@@ -19,6 +19,7 @@ use super::position::{EmacsByteDelta, EmacsBytePos};
 
 const MAX_ENTRIES: usize = 32;
 const MIN_ENTRIES: usize = MAX_ENTRIES / 2;
+const _: () = assert!(MAX_ENTRIES < u16::MAX as usize);
 // `smallvec`'s workspace feature set provides its standard 36-element inline
 // array implementation (rather than arbitrary const-generic lengths).  Four
 // spare slots also keep split insertion entirely inline.
@@ -201,6 +202,12 @@ pub(super) struct OrderedShiftTree<R: OrderedShiftRecord> {
 }
 
 impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
+    pub(super) fn filter_mask(&self) -> OrderedFilterMask {
+        self.root
+            .map(|root| self.summary(root).filter_mask)
+            .unwrap_or(OrderedFilterMask::EMPTY)
+    }
+
     pub(super) fn new() -> Self {
         Self {
             root: None,
@@ -1516,8 +1523,10 @@ pub(super) trait OrderedTreeQuery<R: OrderedShiftRecord>: Copy {
 #[derive(Clone, Copy)]
 struct OrderedTraversalFrame {
     id: OrderedNodeId,
-    cursor: usize,
-    end: usize,
+    // These are node-local indexes (at most MAX_ENTRIES), not buffer
+    // positions. Keep each frame compact: every iterator carries nine.
+    cursor: u16,
+    end: u16,
     inherited: EmacsByteDelta,
 }
 
@@ -1622,8 +1631,8 @@ where
         }
         self.frames[self.len] = OrderedTraversalFrame {
             id,
-            cursor,
-            end,
+            cursor: u16::try_from(cursor).expect("overlay traversal cursor fits node fanout"),
+            end: u16::try_from(end).expect("overlay traversal end fits node fanout"),
             inherited,
         };
         self.len += 1;
@@ -1663,9 +1672,9 @@ where
                         }
                     };
                     let record = if record_delta.is_zero() {
-                        records[record_index]
+                        records[usize::from(record_index)]
                     } else {
-                        records[record_index].shifted(record_delta)
+                        records[usize::from(record_index)].shifted(record_delta)
                     };
                     self.frames[frame_index] = frame;
                     if self.query.record_matches(record) {
@@ -1688,12 +1697,24 @@ where
                             frame.end
                         }
                     };
-                    let child = children[child_index];
+                    let child = children[usize::from(child_index)];
                     self.frames[frame_index] = frame;
                     self.push_if_relevant(child, record_delta);
                 }
             }
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod traversal_storage_tests {
+    use super::*;
+
+    #[test]
+    fn overlay_traversal_frame_keeps_the_bounded_stack_compact() {
+        // Every query carries nine frames. Node-local indexes need only
+        // represent the node's fixed fanout, not arbitrary buffer positions.
+        assert!(std::mem::size_of::<OrderedTraversalFrame>() <= 16);
     }
 }

@@ -123,3 +123,22 @@ fn a_forced_idle_redisplay_lays_out_a_change_made_after_the_last_layout() {
     crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(None);
     assert_eq!(layouts.get(), 2, "now idle, the forced redisplay skips");
 }
+
+#[test]
+fn category_symbol_writes_invalidate_idle_redisplay() {
+    let (mut eval, layouts) = idle_context();
+    eval.eval_str("(progn (put 'idle-category 'face '(:height 100)) (overlay-put (make-overlay 1 20) 'category 'idle-category) (redisplay))").unwrap();
+    assert_eq!(layouts.get(), 1);
+    eval.eval_str("(progn (put 'idle-category 'face '(:height 200)) (redisplay))")
+        .unwrap();
+    assert_eq!(layouts.get(), 2, "category face mutation must repaint");
+    eval.eval_str("(redisplay)").unwrap();
+    assert_eq!(layouts.get(), 2, "unchanged category must remain idle");
+    eval.eval_str("(progn (put 'unrelated-wheel-event 'event-kind 'mouse-click) (redisplay))")
+        .unwrap();
+    assert_eq!(
+        layouts.get(),
+        2,
+        "event metadata is not a layout dependency"
+    );
+}

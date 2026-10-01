@@ -95,7 +95,21 @@ fn linux_window_identity(attrs: WindowAttributes, wayland: bool) -> WindowAttrib
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "windows")]
+pub(crate) fn apply_platform_window_identity(
+    attrs: WindowAttributes,
+    _event_loop: &dyn winit::event_loop::ActiveEventLoop,
+) -> WindowAttributes {
+    // Lisp's mouse-wheel-scroll-amount owns lines per detent. Request wheel
+    // units so a system multiplier is not applied a second time by mwheel.el.
+    attrs.with_platform_attributes(Box::new(
+        winit::platform::windows::WindowAttributesWindows::default()
+            .with_use_system_scroll_speed(false)
+            .with_precision_touchpad(true),
+    ))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 pub(crate) fn apply_platform_window_identity(
     attrs: WindowAttributes,
     _event_loop: &dyn winit::event_loop::ActiveEventLoop,

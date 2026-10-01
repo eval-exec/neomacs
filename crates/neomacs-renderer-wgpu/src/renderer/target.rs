@@ -71,3 +71,49 @@ impl<'a> NativeContentPlacement<'a> {
         Ok(Self { target, source })
     }
 }
+
+/// A bounded sample of a pooled texture, placed in logical destination pixels.
+/// Source coordinates are texture texels, not normalized or logical pixels;
+/// retaining f32 precision avoids quantizing a scrolling crop to a u16 UV grid.
+#[derive(Clone, Copy)]
+pub struct SnapshotRegion<'a> {
+    pub(super) source: &'a crate::SnapshotLease,
+    pub(super) uv: neomacs_display_protocol::Rect,
+    pub(super) destination: neomacs_display_protocol::FrameRect,
+}
+
+impl<'a> SnapshotRegion<'a> {
+    pub fn new(
+        source: &'a crate::SnapshotLease,
+        source_pixels: neomacs_display_protocol::Rect,
+        destination: neomacs_display_protocol::FrameRect,
+    ) -> Option<Self> {
+        let size = source.size();
+        let region = source_pixels;
+        let dst = destination.raw();
+        if [region.x, region.y, region.width, region.height]
+            .iter()
+            .any(|v| !v.is_finite())
+            || region.x < 0.0
+            || region.y < 0.0
+            || region.width <= 0.0
+            || region.height <= 0.0
+            || region.right() > size.width() as f32
+            || region.bottom() > size.height() as f32
+            || dst.width <= 0.0
+            || dst.height <= 0.0
+        {
+            return None;
+        }
+        Some(Self {
+            source,
+            uv: neomacs_display_protocol::Rect::new(
+                region.x / size.width() as f32,
+                region.y / size.height() as f32,
+                region.width / size.width() as f32,
+                region.height / size.height() as f32,
+            ),
+            destination,
+        })
+    }
+}

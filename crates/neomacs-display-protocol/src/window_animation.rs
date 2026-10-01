@@ -197,18 +197,18 @@ impl WindowAnimation {
 }
 
 /// niri's documented range for a damping ratio.
-const MIN_DAMPING_RATIO: f32 = 0.1;
-const MAX_DAMPING_RATIO: f32 = 10.0;
+pub(crate) const MIN_DAMPING_RATIO: f32 = 0.1;
+pub(crate) const MAX_DAMPING_RATIO: f32 = 10.0;
 
 /// The floor is not taste. `Motion::rate_at` is a central difference with a
 /// fixed step, and its answer gates both the finish test and the hand-off when
 /// a motion is interrupted, so it stays meaningful only while `omega * step`
 /// is small. Speeding a spring up without bound makes that rate noise.
-const MIN_SLOWDOWN: f32 = 0.05;
+pub(crate) const MIN_SLOWDOWN: f32 = 0.05;
 /// Generous on purpose: this is how a spring gets watched. It has no duration
 /// to lengthen by hand, so before this existed the only way to see one was to
 /// rebuild with a probe.
-const MAX_SLOWDOWN: f32 = 20.0;
+pub(crate) const MAX_SLOWDOWN: f32 = 20.0;
 
 /// Global controls over every slot, matching niri's `animations { }` block.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]

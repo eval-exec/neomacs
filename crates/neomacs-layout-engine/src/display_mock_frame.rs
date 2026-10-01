@@ -122,6 +122,8 @@ fn new_empty_mock_display_row(
             std::collections::HashMap::new(),
         ),
         None,
+        // A mock row is a chrome row: it has no window and no continuation.
+        crate::display_row::append_context::DisplayRowLineWrap::chrome_row(),
     ))
 }
 
@@ -249,15 +251,20 @@ fn render_mock_display_area(request: MockDisplayAreaRenderRequest<'_>) {
     } = request;
     let render_width = geometry.width();
     let mut source_state = DisplayRowSourceState::frame_local();
-    let row_request =
-        DisplayRowSourceFragmentFrame::new(geometry, role, base_face.display_face_id(), base_face)
-            .render_request_for_area(
-                DisplayRowRenderBounds::new(
-                    DisplayRowPosition::new(0.0, 0),
-                    DisplayRowMaxX::Bounded(render_width),
-                ),
-                area,
-            );
+    let row_request = DisplayRowSourceFragmentFrame::new(
+        geometry,
+        role,
+        base_face.display_face_id(),
+        base_face,
+        crate::display_row::append_context::DisplayRowLineWrap::chrome_row(),
+    )
+    .render_request_for_area(
+        DisplayRowRenderBounds::new(
+            DisplayRowPosition::new(0.0, 0),
+            DisplayRowMaxX::Bounded(render_width),
+        ),
+        area,
+    );
     let mut executor = DisplayRowRenderExecutor::new(
         font_metrics,
         DisplayRowMeasurementMode::LogicalCells,

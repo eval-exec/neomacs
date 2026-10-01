@@ -7,7 +7,10 @@ if [[ -z "$workspace_root" || ! -d "$workspace_root" ]]; then
   exit 2
 fi
 
-scratch_parent="$workspace_root/tmp/melpa"
+# The melpa caches live under the target directory, with the rest of the
+# build output; keep this in step with neomacs_infra::melpa_cache_root().
+target_root="${CARGO_TARGET_DIR:-$workspace_root/target}"
+scratch_parent="$target_root/melpa"
 mkdir -p "$scratch_parent"
 scratch_root=$(mktemp -d "$scratch_parent/preflight.XXXXXX")
 

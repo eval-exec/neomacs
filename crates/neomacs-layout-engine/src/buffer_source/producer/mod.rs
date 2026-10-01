@@ -58,6 +58,17 @@ pub(crate) struct ProducedStep {
     pub(crate) pending_non_text_area: Vec<DisplayNonTextAreaEmission>,
 }
 
+impl ProducedStep {
+    pub(crate) fn empty(source_position: DisplaySourceTextPosition) -> Self {
+        Self {
+            source_item: None,
+            source_position,
+            pending_faces: Vec::new(),
+            pending_non_text_area: Vec::new(),
+        }
+    }
+}
+
 pub(crate) struct BufferElementProducer<'request, B: LayoutBufferView> {
     source_cursor: BufferTextSourceCursor<'request, B>,
     source_resolve_state: DisplaySourceResolveState,
@@ -85,18 +96,49 @@ impl<'request, B: LayoutBufferView> BufferElementProducer<'request, B> {
         start_charpos: i64,
         text_start_byte: usize,
     ) -> Self {
+        Self::new_for_window_range(
+            buffer_id,
+            buffer,
+            window_id,
+            start_charpos,
+            CharPos0::new(usize::MAX),
+            text_start_byte,
+        )
+    }
+
+    /// Bound acquisition before a text run can allocate its source payload.
+    /// Reaching this boundary is exhaustion, not an artificial row break.
+    pub(crate) fn new_for_window_range(
+        buffer_id: BufferId,
+        buffer: &'request B,
+        window_id: Option<u64>,
+        start_charpos: i64,
+        end: CharPos0,
+        text_start_byte: usize,
+    ) -> Self {
         Self {
             source_cursor: BufferTextSourceCursor::new_for_window(
                 buffer_id,
                 buffer,
                 window_id,
                 CharPos0::new(start_charpos.max(0) as usize),
-                CharPos0::new(usize::MAX),
+                end,
                 RenderFaceRef::Inherit,
             ),
             source_resolve_state: DisplaySourceResolveState::default(),
             source_consumption: BufferSourceConsumptionState::new(text_start_byte),
         }
+    }
+
+    /// The buffer view the producer walks, for callers that must consult
+    /// buffer state directly (the hscroll skip resolving `display` specs).
+    pub(crate) fn layout_buffer(&self) -> &B {
+        self.source_cursor.layout_buffer()
+    }
+
+    /// The Emacs byte position of `text[0]` in the buffer.
+    pub(crate) fn text_start_byte(&self) -> usize {
+        self.source_consumption.text_start_byte()
     }
 
     /// Save the producer's seating for a later [`restore`](Self::restore).
@@ -167,6 +209,18 @@ impl<'request, B: LayoutBufferView> BufferElementProducer<'request, B> {
             .request_char_granularity_until(CharPos0::new(end_charpos.max(0) as usize));
     }
 
+    pub(crate) fn produces_single_chars_at(&self, charpos: i64) -> bool {
+        self.source_cursor
+            .produces_single_chars_at(CharPos0::new(charpos.max(0) as usize))
+    }
+
+    pub(crate) fn can_restart_after_buffer_newline(&self, charpos: i64) -> bool {
+        usize::try_from(charpos).is_ok_and(|position| {
+            self.source_cursor
+                .can_restart_after_buffer_newline(CharPos0::new(position))
+        })
+    }
+
     /// Whether production at `source_position` must first yield an anchored
     /// overlay-string insertion.  This does not move or mark the cursor; the
     /// regular production step remains the sole consumer of the element.
@@ -194,46 +248,58 @@ impl<'request, B: LayoutBufferView> BufferElementProducer<'request, B> {
         }
     }
 
-    /// Produce the next element at `source_position`, resolving faces and
-    /// fringe specs into the returned step.
+    /// Produce directly into storage owned by the dispatcher, keeping the
+    /// large consumed-item enum in that storage while side effects are applied.
+    pub(crate) fn produce_step_into(
+        &mut self,
+        source_position: DisplaySourceTextPosition,
+        face_resolution_context: BufferSourceFaceResolutionContext<'_, B>,
+        face_ids: &mut FrameFaceAttempt,
+        output: &mut ProducedStep,
+    ) {
+        output.source_item = None;
+        output.source_position = source_position;
+        output.pending_faces.clear();
+        output.pending_non_text_area.clear();
+        let params = face_resolution_context.source_resolve_params(None);
+        let mut resolver = DisplaySourcePropertyResolver::buffer_local(
+            face_resolution_context.buffer(),
+            params,
+            &mut self.source_resolve_state,
+            face_ids,
+            &mut output.pending_faces,
+        );
+        let mut source_context = DisplaySourceContext::with_face_resolver_and_non_text_area_sink(
+            &mut resolver,
+            &mut output.pending_non_text_area,
+            crate::display_property::DisplayPropertyTarget::for_window_system(
+                params.face_basis().face_resolver().is_window_system(),
+            ),
+        )
+        .with_automatic_composition(params.automatic_composition);
+        output.source_item = self.source_consumption.next_source_consumption_item(
+            &mut self.source_cursor,
+            &mut source_context,
+            &mut output.source_position,
+        );
+    }
+
+    /// Owned acquisition still consumes the complete produced step. The
+    /// interactive dispatcher uses [`Self::produce_step_into`] instead.
     pub(crate) fn produce_step(
         &mut self,
-        mut source_position: DisplaySourceTextPosition,
+        source_position: DisplaySourceTextPosition,
         face_resolution_context: BufferSourceFaceResolutionContext<'_, B>,
         face_ids: &mut FrameFaceAttempt,
     ) -> ProducedStep {
-        let mut pending_faces = Vec::new();
-        let mut pending_non_text_area = Vec::new();
-        let source_item = {
-            let params = face_resolution_context.source_resolve_params(None);
-            let mut resolver = DisplaySourcePropertyResolver::buffer_local(
-                face_resolution_context.buffer(),
-                params,
-                &mut self.source_resolve_state,
-                face_ids,
-                &mut pending_faces,
-            );
-            let mut source_context =
-                DisplaySourceContext::with_face_resolver_and_non_text_area_sink(
-                    &mut resolver,
-                    &mut pending_non_text_area,
-                    crate::display_property::DisplayPropertyTarget::for_window_system(
-                        params.face_basis().face_resolver().is_window_system(),
-                    ),
-                )
-                .with_automatic_composition(params.automatic_composition);
-            self.source_consumption.next_source_consumption_item(
-                &mut self.source_cursor,
-                &mut source_context,
-                &mut source_position,
-            )
-        };
-        ProducedStep {
-            source_item,
+        let mut output = ProducedStep::empty(source_position);
+        self.produce_step_into(
             source_position,
-            pending_faces,
-            pending_non_text_area,
-        }
+            face_resolution_context,
+            face_ids,
+            &mut output,
+        );
+        output
     }
 
     /// Produce the next element against a caller-supplied source context, with
@@ -297,5 +363,5 @@ impl<'request, B: LayoutBufferView> BufferElementProducer<'request, B> {
 mod tests;
 
 #[cfg(test)]
-#[path = "stream_harness_test.rs"]
+#[path = "tests/stream_harness_test.rs"]
 mod stream_harness_tests;

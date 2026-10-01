@@ -171,11 +171,16 @@ impl RenderApp {
             color_space: wgpu::SurfaceColorSpace::Auto,
             width: pending_width,
             height: pending_height,
-            present_mode: wgpu::PresentMode::Fifo,
+            present_mode: crate::presentation::pacing::present_mode(&caps.present_modes),
             alpha_mode,
             view_formats: vec![],
-            desired_maximum_frame_latency: 2,
+            desired_maximum_frame_latency: crate::presentation::pacing::MAXIMUM_FRAME_LATENCY,
         };
+        #[cfg(target_os = "linux")]
+        // SAFETY: this surface and device share the renderer instance; configure follows immediately.
+        unsafe {
+            neomacs_renderer_wgpu::native_presentation::prepare_surface(&device, &surface);
+        }
         surface.configure(&device, &config);
 
         #[cfg(feature = "video")]
@@ -232,6 +237,7 @@ impl RenderApp {
                 content_insets: Default::default(),
                 window,
                 surface,
+                surface_generation: super::frame_windows::next_surface_generation(),
                 surface_backend: adapter_info.backend,
                 surface_config: config,
                 width: pending_width,
@@ -539,6 +545,7 @@ fn run_render_loop_with_startup(
     };
 
     tracing::info!("Render thread entering winit event loop");
+    let preparation_proxy = event_loop.create_proxy();
     let exit_input = comms.input_tx.clone();
     let result = startup::run(event_loop, initial, move |size| {
         let app = RenderApp::new(
@@ -552,8 +559,14 @@ fn run_render_loop_with_startup(
             #[cfg(feature = "neo-term")]
             shared_terminals,
         );
-        #[cfg(any(feature = "video", feature = "webview"))]
         let mut app = app;
+        match super::frame_preparation::FramePreparation::spawn(
+            app.comms.frame_rx.clone(),
+            move || preparation_proxy.wake_up(),
+        ) {
+            Ok(worker) => app.frame_preparation = Some(worker),
+            Err(error) => tracing::warn!(%error, "frame preparation worker unavailable"),
+        }
         #[cfg(feature = "video")]
         {
             app.video_wake = video_wake;

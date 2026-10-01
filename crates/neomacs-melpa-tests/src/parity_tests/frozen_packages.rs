@@ -79,7 +79,10 @@ fn oracle_normalizes_each_editors_sandbox_paths_in_signals() {
     assert!(signal.contains("[ORACLE-HOME]"));
     assert!(signal.contains("[ORACLE-TMPDIR]"));
     assert!(signal.contains("[ORACLE-SANDBOX]"));
-    assert!(!signal.contains("tmp/melpa"));
+    // The sandbox path is normalized away, so the layout root must not
+    // appear in the value at all.
+    let cache_root = neomacs_infra::melpa_cache_root();
+    assert!(!signal.contains(cache_root.to_string_lossy().as_ref()));
 }
 
 #[test]

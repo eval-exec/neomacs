@@ -117,7 +117,10 @@ fn check(text: &str, window_start: usize) {
 
     // pos = t: the last visible line's start.
     assert_eq!(
-        last_visible_row_start_lisp_pos(&ctx).to_one_based_usize(),
+        resolve_pos_visible_target_lisp_pos(&ctx, Some(&Value::T))
+            .unwrap()
+            .unwrap()
+            .to_one_based_usize(),
         (whole_text::nth_line_start(&chars, start, ctx.body_lines - 1) + 1).min(chars.len() + 1),
         "last visible line start (start {window_start})"
     );
@@ -225,4 +228,38 @@ fn a_large_buffer_is_read_only_as_far_as_the_window_shows() {
         .expect("a live window");
     assert_eq!(ctx.text.chars.len(), text.chars().count());
     set_bounded_window_text_for_test(None);
+}
+
+#[test]
+fn exact_target_decoding_matches_approximate_context_without_text_acquisition() {
+    for (text, start) in [
+        ("中文 abc\n".repeat(200), 17),
+        ("x".repeat(2000), 1),
+        (String::new(), 1),
+    ] {
+        let (eval, fid, wid) = window_over(&text, start);
+        let ctx = live_window_display_context_for(&eval.frames, &eval.buffers, fid, wid)
+            .unwrap()
+            .unwrap();
+        for pos in [
+            None,
+            Some(Value::NIL),
+            Some(Value::T),
+            Some(Value::fixnum(-1)),
+            Some(Value::fixnum(17)),
+            Some(Value::fixnum(i64::MAX)),
+        ] {
+            let expected = resolve_pos_visible_target_lisp_pos(&ctx, pos.as_ref()).unwrap();
+            APPROX_WINDOW_TEXT_COPIED_CHARS.with(|count| count.set(0));
+            assert_eq!(
+                resolve_live_target_position(&eval.frames, &eval.buffers, fid, wid, pos.as_ref())
+                    .unwrap(),
+                expected
+            );
+            assert_eq!(
+                APPROX_WINDOW_TEXT_COPIED_CHARS.with(std::cell::Cell::get),
+                0
+            );
+        }
+    }
 }

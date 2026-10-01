@@ -664,7 +664,7 @@ fn public_error_then_buffer_submission_recovers_in_the_same_session() -> ParityB
 
 #[test]
 fn nodejs_repl_package_batch() {
-    match neomacs_infra::tools::resolve_tool("node", "v22.22.2") {
+    match neomacs_infra::tools::resolve_tool("node", "*") {
         Err(neomacs_infra::tools::ToolsError::VersionMismatch { expected, actual }) => {
             eprintln!(
                 "SKIP nodejs-repl: host node identity diverges from the lock row \

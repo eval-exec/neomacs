@@ -1,0 +1,50 @@
+00 |File Edit Options Buffers Tools Minibuf Help
+01 |/* A disabled prototype is intentionally excluded. */
+02 |/* .disabled {
+03 |  color: gray;
+04 |} */
+05 |
+06 |.dashboard,
+07 |.dashboard--compact {
+08 |  color: red;
+09 |
+10 |  .card {
+11 |    padding: 1rem;
+12 |
+13 |    &__title,
+14 |    &__subtitle {
+15 |      color: blue;
+16 |    }
+17 |  }
+18 |}
+19 |
+20 |.footer {
+21 |  color: black;
+22 |}
+23 |
+24 |-UU-:--- F1  tui-fixture.scss   All L11    (SCSS) --------------------------------------------------------------------------------------------------------------
+25 | helm-css-scss-multi
+26 |tui-fixture.scss
+27 |6: .dashboard, .dashboard--compact
+28 |10: .dashboard, .dashboard--compact .card
+29 |13: .dashboard, .dashboard--compact .card &__title, &__subtitle
+30 |20: .footer
+31 |
+32 |component.css
+33 |1: .button
+34 |5: .button:hover
+35 |
+36 |theme.less
+37 |1: .theme
+38 |4: .theme .link
+39 |
+40 |IGNORED.CSS
+41 |1: .upper-case-extension
+42 |
+43 |
+44 |
+45 |
+46 |
+47 |
+48 | *Helm Css SCSS multi buffers* L2    [4 Candidate(s)]   C-h m:Help TAB:Act C-o:NextSrc RET/f1..f12:NthAct C-!:Tog.suspend C-h c:Conf
+49 |Selector:

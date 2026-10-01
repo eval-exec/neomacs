@@ -25,17 +25,40 @@ impl<'a> FontFamilySource<'a> {
     }
 
     pub(super) fn search_order(self, resolve: impl Fn(&str) -> String) -> Vec<Option<String>> {
+        self.capture().search_order(resolve)
+    }
+
+    /// Read evaluator policy before handing native font work to another thread.
+    pub(super) fn capture(self) -> CapturedFontFamilyPolicy {
         match self {
-            Self::Fontset(family) => vec![Some(resolve(family))],
-            Self::Face("") => vec![None],
-            Self::Face(family) => {
+            Self::Fontset(family) => CapturedFontFamilyPolicy::Explicit(family.to_owned()),
+            Self::Face("") => CapturedFontFamilyPolicy::Inherited(Vec::new()),
+            Self::Face(family) => CapturedFontFamilyPolicy::Inherited(
+                neovm_core::emacs_core::font::alternative_font_families(family),
+            ),
+        }
+    }
+}
+
+/// Owned family policy. Native alias resolution is intentionally deferred.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum CapturedFontFamilyPolicy {
+    Explicit(String),
+    Inherited(Vec<String>),
+}
+
+impl CapturedFontFamilyPolicy {
+    pub(super) fn search_order(&self, resolve: impl Fn(&str) -> String) -> Vec<Option<String>> {
+        match self {
+            Self::Explicit(family) => vec![Some(resolve(family))],
+            Self::Inherited(families) => {
                 let mut order = Vec::new();
-                for family in neovm_core::emacs_core::font::alternative_font_families(family) {
-                    let resolved = resolve(&family);
-                    if resolved != family {
+                for family in families {
+                    let resolved = resolve(family);
+                    if resolved != *family {
                         order.push(Some(resolved));
                     }
-                    order.push(Some(family));
+                    order.push(Some(family.clone()));
                 }
                 order.push(None);
                 order

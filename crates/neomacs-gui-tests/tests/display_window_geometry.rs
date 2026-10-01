@@ -7,7 +7,7 @@ use neomacs_gui_tests::{
 use std::{fs, path::PathBuf, time::Duration};
 
 fn run_geometry_probe(probe: &str, gnu: bool) {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = neomacs_infra::crate_root!().join("../..");
     let backend = if cfg!(target_os = "macos") {
         GuiBackend::Macos
     } else {

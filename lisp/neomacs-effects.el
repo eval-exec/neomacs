@@ -70,69 +70,94 @@ whose default differs from the shared one.
 
 A macro rather than forty written-out options because the four slots really are
 parallel — they take the same ten properties, meaning the same things — and
-forty hand-copied docstrings would drift apart at the first edit."
+forty hand-copied docstrings would drift apart at the first edit.
+
+DEFAULTS also accepts three keys that shape the options rather than the slot:
+`:group' overrides the customization group (default `neomacs-window-animation');
+`:master' names the master off-switch option the `enabled' docstring points at
+(default `neomacs-window-animations-off'); `:enabled-doc' replaces the
+paragraph that paragraph family keeps about the offscreen composition ring,
+which only applies to slots whose animation reads the previous frame;
+`:slide' non-nil adds the slot's extra `slide-pixels' option, which the
+;; schema publishes for slots that displace; `:scale' non-nil adds the
+;; slot's `scale-from' option the same way. Both are optional because the
+;; window-animation slots publish neither.
+schema publishes for slots that displace while they fade."
   (let* ((name (symbol-name slot))
          (sym (lambda (property) (intern (format "neomacs-%s-%s" name property))))
+         ;; A quoted value in the caller's plist arrives here as
+         ;; `(quote SYM)'; unwrap it so the defgroup symbol itself is
+         ;; spliced back quoted.
+         (unquote (lambda (value)
+                    (if (and (consp value) (eq (car value) 'quote))
+                        (cadr value)
+                      value)))
+         (group (or (funcall unquote (plist-get defaults :group))
+                    'neomacs-window-animation))
+         (master (or (funcall unquote (plist-get defaults :master))
+                     'neomacs-window-animations-off))
          (get (lambda (property fallback)
                 (if (plist-member defaults property)
                     (plist-get defaults property)
                   fallback))))
     `(progn
        (defcustom ,(funcall sym "enabled") ,(funcall get :enabled t)
-         ,(format "Whether %s is animated.
+          ,(format "Whether %s is animated.
 When nil, %s happens immediately.
 
-Turning every window-animation slot off also stops the compositor from keeping
+%s" summary occasion
+        (or (plist-get defaults :enabled-doc)
+            (format "Turning every window-animation slot off also stops the compositor from keeping
 the previous frame in a texture, which it must do to animate from it — see
-`neomacs-window-animations-off' for the cheaper way to say that." summary occasion)
-         :type 'boolean
-         :group 'neomacs-window-animation
-         :set (lambda (symbol value)
-                (set-default symbol value)
-                (neomacs-effects--set ',slot :enabled value)))
+`%s' for the cheaper way to say that." master)))
+          :type 'boolean
+          :group ',group
+          :set (lambda (symbol value)
+                 (set-default symbol value)
+                 (neomacs-effects--set ',slot :enabled value)))
 
        (defcustom ,(funcall sym "kind") ,(funcall get :kind ''spring)
-         ,(format "Which family of curve animates %s.
+          ,(format "Which family of curve animates %s.
 
 `easing' is a fixed-duration curve: it takes `neomacs-%s-duration' seconds and
 follows `neomacs-%s-easing'.  `spring' is a second-order spring with no
 duration at all — it is described by its stiffness and damping ratio, and
 settles when it arrives." summary name name)
-         :type '(choice (const :tag "Fixed-duration curve" easing)
-                        (const :tag "Second-order spring" spring))
-         :group 'neomacs-window-animation
-         :set (lambda (symbol value)
-                (set-default symbol value)
-                (neomacs-effects--set ',slot :kind value)))
+          :type '(choice (const :tag "Fixed-duration curve" easing)
+                         (const :tag "Second-order spring" spring))
+          :group ',group
+          :set (lambda (symbol value)
+                 (set-default symbol value)
+                 (neomacs-effects--set ',slot :kind value)))
 
        (defcustom ,(funcall sym "duration") ,(funcall get :duration 0.15)
-         ,(format "Seconds %s takes, when `neomacs-%s-kind' is `easing'.
+          ,(format "Seconds %s takes, when `neomacs-%s-kind' is `easing'.
 Zero disables this slot, exactly as setting `neomacs-%s-enabled' to nil does.
 Ignored for a spring, which has no duration." summary name name)
-         :type 'number
-         :group 'neomacs-window-animation
-         :set (lambda (symbol value)
-                (set-default symbol value)
-                (neomacs-effects--set ',slot :duration value)))
+          :type 'number
+          :group ',group
+          :set (lambda (symbol value)
+                 (set-default symbol value)
+                 (neomacs-effects--set ',slot :duration value)))
 
        (defcustom ,(funcall sym "easing") ,(funcall get :easing ''ease-out-quad)
-         ,(format "Curve shape for %s, when `neomacs-%s-kind' is `easing'.
+          ,(format "Curve shape for %s, when `neomacs-%s-kind' is `easing'.
 
 `cubic-bezier' takes its control points from the four `neomacs-%s-bezier-*'
 options, which lets a curve be transcribed directly from a niri configuration.
 Note that `spring' here is a fixed curve *shaped* like a spring, and is not the
 same thing as setting `neomacs-%s-kind' to `spring'." summary name name name)
-         :type '(choice (const linear)
-                        (const ease-out-quad)
-                        (const ease-out-cubic)
-                        (const ease-out-expo)
-                        (const ease-in-out-cubic)
-                        (const :tag "Spring-shaped curve" spring)
-                        (const :tag "Custom cubic Bezier" cubic-bezier))
-         :group 'neomacs-window-animation
-         :set (lambda (symbol value)
-                (set-default symbol value)
-                (neomacs-effects--set ',slot :easing value)))
+          :type '(choice (const linear)
+                         (const ease-out-quad)
+                         (const ease-out-cubic)
+                         (const ease-out-expo)
+                         (const ease-in-out-cubic)
+                         (const :tag "Spring-shaped curve" spring)
+                         (const :tag "Custom cubic Bezier" cubic-bezier))
+          :group ',group
+          :set (lambda (symbol value)
+                 (set-default symbol value)
+                 (neomacs-effects--set ',slot :easing value)))
 
        ,@(let ((axes '(("bezier-x1" :bezier-x1 0.0 "first control point's time")
                        ("bezier-y1" :bezier-y1 0.0 "first control point's value")
@@ -151,35 +176,67 @@ Time is clamped to 0.0-1.0 so the curve stays solvable; value is deliberately
 not, because overshooting past 1.0 is the point of a curve like
 `cubic-bezier(0.34, 1.56, 0.64, 1.0)'." what summary name)
                    :type 'number
-                   :group 'neomacs-window-animation
+                   :group ',group
                    :set (lambda (symbol value)
                           (set-default symbol value)
                           (neomacs-effects--set ',slot ,keyword value)))))
             axes))
 
        (defcustom ,(funcall sym "damping-ratio") ,(funcall get :damping-ratio 1.0)
-         ,(format "How %s settles, when `neomacs-%s-kind' is `spring'.
+          ,(format "How %s settles, when `neomacs-%s-kind' is `spring'.
 
 1.0 is critically damped: the fastest approach that never overshoots.  Below
 1.0 the motion bounces past its destination before returning, and above 1.0 it
 creeps in more slowly than it needs to.  Clamped to 0.1-10.0." summary name)
-         :type 'number
-         :group 'neomacs-window-animation
-         :set (lambda (symbol value)
-                (set-default symbol value)
-                (neomacs-effects--set ',slot :damping-ratio value)))
+          :type 'number
+          :group ',group
+          :set (lambda (symbol value)
+                 (set-default symbol value)
+                 (neomacs-effects--set ',slot :damping-ratio value)))
 
        (defcustom ,(funcall sym "stiffness") ,(funcall get :stiffness 800)
-         ,(format "How hard the spring pulls %s toward its destination.
+          ,(format "How hard the spring pulls %s toward its destination.
 
 Higher is faster.  With the default damping ratio, 800 settles in about a third
 of a second.  This is the same number a niri configuration gives as
 `stiffness', and it means the same thing." summary)
-         :type 'integer
-         :group 'neomacs-window-animation
-         :set (lambda (symbol value)
-                (set-default symbol value)
-                (neomacs-effects--set ',slot :stiffness value))))))
+          :type 'integer
+          :group ',group
+          :set (lambda (symbol value)
+                 (set-default symbol value)
+                 (neomacs-effects--set ',slot :stiffness value)))
+
+       ,@(append
+          (when (plist-get defaults :slide)
+            `((defcustom ,(funcall sym "slide-pixels")
+                  ,(funcall get :slide 0.0)
+                ,(format "How far %s displaces vertically while it animates.
+
+An arriving frame starts this many logical pixels below its placement and
+rises onto it; a departing frame falls this far while it fades.  Zero
+reduces %s to a pure fade.  The displacement shares the slot's own curve,
+so a spring-shaped slot overshoots through its placement and settles back."
+                 summary name)
+                :type 'number
+                :group ',group
+                :set (lambda (symbol value)
+                       (set-default symbol value)
+                       (neomacs-effects--set ',slot :slide-pixels value)))))
+          (when (plist-get defaults :scale)
+            `((defcustom ,(funcall sym "scale-from")
+                  ,(funcall get :scale 1.0)
+                ,(format "The scale %s starts from, as a fraction of its settled size.
+
+1.0 scales nothing.  Below 1.0, an arriving frame grows from this fraction of
+its size and a departing frame shrinks toward it, anchored at the frame's own
+top-left so the picture grows outward from the point that anchored it.  The
+scale shares the slot's own curve, unclamped like the slide: a spring's
+overshoot past the settled size is the point." summary)
+                :type 'number
+                :group ',group
+                :set (lambda (symbol value)
+                       (set-default symbol value)
+                       (neomacs-effects--set ',slot :scale-from value)))))))))
 
 (neomacs-effects--defslot window-open
   "a window appearing"
@@ -203,6 +260,68 @@ of a second.  This is the same number a niri configuration gives as
 (neomacs-effects--defslot window-movement
   "a window that moves without changing size"
   "a moved window snaps to its new position")
+
+
+;;;; Child frames
+
+(defgroup neomacs-child-frame nil
+  "How a child frame's lifecycle is animated.
+
+A child frame — a posframe, a Corfu or company popup — floats over its parent
+frame instead of tiling with other windows, so its four slots are about the
+frame's own lifecycle rather than about a layout: one for a popup appearing,
+one for one being dismissed, one for one whose anchor moved, one for one whose
+size changes.  They share the shape of the `neomacs-window-animation' slots —
+one curve, spring or easing — but no geometry is shared with other panes, so
+each child frame runs its own clock freely.
+
+`open' and `close' ship on.  A popup fading in costs nothing beyond drawing
+the popup across its own animation, and a dismissed popup's ground was always
+the parent frame showing through — a deleted *window*'s fade shows the window
+that replaces it half-transparent underneath, but a popup has no successor.
+
+`movement' and `resize' ship off, deliberately.  Both animate toward where
+Emacs says the popup *will* be while it is not there yet, and a tooltip whose
+tail points at one specific character reads a few pixels behind as a
+positioning bug.  The exact default is stock behaviour; turn them on if your
+popups are the kind that follow the cursor."
+  :group 'neomacs
+  :prefix "neomacs-child-frame-")
+
+(neomacs-effects--defslot child-frame-open
+  "a child frame appearing"
+  "a popup is simply there on the next frame"
+  :group 'neomacs-child-frame
+  :master 'neomacs-child-frame-animations-off
+  :enabled-doc "Nothing else needs to be composed offscreen for it."
+  :kind 'easing :duration 0.15 :easing 'ease-out-expo :slide 8.0 :scale 1.0)
+
+(neomacs-effects--defslot child-frame-close
+  "a child frame going away"
+  "a dismissed popup vanishes on the next frame"
+  :group 'neomacs-child-frame
+  :master 'neomacs-child-frame-animations-off
+  :enabled-doc "Nothing else needs to be composed offscreen for it."
+  :kind 'easing :duration 0.15 :easing 'ease-out-quad :slide 0.0 :scale 1.0)
+
+(neomacs-effects--defslot child-frame-movement
+  "a child frame whose anchor moved"
+  "a re-anchored popup jumps to its new position"
+  :group 'neomacs-child-frame
+  :master 'neomacs-child-frame-animations-off
+  :enabled-doc "Nothing else needs to be composed offscreen for it."
+  :slide 0.0 :scale 1.0)
+
+(neomacs-effects--defslot child-frame-resize
+  "a child frame whose size changes"
+  "a resized popup snaps to its new size"
+  :group 'neomacs-child-frame
+  :master 'neomacs-child-frame-animations-off
+  :enabled-doc "Nothing else needs to be composed offscreen for it.
+Turning this on today does nothing: the slot is wired for a future
+content-crossfade, and until then a resize is instant, exactly as GNU Emacs
+does it."
+  :slide 0.0 :scale 1.0)
 
 
 ;;;; Global controls
@@ -237,6 +356,32 @@ probe."
   :set (lambda (symbol value)
          (set-default symbol value)
          (neomacs-effects--set 'window-animations :slowdown value)))
+
+(defcustom neomacs-child-frame-animations-off nil
+  "Whether to disable every child-frame-animation slot at once.
+
+This is the master switch, and it is cheaper than turning the four slots off
+individually: while any slot is enabled, a popup's install and dismissal
+carry an animation state and a standing scheduler demand, and every frame of
+a fade redraws the popup.  Setting this reclaims that; clearing an
+individual slot's `enabled' does not, because the others still need it."
+  :type 'boolean
+  :group 'neomacs-child-frame
+  :set (lambda (symbol value)
+         (set-default symbol value)
+         (neomacs-effects--set 'child-frame-animations :off value)))
+
+(defcustom neomacs-child-frame-animations-slowdown 1.0
+  "Multiplier on the length of every child-frame animation.
+
+1.0 is normal speed.  Clamped to 0.05-20.0, for the same reason
+`neomacs-window-animations-slowdown' is: springs have no duration to
+lengthen by hand."
+  :type 'number
+  :group 'neomacs-child-frame
+  :set (lambda (symbol value)
+         (set-default symbol value)
+         (neomacs-effects--set 'child-frame-animations :slowdown value)))
 
 ;;;; Cursor
 
@@ -531,7 +676,10 @@ two and reports the difference rather than letting it rot."
   (dolist (effect (list 'window-open 'window-close 'window-resize
                         'window-movement 'window-animations 'cursor-blink
                         'cursor-motion 'cursor-size-transition
-                        'buffer-transition 'scroll-transition))
+                        'buffer-transition 'scroll-transition
+                        'child-frame-open 'child-frame-close
+                        'child-frame-movement 'child-frame-resize
+                        'child-frame-animations))
     (dolist (entry (neomacs-effect-schema effect))
       (let* ((property (substring (symbol-name (car entry)) 1))
              (symbol (intern (format "neomacs-%s-%s" effect property))))

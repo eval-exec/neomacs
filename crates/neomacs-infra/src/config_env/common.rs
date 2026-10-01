@@ -70,7 +70,7 @@ pub struct Spec {
 
 impl Spec {
     pub fn load(name: &str) -> Result<Self, String> {
-        Self::load_from(Path::new(env!("CARGO_MANIFEST_DIR")), name)
+        Self::load_from(&crate::crate_root!(), name)
     }
 
     /// [`Self::load`] anchored at an explicit spec directory — the seam the
@@ -167,7 +167,7 @@ pub fn check_package_pin(
 pub fn cache_root() -> PathBuf {
     std::env::var_os(INFRA_CACHE_OVERRIDE).map_or_else(
         || {
-            Path::new(env!("CARGO_MANIFEST_DIR"))
+            crate::crate_root!()
                 .ancestors()
                 .nth(2)
                 .unwrap_or(Path::new("."))

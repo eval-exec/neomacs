@@ -71,7 +71,10 @@ impl DisplayRowLineEndFinalizer {
     }
 
     pub(crate) fn finalize(self, row: &mut GlyphRow, faces: &[DisplayRowFace]) {
-        if self.row_break.line_height == DisplayLineHeightPolicy::ContentOnly {
+        if self.row_break.line_height != DisplayLineHeightPolicy::Default
+            && (self.measurement_mode.uses_concrete_font_geometry()
+                || self.row_break.line_height == DisplayLineHeightPolicy::ContentOnly)
+        {
             let (height, ascent) = display_row_visible_content_metrics(
                 row,
                 self.fallback_metrics.row_height(),
@@ -83,8 +86,25 @@ impl DisplayRowLineEndFinalizer {
                         .map(|face| (face.metrics.line_height_px(), face.metrics.ascent_px()))
                 },
             );
-            row.height_px = height;
-            row.ascent_px = ascent;
+            let face = faces
+                .iter()
+                .find(|face| face.face_id == self.row_break_face_id)
+                .map(|face| (face.metrics.line_height_px(), face.metrics.ascent_px()))
+                .unwrap_or((
+                    self.fallback_metrics.row_height(),
+                    self.fallback_metrics.ascent(),
+                ));
+            let metrics = crate::display_row::metrics::resolve_line_height(
+                self.row_break.line_height,
+                (height, ascent),
+                face,
+                (
+                    self.fallback_metrics.row_height(),
+                    self.fallback_metrics.ascent(),
+                ),
+            );
+            row.height_px = metrics.height;
+            row.ascent_px = metrics.ascent;
         }
 
         // GNU order at a line end -- append_space_for_newline first, then
@@ -483,5 +503,5 @@ impl<'cursor> GlyphRowFinalizer<'cursor> {
 mod tests;
 
 #[cfg(test)]
-#[path = "extend_fill_test.rs"]
+#[path = "tests/extend_fill_test.rs"]
 mod extend_fill_tests;

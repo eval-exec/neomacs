@@ -151,6 +151,13 @@ impl GapTextBackend {
         self.gap.contiguous_window_at(pos)
     }
 
+    pub(in crate::buffer) fn contiguous_window_before(
+        &self,
+        end: EmacsBytePos,
+    ) -> Option<(EmacsBytePos, &[u8])> {
+        self.gap.contiguous_window_before(end)
+    }
+
     pub(in crate::buffer) fn emacs_byte_pos_to_char_pos(&self, byte_pos: EmacsBytePos) -> CharPos0 {
         self.gap.emacs_byte_pos_to_char_pos(byte_pos)
     }

@@ -783,6 +783,37 @@ jobs:
             --tag "$GITHUB_REF_NAME" \
             --commit "$GITHUB_SHA"
 
+  # Notify the Homebrew tap only after every native asset, SHA256SUMS and the
+  # release itself are public.  The tap owns its cask policy and its bump runs
+  # with the tap's own GITHUB_TOKEN; this job can only send the versioned
+  # release fact.  The tap's daily reconciliation recovers a missed dispatch,
+  # so tap availability is never coupled to release creation.
+  notify-homebrew-tap:
+    name: notify Homebrew tap
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: create-release
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Dispatch exact stable release
+        env:
+          # Fine-grained token or GitHub App token scoped to repository
+          # neomacs-core/homebrew-tap.  It needs only the permission the
+          # repository-dispatch endpoint requires (Contents: read and write);
+          # the tap's own GITHUB_TOKEN performs the bump.
+          GH_TOKEN: ${{ secrets.NEOMACS_HOMEBREW_TAP_DISPATCH_TOKEN }}
+        run: |
+          ./scripts/dispatch-release-event.sh \
+            --target-repository neomacs-core/homebrew-tap \
+            --source-repository "$GITHUB_REPOSITORY" \
+            --tag "$GITHUB_REF_NAME" \
+            --commit "$GITHUB_SHA"
+
   # Package Docker images only after the native GitHub release and checksum
   # manifest exist. The reusable workflow also supports manual backfills of
   # an already-published release such as v0.0.15.

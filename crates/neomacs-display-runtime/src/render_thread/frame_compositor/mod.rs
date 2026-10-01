@@ -25,6 +25,7 @@ use neomacs_renderer_wgpu::{FullFrameTexture, RendererFrameEffects, WgpuGlyphAtl
 mod child_frames;
 pub(in crate::render_thread) mod continuity;
 mod cursor;
+mod input_scroll;
 pub(in crate::render_thread) mod layout_continuity;
 pub(in crate::render_thread) mod layout_driver;
 mod media;
@@ -34,6 +35,7 @@ mod overlays;
 /// Glyph composition and rendering state for a frame window.
 pub(crate) struct FrameCompositor {
     pub current_frame: Option<FrameGlyphBuffer>,
+    pub(in crate::render_thread) input_scroll: input_scroll::InputScroll,
     /// Video identities present in the root or any accepted child
     /// presentation. Rebuilt only when editor presentation data changes, so
     /// decoder wakeups do not rescan every glyph at video frame rate.
@@ -70,6 +72,7 @@ pub(crate) struct FrameCompositor {
     /// (frame scheduling plan, Stage 4). Built lazily from the current frame
     /// and reused across cursor-only frames; invalidated on any full render.
     pub(super) retained_static: Option<RetainedStatic>,
+    pub(super) retained_scroll: Option<super::render_pass::RetainedScroll>,
     /// Anchors and imprints of the presentation most recently *installed*,
     /// waiting to become the baseline if and when it is composed. Separate from
     /// the baseline pair below for the same reason `baseline` is separate from
@@ -115,6 +118,8 @@ pub(crate) struct FrameCompositor {
     pub(super) interaction: Option<neomacs_display_protocol::InteractionProjection>,
     /// How panes should travel, from the current quality policy.
     pub(super) pane_motion: crate::render_thread::render_quality::WindowAnimationSpecs,
+    /// How child frames live and die, from the current quality policy.
+    pub(super) child_frame_motion: crate::render_thread::render_quality::ChildFrameMotionSpecs,
     /// What the compositor is doing about the layout: settled, or carrying the
     /// panes between two of them. A state machine rather than an `Option`,
     /// because every question about it is then a `match` the compiler requires
@@ -186,6 +191,7 @@ impl FrameCompositor {
     pub(super) fn new(glyph_atlas: Option<WgpuGlyphAtlas>) -> Self {
         Self {
             current_frame: None,
+            input_scroll: input_scroll::InputScroll::default(),
             #[cfg(feature = "video")]
             visible_videos: HashSet::new(),
             current_scene_generation: 0,
@@ -202,6 +208,7 @@ impl FrameCompositor {
             renderer_effects: RendererFrameEffects::default(),
             transitions: TransitionState::default(),
             retained_static: None,
+            retained_scroll: None,
             incoming_scroll_anchors: ScrollAnchorsByWindow::default(),
             incoming_reflow_imprints: ReflowImprintsByWindow::default(),
             scroll_anchors: ScrollAnchorsByWindow::default(),
@@ -209,6 +216,8 @@ impl FrameCompositor {
             baseline: None,
             interaction: None,
             pane_motion: crate::render_thread::render_quality::WindowAnimationSpecs::INSTANT,
+            child_frame_motion:
+                crate::render_thread::render_quality::ChildFrameMotionSpecs::INSTANT,
             layout: layout_driver::LayoutDriver::default(),
             pending: PendingContinuity::default(),
         }

@@ -43,6 +43,86 @@ fn discarded_row_preparation_does_not_publish_faces_or_replace_metrics() {
 }
 
 #[test]
+fn prepared_output_append_preserves_order_attempt_scope_and_speculative_metrics() {
+    let arena = FrameFaceArena::default();
+    let mut attempt = arena.begin_attempt();
+    let mut first = Face::new(FaceId::new(0));
+    first.font_family = "prepared output family".into();
+    first.font_size = 13.0;
+    first.id = attempt.stable_face_id(face_realization_identity(&first));
+    attempt.import_face(first.clone()).unwrap();
+
+    let mut measured = first.clone();
+    measured.font_ascent = 18;
+    measured.font_descent = 4;
+    let mut second = Face::new(FaceId::new(1));
+    second.foreground = Color::from_pixel(0x00112233);
+    let mut output = Vec::with_capacity(3);
+    for face in [&first, &measured, &second] {
+        attempt
+            .prepare_face_into_output(face.clone(), &mut output)
+            .unwrap();
+    }
+    assert_eq!(output.len(), 3);
+    for (prepared, expected) in output.iter().zip([&first, &measured, &second]) {
+        assert_eq!(prepared.face(), expected);
+        assert_eq!(attempt.use_face(prepared), Ok(expected.id));
+        assert_eq!(
+            arena.begin_attempt().use_face(prepared),
+            Err(FrameFaceUseError::ForeignAttempt),
+            "another attempt cannot consume a caller-owned prepared handle"
+        );
+    }
+    assert_eq!(attempt.face(first.id), Some(first.clone()));
+    assert!(attempt.face(second.id).is_none());
+    assert_eq!(attempt.faces().len(), 1);
+    drop(output);
+    assert_eq!(
+        attempt.face(first.id),
+        Some(first),
+        "discarding prepared output must not publish measured enrichment"
+    );
+}
+
+#[test]
+fn prepared_output_rejects_identity_and_font_conflicts_without_partial_append() {
+    use neomacs_display_protocol::font::ResolvedFontId;
+
+    let mut attempt = FrameFaceArena::default().begin_attempt();
+    let mut face = Face::new(FaceId::new(0));
+    face.font_family = "retained prepared payload".into();
+    face.font_file_path = Some("/fonts/exact.ttf".into());
+    face.default_resolved_font_id = Some(ResolvedFontId(7));
+    face.id = attempt.stable_face_id(face_realization_identity(&face));
+    attempt.import_face(face.clone()).unwrap();
+    let mut output = Vec::with_capacity(4);
+    attempt
+        .prepare_face_into_output(face.clone(), &mut output)
+        .unwrap();
+    let storage = output.as_ptr();
+    let capacity = output.capacity();
+    let mut different_identity = face.clone();
+    different_identity.font_size *= 1.5;
+    let mut different_path = face.clone();
+    different_path.font_file_path = Some("/fonts/conflicting.ttf".into());
+    let mut different_font = face.clone();
+    different_font.default_resolved_font_id = Some(ResolvedFontId(8));
+    for rejected in [different_identity, different_path, different_font] {
+        let expected = attempt.prepare_face(rejected.clone()).unwrap_err();
+        assert_eq!(
+            attempt.prepare_face_into_output(rejected, &mut output),
+            Err(expected),
+            "output append must use the same checked admission as owned preparation"
+        );
+        assert_eq!(output.len(), 1);
+        assert_eq!(output.as_ptr(), storage);
+        assert_eq!(output.capacity(), capacity);
+        assert_eq!(output[0].face(), &face);
+        assert_eq!(attempt.face(face.id), Some(face.clone()));
+    }
+}
+
+#[test]
 fn sealing_can_complete_but_not_replace_or_erase_an_exact_font_binding() {
     let mut attempt = FrameFaceArena::default().begin_attempt();
     let mut face = Face::new(FaceId::new(0));
@@ -174,6 +254,303 @@ fn sealing_rejects_changed_styling_without_losing_the_published_face() {
 }
 
 use neomacs_display_protocol::types::Color;
+
+#[test]
+fn borrowed_realization_comparison_matches_canonical_projection_for_every_field() {
+    use neomacs_display_protocol::face::{
+        BoxBorderStyle, BoxLineWidth, BoxType, FaceAttributes, UnderlinePosition, UnderlineStyle,
+    };
+    use neomacs_display_protocol::font::ResolvedFontId;
+    use neomacs_display_protocol::frame_glyphs::StipplePattern;
+    use neomacs_display_protocol::gradient::{ColorStop, Gradient};
+    use neomacs_display_protocol::terminal_color::TerminalColor;
+
+    let base = Face::new(FaceId::new(0));
+    let changes: &[(&str, fn(&mut Face), bool)] = &[
+        ("id", |face| face.id = FaceId::new(37), true),
+        ("foreground", |face| face.foreground = Color::BLACK, false),
+        ("background", |face| face.background = Color::WHITE, false),
+        (
+            "terminal_foreground",
+            |face| face.terminal_foreground = Some(TerminalColor::Indexed(2)),
+            false,
+        ),
+        (
+            "terminal_background",
+            |face| face.terminal_background = Some(TerminalColor::Indexed(3)),
+            false,
+        ),
+        (
+            "use_default_foreground",
+            |face| face.use_default_foreground = !face.use_default_foreground,
+            false,
+        ),
+        (
+            "use_default_background",
+            |face| face.use_default_background = !face.use_default_background,
+            false,
+        ),
+        (
+            "underline_color",
+            |face| face.underline_color = Some(Color::WHITE),
+            false,
+        ),
+        (
+            "terminal_underline_color",
+            |face| face.terminal_underline_color = Some(TerminalColor::Indexed(4)),
+            false,
+        ),
+        (
+            "overline_color",
+            |face| face.overline_color = Some(Color::WHITE),
+            false,
+        ),
+        (
+            "strike_through_color",
+            |face| face.strike_through_color = Some(Color::WHITE),
+            false,
+        ),
+        (
+            "box_color",
+            |face| face.box_color = Some(Color::WHITE),
+            false,
+        ),
+        (
+            "font_family",
+            |face| face.font_family = "different family".into(),
+            false,
+        ),
+        ("font_size", |face| face.font_size *= 1.5, false),
+        ("font_weight", |face| face.font_weight = 700, false),
+        (
+            "attributes",
+            |face| face.attributes = FaceAttributes::BOLD,
+            false,
+        ),
+        (
+            "underline_style",
+            |face| face.underline_style = UnderlineStyle::Wave,
+            false,
+        ),
+        ("box_type", |face| face.box_type = BoxType::Raised3D, false),
+        (
+            "box_line_width",
+            |face| face.box_line_width = BoxLineWidth::from_gnu(3),
+            false,
+        ),
+        (
+            "box_corner_radius",
+            |face| face.box_corner_radius = 4,
+            false,
+        ),
+        (
+            "box_border_style",
+            |face| face.box_border_style = BoxBorderStyle::Neon,
+            false,
+        ),
+        (
+            "box_border_speed",
+            |face| face.box_border_speed = 2.0,
+            false,
+        ),
+        (
+            "box_color2",
+            |face| face.box_color2 = Some(Color::WHITE),
+            false,
+        ),
+        (
+            "font_file_path",
+            |face| face.font_file_path = Some("/fonts/enriched.ttf".into()),
+            true,
+        ),
+        ("font_ascent", |face| face.font_ascent = 17, true),
+        ("font_descent", |face| face.font_descent = 5, true),
+        (
+            "underline_position",
+            |face| face.underline_position = 9,
+            false,
+        ),
+        (
+            "underline_thickness",
+            |face| face.underline_thickness = 3,
+            false,
+        ),
+        (
+            "background_gradient",
+            |face| {
+                face.background_gradient = Some(Box::new(Gradient::Linear {
+                    angle: 90.0,
+                    stops: vec![
+                        ColorStop::new(0.0, Color::BLACK),
+                        ColorStop::new(1.0, Color::WHITE),
+                    ],
+                }))
+            },
+            false,
+        ),
+        (
+            "lisp_name",
+            |face| face.lisp_name = Some("borrowed identity".into()),
+            false,
+        ),
+        (
+            "default_resolved_font_id",
+            |face| face.default_resolved_font_id = Some(ResolvedFontId(7)),
+            true,
+        ),
+        (
+            "stipple",
+            |face| {
+                face.stipple = Some(Box::new(StipplePattern {
+                    width: 8,
+                    height: 2,
+                    bits: vec![0x55, 0xaa],
+                }))
+            },
+            false,
+        ),
+        (
+            "underline_placement",
+            |face| face.underline_placement = UnderlinePosition::DescentLine { pixels_above: 2 },
+            false,
+        ),
+    ];
+    for (field, change, expected_same) in changes {
+        let mut changed = base.clone();
+        change(&mut changed);
+        let expected = face_realization_identity(&base) == face_realization_identity(&changed);
+        assert_eq!(expected, *expected_same, "fixture must change {field}");
+        assert_eq!(same_face_realization(&base, &changed), expected, "{field}");
+        assert_eq!(
+            same_face_realization(&changed, &base),
+            expected,
+            "{field}, reversed"
+        );
+    }
+
+    // Preserve PartialEq rather than replacing floating comparisons with bit
+    // equality or making NaN faces reflexive as a pointer fast path might do.
+    let mut positive_zero = base.clone();
+    positive_zero.font_size = 0.0;
+    let mut negative_zero = positive_zero.clone();
+    negative_zero.font_size = -0.0;
+    assert!(same_face_realization(&positive_zero, &negative_zero));
+    let mut nan = base;
+    nan.font_size = f32::NAN;
+    assert!(!same_face_realization(&nan, &nan));
+}
+
+#[test]
+fn borrowed_realization_compares_nested_payload_contents_and_float_semantics() {
+    use neomacs_display_protocol::frame_glyphs::StipplePattern;
+    use neomacs_display_protocol::gradient::{ColorStop, Gradient};
+
+    let mut face = Face::new(FaceId::new(0));
+    face.lisp_name = Some("nested payload face".into());
+    face.background_gradient = Some(Box::new(Gradient::Linear {
+        angle: 90.0,
+        stops: vec![
+            ColorStop::new(0.0, Color::BLACK),
+            ColorStop::new(1.0, Color::WHITE),
+        ],
+    }));
+    face.stipple = Some(Box::new(StipplePattern {
+        width: 8,
+        height: 2,
+        bits: vec![0x55, 0xaa],
+    }));
+    let mut changed = face.clone();
+    assert!(
+        same_face_realization(&face, &changed),
+        "equal independently owned payloads match"
+    );
+    changed.stipple.as_mut().unwrap().bits[1] ^= 1;
+    assert!(!same_face_realization(&face, &changed));
+    assert_eq!(
+        same_face_realization(&face, &changed),
+        face_realization_identity(&face) == face_realization_identity(&changed)
+    );
+    changed = face.clone();
+    let Gradient::Linear { stops, .. } = changed.background_gradient.as_deref_mut().unwrap() else {
+        unreachable!()
+    };
+    stops[1].position = 0.75;
+    assert!(!same_face_realization(&face, &changed));
+    assert_eq!(
+        same_face_realization(&face, &changed),
+        face_realization_identity(&face) == face_realization_identity(&changed)
+    );
+    let Gradient::Linear { stops, .. } = changed.background_gradient.as_deref_mut().unwrap() else {
+        unreachable!()
+    };
+    stops[1].position = f32::NAN;
+    assert!(
+        !same_face_realization(&changed, &changed),
+        "nested NaN remains nonreflexive"
+    );
+}
+
+#[test]
+fn borrowed_validation_preserves_enrichment_conflicts_without_mutating_published_faces() {
+    use neomacs_display_protocol::font::ResolvedFontId;
+
+    let mut base = Face::new(FaceId::new(0));
+    base.font_family = "complete face identity".into();
+    base.font_file_path = Some("/fonts/exact.ttf".into());
+    base.default_resolved_font_id = Some(ResolvedFontId(7));
+    base.font_ascent = 12;
+    base.font_descent = 4;
+    let mut attempt = FrameFaceArena::default().begin_attempt();
+    attempt.import_face(base.clone()).unwrap();
+    for path in [None, Some("/fonts/exact.ttf"), Some("/fonts/different.ttf")] {
+        for font_id in [None, Some(ResolvedFontId(7)), Some(ResolvedFontId(8))] {
+            let mut replacement = base.clone();
+            replacement.font_file_path = path.map(str::to_owned);
+            replacement.default_resolved_font_id = font_id;
+            replacement.font_ascent = 18;
+            replacement.font_descent = 0;
+            let compatible =
+                path != Some("/fonts/different.ttf") && font_id != Some(ResolvedFontId(8));
+            assert_eq!(compatible_realization(&base, &replacement), compatible);
+            assert_eq!(
+                attempt.prepare_face(replacement.clone()).is_ok(),
+                compatible
+            );
+            assert_eq!(
+                attempt.face(base.id),
+                Some(base.clone()),
+                "preparation is speculative"
+            );
+
+            let mut merged = base.clone();
+            assert_eq!(
+                merge_compatible_realization(&mut merged, &replacement),
+                compatible
+            );
+            if compatible {
+                assert_eq!(merged.font_ascent, 18);
+                assert_eq!(
+                    merged.font_descent, 4,
+                    "zero replacement metrics preserve enrichment"
+                );
+                assert_eq!(merged.font_file_path, base.font_file_path);
+                assert_eq!(
+                    merged.default_resolved_font_id,
+                    base.default_resolved_font_id
+                );
+            } else {
+                assert_eq!(merged, base, "a conflicting merge is atomic");
+            }
+        }
+    }
+    let mut wrong_id = base.clone();
+    wrong_id.id = FaceId::new(1);
+    assert!(same_face_realization(&base, &wrong_id));
+    assert!(
+        !compatible_realization(&base, &wrong_id),
+        "merging must also preserve the slot ID"
+    );
+}
 
 fn identity_with_fg(pixel: u32) -> Face {
     let mut face = Face::new(FaceId::new(0));
@@ -444,4 +821,226 @@ fn sealing_advances_the_generation() {
         arena.generation(),
         "each accepted presentation needs a distinct retained-face generation"
     );
+}
+
+#[test]
+fn prepared_faces_reject_foreign_or_conflicting_namespaces() {
+    let arena = FrameFaceArena::default();
+    let mut first = arena.begin_attempt();
+    let mut sibling = arena.begin_attempt();
+    let id = FaceId::new(1);
+    let mut face = Face::new(id);
+    first.import_face(face.clone()).unwrap();
+    face.font_size += 4.0;
+    sibling.import_face(face).unwrap();
+    let first = first.commit();
+    let sibling = sibling.commit();
+    let mut next = first.begin_attempt();
+    assert!(
+        next.admit_prepared([id], &sibling.prepared_snapshot(), &first)
+            .is_err()
+    );
+    assert!(next.faces().is_empty());
+    let foreign = FrameFaceArena::default();
+    assert!(
+        next.admit_prepared([id], &foreign.prepared_snapshot(), &first)
+            .is_err()
+    );
+    assert!(next.faces().is_empty());
+    next.admit_prepared([id], &first.prepared_snapshot(), &first)
+        .unwrap();
+    assert_eq!(next.face(id), first.faces.get(&id).cloned());
+}
+
+#[test]
+fn prepared_dynamic_face_survives_a_page_that_does_not_use_it() {
+    let arena = FrameFaceArena::default();
+    let mut first = arena.begin_attempt();
+    let mut face = Face::new(FaceId::new(0));
+    face.foreground = Color::from_pixel(0x00112233);
+    face.id = first.stable_face_id(face_realization_identity(&face));
+    first.import_face(face.clone()).unwrap();
+    let first = first.commit();
+    fn require_send_sync<T: Send + Sync + 'static>() {}
+    require_send_sync::<PreparedFaceSnapshot>();
+    let prepared = first.prepared_snapshot();
+    let second = first.begin_attempt().commit();
+    drop(first);
+    let prepared = std::thread::spawn(move || prepared)
+        .join()
+        .expect("prepared identities need no thread-local arena");
+    assert!(second.faces.is_empty());
+    let mut third = second.begin_attempt();
+    third.admit_prepared([face.id], &prepared, &second).unwrap();
+    assert_eq!(third.face(face.id), Some(face));
+}
+
+#[test]
+fn worker_face_reservation_preserves_publication_and_serializes_identity_allocation() {
+    let mut arena = FrameFaceArena::default();
+    let generation = arena.generation();
+    let mut attempt = arena.begin_attempt();
+    let sibling = arena.begin_attempt();
+    let resolved = crate::neovm_bridge::ResolvedFace::default();
+    let id = crate::display_row::face_state::stable_face_id_for_resolved(&mut attempt, &resolved);
+    let rendered = crate::display_row::face_state::resolved_display_row_face(id, &resolved, None)
+        .render_face();
+    attempt.import_face(rendered.clone()).unwrap();
+    let prepared = arena.reserve_prepared(&attempt).unwrap();
+    assert_eq!(arena.generation(), generation);
+    assert!(
+        arena.faces.is_empty(),
+        "reservation must not publish speculative faces"
+    );
+    assert!(matches!(
+        arena.reserve_prepared(&sibling),
+        Err(FrameFaceReuseError::ForeignSnapshot)
+    ));
+    let mut fresh = arena.begin_attempt();
+    fresh.admit_prepared([id], &prepared, &arena).unwrap();
+    assert_eq!(fresh.face(id), Some(rendered));
+    let mut other = resolved.clone();
+    other.font_size *= 2.0;
+    let other_id = crate::display_row::face_state::stable_face_id_for_resolved(&mut fresh, &other);
+    assert_ne!(id, other_id);
+    let foreign = FrameFaceArena::default().begin_attempt();
+    assert!(matches!(
+        arena.reserve_prepared(&foreign),
+        Err(FrameFaceReuseError::ForeignArena)
+    ));
+    let invalidated = arena.invalidate();
+    assert!(
+        invalidated
+            .begin_attempt()
+            .admit_prepared([id], &prepared, &invalidated)
+            .is_err()
+    );
+}
+
+#[test]
+fn admitting_repeated_prepared_glyph_faces_preserves_existing_storage() {
+    let arena = FrameFaceArena::default();
+    let mut source = arena.begin_attempt();
+    let id = FaceId::new(1);
+    let mut face = Face::new(id);
+    face.font_family = "prepared face with owned family storage".to_owned();
+    source.import_face(face).unwrap();
+    let arena = source.commit();
+    let prepared = arena.prepared_snapshot();
+    let mut attempt = arena.begin_attempt();
+    attempt.admit_prepared([id], &prepared, &arena).unwrap();
+    let storage = attempt.state.borrow().faces[&id].font_family.as_ptr();
+    // A second row references the same face. It must be checked against its
+    // source namespace without replacing the identical, already owned face.
+    attempt.admit_prepared([id], &prepared, &arena).unwrap();
+    assert_eq!(
+        attempt.state.borrow().faces[&id].font_family.as_ptr(),
+        storage
+    );
+    attempt
+        .admit_prepared(std::iter::repeat_n(id, 4096), &prepared, &arena)
+        .unwrap();
+    assert_eq!(
+        attempt.state.borrow().faces[&id].font_family.as_ptr(),
+        storage
+    );
+    assert_eq!(attempt.faces(), *arena.faces);
+}
+
+#[test]
+fn repeated_prepared_faces_still_validate_each_source_namespace() {
+    let mut source = FrameFaceArena::default().begin_attempt();
+    let id = FaceId::new(1);
+    source.import_face(Face::new(id)).unwrap();
+    let arena = source.commit();
+    let prepared = arena.prepared_snapshot();
+    let mut attempt = arena.begin_attempt();
+    attempt.admit_prepared([id], &prepared, &arena).unwrap();
+    let before = attempt.faces();
+    let mut conflict = prepared.clone();
+    Arc::make_mut(&mut conflict.faces)
+        .get_mut(&id)
+        .unwrap()
+        .font_size += 1.0;
+    assert!(matches!(
+        attempt.admit_prepared([id, id], &conflict, &arena),
+        Err(FrameFaceReuseError::ConflictingFace(bad)) if bad == id
+    ));
+    assert_eq!(attempt.faces(), before);
+    let missing = FaceId::new(99);
+    assert!(matches!(
+        attempt.admit_prepared([id, id, missing], &prepared, &arena),
+        Err(FrameFaceReuseError::MissingFace(bad)) if bad == missing
+    ));
+    assert_eq!(attempt.faces(), before);
+}
+
+#[test]
+fn resolved_binding_slot_matches_owned_binding_without_publishing() {
+    let mut attempt = FrameFaceArena::default().begin_attempt();
+    let mut resolved = crate::neovm_bridge::ResolvedFace::default();
+    resolved.font_family = "slot-family".into();
+    resolved.font_size = 19.0;
+    resolved.font_ascent = 14.0;
+    resolved.font_line_height = 19.0;
+    resolved.italic = true;
+    resolved.font_weight = 700;
+    let id = crate::display_row::face_state::stable_face_id_for_resolved(&mut attempt, &resolved);
+    let expected = attempt.bind_resolved_face(id, resolved.clone()).unwrap();
+    let mut output = None;
+    attempt
+        .bind_resolved_face_into(id, resolved.clone(), &mut output)
+        .unwrap();
+    let bound = output.as_ref().unwrap();
+    assert_eq!(bound.face_id(), expected.face_id());
+    assert_eq!(bound.resolved(), expected.resolved());
+    assert_eq!(bound.realized(None).face(), expected.realized(None).face());
+    assert!(attempt.faces().is_empty());
+    let measured_metrics = crate::font::metrics::FontMetrics {
+        ascent: 20.0,
+        descent: 6.0,
+        line_height: 26.0,
+        char_width: 11.0,
+        space_width: 10.0,
+    };
+    let realized = bound.realized(Some(measured_metrics));
+    assert_eq!(realized.face().font_ascent, 20);
+    assert_eq!(realized.face().font_descent, 6);
+    assert_eq!(bound.resolved(), &resolved);
+    assert!(attempt.faces().is_empty());
+    assert_eq!(attempt.use_face(&realized).unwrap(), id);
+    assert!(
+        FrameFaceArena::default()
+            .begin_attempt()
+            .publish_face(&realized)
+            .is_err()
+    );
+    attempt.publish_face(&realized).unwrap();
+    assert_eq!(attempt.face(id).as_ref(), Some(realized.face()));
+}
+
+#[test]
+fn conflicting_resolved_binding_leaves_caller_slot_and_publication_unchanged() {
+    let mut attempt = FrameFaceArena::default().begin_attempt();
+    let resolved = crate::neovm_bridge::ResolvedFace::default();
+    let id = crate::display_row::face_state::stable_face_id_for_resolved(&mut attempt, &resolved);
+    let mut output = None;
+    attempt
+        .bind_resolved_face_into(id, resolved.clone(), &mut output)
+        .unwrap();
+    let retained = output.as_ref().unwrap().realized(None);
+    attempt.publish_face(&retained).unwrap();
+    let before = attempt.faces();
+    let mut conflicting = resolved.clone();
+    conflicting.font_size *= 0.75;
+    assert!(
+        attempt
+            .bind_resolved_face_into(id, conflicting, &mut output)
+            .is_err()
+    );
+    let unchanged = output.as_ref().unwrap();
+    assert_eq!(unchanged.resolved(), &resolved);
+    assert_eq!(unchanged.realized(None).face(), retained.face());
+    assert_eq!(attempt.faces(), before);
+    assert_eq!(attempt.use_face(&unchanged.realized(None)).unwrap(), id);
 }

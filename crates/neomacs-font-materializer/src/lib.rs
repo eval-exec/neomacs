@@ -580,7 +580,7 @@ fn bitmap_line_height(
 }
 
 #[cfg(all(test, any(windows, target_os = "linux")))]
-#[path = "lib_test.rs"]
+#[path = "tests/lib_test.rs"]
 mod lib_test;
 
 #[cfg(any(windows, target_os = "linux"))]

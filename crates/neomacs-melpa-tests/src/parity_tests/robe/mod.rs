@@ -9,7 +9,7 @@ use neomacs_melpa_test_support::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::{CachedMelpaOracle, INF_RUBY_MELPA_PIN, ROBE_MELPA_PIN, workspace_root};
+use crate::{CachedMelpaOracle, INF_RUBY_MELPA_PIN, ROBE_MELPA_PIN};
 
 use super::batch_support::{ParityBatchCase, assert_oracle_batch_cases};
 
@@ -216,8 +216,8 @@ fn verify_artifact_digest(artifact: &Path, expected: &str) -> Result<(), String>
 /// avoiding global environment mutation while GNU Emacs and Neomacs run in
 /// parallel.
 fn prepare_robe_runtime() -> Result<PathBuf, String> {
-    let cache = workspace_root()
-        .join("tmp/melpa/tool-cache/robe")
+    let cache = neomacs_infra::melpa_cache_root()
+        .join("tool-cache/robe")
         .join(ROBE_RUNTIME_CACHE_VERSION);
     let artifacts = cache.join("artifacts");
     let gem_home = cache.join("gem-home");
@@ -449,7 +449,7 @@ const ROBE_TEST_PRELUDE: &str = r####"
 (defun neomacs-robe-test-runtime-command ()
   "Read the exact external Ruby command prepared below workspace `./tmp`."
   (let ((file (expand-file-name
-               "tmp/melpa/tool-cache/robe/ruby-3.3.10-pry-0.14.2-v2/runtime-command.el"
+               "target/melpa/tool-cache/robe/ruby-3.3.10-pry-0.14.2-v2/runtime-command.el"
                (getenv "NEOMACS_RUNTIME_ROOT"))))
     (with-temp-buffer
       (insert-file-contents file)
@@ -517,7 +517,7 @@ const ROBE_TEST_PRELUDE: &str = r####"
          (console (generate-new-buffer " *robe-test-console*"))
          (gem-home
           (expand-file-name
-           "tmp/melpa/tool-cache/robe/ruby-3.3.10-pry-0.14.2-v2/gem-home"
+           "target/melpa/tool-cache/robe/ruby-3.3.10-pry-0.14.2-v2/gem-home"
            (getenv "NEOMACS_RUNTIME_ROOT")))
          (script (neomacs-robe-test-console-script root))
          process)

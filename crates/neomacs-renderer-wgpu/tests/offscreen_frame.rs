@@ -12,23 +12,27 @@
 use neomacs_display_protocol::face::BoxVerticalEdges;
 #[path = "offscreen_frame/menu_test.rs"]
 mod menu_test;
+#[path = "offscreen_frame/scroll_texture_test.rs"]
+mod scroll_texture_test;
 use neomacs_display_protocol::frame_chrome::PresentationId;
 use neomacs_display_protocol::frame_glyphs::{
     CursorStyle, DisplaySlotId, FrameGlyph, FrameGlyphBuffer, GlyphRowRole, PhysCursor,
 };
+use neomacs_display_protocol::image::EncodedBytes;
 use neomacs_display_protocol::types::{
     AnimatedCursor, Color, DisplayFrameId, DisplayWindowId, FaceId,
 };
 use neomacs_display_protocol::{
-    BoxType, DeviceScale, Face, FaceAttributes, FrameRect, GeometrySize, ImageId, ImageLoadAttempt,
-    ImageLoadToken, ImageSourceRect, LogicalPixels, PointerAppearanceId, PointerAppearancePhase,
-    PointerAppearanceSelection, PointerDrawMode, PointerImageRelief, PointerReliefCornerErase,
-    PointerReliefEdges, PointerReliefMargins, PresentMapping, PresentationExtent,
-    PresentedPaintSpan, PresentedPointerAppearance, PresentedPointerRegion, PresentedPrimitiveKind,
-    SurfaceState,
+    BoxType, DeviceScale, Face, FaceAttributes, FrameRect, GeometrySize, ImageColorContext,
+    ImageFrameIndex, ImageId, ImageLoadAttempt, ImageLoadToken, ImageMaskPolicy, ImageRealization,
+    ImageRotation, ImageSequenceId, ImageSizeSpec, ImageSourceRect, LogicalPixels,
+    PointerAppearanceId, PointerAppearancePhase, PointerAppearanceSelection, PointerDrawMode,
+    PointerImageRelief, PointerReliefCornerErase, PointerReliefEdges, PointerReliefMargins,
+    PresentMapping, PresentationExtent, PresentedPaintSpan, PresentedPointerAppearance,
+    PresentedPointerRegion, PresentedPrimitiveKind, SurfaceState,
 };
 use neomacs_renderer_wgpu::types::SubpixelRequest;
-use neomacs_renderer_wgpu::{WgpuGlyphAtlas, WgpuRenderer};
+use neomacs_renderer_wgpu::{FilledRows, WgpuGlyphAtlas, WgpuRenderer};
 
 const W: u32 = 96;
 const H: u32 = 64;
@@ -193,6 +197,9 @@ fn child_frame_box_line_width_is_one_device_pixel_at_two_x_scale() {
         0.0,
         None,
         None,
+        1.0,
+        1.0,
+        [0.0; 2],
     );
     let buf = read_back(&h);
 
@@ -977,6 +984,9 @@ fn child_frame_negative_box_border_does_not_cover_a_one_cell_glyph() {
         0.0,
         None,
         None,
+        1.0,
+        1.0,
+        [0.0; 2],
     );
     let buf = read_back(&h);
     assert!(
@@ -1081,6 +1091,9 @@ fn child_frame_rounded_extend_box_has_no_terminal_vertical_edge() {
         0.0,
         None,
         None,
+        1.0,
+        1.0,
+        [0.0; 2],
     );
     assert_open_ended_box(&read_back(&h));
 }
@@ -1125,6 +1138,9 @@ fn child_frame_sharp_extend_box_has_no_terminal_vertical_edge() {
         0.0,
         None,
         None,
+        1.0,
+        1.0,
+        [0.0; 2],
     );
     assert_open_ended_box(&read_back(&h));
 }
@@ -1931,6 +1947,9 @@ fn child_filled_box_motion_uses_the_same_inverse_video_contract() {
             0.0,
             None,
             None,
+            1.0,
+            1.0,
+            [0.0; 2],
         );
         read_tex(&h.renderer, &texture)
     };
@@ -1992,5 +2011,591 @@ fn filled_box_cell_redraw_ignores_stale_cell_below_resized_surface() {
         true,
         None,
         (20, 16, 10, 18),
+    );
+}
+
+/// A PNG wide and tall enough to band — over `BANDING_MIN_PIXELS` — whose every
+/// pixel is bright and distinct, so a row drawn from the wrong place (or not
+/// drawn at all) is visible against the black background these tests paint.
+fn banding_png(width: u32, height: u32) -> Vec<u8> {
+    let pixels: Vec<u8> = (0..height)
+        .flat_map(|y| {
+            (0..width).flat_map(move |x| {
+                [
+                    64 + (x % 180) as u8,
+                    64 + (y % 160) as u8,
+                    64 + ((x + y) % 180) as u8,
+                    0xff,
+                ]
+            })
+        })
+        .collect();
+    let image = image::RgbaImage::from_raw(width, height, pixels).expect("pixel buffer");
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(image)
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .expect("PNG is encodable");
+    bytes.into_inner()
+}
+
+/// Every pixel of `texture`, un-padded, as RGBA.
+fn read_image_texture(
+    renderer: &WgpuRenderer,
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+) -> Vec<u8> {
+    let unpadded = width * 4;
+    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    let padded = unpadded.div_ceil(align) * align;
+    let buf = renderer.device().create_buffer(&wgpu::BufferDescriptor {
+        label: Some("image readback"),
+        size: u64::from(padded) * u64::from(height),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut enc = renderer
+        .device()
+        .create_command_encoder(&Default::default());
+    enc.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buf,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded),
+                rows_per_image: Some(height),
+            },
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    renderer.queue().submit(std::iter::once(enc.finish()));
+    let slice = buf.slice(..);
+    slice.map_async(wgpu::MapMode::Read, |_| {});
+    renderer
+        .device()
+        .poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(std::time::Duration::from_secs(10)),
+        })
+        .expect("poll");
+    let data = slice.get_mapped_range().expect("readback is mapped");
+    let mut out = vec![0u8; (unpadded * height) as usize];
+    for row in 0..height {
+        let src = (row * padded) as usize;
+        let dst = (row * unpadded) as usize;
+        out[dst..dst + unpadded as usize].copy_from_slice(&data[src..src + unpadded as usize]);
+    }
+    out
+}
+
+/// Load `data` through the renderer and drain image events the way the frame
+/// loop does. Stops, leaving the decode running, the first time `watch` is
+/// satisfied — which is how a test asks for a frame drawn at one particular
+/// point of the fill rather than after it — and otherwise runs to the end.
+///
+/// Returns every fill observed while rows were still arriving, in order; an
+/// empty list says the decode was never caught mid-flight.
+fn drive_banded_load(
+    h: &mut Harness,
+    image: u32,
+    data: &[u8],
+    realization: ImageRealization,
+    watch: impl Fn(FilledRows) -> bool,
+) -> Vec<FilledRows> {
+    h.renderer.load_image_data_with_id(
+        test_image_load(image),
+        EncodedBytes::copy_of(data),
+        ImageSizeSpec::default(),
+        ImageRotation::None,
+        realization,
+        ImageColorContext::default(),
+        ImageMaskPolicy::Preserve,
+        ImageFrameIndex::default(),
+        ImageSequenceId::new(u64::from(image)).expect("non-zero test sequence"),
+        neomacs_renderer_wgpu::SvgResourceContext::Isolated,
+        neomacs_display_protocol::image_diagnostic::ImageLoadIdentity::unspecified(),
+    );
+    let image_id = ImageId::new(image);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    let mut partial = Vec::new();
+    while std::time::Instant::now() < deadline {
+        h.renderer.process_pending_images();
+        if let Some(cached) = h.renderer.image_cache().get(image_id)
+            && !cached.filled.is_complete()
+            && partial.last() != Some(&cached.filled)
+        {
+            partial.push(cached.filled);
+            if watch(cached.filled) {
+                return partial;
+            }
+        }
+        if h.renderer.is_image_ready(image_id) {
+            break;
+        }
+        std::thread::yield_now();
+    }
+    assert!(h.renderer.is_image_ready(image_id), "the image must decode");
+    partial
+}
+
+/// `sin(pi * t) / (pi * t)`, with the removable singularity at zero taken.
+fn sinc(t: f64) -> f64 {
+    if t == 0.0 {
+        1.0
+    } else {
+        let a = t * std::f64::consts::PI;
+        a.sin() / a
+    }
+}
+
+/// Lanczos's windowed sinc with a window of three, from the definition.
+///
+/// The kernel the banded path filters with, stated here rather than reached
+/// into the crate for, so the acceptance test's expectation does not depend on
+/// the implementation it checks.
+fn lanczos3(distance: f64) -> f64 {
+    let x = distance.abs();
+    if x < 3.0 {
+        sinc(x) * sinc(x / 3.0)
+    } else {
+        0.0
+    }
+}
+
+/// One unit of weight, the divisor a weight is stored in.
+const WEIGHT_ONE: f64 = 65536.0;
+
+/// The resample of `rgba` into `raster`, one axis at a time, written out the
+/// obvious way: every output sample walks the inputs its support covers and
+/// weights each by the kernel.
+///
+/// This is the definition the banded path implements with a streaming target,
+/// stated here so the acceptance test's expectation is independent of that
+/// implementation. Output `o` is centred at `(o + 0.5) * n / m` in input
+/// coordinates, where input texel `i` spans `[i, i + 1)`; the kernel's support
+/// is three output texels — widened by the reduction, so it is `3n/m` input
+/// texels either side — and a tap is any texel whose centre lies inside that.
+/// Weights are the kernel's value at each tap, scaled by [`WEIGHT_ONE`] and
+/// normalized by the sum of the taps that fell inside the source, and the
+/// sample is that weighted sum divided by the sum of the *quantized* weights
+/// and rounded.
+///
+/// Two rules belong to the path rather than to the kernel. The first axis hands
+/// the second a *mean* rather than an 8-bit level: the clamp that turns a mean
+/// into a sample happens once, at the end, because clamping per axis discards
+/// an excursion the second axis was going to cancel. And an axis with as many
+/// outputs as inputs is **copied**: Lanczos3's taps at scale one land on
+/// whole-texel offsets where two of its three sinc factors are zero, so
+/// filtering would come out the same today, but only while the zeros survive
+/// quantization — and an image shown at its own size is the case this path has
+/// to keep exact by construction.
+fn lanczos_resample(
+    rgba: &[u8],
+    (width, height): (u32, u32),
+    (out_width, out_height): (u32, u32),
+) -> Vec<u8> {
+    /// The taps of one output, as `(input index, weight)`.
+    fn taps(centre: f64, scale: f64, input: u32) -> (Vec<(usize, f64)>, f64) {
+        let half = 3.0 * scale;
+        let first = ((centre - half - 0.5).floor().max(0.0)) as u32;
+        let last = ((centre + half - 0.5).ceil().min(f64::from(input - 1))) as u32;
+        let weighted: Vec<(usize, f64)> = (first..=last)
+            .map(|i| (i as usize, ((f64::from(i) + 0.5) - centre).abs() / scale))
+            .map(|(i, distance)| (i, lanczos3(distance)))
+            .collect();
+        let sum = weighted.iter().map(|(_, weight)| *weight).sum();
+        (weighted, sum)
+    }
+    let mean = |sum: i64, total: i64| (sum + total / 2).div_euclid(total) as i32;
+    let level = |mean: i32| u8::try_from(mean.clamp(0, 255)).expect("a clamped level is a level");
+
+    let mut lines: Vec<i32> = Vec::with_capacity(height as usize * out_width as usize * 4);
+    let x_scale = f64::from(width) / f64::from(out_width);
+    for row in rgba.chunks_exact(width as usize * 4) {
+        if width == out_width {
+            lines.extend(row.iter().map(|sample| i32::from(*sample)));
+            continue;
+        }
+        for o in 0..out_width {
+            let (taps, sum) = taps((f64::from(o) + 0.5) * x_scale, x_scale, width);
+            let mut sums = [0_i64; 4];
+            let mut total = 0_i64;
+            for (i, weight) in taps {
+                let weight = (weight * WEIGHT_ONE / sum).round() as i64;
+                total += weight;
+                for (c, sum) in sums.iter_mut().enumerate() {
+                    *sum += weight * i64::from(row[i * 4 + c]);
+                }
+            }
+            for sum in sums {
+                lines.push(mean(sum, total));
+            }
+        }
+    }
+
+    let mut out = vec![0_u8; out_width as usize * out_height as usize * 4];
+    let y_scale = f64::from(height) / f64::from(out_height);
+    for column in 0..out_width as usize {
+        for o in 0..out_height {
+            let at = (o as usize * out_width as usize + column) * 4;
+            if height == out_height {
+                for c in 0..4 {
+                    out[at + c] = level(lines[at + c]);
+                }
+                continue;
+            }
+            let (taps, sum) = taps((f64::from(o) + 0.5) * y_scale, y_scale, height);
+            let mut sums = [0_i64; 4];
+            let mut total = 0_i64;
+            for (i, weight) in taps {
+                let weight = (weight * WEIGHT_ONE / sum).round() as i64;
+                total += weight;
+                for (c, sum) in sums.iter_mut().enumerate() {
+                    *sum += weight * i64::from(lines[(i * out_width as usize + column) * 4 + c]);
+                }
+            }
+            for (channel, sum) in out[at..at + 4].iter_mut().zip(sums) {
+                *channel = level(mean(sum, total));
+            }
+        }
+    }
+    out
+}
+
+/// The area average of `rgba` into `raster`, one axis at a time — the filter
+/// the banded path resampled with between step 4 and step 6, and the control
+/// the acceptance test below holds the new one against.
+fn area_average(
+    rgba: &[u8],
+    (width, height): (u32, u32),
+    (out_width, out_height): (u32, u32),
+) -> Vec<u8> {
+    fn weights(lo: u64, hi: u64, step: u64) -> impl Iterator<Item = (usize, u64)> {
+        (lo / step..hi.div_ceil(step)).filter_map(move |i| {
+            let overlap = hi.min((i + 1) * step) - lo.max(i * step);
+            (overlap > 0).then_some((i as usize, overlap))
+        })
+    }
+    let round = |sum: u64, total: u64| ((sum + total / 2) / total) as u8;
+
+    let mut lines = Vec::with_capacity(height as usize * out_width as usize * 4);
+    for row in rgba.chunks_exact(width as usize * 4) {
+        let mut line = vec![0_u8; out_width as usize * 4];
+        for (o, texel) in line.chunks_exact_mut(4).enumerate() {
+            let (lo, hi) = (
+                o as u64 * u64::from(width),
+                (o as u64 + 1) * u64::from(width),
+            );
+            let mut sums = [0_u64; 4];
+            for (i, weight) in weights(lo, hi, u64::from(out_width)) {
+                for (c, sum) in sums.iter_mut().enumerate() {
+                    *sum += weight * u64::from(row[i * 4 + c]);
+                }
+            }
+            for (channel, sum) in texel.iter_mut().zip(sums) {
+                *channel = round(sum, u64::from(width));
+            }
+        }
+        lines.extend_from_slice(&line);
+    }
+
+    let mut out = vec![0_u8; out_width as usize * out_height as usize * 4];
+    for column in 0..out_width as usize {
+        for o in 0..out_height {
+            let (lo, hi) = (
+                u64::from(o) * u64::from(height),
+                (u64::from(o) + 1) * u64::from(height),
+            );
+            let mut sums = [0_u64; 4];
+            for (i, weight) in weights(lo, hi, u64::from(out_height)) {
+                for (c, sum) in sums.iter_mut().enumerate() {
+                    *sum += weight * u64::from(lines[i * out_width as usize * 4 + column * 4 + c]);
+                }
+            }
+            let at = (o as usize * out_width as usize + column) * 4;
+            for (channel, sum) in out[at..at + 4].iter_mut().zip(sums) {
+                *channel = round(sum, u64::from(height));
+            }
+        }
+    }
+    out
+}
+
+/// The acceptance criterion, on the real GPU path: an image decoded in bands
+/// ends in exactly the texture the same decode realized through the same filter
+/// would have produced — the same bytes, not merely the same picture.
+///
+/// The expected bytes are stated here without reference to the cache: `image`'s
+/// own decode of the fixture, reduced to the raster the texture limit clamps it
+/// to by the Lanczos3 resample above.
+///
+/// This was an equality against `image::imageops::resize(…, Lanczos3)` until
+/// the banded path stopped resampling with Lanczos3. It resamples with it
+/// again, but the equality is not restored, and deliberately: that contract
+/// said a banded decode ends as the *whole-image path's* bytes, which cannot be
+/// true of a path that has no whole-image buffer to agree with. The contract
+/// that survives — and that this test is — is that the finished texture is the
+/// bytes the decode's own filter defines, and that the bands along the way fill
+/// it from row zero.
+///
+/// Two controls keep that from being a statement about any resample at all. The
+/// crate's own Lanczos3 is a *different implementation* of the same filter —
+/// weight quantization and accumulation order are not the same — so it is held
+/// to within a couple of levels of the texture rather than to equality, which
+/// is a bound the area average does not come close to. And the area average,
+/// the filter this replaced, is measured to be a different picture by a margin
+/// the same bound would call a failure.
+#[test]
+fn a_banded_image_ends_in_the_texture_its_own_filter_defines() {
+    let Some(mut h) = try_harness() else {
+        eprintln!("SKIP: no GPU adapter");
+        return;
+    };
+
+    // Five source pixels per raster pixel across: the raster is the clamped
+    // 4096x819, so a band is mapped through a real scaling rather than one to
+    // one, and the clamping is part of what this pins.
+    let (width, height) = (5000u32, 1000u32);
+    let data = banding_png(width, height);
+    let fills = drive_banded_load(
+        &mut h,
+        907,
+        &data,
+        ImageRealization::with_device_scale(1.0, 1.0),
+        |_| false,
+    );
+    assert!(
+        !fills.is_empty(),
+        "a five-megapixel PNG is still arriving when the first frame is drained"
+    );
+
+    let cached = h
+        .renderer
+        .image_cache()
+        .get(ImageId::new(907))
+        .expect("a decoded image has a texture");
+    assert_eq!(
+        (cached.raster.width(), cached.raster.height()),
+        (4096, 819),
+        "the texture limit clamps the raster"
+    );
+    assert!(cached.filled.is_complete());
+    let read_back = read_image_texture(
+        &h.renderer,
+        &cached.texture,
+        cached.raster.width(),
+        cached.raster.height(),
+    );
+
+    let whole = image::load_from_memory(&data)
+        .expect("the fixture decodes")
+        .to_rgba8();
+    let expected = lanczos_resample(whole.as_raw(), (width, height), (4096, 819));
+    assert_eq!(
+        read_back, expected,
+        "the finished texture must be the Lanczos3 resample of the source"
+    );
+
+    // The independent control, and the one that says the equality above is a
+    // statement about *which* filter rather than about this implementation of
+    // it: `image`'s own Lanczos3, resampled whole, is the same picture to
+    // within the level a quantized weight table and two accumulation orders
+    // are worth. Nothing about the banded path is an input to it.
+    let crate_lanczos =
+        image::imageops::resize(&whole, 4096, 819, image::imageops::FilterType::Lanczos3)
+            .into_raw();
+    let worst = read_back
+        .iter()
+        .zip(&crate_lanczos)
+        .map(|(got, want)| got.abs_diff(*want))
+        .max()
+        .expect("a raster has pixels");
+    assert!(
+        worst <= 2,
+        "the banded path must be the same filter the whole-image path resamples \
+         with, to within a level or two: worst texel differs by {worst}"
+    );
+
+    // And the filter this replaced: the area average of the same source is a
+    // different picture by a wide margin, so the equality above cannot be
+    // passing for want of a filter in it.
+    let averaged = area_average(whole.as_raw(), (width, height), (4096, 819));
+    assert_ne!(
+        read_back, averaged,
+        "the banded path does not resample with the area average any more"
+    );
+    assert!(
+        read_back
+            .iter()
+            .zip(&averaged)
+            .map(|(got, want)| got.abs_diff(*want))
+            .max()
+            .expect("a raster has pixels")
+            > 8,
+        "the two filters are not near neighbours; a bound this loose would be a \
+         bound about nothing"
+    );
+}
+
+/// A band's rows are drawn as soon as they are uploaded, and nothing below them
+/// is: the frame that catches a decode mid-flight shows the image down to where
+/// its pixels have arrived and the background underneath.
+#[test]
+fn a_frame_drawn_mid_decode_shows_only_the_rows_that_have_arrived() {
+    let Some(mut h) = try_harness() else {
+        eprintln!("SKIP: no GPU adapter");
+        return;
+    };
+
+    let (width, height) = (5000u32, 1000u32);
+    let data = banding_png(width, height);
+    // Stopped somewhere in the middle of the decode, so the boundary between
+    // drawn and undrawn rows lands inside the target: one row of it drawn, or
+    // all but one, would not exercise the boundary at all.
+    let fills = drive_banded_load(
+        &mut h,
+        908,
+        &data,
+        ImageRealization::with_device_scale(1.0, 1.0),
+        |filled| (0.2..0.8).contains(&filled.filled_fraction()),
+    );
+    let filled = *fills
+        .last()
+        .expect("the decode must be caught part-way through");
+    let image_id = ImageId::new(908);
+
+    let mut frame = FrameGlyphBuffer::with_size(W as f32, H as f32);
+    frame.background = Color::BLACK;
+    let image_face_id = FaceId::new(42);
+    let mut image_face = Face::new(image_face_id);
+    image_face.background = Color::BLACK;
+    frame.faces.insert(image_face_id, image_face);
+    frame.glyphs.push(FrameGlyph::Image {
+        window_id: DisplayWindowId::new(1),
+        row_role: GlyphRowRole::Text,
+        clip_rect: None,
+        slot_id: None,
+        image_id,
+        source_rect: ImageSourceRect::new(0.0, 0.0, 1.0, 1.0).expect("the whole image"),
+        slot_rect: neomacs_display_protocol::Rect::new(0.0, 0.0, W as f32, H as f32),
+        box_rect: neomacs_display_protocol::Rect::new(0.0, 0.0, W as f32, H as f32),
+        x: 0.0,
+        y: 0.0,
+        width: W as f32,
+        height: H as f32,
+        face_id: image_face_id,
+        box_vertical_edges: BoxVerticalEdges::Unboxed,
+    });
+
+    h.renderer.render_frame_glyphs(
+        &h.view,
+        &frame,
+        &mut h.atlas,
+        mapping_for(&frame, W, H),
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    let rendered = read_back(&h);
+
+    // Where the boundary between drawn and undrawn rows falls on screen: the
+    // glyph is the whole target, so its texture rows are the target's rows.
+    let boundary =
+        (f64::from(filled.filled()) / f64::from(filled.total().get()) * f64::from(H)) as u32;
+    assert!(
+        (2..H - 2).contains(&boundary),
+        "the boundary must be inside the frame, got {boundary}"
+    );
+    let above = px(&rendered, W / 2, boundary - 2);
+    let below = px(&rendered, W / 2, boundary + 2);
+    assert!(
+        above[0] > 40 && above[1] > 40,
+        "rows that arrived must be drawn, got {above:?} at row {}",
+        boundary - 2
+    );
+    assert_eq!(
+        below,
+        [0, 0, 0, 255],
+        "rows that have not arrived must not be drawn, got {below:?} at row {}",
+        boundary + 2
+    );
+}
+
+/// A decode that fails after bands have been written leaves nothing behind: the
+/// rows it filled are rows of an image that will never arrive, and a texture
+/// holding them would draw part of a picture forever.
+///
+/// The fixture is a real PNG cut short — header and some rows — so the decode
+/// genuinely produces bands and then genuinely fails, which is the case a
+/// truncated download is.
+#[test]
+fn a_failed_banded_decode_leaves_no_partial_texture() {
+    let Some(mut h) = try_harness() else {
+        eprintln!("SKIP: no GPU adapter");
+        return;
+    };
+
+    let (width, height) = (5000u32, 1000u32);
+    let full = banding_png(width, height);
+    let data = &full[..full.len() * 2 / 5];
+    h.renderer.load_image_data_with_id(
+        test_image_load(909),
+        EncodedBytes::copy_of(data),
+        ImageSizeSpec::default(),
+        ImageRotation::None,
+        ImageRealization::with_device_scale(1.0, 1.0),
+        ImageColorContext::default(),
+        ImageMaskPolicy::Preserve,
+        ImageFrameIndex::default(),
+        ImageSequenceId::new(909).expect("non-zero test sequence"),
+        neomacs_renderer_wgpu::SvgResourceContext::Isolated,
+        neomacs_display_protocol::image_diagnostic::ImageLoadIdentity::unspecified(),
+    );
+    let image_id = ImageId::new(909);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    let mut saw_band = false;
+    while std::time::Instant::now() < deadline {
+        h.renderer.process_pending_images();
+        saw_band |= h
+            .renderer
+            .image_cache()
+            .get(image_id)
+            .is_some_and(|cached| !cached.filled.is_complete());
+        if matches!(
+            h.renderer.image_cache().get_state(image_id),
+            Some(neomacs_renderer_wgpu::ImageState::Failed(_))
+        ) {
+            break;
+        }
+        std::thread::yield_now();
+    }
+
+    assert!(
+        saw_band,
+        "the truncated source bands before it fails, which is what makes the cleanup a case"
+    );
+    assert!(
+        matches!(
+            h.renderer.image_cache().get_state(image_id),
+            Some(neomacs_renderer_wgpu::ImageState::Failed(_))
+        ),
+        "a source that cannot be decoded fails"
+    );
+    assert!(
+        h.renderer.image_cache().get(image_id).is_none(),
+        "a failed decode keeps no texture, partial or otherwise"
     );
 }

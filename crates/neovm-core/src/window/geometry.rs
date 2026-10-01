@@ -106,6 +106,9 @@ struct PresentationPosition {
     body_y: i64,
     width: i64,
     height: i64,
+    /// The line owns coordinate hits even below a shorter glyph. Keep this
+    /// separate from glyph height, which position/cursor queries still need.
+    row_height: i64,
     body_row: i64,
     col: i64,
 }
@@ -245,6 +248,11 @@ impl PresentationWindow {
                 });
             }
         }
+        let row_heights: HashMap<_, _> = snapshot
+            .rows
+            .iter()
+            .map(|row| (row.row, row.height))
+            .collect();
         let positions = snapshot
             .points
             .iter()
@@ -261,6 +269,10 @@ impl PresentationWindow {
                     body_y: body_row.body_y,
                     width: point.width,
                     height: point.height,
+                    // Compatibility snapshots can contain only points. Real
+                    // publications carry canonical row metrics, including
+                    // mixed-font extents, raised text and line spacing.
+                    row_height: row_heights.get(&point.row).copied().unwrap_or(point.height),
                     body_row: body_row.body_row,
                     col: point.col,
                 })
@@ -1280,7 +1292,8 @@ impl<'a> SnapshotWindowGeometry<'a> {
             .positions
             .iter()
             .filter(|point| {
-                body_y >= point.body_y && body_y < point.body_y.saturating_add(point.height.max(1))
+                body_y >= point.body_y
+                    && body_y < point.body_y.saturating_add(point.row_height.max(1))
             })
             .collect();
         points.sort_by_key(|point| (point.x, point.col, point.buffer_pos));

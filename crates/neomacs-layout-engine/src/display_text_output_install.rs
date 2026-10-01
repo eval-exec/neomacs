@@ -20,6 +20,7 @@ pub(crate) struct DisplayOutputRowStoredMetrics {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct DisplayOutputTextRowMetricsInstallRequest {
+    line_spacing: f32,
     display_row_index: usize,
     absolute_y: f32,
     height_px: f32,
@@ -119,11 +120,17 @@ impl DisplayOutputTextRowMetricsInstallRequest {
         ascent_px: f32,
     ) -> Self {
         Self {
+            line_spacing: 0.0,
             display_row_index,
             absolute_y,
             height_px,
             ascent_px,
         }
+    }
+
+    pub(crate) fn with_line_spacing(mut self, spacing: f32) -> Self {
+        self.line_spacing = spacing;
+        self
     }
 
     pub(crate) fn display_row_index(self) -> usize {
@@ -150,6 +157,10 @@ impl DisplayOutputTextRowMetricsInstallRequest {
             metrics.height_px,
             metrics.ascent_px,
         ));
+        let _ = builder.apply_current_window_row_mutation(
+            self.display_row_index,
+            RowLineSpacing(self.line_spacing),
+        );
         metrics
     }
 }
@@ -168,4 +179,13 @@ pub(crate) fn install_output_resolved_face(
     metrics: Option<FontMetrics>,
 ) {
     builder.publish_output_face(&face.realized(metrics));
+}
+
+struct RowLineSpacing(f32);
+
+impl crate::output::row_request::DisplayWindowRowMutation for RowLineSpacing {
+    type Output = ();
+    fn apply(self, row: &mut GlyphRow, _matrix_cols: usize) {
+        row.line_spacing_px = self.0;
+    }
 }

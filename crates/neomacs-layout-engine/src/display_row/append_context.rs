@@ -14,6 +14,7 @@ use crate::display_row::render_state::DisplayRowRenderBounds;
 use crate::display_row::text_output::TextRowOutput;
 use crate::font::metrics::FontMetricsService;
 use crate::neovm_bridge::ResolvedFace;
+use crate::types::LineWrapMode;
 use neomacs_display_protocol::frame_glyphs::GlyphRowRole;
 use neomacs_display_protocol::glyph_matrix::Glyph;
 use neomacs_display_protocol::glyph_matrix::GlyphArea;
@@ -171,12 +172,96 @@ impl DisplayRowMarginAreas {
     }
 }
 
+/// GNU `it->line_wrap` for the row an append surface serves.
+///
+/// `init_iterator` resolves the window's wrap method ONCE, before any glyph is
+/// produced (src/xdisp.c:3414-3426, emacs-31.1):
+///
+/// ```c
+///   /* Are lines in the display truncated?  */
+///   if (TRUNCATE != 0)
+///     it->line_wrap = TRUNCATE;
+///   if (base_face_id == DEFAULT_FACE_ID
+///       && !it->w->hscroll
+///       && (WINDOW_FULL_WIDTH_P (it->w)
+///           || NILP (Vtruncate_partial_width_windows)
+///           || (FIXNUMP (Vtruncate_partial_width_windows)
+///               && (XFIXNUM (Vtruncate_partial_width_windows)
+///                   <= WINDOW_TOTAL_COLS (it->w))))
+///       && NILP (BVAR (current_buffer, truncate_lines)))
+///     it->line_wrap = NILP (BVAR (current_buffer, word_wrap))
+///       ? WINDOW_WRAP : WORD_WRAP;
+/// ```
+///
+/// `enum line_wrap_method { TRUNCATE, WORD_WRAP, WINDOW_WRAP }`
+/// (src/dispextern.h:2325-2330) is THREE-valued, and the distinction is not
+/// cosmetic: `produce_image_glyph` crops a wide image glyph only when
+/// `line_wrap != WORD_WRAP` (:32493-32508) and `display_line` can only move a
+/// preceding word down with the element that did not fit when it saved a
+/// `wrap_it` break candidate, which it does under WORD_WRAP alone
+/// (:26091-26116 and :26379-26406).
+///
+/// [`crate::types::LineWrapMode`] collapses GNU's two wrapping methods into
+/// one `Wrap`, so a row needs this resolved form before it can decide either
+/// rule.  The resolution happens once, where the surface is built from
+/// `WindowParams`; every row appended into that surface inherits it, exactly
+/// as every row GNU's iterator produces inherits one `it->line_wrap`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DisplayRowLineWrap {
+    /// GNU `TRUNCATE`: text past the right edge is dropped.
+    Truncate,
+    /// GNU `WINDOW_WRAP`: text wraps at the edge, whatever it lands on.
+    WindowWrap,
+    /// GNU `WORD_WRAP`: text wraps at a recorded word boundary, and an
+    /// element that does not fit may take the word before it along.
+    WordWrap,
+}
+
+impl DisplayRowLineWrap {
+    /// GNU's resolution above, from the two inputs Neomacs keeps in
+    /// `WindowParams`: the effective truncate/wrap mode and the buffer's
+    /// `word-wrap`.  `truncate-lines` wins, which is why GNU tests it inside
+    /// the WORD_WRAP arm's condition rather than before it.
+    pub(crate) const fn for_window(wrap_mode: LineWrapMode, word_wrap: bool) -> Self {
+        match (wrap_mode, word_wrap) {
+            (LineWrapMode::Truncate, _) => Self::Truncate,
+            (LineWrapMode::Wrap, false) => Self::WindowWrap,
+            (LineWrapMode::Wrap, true) => Self::WordWrap,
+        }
+    }
+
+    /// A row that is not the buffer body's own wrapping row.
+    ///
+    /// Two GNU paths answer TRUNCATE, and every such row is one of them.  A
+    /// mode, header or tab line is initialized with its own base face id, so
+    /// `init_iterator` never raises it above TRUNCATE (`display_mode_line`,
+    /// src/xdisp.c:28145 vs :3416).  A bounded structural fragment -- the
+    /// line-number gutter, a truncation or continuation marker -- has no
+    /// continuation row to wrap onto at all.
+    pub(crate) const fn chrome_row() -> Self {
+        Self::Truncate
+    }
+
+    /// Does this row continue past its right edge at all?
+    pub(crate) const fn wraps(self) -> bool {
+        !matches!(self, Self::Truncate)
+    }
+
+    /// GNU `it->line_wrap == WORD_WRAP`: the row may be moved back to a
+    /// recorded word boundary, so a glyph that does not fit must keep its real
+    /// width for `display_line` to measure.
+    pub(crate) const fn is_word_wrap(self) -> bool {
+        matches!(self, Self::WordWrap)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DisplayRowAppendSurface {
     area: DisplayRowAppendArea,
     margin_areas: DisplayRowMarginAreas,
     tab_policy: DisplayTabPolicy,
     image_scale_environment: ImageScaleEnvironment,
+    line_wrap: DisplayRowLineWrap,
     right_edge_marker_column: RightEdgeMarkerColumn,
 }
 
@@ -206,14 +291,26 @@ impl RightEdgeMarkerColumn {
 }
 
 impl DisplayRowAppendSurface {
-    pub(crate) fn new(area: DisplayRowAppendArea, tab_policy: DisplayTabPolicy) -> Self {
+    /// `line_wrap` is required: a row appended into this surface decides
+    /// GNU's image-crop rule with it (`DisplayImageOverflowAction`), and a
+    /// default would silently mean `Truncate` for a wrapping window.
+    pub(crate) fn new(
+        area: DisplayRowAppendArea,
+        tab_policy: DisplayTabPolicy,
+        line_wrap: DisplayRowLineWrap,
+    ) -> Self {
         Self {
             area,
             margin_areas: DisplayRowMarginAreas::default(),
             tab_policy,
             image_scale_environment: ImageScaleEnvironment::default(),
+            line_wrap,
             right_edge_marker_column: RightEdgeMarkerColumn::NotReserved,
         }
+    }
+
+    pub(crate) fn line_wrap(&self) -> DisplayRowLineWrap {
+        self.line_wrap
     }
 
     pub(crate) fn with_right_edge_marker_column(
@@ -287,6 +384,7 @@ impl DisplayRowAppendSurface {
             margin_areas: self.margin_areas,
             tab_policy: self.tab_policy.clone(),
             image_scale_environment: self.image_scale_environment,
+            line_wrap: self.line_wrap,
             // A full-text-width surface deliberately spans the reserved column
             // too, so nothing on it is a marker column any more.
             right_edge_marker_column: RightEdgeMarkerColumn::NotReserved,
@@ -305,6 +403,7 @@ impl DisplayRowAppendSurface {
             metrics,
             self.tab_policy.clone(),
             self.image_scale_environment,
+            self.line_wrap,
         )
     }
 
@@ -737,6 +836,9 @@ pub(crate) struct DisplayRowAppendFrame {
     margin_areas: DisplayRowMarginAreas,
     face_space_width: f32,
     image_scale_environment: ImageScaleEnvironment,
+    /// The surface's GNU `it->line_wrap`, carried whole to every render
+    /// request this frame builds.  See [`DisplayRowLineWrap`].
+    line_wrap: DisplayRowLineWrap,
 }
 
 pub(crate) struct DisplayRowAppendSourceRenderRequest<'face> {
@@ -850,6 +952,7 @@ impl DisplayRowAppendFrame {
         metrics: DisplayRowAppendMetrics,
         tab_policy: DisplayTabPolicy,
         image_scale_environment: ImageScaleEnvironment,
+        line_wrap: DisplayRowLineWrap,
     ) -> Self {
         Self {
             row: placement.row,
@@ -868,6 +971,7 @@ impl DisplayRowAppendFrame {
             margin_areas,
             face_space_width: metrics.space_width(),
             image_scale_environment,
+            line_wrap,
         }
     }
 
@@ -911,6 +1015,7 @@ impl DisplayRowAppendFrame {
             face_id,
             base_face,
             GlyphRowRole::Text,
+            self.line_wrap,
         )
         .with_image_scale_environment(self.image_scale_environment)
         .with_render_bounds(DisplayRowRenderBounds::in_window_text_area(
@@ -934,6 +1039,7 @@ impl DisplayRowAppendFrame {
             self.glyph_y(),
             kind.output_height(self),
         )
+        .with_default_height(self.default_row_height())
     }
 }
 

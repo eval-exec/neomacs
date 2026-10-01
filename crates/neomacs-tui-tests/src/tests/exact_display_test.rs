@@ -59,6 +59,114 @@ fn paired_environment_normalizes_only_its_declared_session_paths() {
     assert!(normalized.is_satisfied(), "{normalized:#?}");
 }
 
+/// Two spellings of one resource that are not equally wide still leave the
+/// rest of the row -- text, styles and colors alike -- at matching columns.
+#[test]
+fn paired_environment_aligns_spellings_that_differ_in_width() {
+    let mut gnu_bytes = b"F1 \x1b[33mnewcomment.el.gz\x1b[0m\x1b[36m   85%\x1b[0m".to_vec();
+    let mut neo_bytes = b"F1 \x1b[33mnewcomment.el\x1b[0m\x1b[36m   85%\x1b[0m".to_vec();
+    gnu_bytes.extend(std::iter::repeat_n(b'-', 28 - 19 - 6));
+    neo_bytes.extend(std::iter::repeat_n(b'-', 28 - 16 - 6));
+    let gnu = screen(1, 28, &gnu_bytes);
+    let neo = screen(1, 28, &neo_bytes);
+    let environment =
+        PairedDisplayEnvironment::new().with_path_pair("newcomment.el.gz", "newcomment.el");
+
+    let raw = compare_displays(gnu.screen(), neo.screen());
+    let aligned = compare_displays_in_environment(gnu.screen(), neo.screen(), &environment);
+
+    assert!(
+        raw.unexpected()
+            .iter()
+            .any(|difference| matches!(difference, DisplayDifference::TextRow { .. })),
+        "{raw:#?}"
+    );
+    assert!(aligned.is_satisfied(), "{aligned:#?}");
+}
+
+/// The alignment moves cells that follow a spelling, so a real difference
+/// behind it is still a difference.
+#[test]
+fn paired_environment_still_rejects_a_different_row_behind_a_spelling() {
+    let mut gnu_bytes = b"F1 \x1b[33mnewcomment.el.gz\x1b[0m\x1b[36m   85%\x1b[0m".to_vec();
+    let mut neo_bytes = b"F1 \x1b[33mnewcomment.el\x1b[0m\x1b[36m   95%\x1b[0m".to_vec();
+    gnu_bytes.extend(std::iter::repeat_n(b'-', 28 - 19 - 6));
+    neo_bytes.extend(std::iter::repeat_n(b'-', 28 - 16 - 6));
+    let gnu = screen(1, 28, &gnu_bytes);
+    let neo = screen(1, 28, &neo_bytes);
+    let environment =
+        PairedDisplayEnvironment::new().with_path_pair("newcomment.el.gz", "newcomment.el");
+
+    let aligned = compare_displays_in_environment(gnu.screen(), neo.screen(), &environment);
+
+    assert!(
+        aligned
+            .unexpected()
+            .iter()
+            .any(|difference| matches!(difference, DisplayDifference::TextRow { .. })),
+        "{aligned:#?}"
+    );
+}
+
+/// A harness-minted session temporary root covers the name the editor minted
+/// inside it, which no other session can spell the same way.
+#[test]
+fn paired_environment_absorbs_the_name_minted_in_a_session_scratch_root() {
+    let gnu = screen(1, 60, b"/tmp/gnu-root/buffer-content-AAA1 alpha");
+    let neo = screen(1, 60, b"/tmp/neo-root/buffer-content-BBB2 alpha");
+    let scratch_root =
+        PairedDisplayEnvironment::new().with_scratch_root_pair("/tmp/gnu-root", "/tmp/neo-root");
+    let exact = PairedDisplayEnvironment::new().with_path_pair("/tmp/gnu-root", "/tmp/neo-root");
+
+    let absorbed = compare_displays_in_environment(gnu.screen(), neo.screen(), &scratch_root);
+    let exact_only = compare_displays_in_environment(gnu.screen(), neo.screen(), &exact);
+
+    assert!(absorbed.is_satisfied(), "{absorbed:#?}");
+    assert!(
+        !exact_only.is_satisfied(),
+        "an exactly declared root leaves the minted name compared: {exact_only:#?}"
+    );
+}
+
+/// A declared resource is matched on its own terms, so a broader spelling
+/// declared alongside it never hides the part that reaches further.
+#[test]
+fn paired_environment_prefers_the_declared_spelling_that_reaches_furthest() {
+    let gnu = screen(1, 70, b"file /tmp/gnu-root/scratch-AA.txt done");
+    let neo = screen(1, 70, b"file /tmp/neo-root/scratch-BB.txt done");
+
+    for environment in [
+        PairedDisplayEnvironment::new()
+            .with_path_pair("/tmp/gnu-root", "/tmp/neo-root")
+            .with_path_pair(
+                "/tmp/gnu-root/scratch-AA.txt",
+                "/tmp/neo-root/scratch-BB.txt",
+            ),
+        PairedDisplayEnvironment::new()
+            .with_path_pair(
+                "/tmp/gnu-root/scratch-AA.txt",
+                "/tmp/neo-root/scratch-BB.txt",
+            )
+            .with_path_pair("/tmp/gnu-root", "/tmp/neo-root"),
+    ] {
+        let report = compare_displays_in_environment(gnu.screen(), neo.screen(), &environment);
+        assert!(report.is_satisfied(), "{report:#?}");
+    }
+}
+
+/// A cell an editor never painted and a cell holding a blank display the same
+/// thing, so a row is not a difference just because one editor wrote its
+/// blanks and the other left them alone.
+#[test]
+fn paired_environment_treats_unpainted_cells_as_the_blanks_they_show() {
+    let gnu = screen(1, 8, b"a\x1b[1;6Hb");
+    let neo = screen(1, 8, b"a    b");
+
+    let report = compare_displays(gnu.screen(), neo.screen());
+
+    assert!(report.is_satisfied(), "{report:#?}");
+}
+
 #[test]
 fn exact_display_treats_written_and_unwritten_blank_cells_as_same_display() {
     let gnu = screen(1, 8, b"abc");

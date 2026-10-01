@@ -257,6 +257,21 @@ fn serialize_hash_table() {
     assert_eq!(result.unwrap().as_utf8_str(), Some("{\"name\":\"Alice\"}"));
 }
 
+/// GNU's `json_out_object_hash` walks the table with `DOHASH` (src/json.c),
+/// so members come out in the table's slot order -- the order `maphash`
+/// visits, which is the order `json-parse-string` inserted them.  Iterating
+/// the storage's hash index instead emitted a hash-ordered object: this
+/// two-member roundtrip serialized `"s"` before `"k"`, and the oracle suite
+/// caught it as `json_roundtrip` answering nil where GNU answers t.
+#[test]
+fn serialize_hash_table_members_in_maphash_order() {
+    crate::test_utils::init_test_tracing();
+    let source = "{\"k\":[1,2,{\"n\":true}],\"s\":\"v\"}";
+    let parsed = builtin_json_parse_string(vec![Value::string(source)]).unwrap();
+    let serialized = builtin_json_serialize(vec![parsed]).unwrap();
+    assert_eq!(serialized.as_utf8_str(), Some(source));
+}
+
 #[test]
 fn serialize_alist() {
     crate::test_utils::init_test_tracing();

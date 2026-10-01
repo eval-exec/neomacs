@@ -8,7 +8,7 @@ use std::{fs, path::PathBuf, time::Duration};
 #[test]
 // Prerequisites: requires GNU GUI Emacs and Xvfb.
 fn gnu_width_only_resize_preserves_native_height() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = neomacs_infra::crate_root!().join("../..");
     let artifacts = root.join("target/neomacs-gui-tests/gnu-width-resize");
     let backend = GuiBackend::LinuxX11;
     let session = DisplayHarness::for_backend(backend)

@@ -377,7 +377,7 @@ fn concurrent_source_build_callers_publish_one_successful_preparation() {
     let artifact = results[0]
         .as_ref()
         .expect("the shared source preparation succeeds");
-    assert!(artifact.starts_with(crate::workspace_root().join("tmp/melpa")));
+    assert!(artifact.starts_with(crate::melpa_cache_root()));
     assert!(!artifact.starts_with(Path::new("/tmp")));
     assert_eq!(
         invocations.lines().count(),

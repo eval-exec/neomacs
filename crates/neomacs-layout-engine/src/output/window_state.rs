@@ -326,12 +326,24 @@ pub(crate) struct OutputWindowRowGrid {
 
 /// Why an enabled buffer row owns point.
 ///
-/// GNU `row_containing_pos` scans rows in display order.  A position strictly
-/// inside a displayed span belongs to that row; a position exactly at a row's
-/// end belongs to the following row unless `row_for_charpos_p` says the first
-/// row ends at visible ZV (`src/xdisp.c:22425-22504,24942-25003`).  Keeping the
-/// endpoint case closed and explicit prevents synthetic blank rows below ZV
-/// from globally outranking an earlier real span with the same shifted anchor.
+/// GNU `row_containing_pos` scans rows in display order and a row owns CHARPOS
+/// when `START_CHARPOS <= charpos < END_CHARPOS` (src/xdisp.c:22476-22483),
+/// where `END_CHARPOS` is "the position after the last glyph on this row ... In
+/// an up-to-date display, this should always be equal to the start position of
+/// the next row" (src/dispextern.h:974-981).  A position exactly at that shared
+/// end therefore belongs to the FOLLOWING row, unless `row_for_charpos_p` sees
+/// this row ending at visible ZV.
+///
+/// Neomacs stamps a row's bounds from its buffer glyphs
+/// (`apply_display_row_source_slot_bounds`), so only a row that WRAPS ends where
+/// the next one starts.  A row that ends its line stops one position short:
+/// its terminator newline is owned by the row's end-of-line slot rather than by
+/// a glyph, so `end_charpos` IS the newline's own position -- the position the
+/// cursor goes to at end of line -- and the next row starts one past it.  That
+/// is what tells the two endpoint cases apart, and reading them as one dropped
+/// every end-of-line cursor position out of every row: a scrolling replay's
+/// cursor lookup then found no row at all, and the frame was sealed without the
+/// physical cursor (`C-l` after an isearch).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CursorRowBufferMatch {
     DisplayedInterior,
@@ -339,7 +351,8 @@ enum CursorRowBufferMatch {
 }
 
 impl CursorRowBufferMatch {
-    fn classify(row: &GlyphRow, charpos: usize) -> Option<Self> {
+    /// Whether ROW owns CHARPOS, given the row BELOW it in the display.
+    fn classify(row: &GlyphRow, row_below_start: Option<usize>, charpos: usize) -> Option<Self> {
         if !row.enabled
             || row.role != GlyphRowRole::Text
             || charpos < row.start_charpos
@@ -347,10 +360,20 @@ impl CursorRowBufferMatch {
         {
             return None;
         }
-        if charpos < row.end_charpos && row.displays_text {
-            return Some(Self::DisplayedInterior);
+        if charpos < row.end_charpos {
+            return row.displays_text.then_some(Self::DisplayedInterior);
         }
-        (charpos == row.end_charpos && row.ends_at_zv).then_some(Self::VisibleBufferEnd)
+        // CHARPOS is the row's end position.  GNU keeps it here when the row
+        // ends at visible ZV (`row_for_charpos_p`), hands it to the row below
+        // when the two share it -- the up-to-date-display invariant above --
+        // and otherwise it is this row's own end-of-line position.
+        if row.ends_at_zv {
+            return Some(Self::VisibleBufferEnd);
+        }
+        if row_below_start == Some(row.end_charpos) {
+            return None;
+        }
+        row.displays_text.then_some(Self::DisplayedInterior)
     }
 }
 
@@ -430,22 +453,28 @@ impl OutputWindowRowGrid {
     ///
     /// This is GNU `row_containing_pos`'s decisive ordering: an earlier real
     /// span wins immediately, while an end position is admitted only when that
-    /// row ends at visible ZV.  No second pass can let a later synthetic row
-    /// steal an already-resolved point.
+    /// row ends at visible ZV -- or is the row's own end-of-line position.  No
+    /// second pass can let a later synthetic row steal an already-resolved
+    /// point.
     pub(crate) fn find_cursor_row_for_charpos(&self, charpos: usize) -> Option<usize> {
         self.matrix
             .rows
             .iter()
             .enumerate()
-            .find_map(
-                |(row_index, row)| match CursorRowBufferMatch::classify(row, charpos) {
+            .find_map(|(row_index, row)| {
+                let row_below_start = self
+                    .matrix
+                    .rows
+                    .get(row_index + 1)
+                    .map(|row_below| row_below.start_charpos);
+                match CursorRowBufferMatch::classify(row, row_below_start, charpos) {
                     Some(
                         CursorRowBufferMatch::DisplayedInterior
                         | CursorRowBufferMatch::VisibleBufferEnd,
                     ) => Some(row_index),
                     None => None,
-                },
-            )
+                }
+            })
     }
 
     pub(crate) fn row_mut(&mut self, row: usize) -> Option<&mut GlyphRow> {

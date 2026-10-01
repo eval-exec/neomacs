@@ -9568,6 +9568,7 @@ fn window_end_reads_the_atomic_record_when_a_snapshot_disagrees() {
         frame.commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
             window_id: wid,
             rows: vec![crate::window::DisplayRowSnapshot {
+                truncated_end_buffer_pos: None,
                 row: 0,
                 y: 0,
                 height: 16,
@@ -11573,4 +11574,326 @@ fn a_hscrolled_truncate_row_is_clipped_hscroll_columns_further_along() {
          - 1, so hscrolling a window makes a row that was clipped stop being \
          clipped"
     );
+}
+
+// ---------------------------------------------------------------------------
+// window-lines-pixel-dimensions
+//
+// Expected values are GNU 31.1's, recorded from the real binary on a 9x20 cell
+// (`tmp/textsize2/gnu-wlpd.txt`).  The fixture below uses a 10x20 cell, so a
+// pure-text width is GNU's scaled by 10/9.
+// ---------------------------------------------------------------------------
+
+/// A window holding `ab\n`, `abcd\n`, `abcdef\n` plus the empty row the final
+/// newline opens, and the mode line below it -- the buffer GNU's `basic` run
+/// measured.
+///
+/// Returns the evaluator, the window id, and the window's body width in pixels
+/// (GNU's `window_width` under BODY, and the width an INVERSE answer measures
+/// back from).
+fn window_lines_pixel_dimensions_fixture() -> (Context, crate::window::WindowId, i64) {
+    // `noninteractive' is what GNU's first bail tests, so the fixture has to
+    // look like an interactive session for the matrix to be readable at all.
+    let mut ev = Context::new();
+    ev.set_variable("noninteractive", Value::NIL);
+    let buf = ev.buffers.create_buffer("*wlpd*");
+    ev.buffers.set_current(buf);
+    let fid = ev.frames.create_frame("wlpd", 745, 422, buf);
+    let wid = ev.frames.get(fid).expect("frame").selected_window;
+    {
+        let frame = ev.frames.get_mut(fid).expect("frame");
+        frame.char_width = 10.0;
+        frame.char_height = 20.0;
+        frame.font_pixel_size = 20.0;
+        frame.font_ascent = 15.0;
+        frame.set_window_system(Some(Value::symbol("x")));
+        frame
+            .root_window_mut()
+            .set_bounds(crate::window::Rect::new(0.0, 0.0, 800.0, 442.0));
+        // The rows the walk would have produced: `ab`, `abcd`, `abcdef`, the
+        // empty last line, and the mode line at the window's foot.
+        let row = |row: i64, y: i64, used: i64| crate::window::DisplayRowSnapshot {
+            row,
+            y,
+            height: 20,
+            start_x: 0,
+            end_x: used,
+            ..crate::window::DisplayRowSnapshot::default()
+        };
+        frame.commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
+            window_id: wid,
+            mode_line_height: 20,
+            rows: vec![
+                row(0, 0, 20),
+                row(1, 20, 40),
+                row(2, 40, 60),
+                row(3, 60, 0),
+                crate::window::DisplayRowSnapshot {
+                    row: 21,
+                    y: 422,
+                    height: 20,
+                    ..crate::window::DisplayRowSnapshot::default()
+                },
+            ],
+            points: vec![
+                crate::window::DisplayPointSnapshot {
+                    buffer_pos: LispCharPos1::new(1),
+                    role: crate::window::DisplayPointRole::Glyph,
+                    x: 0,
+                    y: 0,
+                    width: 10,
+                    height: 20,
+                    row: 0,
+                    col: 0,
+                },
+                crate::window::DisplayPointSnapshot {
+                    buffer_pos: LispCharPos1::new(2),
+                    role: crate::window::DisplayPointRole::Glyph,
+                    x: 10,
+                    y: 0,
+                    width: 10,
+                    height: 20,
+                    row: 0,
+                    col: 1,
+                },
+            ],
+            ..crate::window::WindowDisplaySnapshot::default()
+        }]);
+    }
+    let window = ev.frames.get(fid).expect("frame").find_window(wid).cloned();
+    let body = window_lines_pixel_dimensions_body_width(&ev, fid, window.as_ref().expect("window"));
+    (ev, wid, body)
+}
+
+fn window_lines_pixel_dimensions_body_width(
+    ev: &Context,
+    fid: crate::window::FrameId,
+    window: &crate::window::Window,
+) -> i64 {
+    super::window_body_width_pixels(&ev.frames, fid, window)
+}
+
+fn wlpd(eval: &mut Context, args: Vec<Value>) -> Value {
+    super::builtin_window_lines_pixel_dimensions(eval, args).expect("window-lines-pixel-dimensions")
+}
+
+#[test]
+fn window_lines_pixel_dimensions_reports_each_rows_width_and_bottom_edge() {
+    crate::test_utils::init_test_tracing();
+    let (mut ev, wid, _body) = window_lines_pixel_dimensions_fixture();
+    let value = wlpd(&mut ev, vec![Value::make_window(wid.0)]);
+    assert_eq!(
+        crate::emacs_core::print::print_value(&value),
+        // GNU: ((27 . 20) (45 . 40) (63 . 60) (9 . 80)) at a 9-pixel cell.
+        "((30 . 20) (50 . 40) (70 . 60) (10 . 80))",
+        "row width is the row's right edge; y is its bottom"
+    );
+
+    // BODY moves the two vertical boundaries, not the rows here (this window
+    // has no tab or header line).
+    let body = wlpd(
+        &mut ev,
+        vec![Value::make_window(wid.0), Value::NIL, Value::NIL, Value::T],
+    );
+    assert_eq!(
+        crate::emacs_core::print::print_value(&body),
+        "((30 . 20) (50 . 40) (70 . 60) (10 . 80))",
+        "GNU's body answer for this window"
+    );
+
+    // FIRST and LAST are matrix indices, not text-row indices.
+    assert_eq!(
+        crate::emacs_core::print::print_value(&wlpd(
+            &mut ev,
+            vec![Value::make_window(wid.0), Value::fixnum(1)]
+        )),
+        "((50 . 40) (70 . 60) (10 . 80))"
+    );
+    assert_eq!(
+        crate::emacs_core::print::print_value(&wlpd(
+            &mut ev,
+            vec![
+                Value::make_window(wid.0),
+                Value::fixnum(0),
+                Value::fixnum(1)
+            ]
+        )),
+        "((30 . 20) (50 . 40))"
+    );
+}
+
+#[test]
+fn window_lines_pixel_dimensions_inverts_against_the_window_edge() {
+    crate::test_utils::init_test_tracing();
+    let (mut ev, wid, body) = window_lines_pixel_dimensions_fixture();
+    // The window is 800 px wide; GNU's INVERSE measures from the row's right
+    // edge back to it (`window_width - row->pixel_width`).
+    let value = wlpd(
+        &mut ev,
+        vec![
+            Value::make_window(wid.0),
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::T,
+        ],
+    );
+    assert_eq!(
+        crate::emacs_core::print::print_value(&value),
+        "((770 . 20) (750 . 40) (730 . 60) (790 . 80))"
+    );
+    // ... and back from the BODY edge when BODY is non-nil.
+    let value = wlpd(
+        &mut ev,
+        vec![
+            Value::make_window(wid.0),
+            Value::NIL,
+            Value::NIL,
+            Value::T,
+            Value::T,
+        ],
+    );
+    assert_eq!(
+        crate::emacs_core::print::print_value(&value),
+        format!(
+            "(({} . 20) ({} . 40) ({} . 60) ({} . 80))",
+            body - 30,
+            body - 50,
+            body - 70,
+            body - 10
+        ),
+        "INVERSE under BODY measures from `window_body_width (w, PIXELS)`"
+    );
+}
+
+#[test]
+fn window_lines_pixel_dimensions_left_reports_the_leftmost_glyph() {
+    crate::test_utils::init_test_tracing();
+    let (mut ev, wid, _body) = window_lines_pixel_dimensions_fixture();
+    // LEFT reads the row's FIRST glyph, not the row: `window_width -
+    // glyph->pixel_width`.  The fixture's first two rows publish a 10-pixel
+    // span each; the rows with no span (the empty line) fall back to one cell.
+    let value = wlpd(
+        &mut ev,
+        vec![
+            Value::make_window(wid.0),
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::T,
+        ],
+    );
+    assert_eq!(
+        crate::emacs_core::print::print_value(&value),
+        "((790 . 20) (790 . 40) (790 . 60) (790 . 80))"
+    );
+    let value = wlpd(
+        &mut ev,
+        vec![
+            Value::make_window(wid.0),
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::T,
+            Value::T,
+        ],
+    );
+    assert_eq!(
+        crate::emacs_core::print::print_value(&value),
+        "((10 . 20) (10 . 40) (10 . 60) (10 . 80))"
+    );
+}
+
+#[test]
+fn window_lines_pixel_dimensions_stops_at_the_window_edge_and_the_mode_line() {
+    crate::test_utils::init_test_tracing();
+    let (mut ev, wid, body) = window_lines_pixel_dimensions_fixture();
+    // A row that reaches the body's right edge has no room for the cursor
+    // cell GNU appends at end of line, so it reports exactly what it drew.
+    {
+        let fid = ev.frames.find_window_frame_id(wid).expect("frame");
+        let frame = ev.frames.get_mut(fid).expect("frame");
+        let mut snapshot = frame.redisplay_snapshot(wid).expect("snapshot").clone();
+        snapshot.rows[0].end_x = body;
+        frame.replace_redisplay_cache_for_test(vec![snapshot]);
+    }
+    assert_eq!(
+        crate::emacs_core::print::print_value(&wlpd(&mut ev, vec![Value::make_window(wid.0)])),
+        format!("(({} . 20) (50 . 40) (70 . 60) (10 . 80))", body),
+        "a full row is measured as it was drawn"
+    );
+}
+
+#[test]
+fn window_lines_pixel_dimensions_refuses_what_gnu_refuses() {
+    crate::test_utils::init_test_tracing();
+    let (mut ev, wid, _body) = window_lines_pixel_dimensions_fixture();
+    // GNU `check_integer_range (first, 0, matrix->nrows)`.
+    let err = super::builtin_window_lines_pixel_dimensions(
+        &mut ev,
+        vec![Value::make_window(wid.0), Value::fixnum(100)],
+    )
+    .expect_err("an out-of-range FIRST signals");
+    match err {
+        // GNU `check_integer_range (first, 0, matrix->nrows)`: the upper bound
+        // is the matrix's own row count.
+        crate::emacs_core::error::Flow::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "args-out-of-range");
+            assert_eq!(
+                sig.data,
+                vec![Value::fixnum(100), Value::fixnum(0), Value::fixnum(5)]
+            );
+        }
+        other => panic!("expected args-out-of-range, got {other:?}"),
+    }
+
+    // A dead window is `window-live-p`, whatever the other arguments say.
+    let fid = ev.frames.find_window_frame_id(wid).expect("frame");
+    let buffer = ev.buffers.current_buffer().expect("buffer").id;
+    let dead = ev
+        .frames
+        .split_window(
+            fid,
+            wid,
+            crate::window::SplitDirection::Vertical,
+            buffer,
+            None,
+            crate::window::SplitPlacement::AfterTarget,
+        )
+        .expect("split the fixture window");
+    assert!(ev.frames.delete_window(fid, dead));
+    let err = super::builtin_window_lines_pixel_dimensions(
+        &mut ev,
+        vec![Value::make_window(dead.0), Value::fixnum(0)],
+    )
+    .expect_err("a dead window signals");
+    match err {
+        crate::emacs_core::error::Flow::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "wrong-type-argument");
+            assert_eq!(sig.data.first(), Some(&Value::symbol("window-live-p")));
+        }
+        other => panic!("expected wrong-type-argument, got {other:?}"),
+    }
+}
+
+/// GNU returns nil when there is no current matrix to read: a pseudo window,
+/// batch, or a redisplay that has not run since the last change.
+#[test]
+fn window_lines_pixel_dimensions_returns_nil_without_a_current_matrix() {
+    crate::test_utils::init_test_tracing();
+    let (mut ev, wid, _body) = window_lines_pixel_dimensions_fixture();
+    // Batch -- GNU's `if (noninteractive || w->pseudo_window_p) return Qnil;`
+    // comes before the matrix is even looked at.
+    ev.set_variable("noninteractive", Value::T);
+    assert!(wlpd(&mut ev, vec![Value::make_window(wid.0)]).is_nil());
+    ev.set_variable("noninteractive", Value::NIL);
+
+    // A window whose rows were never committed.
+    let mut fresh = Context::new();
+    let buf = fresh.buffers.create_buffer("*empty*");
+    fresh.buffers.set_current(buf);
+    let fid = fresh.frames.create_frame("wlpd-empty", 800, 442, buf);
+    let wid = fresh.frames.get(fid).expect("frame").selected_window;
+    assert!(wlpd(&mut fresh, vec![Value::make_window(wid.0)]).is_nil());
 }

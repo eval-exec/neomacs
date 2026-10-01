@@ -16,7 +16,6 @@ use super::install::{
     InstallCommandError, PackageInstallDriver, configure_process_environment, elisp_string,
     package_preparation_run_id, publish_package_preparation_failure,
 };
-use crate::workspace_root;
 
 #[derive(Clone, Copy)]
 pub struct PackageArchiveSpec {
@@ -66,8 +65,7 @@ fn prepare_cached_package(
         ));
     }
 
-    let root = workspace_root()
-        .join("tmp/melpa")
+    let root = crate::melpa_cache_root()
         .join(archive.cache_directory)
         .join(name)
         .join(version);

@@ -4469,3 +4469,38 @@ fn literal_register_reuse_preserves_raw_unibyte_coordinates() {
         );
     }
 }
+
+// Composition needs group zero's character extent, including when subgroups
+// backtrack, but must leave the rest of a long layout chunk borrowed.
+#[test]
+fn composition_match_length_preserves_native_regexp_extent() {
+    crate::test_utils::init_test_tracing();
+    let tail = " untouched界".repeat(8192);
+    for (pattern, prefix, expected) in [
+        (r"\(é界\)\1", "é界é界", Some(4)),
+        (r"\(a+\)ab", "aaab", Some(4)),
+        ("a*", "界", Some(0)),
+        ("É", "é", None),
+        ("missing", "é界", None),
+    ] {
+        let text = format!("{prefix}{tail}");
+        assert_eq!(
+            looking_at_lisp_pattern_length_with_syntax(
+                &LispString::from_utf8(pattern),
+                &text,
+                &DefaultSyntaxLookup,
+            )
+            .expect("valid native regexp"),
+            expected,
+            "pattern {pattern:?}",
+        );
+    }
+    assert!(
+        looking_at_lisp_pattern_length_with_syntax(
+            &LispString::from_utf8("["),
+            &tail,
+            &DefaultSyntaxLookup,
+        )
+        .is_err()
+    );
+}

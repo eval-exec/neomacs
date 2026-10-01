@@ -195,6 +195,18 @@ impl TextBackend {
         dispatch_backend_ref!(self, storage => PhysicalTextBackend::contiguous_window_at(storage, pos))
     }
 
+    /// Optional borrowed span for reverse scans. Indexed backends already
+    /// resolve character positions through their trees rather than scanning.
+    pub(in crate::buffer) fn contiguous_window_before(
+        &self,
+        end: EmacsBytePos,
+    ) -> Option<(EmacsBytePos, &[u8])> {
+        match self {
+            Self::Gap(storage) => storage.contiguous_window_before(end),
+            Self::PieceTree(_) | Self::Rope(_) => None,
+        }
+    }
+
     pub(in crate::buffer) fn emacs_byte_pos_to_char_pos(&self, byte_pos: EmacsBytePos) -> CharPos0 {
         dispatch_backend_ref!(self, storage => PhysicalTextBackend::emacs_byte_pos_to_char_pos(storage, byte_pos))
     }

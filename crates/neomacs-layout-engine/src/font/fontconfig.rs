@@ -38,11 +38,18 @@ use std::sync::{Mutex, OnceLock};
 #[cfg(unix)]
 use {fontconfig::Pattern, fontconfig_sys};
 
+#[cfg(unix)]
+mod candidate_cache;
+
 /// Generation-local Fontconfig query results. One owner makes catalog
 /// invalidation exhaustive instead of requiring every new query cache to grow
 /// another unrelated global reset hook.
 #[derive(Default)]
 struct FontconfigCaches {
+    #[cfg(unix)]
+    candidate_epoch: u64,
+    #[cfg(unix)]
+    candidate_queries: candidate_cache::CandidateQueries,
     aliases: Option<HashMap<String, String>>,
     spacing: HashMap<String, Option<i32>>,
     subpixel_order: Option<FontconfigSubpixelOrder>,
@@ -74,9 +81,16 @@ fn fontconfig_caches() -> &'static Mutex<FontconfigCaches> {
 
 /// Drop every answer derived from the previous native catalog generation.
 pub(crate) fn invalidate_catalog_caches() {
-    *fontconfig_caches()
+    let mut caches = fontconfig_caches()
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) = FontconfigCaches::default();
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    #[cfg(unix)]
+    let next = caches.candidate_epoch.wrapping_add(1);
+    *caches = FontconfigCaches::default();
+    #[cfg(unix)]
+    {
+        caches.candidate_epoch = next;
+    }
 }
 
 impl FontMatch {
@@ -1128,10 +1142,16 @@ pub(crate) fn fc_match_candidate(
 }
 
 #[cfg(unix)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FcQueryKind {
     List,
     Match,
+}
+
+#[cfg(all(test, unix))]
+thread_local! {
+    static NATIVE_CANDIDATE_QUERIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static NATIVE_UNSUPPORTED_PATTERNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(unix)]
@@ -1142,6 +1162,49 @@ fn fc_query_candidates(
     langs: &[String],
     kind: FcQueryKind,
 ) -> Vec<ListedFont> {
+    let Some(query) =
+        candidate_cache::Query::new(family, query_charset_ranges, required_char, langs, kind)
+    else {
+        return fc_query_candidates_uncached(
+            family,
+            query_charset_ranges,
+            required_char,
+            langs,
+            kind,
+        );
+    };
+    let epoch = {
+        let mut caches = fontconfig_caches()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(answer) = caches.candidate_queries.get(&query) {
+            return answer;
+        }
+        caches.candidate_epoch
+    };
+    // Native enumeration stays outside the cache lock. A catalog change during
+    // discovery prevents its old answer from entering the new generation.
+    let answer =
+        fc_query_candidates_uncached(family, query_charset_ranges, required_char, langs, kind);
+    let mut caches = fontconfig_caches()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if caches.candidate_epoch == epoch {
+        caches.candidate_queries.insert(query, &answer);
+    }
+    answer
+}
+
+#[cfg(unix)]
+fn fc_query_candidates_uncached(
+    family: Option<&str>,
+    query_charset_ranges: &[(u32, u32)],
+    required_char: Option<u32>,
+    langs: &[String],
+    kind: FcQueryKind,
+) -> Vec<ListedFont> {
+    #[cfg(test)]
+    NATIVE_CANDIDATE_QUERIES.with(|count| count.set(count.get() + 1));
     if fontconfig_handle().is_none() {
         return Vec::new();
     }
@@ -1173,7 +1236,15 @@ fn fc_query_candidates(
                 continue;
             }
         }
-        let query_charset = if query_charset_ranges.is_empty() {
+        // Character lookup without a registry already filters these answers
+        // below. Push that same predicate into native enumeration so unrelated
+        // patterns and their large charsets are never copied into the result.
+        // Keep the projection (and therefore candidate order) unchanged; GNU
+        // registry queries and FcFontMatch retain their existing semantics.
+        let required_range = required_char
+            .filter(|_| query_charset_ranges.is_empty() && matches!(kind, FcQueryKind::List))
+            .map(|ch| (ch, ch));
+        let query_charset = if query_charset_ranges.is_empty() && required_range.is_none() {
             None
         } else {
             let charset = unsafe { fontconfig_sys::FcCharSetCreate() };
@@ -1182,7 +1253,7 @@ fn fc_query_candidates(
             }
             let charset = FcCharSetGuard(charset);
             let mut ok = true;
-            for &(from, to) in query_charset_ranges {
+            for (from, to) in query_charset_ranges.iter().copied().chain(required_range) {
                 for codepoint in from.min(to)..=from.max(to) {
                     let added = unsafe {
                         fontconfig_sys::FcCharSetAddChar(
@@ -1267,7 +1338,11 @@ fn fc_query_candidates(
             }
             continue;
         }
-        let projection = if required_char.is_some() && query_charset_ranges.is_empty() {
+        // The postfilter below needs coverage even when a registry/repertory
+        // already constrained native discovery. Omitting FC_CHARSET makes
+        // every returned pattern appear unsupported and forces fallback.
+        // Registry-only enumeration keeps GNU's metadata-only projection.
+        let projection = if required_char.is_some() {
             GnuEntityProjection::MetadataAndCharset
         } else {
             GnuEntityProjection::Metadata
@@ -1308,6 +1383,8 @@ fn fc_query_candidates(
             if let Some(required_char) = required_char
                 && !raw_pattern_supports_any_char(candidate_pattern, &[required_char])
             {
+                #[cfg(test)]
+                NATIVE_UNSUPPORTED_PATTERNS.with(|count| count.set(count.get() + 1));
                 continue;
             }
             let Some(candidate) = listed_font_from_raw_pattern(candidate_pattern) else {

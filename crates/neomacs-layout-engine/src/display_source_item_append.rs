@@ -98,14 +98,15 @@ impl DisplaySourceNaturalMeasurementRequest {
         position: DisplayRowPosition,
         source_item: &DisplayItem,
     ) -> Option<f32> {
-        let mut render_policy = DisplaySourceAppendRenderPolicy::natural();
-        SingleDisplayItemAppendContext::new(base_face, face_id, frame).measure_width_with_policy(
-            state,
-            source_item.clone(),
-            position,
-            self.source_item().append_kind(),
-            &mut render_policy,
-        )
+        // This is the buffer iterator's pen, also used by the eventual
+        // append. Structural glyphs have already been accounted for by it.
+        SingleDisplayItemAppendContext::for_source_walk(base_face, face_id, frame)
+            .measure_width_naturally(
+                state,
+                source_item.clone(),
+                position,
+                self.source_item().append_kind(),
+            )
     }
 
     pub(crate) fn resolve_to_text_row(

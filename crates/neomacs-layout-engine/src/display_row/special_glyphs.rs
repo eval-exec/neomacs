@@ -119,13 +119,22 @@ struct RightEdgeMarkerItemSource {
 }
 
 impl RightEdgeMarkerItemSource {
-    fn new(padding_cols: usize, marker: char, face_id: FaceId) -> Self {
+    fn new(padding_cols: usize, marker: char, face_id: FaceId, padding_is_marker: bool) -> Self {
         let mut source_offset = 0usize;
         let mut items = Vec::with_capacity(usize::from(padding_cols > 0) + 1);
         if padding_cols > 0 {
+            // GNU's TTY truncation overwrites the padding cells of a cut
+            // wide character with the truncation glyph itself
+            // (xdisp.c:26636-26641): both cells a half-glyph leaves carry
+            // `$`. Without a cut wide glyph the padding stays blank.
+            let padding_text = if padding_is_marker {
+                marker.to_string().repeat(padding_cols)
+            } else {
+                " ".repeat(padding_cols)
+            };
             items.push(synthetic_special_glyph_text_item(
                 RIGHT_EDGE_MARKER_SOURCE_ID,
-                " ".repeat(padding_cols),
+                padding_text,
                 face_id,
                 source_offset,
             ));
@@ -198,16 +207,22 @@ fn install_right_edge_marker_from_source_request(
     base_face: &ResolvedFace,
     char_width: f32,
     matrix_cols: usize,
+    marker_fill_padding: bool,
     render_services: &mut ChromeRowRenderServices<'_, '_>,
 ) {
     let Some(clamped_col) = prepare_special_glyph_row(row, matrix_cols, target_col) else {
         return;
     };
-    trim_display_row_text_to_total_columns(row, clamped_col, char_width);
+    let trimmed_wide = trim_display_row_text_to_total_columns(row, clamped_col, char_width);
 
     let padding_cols =
         clamped_col.saturating_sub(DisplayRowColumnCount::from_row(row, char_width).get());
-    let mut source = RightEdgeMarkerItemSource::new(padding_cols, marker, face_id);
+    let mut source = RightEdgeMarkerItemSource::new(
+        padding_cols,
+        marker,
+        face_id,
+        trimmed_wide || marker_fill_padding,
+    );
     render_right_edge_marker_source(
         row,
         render_services,
@@ -224,6 +239,9 @@ pub(crate) struct TextWindowRightEdgeMarkerDecoration {
     pub(crate) display_row_index: usize,
     pub(crate) target_col: usize,
     pub(crate) marker: char,
+    /// A double-width character was cut at this row's edge: its cells are
+    /// overwritten with the marker, not blanks (GNU xdisp.c:26611-26641).
+    pub(crate) marker_fill_padding: bool,
 }
 
 pub(crate) fn text_window_right_edge_marker_decorations(
@@ -249,10 +267,14 @@ pub(crate) fn text_window_right_edge_marker_decorations(
         let Some(marker) = marker else {
             continue;
         };
+        let marker_fill_padding = request
+            .row_flags
+            .is_set(row_idx, DisplayRowFlagKind::WideCut);
         decorations.push(TextWindowRightEdgeMarkerDecoration {
             display_row_index,
             target_col,
             marker,
+            marker_fill_padding,
         });
     }
     decorations
@@ -278,6 +300,7 @@ impl DisplayWindowRowMutation for TextWindowRightEdgeMarkerMutation<'_, '_, '_, 
             self.base_face,
             self.char_width,
             matrix_cols,
+            self.decoration.marker_fill_padding,
             self.render_services,
         );
     }

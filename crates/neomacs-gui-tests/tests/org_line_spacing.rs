@@ -9,7 +9,7 @@ use std::{path::PathBuf, time::Duration};
 #[test]
 // Prerequisites: requires a built binary/pdump, Weston, and DejaVu Sans Mono.
 fn org_selection_and_empty_line_cursor_preserve_spacing_and_backgrounds() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = neomacs_infra::crate_root!().join("../..");
     let binary = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("target/release/neomacs"));

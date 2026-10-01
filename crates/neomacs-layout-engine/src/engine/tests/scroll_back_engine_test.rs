@@ -1,4 +1,4 @@
-//! P3.5 G3 (`NEOMACS_LAYOUT_SCROLL_BACK=on`): a window whose start moved
+//! Small backward scrolls (disable with `NEOMACS_LAYOUT_SCROLL_BACK=off`): a window whose start moved
 //! BACK walks only the newly exposed rows and reuses its old rows below
 //! them, shifted down (GNU `try_window_reusing_current_matrix`). Each frame
 //! is compared with a fresh full layout of the same state.
@@ -108,10 +108,31 @@ fn scrolling_back_by_more_than_the_window_lays_out_in_full() {
 }
 
 #[test]
-fn without_the_knob_a_backward_scroll_lays_out_in_full() {
+fn explicitly_disabled_backward_scroll_lays_out_in_full() {
+    set_scroll_back_for_test(Some(false));
+    let _reset = ScrollBackGuard;
     let (mut eval, frame_id, buf_id, window) = incr_editing_frame(&LINE.repeat(80), 800, 600);
     let mut engine = LayoutEngine::new();
     scroll_and_compare(&mut eval, &mut engine, frame_id, window, buf_id, 10, 20);
     let stats = scroll_and_compare(&mut eval, &mut engine, frame_id, window, buf_id, 9, 20);
     assert_eq!(stats.scroll_windows, 0, "{stats:?}");
+}
+
+#[test]
+fn small_backward_scroll_reuses_rows_by_default() {
+    let (mut eval, frame, buffer, window) = incr_editing_frame(&LINE.repeat(200), 800, 600);
+    let mut engine = LayoutEngine::new();
+    scroll_and_compare(&mut eval, &mut engine, frame, window, buffer, 60, 68);
+    let stats = scroll_and_compare(&mut eval, &mut engine, frame, window, buffer, 59, 67);
+    assert_eq!(stats.scroll_windows, 1);
+    assert!(stats.reused_shifted_rows > 20);
+}
+
+#[test]
+fn page_sized_backward_scroll_avoids_speculative_reuse() {
+    let (mut eval, frame, buffer, window) = incr_editing_frame(&LINE.repeat(200), 800, 600);
+    let mut engine = LayoutEngine::new();
+    scroll_and_compare(&mut eval, &mut engine, frame, window, buffer, 60, 68);
+    let stats = scroll_and_compare(&mut eval, &mut engine, frame, window, buffer, 30, 38);
+    assert_eq!(stats.scroll_windows, 0);
 }

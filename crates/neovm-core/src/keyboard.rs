@@ -22,6 +22,7 @@ use crate::heap_types::LispString;
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
+mod display_service;
 mod input_method;
 mod keysym;
 mod unread;
@@ -209,13 +210,19 @@ impl crate::gc_trace::GcTrace for PresentedInteractions {
 // ---------------------------------------------------------------------------
 
 /// Modifier flags for key events.
+///
+/// GNU distinguishes `alt_modifier' from `meta_modifier` (src/event.h), and
+/// the NS modifier policy cooks Option to either of them
+/// (`parse_solitary_modifier', src/keyboard.c:7917), so this struct carries
+/// both.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Modifiers {
     pub ctrl: bool,
-    pub meta: bool, // Alt
+    pub meta: bool,
     pub shift: bool,
     pub super_: bool,
     pub hyper: bool,
+    pub alt: bool,
 }
 
 impl Modifiers {
@@ -248,7 +255,8 @@ impl Modifiers {
     /// Convert to Emacs modifier bitmask.
     pub fn to_bits(&self) -> u32 {
         use crate::emacs_core::keyboard::pure::{
-            KEY_CHAR_CTRL, KEY_CHAR_HYPER, KEY_CHAR_META, KEY_CHAR_SHIFT, KEY_CHAR_SUPER,
+            KEY_CHAR_ALT, KEY_CHAR_CTRL, KEY_CHAR_HYPER, KEY_CHAR_META, KEY_CHAR_SHIFT,
+            KEY_CHAR_SUPER,
         };
         let mut bits = 0u32;
         if self.ctrl {
@@ -266,13 +274,17 @@ impl Modifiers {
         if self.hyper {
             bits |= KEY_CHAR_HYPER as u32;
         }
+        if self.alt {
+            bits |= KEY_CHAR_ALT as u32;
+        }
         bits
     }
 
     /// Parse from Emacs modifier bitmask.
     pub fn from_bits(bits: u32) -> Self {
         use crate::emacs_core::keyboard::pure::{
-            KEY_CHAR_CTRL, KEY_CHAR_HYPER, KEY_CHAR_META, KEY_CHAR_SHIFT, KEY_CHAR_SUPER,
+            KEY_CHAR_ALT, KEY_CHAR_CTRL, KEY_CHAR_HYPER, KEY_CHAR_META, KEY_CHAR_SHIFT,
+            KEY_CHAR_SUPER,
         };
         Self {
             ctrl: bits & KEY_CHAR_CTRL as u32 != 0,
@@ -280,20 +292,24 @@ impl Modifiers {
             shift: bits & KEY_CHAR_SHIFT as u32 != 0,
             super_: bits & KEY_CHAR_SUPER as u32 != 0,
             hyper: bits & KEY_CHAR_HYPER as u32 != 0,
+            alt: bits & KEY_CHAR_ALT as u32 != 0,
         }
     }
 
     /// Format as Emacs modifier prefix (e.g., "C-M-").
+    ///
+    /// The order is GNU's canonical modifier order (`event_modifier_prefix`,
+    /// mirroring keymap.c:1478): A- C- H- M- S- s-.
     pub fn prefix_string(&self) -> String {
         let mut s = String::new();
-        if self.hyper {
-            s.push_str("H-");
-        }
-        if self.super_ {
-            s.push_str("s-");
+        if self.alt {
+            s.push_str("A-");
         }
         if self.ctrl {
             s.push_str("C-");
+        }
+        if self.hyper {
+            s.push_str("H-");
         }
         if self.meta {
             s.push_str("M-");
@@ -301,11 +317,14 @@ impl Modifiers {
         if self.shift {
             s.push_str("S-");
         }
+        if self.super_ {
+            s.push_str("s-");
+        }
         s
     }
 
     pub fn is_empty(&self) -> bool {
-        !self.ctrl && !self.meta && !self.shift && !self.super_ && !self.hyper
+        !self.ctrl && !self.meta && !self.shift && !self.super_ && !self.hyper && !self.alt
     }
 }
 
@@ -555,6 +574,7 @@ impl KeyEvent {
                         shift,
                         super_,
                         hyper,
+                        alt,
                     },
                 })
             }
@@ -599,6 +619,7 @@ impl KeyEvent {
                         shift,
                         super_,
                         hyper,
+                        alt,
                     },
                 })
             }
@@ -948,10 +969,18 @@ pub const XK_F1: u32 = 0xFFBE;
 pub const XK_F24: u32 = 0xFFD5;
 
 // Render thread modifier bitmask constants.
+//
+// These are the wire values of `neomacs_display_protocol`'s
+// `TransportModifierBit` masks (`modifier_policy.rs`); `Alt` and `Hyper`
+// were appended when the NS modifier policy (issue #442) taught the
+// transport to carry the full GNU modifier set, which distinguishes
+// `alt_modifier' from `meta_modifier'.
 pub const RENDER_SHIFT_MASK: u32 = 1 << 0;
 pub const RENDER_CTRL_MASK: u32 = 1 << 1;
 pub const RENDER_META_MASK: u32 = 1 << 2;
 pub const RENDER_SUPER_MASK: u32 = 1 << 3;
+pub const RENDER_ALT_MASK: u32 = 1 << 4;
+pub const RENDER_HYPER_MASK: u32 = 1 << 5;
 
 /// Meaning of a character-shaped frontend event before it enters Emacs's
 /// command loop.
@@ -994,7 +1023,16 @@ impl FrontendCharacterInput {
                 produced,
                 modifiers: ControlChordModifiers(modifiers),
             }
-        } else if modifiers.meta || modifiers.super_ || modifiers.hyper {
+        } else if modifiers.meta
+            || modifiers.super_
+            || modifiers.hyper
+            // GNU cooks `parse_solitary_modifier("alt")' to a distinct
+            // `alt_modifier' bit (`src/keyboard.c:7941`), which is as much a
+            // command modifier as meta: the NS modifier policy can map
+            // Option to `alt' (issue #442), and that chord must reach the
+            // command loop as `A-x', never as text.
+            || modifiers.alt
+        {
             Self::NonControlChord {
                 produced,
                 modifiers: NonControlChordModifiers(modifiers),
@@ -1069,7 +1107,8 @@ pub fn render_modifiers_to_modifiers(bits: u32) -> Modifiers {
         meta: bits & RENDER_META_MASK != 0,
         shift: bits & RENDER_SHIFT_MASK != 0,
         super_: bits & RENDER_SUPER_MASK != 0,
-        hyper: false,
+        hyper: bits & RENDER_HYPER_MASK != 0,
+        alt: bits & RENDER_ALT_MASK != 0,
     }
 }
 
@@ -1210,6 +1249,15 @@ impl TtyInputTarget {
 /// Input events from the display layer.
 #[derive(Clone, Debug)]
 pub enum InputEvent {
+    Tracked {
+        receipt: neomacs_display_protocol::input_progress::InputDelivery,
+        event: Box<InputEvent>,
+    },
+    /// Native diagnostic observation; unwrapped by the ordered command reader.
+    Observed {
+        token: neomacs_display_protocol::input_latency::InputToken,
+        event: Box<InputEvent>,
+    },
     /// Uninterpreted bytes from a Unix TTY.
     ///
     /// The evaluator expands this transport batch into ordered
@@ -2489,6 +2537,8 @@ pub struct CommandLoop {
     pub keyboard: KeyboardRuntime,
     /// Lisp meanings paired with immutable displayed frame presentations.
     pub presented_interactions: PresentedInteractions,
+    /// Next bounded GUI service opportunity while command input stays queued.
+    gui_display_deadline: Option<Instant>,
     /// Current prefix argument.
     pub prefix_arg: PrefixArg,
     /// Whether we are in a recursive edit.
@@ -2521,6 +2571,7 @@ impl CommandLoop {
         Self {
             keyboard: KeyboardRuntime::new(),
             presented_interactions: PresentedInteractions::default(),
+            gui_display_deadline: None,
             prefix_arg: PrefixArg::None,
             recursive_depth: 0,
             running: false,
@@ -5056,6 +5107,14 @@ impl crate::emacs_core::eval::Context {
         }
 
         match event {
+            InputEvent::Tracked { receipt, event } => {
+                self.input_progress.consumed(receipt);
+                self.handle_read_char_input_event(*event, tty_input_decoding)
+            }
+            InputEvent::Observed { token, event } => {
+                neomacs_display_protocol::input_latency::consumed(token);
+                self.handle_read_char_input_event(*event, tty_input_decoding)
+            }
             InputEvent::RawTtyBytes { bytes, target } => {
                 self.route_tty_keyboard_input(target);
                 for byte in bytes.into_iter().rev() {
@@ -5325,14 +5384,26 @@ impl crate::emacs_core::eval::Context {
                 Ok(Some(event))
             }
             InputEvent::MouseScroll {
-                delta_x: _,
+                delta_x,
                 delta_y,
                 x,
                 y,
                 modifiers,
                 target_frame_id,
             } => {
-                let dir = if delta_y > 0.0 {
+                if !delta_x.is_finite()
+                    || !delta_y.is_finite()
+                    || (delta_x == 0.0 && delta_y == 0.0)
+                {
+                    return Ok(None);
+                }
+                let dir = if delta_x.abs() > delta_y.abs() {
+                    if delta_x > 0.0 {
+                        "wheel-left"
+                    } else {
+                        "wheel-right"
+                    }
+                } else if delta_y > 0.0 {
                     "wheel-up"
                 } else {
                     "wheel-down"
@@ -5341,7 +5412,16 @@ impl crate::emacs_core::eval::Context {
                 Self::append_modifier_prefix(&modifiers, &mut sym);
                 sym.push_str(dir);
                 let position = Self::make_mouse_position(x, y, target_frame_id, self);
-                let event = Value::list(vec![Value::symbol(&sym), position]);
+                // Frontends accumulate fractional wheel units before this
+                // integral command boundary. Preserve multiple steps in GNU's
+                // LINE-COUNT field, keeping custom wheel bindings in control.
+                let count = delta_x.abs().max(delta_y.abs()).round().max(1.0) as i64;
+                let event = Value::list(vec![
+                    Value::symbol(&sym),
+                    position,
+                    Value::fixnum(1),
+                    Value::fixnum(count),
+                ]);
                 self.command_loop.store_kbd_macro_event(event);
                 Ok(Some(event))
             }
@@ -5703,10 +5783,17 @@ impl crate::emacs_core::eval::Context {
                     .command_idle_auto_save_delay()
                     .and_then(|delay| std::time::Instant::now().checked_add(delay));
             }
-            let wait_deadline = [deadline, idle_auto_save_deadline, key_echo_deadline]
-                .into_iter()
-                .flatten()
-                .min();
+            let display_idle_deadline =
+                self.display_idle_maintenance_deadline(command_input, timeout.is_some());
+            let wait_deadline = [
+                deadline,
+                idle_auto_save_deadline,
+                key_echo_deadline,
+                display_idle_deadline,
+            ]
+            .into_iter()
+            .flatten()
+            .min();
             let wait_result = self.wait_for_command_input(wait_deadline);
 
             match wait_result? {
@@ -5752,6 +5839,31 @@ impl crate::emacs_core::eval::Context {
                 }
             }
         }
+    }
+
+    fn display_idle_maintenance_deadline(
+        &mut self,
+        command_input: bool,
+        timed_read: bool,
+    ) -> Option<std::time::Instant> {
+        if !command_input
+            || timed_read
+            || self.command_loop.keyboard.has_pending_low_level_input()
+            || self.has_pending_command_input_for_query()
+            || self.input_rx.as_ref().is_some_and(|rx| !rx.is_empty())
+        {
+            return None;
+        }
+        let mut maintenance = self.display_idle_maintenance_fn.take()?;
+        let (next, publish) = maintenance(self);
+        self.display_idle_maintenance_fn = Some(maintenance);
+        if publish {
+            // Drop the engine borrow before redisplay re-enters layout. This
+            // publishes newly available coverage without changing the buffer.
+            self.invalidate_redisplay();
+            self.redisplay();
+        }
+        next.and_then(|delay| std::time::Instant::now().checked_add(delay))
     }
 
     /// GNU's buffer-size-scaled delay for `auto-save-timeout`.

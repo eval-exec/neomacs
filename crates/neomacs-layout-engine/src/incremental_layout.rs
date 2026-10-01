@@ -157,9 +157,12 @@ impl WindowDelta {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RetainedWindowKey {
+    /// Fontset rules can change without touching buffer, face, or display ticks.
+    pub fontset_generation: u64,
     pub prefixes: neovm_core::window::LayoutPrefixInputs,
     pub invisibility: neovm_core::window::LayoutInvisibilityInput,
     pub char_table_revision: neovm_core::window::CharTableLayoutRevision,
+    pub symbol_property_revision: neovm_core::emacs_core::symbol::SymbolPropertyRevision,
     pub display_table: neovm_core::window::LayoutDisplayTableInput,
     /// Generation of asynchronously decoded media (see
     /// `Context::invalidate_media`). An image that finishes decoding changes
@@ -244,6 +247,15 @@ pub struct RetainedWindowKey {
 }
 
 impl RetainedWindowKey {
+    /// Row contents are independent of their viewport start and pixel offset.
+    /// Keep every source, font, window-policy and geometry invalidator intact.
+    pub(crate) fn row_content_eligible(previous: &Self, current: &Self) -> bool {
+        let mut placed = current.clone();
+        placed.window_start = previous.window_start;
+        placed.vscroll = previous.vscroll;
+        Self::cursor_only_eligible(previous, &placed)
+    }
+
     /// Snapshot the layout inputs from the resolved window params for this pass,
     /// reading the per-buffer invalidation ticks + global face counter from the
     /// evaluator. A missing buffer falls back to zero ticks (it will not match a
@@ -280,8 +292,11 @@ impl RetainedWindowKey {
             })
             .unwrap_or((0, 0, 0, false, p.buffer_size, 0));
         Self {
+            fontset_generation: neovm_core::emacs_core::fontset::fontset_generation(),
             media_generation: evaluator.media_generation(),
             char_table_revision: neovm_core::window::CharTableLayoutRevision::current(),
+            symbol_property_revision:
+                neovm_core::emacs_core::symbol::SymbolPropertyRevision::current(),
             display_table: evaluator
                 .layout_display_table_input(neovm_core::buffer::BufferId(p.buffer_id))
                 .unwrap_or_default(),
@@ -405,9 +420,11 @@ impl RetainedWindowKey {
             }};
         }
         diff!(
+            fontset_generation,
             prefixes,
             invisibility,
             char_table_revision,
+            symbol_property_revision,
             display_table,
             media_generation,
             buffer_id,
@@ -1096,6 +1113,17 @@ impl RetainedWindowMatrix {
         &self,
         curr: &RetainedWindowKey,
     ) -> Result<CursorOnlyReplay, CursorOnlyDecline> {
+        self.cursor_only_replay_with_forced_start(curr, false)
+    }
+
+    /// An explicit scroll fixes the viewport start even when point lands on
+    /// its boundary. Keep all content/cursor validation; only the ordinary
+    /// point-motion recenter guard is unnecessary in that case.
+    pub(crate) fn cursor_only_replay_with_forced_start(
+        &self,
+        curr: &RetainedWindowKey,
+        force_start: bool,
+    ) -> Result<CursorOnlyReplay, CursorOnlyDecline> {
         if self.validity != MatrixValidity::Valid {
             return Err(CursorOnlyDecline::MatrixNotValid);
         }
@@ -1124,7 +1152,10 @@ impl RetainedWindowMatrix {
             }
             let start = row.start_charpos as i64;
             let end = row.end_charpos as i64;
-            if new_cursor.is_none() && start <= new_point && new_point <= end {
+            if new_cursor.is_none()
+                && start <= new_point
+                && (new_point < end || (new_point == end && !row.continued))
+            {
                 new_cursor = Some((idx, row.as_ref()));
             }
             body_indices.insert(idx);
@@ -1146,9 +1177,37 @@ impl RetainedWindowMatrix {
             // even though the underlying number stays absolute.
             return Err(CursorOnlyDecline::LineNumberedCursorRowChanged);
         }
-        if cursor_row.continued
+        let retained_cursor = (self.key.point == curr.point)
+            .then(|| {
+                self.presented_cursor
+                    .clone()
+                    .zip(self.display_snapshot.phys_cursor.clone())
+                    .and_then(|(presented, output)| {
+                        let output_slot_id = DisplaySlotId {
+                            window_id: presented.window_id,
+                            row: u32::try_from(output.row).ok()?,
+                            col: u16::try_from(output.col).ok()?,
+                        };
+                        RetainedTextWindowCursor::new(presented, output_slot_id, output.x)
+                    })
+            })
+            .flatten();
+        // Replay combines the point face's metrics with the retained row
+        // through the canonical cursor rule. Unmeasured raised glyphs cannot
+        // establish that geometry and still require a fresh walk.
+        if (retained_cursor.is_none()
+            && cursor_row
+                .glyphs
+                .iter()
+                .flatten()
+                .any(|glyph| glyph.vertical_offset_px != 0.0 && glyph.pixel_height <= 0.0))
             || cursor_row.truncated_left
-            || cursor_row.left_fringe_bitmap.is_some()
+            || (retained_cursor.is_none()
+                && (cursor_row.continued || cursor_row.left_fringe_bitmap.is_some())
+                && !self.display_snapshot.points.iter().any(|point| {
+                    point.row == new_cursor_row_index as i64
+                        && point.buffer_pos.as_i64() == new_point + 1
+                }))
         {
             return Err(CursorOnlyDecline::CursorRowNotReDecoratable);
         }
@@ -1169,7 +1228,14 @@ impl RetainedWindowMatrix {
         // Ungated, this rejected every frame of a window nothing had touched --
         // 200 consecutive frames of the rust-lsp-typing fixture rebuilt a
         // 7-row window in full with `differing=[]`.
-        if point_moved {
+        // A forced start may still move point out of a clipped boundary row.
+        // Only a completely visible cursor row can bypass the recenter guard.
+        let body = curr.partition.text_body();
+        let cursor_top = cursor_row.pixel_y + self.display_snapshot.regions.outer.y;
+        let forced_visible = force_start
+            && cursor_top >= body.y
+            && cursor_top + cursor_row.height_px <= body.y + body.height;
+        if point_moved && !forced_visible {
             if Some(new_cursor_row_index) == last_body_index && !cursor_row.ends_at_zv {
                 return Err(CursorOnlyDecline::PointMoveMayScrollDown);
             }
@@ -1195,21 +1261,7 @@ impl RetainedWindowMatrix {
             // needs the chrome dirty flags off the evaluator. `None` = walk.
             chrome: None,
             chrome_memo: None,
-            retained_cursor: (self.key.point == curr.point)
-                .then(|| {
-                    self.presented_cursor
-                        .clone()
-                        .zip(self.display_snapshot.phys_cursor.clone())
-                        .and_then(|(presented, output)| {
-                            let output_slot_id = DisplaySlotId {
-                                window_id: presented.window_id,
-                                row: u32::try_from(output.row).ok()?,
-                                col: u16::try_from(output.col).ok()?,
-                            };
-                            RetainedTextWindowCursor::new(presented, output_slot_id, output.x)
-                        })
-                })
-                .flatten(),
+            retained_cursor,
             face_generation: self.face_generation,
         })
     }
@@ -1218,26 +1270,52 @@ impl RetainedWindowMatrix {
     /// text/appearance change, else `None` (→ full rebuild). Handles forward
     /// (downward) scroll — the new `window_start` lands on a retained row
     /// boundary `s` rows down; rows `[s..]` are reused (shifted up by `dvpos`)
-    /// and `s` newly-exposed rows remain to be laid at the bottom. Scroll-up
-    /// (new start above the retained top), partial-row scroll, vscroll, line
-    /// numbers, and continuation/truncation rows all bail (conservative).
+    /// and `s` newly-exposed rows remain to be laid at the bottom. A backward
+    /// scroll walks exposed rows until it proves synchronization with the old
+    /// top. The engine limits that optimization to small moves. Vscroll, line
+    /// numbers, and unsafe continuation/truncation rows bail conservatively.
     pub fn scroll_replay(&self, curr: &RetainedWindowKey) -> Option<ScrollReplay> {
+        self.scroll_replay_for_placement(curr, None)
+    }
+
+    /// A shifted prefix for joining with prepared coverage. It is not a
+    /// partial-walk plan: the join must certify the complete target viewport.
+    pub(crate) fn prepared_projection_prefix(
+        &self,
+        curr: &RetainedWindowKey,
+        text_y: f32,
+    ) -> Option<ScrollReplay> {
+        self.scroll_replay_for_placement(curr, Some(text_y))
+    }
+
+    fn scroll_replay_for_placement(
+        &self,
+        curr: &RetainedWindowKey,
+        projected_y: Option<f32>,
+    ) -> Option<ScrollReplay> {
         if self.validity != MatrixValidity::Valid {
             return None;
         }
-        if !RetainedWindowKey::scroll_eligible(&self.key, curr) || curr.vscroll != 0 {
+        let eligible = if projected_y.is_some() {
+            RetainedWindowKey::row_content_eligible(&self.key, curr)
+        } else {
+            RetainedWindowKey::scroll_eligible(&self.key, curr) && curr.vscroll == 0
+        };
+        if !eligible {
             return None;
         }
-        // Collect body rows in matrix order; bail on anything that the uniform
-        // shift cannot reproduce (line numbers renumber; continuation/truncation
-        // /fringe rows have position-dependent decoration).
+        // A complete prepared join at the same source origin can translate
+        // wrapped rows and their fringes without restarting line layout. Other
+        // shifts still require the ordinary conservative decoration guards.
+        let same_origin_projection =
+            projected_y.is_some() && curr.window_start == self.key.window_start;
         let mut body: Vec<(usize, &MatrixRow)> = Vec::new();
         for (idx, row) in self.matrix.rows.iter().enumerate() {
             if !row.enabled || Self::is_chrome_role(row.role) {
                 continue;
             }
             if !row.glyphs[GlyphArea::LeftMargin.index()].is_empty()
-                || row.continued
+                || (row.continued && !same_origin_projection)
                 || row.truncated_left
             {
                 return None;
@@ -1248,12 +1326,16 @@ impl RetainedWindowMatrix {
             // and carry real ZV bounds, so they reuse like the placeholder.
             if (row.left_fringe_bitmap.is_some() || row.right_fringe_bitmap.is_some())
                 && row.displays_text
+                && !same_origin_projection
             {
                 return None;
             }
             body.push((idx, row));
         }
         if body.len() < 2 {
+            return None;
+        }
+        if projected_y.is_some() && curr.window_start < body[0].1.start_charpos as i64 {
             return None;
         }
         // Whole-row scroll distance: the body row whose start matches the new
@@ -1294,11 +1376,11 @@ impl RetainedWindowMatrix {
         let s = body.iter().position(|(_, row)| {
             row.displays_text && row.start_charpos as i64 == curr.window_start
         })?;
-        if s == 0 {
+        if s == 0 && projected_y.is_none() {
             return None;
         }
         let last = body.len() - 1;
-        let dvpos = body[0].1.pixel_y - body[s].1.pixel_y;
+        let dvpos = projected_y.unwrap_or(body[0].1.pixel_y) - body[s].1.pixel_y;
         let dvpos_i64 = dvpos.round() as i64;
         // old matrix row index → new matrix row index for each reused row.
         let mut remap: rustc_hash::FxHashMap<i64, i64> = rustc_hash::FxHashMap::default();
@@ -1347,7 +1429,7 @@ impl RetainedWindowMatrix {
             reused_row_snapshots,
             reused_points,
             walk_start: PartialBodyWalkStart::new(last_row.end_charpos as i64 + 1),
-            exposed_row_base: body[last - s + 1].0,
+            exposed_row_base: body.get(last - s + 1).map_or(body[last].0 + 1, |row| row.0),
             exposed_row_count: s,
             exposed_text_y: last_row.pixel_y + dvpos + last_row.height_px,
             new_window_start: curr.window_start,
@@ -1856,6 +1938,8 @@ pub struct LayoutStats {
     pub full_windows: usize,
     /// Windows that took the cursor-only fast path (Phase 1).
     pub cursor_only_windows: usize,
+    /// Subset of body replays restored from an older prepared viewport.
+    pub prepared_windows: usize,
     /// Windows that took the pure-scroll fast path (Phase 2).
     pub scroll_windows: usize,
     /// Windows that took the localized-edit fast path (Phase 3).

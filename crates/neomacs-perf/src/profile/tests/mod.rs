@@ -9,9 +9,9 @@ use std::time::Duration;
 
 use crate::{
     CaptureRoute, Frontend, NativeProfiler, PerfCallGraph, PerfCapture, PerfCaptureConfiguration,
-    PerfHarness, PerfSamplingEvent, ProfileArtifact, ProfileGate, ProfileRejection,
-    ProfileReportStyle, ProfileRequest, ProfileScope, ProfileVerdict, RunArtifact, RunReport,
-    RunVerdict, ScenarioId, perf_data_sample_count, profile_verdict,
+    PerfHarness, PerfSamplingEvent, PerfSamplingRate, ProfileArtifact, ProfileGate,
+    ProfileRejection, ProfileReportStyle, ProfileRequest, ProfileScope, ProfileVerdict,
+    RunArtifact, RunReport, RunVerdict, ScenarioId, perf_data_sample_count, profile_verdict,
 };
 
 #[test]
@@ -32,7 +32,9 @@ fn captured_profile_artifact_links_raw_data_report_and_scenario_run_without_timi
         report_style: ProfileReportStyle::SelfTime,
         configuration: PerfCaptureConfiguration {
             event: PerfSamplingEvent::UserCpuClock,
-            frequency_hz: NonZeroU32::new(999).expect("non-zero literal"),
+            sampling: PerfSamplingRate::Frequency {
+                frequency_hz: NonZeroU32::new(999).expect("non-zero literal"),
+            },
             call_graph: PerfCallGraph::Dwarf {
                 stack_size_bytes: NonZeroU32::new(16_384).expect("non-zero literal"),
             },
@@ -50,7 +52,7 @@ fn captured_profile_artifact_links_raw_data_report_and_scenario_run_without_timi
         serde_json::from_str(&json).expect("deserialize profile artifact");
 
     assert_eq!(decoded, artifact);
-    assert_eq!(decoded.schema_version, 4);
+    assert_eq!(decoded.schema_version, 5);
     assert!(json.contains(r##""event": "user-cpu-clock""##));
     assert!(json.contains(r##""scope": "edit-loop""##));
     assert!(json.contains(r##""report_style": "self-time""##));
@@ -62,9 +64,25 @@ fn captured_profile_artifact_links_raw_data_report_and_scenario_run_without_timi
     let mut legacy = serde_json::to_value(&artifact).expect("serialize legacy fixture");
     legacy["schema_version"] = serde_json::json!(3);
     legacy.as_object_mut().unwrap().remove("report_style");
+    legacy["configuration"]
+        .as_object_mut()
+        .unwrap()
+        .remove("sampling");
+    legacy["configuration"]["frequency_hz"] = serde_json::json!(999);
     let decoded: ProfileArtifact = serde_json::from_value(legacy).expect("read schema 3");
     assert_eq!(decoded.schema_version, 3);
     assert_eq!(decoded.report_style, ProfileReportStyle::CallGraph);
+    let mut schema_four = serde_json::to_value(&artifact).unwrap();
+    schema_four["schema_version"] = serde_json::json!(4);
+    schema_four["configuration"]
+        .as_object_mut()
+        .unwrap()
+        .remove("sampling");
+    schema_four["configuration"]["frequency_hz"] = serde_json::json!(999);
+    let decoded: ProfileArtifact = serde_json::from_value(schema_four).expect("read schema 4");
+    assert_eq!(decoded.schema_version, 4);
+    assert_eq!(decoded.configuration, artifact.configuration);
+    assert_eq!(decoded.report_style, ProfileReportStyle::SelfTime);
 }
 
 #[cfg(target_os = "linux")]
@@ -491,7 +509,7 @@ fn batch_capture_distinguishes_edit_loop_from_whole_process_scope() {
 }
 
 #[test]
-fn gui_capture_profiles_only_the_app_via_the_frontend_hook() {
+fn gui_capture_profiles_only_the_app_in_the_harness_owned_session() {
     let scratch = tempfile::Builder::new()
         .prefix("neomacs-perf-gui-profile-command-")
         .tempdir_in(crate::workspace_root().join("tmp"))
@@ -502,34 +520,41 @@ fn gui_capture_profiles_only_the_app_via_the_frontend_hook() {
         ProfileScope::EditLoop,
         Duration::from_secs(2),
     );
+    // The GUI frontend launches the editor directly (the display session is
+    // harness-owned infrastructure), so the capture is a Direct wrap: perf
+    // record profiles the editor process, never the compositor.
+    let mut editor = Command::new("target/release/neomacs");
+    editor.arg("-Q");
     let command = capture
-        .wrap(
-            Command::new("tools/bench/gui-run.sh"),
-            CaptureRoute::Adapter("GUI"),
-        )
+        .wrap(editor, CaptureRoute::Direct)
         .expect("wrap GUI command");
 
-    assert_eq!(command.get_program(), "tools/bench/gui-run.sh");
+    assert_eq!(command.get_program(), "perf");
+    let arguments = command
+        .get_args()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    assert!(arguments.iter().any(|argument| argument == "record"));
+    assert!(arguments.iter().any(|argument| argument == "--"));
+    assert!(
+        arguments
+            .iter()
+            .any(|argument| argument.starts_with("--control=fifo:"))
+    );
     let environment = command
         .get_envs()
         .filter_map(|(name, value)| Some((name.to_str()?, value?.to_str()?)))
         .collect::<std::collections::BTreeMap<_, _>>();
-    assert_eq!(environment.get("GUI_PERF_EVENT"), Some(&"cpu-clock:u"));
-    assert_eq!(environment.get("GUI_PERF_FREQUENCY"), Some(&"999"));
-    assert_eq!(environment.get("GUI_PERF_CALL_GRAPH"), Some(&"dwarf,16384"));
-    assert!(
-        environment
-            .get("GUI_PERF_CONTROL")
-            .is_some_and(|control| control.starts_with("fifo:"))
-    );
     assert!(environment.contains_key("NEOMACS_PERF_GATE_PORT"));
     assert!(
-        PathBuf::from(
-            environment
-                .get("GUI_PERF_RECORD")
-                .expect("GUI capture path")
-        )
-        .ends_with("perf.data")
+        !environment.keys().any(|name| name.starts_with("GUI_PERF_")),
+        "the GUI adapter perf contract retired with tools/bench/gui-run.sh"
+    );
+    assert!(
+        arguments
+            .iter()
+            .any(|argument| argument.ends_with("perf.data")),
+        "perf record writes its data below the run directory"
     );
 }
 
@@ -570,5 +595,211 @@ fn tui_capture_profiles_only_the_app_inside_the_private_pty() {
                 .expect("PTY capture path")
         )
         .ends_with("perf.data")
+    );
+}
+
+fn instruction_lbr_configuration() -> PerfCaptureConfiguration {
+    PerfCaptureConfiguration {
+        event: PerfSamplingEvent::UserCoreInstructions,
+        sampling: PerfSamplingRate::Period {
+            sample_period: NonZeroU64::new(4_000_000).unwrap(),
+        },
+        call_graph: PerfCallGraph::Lbr,
+    }
+}
+
+#[test]
+fn instruction_profile_metadata_preserves_period_and_rejects_ambiguous_rates() {
+    let configuration = instruction_lbr_configuration();
+    let json = serde_json::to_value(configuration).unwrap();
+    assert_eq!(json["event"], "user-core-instructions");
+    assert_eq!(json["sampling"]["kind"], "period");
+    assert_eq!(json["sampling"]["sample_period"], 4_000_000);
+    assert_eq!(json["call_graph"]["kind"], "lbr");
+    assert!(json.get("frequency_hz").is_none());
+    assert_eq!(
+        serde_json::from_value::<PerfCaptureConfiguration>(json.clone()).unwrap(),
+        configuration
+    );
+    let mut ambiguous = json.clone();
+    ambiguous["frequency_hz"] = serde_json::json!(999);
+    assert!(serde_json::from_value::<PerfCaptureConfiguration>(ambiguous).is_err());
+    let mut missing = json.clone();
+    missing.as_object_mut().unwrap().remove("sampling");
+    assert!(serde_json::from_value::<PerfCaptureConfiguration>(missing).is_err());
+    let mut zero_period = json;
+    zero_period["sampling"]["sample_period"] = serde_json::json!(0);
+    assert!(serde_json::from_value::<PerfCaptureConfiguration>(zero_period).is_err());
+    let request = ProfileRequest::new(
+        ScenarioId::Scrolling,
+        "neomacs",
+        NonZeroU32::new(1).unwrap(),
+        NativeProfiler::Perf,
+    )
+    .with_capture_configuration(configuration);
+    assert_eq!(request.configuration, configuration);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn gui_instruction_capture_keeps_edit_loop_gate_and_exact_record_options() {
+    let scratch = tempfile::Builder::new()
+        .prefix("neomacs-perf-instructions-")
+        .tempdir_in(crate::workspace_root().join("tmp"))
+        .unwrap();
+    let mut capture = PerfCapture::new(
+        scratch.path(),
+        instruction_lbr_configuration(),
+        ProfileScope::EditLoop,
+        Duration::from_secs(2),
+    );
+    let command = capture
+        .wrap(Command::new("neomacs"), CaptureRoute::Direct)
+        .unwrap();
+    let arguments: Vec<_> = command
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    for pair in [
+        ["--event", "cpu_core/instructions/u"],
+        ["--count", "4000000"],
+        ["--call-graph", "lbr"],
+    ] {
+        assert!(arguments.windows(2).any(|a| a == pair));
+    }
+    assert!(!arguments.iter().any(|a| a == "--freq"));
+    assert!(arguments.iter().any(|a| a == "--delay=-1"));
+    assert!(arguments.iter().any(|a| a.starts_with("--control=fifo:")));
+    assert!(
+        command
+            .get_envs()
+            .any(|(name, value)| name == "NEOMACS_PERF_GATE_PORT" && value.is_some())
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn tui_adapter_clears_the_opposite_inherited_sampling_rate() {
+    let scratch = tempfile::Builder::new()
+        .prefix("neomacs-perf-instruction-adapter-")
+        .tempdir_in(crate::workspace_root().join("tmp"))
+        .unwrap();
+    for (configuration, retained, removed) in [
+        (
+            instruction_lbr_configuration(),
+            "PTY_PERF_PERIOD",
+            "PTY_PERF_FREQUENCY",
+        ),
+        (
+            PerfCaptureConfiguration::standard(),
+            "PTY_PERF_FREQUENCY",
+            "PTY_PERF_PERIOD",
+        ),
+    ] {
+        let mut capture = PerfCapture::new(
+            scratch.path(),
+            configuration,
+            ProfileScope::WholeProcess,
+            Duration::from_secs(2),
+        );
+        let mut adapter = Command::new("python3");
+        adapter
+            .env("PTY_PERF_PERIOD", "123")
+            .env("PTY_PERF_FREQUENCY", "456");
+        let command = capture.wrap(adapter, CaptureRoute::Adapter("PTY")).unwrap();
+        let environment: std::collections::BTreeMap<_, _> = command.get_envs().collect();
+        assert!(environment[std::ffi::OsStr::new(retained)].is_some());
+        assert_eq!(environment[std::ffi::OsStr::new(removed)], None);
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn pty_runner_uses_period_recording_without_a_frequency_argument() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = tempfile::Builder::new()
+        .prefix("neomacs-perf-pty-instruction-argv-")
+        .tempdir_in(crate::workspace_root().join("tmp"))
+        .unwrap();
+    let fake_perf = scratch.path().join("perf");
+    fs::write(
+        &fake_perf,
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$FAKE_PERF_ARGUMENTS\"\n: > \"$SENTINEL\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&fake_perf, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut path = vec![scratch.path().to_path_buf()];
+    path.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let arguments_path = scratch.path().join("arguments");
+    let output = Command::new("python3")
+        .arg(crate::workspace_root().join("tools/bench/pty-run.py"))
+        .arg("neomacs")
+        .env("PATH", std::env::join_paths(path).unwrap())
+        .env("SENTINEL", scratch.path().join("sentinel"))
+        .env("FAKE_PERF_ARGUMENTS", &arguments_path)
+        .env("PTY_TIMEOUT", "5")
+        .env("PTY_PERF_RECORD", scratch.path().join("perf.data"))
+        .env("PTY_PERF_EVENT", "instructions:u")
+        .env("PTY_PERF_PERIOD", "4000000")
+        .env("PTY_PERF_FREQUENCY", "999")
+        .env("PTY_PERF_CALL_GRAPH", "lbr")
+        .env("PTY_PERF_CONTROL", "fifo:command,ack")
+        .env_remove("PTY_PERF_STAT")
+        .env_remove("PTY_CPU")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let arguments = fs::read_to_string(arguments_path).unwrap();
+    assert!(arguments.contains("--event\ninstructions:u\n"));
+    assert!(arguments.contains("--count\n4000000\n"));
+    assert!(arguments.contains("--call-graph\nlbr\n"));
+    assert!(arguments.contains("--delay=-1\n--control=fifo:command,ack\n"));
+    assert!(!arguments.contains("--freq"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn failed_profile_can_cancel_an_edit_loop_gate_before_any_editor_connects() {
+    let scratch = tempfile::Builder::new()
+        .prefix("neomacs-perf-failed-gate-")
+        .tempdir_in(crate::workspace_root().join("tmp"))
+        .unwrap();
+    let mut capture = PerfCapture::new(
+        scratch.path(),
+        instruction_lbr_configuration(),
+        ProfileScope::EditLoop,
+        Duration::from_secs(300),
+    );
+    let _command = capture
+        .wrap(Command::new("neomacs"), CaptureRoute::Direct)
+        .unwrap();
+    assert!(scratch.path().join("perf-control.fifo").exists());
+    capture.cancel_gate();
+    assert!(!scratch.path().join("perf-control.fifo").exists());
+    assert!(!scratch.path().join("perf-ack.fifo").exists());
+}
+
+#[test]
+fn self_time_report_disables_inline_expansion_without_changing_call_graph_reports() {
+    let input = std::path::Path::new("perf.data");
+    let self_time = ProfileReportStyle::SelfTime.report_arguments(input);
+    assert!(self_time.iter().any(|argument| argument == "--no-inline"));
+    assert!(
+        self_time
+            .windows(2)
+            .any(|arguments| arguments == ["--call-graph", "none"])
+    );
+    let call_graph = ProfileReportStyle::CallGraph.report_arguments(input);
+    assert!(!call_graph.iter().any(|argument| argument == "--no-inline"));
+    assert!(
+        call_graph
+            .windows(2)
+            .any(|arguments| arguments == ["--call-graph", "fractal,0.5"])
     );
 }

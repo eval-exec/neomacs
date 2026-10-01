@@ -372,5 +372,5 @@ pub fn should_enable_live_tty_io(startup: &StartupOptions) -> bool {
 }
 
 #[cfg(test)]
-#[path = "tty_init_test.rs"]
+#[path = "tests/tty_init_test.rs"]
 mod tty_init_test;

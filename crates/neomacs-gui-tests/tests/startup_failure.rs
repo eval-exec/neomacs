@@ -460,7 +460,7 @@ fn check_lisp_startup_exit_status(status: i32) {
 #[test]
 // Prerequisites: requires a release binary and a native graphical session.
 fn evaluator_image_failure_exits_instead_of_waiting_for_initial_window() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = neomacs_infra::crate_root!().join("../..");
     let artifacts = root.join("target/neomacs-gui-tests");
     let missing_image = artifacts.join("startup-failure-intentionally-missing.pdump");
     assert!(!missing_image.exists(), "test requires an absent image");
@@ -514,7 +514,7 @@ fn evaluator_image_failure_exits_instead_of_waiting_for_initial_window() {
 #[test]
 // Prerequisites: requires release binary/pdump, Fontconfig, and Weston.
 fn empty_native_font_catalog_reports_startup_failure_without_a_window() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = neomacs_infra::crate_root!().join("../..");
     let artifacts = root.join("target/neomacs-gui-tests");
     let backend = GuiBackend::LinuxWayland;
     let session = DisplayHarness::for_backend(backend)

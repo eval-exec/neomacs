@@ -177,6 +177,17 @@ macro_rules! effect_schema {
     };
 }
 
+// Generated alongside each slot, so adding an enabled property cannot
+// silently bypass the renderer's static-paint admission check.
+macro_rules! effect_enabled_flag {
+    ($config:ident, enabled) => {
+        $config.enabled
+    };
+    ($config:ident, $field:ident) => {
+        false
+    };
+}
+
 macro_rules! effect_config {
     (
         $(#[$meta:meta])*
@@ -199,6 +210,10 @@ macro_rules! effect_config {
             }
         }
         impl $name {
+            fn enabled_flag(&self) -> bool {
+                false $(|| effect_enabled_flag!(self, $field))*
+            }
+
             /// Every property of this effect, with the kind a customization
             /// widget needs. Emitted from the same declaration that defines the
             /// fields, so the two cannot drift.
@@ -1929,6 +1944,16 @@ pub fn schema_for(effect: &str) -> Option<&'static [PropertySchema]> {
 
 macro_rules! effect_schema_table {
     ($($field:ident => $ty:ty,)*) => {
+        impl EffectsConfig {
+            /// Cursor color cycling is composed separately from body paint.
+            /// Other enabled effects conservatively veto a static body cache.
+            /// Disabled parameters (including rounded colors) are irrelevant.
+            pub fn has_enabled_effects_other_than_cursor_color_cycle(&self) -> bool {
+                false $(|| (stringify!($field) != "cursor_color_cycle"
+                    && self.$field.enabled_flag()))*
+            }
+        }
+
         fn schema_by_field(field: &str) -> Option<&'static [PropertySchema]> {
             match field {
                 $(stringify!($field) => Some(<$ty>::PROPERTIES),)*
@@ -1946,6 +1971,13 @@ macro_rules! effect_schema_table {
                 }
                 "window_open" | "window_close" | "window_resize" | "window_movement" => {
                     Some(crate::window_animation::WindowAnimation::PROPERTIES)
+                }
+                "child_frame_animations" => {
+                    Some(crate::child_frame_animation::ChildFrameAnimationsConfig::PROPERTIES)
+                }
+                "child_frame_open" | "child_frame_close" | "child_frame_movement"
+                | "child_frame_resize" => {
+                    Some(crate::child_frame_animation::ChildFrameAnimation::PROPERTIES)
                 }
                 _ => None,
             }

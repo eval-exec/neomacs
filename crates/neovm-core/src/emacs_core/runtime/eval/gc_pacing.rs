@@ -59,6 +59,8 @@ impl Context {
                 visit(root);
             }
         }
+        group("owned_native");
+        self.owned_roots.trace_roots(visit);
         group("eval_temp");
         for root in self.eval_temp_roots.iter().copied() {
             visit(root);

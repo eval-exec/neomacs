@@ -974,3 +974,350 @@ fn hit_test_respects_updated_z_order() {
     // Now frame 2 is on top
     assert_eq!(mgr.hit_test(100.0, 100.0).unwrap().0, 2);
 }
+
+// ===================================================================
+// Lifecycle animation state
+// ===================================================================
+
+use neomacs_display_protocol::motion_spec::{MotionDuration, TweenSpec};
+use neomacs_display_protocol::scroll_animation::TransitionEasing;
+
+fn tween_100ms() -> MotionSpec {
+    MotionSpec::Tween(TweenSpec {
+        duration: MotionDuration::new(std::time::Duration::from_millis(100))
+            .expect("positive duration"),
+        easing: TransitionEasing::EaseOutQuad,
+        bezier: None,
+    })
+}
+
+fn instant() -> MotionSpec {
+    MotionSpec::Instant
+}
+
+fn sample_at(origin: EventTime, millis: u64) -> FrameSample {
+    FrameSample::new(
+        origin.plus(std::time::Duration::from_millis(millis)),
+        std::time::Duration::ZERO,
+    )
+}
+
+/// A child frame whose *parent* is another child frame, so subtree removal
+/// and z-order tests exercise ancestry rather than the fixture's root.
+fn make_nested_buf(
+    frame_id: u64,
+    parent_id: u64,
+    parent_x: f32,
+    parent_y: f32,
+    width: f32,
+    height: f32,
+    z_order: i32,
+) -> FrameGlyphBuffer {
+    let mut buf = make_child_buf(frame_id, parent_x, parent_y, width, height, z_order);
+    buf.set_frame_identity(
+        neomacs_display_protocol::DisplayFrameId::new(frame_id),
+        neomacs_display_protocol::DisplayFrameId::new(parent_id),
+        parent_x,
+        parent_y,
+        z_order,
+        false,
+        0.0,
+        neomacs_display_protocol::Color::BLACK,
+        false,
+        1.0,
+    );
+    buf
+}
+
+fn origin_now() -> EventTime {
+    // The same observation the production lifecycle paths use
+    // (`observe_platform_now`); the motion tests share the idiom.
+    neomacs_display_protocol::frame_time::observe_platform_now()
+}
+
+#[test]
+fn open_animation_advances_by_sampling_not_stepping() {
+    let mut mgr = make_manager();
+    mgr.update_frame(make_child_buf(1, 0.0, 0.0, 100.0, 100.0, 0));
+    let origin = origin_now();
+    mgr.begin_open_animation(1, tween_100ms(), origin, 8.0, 1.0);
+
+    // Sampling, not stepping: the same instant gives the same answer.
+    let early = mgr
+        .frames
+        .get(&1)
+        .unwrap()
+        .animation
+        .as_ref()
+        .unwrap()
+        .motion
+        .sample(sample_at(origin, 0));
+    assert_eq!(early.progress, 0.0);
+    let mid = mgr
+        .frames
+        .get(&1)
+        .unwrap()
+        .animation
+        .as_ref()
+        .unwrap()
+        .motion
+        .sample(sample_at(origin, 50));
+    assert!(
+        (mid.progress - 0.75).abs() < 1e-3,
+        "ease-out-quad at half time"
+    );
+    assert!(mid.content_mix.get() > 0.0 && mid.content_mix.get() <= 1.0);
+    let late = mgr
+        .frames
+        .get(&1)
+        .unwrap()
+        .animation
+        .as_ref()
+        .unwrap()
+        .motion
+        .sample(sample_at(origin, 101));
+    assert!(late.finished);
+}
+
+#[test]
+fn open_animation_survives_a_content_refresh() {
+    let mut mgr = make_manager();
+    mgr.update_frame(make_child_buf(1, 0.0, 0.0, 100.0, 100.0, 0));
+    mgr.begin_open_animation(1, tween_100ms(), origin_now(), 8.0, 1.0);
+
+    // A completion popup redraws per keystroke; the fade must continue, not
+    // restart.
+    mgr.update_frame(make_child_buf(1, 0.0, 0.0, 120.0, 100.0, 0));
+    assert!(mgr.frames.get(&1).unwrap().animation.is_some());
+}
+
+#[test]
+fn an_instant_open_spec_builds_no_animation_state() {
+    let mut mgr = make_manager();
+    mgr.update_frame(make_child_buf(1, 0.0, 0.0, 100.0, 100.0, 0));
+    mgr.begin_open_animation(1, instant(), origin_now(), 8.0, 1.0);
+    assert!(mgr.frames.get(&1).unwrap().animation.is_none());
+}
+
+#[test]
+fn retire_moves_the_subtree_to_dying_and_out_of_interaction() {
+    let mut mgr = make_manager();
+    mgr.update_frame(make_child_buf(1, 0.0, 0.0, 100.0, 100.0, 0));
+    mgr.update_frame(make_nested_buf(2, 1, 0.0, 100.0, 100.0, 100.0, 0)); // child of 1
+
+    let origin = origin_now();
+    assert!(mgr.retire_frame(1, tween_100ms(), origin, 6.0, 1.0));
+
+    // Gone from every interaction path...
+    assert!(!mgr.frames.contains_key(&1));
+    assert!(!mgr.frames.contains_key(&2));
+    assert_eq!(mgr.hit_test(50.0, 50.0), None);
+    // ...but retained for the fade, with a bound close animation.
+    assert_eq!(mgr.dying.len(), 2);
+    assert!(mgr.has_dying());
+    assert!(mgr.dying_entry(1).is_some());
+    assert!(mgr.dying_entry(2).is_some());
+
+    // The close path fades: content_mix rises while visible opacity falls.
+    let early = mgr
+        .dying_entry(1)
+        .unwrap()
+        .animation
+        .motion
+        .sample(sample_at(origin, 0));
+    assert_eq!(early.content_mix.get(), 0.0, "not yet faded");
+    let late = mgr
+        .dying_entry(1)
+        .unwrap()
+        .animation
+        .motion
+        .sample(sample_at(origin, 101));
+    assert!(late.finished, "past the tween's duration");
+}
+
+#[test]
+fn an_instant_close_drops_outright_with_no_dying_entry() {
+    let mut mgr = make_manager();
+    mgr.update_frame(make_child_buf(1, 0.0, 0.0, 100.0, 100.0, 0));
+    let origin = origin_now();
+    assert!(mgr.retire_frame(1, instant(), origin, 6.0, 1.0));
+    assert!(mgr.dying.is_empty());
+    assert!(mgr.frames.is_empty());
+}
+
+#[test]
+fn reinstalling_a_dying_frame_id_resurrects_it_alone() {
+    // Emacs re-showing the same popup mid-fade-out must cancel the fade and
+    // bring the frame back, while unrelated dying frames keep dying.
+    let mut mgr = make_manager();
+    mgr.update_frame(make_child_buf(1, 0.0, 0.0, 100.0, 100.0, 0));
+    mgr.update_frame(make_child_buf(2, 0.0, 100.0, 100.0, 100.0, 0));
+    let origin = origin_now();
+    mgr.retire_frame(1, tween_100ms(), origin, 0.0, 1.0);
+    mgr.retire_frame(2, tween_100ms(), origin, 0.0, 1.0);
+    assert_eq!(mgr.dying.len(), 2);
+
+    mgr.update_frame(make_child_buf(1, 0.0, 0.0, 100.0, 100.0, 0));
+    assert!(mgr.frames.contains_key(&1));
+    assert!(
+        mgr.dying_entry(1).is_none(),
+        "the resurrected id stops dying"
+    );
+    assert!(
+        mgr.dying_entry(2).is_some(),
+        "unrelated dying frames continue"
+    );
+}
+
+#[test]
+fn prune_dying_drops_only_finished_entries() {
+    let mut mgr = make_manager();
+    mgr.update_frame(make_child_buf(1, 0.0, 0.0, 100.0, 100.0, 0));
+    mgr.update_frame(make_child_buf(2, 0.0, 100.0, 100.0, 100.0, 0));
+    let origin = origin_now();
+    mgr.retire_frame(1, tween_100ms(), origin, 0.0, 1.0);
+    mgr.retire_frame(2, tween_100ms(), origin, 0.0, 1.0);
+    assert_eq!(mgr.dying.len(), 2);
+
+    mgr.prune_dying(sample_at(origin, 10));
+    assert_eq!(mgr.dying.len(), 2, "mid-fade entries are retained");
+
+    mgr.prune_dying(sample_at(origin, 200));
+    assert!(mgr.dying.is_empty(), "finished entries are dropped");
+}
+
+#[test]
+fn merged_render_order_interleaves_living_and_dying_by_z() {
+    let mut mgr = make_manager();
+    // z 5 (living), z 3 (will die), z 1 (living), z 1 (will die)
+    mgr.update_frame(make_child_buf(1, 0.0, 0.0, 100.0, 100.0, 5));
+    mgr.update_frame(make_child_buf(2, 0.0, 0.0, 100.0, 100.0, 3));
+    mgr.update_frame(make_child_buf(3, 0.0, 0.0, 100.0, 100.0, 1));
+    mgr.update_frame(make_child_buf(4, 0.0, 0.0, 100.0, 100.0, 1));
+    let origin = origin_now();
+    mgr.retire_frame(2, tween_100ms(), origin, 0.0, 1.0);
+    mgr.retire_frame(4, tween_100ms(), origin, 0.0, 1.0);
+
+    let order: Vec<u64> = mgr
+        .merged_render_order()
+        .iter()
+        .map(|(id, _)| *id)
+        .collect();
+    assert_eq!(
+        order,
+        vec![4, 3, 2, 1],
+        "z ascending, with the z-3 corpse between the z-1 and z-5 living frames"
+    );
+}
+
+#[test]
+fn merged_render_order_puts_a_corpse_beneath_a_living_frame_at_equal_z() {
+    // The dismissal case: the dying popup is being replaced by the popup
+    // that took its place at the same z. The old picture must recede
+    // *beneath* the new one.
+    let mut mgr = make_manager();
+    mgr.update_frame(make_child_buf(1, 0.0, 0.0, 100.0, 100.0, 7));
+    mgr.update_frame(make_child_buf(2, 0.0, 0.0, 100.0, 100.0, 7));
+    let origin = origin_now();
+    mgr.retire_frame(1, tween_100ms(), origin, 0.0, 1.0);
+
+    let order = mgr.merged_render_order();
+    assert_eq!(order, vec![(1, true), (2, false)]);
+}
+
+#[test]
+fn merged_render_order_is_empty_with_no_frames() {
+    let mgr = make_manager();
+    assert!(mgr.merged_render_order().is_empty());
+}
+
+#[test]
+fn merged_render_order_keeps_living_frames_when_only_they_exist() {
+    let mut mgr = make_manager();
+    mgr.update_frame(make_child_buf(1, 0.0, 0.0, 100.0, 100.0, 2));
+    mgr.update_frame(make_child_buf(2, 0.0, 0.0, 100.0, 100.0, 1));
+    let order: Vec<u64> = mgr
+        .merged_render_order()
+        .iter()
+        .map(|(id, dying)| {
+            assert!(!dying);
+            *id
+        })
+        .collect();
+    assert_eq!(order, vec![2, 1]);
+}
+
+#[test]
+fn drift_glides_from_its_departure_toward_the_placement() {
+    let mut mgr = make_manager();
+    // The popup is placed at (240, 180); the re-anchor moved it there from
+    // (40, 0).
+    mgr.update_frame(make_child_buf(1, 240.0, 180.0, 100.0, 100.0, 0));
+    let origin = origin_now();
+    assert!(mgr.begin_drift(1, 40.0, 0.0, tween_100ms(), origin));
+
+    // Sampled, not stepped: the same instant gives the same position.
+    let entry = mgr.frames.get(&1).unwrap();
+    let drift = entry.drift.as_ref().unwrap();
+    let early = drift.motion.sample(sample_at(origin, 0));
+    assert_eq!(early.progress, 0.0, "not yet departed");
+    let mid = drift.motion.sample(sample_at(origin, 50));
+    assert!(
+        (mid.progress - 0.75).abs() < 1e-3,
+        "ease-out-quad at half time"
+    );
+    // The interpolation itself is the scene pass's job; the drift owns the
+    // departure and the curve.
+    let late = drift.motion.sample(sample_at(origin, 101));
+    assert!(late.finished);
+}
+
+#[test]
+fn drift_retargets_from_the_last_drawn_position() {
+    let mut mgr = make_manager();
+    mgr.update_frame(make_child_buf(1, 240.0, 180.0, 100.0, 100.0, 0));
+    let origin = origin_now();
+    mgr.begin_drift(1, 40.0, 0.0, tween_100ms(), origin);
+
+    // The scene pass painted the popup at (140, 90), moving at 1.0/s.
+    mgr.record_drift_drawn(1, 140.0, 90.0, 1.0);
+
+    // A second re-anchor arrives mid-drift: the fresh drift departs from
+    // where the popup was seen, not from the old anchor.
+    mgr.retarget_drift(1, tween_100ms(), origin_now());
+    let drift = mgr.frames.get(&1).unwrap().drift.as_ref().unwrap();
+    assert!(
+        (drift.from_x - 140.0).abs() < 1e-4 && (drift.from_y - 90.0).abs() < 1e-4,
+        "the retargeted drift must depart from the last drawn position"
+    );
+    // The last-drawn state resets: the new curve has not been painted yet.
+    assert!(drift.last_drawn.is_none());
+}
+
+#[test]
+fn drift_retarget_without_a_drawn_position_fails_cleanly() {
+    let mut mgr = make_manager();
+    mgr.update_frame(make_child_buf(1, 240.0, 180.0, 100.0, 100.0, 0));
+    // No drift began (the movement slot was off at its anchor): a retarget
+    // has nothing to carry on from and must refuse.
+    assert!(!mgr.retarget_drift(1, tween_100ms(), origin_now()));
+    assert!(mgr.frames.get(&1).unwrap().drift.is_none());
+}
+
+#[test]
+fn finished_drifts_clear_so_the_retained_path_returns() {
+    let mut mgr = make_manager();
+    mgr.update_frame(make_child_buf(1, 240.0, 180.0, 100.0, 100.0, 0));
+    let origin = origin_now();
+    mgr.begin_drift(1, 40.0, 0.0, tween_100ms(), origin);
+    assert!(mgr.has_animation_activity());
+
+    // Mid-drift the drift pins full renders.
+    assert!(mgr.clear_finished_drifts(sample_at(origin, 10)) == false);
+    assert!(mgr.has_animation_activity());
+
+    // Past the tween the drift clears, releasing the retained path.
+    assert!(mgr.clear_finished_drifts(sample_at(origin, 200)));
+    assert!(!mgr.has_animation_activity());
+    assert!(mgr.frames.get(&1).unwrap().drift.is_none());
+}

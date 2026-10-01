@@ -371,7 +371,7 @@ fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 #[cfg(all(test, target_os = "linux"))]
-#[path = "backend_bridge_test.rs"]
+#[path = "tests/backend_bridge_test.rs"]
 mod bridge_tests;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

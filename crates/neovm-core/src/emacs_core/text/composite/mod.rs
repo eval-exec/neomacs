@@ -1002,6 +1002,15 @@ fn select_automatic_composition_spans(
     let ascii_rules: [Value; 128] = std::array::from_fn(|ch| {
         super::chartable::ct_lookup(&composition_function_table, ch as i64).unwrap_or(Value::NIL)
     });
+    // Composition-rule tracing rides RUST_LOG like every other diagnostic:
+    // `RUST_LOG=neovm_core::emacs_core::text::composite=debug`.
+    tracing::debug!(
+        text_len = text.len(),
+        char_count = char_count,
+        rules_for_dash = ascii_rules.get(0x2D).map(|rule| !rule.is_nil()),
+        rules_non_nil = ascii_rules.iter().filter(|rule| !rule.is_nil()).count(),
+        "select composition spans: scan start"
+    );
 
     let bytes = text.as_bytes();
     let mut spans = Vec::new();
@@ -1056,19 +1065,12 @@ fn select_automatic_composition_spans(
                     continue;
                 };
                 let suffix = &text[byte_offsets[start]..];
-                let mut match_data = None;
-                let Ok(true) = super::regex::looking_at_lisp_pattern_with_syntax(
-                    pattern,
-                    suffix,
-                    syntax,
-                    &mut match_data,
+                let Ok(Some(match_len)) = super::regex::looking_at_lisp_pattern_length_with_syntax(
+                    pattern, suffix, syntax,
                 ) else {
                     continue;
                 };
-                let Some(group) = match_data.and_then(|data| data.group(0)) else {
-                    continue;
-                };
-                group.end()
+                match_len
             };
             let end = start.saturating_add(match_len).min(char_count);
             if start < end && trigger < end {

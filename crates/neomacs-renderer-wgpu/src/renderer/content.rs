@@ -179,13 +179,19 @@ impl WgpuRenderer {
         clip_corner_radius: f32,
         pointer_selection: Option<neomacs_display_protocol::PointerAppearanceSelection>,
         scissor: Option<(u32, u32, u32, u32)>,
+        content_alpha: f32,
+        content_scale: f32,
+        content_pivot: [f32; 2],
     ) {
-        let draw = self.parameters(
+        let draw = self.parameters_for(
             [
                 surface_width as f32 / self.scale_factor,
                 surface_height as f32 / self.scale_factor,
             ],
             0.0,
+            content_alpha,
+            content_scale,
+            content_pivot,
         );
         self.arenas.glyph.begin_frame();
         self.arenas.coverage.begin_frame();
@@ -1523,7 +1529,7 @@ impl WgpuRenderer {
                     clip_rect,
                     ..
                 } = glyph
-                    && self.caches.image.get(*image_id).is_some()
+                    && let Some(cached) = self.caches.image.get(*image_id)
                 {
                     let effective_clip = *clip_rect;
                     let Some(clipped) =
@@ -1535,6 +1541,13 @@ impl WgpuRenderer {
                     let iy = clipped.draw_y + offset_y;
                     let (u_min, v_min) = source_rect.map_uv(clipped.u_min, clipped.v_min);
                     let (u_max, v_max) = source_rect.map_uv(clipped.u_max, clipped.v_max);
+                    // A decode that is still arriving has only part of its
+                    // texture written; draw that part and no more.
+                    let Some((v_max, draw_height)) =
+                        cached.filled.clip_span(v_min, v_max, clipped.draw_height)
+                    else {
+                        continue;
+                    };
                     tracing::debug!(
                         "render_frame_content: image {} at ({:.1},{:.1}) size {:.1}x{:.1}",
                         image_id,
@@ -1549,7 +1562,7 @@ impl WgpuRenderer {
                             ix,
                             iy,
                             clipped.draw_width,
-                            clipped.draw_height,
+                            draw_height,
                             u_min,
                             u_max,
                             v_min,

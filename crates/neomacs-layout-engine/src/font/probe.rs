@@ -341,7 +341,7 @@ std::cfg_select! {
 
         // The probe tests exercise the FreeType functions against real fonts.
         #[cfg(test)]
-        #[path = "probe_test.rs"]
+        #[path = "tests/probe_test.rs"]
         mod tests;
     }
     _ => {

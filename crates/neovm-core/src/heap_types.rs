@@ -1293,5 +1293,5 @@ pub struct LispMarker {
 }
 
 #[cfg(test)]
-#[path = "heap_types_marker_test.rs"]
+#[path = "tests/heap_types_marker_test.rs"]
 mod marker_test;

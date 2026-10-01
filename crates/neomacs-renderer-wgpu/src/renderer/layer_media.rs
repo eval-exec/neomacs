@@ -409,8 +409,21 @@ impl WgpuRenderer {
                 if clipped_width <= 0.0 || clipped_height <= 0.0 {
                     continue;
                 }
+                // Check if image texture is ready
+                let Some(cached) = self.caches.image.get(*image_id) else {
+                    continue;
+                };
                 let (tex_u_min, tex_v_min) = source_rect.map_uv(tex_u_min, tex_v_min);
                 let (tex_u_max, tex_v_max) = source_rect.map_uv(tex_u_max, tex_v_max);
+                // A decode that is still arriving has only part of its texture
+                // written; draw that part and no more.
+                let Some((tex_v_max, clipped_height)) =
+                    cached
+                        .filled
+                        .clip_span(tex_v_min, tex_v_max, clipped_height)
+                else {
+                    continue;
+                };
 
                 tracing::debug!(
                     "Rendering image {} at ({}, {}) size {}x{} (clipped to {})",
@@ -421,43 +434,40 @@ impl WgpuRenderer {
                     height,
                     clipped_height
                 );
-                // Check if image texture is ready
-                if self.caches.image.get(*image_id).is_some() {
-                    self.media_budget
-                        .touch(crate::media_budget::MediaType::Image, image_id.get());
-                    // Create vertices for image quad (white color = no tinting)
-                    quads.push(MediaQuad {
-                        id: *image_id,
-                        vertices: textured_quad_vertices_uv(
-                            draw_x,
-                            draw_y,
-                            clipped_width,
-                            clipped_height,
-                            tex_u_min,
-                            tex_u_max,
-                            tex_v_min,
-                            tex_v_max,
-                        ),
-                    });
-                    if let Some(override_paint) =
-                        ctx.params.pointer_override.image_override(glyph_index)
-                        && let neomacs_display_protocol::PointerDrawMode::ImageRelief(relief) =
-                            override_paint.mode()
-                    {
-                        let relief_clip = ctx
-                            .params
-                            .pointer_override
-                            .image_clip(glyph_index, clip_rect.as_ref());
-                        super::pointer_override::append_clipped_relief(
-                            &mut relief_vertices,
-                            *x,
-                            *y,
-                            *width,
-                            *height,
-                            relief,
-                            relief_clip.as_ref(),
-                        );
-                    }
+                self.media_budget
+                    .touch(crate::media_budget::MediaType::Image, image_id.get());
+                // Create vertices for image quad (white color = no tinting)
+                quads.push(MediaQuad {
+                    id: *image_id,
+                    vertices: textured_quad_vertices_uv(
+                        draw_x,
+                        draw_y,
+                        clipped_width,
+                        clipped_height,
+                        tex_u_min,
+                        tex_u_max,
+                        tex_v_min,
+                        tex_v_max,
+                    ),
+                });
+                if let Some(override_paint) =
+                    ctx.params.pointer_override.image_override(glyph_index)
+                    && let neomacs_display_protocol::PointerDrawMode::ImageRelief(relief) =
+                        override_paint.mode()
+                {
+                    let relief_clip = ctx
+                        .params
+                        .pointer_override
+                        .image_clip(glyph_index, clip_rect.as_ref());
+                    super::pointer_override::append_clipped_relief(
+                        &mut relief_vertices,
+                        *x,
+                        *y,
+                        *width,
+                        *height,
+                        relief,
+                        relief_clip.as_ref(),
+                    );
                 }
             }
         }

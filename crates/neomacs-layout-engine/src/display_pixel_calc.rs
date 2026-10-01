@@ -178,7 +178,9 @@ fn collect_space_image_operands(
         && let Some(catalog) = inputs.catalog.as_ref()
     {
         let request = layout.into_resolve_request(inputs.scale, inputs.dimensions);
-        let placement = catalog.lookup(request).placement();
+        let placement = catalog
+            .lookup(request, inputs.scale.size_limit())
+            .placement();
         sizes.insert(
             *value,
             f64::from(placement.width().max(1)),

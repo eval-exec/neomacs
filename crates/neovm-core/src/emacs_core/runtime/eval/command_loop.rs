@@ -496,6 +496,12 @@ impl Context {
                 return Ok(Value::NIL);
             }
 
+            self.service_gui_command_boundary()?;
+
+            // Retained through hooks, point adjustment and finalization. A
+            // mid-command redisplay must not acknowledge unfinished input.
+            let _completed_inputs = self.input_progress.begin_command();
+
             self.flush_pending_safe_funcalls();
             self.sync_current_buffer_to_selected_window();
 
@@ -701,6 +707,8 @@ impl Context {
                 )
             });
 
+            let input_measurement = neomacs_display_protocol::input_latency::CommandInputs::begin();
+
             // Finding 2: this-original-command stays at the original
             // (pre-remap) command for the duration of the iteration
             // unless a pre-command-hook explicitly cleared it.
@@ -771,6 +779,7 @@ impl Context {
             let command_execution_start = command_observation
                 .as_ref()
                 .map(UserCommandObservation::begin_execution);
+            input_measurement.start(|frame| self.input_latency_viewport(frame));
             let exec_result = self.dispatch_command_in_loop(remapped);
             if let (Some(observation), Some(start)) =
                 (command_observation.as_mut(), command_execution_start)
@@ -797,6 +806,7 @@ impl Context {
             // GNU `command_loop_1` calls `safe_run_hooks (Qpost_command_hook)`
             // at keyboard.c:1563.
             self.safe_run_hook_if_bound("post-command-hook")?;
+            input_measurement.complete(|frame| self.input_latency_viewport(frame));
 
             // GNU `command_loop_1` (src/keyboard.c:1342-1345): "If displaying a
             // message, resize the echo area window to fit that message's size
@@ -1708,6 +1718,31 @@ impl Context {
         })
     }
 
+    /// Plain viewport facts used to attribute a diagnostic scroll response.
+    /// Point/chrome changes alone do not count as scrolling.
+    pub fn input_latency_viewport(
+        &self,
+        frame_id: u64,
+    ) -> Vec<neomacs_display_protocol::input_latency::ScrollViewport> {
+        let Some(frame) = self.frames.get(crate::window::FrameId(frame_id)) else {
+            return Vec::new();
+        };
+        frame
+            .window_list()
+            .into_iter()
+            .filter_map(|window| {
+                let layout = frame.window_layout_inputs(window)?;
+                Some(neomacs_display_protocol::input_latency::ScrollViewport {
+                    window: window.0,
+                    buffer: layout.buffer_id.0,
+                    start: layout.window_start.to_one_based_usize(),
+                    hscroll: layout.hscroll,
+                    vscroll: layout.vscroll,
+                })
+            })
+            .collect()
+    }
+
     pub(super) fn redisplay_signature(&self) -> RedisplaySignature {
         let selected_frame = self.frames.selected_frame().map(|frame| frame.id.0);
         let selected_window = self
@@ -1745,6 +1780,16 @@ impl Context {
             }
         });
         RedisplaySignature {
+            fontset_generation: crate::emacs_core::fontset::fontset_generation(),
+            compositor_scrolling_enabled: selected_window.is_some_and(|window| {
+                self.compositor_scrolling_enabled(crate::window::WindowId(window))
+            }),
+            // Bindings and hooks may change without moving text or point.
+            // Republish permission so the renderer cannot keep a stale grant.
+            compositor_pixel_scroll: selected_window.is_some_and(|window| {
+                self.permits_compositor_pixel_scroll(crate::window::WindowId(window))
+            }),
+            input_checkpoint: self.input_progress.checkpoint(),
             selected_frame,
             selected_window,
             current_buffer: self.buffers.current_buffer_id().map(|id| id.0),
@@ -1753,6 +1798,7 @@ impl Context {
             minibuffer_selected_window: self.minibuffer_selected_window.map(|id| id.0),
             face_change_count: self.face_change_count,
             obarray_function_epoch: self.obarray.function_epoch(),
+            symbol_property_revision: crate::emacs_core::symbol::SymbolPropertyRevision::current(),
             redisplay_generation: self.redisplay_generation,
             frame,
         }

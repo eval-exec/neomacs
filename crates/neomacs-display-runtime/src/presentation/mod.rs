@@ -1,5 +1,6 @@
 //! Native presentation ownership. Menu behavior and GPU painting stay elsewhere.
 mod host;
+pub(crate) mod pacing;
 mod platform;
 mod retirement;
 mod surface;

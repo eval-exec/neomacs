@@ -57,6 +57,149 @@
 (require 'menu-bar)
 (require 'fontset)
 
+;;; NS modifier policy (issue #442).
+
+;; GNU's macOS backend is AppKit, and it reads seven C variables at every
+;; `keyDown:' to cook the window server's raw modifier flags
+;; (`EV_MODIFIERS2', src/nsterm.m:397-425).  Neomacs renders through winit on
+;; every platform, so this window-system file owns the Lisp surface, with
+;; GNU's compiled-in defaults (nsterm.m:11568-11643).  The render thread
+;; cooks the same arithmetic from a compiled policy; see
+;; `neomacs-set-modifier-policy'.
+;;
+;; This file loads after the init file (the GUI runtime loader runs once
+;; frames are being created), while GNU's ns-win.el loads in the dump, before
+;; user init.  A user config that setq's the `mac-*' compatibility alias
+;; before this file loads therefore carries its value across here, exactly as
+;; GNU's dump-order load would have left it.
+
+(defvar ns-alternate-modifier 'meta
+  "This variable describes the behavior of the alternate or option key.
+Either SYMBOL, describing the behavior for any event,
+or (:ordinary SYMBOL :function SYMBOL :mouse SYMBOL), describing behavior
+separately for ordinary keys, function keys, and mouse events.
+
+Each SYMBOL is `control', `meta', `alt', `super', `hyper' or `none'.
+If `none', the key is ignored by Emacs and retains its standard meaning.")
+
+(defvar ns-right-alternate-modifier 'left
+  "This variable describes the behavior of the right alternate or option key.
+Either SYMBOL, describing the behavior for any event,
+or (:ordinary SYMBOL :function SYMBOL :mouse SYMBOL), describing behavior
+separately for ordinary keys, function keys, and mouse events.
+It can also be `left' to use the value of `ns-alternate-modifier' instead.
+
+Each SYMBOL is `control', `meta', `alt', `super', `hyper' or `none'.
+If `none', the key is ignored by Emacs and retains its standard meaning.")
+
+(defvar ns-command-modifier 'super
+  "This variable describes the behavior of the command key.
+Either SYMBOL, describing the behavior for any event,
+or (:ordinary SYMBOL :function SYMBOL :mouse SYMBOL), describing behavior
+separately for ordinary keys, function keys, and mouse events.
+
+Each SYMBOL is `control', `meta', `alt', `super', `hyper' or `none'.
+If `none', the key is ignored by Emacs and retains its standard meaning.")
+
+(defvar ns-right-command-modifier 'left
+  "This variable describes the behavior of the right command key.
+Either SYMBOL, describing the behavior for any event,
+or (:ordinary SYMBOL :function SYMBOL :mouse SYMBOL), describing behavior
+separately for ordinary keys, function keys, and mouse events.
+It can also be `left' to use the value of `ns-command-modifier' instead.
+
+Each SYMBOL is `control', `meta', `alt', `super', `hyper' or `none'.
+If `none', the key is ignored by Emacs and retains its standard meaning.")
+
+(defvar ns-control-modifier 'control
+  "This variable describes the behavior of the control key.
+Either SYMBOL, describing the behavior for any event,
+or (:ordinary SYMBOL :function SYMBOL :mouse SYMBOL), describing behavior
+separately for ordinary keys, function keys, and mouse events.
+
+Each SYMBOL is `control', `meta', `alt', `super', `hyper' or `none'.
+If `none', the key is ignored by Emacs and retains its standard meaning.")
+
+(defvar ns-right-control-modifier 'left
+  "This variable describes the behavior of the right control key.
+Either SYMBOL, describing the behavior for any event,
+or (:ordinary SYMBOL :function SYMBOL :mouse SYMBOL), describing behavior
+separately for ordinary keys, function keys, and mouse events.
+It can also be `left' to use the value of `ns-control-modifier' instead.
+
+Each SYMBOL is `control', `meta', `alt', `super', `hyper' or `none'.
+If `none', the key is ignored by Emacs and retains its standard meaning.")
+
+(defvar ns-function-modifier 'none
+  "This variable describes the behavior of the function (fn) key.
+Either SYMBOL, describing the behavior for any event,
+or (:ordinary SYMBOL :function SYMBOL :mouse SYMBOL), describing behavior
+separately for ordinary keys, function keys, and mouse events.
+
+Each SYMBOL is `control', `meta', `alt', `super', `hyper' or `none'.
+If `none', the key is ignored by Emacs and retains its standard meaning.")
+
+(defun neomacs--sync-modifier-policy ()
+  "Compile the NS modifier variables and ship the policy to the render thread."
+  (when (fboundp 'neomacs-set-modifier-policy)
+    (condition-case err
+        (neomacs-set-modifier-policy)
+      (error (display-warning 'neomacs
+                              (format "compiling the NS modifier policy failed: %s"
+                                      (error-message-string err))
+                              :error)))))
+
+(defun neomacs--queue-modifier-policy-sync (&rest _ignored)
+  "Re-compile the NS modifier policy once the pending variable set lands.
+Watchers run before the write (GNU: \"about to be set\", src/data.c), so the
+recompile is deferred to the next event-loop turn, where every variable
+reads its post-set value."
+  (run-with-timer 0 nil #'neomacs--sync-modifier-policy))
+
+(defun neomacs--setup-modifier-policy ()
+  "Install the NS modifier variables and keep the render policy in sync."
+  ;; GNU's second alias chain (term/ns-win.el:560-568): the `ns-option*'
+  ;; names are aliases of the `ns-alternate*' variables.  This hop must
+  ;; exist BEFORE the transfer below, so an init-time setq of the
+  ;; `mac-option*' alias resolves into the variable the render policy
+  ;; reads.
+  (defvaralias 'ns-option-modifier 'ns-alternate-modifier)
+  (defvaralias 'ns-right-option-modifier 'ns-right-alternate-modifier)
+  ;; GNU's Choi/Mitsuharu Carbon-port compatibility aliases
+  ;; (term/ns-win.el:208-215).  When a user's init file setq'd an alias
+  ;; before this file loaded, move its value to the base first: GNU's
+  ;; `defvaralias' only migrates an alias value to a VOID base
+  ;; (eval.c:679-685), and discards it when the base already has one, but
+  ;; GNU never faces that case because its aliases exist in the dump.
+  (dolist (pair '((mac-command-modifier . ns-command-modifier)
+                  (mac-right-command-modifier . ns-right-command-modifier)
+                  (mac-control-modifier . ns-control-modifier)
+                  (mac-right-control-modifier . ns-right-control-modifier)
+                  (mac-option-modifier . ns-option-modifier)
+                  (mac-right-option-modifier . ns-right-option-modifier)
+                  (mac-function-modifier . ns-function-modifier)))
+    (let ((alias (car pair))
+          (base (cdr pair)))
+      ;; An init-time setq of the alias wins, exactly as GNU's dump-order
+      ;; load would have delivered it (the setq would have written through
+      ;; the already-existing alias).
+      (when (boundp alias)
+        (set base (symbol-value alias)))
+      (defvaralias alias base)))
+  ;; Watch the base names: alias writes resolve to the base, and
+  ;; `defvaralias' clears any watchers installed on the alias.
+  (dolist (var '(ns-alternate-modifier ns-right-alternate-modifier
+                 ns-command-modifier ns-right-command-modifier
+                 ns-control-modifier ns-right-control-modifier
+                 ns-function-modifier))
+    (let ((watcher #'neomacs--queue-modifier-policy-sync))
+      (unless (member watcher (get-variable-watchers var))
+        (add-variable-watcher var watcher))))
+  (neomacs--sync-modifier-policy))
+
+(when (eq system-type 'darwin)
+  (neomacs--setup-modifier-policy))
+
 (defvar x-invocation-args)
 (defvar x-command-line-resources)
 

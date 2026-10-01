@@ -664,6 +664,28 @@ impl<'face> SingleDisplayItemAppendContext<'face> {
         position: DisplayRowPosition,
         kind: DisplayRowAppendKind,
     ) -> Option<f32> {
+        // Independent printable scalars cannot inspect or grow an earlier
+        // cluster. With an authoritative source pen their width can be probed
+        // by the canonical renderer on an empty row, avoiding a copy of the
+        // growing output row for every character. Tabs, contextual text,
+        // replacement items and row-tail-relative clients keep the full probe.
+        if self.start_policy == DisplayRowAppendStartPolicy::SourcePosition
+            && !item.layout.break_after_row
+            && let DisplayItemKind::TextRun(run) = &item.kind
+            && run.composition == crate::display_item::DisplayTextComposition::Independent
+            && run.text.len() == 1
+            && (b' '..=b'~').contains(&run.text.as_bytes()[0])
+        {
+            let prepared = self.prepare_item(item, position, kind);
+            let (item, face_id, kind, position) = prepared.into_parts();
+            let mut face_ids = FrameFaceArena::default().begin_attempt();
+            face_ids.reserve_after(face_id);
+            let request = self
+                .frame
+                .source_append_measure_request(position, face_id, self.base_face, kind)
+                .with_append_start_policy(DisplayRowAppendStartPolicy::SourcePosition);
+            return state.measure_independent_text_width(&mut face_ids, item, request, position);
+        }
         let mut render_policy = DisplaySourceAppendRenderPolicy::natural();
         self.measure_width_with_policy(state, item, position, kind, &mut render_policy)
     }

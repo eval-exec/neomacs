@@ -52,7 +52,7 @@ fn asilea_installed_payload_inventory_sizes_and_content_digests_match() -> Parit
             (directory-files directory nil "\\`[^.]"))
            #'string<)))"##,
         expect![[
-            r#"OK (("asilea-autoloads.el" 671 "789051238f361972d0a74e61b8caef971bee13faf8a67119316ab1f3110e8714") ("asilea-pkg.el" 429 "5086c0efc627fe6981ca743c3671370c03fbe0b4328e9ffeefc264da4ae5373e") ("asilea.el" 16326 "ea0a4b390818cd780c323eb1e44a082c29fc153bff6a7681370aa7fe0bf41a5b") ("asilea.elc" 10931 "edd8d3d3137c47cd7086e96c26c6d9b04b2ff6268d71b3711f74011cd51cebd3"))"#
+            r#"OK (("asilea-autoloads.el" 671 "789051238f361972d0a74e61b8caef971bee13faf8a67119316ab1f3110e8714") ("asilea-pkg.el" 429 "5086c0efc627fe6981ca743c3671370c03fbe0b4328e9ffeefc264da4ae5373e") ("asilea.el" 16326 "ea0a4b390818cd780c323eb1e44a082c29fc153bff6a7681370aa7fe0bf41a5b") ("asilea.elc" :compiled t t))"#
         ]],
     )
 }

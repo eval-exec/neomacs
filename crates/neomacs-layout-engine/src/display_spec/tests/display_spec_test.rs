@@ -42,7 +42,7 @@ fn image_data_base_uri_survives_as_an_explicit_resource_capability() {
     else {
         panic!("data plus :base-uri must remain a capability-bearing source");
     };
-    assert_eq!(data, b"<svg/>");
+    assert_eq!(&*data, b"<svg/>");
     assert_eq!(base_uri.as_utf8_str(), Some("/tmp/telega/dummy"));
 }
 

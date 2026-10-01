@@ -1,3 +1,4 @@
-name	version	sha256
-git	2.51.2	
-node	v22.22.2	
+name	version	source	sha256
+git	*	system	
+java	*	nix:melpa-tools	
+node	*	system	

@@ -246,11 +246,23 @@ fn wheel_input_atomically_carries_its_presented_region() {
 
     app.handle_mouse_wheel(
         window_id,
+        None,
         winit::event::MouseScrollDelta::LineDelta(0.0, -1.0),
+        winit::event::TouchPhase::Moved,
     );
 
+    let crate::thread_comm::InputEvent::Tracked { receipt, event } =
+        emacs.input_rx.try_recv().unwrap()
+    else {
+        panic!("wheel delivery must carry its completion receipt");
+    };
+    assert!(!receipt.receipt().cancelled());
+    let event = match *event {
+        crate::thread_comm::InputEvent::Observed { event, .. } => *event,
+        event => event,
+    };
     assert!(matches!(
-        emacs.input_rx.try_recv().unwrap(),
+        event,
         crate::thread_comm::InputEvent::PositionedPointer(
             crate::thread_comm::PositionedPointerInput {
                 position: crate::thread_comm::PointerPosition {
@@ -271,6 +283,80 @@ fn wheel_input_atomically_carries_its_presented_region() {
             == Some(neomacs_display_protocol::DisplayWindowId::new(1))
     ));
     assert!(emacs.input_rx.try_recv().is_err());
+}
+
+#[test]
+fn continuous_x11_scroll_reaches_pixel_delivery_at_fractional_and_whole_units() {
+    let (mut app, emacs) = make_test_app_with_input(200, 128, 1.0);
+    let window_id = winit::window::WindowId::from_raw(1);
+    app.frame_windows.primary_winit_id = Some(window_id);
+    let window = app.frame_windows.primary_window_mut().unwrap();
+    window.render.set_emacs_frame_id(0x42);
+    window.render.set_mouse_pos((20.0, 20.0));
+    let mut frame = FrameGlyphBuffer::with_size(200.0, 128.0);
+    frame.presentation_id = PresentationId::new(91);
+    frame
+        .install_presented_hit_index(
+            PresentedHitIndex::from_parts(
+                frame.presentation_id,
+                vec![PresentedHitRegion::new(
+                    Some(neomacs_display_protocol::DisplayWindowId::new(1)),
+                    PresentedRegionKind::TextBody,
+                    FrameRect::new(0.0, 0.0, 200.0, 64.0).unwrap(),
+                    0,
+                )],
+                vec![],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    frame.add_window_info(
+        neomacs_display_protocol::DisplayWindowId::new(1),
+        1,
+        1,
+        100,
+        1000,
+        Default::default(),
+        0.0,
+        0.0,
+        200.0,
+        64.0,
+        0.0,
+        0.0,
+        0.0,
+        true,
+        false,
+        16.0,
+        String::new(),
+        String::new(),
+        false,
+    );
+    window
+        .render
+        .set_current_frame(Some(frame), None, Default::default(), Default::default());
+
+    for (units, pixels) in [(0.125, 2.0), (1.0, 16.0), (3.0, 48.0)] {
+        app.handle_mouse_wheel(
+            window_id,
+            None,
+            winit::event::MouseScrollDelta::ContinuousLineDelta(0.0, -units),
+            winit::event::TouchPhase::Moved,
+        );
+        let crate::thread_comm::InputEvent::Tracked { event, .. } = emacs
+            .input_rx
+            .try_recv()
+            .expect("XI2 motion must reach the pixel command path")
+        else {
+            panic!("missing receipt")
+        };
+        let event = match *event {
+            crate::thread_comm::InputEvent::Observed { event, .. } => *event,
+            event => event,
+        };
+        assert!(
+            matches!(event, crate::thread_comm::InputEvent::PositionedPointer(crate::thread_comm::PositionedPointerInput { action: crate::thread_comm::PointerAction::Scroll { delta: crate::thread_comm::ScrollDelta::Pixels {x:0.0, y}, .. }, .. }) if y == -pixels)
+        );
+    }
 }
 
 fn presented_pointer_integration_relief(pressed: bool) -> PointerImageRelief {

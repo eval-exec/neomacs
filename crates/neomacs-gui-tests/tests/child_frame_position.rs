@@ -14,7 +14,7 @@ fn child_frame_position_apis_preserve_coordinate_intent_in_rendered_placement() 
         Ok("windows") => GuiBackend::Windows,
         _ => panic!("set NEOMACS_GUI_TEST_BACKEND"),
     };
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = neomacs_infra::crate_root!().join("../..");
     let binary = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("target/release/neomacs"));

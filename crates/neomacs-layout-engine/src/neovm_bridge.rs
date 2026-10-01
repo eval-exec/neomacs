@@ -5,13 +5,18 @@
 
 use std::cmp::Ordering;
 
+mod borrowed_buffer;
+mod buffer_snapshot;
+pub(crate) use borrowed_buffer::BorrowedLayoutBuffer;
+pub(crate) use buffer_snapshot::LayoutBufferSnapshot;
+use buffer_snapshot::capture_string_composition_rules;
+
 mod face_colors;
 use face_colors::{FaceColorAttributes, FaceColorState};
 
 use neovm_core::buffer::{
-    Buffer, BufferTextSnapshot, CharPos0, CharRange, EmacsByteLen, EmacsBytePos, EmacsByteRange,
-    LispCharPos1,
-    buffer::{BUFFER_SLOT_COUNT, BufferSlotInfo, lookup_buffer_slot_by_sym_id},
+    Buffer, CharPos0, CharRange, EmacsByteLen, EmacsBytePos, EmacsByteRange, LispCharPos1,
+    buffer::{BufferSlotInfo, lookup_buffer_slot_by_sym_id},
     overlay::{OverlayList, OverlayPropertyAtPoint, OverlayPropertyFilter},
 };
 use neovm_core::emacs_core::effect_profile::{
@@ -23,7 +28,7 @@ use neovm_core::emacs_core::plist::plist_get;
 use neovm_core::emacs_core::symbol::Obarray;
 use neovm_core::emacs_core::textprop::{DirectCharProperties, resolve_effective_char_property};
 use neovm_core::emacs_core::value::{ValueKind, eq_value, list_to_vec};
-use neovm_core::emacs_core::{Context, SymId, Value};
+use neovm_core::emacs_core::{Context, Value};
 use neovm_core::face::{
     BoxStyle as NeoBoxStyle, Color as NeoColor, Face as NeoFace, FaceDecoration, FaceHeight,
     FaceTable, FontWeight, UnderlinePosition as NeoUnderlinePosition,
@@ -53,7 +58,6 @@ use neomacs_display_protocol::cursor::{CursorBarWidth, CursorKind, CursorSpec};
 use neomacs_display_protocol::face::{BasicFaceId, BoxLineWidth};
 use neomacs_display_protocol::types::{FaceId, Rect};
 use neomacs_display_protocol::{EffectsConfig, PresentedResizeEdge};
-use rustc_hash::FxHashMap;
 use strum::{EnumString, IntoStaticStr};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr)]
@@ -77,16 +81,24 @@ impl DisplayLineNumbersSymbol {
 impl DisplayLineNumbersMode {
     fn from_lisp_value(value: Option<Value>) -> Self {
         match value {
-            Some(v) if v.bits() == Value::T.bits() => Self::Absolute,
-            Some(value) => value
-                .as_symbol_name()
-                .and_then(DisplayLineNumbersSymbol::from_symbol_name)
-                .map(|symbol| match symbol {
-                    DisplayLineNumbersSymbol::Relative => Self::Relative,
-                    DisplayLineNumbersSymbol::Visual => Self::Visual,
-                })
-                .unwrap_or(Self::Off),
-            None => Self::Off,
+            // GNU dispatches only the two special symbols
+            // (`xdisp.c` maybe_produce_line_number: `EQ (..., Qrelative)`
+            // and `EQ (..., Qvisual)`); every other non-nil value — `t`,
+            // the `'absolute` a user init sets, anything else truthy — is
+            // ABSOLUTE line numbers. Rejecting unrecognized symbols here
+            // switched the whole gutter off for
+            // `(setq display-line-numbers-type 'absolute)` (issue #441).
+            Some(value) if value.is_truthy() => {
+                match DisplayLineNumbersSymbol::from_symbol_name(
+                    value.as_symbol_name().unwrap_or(""),
+                ) {
+                    Some(DisplayLineNumbersSymbol::Relative) => Self::Relative,
+                    Some(DisplayLineNumbersSymbol::Visual) => Self::Visual,
+                    // GNU's absolute: `t`, `'absolute`, any other truthy value.
+                    None => Self::Absolute,
+                }
+            }
+            _ => Self::Off,
         }
     }
 }
@@ -207,106 +219,6 @@ impl BufferFaceRemapping {
     }
 }
 
-#[derive(Clone)]
-pub(crate) struct LayoutBufferSnapshot {
-    display_target: crate::display_property::DisplayPropertyTarget,
-    /// `(when FORM . SPEC)` results for the window walk this snapshot serves.
-    display_when: crate::display_when::DisplayWhenConditions,
-    name: String,
-    text_snapshot: BufferTextSnapshot,
-    accessible_start_emacs_byte: EmacsBytePos,
-    accessible_end_emacs_byte: EmacsBytePos,
-    accessible_end_char: CharPos0,
-    local_var_alist: Value,
-    slots: [Value; BUFFER_SLOT_COUNT],
-    overlays: OverlayList,
-    /// Symbol plists for the category symbols actually referenced by this
-    /// buffer's text and overlays. Capturing this sparse set keeps layout
-    /// immutable without cloning the evaluator's complete obarray.
-    category_symbol_plists: FxHashMap<SymId, Value>,
-    /// Every [`LayoutVar`] resolved once at snapshot construction, indexed by
-    /// variant. GNU redisplay reads display variables as one memory load
-    /// (BVAR fields, or V-globals the buffer-local machinery keeps swapped
-    /// in: xdisp.c:3424, xfaces.c:5188); resolving per QUERY instead walked
-    /// the buffer's local-var alist every time and measured 3.15% of GUI
-    /// typing even with pre-interned symbols.
-    vars: [Option<Value>; <LayoutVar as strum::EnumCount>::COUNT],
-    /// Non-overlapping ranges compiled from Lisp's live
-    /// `composition-function-table`, in ascending buffer-character order.
-    automatic_composition_spans: Vec<CharRange>,
-    string_composition_rules: Option<neovm_core::emacs_core::composite::AutomaticCompositionRules>,
-}
-
-impl LayoutBufferSnapshot {
-    pub fn from_buffer(buffer: &Buffer) -> Self {
-        let local_var_alist = buffer.local_var_alist_value();
-        let slots = buffer.slot_values_snapshot();
-        Self {
-            display_when: crate::display_when::DisplayWhenConditions::structural(),
-            display_target: crate::display_property::DisplayPropertyTarget::Graphical,
-            name: buffer.name_runtime_string_owned(),
-            text_snapshot: buffer.text_snapshot(),
-            accessible_start_emacs_byte: buffer.point_min_emacs_byte_pos(),
-            accessible_end_emacs_byte: buffer.point_max_emacs_byte_pos(),
-            accessible_end_char: buffer.point_max_char_pos(),
-            vars: resolve_layout_vars(local_var_alist, &slots, None),
-            local_var_alist,
-            slots,
-            overlays: buffer.overlays().snapshot_clone(),
-            category_symbol_plists: FxHashMap::default(),
-            automatic_composition_spans: Vec::new(),
-            string_composition_rules: None,
-        }
-    }
-
-    #[cfg(test)]
-    pub fn from_buffer_with_obarray(buffer: &Buffer, obarray: &Obarray) -> Self {
-        Self::from_buffer_for_window(
-            buffer,
-            obarray,
-            None,
-            crate::display_property::DisplayPropertyTarget::Graphical,
-        )
-    }
-
-    /// Snapshot a buffer for one window.
-    ///
-    /// `visible` bounds the automatic-composition scan to what that window
-    /// could possibly display, as `(first_char, char_budget)`. `None` keeps
-    /// the whole-buffer scan, which is what a caller with no window in hand
-    /// (a test, a display query) must use.
-    pub fn from_buffer_for_window(
-        buffer: &Buffer,
-        obarray: &Obarray,
-        visible: Option<(usize, usize)>,
-        target: crate::display_property::DisplayPropertyTarget,
-    ) -> Self {
-        let mut snapshot = Self::from_buffer(buffer);
-        snapshot.display_target = target;
-        snapshot.vars =
-            resolve_layout_vars(snapshot.local_var_alist, &snapshot.slots, Some(obarray));
-        snapshot.category_symbol_plists = capture_layout_category_symbol_plists(buffer, obarray);
-        snapshot.automatic_composition_spans =
-            capture_automatic_composition_spans(buffer, obarray, &snapshot.vars, visible);
-        snapshot.string_composition_rules = capture_string_composition_rules(buffer, obarray);
-        SNAPSHOTS_BUILT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        snapshot
-    }
-
-    /// Attach the `(when FORM . SPEC)` results evaluated for this walk.
-    pub fn with_display_when(
-        mut self,
-        display_when: crate::display_when::DisplayWhenConditions,
-    ) -> Self {
-        self.display_when = display_when;
-        self
-    }
-
-    pub(crate) fn name(&self) -> &str {
-        &self.name
-    }
-}
-
 /// ADMITTED-WORK counters, read and reset once per accepted frame into
 /// [`crate::incremental_layout::LayoutStats`].
 ///
@@ -330,66 +242,6 @@ pub(crate) fn take_snapshot_work() -> (usize, usize, usize) {
     )
 }
 
-fn capture_automatic_composition_spans(
-    buffer: &Buffer,
-    obarray: &Obarray,
-    vars: &[Option<Value>; <LayoutVar as strum::EnumCount>::COUNT],
-    visible: Option<(usize, usize)>,
-) -> Vec<CharRange> {
-    if !buffer.get_multibyte() {
-        return Vec::new();
-    }
-    let Some(table) = active_composition_table(
-        vars[LayoutVar::AutoCompositionMode as usize],
-        vars[LayoutVar::AutoCompositionFunction as usize],
-        obarray,
-    ) else {
-        return Vec::new();
-    };
-    // Both paths report ABSOLUTE char positions, so nothing is added here.
-    // The bounded one is memoized only in its whole-buffer form: a memo keyed
-    // on the buffer alone cannot answer a question that moves with the window.
-    let spans = match visible {
-        Some((first_char, budget)) => {
-            buffer.automatic_composition_spans_visible(table, first_char, budget)
-        }
-        None => buffer.automatic_composition_spans(table),
-    };
-    spans
-        .iter()
-        .map(|span| CharRange::new(CharPos0::new(span.start()), CharPos0::new(span.end())))
-        .collect()
-}
-
-/// Resolve the same automatic composer as buffer redisplay, but leave the
-/// multibyte gate to the string object, as GNU composition_compute_stop_pos
-/// does. The caller keeps the live Lisp tables rooted during redisplay.
-fn capture_string_composition_rules(
-    buffer: &Buffer,
-    obarray: &Obarray,
-) -> Option<neovm_core::emacs_core::composite::AutomaticCompositionRules> {
-    let value = |var| effective_buffer_value(buffer, obarray, var);
-    let table = active_composition_table(
-        value(LayoutVar::AutoCompositionMode),
-        value(LayoutVar::AutoCompositionFunction),
-        obarray,
-    )?;
-    neovm_core::emacs_core::composite::AutomaticCompositionRules::new(buffer, table)
-}
-
-fn active_composition_table(
-    mode: Option<Value>,
-    function: Option<Value>,
-    obarray: &Obarray,
-) -> Option<Value> {
-    if mode.is_none_or(Value::is_nil)
-        || !function.is_some_and(|value| value.is_symbol_named("auto-compose-chars"))
-    {
-        return None;
-    }
-    obarray.symbol_value("composition-function-table").copied()
-}
-
 pub(crate) fn window_string_composition_rules(
     evaluator: &neovm_core::emacs_core::Context,
     window_id: neovm_core::window::WindowId,
@@ -411,129 +263,6 @@ pub(crate) fn current_string_composition_rules(
         evaluator.buffer_manager().current_buffer()?,
         evaluator.obarray(),
     )
-}
-
-fn capture_layout_category_symbol_plists(
-    buffer: &Buffer,
-    obarray: &Obarray,
-) -> FxHashMap<SymId, Value> {
-    fn remember(category: Value, obarray: &Obarray, plists: &mut FxHashMap<SymId, Value>) {
-        if let Some(category_id) = category.as_symbol_id() {
-            plists
-                .entry(category_id)
-                .or_insert_with(|| obarray.symbol_plist_id(category_id));
-        }
-    }
-
-    let category_property = Value::symbol("category");
-    let mut plists = FxHashMap::default();
-    let end = buffer.total_emacs_byte_end_pos();
-    let mut pos = EmacsBytePos::ZERO;
-    while pos < end {
-        if let Some(category) =
-            buffer.text_props_get_property_at_emacs_byte_pos(pos, category_property)
-        {
-            remember(category, obarray, &mut plists);
-        }
-        let Some(next) =
-            buffer.text_props_next_single_change_after_emacs_byte_pos(pos, category_property)
-        else {
-            break;
-        };
-        if next <= pos {
-            break;
-        }
-        pos = next.min(end);
-    }
-
-    for overlay in buffer.overlays().overlays_in_gnu_lists_order() {
-        if let Some(category) = buffer
-            .overlays()
-            .overlay_get_named(overlay, category_property)
-        {
-            remember(category, obarray, &mut plists);
-        }
-    }
-
-    plists
-}
-
-/// Resolve every [`LayoutVar`] with the same precedence the per-query path
-/// used: buffer slot, else the FIRST local-var-alist entry when bound, else
-/// (for the curated captures_default subset, and only when an obarray is
-/// available) the variable's default value. An alist entry that exists but
-/// is unbound shadows nothing — it falls through to the default, exactly
-/// like the old `assq`-then-default sequence.
-fn resolve_layout_vars(
-    local_var_alist: Value,
-    slots: &[Value; BUFFER_SLOT_COUNT],
-    obarray: Option<&Obarray>,
-) -> [Option<Value>; <LayoutVar as strum::EnumCount>::COUNT] {
-    use strum::EnumCount;
-    use strum::VariantArray;
-    const N: usize = <LayoutVar as EnumCount>::COUNT;
-    let mut vars: [Option<Value>; N] = [None; N];
-    let mut seen_in_alist = [false; N];
-
-    for var in LayoutVar::VARIANTS {
-        if let Some(info) = layout_var_info(*var).slot {
-            vars[*var as usize] = Some(slots[info.offset.index()]);
-        }
-    }
-
-    // One walk over the alist for all variables (first entry per symbol
-    // wins, matching assq).
-    let mut cursor = local_var_alist;
-    while cursor.is_cons() {
-        let entry = cursor.cons_car();
-        cursor = cursor.cons_cdr();
-        if !entry.is_cons() {
-            continue;
-        }
-        let Some(var) = entry
-            .cons_car()
-            .as_symbol_id()
-            .and_then(layout_var_by_sym_id)
-        else {
-            continue;
-        };
-        let index = var as usize;
-        if vars[index].is_some() || seen_in_alist[index] {
-            continue;
-        }
-        seen_in_alist[index] = true;
-        let value = entry.cons_cdr();
-        if !value.is_unbound() {
-            vars[index] = Some(value);
-        }
-    }
-
-    if let Some(obarray) = obarray {
-        for var in LayoutVar::VARIANTS {
-            let index = *var as usize;
-            if vars[index].is_none() && layout_var_info(*var).captures_default {
-                vars[index] = obarray.default_value_id(var.sym_id()).copied();
-            }
-        }
-    }
-
-    vars
-}
-
-/// Reverse map sym_id -> LayoutVar for the single alist walk above.
-fn layout_var_by_sym_id(sym_id: neovm_core::emacs_core::intern::SymId) -> Option<LayoutVar> {
-    use std::sync::OnceLock;
-    use strum::VariantArray;
-    static MAP: OnceLock<rustc_hash::FxHashMap<neovm_core::emacs_core::intern::SymId, LayoutVar>> =
-        OnceLock::new();
-    MAP.get_or_init(|| {
-        LayoutVar::VARIANTS
-            .iter()
-            .map(|var| (var.sym_id(), *var))
-            .collect()
-    })
-    .get(&sym_id)
-    .copied()
 }
 
 struct LayoutVarInfo {
@@ -682,148 +411,6 @@ impl LayoutBufferView for Buffer {
 
     fn layout_overlays(&self) -> &OverlayList {
         self.overlays()
-    }
-}
-
-impl LayoutBufferView for LayoutBufferSnapshot {
-    fn layout_display_target(&self) -> crate::display_property::DisplayPropertyTarget {
-        self.display_target
-    }
-    fn layout_string_composition_rules(
-        &self,
-    ) -> Option<neovm_core::emacs_core::composite::AutomaticCompositionRules> {
-        self.string_composition_rules
-    }
-    fn layout_display_when_conditions(&self) -> crate::display_when::DisplayWhenConditions {
-        self.display_when.clone()
-    }
-    fn layout_is_multibyte(&self) -> bool {
-        self.text_snapshot.is_multibyte()
-    }
-
-    fn layout_buffer_local_value(&self, var: LayoutVar) -> Option<Value> {
-        self.vars[var as usize]
-    }
-
-    fn layout_point_min_emacs_byte_pos(&self) -> EmacsBytePos {
-        self.accessible_start_emacs_byte
-    }
-
-    fn layout_point_max_emacs_byte_pos(&self) -> EmacsBytePos {
-        self.accessible_end_emacs_byte
-    }
-
-    fn layout_point_max_char_pos(&self) -> CharPos0 {
-        self.accessible_end_char
-    }
-
-    fn layout_total_emacs_byte_len(&self) -> EmacsByteLen {
-        self.text_snapshot.emacs_byte_len()
-    }
-
-    fn layout_char_pos_to_emacs_byte_pos(&self, charpos: CharPos0) -> EmacsBytePos {
-        self.text_snapshot
-            .char_pos_to_emacs_byte_pos(charpos.min(self.accessible_end_char))
-    }
-
-    fn layout_emacs_byte_pos_to_char_pos(&self, bytepos: EmacsBytePos) -> CharPos0 {
-        self.text_snapshot
-            .emacs_byte_pos_to_char_pos(bytepos.min(self.accessible_end_emacs_byte))
-    }
-
-    fn layout_copy_emacs_byte_range_to(&self, range: EmacsByteRange, out: &mut Vec<u8>) {
-        self.text_snapshot.copy_emacs_byte_range_to(range, out);
-    }
-
-    fn layout_try_for_each_emacs_byte_range_chunk<E>(
-        &self,
-        range: EmacsByteRange,
-        f: impl FnMut(&[u8]) -> Result<(), E>,
-    ) -> Result<(), E> {
-        self.text_snapshot
-            .try_for_each_emacs_byte_range_chunk(range, f)
-    }
-
-    fn layout_emacs_byte_at_pos(&self, pos: EmacsBytePos) -> Option<u8> {
-        self.text_snapshot.emacs_byte_at_pos(pos)
-    }
-
-    fn layout_indexed_newline_count(&self, range: EmacsByteRange) -> Option<usize> {
-        self.text_snapshot.indexed_newline_count(range)
-    }
-
-    fn layout_text_prop_at_emacs_byte_pos(&self, pos: EmacsBytePos, name: Value) -> Option<Value> {
-        self.text_snapshot.text_prop_at_emacs_byte_pos(pos, name)
-    }
-
-    fn layout_category_symbol_property(&self, category: Value, property: Value) -> Option<Value> {
-        let category_id = category.as_symbol_id()?;
-        let plist = self.category_symbol_plists.get(&category_id).copied()?;
-        plist_get(plist, &property)
-    }
-
-    fn layout_next_text_prop_change_after_emacs_byte_pos(
-        &self,
-        pos: EmacsBytePos,
-    ) -> Option<EmacsBytePos> {
-        self.text_snapshot
-            .next_text_prop_change_after_emacs_byte_pos(pos)
-    }
-
-    fn layout_next_single_text_prop_change_after_emacs_byte_pos(
-        &self,
-        pos: EmacsBytePos,
-        name: Value,
-    ) -> Option<EmacsBytePos> {
-        self.text_snapshot
-            .next_single_text_prop_change_after_emacs_byte_pos(pos, name)
-    }
-
-    fn layout_next_single_text_prop_change_after_emacs_byte_pos_bounded(
-        &self,
-        pos: EmacsBytePos,
-        name: Value,
-        limit: EmacsBytePos,
-    ) -> Option<EmacsBytePos> {
-        self.text_snapshot
-            .next_single_text_prop_change_after_emacs_byte_pos_bounded(pos, name, limit)
-    }
-
-    fn layout_previous_single_text_prop_change_before_emacs_byte_pos(
-        &self,
-        pos: EmacsBytePos,
-        name: Value,
-    ) -> Option<EmacsBytePos> {
-        self.text_snapshot
-            .previous_single_text_prop_change_before_emacs_byte_pos(pos, name)
-    }
-
-    fn layout_overlays(&self) -> &OverlayList {
-        &self.overlays
-    }
-
-    fn layout_automatic_composition_starting_at(&self, pos: CharPos0) -> Option<CharRange> {
-        let index = self
-            .automatic_composition_spans
-            .partition_point(|range| range.start() < pos);
-        self.automatic_composition_spans
-            .get(index)
-            .copied()
-            .filter(|range| range.start() == pos)
-    }
-
-    fn layout_next_automatic_composition_start(
-        &self,
-        pos: CharPos0,
-        limit: CharPos0,
-    ) -> Option<CharPos0> {
-        let index = self
-            .automatic_composition_spans
-            .partition_point(|range| range.start() < pos);
-        self.automatic_composition_spans
-            .get(index)
-            .map(|range| range.start())
-            .filter(|start| *start < limit)
     }
 }
 
@@ -2087,6 +1674,8 @@ pub fn window_params_from_neovm_with_font_sizing(
         // Normalize to the layout engine's internal 0-based char positions.
         window_start: lisp_char_pos_to_layout_i64(window_start),
         measurement_rows: None,
+        measurement_pixels: None,
+        query_target: None,
         force_start,
         // GNU stores this as an offset from Z; recover the Lisp position and
         // normalize to the layout engine's 0-based space.
@@ -2524,76 +2113,83 @@ impl<'a, B: LayoutBufferView> RustBufferAccess<'a, B> {
         count
     }
 
-    /// Byte position just AFTER the `n`-th newline at or after `byte_from`,
-    /// or `None` when fewer than `n` newlines remain. Chunked scan with early
-    /// exit — cost is proportional to the distance to the `n`-th newline,
-    /// not to the buffer tail.
-    pub fn find_nth_newline_after(&self, byte_from: i64, n: usize) -> Option<i64> {
+    /// Find a read boundary after N source newlines that cannot be consumed by
+    /// a display/invisible property. Inserted strings and wrapping only add
+    /// rows. Conservatively ignore every newline covered by either property,
+    /// including inactive values and overlays belonging to another window.
+    /// Skip hazardous extents directly, so a large fold needs no per-line
+    /// property queries. The returned offset always follows a real newline.
+    pub fn find_nth_preserved_newline_after(&self, byte_from: i64, n: usize) -> Option<i64> {
+        let bounds = clamped_layout_emacs_byte_range(self.buffer, byte_from, self.zv())?;
         if n == 0 {
-            return Some(byte_from);
+            return Some(bounds.start().get() as i64);
         }
-        let range = clamped_layout_emacs_byte_range(self.buffer, byte_from, self.zv())?;
+        let lookups = ["display", "invisible"]
+            .map(|name| LayoutCharPropertyLookup::new(self.buffer, Value::symbol(name)));
+        let overlays = self.buffer.layout_overlays();
+        let mut start = bounds.start();
         let mut remaining = n;
-        let mut offset: i64 = byte_from;
-        let mut found: Option<i64> = None;
-        let _ = self
-            .buffer
-            .layout_try_for_each_emacs_byte_range_chunk(range, |chunk| {
-                for (i, byte) in chunk.iter().enumerate() {
-                    if *byte == b'\n' {
+        while start < bounds.end() {
+            let mut offset = start.get();
+            let result = self.buffer.layout_try_for_each_emacs_byte_range_chunk(
+                EmacsByteRange::new(start, bounds.end()),
+                |chunk| {
+                    for (index, byte) in chunk.iter().enumerate() {
+                        if *byte != b'\n' {
+                            continue;
+                        }
+                        let pos = EmacsBytePos::new(offset + index);
+                        let after = EmacsBytePos::new(pos.get() + 1);
+                        let mut skip_to = pos;
+                        for lookup in &lookups {
+                            if let Some(extent) =
+                                lookup.effective_text_extent_at(self.buffer, pos, bounds)
+                            {
+                                skip_to = skip_to.max(extent.end());
+                            }
+                        }
+                        for overlay in overlays.iter_overlays_in_accessible_emacs_byte_range(
+                            EmacsByteRange::new(pos, after),
+                            bounds.end(),
+                        ) {
+                            let Some(end) = overlays.overlay_end_emacs_byte_pos(overlay) else {
+                                continue;
+                            };
+                            // Empty overlays insert strings but consume no source.
+                            if end <= pos
+                                || overlays
+                                    .overlay_start_emacs_byte_pos(overlay)
+                                    .is_none_or(|begin| begin > pos)
+                            {
+                                continue;
+                            }
+                            if lookups.iter().any(|lookup| {
+                                lookup
+                                    .effective_overlay_value(self.buffer, overlay)
+                                    .is_some()
+                            }) {
+                                skip_to = skip_to.max(end.min(bounds.end()));
+                            }
+                        }
+                        if skip_to > pos {
+                            return Err((false, skip_to));
+                        }
                         remaining -= 1;
                         if remaining == 0 {
-                            found = Some(offset + i as i64 + 1);
-                            return Err(());
+                            return Err((true, after));
                         }
                     }
-                }
-                offset += chunk.len() as i64;
-                Ok(())
-            });
-        found
-    }
-
-    /// Whether any structure-affecting source exists in `[byte_from, byte_to)`
-    /// that could make the layout walk CONSUME buffer text beyond simple
-    /// line-by-line reading: overlays (display/invisible/before/after
-    /// strings), or `display` / `invisible` text properties. Used to gate the
-    /// bounded window read — when any is present the caller falls back to
-    /// reading the full accessible tail.
-    pub fn has_walk_consumption_hazard(&self, byte_from: i64, byte_to: i64) -> bool {
-        if !self.buffer.layout_overlays().is_empty() {
-            return true;
-        }
-        let Some(from) = layout_emacs_byte_pos_from_i64(byte_from) else {
-            return true;
-        };
-        let Some(to) = layout_emacs_byte_pos_from_i64(byte_to) else {
-            return true;
-        };
-        for prop in ["display", "invisible"] {
-            let name = Value::symbol(prop);
-            let mut pos = from;
-            loop {
-                if pos >= to {
-                    break;
-                }
-                if self
-                    .buffer
-                    .layout_text_prop_at_emacs_byte_pos(pos, name)
-                    .is_some()
-                {
-                    return true;
-                }
-                match self
-                    .buffer
-                    .layout_next_single_text_prop_change_after_emacs_byte_pos_bounded(pos, name, to)
-                {
-                    Some(next) if next > pos => pos = next,
-                    _ => break,
-                }
+                    offset += chunk.len();
+                    Ok(())
+                },
+            );
+            match result {
+                Err((true, end)) => return Some(end.get() as i64),
+                Err((false, resume)) => start = resume,
+                Ok(()) => return None,
             }
         }
-        false
+        None
     }
 
     /// Read a single byte at the given byte position.
@@ -3210,6 +2806,31 @@ impl<'a, B: LayoutBufferView + ?Sized> RustTextPropAccess<'a, B> {
         (status, next_change)
     }
 
+    /// Classify a bounded acquisition span with the same visibility rule as
+    /// the live iterator. A hidden run must close before `limit`; otherwise
+    /// the caller cannot yet know its complete source extent or ellipsis.
+    pub(crate) fn invisible_run_before(
+        &self,
+        charpos: i64,
+        limit: i64,
+    ) -> Option<(InvisibleStatus, i64)> {
+        if charpos >= limit {
+            return None;
+        }
+        let status = self.invisible_status_at(charpos);
+        if !status.hidden() {
+            return Some((status, charpos));
+        }
+        // Acquisition already bounds the number of source characters. Avoid
+        // check_invisible's intentional coalescing all the way to buffer-end.
+        for position in charpos + 1..limit {
+            if !self.invisible_status_at(position).hidden() {
+                return Some((status, position));
+            }
+        }
+        None
+    }
+
     /// Whether a REPLACING `display` spec applies at `charpos`.
     ///
     /// GNU's handler chain runs `handle_display_prop` BEFORE
@@ -3251,8 +2872,7 @@ impl<'a, B: LayoutBufferView + ?Sized> RustTextPropAccess<'a, B> {
     /// Whether `[char_from, char_to)` contains an effective property that can
     /// collapse source rows during the display walk.
     ///
-    /// Unlike [`RustBufferAccess::has_walk_consumption_hazard`], this predicate
-    /// is deliberately range- and semantics-aware.  A face-only overlay, an
+    /// This predicate is range- and semantics-aware.  A face-only overlay, an
     /// out-of-range overlay, a non-replacing `display` value, or an `invisible`
     /// value disabled by `buffer-invisibility-spec` cannot make source-line
     /// counting over-estimate display rows and therefore must not force
@@ -3292,7 +2912,7 @@ impl<'a, B: LayoutBufferView + ?Sized> RustTextPropAccess<'a, B> {
 
     /// Combined `invisible` status at `charpos` from the `invisible` text
     /// property and the highest-priority overlay (GNU `invisible_p`).
-    fn invisible_status_at(&self, charpos: i64) -> InvisibleStatus {
+    pub(crate) fn invisible_status_at(&self, charpos: i64) -> InvisibleStatus {
         let bytepos = buffer_i64_charpos_to_emacs_byte_pos(self.buffer, charpos);
         let spec = self
             .buffer
@@ -3962,6 +3582,14 @@ impl OrderedFaceSources {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.sources.is_empty()
+    }
+
+    pub(crate) fn single_value(&self) -> Option<Value> {
+        if self.sources.len() == 1 {
+            self.values().next()
+        } else {
+            None
+        }
     }
 
     pub(crate) fn values(&self) -> impl Iterator<Item = Value> + '_ {

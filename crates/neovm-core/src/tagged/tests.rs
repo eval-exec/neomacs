@@ -818,7 +818,7 @@ fn alloc_roundtrip_cost_probe() {
 #[test]
 fn gc_root_stays_a_facade_after_the_domain_split() {
     const CEILING: usize = 3_000;
-    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/tagged/gc.rs");
+    let path = neomacs_infra::crate_root!().join("src/tagged/gc.rs");
     let lines = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
         .lines()

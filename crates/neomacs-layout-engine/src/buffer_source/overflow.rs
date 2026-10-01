@@ -4,9 +4,11 @@
 //! special display items while delegating actual item appends to the shared row
 //! source append pipeline.
 
+use crate::buffer_source::item_append::BufferSourceRowAppendContext;
 use crate::buffer_source::loop_state::BufferSourceLoopMutableState;
 use crate::buffer_source::walk::{BufferSourceRewind, BufferSourceWalk};
 use crate::display_row::append_context::RightEdgeMarkerColumn;
+#[cfg(test)]
 use crate::display_row::builder::DisplayRowGlyphCheckpoint;
 use crate::display_row::builder::DisplayRowPosition;
 use crate::display_row::geometry::{
@@ -177,8 +179,10 @@ impl<'a> BufferSourceOverflowRenderRequest<'a> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn render_if_needed_and_apply<B: LayoutBufferView>(
         self,
+        append_context: &BufferSourceRowAppendContext<'_, '_, B>,
         source_walk: &mut BufferSourceWalk<'_, B>,
         text: &[u8],
         state: BufferSourceLoopMutableState<'_, '_, '_>,
@@ -204,6 +208,20 @@ impl<'a> BufferSourceOverflowRenderRequest<'a> {
         ) {
             DisplaySourceTextCharOverflowAction::Fits => BufferSourceOverflowRenderOutcome::Fits,
             DisplaySourceTextCharOverflowAction::Truncate { transition } => {
+                // A wide character cut at the edge leaves its cells to the
+                // truncation pass: record the cut so the marker installer
+                // overwrites the padding cells with the truncation glyph
+                // instead of blanks (GNU xdisp.c:26611-26641 — the back-scan
+                // to the last non-padding glyph, then one
+                // produce_special_glyphs per cell to the row's end).
+                let cut_start_inside = progress.row_position().x_px() < context.right_edge_px;
+                if crate::unicode::is_wide_char(context.ch) && cut_start_inside {
+                    row_build.row_geometry.mark_current_row_flag_kind(
+                        row_build.row_flags,
+                        crate::display_row::geometry::DisplayRowFlagKind::WideCut,
+                        context.row_limit,
+                    );
+                }
                 self.publish_right_edge_marker_slot(
                     &mut source_render,
                     row_build.row_geometry,
@@ -213,6 +231,11 @@ impl<'a> BufferSourceOverflowRenderRequest<'a> {
                 let truncation_skip = source_walk
                     .consume_truncation_skip(text, progress.source_position())
                     .apply_to_progress(&mut progress);
+                source_render
+                    .output_emitter()
+                    .note_truncated_end(LispCharPos1::new(
+                        truncation_skip.charpos + i64::from(!truncation_skip.reached_line_break),
+                    ));
                 truncation_skip.apply_before_row_transition(
                     row_carryover.line_numbers,
                     row_build.row_extend,
@@ -260,7 +283,7 @@ impl<'a> BufferSourceOverflowRenderRequest<'a> {
                 // boundary; this is the glyph-side of that rewind. (The
                 // display-point metadata is rewound to the same boundary by
                 // `apply_before_row_transition` below.)
-                source_render.restore_glyph_checkpoint(word_wrap_action.glyph_checkpoint());
+                source_render.restore_word_wrap_checkpoint(wrap_break);
                 word_wrap_action.restore_row_extend(row_build.row_extend, row_build.row_geometry);
                 {
                     let box_vertical_edges = source_render.trailing_box_run_terminal();
@@ -494,6 +517,7 @@ impl BufferSourceWordWrapAction {
         Self { break_candidate }
     }
 
+    #[cfg(test)]
     pub(crate) fn glyph_checkpoint(self) -> DisplayRowGlyphCheckpoint {
         self.break_candidate.glyph_checkpoint()
     }
@@ -520,6 +544,7 @@ impl BufferSourceWordWrapAction {
             self.break_candidate.row_display_positions();
         output_emitter
             .restore_current_row_display_positions(row_first_display_pos, row_last_display_pos);
+        output_emitter.restore_current_row_pen(self.break_candidate.row_position());
     }
 
     pub(crate) fn source_position(self) -> DisplaySourceTextPosition {
@@ -838,6 +863,11 @@ impl<'a> BufferSourceSpecialOverflowRenderRequest<'a> {
                 let truncation_skip = source_walk
                     .consume_truncation_skip(context.text, progress.source_position())
                     .apply_to_progress(&mut progress);
+                source_render
+                    .output_emitter()
+                    .note_truncated_end(LispCharPos1::new(
+                        truncation_skip.charpos + i64::from(!truncation_skip.reached_line_break),
+                    ));
                 let mut source_position = truncation_skip.source_position();
                 truncation_skip.apply_before_row_transition(
                     row_carryover.line_numbers,

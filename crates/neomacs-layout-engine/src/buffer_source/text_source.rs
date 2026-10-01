@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use crate::buffer_source::mouse_face::{MouseFaceRuns, MouseFaceStableRun, ResolvedMouseFace};
 use crate::buffer_source::producer::frame::{
     DisplayReplacementExtentLookup, ReplacementCoveredSpan,
@@ -128,6 +130,29 @@ impl BufferOverlayStringsItem {
 /// bridge, which preserves typed display items while splitting text runs only
 /// where the remaining buffer walk still needs per-character wrap/cursor
 /// decisions.
+/// The exclusive end of a plain text run: STRICTLY past the run's start. An
+/// empty run is unrepresentable — issue #445: a composition-start limit
+/// clamped ONTO the run's start once produced an empty `TextRun`, whose
+/// missing source character made consumption refuse the item and the walk
+/// abandon the row, committing it blank.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct NonEmptyRunEnd(CharPos0);
+
+impl NonEmptyRunEnd {
+    /// `scanned_end`, floored at `start + 1` (progress is structural) and
+    /// never clamped below that floor by `limit`: a limit at or before the
+    /// run's start cannot yield a run, and honouring it would re-create the
+    /// empty run.
+    pub(crate) fn past(start: CharPos0, scanned_end: CharPos0, limit: CharPos0) -> Self {
+        let floor = start.add_len(CharLen::new(1));
+        Self(scanned_end.max(floor).min(limit.max(floor)))
+    }
+
+    pub(crate) fn get(self) -> CharPos0 {
+        self.0
+    }
+}
+
 pub(crate) struct BufferTextSourceCursor<'a, B: LayoutBufferView + ?Sized> {
     buffer_id: BufferId,
     buffer: &'a B,
@@ -138,6 +163,12 @@ pub(crate) struct BufferTextSourceCursor<'a, B: LayoutBufferView + ?Sized> {
     window_id: Option<u64>,
     char_pos: CharPos0,
     end: CharPos0,
+    // Absolute mappings within this immutable view. Decoding establishes the
+    // current and next byte positions; a separate lookup slot keeps distant
+    // property boundaries from displacing that sequential pair. Rewinds may
+    // miss, but all cached mappings remain valid until the view is dropped.
+    decoded_byte_positions: Cell<[(CharPos0, EmacsBytePos); 2]>,
+    looked_up_byte_position: Cell<(CharPos0, EmacsBytePos)>,
     /// While the cursor sits before this position, plain text runs are produced
     /// ONE CHARACTER AT A TIME.
     ///
@@ -172,6 +203,15 @@ pub(crate) struct BufferTextSourceCursor<'a, B: LayoutBufferView + ?Sized> {
     base_face: RenderFaceRef,
     replacement_strings: LispStringSourceStack,
     mouse_faces: MouseFaceRuns<'a, B>,
+    /// Stop position within this immutable view. Valid only for queries in
+    /// [start, end): wrap rewinds and replacement lookahead may query elsewhere.
+    property_boundary_run: Cell<Option<(CharPos0, CharPos0)>>,
+    #[cfg(test)]
+    property_boundary_queries: Cell<usize>,
+    #[cfg(test)]
+    text_slice_queries: Cell<usize>,
+    #[cfg(test)]
+    byte_position_queries: Cell<usize>,
     face_property: LayoutCharPropertyLookup,
     display_property: LayoutCharPropertyLookup,
     /// The walk's evaluated `(when FORM . SPEC)` results (from the view).
@@ -208,12 +248,16 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
         let accessible_end = buffer.layout_point_max_char_pos();
         let start = start.min(accessible_end);
         let end = end.min(accessible_end).max(start);
+        let start_byte = buffer.layout_char_pos_to_emacs_byte_pos(start);
+        let end_byte = buffer.layout_char_pos_to_emacs_byte_pos(end);
         Self {
             buffer_id,
             buffer,
             window_id,
             char_pos: start,
             end,
+            decoded_byte_positions: Cell::new([(start, start_byte); 2]),
+            looked_up_byte_position: Cell::new((end, end_byte)),
             char_granularity_end: None,
             overlay_strings_produced_at: None,
             base_face,
@@ -225,12 +269,16 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
             display_when: buffer.layout_display_when_conditions(),
             mouse_faces: MouseFaceRuns::new(
                 buffer,
-                EmacsByteRange::new(
-                    buffer.layout_char_pos_to_emacs_byte_pos(start),
-                    buffer.layout_char_pos_to_emacs_byte_pos(end),
-                ),
+                EmacsByteRange::new(start_byte, end_byte),
                 window_id,
             ),
+            property_boundary_run: Cell::new(None),
+            #[cfg(test)]
+            property_boundary_queries: Cell::new(0),
+            #[cfg(test)]
+            text_slice_queries: Cell::new(0),
+            #[cfg(test)]
+            byte_position_queries: Cell::new(0),
             face_property: LayoutCharPropertyLookup::new(buffer, Value::symbol("face")),
             display_property: LayoutCharPropertyLookup::new(buffer, Value::symbol("display")),
             line_height_property: LayoutCharPropertyLookup::new(
@@ -242,6 +290,13 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
                 Value::symbol("line-spacing"),
             ),
         }
+    }
+
+    /// The buffer view the cursor walks — for callers that must consult
+    /// buffer state (e.g. the hscroll skip resolving a `display` spec's
+    /// width) without routing through the producer.
+    pub(crate) fn layout_buffer(&self) -> &B {
+        self.buffer
     }
 
     pub(crate) fn current_char_pos(&self) -> CharPos0 {
@@ -272,6 +327,39 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
     pub(crate) fn has_pending_overlay_strings_at(&self, char_pos: CharPos0) -> bool {
         self.overlay_strings_produced_at != Some(char_pos)
             && self.overlay_strings_at(char_pos).is_some()
+    }
+
+    /// A fresh buffer cursor seated here produces the same next source item.
+    /// This is used only after an ordinary consumed newline; source anchors
+    /// alone cannot certify a restart in pushed replacement text.
+    pub(crate) fn can_restart_after_buffer_newline(&self, char_pos: CharPos0) -> bool {
+        if self.char_pos != char_pos
+            // At EOB no next source item refreshes the active face. The tail
+            // can retain the preceding newline's metrics, while a fresh EOB
+            // walk starts with default metrics, so it is not a restart seam.
+            || char_pos >= self.end
+            || !self.replacement_strings.is_empty()
+            || self.overlay_strings_produced_at == Some(char_pos)
+            || self.produces_single_chars_at(char_pos)
+        {
+            return false;
+        }
+        // The invisible checkpoint precedes face acquisition. A hidden prefix
+        // can draw an ellipsis or reach EOB using the preceding newline's face,
+        // unlike a fresh cursor. Use the checkpoint's visibility context here
+        // and classify only this anchor, without scanning the entire fold.
+        if RustTextPropAccess::new(self.buffer)
+            .invisible_status_at(char_pos.get() as i64)
+            .hidden()
+        {
+            return false;
+        }
+        let properties = RustTextPropAccess::new_for_optional_window(self.buffer, self.window_id);
+        ["line-prefix", "wrap-prefix"].iter().all(|name| {
+            properties
+                .get_property(char_pos.get() as i64, Value::symbol(name))
+                .is_none_or(|value| value.is_nil())
+        })
     }
 
     /// A produced run must never CROSS an overlay-string anchor: anchors are
@@ -328,7 +416,7 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
         self.char_granularity_end = end_charpos;
     }
 
-    fn produces_single_chars_at(&self, char_pos: CharPos0) -> bool {
+    pub(crate) fn produces_single_chars_at(&self, char_pos: CharPos0) -> bool {
         self.char_granularity_end.is_some_and(|end| char_pos < end)
     }
 
@@ -350,8 +438,27 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn byte_position_queries(&self) -> usize {
+        self.byte_position_queries.get()
+    }
+
     fn byte_pos(&self, char_pos: CharPos0) -> EmacsBytePos {
-        self.buffer.layout_char_pos_to_emacs_byte_pos(char_pos)
+        for (position, byte) in self.decoded_byte_positions.get() {
+            if position == char_pos {
+                return byte;
+            }
+        }
+        let (position, byte) = self.looked_up_byte_position.get();
+        if position == char_pos {
+            return byte;
+        }
+        #[cfg(test)]
+        self.byte_position_queries
+            .set(self.byte_position_queries.get() + 1);
+        let byte = self.buffer.layout_char_pos_to_emacs_byte_pos(char_pos);
+        self.looked_up_byte_position.set((char_pos, byte));
+        byte
     }
 
     pub(crate) fn char_at(&self, char_pos: CharPos0) -> Option<EmacsChar> {
@@ -359,22 +466,56 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
             return None;
         }
         let start = self.byte_pos(char_pos);
-        let end = self.byte_pos(char_pos.add_len(CharLen::new(1)).min(self.end));
-        let mut bytes = Vec::new();
-        self.buffer
-            .layout_copy_emacs_byte_range_to(EmacsByteRange::new(start, end), &mut bytes);
-        decode_emacs_char(
-            &bytes,
-            if self.buffer.layout_is_multibyte() {
-                EmacsTextStorage::Multibyte
-            } else {
-                EmacsTextStorage::Unibyte
-            },
-        )
-        .map(|(character, _)| character)
+        let first = self.buffer.layout_emacs_byte_at_pos(start)?;
+        let storage = if self.buffer.layout_is_multibyte() {
+            EmacsTextStorage::Multibyte
+        } else {
+            EmacsTextStorage::Unibyte
+        };
+        let (character, decoded_len) = if first.is_ascii() || storage == EmacsTextStorage::Unibyte {
+            decode_emacs_char(&[first], storage)?
+        } else {
+            // A single Emacs character needs at most five bytes. Its decoded
+            // length supplies the next absolute byte anchor, including raw
+            // byte and non-Unicode characters that have no Rust UTF-8 length.
+            let mut bytes = [0; neovm_core::emacs_core::emacs_char::MAX_MULTIBYTE_LENGTH];
+            let end = EmacsBytePos::new(
+                start
+                    .get()
+                    .saturating_add(bytes.len())
+                    .min(self.buffer.layout_point_max_emacs_byte_pos().get()),
+            );
+            let mut len = 0;
+            let _: Result<(), std::convert::Infallible> =
+                self.buffer.layout_try_for_each_emacs_byte_range_chunk(
+                    EmacsByteRange::new(start, end),
+                    |chunk| {
+                        bytes[len..len + chunk.len()].copy_from_slice(chunk);
+                        len += chunk.len();
+                        Ok(())
+                    },
+                );
+            decode_emacs_char(&bytes[..len], storage)?
+        };
+        self.decoded_byte_positions.set([
+            (char_pos, start),
+            (
+                char_pos.add_len(CharLen::new(1)),
+                EmacsBytePos::new(start.get() + decoded_len),
+            ),
+        ]);
+        Some(character)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn text_slice_queries(&self) -> usize {
+        self.text_slice_queries.get()
     }
 
     fn text_slice(&self, start: CharPos0, end: CharPos0) -> String {
+        #[cfg(test)]
+        self.text_slice_queries
+            .set(self.text_slice_queries.get() + 1);
         let mut bytes = Vec::new();
         self.buffer.layout_copy_emacs_byte_range_to(
             EmacsByteRange::new(self.byte_pos(start), self.byte_pos(end)),
@@ -411,6 +552,11 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
         )
     }
 
+    #[cfg(test)]
+    pub(crate) fn property_boundary_queries(&self) -> usize {
+        self.property_boundary_queries.get()
+    }
+
     /// neomacs equivalent of GNU `compute_stop_pos`: the next position at which
     /// the face/display can change, i.e. where the current text run must end.
     /// GNU folds the next text-property change AND the next *overlay* change
@@ -421,6 +567,15 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
     /// the run would keep the face resolved at its start and the overlay would
     /// never paint (or would paint over the whole run).
     fn next_property_change(&self, char_pos: CharPos0) -> CharPos0 {
+        if let Some((start, end)) = self.property_boundary_run.get()
+            && start <= char_pos
+            && char_pos < end
+        {
+            return end;
+        }
+        #[cfg(test)]
+        self.property_boundary_queries
+            .set(self.property_boundary_queries.get() + 1);
         let byte = self.byte_pos(char_pos);
         let prop_change = self
             .buffer
@@ -433,7 +588,9 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
             .next_boundary_after_emacs_byte_pos(byte)
             .map(|byte_pos| self.buffer.layout_emacs_byte_pos_to_char_pos(byte_pos))
             .unwrap_or(self.end);
-        prop_change.min(overlay_change).min(self.end)
+        let end = prop_change.min(overlay_change).min(self.end);
+        self.property_boundary_run.set(Some((char_pos, end)));
+        end
     }
 
     fn display_prop_at(&self, char_pos: CharPos0) -> Option<Value> {
@@ -663,7 +820,7 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
         Some(DisplayPointerAppearance::new(source, pointer_face))
     }
 
-    fn next_text_run_end(&self, start: CharPos0, limit: CharPos0) -> CharPos0 {
+    fn next_text_run_end(&self, start: CharPos0, limit: CharPos0) -> NonEmptyRunEnd {
         let limit = self
             .buffer
             .layout_next_automatic_composition_start(start, limit)
@@ -690,7 +847,7 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
             }
             end = end.add_len(CharLen::new(1));
         }
-        end.max(start.add_len(CharLen::new(1))).min(limit)
+        NonEmptyRunEnd::past(start, end, limit)
     }
 
     /// Resolve the active display table's glyph vector for `ch`, returning the
@@ -775,7 +932,21 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
 
         if let Some(composition) = self.buffer.layout_automatic_composition_starting_at(start) {
             let end = composition.end();
-            if end <= property_end && end <= self.end {
+            // A text-property boundary INSIDE the span does not split it: GNU
+            // composes the character sequence and stamps the composed glyph
+            // with the base character's face (`handle_stop` never re-seats a
+            // composition on a face change), and the pipeline writer's
+            // cross-segment merge rule keeps the base glyph's face. Gating on
+            // `property_end` here used to drop the span whenever a face seam
+            // cut it, and the plain-run scan below then clamped onto the
+            // span's start position and emitted an EMPTY run — the walk
+            // aborted and the row was committed blank (issue #445: ibuffer
+            // group headers like "🛠\u{FE0F}\u{FE0F} …" with an underline face
+            // starting on the selector blanked every row below). The
+            // `end <= self.end` bound still refuses spans crossing the
+            // accessible end (a bounded fragment's last cell is plain text,
+            // and the next fragment re-derives the composition).
+            if end <= self.end {
                 self.char_pos = end;
                 return Some(
                     self.bind_box_run_topology(
@@ -897,18 +1068,26 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
         let end = if self.produces_single_chars_at(start) {
             start.add_len(CharLen::new(1)).min(property_end)
         } else {
-            self.next_text_run_end(start, property_end)
+            self.next_text_run_end(start, property_end).get()
         };
         self.debug_assert_no_overlay_string_anchor_inside(start, end);
         self.char_pos = end;
+        // The ordinary single-character path has already decoded and classified
+        // this character. Avoid copying its buffer range and decoding it again.
+        let text = if end == start.add_len(CharLen::new(1))
+            && let TextSourceCharClassification::Text(ch) = classify_text_source_char(character)
+        {
+            let mut encoded = [0; 4];
+            Box::<str>::from(&*ch.encode_utf8(&mut encoded))
+        } else {
+            self.text_slice(start, end).into_boxed_str()
+        };
         Some(
             self.bind_box_run_topology(
                 DisplayItem::new(
                     self.span(start, end),
                     face,
-                    DisplayItemKind::TextRun(DisplayTextRun::independent(
-                        self.text_slice(start, end),
-                    )),
+                    DisplayItemKind::TextRun(DisplayTextRun::independent(text)),
                 )
                 .with_layout(layout),
                 start,

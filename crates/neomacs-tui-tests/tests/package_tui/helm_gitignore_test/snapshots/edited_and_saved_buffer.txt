@@ -1,0 +1,27 @@
+(:buffer (:text "# Created by https://www.toptal.com/developers/gitignore/api/visualstudiocode
+# Edit at https://www.toptal.com/developers/gitignore?templates=visualstudiocode
+
+### VisualStudioCode ###
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/*.code-snippets
+
+# Local History for Visual Studio Code
+.history/
+
+# Built Visual Studio Code Extensions
+*.vsix
+
+### VisualStudioCode Patch ###
+# Ignore all local history of files
+.history
+.ionide
+
+# End of https://www.toptal.com/developers/gitignore/api/visualstudiocode
+
+# Project-local release artifacts
+release-output/
+" :point 617 :mode gitignore-mode :modified nil :file ".gitignore" :selected t) :requests ((:request-line "GET /dropdown/templates.json?term=visual HTTP/1.1" :headers ("Accept-encoding: gzip" "Accept: */*" "Connection: close" "Host: 127.0.0.1:<port>" "MIME-Version: 1.0" "User-Agent: <editor>") :body-bytes 0) (:request-line "GET /developers/gitignore/dropdown/templates.json?term=visual HTTP/1.1" :headers ("Accept-encoding: gzip" "Accept: */*" "Connection: close" "Host: 127.0.0.1:<port>" "MIME-Version: 1.0" "User-Agent: <editor>") :body-bytes 0) (:request-line "GET /api/visualstudiocode HTTP/1.1" :headers ("Accept-encoding: gzip" "Accept: */*" "Connection: close" "Host: 127.0.0.1:<port>" "MIME-Version: 1.0" "User-Agent: <editor>") :body-bytes 0) (:request-line "GET /developers/gitignore/api/visualstudiocode HTTP/1.1" :headers ("Accept-encoding: gzip" "Accept: */*" "Connection: close" "Host: 127.0.0.1:<port>" "MIME-Version: 1.0" "User-Agent: <editor>") :body-bytes 0)) :request-urls ("<origin>/dropdown/templates.json?term=visual" "<origin>/api/visualstudiocode") :remaining-plan nil :misses nil :live-clients nil :response-buffers nil)

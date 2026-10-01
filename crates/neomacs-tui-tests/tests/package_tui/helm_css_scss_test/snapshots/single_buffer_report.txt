@@ -1,0 +1,247 @@
+((:stage active-1 :alive t :prompt #("Selector: " 0 10 (face helm-minibuffer-prompt)) :pattern "" :source-name "tui-fixture.scss" :helm-buffer-text "tui-fixture.scss
+6: .dashboard, .dashboard--compact
+10: .dashboard, .dashboard--compact .card
+13: .dashboard, .dashboard--compact .card &__title, &__subtitle
+20: .footer
+" :helm-face-runs ((0 17 helm-source-header "tui-fixture.scss
+") (17 18 font-lock-function-name-face "6") (20 51 helm-css-scss-selector-depth-face-1 ".dashboard, .dashboard--compact") (52 54 font-lock-function-name-face "10") (56 87 helm-css-scss-selector-depth-face-1 ".dashboard, .dashboard--compact") (88 93 helm-css-scss-selector-depth-face-2 ".card") (94 96 font-lock-function-name-face "13") (98 129 helm-css-scss-selector-depth-face-1 ".dashboard, .dashboard--compact") (130 135 helm-css-scss-selector-depth-face-2 ".card") (136 157 helm-css-scss-selector-depth-face-3 "&__title, &__subtitle") (158 160 font-lock-function-name-face "20") (162 169 helm-css-scss-selector-depth-face-1 ".footer")) :selected "10: .dashboard, .dashboard--compact .card" :selected-face-runs ((0 2 font-lock-function-name-face "10") (4 35 helm-css-scss-selector-depth-face-1 ".dashboard, .dashboard--compact") (36 41 helm-css-scss-selector-depth-face-2 ".card")) :selected-real (148 230 2 140 148 10) :source ("tui-fixture.scss" 148 10 8 32 123 "  .card {") :overlay ("tui-fixture.scss" 140 148 "  .card " helm-css-scss-target-line-face) :last-line ("tui-fixture.scss" 10) :fold-invisible nil :unveiled ((140 150 neomacs-hcss-single-fold)) :advices (t t) :update-hook t :windows ("tui-fixture.scss" "*Helm Css SCSS*") :cache-count 4) (:stage active-2 :alive t :prompt #("Selector: " 0 10 (face helm-minibuffer-prompt)) :pattern "" :source-name "tui-fixture.scss" :helm-buffer-text "tui-fixture.scss
+6: .dashboard, .dashboard--compact
+10: .dashboard, .dashboard--compact .card
+13: .dashboard, .dashboard--compact .card &__title, &__subtitle
+20: .footer
+" :helm-face-runs ((0 17 helm-source-header "tui-fixture.scss
+") (17 18 font-lock-function-name-face "6") (20 51 helm-css-scss-selector-depth-face-1 ".dashboard, .dashboard--compact") (52 54 font-lock-function-name-face "10") (56 87 helm-css-scss-selector-depth-face-1 ".dashboard, .dashboard--compact") (88 93 helm-css-scss-selector-depth-face-2 ".card") (94 96 font-lock-function-name-face "13") (98 129 helm-css-scss-selector-depth-face-1 ".dashboard, .dashboard--compact") (130 135 helm-css-scss-selector-depth-face-2 ".card") (136 157 helm-css-scss-selector-depth-face-3 "&__title, &__subtitle") (158 160 font-lock-function-name-face "20") (162 169 helm-css-scss-selector-depth-face-1 ".footer")) :selected "13: .dashboard, .dashboard--compact .card &__title, &__subtitle" :selected-face-runs ((0 2 font-lock-function-name-face "13") (4 35 helm-css-scss-selector-depth-face-1 ".dashboard, .dashboard--compact") (36 41 helm-css-scss-selector-depth-face-2 ".card") (42 63 helm-css-scss-selector-depth-face-3 "&__title, &__subtitle")) :selected-real (200 226 3 170 200 13) :source ("tui-fixture.scss" 200 14 16 32 123 "    &__subtitle {") :overlay ("tui-fixture.scss" 170 200 "    &__title,
+    &__subtitle " helm-css-scss-target-line-face) :last-line ("tui-fixture.scss" 13) :fold-invisible neomacs-hcss-single-fold :unveiled nil :advices (t t) :update-hook t :windows ("tui-fixture.scss" "*Helm Css SCSS*") :cache-count 4) (:stage active-3 :alive t :prompt #("Selector: " 0 10 (face helm-minibuffer-prompt)) :pattern "footer" :source-name "tui-fixture.scss" :helm-buffer-text "tui-fixture.scss
+20: .footer
+" :helm-face-runs ((0 17 helm-source-header "tui-fixture.scss
+") (17 19 font-lock-function-name-face "20") (21 28 helm-css-scss-selector-depth-face-1 ".footer")) :selected "20: .footer" :selected-face-runs ((0 2 font-lock-function-name-face "20") (4 11 helm-css-scss-selector-depth-face-1 ".footer")) :selected-real (242 261 1 234 242 20) :source ("tui-fixture.scss" 242 20 8 32 123 ".footer {") :overlay ("tui-fixture.scss" 234 242 ".footer " helm-css-scss-target-line-face) :last-line ("tui-fixture.scss" 20) :fold-invisible neomacs-hcss-single-fold :unveiled nil :advices (t t) :update-hook t :windows ("tui-fixture.scss" "*Helm Css SCSS*") :cache-count 4) (:stage cancel :current "tui-fixture.scss" :windows ("tui-fixture.scss") :source ("tui-fixture.scss" 150 11 0 10 32 nil 4 "") :disk-bytes "/* A disabled prototype is intentionally excluded. */
+/* .disabled {
+  color: gray;
+} */
+
+.dashboard,
+.dashboard--compact {
+  color: red;
+
+  .card {
+    padding: 1rem;
+
+    &__title,
+    &__subtitle {
+      color: blue;
+    }
+  }
+}
+
+.footer {
+  color: black;
+}
+" :last-point (150 "tui-fixture.scss") :fold-invisible neomacs-hcss-single-fold :unveiled nil :package-overlay-buffer nil :advices (nil nil) :update-hook nil :helm-alive nil :helm-buffers ("*Helm Css SCSS*")) (:stage open-action :current "tui-fixture.scss" :windows ("tui-fixture.scss") :source ("tui-fixture.scss" 148 10 8 32 123 nil 4 "") :disk-bytes "/* A disabled prototype is intentionally excluded. */
+/* .disabled {
+  color: gray;
+} */
+
+.dashboard,
+.dashboard--compact {
+  color: red;
+
+  .card {
+    padding: 1rem;
+
+    &__title,
+    &__subtitle {
+      color: blue;
+    }
+  }
+}
+
+.footer {
+  color: black;
+}
+" :last-point (150 "tui-fixture.scss") :fold-invisible nil :unveiled ((140 150 neomacs-hcss-single-fold)) :package-overlay-buffer nil :advices (nil nil) :update-hook nil :helm-alive nil :helm-buffers ("*Helm Css SCSS*")) (:stage close-action :current "tui-fixture.scss" :windows ("tui-fixture.scss") :source ("tui-fixture.scss" 230 17 3 125 10 nil 4 "") :disk-bytes "/* A disabled prototype is intentionally excluded. */
+/* .disabled {
+  color: gray;
+} */
+
+.dashboard,
+.dashboard--compact {
+  color: red;
+
+  .card {
+    padding: 1rem;
+
+    &__title,
+    &__subtitle {
+      color: blue;
+    }
+  }
+}
+
+.footer {
+  color: black;
+}
+" :last-point (148 "tui-fixture.scss") :fold-invisible nil :unveiled ((140 150 neomacs-hcss-single-fold)) :package-overlay-buffer nil :advices (nil nil) :update-hook nil :helm-alive nil :helm-buffers ("*Helm Css SCSS*")) (:stage back-one :current "tui-fixture.scss" :windows ("tui-fixture.scss") :source ("tui-fixture.scss" 148 10 8 32 123 nil 4 "") :disk-bytes "/* A disabled prototype is intentionally excluded. */
+/* .disabled {
+  color: gray;
+} */
+
+.dashboard,
+.dashboard--compact {
+  color: red;
+
+  .card {
+    padding: 1rem;
+
+    &__title,
+    &__subtitle {
+      color: blue;
+    }
+  }
+}
+
+.footer {
+  color: black;
+}
+" :last-point (230 "tui-fixture.scss") :fold-invisible nil :unveiled ((140 150 neomacs-hcss-single-fold)) :package-overlay-buffer nil :advices (nil nil) :update-hook nil :helm-alive nil :helm-buffers ("*Helm Css SCSS*")) (:stage back-two :current "tui-fixture.scss" :windows ("tui-fixture.scss") :source ("tui-fixture.scss" 230 17 3 125 10 nil 4 "") :disk-bytes "/* A disabled prototype is intentionally excluded. */
+/* .disabled {
+  color: gray;
+} */
+
+.dashboard,
+.dashboard--compact {
+  color: red;
+
+  .card {
+    padding: 1rem;
+
+    &__title,
+    &__subtitle {
+      color: blue;
+    }
+  }
+}
+
+.footer {
+  color: black;
+}
+" :last-point (148 "tui-fixture.scss") :fold-invisible nil :unveiled ((140 150 neomacs-hcss-single-fold)) :package-overlay-buffer nil :advices (nil nil) :update-hook nil :helm-alive nil :helm-buffers ("*Helm Css SCSS*")) (:stage active-4 :alive t :prompt #("Selector: " 0 10 (face helm-minibuffer-prompt)) :pattern "new-release" :source-name "tui-fixture.scss" :helm-buffer-text "tui-fixture.scss
+23: .new-release
+" :helm-face-runs ((0 17 helm-source-header "tui-fixture.scss
+") (17 19 font-lock-function-name-face "23") (21 33 helm-css-scss-selector-depth-face-1 ".new-release")) :selected "23: .new-release" :selected-face-runs ((0 2 font-lock-function-name-face "23") (4 16 helm-css-scss-selector-depth-face-1 ".new-release")) :selected-real (275 291 1 262 275 23) :source ("tui-fixture.scss" 275 23 13 32 123 ".new-release { color: teal; }") :overlay ("tui-fixture.scss" 262 275 ".new-release " helm-css-scss-target-line-face) :last-line ("tui-fixture.scss" 23) :fold-invisible neomacs-hcss-single-fold :unveiled nil :advices (t t) :update-hook t :windows ("tui-fixture.scss" "*Helm Css SCSS*") :cache-count 5) (:stage unsaved-cache :current "tui-fixture.scss" :windows ("tui-fixture.scss") :source ("tui-fixture.scss" 292 24 0 10 nil t 5 "") :disk-bytes "/* A disabled prototype is intentionally excluded. */
+/* .disabled {
+  color: gray;
+} */
+
+.dashboard,
+.dashboard--compact {
+  color: red;
+
+  .card {
+    padding: 1rem;
+
+    &__title,
+    &__subtitle {
+      color: blue;
+    }
+  }
+}
+
+.footer {
+  color: black;
+}
+" :last-point (292 "tui-fixture.scss") :fold-invisible neomacs-hcss-single-fold :unveiled nil :package-overlay-buffer nil :advices (nil nil) :update-hook nil :helm-alive nil :helm-buffers ("*Helm Css SCSS*")) (:stage saved-cache-cleared :current "tui-fixture.scss" :windows ("tui-fixture.scss") :source ("tui-fixture.scss" 292 24 0 10 nil nil 0 "") :disk-bytes "/* A disabled prototype is intentionally excluded. */
+/* .disabled {
+  color: gray;
+} */
+
+.dashboard,
+.dashboard--compact {
+  color: red;
+
+  .card {
+    padding: 1rem;
+
+    &__title,
+    &__subtitle {
+      color: blue;
+    }
+  }
+}
+
+.footer {
+  color: black;
+}
+.new-release { color: teal; }
+" :last-point (292 "tui-fixture.scss") :fold-invisible neomacs-hcss-single-fold :unveiled nil :package-overlay-buffer nil :advices (nil nil) :update-hook nil :helm-alive nil :helm-buffers ("*Helm Css SCSS*")) (:stage active-5 :alive t :prompt #("Selector: " 0 10 (face helm-minibuffer-prompt)) :pattern "new-release" :source-name "tui-fixture.scss" :helm-buffer-text "tui-fixture.scss
+23: .new-release
+" :helm-face-runs ((0 17 helm-source-header "tui-fixture.scss
+") (17 19 font-lock-function-name-face "23") (21 33 helm-css-scss-selector-depth-face-1 ".new-release")) :selected "23: .new-release" :selected-face-runs ((0 2 font-lock-function-name-face "23") (4 16 helm-css-scss-selector-depth-face-1 ".new-release")) :selected-real (275 291 1 262 275 23) :source ("tui-fixture.scss" 275 23 13 32 123 ".new-release { color: teal; }") :overlay ("tui-fixture.scss" 262 275 ".new-release " helm-css-scss-target-line-face) :last-line ("tui-fixture.scss" 23) :fold-invisible neomacs-hcss-single-fold :unveiled nil :advices (t t) :update-hook t :windows ("tui-fixture.scss" "*Helm Css SCSS*") :cache-count 5) (:stage saved-cache-rebuilt-action :current "tui-fixture.scss" :windows ("tui-fixture.scss") :source ("tui-fixture.scss" 275 23 13 32 123 nil 5 "") :disk-bytes "/* A disabled prototype is intentionally excluded. */
+/* .disabled {
+  color: gray;
+} */
+
+.dashboard,
+.dashboard--compact {
+  color: red;
+
+  .card {
+    padding: 1rem;
+
+    &__title,
+    &__subtitle {
+      color: blue;
+    }
+  }
+}
+
+.footer {
+  color: black;
+}
+.new-release { color: teal; }
+" :last-point (292 "tui-fixture.scss") :fold-invisible neomacs-hcss-single-fold :unveiled nil :package-overlay-buffer nil :advices (nil nil) :update-hook nil :helm-alive nil :helm-buffers ("*Helm Css SCSS*")) (:stage isearch-literal-cancel :current "tui-fixture.scss" :windows ("tui-fixture.scss") :source ("tui-fixture.scss" 241 20 7 114 32 nil 5 "") :disk-bytes "/* A disabled prototype is intentionally excluded. */
+/* .disabled {
+  color: gray;
+} */
+
+.dashboard,
+.dashboard--compact {
+  color: red;
+
+  .card {
+    padding: 1rem;
+
+    &__title,
+    &__subtitle {
+      color: blue;
+    }
+  }
+}
+
+.footer {
+  color: black;
+}
+.new-release { color: teal; }
+" :last-point (241 "tui-fixture.scss") :fold-invisible neomacs-hcss-single-fold :unveiled nil :package-overlay-buffer nil :advices (nil nil) :update-hook nil :helm-alive nil :helm-buffers ("*Helm Css SCSS*")) (:stage isearch-regexp-cancel :current "tui-fixture.scss" :windows ("tui-fixture.scss") :source ("tui-fixture.scss" 241 20 7 114 32 nil 5 "") :disk-bytes "/* A disabled prototype is intentionally excluded. */
+/* .disabled {
+  color: gray;
+} */
+
+.dashboard,
+.dashboard--compact {
+  color: red;
+
+  .card {
+    padding: 1rem;
+
+    &__title,
+    &__subtitle {
+      color: blue;
+    }
+  }
+}
+
+.footer {
+  color: black;
+}
+.new-release { color: teal; }
+" :last-point (241 "tui-fixture.scss") :fold-invisible neomacs-hcss-single-fold :unveiled nil :package-overlay-buffer nil :advices (nil nil) :update-hook nil :helm-alive nil :helm-buffers ("*Helm Css SCSS*")) (:cleanup (:source-live nil :root-exists nil :fold-buffer nil :overlay-buffer nil :unveiled nil :advices (nil nil) :update-hook nil :helm-alive nil :helm-buffers nil :display-restored t :cleanup-error nil)))

@@ -1,0 +1,52 @@
+GRUVBOX-THEME-PAGE 1/3
+THEME gruvbox-light-medium
+ENABLED (gruvbox-light-medium)
+MODE light
+FACE default :foreground "#3c3836" "#3c3836"
+FACE default :background "#fbf1c7" "#fbf1c7"
+FACE keyword :foreground "#9d0006" "#9d0006"
+FACE keyword :weight normal normal
+FACE string :foreground "#79740e" "#79740e"
+FACE org-link :foreground "#689d6a" "#689d6a"
+FACE org-link :underline t t
+FACE diff-added :foreground "#79740e" "#79740e"
+FACE diff-added :background unspecified "#fbf1c7"
+FACE diff-removed :foreground "#9d0006" "#9d0006"
+FACE diff-removed :background unspecified "#fbf1c7"
+FACE diff-context :foreground "#3c3836" "#3c3836"
+FACE diff-context :background "#ebdbb2" "#ebdbb2"
+FACE mode-line-inactive :foreground "#7c6f64" "#7c6f64"
+FACE mode-line-inactive :background "#ebdbb2" "#ebdbb2"
+GRUVBOX-THEME-PAGE-DONE 1/3
+--
+GRUVBOX-THEME-PAGE 2/3
+FACE region :foreground unspecified "#3c3836"
+FACE region :background "#d5c4a1" "#d5c4a1"
+FACE hl-line :foreground unspecified "#3c3836"
+FACE hl-line :background "#ebdbb2" "#ebdbb2"
+FACE cursor :background "#3c3836" "#3c3836"
+FACE orderless-0 :foreground "#66999D" "#66999D"
+FACE orderless-0 :weight bold bold
+FACE orderless-1 :foreground "#d65d0e" "#d65d0e"
+FACE orderless-1 :weight bold bold
+FACE orderless-2 :foreground "#8ec07c" "#8ec07c"
+FACE orderless-2 :weight bold bold
+FACE orderless-3 :foreground "#d79921" "#d79921"
+FACE orderless-3 :weight bold bold
+VAR ANSI-BOUND t
+VAR ANSI 0 "#ebdbb2"
+VAR ANSI 1 "#cc241d"
+VAR ANSI 2 "#98971a"
+VAR ANSI 3 "#d79921"
+GRUVBOX-THEME-PAGE-DONE 2/3
+--
+GRUVBOX-THEME-PAGE 3/3
+VAR ANSI 4 "#458588"
+VAR ANSI 5 "#b16286"
+VAR ANSI 6 "#689d6a"
+VAR ANSI 7 "#3c3836"
+VAR PDF-BOUND t
+VAR PDF-LIGHT "#282828"
+VAR PDF-DARK "#fbf1c7"
+GRUVBOX-THEME-PAGE-DONE 3/3
+GRUVBOX-THEME-READY

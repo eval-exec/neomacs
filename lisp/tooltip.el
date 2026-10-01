@@ -295,6 +295,12 @@ Value is non-nil if tooltip was open."
         (setq tooltip-hide-time (float-time))))))
 
 
+;; This standard hook changes auxiliary UI/startup state, not the viewport.
+;; Prediction is revoked if its function definition changes.
+(when (or (not (fboundp 'advice--p))
+          (not (advice--p (symbol-function 'tooltip-hide))))
+  (put 'tooltip-hide 'neomacs--scroll-definition (symbol-function 'tooltip-hide)))
+
 ;;; Debugger-related functions
 
 (defun tooltip-identifier-from-point (point)

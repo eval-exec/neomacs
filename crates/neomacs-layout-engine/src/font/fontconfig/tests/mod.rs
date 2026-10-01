@@ -19,6 +19,26 @@ use std::ffi::CString;
 #[cfg(unix)]
 use std::ptr;
 
+#[cfg(unix)]
+#[test]
+fn identical_native_candidate_queries_are_reused_until_catalog_changes() {
+    if fontconfig_handle().is_none() {
+        return;
+    }
+    super::invalidate_catalog_caches();
+    super::NATIVE_CANDIDATE_QUERIES.with(|count| count.set(0));
+    let first = fc_list_candidates(Some("DejaVu Sans Mono"), &[], None, &[]);
+    let second = fc_list_candidates(Some("DejaVu Sans Mono"), &[], None, &[]);
+    assert_eq!(first, second);
+    assert_eq!(super::NATIVE_CANDIDATE_QUERIES.with(|count| count.get()), 1);
+    super::invalidate_catalog_caches();
+    assert_eq!(
+        first,
+        fc_list_candidates(Some("DejaVu Sans Mono"), &[], None, &[])
+    );
+    assert_eq!(super::NATIVE_CANDIDATE_QUERIES.with(|count| count.get()), 2);
+}
+
 fn font_sym(name: &str) -> neovm_core::emacs_core::SymId {
     intern(name)
 }
@@ -201,6 +221,40 @@ fn spacing_score_is_neutral_without_requested_spacing() {
         0
     );
     assert_eq!(spacing_score(None, Some(FONT_SPACING_MONO), true), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn registry_candidates_preserve_coverage_for_required_character_filtering() {
+    let (pattern, _charset, _langset, langs, ranges) = gb2312_registry_pattern();
+    let objects = build_candidate_object_set(GnuEntityProjection::MetadataAndCharset).unwrap();
+    let fonts = FcFontSetGuard(unsafe {
+        fontconfig_sys::FcFontList(ptr::null_mut(), pattern.0, objects.0)
+    });
+    assert!(!fonts.0.is_null());
+    let patterns =
+        unsafe { std::slice::from_raw_parts((*fonts.0).fonts, (*fonts.0).nfont as usize) };
+    for ch in ['好', '\u{10ffff}'] {
+        let expected: Vec<_> = patterns
+            .iter()
+            .copied()
+            .filter(|pattern| super::raw_pattern_supports_any_char(*pattern, &[ch as u32]))
+            .filter_map(listed_font_from_raw_pattern)
+            .collect();
+        if ch == '好' {
+            assert!(!expected.is_empty(), "installed CJK fallback required");
+        } else {
+            assert!(expected.is_empty());
+        }
+        let actual = super::fc_query_candidates_uncached(
+            None,
+            &ranges,
+            Some(ch as u32),
+            &langs,
+            super::FcQueryKind::List,
+        );
+        assert_eq!(actual, expected, "registry query for {ch:?}");
+    }
 }
 
 #[test]
@@ -625,4 +679,75 @@ fn default_subpixel_order_resolves_to_known_variant() {
             | super::FontconfigSubpixelOrder::VRgb
             | super::FontconfigSubpixelOrder::VBgr
     ));
+}
+
+#[cfg(unix)]
+#[test]
+fn required_character_filters_native_enumeration_before_returning_patterns() {
+    super::NATIVE_UNSUPPORTED_PATTERNS.with(|count| count.set(0));
+    let candidates = super::fc_query_candidates_uncached(
+        None,
+        &[],
+        Some('好' as u32),
+        &[],
+        super::FcQueryKind::List,
+    );
+    assert!(!candidates.is_empty(), "installed CJK fallback required");
+    assert_eq!(
+        super::NATIVE_UNSUPPORTED_PATTERNS.with(|count| count.get()),
+        0,
+        "unrelated font patterns must be rejected by native discovery"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn required_character_discovery_preserves_postfiltered_candidate_order() {
+    for family in [None, Some("DejaVu Sans Mono"), Some("DejaVu Serif")] {
+        let pattern = FcPatternGuard(unsafe { fontconfig_sys::FcPatternCreate() });
+        assert!(!pattern.0.is_null());
+        if let Some(family) = family {
+            let name = CString::new(family).unwrap();
+            assert_ne!(
+                unsafe {
+                    fontconfig_sys::FcPatternAddString(
+                        pattern.0,
+                        fontconfig::FC_FAMILY.as_ptr(),
+                        name.as_ptr().cast(),
+                    )
+                },
+                0
+            );
+        }
+        let objects = build_candidate_object_set(GnuEntityProjection::MetadataAndCharset).unwrap();
+        let fonts = FcFontSetGuard(unsafe {
+            fontconfig_sys::FcFontList(ptr::null_mut(), pattern.0, objects.0)
+        });
+        assert!(!fonts.0.is_null());
+        let patterns =
+            unsafe { std::slice::from_raw_parts((*fonts.0).fonts, (*fonts.0).nfont as usize) };
+        for ch in ['a', 'é', '\u{301}', '好', 'ש', 'س', '👩', '\u{10ffff}'] {
+            let expected: Vec<_> = patterns
+                .iter()
+                .copied()
+                .filter(|pattern| super::raw_pattern_supports_any_char(*pattern, &[ch as u32]))
+                .filter_map(listed_font_from_raw_pattern)
+                .collect();
+            let actual = super::fc_query_candidates_uncached(
+                family,
+                &[],
+                Some(ch as u32),
+                &[],
+                super::FcQueryKind::List,
+            );
+            assert_eq!(
+                actual.len(),
+                expected.len(),
+                "family={family:?} char={ch:?}"
+            );
+            for (actual, expected) in actual.iter().zip(&expected) {
+                assert_eq!(actual, expected, "family={family:?} char={ch:?}");
+            }
+        }
+    }
 }

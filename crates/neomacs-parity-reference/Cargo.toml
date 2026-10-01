@@ -9,6 +9,7 @@ description = "Identity of the pinned GNU Emacs every parity number is measured 
 publish = false
 
 [dependencies]
+neomacs-infra.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]

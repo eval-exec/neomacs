@@ -8,9 +8,9 @@ use thiserror::Error;
 
 use crate::{
     ComparisonRequest, ComparisonSampleCount, ComparisonVerdict, CounterScope, Frontend,
-    MachinePolicy, NativeProfiler, PerfError, PerfHarness, ProfileReportStyle, ProfileRequest,
-    ProfileScope, ProfileVerdict, RunRequest, ScenarioId, SuiteId, SuiteRequest, SuiteVerdict,
-    scenarios,
+    MachinePolicy, NativeProfiler, PerfCallGraph, PerfCaptureConfiguration, PerfError, PerfHarness,
+    PerfSamplingEvent, PerfSamplingRate, ProfileReportStyle, ProfileRequest, ProfileScope,
+    ProfileVerdict, RunRequest, ScenarioId, SuiteId, SuiteRequest, SuiteVerdict, scenarios,
 };
 
 const DEFAULT_SAMPLES: ComparisonSampleCount =
@@ -20,6 +20,10 @@ const DEFAULT_TIMEOUT_SECS: NonZeroU64 = NonZeroU64::new(300).expect("300 is non
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PerfCommand {
     List,
+    InputLatency {
+        path: PathBuf,
+        budget_us: NonZeroU64,
+    },
     Run {
         scenario: ScenarioId,
         editor: Option<PathBuf>,
@@ -52,6 +56,7 @@ pub enum PerfCommand {
         profiler: NativeProfiler,
         scope: ProfileScope,
         report_style: ProfileReportStyle,
+        configuration: PerfCaptureConfiguration,
         editor: Option<PathBuf>,
         iterations: NonZeroU32,
         frontend: Option<Frontend>,
@@ -89,6 +94,13 @@ struct PerfCli {
 
 #[derive(Debug, Subcommand)]
 enum PerfSubcommand {
+    /// Summarize one NEOMACS_INPUT_LATENCY_FILE native GUI session.
+    InputLatency {
+        path: PathBuf,
+        /// Input-to-confirmed-presentation budget, in microseconds.
+        #[arg(long, default_value = "16667")]
+        budget_us: NonZeroU64,
+    },
     /// List the registered performance scenarios.
     List,
     /// Execute one correctness-gated workload run.
@@ -158,11 +170,66 @@ struct ProfileArgs {
     /// Self-time skips stack unwinding for a faster report; raw stacks are retained.
     #[arg(long, value_enum, default_value_t = ProfileReportStyleArg::CallGraph)]
     report_style: ProfileReportStyleArg,
+    /// Event to sample; unavailable hardware events fail without a clock fallback.
+    #[arg(long, value_enum, default_value_t = PerfSamplingEventArg::CpuClock)]
+    sampling_event: PerfSamplingEventArg,
+    /// Events per sample (defaults to 4000000 for instruction sampling).
+    #[arg(long, conflicts_with = "sample_frequency")]
+    sample_period: Option<NonZeroU64>,
+    /// Adaptive samples per second (defaults to 999 for CPU clock sampling).
+    #[arg(long, conflicts_with = "sample_period")]
+    sample_frequency: Option<NonZeroU32>,
+    /// Stack capture method; LBR requires hardware branch recording support.
+    #[arg(long, value_enum, default_value_t = PerfCallGraphArg::Dwarf)]
+    call_graph: PerfCallGraphArg,
     /// Editor executable (defaults to target/profiling/neomacs).
     #[arg(long)]
     editor: Option<PathBuf>,
     #[command(flatten)]
     workload: WorkloadArgs,
+}
+
+impl ProfileArgs {
+    fn capture_configuration(&self) -> PerfCaptureConfiguration {
+        let event = match self.sampling_event {
+            PerfSamplingEventArg::CpuClock => PerfSamplingEvent::UserCpuClock,
+            PerfSamplingEventArg::Instructions => PerfSamplingEvent::UserInstructions,
+            PerfSamplingEventArg::CoreInstructions => PerfSamplingEvent::UserCoreInstructions,
+        };
+        let sampling = match (self.sample_period, self.sample_frequency) {
+            (Some(sample_period), _) => PerfSamplingRate::Period { sample_period },
+            (_, Some(frequency_hz)) => PerfSamplingRate::Frequency { frequency_hz },
+            _ if event == PerfSamplingEvent::UserCpuClock => {
+                PerfCaptureConfiguration::standard().sampling
+            }
+            _ => PerfSamplingRate::Period {
+                sample_period: NonZeroU64::new(4_000_000).expect("4000000 is non-zero"),
+            },
+        };
+        let call_graph = match self.call_graph {
+            PerfCallGraphArg::Dwarf => PerfCaptureConfiguration::standard().call_graph,
+            PerfCallGraphArg::Lbr => PerfCallGraph::Lbr,
+        };
+        PerfCaptureConfiguration {
+            event,
+            sampling,
+            call_graph,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum PerfSamplingEventArg {
+    CpuClock,
+    Instructions,
+    /// Linux P-core PMU, for hosts with hybrid CPUs.
+    CoreInstructions,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum PerfCallGraphArg {
+    Dwarf,
+    Lbr,
 }
 
 #[derive(Debug, Args)]
@@ -393,6 +460,9 @@ impl TryFrom<PerfSubcommand> for PerfCommand {
     fn try_from(command: PerfSubcommand) -> Result<Self, Self::Error> {
         Ok(match command {
             PerfSubcommand::List => Self::List,
+            PerfSubcommand::InputLatency { path, budget_us } => {
+                Self::InputLatency { path, budget_us }
+            }
             PerfSubcommand::Run(arguments) => {
                 let execution_overrides = arguments
                     .execution_overrides
@@ -443,6 +513,7 @@ impl TryFrom<PerfSubcommand> for PerfCommand {
                 }
             }
             PerfSubcommand::Profile(arguments) => {
+                let configuration = arguments.capture_configuration();
                 let execution_overrides = arguments
                     .execution_overrides
                     .try_into()
@@ -454,6 +525,7 @@ impl TryFrom<PerfSubcommand> for PerfCommand {
                     profiler: arguments.profiler.into(),
                     scope: arguments.scope.into(),
                     report_style: arguments.report_style.into(),
+                    configuration,
                     editor: arguments.editor,
                     iterations,
                     frontend,
@@ -487,6 +559,18 @@ pub fn run_cli(
 ) -> Result<(), PerfCliError> {
     let workspace_root = workspace_root.as_ref();
     match parse_perf_command(args)? {
+        PerfCommand::InputLatency { path, budget_us } => {
+            let text = std::fs::read_to_string(&path).map_err(|error| PerfCliError::Usage {
+                message: format!("{}: {error}", path.display()),
+            })?;
+            let report = crate::input_latency::report(&text, budget_us.get())
+                .map_err(|message| PerfCliError::Usage { message })?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).expect("valid report")
+            );
+            Ok(())
+        }
         PerfCommand::List => {
             for scenario in scenarios() {
                 println!("{}\t{}", scenario.id, scenario.description);
@@ -606,6 +690,7 @@ pub fn run_cli(
             profiler,
             scope,
             report_style,
+            configuration,
             editor,
             iterations,
             frontend,
@@ -619,6 +704,7 @@ pub fn run_cli(
             let mut request = ProfileRequest::new(scenario, editor, iterations, profiler)
                 .with_scope(scope)
                 .with_report_style(report_style)
+                .with_capture_configuration(configuration)
                 .with_timeout(timeout)
                 .with_machine_policy(machine)
                 .with_video_file(video_file)

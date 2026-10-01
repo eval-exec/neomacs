@@ -4,5 +4,5 @@ mod platform;
 pub(crate) use controller::WindowChromeController;
 
 #[cfg(test)]
-#[path = "controller_test.rs"]
+#[path = "tests/controller_test.rs"]
 mod controller_test;

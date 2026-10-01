@@ -285,7 +285,7 @@ impl PerfHarness {
         } else {
             let mut capture = PerfCapture::new(
                 &context.directory,
-                request.profiler.capture_configuration(),
+                request.configuration,
                 request.scope,
                 request.timeout,
             )
@@ -316,7 +316,7 @@ impl PerfHarness {
             profiler: request.profiler,
             scope: request.scope,
             report_style: request.report_style,
-            configuration: request.profiler.capture_configuration(),
+            configuration: request.configuration,
             run_artifact_path: PathBuf::from("artifact.json"),
             verdict,
         };
@@ -387,49 +387,92 @@ impl PerfHarness {
         };
         files.extend(prepared.input_artifacts());
 
-        let frontend = frontend_command(request, &self.workspace_root, &prepared);
         let capture_route =
             crate::CaptureRoute::for_frontend(request.frontend(), prepared.uses_native_display());
-        let mut counters = request
-            .counters()
-            .map(|scope| PerfStatCapture::new(&context.directory, scope, request.timeout()));
-        let mut command = match profile.as_deref_mut() {
-            Some(profile) => match profile.wrap(frontend, capture_route) {
-                Ok(command) => command,
-                Err(message) => return context.infrastructure_failure(message, files),
-            },
-            None => match counters.as_mut() {
-                Some(counters) => match counters.wrap(frontend, capture_route) {
+        // GUI launches carry a real startup race: the editor's Wayland
+        // surface handshake fails intermittently, which is a LAUNCH flake,
+        // not a measurement. A flaky attempt retries whole -- fresh display
+        // session, fresh editor -- and only a run whose fixture never wrote
+        // its sentinel is eligible. Once the sentinel exists the workload's
+        // outcome is real and is never thrown away.
+        let retried_launches =
+            matches!(request.frontend(), Frontend::Gui { .. }) && !prepared.uses_native_display();
+        let mut attempt = 0;
+        let (output, process_wall_us, mut counters) = loop {
+            attempt += 1;
+            let bench_session = if retried_launches {
+                match start_bench_session(request, &prepared) {
+                    Ok(session) => Some(session),
+                    Err(message) => {
+                        if attempt < GUI_LAUNCH_ATTEMPTS {
+                            continue;
+                        }
+                        return context.infrastructure_failure(message, files);
+                    }
+                }
+            } else {
+                None
+            };
+            let frontend = frontend_command(
+                request,
+                &self.workspace_root,
+                &prepared,
+                bench_session.as_ref(),
+            );
+            let mut counters = request
+                .counters()
+                .map(|scope| PerfStatCapture::new(&context.directory, scope, request.timeout()));
+            let mut command = match profile.as_deref_mut() {
+                Some(profile) => match profile.wrap(frontend, capture_route) {
                     Ok(command) => command,
                     Err(message) => return context.infrastructure_failure(message, files),
                 },
-                None => frontend,
-            },
-        };
-        let process_started = Instant::now();
-        let execution = if profile.is_some() || counters.is_some() {
-            group_output_with_timeout(&mut command, request.timeout)
-        } else {
-            output_with_timeout(&mut command, request.timeout)
-        };
-        let output = match execution {
-            Ok(output) => output,
-            Err(error) => {
+                None => match counters.as_mut() {
+                    Some(counters) => match counters.wrap(frontend, capture_route) {
+                        Ok(command) => command,
+                        Err(message) => return context.infrastructure_failure(message, files),
+                    },
+                    None => frontend,
+                },
+            };
+            let process_started = Instant::now();
+            let execution = if profile.is_some() || counters.is_some() {
+                group_output_with_timeout(&mut command, request.timeout)
+            } else {
+                output_with_timeout(&mut command, request.timeout)
+            };
+            let output = match execution {
+                Ok(output) => output,
+                Err(error) => {
+                    if let Some(profile) = profile.as_deref_mut() {
+                        profile.cancel_gate();
+                    }
+                    if let Some(counters) = counters.as_mut() {
+                        counters.cancel_gate();
+                    }
+                    let (message, output) = command_error_details(error, request.timeout);
+                    if let Some(output) = output {
+                        files.extend(write_process_output(&context.directory, &output)?);
+                    }
+                    files.extend(frontend_artifacts_if_present(&prepared));
+                    return context.infrastructure_failure(message, files);
+                }
+            };
+            let process_wall_us = process_started.elapsed().as_micros();
+            let launch_flake =
+                !output.status.success() && !prepared.sentinel.is_file() && retried_launches;
+            if launch_flake && attempt < GUI_LAUNCH_ATTEMPTS {
                 if let Some(profile) = profile.as_deref_mut() {
                     profile.cancel_gate();
                 }
                 if let Some(counters) = counters.as_mut() {
                     counters.cancel_gate();
                 }
-                let (message, output) = command_error_details(error, request.timeout);
-                if let Some(output) = output {
-                    files.extend(write_process_output(&context.directory, &output)?);
-                }
-                files.extend(frontend_artifacts_if_present(&prepared));
-                return context.infrastructure_failure(message, files);
+                drop(bench_session);
+                continue;
             }
+            break (output, process_wall_us, counters);
         };
-        let process_wall_us = process_started.elapsed().as_micros();
         files.extend(write_process_output(&context.directory, &output)?);
         files.extend(frontend_artifacts_if_present(&prepared));
         let dump_status = crate::portable_dump::status_path(&prepared.provenance);
@@ -438,6 +481,26 @@ impl PerfHarness {
                 kind: ArtifactKind::PortableDumpStatus,
                 path: relative_artifact_path(&dump_status),
             });
+        }
+        if !output.status.success() {
+            // A profiler can fail to open the requested PMU before it launches
+            // the editor. No client will connect to the edit-loop gate then;
+            // cancel it before joining instead of waiting for the deadline.
+            if let Some(profile) = profile.as_deref_mut() {
+                profile.cancel_gate();
+            }
+            if let Some(counters) = counters.as_mut() {
+                counters.cancel_gate();
+            }
+            return context.infrastructure_failure(
+                format!(
+                    "{} {} exited with status {} after {attempt} launch attempt(s)",
+                    frontend_name(request.frontend()),
+                    capture_route.process_role(),
+                    output.status
+                ),
+                files,
+            );
         }
         if let Some(profile) = profile {
             if let Err(message) = profile.finish_gate() {
@@ -466,17 +529,6 @@ impl PerfHarness {
             None
         };
 
-        if !output.status.success() {
-            return context.infrastructure_failure(
-                format!(
-                    "{} {} exited with status {}",
-                    frontend_name(request.frontend()),
-                    capture_route.process_role(),
-                    output.status
-                ),
-                files,
-            );
-        }
         if let Err(message) = prepared.verify_inputs_unchanged() {
             return context.infrastructure_failure(message, files);
         }
@@ -538,6 +590,12 @@ impl PerfHarness {
             }
             ScenarioId::MxTabCompletion => {
                 scenarios::mx_tab::prepare(&self.workspace_root, request, run_directory)
+            }
+            ScenarioId::MxTabCompletionSteady => {
+                scenarios::mx_tab::prepare_steady(&self.workspace_root, request, run_directory)
+            }
+            ScenarioId::Scrolling => {
+                scenarios::scrolling::prepare(&self.workspace_root, request, run_directory)
             }
             ScenarioId::BoundedSearchEditSmall
             | ScenarioId::BoundedSearchEditLarge
@@ -840,7 +898,14 @@ impl PerfCapture {
         if let crate::CaptureRoute::Adapter(prefix) = route {
             command.env(format!("{prefix}_PERF_RECORD"), &self.data);
             for (name, value) in self.configuration.adapter_record_environment(prefix) {
-                command.env(name, value);
+                match value {
+                    Some(value) => {
+                        command.env(name, value);
+                    }
+                    None => {
+                        command.env_remove(name);
+                    }
+                }
             }
             self.configure_gate_environment(&mut command, Some(prefix));
             return Ok(command);
@@ -897,7 +962,7 @@ impl PerfCapture {
         }
     }
 
-    fn cancel_gate(&mut self) {
+    pub(crate) fn cancel_gate(&mut self) {
         self.gate.take();
     }
 
@@ -982,6 +1047,10 @@ enum PreparedWorkload {
         packages: Box<PreparedPackageSet>,
     },
     MxTabCompletion,
+    /// Same fixture and launch shape as `MxTabCompletion`; the fixture reads
+    /// its warm-up count from the environment this variant carries.
+    MxTabCompletionSteady,
+    Scrolling,
     BytecodeCallLoop,
     VmLoop,
     BuiltinCall,
@@ -1162,6 +1231,12 @@ impl PreparedScenario {
     }
 
     fn add_workload_environment(&self, command: &mut Command) {
+        if let PreparedWorkload::MxTabCompletionSteady = &self.workload {
+            // Five warm-up completions: enough to cross the JIT and cache
+            // warm-up the cold row's 5 timed calls otherwise absorb. The
+            // fixture owns the semantics; this owns the decision.
+            command.env("NEOMACS_PERF_WARMUP_COMPLETIONS", "5");
+        }
         if let PreparedWorkload::BoundedSearch(settings) = &self.workload {
             command
                 .env("NEOMACS_PERF_BUFFER_SIZE", settings.buffer_size.to_string())
@@ -1269,10 +1344,39 @@ fn prepare_gui_runtime_directory(workspace_root: &Path) -> Result<PathBuf, Strin
     Ok(directory)
 }
 
+/// How many times a GUI scenario may retry a failed LAUNCH on a fresh
+/// display session. Measurement failures -- the sentinel exists -- are never
+/// retried.
+const GUI_LAUNCH_ATTEMPTS: u32 = 5;
+
+/// Start one isolated headless display session for a GUI scenario under the
+/// run's private runtime directory. The session always exposes Xwayland so
+/// X11-only GNU Emacs builds can run the same scenario beside Neomacs.
+fn start_bench_session(
+    request: &RunRequest,
+    prepared: &PreparedScenario,
+) -> Result<neomacs_infra::display::WestonBenchSession, String> {
+    let (width, height) = match request.frontend() {
+        Frontend::Gui { width, height } => (u32::from(width), u32::from(height)),
+        _ => return Err("bench display sessions exist only for the GUI frontend".to_string()),
+    };
+    neomacs_infra::display::WestonBenchSession::start(
+        &prepared.gui_runtime_directory,
+        neomacs_infra::display::WestonBenchConfig {
+            width,
+            height,
+            xwayland: true,
+            desktop: neomacs_infra::display::WestonDesktop::Solid,
+        },
+    )
+    .map_err(|error| format!("failed to start the bench display session: {error}"))
+}
+
 fn frontend_command(
     request: &RunRequest,
     workspace_root: &Path,
     prepared: &PreparedScenario,
+    display_environment: Option<&neomacs_infra::display::WestonBenchSession>,
 ) -> Command {
     let frontend = request.frontend();
     let mut command = match frontend {
@@ -1311,8 +1415,14 @@ fn frontend_command(
             command
         }
         Frontend::Gui { .. } => {
-            let mut command = Command::new(workspace_root.join("tools/bench/gui-run.sh"));
-            command.arg(request.editor()).arg("-Q");
+            let mut command = if let Some(cpu) = request.machine_policy().cpu {
+                let mut command = Command::new("taskset");
+                command.arg("-c").arg(cpu.to_string()).arg(request.editor());
+                command
+            } else {
+                Command::new(request.editor())
+            };
+            command.arg("-Q");
             command
         }
     };
@@ -1321,6 +1431,14 @@ fn frontend_command(
         &prepared.sandbox,
         request.benchmark_environment(),
     );
+    if matches!(frontend, Frontend::Gui { .. }) {
+        // Keep adapter identity in stdout.log, including any software fallback,
+        // without enabling per-frame diagnostic logging during measurement.
+        command.env(
+            "RUST_LOG",
+            "warn,neomacs_display_runtime::render_thread::bootstrap=info",
+        );
+    }
     match frontend {
         Frontend::Batch => {}
         Frontend::Tui { rows, columns } => {
@@ -1337,16 +1455,20 @@ fn frontend_command(
             }
         }
         Frontend::Gui { .. } if prepared.uses_native_display() => {}
-        Frontend::Gui { width, height } => {
-            command
-                .env("GUI_WIDTH", width.to_string())
-                .env("GUI_HEIGHT", height.to_string())
-                .env("GUI_TIMEOUT", adapter_timeout(request.timeout()))
-                .env("GUI_APP_LOG", &prepared.gui_app_log)
-                .env("GUI_WESTON_LOG", &prepared.gui_weston_log)
-                .env("XDG_RUNTIME_DIR", &prepared.gui_runtime_directory);
-            if let Some(cpu) = request.machine_policy().cpu {
-                command.env("GUI_CPU", cpu.to_string());
+        // The bench display session's environment (private XDG_RUNTIME_DIR,
+        // Wayland socket, Xwayland display, locale pin) is owned by
+        // neomacs-infra and injected per attempt by the run loop.
+        Frontend::Gui {
+            width: _,
+            height: _,
+        } => {
+            if let Some(session) = display_environment {
+                command.envs(
+                    session
+                        .env()
+                        .iter()
+                        .map(|(name, value)| (name.as_str(), value.as_str())),
+                );
             }
         }
     }
@@ -1358,6 +1480,10 @@ fn frontend_command(
         .env("SENTINEL", &prepared.sentinel)
         .env("NEOMACS_PERF_RESULT", &prepared.result)
         .env("NEOMACS_PERF_WORKLOAD", request.scenario.workload_str())
+        // The fixture reports this name in its result JSON, so a
+        // fixture shared by two rows (mx-tab) writes the identity the
+        // validator demands rather than a hardcoded one.
+        .env("NEOMACS_PERF_SCENARIO_ID", request.scenario.workload_str())
         .env(
             "NEOMACS_PERF_ITERATIONS",
             request.iterations().get().to_string(),
@@ -1376,6 +1502,12 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "LD_LIBRARY_PATH",
     "DYLD_LIBRARY_PATH",
     "DYLD_FALLBACK_LIBRARY_PATH",
+    // Preserve Vulkan loader discovery on hosts whose drivers live outside
+    // the default search paths (e.g. NixOS). Dropping these can silently
+    // benchmark software rendering instead of the session's GPU driver.
+    "VK_DRIVER_FILES",
+    "VK_ICD_FILENAMES",
+    "VK_ADD_DRIVER_FILES",
     "GST_PLUGIN_SYSTEM_PATH_1_0",
     "GST_PLUGIN_SCANNER_1_0",
     "SYSTEMROOT",
@@ -1699,10 +1831,21 @@ fn write_process_output(
 }
 
 fn frontend_artifacts_if_present(prepared: &PreparedScenario) -> Vec<ArtifactFile> {
+    // The compositor log lives inside the bench session's artifact root
+    // (neomacs-infra writes it there); the legacy run-directory path remains
+    // for artifacts produced before the display session moved into
+    // neomacs-infra. Whichever exists is retained.
+    let compositor_log = if prepared.gui_weston_log.is_file() {
+        prepared.gui_weston_log.clone()
+    } else {
+        prepared
+            .gui_runtime_directory
+            .join(neomacs_infra::display::WESTON_BENCH_LOG_FILE)
+    };
     [
         (ArtifactKind::TerminalByteStream, &prepared.terminal_bytes),
         (ArtifactKind::FrontendLog, &prepared.gui_app_log),
-        (ArtifactKind::CompositorLog, &prepared.gui_weston_log),
+        (ArtifactKind::CompositorLog, &compositor_log),
     ]
     .into_iter()
     .filter(|(_, path)| path.is_file())
@@ -1730,6 +1873,8 @@ fn frontend_name(frontend: Frontend) -> &'static str {
 enum ScenarioResult {
     RustLspTyping(scenarios::rust_lsp::RustLspTypingResult),
     MxTabCompletion(scenarios::mx_tab::MxTabCompletionResult),
+    MxTabCompletionSteady(scenarios::mx_tab::MxTabCompletionSteadyResult),
+    Scrolling(scenarios::scrolling::ScrollingResult),
     BytecodeCallLoop(scenarios::bytecode::BytecodeCallLoopResult),
     VmLoop(scenarios::vm_loop::VmLoopResult),
     BuiltinCall(scenarios::builtin_call::BuiltinCallResult),
@@ -1755,6 +1900,8 @@ impl ScenarioResult {
         match self {
             Self::RustLspTyping(result) => result.elapsed_us,
             Self::MxTabCompletion(result) => result.elapsed_us,
+            Self::MxTabCompletionSteady(result) => result.base.elapsed_us,
+            Self::Scrolling(result) => result.elapsed_us,
             Self::BytecodeCallLoop(result) => result.elapsed_us,
             Self::VmLoop(result) => result.elapsed_us(),
             Self::BuiltinCall(result) => result.elapsed_us(),
@@ -1780,6 +1927,10 @@ fn parse_scenario_result(
         ScenarioId::MxTabCompletion => {
             serde_json::from_str(raw).map(ScenarioResult::MxTabCompletion)
         }
+        ScenarioId::MxTabCompletionSteady => {
+            serde_json::from_str(raw).map(ScenarioResult::MxTabCompletionSteady)
+        }
+        ScenarioId::Scrolling => serde_json::from_str(raw).map(ScenarioResult::Scrolling),
         ScenarioId::BoundedSearchEditSmall
         | ScenarioId::BoundedSearchEditLarge
         | ScenarioId::BoundedSearchEditOnly
@@ -2054,6 +2205,12 @@ fn result_verdict(
         ScenarioResult::MxTabCompletion(result) => {
             scenarios::mx_tab::validate_mx_tab_completion_result(request, result)
         }
+        ScenarioResult::MxTabCompletionSteady(result) => {
+            scenarios::mx_tab::validate_mx_tab_completion_steady_result(request, result)
+        }
+        ScenarioResult::Scrolling(result) => {
+            scenarios::scrolling::validate_scrolling_result(request, result)
+        }
         ScenarioResult::BytecodeCallLoop(result) => {
             scenarios::bytecode::validate_bytecode_call_loop_result(request, result)
         }
@@ -2116,6 +2273,12 @@ fn valid_measurements(result: &ScenarioResult, wall_elapsed_us: u128) -> Vec<Mea
         }
         ScenarioResult::MxTabCompletion(result) => {
             scenarios::mx_tab::valid_mx_tab_completion_measurements(result, wall_elapsed_us)
+        }
+        ScenarioResult::MxTabCompletionSteady(result) => {
+            scenarios::mx_tab::valid_mx_tab_completion_steady_measurements(result, wall_elapsed_us)
+        }
+        ScenarioResult::Scrolling(result) => {
+            scenarios::scrolling::valid_scrolling_measurements(result, wall_elapsed_us)
         }
         ScenarioResult::BytecodeCallLoop(result) => {
             scenarios::bytecode::valid_bytecode_call_loop_measurements(result, wall_elapsed_us)

@@ -863,7 +863,7 @@ fn cases() -> Vec<ParityBatchCase> {
 
 #[test]
 fn public_helm_git_grep_workflows_match() {
-    match neomacs_infra::tools::resolve_tool("git", "2.51.2") {
+    match neomacs_infra::tools::resolve_tool("git", "*") {
         Err(neomacs_infra::tools::ToolsError::VersionMismatch { expected, actual }) => {
             eprintln!(
                 "SKIP helm-git-grep: host git identity diverges from the lock row \

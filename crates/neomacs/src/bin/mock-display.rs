@@ -223,7 +223,7 @@ fn run_gui(demo: &str) {
         .expect("mock presentation has valid empty hit geometry");
         let sealed = neomacs_display_protocol::SealedFramePresentation::seal(state)
             .expect("mock GUI frame is a coherent presentation");
-        let _ = emacs_comms.frame_tx.send(sealed);
+        let _ = emacs_comms.frame_tx.submit(sealed);
     }
 
     loop {

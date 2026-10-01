@@ -4627,6 +4627,7 @@ pub(crate) fn builtin_internal_set_alternative_font_family_alist(args: Vec<Value
     if let Ok(mut state) = alternative_font_family_alist().write() {
         *state = alist;
     }
+    crate::emacs_core::fontset::invalidate_font_selection_policy();
     clear_font_cache_state();
     Ok(Value::list(normalized))
 }
@@ -4659,6 +4660,7 @@ pub(crate) fn builtin_internal_set_alternative_font_registry_alist(args: Vec<Val
     if let Ok(mut state) = alternative_font_registry_alist().write() {
         *state = alist;
     }
+    crate::emacs_core::fontset::invalidate_font_selection_policy();
     clear_font_cache_state();
     Ok(Value::list(normalized))
 }

@@ -5,6 +5,8 @@
 //! away from an in-progress presentation without weakening either engine's
 //! exclusive mutable state.
 
+mod maintenance;
+
 use std::cell::{Cell, RefCell};
 
 use neomacs_display_protocol::SealedFramePresentation;
@@ -13,6 +15,7 @@ use neomacs_layout_engine::LayoutEngine;
 use neomacs_layout_engine::engine::{
     FrameLayoutAttempt, WindowLayoutQueryEngine, WindowLayoutQuerySeed,
 };
+use neomacs_layout_engine::font::metrics::FontMetricsService;
 use neomacs_layout_engine::font::sizing::FontSizing;
 use neovm_core::emacs_core::eval::Context;
 use neovm_core::window::geometry::{PresentationActivateError, PresentationId};
@@ -32,6 +35,19 @@ pub enum FrameLayoutPurpose {
 pub struct PreparedPresentationTicket {
     frame_id: FrameId,
     presentation: PresentationId,
+}
+
+impl crate::thread_comm::SupersededPresentation {
+    /// Retire a revision which the mailbox proves was never acquired by the
+    /// renderer. Run on the evaluator thread, without an input-channel roundtrip.
+    pub fn discard(self, evaluator: &mut Context) -> bool {
+        PreparedPresentationTicket {
+            frame_id: FrameId(self.frame_placement.frame().get()),
+            presentation: PresentationId::try_new(self.presentation().get())
+                .expect("sealed presentations have nonzero revisions"),
+        }
+        .discard(evaluator)
+    }
 }
 
 impl PreparedPresentationTicket {
@@ -103,12 +119,48 @@ pub struct RedisplayRuntime {
     /// disjoint is what makes display queries ordinary nested operations
     /// instead of recursive borrows of retained presentation state.
     reentrant_query_engine: RefCell<Option<WindowLayoutQueryEngine>>,
+    /// Font metrics for the installed font-shaping driver (issue #447): the
+    /// driver is invoked DURING the layout walk (auto-composition inside a
+    /// redisplay), when the engine's own font metrics are mutably borrowed —
+    /// this disjoint instance shapes without touching that borrow.
+    shaping_metrics: RefCell<FontMetricsService>,
     query_seed: RefCell<WindowLayoutQuerySeed>,
     cosmic_metrics_enabled: Cell<bool>,
     font_sizing: Cell<FontSizing>,
 }
 
 impl RedisplayRuntime {
+    pub fn resolved_scroll_preview(
+        &self,
+        evaluator: &Context,
+        frame: FrameId,
+        window: WindowId,
+        inputs: Vec<neomacs_display_protocol::input_progress::InputReceipt>,
+    ) -> Option<neomacs_display_protocol::scroll_coverage::ResolvedScrollIntent> {
+        self.engine
+            .try_borrow()
+            .ok()?
+            .resolved_scroll_preview(evaluator, frame, window, inputs)
+    }
+
+    pub fn maintain_scroll_coverage(
+        &self,
+        evaluator: &Context,
+    ) -> (Option<std::time::Duration>, bool) {
+        let Ok(mut engine) = self.engine.try_borrow_mut() else {
+            return (None, false);
+        };
+        let started = std::time::Instant::now();
+        let (progress, publish) = maintenance::run_budgeted(
+            || {
+                let progress = engine.maintain_scroll_coverage(evaluator);
+                (progress, engine.take_scroll_coverage_publication())
+            },
+            || started.elapsed(),
+        );
+        (progress.map(|progress| progress.next_wake()), publish)
+    }
+
     /// Construct a runtime without the expensive scalable-font database.
     /// GUI startup enables it explicitly; TTY keeps cell metrics.
     pub fn new_without_font_metrics() -> Self {
@@ -118,6 +170,7 @@ impl RedisplayRuntime {
             engine: RefCell::new(engine),
             reentrant_query_engine: RefCell::new(None),
             query_seed: RefCell::new(query_seed),
+            shaping_metrics: RefCell::new(FontMetricsService::new()),
             cosmic_metrics_enabled: Cell::new(false),
             font_sizing: Cell::new(FontSizing::native_gui()),
         }
@@ -158,6 +211,26 @@ impl RedisplayRuntime {
     /// frame (relaid and reused rows, fast-path classes).
     pub fn last_layout_stats(&self) -> neomacs_layout_engine::incremental_layout::LayoutStats {
         self.engine.borrow().last_layout_stats().clone()
+    }
+
+    /// Issue #447: the installed font-shaping driver (GNU
+    /// `font->driver->shape`). Shapes the gstring through the layout
+    /// engine's font system — the same cosmic machinery the row walk uses —
+    /// filling the gstring's glyph slots with the font's shaped glyphs
+    /// (ligature glyphs included).
+    pub fn shape_gstring(
+        &self,
+        mut gstring: neovm_core::Value,
+        direction: neovm_core::Value,
+    ) -> neovm_core::emacs_core::font::GstringShapeOutcome {
+        // The driver fires DURING the layout walk (auto-composition inside a
+        // redisplay), when the engine and its font metrics are already
+        // mutably borrowed — shape through this disjoint instance instead.
+        neomacs_layout_engine::font::metrics::FontMetricsService::shape_gstring_through_font(
+            &mut self.shaping_metrics.borrow_mut(),
+            &mut gstring,
+            direction,
+        )
     }
 
     /// Produce one logical frame through the presentation engine.

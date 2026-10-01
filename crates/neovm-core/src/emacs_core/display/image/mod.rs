@@ -18,12 +18,14 @@ use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_max_args, expect_min_args};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::image_catalog::{
-    AxisSize, ImageAnimationInvalidation, ImageColorContext, ImageDataSource, ImageFrameIndex,
-    ImageHeuristicMask, ImageInvalidation, ImageMaskKind, ImageMaskPolicy, ImageResolveRequest,
-    ImageResolveSource, ImageRotation, ImageScaleEnvironment, ImageScalePolicy, ImageSizeSpec,
-    ImageSpecIdentity, image_scale_environment, numeric_image_scale,
+    AxisSize, EncodedBytes, ImageAnimationInvalidation, ImageColorContext, ImageDataSource,
+    ImageFrameIndex, ImageHeuristicMask, ImageInvalidation, ImageLoadIdentity, ImageMaskKind,
+    ImageMaskPolicy, ImageResolveRequest, ImageResolveSource, ImageRotation, ImageScaleEnvironment,
+    ImageScalePolicy, ImageSizeSpec, ImageSpecIdentity, image_scale_environment,
+    numeric_image_scale,
 };
 use crate::window::FRAME_ID_BASE;
+use neomacs_display_protocol::image_diagnostic::{ImageDiagnosticSubject, ImageFormatName};
 use strum::{EnumString, IntoStaticStr};
 
 // ---------------------------------------------------------------------------
@@ -280,7 +282,13 @@ pub fn image_resolve_source_from_items(items: &[Value]) -> Option<ImageResolveSo
         match ImageSpecKey::from_lisp_value(items[index]) {
             Some(ImageSpecKey::File) => file_source = value.as_lisp_string().cloned(),
             Some(ImageSpecKey::Data) => {
-                data_source = value.as_lisp_string().map(|data| data.as_bytes().to_vec());
+                // The Lisp string's bytes are materialized once, here, and every
+                // consumer of this request — the catalog's key, the load command,
+                // the decode job — carries a handle to that one buffer rather
+                // than a copy of it.
+                data_source = value
+                    .as_lisp_string()
+                    .map(|data| EncodedBytes::new(data.as_bytes().to_vec()));
             }
             Some(ImageSpecKey::BaseUri) => base_uri = value.as_lisp_string().cloned(),
             _ => {}
@@ -394,6 +402,50 @@ fn validate_image_area(area: Value) -> Result<(), Flow> {
     ))
 }
 
+/// What GNU calls an image specification when it reports a failure on it.
+///
+/// Both parsers of an image specification — this one, which builds the
+/// evaluator's resolve request, and the layout engine's display-spec parser —
+/// describe the same image, and GNU words a failure from facts about the
+/// request rather than about the bytes. One function for those facts is what
+/// keeps the two from naming the same image differently in *Messages*.
+///
+/// The type is GNU's `image_spec_value (spec, QCtype, NULL)` under the name the
+/// loaders spell it with. The subject follows GNU's own split: an image with a
+/// `:file` is named by that file, and an image with only `:data` is named by
+/// the whole printed specification, because it has no file to report
+/// (`src/image.c:8285`, `:8302`, `:8323`).
+#[must_use]
+pub fn image_load_identity(spec: &Value, items: &[Value]) -> ImageLoadIdentity {
+    let mut format = None;
+    let mut file = None;
+    let mut index = 1;
+    while index + 1 < items.len() {
+        let value = items[index + 1];
+        match ImageSpecKey::from_lisp_value(items[index]) {
+            Some(ImageSpecKey::Type) => {
+                format = value.as_symbol_name().map(ImageFormatName::from_lisp_type);
+            }
+            Some(ImageSpecKey::File) => file = value.as_utf8_str().map(str::to_owned),
+            _ => {}
+        }
+        index += 2;
+    }
+    let subject = match file {
+        Some(path) => ImageDiagnosticSubject::File(path),
+        // GNU reaches the specification through `%s`, which is `princ`: the
+        // strings inside it lose their quotes (`:data x`, not `:data "x"`).
+        None => ImageDiagnosticSubject::Spec(crate::emacs_core::print::print_value_with_options(
+            spec,
+            crate::emacs_core::print::PrintOptions::princ(),
+        )),
+    };
+    ImageLoadIdentity::new(
+        format.unwrap_or_else(|| ImageFormatName::Other(String::new())),
+        subject,
+    )
+}
+
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn infer_image_type_from_filename(path: &str) -> Option<&'static str> {
     ImageFilenameType::from_file_name(path).map(ImageFilenameType::name)
@@ -476,6 +528,76 @@ impl ImageSpecMargins {
     }
 }
 
+/// GNU `img->hmargin` / `img->vmargin` for an image SPEC: the margin ONE SIDE
+/// of the bitmap occupies (`:margin` / `:relief`, the latter by its magnitude).
+///
+/// Redisplay's glyph arithmetic adds one of these on each side it reaches
+/// (`produce_image_glyph`, src/xdisp.c:32463-32470), so a consumer that wants
+/// the whole glyph adds twice the value; `Fimage_size` does the same.
+pub(crate) fn image_spec_margins(spec: &Value) -> (f32, f32) {
+    let margins = ImageSpecMargins::from_image_spec(spec);
+    (margins.hmargin as f32, margins.vmargin as f32)
+}
+
+/// GNU's `img->ascent` policy for an image SPEC
+/// (`src/image.c:3592-3596`, `image_ascent` at `src/image.c:1887-1924`).
+///
+/// `:ascent N` is a percentage of the image's height, `:ascent center` centres
+/// the image on the text baseline with `image_ascent`'s font-metric bias, and
+/// anything else keeps `DEFAULT_IMAGE_ASCENT` (50, src/dispextern.h:3311).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum ImageAscentPolicy {
+    Percent(f32),
+    Center,
+}
+
+impl ImageAscentPolicy {
+    /// The ascent in pixels of an image whose ascent box is `height` pixels,
+    /// against a face font whose cell splits into `text_ascent` / `text_descent`.
+    ///
+    /// `height` is what GNU's `image_ascent` calls `height`: the glyph height
+    /// plus its vertical margin where the image touches the cell edge.
+    pub(crate) fn resolve(self, height: f32, text_ascent: f32, text_descent: f32) -> f32 {
+        match self {
+            Self::Percent(percent) => height * (percent / 100.0),
+            // GNU errs upward when the image cannot be centred exactly: a
+            // typical font is top-heavy, so the placement should be too.
+            Self::Center => ((height + text_ascent - text_descent + 1.0) / 2.0).floor(),
+        }
+    }
+}
+
+/// Read `:ascent` off an image SPEC.
+///
+/// The accepted range deliberately matches the renderer's parser
+/// (`neomacs-layout-engine/src/display_spec.rs::parse_image_ascent`): a
+/// measurement that accepted a percentage the renderer rejects would report a
+/// row height no redisplay ever produces.  GNU accepts any fixnum there and
+/// multiplies by it, so an out-of-range `:ascent` is the one case where a
+/// measurement of an out-of-range spec differs from GNU's.
+pub(crate) fn image_spec_ascent(spec: &Value) -> ImageAscentPolicy {
+    let Some(items) = list_to_vec(spec) else {
+        return ImageAscentPolicy::Percent(50.0);
+    };
+    let mut index = 1;
+    while index + 1 < items.len() {
+        if ImageSpecKey::from_lisp_value(items[index]) == Some(ImageSpecKey::Ascent) {
+            let value = items[index + 1];
+            if value.is_symbol_named("center") {
+                return ImageAscentPolicy::Center;
+            }
+            if let Some(percent) = value.as_int().map(|percent| percent as f32)
+                && percent.is_finite()
+                && (0.0..=100.0).contains(&percent)
+            {
+                return ImageAscentPolicy::Percent(percent);
+            }
+        }
+        index += 2;
+    }
+    ImageAscentPolicy::Percent(50.0)
+}
+
 pub(crate) fn image_resolve_request_from_spec(
     spec: &Value,
     environment: ImageScaleEnvironment,
@@ -486,8 +608,13 @@ pub(crate) fn image_resolve_request_from_spec(
         return None;
     }
 
-    let spec = ImageSpecIdentity::from_lisp_spec(spec)?;
     let source = image_resolve_source_from_items(&items)?;
+    // Built before `spec` is consumed into its opaque cache identity: GNU's
+    // `:data` diagnostic prints the specification, and this is the last point
+    // that still owns one.
+    let identity = image_load_identity(spec, &items);
+
+    let spec = ImageSpecIdentity::from_lisp_spec(spec)?;
     // GNU keeps these four apart: `:width`/`:height` are targets that override
     // their `:max-` counterpart, `:max-width`/`:max-height` are clamps.
     let (mut width, mut max_width) = (None, None);
@@ -552,6 +679,7 @@ pub(crate) fn image_resolve_request_from_spec(
         mask: image_mask_policy_from_items(&items),
         frame,
         realization: environment.resolve(scale),
+        identity,
     })
 }
 
@@ -906,8 +1034,17 @@ pub(crate) fn builtin_image_size_in_context(eval: &mut Context, args: Vec<Value>
     };
 
     let resolved = display_host
-        .resolve_image_sync(request)
-        .map_err(|message| signal("error", vec![Value::string(message)]))?;
+        .resolve_image_sync(request, environment.size_limit())
+        .map_err(|message| {
+            // `image-size` on a failing image logs in GNU (`lookup_image` runs
+            // inside `Fimage_size`) even though it also returns the
+            // placeholder size rather than signalling. The message is reported
+            // here, on the way out, so the diagnostic does not have to wait for
+            // a redisplay that may never come.
+            eval.log_pending_image_diagnostics();
+            signal("error", vec![Value::string(message)])
+        })?;
+    eval.log_pending_image_diagnostics();
     let Some(image) = resolved else {
         return Err(signal(
             "error",
@@ -1057,7 +1194,7 @@ pub(crate) fn builtin_image_mask_p_in_context(eval: &mut Context, args: Vec<Valu
     // Prefer a sync resolve so mask/transparency reflects decoded state, not a
     // pending catalog probe. GNU inspects `img->mask` after `lookup_image`.
     let resolved = display_host
-        .resolve_image_sync(request)
+        .resolve_image_sync(request, environment.size_limit())
         .map_err(|message| signal("error", vec![Value::string(message)]))?;
     let Some(image) = resolved else {
         return Ok(Value::NIL);
@@ -1501,7 +1638,7 @@ pub(crate) fn builtin_image_metadata_in_context(
         )
     })?;
     let resolved = display_host
-        .resolve_image_sync(request)
+        .resolve_image_sync(request, environment.size_limit())
         .map_err(|message| signal("error", vec![Value::string(message)]))?;
     Ok(resolved
         .map(|image| image_embedded_metadata_to_lisp(&image.metadata.embedded))
@@ -1543,7 +1680,7 @@ pub(crate) fn builtin_neomacs_image_extent_in_context(
     };
     let display_host = eval.display_host.as_ref().expect("checked host");
     let resolved = display_host
-        .resolve_image_sync(request)
+        .resolve_image_sync(request, environment.size_limit())
         .map_err(|message| signal("error", vec![Value::string(message)]))?;
     let Some(image) = resolved else {
         return Ok(Value::NIL);
@@ -1706,3 +1843,39 @@ pub(crate) fn builtin_image_transforms_p(
 #[cfg(test)]
 #[path = "tests/mod.rs"]
 mod tests;
+
+impl Context {
+    /// Report every image failure a display path has observed since the last
+    /// call, in GNU's words.
+    ///
+    /// GNU reports from inside `lookup_image` (`src/image.c:3568`): an image a
+    /// user never displays is never reported, and one that fails to draw says
+    /// so the moment something tries to draw it. Neomacs' display path reaches
+    /// the catalog through `DisplayHost::image_catalog`, which has no evaluator
+    /// to log with — so the catalog records the failure where it observes it
+    /// and this drains it, in the same pass and on the same thread. That is
+    /// what keeps the *when* the same even though the *where* cannot be.
+    ///
+    /// The text passes through `text-quoting-style` because GNU's `vadd_to_log`
+    /// runs each diagnostic through `Fformat_message` before logging it.
+    /// Without that step `*Messages*` would hold the grave accents of
+    /// `src/image.c`'s string literals, where GNU shows `‘…’`.
+    pub fn log_pending_image_diagnostics(&mut self) {
+        // Collect first so the immutable borrow of the display host has ended
+        // by the time `add_to_log` appends to *Messages*.
+        let diagnostics = self
+            .display_host
+            .as_ref()
+            .and_then(|host| host.image_catalog())
+            .map(|catalog| catalog.take_pending_diagnostics())
+            .unwrap_or_default();
+        if diagnostics.is_empty() {
+            return;
+        }
+        let quoting = crate::emacs_core::coding::effective_text_quoting_style(&self.obarray);
+        for diagnostic in diagnostics {
+            let message = crate::emacs_core::coding::requote_c_error_message(&diagnostic, quoting);
+            self.add_to_log(&message);
+        }
+    }
+}

@@ -62,22 +62,6 @@ struct RowMeasurer {
 }
 
 impl RowMeasurer {
-    fn query(
-        &self,
-        eval: &mut Context,
-        start: LispCharPos1,
-        count: usize,
-    ) -> Result<Option<WindowDisplaySnapshot>, Flow> {
-        measurement::query(
-            eval,
-            self.frame,
-            self.window,
-            self.buffer,
-            start,
-            NonZeroUsize::new(count).ok_or_else(|| failure("Empty display row budget"))?,
-        )
-    }
-
     fn accessible(&self, eval: &Context) -> Result<AccessibleCharRange, Flow> {
         eval.buffers
             .get(self.buffer)
@@ -105,11 +89,18 @@ impl RowMeasurer {
         delta: i64,
         line_height: i64,
     ) -> Result<LispCharPos1, Flow> {
-        let mut count = 64usize;
-        let mut start = self.backtrack(eval, origin, if delta < 0 { count } else { 0 })?;
+        // The goal is in pixels. Measure its extent directly instead of
+        // repeatedly guessing a visual-row count for mixed-height text.
+        let mut height = i64::try_from(delta.unsigned_abs())
+            .ok()
+            .and_then(|pixels| pixels.checked_add(line_height.max(1)))
+            .ok_or_else(|| failure("Scroll measurement exceeds the pixel address space"))?;
+        let origin_line = self.backtrack(eval, origin, 0)?;
+        let mut backtracked_lines = usize::from(delta < 0);
+        let mut start = self.backtrack(eval, origin, backtracked_lines)?;
         loop {
             let snapshot = self
-                .query(eval, start, count)?
+                .pixel_rows(eval, start, height)?
                 .ok_or_else(|| failure("Scroll row producer disappeared"))?;
             let rows = snapshot_text_rows(&snapshot);
             let accessible = self.accessible(eval)?;
@@ -122,7 +113,34 @@ impl RowMeasurer {
             {
                 let goal = rows[index].y.saturating_add(delta);
                 if delta < 0 && goal < rows[0].y && start > accessible.start_lisp() {
-                    start = self.backtrack(eval, start, count)?;
+                    // Physical lines can contain many visual rows. Extend
+                    // by the pixel deficit and the measured source density.
+                    let missing = rows[0].y.saturating_sub(goal).max(1) as u64;
+                    // Estimate from complete preceding physical lines,
+                    // excluding the origin line's partial visual prefix.
+                    // Counting that prefix as one of the backtracked lines
+                    // underestimates how many more source lines we need.
+                    let preceding_end = snapshot_row_index_for_pos_or_truncated_line(
+                        &rows,
+                        origin_line,
+                        accessible.end_lisp(),
+                    )
+                    .map_or(rows[index].y, |line| rows[line].y);
+                    let covered = (preceding_end - rows[0].y).max(line_height).max(1) as u64;
+                    let lines = missing
+                        .saturating_mul(backtracked_lines as u64)
+                        .div_ceil(covered)
+                        .clamp(1, 64) as usize;
+                    start = self.backtrack(eval, start, lines)?;
+                    backtracked_lines = backtracked_lines.saturating_add(lines);
+                    // The newly included source lines can be taller than
+                    // the observed average. Grow geometrically, as when the
+                    // origin lies beyond coverage, to avoid a nearly-complete
+                    // intermediate walk followed by another full restart.
+                    height = height.checked_mul(2).ok_or_else(|| {
+                        failure("Scroll measurement exceeds the pixel address space")
+                    })?;
+                    continue;
                 } else if goal >= rows.last().expect("origin row").y
                     && rows.last().and_then(|row| row.end_buffer_pos) != Some(accessible.end_lisp())
                 {
@@ -157,36 +175,29 @@ impl RowMeasurer {
             {
                 return Err(failure("Scroll origin is outside measured source coverage"));
             }
-            count = count
+            height = height
                 .checked_mul(2)
-                .ok_or_else(|| failure("Scroll measurement exceeds the row address space"))?;
+                .ok_or_else(|| failure("Scroll measurement exceeds the pixel address space"))?;
         }
     }
 
-    fn viewport(
+    fn pixel_rows(
         &self,
         eval: &mut Context,
         start: LispCharPos1,
         height: i64,
     ) -> Result<Option<WindowDisplaySnapshot>, Flow> {
-        let mut count = 64usize;
-        loop {
-            let Some(snapshot) = self.query(eval, start, count)? else {
-                return Ok(None);
-            };
-            let rows = snapshot_text_rows(&snapshot);
-            let (Some(first), Some(last)) = (rows.first(), rows.last()) else {
-                return Err(failure("Scroll measurement has no source rows"));
-            };
-            if last.y - first.y >= height
-                || last.end_buffer_pos == Some(self.accessible(eval)?.end_lisp())
-            {
-                return Ok(Some(snapshot));
-            }
-            count = count
-                .checked_mul(2)
-                .ok_or_else(|| failure("Scroll measurement exceeds the row address space"))?;
-        }
+        let height = usize::try_from(height.max(1))
+            .ok()
+            .and_then(NonZeroUsize::new)
+            .ok_or_else(|| failure("Scroll pixel extent exceeds the address space"))?;
+        measurement::query_scope(
+            eval,
+            self.frame,
+            self.window,
+            self.buffer,
+            crate::window::WindowLayoutQueryScope::Pixels { start, height },
+        )
     }
 }
 
@@ -295,7 +306,7 @@ fn plan_scroll(
     };
     let accessible = measurer.accessible(eval)?;
     start = start.clamp(accessible.start_lisp(), accessible.end_lisp());
-    let Some(snapshot) = measurer.viewport(eval, start, height + hidden_top)? else {
+    let Some(snapshot) = measurer.pixel_rows(eval, start, height + hidden_top)? else {
         return Ok(None);
     };
     let rows = snapshot_text_rows(&snapshot);
@@ -361,7 +372,28 @@ fn plan_scroll(
         start = measurer.pixels(eval, point, -(height / 2), line_height)?;
     }
     let new_start = match amount {
-        ScrollAmount::Page(_) => measurer.pixels(eval, start, delta, line_height)?,
+        ScrollAmount::Page(_) => {
+            // A forward page normally fits inside the current measured body.
+            // Use that exact geometry, including a wrapped first row's actual
+            // context, instead of starting another walk at its physical line.
+            let covered = (delta > 0)
+                .then(|| rows.first())
+                .flatten()
+                .filter(|first| first.start_buffer_pos == Some(start))
+                .and_then(|first| {
+                    let goal = first.y.saturating_add(delta);
+                    rows.iter()
+                        .rev()
+                        .find(|row| row.y <= goal)
+                        .filter(|row| goal < row.y.saturating_add(row.height))
+                        .and_then(|row| row.start_buffer_pos)
+                        .filter(|target| *target > start)
+                });
+            match covered {
+                Some(target) => target,
+                None => measurer.pixels(eval, start, delta, line_height)?,
+            }
+        }
         ScrollAmount::Rows(rows) => {
             super::resolve(
                 eval,
@@ -384,7 +416,7 @@ fn plan_scroll(
         return Err(signal(LispCondition::BeginningOfBuffer, vec![]));
     }
     let candidate = measurer
-        .viewport(eval, new_start, height)?
+        .pixel_rows(eval, new_start, height)?
         .ok_or_else(|| failure("Scroll row producer disappeared"))?;
     let candidate_rows = snapshot_text_rows(&candidate);
     let first_y = candidate_rows[0].y;

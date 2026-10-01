@@ -22,7 +22,8 @@ use neovm_core::emacs_core::eval::{
     WebKitResolveRequest,
 };
 use neovm_core::emacs_core::image_catalog::{
-    ImageCatalog, ImageLookup, ImageResolveRequest, PendingImage, ReadyImage, ResolvedImageMetadata,
+    ImageCatalog, ImageLookup, ImageResolveRequest, ImageSizeLimit, PendingImage, ReadyImage,
+    ResolvedImageMetadata,
 };
 use neovm_core::emacs_core::value::StringTextPropertyRun;
 use neovm_core::emacs_core::{Context, Value};
@@ -111,6 +112,7 @@ fn display_row_request_for_face<'a>(
         base_face_id,
         base_face,
         role,
+        DisplayRowLineWrap::chrome_row(),
     )
 }
 
@@ -196,6 +198,7 @@ impl DisplayHost for RecordingDisplayRowMediaHost {
     fn resolve_image_sync(
         &self,
         _request: ImageResolveRequest,
+        _limit: neovm_core::emacs_core::image_catalog::ImageSizeLimit,
     ) -> Result<Option<ReadyImage>, String> {
         panic!("display row rendering must not use synchronous image resolution");
     }
@@ -229,7 +232,7 @@ impl DisplayHost for RecordingDisplayRowMediaHost {
 }
 
 impl ImageCatalog for RecordingDisplayRowMediaHost {
-    fn lookup(&self, request: ImageResolveRequest) -> ImageLookup {
+    fn lookup(&self, request: ImageResolveRequest, _limit: ImageSizeLimit) -> ImageLookup {
         self.image_requests
             .lock()
             .expect("image requests lock")
@@ -1346,6 +1349,7 @@ fn display_row_geometry_builds_row_layout() {
             std::collections::HashMap::new(),
         ),
         None,
+        DisplayRowLineWrap::chrome_row(),
     );
 
     assert_eq!(layout.role, GlyphRowRole::Text);
@@ -2822,12 +2826,33 @@ fn display_row_glyph_measurer_builds_measured_complex_text_run_plan() {
     else {
         panic!("font-backed measurer should produce a measured text-run plan");
     };
+    // The SHAPE of the shaped run is font-dependent: a font with proper
+    // Arabic shaping forms the mandatory lam-alef ligature (ل + ا -> one
+    // glyph), collapsing the four characters into three clusters; a fallback
+    // font renders them as isolated forms and keeps four. Assert the
+    // font-independent contract instead of an exact glyph count.
+    let offsets: Vec<(usize, usize)> = advances
+        .iter()
+        .map(|advance| (advance.char_offset, advance.byte_offset))
+        .collect();
+    assert!(
+        !offsets.is_empty(),
+        "a measured plan must have at least one advance: {advances:?}"
+    );
     assert_eq!(
-        advances
-            .iter()
-            .map(|advance| (advance.char_offset, advance.byte_offset))
-            .collect::<Vec<_>>(),
-        vec![(0, 0), (1, 2), (2, 4), (3, 6)]
+        offsets.first().copied(),
+        Some((0, 0)),
+        "the run's first character opens the plan: {advances:?}"
+    );
+    assert!(
+        offsets.windows(2).all(|w| w[0] < w[1]),
+        "advances must be strictly increasing per cluster: {advances:?}"
+    );
+    assert!(
+        offsets.iter().all(|(char_offset, byte_offset)| {
+            (0..4).contains(char_offset) && (0..8).contains(byte_offset)
+        }),
+        "every advance must sit inside the four-character run: {advances:?}"
     );
     assert!(
         advances.iter().all(|advance| advance.advance_px > 0.0),

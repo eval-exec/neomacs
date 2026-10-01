@@ -64,6 +64,8 @@ Run the catalogued workloads through `xtask`:
 cargo xtask perf list
 cargo xtask perf run rust-lsp-typing
 cargo xtask perf run mx-tab-completion
+cargo xtask perf run mx-tab-completion-steady
+cargo xtask perf run scrolling
 cargo xtask perf run bytecode-call-loop
 cargo xtask perf run editing-simulation
 cargo xtask perf run startup
@@ -143,7 +145,14 @@ same loop on the wall clock.
 
 The GUI adapter gives Neomacs a native Wayland connection and exposes the same
 headless Weston session to X11-only GNU Emacs builds through Xwayland. The
-`mx-tab-completion` fixture installs 1,024 identically named no-op commands
+session is `neomacs-infra`'s `WestonBenchSession`: a harness-owned
+compositor with a private `XDG_RUNTIME_DIR`, a pinned locale, and a
+deterministic teardown, retried on a fresh compositor when a launch flakes.
+The editor preserves `VK_DRIVER_FILES`, `VK_ICD_FILENAMES`, and
+`VK_ADD_DRIVER_FILES` in its otherwise restricted environment and records them
+in input provenance. These loader settings matter on hosts such as NixOS:
+dropping them can silently select software rendering and inflate GUI timings.
+The `mx-tab-completion` fixture installs 1,024 identically named no-op commands
 before measurement, then performs a real `M-x`, TAB, completion-window,
 selection, and minibuffer-exit lifecycle over that controlled namespace.
 
@@ -413,6 +422,34 @@ The run is rejected unless all of these remain true:
 No package preparation or live external service is involved. This keeps the
 workload focused on the built-in obarray completion and display path that GNU
 Emacs and Neomacs both execute for an empty `M-x TAB`.
+
+## `mx-tab-completion-steady`
+
+The cold row's 5 timed completions sit right on top of per-process warm-up:
+JIT tier entry for the completion machinery, font and obarray caches. On one
+machine that made its run-to-run medians swing 12.7k-16.9k microseconds per
+completion -- noise larger than the row's own 8% budget. This row runs the
+same fixture, but the fixture first performs an untimed warm-up pass (five
+completions, before the sampling gate) and only then opens the timing window
+around the measured calls. The result proves the warm-up ran
+(`warmup-completion-help-calls`); the cold row proves none ran. The two rows
+are complementary: `mx-tab-completion` measures the first-completion user
+experience including warm-up, `mx-tab-completion-steady` measures the
+steady-state cost that warm-up otherwise buries. Never substitute one for
+the other.
+
+## `scrolling`
+
+Page scrolling -- real `scroll-up-command`/`scroll-down-command`, the
+commands C-v/M-v run -- over a deterministic 2,400-line buffer carrying the
+faces a real session shows: weights, slants, boxes, spell-check waves, CJK
+lines, truncation-length lines. Scrolling is the one editing gesture where
+the window start moves, and no other row times it. Two phases are timed
+apart: a COLD pass that displays every line for the first time (paying JIT,
+layout, and face-realisation warm-up) and WARM passes down and back up over
+already-laid-out rows. One operation is one scroll command with a forced
+redisplay; the artifact records both phase timings and the per-command cost.
+The buffer's checksum, point, and window start must survive every run.
 
 ## `bytecode-call-loop`
 

@@ -11,17 +11,23 @@ pub mod frame_post;
 pub mod glyph_atlas;
 #[cfg(feature = "video")]
 mod gpu_frame_timing;
+mod image_bands;
 pub mod image_cache;
+pub mod image_probe;
+mod image_scale;
 mod image_sequence;
 pub mod media_budget;
+#[cfg(target_os = "linux")]
+pub mod native_presentation;
 pub mod renderer;
 pub mod shader_surface;
 pub mod shader_surface_cache;
 mod svg;
 #[cfg(test)]
-#[path = "texture_discipline_test.rs"]
+#[path = "tests/texture_discipline_test.rs"]
 mod texture_discipline_test;
 pub mod tooltip_layout;
+pub use image_bands::{BandPlacement, DecodedBand, RasterBand, RowRange, TextureRows};
 pub use svg::SvgResourceContext;
 pub mod vertex;
 pub mod xbm;
@@ -50,7 +56,10 @@ pub use glyph_atlas::{
     ComposedGlyphKey, GlyphAtlasHandle, GlyphKey, GlyphPixelKind, RasterizeResult, WgpuGlyphAtlas,
     allocator, pages, types,
 };
-pub use image_cache::{CachedImage, ImageCache, ImageCacheEvent, ImageMetadata, ImageState};
+pub use image_cache::{
+    CachedImage, FilledRows, ImageCache, ImageCacheEvent, ImageMetadata, ImageState,
+};
+pub use image_probe::{ImageProbeSource, admit, probe_image_layout};
 pub use renderer::{
     BudgetExceeded, CompositionRing, FrameRowDamage, FullFrameTexture, GpuBudget, GpuBudgetOwner,
     PaneBlit, PaneSource, RendererFrameEffects, RowDamageInfo, RowReuseStats, SnapshotId,

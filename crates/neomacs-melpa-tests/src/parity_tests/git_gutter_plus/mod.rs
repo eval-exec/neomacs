@@ -580,7 +580,7 @@ fn git_gutter_plus_package_batch() {
     // valid for the pinned tool identity.  Resolve it through
     // neomacs-infra's tools lock; a host whose git identity diverges gets a
     // loud documented skip instead of a misleading provenance error.
-    match neomacs_infra::tools::resolve_tool("git", "2.51.2") {
+    match neomacs_infra::tools::resolve_tool("git", "*") {
         Ok(tool) => {
             // System-sourced binaries are already on PATH (the editors
             // inherit it); provisioned strategies (tarball/nix) will prepend

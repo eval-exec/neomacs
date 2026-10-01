@@ -36,7 +36,7 @@ use neovm_core::emacs_core::{Context, Value};
 
 /// The four logical arrow bitmaps resolved once per window for the body rows.
 /// `None` means the indicator resolves to no bitmap (GNU `NO_FRINGE_BITMAP`).
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct FringeArrowBitmaps {
     /// `truncation` left element — `left-arrow`.
     truncation_left: Option<u16>,
@@ -76,6 +76,7 @@ impl FringeArrowBitmaps {
 /// Per-row decoration request for the truncation/continuation fringe arrows.
 /// Built for every installed body row from [`DisplayRowFlags`] and applied to
 /// the live `GlyphRow` (which also carries `truncated_left` / `reversed_p`).
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TruncationContinuationFringeRequest {
     /// First text-area display-row index (`display_text_row_base`).
     display_text_row_base: usize,
@@ -100,8 +101,26 @@ impl TruncationContinuationFringeRequest {
         display_text_row_base: usize,
         face_id: FaceId,
     ) -> Option<Self> {
-        let has_left_fringe = params.left_fringe_width > 0.0;
-        let has_right_fringe = params.right_fringe_width > 0.0;
+        Self::for_fringe_widths(
+            buffer,
+            ctx,
+            params.left_fringe_width,
+            params.right_fringe_width,
+            display_text_row_base,
+            face_id,
+        )
+    }
+
+    pub(crate) fn for_fringe_widths<B: LayoutBufferView>(
+        buffer: &B,
+        ctx: &Context,
+        left: f32,
+        right: f32,
+        display_text_row_base: usize,
+        face_id: FaceId,
+    ) -> Option<Self> {
+        let has_left_fringe = left > 0.0;
+        let has_right_fringe = right > 0.0;
         if !has_left_fringe && !has_right_fringe {
             return None;
         }
@@ -116,6 +135,20 @@ impl TruncationContinuationFringeRequest {
             bitmaps,
             face_id,
         })
+    }
+
+    /// Apply the same resolved decoration to a detached worker row.
+    pub(crate) fn decorate_row(&self, row: &mut GlyphRow, continued: bool, continuation: bool) {
+        FringeArrowRowMutation {
+            continued,
+            continuation,
+            truncated_right: false,
+            has_left_fringe: self.has_left_fringe,
+            has_right_fringe: self.has_right_fringe,
+            bitmaps: self.bitmaps,
+            face_id: self.face_id,
+        }
+        .apply(row, 0);
     }
 
     /// Walk every text-area row and install the arrow bitmaps that its state
@@ -137,11 +170,17 @@ impl TruncationContinuationFringeRequest {
                 bitmaps: self.bitmaps,
                 face_id: self.face_id,
             };
-            // `truncated_left` lives on the GlyphRow (not in `row_flags`), so the
-            // mutation must run on every row to read it; the flag-only fields are
-            // passed through.
-            let _ = output_builder
-                .apply_current_window_row_mutation(self.display_text_row_base + row_idx, mutation);
+            let matrix_row = self.display_text_row_base + row_idx;
+            let Some(row) = output_builder.current_window_row(matrix_row) else {
+                continue;
+            };
+            // Read row-owned truncation, direction and explicit bitmap slots
+            // before requesting mutable access. Replayed rows remain shared
+            // when the decoration would leave both slots unchanged.
+            let pending = mutation.resolve(row);
+            if pending.left.is_some() || pending.right.is_some() {
+                let _ = output_builder.apply_current_window_row_mutation(matrix_row, pending);
+            }
         }
     }
 }
@@ -222,12 +261,14 @@ struct FringeArrowRowMutation {
     face_id: FaceId,
 }
 
-impl DisplayWindowRowMutation for FringeArrowRowMutation {
-    type Output = ();
-
-    fn apply(self, row: &mut GlyphRow, _matrix_cols: usize) -> Self::Output {
+impl FringeArrowRowMutation {
+    fn resolve(&self, row: &GlyphRow) -> ResolvedFringeArrowRowMutation {
         if !row.enabled {
-            return;
+            return ResolvedFringeArrowRowMutation {
+                left: None,
+                right: None,
+                face_id: self.face_id,
+            };
         }
         let state = FringeArrowRowState {
             continued: self.continued,
@@ -242,20 +283,49 @@ impl DisplayWindowRowMutation for FringeArrowRowMutation {
             self.has_right_fringe,
             &self.bitmaps,
         );
-        // Precedence: don't clobber an explicit `(left-fringe …)` spec or the
-        // empty-line filler already occupying the slot (GNU's
-        // `row->left_user_fringe_bitmap` short-circuit).
-        if row.left_fringe_bitmap.is_none()
-            && let Some(bitmap_index) = left
-        {
+        // Explicit display specs and the empty-line filler keep precedence.
+        ResolvedFringeArrowRowMutation {
+            left: if row.left_fringe_bitmap.is_none() {
+                left
+            } else {
+                None
+            },
+            right: if row.right_fringe_bitmap.is_none() {
+                right
+            } else {
+                None
+            },
+            face_id: self.face_id,
+        }
+    }
+}
+
+impl DisplayWindowRowMutation for FringeArrowRowMutation {
+    type Output = ();
+
+    fn apply(self, row: &mut GlyphRow, matrix_cols: usize) -> Self::Output {
+        self.resolve(row).apply(row, matrix_cols);
+    }
+}
+
+/// Additions selected while the row is still borrowed immutably.
+struct ResolvedFringeArrowRowMutation {
+    left: Option<u16>,
+    right: Option<u16>,
+    face_id: FaceId,
+}
+
+impl DisplayWindowRowMutation for ResolvedFringeArrowRowMutation {
+    type Output = ();
+
+    fn apply(self, row: &mut GlyphRow, _matrix_cols: usize) -> Self::Output {
+        if let Some(bitmap_index) = self.left {
             row.left_fringe_bitmap = Some(FringeBitmapInfo {
                 bitmap_index,
                 face_id: self.face_id,
             });
         }
-        if row.right_fringe_bitmap.is_none()
-            && let Some(bitmap_index) = right
-        {
+        if let Some(bitmap_index) = self.right {
             row.right_fringe_bitmap = Some(FringeBitmapInfo {
                 bitmap_index,
                 face_id: self.face_id,

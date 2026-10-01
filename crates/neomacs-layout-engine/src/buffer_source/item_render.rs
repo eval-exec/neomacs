@@ -92,6 +92,10 @@ impl<'a> BufferSourceItemRenderRequest<'a> {
             DisplayItemKind::RowBreak(row_break) => row_break.line_spacing,
             _ => crate::display_item::DisplayLineSpacingPolicy::Inherit,
         };
+        let line_height = match source_item.item().kind {
+            DisplayItemKind::RowBreak(row_break) => row_break.line_height,
+            _ => crate::display_item::DisplayLineHeightPolicy::Default,
+        };
         let mut state = state;
         let selective_display_outcome = self.render_selective_display_tail_for_context(
             &mut state,
@@ -119,6 +123,7 @@ impl<'a> BufferSourceItemRenderRequest<'a> {
                     source_step_char,
                     box_vertical_edges,
                     line_spacing,
+                    line_height,
                     buffer,
                 )
                 .should_break()
@@ -189,6 +194,7 @@ impl<'a> BufferSourceItemRenderRequest<'a> {
         source_char: DisplaySourceStepChar,
         box_vertical_edges: neomacs_display_protocol::face::BoxVerticalEdges,
         line_spacing: crate::display_item::DisplayLineSpacingPolicy,
+        line_height: crate::display_item::DisplayLineHeightPolicy,
         buffer: &B,
     ) -> DisplayRowTransitionContinuation {
         let request = self
@@ -200,7 +206,8 @@ impl<'a> BufferSourceItemRenderRequest<'a> {
                 self.active_face_state,
             )
             .with_box_vertical_edges(box_vertical_edges)
-            .with_line_spacing(line_spacing);
+            .with_line_spacing(line_spacing)
+            .with_line_height(line_height);
         self.render_line_break(state, source_walk, request, buffer)
     }
 
@@ -315,17 +322,23 @@ impl<'a> BufferSourceItemRenderRequest<'a> {
             append_geometry,
         );
 
-        if let Some(outcome) = text_run_request.render_if_fits_and_apply(
-            source_item.clone(),
-            &active_face_state,
+        if text_run_request.can_render_whole_run(
+            &source_item,
             &buffer_row_append_context,
-            cursor_info,
-            row_carryover.trailing_whitespace,
-            row_carryover.word_wrap,
-            predecessor_row_extend,
             &mut source_render,
-            &mut progress,
         ) {
+            let outcome = text_run_request.render_and_apply(
+                source_item,
+                &active_face_state,
+                &buffer_row_append_context,
+                cursor_info,
+                row_carryover.trailing_whitespace,
+                row_carryover.word_wrap,
+                predecessor_row_extend,
+                &mut source_render,
+                &mut progress,
+            );
+            source_render.include_current_row_metrics(row_build.row_geometry);
             return outcome;
         }
 
@@ -342,7 +355,7 @@ impl<'a> BufferSourceItemRenderRequest<'a> {
             if let Some(resume_charpos) = prefix.source_end_charpos() {
                 source_walk.consume_prefix_to(resume_charpos);
             }
-            return text_run_request.render_and_apply(
+            let outcome = text_run_request.render_and_apply(
                 prefix,
                 &active_face_state,
                 &buffer_row_append_context,
@@ -353,6 +366,8 @@ impl<'a> BufferSourceItemRenderRequest<'a> {
                 &mut source_render,
                 &mut progress,
             );
+            source_render.include_current_row_metrics(row_build.row_geometry);
+            return outcome;
         }
 
         // Neither whole-run path could take this run, so it is rendered one

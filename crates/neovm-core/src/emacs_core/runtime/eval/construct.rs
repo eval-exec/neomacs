@@ -86,6 +86,8 @@ impl Context {
         ev.input_rx = None;
         ev.eval_task_rx = None;
         ev.redisplay_fn = None;
+        ev.display_idle_maintenance_fn = None;
+        ev.scroll_preview_fn = None;
         ev.frame_snapshot_fn = None;
         ev.window_layout_query_adapter = WindowLayoutQueryAdapter::Unavailable;
         ev.scroll_goal = None;
@@ -2156,6 +2158,7 @@ impl Context {
             obarray.symbol_value_id_or_nil(core_eval_symbols.throw_on_input_symbol);
 
         let mut ev = Self {
+            owned_roots: Default::default(),
             tagged_heap,
             pdump_image: None,
             after_pdump_load_hook_pending: false,
@@ -2241,6 +2244,10 @@ impl Context {
             eval_task_rx: None,
             quit_requested: QuitRequest::new(),
             redisplay_fn: None,
+            font_shape_fn: None,
+            gstring_shape_cache: HashMap::new(),
+            display_idle_maintenance_fn: None,
+            scroll_preview_fn: None,
             frame_snapshot_fn: None,
             window_layout_query_adapter: WindowLayoutQueryAdapter::Unavailable,
             scroll_goal: None,
@@ -2255,6 +2262,7 @@ impl Context {
             face_change_count: 0,
             materialized_face_table_source: None,
             display_var_change_count: 0,
+            input_progress: Default::default(),
             redisplay_generation: 0,
             menu_bar_rebuild_generation: 0,
             chrome_dirty: Default::default(),

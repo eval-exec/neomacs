@@ -234,10 +234,146 @@ struct LineColumn {
     column: usize,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// What a measured buffer region occupies on screen.
+///
+/// The horizontal and vertical extents are LOGICAL PIXELS, not character
+/// columns and rows.  `window-text-pixel-size` is a pixel measurement (GNU
+/// walks the display iterator, whose `it.pixel_width` and `it.ascent` /
+/// `it.descent` are pixels), and a `display` property can carry an element
+/// whose size is not a whole number of cells -- an image.  A column count
+/// cannot represent a 200-pixel image in a 9-pixel cell at all: that is why
+/// the unit is part of the type rather than a multiplier applied by each
+/// caller.  Text still uses the monospace approximation, contributing
+/// [`TextCellPixels::width`] per column.
+///
+/// `max_width` is the value GNU's `window_text_pixel_size` returns -- `x -
+/// start_x` over the walked display lines, which [`MeasuredRange`] defines --
+/// and not a raw widest-line measurement.  `height` shares the same origin:
+/// both count from FROM's display line, never from the start of FROM's
+/// logical line.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct RegionTextMetrics {
+    /// Screen lines the region spans.
     pub(crate) lines: usize,
-    pub(crate) max_columns: usize,
+    /// GNU's returned width, in logical pixels.
+    pub(crate) max_width: f32,
+    /// The region's height in logical pixels: the sum of the lines' own
+    /// heights, each of them the tallest thing displayed on that line.
+    pub(crate) height: f32,
+}
+
+impl RegionTextMetrics {
+    pub(crate) const EMPTY: Self = Self {
+        lines: 0,
+        max_width: 0.0,
+        height: 0.0,
+    };
+
+    /// The metrics of a region whose iterator landed on an occupied row but
+    /// traversed no text: one row of the frame's cell, no width.
+    pub(crate) fn empty_row(cell_height: f32) -> Self {
+        Self {
+            lines: 1,
+            max_width: 0.0,
+            height: cell_height.max(0.0),
+        }
+    }
+}
+
+/// A frame's character cell, in logical pixels.
+///
+/// The scanner's text approximation: one column costs exactly `width` pixels
+/// and a line's vertical extent starts at the cell's own split.  The split is
+/// GNU's `FONT_BASE` / `FONT_DESCENT` for the frame's default font, because a
+/// row is as tall as `max (ascent) + max (descent)` over the elements on it
+/// (`move_it_in_display_line_to`, src/xdisp.c:11203-11207) and an image with
+/// `:ascent 100` rises above the baseline.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TextCellPixels {
+    pub(crate) width: f32,
+    pub(crate) height: f32,
+    pub(crate) ascent: f32,
+}
+
+impl TextCellPixels {
+    pub(crate) fn new(width: f32, height: f32, ascent: f32) -> Self {
+        let width = if width.is_finite() && width > 0.0 {
+            width
+        } else {
+            1.0
+        };
+        let height = if height.is_finite() && height > 0.0 {
+            height
+        } else {
+            1.0
+        };
+        let ascent = if ascent.is_finite() {
+            ascent.clamp(0.0, height)
+        } else {
+            height
+        };
+        Self {
+            width,
+            height,
+            ascent,
+        }
+    }
+
+    pub(crate) fn descent(self) -> f32 {
+        (self.height - self.ascent).max(0.0)
+    }
+}
+
+/// One display element's extent in logical pixels: how far it advances the
+/// text cursor, and how far it reaches above and below the baseline.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ElementExtent {
+    pub(crate) advance: f32,
+    pub(crate) ascent: f32,
+    pub(crate) descent: f32,
+}
+
+/// What a `display` spec contributes to the layout of the run it covers.
+///
+/// The unit is part of the value because the two cases are NOT interchangeable:
+/// a stretch is a whole number of text cells (so a long run stays exact), while
+/// an image's advance is an absolute pixel count that has no cell count at all.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum DisplayElement {
+    /// A `(space ...)` stretch, in text columns.
+    Cells(f32),
+    /// An element with its own pixel metrics.
+    Pixels(ElementExtent),
+}
+
+/// One display line's horizontal extent.
+///
+/// Text is counted in EXACT columns and multiplied by the cell width once, at
+/// the point of use, so a long line cannot accumulate float error the way a
+/// running pixel sum would; an element with its own size contributes absolute
+/// pixels.  The two are not interchangeable, which is why they are separate
+/// fields with a single accessor.
+#[derive(Clone, Copy, Debug, Default)]
+struct LineAdvance {
+    columns: f32,
+    pixels: f32,
+    /// Set when the line ended at the X-LIMIT edge (GNU
+    /// `MOVE_LINE_TRUNCATED`): its width is then exactly that edge.
+    truncated_at: Option<f32>,
+}
+
+impl LineAdvance {
+    fn width(self, cell_width: f32) -> f32 {
+        match self.truncated_at {
+            Some(edge) => edge,
+            None => self.columns * cell_width + self.pixels,
+        }
+    }
+
+    /// Forget everything the row has advanced so far.
+    fn restart(&mut self) {
+        *self = Self::default();
+    }
 }
 
 // Whether the mode-line expansion currently running consumed `%c` / `%C`.
@@ -339,54 +475,6 @@ fn prefix_line_and_column(
     buf.copy_emacs_byte_range_to(EmacsByteRange::new(bol, end), &mut tail);
     let col = emacs_char_count(&tail, buf.get_multibyte());
     LineColumn { line, column: col }
-}
-
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-fn region_text_metrics(bytes: &[u8], multibyte: bool) -> RegionTextMetrics {
-    if bytes.is_empty() {
-        return RegionTextMetrics {
-            lines: 0,
-            max_columns: 0,
-        };
-    }
-
-    let mut max_cols = 0usize;
-    let mut lines = 1usize;
-    let mut cur_col = 0usize;
-
-    let mut visit = |code: u32| {
-        if code == '\n' as u32 {
-            lines += 1;
-            max_cols = max_cols.max(cur_col);
-            cur_col = 0;
-        } else if code == '\t' as u32 {
-            cur_col = (cur_col + 8) & !7;
-        } else {
-            cur_col += 1;
-        }
-    };
-
-    if multibyte {
-        let mut pos = 0usize;
-        while pos < bytes.len() {
-            let (code, len) = crate::emacs_core::emacs_char::string_char(&bytes[pos..]);
-            visit(code);
-            pos += len;
-        }
-    } else {
-        for &byte in bytes {
-            visit(byte as u32);
-        }
-    }
-
-    if bytes.last() == Some(&b'\n') {
-        lines = lines.saturating_sub(1);
-    }
-
-    RegionTextMetrics {
-        lines,
-        max_columns: max_cols.max(cur_col),
-    }
 }
 
 /// Resolve a `(space :align-to SPEC)` / `(space :width SPEC)` value to a count of
@@ -532,42 +620,109 @@ pub(crate) enum LineWrap {
     WordWrap,
 }
 
-/// Horizontal scanner policy for a terminal `window-text-pixel-size` call.
+/// Where a measured region's pixel x-axis is anchored.
 ///
-/// GNU does not have a second, approximate wrapping decision for this
-/// builtin: `window_text_pixel_size` starts the ordinary display iterator, so
-/// the iterator's [`LineWrap`] value decides both whether long lines add rows
-/// and which terminal columns can contribute to the measured width.  Keeping
-/// those two effects in one enum prevents a caller from accidentally capping a
-/// truncated line while also counting it as wrapped (the bug this type was
-/// introduced to fix).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TtyWindowTextLineMeasurement {
-    TruncateAt(NonZeroUsize),
-    WrapAt(NonZeroUsize),
+/// GNU's `window_text_pixel_size` does not start measuring at FROM.  It starts
+/// the display iterator at FROM, rewinds it to the beginning of FROM's
+/// *display line* (`move_it_by_lines (&it, 0)` then `it.current_x = it.hpos =
+/// it.wrap_prefix_width = 0`, src/xdisp.c:11833-11899), walks forward to FROM
+/// and keeps the x it reached as `start_x`; the width it returns is `x -
+/// start_x`.  So the prefix of FROM's display line is inside the measurement:
+/// `abcd\n` reports 36 from every one of FROM 1..4, not 36/27/18/9.
+///
+/// The subtraction is dropped when the walk crosses a display-line boundary
+/// (`if (it.current_y > start_y) start_x = 0;`, src/xdisp.c:12004): a region
+/// spanning several rows is as wide as its widest row, each measured from that
+/// row's own left edge.  Both conventions live here because the scanner has to
+/// know where the prefix is while it is walking; a caller that passed only
+/// FROM could not tell it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MeasuredRange {
+    /// First byte of FROM's display line: where the walk starts, and what the
+    /// returned width subtracts.  GNU rewinds to the *screen* line, so for a
+    /// soft-wrapped line this may be earlier than the logical line start; the
+    /// scanner re-derives the display-line boundary from [`RowEdge::wrap`] and
+    /// discards whatever it measured before reaching [`Self::from`].
+    pub(crate) line_start: EmacsBytePos,
+    /// GNU's FROM: the position the returned width and height are measured
+    /// from.
+    pub(crate) from: EmacsBytePos,
+    /// GNU's TO, exclusive.
+    pub(crate) to: EmacsBytePos,
 }
 
-impl TtyWindowTextLineMeasurement {
-    fn from_display_policy(line_wrap: LineWrap, body_columns: usize) -> Self {
-        let body_columns = NonZeroUsize::new(body_columns.max(1)).expect("positive body width");
-        match line_wrap {
-            LineWrap::Truncate => Self::TruncateAt(body_columns),
-            // GNU reserves the final TTY column for the continuation glyph,
-            // so wrapped text has one fewer usable column than the window
-            // body.  Both continuation methods share that hard edge; word
-            // boundary selection remains the display scanner's concern.
-            LineWrap::WindowWrap | LineWrap::WordWrap => Self::WrapAt(
-                NonZeroUsize::new(body_columns.get().saturating_sub(1).max(1))
-                    .expect("positive continuation width"),
-            ),
+impl MeasuredRange {
+    /// A range that starts measuring at `from` -- the convention for callers
+    /// with no display line to rewind to (`buffer-text-pixel-size`, whose GNU
+    /// implementation measures the accessible portion of the buffer).
+    pub(crate) fn starting_at(from: EmacsBytePos, to: EmacsBytePos) -> Self {
+        Self {
+            line_start: from,
+            from,
+            to,
+        }
+    }
+}
+
+/// GNU's `it.last_visible_x` together with `it.line_wrap`: the pixel x at
+/// which a display row stops, and what the window does there.
+///
+/// One quantity, not two.  GNU has a single row edge -- X-LIMIT when the
+/// caller supplied one, otherwise the window's body width (`it.last_visible_x
+/// = it.first_visible_x + body_width`, src/xdisp.c:3507, which an explicit
+/// X-LIMIT replaces whole, src/xdisp.c:11924) -- and `line_wrap` alone decides
+/// whether the row truncates at it or continues on the next row.
+///
+/// Keeping the edge and the wrap budget as separate, differently-united
+/// quantities is what let two divergences sit here at once: a GUI row had no
+/// edge at all, so a truncated long line measured wider than GNU reports; and
+/// a terminal row wrapped at a budget the caller's X-LIMIT did not move, so
+/// an X-LIMIT narrower than the window truncated where GNU continues.  With
+/// one value the two questions cannot be answered from different inputs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct RowEdge {
+    /// The pixel x at which the row stops, measured from the row's left edge.
+    pub(crate) x: f32,
+    /// What the window does at that x (GNU `it.line_wrap`).
+    pub(crate) wrap: LineWrap,
+}
+
+impl RowEdge {
+    pub(crate) fn new(x: f32, wrap: LineWrap) -> Self {
+        Self {
+            x: x.max(0.0),
+            wrap,
         }
     }
 
-    fn scanner_limits(self) -> (Option<usize>, Option<usize>) {
-        match self {
-            Self::TruncateAt(columns) => (Some(columns.get()), None),
-            Self::WrapAt(columns) => (None, Some(columns.get())),
-        }
+    /// A terminal window's row edge, in the pixel unit the scanner uses.
+    ///
+    /// GNU reserves the final TTY column: the continuation or truncation glyph
+    /// occupies one, so the row stops one column short of the body
+    /// (`it->last_visible_x -= it->truncation_pixel_width` /
+    /// `continuation_pixel_width`, src/xdisp.c:3508-3516, done "only if the
+    /// window has no right fringe", which a terminal never has).  Word
+    /// boundary selection remains the display scanner's concern.
+    pub(crate) fn tty(body_columns: usize, cell_width: f32, wrap: LineWrap) -> Self {
+        let usable = NonZeroUsize::new(body_columns.max(1))
+            .expect("positive body width")
+            .get()
+            .saturating_sub(1)
+            .max(1);
+        Self::new(usable as f32 * cell_width, wrap)
+    }
+}
+
+#[cfg(test)]
+mod row_edge_tests {
+    use super::*;
+
+    #[test]
+    fn tty_row_edge_reserves_one_column_for_the_edge_glyph() {
+        assert_eq!(RowEdge::tty(80, 9.0, LineWrap::Truncate).x, 711.0);
+        assert_eq!(RowEdge::tty(80, 9.0, LineWrap::WindowWrap).x, 711.0);
+        // A one-column body cannot go below one usable column.
+        assert_eq!(RowEdge::tty(1, 9.0, LineWrap::Truncate).x, 9.0);
     }
 }
 
@@ -646,37 +801,50 @@ pub(crate) enum CharColumnWidth {
     DisplayWidth,
 }
 
-/// `display`-aware variant of [`region_text_metrics`].  Scans the buffer's
-/// byte range `[from, to)` honoring the `display` text property / overlay at
-/// each position: a `(space :align-to N)` / `(space :width N)` spec contributes
-/// its real column width (GNU resolves these through the display iterator's
-/// `calc_pixel_width_or_height`), instead of being counted as a single
-/// character column.  Plain text, tabs and newlines are counted exactly as
-/// `region_text_metrics` does.  `apply_trim` requests the GNU `TO == t`
-/// trailing-blank-line trimming, applied to the *byte* range before scanning.
+/// The one display-aware region scanner.
 ///
-/// `char_width` selects the per-char column accounting (see [`CharColumnWidth`]).
-/// `x_limit` / `y_limit` cap the measured columns-per-line and lines (used by
-/// `buffer-text-pixel-size`); pass `None` for an unbounded scan.
-/// `wrap_columns` counts soft-wrapped display rows at the supplied text width,
-/// as `window-text-pixel-size` must do for a live window.
+/// Scans the buffer's byte range `[from, to)` honoring the `display` text
+/// property / overlay at each position, and returns the region's extent in
+/// logical pixels.  Every element is measured the way GNU's display iterator
+/// measures it:
+///
+///   * a `(space :align-to N)` / `(space :width N)` spec contributes its real
+///     column width (GNU resolves these through `calc_pixel_width_or_height`),
+///     instead of being counted as a single character column;
+///   * an image spec contributes its own pixel advance and its own baseline
+///     split, resolved through the same image catalog redisplay uses
+///     (`produce_image_glyph`, src/xdisp.c:32384-32520);
+///   * plain text, tabs and newlines contribute one cell column each, exactly
+///     as before.
+///
+/// `apply_trim` requests the GNU `TO == t` trailing-blank-line trimming,
+/// applied to the *byte* range before scanning.
+///
+/// `cell` is the frame's character cell (see [`TextCellPixels`]) and `frame` is
+/// the frame the region is measured for: image specs are resolved against it
+/// and a terminal frame displays no image at all (GNU `valid_image_p` is false
+/// without a window system).  `char_width` selects the per-char column
+/// accounting (see [`CharColumnWidth`]).
+///
+/// `range` carries GNU's FROM together with the start of FROM's display line,
+/// which is where the walk begins and what the returned width subtracts (see
+/// [`MeasuredRange`]).  `edge` is GNU's one row edge and what the window does
+/// at it; `y_limit` is GNU's Y-LIMIT in PIXELS, and it both stops the walk and
+/// clamps the returned height.
 #[allow(clippy::too_many_arguments)] // measurement bounds and display policy are independent inputs
 pub(crate) fn region_text_metrics_with_display(
     eval: &super::eval::Context,
+    frame: FrameId,
     buffer_id: BufferId,
-    from: EmacsBytePos,
-    to: EmacsBytePos,
+    range: MeasuredRange,
     apply_trim: bool,
+    cell: TextCellPixels,
     char_width: CharColumnWidth,
-    x_limit: Option<usize>,
-    y_limit: Option<usize>,
-    wrap_columns: Option<usize>,
+    edge: Option<RowEdge>,
+    y_limit: Option<f32>,
 ) -> RegionTextMetrics {
     let Some(buf) = eval.buffers.get(buffer_id) else {
-        return RegionTextMetrics {
-            lines: 0,
-            max_columns: 0,
-        };
+        return RegionTextMetrics::EMPTY;
     };
 
     // The GNU `TO == t` semantics measure through the line ending the last
@@ -684,28 +852,39 @@ pub(crate) fn region_text_metrics_with_display(
     // byte-level trimmer to find the trimmed end, then scan with display props.
     let scan_end = if apply_trim {
         let mut bytes = Vec::new();
-        buf.copy_emacs_byte_range_to(EmacsByteRange::new(from, to), &mut bytes);
+        buf.copy_emacs_byte_range_to(EmacsByteRange::new(range.from, range.to), &mut bytes);
         let trimmed_len = trim_window_text_to_non_empty_line_end(&bytes).len();
-        EmacsBytePos::new(from.get() + trimmed_len)
+        EmacsBytePos::new(range.from.get() + trimmed_len)
     } else {
-        to
+        range.to
     };
 
-    if scan_end.get() <= from.get() {
-        return RegionTextMetrics {
-            lines: 0,
-            max_columns: 0,
-        };
-    }
-
     let display_sym = Value::symbol("display");
-    let mut state = ScanState::new(char_width, x_limit, y_limit, wrap_columns);
+    // GNU's `FETCH_BYTE (start_bpos) == '\n'`: a newline at FROM takes no place
+    // on display, so the walk pretends to start at the next line's origin.
+    let origin_is_newline = buf.emacs_byte_at_pos(range.from) == Some(b'\n');
+    let mut state = ScanState::new(
+        cell,
+        char_width,
+        edge,
+        y_limit,
+        range.from,
+        origin_is_newline,
+    );
 
-    let mut scan = from.get();
-    let end = scan_end.get();
+    // GNU rewinds to the beginning of FROM's display line and walks forward to
+    // FROM, so the prefix is walked even when the measured range is empty:
+    // FROM == TO still reports the row FROM sits on.
+    let mut scan = range.line_start.get().min(range.from.get());
+    let end = scan_end.get().max(range.from.get());
     while scan < end {
         if state.y_limit_reached() {
             break;
+        }
+
+        if state.before_origin() && scan >= range.from.get() {
+            state.reach_origin();
+            // The origin's own character is still to be processed.
         }
 
         // GNU's display iterator processes overlay strings anchored at a
@@ -713,16 +892,23 @@ pub(crate) fn region_text_metrics_with_display(
         // overlays starting here, plus after-strings of overlays ending here
         // (see `load_overlay_strings`/`get_overlay_strings` in xdisp.c).  Each
         // contributes its own laid-out columns to the running line width.
-        process_overlay_strings_at(eval, buf, scan, &display_sym, &mut state);
+        process_overlay_strings_at(eval, frame, buf, scan, &display_sym, &mut state);
 
-        // A `display` property (text property or overlay) whose value is a
-        // `(space ...)` spec replaces the covered text for layout.  Resolve its
-        // column width and advance over the whole property/overlay run atomically.
-        if let Some((width, run_end)) =
-            display_space_run(eval, buf, scan, state.cur_col, &display_sym, end)
-            && run_end > scan
+        // A `display` property (text property or overlay) whose value replaces
+        // the text it covers -- a `(space ...)` stretch or an image -- defines
+        // the whole run's extent.  Resolve it once and advance over the run
+        // atomically.
+        if let Some((element, run_end)) = display_element_run(
+            eval,
+            frame,
+            buf,
+            scan,
+            state.line_columns(),
+            &display_sym,
+            end,
+        ) && run_end > scan
         {
-            state.advance_columns(width);
+            state.push_display_element(element);
             state.last_code = None;
             scan = run_end.min(end);
             continue;
@@ -752,7 +938,14 @@ pub(crate) fn region_text_metrics_with_display(
     // visits positions `scan < end`, so `end` itself is processed exactly once
     // here with the same full `before = true` collection used in the loop body.
     if !state.y_limit_reached() {
-        process_overlay_strings_at(eval, buf, end, &display_sym, &mut state);
+        process_overlay_strings_at(eval, frame, buf, end, &display_sym, &mut state);
+    }
+
+    // A range that ends where it starts never entered the loop, and one whose
+    // last byte is the origin's own character left the origin unreached; both
+    // still measure FROM's display line, one of GNU's rewound positions.
+    if state.before_origin() {
+        state.reach_origin();
     }
 
     state.finish()
@@ -761,104 +954,374 @@ pub(crate) fn region_text_metrics_with_display(
 /// Mutable accounting state shared between the buffer-text scan and the
 /// overlay-string walk in [`region_text_metrics_with_display`].  Tracks the
 /// running column on the current line, the widest line seen, the line count,
-/// and the `x_limit`/`y_limit` caps, so overlay strings contribute their
+/// and the row-edge / `y_limit` caps, so overlay strings contribute their
 /// columns and embedded newlines exactly like buffer text.
 struct ScanState {
+    cell: TextCellPixels,
     char_width: CharColumnWidth,
-    x_limit: Option<usize>,
-    y_limit: Option<usize>,
-    wrap_columns: Option<usize>,
-    max_cols: usize,
+    /// GNU's row edge (`it.last_visible_x`) and what the window does there.
+    /// `None` means an unbounded row, which only `buffer-text-pixel-size`
+    /// reaches when the window has no geometry at all.
+    edge: Option<RowEdge>,
+    /// GNU's Y-LIMIT in pixels.  It stops the walk at the first row whose
+    /// pixel span contains it and clamps the returned height to it.
+    y_limit: Option<f32>,
+    /// The height to return once the y-limit stopped the walk: the limit
+    /// itself.  `Some` means the scan is over.
+    y_limit_stop: Option<f32>,
+    /// GNU's `start_x`: the x of FROM inside FROM's display line.  Subtracted
+    /// from the width unless the walk crossed a display-line boundary.
+    origin_x: f32,
+    /// Byte position of GNU's FROM, or `None` once the walk has passed it.
+    /// Positions before it are FROM's display-line prefix: they build
+    /// [`Self::origin_x`] and are otherwise discarded, because GNU resets the
+    /// iterator's y there (`it.current_y = start_y;`, src/xdisp.c:11906) and
+    /// measures from FROM's row.
+    origin_pos: Option<usize>,
+    /// Whether the character AT FROM is a newline (GNU's `FETCH_BYTE
+    /// (start_bpos) == '\n'`).
+    origin_is_newline: bool,
+    /// Whether a row break happened after the walk passed FROM.  GNU drops
+    /// `start_x` then (`if (it.current_y > start_y) start_x = 0;`,
+    /// src/xdisp.c:12004).
+    crossed_display_line: bool,
+    /// Widest display line so far, in logical pixels.
+    max_width: f32,
+    /// Sum of the finished lines' heights, in logical pixels.
+    height: f32,
     lines: usize,
-    cur_col: usize,
+    line: LineAdvance,
+    /// Tallest reach above / below the baseline on the current line, as the
+    /// display iterator accumulates them: from ZERO, so a row that produced no
+    /// element is zero pixels tall and a row of text is one cell.  GNU reads
+    /// `it.max_ascent + it.max_descent`, which starts at 0 at every row break
+    /// (`it->max_ascent = it->max_descent = 0;`, src/xdisp.c:11199) and only
+    /// grows as `PRODUCE_GLYPHS` runs -- seeding them with the cell's own split
+    /// would make an empty row one line tall where GNU reports none.
+    line_ascent: f32,
+    line_descent: f32,
     last_code: Option<u32>,
-    /// Once the running line is capped by `x_limit`, ignore further width on it.
-    line_capped: bool,
 }
 
 impl ScanState {
     fn new(
+        cell: TextCellPixels,
         char_width: CharColumnWidth,
-        x_limit: Option<usize>,
-        y_limit: Option<usize>,
-        wrap_columns: Option<usize>,
+        edge: Option<RowEdge>,
+        y_limit: Option<f32>,
+        origin: EmacsBytePos,
+        origin_is_newline: bool,
     ) -> Self {
+        let cell = TextCellPixels::new(cell.width, cell.height, cell.ascent);
         Self {
+            cell,
             char_width,
-            x_limit,
-            y_limit,
-            wrap_columns: wrap_columns.filter(|columns| *columns > 0),
-            max_cols: 0,
+            edge: edge.filter(|edge| edge.x.is_finite()),
+            y_limit: y_limit.filter(|limit| limit.is_finite() && *limit >= 0.0),
+            y_limit_stop: None,
+            origin_x: 0.0,
+            origin_pos: Some(origin.get()),
+            origin_is_newline,
+            crossed_display_line: false,
+            max_width: 0.0,
+            height: 0.0,
             lines: 1,
-            cur_col: 0,
+            line: LineAdvance::default(),
+            line_ascent: 0.0,
+            line_descent: 0.0,
             last_code: None,
-            line_capped: false,
         }
     }
 
-    /// True once the line count has exceeded `y_limit`; the caller stops and the
-    /// over-counted line is rolled back so the result matches GNU's cap.
-    fn y_limit_reached(&mut self) -> bool {
-        if self.y_limit.is_some_and(|limit| self.lines > limit) {
-            self.lines = self.lines.saturating_sub(1);
-            true
-        } else {
-            false
-        }
+    /// Whether the walk has passed GNU's FROM yet.
+    fn before_origin(&self) -> bool {
+        self.origin_pos.is_some()
     }
 
-    fn cap_line(&mut self) {
-        if let Some(limit) = self.x_limit
-            && self.cur_col >= limit
-        {
-            self.cur_col = limit;
-            self.line_capped = true;
-        }
-    }
-
-    /// Advance the running column by a resolved `(space ...)` width.
-    fn advance_columns(&mut self, width: usize) {
-        if self.line_capped {
+    /// The walk reached GNU's FROM.  Everything measured so far is FROM's
+    /// display-line prefix, which the returned width subtracts and which must
+    /// not contribute rows or height.
+    ///
+    /// The prefix's baseline split is kept, as GNU keeps `it.max_ascent` /
+    /// `it.max_descent` across the rewind: a range that ends where it starts
+    /// (`FROM` == `TO`) still reports the row it sits on, one cell tall.
+    fn reach_origin(&mut self) {
+        if !self.before_origin() {
             return;
         }
+        // GNU rewinds to the start of FROM's SCREEN line, so a row break that
+        // is already due at FROM belongs to the prefix: without this, FROM at
+        // the first position of a wrapped row reports the row the prefix had
+        // just filled, and counts it in the height.  The break is taken while
+        // `before_origin` still holds, so it cannot mark a crossing.
+        if let Some(edge) = self.wrapping_edge()
+            && self.line_width() >= edge
+        {
+            self.soft_wrap();
+        }
+        self.origin_pos = None;
+        self.origin_x = self.line_width();
+        self.max_width = 0.0;
+        self.height = 0.0;
+        self.lines = 1;
+        self.last_code = None;
+        // GNU's "If FROM is on a newline, pretend that we start at the
+        // beginning of the next line, because the newline takes no place on
+        // display" (src/xdisp.c:11920) zeroes the iterator's x for the walk --
+        // but not `start_x`, which was read from the iterator just before.
+        if self.origin_is_newline {
+            self.line.restart();
+        }
+    }
 
-        let mut remaining = width;
-        while remaining > 0 {
-            if let Some(wrap_columns) = self.wrap_columns {
-                if self.cur_col >= wrap_columns {
-                    self.soft_wrap();
-                }
-                let available = wrap_columns.saturating_sub(self.cur_col);
-                let advanced = remaining.min(available);
-                self.cur_col = self.cur_col.saturating_add(advanced);
-                remaining = remaining.saturating_sub(advanced);
-                if remaining > 0 {
-                    self.soft_wrap();
-                }
-            } else {
-                self.cur_col = self.cur_col.saturating_add(remaining);
-                remaining = 0;
+    /// True once the y-limit stopped the walk; the caller stops scanning.
+    fn y_limit_reached(&self) -> bool {
+        self.y_limit_stop.is_some()
+    }
+
+    fn line_width(&self) -> f32 {
+        self.line.width(self.cell.width)
+    }
+
+    /// The running row's width in whole text columns, for `(space :align-to N)`
+    /// (an absolute target column).  A row carrying an image has no exact
+    /// column count; the nearest one keeps the target monotonic.
+    fn line_columns(&self) -> usize {
+        (self.line_width() / self.cell.width).round().max(0.0) as usize
+    }
+
+    fn line_height(&self) -> f32 {
+        self.line_ascent + self.line_descent
+    }
+
+    /// Whether the current line has reached the row edge, in which case no
+    /// further element is produced on it (`MOVE_LINE_TRUNCATED`).
+    fn line_at_limit(&self) -> bool {
+        self.line.truncated_at.is_some()
+            || self
+                .edge
+                .is_some_and(|edge| edge.wrap.truncates() && self.line_width() >= edge.x)
+    }
+
+    /// How much room is left on a truncating row before the edge.
+    fn room_to_limit(&self) -> Option<f32> {
+        self.edge
+            .filter(|edge| edge.wrap.truncates())
+            .map(|edge| (edge.x - self.line_width()).max(0.0))
+    }
+
+    /// End the row at the edge, as GNU's `MOVE_LINE_TRUNCATED` does.
+    fn truncate_at_limit(&mut self) {
+        self.line.truncated_at = self.edge.map(|edge| edge.x);
+    }
+
+    /// Place a `display` spec's element on the current line, each in its own
+    /// unit: a stretch counts text cells (so a long line stays exact), an
+    /// image counts its own pixels.
+    fn push_display_element(&mut self, element: DisplayElement) {
+        match element {
+            DisplayElement::Cells(columns) => self.advance_columns(columns),
+            DisplayElement::Pixels(extent) => self.push_element(extent),
+        }
+    }
+
+    /// Fold an element's reach above and below the baseline into the line.
+    fn fold_vertical(&mut self, extent: ElementExtent) {
+        self.line_ascent = self.line_ascent.max(extent.ascent.max(0.0));
+        self.line_descent = self.line_descent.max(extent.descent.max(0.0));
+    }
+
+    /// Place a display element that carries its own PIXEL size -- an image --
+    /// on the current line.
+    ///
+    /// Enforces GNU's two horizontal rules: an element that would start at or
+    /// past the X-LIMIT edge is never produced (`move_it_in_display_line_to`
+    /// returns `MOVE_LINE_TRUNCATED` before `PRODUCE_GLYPHS`, so it contributes
+    /// neither advance nor height), and one that straddles the edge is cropped
+    /// to it (`produce_image_glyph`, src/xdisp.c:32500-32514) while still
+    /// contributing its height: the row is as tall as what it draws.
+    fn push_element(&mut self, extent: ElementExtent) {
+        if self.line.truncated_at.is_some() {
+            return;
+        }
+        if let Some(room) = self.room_to_limit() {
+            if room <= 0.0 {
+                self.truncate_at_limit();
+                return;
             }
-            self.cap_line();
-            if self.line_capped {
+            if extent.advance > room {
+                self.line.pixels += room;
+                self.truncate_at_limit();
+                self.fold_vertical(extent);
+                return;
+            }
+        }
+        // An element that does not fit the wrap edge moves to the next row
+        // before it is produced (GNU wraps in `move_it_in_display_line_to`
+        // before `PRODUCE_GLYPHS`).
+        if let Some(edge) = self.wrapping_edge()
+            && self.line_width() + extent.advance > edge
+            && self.line_width() > 0.0
+        {
+            self.soft_wrap();
+        }
+        self.note_text_baseline();
+        self.line.pixels += extent.advance.max(0.0);
+        self.fold_vertical(extent);
+        if self.line_at_limit() {
+            self.truncate_at_limit();
+        }
+    }
+
+    /// The row edge when the window continues past it instead of truncating.
+    fn wrapping_edge(&self) -> Option<f32> {
+        self.edge
+            .filter(|edge| !edge.wrap.truncates())
+            .map(|edge| edge.x)
+    }
+
+    /// Fold the frame's own character cell into the running row's baseline
+    /// split, as producing a text glyph does.
+    fn note_text_baseline(&mut self) {
+        self.line_ascent = self.line_ascent.max(self.cell.ascent);
+        self.line_descent = self.line_descent.max(self.cell.descent());
+    }
+
+    /// Advance the running line by `columns` text cells.
+    fn advance_columns(&mut self, columns: f32) {
+        if self.line.truncated_at.is_some() {
+            return;
+        }
+        // A run that straddles the truncation edge is displayed up to the edge,
+        // and the row's width is then exactly the edge.
+        if let Some(room) = self.room_to_limit()
+            && columns * self.cell.width > room
+        {
+            self.note_text_baseline();
+            self.line.pixels += room;
+            self.truncate_at_limit();
+            return;
+        }
+        let mut remaining = columns;
+        // A run of text is split across rows at the wrap edge, which is what
+        // the continuation glyph marks.
+        while remaining > 0.0 {
+            self.note_text_baseline();
+            match self.wrapping_edge() {
+                Some(wrap_at) => {
+                    if self.line_width() >= wrap_at {
+                        self.soft_wrap();
+                        self.note_text_baseline();
+                    }
+                    let available = wrap_at - self.line_width();
+                    let advanced = (available / self.cell.width).min(remaining);
+                    self.line.columns += advanced;
+                    remaining -= advanced;
+                    if remaining > 0.0 {
+                        self.soft_wrap();
+                        self.note_text_baseline();
+                    }
+                }
+                None => {
+                    self.line.columns += remaining;
+                    remaining = 0.0;
+                }
+            }
+            if self.line_at_limit() {
+                self.truncate_at_limit();
                 break;
             }
         }
     }
 
+    /// Finish the current row and start the next one.
+    ///
+    /// GNU's `move_it_to` stops at the first row whose pixel span CONTAINS
+    /// Y-LIMIT, restores the iterator to that row's start -- so the row
+    /// contributes no width to `max_current_x` -- and then clamps the height
+    /// to the limit (`if (y > max_y) y = max_y`, src/xdisp.c:12012).  A row
+    /// that TO is reached inside is not rolled back: reaching TO breaks the
+    /// walk before the y test runs.
+    ///
+    /// Rolling the row back here, at the one place a row can end, is what
+    /// keeps the retracted width and the retracted height from disagreeing:
+    /// there is no second counter to decrement.
     fn soft_wrap(&mut self) {
+        if self.roll_back_if_y_limit_lands_inside() {
+            return;
+        }
+        if !self.before_origin() {
+            // The walk from GNU's FROM crossed a display-line boundary, so the
+            // returned width is measured from each row's own left edge rather
+            // than from FROM.
+            self.crossed_display_line = true;
+        }
         self.lines += 1;
-        self.max_cols = self.max_cols.max(self.cur_col);
-        self.cur_col = 0;
-        self.line_capped = false;
+        self.max_width = self.max_width.max(self.line_width());
+        self.height += self.line_height();
+        self.line = LineAdvance::default();
+        self.line_ascent = 0.0;
+        self.line_descent = 0.0;
+    }
+
+    /// Retract the current row and stop the walk when Y-LIMIT lands strictly
+    /// inside it.  Returns whether the walk stopped.
+    ///
+    /// Rows before FROM are not walked by GNU at all -- the iterator is
+    /// rewound to FROM's display line and reset there -- so a limit that lands
+    /// inside one of them must not end the walk.
+    fn roll_back_if_y_limit_lands_inside(&mut self) -> bool {
+        if self.y_limit_stop.is_some() {
+            return true;
+        }
+        if self.before_origin() {
+            return false;
+        }
+        let Some(limit) = self.y_limit else {
+            return false;
+        };
+        let row_top = self.height;
+        if limit >= row_top && limit < row_top + self.line_height() {
+            self.y_limit_stop = Some(limit);
+            return true;
+        }
+        false
+    }
+
+    /// GNU's returned width: the widest display line walked, minus `start_x`
+    /// unless the walk crossed a display-line boundary.
+    fn measurement_width(&self) -> f32 {
+        let widest = if self.y_limit_stop.is_some() {
+            // The row Y-LIMIT landed in was retracted: GNU restored the
+            // iterator to that row's start before recording `max_current_x`,
+            // so whatever width the row had reached is not part of the answer.
+            self.max_width
+        } else {
+            self.max_width.max(self.line_width())
+        };
+        let from_origin = if self.crossed_display_line {
+            0.0
+        } else {
+            self.origin_x
+        };
+        let width = widest - from_origin;
+        // GNU: `if (x > max_x) x = max_x;` (src/xdisp.c:12000), the row edge
+        // when the caller supplied X-LIMIT and the body width otherwise.
+        match self.edge {
+            Some(edge) => width.min(edge.x),
+            None => width,
+        }
     }
 
     /// End the current line, record its width, and reset for the next line.
     fn newline(&mut self) {
-        self.lines += 1;
-        self.max_cols = self.max_cols.max(self.cur_col);
-        self.cur_col = 0;
-        self.line_capped = false;
+        // The newline is a produced element like any other: GNU's iterator
+        // produces it, so `it.max_ascent + it.max_descent` holds the font's
+        // split by the time the row closes and an empty display line is one
+        // cell tall (`abcd\n\nefgh\n` is 60 pixels, not 40), while a row the
+        // walk never entered stays zero.
+        self.note_text_baseline();
+        self.soft_wrap();
     }
 
     /// Account for one character `code` (newline, tab, or normal), tracking it
@@ -866,16 +1329,34 @@ impl ScanState {
     fn push_char(&mut self, code: u32) {
         if code == '\n' as u32 {
             self.newline();
-        } else if !self.line_capped {
+        } else if self.line.truncated_at.is_none() {
             if code == '\t' as u32 {
-                let next_tab = (self.cur_col + 8) & !7;
-                self.advance_columns(next_tab.saturating_sub(self.cur_col));
+                // GNU's tab stops are pixel multiples of
+                // `tab_width * FRAME_COLUMN_WIDTH` from the row's left edge
+                // (`gui_produce_glyphs`, src/xdisp.c), so text after an image
+                // lands on the stop GNU picks.  A row that is all text keeps
+                // whole columns, which is the same stop set.
+                let tab_width = 8.0 * self.cell.width;
+                let x = self.line_width();
+                let next_tab_x = (1.0 + (x / tab_width).floor()) * tab_width;
+                let advance = (next_tab_x - x).max(0.0);
+                if self.line.pixels == 0.0 {
+                    // A text-only row's stops are whole columns; rounding the
+                    // division keeps that exact for a fractional cell width.
+                    self.advance_columns((advance / self.cell.width).round());
+                } else {
+                    self.push_element(ElementExtent {
+                        advance,
+                        ascent: self.cell.ascent,
+                        descent: self.cell.descent(),
+                    });
+                }
             } else {
                 let columns = match self.char_width {
-                    CharColumnWidth::One => 1,
+                    CharColumnWidth::One => 1.0,
                     CharColumnWidth::DisplayWidth => char::from_u32(code)
                         .map(crate::encoding::char_width)
-                        .unwrap_or(1),
+                        .unwrap_or(1) as f32,
                 };
                 self.advance_columns(columns);
             }
@@ -884,31 +1365,62 @@ impl ScanState {
     }
 
     fn finish(mut self) -> RegionTextMetrics {
-        // Match `region_text_metrics`: a trailing newline does not open a line.
+        if let Some(limit) = self.y_limit_stop {
+            // GNU stopped before producing the row Y-LIMIT landed in, and
+            // clamped the height to the limit.
+            return RegionTextMetrics {
+                lines: self.lines,
+                max_width: self.measurement_width(),
+                height: limit,
+            };
+        }
+        // A trailing newline does not open a line, and that empty (never
+        // displayed) line contributes neither width nor height.  The final row
+        // is closed here, where it can still be retracted by Y-LIMIT.
         if self.last_code == Some('\n' as u32) {
             self.lines = self.lines.saturating_sub(1);
+        } else if !self.roll_back_if_y_limit_lands_inside() {
+            self.height += self.line_height();
+        } else {
+            let limit = self.y_limit_stop.expect("rollback records the limit");
+            return RegionTextMetrics {
+                lines: self.lines,
+                max_width: self.measurement_width(),
+                height: limit,
+            };
         }
         RegionTextMetrics {
             lines: self.lines,
-            max_columns: self.max_cols.max(self.cur_col),
+            max_width: self.measurement_width(),
+            height: self.height,
         }
     }
 }
 
-/// If buffer byte `pos` carries a `display` property (text property OR overlay)
-/// whose value is a `(space ...)` spec with a column-bearing keyword, return
-/// `(column_width, run_end_byte)`.  Mirrors the `display`-spec branch of GNU's
-/// display iterator: the covered run is laid out as a single stretch of the
-/// resolved width.  Returns `None` when there is no `display` property, or its
-/// value is not a width-bearing `(space ...)` spec we model.
-fn display_space_run(
+/// The extent of the `display` property at buffer byte `pos`, if its value
+/// replaces the covered text with an element that has its own size.
+///
+/// Returns `(element, run_end_byte)`.  Mirrors the `display`-spec branch of
+/// GNU's display iterator: the covered run is laid out as ONE element -- a
+/// stretch glyph for `(space ...)`, an image glyph for `(image ...)` -- and
+/// the iterator jumps to the end of the run.  `cur_column` is the running row
+/// width in text columns, which `(space :align-to N)` needs (an absolute
+/// target column).
+///
+/// Returns `None` when there is no `display` property, or its value is not a
+/// spec this measurement models.  Deliberately unmodelled: `(slice ...)`,
+/// `(when ...)`, `((margin ...) ...)`, fringe bitmaps and the neomacs media
+/// heads (`video` / `webkit` / `surface`), all of which also replace text on a
+/// window-system frame.
+fn display_element_run(
     eval: &super::eval::Context,
+    frame: FrameId,
     buf: &Buffer,
     pos: usize,
-    cur_col: usize,
+    cur_column: usize,
     display_sym: &Value,
     region_end: usize,
-) -> Option<(usize, usize)> {
+) -> Option<(DisplayElement, usize)> {
     let charpos0 = buf.emacs_byte_pos_to_char_pos_clamped(EmacsBytePos::new(pos));
     let charpos1 = charpos0.get() as i64 + 1;
 
@@ -932,11 +1444,24 @@ fn display_space_run(
         if v.is_nil() { None } else { Some((v, None)) }
     })?;
 
-    // Only `(space ...)` specs affect the measured column width here.
-    if !(display.is_cons() && display.cons_car() == Value::symbol("space")) {
-        return None;
-    }
-    let width = space_spec_advance_columns(display.cons_cdr(), cur_col)?;
+    let element = match super::display_spec::display_spec_kind(display) {
+        super::display_spec::DisplaySpecKind::Space => {
+            let width = space_spec_advance_columns(display.cons_cdr(), cur_column)?;
+            DisplayElement::Cells(width as f32)
+        }
+        // An image replaces its text only on a frame that can display one:
+        // GNU's `valid_image_p` is false without a window system, and the
+        // covered characters are then displayed normally.
+        super::display_spec::DisplaySpecKind::Image
+            if eval
+                .frames
+                .get(frame)
+                .is_some_and(|frame| frame.effective_window_system().is_some()) =>
+        {
+            DisplayElement::Pixels(image_element_extent(eval, frame, display)?)
+        }
+        _ => return None,
+    };
 
     // End of the run: overlay-end for an overlay `display`, else the
     // text-property range end (GNU `OVERLAY_END` vs `get_property_and_range`).
@@ -961,7 +1486,62 @@ fn display_space_run(
             .get()
     };
 
-    Some((width, run_end.min(region_end)))
+    Some((element, run_end.min(region_end)))
+}
+
+/// The display extent of an image spec, in logical pixels.
+///
+/// GNU's `produce_image_glyph` + `image_ascent` (src/xdisp.c:32384-32520,
+/// src/image.c:1887-1924): the glyph advances by the image's width plus one
+/// horizontal margin on each side it reaches, rises `image_ascent` above the
+/// baseline and descends by the rest (plus a vertical margin where the image
+/// touches the cell's top and bottom).  The size itself comes from the image
+/// catalog -- the same lookup redisplay uses -- so a measurement and a
+/// redisplay of the same buffer cannot disagree about how big the image is.
+fn image_element_extent(
+    eval: &super::eval::Context,
+    frame: FrameId,
+    spec: Value,
+) -> Option<ElementExtent> {
+    let live_frame = eval.frames.get(frame)?;
+    let cell = TextCellPixels::new(
+        live_frame.char_width,
+        live_frame.char_height,
+        live_frame.font_cell_ascent(),
+    );
+    let environment = super::image_catalog::image_scale_environment(live_frame, &eval.obarray);
+    let request = super::image::image_resolve_request_from_spec(
+        &spec,
+        environment,
+        eval.face_table().default_face_colors(),
+    )?;
+    let placement = eval
+        .display_host
+        .as_ref()?
+        .image_catalog()?
+        .lookup(request, environment.size_limit())
+        .placement();
+
+    // GNU's glyph arithmetic, for a whole (unsliced) image:
+    //   it->pixel_width = img->width + 2 * img->hmargin
+    //   it->ascent      = image_ascent (img->height + img->vmargin)
+    //   it->descent     = img->height - ascent + 2 * img->vmargin
+    // (`produce_image_glyph`, src/xdisp.c:32447-32463; `image_ascent`,
+    // src/image.c:1887-1924.)
+    let (hmargin, vmargin) = super::image::image_spec_margins(&spec);
+    let (hmargin, vmargin) = (hmargin.max(0.0), vmargin.max(0.0));
+    let image_width = placement.width().max(1) as f32;
+    let image_height = placement.height().max(1) as f32;
+    let width = image_width + 2.0 * hmargin;
+    let height = image_height + 2.0 * vmargin;
+    let ascent = super::image::image_spec_ascent(&spec)
+        .resolve(image_height + vmargin, cell.ascent, cell.descent())
+        .clamp(0.0, height);
+    Some(ElementExtent {
+        advance: width,
+        ascent,
+        descent: (height - ascent).max(0.0),
+    })
 }
 
 /// One overlay string anchored at the scan position, with the metadata GNU's
@@ -1094,6 +1674,7 @@ fn collect_overlay_strings_at(buf: &Buffer, pos: usize, before: bool) -> Vec<Ove
 /// folding each one's laid-out columns (and embedded newlines) into `state`.
 fn process_overlay_strings_at(
     eval: &super::eval::Context,
+    frame: FrameId,
     buf: &Buffer,
     pos: usize,
     display_sym: &Value,
@@ -1103,7 +1684,7 @@ fn process_overlay_strings_at(
         return;
     }
     for entry in collect_overlay_strings_at(buf, pos, true) {
-        walk_overlay_string(eval, entry.string, display_sym, state);
+        walk_overlay_string(eval, frame, entry.string, display_sym, state);
     }
 }
 
@@ -1118,6 +1699,7 @@ fn process_overlay_strings_at(
 /// posframe width.  Other chars count as their display width.
 fn walk_overlay_string(
     eval: &super::eval::Context,
+    frame: FrameId,
     string: Value,
     display_sym: &Value,
     state: &mut ScanState,
@@ -1140,13 +1722,18 @@ fn walk_overlay_string(
         }
 
         // Resolve this string's own `display` property at the char position.  A
-        // width-bearing `(space ...)` spec replaces the run up to the next
-        // `display` change, advancing the column by the resolved width.
-        if let Some((width, run_end_char)) =
-            string_display_space_run(eval, string, char_index, state.cur_col, display_sym)
-            && run_end_char > char_index
+        // spec that replaces its text -- `(space ...)`, an image -- covers the
+        // run up to the next `display` change and defines its extent.
+        if let Some((element, run_end_char)) = string_display_element_run(
+            eval,
+            frame,
+            string,
+            char_index,
+            state.line_columns(),
+            display_sym,
+        ) && run_end_char > char_index
         {
-            state.advance_columns(width);
+            state.push_display_element(element);
             // Skip the covered chars (advance both char and byte cursors).
             let mut skip = run_end_char.min(schars) - char_index;
             while skip > 0 && byte_off < bytes.len() {
@@ -1175,19 +1762,21 @@ fn walk_overlay_string(
     }
 }
 
-/// String-object analogue of [`display_space_run`]: if the overlay string
-/// carries a `display` text property at char position `char_index` whose value
-/// is a width-bearing `(space ...)` spec, return `(column_width, run_end_char)`.
+/// String-object analogue of [`display_element_run`]: the element an overlay
+/// string's own `display` text property contributes at char position
+/// `char_index`, with the position its run ends at.
+///
 /// `cur_col` is the running column at the spec, needed for `:align-to` (an
 /// absolute target).  `run_end_char` is the next `display`-property change in
 /// the string (the end of the covered run), defaulting to the string length.
-fn string_display_space_run(
+fn string_display_element_run(
     eval: &super::eval::Context,
+    frame: FrameId,
     string: Value,
     char_index: usize,
     cur_col: usize,
     display_sym: &Value,
-) -> Option<(usize, usize)> {
+) -> Option<(DisplayElement, usize)> {
     // `get-text-property` on a string takes a 0-based char position.
     let display = super::textprop::builtin_get_text_property_in_state(
         &eval.obarray,
@@ -1196,11 +1785,20 @@ fn string_display_space_run(
     )
     .ok()?;
 
-    // Only `(space ...)` specs affect the measured column width here.
-    if !(display.is_cons() && display.cons_car() == Value::symbol("space")) {
-        return None;
-    }
-    let width = space_spec_advance_columns(display.cons_cdr(), cur_col)?;
+    let element = match super::display_spec::display_spec_kind(display) {
+        super::display_spec::DisplaySpecKind::Space => {
+            DisplayElement::Cells(space_spec_advance_columns(display.cons_cdr(), cur_col)? as f32)
+        }
+        super::display_spec::DisplaySpecKind::Image
+            if eval
+                .frames
+                .get(frame)
+                .is_some_and(|frame| frame.effective_window_system().is_some()) =>
+        {
+            DisplayElement::Pixels(image_element_extent(eval, frame, display)?)
+        }
+        _ => return None,
+    };
 
     let schars = string.as_lisp_string().map(|s| s.schars()).unwrap_or(0);
     let run_end_char = super::textprop::builtin_next_single_property_change_in_state(
@@ -1216,7 +1814,7 @@ fn string_display_space_run(
     .unwrap_or(schars)
     .min(schars);
 
-    Some((width, run_end_char))
+    Some((element, run_end_char))
 }
 
 fn trim_window_text_to_non_empty_line_end(bytes: &[u8]) -> &[u8] {
@@ -4322,8 +4920,10 @@ fn window_text_pixel_offset_target(
 
 /// `(window-text-pixel-size &optional WINDOW FROM TO X-LIMIT Y-LIMIT MODE)` evaluator-backed variant.
 ///
-/// Computes approximate pixel dimensions of text in the window region.
-/// Uses the frame's character width/height as a monospace approximation.
+/// Computes the region's dimensions in pixels the way GNU's display iterator
+/// does: text is approximated by the frame's character cell, and a `display`
+/// property that replaces its text -- an image -- contributes its own measured
+/// advance and baseline split (see [`region_text_metrics_with_display`]).
 pub(crate) fn builtin_window_text_pixel_size_ctx(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
@@ -4331,23 +4931,28 @@ pub(crate) fn builtin_window_text_pixel_size_ctx(
     expect_args_range("window-text-pixel-size", &args, 0, 7)?;
     let (fid, wid) = resolve_live_window_for_text_pixel_size(&eval.frames, args.first())?;
 
-    let Some((buf_id, char_w, char_h, tty_body_columns)) = eval.frames.get(fid).and_then(|frame| {
+    let cell = eval
+        .frames
+        .get(fid)
+        .map(|frame| {
+            TextCellPixels::new(
+                frame.char_width,
+                frame.char_height,
+                frame.font_cell_ascent(),
+            )
+        })
+        .unwrap_or_else(|| TextCellPixels::new(1.0, 1.0, 1.0));
+    let char_h = cell.height;
+    let Some((buf_id, is_terminal)) = eval.frames.get(fid).and_then(|frame| {
         let window = frame.find_window(wid)?;
         let buf_id = window.buffer_id()?;
-        let tty_body_columns = frame.effective_window_system().is_none().then(|| {
-            let body_pixels =
-                super::window_cmds::window_body_width_pixels(&eval.frames, fid, window).max(0);
-            (body_pixels as f32 / frame.char_width.max(1.0)).floor() as usize
-        });
-        Some((
-            buf_id,
-            frame.char_width,
-            frame.char_height,
-            tty_body_columns,
-        ))
+        Some((buf_id, frame.effective_window_system().is_none()))
     }) else {
         return Ok(Value::cons(Value::fixnum(0), Value::fixnum(0)));
     };
+    // GNU's `it.line_wrap` is resolved once per window+buffer pair and decides
+    // what happens at the row edge; it is the only input that does.
+    let line_wrap = window_line_wrap(eval, wid, buf_id);
     // GNU `window-text-pixel-size' is
     // (WINDOW &optional FROM TO X-LIMIT Y-LIMIT MODE-LINES IGNORE-LINE-AT-END),
     // so Y-LIMIT is argument 4.  It was never read: the scanner was handed
@@ -4357,15 +4962,12 @@ pub(crate) fn builtin_window_text_pixel_size_ctx(
     // whole buffer.  GNU stops after one frame's worth of rows: 2,154ms
     // against its flat 31ms on a 320,000-character buffer.
     //
-    // Y-LIMIT is in PIXELS and the scanner's cap is in LINES, so it has to be
-    // converted.  GNU's `move_it_to' stops once the row's y REACHES the
-    // limit, and that row still counts, which is the `+ 1`: with a char
-    // height of 1, Y-LIMIT 5 yields 6 rows.
+    // Y-LIMIT is in PIXELS, which is the unit the scanner now works in: GNU
+    // stops the walk at the first row whose pixel span contains it and clamps
+    // the returned height to it (`if (y > max_y) y = max_y`, src/xdisp.c:12012).
     let y_limit = match args.get(4) {
         Some(value) if !value.is_nil() && !value.is_t() => match value.kind() {
-            ValueKind::Fixnum(pixels) if pixels >= 0 => {
-                Some((pixels as f32 / char_h.max(1.0)).floor() as usize + 1)
-            }
+            ValueKind::Fixnum(pixels) if pixels >= 0 => Some(pixels as f32),
             _ => {
                 return Err(signal(
                     LispCondition::WrongTypeArgument,
@@ -4375,18 +4977,37 @@ pub(crate) fn builtin_window_text_pixel_size_ctx(
         },
         _ => None,
     };
-    let (default_x_limit, wrap_columns) = tty_body_columns
-        .map(|body_columns| {
-            let line_wrap = super::window_cmds::window_line_wrap(
-                eval,
-                Some(Value::make_window(wid.0)),
-                buf_id,
-                MotionEngine::DisplayIterator,
-            );
-            TtyWindowTextLineMeasurement::from_display_policy(line_wrap, body_columns)
-                .scanner_limits()
-        })
-        .unwrap_or((None, None));
+    // X-LIMIT is argument 3, in PIXELS.  GNU has exactly three cases and they
+    // are not "some value or none":
+    //
+    //     if (RANGED_FIXNUMP (0, x_limit, INT_MAX))  max_x = XFIXNUM (x_limit);
+    //     else if (!NILP (x_limit))                  max_x = INT_MAX;
+    //
+    // (src/xdisp.c:11796-11799).  So a fixnum replaces the row edge whole
+    // (`it.last_visible_x = max_x`, src/xdisp.c:11924, keeping the window's
+    // `line_wrap`); anything else non-nil -- `t` included, and a negative or
+    // non-numeric value too -- is unbounded; and nil leaves the edge
+    // `init_iterator` set, which is the window's BODY width (`it.last_visible_x
+    // = it.first_visible_x + body_width`, src/xdisp.c:3507).  That last case is
+    // why a truncated line cannot measure wider than the window; Neomacs applied
+    // it to terminal frames only, in COLUMNS, and left a GUI frame's row
+    // officially unbounded.
+    let explicit_x_limit = match x_limit_arg(args.get(3)) {
+        XLimitArg::Body => None,
+        XLimitArg::Unbounded => Some(RowEdge::new(i32::MAX as f32, line_wrap)),
+        XLimitArg::Pixels(pixels) => Some(RowEdge::new(pixels, line_wrap)),
+    };
+    let body_edge = eval.frames.get(fid).and_then(|frame| {
+        let window = frame.find_window(wid)?;
+        window_body_row_edge(
+            &eval.frames,
+            fid,
+            window,
+            is_terminal,
+            frame.char_width,
+            line_wrap,
+        )
+    });
 
     let (initial_from_pos, to_pos, y_offset, max_offset_rows) = {
         let Some(buf) = eval.buffers.get(buf_id) else {
@@ -4407,6 +5028,33 @@ pub(crate) fn builtin_window_text_pixel_size_ctx(
                 .saturating_add(1),
         )
     };
+
+    // Precision scrolling measures backwards from the current row boundary,
+    // excluding that row. Use the same offscreen producer as display motion;
+    // multiplying source lines by the default font height loses pixels on
+    // every crossing of a mixed-font, raised, wrapped, or overlay row.
+    if let Some(offset) = y_offset.filter(|offset| *offset < 0)
+        && initial_from_pos == to_pos
+        && args.get(3).is_none_or(|v| v.is_nil())
+        && args.get(4).is_none_or(|v| v.is_nil())
+        && args.get(5).is_none_or(|v| v.is_nil())
+        && args.get(6).is_some_and(|v| v.is_truthy())
+    {
+        let origin = eval
+            .buffers
+            .get(buf_id)
+            .expect("resolved buffer")
+            .emacs_byte_pos_to_lisp_char_pos(initial_from_pos);
+        if let Some(extent) =
+            motion::pixels::backward_extent(eval, fid, wid, buf_id, origin, offset)?
+        {
+            return Ok(Value::list(vec![
+                Value::fixnum(extent.width),
+                Value::fixnum(extent.height),
+                Value::fixnum(extent.start.as_i64()),
+            ]));
+        }
+    }
 
     // Determine FROM/TO range.
     let (from_pos, offset_landed_on_occupied_row) = if let Some(y_offset) = y_offset {
@@ -4443,36 +5091,62 @@ pub(crate) fn builtin_window_text_pixel_size_ctx(
         eval.add_to_log(&diagnostic);
     }
 
-    // Count lines and max columns in the region, honoring `display` text
-    // properties (e.g. `(space :align-to N)`) that change a line's pixel width.
+    // GNU measures from the beginning of FROM's DISPLAY line, not from FROM:
+    // `window_text_pixel_size` rewinds the iterator (`move_it_by_lines (&it,
+    // 0)`, then `it.current_x = it.hpos = it.wrap_prefix_width = 0`,
+    // src/xdisp.c:11833-11899) and keeps the x it reaches at FROM as `start_x`,
+    // returning `x - start_x`.  The prefix of FROM's line is therefore inside
+    // the measurement -- which is why `abcd\n` reports 36 from every start
+    // position, not 36/27/18/9.
+    //
+    // A FROM given as `(POS . VOFFSET)` skips the rewind: GNU takes a wholly
+    // different branch there, moving the iterator vertically by VOFFSET and
+    // leaving `start_x` at the x the offset landed on.
+    let measured = {
+        let Some(buf) = eval.buffers.get(buf_id) else {
+            return Ok(Value::cons(Value::fixnum(0), Value::fixnum(0)));
+        };
+        let line_start = if y_offset.is_some() {
+            from_pos
+        } else {
+            display_line_start_byte(buf, from_pos)
+        };
+        MeasuredRange {
+            line_start,
+            from: from_pos,
+            to: to_pos,
+        }
+    };
+
+    // Measure the region in pixels, honoring `display` text properties: a
+    // `(space :align-to N)` stretch, or an image, which contributes its own
+    // width and its own baseline split.
+    let edge = explicit_x_limit.or(body_edge);
     let mut text_metrics = region_text_metrics_with_display(
         eval,
+        fid,
         buf_id,
-        from_pos,
-        to_pos,
+        measured,
         apply_trim,
+        cell,
         CharColumnWidth::One,
-        default_x_limit,
+        edge,
         y_limit,
-        wrap_columns,
     );
     if offset_landed_on_occupied_row && from_pos >= to_pos {
         // GNU keeps the adjusted iterator's current row in the vertical
         // extent even when its original, pre-clipped TO is now at or before
         // FROM.  No text width is traversed in that case.
-        text_metrics = RegionTextMetrics {
-            lines: 1,
-            max_columns: 0,
-        };
+        text_metrics = RegionTextMetrics::empty_row(char_h);
     }
 
-    let width = (text_metrics.max_columns as f32 * char_w).ceil() as i64;
+    let width = text_metrics.max_width.ceil() as i64;
     let mode_line_rows = if window_text_pixel_size_includes_mode_line(args.get(5)) {
         1.0
     } else {
         0.0
     };
-    let height = ((text_metrics.lines as f32 + mode_line_rows) * char_h).ceil() as i64;
+    let height = (text_metrics.height + mode_line_rows * char_h).ceil() as i64;
 
     if let Some(reported_start) = reported_start {
         Ok(Value::list(vec![
@@ -4483,6 +5157,99 @@ pub(crate) fn builtin_window_text_pixel_size_ctx(
     } else {
         Ok(Value::cons(Value::fixnum(width), Value::fixnum(height)))
     }
+}
+
+/// GNU's three-way X-LIMIT argument (src/xdisp.c:11796-11799).
+enum XLimitArg {
+    /// nil or omitted: keep `init_iterator`'s edge, the window's body width.
+    Body,
+    /// `t`, a negative fixnum, or any other non-nil non-fixnum: `max_x =
+    /// INT_MAX`, an unbounded row.
+    Unbounded,
+    /// A non-negative fixnum: the row edge itself.
+    Pixels(f32),
+}
+
+fn x_limit_arg(value: Option<&Value>) -> XLimitArg {
+    match value {
+        None => XLimitArg::Body,
+        Some(value) if value.is_nil() => XLimitArg::Body,
+        Some(value) => match value.as_int().filter(|pixels| *pixels >= 0) {
+            Some(pixels) => XLimitArg::Pixels(if pixels > i64::from(i32::MAX) {
+                i32::MAX as f32
+            } else {
+                pixels as f32
+            }),
+            None => XLimitArg::Unbounded,
+        },
+    }
+}
+
+/// The window's `truncate-lines` / `word-wrap` decision, from a window
+/// identity the caller has already decoded.
+fn window_line_wrap(
+    eval: &mut super::eval::Context,
+    window_id: crate::window::WindowId,
+    buffer_id: BufferId,
+) -> LineWrap {
+    super::window_cmds::window_line_wrap(
+        eval,
+        Some(Value::make_window(window_id.0)),
+        buffer_id,
+        MotionEngine::DisplayIterator,
+    )
+}
+
+/// GNU's default row edge when X-LIMIT is nil: the window's BODY width.
+///
+/// `init_iterator` sets `it.last_visible_x = it.first_visible_x +
+/// window_box_width (w, TEXT_AREA)` (src/xdisp.c:3507) and then takes the
+/// truncation or continuation glyph's width back off for a window with no
+/// right fringe (src/xdisp.c:3508-3516) -- which is every terminal window.
+/// `window_body_width (w, WINDOW_BODY_IN_PIXELS)` is that same text-area width.
+///
+/// A terminal window is expressed in columns first, because its pixel geometry
+/// is derived from the character grid and GNU's reserve is exactly one column;
+/// a window-system window keeps the exact pixel width.
+fn window_body_row_edge(
+    frames: &FrameManager,
+    fid: FrameId,
+    window: &crate::window::Window,
+    is_terminal: bool,
+    char_width: f32,
+    line_wrap: LineWrap,
+) -> Option<RowEdge> {
+    let body_pixels = super::window_cmds::window_body_width_pixels(frames, fid, window);
+    if body_pixels <= 0 {
+        return None;
+    }
+    if is_terminal {
+        let columns = (body_pixels as f32 / char_width.max(1.0)).floor() as usize;
+        return Some(RowEdge::tty(columns, char_width, line_wrap));
+    }
+    Some(RowEdge::new(body_pixels as f32, line_wrap))
+}
+
+/// First byte of the display line that `from` sits on.
+///
+/// This is the position GNU rewinds to with `move_it_by_lines (&it, 0)`:
+/// the beginning of FROM's *screen* line.  For a soft-wrapped line the true
+/// screen line starts later than the logical one, so this returns the logical
+/// line start and lets the scanner -- which knows [`RowEdge::wrap`] -- discard
+/// the rows before FROM.  That is exactly what GNU's `it.current_y = start_y`
+/// reset does after its own forward walk (src/xdisp.c:11906).
+fn display_line_start_byte(buf: &crate::buffer::Buffer, from: EmacsBytePos) -> EmacsBytePos {
+    let begin = buf.accessible_emacs_byte_region().start().get();
+    let mut pos = from.get();
+    while pos > begin {
+        // Newline bytes cannot occur inside a multi-byte character in emacs
+        // byte encoding, so a raw backwards scan is safe.
+        if buf.emacs_byte_at_pos(EmacsBytePos::new(pos - 1)) == Some(b'\n') {
+            break;
+        }
+        pos -= 1;
+    }
+    EmacsBytePos::new(pos)
 }
 
 fn resolve_live_window_for_text_pixel_size(
@@ -4794,13 +5561,18 @@ fn window_line_height_impl(
     {
         let line_spec = args.first().copied().unwrap_or(Value::NIL);
         let metrics = if line_spec.is_nil() {
-            resolve_exact_visible_metrics(frames, buffers, args.get(1), None)?.and_then(
-                |(_, metrics)| {
-                    snapshot
-                        .row_metrics(metrics.row)
-                        .map(|row| snapshot_text_row_line_metrics(snapshot, row))
-                },
-            )
+            resolve_exact_visible_metrics(
+                frames,
+                buffers,
+                args.get(1),
+                None,
+                PositionGeometrySource::Presented,
+            )?
+            .and_then(|(_, metrics)| {
+                snapshot
+                    .row_metrics(metrics.row)
+                    .map(|row| snapshot_text_row_line_metrics(snapshot, row))
+            })
         } else if let Some(selector) = WindowLineSelector::from_lisp_value(line_spec) {
             snapshot_chrome_line_metrics(snapshot, selector)
         } else {
@@ -5935,6 +6707,11 @@ fn live_window_display_context_with_all_text(
     Ok(Some(ctx))
 }
 
+#[cfg(test)]
+thread_local! {
+    static APPROX_WINDOW_TEXT_COPIED_CHARS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The buffer's characters in `[start, end)` (0-based, clamped to Z).
 fn approx_window_text(
     buffer: &crate::buffer::Buffer,
@@ -5944,6 +6721,8 @@ fn approx_window_text(
     let total_chars = buffer.total_char_len().get();
     let end = end.min(total_chars);
     let start = start.min(end);
+    #[cfg(test)]
+    APPROX_WINDOW_TEXT_COPIED_CHARS.with(|count| count.set(count.get() + end - start));
     let byte = |char_pos: usize| {
         buffer.char_pos_to_emacs_byte_pos_clamped(crate::buffer::CharPos0::new(char_pos))
     };
@@ -6030,35 +6809,84 @@ fn resolve_pos_visible_target_lisp_pos(
     ctx: &ApproxWindowDisplayContext,
     pos: Option<&Value>,
 ) -> Result<Option<LispCharPos1>, Flow> {
-    match pos {
+    resolve_target_position_value(pos, ctx.total_chars, ctx.window_point, || {
+        ctx.last_visible_row_start
+    })
+}
+
+/// Decode only the target position. Exact geometry consumers do not need an
+/// approximate text copy, and ordinary point/integer queries need no line scan.
+fn resolve_target_position_value(
+    pos: Option<&Value>,
+    total_chars: usize,
+    window_point: LispCharPos1,
+    last_visible_row_start: impl FnOnce() -> usize,
+) -> Result<Option<LispCharPos1>, Flow> {
+    let lisp_pos = match pos {
         Some(value) if value.is_t() || value.is_symbol_named("t") => {
-            Ok(Some(last_visible_row_start_lisp_pos(ctx)))
+            last_visible_row_start().saturating_add(1)
         }
         Some(value) if !value.is_nil() => {
             expect_integer_or_marker(value)?;
-            let lisp_pos = value.as_int().unwrap_or(0).max(1) as usize;
-            Ok(Some(LispCharPos1::from_one_based_usize(
-                lisp_pos.min(ctx.total_chars.saturating_add(1)),
-            )))
+            value.as_int().unwrap_or(0).max(1) as usize
         }
-        _ => Ok(Some(current_window_point_lisp(ctx))),
-    }
+        _ => window_point.to_one_based_usize(),
+    };
+    Ok(Some(LispCharPos1::from_one_based_usize(
+        lisp_pos.min(total_chars.saturating_add(1)),
+    )))
 }
 
-fn current_window_point_lisp(ctx: &ApproxWindowDisplayContext) -> LispCharPos1 {
-    LispCharPos1::from_one_based_usize(
-        ctx.window_point
+fn resolve_live_target_position(
+    frames: &crate::window::FrameManager,
+    buffers: &crate::buffer::BufferManager,
+    fid: FrameId,
+    wid: WindowId,
+    pos: Option<&Value>,
+) -> Result<Option<LispCharPos1>, Flow> {
+    let Some(frame) = frames.get(fid) else {
+        return Ok(None);
+    };
+    let Some(window) = frame.find_window(wid) else {
+        return Ok(None);
+    };
+    let Some(buffer) = window.buffer_id().and_then(|id| buffers.get(id)) else {
+        return Ok(None);
+    };
+    let Window::Leaf {
+        bounds,
+        window_start,
+        point,
+        ..
+    } = window
+    else {
+        return Ok(None);
+    };
+    let window_point = if frame.selected_window == wid {
+        buffer.point_char_pos().to_lisp()
+    } else {
+        (*point).max(LispCharPos1::ONE)
+    };
+    let total_chars = buffer.total_char_len().get();
+    resolve_target_position_value(pos, total_chars, window_point, || {
+        // Preserve the approximate POS=t convention without materializing text.
+        // This scan is lazy: the common point and integer cases are O(1).
+        let char_height = frame.char_height.max(1.0).round() as i64;
+        let body_top = bounds.y.max(0.0) as i64;
+        let body_bottom = (bounds.y + bounds.height).max(0.0) as i64
+            - if frame.minibuffer_window == Some(wid) {
+                0
+            } else {
+                char_height
+            };
+        let body_height = (body_bottom - body_top).max(1);
+        let body_lines = ((body_height + char_height - 1) / char_height).max(1);
+        let start = window_start
             .to_one_based_usize()
-            .min(ctx.total_chars.saturating_add(1)),
-    )
-}
-
-fn last_visible_row_start_lisp_pos(ctx: &ApproxWindowDisplayContext) -> LispCharPos1 {
-    LispCharPos1::from_one_based_usize(
-        ctx.last_visible_row_start
-            .saturating_add(1)
-            .min(ctx.total_chars.saturating_add(1)),
-    )
+            .saturating_sub(1)
+            .min(total_chars);
+        nth_line_start_in_buffer(buffer, start, body_lines.saturating_sub(1), total_chars)
+    })
 }
 
 /// The visual row and column of `lisp_pos` counted from `start_char`.
@@ -6272,7 +7100,10 @@ fn live_position_visibility(
     if let Some(snapshot) = eval.fresh_window_display_snapshot(fid, wid, buffer_id) {
         return Ok(Some(measure(snapshot)));
     }
-    match eval.query_window_layout(fid, wid) {
+    let scope = pos.map_or(crate::window::WindowLayoutQueryScope::Viewport, |target| {
+        crate::window::WindowLayoutQueryScope::Position { target }
+    });
+    match eval.query_window_layout_scope(fid, wid, scope) {
         crate::window::WindowLayoutQueryOutcome::Ready(query) => {
             Ok(query.into_geometry().as_ref().map(measure))
         }
@@ -6450,6 +7281,14 @@ fn approximate_point_at_coords(
     }))
 }
 
+/// Lisp motion queries use current redisplay rows, recomputed when stale.
+/// Native pointer events retain their captured presentation coordinates.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PositionGeometrySource {
+    Redisplay,
+    Presented,
+}
+
 /// Result of asking an immutable GUI presentation for one buffer position.
 ///
 /// A live Emacs window and the renderer's active presentation are updated on
@@ -6520,26 +7359,29 @@ fn resolve_exact_visible_metrics_with_layout(
     window: Option<&Value>,
     pos: Option<&Value>,
 ) -> Result<Option<(WindowId, ExactVisibleMetrics)>, Flow> {
-    // Prefer retained rows only while they are still VALID for the live
-    // window.  Their columns are window-relative and therefore meaningless
-    // without the horizontal origin they were produced at; see the freshness
-    // note in `compute_terminal_window_geometry`.
-    let retained_rows_valid = retained_rows_answer_for_live_window(eval, window)?;
-    if retained_rows_valid
-        && let Some(found) =
-            resolve_exact_visible_metrics(&eval.frames, &eval.buffers, window, pos)?
-    {
-        return Ok(Some(found));
-    }
     let Some((fid, wid)) = resolve_live_window_identity(&eval.frames, window)? else {
         return Ok(None);
     };
-    if let Some(geometry) = compute_terminal_window_geometry(eval, fid, wid)? {
-        let Some(ctx) = resolve_live_window_display_context(&eval.frames, &eval.buffers, window)?
+    // Prefer retained rows only while they are still VALID for the live
+    // window.  Their columns are window-relative and therefore meaningless
+    // without the horizontal origin they were produced at; see the freshness
+    // note in `compute_live_window_geometry`.
+    let retained_rows_valid = retained_rows_answer_for_live_window(eval, window)?;
+    if retained_rows_valid
+        && let Some(found) = resolve_exact_visible_metrics(
+            &eval.frames,
+            &eval.buffers,
+            window,
+            pos,
+            PositionGeometrySource::Redisplay,
+        )?
+    {
+        return Ok(Some(found));
+    }
+    if let Some(geometry) = compute_live_window_geometry(eval, fid, wid)? {
+        let Some(pos_lisp) =
+            resolve_live_target_position(&eval.frames, &eval.buffers, fid, wid, pos)?
         else {
-            return Ok(None);
-        };
-        let Some(pos_lisp) = resolve_pos_visible_target_lisp_pos(&ctx, pos)? else {
             return Ok(None);
         };
         return Ok(geometry
@@ -6554,7 +7396,13 @@ fn resolve_exact_visible_metrics_with_layout(
     // answer rather than nothing -- which is exactly what they did before the
     // preference above, so the freshness gate can only replace a stale answer
     // with a recomputed one and never with silence.
-    resolve_exact_visible_metrics(&eval.frames, &eval.buffers, window, pos)
+    resolve_exact_visible_metrics(
+        &eval.frames,
+        &eval.buffers,
+        window,
+        pos,
+        PositionGeometrySource::Presented,
+    )
 }
 
 /// Whether the retained row map for WINDOW still describes the live window.
@@ -6563,9 +7411,9 @@ fn resolve_exact_visible_metrics_with_layout(
 /// `Context::fresh_window_display_snapshot` compares the whole
 /// [`crate::window::WindowDisplaySnapshotFreshness`] token, whose fields are
 /// deliberately opaque so that "individual snapshot consumers [cannot] invent
-/// partial freshness checks that drift apart".  A window-system frame answers
-/// posn queries from its presented geometry, which carries its own staleness
-/// states (see [`PresentedBufferPosition`]), so it is not this question.
+/// partial freshness checks that drift apart". This includes graphical
+/// windows: a renderer acknowledgement does not make old scroll coordinates
+/// suitable for a new Lisp motion query.
 fn retained_rows_answer_for_live_window(
     eval: &super::eval::Context,
     window: Option<&Value>,
@@ -6576,9 +7424,6 @@ fn retained_rows_answer_for_live_window(
     let Some(frame) = eval.frames.get(fid) else {
         return Ok(true);
     };
-    if frame.effective_window_system().is_some() {
-        return Ok(true);
-    }
     let Some(buffer_id) = frame.find_window(wid).and_then(|window| window.buffer_id()) else {
         return Ok(true);
     };
@@ -6592,6 +7437,7 @@ fn resolve_exact_visible_metrics(
     buffers: &crate::buffer::BufferManager,
     window: Option<&Value>,
     pos: Option<&Value>,
+    source: PositionGeometrySource,
 ) -> Result<Option<(WindowId, ExactVisibleMetrics)>, Flow> {
     let Some((fid, wid)) = resolve_live_window_identity(frames, window)? else {
         return Ok(None);
@@ -6599,10 +7445,7 @@ fn resolve_exact_visible_metrics(
     let Some(frame) = frames.get(fid) else {
         return Ok(None);
     };
-    let Some(ctx) = resolve_live_window_display_context(frames, buffers, window)? else {
-        return Ok(None);
-    };
-    let Some(pos_lisp) = resolve_pos_visible_target_lisp_pos(&ctx, pos)? else {
+    let Some(pos_lisp) = resolve_live_target_position(frames, buffers, fid, wid, pos)? else {
         return Ok(None);
     };
     if frame.effective_window_system().is_none() {
@@ -6613,7 +7456,11 @@ fn resolve_exact_visible_metrics(
             .point_for_buffer_pos(pos_lisp)
             .map(|point| (wid, exact_metrics_from_redisplay_point(snapshot, point))));
     }
-    let Some(publication) = frame.active_presentation_geometry() else {
+    let publication = match source {
+        PositionGeometrySource::Redisplay => frame.completed_presentation_geometry(),
+        PositionGeometrySource::Presented => frame.active_presentation_geometry(),
+    };
+    let Some(publication) = publication else {
         return Ok(None);
     };
     let point = match resolve_presented_buffer_position(publication, wid, pos_lisp)
@@ -6991,17 +7838,34 @@ pub(crate) fn builtin_posn_at_x_y(eval: &mut super::eval::Context, args: Vec<Val
     // a window redisplay has not drawn yet.
     // `posn-at-x-y` takes a FRAME-OR-WINDOW, so it resolves the target through
     // its own designator rule rather than the window-only one.
-    let computed = match resolve_posn_at_xy_window(&eval.frames, args.get(2))? {
-        Some((fid, wid, _)) => compute_terminal_window_geometry(eval, fid, wid)?,
-        None => None,
+    let (computed, source) = match resolve_posn_at_xy_window(&eval.frames, args.get(2))? {
+        Some((fid, wid, _)) => {
+            let computed = compute_live_window_geometry(eval, fid, wid)?;
+            let fresh =
+                retained_rows_answer_for_live_window(eval, Some(&Value::make_window(wid.0)))?;
+            let source = if computed.is_some() || fresh {
+                PositionGeometrySource::Redisplay
+            } else {
+                PositionGeometrySource::Presented
+            };
+            (computed, source)
+        }
+        None => (None, PositionGeometrySource::Presented),
     };
-    posn_at_x_y_impl(&mut eval.frames, &mut eval.buffers, computed.as_ref(), args)
+    posn_at_x_y_impl(
+        &mut eval.frames,
+        &mut eval.buffers,
+        computed.as_ref(),
+        source,
+        args,
+    )
 }
 
-/// Run the canonical row producer for one terminal window that redisplay has
-/// left no rows for; `None` whenever the retained snapshot can answer, the
-/// frame is not a live terminal frame, or no frontend adapter is installed.
-fn compute_terminal_window_geometry(
+/// Run the canonical row producer when the live window has no current rows.
+/// This does not publish or activate a presentation. `None` means a fresh
+/// redisplay snapshot can answer, the frame is not interactive, or no frontend
+/// adapter is installed.
+fn compute_live_window_geometry(
     eval: &mut super::eval::Context,
     fid: FrameId,
     wid: WindowId,
@@ -7009,10 +7873,10 @@ fn compute_terminal_window_geometry(
     let Some(frame) = eval.frames.get(fid) else {
         return Ok(None);
     };
-    // GNU's own gate: `pos_visible_p` returns false immediately for
-    // `FRAME_INITIAL_P`, and a window-system frame answers from its presented
-    // geometry rather than from a terminal row walk.
-    if frame.initial || frame.effective_window_system().is_some() || eval.noninteractive() {
+    // GNU's coordinate queries walk from the live window start even on a
+    // graphical frame. Using the renderer's older presentation during queued
+    // pixel-scroll commands makes point correction undo part of the gesture.
+    if frame.initial || eval.noninteractive() {
         return Ok(None);
     }
     // A populated snapshot that is still FRESH already answered (or correctly
@@ -7303,6 +8167,7 @@ fn posn_at_x_y_impl(
     frames: &mut crate::window::FrameManager,
     buffers: &mut crate::buffer::BufferManager,
     computed: Option<&WindowDisplaySnapshot>,
+    source: PositionGeometrySource,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("posn-at-x-y", &args, 2, 4)?;
@@ -7320,8 +8185,12 @@ fn posn_at_x_y_impl(
         return Ok(Value::NIL);
     };
 
-    if frame.effective_window_system().is_some() {
-        let publication = frame.active_presentation_geometry().ok_or_else(|| {
+    if computed.is_none() && frame.effective_window_system().is_some() {
+        let publication = match source {
+            PositionGeometrySource::Redisplay => frame.completed_presentation_geometry(),
+            PositionGeometrySource::Presented => frame.active_presentation_geometry(),
+        };
+        let publication = publication.ok_or_else(|| {
             signal(
                 LispCondition::Error,
                 vec![Value::string("GUI frame has no presented geometry")],
@@ -7851,6 +8720,8 @@ pub enum SnapshotFormat {
     TextFaces,
     /// Full-fidelity JSON: serde on the real protocol structs.
     Json,
+    /// Frame and window geometry without replay assets or glyph matrices.
+    JsonGeometry,
 }
 
 /// One `neomacs--frame-snapshot` request, handed to the frontend hook.
@@ -7864,7 +8735,7 @@ pub struct SnapshotRequest {
 /// FRAME argument). FRAME: nil = selected frame, t = all visible frames, or
 /// a live frame object (a fixnum frame id is also accepted, mirroring
 /// `frame_id_from_designator` in font.rs). FORMAT: nil/`text`,
-/// `text-faces`, or `json`.
+/// `text-faces`, `json`, or `json-geometry`.
 fn snapshot_request_from_args(
     eval: &super::eval::Context,
     rest: &[Value],
@@ -7901,11 +8772,12 @@ fn snapshot_request_from_args(
             Some("text") => SnapshotFormat::Text,
             Some("text-faces") => SnapshotFormat::TextFaces,
             Some("json") => SnapshotFormat::Json,
+            Some("json-geometry") => SnapshotFormat::JsonGeometry,
             _ => {
                 return Err(signal(
                     "error",
                     vec![Value::string(format!(
-                        "Invalid frame snapshot format: {value} (use text, text-faces or json)"
+                        "Invalid frame snapshot format: {value} (use text, text-faces, json or json-geometry)"
                     ))],
                 ));
             }
@@ -8014,7 +8886,7 @@ pub(crate) fn builtin_buffer_text_pixel_size(
     // that named `window-live-p` while enforcing `windowp`, so every window
     // object was accepted -- and it ran AFTER the buffer was resolved, so a bad
     // buffer name masked a bad window.
-    crate::emacs_core::window_cmds::decode_live_window_id(eval, args.get(1))?;
+    let window_id = crate::emacs_core::window_cmds::decode_live_window_id(eval, args.get(1))?;
 
     // GNU `buffer-text-pixel-size` returns PIXELS: the measured column/row counts
     // scaled by the frame's character cell size. On a TTY the cell is 1x1 (so the
@@ -8024,11 +8896,16 @@ pub(crate) fn builtin_buffer_text_pixel_size(
     // mode-line `(space :align-to (- right-margin (string-pixel-width …)))` produced
     // by `mode-line-format-right-align` mis-aligns on GUI frames — the Doom dashboard
     // "DOOM vX" right segment is pushed off-screen.
-    let (char_w, char_h) = eval
+    let (cell, frame_id) = eval
         .frames
         .selected_frame()
-        .map(|f| (f.char_width.max(1.0), f.char_height.max(1.0)))
-        .unwrap_or((1.0, 1.0));
+        .map(|f| {
+            (
+                TextCellPixels::new(f.char_width, f.char_height, f.font_cell_ascent()),
+                f.id,
+            )
+        })
+        .unwrap_or_else(|| (TextCellPixels::new(1.0, 1.0, 1.0), FrameId(0)));
 
     let buffers = &eval.buffers;
 
@@ -8074,27 +8951,67 @@ pub(crate) fn builtin_buffer_text_pixel_size(
         return Ok(Value::cons(Value::fixnum(0), Value::fixnum(0)));
     }
 
-    // Measure honoring `display` text properties (e.g. `(space :align-to N)` /
-    // `(space :width N)`), shared with `window-text-pixel-size`.  Wide chars
-    // contribute their display width, preserving the previous accounting.
-    let metrics = crate::emacs_core::xdisp::region_text_metrics_with_display(
+    // The window's frame supplies the cell, the row edge and `line_wrap`; a
+    // window whose frame has gone keeps the selected frame's cell and an
+    // unbounded row, which is the best a measurement can say.
+    let (fid, is_terminal, char_width) = eval
+        .frames
+        .find_window_frame_id(window_id)
+        .and_then(|fid| {
+            eval.frames.get(fid).map(|frame| {
+                (
+                    fid,
+                    frame.effective_window_system().is_none(),
+                    frame.char_width,
+                )
+            })
+        })
+        .unwrap_or((frame_id, false, cell.width));
+    let line_wrap = window_line_wrap(eval, window_id, buffer_id);
+
+    // Measure the whole buffer in pixels, honoring `display` text properties
+    // (e.g. `(space :align-to N)` / `(space :width N)`, or an image), through
+    // the same scanner `window-text-pixel-size` uses.  Wide chars contribute
+    // their display width, preserving the previous accounting.
+    //
+    // X-LIMIT and Y-LIMIT have "the same meaning as with
+    // `window-text-pixel-size`" (GNU docstring): PIXELS, and GNU's
+    // implementation forwards them to the same `window_text_pixel_size`, so
+    // X-LIMIT nil means WINDOW's body width here too and the row edge is the
+    // window's.  There is no display line to rewind to: the measurement starts
+    // at the accessible portion's start.
+    let edge = match x_limit {
+        Some(pixels) => Some(RowEdge::new(pixels as f32, line_wrap)),
+        None => eval.frames.get(fid).and_then(|frame| {
+            let window = frame.find_window(window_id)?;
+            window_body_row_edge(
+                &eval.frames,
+                fid,
+                window,
+                is_terminal,
+                char_width,
+                line_wrap,
+            )
+        }),
+    };
+    let metrics = region_text_metrics_with_display(
         eval,
+        fid,
         buffer_id,
-        range.start(),
-        range.end(),
+        MeasuredRange::starting_at(range.start(), range.end()),
         false,
-        crate::emacs_core::xdisp::CharColumnWidth::DisplayWidth,
-        x_limit,
-        y_limit,
-        None,
+        cell,
+        CharColumnWidth::DisplayWidth,
+        edge,
+        y_limit.map(|pixels| pixels as f32),
     );
 
     if metrics.lines == 0 {
         return Ok(Value::cons(Value::fixnum(0), Value::fixnum(0)));
     }
     Ok(Value::cons(
-        Value::fixnum((metrics.max_columns as f32 * char_w).ceil() as i64),
-        Value::fixnum((metrics.lines as f32 * char_h).ceil() as i64),
+        Value::fixnum(metrics.max_width.ceil() as i64),
+        Value::fixnum(metrics.height.ceil() as i64),
     ))
 }
 

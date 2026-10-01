@@ -189,6 +189,22 @@ fn try_format_integer_as_character(
 }
 
 impl PrintOptions {
+    /// `princ`'s options: strings inside an aggregate print their own bytes
+    /// instead of a quoted form.
+    ///
+    /// GNU's `format` prints `%s` with `princ` (as opposed to `%S`, which is
+    /// `prin1`), and native code reaches for it when it has an object and no
+    /// string to put in its place — `image_error ("Not a PNG image: `%s'",
+    /// img->spec)`, `src/image.c:8323`. Callers outside this module cannot
+    /// build `PrintOptions` themselves, because one field is private.
+    #[must_use]
+    pub fn princ() -> Self {
+        Self {
+            print_noescape: true,
+            ..Self::default()
+        }
+    }
+
     pub const fn with_print_gensym(print_gensym: bool) -> Self {
         Self {
             print_gensym,

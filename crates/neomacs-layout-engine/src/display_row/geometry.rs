@@ -1,5 +1,6 @@
 use crate::display_item::RenderFaceRef;
 use crate::display_pixel_calc::PixelCalcContext;
+use crate::display_row::append_context::DisplayRowLineWrap;
 use crate::display_row::builder::{DisplayRowLayout, DisplayTabPolicy};
 use crate::display_row::face_state::DisplayRowMeasurementMode;
 use crate::display_row::spacing::ResolvedLineSpacing;
@@ -134,6 +135,7 @@ impl DisplayRowGeometry {
         self
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn to_layout(
         &self,
         role: GlyphRowRole,
@@ -142,6 +144,7 @@ impl DisplayRowGeometry {
         base_face: RenderFaceRef,
         pixel_calc: PixelCalcContext,
         space_image_params: Option<crate::display_pixel_calc::PixelCalcImageInputs>,
+        line_wrap: DisplayRowLineWrap,
     ) -> DisplayRowLayout {
         DisplayRowLayout {
             role,
@@ -154,6 +157,7 @@ impl DisplayRowGeometry {
             base_face,
             pixel_calc,
             space_image_params,
+            line_wrap,
         }
     }
 }
@@ -255,6 +259,8 @@ pub(crate) struct DisplayRowGeometryCursor {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct DisplayRowVisibilityLimit {
+    /// GUI bodies lay out the complete row intersecting the bottom clip.
+    pub(crate) allow_partial: bool,
     pub(crate) max_rows: usize,
     pub(crate) bottom_y: f32,
 }
@@ -278,6 +284,13 @@ pub(crate) enum DisplayRowFlagKind {
     /// 26399-26403, 26421-26432). A row broken at a recorded word-wrap point
     /// (`back_to_wrap`, src/xdisp.c:26360-26388) is `Continued` but not this.
     ContinuedMidElement,
+    /// A double-width character was cut at this row's right edge: its first
+    /// cell started inside the window and its trailing cell crossed the edge.
+    /// GNU's TTY truncation pass overwrites EVERY cell the cut glyph leaves
+    /// with the truncation glyph (the back-scan to the last non-padding glyph
+    /// at src/xdisp.c:26611-26615, then one produce_special_glyphs per cell
+    /// to the row's end, :26636-26641) — issue #446's wide-name case.
+    WideCut,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -286,6 +299,7 @@ pub(crate) struct DisplayRowFlags {
     truncated: Vec<bool>,
     continuation: Vec<bool>,
     continued_mid_element: Vec<bool>,
+    wide_cut: Vec<bool>,
 }
 
 impl DisplayRowFlags {
@@ -295,6 +309,7 @@ impl DisplayRowFlags {
             truncated: vec![false; row_count],
             continuation: vec![false; row_count],
             continued_mid_element: vec![false; row_count],
+            wide_cut: vec![false; row_count],
         }
     }
 
@@ -318,6 +333,7 @@ impl DisplayRowFlags {
             DisplayRowFlagKind::Truncated => &self.truncated,
             DisplayRowFlagKind::Continuation => &self.continuation,
             DisplayRowFlagKind::ContinuedMidElement => &self.continued_mid_element,
+            DisplayRowFlagKind::WideCut => &self.wide_cut,
         }
     }
 
@@ -327,6 +343,7 @@ impl DisplayRowFlags {
             DisplayRowFlagKind::Truncated => &mut self.truncated,
             DisplayRowFlagKind::Continuation => &mut self.continuation,
             DisplayRowFlagKind::ContinuedMidElement => &mut self.continued_mid_element,
+            DisplayRowFlagKind::WideCut => &mut self.wide_cut,
         }
     }
 }
@@ -403,6 +420,12 @@ pub(crate) struct DisplayRowGeometryTransitionTarget<'a> {
 pub(crate) struct DisplayRowBoundaryTarget<'a> {
     next_row_start: LayoutCharPos0,
     transition: DisplayRowGeometryTransitionTarget<'a>,
+}
+
+impl DisplayRowBoundaryTarget<'_> {
+    pub(crate) fn line_spacing(&self) -> f32 {
+        self.transition.kind.line_spacing().pixels()
+    }
 }
 
 impl DisplayRowYFallback {
@@ -658,7 +681,12 @@ impl DisplayRowGeometryState {
     }
 
     pub(crate) fn current_row_is_visible(&self, limit: DisplayRowVisibilityLimit) -> bool {
-        self.row < limit.max_rows && self.y + self.height <= limit.bottom_y
+        self.row < limit.max_rows
+            && if limit.allow_partial {
+                self.y < limit.bottom_y
+            } else {
+                self.y + self.height <= limit.bottom_y
+            }
     }
 
     pub(crate) fn is_within_row_limit(&self, limit: DisplayRowLimit) -> bool {
@@ -930,6 +958,7 @@ impl CurrentDisplayRowMetrics {
 
     pub(crate) fn finish_current_row(&self, y: f32) -> DisplayTextRowMetrics {
         DisplayTextRowMetrics {
+            line_spacing: 0.0,
             y,
             height: self.height,
             ascent: self.ascent,
@@ -976,8 +1005,9 @@ impl CurrentDisplayRowMetrics {
         // after the row. Glyph ascent stays unchanged. Painting, hit testing
         // and retained-row replay all consume this same finished height.
         self.height += line_spacing;
-        let finished =
+        let mut finished =
             self.finish_and_reset(advance.y, advance.default_height, advance.default_ascent);
+        finished.line_spacing = line_spacing;
         DisplayRowAdvance {
             finished,
             next_y: advance.text_y + advance.next_row as f32 * advance.default_height + row_extra_y,

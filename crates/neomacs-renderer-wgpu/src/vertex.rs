@@ -234,13 +234,36 @@ impl RoundedRectVertex {
 }
 
 /// Uniforms passed to shaders.
+///
+/// Layout must match the WGSL `Uniforms` structs field for field: the CPU
+/// struct is 32 bytes so the implicit WGSL padding before the vec2 pivot
+/// (`content_scale` then a four-byte hole) lands where the shader expects
+/// it. Shaders that read only `screen_size` are unaffected by the extra
+/// bytes — a larger buffer binds fine.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct Uniforms {
     pub screen_size: [f32; 2],
     /// Elapsed time in seconds since renderer creation (for animated effects)
     pub time: f32,
-    pub _padding: f32,
+    /// Global multiplier on every alpha this draw produces.
+    ///
+    /// The child-frame composition path scales a fading or appearing
+    /// frame's whole picture — background, border, shadow and glyphs alike
+    /// — by one value; everything else passes 1.0.
+    pub content_alpha: f32,
+    /// Global scale around `content_pivot`, again child-frame-only.
+    ///
+    /// Positions multiply away from the pivot; sizes (rounded-rect radii,
+    /// border widths, the CPU-built chrome geometry) scale by the same
+    /// factor CPU-side. `1.0` with a zero pivot is the identity and produces
+    /// the same draw-parameters cache entry as before this existed.
+    pub content_scale: f32,
+    /// Keeps `content_pivot` at an 8-byte-aligned WGSL offset.
+    pub _pivot_padding: f32,
+    /// The scale's anchor, in the logical surface coordinates the vertex
+    /// positions use.
+    pub content_pivot: [f32; 2],
 }
 
 #[cfg(test)]

@@ -595,6 +595,7 @@ fn text_matrix_row_output_finishes_with_matrix_metrics() {
         TextWindowOutputTarget::from_builder(&mut builder),
         &mut emitter,
         DisplayTextRowMetrics {
+            line_spacing: 0.0,
             y: 20.0,
             height: 16.0,
             ascent: 11.0,
@@ -699,6 +700,7 @@ fn text_window_redisplay_positions_use_last_row_with_buffer_position() {
         TextWindowOutputTarget::from_builder(&mut builder),
         &mut emitter,
         DisplayTextRowMetrics {
+            line_spacing: 0.0,
             y: 0.0,
             height: 16.0,
             ascent: 12.0,
@@ -723,6 +725,7 @@ fn text_window_redisplay_positions_use_last_row_with_buffer_position() {
         TextWindowOutputTarget::from_builder(&mut builder),
         &mut emitter,
         DisplayTextRowMetrics {
+            line_spacing: 0.0,
             y: 16.0,
             height: 16.0,
             ascent: 12.0,
@@ -1187,6 +1190,7 @@ fn text_matrix_row_commands_begin_and_finish_output() {
         TextWindowOutputTarget::from_builder(&mut builder),
         &mut emitter,
         DisplayTextRowMetrics {
+            line_spacing: 0.0,
             y: 0.0,
             height: 16.0,
             ascent: 12.0,
@@ -1242,6 +1246,7 @@ fn display_text_row_metrics_finish_and_end_closes_matrix_row() {
         TextWindowOutputTarget::from_builder(&mut builder),
         &mut emitter,
         DisplayTextRowMetrics {
+            line_spacing: 0.0,
             y: 0.0,
             height: 16.0,
             ascent: 12.0,
@@ -1361,6 +1366,7 @@ fn install_text_window_output_installs_row_metrics() {
         TextWindowOutputTarget::from_builder(&mut builder),
         &mut emitter,
         DisplayTextRowMetrics {
+            line_spacing: 0.0,
             y: 2.0,
             height: 20.0,
             ascent: 15.0,
@@ -1428,6 +1434,7 @@ fn install_text_window_body_output_records_redisplay_and_installs_rows() {
         TextWindowOutputTarget::from_builder(&mut builder),
         &mut emitter,
         DisplayTextRowMetrics {
+            line_spacing: 0.0,
             y: 2.0,
             height: 20.0,
             ascent: 15.0,
@@ -1527,6 +1534,7 @@ fn text_matrix_row_transition_finishes_without_starting_past_max_rows() {
         &mut eval,
         DisplayTextRowGeometryTransition {
             finished_row: DisplayTextRowMetrics {
+                line_spacing: 0.0,
                 y: 0.0,
                 height: 16.0,
                 ascent: 12.0,
@@ -1593,6 +1601,7 @@ fn text_matrix_row_transition_emits_finish_and_begin() {
         &mut eval,
         DisplayTextRowGeometryTransition {
             finished_row: DisplayTextRowMetrics {
+                line_spacing: 0.0,
                 y: 0.0,
                 height: 16.0,
                 ascent: 12.0,

@@ -1,11 +1,27 @@
 //! Child frame rendering methods for WgpuRenderer.
 
 use super::super::glyph_atlas::WgpuGlyphAtlas;
-use super::super::vertex::{RectVertex, RoundedRectVertex, Uniforms};
+use super::super::vertex::{GlyphVertex, RectVertex, RoundedRectVertex};
 use super::WgpuRenderer;
 use neomacs_display_protocol::frame_glyphs::FrameGlyphBuffer;
 use neomacs_display_protocol::types::{AnimatedCursor, Color};
 use neomacs_display_protocol::{PointerAppearanceSelection, RootSurfaceRect};
+
+impl WgpuRenderer {
+    /// The scissor rect a child frame's clip resolves to on this surface.
+    ///
+    /// The crossfade quad needs the same clip the frame's own chrome
+    /// computes internally, so the fading old picture cannot paint outside
+    /// the popup's placed area.
+    pub fn child_frame_scissor(
+        &self,
+        clip: RootSurfaceRect,
+        surface_width: u32,
+        surface_height: u32,
+    ) -> Option<(u32, u32, u32, u32)> {
+        child_scissor(clip, self.scale_factor, surface_width, surface_height)
+    }
+}
 
 fn child_scissor(
     clip: RootSurfaceRect,
@@ -29,12 +45,103 @@ fn child_scissor(
 }
 
 impl WgpuRenderer {
+    /// Draw one snapshot's picture as an alpha-blended quad.
+    ///
+    /// The resize content crossfade's old-content layer: the previous
+    /// presentation's picture, leased from the snapshot pool, fading out
+    /// beneath the freshly installed frame. The image pipeline's blended
+    /// variant composites `tex_color * vertex_color`, so the alpha rides on
+    /// the vertex color and the draw-parameters snapshot stays the shared
+    /// identity one.
+    pub fn draw_child_crossfade_quad(
+        &mut self,
+        view: &wgpu::TextureView,
+        snapshot_bind_group: &wgpu::BindGroup,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        surface_width: u32,
+        surface_height: u32,
+        alpha: f32,
+        scissor: Option<(u32, u32, u32, u32)>,
+    ) {
+        let logical_w = surface_width as f32 / self.scale_factor;
+        let logical_h = surface_height as f32 / self.scale_factor;
+        let draw = self.parameters([logical_w, logical_h], 0.0);
+
+        let (r, g, b, a) = (1.0_f32, 1.0_f32, 1.0_f32, alpha.clamp(0.0, 1.0));
+        let color = [r, g, b, a];
+        let mut vertices = Vec::with_capacity(6);
+        let quad = |vertices: &mut Vec<GlyphVertex>, x0: f32, y0: f32, x1: f32, y1: f32| {
+            for (position, tex_coords) in [
+                ([x0, y0], [0.0, 0.0]),
+                ([x1, y0], [1.0, 0.0]),
+                ([x1, y1], [1.0, 1.0]),
+                ([x0, y0], [0.0, 0.0]),
+                ([x1, y1], [1.0, 1.0]),
+                ([x0, y1], [0.0, 1.0]),
+            ] {
+                vertices.push(GlyphVertex {
+                    position,
+                    tex_coords,
+                    color,
+                });
+            }
+        };
+        quad(&mut vertices, x, y, x + width, y + height);
+        if let Some(upload) = self
+            .arenas
+            .glyph
+            .upload(&self.device, &self.queue, &vertices)
+        {
+            let mut encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Child Frame Crossfade Quad Encoder"),
+                });
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Child Frame Crossfade Quad Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                if let Some((sx, sy, sw, sh)) = scissor {
+                    pass.set_scissor_rect(sx, sy, sw, sh);
+                }
+                pass.set_pipeline(&self.pipelines.image);
+                pass.set_bind_group(0, draw.binding(), &[]);
+                pass.set_bind_group(1, snapshot_bind_group, &[]);
+                pass.set_vertex_buffer(0, upload.buffer_slice());
+                pass.draw(0..vertices.len() as u32, 0..1);
+            }
+            self.queue.submit(std::iter::once(encoder.finish()));
+        }
+    }
+
     /// Render a child frame as a floating overlay on top of the parent frame.
     ///
     /// Draws shadow, background fill, and rounded border, delegates all glyph
     /// rendering (text, cursors, images, etc.) to `render_frame_content()`,
     /// then draws the square outer border.
     /// Uses LoadOp::Load to composite on top of whatever was rendered before.
+    ///
+    /// `alpha` scales the frame's whole picture — background, border, shadow
+    /// and glyphs alike — toward transparent. The composition path passes the
+    /// interpolated value of a lifecycle animation, or 1.0 for a settled
+    /// frame; the multiply happens in the shared uniform, so no vertex
+    /// builder changes shape.
     #[allow(clippy::too_many_arguments)]
     pub fn render_child_frame(
         &mut self,
@@ -54,20 +161,39 @@ impl WgpuRenderer {
         shadow_offset: f32,
         shadow_opacity: f32,
         pointer_selection: Option<PointerAppearanceSelection>,
+        alpha: f32,
+        scale: f32,
+        pivot: [f32; 2],
     ) {
+        let alpha = if alpha.is_finite() {
+            alpha.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        // An identity scale normalizes to (1.0, origin) so the draw-parameters
+        // cache key -- and therefore the immutable uniform snapshot -- is
+        // byte-identical to the pre-scale pipeline for every settled frame.
+        let (scale, pivot) = if !scale.is_finite() || (scale - 1.0).abs() < f32::EPSILON {
+            (1.0, [0.0_f32; 2])
+        } else {
+            (scale, pivot)
+        };
         let logical_w = surface_width as f32 / self.scale_factor;
         let logical_h = surface_height as f32 / self.scale_factor;
-        let uniforms = Uniforms {
-            screen_size: [logical_w, logical_h],
-            time: 0.0,
-            _padding: 0.0,
-        };
-        let draw = self.parameters(uniforms.screen_size, uniforms.time);
+        // Same cache key as `parameters()` when alpha is 1.0 and the scale is
+        // the identity, so a settled child frame reuses the identical
+        // immutable snapshot.
+        let draw = self.parameters_for([logical_w, logical_h], 0.0, alpha, scale, pivot);
 
         let bw = child.border_width;
-        let frame_w = child.width;
-        let frame_h = child.height;
-        let bg_alpha = child.background_alpha;
+        // The CPU-built chrome geometry scales by the same factor the vertex
+        // shader applies to glyph positions: the frame grows out of its
+        // top-left anchor, so the chrome's width and height shrink toward it
+        // and its radii and border widths thin proportionally.
+        let frame_w = child.width * scale;
+        let frame_h = child.height * scale;
+        let corner_radius = corner_radius * scale;
+        let bg_alpha = child.background_alpha * alpha;
         let Some(scissor) = child_scissor(
             clip_in_root,
             self.scale_factor,
@@ -121,9 +247,10 @@ impl WgpuRenderer {
                     let sy = offset_y;
                     for layer in (1..=shadow_layers).rev() {
                         let off = layer as f32 * shadow_offset;
-                        let alpha =
-                            shadow_opacity * (1.0 - (layer - 1) as f32 / shadow_layers as f32);
-                        let c = Color::new(0.0, 0.0, 0.0, alpha);
+                        let layer_alpha = shadow_opacity
+                            * (1.0 - (layer - 1) as f32 / shadow_layers as f32)
+                            * alpha;
+                        let c = Color::new(0.0, 0.0, 0.0, layer_alpha);
                         self.add_rect(&mut shadow_verts, sx + off, sy + total_h, total_w, off, &c);
                         self.add_rect(&mut shadow_verts, sx + total_w, sy + off, off, total_h, &c);
                         self.add_rect(&mut shadow_verts, sx + total_w, sy + total_h, off, off, &c);
@@ -229,7 +356,7 @@ impl WgpuRenderer {
                 } else {
                     Color::new(0.5, 0.5, 0.5, 0.3).srgb_to_linear()
                 };
-                let effective_bw = if bw > 0.0 { bw } else { 1.0 };
+                let effective_bw = (if bw > 0.0 { bw } else { 1.0 }) * scale;
                 self.add_rounded_rect(
                     &mut border_verts,
                     offset_x,
@@ -348,10 +475,12 @@ impl WgpuRenderer {
             corner_radius,
             pointer_selection,
             Some(scissor),
+            alpha,
+            scale,
+            pivot,
         );
 
-        let outer_bw = child
-            .outer_border_width
+        let outer_bw = (child.outer_border_width * scale)
             .max(0.0)
             .min(frame_w.max(0.0) / 2.0)
             .min(frame_h.max(0.0) / 2.0);

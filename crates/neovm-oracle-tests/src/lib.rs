@@ -61,6 +61,7 @@ mod compare;
 mod comparison;
 mod comparison_advanced;
 mod completion_basic_semantics;
+mod composition_font_shape;
 mod concat;
 mod cond;
 mod condition;

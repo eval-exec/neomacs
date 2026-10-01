@@ -22,7 +22,7 @@ fn inherited_wayland_connection_does_not_adopt_an_unused_socket_name() {
 }
 
 fn assert_inherited_wayland_identity(unused_display: Option<&str>) {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = neomacs_infra::crate_root!().join("../..");
     let binary = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("target/release/neomacs"));

@@ -714,3 +714,183 @@ fn an_exact_native_miss_does_not_survive_backend_replacement() {
         identity
     );
 }
+
+#[test]
+fn captured_character_policy_selects_on_a_thread_without_evaluator_state() {
+    let mut spec = StoredFontSpec {
+        family: Some(intern("Fixture Sans")),
+        registry: None,
+        lang: Some(intern("ja")),
+        weight: Some(FontWeight::from_css_weight(700)),
+        slant: Some(FontSlant::Italic),
+        width: Some(FontWidth::Normal),
+        repertory: Some(
+            neovm_core::emacs_core::fontset::FontRepertory::CharTableRanges(vec![(0x3040, 0x309f)]),
+        ),
+    };
+    let policy = CapturedCharacterPolicy::capture(
+        "Base Mono",
+        'あ',
+        400,
+        FontSlant::Normal,
+        FontWidth::Expanded,
+        selection_size(),
+        &spec,
+    );
+    let candidates = vec![
+        candidate("Fixture Sans", 400, FontSlant::Normal, 0),
+        candidate("Fixture Sans", 700, FontSlant::Italic, 0),
+    ];
+    let resolver = FontResolver::new(Box::new(CandidateBackend {
+        candidates: candidates.clone(),
+    }));
+    let expected = resolver
+        .resolve_from_spec(
+            "Base Mono",
+            'あ',
+            true,
+            400,
+            FontSlant::Normal,
+            FontWidth::Expanded,
+            selection_size(),
+            &spec,
+        )
+        .expect("live selection");
+    spec.family = Some(intern("Changed Family"));
+    spec.weight = Some(FontWeight::from_css_weight(400));
+    spec.lang = None;
+    spec.repertory = None;
+    drop(spec);
+    drop(resolver);
+
+    let selected = std::thread::spawn(move || {
+        // No evaluator, obarray binding, or fontset read on this thread.
+        assert_eq!(policy.languages, vec!["ja"]);
+        assert_eq!(policy.charset_ranges, vec![(0x3040, 0x309f)]);
+        assert_eq!(
+            policy.families.search_order(str::to_owned),
+            vec![Some("Fixture Sans".into())]
+        );
+        let resolver = FontResolver::new(Box::new(CandidateBackend { candidates }));
+        resolver
+            .resolve_from_policy(&policy, true)
+            .expect("captured selection")
+    })
+    .join()
+    .expect("native font selection worker");
+    assert_eq!(selected, expected);
+    assert_eq!(selected.weight(), Some(700));
+    assert_eq!(selected.slant(), FontSlant::Italic);
+}
+
+#[test]
+fn captured_family_policy_keeps_alias_order_and_fallback_boundary() {
+    let families = CapturedFontFamilyPolicy::Inherited(vec!["Alias".into(), "Second".into()]);
+    let resolve = |family: &str| match family {
+        "Alias" => "Native".to_owned(),
+        _ => family.to_owned(),
+    };
+    assert_eq!(
+        families.search_order(resolve),
+        vec![
+            Some("Native".into()),
+            Some("Alias".into()),
+            Some("Second".into()),
+            None,
+        ]
+    );
+    assert_eq!(
+        CapturedFontFamilyPolicy::Explicit("Alias".into()).search_order(resolve),
+        vec![Some("Native".into())]
+    );
+    assert_eq!(
+        CapturedFontFamilyPolicy::Inherited(Vec::new()).search_order(resolve),
+        vec![None]
+    );
+}
+
+#[test]
+fn frozen_character_requests_survive_live_policy_mutation_and_reject_unknown_queries() {
+    let mut eval = neovm_core::emacs_core::Context::new();
+    eval.eval_str("(let ((font-encoding-alist '((\".*\" unicode)))) (set-fontset-font t #x3042 '(\"Fixture Sans\" . \"iso10646-1\")))").unwrap();
+    let policies = FrozenCharacterPolicies::capture(
+        &[("Base Mono", 'あ', 400, false, selection_size())],
+        4096,
+    )
+    .unwrap();
+    let candidates = vec![candidate("Fixture Sans", 400, FontSlant::Normal, 0)];
+    let resolver = FontResolver::new(Box::new(CandidateBackend {
+        candidates: candidates.clone(),
+    }));
+    let expected = resolver
+        .resolve_for_char(
+            "Base Mono",
+            'あ',
+            400,
+            FontSlant::Normal,
+            FontWidth::Normal,
+            selection_size(),
+        )
+        .unwrap();
+    eval.eval_str("(set-fontset-font t #x3042 nil)").unwrap();
+    drop(eval);
+    std::thread::spawn(move || {
+        let mut resolver = FontResolver::new(Box::new(CandidateBackend { candidates }));
+        resolver.install_worker_policy(Arc::new(policies));
+        assert_eq!(
+            resolver.resolve_for_char(
+                "Base Mono",
+                'あ',
+                400,
+                FontSlant::Normal,
+                FontWidth::Normal,
+                selection_size()
+            ),
+            Some(expected)
+        );
+        assert!(!resolver.worker_policy_missing());
+        assert!(
+            resolver
+                .resolve_for_char(
+                    "Base Mono",
+                    'い',
+                    400,
+                    FontSlant::Normal,
+                    FontWidth::Normal,
+                    selection_size()
+                )
+                .is_none()
+        );
+        assert!(resolver.worker_policy_missing());
+    })
+    .join()
+    .unwrap();
+}
+
+#[test]
+fn frozen_explicit_none_does_not_enable_native_fallback() {
+    let mut eval = neovm_core::emacs_core::Context::new();
+    eval.eval_str("(set-fontset-font t #x3042 nil)").unwrap();
+    let policies = FrozenCharacterPolicies::capture(
+        &[("Base Mono", 'あ', 400, false, selection_size())],
+        4096,
+    )
+    .unwrap();
+    let mut resolver = FontResolver::new(Box::new(CandidateBackend {
+        candidates: vec![candidate("Fixture Sans", 400, FontSlant::Normal, 0)],
+    }));
+    resolver.install_worker_policy(Arc::new(policies));
+    assert!(
+        resolver
+            .resolve_for_char(
+                "Base Mono",
+                'あ',
+                400,
+                FontSlant::Normal,
+                FontWidth::Normal,
+                selection_size()
+            )
+            .is_none()
+    );
+    assert!(!resolver.worker_policy_missing());
+}

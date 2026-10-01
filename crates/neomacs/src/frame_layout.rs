@@ -111,6 +111,24 @@ struct SnapshotDoc<'a> {
     frames: &'a [FrameDisplayState],
 }
 
+/// Geometry-only diagnostics borrow the protocol's authoritative window data.
+/// Serializing the whole state can repeat large in-memory font assets in the
+/// resolved font tables and off-screen coverage (notably CoreText fonts).
+#[derive(serde::Serialize)]
+struct SnapshotGeometryFrame<'a> {
+    presentation_id: &'a neomacs_display_protocol::frame_chrome::PresentationId,
+    frame_cols: usize,
+    frame_rows: usize,
+    frame_pixel_width: f32,
+    frame_pixel_height: f32,
+    window_infos: &'a [neomacs_display_protocol::frame_glyphs::WindowInfo],
+}
+
+#[derive(serde::Serialize)]
+struct SnapshotGeometryDoc<'a> {
+    frames: Vec<SnapshotGeometryFrame<'a>>,
+}
+
 /// Install the `neomacs--frame-snapshot` hook (`Context::frame_snapshot_fn`).
 ///
 /// Called by both frontends right where they install `redisplay_fn`; batch
@@ -123,6 +141,21 @@ pub fn install_frame_snapshot_fn(evaluator: &mut Context) {
         Ok(match request.format {
             SnapshotFormat::Json => serde_json::to_string(&SnapshotDoc { frames: &states })
                 .map_err(|error| format!("frame snapshot JSON serialization failed: {error}"))?,
+            SnapshotFormat::JsonGeometry => {
+                let frames = states
+                    .iter()
+                    .map(|state| SnapshotGeometryFrame {
+                        presentation_id: &state.presentation_id,
+                        frame_cols: state.frame_cols,
+                        frame_rows: state.frame_rows,
+                        frame_pixel_width: state.frame_pixel_width,
+                        frame_pixel_height: state.frame_pixel_height,
+                        window_infos: &state.window_infos,
+                    })
+                    .collect();
+                serde_json::to_string(&SnapshotGeometryDoc { frames })
+                    .map_err(|error| format!("frame geometry JSON serialization failed: {error}"))?
+            }
             SnapshotFormat::Text => states
                 .iter()
                 .map(|state| state.render_text())
@@ -143,7 +176,21 @@ pub fn install_frame_snapshot_fn(evaluator: &mut Context) {
 /// This targets one window through the canonical row producer without entering
 /// the renderer presentation lifecycle. Both GUI and TTY install this adapter;
 /// batch mode intentionally does not.
+/// Issue #447: install the font-shaping driver (GNU `font->driver->shape`)
+/// on the evaluator. The driver reenters the redisplay runtime and shapes
+/// ligature/composition gstrings through the layout engine's font system —
+/// the same cosmic machinery the row walk uses, so the font's `liga`
+/// feature applies.
+pub fn install_font_shape_driver(evaluator: &mut Context) {
+    evaluator.font_shape_fn = Some(Box::new(|eval, gstring, direction| {
+        REDISPLAY_RUNTIME.with(|runtime| runtime.shape_gstring(gstring, direction))
+    }));
+}
+
 pub fn install_window_layout_query_fn(evaluator: &mut Context) {
+    evaluator.display_idle_maintenance_fn = Some(Box::new(|eval| {
+        REDISPLAY_RUNTIME.with(|runtime| runtime.maintain_scroll_coverage(eval))
+    }));
     evaluator.install_window_layout_query(|eval, frame_id, window_id, scope| {
         REDISPLAY_RUNTIME.with(|runtime| runtime.query_window(eval, frame_id, window_id, scope))
     });
@@ -286,4 +333,5 @@ pub fn install_tty_redisplay_callback_with_popup_redraw(
     }));
     install_frame_snapshot_fn(evaluator);
     install_window_layout_query_fn(evaluator);
+    install_font_shape_driver(evaluator);
 }

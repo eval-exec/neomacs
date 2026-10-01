@@ -41,17 +41,37 @@ fn gui_text_input_policy_enables_native_ime_on_window_creation() {
     );
 }
 
+/// GNU's compiled-in `ns-alternate-modifier' default is meta
+/// (`src/nsterm.m:11576`), so the compiled default policy's Option shape
+/// must be the full rewrite: an Option chord reaches Emacs as the layout's
+/// shifted base key (M-<), never as the character macOS composes from it
+/// (M-¯).
 #[test]
-fn gui_text_input_policy_makes_the_option_key_a_command_modifier() {
-    let policy = NativeTextInputPolicy::for_gui_frame();
+fn gnu_default_policy_makes_the_option_key_a_command_modifier() {
+    let policy = neomacs_display_protocol::ModifierPolicy::gnu_ns_default();
 
-    assert!(
-        policy.option_key_is_meta,
+    assert_eq!(
+        policy.option_as_alt_shape(),
+        neomacs_display_protocol::OptionAsAltShape::Both,
         "GNU's ns-alternate-modifier defaults to meta, so an Option chord must \
          reach Emacs as the layout's shifted base key (M-<), never as the \
          character macOS composes from it (M-¯)"
     );
 }
+
+/// `mac-option-modifier nil' (GNU `none') must leave Option composing
+/// characters.
+#[test]
+fn option_none_policy_leaves_option_composing_characters() {
+    let policy = ModifierPolicy::gnu_ns_default().with_option_none();
+
+    assert_eq!(
+        policy.option_as_alt_shape(),
+        neomacs_display_protocol::OptionAsAltShape::None,
+    );
+}
+
+use neomacs_display_protocol::ModifierPolicy;
 
 #[cfg(feature = "neo-term")]
 #[test]

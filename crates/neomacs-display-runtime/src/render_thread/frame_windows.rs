@@ -43,12 +43,24 @@ use crate::thread_comm::WindowFullscreenMode;
 /// How close together two titlebar clicks must be to count as a double click.
 const TITLEBAR_DOUBLE_CLICK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(400);
 
+/// Unique across resize, device loss, destruction and recreation (no handle ABA).
+pub(super) fn next_surface_generation() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_update(
+        std::sync::atomic::Ordering::Relaxed,
+        std::sync::atomic::Ordering::Relaxed,
+        |id| id.checked_add(1),
+    )
+    .expect("surface generation exhausted")
+}
+
 /// Native window/surface state for a top-level GUI frame.
 pub(crate) struct GuiFrameNativeWindowState {
     pub(super) window_chrome: crate::window_chrome::WindowChromeController,
     pub(super) content_insets: neomacs_display_protocol::ContentInsets,
     pub window: Arc<dyn Window>,
     pub surface: wgpu::Surface<'static>,
+    pub surface_generation: u64,
     /// Backend of the adapter this surface presents through; wgpu surfaces
     /// do not expose it, and the GL resize quirk needs it.
     pub surface_backend: wgpu::Backend,
@@ -101,6 +113,7 @@ impl GuiFrameNativeWindowState {
         device: &wgpu::Device,
         instance: &wgpu::Instance,
     ) -> bool {
+        self.surface_generation = next_surface_generation();
         if self.surface_backend == wgpu::Backend::Gl {
             let rebuilt = instance
                 .create_surface(self.window.clone())
@@ -111,6 +124,14 @@ impl GuiFrameNativeWindowState {
             match rebuilt {
                 Ok(surface) => {
                     self.surface = surface;
+                    #[cfg(target_os = "linux")]
+                    // SAFETY: the rebuilt surface and device share this renderer instance.
+                    unsafe {
+                        neomacs_renderer_wgpu::native_presentation::prepare_surface(
+                            device,
+                            &self.surface,
+                        );
+                    }
                     self.surface.configure(device, &self.surface_config);
                     return true;
                 }
@@ -121,6 +142,11 @@ impl GuiFrameNativeWindowState {
                 }
             }
         }
+        #[cfg(target_os = "linux")]
+        // SAFETY: this surface and device share the renderer instance; configure follows immediately.
+        unsafe {
+            neomacs_renderer_wgpu::native_presentation::prepare_surface(device, &self.surface);
+        }
         self.surface.configure(device, &self.surface_config);
         false
     }
@@ -130,12 +156,6 @@ impl GuiFrameNativeWindowState {
 pub(super) struct NativeTextInputPolicy {
     pub(super) ime_allowed_on_create: bool,
     pub(super) initial_cursor_area: ImeCursorArea,
-    /// Whether the Option key delivers a command modifier instead of the
-    /// layout's composed character.  This is GNU's `ns-alternate-modifier`,
-    /// whose default is `meta` (`src/nsterm.m`), so Emacs reads an Option
-    /// chord from `charactersIgnoringModifiers` and never from the composed
-    /// `characters`.
-    pub(super) option_key_is_meta: bool,
 }
 
 impl NativeTextInputPolicy {
@@ -148,12 +168,10 @@ impl NativeTextInputPolicy {
                 width: 1,
                 height: 1,
             },
-            option_key_is_meta: true,
         }
     }
 
     pub(super) fn apply_to_window(self, window: &dyn Window) {
-        apply_option_key_policy(window, self.option_key_is_meta);
         let request = if self.ime_allowed_on_create {
             // Enabling declares the capabilities the IME may drive from here
             // on, so the initial cursor area rides along with the request that
@@ -200,12 +218,14 @@ fn request_ime_cursor_area(window: &dyn Window, position: Position, size: Size) 
     }
 }
 
-/// Make Option a command modifier the way GNU's `ns-alternate-modifier`
-/// default does.
+/// Make Option a command modifier the way GNU's compiled-in
+/// `ns-alternate-modifier` default does, or leave it composing characters
+/// when the policy maps Option to `none'.
 ///
 /// macOS composes an Option chord in the window server, so AppKit hands over
 /// the composed character: Option+X arrives as `≈`, Option+Shift+, as `¯`.
-/// GNU never reads that.  `keyDown:` takes its code from
+/// GNU never reads that when a control-like modifier is down.
+/// `keyDown:` takes its code from
 /// `[theEvent charactersIgnoringModifiers]` (`src/nsterm.m`), which applies
 /// Shift but not Option, and re-derives it with `ns_get_shifted_character` --
 /// `UCKeyTranslate` with only the shift-like modifier bits -- when a
@@ -213,28 +233,42 @@ fn request_ime_cursor_area(window: &dyn Window, position: Position, size: Size) 
 /// `ns-alternate-modifier` of `meta` those two agree, because Option is then
 /// never shift-like, so `nil_or_none` is false and only `shiftKey` is passed.
 ///
-/// `OptionAsAlt::Both` is winit's name for exactly that: it rewrites the
-/// `NSEvent` so `characters` becomes `charactersIgnoringModifiers` whenever
-/// Option is down and Control and Command are not.  It has to happen here,
+/// `OptionAsAlt` is winit's knob for exactly that split: its rewriting shapes
+/// make `characters` become `charactersIgnoringModifiers` whenever Option is
+/// down and Control and Command are not.  It has to happen here,
 /// at the window, rather than while translating a `KeyEvent`, because winit
 /// applies it before `interpretKeyEvents` -- so an Option chord that lands on
 /// a dead key (Option+E on the US layout) stops opening a preedit and starts
 /// arriving as a key event at all.
+///
+/// The shape is the *policy's* answer (`ModifierPolicy::option_as_alt_shape`),
+/// not a constant: `mac-option-modifier nil` (GNU's `none') must keep
+/// composing characters, so the knob is driven by the NS modifier policy
+/// shipped from Lisp.
 #[cfg(target_os = "macos")]
-fn apply_option_key_policy(window: &dyn Window, option_key_is_meta: bool) {
+pub(super) fn apply_option_key_policy(
+    window: &dyn Window,
+    shape: neomacs_display_protocol::OptionAsAltShape,
+) {
+    use neomacs_display_protocol::OptionAsAltShape as Shape;
     use winit::platform::macos::{OptionAsAlt, WindowExtMacOS};
 
-    window.set_option_as_alt(if option_key_is_meta {
-        OptionAsAlt::Both
-    } else {
-        OptionAsAlt::None
+    window.set_option_as_alt(match shape {
+        Shape::None => OptionAsAlt::None,
+        Shape::LeftOnly => OptionAsAlt::OnlyLeft,
+        Shape::RightOnly => OptionAsAlt::OnlyRight,
+        Shape::Both => OptionAsAlt::Both,
     });
 }
 
 /// No other window system composes an Option/Alt chord into a different
 /// character, so Alt already reaches Emacs as a bare modifier there.
 #[cfg(not(target_os = "macos"))]
-fn apply_option_key_policy(_window: &dyn Window, _option_key_is_meta: bool) {}
+pub(super) fn apply_option_key_policy(
+    _window: &dyn Window,
+    _shape: neomacs_display_protocol::OptionAsAltShape,
+) {
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ActivePresentationTransition {
@@ -294,6 +328,7 @@ pub(crate) struct GuiFrameRenderState {
     pub(super) cursor: CursorState,
     /// Last known pointer position in native root-surface logical coordinates.
     pub mouse_pos: (f32, f32),
+    pub(super) scroll_input: super::scroll_input::ScrollInput,
     /// Whether the native window currently owns the pointer. The last position
     /// remains useful for input coordinates after leave, but must not reactivate
     /// a visual range on a captured release.
@@ -491,6 +526,7 @@ impl GuiFrameRenderState {
             input_method: InputMethodState::default(),
             cursor: CursorState::new(at),
             mouse_pos: (0.0, 0.0),
+            scroll_input: super::scroll_input::ScrollInput::default(),
             pointer_inside: false,
         }
     }
@@ -646,7 +682,7 @@ impl GuiFrameRenderState {
     /// every hit test needs both the buffer and the projection that belongs to
     /// it; resolving the pair in one place is what keeps them from being
     /// fetched from two different frames.
-    fn frame_for_target(&self, target_frame_id: u64) -> Option<&FrameGlyphBuffer> {
+    pub(super) fn frame_for_target(&self, target_frame_id: u64) -> Option<&FrameGlyphBuffer> {
         if target_frame_id == self.emacs_frame_id {
             self.compositor.current_frame.as_ref()
         } else {
@@ -770,6 +806,11 @@ impl GuiFrameRenderState {
                 expected: point.presentation(),
                 requested: presentation,
             });
+        }
+        if target_frame_id == self.emacs_frame_id
+            && let Some(hit) = self.compositor.input_scroll.hit(point)
+        {
+            return hit;
         }
         frame
             .resolve_presented_hit(PresentedHitQuery::new(point))
@@ -989,6 +1030,24 @@ impl GuiFrameRenderState {
         &self,
         frame: &FrameGlyphBuffer,
     ) -> Option<neomacs_display_protocol::PointerAppearanceSelection> {
+        // The projected frame owns a newly resolved pointer map. Appearance
+        // IDs from the authoritative frame cannot address it; resolve hover
+        // against the exact temporary paint geometry instead.
+        if self.compositor.input_scroll.active() {
+            if !self.pointer_inside || self.presented_press.is_some() {
+                return None;
+            }
+            let (x, y) = self.root_frame_point_from_surface(self.mouse_pos.0, self.mouse_pos.1)?;
+            let point = self.inverse_map(frame, x, y)?;
+            let appearance = frame
+                .resolve_presented_hit(PresentedHitQuery::new(point))
+                .ok()??
+                .appearance()?;
+            return Some(neomacs_display_protocol::PointerAppearanceSelection::new(
+                appearance,
+                neomacs_display_protocol::PointerAppearancePhase::Hover,
+            ));
+        }
         self.pointer_appearance.selection_for(frame)
     }
 
@@ -1174,6 +1233,13 @@ impl GuiFrameRenderState {
             installed_at,
         )
         .apply(self);
+        if let Some(window) = self.compositor.input_scroll.reconcile(frame.as_ref()) {
+            // Projected motion has already been drawn; do not animate it twice.
+            self.compositor
+                .pending
+                .scrolls
+                .retain(|scroll| scroll.window != window);
+        }
         // Staged, not installed: these describe the incoming presentation, and
         // they become the baseline only if a frame is actually drawn from it.
         self.compositor.incoming_reflow_imprints = reflow_imprints;
@@ -1238,6 +1304,7 @@ impl GuiFrameRenderState {
     ) -> Option<FrameGlyphBuffer> {
         let current_frame = self.compositor.current_frame.as_mut()?;
         let mut frame = Self::take_frame_for_render(current_frame);
+        self.compositor.input_scroll.paint(&mut frame);
         #[cfg(feature = "neo-term")]
         self.compositor.terminal_expansion.compose_into(&mut frame);
         Some(frame)
@@ -1799,6 +1866,9 @@ pub(crate) struct GuiFrameWindowManager {
     pub(super) chrome_defaults: WindowChrome,
     /// Whether future secondary frame windows should start with FPS enabled.
     pub(super) fps_enabled: bool,
+    /// The NS modifier policy's Option rewrite shape, applied to every live
+    /// window and to windows opened later (issue #442).
+    pub(super) option_as_alt: neomacs_display_protocol::OptionAsAltShape,
 }
 
 /// A request to create a new OS window.
@@ -1821,6 +1891,7 @@ impl GuiFrameWindowManager {
             pending_destroys: Vec::new(),
             chrome_defaults: WindowChrome::default(),
             fps_enabled: false,
+            option_as_alt: neomacs_display_protocol::OptionAsAltShape::Both,
         }
     }
 
@@ -2047,14 +2118,25 @@ impl GuiFrameWindowManager {
                         color_space: wgpu::SurfaceColorSpace::Auto,
                         width: phys.width,
                         height: phys.height,
-                        present_mode: wgpu::PresentMode::Fifo,
+                        present_mode: crate::presentation::pacing::present_mode(
+                            &caps.present_modes,
+                        ),
                         alpha_mode,
                         view_formats: vec![],
-                        desired_maximum_frame_latency: 2,
+                        desired_maximum_frame_latency:
+                            crate::presentation::pacing::MAXIMUM_FRAME_LATENCY,
                     };
+                    #[cfg(target_os = "linux")]
+                    // SAFETY: this surface and device share the renderer instance; configure follows immediately.
+                    unsafe {
+                        neomacs_renderer_wgpu::native_presentation::prepare_surface(
+                            device, &surface,
+                        );
+                    }
                     surface.configure(device, &config);
 
                     NativeTextInputPolicy::for_gui_frame().apply_to_window(window.as_ref());
+                    apply_option_key_policy(window.as_ref(), self.option_as_alt);
                     apply_window_geometry_hints(window.as_ref(), req.geometry_hints);
 
                     let winit_id = window.id();
@@ -2102,6 +2184,7 @@ impl GuiFrameWindowManager {
                                     content_insets: Default::default(),
                                     window,
                                     surface,
+                                    surface_generation: next_surface_generation(),
                                     surface_backend: adapter.get_info().backend,
                                     surface_config: config,
                                     width: phys.width,
@@ -2387,6 +2470,20 @@ impl GuiFrameWindowManager {
         });
     }
 
+    /// Apply the NS modifier policy's Option rewrite shape to every live
+    /// window and remember it for windows opened later.
+    pub(super) fn apply_option_key_policy(
+        &mut self,
+        shape: neomacs_display_protocol::OptionAsAltShape,
+    ) {
+        self.option_as_alt = shape;
+        self.for_each_top_level_window(|window_state| {
+            if let Some(window) = window_state.lifecycle.window() {
+                apply_option_key_policy(window.as_ref(), shape);
+            }
+        });
+    }
+
     pub(super) fn set_top_level_fps_enabled(&mut self, enabled: bool) {
         self.fps_enabled = enabled;
         self.for_each_top_level_window_mut(|window_state| {
@@ -2476,6 +2573,20 @@ impl GuiFrameWindowManager {
         });
     }
 
+    /// Publish how child frames should live and die under the current policy.
+    ///
+    /// Like the pane-motion publication above, this only affects lifecycle
+    /// events measured after this point: a fade already in flight finishes on
+    /// the spec it started with.
+    pub(super) fn apply_top_level_child_frame_motion(
+        &mut self,
+        specs: crate::render_thread::render_quality::ChildFrameMotionSpecs,
+    ) {
+        self.for_each_top_level_window_mut(|window_state| {
+            window_state.render.compositor.child_frame_motion = specs;
+        });
+    }
+
     /// Discard renderer-owned animation timelines for every top-level window.
     ///
     /// A quality-policy downgrade must remove the state that advertises frame
@@ -2494,11 +2605,16 @@ impl GuiFrameWindowManager {
     pub(super) fn clear_gpu_resident_state(&mut self) {
         self.for_each_top_level_window_mut(|window_state| {
             let render = &mut window_state.render;
+            // Resize crossfades lease snapshot-pool textures; theirs died
+            // with the device and the crossfades themselves have no meaning
+            // on a rebuilt device. CPU child-frame state is kept.
+            render.compositor.child_frames.drop_all_crossfades();
             // Glyph atlas textures (recreated against the new device by
             // populate_glyph_atlas / recreate_secondary_native_surfaces).
             render.compositor.glyph_atlas = None;
             // Retained cursorless scene: texture + view + bind group.
             render.compositor.retained_static = None;
+            render.compositor.retained_scroll = None;
             // Composition ring plus every running transition's leased
             // source picture.
             clear_frame_transition_textures(&mut render.compositor.transitions);
@@ -2561,12 +2677,18 @@ impl GuiFrameWindowManager {
                 color_space: wgpu::SurfaceColorSpace::Auto,
                 width: native.width,
                 height: native.height,
-                present_mode: wgpu::PresentMode::Fifo,
+                present_mode: crate::presentation::pacing::present_mode(&caps.present_modes),
                 alpha_mode,
                 view_formats: vec![],
-                desired_maximum_frame_latency: 2,
+                desired_maximum_frame_latency: crate::presentation::pacing::MAXIMUM_FRAME_LATENCY,
             };
+            #[cfg(target_os = "linux")]
+            // SAFETY: this surface and device share the renderer instance; configure follows immediately.
+            unsafe {
+                neomacs_renderer_wgpu::native_presentation::prepare_surface(device, &surface);
+            }
             surface.configure(device, &config);
+            native.surface_generation = next_surface_generation();
             // Replacing the fields drops the old-instance surface in place.
             native.surface = surface;
             native.surface_config = config;

@@ -55,6 +55,23 @@ impl DrawContext<'_, '_> {
             .paint_menu(self.target, &self.parameters, menu, atlas);
     }
 
+    /// Place one certified crop without clearing any neighboring pixels.
+    pub fn blit_snapshot_region(&mut self, region: super::SnapshotRegion<'_>) {
+        assert_eq!(
+            region.source.view().texture().format(),
+            self.target.view.texture().format()
+        );
+        self.renderer.paint_blit(
+            self.target,
+            &self.parameters,
+            region.source.bind_group(),
+            super::paint::BlitPlacement::Region {
+                uv: region.uv,
+                destination: region.destination.raw(),
+            },
+        );
+    }
+
     pub fn blit_retained(&mut self, source: &wgpu::BindGroup) {
         self.renderer.paint_blit(
             self.target,

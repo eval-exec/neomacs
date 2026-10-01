@@ -29,9 +29,9 @@ fn every_backend() -> impl Iterator<Item = ImplementedBufferTextBackendKind> {
 }
 
 #[test]
-fn knob_parses_modes_and_defaults_to_copy() {
+fn knob_parses_modes_and_defaults_to_share() {
     crate::test_utils::init_test_tracing();
-    assert_eq!(parse_text_snapshot_knob(None), TextSnapshotMode::Copy);
+    assert_eq!(parse_text_snapshot_knob(None), TextSnapshotMode::Share);
     assert_eq!(parse_text_snapshot_knob(Some("")), TextSnapshotMode::Copy);
     assert_eq!(
         parse_text_snapshot_knob(Some("copy")),

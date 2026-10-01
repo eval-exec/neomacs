@@ -44,6 +44,10 @@ pub struct PreparedPackageSet {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LoadSuffixes {
     /// `load-suffixes '(".el")`: read the source, ignoring any byte-code.
+    ///
+    /// The startup form preloads `jka-compr` first: an installed GNU ships its
+    /// Lisp compressed, and the narrow suffix list would otherwise make GNU
+    /// decompress `jka-compr.el.gz` with itself ("Recursive load").
     Source,
     /// Emacs' own default, which prefers `.elc` over `.el`.
     EmacsDefault,
@@ -195,14 +199,25 @@ impl PreparedPackageSet {
             .collect::<Vec<_>>()
             .join(" ");
         let activation = package_activation_elisp(self.activation);
-        let load_suffixes_form = match self.load_suffixes {
-            LoadSuffixes::Source => "\n                         load-suffixes '(\".el\")",
-            LoadSuffixes::EmacsDefault => "",
+        let (suffixes_prelude, load_suffixes_form) = match self.load_suffixes {
+            // An installed GNU ships its Lisp compressed (`make install` runs
+            // the sources through GZIP_PROG; `pcase.el.gz`), so decompression
+            // support must be in place BEFORE `load-suffixes` is narrowed to
+            // `.el`: otherwise the first `require` of an editor library reaches
+            // for `jka-compr.el.gz` to decompress itself and GNU signals
+            // "Recursive load".  This require loads through the default
+            // suffixes -- `jka-compr.elc` when installed -- and is a no-op in a
+            // build tree.
+            LoadSuffixes::Source => (
+                "(require 'jka-compr)\n                   ",
+                "\n                         load-suffixes '(\".el\")",
+            ),
+            LoadSuffixes::EmacsDefault => ("", ""),
         };
         format!(
             r##";;; -*- lexical-binding: t; -*-
 (progn
-                   (require 'package)
+                   {suffixes_prelude}(require 'package)
                    (setq package-user-dir
                          (getenv "NEOMACS_PACKAGE_USER_DIR")
                          package-directory-list

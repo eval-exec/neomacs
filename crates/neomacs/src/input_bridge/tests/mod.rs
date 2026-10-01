@@ -554,3 +554,37 @@ fn positioned_pixel_scroll_maps_typed_pixels_to_core_smooth_scroll() {
         }] if modifiers.shift
     ));
 }
+
+#[test]
+fn tracked_pointer_receipt_wraps_the_action_after_its_position_observation() {
+    let stream = neomacs_display_protocol::input_progress::InputStream::default();
+    let receipt = stream.issue().unwrap();
+    let event = DisplayEvent::Tracked {
+        receipt: receipt.clone(),
+        event: Box::new(unpresented_pointer(
+            10.0,
+            20.0,
+            7,
+            PointerAction::Scroll {
+                delta: ScrollDelta::Pixels { x: 0.0, y: -4.0 },
+                modifiers: 0,
+            },
+        )),
+    };
+    let events: Vec<_> = super::convert_display_event(&event).into_iter().collect();
+    let Some(KbInputEvent::Tracked {
+        receipt: delivered,
+        event,
+    }) = events.last()
+    else {
+        panic!("receipt must travel with the command action");
+    };
+    assert!(matches!(
+        event.as_ref(),
+        KbInputEvent::PixelScroll { delta_y: -4.0, .. }
+    ));
+    let mut progress = neomacs_display_protocol::input_progress::InputProgress::default();
+    progress.consumed(delivered.clone());
+    drop(progress.begin_command());
+    assert!(receipt.acknowledged_by(&progress.checkpoint()));
+}

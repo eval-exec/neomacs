@@ -210,7 +210,7 @@ const PROCESS_WAIT_AUDIT: &[(&str, usize, ProcessWaitVerdict, &str)] = &[
 const NEEDS_AUDIT_SITE_BUDGET: usize = 6;
 
 fn parity_tests_directory() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/parity_tests")
+    neomacs_infra::crate_root!().join("src/parity_tests")
 }
 
 /// True when LINE uses `process-live-p` as a `while` loop condition.

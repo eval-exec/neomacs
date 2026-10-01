@@ -481,7 +481,8 @@ impl MenuPresentation {
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let delta = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => *y * 30.0,
+                    MouseScrollDelta::LineDelta(_, y)
+                    | MouseScrollDelta::ContinuousLineDelta(_, y) => *y * 30.0,
                     MouseScrollDelta::PixelDelta(p) => {
                         p.y as f32 / self.host.geometry(depth).unwrap().device_scale().get()
                     }

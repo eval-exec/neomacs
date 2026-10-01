@@ -114,6 +114,7 @@ impl GuiFrameRenderState {
         &mut self,
         projection: Option<neomacs_display_protocol::InteractionProjection>,
     ) {
+        self.compositor.input_scroll.submit();
         if let Some(projection) = projection {
             self.compositor.interaction = Some(projection);
         }

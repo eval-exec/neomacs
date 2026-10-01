@@ -27,6 +27,8 @@ bytemuck.workspace = true
 pollster.workspace = true
 ash.workspace = true
 image.workspace = true
+png.workspace = true
+zune-jpeg.workspace = true
 imagesize.workspace = true
 flate2.workspace = true
 libc.workspace = true
@@ -42,6 +44,7 @@ neomacs-video = { workspace = true, optional = true }
 neomacs-infra.workspace = true
 neomacs-test-fonts.workspace = true
 tracing-test.workspace = true
+jpeg-encoder.workspace = true
 
 [lints]
 workspace = true

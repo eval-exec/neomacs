@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 
 fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    neomacs_infra::crate_root!().join("../..")
 }
 
 fn binary() -> PathBuf {

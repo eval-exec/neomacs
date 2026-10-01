@@ -145,8 +145,15 @@ fn a_firing_alarm_reports_itself_in_the_echo_area_when_no_notifier_exists() -> P
         "a_firing_alarm_reports_itself_in_the_echo_area_when_no_notifier_exists",
         r##"(progn
   (alarm-clock-test-setup)
-  (let* ((baseline (copy-sequence timer-list))
-         (scheduled (alarm-clock-test-set "10 seconds" "Tea is ready")))
+  ;; This contract is the no-notifier path: a firing alarm reports itself in
+  ;; the echo area instead of starting a program, and schedules one retry
+  ;; rather than two.  Which notifiers exist is a fact about the machine
+  ;; running the suite, so both the package's own lookup and the list this
+  ;; case reports are taken with an empty `exec-path'; a host that has
+  ;; `notify-send' or `mpg123' installed would otherwise start one.
+  (let ((exec-path nil))
+   (let* ((baseline (copy-sequence timer-list))
+          (scheduled (alarm-clock-test-set "10 seconds" "Tea is ready")))
     (let* ((fired (plist-get (car alarm-clock--alist) :timer))
            (mark (alarm-clock-test-message-mark))
            (processes-before (length (process-list))))
@@ -160,7 +167,7 @@ fn a_firing_alarm_reports_itself_in_the_echo_area_when_no_notifier_exists() -> P
             :new-timers-from-firing (length (alarm-clock-test-new-timers baseline))
             :stopped alarm-clock--stopped
             :scheduled scheduled
-            :state (alarm-clock-test-state)))))"##,
+            :state (alarm-clock-test-state))))))"##,
         expect![[
             r#"OK (:notifiers (("notify-send") ("terminal-notifier") ("mpg123") ("afplay")) :alert-available nil :sound-file-exists t :messages ("[Alarm Clock] - Tea is ready") :processes-started 0 :timer-still-scheduled nil :new-timers-from-firing 1 :stopped nil :scheduled ("Tea is ready" 10 t 2) :state (("Tea is ready" nil)))"#
         ]],

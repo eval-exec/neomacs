@@ -527,5 +527,5 @@ impl TerminalCapabilityDatabase for neomacs_terminfo::Database {
 }
 
 #[cfg(test)]
-#[path = "terminal_capabilities_test.rs"]
+#[path = "tests/terminal_capabilities_test.rs"]
 pub(crate) mod tests;

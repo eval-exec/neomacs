@@ -6,9 +6,7 @@ use crate::buffer_source::loop_state::{
     BufferSourceLoopMutableState, BufferSourceRowBuildState, BufferSourceRowCarryoverState,
     BufferSourceSurfaceContext,
 };
-use crate::buffer_source::render_attempt::{
-    BufferSourceOutputState, BufferSourceRedisplayPublishRequest,
-};
+use crate::buffer_source::render_attempt::BufferSourceOutputState;
 use crate::buffer_source::render_plan::BufferSourceDefaultFacePlan;
 use crate::buffer_source::row_prelude::BufferSourceRowPreludeRequestContext;
 use crate::buffer_source::tail_render::{
@@ -19,7 +17,7 @@ use crate::buffer_source::walk::BufferSourceWalk;
 use crate::buffer_source::window_geometry::{BufferWindowGeometry, BufferWindowLocalDisplayPolicy};
 use crate::buffer_source::window_source::BufferWindowSource;
 use crate::display_cursor::CursorCaptureState;
-use crate::display_row::append_context::DisplayRowAppendSurface;
+use crate::display_row::append_context::{DisplayRowAppendSurface, DisplayRowLineWrap};
 use crate::display_row::builder::DisplayPhysicalLineTabState;
 use crate::display_row::face_environment::FrameFaces;
 use crate::display_row::face_state::{DisplayRowActiveFaceState, DisplayRowMeasurementMode};
@@ -48,7 +46,6 @@ use crate::types::{LineWrapMode, WindowParams};
 use crate::window_output::{
     TextWindowOutputTarget, TextWindowRedisplayPositions, WindowOutputEmitter,
 };
-use neovm_core::emacs_core::Context;
 use neovm_core::emacs_core::image_catalog::ImageScaleEnvironment;
 
 pub(crate) struct BufferSourceWalkSetupRequest<'a> {
@@ -295,6 +292,12 @@ impl<'a> BufferSourceWalkSetupRequest<'a> {
                 self.metrics.char_width(),
                 self.tab_width,
                 self.tab_stop_list,
+                // The single point where GNU's `it->line_wrap` is resolved
+                // for a window's rows: `window__wrap_mode` is the effective
+                // truncate/wrap decision and `word-wrap` picks between GNU's
+                // word-wrap and window-wrap (`init_iterator`,
+                // src/xdisp.c:3414-3426).
+                DisplayRowLineWrap::for_window(self.wrap_mode, self.word_wrap),
             )
             .into_surface()
             .with_margin_areas(
@@ -440,23 +443,6 @@ impl BufferSourceWalkSetup {
             ))
     }
 
-    pub(crate) fn install_body_and_publish_redisplay(
-        &mut self,
-        output: TextWindowOutputTarget<'_>,
-        output_emitter: &mut WindowOutputEmitter,
-        evaluator: &mut Context,
-        render_services: ChromeRowRenderServices<'_, '_>,
-        tail_context: &BufferSourceTailRequestContext<'_>,
-        publish_request: BufferSourceRedisplayPublishRequest,
-    ) -> TextWindowRedisplayPositions {
-        let redisplay_positions =
-            self.install_body(output, output_emitter, render_services, tail_context);
-        // GNU status-line percent specs read the live window state from the
-        // just-produced redisplay. Publish before chrome rows are evaluated.
-        publish_request.publish_window_end(evaluator, redisplay_positions);
-        redisplay_positions
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn render_body_and_tail<'request, 'buf, B: LayoutBufferView>(
         &mut self,
@@ -519,6 +505,11 @@ impl BufferSourceWalkSetup {
         buf_access: &RustBufferAccess<'buf, B>,
     ) -> (WindowOutputEmitter, BufferSourcePostLoopRenderOutcome) {
         let mut output_emitter = output.begin_text_window_output(begin_request);
+        output_emitter.set_query_target(params.query_target);
+        output_emitter.set_collect_query_restarts(
+            params.measurement_pixels.is_some(),
+            self.row_geometry_defaults,
+        );
         let source_render = output.source_render_state(
             &mut output_emitter,
             font_metrics,

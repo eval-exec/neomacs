@@ -424,7 +424,12 @@ fn decorate_window_cursor(
                         break;
                     }
                 }
-                (row.pixel_y, row.height_px, row.ascent_px, width)
+                (
+                    row.pixel_y,
+                    row.height_without_line_spacing(),
+                    row.ascent_px,
+                    width,
+                )
             }
             None => (0.0, default_height, default_ascent, char_w),
         };
@@ -472,7 +477,7 @@ impl BufferSourceOutputSetup {
         max_rows: usize,
         walk_setup: &BufferSourceWalkSetup,
     ) -> Self {
-        Self::new(
+        let mut setup = Self::new(
             frame_id,
             window_id,
             params.window_id as u64,
@@ -489,7 +494,14 @@ impl BufferSourceOutputSetup {
             geometry.visibility_bottom_y,
             max_rows,
             walk_setup,
-        )
+        );
+        setup.row_visibility_limit.allow_partial = params.window_system
+            && !params.kind.is_minibuffer()
+            && params.measurement_rows.is_none();
+        if setup.row_visibility_limit.allow_partial && params.measurement_pixels.is_none() {
+            setup.row_visibility_limit.bottom_y = layout_box.body().bottom();
+        }
+        setup
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -534,6 +546,7 @@ impl BufferSourceOutputSetup {
                 ),
             ),
             row_visibility_limit: DisplayRowVisibilityLimit {
+                allow_partial: false,
                 max_rows,
                 // Lifted to span `max_rows` for a minibuffer so the unclamped
                 // GNU `resize_mini_window` measurement can emit content rows
@@ -795,9 +808,9 @@ impl BufferSourceOutputSetup {
             // Capture the point glyph's metrics from the new cursor row before the
             // rows are moved into the grid (fall back to the window face metrics
             // when point is at EOL / on hidden text with no glyph of its own).
-            // Cursor height/ascent are ROW metrics (`height_px`/`ascent_px`); only
-            // the width comes from the point glyph's advance. Fall back to the
-            // window face metrics when point is at EOL / on hidden text.
+            // Combine row ascent with the point face's descent through the
+            // canonical cursor geometry rule. Width comes from the point glyph.
+            // Fall back to row metrics at EOL or hidden text without a glyph.
             let mut cursor_width = geometry.char_width;
             let mut cursor_height = geometry.char_height;
             let mut cursor_ascent = window_metrics.ascent();
@@ -818,11 +831,35 @@ impl BufferSourceOutputSetup {
                     // starting at 0. The full-rebuild path is unaffected: it
                     // captures the cursor y during emission from `row_geometry`.
                     cursor_row_pixel_y = row.pixel_y.max(prev_row_bottom);
-                    cursor_height = row.height_px;
+                    cursor_height = row.height_without_line_spacing();
                     cursor_ascent = row.ascent_px;
                     for glyph in &row.glyphs[GlyphArea::Text.index()] {
                         if row.glyph_covers_buffer_charpos(glyph, replay.new_point as usize) {
                             cursor_width = glyph.pixel_width;
+                            // Use the point face's descent, not the tallest
+                            // neighbouring face's full cell, just as the
+                            // canonical cursor capture path does.
+                            if let Some(face) =
+                                output.output_target().builder().output_face(glyph.face_id)
+                            {
+                                let face_ascent = face.font_ascent as f32;
+                                let face_height = face_ascent + face.font_descent as f32;
+                                if face_height > 0.0 {
+                                    let (y, height, ascent) =
+                                        crate::display_cursor::resolve_cursor_vertical_metrics(
+                                            cursor_row_pixel_y,
+                                            face_height,
+                                            face_ascent,
+                                            cursor_height,
+                                            cursor_ascent,
+                                            geometry.char_height,
+                                            row.ends_at_zv,
+                                        );
+                                    cursor_row_pixel_y = y;
+                                    cursor_height = height;
+                                    cursor_ascent = ascent;
+                                }
+                            }
                             break;
                         }
                     }
@@ -975,6 +1012,7 @@ impl BufferSourceOutputSetup {
             );
             return BufferSourceRenderAttemptOutcome::Finished {
                 redisplay_positions,
+                query_restart_rows: Vec::new(),
                 window_end_record: publish_request.window_end_record(redisplay_positions),
                 freshness_before_chrome,
                 effective_default_face,
@@ -1249,6 +1287,31 @@ impl BufferSourceOutputSetup {
                 render_services.reborrow(),
                 &tail_context,
             );
+            // The exposed walk can wrap even when its reused prefix contains
+            // only natural rows. Finalize its fringe indicators through the
+            // same installer as a full walk, at the exposed output-row base.
+            if let Some(arrows) = TruncationContinuationFringeRequest::new(
+                buffer,
+                evaluator,
+                params,
+                geometry.display_text_row_base,
+                {
+                    let resolved = FrameFaces::new(face_resolver)
+                        .for_window(buffer)
+                        .resolve_named_face("fringe");
+                    let face_id = crate::display_row::face_state::stable_face_id_for_resolved(
+                        render_services.face_ids(),
+                        &resolved,
+                    );
+                    {
+                        let bound = output.builder().bind_resolved_face(face_id, &resolved);
+                        output.install_resolved_face(&bound, None)
+                    };
+                    face_id
+                },
+            ) {
+                arrows.install(output.builder(), &walk_setup.row_flags);
+            }
             record_text_window_display_range(
                 output.reborrow(),
                 redisplay_positions.display_range(output_window_id),
@@ -1288,6 +1351,40 @@ impl BufferSourceOutputSetup {
                     geometry.char_height,
                     window_metrics.ascent(),
                 );
+            }
+
+            // A replay may not be SEALED without the frame's physical cursor.
+            //
+            // GNU's reuse gives the optimization up rather than proceed without
+            // the cursor: `try_window_reusing_current_matrix` searches the
+            // current matrix with `row_containing_pos` and otherwise
+            //     /* Give up if point isn't in a row displayed or reused.  This
+            //        also handles the case where w->cursor.vpos < nrows_scrolled
+            //        after the calls to display_line, which can happen with
+            //        scroll margins.  (See bug#1295.)  */
+            //     clear_glyph_matrix (w->desired_matrix); return false;
+            // (src/xdisp.c:21916-21926, :22098-22105), and `try_window_id` gives
+            // up the same way (src/xdisp.c:23077-23085: "Give up if cursor was
+            // not found.").  The reason is that the cursor is not optional: a
+            // frame has exactly ONE physical cursor slot, `tty_set_cursor`
+            // places the terminal cursor from the selected window's `w->cursor`
+            // (src/dispnew.c:5673) and `tty_update_end` shows it after every
+            // update (src/term.c:253).  A replay that found no row for point --
+            // or whose cursor ended outside the window's text area, GNU's
+            // scroll-margin case -- leaves that slot empty, and the tty then
+            // hides the cursor on the echo-area row instead of showing it on
+            // point's (the `C-l` after an isearch case).  Reject the replay
+            // instead: the retried layout carries no fast-path plan, so it
+            // cannot mispredict, and a full walk always places the cursor.
+            if params.cursor_role.is_active()
+                && cursor_style_for_window(params).is_some()
+                && output.builder().phys_cursor().is_none()
+            {
+                crate::window_output::restore_text_window_retry_checkpoint(
+                    output.reborrow(),
+                    retry_checkpoint,
+                );
+                return BufferSourceRenderAttemptOutcome::ReplayMispredicted;
             }
 
             // As on the cursor-only path: an EDIT replay confined to the cursor's
@@ -1340,6 +1437,7 @@ impl BufferSourceOutputSetup {
             );
             return BufferSourceRenderAttemptOutcome::Finished {
                 redisplay_positions,
+                query_restart_rows: Vec::new(),
                 window_end_record: publish_request.window_end_record(redisplay_positions),
                 freshness_before_chrome,
                 effective_default_face,
@@ -1421,14 +1519,15 @@ impl BufferSourceOutputSetup {
         let mut render_services =
             ChromeRowRenderServices::new(font_metrics, face_resolver, &mut face_ids);
         let mut output_emitter = output_emitter;
-        let redisplay_positions = walk_setup.install_body_and_publish_redisplay(
+        let redisplay_positions = walk_setup.install_body(
             output.reborrow(),
             &mut output_emitter,
-            evaluator,
             render_services.reborrow(),
             &tail_context,
-            publish_request,
         );
+        // Live window publication belongs to this evaluator-side orchestrator,
+        // after body installation and before chrome reads window-end (%p, etc.).
+        publish_request.publish_window_end(evaluator, redisplay_positions);
         // GNU's redisplay tail keeps producing rows below the last buffer line.
         // Compose the decorations for those rows here: a line-number-faced
         // TEXT_AREA prefix when line numbers are active, and an `empty-line`
@@ -1532,6 +1631,7 @@ impl BufferSourceOutputSetup {
             Ok(metrics) => metrics,
             Err(changed) => return changed.into(),
         };
+        let query_restart_rows = output_emitter.take_query_restart_rows();
         tail_context.finish_and_install(
             TextWindowFinishState::new(output, output_emitter, evaluator),
             measured_chrome_heights,
@@ -1539,6 +1639,7 @@ impl BufferSourceOutputSetup {
         );
         BufferSourceRenderAttemptOutcome::Finished {
             redisplay_positions,
+            query_restart_rows,
             window_end_record: publish_request.window_end_record(redisplay_positions),
             freshness_before_chrome,
             effective_default_face,

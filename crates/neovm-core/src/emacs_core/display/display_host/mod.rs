@@ -496,9 +496,15 @@ pub trait DisplayHost {
     /// GNU-compatible synchronous image query used by explicit Lisp
     /// primitives such as `image-size`. This may wait for metadata and must
     /// never be called from redisplay.
+    ///
+    /// `limit` is the querying frame's resolved `max-image-size`, for the same
+    /// reason [`super::image_catalog::ImageCatalog::lookup`] takes it: GNU
+    /// checks the bound in the loader, so a synchronous query must refuse the
+    /// same images redisplay refuses.
     fn resolve_image_sync(
         &self,
         _request: super::image_catalog::ImageResolveRequest,
+        _limit: super::image_catalog::ImageSizeLimit,
     ) -> Result<Option<super::image_catalog::ReadyImage>, String> {
         Ok(None)
     }
@@ -658,6 +664,20 @@ pub trait DisplayHost {
     fn set_visual_config(
         &mut self,
         _config: neomacs_display_protocol::VisualConfig,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    /// Publish the compiled NS modifier policy to the display backend.
+    ///
+    /// GNU's `nsterm.m` reads `ns-command-modifier' and friends at every
+    /// `keyDown:'; a winit backend cannot read Lisp per event, so Lisp
+    /// compiles the policy once per change (`add-variable-watcher' in
+    /// `lisp/term/neo-win.el') and ships it here.  The conservative default
+    /// keeps test and TTY hosts honest: they carry no modifier policy, and
+    /// the render thread keeps cooking with GNU's compiled-in defaults.
+    fn set_modifier_policy(
+        &mut self,
+        _policy: neomacs_display_protocol::modifier_policy::ModifierPolicy,
     ) -> Result<(), String> {
         Ok(())
     }

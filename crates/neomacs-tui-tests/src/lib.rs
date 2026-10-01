@@ -12,7 +12,31 @@
 //!   Call [`TuiSession::send`] to type keys and [`TuiSession::read`] to
 //!   advance the parser. [`TuiSession::screen`] returns the current
 //!   virtual screen. With `NEOMACS_TUI_RECORD=on`, each session also writes an
-//!   asciicast v3 recording under `target/tui-recordings`.
+//!   asciicast v3 recording under `target/tui-recordings`, and brackets every
+//!   key it sends with `NEOMACS_TUI_RECORD_DELAY_MS` -- `sleep, key, sleep` --
+//!   so the cast is watchable instead of a blur. The default is 2000 ms, `0`
+//!   turns pacing off, and the variable is only read while recording, so a
+//!   normal run sleeps nowhere. The leading wait is why the first key lands on
+//!   a screen the editor has finished painting rather than mid-redraw, and the
+//!   trailing one holds the response to the last key; between two consecutive
+//!   sends in one session the pacing alone is twice the delay.
+//!
+//!   Pacing is charged per `send`, and a paced run is not free. The paired
+//!   drivers work both editors from one thread, so a single `send_both` key
+//!   costs four delays -- 8 s at the default -- and a scenario of a few dozen
+//!   keys spends minutes on the clock, long enough to trip
+//!   `.config/nextest.toml`'s 600 s slow-timeout. (Roughly 75 paired keys, or
+//!   150 single-session keys, is that ceiling.) A paced test that runs past it
+//!   was killed, not hung; lower `NEOMACS_TUI_RECORD_DELAY_MS` whenever the
+//!   pacing is not the thing being inspected.
+//!
+//!   A recorded run is also a *different execution*, not an observation of the
+//!   graded one: inserting seconds between keys changes what the editor does
+//!   -- idle timers fire, the echo area clears, which-key pops up, async
+//!   completion lands mid-command -- so a recorded run may pass or fail
+//!   differently from the same scenario without recording. It is a
+//!   diagnostic for a human; CI must never set it, and a green recorded run
+//!   is not evidence that the graded run is green.
 //!
 //! - [`emacs_key`] translates Emacs key descriptions (`"C-x"`, `"M-x"`,
 //!   `"RET"`) into the raw bytes a terminal would send.
@@ -24,6 +48,8 @@
 //! - [`diff_screens`] remains available for tests that intentionally inspect
 //!   raw terminal cells or exact palette values.
 
+use std::borrow::Cow;
+use std::collections::HashMap;
 use std::io::Write;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -37,7 +63,7 @@ mod recording;
 pub use launch::TuiLaunch;
 use pty_output::{PtyOutputEvent, PtyOutputPump};
 pub use recording::TuiRecordingScope;
-use recording::{RecordingIdentity, RecordingPolicy, SessionRecording, TerminalSize};
+use recording::{RecordingConfig, RecordingIdentity, SessionRecording, TerminalSize};
 
 // ── Session ──────────────────────────────────────────────────────────
 
@@ -301,6 +327,10 @@ pub struct TuiSession {
     parser: vt100::Parser,
     recent_output: Vec<u8>,
     recording: SessionRecording,
+    // Pacing around every recorded key send: zero unless this session
+    // records, so `send` sleeps nowhere on a graded run. Only
+    // `RecordingConfig` can produce a non-zero value.
+    recording_delay: Duration,
     home: SessionDirectory,
     // Keep TMPDIR isolated per session: interactive Org chooses one of only
     // 1,000 babel-stable names there and cleans it from kill-emacs-hook. A
@@ -382,15 +412,18 @@ impl TuiSession {
         terminal: TuiTerminalConfig,
         erase: PtyEraseChar,
     ) -> Self {
-        let policy = RecordingPolicy::parse(std::env::var_os(NEOMACS_TUI_RECORD).as_deref())
-            .unwrap_or_else(|message| panic!("{message}"));
+        let config = RecordingConfig::parse(
+            std::env::var_os(NEOMACS_TUI_RECORD).as_deref(),
+            std::env::var_os(NEOMACS_TUI_RECORD_DELAY_MS).as_deref(),
+        )
+        .unwrap_or_else(|message| panic!("{message}"));
         let root = tui_recording_root();
         Self::spawn_launch_with_recording(
             launch,
             name,
             terminal,
             erase,
-            policy,
+            config,
             &root,
             scope.session(name),
         )
@@ -401,7 +434,7 @@ impl TuiSession {
         name: &str,
         terminal: TuiTerminalConfig,
         erase: PtyEraseChar,
-        recording_policy: RecordingPolicy,
+        recording: RecordingConfig,
         recording_root: &Path,
         recording_identity: RecordingIdentity,
     ) -> Self {
@@ -410,8 +443,8 @@ impl TuiSession {
             .expect("resize pty");
         set_pty_erase_char(&pts, erase);
         let damage_report_tag = recording_identity.damage_report_tag();
-        let recording = SessionRecording::start(
-            recording_policy,
+        let session_recording = SessionRecording::start(
+            recording.policy(),
             recording_root,
             recording_identity,
             &terminal.terminal_type,
@@ -497,7 +530,8 @@ impl TuiSession {
             _child: child,
             parser,
             recent_output: Vec::new(),
-            recording,
+            recording: session_recording,
+            recording_delay: recording.delay(),
             home,
             _tmp: tmp,
             name: name.to_string(),
@@ -509,7 +543,7 @@ impl TuiSession {
         launch: TuiLaunch,
         name: &str,
         terminal: TuiTerminalConfig,
-        policy: RecordingPolicy,
+        recording: RecordingConfig,
         root: &Path,
         identity: RecordingIdentity,
     ) -> Self {
@@ -518,7 +552,7 @@ impl TuiSession {
             name,
             terminal,
             PtyEraseChar::TerminalDefault,
-            policy,
+            recording,
             root,
             identity,
         )
@@ -666,7 +700,16 @@ impl TuiSession {
     }
 
     /// Send raw bytes to the PTY.
+    ///
+    /// Every key the harness types funnels through here: [`Self::send_key`],
+    /// [`Self::send_keys`], [`Self::paste`] and the paired drivers are all
+    /// this method. While a session records, it brackets the write with
+    /// `NEOMACS_TUI_RECORD_DELAY_MS`, so the recorded run is watchable rather
+    /// than a blur.
     pub fn send(&mut self, data: &[u8]) {
+        // Before: the key lands on a screen the editor has finished painting,
+        // not in the middle of the previous key's redraw.
+        self.pace_recording();
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut written = 0;
 
@@ -700,6 +743,17 @@ impl TuiSession {
             }
         }
         self.recording.input(data);
+        // After: the editor's response to this key is drawn -- and recorded at
+        // its own observation time -- before the next key arrives, and the
+        // final key of a scenario leaves the last screen on display.
+        self.pace_recording();
+    }
+
+    /// Wait out the recording delay, if this session has one.
+    fn pace_recording(&self) {
+        if !self.recording_delay.is_zero() {
+            std::thread::sleep(self.recording_delay);
+        }
     }
 
     /// Paste text through the terminal's bracketed-paste protocol.
@@ -869,6 +923,7 @@ impl TuiSession {
 const NEOMACS_TUI_NEOMACS_BIN: &str = "NEOMACS_TUI_NEOMACS_BIN";
 const NEOMACS_TUI_RECORD: &str = "NEOMACS_TUI_RECORD";
 const NEOMACS_TUI_RECORD_DIR: &str = "NEOMACS_TUI_RECORD_DIR";
+const NEOMACS_TUI_RECORD_DELAY_MS: &str = "NEOMACS_TUI_RECORD_DELAY_MS";
 
 fn tui_recording_root() -> PathBuf {
     let workspace = workspace_root();
@@ -1612,8 +1667,12 @@ impl TuiRow {
 /// Values that differ only because the two editors run in isolated fixtures.
 ///
 /// An environment says which concrete path spellings denote the same
-/// test-owned resource.  The resulting comparison remains exact after those
-/// declared values are mapped to a shared canonical token.
+/// test-owned resource.  The comparison assigns each of them a canonical
+/// token, which occupies exactly as many columns as the widest of the two
+/// spellings: a row whose spelling is shorter than its counterpart's is
+/// padded into the token, so every cell that follows the spelling still sits
+/// at the column the other editor put it in and the rest of the row compares
+/// cell for cell.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PairedDisplayEnvironment {
     paths: Vec<PairedPath>,
@@ -1623,12 +1682,103 @@ pub struct PairedDisplayEnvironment {
 struct PairedPath {
     gnu: PathBuf,
     neomacs: PathBuf,
+    scope: PathScope,
+}
+
+/// How far one declared spelling reaches into a path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PathScope {
+    /// The spelling names exactly one resource.
+    Exact,
+    /// The spelling names a directory the harness minted for one session
+    /// alone.  Every name minted inside it -- an editor's `make-temp-file`
+    /// scratch copy, for instance -- belongs to that same private resource,
+    /// so the one path segment that follows the root is part of the spelling.
+    SessionScratchRoot,
 }
 
 #[derive(Debug, Clone, Copy)]
 enum DisplayPeer {
     Gnu,
     Neomacs,
+}
+
+/// One position of a peer's terminal row after the environment's declared
+/// spellings have been replaced by their canonical tokens.
+///
+/// A declared spelling is the single place where the two editors are expected
+/// to print different characters for the same resource.  Its token keeps every
+/// later cell of the row at the same column in both editors, so only the span
+/// itself is exempt from the character comparison.
+#[derive(Clone, Copy)]
+enum AlignedCell<'screen> {
+    /// The peer's own cell; compared in every dimension.
+    Own(&'screen vt100::Cell),
+    /// A cell inside a declared spelling that both peers spell with the same
+    /// number of columns.  The position denotes the same cell in each editor,
+    /// so its layout, style and colors still compare -- only the characters,
+    /// which are the declared pair rather than anything an editor spelled, do
+    /// not.
+    Declared {
+        pair: usize,
+        cell: &'screen vt100::Cell,
+    },
+    /// A cell inside a declared spelling whose width the two peers do not
+    /// share.  Nothing inside such a span corresponds cell for cell, so it
+    /// compares only as a token of the same declared pair.
+    Token { pair: usize },
+}
+
+impl<'screen> AlignedCell<'screen> {
+    /// The cell to compare styles and colors with, for positions that have
+    /// one.  A token cell stands for a span that has no counterpart.
+    fn styled_cell(self) -> Option<&'screen vt100::Cell> {
+        match self {
+            Self::Own(cell) | Self::Declared { cell, .. } => Some(cell),
+            Self::Token { .. } => None,
+        }
+    }
+
+    /// Whether two peers display the same thing at this position.
+    fn displays_same_as(self, other: Self) -> bool {
+        match (self, other) {
+            (Self::Own(ours), Self::Own(theirs)) => {
+                displayed_contents(ours) == displayed_contents(theirs)
+            }
+            (Self::Declared { pair: ours, .. }, Self::Declared { pair: theirs, .. })
+            | (Self::Token { pair: ours }, Self::Token { pair: theirs }) => ours == theirs,
+            _ => false,
+        }
+    }
+}
+
+/// A declared spelling as one peer's screen can show it.
+struct Spelling<'a> {
+    pair: usize,
+    text: Cow<'a, str>,
+    absorbs_one_segment: bool,
+}
+
+/// One occurrence of a declared spelling on one row of one peer's screen.
+#[derive(Debug, Clone, Copy)]
+struct SpellingSpan {
+    pair: usize,
+    /// The raw column the spelling starts at.
+    start: u16,
+    /// The raw cells the spelling occupies.
+    cells: u16,
+}
+
+/// One occurrence as it is finally rendered, once both peers' spellings of
+/// that occurrence have been taken into account.
+#[derive(Debug, Clone, Copy)]
+struct Placement {
+    span: SpellingSpan,
+    /// The aligned cells this occurrence's token occupies.
+    token_cells: u16,
+    /// Whether both peers spell the occurrence with the same number of
+    /// columns, so the cells inside the span still correspond one to one.
+    corresponding: bool,
 }
 
 impl PairedDisplayEnvironment {
@@ -1644,34 +1794,285 @@ impl PairedDisplayEnvironment {
         self.paths.push(PairedPath {
             gnu: gnu.into(),
             neomacs: neomacs.into(),
+            scope: PathScope::Exact,
         });
         self
     }
 
     /// Capture the path values which the harness necessarily isolates for a
     /// paired editor session.
+    ///
+    /// The session home is declared as one exact resource.  The session's
+    /// temporary directory is declared as its own scratch root: the harness
+    /// minted that directory for this session alone, so the `make-temp-file`
+    /// names an editor mints inside it are per-session scratch copies of one
+    /// and the same thing, never a spelling either editor chose.
     #[must_use]
     pub fn from_sessions(gnu: &TuiSession, neomacs: &TuiSession) -> Self {
         Self::new()
             .with_path_pair(gnu.home_dir(), neomacs.home_dir())
-            .with_path_pair(gnu.temp_dir(), neomacs.temp_dir())
+            .with_scratch_root_pair(gnu.temp_dir(), neomacs.temp_dir())
     }
 
-    fn normalize(&self, peer: DisplayPeer, text: &str) -> String {
+    /// Declare two directories as the GNU and Neomacs scratch roots the
+    /// harness minted for one session each.
+    #[must_use]
+    fn with_scratch_root_pair(
+        mut self,
+        gnu: impl Into<PathBuf>,
+        neomacs: impl Into<PathBuf>,
+    ) -> Self {
+        self.paths.push(PairedPath {
+            gnu: gnu.into(),
+            neomacs: neomacs.into(),
+            scope: PathScope::SessionScratchRoot,
+        });
+        self
+    }
+
+    /// Lay out one row of both peers, with every declared spelling replaced by
+    /// its token.
+    fn aligned_rows<'screen>(
+        &self,
+        gnu: &'screen vt100::Screen,
+        neomacs: &'screen vt100::Screen,
+        row: u16,
+        gnu_columns: u16,
+        neomacs_columns: u16,
+    ) -> (Vec<AlignedCell<'screen>>, Vec<AlignedCell<'screen>>) {
+        if self.paths.is_empty() {
+            return (
+                own_cells(gnu, row, gnu_columns),
+                own_cells(neomacs, row, neomacs_columns),
+            );
+        }
+        let gnu_spans = self.row_spellings(gnu, row, gnu_columns, DisplayPeer::Gnu);
+        let neomacs_spans = self.row_spellings(neomacs, row, neomacs_columns, DisplayPeer::Neomacs);
+        (
+            lay_out_row(
+                gnu,
+                row,
+                gnu_columns,
+                &reconciled(&gnu_spans, &neomacs_spans),
+            ),
+            lay_out_row(
+                neomacs,
+                row,
+                neomacs_columns,
+                &reconciled(&neomacs_spans, &gnu_spans),
+            ),
+        )
+    }
+
+    /// The declared spellings one peer's screen can show, earliest declared
+    /// first.  Only a peer's own spelling is ever matched against its screen.
+    fn spellings(&self, peer: DisplayPeer) -> Vec<Spelling<'_>> {
         self.paths
             .iter()
             .enumerate()
-            .fold(text.to_owned(), |normalized, (index, path)| {
-                let concrete = match peer {
-                    DisplayPeer::Gnu => &path.gnu,
-                    DisplayPeer::Neomacs => &path.neomacs,
+            .filter_map(|(pair, path)| {
+                let (path, scope) = match peer {
+                    DisplayPeer::Gnu => (&path.gnu, path.scope),
+                    DisplayPeer::Neomacs => (&path.neomacs, path.scope),
                 };
-                normalized.replace(
-                    concrete.to_string_lossy().as_ref(),
-                    &format!("<PAIRED-PATH-{index}>"),
-                )
+                let text = path.to_string_lossy();
+                (!text.is_empty()).then_some(Spelling {
+                    pair,
+                    text,
+                    absorbs_one_segment: scope == PathScope::SessionScratchRoot,
+                })
             })
+            .collect()
     }
+
+    /// Every occurrence of those spellings on one row, in column order.
+    fn row_spellings(
+        &self,
+        screen: &vt100::Screen,
+        row: u16,
+        columns: u16,
+        peer: DisplayPeer,
+    ) -> Vec<SpellingSpan> {
+        let spellings = self.spellings(peer);
+        let mut spans = Vec::new();
+        let mut column = 0u16;
+        while column < columns {
+            // The longest match wins, so a resource is never shadowed by a
+            // shorter declared spelling that contains it; a tie keeps the
+            // spelling declared first.
+            let mut best: Option<SpellingSpan> = None;
+            for spelling in &spellings {
+                let Some(cells) = matching_cells(screen, row, columns, column, spelling) else {
+                    continue;
+                };
+                if best.is_none_or(|best| cells > best.cells) {
+                    best = Some(SpellingSpan {
+                        pair: spelling.pair,
+                        start: column,
+                        cells,
+                    });
+                }
+            }
+            match best {
+                Some(span) => {
+                    spans.push(span);
+                    column += span.cells;
+                }
+                None => column += 1,
+            }
+        }
+        spans
+    }
+}
+
+/// The text a cell displays.
+///
+/// `vt100` distinguishes a cell with no contents -- one an editor erased or
+/// never painted -- from a cell holding a blank.  Both show a blank cell, and
+/// the comparison is about the display, so both spell the same thing here.
+/// [`visible_row_text`] canonicalizes the same states for whole rows.
+fn displayed_contents(cell: &vt100::Cell) -> &str {
+    if cell.has_contents() {
+        cell.contents()
+    } else {
+        " "
+    }
+}
+
+/// Every cell of a row, with nothing replaced.
+fn own_cells<'screen>(
+    screen: &'screen vt100::Screen,
+    row: u16,
+    columns: u16,
+) -> Vec<AlignedCell<'screen>> {
+    (0..columns)
+        .map(|column| {
+            AlignedCell::Own(
+                screen
+                    .cell(row, column)
+                    .expect("cell inside terminal geometry"),
+            )
+        })
+        .collect()
+}
+
+/// The cell's character, when it holds exactly one.
+fn cell_character(screen: &vt100::Screen, row: u16, columns: u16, column: u16) -> Option<char> {
+    if column >= columns {
+        return None;
+    }
+    let contents = screen.cell(row, column)?.contents();
+    let mut characters = contents.chars();
+    match (characters.next(), characters.next()) {
+        (Some(character), None) => Some(character),
+        _ => None,
+    }
+}
+
+/// How many cells `spelling` occupies at `column`, or `None` when the screen
+/// does not show it there.
+fn matching_cells(
+    screen: &vt100::Screen,
+    row: u16,
+    columns: u16,
+    column: u16,
+    spelling: &Spelling<'_>,
+) -> Option<u16> {
+    let mut cells = 0u16;
+    for expected in spelling.text.chars() {
+        if cell_character(screen, row, columns, column + cells)? != expected {
+            return None;
+        }
+        cells += 1;
+    }
+    if spelling.absorbs_one_segment {
+        cells = scratch_cells(screen, row, columns, column, cells);
+    }
+    Some(cells)
+}
+
+/// Extend a scratch root's match by the one path segment minted inside it.
+fn scratch_cells(
+    screen: &vt100::Screen,
+    row: u16,
+    columns: u16,
+    column: u16,
+    root_cells: u16,
+) -> u16 {
+    let after_root = column + root_cells;
+    if cell_character(screen, row, columns, after_root) != Some('/') {
+        return root_cells;
+    }
+    let mut end = after_root + 1;
+    while let Some(character) = cell_character(screen, row, columns, end) {
+        if character == '/' || character.is_whitespace() {
+            break;
+        }
+        end += 1;
+    }
+    end - column
+}
+
+/// Pair each of one peer's occurrences with the other peer's occurrence of the
+/// same declared resource, so both peers render it as the same token.
+fn reconciled(own: &[SpellingSpan], other: &[SpellingSpan]) -> Vec<Placement> {
+    let mut occurrences: HashMap<usize, usize> = HashMap::new();
+    own.iter()
+        .map(|span| {
+            let occurrence = occurrences.entry(span.pair).or_default();
+            let counterpart = other
+                .iter()
+                .filter(|candidate| candidate.pair == span.pair)
+                .nth(*occurrence);
+            *occurrence += 1;
+            Placement {
+                span: *span,
+                token_cells: counterpart.map_or(span.cells, |it| span.cells.max(it.cells)),
+                corresponding: counterpart.is_some_and(|it| it.cells == span.cells),
+            }
+        })
+        .collect()
+}
+
+/// Lay out one row as its own cells, with each declared spelling replaced by
+/// a token as wide as the widest spelling of that occurrence.
+fn lay_out_row<'screen>(
+    screen: &'screen vt100::Screen,
+    row: u16,
+    columns: u16,
+    placements: &[Placement],
+) -> Vec<AlignedCell<'screen>> {
+    let mut aligned = Vec::with_capacity(columns as usize);
+    let mut column = 0u16;
+    let mut placements = placements.iter().peekable();
+    while aligned.len() < columns as usize {
+        if placements
+            .peek()
+            .is_some_and(|placement| placement.span.start == column)
+        {
+            let placement = placements.next().expect("row placement");
+            let pair = placement.span.pair;
+            let filled = (placement.token_cells as usize).min(columns as usize - aligned.len());
+            for offset in 0..filled {
+                if placement.corresponding {
+                    let cell = screen
+                        .cell(row, column + offset as u16)
+                        .expect("cell inside terminal geometry");
+                    aligned.push(AlignedCell::Declared { pair, cell });
+                } else {
+                    aligned.push(AlignedCell::Token { pair });
+                }
+            }
+            column += placement.span.cells;
+            continue;
+        }
+        let Some(cell) = screen.cell(row, column) else {
+            break;
+        };
+        aligned.push(AlignedCell::Own(cell));
+        column += 1;
+    }
+    aligned
 }
 
 /// A terminal's visible geometry.
@@ -2036,6 +2437,8 @@ fn compare_displays_with_environment(
     color_contract: DisplayColorContract,
 ) -> DisplayReport {
     let color_policy = color_contract.policy();
+    let empty_environment = PairedDisplayEnvironment::new();
+    let environment = environment.unwrap_or(&empty_environment);
     let gnu_size = DisplaySize::from(gnu.size());
     let neomacs_size = DisplaySize::from(neomacs.size());
     let mut unexpected = Vec::new();
@@ -2045,13 +2448,26 @@ fn compare_displays_with_environment(
             neomacs: neomacs_size,
         });
     }
-    for row in 0..gnu_size.rows.min(neomacs_size.rows) {
+    let rows = gnu_size.rows.min(neomacs_size.rows);
+    // Both peers' rows with the declared spellings replaced by their tokens.
+    // Every comparison runs over these, so a spelling that is spelled with
+    // different widths cannot shift the cells that follow it.
+    let aligned: Vec<_> = (0..rows)
+        .map(|row| {
+            environment.aligned_rows(gnu, neomacs, row, gnu_size.columns, neomacs_size.columns)
+        })
+        .collect();
+    for row in 0..rows {
         let gnu_text = visible_row_text(gnu, row, gnu_size.columns);
         let neomacs_text = visible_row_text(neomacs, row, neomacs_size.columns);
-        let text_matches = environment.is_some_and(|environment| {
-            environment.normalize(DisplayPeer::Gnu, &gnu_text)
-                == environment.normalize(DisplayPeer::Neomacs, &neomacs_text)
-        }) || gnu_text == neomacs_text;
+        let (gnu_row, neomacs_row) = &aligned[row as usize];
+        // Equal raw text is equal display: the declared pairs can only exempt
+        // characters, never add or remove any.
+        let text_matches = gnu_text == neomacs_text
+            || gnu_row
+                .iter()
+                .zip(neomacs_row)
+                .all(|(ours, theirs)| ours.displays_same_as(*theirs));
         if !text_matches {
             unexpected.push(DisplayDifference::TextRow {
                 row: TuiRow::absolute(row.into()),
@@ -2071,13 +2487,21 @@ fn compare_displays_with_environment(
     }
     let mut gnu_style_origins = std::collections::HashMap::new();
     let mut neomacs_style_origins = std::collections::HashMap::new();
-    for row in 0..gnu_size.rows.min(neomacs_size.rows) {
-        for column in 0..gnu_size.columns.min(neomacs_size.columns) {
-            let at = DisplayCell { row, column };
-            let gnu_cell = gnu.cell(row, column).expect("cell inside GNU geometry");
-            let neomacs_cell = neomacs
-                .cell(row, column)
-                .expect("cell inside Neomacs geometry");
+    for row in 0..rows {
+        let (gnu_row, neomacs_row) = &aligned[row as usize];
+        for (column, (gnu_aligned, neomacs_aligned)) in gnu_row.iter().zip(neomacs_row).enumerate()
+        {
+            let at = DisplayCell {
+                row,
+                column: column as u16,
+            };
+            // A token stands for a span with no cell-for-cell counterpart, so
+            // it takes part in no style or color comparison.
+            let (Some(gnu_cell), Some(neomacs_cell)) =
+                (gnu_aligned.styled_cell(), neomacs_aligned.styled_cell())
+            else {
+                continue;
+            };
             let gnu_class = *gnu_style_origins
                 .entry(VisibleCellStyle::for_color_policy(gnu_cell, color_policy))
                 .or_insert(at);
@@ -2154,6 +2578,19 @@ fn visible_row_text(screen: &vt100::Screen, row: u16, columns: u16) -> String {
 #[path = "tests/exact_display_test.rs"]
 mod exact_display_tests;
 
+#[cfg(test)]
+#[path = "tests/git_fixture_test.rs"]
+mod git_fixture_tests;
+
+#[cfg(test)]
+#[path = "tests/snapshot_test.rs"]
+mod snapshot_tests;
+
+pub mod git_fixture;
+pub mod package_harness;
 pub mod package_scenario;
 #[allow(dead_code)]
 pub mod pair;
+
+pub use snapshot::Snapshot;
+pub mod snapshot;

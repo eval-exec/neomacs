@@ -221,6 +221,19 @@ pub fn deterministic_process_environment(
             std::ffi::OsString::from("LOGNAME"),
             std::ffi::OsString::from("melpa-test"),
         ),
+        // `user-full-name' is not the login name: GNU reads NAME first and
+        // falls back to the password database, so an unset NAME leaks the
+        // running user into every value that prints it.
+        (
+            std::ffi::OsString::from("NAME"),
+            std::ffi::OsString::from("melpa-test"),
+        ),
+        // A recorded process environment prints this one verbatim, and CI
+        // exports it for the whole job: pin it so a plain shell agrees.
+        (
+            std::ffi::OsString::from("RUST_BACKTRACE"),
+            std::ffi::OsString::from("1"),
+        ),
         (
             std::ffi::OsString::from("HOSTNAME"),
             std::ffi::OsString::from("melpa-host"),

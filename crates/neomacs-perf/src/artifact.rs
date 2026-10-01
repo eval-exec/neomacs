@@ -59,6 +59,10 @@ pub enum MetricName {
     Redisplays,
     CompletionHelpCalls,
     CompletionCandidateCount,
+    /// Untimed warm-up completions the steady row discarded before opening
+    /// its timing window. A count, so an artifact proves the warm-up ran.
+    WarmupCompletionHelpCalls,
+    ScrollCommandCount,
     OverlayCount,
     LspDiagnosticCount,
     BytecodeCalls,
@@ -85,6 +89,12 @@ pub enum MetricName {
     BufferSwitchPhaseCpuTime,
     HowManyPhaseCpuTime,
     MotionPhaseCpuTime,
+    /// Scrolling, first display of every line in the pass: pays JIT, layout,
+    /// and face realisation warm-up. Reported beside `warm-scroll-phase` so
+    /// the steady-state cost is never silently blended with warm-up.
+    ColdScrollPhaseCpuTime,
+    /// Scrolling over already-laid-out rows: the steady-state cost.
+    WarmScrollPhaseCpuTime,
     /// Wall time the harness spent on ITSELF inside the timed window: the
     /// per-iteration whole-buffer snapshot, the comparison against it, and
     /// the restore when the workload changed the text.
@@ -144,6 +154,8 @@ impl MetricName {
             | Self::BufferSwitchPhaseCpuTime
             | Self::HowManyPhaseCpuTime
             | Self::MotionPhaseCpuTime
+            | Self::ColdScrollPhaseCpuTime
+            | Self::WarmScrollPhaseCpuTime
             | Self::HarnessBookkeepingWallTime
             | Self::P50InputToRedisplayLatency
             | Self::P95InputToRedisplayLatency
@@ -167,6 +179,8 @@ impl MetricName {
             | Self::Redisplays
             | Self::CompletionHelpCalls
             | Self::CompletionCandidateCount
+            | Self::WarmupCompletionHelpCalls
+            | Self::ScrollCommandCount
             | Self::OverlayCount
             | Self::LspDiagnosticCount
             | Self::BytecodeCalls

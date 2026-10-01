@@ -1,0 +1,26 @@
+MWIM-VISUAL-SETUP w=24 b=24 p=48 chars=133 begin=beginning-of-visual-line end=end-of-visual-line visual=t wrap=t
+MWIM-GRID-1 "  alpha beta gamma"
+MWIM-GRID-2 "delta epsilon zeta eta"
+MWIM-GRID-3 "theta iota kappa"
+MWIM-GRID-4 "lambda mu nu xi omicron"
+MWIM-GRID-5 "        wide 界 cedar"
+MWIM-GRID-6 "birch maple spruce"
+MWIM-GRID-7 "willow aspen oak"
+MWIM-MOVE e=1 p=43 line=1 col=42 begin=beginning-of-visual-line end=end-of-visual-line mod=nil undo=nil
+MWIM-MOVE e=2 p=43 line=1 col=42 begin=beginning-of-visual-line end=end-of-visual-line mod=nil undo=nil
+MWIM-MOVE e=3 p=43 line=1 col=42 begin=beginning-of-visual-line end=end-of-visual-line mod=nil undo=nil
+MWIM-VISUAL-RESET-MIDDLE p=48
+MWIM-MOVE e=4 p=59 line=1 col=58 begin=beginning-of-visual-line end=end-of-visual-line mod=nil undo=nil
+MWIM-MOVE e=5 p=59 line=1 col=58 begin=beginning-of-visual-line end=end-of-visual-line mod=nil undo=nil
+MWIM-MOVE e=6 p=59 line=1 col=58 begin=beginning-of-visual-line end=end-of-visual-line mod=nil undo=nil
+MWIM-VISUAL-RESET-FINAL p=80
+MWIM-MOVE e=7 p=60 line=1 col=59 begin=beginning-of-visual-line end=end-of-visual-line mod=nil undo=nil
+MWIM-MOVE e=8 p=83 line=1 col=82 begin=beginning-of-visual-line end=end-of-visual-line mod=nil undo=nil
+MWIM-WIDE-VISUAL-RESET p=109 line=2 col=33 begin=beginning-of-visual-line end=end-of-visual-line
+MWIM-MOVE e=9 p=98 line=2 col=22 begin=beginning-of-visual-line end=end-of-visual-line mod=nil undo=nil
+MWIM-WIDE-VISUAL-RESET-AGAIN p=109 line=2 col=33
+MWIM-MOVE e=10 p=116 line=2 col=40 begin=beginning-of-visual-line end=end-of-visual-line mod=nil undo=nil
+MWIM-LOGICAL-RESET p=109 line=2 col=33 begin=beginning-of-line end=end-of-line
+MWIM-MOVE e=11 p=84 line=2 col=0 begin=beginning-of-line end=end-of-line mod=nil undo=nil
+MWIM-LOGICAL-RESET-AGAIN p=109 line=2 col=33
+MWIM-MOVE e=12 p=133 line=2 col=57 begin=beginning-of-line end=end-of-line mod=nil undo=nil

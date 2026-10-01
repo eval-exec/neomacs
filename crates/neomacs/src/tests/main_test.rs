@@ -22,6 +22,7 @@ use super::super::{
 };
 #[cfg(feature = "video")]
 use neomacs_display_protocol::VideoId;
+use neomacs_display_protocol::image_diagnostic::{ImageDiagnostic, ImageFormatName};
 use neomacs_display_protocol::{SelectionOwner, WebViewId};
 use neomacs_display_runtime::render_thread::{
     ImageDecodeTerminal, ImageRenderState, SharedImageRenderState,
@@ -57,9 +58,10 @@ use neovm_core::emacs_core::eval::{
 };
 use neovm_core::emacs_core::image_catalog::{AxisSize, ImageRotation, ImageSizeSpec};
 use neovm_core::emacs_core::image_catalog::{
-    ImageAnimationInvalidation, ImageCatalog, ImageColorContext, ImageDataSource, ImageFrameIndex,
-    ImageId, ImageLoadAttempt, ImageLoadToken, ImageLookup, ImageResolveRequest,
-    ImageResolveSource, ImageSpecIdentity, ResolvedImageMetadata,
+    EncodedBytes, ImageAnimationInvalidation, ImageCatalog, ImageColorContext, ImageDataSource,
+    ImageFrameIndex, ImageId, ImageLoadAttempt, ImageLoadIdentity, ImageLoadToken, ImageLookup,
+    ImageResolveRequest, ImageResolveSource, ImageSizeLimit, ImageSpecIdentity,
+    ResolvedImageMetadata,
 };
 use neovm_core::emacs_core::intern::intern;
 use neovm_core::emacs_core::load::{
@@ -83,7 +85,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 #[cfg(target_os = "linux")]
-#[path = "../platform_startup_test.rs"]
+#[path = "../tests/platform_startup_test.rs"]
 mod platform_fonts;
 
 fn gui_display() -> BootstrapDisplayConfig {
@@ -118,6 +120,26 @@ fn shared_primary_window_size(width: u32, height: u32) -> Arc<Mutex<PrimaryWindo
 
 thread_local! {
     static IMAGE_SPEC_TEST_CONTEXT: Context = Context::new();
+}
+
+/// The declared type and subject GNU would use for a test image source.
+///
+/// Tests that only exercise cache mechanics still have to state what the image
+/// *is*, because that is what a failure on it would be reported as.
+fn test_file_image_identity(path: &str) -> ImageLoadIdentity {
+    use neomacs_display_protocol::image_diagnostic::{ImageDiagnosticSubject, ImageFormatName};
+    ImageLoadIdentity::new(
+        ImageFormatName::Png,
+        ImageDiagnosticSubject::File(path.to_owned()),
+    )
+}
+
+fn test_data_image_identity() -> ImageLoadIdentity {
+    use neomacs_display_protocol::image_diagnostic::{ImageDiagnosticSubject, ImageFormatName};
+    ImageLoadIdentity::new(
+        ImageFormatName::Png,
+        ImageDiagnosticSubject::Spec(String::new()),
+    )
 }
 
 fn test_image_spec_identity(label: &str) -> ImageSpecIdentity {
@@ -1597,7 +1619,12 @@ fn test_image_catalog(
     cmd_tx: &crossbeam_channel::Sender<RenderCommand>,
     image_metadata: SharedImageRenderState,
 ) -> Rc<AsyncImageCatalog> {
-    Rc::new(AsyncImageCatalog::new(cmd_tx.clone(), None, image_metadata))
+    Rc::new(AsyncImageCatalog::new(
+        cmd_tx.clone(),
+        None,
+        image_metadata,
+        None,
+    ))
 }
 
 #[test]
@@ -2543,6 +2570,14 @@ fn primary_display_host_popup_menu_routes_primary_and_secondary_frames() {
     ));
 }
 
+/// The catalog's own scheduling tests are not about the size bound: every
+/// lookup here states GNU's "no explicit limit" arm. The bound itself travels
+/// through `the_load_command_carries_the_looking_frames_max_image_size` in the
+/// catalog's own suite.
+fn unbounded_lookup(catalog: &AsyncImageCatalog, request: ImageResolveRequest) -> ImageLookup {
+    catalog.lookup(request, ImageSizeLimit::UNLIMITED)
+}
+
 #[test]
 fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_thread() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
@@ -2576,6 +2611,7 @@ fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_threa
         source: ImageResolveSource::File(LispString::from_utf8(
             image_path.to_str().expect("utf8 path"),
         )),
+        identity: test_file_image_identity(image_path.to_str().expect("utf8 path")),
         size: ImageSizeSpec::new(AxisSize::AtMost(50), AxisSize::AtMost(50)),
         rotation: ImageRotation::None,
         colors: ImageColorContext::default(),
@@ -2585,7 +2621,7 @@ fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_threa
     };
 
     let started = Instant::now();
-    let lookup = host.image_catalog.lookup(request.clone());
+    let lookup = unbounded_lookup(&host.image_catalog, request.clone());
 
     assert!(
         started.elapsed() < Duration::from_millis(100),
@@ -2607,7 +2643,7 @@ fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_threa
         other => panic!("expected ImageLoadFile, got {other:?}"),
     }
     assert_eq!(
-        host.image_catalog.lookup(request.clone()),
+        unbounded_lookup(&host.image_catalog, request.clone()),
         ImageLookup::Pending(image.clone()),
         "duplicate lookup should reuse the same pending image"
     );
@@ -2627,7 +2663,7 @@ fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_threa
         )),
     );
 
-    let ImageLookup::Ready(image) = host.image_catalog.lookup(request) else {
+    let ImageLookup::Ready(image) = unbounded_lookup(&host.image_catalog, request) else {
         panic!("decoded image lookup should be ready");
     };
     assert_eq!(image.metadata.layout.dimensions(), (25, 50));
@@ -2646,11 +2682,14 @@ fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_threa
 #[test]
 fn animation_frames_share_sequence_identity_and_retirement_advances_generation() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
-    let catalog = AsyncImageCatalog::new(cmd_tx, None, Arc::new(ImageRenderState::default()));
-    let source = ImageResolveSource::Data(ImageDataSource::Isolated(vec![b'G', b'I', b'F']));
+    let catalog = AsyncImageCatalog::new(cmd_tx, None, Arc::new(ImageRenderState::default()), None);
+    let source = ImageResolveSource::Data(ImageDataSource::Isolated(EncodedBytes::new(vec![
+        b'G', b'I', b'F',
+    ])));
     let mut request = ImageResolveRequest {
         spec: test_image_spec_identity("animated.gif"),
         source: source.clone(),
+        identity: test_file_image_identity("animated.gif"),
         size: ImageSizeSpec::default(),
         rotation: ImageRotation::None,
         colors: ImageColorContext::default(),
@@ -2659,9 +2698,9 @@ fn animation_frames_share_sequence_identity_and_retirement_advances_generation()
         realization: Default::default(),
     };
 
-    catalog.lookup(request.clone());
+    unbounded_lookup(&catalog, request.clone());
     request.frame = ImageFrameIndex::new(1);
-    catalog.lookup(request.clone());
+    unbounded_lookup(&catalog, request.clone());
     let sequence_for = |command| match command {
         RenderCommand::Asset(AssetCommand::ImageLoadData { sequence, .. }) => sequence,
         other => panic!("expected image data load, got {other:?}"),
@@ -2682,7 +2721,7 @@ fn animation_frames_share_sequence_identity_and_retirement_advances_generation()
     ));
 
     request.frame = ImageFrameIndex::new(2);
-    catalog.lookup(request);
+    unbounded_lookup(&catalog, request);
     let replacement = sequence_for(cmd_rx.try_recv().expect("replacement frame load"));
     assert_ne!(replacement, first);
 }
@@ -2697,7 +2736,10 @@ fn primary_image_catalog_does_not_block_on_render_command_backpressure() {
         .expect("fill command queue");
     let request = ImageResolveRequest {
         spec: test_image_spec_identity("backpressure.png"),
-        source: ImageResolveSource::Data(ImageDataSource::Isolated(vec![0x89, b'P', b'N', b'G'])),
+        source: ImageResolveSource::Data(ImageDataSource::Isolated(EncodedBytes::new(vec![
+            0x89, b'P', b'N', b'G',
+        ]))),
+        identity: test_data_image_identity(),
         size: ImageSizeSpec::new(AxisSize::AtMost(24), AxisSize::AtMost(24)),
         rotation: ImageRotation::None,
         colors: ImageColorContext::default(),
@@ -2733,8 +2775,8 @@ fn primary_image_catalog_does_not_block_on_render_command_backpressure() {
             #[cfg(feature = "neo-term")]
             terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
         };
-        let lookup = host.image_catalog.lookup(request.clone());
-        let duplicate_lookup = host.image_catalog.lookup(request);
+        let lookup = unbounded_lookup(&host.image_catalog, request.clone());
+        let duplicate_lookup = unbounded_lookup(&host.image_catalog, request);
         done_tx
             .send((lookup, duplicate_lookup))
             .expect("publish lookup results");
@@ -2794,7 +2836,10 @@ fn primary_image_catalog_does_not_wait_for_renderer_metadata_lock() {
     };
     let request = ImageResolveRequest {
         spec: test_image_spec_identity("metadata-lock.png"),
-        source: ImageResolveSource::Data(ImageDataSource::Isolated(vec![0x89, b'P', b'N', b'G'])),
+        source: ImageResolveSource::Data(ImageDataSource::Isolated(EncodedBytes::new(vec![
+            0x89, b'P', b'N', b'G',
+        ]))),
+        identity: test_data_image_identity(),
         size: ImageSizeSpec::new(AxisSize::AtMost(18), AxisSize::AtMost(18)),
         rotation: ImageRotation::None,
         colors: ImageColorContext::default(),
@@ -2802,7 +2847,8 @@ fn primary_image_catalog_does_not_wait_for_renderer_metadata_lock() {
         frame: Default::default(),
         realization: Default::default(),
     };
-    let ImageLookup::Pending(expected) = host.image_catalog.lookup(request.clone()) else {
+    let ImageLookup::Pending(expected) = unbounded_lookup(&host.image_catalog, request.clone())
+    else {
         panic!("new image should be pending");
     };
     cmd_rx.try_recv().expect("queued image command");
@@ -2818,7 +2864,7 @@ fn primary_image_catalog_does_not_wait_for_renderer_metadata_lock() {
     locked_rx.recv().expect("renderer metadata lock acquired");
 
     let started = Instant::now();
-    let lookup = host.image_catalog.lookup(request);
+    let lookup = unbounded_lookup(&host.image_catalog, request);
     let elapsed = started.elapsed();
     drop(release_tx);
     locker.join().expect("metadata locker");
@@ -2857,6 +2903,7 @@ fn primary_display_host_expands_tilde_in_image_file_before_render_command() {
     let request = ImageResolveRequest {
         spec: test_image_spec_identity("~/Pictures/Pik.png"),
         source: ImageResolveSource::File(LispString::from_utf8("~/Pictures/Pik.png")),
+        identity: test_file_image_identity("~/Pictures/Pik.png"),
         size: ImageSizeSpec::new(AxisSize::AtMost(0), AxisSize::AtMost(24)),
         rotation: ImageRotation::None,
         colors: ImageColorContext::default(),
@@ -2866,7 +2913,7 @@ fn primary_display_host_expands_tilde_in_image_file_before_render_command() {
     };
 
     assert!(matches!(
-        host.image_catalog.lookup(request),
+        unbounded_lookup(&host.image_catalog, request),
         ImageLookup::Pending(_)
     ));
 
@@ -2889,13 +2936,16 @@ fn failed_image_decode_wakes_waiter_and_is_negative_cached() {
     let publisher = Arc::clone(&shared);
     let worker = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(10));
-        publisher.publish_terminal(load, ImageDecodeTerminal::Failed("bad image".to_owned()));
+        publisher.publish_terminal(
+            load,
+            ImageDecodeTerminal::Failed(ImageDiagnostic::InvalidSize),
+        );
     });
 
     let started = Instant::now();
     assert_eq!(
         wait_for_image_metadata(&shared, load, Duration::from_secs(1)),
-        Some(ImageDecodeTerminal::Failed("bad image".to_owned()))
+        Some(ImageDecodeTerminal::Failed(ImageDiagnostic::InvalidSize))
     );
     assert!(
         started.elapsed() < Duration::from_millis(250),
@@ -2906,7 +2956,7 @@ fn failed_image_decode_wakes_waiter_and_is_negative_cached() {
     let cached = Instant::now();
     assert_eq!(
         wait_for_image_metadata(&shared, load, Duration::from_secs(1)),
-        Some(ImageDecodeTerminal::Failed("bad image".to_owned()))
+        Some(ImageDecodeTerminal::Failed(ImageDiagnostic::InvalidSize))
     );
     assert!(
         cached.elapsed() < Duration::from_millis(250),
@@ -2942,7 +2992,10 @@ fn primary_display_host_resolve_image_sync_returns_cached_decode_failure_promptl
     };
     let request = ImageResolveRequest {
         spec: test_image_spec_identity("failed-decode.png"),
-        source: ImageResolveSource::Data(ImageDataSource::Isolated(vec![0xde, 0xad])),
+        source: ImageResolveSource::Data(ImageDataSource::Isolated(EncodedBytes::new(vec![
+            0xde, 0xad,
+        ]))),
+        identity: test_data_image_identity(),
         size: ImageSizeSpec::new(AxisSize::AtMost(0), AxisSize::AtMost(0)),
         rotation: ImageRotation::None,
         colors: ImageColorContext::default(),
@@ -2950,32 +3003,52 @@ fn primary_display_host_resolve_image_sync_returns_cached_decode_failure_promptl
         frame: Default::default(),
         realization: Default::default(),
     };
-    let ImageLookup::Pending(image) = host.image_catalog.lookup(request.clone()) else {
+    let ImageLookup::Pending(image) = unbounded_lookup(&host.image_catalog, request.clone()) else {
         panic!("new image should be pending");
     };
     image_metadata.publish_terminal(
         image.load(),
-        ImageDecodeTerminal::Failed("image decode failed".to_owned()),
+        ImageDecodeTerminal::Failed(ImageDiagnostic::FormatError {
+            format: ImageFormatName::Png,
+            detail: "Read error".to_owned(),
+        }),
     );
 
+    let mut reported = Vec::new();
     for _ in 0..2 {
         let started = Instant::now();
-        let ImageLookup::Failed(failed) = host.image_catalog.lookup(request.clone()) else {
+        let ImageLookup::Failed(failed) = unbounded_lookup(&host.image_catalog, request.clone())
+        else {
             panic!("failed decode should be negative-cached");
         };
         assert_eq!(failed.placement(), image.placement());
-        assert_eq!(failed.error, "image decode failed");
+        assert_eq!(failed.error.message(), "PNG error: Read error");
+        reported.push(host.image_catalog.take_pending_diagnostics());
         assert!(
             started.elapsed() < Duration::from_millis(100),
             "failed catalog lookup should return from the negative cache"
         );
     }
+    // Two lookups of the same failed attempt report once.  Neomacs' layout
+    // consults the catalog on every pass whether or not the frame changed, so
+    // reporting per lookup would add a line to *Messages* per redisplay tick;
+    // GNU's iterator does not run between glyph regenerations and so never
+    // repeats itself here.
+    assert_eq!(
+        reported,
+        vec![vec!["PNG error: Read error".to_owned()], Vec::new()],
+        "a repeated lookup of one failed attempt must not report twice"
+    );
 
     for _ in 0..2 {
         let started = Instant::now();
         assert_eq!(
-            neovm_core::emacs_core::DisplayHost::resolve_image_sync(&host, request.clone()),
-            Err("image decode failed".to_owned())
+            neovm_core::emacs_core::DisplayHost::resolve_image_sync(
+                &host,
+                request.clone(),
+                ImageSizeLimit::UNLIMITED,
+            ),
+            Err("PNG error: Read error".to_owned()) // GNU's own words for the same bytes, not a generic failure string.
         );
         assert!(
             started.elapsed() < Duration::from_millis(250),
@@ -3791,7 +3864,8 @@ fn publish_gui_frame_sends_opening_frame_before_startup_lisp() {
     configure_gnu_startup_state(&mut eval, frame_id, &gui_startup());
 
     REDISPLAY_RUNTIME.with(|runtime| runtime.enable_cosmic_metrics());
-    let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
+    let comms = neomacs_display_runtime::thread_comm::ThreadComms::new();
+    let (frame_tx, frame_rx) = (comms.frame_tx, comms.frame_rx);
     let active_before = eval
         .frame_manager()
         .get(frame_id)
@@ -3844,7 +3918,8 @@ fn publish_gui_frame_sends_every_visible_top_level_frame_tree() {
     );
 
     REDISPLAY_RUNTIME.with(|runtime| runtime.enable_cosmic_metrics());
-    let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
+    let comms = neomacs_display_runtime::thread_comm::ThreadComms::new();
+    let (frame_tx, frame_rx) = (comms.frame_tx, comms.frame_rx);
 
     publish_gui_frame(&mut eval, &frame_tx, None);
 
@@ -3869,7 +3944,8 @@ fn rejected_gui_frame_is_discarded_instead_of_becoming_active() {
     configure_gnu_startup_state(&mut eval, frame_id, &gui_startup());
 
     REDISPLAY_RUNTIME.with(|runtime| runtime.enable_cosmic_metrics());
-    let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
+    let comms = neomacs_display_runtime::thread_comm::ThreadComms::new();
+    let (frame_tx, frame_rx) = (comms.frame_tx, comms.frame_rx);
     drop(frame_rx);
 
     publish_gui_frame(&mut eval, &frame_tx, None);
@@ -6585,6 +6661,28 @@ fn frame_snapshot_subr_end_to_end_json_and_text() {
         "window_infos carry buffer names: {window_infos:?}"
     );
 
+    let geometry_value = eval
+        .eval_str("(neomacs--frame-snapshot t 'json-geometry)")
+        .expect("all-frames geometry snapshot");
+    let geometry_json = geometry_value.as_str_owned().expect("string result");
+    let geometry: serde_json::Value = serde_json::from_str(&geometry_json).unwrap();
+    let geometry_frames = geometry["frames"].as_array().unwrap();
+    assert_eq!(geometry_frames.len(), frames.len());
+    for (geometry_frame, full_frame) in geometry_frames.iter().zip(frames) {
+        assert_eq!(geometry_frame["window_infos"], full_frame["window_infos"]);
+        assert_eq!(
+            geometry_frame["frame_pixel_width"],
+            full_frame["frame_pixel_width"]
+        );
+        assert_eq!(
+            geometry_frame["frame_pixel_height"],
+            full_frame["frame_pixel_height"]
+        );
+        assert!(geometry_frame.get("fonts").is_none());
+        assert!(geometry_frame.get("scroll_coverage").is_none());
+        assert!(geometry_frame.get("window_matrices").is_none());
+    }
+
     let text_value = eval
         .eval_str("(neomacs--frame-snapshot)")
         .expect("selected-frame text snapshot");
@@ -6877,4 +6975,38 @@ fn the_stale_bytecode_refusal_covers_this_crates_tests() {
          source; `main' announcing itself a shipped editor is a different \
          process from this one"
     );
+}
+
+#[test]
+fn superseded_gui_publications_retire_evaluator_records_without_input_roundtrip() {
+    let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"])
+        .expect("cached bootstrap evaluator");
+    let _bootstrap = bootstrap_buffers(&mut eval, 960, 640, gui_display());
+    let frame_id = eval.frame_manager().selected_frame().unwrap().id;
+    configure_gnu_startup_state(&mut eval, frame_id, &gui_startup());
+    REDISPLAY_RUNTIME.with(|runtime| runtime.enable_cosmic_metrics());
+    let comms = neomacs_display_runtime::thread_comm::ThreadComms::new();
+    assert!(
+        !eval
+            .frame_manager()
+            .get(frame_id)
+            .unwrap()
+            .has_prepared_display_presentations()
+    );
+    for _ in 0..16 {
+        publish_gui_frame(&mut eval, &comms.frame_tx, None);
+    }
+    let latest = comms.frame_rx.try_recv().unwrap();
+    assert!(comms.frame_rx.try_recv().is_err());
+    assert!(comms.input_rx.try_recv().is_err());
+    let presentation =
+        neovm_core::window::geometry::PresentationId::new(latest.presentation().get());
+    let frame = eval.frame_manager_mut().get_mut(frame_id).unwrap();
+    assert_eq!(frame.active_presentation(), None);
+    frame.activate_display_presentation(presentation).unwrap();
+    assert!(
+        !frame.has_prepared_display_presentations(),
+        "superseded publications leaked"
+    );
+    assert_eq!(frame.active_presentation(), Some(presentation));
 }

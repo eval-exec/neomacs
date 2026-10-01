@@ -96,7 +96,9 @@ pub(crate) fn set_scroll_back_for_test(enabled: Option<bool>) {
 /// `NEOMACS_LAYOUT_SCROLL_BACK=on` (P3.5 G3): a window whose start moved
 /// BACK reuses its old rows below the newly exposed ones (GNU
 /// `try_window_reusing_current_matrix`, xdisp.c:21766). Read once; default
-/// off.
+/// on. The engine limits this path to small backward moves; page-sized
+/// moves rebuild because walking most of a page plus retaining its tail costs
+/// more than a direct walk. Set the variable to `off` to disable reuse.
 pub(crate) fn scroll_back_enabled() -> bool {
     #[cfg(test)]
     if let Some(enabled) = SCROLL_BACK_OVERRIDE.with(std::cell::Cell::get) {
@@ -104,13 +106,14 @@ pub(crate) fn scroll_back_enabled() -> bool {
     }
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| {
-        matches!(
-            std::env::var("NEOMACS_LAYOUT_SCROLL_BACK")
-                .ok()
-                .map(|value| value.trim().to_ascii_lowercase())
-                .as_deref(),
-            Some("on" | "1" | "true" | "yes")
-        )
+        std::env::var("NEOMACS_LAYOUT_SCROLL_BACK")
+            .ok()
+            .is_none_or(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "on" | "1" | "true" | "yes"
+                )
+            })
     })
 }
 

@@ -1,0 +1,35 @@
+(:buffer (:text "# Created by https://www.toptal.com/developers/gitignore/api/linux,archlinuxpackages
+# Edit at https://www.toptal.com/developers/gitignore?templates=linux,archlinuxpackages
+
+### ArchLinuxPackages ###
+*.tar
+*.tar.*
+*.jar
+*.exe
+*.msi
+*.zip
+*.tgz
+*.log
+*.log.*
+*.sig
+
+pkg/
+src/
+
+### Linux ###
+*~
+
+# temporary files which can be created if a process still has a handle open of a deleted file
+.fuse_hidden*
+
+# KDE directory preferences
+.directory
+
+# Linux trash folder which might appear on any partition or disk
+.Trash-*
+
+# .nfs files are created when an open file is removed but is still being accessed
+.nfs*
+
+# End of https://www.toptal.com/developers/gitignore/api/linux,archlinuxpackages
+" :point 1 :mode gitignore-mode :modified t :file nil :selected t) :requests ((:request-line "GET /dropdown/templates.json?term=linux HTTP/1.1" :headers ("Accept-encoding: gzip" "Accept: */*" "Connection: close" "Host: 127.0.0.1:<port>" "MIME-Version: 1.0" "User-Agent: <editor>") :body-bytes 0) (:request-line "GET /developers/gitignore/dropdown/templates.json?term=linux HTTP/1.1" :headers ("Accept-encoding: gzip" "Accept: */*" "Connection: close" "Host: 127.0.0.1:<port>" "MIME-Version: 1.0" "User-Agent: <editor>") :body-bytes 0) (:request-line "GET /api/linux,archlinuxpackages HTTP/1.1" :headers ("Accept-encoding: gzip" "Accept: */*" "Connection: close" "Host: 127.0.0.1:<port>" "MIME-Version: 1.0" "User-Agent: <editor>") :body-bytes 0) (:request-line "GET /developers/gitignore/api/linux,archlinuxpackages HTTP/1.1" :headers ("Accept-encoding: gzip" "Accept: */*" "Connection: close" "Host: 127.0.0.1:<port>" "MIME-Version: 1.0" "User-Agent: <editor>") :body-bytes 0)) :request-urls ("<origin>/dropdown/templates.json?term=linux" "<origin>/api/linux,archlinuxpackages") :remaining-plan nil :misses nil :live-clients nil :response-buffers nil)

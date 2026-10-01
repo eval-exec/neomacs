@@ -259,25 +259,40 @@ impl<'a, B: LayoutBufferView> BufferSourceFaceResolutionContext<'a, B> {
         .with_automatic_composition(self.buffer().layout_string_composition_rules())
     }
 
+    pub(crate) fn string_source_resolve_params<'s>(
+        &'s self,
+        base: &'s DisplayStringBaseFace,
+    ) -> DisplaySourceResolveParams<'s> {
+        DisplaySourceResolveParams::new(
+            DisplaySourceFaceBasis::new(
+                self.face_resolver,
+                base.face_id(),
+                base.face(),
+                self.default_face_metrics,
+            ),
+            None,
+            self.image_scale_environment,
+        )
+        .with_automatic_composition(self.buffer().layout_string_composition_rules())
+    }
+
     pub(crate) fn install_pending_source_faces(
         self,
         source_render: &mut TextRowSourceRenderState<'_>,
-        row_geometry: &mut DisplayRowGeometryState,
         pending_faces: Vec<PendingDisplaySourceFace>,
     ) {
+        // Pending faces include neighbours inspected for box-run boundaries.
+        // Installing those resources must not enlarge this row: checkpoints
+        // and appended items account for the faces actually used by it.
         for pending in pending_faces {
             let (face_id, resolved) = pending.into_parts();
-            let active_face = {
-                let bound = source_render.bind_resolved_face(face_id, &resolved);
-                source_render.resolve_and_install_measured_face(
-                    self.measurement_policy,
-                    bound,
-                    self.window_metrics.char_width(),
-                    self.window_metrics,
-                )
-            };
-            let metrics = active_face.metrics();
-            row_geometry.include_row_extents(metrics.row_height(), metrics.ascent());
+            source_render.install_pending_resolved_measured_face(
+                face_id,
+                resolved,
+                self.measurement_policy,
+                self.window_metrics.char_width(),
+                self.window_metrics,
+            );
         }
     }
 
@@ -357,20 +372,37 @@ impl DisplaySourceNobreakHint {
     }
 }
 
+/// Ordinary items borrow the installed face. Only semantic overlays and
+/// height adjustments own another face; boxing that uncommon case keeps
+/// the per-glyph result small instead of moving a whole face through an enum.
+pub(crate) enum ItemActiveFace<'a> {
+    Current(&'a DisplayRowActiveFaceState),
+    Adjusted(Box<DisplayRowActiveFaceState>),
+}
+
+impl std::ops::Deref for ItemActiveFace<'_> {
+    type Target = DisplayRowActiveFaceState;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Current(face) => face,
+            Self::Adjusted(face) => face,
+        }
+    }
+}
+
 impl BufferSourceItemLayoutResolutionContext<'_> {
-    pub(crate) fn resolve_source_item_layout_for_active_face(
+    pub(crate) fn resolve_source_item_layout_for_active_face<'face>(
         &self,
         source_render: &mut TextRowSourceRenderState<'_>,
         face_ids: &mut FrameFaceAttempt,
         row_geometry: &mut DisplayRowGeometryState,
-        active_face_state: &DisplayRowActiveFaceState,
+        active_face_state: &'face DisplayRowActiveFaceState,
         item: &mut DisplayItem,
         nobreak_hint: DisplaySourceNobreakHint,
-    ) -> DisplayRowActiveFaceState {
+    ) -> ItemActiveFace<'face> {
         item.face =
             RenderFaceRef::FaceId(render_face_ref_id(item.face, active_face_state.face_id()));
-
-        let active_face_state = active_face_state.clone();
 
         // GNU merges semantic faces after resolving the source face:
         // `escape-glyph` for control notation and `glyphless-char` for every
@@ -381,12 +413,12 @@ impl BufferSourceItemLayoutResolutionContext<'_> {
                 source_render,
                 face_ids,
                 row_geometry,
-                &active_face_state,
+                active_face_state,
                 item,
                 overlay.face_name(),
             )
         {
-            return merged;
+            return ItemActiveFace::Adjusted(Box::new(merged));
         }
 
         // GNU `get_next_display_element` (xdisp.c:8594-8617): in highlight mode
@@ -406,12 +438,12 @@ impl BufferSourceItemLayoutResolutionContext<'_> {
                 source_render,
                 face_ids,
                 row_geometry,
-                &active_face_state,
+                active_face_state,
                 item,
                 face_name,
             )
         {
-            return merged;
+            return ItemActiveFace::Adjusted(Box::new(merged));
         }
 
         let Some(factor) = item
@@ -419,7 +451,7 @@ impl BufferSourceItemLayoutResolutionContext<'_> {
             .height
             .filter(|factor| factor.is_finite() && *factor > 0.0)
         else {
-            return active_face_state.clone();
+            return ItemActiveFace::Current(active_face_state);
         };
 
         item.layout.height = None;
@@ -433,7 +465,7 @@ impl BufferSourceItemLayoutResolutionContext<'_> {
             factor,
             source_render.height_face_measurement(),
         ) else {
-            return active_face_state.clone();
+            return ItemActiveFace::Current(active_face_state);
         };
 
         let face_id = stable_face_id_for_resolved(face_ids, &resolved);
@@ -449,7 +481,7 @@ impl BufferSourceItemLayoutResolutionContext<'_> {
         };
         let metrics = resolved_active_face.metrics();
         row_geometry.include_row_extents(metrics.row_height(), metrics.ascent());
-        resolved_active_face
+        ItemActiveFace::Adjusted(Box::new(resolved_active_face))
     }
 
     /// Realize the legacy escape/nobreak face merge.

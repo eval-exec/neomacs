@@ -59,6 +59,11 @@
 
 (defvar neomacs-perf-mx-tab--elapsed-us 0)
 (defvar neomacs-perf-mx-tab--help-calls 0)
+(defvar neomacs-perf-mx-tab--warmup-calls 0)
+;; When nil, a completion still runs in full but the advice records
+;; nothing: the warm-up pass must be indistinguishable from a real one to
+;; the JIT and caches, yet contribute zero timed work.
+(defvar neomacs-perf-mx-tab--timed t)
 (defvar neomacs-perf-mx-tab--completion-visible t)
 (defvar neomacs-perf-mx-tab--completion-mode-correct t)
 (defvar neomacs-perf-mx-tab--known-commands-present t)
@@ -97,8 +102,17 @@
     completions))
 
 (defun neomacs-perf-mx-tab--around-completion-help (original &rest arguments)
-  (let ((started (car (current-cpu-time))))
-    (prog1 (apply original arguments)
+  (if (not neomacs-perf-mx-tab--timed)
+      ;; Warm-up: identical work, zero recording. Even the redisplay runs,
+      ;; so the completion window machinery warms exactly as in a timed
+      ;; call.
+      (progn
+        (apply original arguments)
+        (redisplay t)
+        (setq neomacs-perf-mx-tab--warmup-calls
+              (1+ neomacs-perf-mx-tab--warmup-calls)))
+    (let ((started (car (current-cpu-time))))
+      (prog1 (apply original arguments)
       ;; The workload measures the point at which the completion window is
       ;; actually presentable, not merely the end of candidate enumeration.
       (redisplay t)
@@ -130,10 +144,11 @@
                   neomacs-perf-mx-tab--last-completions)
                  (neomacs-perf-mx-tab--candidate-present-p
                   "neomacs-perf-command-1023"
-                  neomacs-perf-mx-tab--last-completions))))))
+                  neomacs-perf-mx-tab--last-completions)))))))
 
 (defun neomacs-perf-mx-tab--write-result
-    (path status iterations elapsed-us completion-help-calls
+    (path scenario-name status iterations elapsed-us completion-help-calls
+          warmup-completion-help-calls
           completion-visible completion-mode-correct known-commands-present
           completion-candidate-count candidate-count-stable
           completion-hidden-after-exit minibuffer-depth-restored
@@ -142,11 +157,12 @@
     (insert
      (json-serialize
       `((schema_version . 1)
-        (scenario . "mx-tab-completion")
+        (scenario . ,scenario-name)
         (status . ,status)
         (iterations . ,iterations)
         (elapsed_us . ,elapsed-us)
         (completion_help_calls . ,completion-help-calls)
+        (warmup_completion_help_calls . ,warmup-completion-help-calls)
         (completion_visible . ,(neomacs-perf--json-boolean completion-visible))
         (completion_mode_correct
          . ,(neomacs-perf--json-boolean completion-mode-correct))
@@ -173,6 +189,11 @@
           (string-to-number
            (neomacs-perf--required-environment "NEOMACS_PERF_ITERATIONS")))
          (initial-buffer (current-buffer))
+         (warmup-completions
+          (string-to-number
+           (or (getenv "NEOMACS_PERF_WARMUP_COMPLETIONS") "0")))
+         (scenario-name
+          (or (getenv "NEOMACS_PERF_SCENARIO_ID") "mx-tab-completion"))
          (completed 0)
          (completion-hidden-after-exit t)
          (minibuffer-depth-restored t)
@@ -189,6 +210,17 @@
                       #'neomacs-perf-mx-tab--around-completion-help)
           (advice-add 'completion-all-completions :around
                       #'neomacs-perf-mx-tab--capture-completions)
+          ;; Warm-up pass: identical completions, untimed, invariants
+          ;; unchecked, and BEFORE the sampling gate so a profile never
+          ;; attributes warm-up to the workload. Zero by default, so the
+          ;; cold row measures start + warm-up as it always has.
+          (let ((neomacs-perf-mx-tab--timed nil))
+            (dotimes (_ warmup-completions)
+              (setq neomacs-perf-mx-tab--last-completions nil
+                    neomacs-perf-mx-tab--current-candidate-count 0)
+              (execute-kbd-macro
+               (vconcat (kbd "M-x") "neomacs-perf-command-"
+                        (kbd "TAB") "0000" (kbd "RET")))))
           (let ((sampling-enabled nil))
             (neomacs-perf--sampling-command "enable")
             (setq sampling-enabled t)
@@ -225,8 +257,9 @@
                    #'neomacs-perf-mx-tab--capture-completions)
     (neomacs-perf--close-profile-gate)
     (neomacs-perf-mx-tab--write-result
-     result-path status completed neomacs-perf-mx-tab--elapsed-us
+     result-path scenario-name status completed neomacs-perf-mx-tab--elapsed-us
      neomacs-perf-mx-tab--help-calls
+     neomacs-perf-mx-tab--warmup-calls
      neomacs-perf-mx-tab--completion-visible
      neomacs-perf-mx-tab--completion-mode-correct
      neomacs-perf-mx-tab--known-commands-present

@@ -164,6 +164,7 @@ fn arrow_marker_charpos(evaluator: &Context, var: Value, buffer_id: BufferId) ->
 fn arrow_string(evaluator: &Context, var: Value) -> Option<String> {
     let sym = var.as_symbol_id()?;
     let prop_key = intern("overlay-arrow-string");
+    neovm_core::emacs_core::symbol::SymbolPropertyRevision::observe(sym);
     let mut plist = evaluator.obarray().symbol_plist_id(sym);
     while plist.is_cons() {
         let key = plist.cons_car();
@@ -197,6 +198,7 @@ fn resolve_fringe_bitmap_index<B: LayoutBufferView>(
 ) -> Option<u16> {
     if let Some(sym) = var.as_symbol_id() {
         let bitmap_key = intern("overlay-arrow-bitmap");
+        neovm_core::emacs_core::symbol::SymbolPropertyRevision::observe(sym);
         let mut plist = evaluator.obarray().symbol_plist_id(sym);
         while plist.is_cons() {
             let key = plist.cons_car();

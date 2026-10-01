@@ -3,23 +3,31 @@
 //! Ordinary redisplay only mutates evaluator-local state and probes renderer
 //! completion with `try_lock`. Queue backpressure is handed to one submission
 //! worker, so lookup never waits for the renderer thread.
+//!
+//! Geometry is resolved the same way: a decode reports its size only when it
+//! finishes, so a second worker reads the encoded header and publishes the
+//! layout that decode will confirm. Redisplay picks that layout up on its next
+//! `try_lock` probe — it never waits for it — which is what lets a large image
+//! reserve its real box while its pixels are still being decoded.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, TryLockError};
 use std::time::Duration;
 
+use neomacs_display_protocol::image_diagnostic::ImageDiagnostic;
 use neomacs_display_protocol::{ImageSequenceId, ImageSequenceRetirement};
 use neomacs_display_runtime::render_thread::{
-    ImageDecodeTerminal, ImageTerminalProbe, SharedImageRenderState,
+    ImageDecodeTerminal, ImageProbeSource, ImageTerminalProbe, SharedImageRenderState,
+    probe_image_layout,
 };
 use neomacs_display_runtime::thread_comm::{AssetCommand, RenderCommand};
 use neovm_core::emacs_core::image_catalog::{
     FailedImage, ImageAnimationInvalidation, ImageCatalog, ImageId, ImageInvalidation,
     ImageInvalidationResult, ImageLayoutExtent, ImageLoadAttempt, ImageLoadToken, ImageLookup,
-    ImagePlacement, ImageResolveRequest, ImageResolveSource, ImageStateEvent, PendingImage,
-    ReadyImage,
+    ImagePlacement, ImageResolveRequest, ImageResolveSource, ImageSizeLimit, ImageStateEvent,
+    PendingImage, ReadyImage,
 };
 use neovm_core::emacs_core::image_path::ImageFileRequest;
 use neovm_core::emacs_core::load::image_data_directory;
@@ -78,20 +86,100 @@ impl CatalogEntry {
     }
 }
 
+/// Layout resolved from an encoded header, tagged with the load it was
+/// resolved for.
+///
+/// The tag is the probe's identity check: an entry that was invalidated or
+/// re-queued decodes under a fresh [`ImageLoadToken`], so a probe still in
+/// flight for the previous one is ignored rather than adopted. `None` records
+/// a header this crate could not measure, so a request is probed once.
+type HeaderLayouts =
+    Arc<Mutex<HashMap<ImageResolveRequest, (ImageLoadToken, Option<ImageLayoutExtent>)>>>;
+
+/// Asks the evaluator to republish layout from a producer thread.
+///
+/// Header geometry arrives on the prober's thread, but only the evaluator owns
+/// layout. Without this wake the resolved box would wait for whatever redisplay
+/// happened next — exactly the wait this step removes.
+#[derive(Clone)]
+pub(super) struct RedisplayWaker {
+    input: crossbeam_channel::Sender<neovm_core::keyboard::InputEvent>,
+    notifier: Option<neovm_core::emacs_core::process::WaitNotifier>,
+}
+
+impl RedisplayWaker {
+    pub(super) fn new(
+        input: crossbeam_channel::Sender<neovm_core::keyboard::InputEvent>,
+        notifier: Option<neovm_core::emacs_core::process::WaitNotifier>,
+    ) -> Self {
+        Self { input, notifier }
+    }
+
+    /// `LayoutInvalidated` is this codebase's "a display dependency changed and
+    /// evaluator layout must be republished": the image's geometry just became
+    /// known, and the slot it reserved is stale.
+    fn request_redisplay(&self) {
+        if self
+            .input
+            .send(neovm_core::keyboard::InputEvent::LayoutInvalidated)
+            .is_err()
+        {
+            return;
+        }
+        if let Some(notifier) = &self.notifier
+            && let Err(error) = notifier.notify()
+        {
+            tracing::warn!(%error, "failed to wake the evaluator for resolved image geometry");
+        }
+    }
+}
+
 /// Deep host-side module that owns image request identity, state transitions,
 /// renderer scheduling, and completion observation.
 pub(super) struct AsyncImageCatalog {
     cmd_tx: crossbeam_channel::Sender<RenderCommand>,
     render_waker: Option<GuiEventLoopWaker>,
     image_metadata: SharedImageRenderState,
+    /// Geometry read from encoded headers, off-thread (see [`HeaderProbeRequest`]).
+    header_layouts: HeaderLayouts,
+    /// Woken once per header probe that produced geometry.
+    redisplay_waker: Option<RedisplayWaker>,
     entries: RefCell<HashMap<ImageResolveRequest, CatalogEntry>>,
     sequence_ids: RefCell<HashMap<ImageResolveSource, ImageSequenceId>>,
     next_load_attempt: Cell<u64>,
     next_sequence_id: Cell<u64>,
+    /// The `max-image-size` bound the most recent lookup resolved.
+    ///
+    /// Only the device-loss re-queue needs it: that path rebuilds every
+    /// entry's load command without a frame in hand, and it runs while the
+    /// same frames are being redisplayed, so the bound those entries were
+    /// built under is the one to re-check them against. It starts at GNU's
+    /// registered initializer rather than at "no limit", so a re-queue can
+    /// never be the one path that loads without a bound.
+    size_limit: Cell<ImageSizeLimit>,
     home_directory: Option<String>,
     /// GNU `image_find_image_fd` search path (`data-directory/images`, then
     /// `x-bitmap-file-path`), used to resolve relative image `:file`s.
     search_path: Vec<String>,
+    /// Failures a display path has observed and the evaluator has not yet
+    /// logged, in observation order.
+    ///
+    /// Filled inside `lookup` rather than at its call sites, which is the
+    /// point: a consumer that only wants the placeholder geometry would
+    /// otherwise drop the reason, and that is exactly how this codebase came
+    /// to have no image-failure path at all.
+    failed_diagnostics: RefCell<Vec<ImageDiagnostic>>,
+    /// The load attempt each image's failure has already been reported for.
+    ///
+    /// GNU reports from inside `lookup_image` and can afford to, because its
+    /// display iterator does not run between glyph regenerations. Neomacs'
+    /// layout consults this catalog once per pass whether or not anything
+    /// changed, so a report per lookup would grow a line in *Messages* on
+    /// every redisplay tick. Keying the report on the load attempt keeps the
+    /// cadence a user sees the same as GNU's: one line when the image first
+    /// fails to draw, none while the frame merely redisplays, and another
+    /// whenever the image is loaded again.
+    reported_failures: RefCell<HashMap<ImageId, ImageLoadToken>>,
 }
 
 impl AsyncImageCatalog {
@@ -99,17 +187,23 @@ impl AsyncImageCatalog {
         cmd_tx: crossbeam_channel::Sender<RenderCommand>,
         render_waker: Option<GuiEventLoopWaker>,
         image_metadata: SharedImageRenderState,
+        redisplay_waker: Option<RedisplayWaker>,
     ) -> Self {
         Self {
             cmd_tx,
             render_waker,
             image_metadata,
+            header_layouts: Arc::new(Mutex::new(HashMap::new())),
+            redisplay_waker,
             entries: RefCell::new(HashMap::new()),
             sequence_ids: RefCell::new(HashMap::new()),
             next_load_attempt: Cell::new(0),
             next_sequence_id: Cell::new(0),
+            size_limit: Cell::new(ImageSizeLimit::default()),
             home_directory: home_directory_from_environment(),
             search_path: vec![image_data_directory().to_string_lossy().into_owned()],
+            failed_diagnostics: RefCell::new(Vec::new()),
+            reported_failures: RefCell::new(HashMap::new()),
         }
     }
 
@@ -192,13 +286,17 @@ impl AsyncImageCatalog {
     /// to `Pending` while its renderer residency is rebuilt.
     pub(super) fn invalidate_all(&self) {
         let mut entries = self.entries.borrow_mut();
+        // No frame is in hand on this path; re-check every entry against the
+        // bound the redisplay that built it resolved (see `size_limit`).
+        let limit = self.size_limit.get();
         for (request, state) in entries.iter_mut() {
             let placement = state.placement();
             let image_id = placement.image_id();
             let load = self.next_load(image_id);
             let (request, resolution) = self.classify_request(request.clone());
-            let command = image_load_command(&request, load, self.sequence_id(&request.source));
-            let pending = PendingImage::new(load, placement.layout());
+            let command =
+                image_load_command(&request, load, self.sequence_id(&request.source), limit);
+            let pending = PendingImage::new(load, self.renew_header_layout(&request, load));
             *state = match schedule_image_command(
                 &self.cmd_tx,
                 self.render_waker.as_ref(),
@@ -212,7 +310,7 @@ impl AsyncImageCatalog {
                         %error,
                         "failed to re-queue image decode after display reset"
                     );
-                    CatalogEntry::Failed(pending.failed(error))
+                    CatalogEntry::Failed(pending.failed(ImageDiagnostic::NotDrawable))
                 }
             };
         }
@@ -221,12 +319,19 @@ impl AsyncImageCatalog {
     pub(super) fn resolve_sync(
         &self,
         request: ImageResolveRequest,
+        limit: ImageSizeLimit,
     ) -> Result<Option<ReadyImage>, String> {
         let normalized_request = self.classify_request(request.clone()).0;
-        let pending = match self.lookup(request.clone()) {
+        let pending = match self.lookup_inner(request.clone(), limit) {
             ImageLookup::Ready(image) => return Ok(Some(image)),
             ImageLookup::Pending(image) => image,
-            ImageLookup::Failed(failed) => return Err(failed.error),
+            ImageLookup::Failed(failed) => {
+                // `image-size` asks about one image and GNU logs every time it
+                // is asked, so this path reports even a failure the display
+                // side has already reported.
+                self.record_failure_always(&failed);
+                return Err(failed.error.message());
+            }
         };
         let placement = pending.placement();
 
@@ -247,14 +352,62 @@ impl AsyncImageCatalog {
 
         match state {
             ImageLookup::Ready(image) => Ok(Some(image)),
-            ImageLookup::Failed(failed) => Err(failed.error),
+            ImageLookup::Failed(failed) => Err(failed.error.message()),
             ImageLookup::Pending(_) => unreachable!("terminal decode cannot remain pending"),
         }
     }
 }
 
 impl ImageCatalog for AsyncImageCatalog {
-    fn lookup(&self, request: ImageResolveRequest) -> ImageLookup {
+    fn lookup(&self, request: ImageResolveRequest, limit: ImageSizeLimit) -> ImageLookup {
+        let lookup = self.lookup_inner(request, limit);
+        // Every return path of the inner lookup funnels through here,
+        // including ones added later, so a failed lookup cannot be consumed
+        // without the failure being recorded.
+        if let ImageLookup::Failed(failed) = &lookup {
+            self.record_failure(failed);
+        }
+        lookup
+    }
+
+    fn take_pending_diagnostics(&self) -> Vec<String> {
+        self.failed_diagnostics
+            .borrow_mut()
+            .drain(..)
+            .map(|diagnostic| diagnostic.message())
+            .collect()
+    }
+}
+
+impl AsyncImageCatalog {
+    /// Report a failure unless this load attempt has already been reported.
+    fn record_failure(&self, failed: &FailedImage) {
+        let image = failed.load().image();
+        let mut reported = self.reported_failures.borrow_mut();
+        if reported.get(&image) == Some(&failed.load()) {
+            return;
+        }
+        reported.insert(image, failed.load());
+        self.failed_diagnostics
+            .borrow_mut()
+            .push(failed.error.clone());
+    }
+
+    /// Report a failure regardless of whether it has been reported before.
+    ///
+    /// For the synchronous path, where the caller asked about this one image
+    /// and GNU answers with `image_error` every time it is asked.
+    fn record_failure_always(&self, failed: &FailedImage) {
+        self.reported_failures
+            .borrow_mut()
+            .insert(failed.load().image(), failed.load());
+        self.failed_diagnostics
+            .borrow_mut()
+            .push(failed.error.clone());
+    }
+
+    fn lookup_inner(&self, request: ImageResolveRequest, limit: ImageSizeLimit) -> ImageLookup {
+        self.size_limit.set(limit);
         let (request, resolution) = self.classify_request(request);
         let mut entries = self.entries.borrow_mut();
         if !entries.contains_key(&request) {
@@ -262,7 +415,8 @@ impl ImageCatalog for AsyncImageCatalog {
             let load = self.next_load(image_id);
             let layout = placeholder_image_extent(&request);
             let pending = PendingImage::new(load, layout);
-            let command = image_load_command(&request, load, self.sequence_id(&request.source));
+            let command =
+                image_load_command(&request, load, self.sequence_id(&request.source), limit);
             let state = match schedule_image_command(
                 &self.cmd_tx,
                 self.render_waker.as_ref(),
@@ -270,9 +424,16 @@ impl ImageCatalog for AsyncImageCatalog {
                 resolution.as_ref(),
             ) {
                 Ok(()) => CatalogEntry::Pending(pending),
-                Err(error) => CatalogEntry::Failed(pending.failed(error)),
+                Err(error) => {
+                    // Not a decode failure: the render thread could not be
+                    // handed the job at all. GNU has no sentence for this,
+                    // because it has no second thread to lose.
+                    tracing::warn!(%error, "image load command could not be scheduled");
+                    CatalogEntry::Failed(pending.failed(ImageDiagnostic::NotDrawable))
+                }
             };
             entries.insert(request.clone(), state);
+            self.schedule_header_probe(&request, resolution.as_ref(), load);
         }
 
         let state = entries
@@ -281,7 +442,8 @@ impl ImageCatalog for AsyncImageCatalog {
         if let CatalogEntry::Evicted(placement) = state {
             let load = self.next_load(placement.image_id());
             let pending = PendingImage::new(load, placement.layout());
-            let command = image_load_command(&request, load, self.sequence_id(&request.source));
+            let command =
+                image_load_command(&request, load, self.sequence_id(&request.source), limit);
             *state = match schedule_image_command(
                 &self.cmd_tx,
                 self.render_waker.as_ref(),
@@ -289,8 +451,15 @@ impl ImageCatalog for AsyncImageCatalog {
                 resolution.as_ref(),
             ) {
                 Ok(()) => CatalogEntry::Pending(pending),
-                Err(error) => CatalogEntry::Failed(pending.failed(error)),
+                Err(error) => {
+                    // Not a decode failure: the render thread could not be
+                    // handed the job at all. GNU has no sentence for this,
+                    // because it has no second thread to lose.
+                    tracing::warn!(%error, "image load command could not be scheduled");
+                    CatalogEntry::Failed(pending.failed(ImageDiagnostic::NotDrawable))
+                }
             };
+            self.schedule_header_probe(&request, resolution.as_ref(), load);
         }
         let CatalogEntry::Pending(pending) = state else {
             return state
@@ -298,6 +467,14 @@ impl ImageCatalog for AsyncImageCatalog {
                 .expect("evicted entry was transitioned above");
         };
         let load = pending.load();
+        // Header geometry may have landed since the slot was reserved: adopt it
+        // by narrowing the slot in place. The identity is unchanged, so glyphs
+        // already published against this image keep pointing at it.
+        if let Some(layout) = self.header_layout(&request, load)
+            && layout != pending.placement().layout()
+        {
+            *pending = PendingImage::new(load, layout);
+        }
         let terminal = match self.image_metadata.try_terminal(load) {
             ImageTerminalProbe::Busy => {
                 return state.as_lookup().expect("pending state is observable");
@@ -307,7 +484,9 @@ impl ImageCatalog for AsyncImageCatalog {
         let Some(terminal) = terminal else {
             return state.as_lookup().expect("pending state is observable");
         };
-        *state = CatalogEntry::from_lookup(image_lookup_from_terminal(pending.clone(), terminal));
+        let resolved = image_lookup_from_terminal(pending.clone(), terminal);
+        self.report_header_disagreement(&request, &resolved);
+        *state = CatalogEntry::from_lookup(resolved);
         state
             .as_lookup()
             .expect("terminal state is observable through the catalog")
@@ -320,7 +499,7 @@ impl ImageCatalog for AsyncImageCatalog {
             }
             other => other,
         };
-        let removed = {
+        let (removed, invalidated) = {
             let mut entries = self.entries.borrow_mut();
             let requests = entries
                 .keys()
@@ -331,12 +510,26 @@ impl ImageCatalog for AsyncImageCatalog {
                 })
                 .cloned()
                 .collect::<Vec<_>>();
-            requests
+            let mut invalidated = Vec::new();
+            let removed = requests
                 .into_iter()
-                .filter_map(|request| entries.remove(&request))
-                .map(|state| state.placement().image_id())
-                .collect::<Vec<_>>()
+                .filter_map(|request| {
+                    let state = entries.remove(&request)?;
+                    invalidated.push(request);
+                    Some(state.placement().image_id())
+                })
+                .collect::<Vec<_>>();
+            (removed, invalidated)
         };
+
+        // An invalidated source may have changed on disk, so its header is
+        // stale: drop the geometry and let the next load's probe re-read it.
+        if !invalidated.is_empty() {
+            let mut layouts = self.lock_header_layouts();
+            for request in &invalidated {
+                layouts.remove(request);
+            }
+        }
 
         let result = if removed.is_empty() {
             ImageInvalidationResult::Unchanged
@@ -385,9 +578,9 @@ impl ImageCatalog for AsyncImageCatalog {
         // about to rebuild matrices and must observe the renderer's exact
         // terminal/residency state.
         let mut entries = self.entries.borrow_mut();
-        let Some(state) = entries
-            .values_mut()
-            .find(|state| state.placement().image_id() == event.image())
+        let Some((request, state)) = entries
+            .iter_mut()
+            .find(|(_, state)| state.placement().image_id() == event.image())
         else {
             return;
         };
@@ -402,10 +595,9 @@ impl ImageCatalog for AsyncImageCatalog {
                 let Some(terminal) = self.image_metadata.terminal(load) else {
                     return;
                 };
-                *state = CatalogEntry::from_lookup(image_lookup_from_terminal(
-                    pending.clone(),
-                    terminal,
-                ));
+                let resolved = image_lookup_from_terminal(pending.clone(), terminal);
+                self.report_header_disagreement(request, &resolved);
+                *state = CatalogEntry::from_lookup(resolved);
             }
             ImageStateEvent::Evicted(_) => {
                 let placement = state.placement();
@@ -416,7 +608,105 @@ impl ImageCatalog for AsyncImageCatalog {
 }
 
 impl AsyncImageCatalog {
+    fn lock_header_layouts(
+        &self,
+    ) -> std::sync::MutexGuard<
+        '_,
+        HashMap<ImageResolveRequest, (ImageLoadToken, Option<ImageLayoutExtent>)>,
+    > {
+        self.header_layouts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Layout a completed header probe resolved for this exact load.
+    ///
+    /// Never waits: a probe still in flight (or one that found no header) just
+    /// leaves the request on its placeholder until a later lookup.
+    fn header_layout(
+        &self,
+        request: &ImageResolveRequest,
+        load: ImageLoadToken,
+    ) -> Option<ImageLayoutExtent> {
+        match self.header_layouts.try_lock() {
+            Ok(layouts) => probed_layout(&layouts, request, load),
+            Err(TryLockError::WouldBlock) => None,
+            Err(TryLockError::Poisoned(poisoned)) => {
+                probed_layout(&poisoned.into_inner(), request, load)
+            }
+        }
+    }
+
+    /// Carry a known header layout over to a replacement load of the same
+    /// source, or fall back to the request's placeholder.
+    fn renew_header_layout(
+        &self,
+        request: &ImageResolveRequest,
+        load: ImageLoadToken,
+    ) -> ImageLayoutExtent {
+        let layout = self.header_layout(request, load).or_else(|| {
+            let mut layouts = self.lock_header_layouts();
+            let (_, layout) = layouts.get(request).copied()?;
+            let layout = layout?;
+            // Same bytes, new load: the header did not change, only the
+            // renderer residency it will rebuild.
+            layouts.insert(request.clone(), (load, Some(layout)));
+            Some(layout)
+        });
+        layout.unwrap_or_else(|| placeholder_image_extent(request))
+    }
+
+    /// The invariant pending geometry rests on: a layout resolved from the
+    /// header must equal the layout the decode reports. Say so when it does
+    /// not, rather than letting the frame move quietly.
+    fn report_header_disagreement(&self, request: &ImageResolveRequest, resolved: &ImageLookup) {
+        let ImageLookup::Ready(ready) = resolved else {
+            return;
+        };
+        let Some(probed) = self.header_layout(request, ready.load) else {
+            return;
+        };
+        if probed != ready.metadata.layout {
+            tracing::warn!(
+                image = %ready.load.image(),
+                ?probed,
+                decoded = ?ready.metadata.layout,
+                "image geometry resolved from the header disagrees with the decode"
+            );
+        }
+    }
+
+    /// Submit an off-thread header probe for `request` under `load`.
+    ///
+    /// The probe is the whole reason a large image can take its real box
+    /// before its pixels exist, so it is deliberately *not* deferred to the
+    /// renderer: four decoder threads busy with large images must not delay a
+    /// header read, and a slow decode must not delay anyone else's layout.
+    fn schedule_header_probe(
+        &self,
+        request: &ImageResolveRequest,
+        resolution: Option<&ImageFileRequest>,
+        load: ImageLoadToken,
+    ) {
+        let probe = HeaderProbeRequest {
+            request: request.clone(),
+            resolution: resolution.cloned(),
+            load,
+            layouts: Arc::clone(&self.header_layouts),
+            redisplay_waker: self.redisplay_waker.clone(),
+        };
+        if header_probe_sender().send(probe).is_err() {
+            tracing::warn!(image = %load.image(), "failed to queue image header probe");
+        }
+    }
+
     fn retire_image_ids(&self, removed: Vec<ImageId>) {
+        {
+            let mut reported = self.reported_failures.borrow_mut();
+            for image in &removed {
+                reported.remove(image);
+            }
+        }
         for image in removed {
             let command = RenderCommand::Asset(AssetCommand::ImageRetire { image });
             if let Err(error) =
@@ -431,6 +721,9 @@ impl AsyncImageCatalog {
 fn image_lookup_from_terminal(pending: PendingImage, terminal: ImageDecodeTerminal) -> ImageLookup {
     let load = pending.load();
     match terminal {
+        // Intermediate: the decode is still running, so the slot keeps the
+        // geometry the header gave it and stays pending until `Ready` lands.
+        ImageDecodeTerminal::Band(_) => ImageLookup::Pending(pending),
         ImageDecodeTerminal::Ready(metadata) => ImageLookup::Ready(ReadyImage { load, metadata }),
         ImageDecodeTerminal::Failed(error) => ImageLookup::Failed(pending.failed(error)),
     }
@@ -442,6 +735,96 @@ pub(super) fn wait_for_image_metadata(
     timeout: Duration,
 ) -> Option<ImageDecodeTerminal> {
     shared.wait_for_terminal(load, timeout)
+}
+
+/// One off-thread header probe.
+///
+/// Carries its catalog's result map and waker so a single process-wide prober
+/// can serve every catalog instance; a catalog is free to drop its end.
+struct HeaderProbeRequest {
+    request: ImageResolveRequest,
+    resolution: Option<ImageFileRequest>,
+    load: ImageLoadToken,
+    layouts: HeaderLayouts,
+    redisplay_waker: Option<RedisplayWaker>,
+}
+
+fn header_probe_sender() -> &'static crossbeam_channel::Sender<HeaderProbeRequest> {
+    static SENDER: OnceLock<crossbeam_channel::Sender<HeaderProbeRequest>> = OnceLock::new();
+    SENDER.get_or_init(|| {
+        let (tx, rx) = crossbeam_channel::unbounded::<HeaderProbeRequest>();
+        let _ = std::thread::Builder::new()
+            .name("neomacs-image-header-probe".to_owned())
+            .spawn(move || {
+                while let Ok(first) = rx.recv() {
+                    // Drain what is already queued: one evaluation pass can
+                    // schedule every image of a buffer, and the evaluator only
+                    // needs one redisplay for all of them.
+                    let mut batch = vec![first];
+                    while let Ok(next) = rx.try_recv() {
+                        batch.push(next);
+                    }
+                    for probe in batch {
+                        run_header_probe(probe);
+                    }
+                }
+            });
+        tx
+    })
+}
+
+fn run_header_probe(probe: HeaderProbeRequest) {
+    let layout = probe_layout(&probe);
+    {
+        let mut layouts = probe
+            .layouts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        layouts.insert(probe.request.clone(), (probe.load, layout));
+    }
+    let Some(layout) = layout else {
+        return;
+    };
+    tracing::debug!(
+        image = %probe.load.image(),
+        width = layout.width(),
+        height = layout.height(),
+        "resolved image geometry from the encoded header"
+    );
+    if let Some(waker) = &probe.redisplay_waker {
+        waker.request_redisplay();
+    }
+}
+
+/// Resolve the header's layout exactly the way the decoder will resolve the
+/// decoded one: same native extent, same size spec, same realization.
+fn probe_layout(probe: &HeaderProbeRequest) -> Option<ImageLayoutExtent> {
+    let request = &probe.request;
+    let resolved;
+    let source = match &request.source {
+        ImageResolveSource::File(path) => {
+            let name = path.as_utf8_str()?;
+            // `Search` and `~user` are resolved here, not on the evaluator
+            // thread; a path that resolves to nothing keeps the classified
+            // name and simply fails the probe.
+            resolved = probe
+                .resolution
+                .as_ref()
+                .and_then(ImageFileRequest::resolve);
+            ImageProbeSource::File(resolved.as_deref().unwrap_or(name))
+        }
+        ImageResolveSource::Data(data) => ImageProbeSource::Data(data.bytes()),
+    };
+    probe_image_layout(source, request.size, request.rotation, request.realization)
+}
+
+fn probed_layout(
+    layouts: &HashMap<ImageResolveRequest, (ImageLoadToken, Option<ImageLayoutExtent>)>,
+    request: &ImageResolveRequest,
+    load: ImageLoadToken,
+) -> Option<ImageLayoutExtent> {
+    let (token, layout) = layouts.get(request)?;
+    (*token == load).then_some(*layout).flatten()
 }
 
 struct DeferredRenderCommand {
@@ -536,10 +919,18 @@ fn resolve_deferred_image_path(
     command
 }
 
+/// Build one load command.
+///
+/// `limit` travels with the command rather than staying behind in the catalog
+/// because only the decoder side can apply it: GNU checks the bound in the
+/// loader, against the header it has just read, before it allocates a pixel
+/// buffer (`check_image_size`, `src/image.c:1811`), and the renderer's header
+/// read is the port's equivalent of that moment.
 fn image_load_command(
     request: &ImageResolveRequest,
     load: ImageLoadToken,
     sequence: ImageSequenceId,
+    limit: ImageSizeLimit,
 ) -> RenderCommand {
     match &request.source {
         ImageResolveSource::File(path) => RenderCommand::Asset(AssetCommand::ImageLoadFile {
@@ -552,6 +943,8 @@ fn image_load_command(
             mask: request.mask,
             frame: request.frame,
             sequence,
+            limit,
+            identity: request.identity.clone(),
         }),
         ImageResolveSource::Data(data) => RenderCommand::Asset(AssetCommand::ImageLoadData {
             load,
@@ -563,6 +956,8 @@ fn image_load_command(
             mask: request.mask,
             frame: request.frame,
             sequence,
+            limit,
+            identity: request.identity.clone(),
         }),
     }
 }
@@ -593,3 +988,12 @@ fn home_directory_from_environment() -> Option<String> {
 #[cfg(test)]
 #[path = "image_catalog/tests/image_catalog_test.rs"]
 mod tests;
+
+/// What the catalog does with an image load's intermediate publications.
+///
+/// Separate from `tests` because it pokes the terminal-to-lookup step directly:
+/// what a band must not do is a property of that step, and it holds whatever
+/// else the catalog is in the middle of.
+#[cfg(test)]
+#[path = "image_catalog/tests/image_band_terminal_test.rs"]
+mod band_terminal_tests;

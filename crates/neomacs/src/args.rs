@@ -814,5 +814,5 @@ pub(crate) fn sort_args(argv: &mut Vec<String>) -> Result<(), String> {
 }
 
 #[cfg(test)]
-#[path = "args_test.rs"]
+#[path = "tests/args_test.rs"]
 mod args_test;

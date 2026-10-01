@@ -77,6 +77,7 @@ impl WindowScrollUpdate {
             *preserve_vscroll_p = false;
             *force_start = true;
         }
+        eval.publish_committed_scroll_preview(self.frame, self.window);
         Ok(())
     }
 }
@@ -547,6 +548,7 @@ impl crate::emacs_core::eval::Context {
                 .map(crate::window::WindowLayoutValueIdentity::of);
         }
         Some(crate::window::WindowLayoutAttemptFreshness {
+            fontset_generation: crate::emacs_core::fontset::fontset_generation(),
             context_instance_id: self.context_instance_id(),
             window_topology_generation: self.frames.window_topology_generation(),
             frame: frame.layout_inputs(),
@@ -635,8 +637,12 @@ impl crate::emacs_core::eval::Context {
         };
         // Redisplay observes the outermost restriction; motion observes the
         // caller's accessible region. Do not widen a measured motion query.
-        let saved_restrictions = matches!(scope, crate::window::WindowLayoutQueryScope::Viewport)
-            .then(|| self.buffers.reset_outermost_restrictions());
+        let saved_restrictions = matches!(
+            scope,
+            crate::window::WindowLayoutQueryScope::Viewport
+                | crate::window::WindowLayoutQueryScope::Position { .. }
+        )
+        .then(|| self.buffers.reset_outermost_restrictions());
         let record = query(self, frame_id, window_id, scope);
         if let Some(saved_restrictions) = saved_restrictions {
             self.buffers
@@ -845,6 +851,7 @@ impl crate::emacs_core::eval::Context {
             return None;
         }
         Some(WindowDisplaySnapshotFreshness {
+            fontset_generation: crate::emacs_core::fontset::fontset_generation(),
             context_instance_id: self.context_instance_id(),
             window_topology_generation: self.frames.window_topology_generation(),
             frame: frame.layout_inputs(),
@@ -855,6 +862,7 @@ impl crate::emacs_core::eval::Context {
             redisplay_generation: self.redisplay_generation(),
             media_generation: self.media_generation(),
             function_epoch: self.obarray().function_epoch(),
+            symbol_property_revision: crate::emacs_core::symbol::SymbolPropertyRevision::current(),
         })
     }
 

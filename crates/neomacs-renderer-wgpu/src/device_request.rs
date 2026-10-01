@@ -1,6 +1,6 @@
 //! One renderer-device policy for every Neomacs GPU entry point.
 
-#[cfg(all(target_os = "linux", any(feature = "video", feature = "webview")))]
+#[cfg(target_os = "linux")]
 pub(crate) const LINUX_DMA_BUF_EXTENSIONS: [&std::ffi::CStr; 4] = [
     ash::khr::external_memory_fd::NAME,
     ash::ext::external_memory_dma_buf::NAME,
@@ -45,13 +45,13 @@ pub async fn request_renderer_device(
     };
 
     std::cfg_select! {
-        all(target_os = "linux", any(feature = "video", feature = "webview")) => {
-            if linux::supports_dma_buf_extensions(adapter) {
-                match linux::request_dma_buf_device(adapter, &descriptor) {
+        target_os = "linux" => {
+            if linux::supports_dma_buf_extensions(adapter) || crate::native_presentation::requested() {
+                match linux::request_interop_device(adapter, &descriptor) {
                     Ok(device) => return Ok(device),
                     Err(error) => tracing::warn!(
                         %error,
-                        "failed to enable Linux DMA-BUF device extensions; falling back to a standard renderer device"
+                        "failed to enable Vulkan interop device extensions; falling back to a standard renderer device"
                     ),
                 }
             } else {
@@ -69,12 +69,15 @@ pub async fn request_renderer_device(
         .map_err(|error| format!("failed to create renderer device: {error}"))
 }
 
-#[cfg(all(target_os = "linux", any(feature = "video", feature = "webview")))]
+#[cfg(target_os = "linux")]
 mod linux {
     use super::LINUX_DMA_BUF_EXTENSIONS;
     use wgpu::hal::api::Vulkan;
 
     pub(super) fn supports_dma_buf_extensions(adapter: &wgpu::Adapter) -> bool {
+        if !cfg!(any(feature = "video", feature = "webview")) {
+            return false;
+        }
         // SAFETY: the guard is used only for immutable capability inspection
         // and is dropped before this function returns.
         unsafe { adapter.as_hal::<Vulkan>() }.is_some_and(|hal| {
@@ -85,7 +88,7 @@ mod linux {
         })
     }
 
-    pub(super) fn request_dma_buf_device(
+    pub(super) fn request_interop_device(
         adapter: &wgpu::Adapter,
         descriptor: &wgpu::DeviceDescriptor<'_>,
     ) -> Result<(wgpu::Device, wgpu::Queue), String> {
@@ -97,13 +100,18 @@ mod linux {
             let hal_adapter = adapter
                 .as_hal::<Vulkan>()
                 .ok_or_else(|| "selected renderer adapter is not Vulkan".to_owned())?;
+            let dma_buf = supports_dma_buf_extensions(adapter);
+            let mut timing = crate::native_presentation::DeviceFeatures::query(&hal_adapter);
             let hal_device = hal_adapter
                 .open_with_callback(
                     descriptor.required_features,
                     &descriptor.required_limits,
                     &descriptor.memory_hints,
-                    Some(Box::new(|args| {
-                        for extension in LINUX_DMA_BUF_EXTENSIONS {
+                    Some(Box::new(|mut args| {
+                        if let Some(timing) = &mut timing {
+                            timing.enable(&mut args);
+                        }
+                        for extension in LINUX_DMA_BUF_EXTENSIONS.into_iter().filter(|_| dma_buf) {
                             if !args.extensions.contains(&extension) {
                                 args.extensions.push(extension);
                             }

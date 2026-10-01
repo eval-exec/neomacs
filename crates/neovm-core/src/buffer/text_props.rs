@@ -221,6 +221,7 @@ type IntervalPlist = Value;
 fn plist_value_from_pairs(plist: &[(Value, Value)]) -> Value {
     let mut items = Vec::with_capacity(plist.len() * 2);
     for (key, value) in plist {
+        crate::emacs_core::symbol::SymbolPropertyRevision::observe_category_property(*key, *value);
         items.push(*key);
         items.push(*value);
     }
@@ -296,6 +297,7 @@ fn plist_pairs(plist: Value) -> Vec<(Value, Value)> {
 }
 
 fn plist_value_prepend_pair(plist: Value, key: Value, value: Value) -> Value {
+    crate::emacs_core::symbol::SymbolPropertyRevision::observe_category_property(key, value);
     let saved = save_scratch_gc_roots();
     push_scratch_gc_root(plist);
     push_scratch_gc_root(key);
@@ -326,6 +328,7 @@ fn plist_value_get(plist: Value, key: Value) -> Option<Value> {
 }
 
 fn plist_value_put_replace(plist: &mut Value, key: Value, value: Value) -> bool {
+    crate::emacs_core::symbol::SymbolPropertyRevision::observe_category_property(key, value);
     let mut tail = *plist;
     while tail.is_cons() {
         let name = tail.cons_car();

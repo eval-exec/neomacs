@@ -11,16 +11,20 @@ use crate::display_item::{
 };
 use crate::display_pixel_calc::{PixelCalcContext, calc_pixel_width_or_height};
 use crate::display_row::append_context::{
-    DisplayRowTextCharState, DisplayRowTextNaturalAdvanceKind, DisplayRowTextNaturalAdvancePolicy,
-    DisplayRowTextNaturalAdvanceRequest,
+    DisplayRowLineWrap, DisplayRowTextCharState, DisplayRowTextNaturalAdvanceKind,
+    DisplayRowTextNaturalAdvancePolicy, DisplayRowTextNaturalAdvanceRequest,
 };
 use crate::display_row::geometry::DisplayRowTextAreaOrigin;
 #[cfg(test)]
 use crate::display_source::{DisplayItemSource, DisplaySourceContext};
-use crate::display_source_overflow::{DisplayXwidgetOverflowAction, WindowLocalRowExtent};
+use crate::display_source_overflow::{
+    DisplayImageOverflowAction, DisplayXwidgetOverflowAction, WindowLocalRowExtent,
+};
 use crate::glyph_row_writer;
 #[cfg(test)]
 use crate::output::builder::DisplayOutputBuilder;
+#[cfg(test)]
+use crate::row_layout::{ResolvedMappedTextInput, ResolvedTextInput};
 use neomacs_display_protocol::frame_glyphs::GlyphRowRole;
 use neomacs_display_protocol::glyph_matrix::{
     Glyph, GlyphArea, GlyphProvenance, GlyphRow, GlyphStringSource, GlyphType,
@@ -106,6 +110,11 @@ pub(crate) struct DisplayRowLayout {
     /// GNU's `FRAME_WINDOW_P` guard: the operand fails and `:align-to` is not
     /// applied.
     pub(crate) space_image_params: Option<crate::display_pixel_calc::PixelCalcImageInputs>,
+    /// GNU `it->line_wrap` for the row this layout produces.  The writer reads
+    /// it where GNU's `produce_image_glyph` reads it -- to decide whether an
+    /// overflowing image glyph is cropped or left whole; see
+    /// [`DisplayRowLineWrap`].
+    pub(crate) line_wrap: DisplayRowLineWrap,
 }
 
 impl DisplayRowLayout {
@@ -835,8 +844,8 @@ impl DisplayRowGlyphCheckpoint {
     /// Derive a checkpoint `added` text glyphs further along than `self`. Used by
     /// the whole-text-run word-wrap path, which records candidates *after* the
     /// run is appended: the base checkpoint snapshots the row before the run, and
-    /// each candidate's boundary is `base + char_offset` text glyphs (natural
-    /// text runs map one source char to one text glyph). Any added text glyph
+    /// each candidate supplies the writer's actual primitive offset, including
+    /// padding and composition. Any added text glyph
     /// means the row now displays text.
     pub(crate) fn with_added_text_glyphs(
         self,
@@ -909,18 +918,28 @@ impl DisplayRowColumnCount {
     }
 }
 
+/// Pop glyphs until the row fits `target` columns. Returns whether any
+/// popped glyph was a wide glyph or a wide-glyph padding cell: GNU's TTY
+/// truncation overwrites the padding cells of a cut wide character with the
+/// truncation glyph (the back-scan to the last non-padding glyph at
+/// xdisp.c:26611-26615, then one `produce_special_glyphs` per cell from
+/// there to the row's end, :26636-26641) — issue #446's
+/// `ibuffer_truncated_wide_name_at_the_window_edge`: both cells the cut
+/// `日` leaves carry `$`, not blank+`$`.
 pub(crate) fn trim_display_row_text_to_total_columns(
     row: &mut GlyphRow,
     target: usize,
     char_width_px: f32,
-) {
+) -> bool {
+    let mut popped_wide = false;
     while DisplayRowColumnCount::from_row(row, char_width_px).get() > target {
         let text_area = &mut row.glyphs[GlyphArea::Text.index()];
-        if text_area.is_empty() {
+        let Some(glyph) = text_area.pop() else {
             break;
-        }
-        text_area.pop();
+        };
+        popped_wide |= glyph.wide || glyph.padding;
     }
+    popped_wide
 }
 
 pub(crate) fn pop_display_row_trailing_text_char(row: &mut GlyphRow, ch: char) -> Option<Glyph> {
@@ -1081,10 +1100,10 @@ impl DisplayRowAppendStartPolicy {
     fn resolve(
         self,
         requested: DisplayRowPosition,
-        current_tail: DisplayRowPosition,
+        current_tail: impl FnOnce() -> DisplayRowPosition,
     ) -> DisplayRowPosition {
         match self {
-            Self::ReconcileWithRowTail => append_start_position(requested, current_tail),
+            Self::ReconcileWithRowTail => append_start_position(requested, current_tail()),
             Self::SourcePosition => requested,
         }
     }
@@ -1105,6 +1124,10 @@ pub(crate) struct DisplayRowGlyphSlot {
     width_px: f32,
     width_cols: usize,
     coverage: DisplayRowGlyphCoverage,
+    default_cell_height: bool,
+    // Primitive boundary relative to the start of this text append. Source
+    // characters and stored glyphs differ for padding and composition.
+    text_glyph_offset: Option<usize>,
 }
 
 /// Source positions and paint primitives are not one-to-one. Composition
@@ -1146,7 +1169,33 @@ impl DisplayRowGlyphSlot {
             coverage: DisplayRowGlyphCoverage::Primitive {
                 source_chars: std::num::NonZeroUsize::MIN,
             },
+            default_cell_height: false,
+            text_glyph_offset: None,
         }
+    }
+
+    /// Buffer TAB hit cells use the window default height, independently
+    /// of the font supplying the tab's horizontal space advance.
+    fn with_default_cell_height(mut self, use_default: bool) -> Self {
+        self.default_cell_height = use_default;
+        self
+    }
+
+    pub(crate) fn cell_height(&self, face_height: f32, default_height: f32) -> f32 {
+        if self.default_cell_height {
+            default_height
+        } else {
+            face_height
+        }
+    }
+
+    pub(crate) fn with_text_glyph_offset(mut self, offset: usize) -> Self {
+        self.text_glyph_offset = Some(offset);
+        self
+    }
+
+    pub(crate) fn text_glyph_offset(&self) -> Option<usize> {
+        self.text_glyph_offset
     }
 
     pub(crate) fn source(&self) -> DisplaySourcePosition {
@@ -1243,6 +1292,19 @@ impl DisplayRowAppendProgress {
 
     pub(crate) fn slots(&self) -> &[DisplayRowGlyphSlot] {
         &self.slots
+    }
+
+    /// How many glyphs of the appended item reached the row.
+    ///
+    /// The writer pushes one slot per emitted glyph (the text path pushes one
+    /// per character, media and replacements push one for their single glyph)
+    /// and pushes none when it refuses the item -- either because the item
+    /// draws past the right edge of a text row, or because a structural lane
+    /// has no room for it.  GNU reads the same count off
+    /// `row->used[TEXT_AREA] - n_glyphs_before` (`display_line`,
+    /// src/xdisp.c:26304) to decide whether an element was produced at all.
+    pub(crate) fn emitted_glyphs(&self) -> usize {
+        self.slots.len()
     }
 
     pub(crate) fn is_complete_with_positive_width(&self) -> bool {
@@ -1363,6 +1425,14 @@ enum DisplayRowOverflowPolicy {
 enum DisplayItemRightEdgeAdmission {
     EnforceRowBoundary,
     PreserveWholeXwidget,
+    /// An image the row already cropped to its right edge
+    /// (`DisplayImageOverflowAction::CropToVisibleWidth`).
+    ///
+    /// The crop is the boundary handling, so re-deriving the edge from the
+    /// rounded frame coordinates below can only disagree with it by an
+    /// ulp -- and the disagreement would drop the glyph this path exists to
+    /// keep.
+    CroppedImageAtRowEdge,
 }
 
 pub(crate) struct DisplayRowProgressWriter<'layout, 'row, 'measurer> {
@@ -1373,6 +1443,7 @@ pub(crate) struct DisplayRowProgressWriter<'layout, 'row, 'measurer> {
     /// window-local terms; see `DisplayRowTextAreaOrigin`.
     text_area_origin: DisplayRowTextAreaOrigin,
     text_run_measurement: Option<DisplayTextRunMeasurement>,
+    buffer_tab_admission: bool,
 }
 
 #[cfg(test)]
@@ -1548,6 +1619,7 @@ impl<'layout, 'row> DisplayRowProgressWriter<'layout, 'row, '_> {
             max_x_px,
             text_area_origin: DisplayRowTextAreaOrigin::row_local(),
             text_run_measurement: None,
+            buffer_tab_admission: false,
         }
     }
 }
@@ -1606,13 +1678,14 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
         let mut writer =
             DisplayRowWriter::with_glyph_measurer_for_area(layout, row, glyph_measurer, area);
         writer.set_empty_row_start(position);
-        let position = start_policy.resolve(position, writer.current_text_position());
+        let position = start_policy.resolve(position, || writer.current_text_position());
         Self {
             writer,
             position,
             max_x_px,
             text_area_origin,
             text_run_measurement: None,
+            buffer_tab_admission: false,
         }
     }
 
@@ -1652,6 +1725,7 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
             max_x_px,
             text_area_origin: DisplayRowTextAreaOrigin::row_local(),
             text_run_measurement: Some(text_run_measurement),
+            buffer_tab_admission: false,
         }
     }
 
@@ -1670,19 +1744,28 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
         let mut writer =
             DisplayRowWriter::with_glyph_measurer_for_area(layout, row, glyph_measurer, area);
         writer.set_empty_row_start(position);
-        let position = start_policy.resolve(position, writer.current_text_position());
+        let position = start_policy.resolve(position, || writer.current_text_position());
         Self {
             writer,
             position,
             max_x_px,
             text_area_origin,
             text_run_measurement: Some(text_run_measurement),
+            buffer_tab_admission: false,
         }
     }
 
     #[cfg(test)]
     pub(crate) fn position(&self) -> DisplayRowPosition {
         self.position
+    }
+
+    /// Buffer tabs follow DisplayRowTextOverflowDecision::for_char: their
+    /// complete advance is admitted even past the right edge. Structural
+    /// lanes and string writers retain their own clipping policy.
+    pub(crate) fn with_buffer_tab_admission(mut self) -> Self {
+        self.buffer_tab_admission = true;
+        self
     }
 
     pub(crate) fn push_item(&mut self, item: DisplayItem) -> DisplayRowAppendProgress {
@@ -1752,11 +1835,12 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
                 let slot_start = self.position;
                 let slot_source = span.start.clone();
                 let before_len = self.area_len();
-                // GNU crops a wide xwidget's advance when it produces the
-                // glyph, before `display_line` measures the row; see
-                // `DisplayXwidgetOverflowAction`.  Xwidgets in body text only:
-                // images have their own GNU rule (not ported), and margin
-                // lanes keep their own structural clip below.
+                // GNU crops a wide xwidget's advance, and a wide image's
+                // advance *and* source slice, when it produces the glyph --
+                // before `display_line` measures the row; see
+                // `DisplayXwidgetOverflowAction` and
+                // `DisplayImageOverflowAction`.  Media in body text only:
+                // margin lanes keep their own structural clip below.
                 let (kind, right_edge_admission) = match kind {
                     DisplayItemKind::MediaReplacement(media)
                         if self.writer.overflow_policy()
@@ -1799,10 +1883,66 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
                                     admission,
                                 )
                             }
-                            Err(media) => (
-                                DisplayItemKind::MediaReplacement(media),
-                                DisplayItemRightEdgeAdmission::EnforceRowBoundary,
-                            ),
+                            Err(media) => match media.into_image() {
+                                Ok(image) => {
+                                    let extent = WindowLocalRowExtent::from_frame_coordinates(
+                                        self.text_area_origin,
+                                        self.position.x_px(),
+                                        self.max_x_px,
+                                    );
+                                    // A window-local extent this row cannot
+                                    // form (a pen outside the text area) is not
+                                    // a crop: leave the glyph whole and let the
+                                    // boundary check below decide, exactly as
+                                    // an uncroppable image does.  The xwidget
+                                    // arm rejects instead because GNU crops a
+                                    // widget on a width alone, with no floor to
+                                    // fall back on.
+                                    let action = extent.map_or(
+                                        DisplayImageOverflowAction::LeaveWhole,
+                                        |extent| {
+                                            DisplayImageOverflowAction::for_image(
+                                                image.layout_advance_px(),
+                                                extent,
+                                                before_len == 0,
+                                                self.writer.layout.char_width_px,
+                                                self.writer.layout.line_number_width_px,
+                                                self.writer.layout.line_wrap,
+                                            )
+                                        },
+                                    );
+                                    match action {
+                                        DisplayImageOverflowAction::CropToVisibleWidth {
+                                            advance,
+                                        } => match image.crop_to_visible_width(advance) {
+                                            Some(cropped) => (
+                                                DisplayItemKind::MediaReplacement(cropped),
+                                                DisplayItemRightEdgeAdmission::CroppedImageAtRowEdge,
+                                            ),
+                                            // Nothing of the slice would
+                                            // survive the crop; GNU emits a
+                                            // zero-width glyph here, this port
+                                            // lets the row's own boundary
+                                            // policy decide.
+                                            None => (
+                                                DisplayItemKind::MediaReplacement(
+                                                    image.into_media(),
+                                                ),
+                                                DisplayItemRightEdgeAdmission::EnforceRowBoundary,
+                                            ),
+                                        },
+                                        DisplayImageOverflowAction::Fits
+                                        | DisplayImageOverflowAction::LeaveWhole => (
+                                            DisplayItemKind::MediaReplacement(image.into_media()),
+                                            DisplayItemRightEdgeAdmission::EnforceRowBoundary,
+                                        ),
+                                    }
+                                }
+                                Err(media) => (
+                                    DisplayItemKind::MediaReplacement(media),
+                                    DisplayItemRightEdgeAdmission::EnforceRowBoundary,
+                                ),
+                            },
                         }
                     }
                     kind => (kind, DisplayItemRightEdgeAdmission::EnforceRowBoundary),
@@ -1814,40 +1954,64 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
                         .with_box_vertical_edges(box_vertical_edges)
                         .with_pointer_appearance(pointer_appearance.clone()),
                 );
+                let appended_is_stretch = self.writer.row.glyphs[self.writer.area_index()]
+                    [before_len..]
+                    .iter()
+                    .any(|glyph| matches!(glyph.glyph_type, GlyphType::Stretch { .. }));
                 let mut status = DisplayRowAppendStatus::Complete;
                 if written.has_positive_width()
                     && self.position.x_px() + written.width_px() > self.max_x_px
                     && right_edge_admission == DisplayItemRightEdgeAdmission::EnforceRowBoundary
                 {
                     let available_px = (self.max_x_px - self.position.x_px()).max(0.0);
-                    match self.writer.overflow_policy() {
-                        DisplayRowOverflowPolicy::RejectOverflowingGlyph
-                        | DisplayRowOverflowPolicy::ClipToStructuralLane
-                            if available_px <= 0.0 =>
-                        {
-                            checkpoint.restore(self.writer.row);
-                            return DisplayRowAppendProgress::new(
-                                start,
-                                self.position,
-                                metrics,
-                                DisplayRowAppendStatus::Clipped,
-                                slots,
-                            );
-                        }
-                        DisplayRowOverflowPolicy::RejectOverflowingGlyph => {
-                            checkpoint.restore(self.writer.row);
-                            return DisplayRowAppendProgress::new(
-                                start,
-                                self.position,
-                                metrics,
-                                DisplayRowAppendStatus::Clipped,
-                                slots,
-                            );
-                        }
-                        DisplayRowOverflowPolicy::ClipToStructuralLane => {
-                            self.clip_new_glyphs_to_available_width(before_len, available_px);
-                            written = self.metrics_since(before_len);
-                            status = DisplayRowAppendStatus::Clipped;
+                    // GNU `append_stretch_glyph` crops a stretch glyph to the
+                    // visible room while `display_line` advances
+                    // `it->current_x` by the FULL `it->pixel_width`
+                    // (src/xdisp.c): the row is then over-full, every
+                    // following element finds no room, and a truncating row
+                    // ends with the truncation glyph in the last column.
+                    // Rejecting the stretch whole left the pen unmoved and
+                    // silently consumed the spec — issue #446's `:align-to`
+                    // row went on painting the text that follows it
+                    // (`EEEE-000FF$` where GNU shows `EEEE-000  $`).
+                    let stretch_overflows_truncating_row = appended_is_stretch
+                        && self.writer.layout.role == GlyphRowRole::Text
+                        && self.writer.layout.line_wrap == DisplayRowLineWrap::Truncate;
+                    if stretch_overflows_truncating_row {
+                        // Keep the appended glyph: its cells are cropped at
+                        // the window by the raster, and the pen advances by
+                        // the full width below, exactly as GNU's does.
+                        status = DisplayRowAppendStatus::Clipped;
+                    } else {
+                        match self.writer.overflow_policy() {
+                            DisplayRowOverflowPolicy::RejectOverflowingGlyph
+                            | DisplayRowOverflowPolicy::ClipToStructuralLane
+                                if available_px <= 0.0 =>
+                            {
+                                checkpoint.restore(self.writer.row);
+                                return DisplayRowAppendProgress::new(
+                                    start,
+                                    self.position,
+                                    metrics,
+                                    DisplayRowAppendStatus::Clipped,
+                                    slots,
+                                );
+                            }
+                            DisplayRowOverflowPolicy::RejectOverflowingGlyph => {
+                                checkpoint.restore(self.writer.row);
+                                return DisplayRowAppendProgress::new(
+                                    start,
+                                    self.position,
+                                    metrics,
+                                    DisplayRowAppendStatus::Clipped,
+                                    slots,
+                                );
+                            }
+                            DisplayRowOverflowPolicy::ClipToStructuralLane => {
+                                self.clip_new_glyphs_to_available_width(before_len, available_px);
+                                written = self.metrics_since(before_len);
+                                status = DisplayRowAppendStatus::Clipped;
+                            }
                         }
                     }
                 }
@@ -1877,6 +2041,46 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
         DisplayRowAppendProgress::new(start, self.position, metrics, status, slots)
     }
 
+    /// Feed owned input back through the canonical append implementation.
+    /// Capture stays outside the synchronous append hot path.
+    #[cfg(test)]
+    pub(crate) fn push_resolved_text(
+        &mut self,
+        input: ResolvedTextInput,
+    ) -> DisplayRowAppendProgress {
+        self.push_item(DisplayItem {
+            span: input.span,
+            face: RenderFaceRef::FaceId(input.face),
+            kind: DisplayItemKind::TextRun(input.run),
+            layout: input.layout,
+            pointer_appearance: input.pointer_appearance,
+            box_vertical_edges: input.box_vertical_edges,
+            box_run_membership: input.box_run_membership,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn push_resolved_mapped_text(
+        &mut self,
+        input: ResolvedMappedTextInput,
+    ) -> DisplayRowAppendProgress {
+        self.push_item(DisplayItem {
+            span: input.span,
+            face: RenderFaceRef::FaceId(input.face),
+            kind: DisplayItemKind::SourceMappedText(
+                crate::display_item::DisplaySourceMappedText::face_segment(
+                    input.text,
+                    input.glyph_string_start,
+                )
+                .with_measurement_face(input.measurement_face),
+            ),
+            layout: input.layout,
+            pointer_appearance: input.pointer_appearance,
+            box_vertical_edges: input.box_vertical_edges,
+            box_run_membership: input.box_run_membership,
+        })
+    }
+
     fn apply_item_box_run_topology(
         &mut self,
         before_len: usize,
@@ -1902,6 +2106,7 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
         metrics: &mut DisplayRowWriteMetrics,
         slots: &mut Vec<DisplayRowGlyphSlot>,
     ) -> DisplayRowAppendStatus {
+        let glyph_start = self.area_len();
         let face_id = self.writer.face_id(face);
         let measurement = self.text_run_measurement(text, face_id);
         let glyph_pointer_appearance =
@@ -1927,7 +2132,9 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
             let advance =
                 self.writer
                     .item_horizontal_advance_px(ch, face_id, natural_advance, item_layout);
-            let overflowing = advance > 0.0 && self.position.x_px + advance > self.max_x_px;
+            let overflowing = !(self.buffer_tab_admission && ch == '\t')
+                && advance > 0.0
+                && self.position.x_px + advance > self.max_x_px;
             if overflowing
                 && (self.writer.overflow_policy()
                     == DisplayRowOverflowPolicy::RejectOverflowingGlyph
@@ -1974,14 +2181,20 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
                 &self.writer.row.glyphs[self.writer.area_index()],
                 self.writer.layout.char_width_px,
             );
-            slots.push(DisplayRowGlyphSlot::with_pointer_appearance(
-                source_mapping.slot_source(&span.start, char_offset, byte_offset),
-                slot_start.x_px(),
-                slot_start.col(),
-                written.width_px(),
-                written.width_cols(),
-                pointer_appearance.cloned(),
-            ));
+            slots.push(
+                DisplayRowGlyphSlot::with_pointer_appearance(
+                    source_mapping.slot_source(&span.start, char_offset, byte_offset),
+                    slot_start.x_px(),
+                    slot_start.col(),
+                    written.width_px(),
+                    written.width_cols(),
+                    pointer_appearance.cloned(),
+                )
+                .with_default_cell_height(
+                    ch == '\t' && matches!(source_mapping, DisplayTextSourceMapping::NaturalText),
+                )
+                .with_text_glyph_offset(before_len - glyph_start),
+            );
             self.advance(written);
             metrics.add(written);
             byte_offset += ch.len_utf8();
@@ -2005,9 +2218,12 @@ impl<'layout, 'row, 'measurer> DisplayRowProgressWriter<'layout, 'row, 'measurer
         slots: &mut Vec<DisplayRowGlyphSlot>,
     ) -> DisplayRowAppendStatus {
         let face_id = self.writer.face_id(face);
-        let advance = self
-            .writer
-            .automatic_composition_advance_px(text, face_id, &terminal);
+        let advance = self.writer.automatic_composition_advance_px(
+            text,
+            face_id,
+            &terminal,
+            self.text_run_measurement.clone(),
+        );
         if advance > 0.0 && self.position.x_px() + advance > self.max_x_px {
             return DisplayRowAppendStatus::Clipped;
         }
@@ -2206,7 +2422,7 @@ impl<'layout, 'row, 'measurer> DisplayRowWriter<'layout, 'row, 'measurer> {
                     let mapping =
                         DisplayTextSourceMapping::NaturalText.resolve(&item.span, self.row);
                     let advance =
-                        self.automatic_composition_advance_px(&run.text, face_id, &terminal);
+                        self.automatic_composition_advance_px(&run.text, face_id, &terminal, None);
                     self.push_automatic_composition(&run.text, terminal, face_id, mapping, advance);
                 }
             },
@@ -2303,6 +2519,7 @@ impl<'layout, 'row, 'measurer> DisplayRowWriter<'layout, 'row, 'measurer> {
         text: &str,
         face_id: FaceId,
         terminal: &TerminalComposition,
+        measurement: Option<DisplayTextRunMeasurement>,
     ) -> f32 {
         let backend = self
             .glyph_measurer
@@ -2313,7 +2530,8 @@ impl<'layout, 'row, 'measurer> DisplayRowWriter<'layout, 'row, 'measurer> {
             return f32::from(terminal.width_cols) * self.layout.char_width_px.max(1.0);
         }
 
-        self.text_run_measurement(text, face_id)
+        measurement
+            .unwrap_or_else(|| self.text_run_measurement(text, face_id))
             .measured_advances()
             .map(|advances| advances.iter().map(|advance| advance.advance_px).sum())
             .filter(|width: &f32| width.is_finite() && *width > 0.0)
@@ -2538,15 +2756,18 @@ impl<'layout, 'row, 'measurer> DisplayRowWriter<'layout, 'row, 'measurer> {
             };
             glyph.vertical_offset_px = item_layout.vertical_offset_px(reference_height);
         }
-        let vertical_metrics = self.row.glyphs[area_index][before_len..]
-            .iter()
-            .filter_map(|glyph| {
+        // Read one glyph's metrics before mutating the row extent. Keeping
+        // those borrows separate avoids allocating a temporary vector for
+        // every emitted character, while preserving the accumulation order.
+        for index in before_len..self.row.glyphs[area_index].len() {
+            let metrics = {
+                let glyph = &self.row.glyphs[area_index][index];
                 DisplayRowVerticalMetrics::from_glyph(glyph)
                     .map(|metrics| metrics.with_vertical_offset(glyph.vertical_offset_px))
-            })
-            .collect::<Vec<_>>();
-        for metrics in vertical_metrics {
-            metrics.include_in_row(self.row);
+            };
+            if let Some(metrics) = metrics {
+                metrics.include_in_row(self.row);
+            }
         }
     }
 

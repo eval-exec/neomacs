@@ -35,6 +35,9 @@
 (defvar command-line-processed nil
   "Non-nil once command line has been processed.")
 
+(defvar neomacs-compositor-scrolling t
+  "Whether Neomacs may project certified text during native scrolling.
+Customized scroll commands continue through the ordinary evaluator path.")
 (defvar neomacs--startup-gc-ceiling-active nil
   "Non-nil while Neomacs bounds startup GC allocation intervals.")
 
@@ -45,6 +48,12 @@
   "Restore the user's GC allocation interval after startup settles."
   (remove-hook 'pre-command-hook #'neomacs--release-startup-gc-ceiling)
   (setq neomacs--startup-gc-ceiling-active nil))
+
+;; This standard hook changes auxiliary UI/startup state, not the viewport.
+;; Prediction is revoked if its function definition changes.
+(when (or (not (fboundp 'advice--p))
+          (not (advice--p (symbol-function 'neomacs--release-startup-gc-ceiling))))
+  (put 'neomacs--release-startup-gc-ceiling 'neomacs--scroll-definition (symbol-function 'neomacs--release-startup-gc-ceiling)))
 
 (defgroup initialization nil
   "Emacs start-up procedure."

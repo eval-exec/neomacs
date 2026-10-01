@@ -672,7 +672,7 @@ const PRELUDE: &str = r####"
 fn oracle() -> CachedMelpaOracle {
     CachedMelpaOracle::new(EMBARK_CONSULT_MELPA_PIN, "embark-consult.el")
         .expect("prepare exact shallow Embark Consult source below ./tmp")
-        .with_melpa_dependency(COMPAT_GNU_ELPA_PIN)
+        .with_gnu_elpa_dependency(COMPAT_GNU_ELPA_PIN)
         .expect("prepare exact Compat dependency below ./tmp")
         .with_melpa_dependency(CONSULT_MELPA_PIN)
         .expect("prepare exact Consult dependency below ./tmp")

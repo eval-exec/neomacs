@@ -21,6 +21,7 @@ strum.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+neomacs-infra.workspace = true
 proptest.workspace = true
 
 [lints]

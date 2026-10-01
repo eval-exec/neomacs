@@ -2,15 +2,15 @@ use super::CaptureRoute;
 use crate::Frontend;
 
 #[test]
-fn capture_route_distinguishes_adapter_and_direct_gui_launches() {
+fn gui_launches_are_direct_the_display_session_is_harness_owned() {
     let gui = Frontend::Gui {
         width: 1920,
         height: 1080,
     };
-    assert_eq!(
-        CaptureRoute::for_frontend(gui, false),
-        CaptureRoute::Adapter("GUI")
-    );
+    // Both GUI flavors launch the editor as a direct child of the harness:
+    // the bench display session lives in neomacs-infra and is a sibling of
+    // the editor, never its parent, so perf wraps only the editor.
+    assert_eq!(CaptureRoute::for_frontend(gui, false), CaptureRoute::Direct);
     assert_eq!(CaptureRoute::for_frontend(gui, true), CaptureRoute::Direct);
 }
 

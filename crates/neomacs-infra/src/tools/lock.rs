@@ -1,9 +1,9 @@
 //! The tools lock manifest: pinned external tool identities.
 //!
-//! Rows pin NAME + VERSION (+ per-strategy resolution data).  This is
+//! Rows pin NAME + VERSION + SOURCE, where the source names the strategy and
+//! carries its data (`system`, or `nix:<flake-attribute>`).  This is
 //! provenance data only — the repository never vendors tool binaries; the
-//! resolution strategies (PATH probe, nix build, release tarball) fetch or
-//! locate the pinned build.
+//! strategies locate or build the pinned tool.
 
 use std::sync::OnceLock;
 
@@ -13,6 +13,10 @@ const TOOLS_LOCK_MANIFEST: &str = include_str!("tools-lock.tsv");
 pub struct ToolLockEntry {
     pub name: &'static str,
     pub version: &'static str,
+    /// The distribution strategy for this row: `system` for a PATH binary
+    /// whose version matches the pin, `nix:<attribute>` for a build of that
+    /// attribute in the workspace flake.
+    pub source: &'static str,
     /// Expected sha256 of the resolved binary.  `None` for `System`-source
     /// rows where the host package manager owns the bytes and only the
     /// version is pinned.
@@ -35,19 +39,24 @@ impl ToolLockCatalog {
             }
             let columns: Vec<&str> = line.split('\t').collect();
             if !header_seen {
-                header_seen = columns == vec!["name", "version", "sha256"];
+                header_seen = columns == vec!["name", "version", "source", "sha256"];
                 if !header_seen {
                     return Err("tools lock manifest must start with the header row".to_string());
                 }
                 continue;
             }
-            let [name, version, sha256] = columns.as_slice() else {
+            let [name, version, source, sha256] = columns.as_slice() else {
                 return Err(format!(
-                    "tools lock row {index} must have exactly name/version/sha256 columns"
+                    "tools lock row {index} must have exactly name/version/source/sha256 columns"
                 ));
             };
-            if name.is_empty() || version.is_empty() {
+            if name.is_empty() || version.is_empty() || source.is_empty() {
                 return Err(format!("tools lock row {index} has an empty cell"));
+            }
+            if *source != "system" && !source.starts_with("nix:") {
+                return Err(format!(
+                    "tools lock row {index} has unknown source `{source}`"
+                ));
             }
             if let Some(previous) = previous {
                 if *name < previous {
@@ -61,6 +70,7 @@ impl ToolLockCatalog {
             rows.push(ToolLockEntry {
                 name,
                 version,
+                source,
                 sha256,
             });
         }

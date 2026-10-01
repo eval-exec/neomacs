@@ -385,7 +385,13 @@ fn string_pixel_width_bootstrap_matches_gnu_subr_x() {
     assert_eq!(results[5], "OK 4");
     assert_eq!(results[6], "OK 1");
     assert_eq!(results[7], "OK (3 . 2)");
-    assert_eq!(results[8], "OK (4 . 2)");
+    // X-LIMIT replaces the row edge but NOT the window's `line_wrap`
+    // (`it.last_visible_x = max_x`, src/xdisp.c:11924), so a 4-pixel limit in a
+    // 1x1-cell batch window wraps "abcdef" into four rows of one character
+    // rather than truncating it.  GNU 31.1 in batch answers `(4 . 3)` for this
+    // exact form and `(4 . 2)` only with `truncate-lines` non-nil; on an X
+    // frame with a 9x20 cell it answers `(4 . 200)` and `(4 . 40)`.
+    assert_eq!(results[8], "OK (4 . 3)");
     assert_eq!(results[9], "OK nil");
 }
 

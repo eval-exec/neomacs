@@ -1151,6 +1151,10 @@ pub enum ContentTransitionHint {
 /// each frame by the C-side matrix walker. No incremental state management needed.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct FrameGlyphBuffer {
+    pub scroll_input_policy: crate::ScrollInputPolicy,
+    /// Shared immutable off-screen text for compositor scrolling.
+    pub scroll_surfaces: Vec<std::sync::Arc<crate::scroll_coverage::ScrollSurface>>,
+    pub input_checkpoint: Vec<crate::input_progress::InputCheckpoint>,
     /// Evaluator interaction snapshot paired with these exact pixels.
     pub presentation_id: crate::frame_chrome::PresentationId,
     /// Canonical frame ancestry/placement for this presentation.
@@ -1198,6 +1202,8 @@ pub struct FrameGlyphBuffer {
 
     /// Validated pointer hit regions and transient paint overrides.
     presented_pointer: crate::presented_pointer::PresentedPointerMap,
+    /// Stable slot ownership used when compositor painting changes primitive indices.
+    presented_pointer_source: Option<std::sync::Arc<crate::PresentedPointerSourceMap>>,
 
     /// Presentation-qualified semantic regions and exact text positions.
     presented_hit_index: crate::presented_pointer::PresentedHitIndex,
@@ -1430,11 +1436,12 @@ impl FrameGlyphBuffer {
         map.validate_against(context)?;
         map.rebuild_damage_index(self);
         let mut hit_index = self.presented_hit_index.clone();
-        if !map.is_empty() && !hit_index.is_empty() {
+        if !hit_index.is_empty() {
             hit_index.bind_pointer_regions(map.regions())?;
         }
         self.presented_hit_index = hit_index;
         self.presented_pointer = map;
+        self.presented_pointer_source = None;
         Ok(())
     }
 
@@ -1444,7 +1451,21 @@ impl FrameGlyphBuffer {
         source: &crate::presented_pointer::PresentedPointerSourceMap,
     ) -> Result<(), crate::presented_pointer::PresentedPointerMapError> {
         let (regions, appearances) = source.resolve_against(self)?;
-        self.install_presented_pointer(regions, appearances)
+        self.install_presented_pointer(regions, appearances)?;
+        self.presented_pointer_source = Some(std::sync::Arc::new(source.clone()));
+        Ok(())
+    }
+
+    pub(crate) fn scroll_pointer_source(
+        &self,
+    ) -> Result<crate::PresentedPointerSourceMap, crate::PresentedPointerMapError> {
+        match &self.presented_pointer_source {
+            Some(source) => Ok(source.as_ref().clone()),
+            None if self.presented_pointer.is_empty() => {
+                Ok(crate::PresentedPointerSourceMap::empty())
+            }
+            None => Err(crate::PresentedPointerMapError::MissingSourceMap),
+        }
     }
 
     fn synthesize_face(
@@ -1526,6 +1547,9 @@ impl FrameGlyphBuffer {
 
     pub fn new() -> Self {
         Self {
+            scroll_input_policy: crate::ScrollInputPolicy::default(),
+            scroll_surfaces: Vec::new(),
+            input_checkpoint: Vec::new(),
             presentation_id: crate::frame_chrome::PresentationId::default(),
             frame_placement: crate::presented_frame::PresentedFramePlacement::default(),
             origin: crate::presentation_origin::PresentationOrigin::Ordinary,
@@ -1545,6 +1569,7 @@ impl FrameGlyphBuffer {
             glyphs: Vec::with_capacity(10000),
             frame_chrome: crate::frame_chrome::FrameChrome::default(),
             presented_pointer: crate::presented_pointer::PresentedPointerMap::empty(),
+            presented_pointer_source: None,
             presented_hit_index: crate::presented_pointer::PresentedHitIndex::default(),
             window_infos: Vec::with_capacity(16),
             transition_hints: Vec::with_capacity(16),
@@ -1583,6 +1608,7 @@ impl FrameGlyphBuffer {
         self.glyphs.clear();
         self.frame_chrome = crate::frame_chrome::FrameChrome::default();
         self.presented_pointer = crate::presented_pointer::PresentedPointerMap::empty();
+        self.presented_pointer_source = None;
         self.presented_hit_index =
             crate::presented_pointer::PresentedHitIndex::empty(self.presentation_id);
         self.window_infos.clear();

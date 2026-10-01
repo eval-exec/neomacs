@@ -1084,6 +1084,9 @@ pub struct GlyphRow {
     ///
     /// Mirrors GNU `struct glyph_row::height`. `0.0` means unset.
     pub height_px: f32,
+    /// Additional logical descent from line spacing. Cursor height excludes it.
+    #[serde(default)]
+    pub line_spacing_px: f32,
     /// Authoritative baseline ascent from row top in pixels.
     ///
     /// Mirrors GNU `struct glyph_row::ascent`. `0.0` means unset.
@@ -1170,6 +1173,21 @@ pub struct FringeBitmapInfo {
 }
 
 impl GlyphRow {
+    /// The next natural buffer row begins at the same boundary after a visual
+    /// wrap; a physical line end additionally consumes its newline.
+    pub fn next_buffer_row_start(&self) -> Option<usize> {
+        if self.continued {
+            Some(self.end_charpos)
+        } else {
+            self.end_charpos.checked_add(1)
+        }
+    }
+
+    /// Height produced by the row before adding inter-line spacing.
+    pub fn height_without_line_spacing(&self) -> f32 {
+        (self.height_px - self.line_spacing_px).max(0.0)
+    }
+
     pub fn new(role: GlyphRowRole) -> Self {
         Self {
             glyphs: std::array::from_fn(|_| Vec::new()),
@@ -1192,6 +1210,7 @@ impl GlyphRow {
             start_col: 0,
             pixel_y: 0.0,
             height_px: 0.0,
+            line_spacing_px: 0.0,
             ascent_px: 0.0,
             start_charpos: 0,
             end_charpos: 0,
@@ -1612,6 +1631,7 @@ impl GlyphRow {
         self.ends_at_zv = false;
         self.pixel_y = 0.0;
         self.height_px = 0.0;
+        self.line_spacing_px = 0.0;
         self.ascent_px = 0.0;
         self.start_charpos = 0;
         self.end_charpos = 0;
@@ -1703,13 +1723,16 @@ impl GlyphMatrix {
         // and `TtyRif::rasterize` know not to touch them. Matches
         // GNU's `MATRIX_ROW_ENABLED_P` discipline where disabled
         // rows are inert until the walker marks them valid.
-        let rows = (0..nrows)
-            .map(|_| {
-                let mut row = GlyphRow::new(GlyphRowRole::Text);
-                row.enabled = false;
-                MatrixRow::new(row)
-            })
-            .collect();
+        // A pixel extent is a conservative row-capacity bound, often much
+        // larger than the populated viewport. Unused slots share one inert
+        // row; make_mut isolates each slot when the producer enables it.
+        let rows = if nrows == 0 {
+            Vec::new()
+        } else {
+            let mut row = GlyphRow::new(GlyphRowRole::Text);
+            row.enabled = false;
+            vec![MatrixRow::new(row); nrows]
+        };
         Self {
             row_damage: vec![RowDamage::New; nrows],
             rows,
@@ -1926,6 +1949,14 @@ pub struct ScrollBarItem {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct FrameDisplayState {
+    #[serde(default)]
+    pub scroll_input_policy: crate::ScrollInputPolicy,
+    /// Bounded body coverage, separate from authoritative query geometry.
+    #[serde(default)]
+    pub scroll_coverage: Vec<std::sync::Arc<crate::scroll_coverage::ScrollCoverage>>,
+    /// Completed native commands reflected in this immutable frame.
+    #[serde(default)]
+    pub input_checkpoint: Vec<crate::input_progress::InputCheckpoint>,
     /// Evaluator interaction snapshot paired with these exact pixels.
     pub presentation_id: PresentationId,
     /// Why this presentation was produced.
@@ -2462,6 +2493,9 @@ impl FrameDisplayState {
 
     pub fn new(frame_cols: usize, frame_rows: usize, char_width: f32, char_height: f32) -> Self {
         Self {
+            scroll_input_policy: crate::ScrollInputPolicy::default(),
+            scroll_coverage: Vec::new(),
+            input_checkpoint: Vec::new(),
             presentation_id: PresentationId::default(),
             origin: crate::presentation_origin::PresentationOrigin::Ordinary,
             frame_placement: crate::presented_frame::PresentedFramePlacement::default(),
@@ -2563,6 +2597,7 @@ impl FrameDisplayState {
         let frame_rows = (buf.height / buf.char_height.max(1.0)) as usize;
         let mut state = Self::new(frame_cols, frame_rows, buf.char_width, buf.char_height);
         state.presentation_id = buf.presentation_id;
+        state.scroll_input_policy = buf.scroll_input_policy;
         state.frame_placement = buf.frame_placement;
         state.presented_hit_index = buf.presented_hit_index().clone();
         state.frame_pixel_width = buf.width;
@@ -2709,6 +2744,13 @@ impl FrameDisplayState {
         MATERIALIZE_CALL_COUNT.with(|count| count.set(count.get() + 1));
         let mut buf = FrameGlyphBuffer::with_size(self.frame_pixel_width, self.frame_pixel_height);
         buf.presentation_id = self.presentation_id;
+        buf.scroll_input_policy = self.scroll_input_policy;
+        buf.input_checkpoint = self.input_checkpoint.clone();
+        buf.scroll_surfaces = self
+            .scroll_coverage
+            .iter()
+            .filter_map(|coverage| coverage.materialize(self))
+            .collect();
         buf.frame_placement = self.frame_placement;
         buf.origin = self.origin;
         buf.char_width = self.char_width;

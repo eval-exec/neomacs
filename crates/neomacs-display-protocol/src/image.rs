@@ -3,6 +3,7 @@
 use crate::types::{ImageId, ImageLoadToken};
 use std::collections::HashSet;
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 /// One renderer-side image lifecycle fact.
 ///
@@ -57,6 +58,75 @@ impl RetainedImageSet {
 impl FromIterator<ImageId> for RetainedImageSet {
     fn from_iter<T: IntoIterator<Item = ImageId>>(iter: T) -> Self {
         Self(iter.into_iter().collect())
+    }
+}
+
+/// The encoded bytes of one image source, handed around by handle.
+///
+/// One buffer, named by the Lisp side and read by the renderer, so the two are
+/// the same bytes rather than two copies of them: a request's identity holds a
+/// handle to what the decode job reads, and every hop between them — the load
+/// command, the decode queue, the row-wise decoders, the whole-image fallback
+/// an abandoned banded attempt takes — clones the handle instead of the image.
+///
+/// A handle to the [`Vec`] rather than an `Arc<[u8]>`, which is the tidier type
+/// and is not reachable from an owned buffer without the copy this exists to
+/// avoid: a slice's refcount header has to sit in front of its data, so
+/// `Arc::from(vec)` reallocates and copies the whole buffer, while moving a
+/// `Vec` into an `Arc` moves three words and leaves the bytes where they are.
+///
+/// Equality and hashing are the bytes': two handles to the same contents are
+/// one source, which is what a request keyed by them means.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct EncodedBytes(Arc<Vec<u8>>);
+
+impl EncodedBytes {
+    /// Take ownership of the bytes, without copying them.
+    #[must_use]
+    pub fn new(bytes: Vec<u8>) -> Self {
+        Self(Arc::new(bytes))
+    }
+
+    /// A handle to a copy of `bytes`.
+    ///
+    /// For a caller that has a slice and no buffer to hand over: it is a full
+    /// copy of the source, so a path that owns its bytes uses [`Self::new`].
+    #[must_use]
+    pub fn copy_of(bytes: &[u8]) -> Self {
+        Self::new(bytes.to_vec())
+    }
+
+    /// How many bytes the source is.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether the source is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// The bytes.
+    #[must_use]
+    pub fn as_slice(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+}
+
+impl AsRef<[u8]> for EncodedBytes {
+    /// The bytes, for a reader that is given a buffer to read from.
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+}
+
+impl std::ops::Deref for EncodedBytes {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        self.0.as_slice()
     }
 }
 
@@ -136,6 +206,57 @@ impl ImageSourceRect {
     #[must_use]
     pub fn map_uv(self, u: f32, v: f32) -> (f32, f32) {
         (self.x() + u * self.width(), self.y() + v * self.height())
+    }
+
+    /// The sub-rect left when the right `1 - fraction` of this rect's x extent
+    /// is cropped away.
+    ///
+    /// GNU crops an inline image glyph that would run past the row's right
+    /// edge by removing the same pixels from its layout advance and from its
+    /// source slice (`it->pixel_width -= crop; slice.width -= crop;`,
+    /// `produce_image_glyph`, src/xdisp.c:32506-32507), so the glyph shows the
+    /// left part of the image instead of squeezing all of it into the narrower
+    /// box.  This is that crop in the slice's own normalized coordinates.
+    ///
+    /// `None` when `fraction` leaves nothing to sample — including the case
+    /// where the remaining extent rounds to zero width in the `u16` encoding,
+    /// which is also how GNU reaches `slice.width == 0`.
+    #[must_use]
+    pub fn crop_right_to_fraction(self, fraction: f32) -> Option<Self> {
+        if !fraction.is_finite() || fraction <= 0.0 {
+            return None;
+        }
+        if fraction >= 1.0 {
+            return Some(self);
+        }
+        Self::new(self.x(), self.y(), self.width() * fraction, self.height())
+    }
+}
+
+/// The horizontal row advance an inline image glyph keeps after GNU's
+/// right-edge crop.
+///
+/// The cropped advance is deliberately not an `ImageSourceRect` or a raw
+/// pixel count: it is the one number `produce_image_glyph` subtracts the crop
+/// from, and pairing it with the *uncropped* source slice would stretch the
+/// whole image into the narrower box.  [`ImageSourceRect::crop_right_to_fraction`]
+/// is the other half of the same edit.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ImageLayoutAdvance(crate::types::Px);
+
+impl ImageLayoutAdvance {
+    /// A finite, strictly positive glyph advance.  A crop that leaves nothing
+    /// produces no glyph in this port, matching the row writer's rule for
+    /// ordinary glyphs.
+    #[must_use]
+    pub fn new(px: crate::types::Px) -> Option<Self> {
+        (px.get().is_finite() && px.get() > 0.0).then_some(Self(px))
+    }
+
+    #[must_use]
+    pub const fn px(self) -> crate::types::Px {
+        self.0
     }
 }
 
@@ -685,6 +806,16 @@ impl ImageIntrinsicExtent {
     pub const fn dimensions(self) -> (f64, f64) {
         (self.width, self.height)
     }
+
+    /// The integer extent this source occupies once it is rasterized.
+    ///
+    /// GNU compares integer decoded dimensions, so a fractional extent is
+    /// compared with its ceiling: a vector document that is over a limit after
+    /// rounding is over the limit.
+    #[must_use]
+    pub fn native_ceiling(self) -> ImageNativeExtent {
+        ImageNativeExtent::new(intrinsic_bound(self.width), intrinsic_bound(self.height))
+    }
 }
 
 impl From<ImageNativeExtent> for ImageIntrinsicExtent {
@@ -695,6 +826,172 @@ impl From<ImageNativeExtent> for ImageIntrinsicExtent {
         }
     }
 }
+
+/// GNU `max-image-size` resolved into the native-pixel bound it implies.
+///
+/// GNU refuses an image whose *native* extent — before `:width`, `:max-width`
+/// and `:rotation` — exceeds the limit, and it does so before the loader has
+/// allocated a single pixel (`check_image_size`, `src/image.c:1811-1836`):
+///
+/// - an integer limits both axes to that many pixels;
+/// - a float limits each axis to that fraction of the frame's own pixel extent,
+///   so the two axes carry *different* bounds;
+/// - anything non-numeric is no limit at all.
+///
+/// Resolving a Lisp value plus a frame into this one value, on the frame the
+/// image is being looked up on, is what lets the refusal happen at the load
+/// rather than after it: the comparison at the decoder cannot disagree with the
+/// comparison at the caller, and a loader cannot be in the state of "the limit
+/// was never resolved".
+///
+/// The bound is stored as a native-pixel extent rather than as the raw float
+/// because [`ImageNativeExtent`] saturates at `u32::MAX`: a ratio larger than
+/// any representable image degenerates to [`Self::UNLIMITED`] instead of
+/// becoming an "infinite but not really" special case every caller must
+/// remember to handle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ImageSizeLimit {
+    maximum: ImageNativeExtent,
+}
+
+impl ImageSizeLimit {
+    /// No limit: GNU's non-numeric `max-image-size`, and the saturation point
+    /// of every bound wider than the extent type can represent.
+    pub const UNLIMITED: Self = Self {
+        maximum: ImageNativeExtent::new(u32::MAX, u32::MAX),
+    };
+
+    /// GNU's `FIXNUMP (Vmax_image_size)` arm: one absolute pixel bound for both
+    /// axes. A non-positive value permits nothing, which is the same verdict
+    /// `width <= XFIXNUM (Vmax_image_size)` reaches for every real extent.
+    #[must_use]
+    pub fn from_axis_pixels(pixels: i64) -> Self {
+        let bound = match u32::try_from(pixels) {
+            Ok(bound) => bound,
+            Err(_) if pixels < 0 => 0,
+            Err(_) => u32::MAX,
+        };
+        Self {
+            maximum: ImageNativeExtent::new(bound, bound),
+        }
+    }
+
+    /// GNU's `FLOATP (Vmax_image_size)` arm: a fraction of this frame's pixel
+    /// extent, per axis.
+    ///
+    /// `frame` is `None` for GNU's null-frame case, which compares against a
+    /// fixed 1024x1024 (`src/image.c:1830`).
+    #[must_use]
+    pub fn from_frame_ratio(ratio: f64, frame: Option<ImageNativeExtent>) -> Self {
+        let (frame_width, frame_height) = match frame {
+            Some(frame) => (f64::from(frame.width()), f64::from(frame.height())),
+            None => (1024.0, 1024.0),
+        };
+        Self {
+            maximum: ImageNativeExtent::new(
+                ratio_bound(ratio * frame_width),
+                ratio_bound(ratio * frame_height),
+            ),
+        }
+    }
+
+    /// The largest native extent this limit admits.
+    #[must_use]
+    pub const fn maximum(self) -> ImageNativeExtent {
+        self.maximum
+    }
+
+    /// GNU `check_image_size` for a decoded, integer-valued native extent.
+    #[must_use]
+    pub const fn permits(self, native: ImageNativeExtent) -> bool {
+        // GNU's first arm: a non-positive extent is not a size at all
+        // (`src/image.c:1816`). Header-derived extents are always positive, so
+        // this only ever fires for a caller that invented one.
+        if native.width() == 0 || native.height() == 0 {
+            return false;
+        }
+        native.width() <= self.maximum.width() && native.height() <= self.maximum.height()
+    }
+
+    /// [`Self::permits`] for a source extent that has not been rounded to
+    /// pixels yet; see [`ImageIntrinsicExtent::native_ceiling`].
+    #[must_use]
+    pub fn permits_intrinsic(self, intrinsic: ImageIntrinsicExtent) -> bool {
+        self.permits(intrinsic.native_ceiling())
+    }
+}
+
+impl Default for ImageSizeLimit {
+    /// GNU's documented default: `MAX_IMAGE_SIZE 10.0` (`src/image.c:1740`)
+    /// measured against GNU's own unknown-frame size.
+    fn default() -> Self {
+        Self::from_frame_ratio(10.0, None)
+    }
+}
+
+/// `width <= X` for an integer width is `width <= floor (X)`.
+///
+/// A bound that is not a number, or not positive, admits nothing — which is
+/// the verdict the comparison itself reaches, since every comparison against a
+/// NaN is false. An infinite ratio is GNU's "no limit at all" and saturates to
+/// the widest extent the type can hold.
+fn ratio_bound(bound: f64) -> u32 {
+    if bound.is_nan() || bound <= 0.0 {
+        return 0;
+    }
+    if bound >= f64::from(u32::MAX) {
+        return u32::MAX;
+    }
+    bound.floor() as u32
+}
+
+/// The integer extent a fractional source extent is compared as.
+fn intrinsic_bound(dimension: f64) -> u32 {
+    if dimension.is_nan() || dimension <= 0.0 {
+        return 0;
+    }
+    if dimension >= f64::from(u32::MAX) {
+        return u32::MAX;
+    }
+    dimension.ceil() as u32
+}
+
+/// An image the loader refuses because of [`ImageSizeLimit`].
+///
+/// GNU reports this through `image_size_error` (`src/image.c:1432`), which logs
+/// [`Self::MESSAGE`] rather than signalling: redisplay must not be interrupted
+/// by an image it cannot show, and the failed image keeps its placeholder slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OversizedImage {
+    extent: ImageNativeExtent,
+    limit: ImageSizeLimit,
+}
+
+impl OversizedImage {
+    /// GNU's `image_size_error` text, verbatim.
+    pub const MESSAGE: &'static str = "Invalid image size (see `max-image-size')";
+
+    #[must_use]
+    pub const fn new(extent: ImageNativeExtent, limit: ImageSizeLimit) -> Self {
+        Self { extent, limit }
+    }
+
+    /// The native extent that was refused.
+    #[must_use]
+    pub const fn extent(self) -> ImageNativeExtent {
+        self.extent
+    }
+
+    /// The limit that refused it.
+    #[must_use]
+    pub const fn limit(self) -> ImageSizeLimit {
+        self.limit
+    }
+}
+
+#[cfg(test)]
+#[path = "image/tests/image_size_limit_test.rs"]
+mod image_size_limit_tests;
 
 /// All extents derived for one decoded image realization.
 ///
@@ -1012,9 +1309,13 @@ impl ImageRotation {
     }
 }
 
-/// This is GNU's `compute_image_size` input set (src/image.c:2750). The size
-/// cannot be resolved until the native size is known, i.e. after decoding, so
-/// this travels to the decoder rather than being applied up front.
+/// This is GNU's `compute_image_size` input set (src/image.c:2750). It travels
+/// to the decoder because the native size it is resolved against is the
+/// decoder's — but for every raster format that size is already in the encoded
+/// header, so layout can resolve the same geometry from the header while the
+/// decode is still running (see `neomacs_renderer_wgpu::image_probe`). Both
+/// resolutions must produce the identical extent: they are the same
+/// [`ImageRealization::resolve_geometry`] call over the same native size.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct ImageSizeSpec {
     width: AxisSize,

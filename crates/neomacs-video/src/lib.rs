@@ -38,25 +38,25 @@ pub use sampling::{GpuGeneration, PreparedVideoDraw, PreparedVideoDraws, VideoSa
 pub use system::{VideoSystem, VideoWake};
 
 #[cfg(test)]
-#[path = "system_test.rs"]
+#[path = "tests/system_test.rs"]
 mod system_test;
 
 #[cfg(test)]
-#[path = "surface_pool_test.rs"]
+#[path = "tests/surface_pool_test.rs"]
 mod surface_pool_test;
 
 #[cfg(test)]
-#[path = "model_test.rs"]
+#[path = "tests/model_test.rs"]
 mod model_test;
 
 #[cfg(test)]
-#[path = "sampling_test.rs"]
+#[path = "tests/sampling_test.rs"]
 mod sampling_test;
 
 #[cfg(test)]
-#[path = "color_test.rs"]
+#[path = "tests/color_test.rs"]
 mod color_test;
 
 #[cfg(test)]
-#[path = "mailbox_test.rs"]
+#[path = "tests/mailbox_test.rs"]
 mod mailbox_test;

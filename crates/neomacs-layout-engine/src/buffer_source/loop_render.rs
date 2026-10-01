@@ -157,6 +157,14 @@ impl<'rows, 'emit, 'surface> BufferSourceLoopMutableState<'rows, 'emit, 'surface
         self.render_pending_line_number_prefix(context);
 
         let prefix_requested = self.row_carryover.prefix_request.is_requested();
+        if !prefix_requested {
+            // This prelude runs before every source item. With no pending
+            // prefix, the old checkpoint/snapshot path retained zero added
+            // glyphs and cleared the saved fragment. Preserve that transition
+            // without cloning the growing row on every character.
+            self.beyond_accessible_end_line_prefix.replace(None);
+            return;
+        }
         let wrap_prefix = self.row_carryover.prefix_request.is_wrap();
         let line_prefix_checkpoint =
             (!wrap_prefix).then(|| self.source_render.capture_glyph_checkpoint());

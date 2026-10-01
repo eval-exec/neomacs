@@ -152,9 +152,9 @@ pub fn start_weston_with_desktop(
     let mut command = Command::new("weston");
     match desktop {
         WestonDesktop::Solid => {
-            command.arg("--config").arg(
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/weston-headless.ini"),
-            );
+            command
+                .arg("--config")
+                .arg(crate::crate_root!().join("fixtures/weston-headless.ini"));
         }
         WestonDesktop::DefaultPattern => {
             command.arg("--no-config");
@@ -213,6 +213,234 @@ pub fn start_weston_with_desktop(
             ),
         ))
     }
+}
+
+/// Log file name a bench session writes below its artifact root. One file per
+/// `WestonBenchSession::start` call: a launch retry overwrites it, so the
+/// retained log is the attempt that produced the outcome.
+pub const WESTON_BENCH_LOG_FILE: &str = "weston-bench.log";
+
+/// Geometry and protocol policy for one [`WestonBenchSession`].
+///
+/// Reproducibility contract: every field is pinned by the caller (a scenario
+/// spec), never inherited from the machine. A bench session therefore renders
+/// identically on a developer laptop and on the perf runner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WestonBenchConfig {
+    pub width: u32,
+    pub height: u32,
+    /// Also expose the compositor's Xwayland display. Neomacs connects over
+    /// Wayland directly; X11-only GNU Emacs builds need this to run beside it
+    /// in cross-editor comparisons.
+    pub xwayland: bool,
+    pub desktop: WestonDesktop,
+}
+
+/// One benchmark display session: a headless weston compositor whose whole
+/// environment is owned by the caller's artifact root, plus the connection
+/// environment clients must receive.
+///
+/// Ownership: dropping the session kills the compositor and removes its
+/// private `XDG_RUNTIME_DIR`. The launch-flake retry policy (fresh compositor
+/// per attempt) belongs to the caller: drop and start again.
+#[derive(Debug)]
+pub struct WestonBenchSession {
+    session: DisplaySession,
+    wayland_display: String,
+    x_display: Option<String>,
+    artifact_root: PathBuf,
+}
+
+impl WestonBenchSession {
+    /// Start one compositor and wait until it can accept clients: the
+    /// Wayland socket exists, and when [`WestonBenchConfig::xwayland`] is
+    /// set, weston has reported its X server on a display.
+    pub fn start(artifact_root: &Path, config: WestonBenchConfig) -> io::Result<Self> {
+        if config.width == 0 || config.height == 0 {
+            return Err(io::Error::other(
+                "bench display dimensions must be positive",
+            ));
+        }
+        fs::create_dir_all(artifact_root)?;
+        let runtime_directory = RuntimeDirectory::new(artifact_root)?;
+        let runtime_dir = runtime_directory.address.clone();
+        let log_path = artifact_root.join(WESTON_BENCH_LOG_FILE);
+        let log = fs::File::create(&log_path)?;
+
+        let socket = format!("neomacs-infra-bench-{}", std::process::id());
+        let mut command = Command::new("weston");
+        match config.desktop {
+            WestonDesktop::Solid => {
+                command.arg("--config").arg(
+                    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/weston-headless.ini"),
+                );
+            }
+            WestonDesktop::DefaultPattern => {
+                command.arg("--no-config");
+            }
+        }
+        let child = command
+            .arg("--backend=headless")
+            // GL exposes the GPU-backed Wayland surface capabilities clients
+            // need to select a hardware adapter. Pixman made Neomacs choose
+            // llvmpipe even on hosts with a working discrete Vulkan GPU.
+            .arg("--renderer=gl")
+            // Xwayland is opt-in because only X11 clients need it; when absent
+            // the session has no X server to wait for or tear down.
+            .args(config.xwayland.then_some("--xwayland"))
+            .arg("--width")
+            .arg(config.width.to_string())
+            .arg("--height")
+            .arg(config.height.to_string())
+            .arg("--idle-time=0")
+            .arg(format!("--socket={socket}"))
+            .env("XDG_RUNTIME_DIR", &runtime_dir)
+            .stdout(Stdio::null())
+            // The same log carries weston's own diagnostics and the Xwayland
+            // display announcement the wait below parses.
+            .stderr(Stdio::from(log))
+            .spawn()?;
+
+        let mut pending = PendingBenchSession {
+            child: Some(child),
+            runtime_directory: Some(runtime_directory),
+        };
+        let socket_path = runtime_dir.join(&socket);
+        if !wait_for_path(&socket_path, Duration::from_secs(5)) {
+            pending.kill();
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!(
+                    "weston did not create Wayland socket {}; log: {}",
+                    socket_path.display(),
+                    read_log_tail(&log_path)
+                ),
+            ));
+        }
+        let x_display = if config.xwayland {
+            match wait_for_xwayland_display(&log_path, Duration::from_secs(5)) {
+                Some(display) => Some(display),
+                None => {
+                    pending.kill();
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!(
+                            "weston did not report an Xwayland display in {}; log: {}",
+                            log_path.display(),
+                            read_log_tail(&log_path)
+                        ),
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+        let mut session = pending.into_session();
+        session
+            .env
+            .push(("XDG_RUNTIME_DIR".to_string(), path_to_string(&runtime_dir)));
+        session.env.push(("WAYLAND_DISPLAY".to_string(), socket));
+        if let Some(display) = &x_display {
+            session.env.push(("DISPLAY".to_string(), display.clone()));
+        }
+        session.env.push(locale_pin());
+        let wayland_display = session
+            .env
+            .iter()
+            .find(|(name, _)| name == "WAYLAND_DISPLAY")
+            .map(|(_, value)| value.clone())
+            .expect("WAYLAND_DISPLAY was just pushed");
+        Ok(Self {
+            session,
+            wayland_display,
+            x_display,
+            artifact_root: artifact_root.to_path_buf(),
+        })
+    }
+
+    pub fn env(&self) -> &[(String, String)] {
+        &self.session.env
+    }
+
+    pub fn wayland_display(&self) -> &str {
+        &self.wayland_display
+    }
+
+    /// The `:N` display of the session's Xwayland server, when requested.
+    pub fn x_display(&self) -> Option<&str> {
+        self.x_display.as_deref()
+    }
+
+    /// The caller-owned directory holding this session's log.
+    pub fn artifact_root(&self) -> &Path {
+        &self.artifact_root
+    }
+}
+
+/// Own every partially-started bench resource until the socket (and optional
+/// Xwayland display) hand ownership to a live [`WestonBenchSession`].
+#[derive(Debug)]
+struct PendingBenchSession {
+    child: Option<Child>,
+    runtime_directory: Option<RuntimeDirectory>,
+}
+
+impl PendingBenchSession {
+    fn kill(&mut self) {
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+
+    fn into_session(mut self) -> DisplaySession {
+        DisplaySession {
+            child: self.child.take(),
+            env: Vec::new(),
+            cleanup_dir: None,
+            runtime_directory: self.runtime_directory.take(),
+            _held_directory: None,
+        }
+    }
+}
+
+impl Drop for PendingBenchSession {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+/// Poll weston's log for its Xwayland readiness line and return the display.
+///
+/// Weston prints `xserver listening on display :N` once its embedded X
+/// server accepts connections, which is the compositor's own readiness
+/// statement — polling it avoids guessing a display number or sleeping.
+fn wait_for_xwayland_display(log_path: &Path, timeout: Duration) -> Option<String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(display) = xwayland_display_from_log(log_path) {
+            return Some(display);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn xwayland_display_from_log(log_path: &Path) -> Option<String> {
+    let contents = fs::read_to_string(log_path).ok()?;
+    const MARKER: &str = "xserver listening on display ";
+    let line = contents.lines().rfind(|line| line.contains(MARKER))?;
+    let start = line.find(MARKER)? + MARKER.len();
+    let display: String = line[start..]
+        .chars()
+        .take_while(|character| character.is_ascii_digit() || *character == ':')
+        .collect();
+    (display.starts_with(':') && display.len() > 1).then_some(display)
 }
 
 pub fn start_xvfb(artifact_root: &Path) -> io::Result<DisplaySession> {
@@ -377,7 +605,9 @@ impl Drop for PendingXvfbSession {
 /// doubles as the XDG runtime (addressed through /proc so long checkout
 /// paths cannot exceed sockaddr_un's limit).  `config` is sway
 /// configuration text — resolution, seats, and focus policy are scenario
-/// policy, not harness mechanics.
+/// policy, not harness mechanics. Software rendering is the portable default;
+/// set `NEOMACS_GUI_SWAY_RENDERER=gles2` (and, if needed,
+/// `WLR_RENDER_DRM_DEVICE`) for hardware performance measurements.
 pub fn start_sway(artifact_root: &Path, config: &str) -> io::Result<DisplaySession> {
     fs::create_dir_all(artifact_root)?;
     set_owner_only_dir_permissions(artifact_root)?;
@@ -399,13 +629,16 @@ pub fn start_sway(artifact_root: &Path, config: &str) -> io::Result<DisplaySessi
     let runtime = artifact_root.to_string_lossy().into_owned();
 
     let program = std::env::var_os("NEOMACS_GUI_SWAY").unwrap_or_else(|| "sway".into());
+    let renderer =
+        std::env::var("NEOMACS_GUI_SWAY_RENDERER").unwrap_or_else(|_| "pixman".to_owned());
+    fs::write(artifact_root.join("sway-renderer-request"), &renderer)?;
     let mut pending = PendingSwaySession::default();
     let child = Command::new(&program)
         .args(["--unsupported-gpu", "--config"])
         .arg(&config_path)
         .env("XDG_RUNTIME_DIR", &runtime)
         .env("WLR_BACKENDS", "headless")
-        .env("WLR_RENDERER", "pixman")
+        .env("WLR_RENDERER", &renderer)
         .env("WLR_LIBINPUT_NO_DEVICES", "1")
         .env_remove("WAYLAND_DISPLAY")
         .env_remove("DISPLAY")
@@ -577,4 +810,55 @@ fn path_to_string(path: &Path) -> String {
 /// precedence, so one assignment pins every consumer of the session env.
 fn locale_pin() -> (String, String) {
     ("LC_ALL".to_string(), "C.UTF-8".to_string())
+}
+
+#[cfg(test)]
+mod bench_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn weston_available() -> bool {
+        Command::new("weston")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+
+    #[test]
+    fn bench_session_starts_and_env_carries_the_socket() {
+        if !weston_available() {
+            return;
+        }
+        let root = tempfile::tempdir().expect("temp artifact root");
+        let session = WestonBenchSession::start(
+            root.path(),
+            WestonBenchConfig {
+                width: 800,
+                height: 600,
+                xwayland: true,
+                desktop: WestonDesktop::Solid,
+            },
+        )
+        .expect("bench session starts");
+        assert!(
+            session
+                .wayland_display()
+                .starts_with("neomacs-infra-bench-")
+        );
+        let display = session.x_display().expect("xwayland display reported");
+        assert!(display.starts_with(':'));
+        let env: BTreeMap<&str, &str> = session
+            .env()
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .collect();
+        assert_eq!(env.get("WAYLAND_DISPLAY"), Some(&session.wayland_display()));
+        assert_eq!(env.get("DISPLAY"), Some(&display));
+        assert!(env.get("XDG_RUNTIME_DIR").is_some_and(|p| !p.is_empty()));
+        assert_eq!(env.get("LC_ALL"), Some(&"C.UTF-8"));
+        assert!(root.path().join(WESTON_BENCH_LOG_FILE).is_file());
+        drop(session);
+    }
 }

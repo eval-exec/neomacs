@@ -8,7 +8,7 @@ use std::{path::PathBuf, time::Duration};
 #[test]
 // Prerequisites: fresh-built binary/runtime, Sway, wtype, and DejaVu Sans Mono.
 fn org_region_survives_silent_emphasis_visibility_updates() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = neomacs_infra::crate_root!().join("../..");
     let binary = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("target/release/neomacs"));

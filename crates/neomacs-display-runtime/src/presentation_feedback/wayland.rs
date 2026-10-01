@@ -1,4 +1,5 @@
-use std::{fs, path::PathBuf};
+use neomacs_display_protocol::frame_time::{EventTime, observe_platform_now};
+use std::{collections::VecDeque, fs, path::PathBuf, time::Duration};
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 use wayland_backend::client::{Backend, ObjectId};
@@ -12,6 +13,7 @@ use winit::window::Window;
 struct Submission {
     serial: u64,
     frame: u64,
+    layout: neomacs_display_protocol::PresentationId,
     width: u32,
     height: u32,
     scale: f64,
@@ -38,14 +40,41 @@ enum NativeFeedback {
     Discarded(Submission),
 }
 
+#[derive(Default)]
+struct PendingReceipts(VecDeque<(u64, EventTime)>);
+impl PendingReceipts {
+    fn requested(&mut self, serial: u64, now: EventTime) {
+        if self.0.len() == 256 {
+            self.0.pop_front();
+        }
+        self.0.push_back((serial, now));
+    }
+    fn received(&mut self, serial: u64) {
+        self.0.retain(|&(id, _)| id != serial);
+    }
+    fn deadline(&mut self, now: EventTime) -> Option<EventTime> {
+        // Missing feedback from an occluded/destroyed surface must not keep
+        // diagnostics waking forever. This never asks for another frame.
+        self.0
+            .retain(|&(_, requested)| now.saturating_since(requested) < Duration::from_secs(1));
+        (!self.0.is_empty()).then(|| now.plus(Duration::from_millis(4)))
+    }
+}
+
 struct Receipts {
     path: PathBuf,
     latest_presented: u64,
     clock_id: Option<u32>,
+    pending: PendingReceipts,
 }
 
 impl Receipts {
     fn observe(&mut self, feedback: NativeFeedback) {
+        let serial = match feedback {
+            NativeFeedback::Presented(confirmed) => confirmed.submission.serial,
+            NativeFeedback::Discarded(submission) => submission.serial,
+        };
+        self.pending.received(serial);
         let confirmed = match feedback {
             NativeFeedback::Presented(confirmed) => confirmed,
             NativeFeedback::Discarded(submission) => {
@@ -64,15 +93,37 @@ impl Receipts {
             submission,
             timestamp,
         } = confirmed;
+        if let Some(nanoseconds) = timestamp
+            .seconds
+            .checked_mul(1_000_000_000)
+            .and_then(|seconds| seconds.checked_add(u64::from(timestamp.nanoseconds)))
+        {
+            neomacs_display_protocol::input_latency::projected_confirmed(
+                submission.frame,
+                submission.serial,
+                neomacs_display_protocol::input_latency::PlatformTimestamp {
+                    clock_id: timestamp.clock_id,
+                    nanoseconds,
+                },
+            );
+            neomacs_display_protocol::input_latency::confirmed(
+                submission.layout,
+                neomacs_display_protocol::input_latency::PlatformTimestamp {
+                    clock_id: timestamp.clock_id,
+                    nanoseconds,
+                },
+            );
+        }
         if submission.serial <= self.latest_presented {
             return;
         }
         // Atomic replacement prevents the independent Lisp test reader from
         // seeing half a receipt. Discarded submissions never advance readiness.
         let receipt = format!(
-            "(:submission {} :frame {} :width {} :height {} :scale {} :outcome presented :clock-id {} :seconds {} :nanoseconds {})\n",
+            "(:submission {} :frame {} :presentation {} :width {} :height {} :scale {} :outcome presented :clock-id {} :seconds {} :nanoseconds {})\n",
             submission.serial,
             submission.frame,
+            submission.layout.get(),
             submission.width,
             submission.height,
             submission.scale,
@@ -188,6 +239,7 @@ impl Session {
                 path,
                 latest_presented: 0,
                 clock_id: None,
+                pending: PendingReceipts::default(),
             },
             presentation,
             next_submission: 0,
@@ -198,8 +250,10 @@ impl Session {
         &mut self,
         window: &dyn Window,
         frame: u64,
+        layout: neomacs_display_protocol::PresentationId,
         size: (u32, u32),
         scale: f64,
+        projected: &[neomacs_display_protocol::input_latency::InputToken],
     ) -> Result<(), String> {
         let RawWindowHandle::Wayland(handle) = window
             .window_handle()
@@ -223,10 +277,19 @@ impl Session {
         let submission = Submission {
             serial: self.next_submission,
             frame,
+            layout,
             width: size.0,
             height: size.1,
             scale,
         };
+        neomacs_display_protocol::input_latency::projected_requested(
+            projected,
+            frame,
+            submission.serial,
+        );
+        self.receipts
+            .pending
+            .requested(submission.serial, observe_platform_now());
         self.presentation
             .feedback(&surface, &self.queue.handle(), submission);
         tracing::debug!(?submission, "requested native presentation feedback");
@@ -248,6 +311,13 @@ impl PresentationObserver {
     pub(crate) fn new() -> Self {
         Self {
             state: std::env::var_os("NEOMACS_GUI_PRESENTATION_RECEIPT")
+                .or_else(|| {
+                    std::env::var_os("NEOMACS_INPUT_LATENCY_FILE").map(|path| {
+                        PathBuf::from(path)
+                            .with_extension("receipt")
+                            .into_os_string()
+                    })
+                })
                 .map_or(ObserverState::Disabled, |path| {
                     ObserverState::Uninitialized(path.into())
                 }),
@@ -258,8 +328,10 @@ impl PresentationObserver {
         &mut self,
         window: &dyn Window,
         frame: u64,
+        layout: neomacs_display_protocol::PresentationId,
         size: (u32, u32),
         scale: f64,
+        projected: &[neomacs_display_protocol::input_latency::InputToken],
     ) {
         if matches!(self.state, ObserverState::Uninitialized(_)) {
             let ObserverState::Uninitialized(path) =
@@ -273,9 +345,17 @@ impl PresentationObserver {
             }
         }
         if let ObserverState::Active(session) = &mut self.state
-            && let Err(error) = session.request(window, frame, size, scale) {
-                tracing::warn!(%error, "cannot request native presentation feedback");
-            }
+            && let Err(error) = session.request(window, frame, layout, size, scale, projected)
+        {
+            tracing::warn!(%error, "cannot request native presentation feedback");
+        }
+    }
+
+    pub(crate) fn dispatch_deadline(&mut self, now: EventTime) -> Option<EventTime> {
+        match &mut self.state {
+            ObserverState::Active(session) => session.receipts.pending.deadline(now),
+            _ => None,
+        }
     }
 
     pub(crate) fn dispatch_pending(&mut self) {
@@ -308,5 +388,74 @@ impl Drop for PresentationObserver {
         {
             std::mem::forget(session);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use neomacs_display_protocol::PresentationId;
+
+    fn submission(serial: u64, layout: u64) -> Submission {
+        Submission {
+            serial,
+            frame: 7,
+            layout: PresentationId::new(layout),
+            width: 800,
+            height: 600,
+            scale: 1.0,
+        }
+    }
+
+    #[test]
+    fn pending_receipts_wake_without_new_input_and_stop_after_ack_or_timeout() {
+        let now = observe_platform_now();
+        let mut pending = PendingReceipts::default();
+        assert_eq!(pending.deadline(now), None);
+        pending.requested(1, now);
+        pending.requested(2, now);
+        assert_eq!(
+            pending.deadline(now),
+            Some(now.plus(Duration::from_millis(4)))
+        );
+        pending.received(2);
+        assert!(pending.deadline(now).is_some());
+        pending.received(1);
+        assert_eq!(pending.deadline(now), None);
+        pending.requested(3, now);
+        assert_eq!(pending.deadline(now.plus(Duration::from_secs(1))), None);
+    }
+
+    #[test]
+    fn receipt_identifies_confirmed_layout_not_latest_requested_layout() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("receipt");
+        let mut receipts = Receipts {
+            path: path.clone(),
+            latest_presented: 0,
+            clock_id: Some(1),
+            pending: PendingReceipts::default(),
+        };
+        let confirmed = |submission| {
+            NativeFeedback::Presented(ConfirmedPresentation {
+                submission,
+                timestamp: CompositorTimestamp {
+                    clock_id: 1,
+                    seconds: 42,
+                    nanoseconds: 123,
+                },
+            })
+        };
+        receipts.observe(NativeFeedback::Discarded(submission(2, 200)));
+        assert!(!path.exists());
+        receipts.observe(confirmed(submission(1, 100)));
+        let first = fs::read_to_string(&path).unwrap();
+        assert!(first.contains(":submission 1 :frame 7 :presentation 100 "));
+        receipts.observe(confirmed(submission(3, 300)));
+        let latest = fs::read_to_string(&path).unwrap();
+        assert!(latest.contains(":submission 3 :frame 7 :presentation 300 "));
+        receipts.observe(confirmed(submission(1, 100)));
+        receipts.observe(NativeFeedback::Discarded(submission(4, 400)));
+        assert_eq!(fs::read_to_string(&path).unwrap(), latest);
     }
 }

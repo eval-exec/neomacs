@@ -444,7 +444,7 @@ pub(crate) enum RoutedRowLineEnd {
     OverflowHandoff,
     /// Phase 2h rung 2: the line ends AT the end of the source text with no
     /// newline. The window read bound always cuts AFTER a complete line's
-    /// newline (`find_nth_newline_after` returns newline+1) or at the
+    /// newline (`find_nth_preserved_newline_after` returns newline+1) or at the
     /// accessible end, so a newline-less tail line is never a mid-line
     /// artifact of the bound — it is the buffer's (or narrowed region's)
     /// last line, GNU's `IT_EOB` exit (xdisp.c:26007, `row->ends_at_zv_p`).

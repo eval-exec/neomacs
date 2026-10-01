@@ -1,4 +1,6 @@
 use super::*;
+use crate::image_bands::{BandPlacement, DecodedBand, RasterBand, RowRange};
+use crate::image_probe::{ImageProbeSource, probe_image_layout};
 use neomacs_display_protocol::{
     AxisSize, ImageFrameDelay, ImageFrameIndex, ImageRotation, ImageSizeSpec,
 };
@@ -43,7 +45,7 @@ fn toolbar_png_keeps_intrinsic_colors_and_alpha() {
 
 fn decode_toolbar_pixels(data: &[u8]) -> Vec<u8> {
     let pixels = ImageCache::decode_data(
-        data,
+        EncodedBytes::copy_of(data),
         ImageSizeSpec::default(),
         ImageRotation::None,
         ImageColorContext::from_pixels(0xff0000, 0xabcdef)
@@ -54,6 +56,7 @@ fn decode_toolbar_pixels(data: &[u8]) -> Vec<u8> {
         crate::svg::SvgResourceContext::Isolated,
         &ImageSequenceCache::new(),
         ImageSequenceId::new(1).unwrap(),
+        None,
     )
     .expect("decode toolbar SVG");
     // Return the public decoder result's unpremultiplied RGBA payload.
@@ -127,13 +130,19 @@ fn ready_and_failed_terminals_consume_their_active_generations() {
     assert_eq!(loads.active.len(), 1);
 
     assert!(matches!(
-        loads.take_current(WorkerDecodeOutcome::Failed(failed)),
-        Some(WorkerDecodeOutcome::Failed(_))
+        loads.take_current(WorkerDecodeOutcome::Failed {
+            load: failed,
+            diagnostic: test_diagnostic()
+        }),
+        Some(WorkerDecodeOutcome::Failed { .. })
     ));
     assert!(loads.active.is_empty());
     assert!(
         loads
-            .take_current(WorkerDecodeOutcome::Failed(failed))
+            .take_current(WorkerDecodeOutcome::Failed {
+                load: failed,
+                diagnostic: test_diagnostic()
+            })
             .is_none()
     );
 }
@@ -164,13 +173,14 @@ fn decoder_worker_survives_a_panicking_request() {
             colors: ImageColorContext::default(),
             mask: ImageMaskPolicy::default(),
             frame: ImageFrameIndex::default(),
+            identity: test_load_identity(),
         })
         .unwrap();
     request_tx
         .send(DecodeRequest {
             load: following,
             source: ImageSource::Data {
-                data: png_bytes(vec![0x12, 0x34, 0x56, 0xff], 1, 1),
+                data: EncodedBytes::new(png_bytes(vec![0x12, 0x34, 0x56, 0xff], 1, 1)),
                 resources: crate::svg::SvgResourceContext::Isolated,
                 sequence: ImageSequenceId::new(62).expect("non-zero sequence"),
             },
@@ -180,13 +190,14 @@ fn decoder_worker_survives_a_panicking_request() {
             colors: ImageColorContext::default(),
             mask: ImageMaskPolicy::default(),
             frame: ImageFrameIndex::default(),
+            identity: test_load_identity(),
         })
         .unwrap();
     drop(request_tx);
 
     assert!(matches!(
         outcome_rx.recv().unwrap(),
-        WorkerDecodeOutcome::Failed(load) if load == panicking
+        WorkerDecodeOutcome::Failed { load, .. } if load == panicking
     ));
     assert!(matches!(
         outcome_rx.recv().unwrap(),
@@ -1591,4 +1602,1061 @@ fn lru_never_selects_an_image_referenced_by_an_active_presentation() {
         lru_unpresented_victim(entries.into_iter(), &retained),
         Some(ImageId::new(2))
     );
+}
+
+/// Encode a non-square image so a swapped or mis-derived axis is visible.
+fn encoded_sized_image(format: image::ImageFormat, width: u32, height: u32) -> Vec<u8> {
+    let pixels = (0..width * height)
+        .flat_map(|index| [index as u8, 0x40, 0x80, 0xff])
+        .collect::<Vec<u8>>();
+    let image = image::RgbaImage::from_raw(width, height, pixels).expect("pixel buffer");
+    let mut bytes = Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(image)
+        .write_to(&mut bytes, format)
+        .expect("format is encodable");
+    bytes.into_inner()
+}
+
+/// The invariant header-first geometry exists to protect: a layout resolved
+/// from the encoded header must equal the layout the full decode reports, or a
+/// pending image would move when its pixels land. Every realization input that
+/// scales the native extent is exercised, because agreement must hold for the
+/// pair of extents and not merely for the default spec.
+#[test]
+fn header_layout_equals_the_decoded_layout_for_every_probed_format() {
+    let formats = [
+        ("png", image::ImageFormat::Png),
+        ("jpeg", image::ImageFormat::Jpeg),
+        ("gif", image::ImageFormat::Gif),
+        ("webp", image::ImageFormat::WebP),
+        ("bmp", image::ImageFormat::Bmp),
+        ("tiff", image::ImageFormat::Tiff),
+        ("ico", image::ImageFormat::Ico),
+    ];
+    let sizes = [
+        ImageSizeSpec::default(),
+        ImageSizeSpec::new(AxisSize::AtMost(3), AxisSize::AtMost(9)),
+        ImageSizeSpec::new(AxisSize::Exact(4), AxisSize::Native),
+        ImageSizeSpec::new(AxisSize::Native, AxisSize::Exact(2)),
+        ImageSizeSpec::new(AxisSize::Exact(6), AxisSize::AtMost(2)),
+    ];
+    let rotations = [
+        ImageRotation::None,
+        ImageRotation::Quarter,
+        ImageRotation::Half,
+        ImageRotation::ThreeQuarter,
+    ];
+    let realizations = [
+        ImageRealization::default(),
+        ImageRealization::with_device_scale(1.0, 2.0),
+        ImageRealization::new(1.30 / 1.75, 1.75, 1.75),
+    ];
+
+    for (name, format) in formats {
+        let data = encoded_sized_image(format, 5, 3);
+        for size in sizes {
+            for rotation in rotations {
+                for realization in realizations {
+                    let decoded = ImageCache::decode_data_with_metadata_at_full_realization(
+                        &data,
+                        size,
+                        rotation,
+                        (0xffff_ffff, 0),
+                        realization,
+                    )
+                    .unwrap_or_else(|| panic!("{name} should decode"));
+                    let probed = probe_image_layout(
+                        ImageProbeSource::Data(&data),
+                        size,
+                        rotation,
+                        realization,
+                    )
+                    .unwrap_or_else(|| panic!("{name} header should resolve"));
+
+                    assert_eq!(
+                        probed, decoded.metadata.layout,
+                        "{name} header layout moved at decode ({size:?} {rotation:?} {realization:?})"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// The repository fixture the catalog's pending-geometry test uses, probed as
+/// a *file* rather than as bytes: the two halves of the invariant meet on one
+/// file, and both extents come from one image.
+#[test]
+fn header_layout_of_the_repository_image_fixture_equals_its_decode() {
+    let fixture = neomacs_infra::workspace_root().join("test/data/image/blank-100x200.png");
+    let path = fixture.to_str().expect("utf8 fixture path");
+    let data = std::fs::read(&fixture).expect("fixture bytes");
+    let size = ImageSizeSpec::new(AxisSize::AtMost(50), AxisSize::Native);
+    let realization = ImageRealization::default();
+
+    let decoded = ImageCache::decode_data_with_metadata_at_full_realization(
+        &data,
+        size,
+        ImageRotation::None,
+        (0xffff_ffff, 0),
+        realization,
+    )
+    .expect("fixture should decode");
+    let probed = probe_image_layout(
+        ImageProbeSource::File(path),
+        size,
+        ImageRotation::None,
+        realization,
+    )
+    .expect("fixture header should resolve");
+
+    // 100x200 clamped to a 50px width keeps the aspect ratio: 50x100.
+    assert_eq!(probed, decoded.metadata.layout);
+    assert_eq!(probed.dimensions(), (50, 100));
+}
+
+/// An animated source's frames are composited onto the canvas its header
+/// names, so a non-zero `:index` cannot change the extent.
+#[test]
+fn header_layout_of_a_selected_animation_frame_uses_the_canvas() {
+    let data = animated_gif_bytes();
+
+    let decoded = ImageCache::decode_data_with_metadata_for_frame(&data, ImageFrameIndex::new(1))
+        .expect("frame 1 should decode");
+    let probed = probe_image_layout(
+        ImageProbeSource::Data(&data),
+        ImageSizeSpec::default(),
+        ImageRotation::None,
+        ImageRealization::default(),
+    )
+    .expect("animated GIF header should resolve");
+
+    assert_eq!(probed, decoded.metadata.layout);
+}
+
+/// The placeholder fallback must stay available: a source with no header to
+/// read keeps whatever slot its request already had.
+#[test]
+fn probe_declines_sources_it_cannot_measure_without_decoding() {
+    let spec = ImageSizeSpec::default();
+    let realization = ImageRealization::default();
+
+    assert!(
+        probe_image_layout(
+            ImageProbeSource::Data(b"not an image at all"),
+            spec,
+            ImageRotation::None,
+            realization
+        )
+        .is_none()
+    );
+    assert!(
+        probe_image_layout(
+            ImageProbeSource::File("/nonexistent/neomacs/probe.png"),
+            spec,
+            ImageRotation::None,
+            realization
+        )
+        .is_none()
+    );
+    // A vector document's extent comes from parsing the document, including a
+    // bounding-box fallback that depends on resolved resources and colors, so
+    // it is not a header and is deliberately not probed.
+    assert!(
+        probe_image_layout(
+            ImageProbeSource::Data(
+                br#"<svg xmlns="http://www.w3.org/2000/svg" width="3" height="1"/>"#
+            ),
+            spec,
+            ImageRotation::None,
+            realization
+        )
+        .is_none()
+    );
+}
+
+/// A PNG of `width` x `height` whose every pixel differs, so a band placed at
+/// the wrong offset is visible rather than hidden by identical rows.
+fn varying_png(width: u32, height: u32) -> Vec<u8> {
+    let pixels = (0..height)
+        .flat_map(|y| {
+            (0..width).flat_map(move |x| {
+                [
+                    (x % 251) as u8,
+                    (y % 253) as u8,
+                    ((x + y) % 241) as u8,
+                    0xff,
+                ]
+            })
+        })
+        .collect();
+    png_bytes(pixels, width, height)
+}
+
+/// Every pixel of the whole-image path's answer for `data`, through the same
+/// call the banded path falls back to.
+fn whole_pixels(data: &[u8]) -> NativePixels {
+    ImageCache::decode_whole(EncodedBytes::copy_of(data)).expect("fixture decodes whole")
+}
+
+fn decode_with_bands(
+    data: &[u8],
+    scale: f32,
+    bands: &mut Vec<DecodedBand>,
+) -> Option<DecodedPixels> {
+    ImageCache::decode_data(
+        EncodedBytes::copy_of(data),
+        ImageSizeSpec::default(),
+        ImageRotation::None,
+        ImageColorContext::default(),
+        ImageRealization::with_device_scale(scale, scale),
+        ImageMaskPolicy::Preserve,
+        ImageFrameIndex::default(),
+        crate::svg::SvgResourceContext::Isolated,
+        &ImageSequenceCache::new(),
+        ImageSequenceId::new(1).expect("non-zero test sequence"),
+        Some(&mut |band| bands.push(band)),
+    )
+}
+
+/// The whole point of the seam: a large source decodes in bands, they arrive in
+/// order as disjoint row ranges that fill the raster from the top, and the
+/// image they add up to — at this realization the source's own size, where the
+/// filter is the identity — is the image the whole-image path would have
+/// produced, through the same call the renderer makes.
+#[test]
+fn a_large_png_decodes_in_bands_that_add_up_to_the_whole_image() {
+    let (width, height) = (2000, 2000);
+    let data = varying_png(width, height);
+    let mut bands = Vec::new();
+
+    let decoded = decode_with_bands(&data, 1.0, &mut bands).expect("decode");
+    let raster = decoded.geometry.raster();
+
+    assert!(
+        bands.len() > 1,
+        "a four-megapixel source must band, got {} band(s)",
+        bands.len()
+    );
+    let mut expected_start = 0;
+    for band in &bands {
+        assert_eq!(band.source().start(), expected_start);
+        assert_eq!(band.placed().placement().raster(), raster);
+        assert_eq!(band.placed().placement().rows().start(), expected_start);
+        expected_start = band.placed().placement().rows().end();
+    }
+    assert_eq!(expected_start, height, "the bands cover the whole raster");
+    assert_eq!(
+        decoded.rgba.len(),
+        raster.width() as usize * raster.height() as usize * 4,
+        "the decode ends as the raster, not as a native-size image"
+    );
+    assert_eq!(
+        decoded.rgba,
+        whole_pixels(&data).rgba,
+        "a banded decode must publish the whole decode's pixels"
+    );
+}
+
+/// Below the threshold the source takes the whole-image path, bands and all:
+/// one decode is not visibly slow there, and the simpler path is not slower.
+#[test]
+fn a_source_below_the_size_threshold_publishes_no_bands() {
+    let data = varying_png(40, 30);
+    let mut bands = Vec::new();
+
+    let decoded = decode_with_bands(&data, 1.0, &mut bands).expect("decode");
+
+    assert!(bands.is_empty(), "a small source has nothing to report");
+    assert_eq!(decoded.rgba.len(), 40 * 30 * 4);
+}
+
+/// What separates the two paths is the source's size and nothing else, so the
+/// threshold is a boundary: the same kind of source bands on one side of it and
+/// does not on the other.
+#[test]
+fn the_threshold_is_the_boundary_between_the_two_paths() {
+    let threshold = crate::image_bands::BANDING_MIN_PIXELS;
+    let (below_width, below_height) = (1999, 2000);
+    let (above_width, above_height) = (2000, 2000);
+    assert!(u64::from(below_width) * u64::from(below_height) < threshold);
+    assert!(u64::from(above_width) * u64::from(above_height) >= threshold);
+
+    let mut below = Vec::new();
+    decode_with_bands(&varying_png(below_width, below_height), 1.0, &mut below).expect("decode");
+    let mut above = Vec::new();
+    decode_with_bands(&varying_png(above_width, above_height), 1.0, &mut above).expect("decode");
+
+    assert!(
+        below.is_empty(),
+        "a source under the threshold decodes whole"
+    );
+    assert!(
+        !above.is_empty(),
+        "a source at the threshold decodes in bands"
+    );
+}
+
+/// A banded decode that cannot finish is abandoned, and the image is decoded
+/// again whole: the caller gets a whole image, never a prefix.
+///
+/// Both decoders read the same bytes, so no real fixture can express "the
+/// row-wise decode fails where the whole one succeeds" — a source truncated
+/// enough to break one breaks both. The abandonment is therefore injected: the
+/// attempt is cut short after a band, and what the test pins is the consequence
+/// the requirement is about.
+#[test]
+fn an_abandoned_banded_decode_still_yields_the_whole_image() {
+    let (width, height) = (2000, 2000);
+    let data = varying_png(width, height);
+    let mut bands = Vec::new();
+
+    let remaining = ABANDON_AFTER_BANDS.load(Ordering::Relaxed);
+    ABANDON_AFTER_BANDS.store(1, Ordering::Relaxed);
+    let decoded = decode_with_bands(&data, 1.0, &mut bands);
+    ABANDON_AFTER_BANDS.store(remaining, Ordering::Relaxed);
+
+    let decoded = decoded.expect("an abandoned attempt must still produce the image");
+    assert_eq!(bands.len(), 1, "the attempt was abandoned mid-stream");
+    assert_eq!(
+        decoded.rgba,
+        whole_pixels(&data).rgba,
+        "the image must be whole, not the prefix the abandoned attempt reached"
+    );
+}
+
+/// A decoder that fails mid-stream does not leave a half-decoded picture: the
+/// bands it published are abandoned and the decode fails as a whole rather than
+/// succeeding with part of an image.
+#[test]
+fn a_truncated_source_fails_instead_of_publishing_a_prefix() {
+    let (width, height) = (2000, 2000);
+    let data = varying_png(width, height);
+    let truncated = &data[..data.len() / 2];
+    let mut bands = Vec::new();
+
+    let decoded = decode_with_bands(truncated, 1.0, &mut bands);
+
+    assert!(
+        decoded.is_none(),
+        "a decode that could not finish must not publish an image"
+    );
+    assert!(
+        !bands.is_empty(),
+        "the failure happened after the banded path had reported progress"
+    );
+    let covered = bands.last().map_or(0, |band| band.source().end());
+    assert!(
+        covered > 0 && covered < height,
+        "the failure is mid-stream: {covered} of {height} rows"
+    );
+}
+
+/// Bands are progress, not endings: they do not consume the load attempt, so
+/// the terminal outcome that follows them still publishes, and a superseded
+/// decode's bands are dropped with its terminal outcome.
+#[test]
+fn bands_do_not_consume_the_load_attempt() {
+    let mut loads = ImageLoadLifecycle::default();
+    let load = loads.begin_generated(ImageId::new(71));
+
+    let band = || WorkerDecodeOutcome::Band {
+        load,
+        decoded: test_band(),
+    };
+    assert!(matches!(loads.take_current(band()), Some(_)));
+    assert!(matches!(loads.take_current(band()), Some(_)));
+    assert!(loads.is_current(load), "bands leave the attempt alone");
+
+    // The attempt is superseded while its bands are still arriving.
+    let replacement = loads.begin_generated(ImageId::new(71));
+    assert_ne!(replacement, load);
+    assert!(
+        loads.take_current(band()).is_none(),
+        "a superseded decode's bands are dropped"
+    );
+    assert!(loads.is_current(replacement));
+}
+
+/// Every band of a decode is placed in the raster the *finished* upload
+/// resolves, and the placements tile that raster from row zero. The two sides
+/// agree because both resolve their raster through one function; this is the
+/// test that says so, and it is what makes a texture holding rows from two
+/// different scalings unreachable.
+#[test]
+fn every_band_lands_in_the_raster_the_finished_upload_resolves() {
+    let (width, height) = (2000_u32, 2000_u32);
+    let data = varying_png(width, height);
+    let scales = [
+        // Native size: the raster is the source, and every band is its own rows.
+        // (layout scale and device scale both apply: 2000 stays 2000.)
+        (1.0_f32, (2000_u32, 2000_u32)),
+        // Halved twice over, and the raster is an eighth of the source: a ratio
+        // whose output rows are made of several source rows rather than one.
+        (0.5, (500, 500)),
+    ];
+    for (scale, expected) in scales {
+        let realization = ImageRealization::with_device_scale(scale, scale);
+        let mut bands = Vec::new();
+        let decoded = ImageCache::decode_data(
+            EncodedBytes::copy_of(&data),
+            ImageSizeSpec::default(),
+            ImageRotation::None,
+            ImageColorContext::default(),
+            realization,
+            ImageMaskPolicy::Preserve,
+            ImageFrameIndex::default(),
+            crate::svg::SvgResourceContext::Isolated,
+            &ImageSequenceCache::new(),
+            ImageSequenceId::new(1).expect("non-zero test sequence"),
+            Some(&mut |band| bands.push(band)),
+        )
+        .expect("decode");
+        assert!(!bands.is_empty(), "{width}x{height}@{scale} bands");
+
+        let raster = decoded.geometry.raster();
+        assert_eq!(raster.dimensions(), expected, "{width}x{height}@{scale}");
+        assert_eq!(
+            decoded.rgba.len(),
+            raster.width() as usize * raster.height() as usize * 4,
+            "the decode ends as the raster"
+        );
+        let mut expected_start = 0;
+        for band in &bands {
+            let placed = band.placed();
+            assert_eq!(
+                placed.placement().raster(),
+                raster,
+                "a band is mapped into the raster the image is realized to"
+            );
+            assert_eq!(
+                placed.placement().rows().start(),
+                expected_start,
+                "bands tile the raster from row zero"
+            );
+            assert_eq!(
+                placed.pixels().len(),
+                raster.width() as usize * placed.placement().rows().len().get() as usize * 4,
+                "a placed band carries exactly the rows it fills"
+            );
+            expected_start = placed.placement().rows().end();
+        }
+        assert_eq!(
+            expected_start,
+            raster.height(),
+            "{width}x{height}@{scale}: the bands cover the whole raster"
+        );
+    }
+}
+
+/// A rotation or a mask that rewrites pixels leaves a band nowhere to go: GNU
+/// turns the image after sizing, so a band of source rows lands in the
+/// *columns* of the stored raster, and a heuristic mask needs every pixel
+/// before it can say what one of them is. Such a source therefore takes the
+/// whole-image path — which is what it looked like before banding anyway,
+/// empty until the decode completes and then whole — rather than holding the
+/// native-size image a band would have had to wait in.
+#[test]
+fn a_rotation_or_a_rewriting_mask_decodes_the_whole_image() {
+    let (width, height) = (2000_u32, 2000_u32);
+    let data = varying_png(width, height);
+    let cases = [
+        (
+            "a quarter turn",
+            ImageRotation::Quarter,
+            ImageMaskPolicy::Preserve,
+        ),
+        (
+            "no turn, a mask",
+            ImageRotation::None,
+            ImageMaskPolicy::Suppress,
+        ),
+        (
+            "no turn, a heuristic mask",
+            ImageRotation::None,
+            ImageMaskPolicy::Heuristic(ImageHeuristicMask::FourCorners),
+        ),
+    ];
+    for (name, rotation, mask) in cases {
+        let mut bands = Vec::new();
+        let decoded = ImageCache::decode_data(
+            EncodedBytes::copy_of(&data),
+            ImageSizeSpec::default(),
+            rotation,
+            ImageColorContext::default(),
+            ImageRealization::default(),
+            mask,
+            ImageFrameIndex::default(),
+            crate::svg::SvgResourceContext::Isolated,
+            &ImageSequenceCache::new(),
+            ImageSequenceId::new(1).expect("non-zero test sequence"),
+            Some(&mut |band| bands.push(band)),
+        )
+        .expect("decode");
+
+        assert!(bands.is_empty(), "{name}: no band has a destination");
+        let raster = decoded.geometry.raster();
+        let turned = matches!(
+            rotation,
+            ImageRotation::Quarter | ImageRotation::ThreeQuarter
+        );
+        assert_eq!(
+            raster.dimensions(),
+            if turned {
+                (height, width)
+            } else {
+                (width, height)
+            },
+            "{name}: the geometry is still resolved as it was"
+        );
+        assert_eq!(
+            decoded.rgba.len(),
+            raster.width() as usize * raster.height() as usize * 4,
+            "{name}: the whole-image path still realizes the image"
+        );
+    }
+}
+
+/// A texture's filled prefix advances only by a band that continues it. A
+/// hole, a band applied twice, or one that names rows the texture does not
+/// have are all refused, so the value the draw side trusts cannot be made to
+/// claim rows nobody wrote.
+#[test]
+fn a_textures_filled_prefix_advances_only_by_bands_that_continue_it() {
+    let raster = ImageRasterExtent::new(4, 8);
+    let rows_of = |start: u32, len: u32| {
+        TextureRows::new(
+            start,
+            std::num::NonZeroU32::new(len).expect("non-zero test rows"),
+        )
+    };
+
+    let empty = FilledRows::empty(raster);
+    assert_eq!(empty.filled(), 0);
+    assert_eq!(empty.filled_fraction(), 0.0);
+    assert!(!empty.is_complete());
+
+    let first = rows_of(0, 3);
+    let filled = empty
+        .extend(first)
+        .expect("the first band continues row zero");
+    assert_eq!(filled.filled(), first.end());
+    assert!(!filled.is_complete());
+
+    assert!(
+        filled.extend(first).is_none(),
+        "rows already written are not written twice"
+    );
+    assert!(
+        filled.extend(rows_of(4, 2)).is_none(),
+        "a band that would leave a hole is refused"
+    );
+    assert!(
+        filled.extend(rows_of(0, 2)).is_none(),
+        "a band from before the prefix is refused"
+    );
+
+    let filled = filled
+        .extend(rows_of(3, 5))
+        .expect("the last band continues the prefix");
+    assert!(filled.is_complete());
+    assert_eq!(filled.filled(), raster.height());
+    assert_eq!(filled.filled_fraction(), 1.0);
+
+    // A texture shorter than the rows a band names cannot take them, however
+    // contiguous they are: the prefix may not outgrow the texture.
+    let shorter = FilledRows::empty(ImageRasterExtent::new(4, 2));
+    assert!(shorter.extend(rows_of(0, 3)).is_none());
+}
+
+/// A quad is trimmed to the rows that hold pixels: the part of it above the
+/// filled rows is drawn, the rest is not, and a quad wholly below them is not
+/// drawn at all.
+#[test]
+fn a_quad_is_drawn_only_over_the_rows_that_hold_pixels() {
+    /// The trimmed span, as `(v1, height)`, to within a pixel.
+    fn trimmed(span: Option<(f32, f32)>) -> Option<(f32, f32)> {
+        span.map(|(v1, height)| (v1, (height * 1000.0).round() / 1000.0))
+    }
+
+    let complete = FilledRows::complete(ImageRasterExtent::new(4, 8));
+    assert_eq!(
+        trimmed(complete.clip_span(0.0, 1.0, 80.0)),
+        Some((1.0, 80.0)),
+        "a whole texture draws the whole quad"
+    );
+
+    let half = FilledRows::empty(ImageRasterExtent::new(4, 8))
+        .extend(TextureRows::new(
+            0,
+            std::num::NonZeroU32::new(4).expect("non-zero"),
+        ))
+        .expect("the first band continues row zero");
+    assert_eq!(half.filled_fraction(), 0.5);
+
+    // The quad is drawn over the top half of the texture and no further.
+    assert_eq!(trimmed(half.clip_span(0.0, 1.0, 80.0)), Some((0.5, 40.0)));
+    // A span already inside the filled part is untouched.
+    assert_eq!(trimmed(half.clip_span(0.0, 0.25, 20.0)), Some((0.25, 20.0)));
+    // A span that crosses the boundary keeps its start and loses the rest.
+    assert_eq!(trimmed(half.clip_span(0.25, 1.0, 60.0)), Some((0.5, 20.0)));
+    // A span wholly below the boundary has nothing to draw.
+    assert_eq!(half.clip_span(0.5, 1.0, 40.0), None);
+    assert_eq!(half.clip_span(0.75, 1.0, 20.0), None);
+}
+
+/// One band, for the tests that are about how a band is carried rather than
+/// where its pixels came from.
+fn test_band() -> DecodedBand {
+    let rows = RowRange::new(0, std::num::NonZeroU32::new(1).expect("one row"));
+    let placement = BandPlacement::new(
+        ImageRasterExtent::new(1, 1),
+        TextureRows::new(0, std::num::NonZeroU32::new(1).expect("one row")),
+    );
+    DecodedBand::new(rows, RasterBand::new(placement, vec![0u8; 4].into()))
+}
+
+/// Below the banding threshold nothing about the decode changes. The source
+/// goes through the whole-image path, which resamples with the filter it has
+/// always resampled with — so the cheaper filter the banded path now uses
+/// reaches no image small enough not to band, and the wording "nothing below
+/// the threshold changes" is a test rather than a hope.
+#[test]
+fn a_source_below_the_threshold_keeps_the_whole_image_paths_filter() {
+    let (width, height) = (40_u32, 30_u32);
+    assert!(
+        u64::from(width) * u64::from(height) < crate::image_bands::BANDING_MIN_PIXELS,
+        "the fixture is below the threshold"
+    );
+    let data = varying_png(width, height);
+    let mut bands = Vec::new();
+    let decoded = ImageCache::decode_data(
+        EncodedBytes::copy_of(&data),
+        ImageSizeSpec::new(AxisSize::Exact(20), AxisSize::Exact(15)),
+        ImageRotation::None,
+        ImageColorContext::default(),
+        ImageRealization::default(),
+        ImageMaskPolicy::Preserve,
+        ImageFrameIndex::default(),
+        crate::svg::SvgResourceContext::Isolated,
+        &ImageSequenceCache::new(),
+        ImageSequenceId::new(1).expect("non-zero test sequence"),
+        Some(&mut |band| bands.push(band)),
+    )
+    .expect("decode");
+    assert!(bands.is_empty(), "a source this small does not band");
+
+    let whole = image::load_from_memory(&data)
+        .expect("the fixture decodes")
+        .to_rgba8();
+    let expected =
+        image::imageops::resize(&whole, 20, 15, image::imageops::FilterType::Lanczos3).into_raw();
+    assert_eq!(
+        decoded.rgba, expected,
+        "a source below the threshold is still resampled the old way"
+    );
+}
+
+/// The rows a band hands over are the rows the finished image holds.
+///
+/// A preview is not an approximation of the picture that the finished upload
+/// later replaces: the decode resamples each source row once, into the raster
+/// the texture holds, so a band is a *slice of the finished pixels* and where
+/// the decode happens to cut its bands cannot reach them. This is what a
+/// reduced image gets out of decoding into its target — under the per-band
+/// resize this replaced, each band was resampled on its own from its own rows,
+/// at its own scale, and the preview was a different picture from the one it
+/// was previewing.
+#[test]
+fn the_rows_a_band_hands_over_are_the_rows_the_finished_image_holds() {
+    let (width, height) = (2000_u32, 2000_u32);
+    let data = varying_png(width, height);
+    let mut bands = Vec::new();
+    // A realization that really reduces: the raster is 500x500, so a band of
+    // source rows has to be filtered rather than passed through.
+    let decoded = ImageCache::decode_data(
+        EncodedBytes::copy_of(&data),
+        ImageSizeSpec::new(AxisSize::Exact(500), AxisSize::Exact(500)),
+        ImageRotation::None,
+        ImageColorContext::default(),
+        ImageRealization::default(),
+        ImageMaskPolicy::Preserve,
+        ImageFrameIndex::default(),
+        crate::svg::SvgResourceContext::Isolated,
+        &ImageSequenceCache::new(),
+        ImageSequenceId::new(1).expect("non-zero test sequence"),
+        Some(&mut |band| bands.push(band)),
+    )
+    .expect("decode");
+    assert!(!bands.is_empty(), "a four-megapixel source bands");
+
+    let raster = decoded.geometry.raster();
+    assert_eq!(raster.dimensions(), (500, 500));
+    let stride = raster.width() as usize * 4;
+    let mut assembled = vec![0_u8; stride * raster.height() as usize];
+    let mut expected_start = 0;
+    for band in &bands {
+        let rows = band.placed().placement().rows();
+        assert_eq!(rows.start(), expected_start, "bands tile the raster");
+        assembled[rows.start() as usize * stride..rows.end() as usize * stride]
+            .copy_from_slice(band.placed().pixels());
+        expected_start = rows.end();
+    }
+    assert!(
+        expected_start == raster.height(),
+        "the bands cover the raster"
+    );
+    assert_eq!(
+        assembled, decoded.rgba,
+        "a band is a slice of the finished pixels, not an approximation of them"
+    );
+}
+
+/// The acceptance criterion, without a GPU: whatever the bands did on the way,
+/// the image the decode ends with is the whole-image path's pixels, and the
+/// finished upload writes every texel of the texture they were accumulating in.
+///
+/// The identity is structural rather than a coincidence of the band previews:
+/// the terminal upload is the same buffer the whole-image path produces, and
+/// this test pins the two halves of that — the bands fill the texture
+/// completely (so the preview is an honest preview of the finished image), and
+/// the finished upload's buffer is exactly the texture's shape (so its one
+/// write covers everything the bands wrote, however far they got).
+#[test]
+fn the_texture_a_banded_decode_fills_ends_as_the_whole_image_paths() {
+    let (width, height) = (2000, 2000);
+    let data = varying_png(width, height);
+    let (size, realization) = (ImageSizeSpec::default(), ImageRealization::default());
+
+    let mut bands = Vec::new();
+    let decoded = decode_with_bands(&data, 1.0, &mut bands).expect("decode");
+    let raster = decoded.geometry.raster();
+    let (raster_width, raster_height) = raster.dimensions();
+
+    // Stand in for the texture `ImageCache` fills band by band: the same buffer
+    // shape, filled with a placeholder the fixture's own pixels cannot be —
+    // transparent, where every pixel of `varying_png` is opaque — so a row
+    // nobody wrote is visible.
+    let mut texture = vec![0u8; raster_width as usize * raster_height as usize * 4];
+    let stride = raster_width as usize * 4;
+    let mut filled = FilledRows::empty(raster);
+    for band in &bands {
+        let placed = band.placed();
+        let rows = placed.placement().rows();
+        let advanced = filled
+            .extend(rows)
+            .expect("each band continues the rows already written");
+        texture[rows.start() as usize * stride..rows.end() as usize * stride]
+            .copy_from_slice(placed.pixels());
+        filled = advanced;
+    }
+    assert!(
+        filled.is_complete(),
+        "the bands wrote every row of the texture"
+    );
+    for row in 0..raster_height as usize {
+        let written = &texture[row * stride..(row + 1) * stride];
+        assert!(
+            written.chunks_exact(4).all(|texel| texel[3] != 0),
+            "row {row} of the texture was never written"
+        );
+    }
+
+    // The finished upload, as `ImageCache::upload_texture` runs it when the
+    // decode completes: the whole-image realization, written over the whole
+    // texture in one call.
+    let whole = ImageCache::decode_whole(EncodedBytes::copy_of(&data))
+        .expect("fixture decodes whole")
+        .realize_bitmap(
+            size,
+            ImageRotation::None,
+            realization,
+            ImageMaskPolicy::Preserve,
+        )
+        .expect("realize");
+    assert_eq!(
+        whole.geometry.raster(),
+        raster,
+        "the finished upload writes the same raster the bands were mapped into"
+    );
+    assert_eq!(
+        whole.rgba.len(),
+        texture.len(),
+        "the finished upload's buffer is the whole texture"
+    );
+    assert_eq!(
+        decoded.rgba, whole.rgba,
+        "the banded decode ends as the whole-image path's pixels"
+    );
+    texture.copy_from_slice(&whole.rgba);
+    // The oracle, stated without reference to any of the above: this fixture
+    // realizes at its native size, so the whole-image path is `image`'s own
+    // decode of the same file with no resample at all.
+    let expected = image::load_from_memory(&data)
+        .expect("fixture decodes")
+        .to_rgba8()
+        .into_raw();
+    assert_eq!(
+        texture, expected,
+        "the finished texture holds the whole-image path's bytes"
+    );
+}
+
+/// A JPEG of `width` x `height` carrying `pixels` as RGB.
+///
+/// `image` 0.25's `jpeg` feature decodes only, so the tests bring their own
+/// encoder. Quality 85 selects the encoder's 2x2 chroma subsampling, which is
+/// the 4:2:0 shape: one MCU row is sixteen output rows, so this is the case
+/// where a band cannot be a single row.
+fn jpeg_bytes(width: u32, height: u32, pixels: Vec<u8>, progressive: bool) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let mut encoder = jpeg_encoder::Encoder::new(&mut bytes, 85);
+    encoder.set_progressive(progressive);
+    encoder
+        .encode(
+            &pixels,
+            width as u16,
+            height as u16,
+            jpeg_encoder::ColorType::Rgb,
+        )
+        .expect("JPEG is encodable");
+    bytes
+}
+
+/// A baseline JPEG of `width` x `height` whose every pixel differs, so a band
+/// placed at the wrong offset is visible rather than hidden by identical rows.
+fn varying_jpeg(width: u32, height: u32) -> Vec<u8> {
+    let rgb: Vec<u8> = (0..height)
+        .flat_map(|y| {
+            (0..width).flat_map(move |x| [(x % 251) as u8, (y % 253) as u8, ((x + y) % 241) as u8])
+        })
+        .collect();
+    jpeg_bytes(width, height, rgb, false)
+}
+
+/// The same picture, encoded as a progressive frame.
+fn varying_progressive_jpeg(width: u32, height: u32) -> Vec<u8> {
+    let rgb: Vec<u8> = (0..height)
+        .flat_map(|y| {
+            (0..width).flat_map(move |x| [(x % 251) as u8, (y % 253) as u8, ((x + y) % 241) as u8])
+        })
+        .collect();
+    jpeg_bytes(width, height, rgb, true)
+}
+
+/// A large baseline JPEG takes the banded path, and the image it ends as is the
+/// whole-image path's pixels, byte for byte.
+///
+/// This is the acceptance criterion for JPEG, stated the way the PNG one is: at
+/// the source's own size the filter is the identity, so the finished raster is
+/// `image`'s own decode of the same file and a band that lost, doubled or moved
+/// a row would show as a difference rather than as a blur.
+#[test]
+fn a_large_baseline_jpeg_bands_that_add_up_to_the_whole_image() {
+    let (width, height) = (2200_u32, 2000_u32);
+    assert!(u64::from(width) * u64::from(height) >= crate::image_bands::BANDING_MIN_PIXELS);
+    let data = varying_jpeg(width, height);
+    let mut bands = Vec::new();
+
+    let decoded = decode_with_bands(&data, 1.0, &mut bands).expect("decode");
+    assert_eq!(decoded.geometry.raster().dimensions(), (width, height));
+
+    assert!(
+        bands.len() > 1,
+        "a four-megapixel JPEG must band, got {} band(s)",
+        bands.len()
+    );
+    let mut expected_start = 0;
+    for band in &bands {
+        let rows = band.placed().placement().rows();
+        assert_eq!(rows.start(), expected_start, "bands tile the raster");
+        expected_start = rows.end();
+    }
+    assert_eq!(expected_start, height, "the bands cover the raster");
+
+    assert_eq!(
+        decoded.rgba,
+        whole_pixels(&data).rgba,
+        "the banded decode ends as the whole-image path's pixels"
+    );
+    let expected = image::load_from_memory(&data)
+        .expect("fixture decodes")
+        .to_rgba8()
+        .into_raw();
+    assert_eq!(
+        decoded.rgba, expected,
+        "which at this realization is `image`'s own decode of the same file"
+    );
+}
+
+/// The acceptance criterion at the shape a large JPEG actually has on screen: a
+/// source wider than `MAX_TEXTURE_SIZE`, so the raster is the clamp and the
+/// filter is the streamed Lanczos3 from `f7bc3b18f8` rather than the identity.
+///
+/// Two things are pinned. **The bands are slices of the finished pixels** —
+/// they assemble into exactly the raster the decode ends with, so the preview
+/// during a decode is not an approximation of the image but the part of it that
+/// exists. And **the finished texture is the whole-image path's**: the same
+/// kernel over the same source rows, differing only where two implementations
+/// of one kernel round differently, by at most one level of 255 here.
+///
+/// That last clause is the same one the PNG arm carries and is not new here:
+/// `RasterTarget` accumulates in `i32` and clamps once at the end, where
+/// `image::imageops::resize` clamps per axis, so the two agree exactly wherever
+/// the filter is the identity — which is what
+/// `a_large_baseline_jpeg_bands_that_add_up_to_the_whole_image` pins byte for
+/// byte — and differ by rounding at a reduced raster. The bound is asserted
+/// rather than the equality so that a wrong kernel, a dropped band or a band at
+/// the wrong offset, all of which move a channel by far more than one level,
+/// still fail this test.
+#[test]
+fn a_clamped_baseline_jpeg_ends_as_the_whole_image_paths_texture() {
+    let (width, height) = (4400_u32, 1000_u32);
+    assert!(u64::from(width) * u64::from(height) >= crate::image_bands::BANDING_MIN_PIXELS);
+    let data = varying_jpeg(width, height);
+    let mut bands = Vec::new();
+
+    let decoded = decode_with_bands(&data, 1.0, &mut bands).expect("decode");
+    let raster = decoded.geometry.raster();
+    assert!(
+        raster.width() < width,
+        "the source is wider than the texture limit, got a {}x{} raster",
+        raster.width(),
+        raster.height()
+    );
+    assert!(
+        bands.len() > 1,
+        "a four-megapixel source wider than the texture limit bands, got {} band(s)",
+        bands.len()
+    );
+
+    let stride = raster.width() as usize * 4;
+    let mut assembled = vec![0_u8; stride * raster.height() as usize];
+    let mut expected_start = 0;
+    for band in &bands {
+        let rows = band.placed().placement().rows();
+        assert_eq!(rows.start(), expected_start, "bands tile the raster");
+        assembled[rows.start() as usize * stride..rows.end() as usize * stride]
+            .copy_from_slice(band.placed().pixels());
+        expected_start = rows.end();
+    }
+    assert_eq!(
+        expected_start,
+        raster.height(),
+        "the bands cover the raster"
+    );
+    assert_eq!(
+        assembled, decoded.rgba,
+        "a band is a slice of the finished pixels, not an approximation of them"
+    );
+
+    let whole = ImageCache::decode_whole(EncodedBytes::copy_of(&data))
+        .expect("the fixture decodes whole")
+        .realize_bitmap(
+            ImageSizeSpec::default(),
+            ImageRotation::None,
+            ImageRealization::default(),
+            ImageMaskPolicy::Preserve,
+        )
+        .expect("realize");
+    assert_eq!(whole.geometry.raster(), raster);
+    let (mut differing, mut worst) = (0_usize, 0_i32);
+    for (banded, whole) in decoded.rgba.iter().zip(&whole.rgba) {
+        let delta = i32::from(*banded) - i32::from(*whole);
+        if delta != 0 {
+            differing += 1;
+        }
+        worst = worst.max(delta.abs());
+    }
+    assert!(
+        worst <= 1,
+        "the banded raster is {worst} levels from the whole-image path's; \
+         one level is the filter's rounding, more is a different filter"
+    );
+    assert!(
+        differing * 4 < decoded.rgba.len(),
+        "{differing} of {} bytes differ, which is more than rounding",
+        decoded.rgba.len()
+    );
+    tracing::debug!(
+        differing,
+        worst,
+        width = raster.width(),
+        height = raster.height(),
+        "banded against whole at the clamped raster"
+    );
+}
+
+/// A progressive JPEG has no usable band, so it takes the whole-image path —
+/// and the picture it produces is the one a baseline encoding of the same
+/// pixels produces, to within what the two encodings cost.
+///
+/// The point is not that the two are identical (they are not: two lossy
+/// encodings of one picture are two pictures) but that neither is *wrong*: the
+/// progressive frame decodes to the same dimensions and the same
+/// `image::load_from_memory` bytes as every other path produces for it, which
+/// is what a band taken from an unfinished scan would not.
+#[test]
+fn a_progressive_jpeg_decodes_through_the_whole_path() {
+    let (width, height) = (2200_u32, 2000_u32);
+    let data = varying_progressive_jpeg(width, height);
+    let mut bands = Vec::new();
+
+    let decoded = decode_with_bands(&data, 1.0, &mut bands).expect("decode");
+    assert!(
+        bands.is_empty(),
+        "a progressive frame has no bands to publish, got {}",
+        bands.len()
+    );
+    assert_eq!(decoded.geometry.raster().dimensions(), (width, height));
+    assert_eq!(
+        decoded.rgba,
+        whole_pixels(&data).rgba,
+        "a progressive frame decodes whole, like every other unbandable source"
+    );
+    let expected = image::load_from_memory(&data)
+        .expect("fixture decodes")
+        .to_rgba8()
+        .into_raw();
+    assert_eq!(decoded.rgba, expected);
+}
+
+/// JPEG takes the same size threshold PNG does: the same kind of source bands
+/// on one side of it and decodes whole on the other.
+#[test]
+fn a_jpeg_below_the_threshold_publishes_no_bands() {
+    let threshold = crate::image_bands::BANDING_MIN_PIXELS;
+    // 4:2:0 rounds the MCU rows to a multiple of sixteen, so the fixtures are
+    // chosen with that in mind rather than to make the arithmetic tidy.
+    let (below_width, below_height) = (1999_u32, 1999_u32);
+    let (above_width, above_height) = (2000_u32, 2000_u32);
+    assert!(u64::from(below_width) * u64::from(below_height) < threshold);
+    assert!(u64::from(above_width) * u64::from(above_height) >= threshold);
+
+    let mut below = Vec::new();
+    decode_with_bands(&varying_jpeg(below_width, below_height), 1.0, &mut below).expect("decode");
+    let mut above = Vec::new();
+    decode_with_bands(&varying_jpeg(above_width, above_height), 1.0, &mut above).expect("decode");
+
+    assert!(below.is_empty(), "a JPEG under the threshold decodes whole");
+    assert!(
+        !above.is_empty(),
+        "a JPEG at the threshold decodes in bands"
+    );
+}
+
+#[path = "decode_diagnostic.rs"]
+mod decode_diagnostic;
+
+/// A diagnostic for tests that only exercise scheduling, not wording.
+fn test_diagnostic() -> neomacs_display_protocol::image_diagnostic::ImageDiagnostic {
+    neomacs_display_protocol::image_diagnostic::ImageDiagnostic::InvalidSize
+}
+
+fn test_load_identity() -> neomacs_display_protocol::image_diagnostic::ImageLoadIdentity {
+    use neomacs_display_protocol::image_diagnostic::{ImageDiagnosticSubject, ImageFormatName};
+    ImageLoadIdentity::new(
+        ImageFormatName::Png,
+        ImageDiagnosticSubject::File(String::new()),
+    )
 }

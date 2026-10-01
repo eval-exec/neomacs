@@ -868,5 +868,18 @@ precisely, according to the turning of the mouse wheel."
   (setq-default make-cursor-line-fully-visible
                 (not pixel-scroll-precision-mode)))
 
+;; The compositor may predict only these exact, unadvised definitions.  The
+;; evaluator also checks active bindings, remaps and blocking scroll hooks.
+;; Keeping the witness at the definition site makes later fset/advice changes
+;; revoke prediction without changing ordinary command dispatch.
+(dolist (function '(pixel-scroll-precision
+                    pixel-scroll-precision-scroll-down
+                    pixel-scroll-precision-scroll-down-page
+                    pixel-scroll-precision-scroll-up
+                    pixel-scroll-precision-scroll-up-page
+                    pixel-scroll-precision-interpolate))
+  (unless (advice--p (symbol-function function))
+    (put function 'neomacs--scroll-definition (symbol-function function))))
+
 (provide 'pixel-scroll)
 ;;; pixel-scroll.el ends here

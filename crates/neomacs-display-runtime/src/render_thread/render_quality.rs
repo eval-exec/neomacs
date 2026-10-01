@@ -220,6 +220,31 @@ impl RenderQualityPolicy {
         }
     }
 
+    /// How child frames travel under this policy, one spec per lifecycle role.
+    ///
+    /// Unlike [`Self::pane_motion`], a reduced-quality plan does **not**
+    /// decline this family. A pane morph animates the whole tiling and needs
+    /// the previous picture composed offscreen; a child-frame fade draws the
+    /// popup's own pixels onto the retained root scene, the same work the
+    /// popup itself already costs every frame, and the software-mode smoke
+    /// and close-confirmation suites already sustain display-rate demand for
+    /// exactly that kind of redraw. A user on a software adapter gets the
+    /// fade they asked for; turning it off remains their `enabled` setting.
+    pub(super) fn child_frame_motion(&self) -> ChildFrameMotionSpecs {
+        let config = &self.effective_visual_config;
+        let globals = config.child_frame_animations;
+        ChildFrameMotionSpecs {
+            open: config.child_frame_open.motion(globals),
+            open_slide: config.child_frame_open.slide_pixels,
+            open_scale_from: config.child_frame_open.scale_from,
+            close: config.child_frame_close.motion(globals),
+            close_slide: config.child_frame_close.slide_pixels,
+            close_scale_from: config.child_frame_close.scale_from,
+            movement: config.child_frame_movement.motion(globals),
+            resize: config.child_frame_resize.motion(globals),
+        }
+    }
+
     pub(super) fn transition_policy(&self) -> TransitionPolicy {
         TransitionPolicy::from(&self.effective_visual_config)
     }
@@ -310,6 +335,48 @@ impl WindowAnimationSpecs {
 pub(super) enum GeometryRole {
     Resize,
     Movement,
+}
+
+/// The lifecycle motion specs a child frame may need, resolved from config
+/// for one frame.
+///
+/// They travel together for the same reason [`WindowAnimationSpecs`] does: a
+/// frame is installed, updated and deleted through the same ingest paths, and
+/// splitting the four answers into separate lookups creates the chance to
+/// pass one from a stale policy snapshot. The slide distances travel with
+/// them because the displacement shares the slot's own curve.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct ChildFrameMotionSpecs {
+    /// Opacity of a child frame that is appearing.
+    pub(super) open: MotionSpec,
+    /// Vertical displacement of an appearing frame, in logical pixels.
+    pub(super) open_slide: f32,
+    /// The scale an appearing frame grows from; 1.0 scales nothing.
+    pub(super) open_scale_from: f32,
+    /// Opacity of a child frame that is going away.
+    pub(super) close: MotionSpec,
+    /// Vertical displacement of a departing frame, in logical pixels.
+    pub(super) close_slide: f32,
+    /// The scale a departing frame shrinks toward; 1.0 scales nothing.
+    pub(super) close_scale_from: f32,
+    /// Placement drift toward a re-anchored frame.
+    pub(super) movement: MotionSpec,
+    /// Reserved for content-crossfade resizes; resolves Instant today.
+    pub(super) resize: MotionSpec,
+}
+
+impl ChildFrameMotionSpecs {
+    /// Every lifecycle event is instant: no animation state is built.
+    pub(super) const INSTANT: Self = Self {
+        open: MotionSpec::Instant,
+        open_slide: 0.0,
+        open_scale_from: 1.0,
+        close: MotionSpec::Instant,
+        close_slide: 0.0,
+        close_scale_from: 1.0,
+        movement: MotionSpec::Instant,
+        resize: MotionSpec::Instant,
+    };
 }
 
 fn software_compat_visual_config(requested: &VisualConfig) -> VisualConfig {

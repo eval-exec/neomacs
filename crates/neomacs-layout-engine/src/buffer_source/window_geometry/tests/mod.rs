@@ -24,6 +24,8 @@ fn window_params() -> WindowParams {
         top_line: 0,
         window_start: 17,
         measurement_rows: None,
+        measurement_pixels: None,
+        query_target: None,
         force_start: false,
         previous_visible_end: None,
         point: 17,
@@ -150,11 +152,11 @@ fn geometry_request_derives_text_area_and_matrix_rows() {
     assert_eq!(geometry.text_height, 92.0);
     assert_eq!(geometry.char_width, 8.0);
     assert_eq!(geometry.char_height, 16.0);
-    assert_eq!(geometry.max_rows, 5);
+    assert_eq!(geometry.max_rows, 6);
     assert_eq!(geometry.display_text_row_base, 2);
-    assert_eq!(geometry.display_text_rows, 5);
+    assert_eq!(geometry.display_text_rows, 6);
     assert_eq!(geometry.bottom_chrome_rows, 1);
-    assert_eq!(geometry.mode_line_display_row, 7);
+    assert_eq!(geometry.mode_line_display_row, 8);
     assert_eq!(geometry.line_number_pixel_width, 24.0);
     assert_eq!(geometry.content_x, 40.0);
     assert_eq!(geometry.matrix_columns.get(), 20);
@@ -173,7 +175,7 @@ fn geometry_reserves_the_measured_line_number_face_extent() {
 }
 
 #[test]
-fn geometry_request_only_forces_fractional_row_for_minibuffer() {
+fn geometry_request_includes_partial_rows_for_gui_and_minibuffer() {
     let mut params = window_params();
     params.bounds.height = 15.0;
     params.text_bounds.height = 15.0;
@@ -181,7 +183,7 @@ fn geometry_request_only_forces_fractional_row_for_minibuffer() {
     let ordinary = geometry_request(&params, 8.0, 16.0, 0.0, 0.0, 0.0).into_geometry(
         crate::display_row::walk_state::LineNumberFieldLayout::new(0, 8.0),
     );
-    assert_eq!(ordinary.max_rows, 0);
+    assert_eq!(ordinary.max_rows, 1);
 
     params.kind = WindowKind::Minibuffer;
     let minibuffer = geometry_request(&params, 8.0, 16.0, 0.0, 0.0, 0.0).into_geometry(

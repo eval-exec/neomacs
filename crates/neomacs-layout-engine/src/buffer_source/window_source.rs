@@ -8,6 +8,10 @@ use crate::scroll_policy::{
 use crate::types::{PartialBodyWalkStart, WindowKind, WindowParams};
 use neovm_core::buffer::{CharPos0, EmacsBytePos, TextPositionAnchor};
 
+#[cfg(test)]
+#[path = "tests/window_source_tests.rs"]
+mod bounded_read_tests;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct BufferWindowSource {
     window_start: i64,
@@ -265,23 +269,18 @@ impl BufferWindowSourceRequest {
         } else {
             let text_end = (window_start + read_chars).min(self.accessible_end);
             let byte_to = access.charpos_to_bytepos(text_end);
-            // Bound the copy to the lines the walk can actually display
-            // instead of the whole accessible tail (O(visible), not
-            // O(buffer)). `max_rows + 2` COMPLETE lines always over-cover the
-            // walk: wrapping only makes a line span MORE rows, and truncation
-            // consumes at most the full line, which the bound includes. The
-            // bound is only sound when nothing can make the walk consume text
-            // non-linearly — overlays (display/invisible/before/after
-            // strings), display or invisible text properties, and
-            // selective-display all fall back to the full-tail read.
-            let bounded_to = access
-                .find_nth_newline_after(text_start_byte as i64, self.max_rows + 2)
-                .filter(|bound| {
-                    *bound < byte_to
-                        && crate::neovm_bridge::buffer_selective_display(access.view()) == 0
-                        && !access.has_walk_consumption_hazard(text_start_byte as i64, *bound)
-                })
-                .unwrap_or(byte_to);
+            // Count only source newlines that no replacement or invisibility
+            // property can consume. Wrapping and inserted strings add rows;
+            // face-only overlays do not force a full-buffer copy. Selective
+            // display still needs the unrestricted source walk.
+            let bounded_to = if crate::neovm_bridge::buffer_selective_display(access.view()) == 0 {
+                access
+                    .find_nth_preserved_newline_after(text_start_byte as i64, self.max_rows + 2)
+                    .unwrap_or(byte_to)
+                    .min(byte_to)
+            } else {
+                byte_to
+            };
             access.copy_text(text_start_byte as i64, bounded_to, out);
             out.len()
         };

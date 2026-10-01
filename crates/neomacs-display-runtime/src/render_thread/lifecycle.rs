@@ -1,5 +1,5 @@
 use super::RenderApp;
-use super::frame_windows::{FrameLifecycle, NativeTextInputPolicy};
+use super::frame_windows::{FrameLifecycle, NativeTextInputPolicy, apply_option_key_policy};
 use super::geometry_hints::apply_window_geometry_hints;
 use super::state::{
     RenderGpuContext, effective_window_scale_factor, window_size_from_emacs_pixels,
@@ -162,6 +162,7 @@ impl RenderApp {
                 Ok(window) => {
                     let window: Arc<dyn winit::window::Window> = Arc::from(window);
                     NativeTextInputPolicy::for_gui_frame().apply_to_window(window.as_ref());
+                    apply_option_key_policy(window.as_ref(), self.frame_windows.option_as_alt);
 
                     if self.clipboard.is_err() {
                         self.clipboard = crate::clipboard::ClipboardService::for_display(
@@ -323,7 +324,18 @@ impl RenderApp {
         }
         self.refresh_monitor_snapshot(event_loop, true);
         self.complete_pending_scale_changes();
-        self.presentation_observer.dispatch_pending();
+        self.presentation_observer.dispatch_pending(
+            self.renderer
+                .as_ref()
+                .map(|renderer| renderer.device().as_ref()),
+            |frame| {
+                self.frame_windows
+                    .get(frame)?
+                    .lifecycle
+                    .native()
+                    .map(|native| (&native.surface, native.surface_generation))
+            },
+        );
         if self.process_commands() {
             self.handle_exiting();
             event_loop.exit();
@@ -517,6 +529,13 @@ impl RenderApp {
             super::frame_sched::LoopWake::At(at) => Some(at.instant()),
             super::frame_sched::LoopWake::Idle => None,
         };
+        // Foreign Wayland feedback can be queued without another winit
+        // application event. Drain it on a bounded diagnostics-only wake;
+        // do not manufacture a redraw to obtain a presentation receipt.
+        if let Some(receipt_poll) = self.presentation_observer.dispatch_deadline(now) {
+            let receipt_poll = receipt_poll.into_instant();
+            deadline = Some(deadline.map_or(receipt_poll, |d| d.min(receipt_poll)));
+        }
         if self.has_pending_images() {
             const IMAGE_DECODE_POLL_INTERVAL: std::time::Duration =
                 std::time::Duration::from_millis(16);
@@ -666,6 +685,31 @@ impl RenderApp {
                     dynamic_effects_allowed && window_state.render.compositor.layout.wants_frames(),
                     DemandReason::PaneMotion,
                     dynamic_animation_rate,
+                ),
+                // Child-frame lifecycle animation is the same shape: its state
+                // lives in the child-frame manager, invisible to every demand
+                // above. Unlike the ambient families it is not gated on
+                // dynamic quality -- a fade is a finite burst the user asked
+                // for, not standing ambient demand, and it draws the popup's
+                // own pixels onto the retained root scene. Sampled at the
+                // observed now rather than a presentation tick: a demand check
+                // only answers "is it still running", and sampling is
+                // monotonic in `now`, so an early sample can at worst retract
+                // one poll early -- never report a dead animation alive or
+                // extend one that finished.
+                (
+                    window_state
+                        .render
+                        .compositor
+                        .child_frames
+                        .has_active_animation(
+                            neomacs_display_protocol::frame_time::FrameSample::new(
+                                now,
+                                std::time::Duration::ZERO,
+                            ),
+                        ),
+                    DemandReason::ChildFrameMotion,
+                    max_rate,
                 ),
             ];
             let mut action = PacingAction::Sleep;

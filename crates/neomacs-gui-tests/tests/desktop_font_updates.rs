@@ -279,7 +279,7 @@ fn live_font_overrides_current_fonts_and_sets_future_defaults() {
 }
 
 fn check_live_font(backend: GuiBackend, scenario: &str, case: LiveFontCase) {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = neomacs_infra::crate_root!().join("../..");
     let artifacts = root.join("target/neomacs-gui-tests").join(scenario);
     let config = artifacts.join("settings-config");
     if config.exists() {

@@ -6,6 +6,7 @@
 // `too_many_arguments` is allowed crate-wide rather than at each of the ~15 sites.
 #![allow(clippy::too_many_arguments)]
 
+pub mod child_frame_animation;
 pub mod clipboard;
 pub mod cursor;
 pub mod display_identity;
@@ -22,8 +23,11 @@ pub mod geometry;
 pub mod glyph_matrix;
 pub mod gradient;
 pub mod image;
+pub mod image_diagnostic;
+pub mod input_progress;
 pub mod interaction_projection;
 pub mod menu;
+pub mod modifier_policy;
 pub mod motion_spec;
 pub mod popup_placement;
 pub mod present_mapping;
@@ -32,6 +36,8 @@ pub mod presented_frame;
 pub mod presented_pointer;
 pub mod scene;
 pub mod scroll_animation;
+pub mod scroll_coverage;
+pub mod scroll_input;
 pub mod sealed_frame_presentation;
 pub mod snapshot_text;
 pub mod terminal_color;
@@ -62,14 +68,17 @@ pub use geometry::*;
 pub use gradient::*;
 pub use image::*;
 pub use interaction_projection::*;
+pub use modifier_policy::*;
 pub use popup_placement::*;
 pub use present_mapping::*;
 pub use window_chrome::*;
 
+pub use child_frame_animation::*;
 pub use presented_frame::*;
 pub use presented_pointer::*;
 pub use scene::*;
 pub use scroll_animation::*;
+pub use scroll_input::*;
 pub use sealed_frame_presentation::*;
 pub use terminal_color::TerminalColor;
 pub use toolbar_icon::*;
@@ -83,3 +92,5 @@ pub use xwidget_extent::*;
 
 #[cfg(test)]
 mod tests;
+
+pub mod input_latency;

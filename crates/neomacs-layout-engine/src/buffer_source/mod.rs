@@ -28,3 +28,5 @@ pub(crate) mod walk;
 pub(crate) mod window_geometry;
 pub(crate) mod window_render;
 pub(crate) mod window_source;
+
+pub(crate) mod owned_capture;

@@ -10681,6 +10681,87 @@ fn treesit_query_expand_and_pattern_expand_follow_gnu_sexp_forms() {
 }
 
 #[test]
+fn treesit_candidate_paths_expand_tilde_and_relative_directories_like_gnu() {
+    // GNU expands EVERY candidate through Fexpand_file_name before dynlib_open
+    // (src/treesit.c:797 for the `user-emacs-directory` candidate and :807 for
+    // each `treesit-extra-load-path` entry): `expand-file-name` resolves `~`
+    // against $HOME and relative directories against the cwd. dynlib_open
+    // does NEITHER, so handing it the raw `"~/.config/emacs/..."` string made
+    // every grammar under the default `user-emacs-directory` report
+    // `not-found` (issue #413) while the identical file loaded in GNU.
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval::Context::new();
+    eval.eval_str(
+        r#"(progn
+             (setq user-emacs-directory "~/.config/emacs/")
+             (setq treesit-extra-load-path '("~/grammars/"))) "#,
+    )
+    .expect("eval treesit load-path fixture");
+    let language = crate::emacs_core::intern::intern("c");
+
+    let candidates = super::treesit::treesit_candidate_paths(&eval, language);
+
+    assert!(
+        candidates
+            .iter()
+            .any(|path| path.ends_with("tree-sitter/libtree-sitter-c.so")),
+        "the user-emacs-directory candidates must keep the tree-sitter/ layout: {candidates:?}"
+    );
+    // GNU keeps the bare-name group relative on purpose -- those go through
+    // the system loader search (src/treesit.c:793). Everything derived from a
+    // DIRECTORY must come out of expand-file-name absolute and tilde-free.
+    for path in &candidates {
+        let dir_derived =
+            path.ends_with("tree-sitter/libtree-sitter-c.so") || path.contains("/grammars/");
+        if !dir_derived {
+            continue;
+        }
+        assert!(
+            std::path::Path::new(path).is_absolute(),
+            "every directory-derived candidate must be absolute like GNU's \
+             expand-file-name output: {path}"
+        );
+        assert!(
+            !path.starts_with('~'),
+            "dynlib_open cannot resolve `~`; the candidate must name a real path: {path}"
+        );
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    assert!(
+        candidates
+            .iter()
+            .any(|path| *path == format!("{home}/.config/emacs/tree-sitter/libtree-sitter-c.so")),
+        "the user-emacs-directory candidate must resolve under $HOME: {candidates:?}"
+    );
+    assert!(
+        candidates
+            .iter()
+            .any(|path| *path == format!("{home}/grammars/libtree-sitter-c.so")),
+        "each treesit-extra-load-path entry must expand too (GNU treesit.c:807): {candidates:?}"
+    );
+}
+
+#[test]
+fn treesit_query_expand_preserves_nil_as_the_anonymous_node_marker() {
+    // Issue #416: nil in a query sexp is the anonymous node marker and must
+    // expand to its prin1 form `nil`, not the empty-list `()` — `(())` is a
+    // node pattern with no type name and matches nothing.
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        crate::emacs_core::builtins::builtin_treesit_query_expand(vec![Value::list(vec![
+            Value::list(vec![Value::NIL]),
+            Value::symbol("@f"),
+        ],)])
+        .unwrap(),
+        Value::string("(nil) @f"),
+    );
+    assert_eq!(
+        crate::emacs_core::builtins::builtin_treesit_pattern_expand(vec![Value::NIL]).unwrap(),
+        Value::string("nil"),
+    );
+}
+
+#[test]
 fn treesit_query_compile_eager_missing_language_signals_treesit_query_error() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();

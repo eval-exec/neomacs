@@ -172,6 +172,27 @@ assert_payload_layout() {
     return 1
   fi
 
+  # The bundle's icon.  `CFBundleIconFile` names `neomacs`, and macOS has no
+  # SVG icon format, so the packaging script must have assembled
+  # `neomacs.icns` via `iconutil`; a pipeline that silently skips the icon
+  # would satisfy every other assertion here, which is exactly how DMGs
+  # without an app icon shipped before.
+  app_icon="$expected_app/Contents/Resources/neomacs.icns"
+  if [[ ! -f "$app_icon" || -L "$app_icon" ]]; then
+    echo "$artifact must contain the app icon at Contents/Resources/neomacs.icns" >&2
+    return 1
+  fi
+  if [[ "$(head -c 4 "$app_icon")" != "icns" ]]; then
+    echo "$artifact app icon is not an .icns container" >&2
+    return 1
+  fi
+  declared_icon="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' \
+    "$expected_app/Contents/Info.plist" 2>/dev/null || true)"
+  if [[ "$declared_icon" != "neomacs" ]]; then
+    echo "$artifact Info.plist must declare CFBundleIconFile=neomacs (got: ${declared_icon:-<none>})" >&2
+    return 1
+  fi
+
   if [[ "$distribution_mode" == adhoc ]]; then
     instructions="$content_root/If macOS blocks NEO Emacs.txt"
     if [[ ! -f "$instructions" || -L "$instructions" ]]; then

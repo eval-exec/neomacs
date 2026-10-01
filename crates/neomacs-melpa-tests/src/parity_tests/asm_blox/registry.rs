@@ -54,7 +54,7 @@ fn asm_blox_installed_payload_inventory_sizes_and_content_digests_match() -> Par
             (directory-files directory nil "\\`[^.]"))
            #'string<)))"##,
         expect![[
-            r#"OK (("asm-blox-autoloads.el" 952 "2feebea65a2d99cf3ab0b1ebcae3878465f957781d8ff89d5a461fd25ddac49f") ("asm-blox-pkg.el" 316 "e66b987e19b09ce5d2c9b447a5b90491d88ffb982ed78bf1410f35854364049c") ("asm-blox-puzzles.el" 51075 "fb7d70d6d8e8057c5ac7712e3b7fcdd4f04243f739fb3c828e1cd4561c7773b9") ("asm-blox-puzzles.elc" 32187 "6953a8b047cabca0f349ee24a8f56d1ae9846c3ba719d994b32c49a82bbc7fa6") ("asm-blox.el" 159389 "25d33612f757c4d682cf8d13112460682668dda06c63b234bebfa14c937153a7") ("asm-blox.elc" 176059 "99fc3783ccf8f2fee157de04ccb7ad60df0194403cdb3b22c214547078b9a46a") ("asm-blox.info" 25413 "22d1301c320c68b7609115a07e5e028a92321590cd3559793216652f096e7b91") ("dir" 541 "1d727514971d5b4b2c807ee0d6b892a3714d3a631fe14fbf54c97617fa5bc027"))"#
+            r#"OK (("asm-blox-autoloads.el" 952 "2feebea65a2d99cf3ab0b1ebcae3878465f957781d8ff89d5a461fd25ddac49f") ("asm-blox-pkg.el" 316 "e66b987e19b09ce5d2c9b447a5b90491d88ffb982ed78bf1410f35854364049c") ("asm-blox-puzzles.el" 51075 "fb7d70d6d8e8057c5ac7712e3b7fcdd4f04243f739fb3c828e1cd4561c7773b9") ("asm-blox-puzzles.elc" :compiled t t) ("asm-blox.el" 159389 "25d33612f757c4d682cf8d13112460682668dda06c63b234bebfa14c937153a7") ("asm-blox.elc" :compiled t t) ("asm-blox.info" :built t t) ("dir" 541 "1d727514971d5b4b2c807ee0d6b892a3714d3a631fe14fbf54c97617fa5bc027"))"#
         ]],
     )
 }

@@ -684,6 +684,7 @@ impl TaggedValue {
     #[inline(always)]
     pub fn as_cons_ptr(self) -> Option<*const ConsCell> {
         if self.is_cons() {
+            super::collection_reads::observe(self);
             Some((self.0 & !TAG_MASK) as *const ConsCell)
         } else {
             None
@@ -694,6 +695,7 @@ impl TaggedValue {
     #[inline(always)]
     pub fn xcons_ptr(self) -> *const ConsCell {
         debug_assert!(self.is_cons());
+        super::collection_reads::observe(self);
         (self.0 & !TAG_MASK) as *const ConsCell
     }
 
@@ -701,6 +703,7 @@ impl TaggedValue {
     #[inline(always)]
     pub fn as_string_ptr(self) -> Option<*const StringObj> {
         if self.is_string() {
+            super::collection_reads::observe(self);
             Some((self.0 & !TAG_MASK) as *const StringObj)
         } else {
             None
@@ -721,6 +724,7 @@ impl TaggedValue {
     #[inline(always)]
     pub fn as_veclike_ptr(self) -> Option<*const VecLikeHeader> {
         if self.is_veclike() {
+            super::collection_reads::observe(self);
             Some((self.0 & !TAG_MASK) as *const VecLikeHeader)
         } else {
             None
@@ -731,6 +735,7 @@ impl TaggedValue {
     #[inline]
     pub fn heap_ptr(self) -> Option<*const u8> {
         if self.is_heap_object() {
+            super::collection_reads::observe(self);
             Some((self.0 & !TAG_MASK) as *const u8)
         } else {
             None

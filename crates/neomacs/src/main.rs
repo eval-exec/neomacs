@@ -198,7 +198,9 @@ use neovm_core::emacs_core::eval::{
     SurfaceChannelKind, SurfaceResolveRequest, VideoResolveRequest, WebKitResolveRequest,
     WebKitResolveSource,
 };
-use neovm_core::emacs_core::image_catalog::{ImageCatalog, ImageResolveRequest, ReadyImage};
+use neovm_core::emacs_core::image_catalog::{
+    ImageCatalog, ImageResolveRequest, ImageSizeLimit, ReadyImage,
+};
 use neovm_core::emacs_core::intern::intern;
 use neovm_core::emacs_core::load::{
     LoadupDumpInvocation, LoadupDumpMode, LoadupInvocation, RuntimeImageRole,
@@ -220,7 +222,7 @@ use neovm_core::window::{
     FrameDisplayIdentity, FrameFullscreen, FrameId, FrameParam, FrameVisibility, Window,
 };
 
-use image_catalog::AsyncImageCatalog;
+use image_catalog::{AsyncImageCatalog, RedisplayWaker};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 // Variants share a `Print*` prefix by design (all are print-and-exit CLI
@@ -1920,6 +1922,16 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         )
     }
 
+    fn set_modifier_policy(
+        &mut self,
+        policy: neomacs_display_protocol::ModifierPolicy,
+    ) -> Result<(), String> {
+        self.send_render_command(
+            RenderCommand::Config(ConfigCommand::SetModifierPolicy(policy)),
+            "failed to set the NS modifier policy",
+        )
+    }
+
     fn resolve_font_for_char(
         &mut self,
         request: FontResolveRequest,
@@ -2167,8 +2179,9 @@ impl DisplayHost for PrimaryWindowDisplayHost {
     fn resolve_image_sync(
         &self,
         request: ImageResolveRequest,
+        limit: ImageSizeLimit,
     ) -> Result<Option<ReadyImage>, String> {
-        self.image_catalog.resolve_sync(request)
+        self.image_catalog.resolve_sync(request, limit)
     }
 
     fn image_catalog(&self) -> Option<&dyn ImageCatalog> {
@@ -3684,6 +3697,10 @@ fn run_gui_evaluator_worker(
     configure_gnu_startup_state(&mut evaluator, frame_id, &startup);
     maybe_install_startup_phase_trace(&mut evaluator);
 
+    // Created before the display host: the image catalog resolves geometry
+    // off-thread and must be able to ask for the redisplay that publishes it.
+    let (input_tx, input_rx) = crossbeam_channel::unbounded();
+    let image_redisplay_waker = RedisplayWaker::new(input_tx.clone(), evaluator.wait_notifier());
     evaluator.set_display_host(Box::new(PrimaryWindowDisplayHost {
         resources,
         system_fonts: bootstrap_display.font_defaults.system_fonts(),
@@ -3702,6 +3719,7 @@ fn run_gui_evaluator_worker(
             emacs_comms.cmd_tx.clone(),
             Some(render_waker.clone()),
             Arc::clone(&gui_image_metadata),
+            Some(image_redisplay_waker),
         )),
         #[cfg(feature = "video")]
         resolved_videos: Mutex::new(ResolvedVideoRegistry::default()),
@@ -3717,7 +3735,6 @@ fn run_gui_evaluator_worker(
 
     prime_initial_monitor_snapshot(&shared_monitors);
 
-    let (input_tx, input_rx) = crossbeam_channel::unbounded();
     let secondary_ttys = secondary_tty::SecondaryTtyRegistry::default();
     let display_input_rx = emacs_comms.input_rx;
     let mut font_changes = font_observer.take_changes();
@@ -3817,6 +3834,21 @@ fn run_gui_evaluator_worker(
         runtime.enable_cosmic_metrics();
         runtime.set_font_sizing(bootstrap_display.font_sizing());
     });
+    let preview_tx = emacs_comms.cmd_tx.clone();
+    let preview_waker = render_waker.clone();
+    evaluator.scroll_preview_fn = Some(Box::new(move |eval, frame, window, inputs| {
+        let intent = frame_layout::REDISPLAY_RUNTIME
+            .with(|runtime| runtime.resolved_scroll_preview(eval, frame, window, inputs));
+        if let Some(intent) = intent
+            && preview_tx
+                .try_send(neomacs_display_runtime::thread_comm::RenderCommand::Window(
+                    neomacs_display_runtime::thread_comm::WindowCommand::ScrollPreview(intent),
+                ))
+                .is_ok()
+        {
+            preview_waker.wake();
+        }
+    }));
     let frame_tx = emacs_comms.frame_tx;
     let initial_frame_tx = frame_tx.clone();
     let redisplay_waker = render_waker.clone();
@@ -3828,6 +3860,7 @@ fn run_gui_evaluator_worker(
     }));
     frame_layout::install_frame_snapshot_fn(&mut evaluator);
     frame_layout::install_window_layout_query_fn(&mut evaluator);
+    frame_layout::install_font_shape_driver(&mut evaluator);
     publish_gui_frame(&mut evaluator, &initial_frame_tx, Some(&render_waker));
 
     if let Some(buf) = evaluator.buffer_manager_mut().current_buffer_mut() {
@@ -5568,7 +5601,7 @@ fn ensure_dir_string(path: &Path) -> String {
 
 fn publish_gui_frame(
     evaluator: &mut Context,
-    frame_tx: &crossbeam_channel::Sender<neomacs_display_protocol::SealedFramePresentation>,
+    frame_tx: &neomacs_display_runtime::thread_comm::FrameSender,
     render_waker: Option<&GuiEventLoopWaker>,
 ) {
     evaluator.setup_thread_locals();
@@ -5597,8 +5630,13 @@ fn publish_gui_frame(
             continue;
         };
         let (ticket, display_state) = prepared.into_submission();
-        match frame_tx.try_send(display_state) {
-            Ok(()) => sent_any = true,
+        match frame_tx.submit(display_state) {
+            Ok(superseded) => {
+                if let Some(old) = superseded {
+                    old.discard(evaluator);
+                }
+                sent_any = true;
+            }
             Err(error) => {
                 ticket.discard(evaluator);
                 tracing::debug!(

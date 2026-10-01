@@ -103,6 +103,7 @@ impl WgpuRenderer {
         mask: ImageMaskPolicy,
         frame: ImageFrameIndex,
         sequence: ImageSequenceId,
+        identity: neomacs_display_protocol::image_diagnostic::ImageLoadIdentity,
     ) {
         self.caches.image.load_file_with_id(
             load,
@@ -114,6 +115,7 @@ impl WgpuRenderer {
             mask,
             frame,
             sequence,
+            identity,
         )
     }
 
@@ -135,7 +137,7 @@ impl WgpuRenderer {
     pub fn load_image_data_with_id(
         &mut self,
         load: ImageLoadToken,
-        data: &[u8],
+        data: neomacs_display_protocol::image::EncodedBytes,
         size: ImageSizeSpec,
         rotation: ImageRotation,
         realization: ImageRealization,
@@ -144,6 +146,7 @@ impl WgpuRenderer {
         frame: ImageFrameIndex,
         sequence: ImageSequenceId,
         resources: crate::SvgResourceContext,
+        identity: neomacs_display_protocol::image_diagnostic::ImageLoadIdentity,
     ) {
         self.caches.image.load_data_with_id(
             load,
@@ -156,6 +159,7 @@ impl WgpuRenderer {
             frame,
             sequence,
             resources,
+            identity,
         )
     }
 

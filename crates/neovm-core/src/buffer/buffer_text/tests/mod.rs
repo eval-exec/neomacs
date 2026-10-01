@@ -9,6 +9,8 @@ use crate::emacs_core::value::Value;
 
 use super::BufferText;
 
+mod reverse_scan_test;
+
 fn implemented_kind(kind: BufferTextBackendKind) -> ImplementedBufferTextBackendKind {
     kind.implemented()
         .expect("test backend should be implemented")

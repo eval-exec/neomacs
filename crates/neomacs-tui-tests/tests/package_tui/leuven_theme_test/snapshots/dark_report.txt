@@ -1,0 +1,40 @@
+PHASE dark (leuven-dark leuven)
+SCALE-DIRECT dark numeric (1.55 1.35 1.0 1.65 1.65 1.15)
+SCALE-DIRECT dark nil-before-reload (1.55 1.35 1.0 1.65 1.65 1.15)
+SCALE-DIRECT dark nil-after-reload (unspecified unspecified 1.0 unspecified unspecified unspecified)
+SCALE-DIRECT dark default (1.8 1.3 1.0 1.6 1.6 1.1)
+SCALE-DIRECT dark final-numeric (1.55 1.35 1.0 1.65 1.65 1.15)
+FACE-D default ((:foreground . "#cfccd2") (:background . "#25202a"))
+FACE-R default ((:foreground . "#cfccd2") (:background . "#25202a"))
+FACE-D font-lock-comment-face ((:foreground . "#767283") (:slant . italic))
+FACE-R font-lock-comment-face ((:foreground . "#767283") (:slant . italic))
+FACE-D font-lock-keyword-face ((:foreground . "#ffff0b"))
+FACE-R font-lock-keyword-face ((:foreground . "#ffff0b"))
+FACE-D font-lock-function-name-face ((:foreground . "#ff996f"))
+FACE-R font-lock-function-name-face ((:foreground . "#ff996f"))
+FACE-D diff-context ((:foreground . "#7b777f") (:background . unspecified))
+FACE-R diff-context ((:foreground . "#7b777f") (:background . "#25202a"))
+FACE-D diff-header ((:foreground . "#83ffff") (:background . "#252073") (:weight . bold))
+FACE-R diff-header ((:foreground . "#83ffff") (:background . "#252073") (:weight . bold))
+FACE-D org-document-title ((:foreground . "#ffffff") (:weight . bold) (:height . 1.55))
+FACE-R org-document-title ((:foreground . "#ffffff") (:weight . bold) (:height . 1))
+FACE-D org-level-1 ((:foreground . "#c7c3cb") (:background . "#322d37") (:height . 1.35))
+FACE-R org-level-1 ((:foreground . "#c7c3cb") (:background . "#322d37") (:height . 1))
+FACE-D org-link ((:foreground . "#ff925a") (:underline . t))
+FACE-R org-link ((:foreground . "#ff925a") (:underline . t))
+FACE-D org-block ((:foreground . "#ffff7f") (:background . "#252046"))
+FACE-R org-block ((:foreground . "#ffff7f") (:background . "#252046"))
+RUN Elisp font-lock-comment-delimiter-face ";; "
+RUN Elisp font-lock-keyword-face "defun"
+RUN Elisp font-lock-function-name-face "deploy-release"
+RUN Elisp font-lock-doc-face "\"Ship ARTIFACT safely.\""
+RUN Org org-document-title "Release Control Ω\n"
+RUN Org (org-todo org-level-1) "TODO"
+RUN Org (org-done org-level-2) "DONE"
+RUN Org org-link "[[https://example.test/runbook][runbook]]"
+RUN Org org-block-begin-line "#+begin_src emacs-lisp\n"
+RUN Diff diff-header "diff --git a/release.el b/release.el\n--- "
+RUN Diff diff-hunk-header "@@ -1,2 +1,2 @@"
+RUN Diff diff-context " context line\n"
+RUN Diff diff-indicator-removed "-"
+RUN Diff diff-indicator-added "+"

@@ -37,7 +37,12 @@ const AUTO_ORG_MD_TEST_PRELUDE: &str = r##"
   (let ((root
          (expand-file-name
           (concat "tmp/melpa-parity/auto-org-md/" name)
-          (getenv "CARGO_WORKSPACE_DIR"))))
+          ;; The archived shard runs on a machine that never compiled this
+          ;; tree, so the baked constant names a path that does not exist
+          ;; there; nextest's remapped root comes first, like the Rust
+          ;; workspace_root() resolver (crate::test_utils).
+          (or (getenv "NEXTEST_WORKSPACE_ROOT")
+              (getenv "CARGO_WORKSPACE_DIR")))))
     (when (file-exists-p root)
       (delete-directory root t))
     (make-directory root t)

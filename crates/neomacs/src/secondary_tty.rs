@@ -598,5 +598,5 @@ fn publish_input(
 }
 
 #[cfg(test)]
-#[path = "secondary_tty_test.rs"]
+#[path = "tests/secondary_tty_test.rs"]
 mod secondary_tty_test;

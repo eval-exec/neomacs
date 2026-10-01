@@ -4,6 +4,10 @@ use neomacs_gui_tests::{
 };
 use std::{fs, path::PathBuf, time::Duration};
 
+#[cfg(target_os = "linux")]
+#[path = "native_display/linux_scroll.rs"]
+mod linux_scroll;
+
 #[test]
 // Prerequisites: requires a fresh release binary/pdump and a native graphical session.
 fn native_startup_font_and_resize_contract() {
@@ -21,6 +25,83 @@ fn native_startup_font_and_resize_contract() {
     assert!(
         pixels.pixels().any(|pixel| pixel != first),
         "GUI readback is blank"
+    );
+}
+
+#[test]
+// Canonical commands and native rendering; physical device transport is tested separately.
+fn native_rich_scroll_commands_preserve_pixel_offset() {
+    #[cfg(target_os = "linux")]
+    for result in linux_scroll::run_rich_pixel_contracts() {
+        assert_native_scroll_contract(&result);
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let result =
+            run_native_contract("native-display-scroll", "native-scroll-contract.el", false);
+        assert_native_scroll_contract(&result);
+    }
+}
+
+fn assert_native_scroll_contract(result: &GuiRunResult) {
+    let state: serde_json::Value =
+        serde_json::from_slice(&fs::read(&result.artifacts.gui_state).unwrap()).unwrap();
+    assert_eq!(state["contract"], "native-scroll");
+    assert_eq!(state["content"]["lines"], 100_000);
+    assert_eq!(state["content"]["face-variants"], 6);
+    assert_eq!(
+        state["content"]["font-families"].as_array().unwrap().len(),
+        3
+    );
+    assert_eq!(state["content"]["font-selection"], "installed");
+    assert!(state["content"]["overlays"].as_u64().unwrap() >= 12_500);
+    assert_eq!(state["pixel-down"][0], state["pixel-origin"][0]);
+    assert_eq!(
+        state["pixel-down"][1].as_i64().unwrap() - state["pixel-origin"][1].as_i64().unwrap(),
+        7
+    );
+    assert_eq!(state["pixel-returned"], true);
+    assert_eq!(state["page-advanced"], true);
+    assert_eq!(state["page-returned"], true);
+    assert!(
+        fs::metadata(&result.artifacts.frame_snapshot_json)
+            .unwrap()
+            .len()
+            < 64 * 1024,
+        "geometry snapshot unexpectedly contains bulky replay data"
+    );
+    let snapshot: serde_json::Value =
+        serde_json::from_slice(&fs::read(&result.artifacts.frame_snapshot_json).unwrap()).unwrap();
+    assert!(
+        snapshot["frames"].as_array().unwrap().iter().any(|frame| {
+            frame["window_infos"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|window| {
+                    // Protocol offsets are zero-based; Lisp positions start at one.
+                    window["window_start"]
+                        .as_u64()
+                        .and_then(|start| start.checked_add(1))
+                        == state["final-start"].as_u64()
+                        && window["buffer_size"]
+                            .as_u64()
+                            .is_some_and(|size| size > 1_000_000)
+                })
+        }),
+        "native snapshot did not contain the final rich viewport"
+    );
+    let pixels = image::open(&result.artifacts.png).unwrap().to_rgba8();
+    let first = pixels.get_pixel(0, 0);
+    assert!(
+        pixels.pixels().any(|pixel| pixel != first),
+        "scroll readback is blank"
+    );
+    assert!(
+        pixels
+            .pixels()
+            .any(|pixel| { pixel[0].abs_diff(pixel[2]) > 60 || pixel[1].abs_diff(pixel[2]) > 60 }),
+        "readback did not contain the rich buffer's colored faces"
     );
 }
 
@@ -97,6 +178,10 @@ fn run_native_contract(name: &str, fixture: &str, resources: bool) -> GuiRunResu
     )
     .with_program(binary)
     .with_env("RUST_LOG", "info");
+    if name == "native-display-scroll" {
+        // Keep readback active until the rich fixture and its scrolls render.
+        plan = plan.with_env("NEOMACS_DEBUG_SURFACE_READBACK", "100");
+    }
     if resources {
         plan = plan.with_args(vec![
             "--no-init-file".into(),

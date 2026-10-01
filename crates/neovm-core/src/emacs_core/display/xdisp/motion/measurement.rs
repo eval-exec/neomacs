@@ -85,12 +85,24 @@ pub(super) fn query(
     start: LispCharPos1,
     count: NonZeroUsize,
 ) -> Result<Option<WindowDisplaySnapshot>, Flow> {
-    eval.maybe_quit()?;
-    let snapshot = match eval.query_window_layout_scope(
+    query_scope(
+        eval,
         frame,
         window,
+        buffer,
         WindowLayoutQueryScope::Rows { start, count },
-    ) {
+    )
+}
+
+pub(super) fn query_scope(
+    eval: &mut Context,
+    frame: FrameId,
+    window: WindowId,
+    buffer: BufferId,
+    scope: WindowLayoutQueryScope,
+) -> Result<Option<WindowDisplaySnapshot>, Flow> {
+    eval.maybe_quit()?;
+    let snapshot = match eval.query_window_layout_scope(frame, window, scope) {
         WindowLayoutQueryOutcome::Ready(query) => query
             .into_geometry()
             .ok_or_else(|| failed("Display motion query produced no rows"))?,
@@ -133,7 +145,11 @@ pub(super) fn resolve(
         0
     };
     let mut start = backtrack(buffer, request.origin, backtrack_lines);
-    let mut count = NonZeroUsize::new(64).expect("nonzero initial row budget");
+    // Start with the requested displacement plus boundary context. Wrapped
+    // source lines can require more rows; the measured result below, rather
+    // than a fixed 64-row minimum, decides when to expand.
+    let initial_rows = request.rows.unsigned_abs().saturating_add(2).clamp(4, 64) as usize;
+    let mut count = NonZeroUsize::new(initial_rows).expect("nonzero initial row budget");
     loop {
         let Some(snapshot) = query(eval, frame, window, request.buffer, start, count)? else {
             return Ok(None);

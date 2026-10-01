@@ -409,3 +409,37 @@ fn wait_request_redisplay_query_tracks_request_and_activity() {
         redisplay.needs_redisplay_after_service(SpecialInputServiceOutcome::default(), serviced)
     );
 }
+
+#[test]
+fn command_wait_returns_after_callbacks_to_restart_display_maintenance() {
+    let request = WaitRequest::read_command_input_forever();
+    assert_eq!(request.completion_for(WaitServiceOutcome::default()), None);
+    let mut timer = WaitServiceOutcome::default();
+    timer.record_timer_activity(true);
+    assert_eq!(
+        request.completion_for(timer),
+        Some(WaitCompletion::DisplayActivity)
+    );
+    assert_eq!(
+        CommandInputWaitOutcome::from_completion(WaitCompletion::DisplayActivity),
+        CommandInputWaitOutcome::Interrupted
+    );
+    assert_eq!(
+        WaitRequest::sleep_until(Instant::now() + Duration::from_secs(1)).completion_for(timer),
+        None
+    );
+
+    let mut process = ProcessOutputServiceOutcome::default();
+    process.record_serviced();
+    let mut callback = WaitServiceOutcome::default();
+    callback.absorb_process_activity(process);
+    assert_eq!(
+        request.completion_for(callback),
+        Some(WaitCompletion::DisplayActivity)
+    );
+    callback.record_command_input_pending();
+    assert_eq!(
+        request.completion_for(callback),
+        Some(WaitCompletion::CommandInputPending)
+    );
+}

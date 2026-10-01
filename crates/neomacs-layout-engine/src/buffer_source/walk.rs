@@ -4,7 +4,6 @@
 //! source cursor driving, pending face installation, and source-position
 //! updates used by row lifecycle renderers.
 
-use crate::buffer_source::consumption::BufferSourceConsumedItem;
 use crate::buffer_source::face_resolution::BufferSourceFaceResolutionContext;
 use crate::buffer_source::overflow::BufferSourceTruncationSkipAction;
 use crate::buffer_source::producer::{BufferElementProducer, ProducedStep};
@@ -51,32 +50,12 @@ pub(crate) enum BufferSourceRewind {
     CharacterWrap(DisplaySourceTextPosition),
 }
 
-/// Apply a produced step's side effects to the row being assembled: publish the
-/// walk position when no element was produced, install the faces the resolver
-/// collected, and record `(left-fringe …)` / `(right-fringe …)` specs.
-fn apply_produced_step_to_progress(
-    step: ProducedStep,
-    progress: &mut DisplaySourceProgressState<'_>,
-) -> (
-    Option<BufferSourceConsumedItem>,
-    Vec<crate::display_source_resolver::PendingDisplaySourceFace>,
-    Vec<crate::display_source::DisplayNonTextAreaEmission>,
-) {
-    let ProducedStep {
-        source_item,
-        source_position,
-        pending_faces,
-        pending_non_text_area,
-    } = step;
-    if source_item.is_none() {
-        progress.apply_source_position(source_position);
-    }
-    (source_item, pending_faces, pending_non_text_area)
-}
-
+/// Install side effects while the consumed item remains in its caller-owned
+/// step. Publishing a missing item's source position precedes face/emission
+/// installation; dispatch receives the item only after those side effects.
 #[allow(clippy::too_many_arguments)]
 fn apply_produced_step_to_render_progress<B: LayoutBufferView>(
-    step: ProducedStep,
+    step: &mut ProducedStep,
     progress: &mut DisplaySourceProgressState<'_>,
     face_resolution_context: BufferSourceFaceResolutionContext<'_, B>,
     source_render: &mut TextRowSourceRenderState<'_>,
@@ -84,14 +63,12 @@ fn apply_produced_step_to_render_progress<B: LayoutBufferView>(
     append_surface: &DisplayRowAppendSurface,
     active_face_state: &DisplayRowActiveFaceState,
     face_ids: &mut FrameFaceAttempt,
-) -> Option<BufferSourceConsumedItem> {
-    let (source_item, pending_faces, pending_non_text_area) =
-        apply_produced_step_to_progress(step, progress);
-    face_resolution_context.install_pending_source_faces(
-        source_render,
-        row_geometry,
-        pending_faces,
-    );
+) {
+    if step.source_item.is_none() {
+        progress.apply_source_position(step.source_position);
+    }
+    face_resolution_context
+        .install_pending_source_faces(source_render, std::mem::take(&mut step.pending_faces));
     let fallback_metrics =
         DisplayRowFallbackMetrics::from_measured_face(active_face_state.metrics());
     let frame = DisplayRowActiveFaceAppendContext::new(
@@ -102,7 +79,7 @@ fn apply_produced_step_to_render_progress<B: LayoutBufferView>(
         fallback_metrics,
     )
     .active_face_frame();
-    for emission in pending_non_text_area {
+    for emission in std::mem::take(&mut step.pending_non_text_area) {
         let structural_order = if progress.row_position().col() == 0 {
             crate::display_row::source_render::DisplayStructuralAreaOrder::BeforeExisting
         } else {
@@ -119,7 +96,6 @@ fn apply_produced_step_to_render_progress<B: LayoutBufferView>(
             structural_order,
         );
     }
-    source_item
 }
 
 impl<'request, B: LayoutBufferView> BufferSourceWalk<'request, B> {
@@ -172,6 +148,10 @@ impl<'request, B: LayoutBufferView> BufferSourceWalk<'request, B> {
             .remember_resolved_source_face_if_absent(face_id, face);
     }
 
+    pub(crate) fn produces_single_chars_at(&self, charpos: i64) -> bool {
+        self.producer.produces_single_chars_at(charpos)
+    }
+
     /// Decline run batching until `end_charpos`. See
     /// [`BufferElementProducer::request_char_granularity_until`].
     pub(crate) fn request_char_granularity_until(&mut self, end_charpos: i64) {
@@ -194,6 +174,10 @@ impl<'request, B: LayoutBufferView> BufferSourceWalk<'request, B> {
             .has_pending_overlay_strings_at(source_position)
     }
 
+    pub(crate) fn can_restart_after_buffer_newline(&self, charpos: i64) -> bool {
+        self.producer.can_restart_after_buffer_newline(charpos)
+    }
+
     /// Reseat the producer at a row-wrap retry position so the current character
     /// is re-produced on the continuation row.
     pub(crate) fn rewind_source_consumption(&mut self, rewind: BufferSourceRewind) {
@@ -206,7 +190,7 @@ impl<'request, B: LayoutBufferView> BufferSourceWalk<'request, B> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn consume_source_item_for_render(
+    pub(crate) fn consume_source_item_for_render_into(
         &mut self,
         progress: &mut DisplaySourceProgressState<'_>,
         face_resolution_context: BufferSourceFaceResolutionContext<'_, B>,
@@ -215,14 +199,16 @@ impl<'request, B: LayoutBufferView> BufferSourceWalk<'request, B> {
         row_geometry: &mut DisplayRowGeometryState,
         append_surface: &DisplayRowAppendSurface,
         active_face_state: &DisplayRowActiveFaceState,
-    ) -> Option<BufferSourceConsumedItem> {
-        let step = self.producer.produce_step(
+        output: &mut ProducedStep,
+    ) {
+        self.producer.produce_step_into(
             progress.source_position(),
             face_resolution_context,
             face_ids,
+            output,
         );
         apply_produced_step_to_render_progress(
-            step,
+            output,
             progress,
             face_resolution_context,
             source_render,
@@ -241,8 +227,14 @@ impl<'request, B: LayoutBufferView> BufferSourceWalk<'request, B> {
         tab_width: i32,
     ) -> DisplaySourcePositionConsumption<Option<BufferSourceHscrollSkipAction>> {
         let mut source_position = source_position;
-        let action =
-            consume_hscroll_skip_from_position(text, &mut source_position, hscroll_skip, tab_width);
+        let action = consume_hscroll_skip_from_position(
+            text,
+            &mut source_position,
+            hscroll_skip,
+            tab_width,
+            self.producer.layout_buffer(),
+            self.producer.text_start_byte(),
+        );
         DisplaySourcePositionConsumption::new(action, source_position)
     }
 

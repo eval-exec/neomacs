@@ -9,6 +9,7 @@ pub(crate) struct TextRowOutput {
     row_y: f32,
     glyph_y: f32,
     height: f32,
+    default_height: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -29,7 +30,13 @@ impl TextRowOutput {
             row_y,
             glyph_y,
             height,
+            default_height: height,
         }
+    }
+
+    pub(crate) fn with_default_height(mut self, default_height: f32) -> Self {
+        self.default_height = default_height;
+        self
     }
 
     pub(crate) fn row(self) -> usize {
@@ -59,7 +66,7 @@ impl TextRowOutput {
             self.row,
             self.row_y,
             self.glyph_y,
-            self.height,
+            slot.cell_height(self.height, self.default_height),
             slot.start_position(),
             slot.end_position(),
         ))

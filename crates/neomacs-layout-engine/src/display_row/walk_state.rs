@@ -592,6 +592,14 @@ impl DisplayRowTextOverflowDecision {
         if ch == '\t' || x_px + advance_px <= right_edge_px {
             Self::Fits
         } else if wrap_mode == LineWrapMode::Truncate {
+            // Wide-glyph cut case (issue #446 wide-name): a wide character
+            // whose first cell fits is still refused here, but the truncation
+            // arm records the cut as the row's WideCut flag (overflow.rs),
+            // and the marker installer then overwrites the padding cells —
+            // the cut glyph's cells — with the truncation glyph, matching
+            // GNU's visible result (append + overwrite,
+            // xdisp.c:26611-26641) without touching the walk/append
+            // lifecycle.
             Self::Truncate
         } else if word_wrap.has_candidate() {
             Self::WordWrap {
@@ -925,6 +933,10 @@ impl HorizontalScrollSkipState {
 }
 
 impl LineNumberRenderState {
+    pub(crate) fn is_enabled(self) -> bool {
+        !matches!(self.phase, LineNumberRenderPhase::Disabled)
+    }
+
     pub(crate) fn new(enabled: bool, current_line: i64, point_line: i64) -> Self {
         Self {
             current_line,
@@ -1174,6 +1186,14 @@ impl DisplayRowSourceStart {
 
     pub(crate) fn advance_to(&mut self, start_charpos: i64) {
         self.start_charpos = start_charpos;
+    }
+
+    /// Whether `charpos` sits at or after the row's source start — used by
+    /// the hscroll skip to tell that a point hidden in the hscrolled-off
+    /// prefix belongs to THIS line, so its cursor clamps to the truncation
+    /// marker's cell.
+    pub(crate) fn covers(self, charpos: i64) -> bool {
+        charpos >= self.start_charpos
     }
 
     pub(crate) fn should_finish_current_row(

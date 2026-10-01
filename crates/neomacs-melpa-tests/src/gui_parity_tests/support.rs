@@ -8,7 +8,7 @@ use neomacs_gui_tests::{DisplayHarness, DisplaySession, GuiBackend};
 use crate::{
     DirectEditorChild, EmacsRuntime, EvalOutcome, MelpaSandbox, PreparedPackageSet,
     direct_probe_process_error, direct_probe_script, read_direct_probe_file,
-    read_direct_probe_outcome, workspace_root, wrap_direct_probe_logs,
+    read_direct_probe_outcome, wrap_direct_probe_logs,
 };
 
 const GUI_TIMEOUT: Duration = Duration::from_secs(180);
@@ -94,7 +94,7 @@ impl PackageGuiPair {
         probe_elisp: &str,
     ) -> Result<GuiPairOutcome, String> {
         let display = DisplayHarness::for_backend(GuiBackend::LinuxX11)
-            .start_session(workspace_root().join("tmp/melpa/gui-display"))
+            .start_session(neomacs_infra::melpa_cache_root().join("gui-display"))
             .map_err(|error| format!("failed to start owned Xvfb display: {error}"))?;
         let affinity = LinuxCpuAffinity::current_first(4)?;
 

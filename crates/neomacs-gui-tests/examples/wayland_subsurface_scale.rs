@@ -103,7 +103,7 @@ mod linux {
             .next()
             .map(|arg| arg.parse().expect("weston or desktop"))
             .unwrap_or_default();
-        let artifacts = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        let artifacts = neomacs_infra::crate_root!()
             .join("../../target/neomacs-gui-tests/wayland-subsurface-scale");
         let harness = match display {
             ProbeDisplay::Weston => DisplayHarness::WestonHeadless(WaylandOutput::Standard),

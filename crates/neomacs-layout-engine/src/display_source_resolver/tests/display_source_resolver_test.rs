@@ -57,6 +57,69 @@ fn dashboard_like_face_table() -> FaceTable {
 }
 
 #[test]
+fn repeated_source_resolution_reuses_unchanged_base_face_storage() {
+    use crate::buffer_source::text_source::BufferTextSourceCursor;
+
+    let snapshot = test_buffer_snapshot();
+    let table = dashboard_like_face_table();
+    let face_resolver = test_face_resolver(&table);
+    let mut base = face_resolver.default_face().clone();
+    base.font_family = "source face family".into();
+    let base = &base;
+    let mut state = DisplaySourceResolveState::default();
+    let mut face_ids = FrameFaceAttempt::for_test_with_next_id(20);
+    let params = DisplaySourceResolveParams::new(
+        DisplaySourceFaceBasis::new(
+            &face_resolver,
+            FaceId::new(0),
+            base,
+            DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
+        ),
+        None,
+        ImageScaleEnvironment::default(),
+    );
+    let end = snapshot.layout_point_max_char_pos();
+    let mut source = BufferTextSourceCursor::new(
+        neovm_core::buffer::BufferId(1),
+        &snapshot,
+        CharPos0::ZERO,
+        end,
+        RenderFaceRef::FaceId(FaceId::new(0)),
+    );
+    // A declined batched run is consumed character by character during wrap.
+    source.set_char_granularity_end(Some(end));
+    let mut storage = None;
+    for _ in 0..end.get() {
+        let resolved = resolve_next_display_source_item(
+            &mut source,
+            DisplaySourceFaceScope::FrameLocal,
+            params,
+            &mut state,
+            &mut face_ids,
+        );
+        assert!(resolved.item().is_some());
+        let retained = state.resolved_face(FaceId::new(0)).unwrap();
+        assert_eq!(retained, base);
+        let current = retained.font_family.as_ptr();
+        if let Some(previous) = storage {
+            assert_eq!(
+                current, previous,
+                "unchanged base face must not allocate a new family for each source item"
+            );
+        }
+        storage = Some(current);
+    }
+
+    // Reusing the ID does not justify keeping stale attributes.
+    let mut changed = base.clone();
+    changed.font_family = "changed family".into();
+    changed.font_size += 3.0;
+    changed.fg ^= 0x00ff00;
+    state.remember_face(FaceId::new(0), &changed);
+    assert_eq!(state.resolved_face(FaceId::new(0)), Some(&changed));
+}
+
+#[test]
 fn source_face_resolver_merges_overlay_face_over_current_base_face() {
     let table = dashboard_like_face_table();
     let face_resolver = test_face_resolver(&table);
@@ -449,4 +512,132 @@ fn display_media_face_metrics_prefer_active_face_extents() {
     assert_eq!(metrics.row_height(), 24.0);
     assert_eq!(metrics.ascent(), 20.0);
     assert_eq!(metrics.char_width(), 11.0);
+}
+
+#[test]
+fn single_source_face_resolution_reuses_its_realization() {
+    let table = dashboard_like_face_table();
+    let face_resolver = test_face_resolver(&table);
+    let mut state = DisplaySourceResolveState::default();
+    let mut face_ids = FrameFaceAttempt::for_test_with_next_id(20);
+    let mut pending = Vec::new();
+    let params = DisplaySourceResolveParams::new(
+        DisplaySourceFaceBasis::new(
+            &face_resolver,
+            FaceId::new(0),
+            face_resolver.default_face(),
+            DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
+        ),
+        None,
+        ImageScaleEnvironment::default(),
+    );
+    let source = OrderedFaceSources::from_text_and_overlays(
+        Some(Value::symbol("dashboard-title-blue")),
+        Vec::new(),
+    );
+    let mut resolver =
+        DisplaySourcePropertyResolver::frame_local(params, &mut state, &mut face_ids, &mut pending);
+    let first = resolver.resolve_face_sources(RenderFaceRef::Inherit, &source);
+    for _ in 0..512 {
+        assert_eq!(
+            resolver.resolve_face_sources(RenderFaceRef::Inherit, &source),
+            first
+        );
+    }
+    assert_eq!(
+        pending.len(),
+        1,
+        "repeated source lookups must not rebuild and republish the same realized face"
+    );
+    assert_eq!(state.resolved_face(face_id(first)).unwrap().fg, 0x0051afef);
+}
+
+#[test]
+fn source_face_observations_borrow_the_existing_realization() {
+    let table = dashboard_like_face_table();
+    let face_resolver = test_face_resolver(&table);
+    let base = face_resolver.default_face();
+    let mut state = DisplaySourceResolveState::default();
+    state.remember_face(FaceId::new(3), base);
+    for reference in [
+        RenderFaceRef::Inherit,
+        RenderFaceRef::FaceId(FaceId::new(3)),
+        RenderFaceRef::FaceId(FaceId::new(99)),
+    ] {
+        let observed = state.resolved_face_for(reference, base);
+        let borrowed: &ResolvedFace = std::borrow::Borrow::borrow(&observed);
+        let expected = if reference == RenderFaceRef::FaceId(FaceId::new(3)) {
+            state.resolved_face(FaceId::new(3)).unwrap()
+        } else {
+            base
+        };
+        assert!(
+            std::ptr::eq(borrowed, expected),
+            "read-only face observation cloned the realized face"
+        );
+    }
+}
+
+#[test]
+fn consecutive_face_lookups_reuse_hashing_and_replay_mutable_dependencies() {
+    let _context = Context::new();
+    use neovm_core::tagged::collection_reads::capture;
+    let table = FaceTable::new();
+    let resolver = test_face_resolver(&table);
+    let mut state = DisplaySourceResolveState::default();
+    let base = FaceId::new(0);
+    let result = FaceId::new(20);
+    let value = Value::list(vec![Value::symbol(":height"), Value::fixnum(120)]);
+    state.cache_face(base, value, result, resolver.default_face());
+    for _ in 0..512 {
+        assert_eq!(
+            state.cached_face(base, &value),
+            Some(RenderFaceRef::FaceId(result))
+        );
+    }
+    assert_eq!(
+        state.structural_face_lookups, 1,
+        "one structural lookup per unchanged face run"
+    );
+    let (_, reads) = capture(|| state.cached_face(base, &value));
+    let reads = reads.expect("lookup dependencies");
+    value.cons_cdr().set_car(Value::fixnum(180));
+    assert!(
+        !reads.unchanged(),
+        "fast hits must expose nested dependencies"
+    );
+    let lookups = state.structural_face_lookups;
+    state.cached_face(base, &value);
+    assert_eq!(
+        state.structural_face_lookups,
+        lookups + 1,
+        "mutation must retry structural lookup"
+    );
+}
+
+#[test]
+fn consecutive_face_lookup_preserves_structural_equality_and_base_identity() {
+    let _context = Context::new();
+    let table = FaceTable::new();
+    let resolver = test_face_resolver(&table);
+    let mut state = DisplaySourceResolveState::default();
+    let base = FaceId::new(0);
+    let result = FaceId::new(20);
+    let value = Value::list(vec![Value::symbol(":height"), Value::fixnum(120)]);
+    let equal = Value::list(vec![Value::symbol(":height"), Value::fixnum(120)]);
+    state.cache_face(base, value, result, resolver.default_face());
+    assert_eq!(
+        state.cached_face(base, &value),
+        Some(RenderFaceRef::FaceId(result))
+    );
+    assert_eq!(
+        state.cached_face(base, &equal),
+        Some(RenderFaceRef::FaceId(result))
+    );
+    assert_eq!(state.cached_face(FaceId::new(1), &value), None);
+    state.cache_face(base, value, FaceId::new(21), resolver.default_face());
+    assert_eq!(
+        state.cached_face(base, &value),
+        Some(RenderFaceRef::FaceId(FaceId::new(21)))
+    );
 }

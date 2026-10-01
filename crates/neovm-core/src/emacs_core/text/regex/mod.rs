@@ -3958,33 +3958,28 @@ pub fn looking_at_string(
 /// `fast_looking_at` also classifies `\s` and `\c` through the current buffer
 /// even when its bytes come from a separate string, so its classification
 /// remains an explicit input instead of falling back to standard tables.
-pub(crate) fn looking_at_lisp_pattern_with_syntax(
+///
+/// Return only the match's character length. Composition tries rules against
+/// successive suffixes of a layout chunk; owning each searched suffix and
+/// publishing all capture groups would repeatedly copy and count the whole
+/// remaining chunk even when the rule fails immediately.
+pub(crate) fn looking_at_lisp_pattern_length_with_syntax(
     pattern: &LispString,
     string: &str,
     syntax: &dyn SyntaxLookup,
-    match_data: &mut Option<MatchData>,
-) -> Result<bool, String> {
+) -> Result<Option<usize>, String> {
     let compiled =
         compile_lisp_pattern_with_posix_translation(pattern, false, false, true, None, syntax)?;
-    let searched = LispString::from_utf8(string);
-    let text_bytes = searched.as_bytes();
-    if let Some((_end, regs)) = regex_emacs::re_match(
+    let text_bytes = string.as_bytes();
+    Ok(regex_emacs::re_match(
         compiled.as_ref(),
         text_bytes,
         0,
         text_bytes.len(),
         syntax,
         0,
-    ) {
-        let byte_md = engine_match_data_from_registers(&regs, 0);
-        *match_data = Some(string_char_match_data(
-            SearchedString::Owned(searched),
-            byte_md,
-        ));
-        Ok(true)
-    } else {
-        Ok(false)
-    }
+    )
+    .map(|(end, _regs)| super::emacs_char::byte_to_char_pos(text_bytes, end)))
 }
 
 fn looking_at_string_with_syntax(

@@ -20,17 +20,18 @@ fn settled_point(
 }
 
 use super::*;
+use crate::display_row::append_context::DisplayRowLineWrap;
 
-#[path = "../../engine_face_identity_test.rs"]
+#[path = "../../tests/engine_face_identity_test.rs"]
 mod face_identity;
 
-#[path = "../../engine_font_selection_test.rs"]
+#[path = "../../tests/engine_font_selection_test.rs"]
 mod font_selection;
 
-#[path = "../../engine_line_spacing_test.rs"]
+#[path = "../../tests/engine_line_spacing_test.rs"]
 mod line_spacing;
 
-#[path = "../../engine_display_motion_test.rs"]
+#[path = "../../tests/engine_display_motion_test.rs"]
 mod display_motion;
 
 mod chrome_memo_engine_test;
@@ -38,13 +39,15 @@ mod displayed_start_key_test;
 mod edit_replay_point_visibility_test;
 mod edit_replay_row_extent_test;
 mod edit_sync_engine_test;
-#[path = "../../engine_layout_validity_test.rs"]
+#[path = "../../tests/engine_layout_validity_test.rs"]
 mod layout_validity;
 mod lazy_text_hit_test;
 mod mini_window_still_test;
 mod mode_line_gate_engine_test;
 mod replay_cursor_on_tab_test;
 mod scroll_back_engine_test;
+mod scroll_input_policy_test;
+mod scroll_surface_test;
 mod text_snapshot_cow_test;
 
 fn test_image_load(id: u32) -> neomacs_display_protocol::ImageLoadToken {
@@ -107,8 +110,8 @@ use neovm_core::emacs_core::eval::{
     SurfaceChannelKind, SurfaceResolveRequest, VideoResolveRequest, WebKitResolveRequest,
 };
 use neovm_core::emacs_core::image_catalog::{
-    AxisSize, ImageCatalog, ImageLookup, ImageResolveRequest, ImageSizeSpec, PendingImage,
-    ReadyImage,
+    AxisSize, ImageCatalog, ImageLookup, ImageResolveRequest, ImageSizeLimit, ImageSizeSpec,
+    PendingImage, ReadyImage,
 };
 use neovm_core::emacs_core::load::{
     apply_runtime_startup_state, create_bootstrap_evaluator_cached_with_features,
@@ -1683,6 +1686,8 @@ fn test_window_params() -> WindowParams {
         top_line: 0,
         window_start: 1,
         measurement_rows: None,
+        measurement_pixels: None,
+        query_target: None,
         force_start: false,
         previous_visible_end: None,
         point: 1,
@@ -1878,6 +1883,7 @@ impl DisplayHost for RecordingImageDisplayHost {
     fn resolve_image_sync(
         &self,
         _request: ImageResolveRequest,
+        _limit: neovm_core::emacs_core::image_catalog::ImageSizeLimit,
     ) -> Result<Option<ReadyImage>, String> {
         panic!("layout must not use synchronous image resolution");
     }
@@ -1922,7 +1928,7 @@ impl DisplayHost for RecordingImageDisplayHost {
 }
 
 impl ImageCatalog for RecordingImageDisplayHost {
-    fn lookup(&self, request: ImageResolveRequest) -> ImageLookup {
+    fn lookup(&self, request: ImageResolveRequest, _limit: ImageSizeLimit) -> ImageLookup {
         self.requests
             .lock()
             .expect("requests lock")
@@ -2065,6 +2071,7 @@ fn render_buffer_text_source_shadow_row(
         GlyphRowRole::Text,
         FaceId::new(0),
         resolver.default_face(),
+        DisplayRowLineWrap::chrome_row(),
     )
     .render_request(DisplayRowRenderBounds::new(
         DisplayRowPosition::new(0.0, 0),
@@ -2924,6 +2931,7 @@ struct GlyphTrace {
     pixel_width_bits: u32,
     pixel_height_bits: u32,
     pixel_ascent_bits: u32,
+    vertical_offset_bits: u32,
 }
 
 impl GlyphTrace {
@@ -2952,6 +2960,12 @@ impl GlyphTrace {
                     // Compare CONTENT — normalize the allocation-dependent Face.id.
                     let mut f = f.clone();
                     f.id = FaceId::new(0);
+                    // Resource IDs are local to each font service, too. Keep
+                    // binding presence and the exact font path/attributes;
+                    // allocation order is not a rendering difference.
+                    f.default_resolved_font_id = f
+                        .default_resolved_font_id
+                        .map(|_| neomacs_display_protocol::font::ResolvedFontId(0));
                     format!("{f:?}")
                 })
                 .unwrap_or_else(|| format!("UNREGISTERED#{}", glyph.face_id)),
@@ -2962,6 +2976,7 @@ impl GlyphTrace {
             pixel_width_bits: glyph.pixel_width.to_bits(),
             pixel_height_bits: glyph.pixel_height.to_bits(),
             pixel_ascent_bits: glyph.pixel_ascent.to_bits(),
+            vertical_offset_bits: glyph.vertical_offset_px.to_bits(),
         }
     }
 }
@@ -4552,6 +4567,101 @@ fn phase2_scroll_matches_full_rebuild_golden() {
     assert_eq!(
         incremental, reference,
         "pure-scroll output must be byte-identical to a full rebuild"
+    );
+}
+
+/// The frame's single physical cursor slot, as the renderers read it.
+fn frame_phys_cursor(
+    engine: &LayoutEngine,
+) -> Option<neomacs_display_protocol::frame_glyphs::PhysCursor> {
+    engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("an accepted frame")
+        .state()
+        .phys_cursor
+        .clone()
+}
+
+/// REGRESSION (`C-l` recenter hides the physical cursor): a pure-scroll replay
+/// whose point lies in a REUSED row must still publish the selected window's
+/// physical cursor, exactly as a full rebuild of the same state does.
+///
+/// GNU's reuse gives the optimization up rather than proceed without the
+/// cursor: `try_window_reusing_current_matrix` searches the current matrix with
+/// `row_containing_pos` and otherwise
+///     /* Give up if point isn't in a row displayed or reused.  */
+///     clear_glyph_matrix (w->desired_matrix); return false;
+/// (src/xdisp.c:21916-21926, :22098-22105), and `try_window_id` gives up the
+/// same way (src/xdisp.c:23077-23085).  The cursor is not optional: a frame has
+/// exactly ONE physical cursor slot, `tty_set_cursor` places the terminal
+/// cursor from the selected window's `w->cursor` (src/dispnew.c:5673) and
+/// `tty_update_end` shows it after every update (src/term.c:253).  Neomacs'
+/// scroll replay used to skip the cursor silently when its row lookup found
+/// nothing, so the sealed frame carried no `phys_cursor` at all and the tty
+/// left the cursor hidden on the echo-area row (the failing `C-l`-after-isearch
+/// parity case).
+#[test]
+fn phase2_scroll_replay_keeps_the_selected_windows_phys_cursor() {
+    // 80 numbered lines, with the window warmed near the top of the buffer and
+    // point at the END of a line (where isearch's RET leaves it).  The scroll
+    // then moves window-start forward a few rows with point unchanged, so
+    // point's row is one of the REUSED rows while the newly-exposed rows are
+    // the bottom ones the partial walk lays out.
+    let text: String = (1..=80)
+        .map(|line| format!("recenter line {line:02}\n"))
+        .collect();
+    let line_len = 17;
+    let point_line = 12; // 1-based, comfortably inside a tall window
+    let point_byte = (point_line - 1) * line_len + 16; // its trailing newline
+    let scroll_lines = 4i64;
+    let scrolled_start = scroll_lines * line_len as i64 + 1;
+
+    let (mut eval, frame_id, buf_id, win) = incr_editing_frame(&text, 800, 600);
+    let mut engine = LayoutEngine::new();
+    scroll_window_to(&mut eval, frame_id, win, buf_id, 1, point_byte);
+    engine.layout_frame_rust(&mut eval, frame_id);
+    assert!(
+        frame_phys_cursor(&engine).is_some(),
+        "the warm full-layout frame carries the selected window's cursor"
+    );
+
+    scroll_window_to(&mut eval, frame_id, win, buf_id, scrolled_start, point_byte);
+    engine.layout_frame_rust(&mut eval, frame_id);
+    assert_eq!(
+        engine.last_layout_stats().scroll_windows,
+        1,
+        "the scrolled pass must take the pure-scroll fast path: {:?}",
+        engine.last_layout_stats()
+    );
+
+    let cursor = frame_phys_cursor(&engine).expect(
+        "a frame accepted by the pure-scroll replay must still carry the selected window's \
+         physical cursor",
+    );
+    assert_eq!(
+        cursor.window_id.get(),
+        win.0 as i64,
+        "the frame's physical cursor must belong to the selected window"
+    );
+
+    // And it must land where a full rebuild of the same state puts it.
+    let (mut eval_ref, frame_ref, buf_ref, win_ref) = incr_editing_frame(&text, 800, 600);
+    scroll_window_to(
+        &mut eval_ref,
+        frame_ref,
+        win_ref,
+        buf_ref,
+        scrolled_start,
+        point_byte,
+    );
+    let mut ref_engine = LayoutEngine::new();
+    ref_engine.layout_frame_rust(&mut eval_ref, frame_ref);
+    let reference = frame_phys_cursor(&ref_engine).expect("full rebuild publishes the cursor");
+    assert_eq!(
+        (cursor.row, cursor.col, cursor.x, cursor.y),
+        (reference.row, reference.col, reference.x, reference.y),
+        "the scroll replay's cursor must match a full rebuild's"
     );
 }
 
@@ -14858,6 +14968,555 @@ fn layout_frame_rust_honors_display_replacement_string_face_properties() {
     );
 }
 
+/// Every image this host resolves is laid out 200x80, the size the GUI repro
+/// (`tmp/wrap-mid`) uses: wide enough not to fit in the space left beside a
+/// nearly full row of text, narrow enough to fit a row of its own.
+struct MidRowImageHost;
+
+impl DisplayHost for MidRowImageHost {
+    fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn image_catalog(&self) -> Option<&dyn ImageCatalog> {
+        Some(self)
+    }
+}
+
+/// The buffer's own window matrix: the one with the most rows.  A fresh frame
+/// also carries a one-row minibuffer matrix, whose window id does not track the
+/// window the buffer is displayed in.
+fn widest_text_body_window_matrix(
+    state: &neomacs_display_protocol::glyph_matrix::FrameDisplayState,
+) -> &neomacs_display_protocol::glyph_matrix::WindowMatrixEntry {
+    state
+        .window_matrices
+        .iter()
+        .max_by_key(|entry| entry.matrix.rows.len())
+        .expect("a window matrix")
+}
+
+impl ImageCatalog for MidRowImageHost {
+    fn lookup(&self, _request: ImageResolveRequest, _limit: ImageSizeLimit) -> ImageLookup {
+        ImageLookup::Pending(PendingImage::new(
+            test_image_load(7),
+            neomacs_display_protocol::ImageLayoutExtent::new(200, 80),
+        ))
+    }
+}
+
+/// A mid-row image on a WORD-WRAPPING row moves down whole.
+///
+/// GNU `display_line` never drops a display element that draws past the right
+/// edge of a continued row: it unproduces it, restores the iterator to before
+/// it and produces it again at the start of the next row (src/xdisp.c:26448-26475,
+/// "Restore positions to values before the element"), which is also where
+/// `produce_image_glyph`'s wide-glyph crop does not apply because the image now
+/// starts at column zero (:32492-32509).  Before this port the row writer
+/// rejected the glyph and the clipped-item remainder answered "nothing to
+/// remember", so the image was never produced again on any row.
+///
+/// `word-wrap` must be on.  The crop is skipped only for WORD_WRAP
+/// (`it->line_wrap != WORD_WRAP` is the first disjunct of
+/// `produce_image_glyph`'s condition, :32493-32508), so a WINDOW_WRAP row
+/// crops this same image instead of moving it -- measured on GNU Emacs 31.1,
+/// Xvfb, 720 px text area, 9 px column, 75 columns then a 200x80 image:
+/// `word-wrap` nil gives `window-lines-pixel-dimensions` rows (720 54 9)
+/// (cropped, on row 0) and `word-wrap` t gives (675 209 54) (moved whole);
+/// `tmp/midrow-image/wrapfix-*.txt`.
+///
+/// The filler length is measured from the frame's own text metrics so the image
+/// lands mid-row whatever the default font measures, and the numbers are the
+/// repro's: a whole-row-wide image at the far end of a full row of text.
+#[test]
+fn layout_frame_rust_wraps_a_mid_row_image_onto_the_next_row() {
+    let mut eval = Context::new();
+    eval.set_display_host(Box::new(MidRowImageHost));
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("layout-wrap-mid-image", 640, 400, buf_id);
+    // Media replacement is meaningful only on a graphical frame.
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("frame")
+        .set_window_system(Some(Value::symbol("neo")));
+    // First pass: the frame's own metrics, so the filler can be sized to leave
+    // less than the image's width on the row it lands on.
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let probe = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("probe display state");
+    let entry = widest_text_body_window_matrix(probe);
+    let text_width = entry.text_pixel_bounds.width;
+    let char_width = probe.char_width;
+    assert!(char_width > 0.0, "the frame measures a positive char width");
+    // Five cells short of a full row leaves far less than 200px for the image.
+    let filler = (text_width / char_width).floor() as usize - 5;
+    assert!(filler > 8, "the probe row holds enough columns: {filler}");
+    assert!(
+        200.0 <= text_width,
+        "the image fits a row of its own: {text_width}px"
+    );
+
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert(&format!("{}i\n", "x".repeat(filler)));
+        buf.put_text_property(
+            filler + 1,
+            filler + 2,
+            Value::symbol("display"),
+            Value::list(vec![
+                Value::symbol("image"),
+                Value::keyword("type"),
+                Value::symbol("png"),
+                Value::keyword("file"),
+                Value::string("./tmp/wrap-mid/mid-row.png"),
+            ]),
+        );
+        buf.set_buffer_local("truncate-lines", Value::NIL);
+        // WORD_WRAP: the only wrap method under which GNU leaves the glyph
+        // whole for `display_line` to move.  Without it the row crops.
+        buf.set_buffer_local("word-wrap", Value::T);
+    }
+
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let entry = widest_text_body_window_matrix(state);
+    let text_rows: Vec<&neomacs_display_protocol::glyph_matrix::MatrixRow> = entry
+        .matrix
+        .rows
+        .iter()
+        .filter(|row| row.enabled && row.role == GlyphRowRole::Text)
+        .collect();
+
+    let image_row = text_rows
+        .iter()
+        .position(|row| {
+            row.glyphs[GlyphArea::Text.index()]
+                .iter()
+                .any(|glyph| matches!(glyph.glyph_type, GlyphType::Image { .. }))
+        })
+        .expect("the wrapped image is displayed on a continuation row");
+    assert_eq!(
+        image_row, 1,
+        "the image moves to the row after the one it did not fit in"
+    );
+
+    let image_glyph = &text_rows[image_row].glyphs[GlyphArea::Text.index()][0];
+    let GlyphType::Image { image_id, .. } = image_glyph.glyph_type else {
+        panic!("the image starts the continuation row: {image_glyph:?}");
+    };
+    assert_eq!(image_id, 7);
+    assert_eq!(
+        image_glyph.pixel_width, 200.0,
+        "a deferred image is re-produced whole on the next row, not cropped"
+    );
+
+    // GNU marks that row continued (`row->continued_p = true`) rather than
+    // ending it, which is what makes the next row its continuation: the row
+    // keeps its `:extend` fill and draws the right-fringe continuation arrow.
+    let right_curly_index = eval
+        .eval_str("(get 'right-curly-arrow 'fringe)")
+        .expect("right-curly-arrow fringe prop")
+        .as_fixnum()
+        .expect("fringe index") as u16;
+    assert!(
+        text_rows[0].continued,
+        "the row the image did not fit in is a continued row"
+    );
+    assert!(
+        text_rows[0]
+            .right_fringe_bitmap
+            .is_some_and(|info| info.bitmap_index == right_curly_index),
+        "a continued row draws the right-fringe continuation arrow"
+    );
+
+    let first_row_text = &text_rows[0].glyphs[GlyphArea::Text.index()];
+    assert!(
+        first_row_text
+            .iter()
+            .all(|glyph| !matches!(glyph.glyph_type, GlyphType::Image { .. })),
+        "the row the image did not fit in keeps only its text"
+    );
+    assert_eq!(
+        first_row_text
+            .iter()
+            .filter(|glyph| matches!(glyph.glyph_type, GlyphType::Char { ch: 'x' }))
+            .count(),
+        filler,
+        "the text row is unchanged by the deferral"
+    );
+}
+
+/// A mid-row image on a WINDOW-WRAPPING row is cropped to the row edge.
+///
+/// Same content and geometry as the WORD_WRAP test above, with `word-wrap`
+/// nil.  GNU crops here: `it->line_wrap != WORD_WRAP` is the first disjunct of
+/// `produce_image_glyph`'s condition, so a WINDOW_WRAP row never reaches the
+/// "keep the real width for wrapping" clause
+/// (src/xdisp.c:32493-32508), and the glyph ends exactly at
+/// `it->last_visible_x` -- which is why `display_line` can end a truncating
+/// row on `IT_IMAGE` at equality and why the crop is what lets the row keep
+/// the glyph at all.
+///
+/// Measured, GNU Emacs 31.1 under Xvfb, 720 px text area, 9 px column, 75
+/// columns of text and a 200x80 image: `window-lines-pixel-dimensions` reports
+/// rows (720 54 9) with `word-wrap` nil against (675 209 54) with it
+/// (`tmp/midrow-image/wrapfix-nil.txt`, `wrapfix-t.txt`).
+#[test]
+fn layout_frame_rust_crops_a_mid_row_image_on_a_window_wrapping_row() {
+    let mut eval = Context::new();
+    eval.set_display_host(Box::new(MidRowImageHost));
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("layout-window-wrap-crop", 640, 400, buf_id);
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("frame")
+        .set_window_system(Some(Value::symbol("neo")));
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let probe = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("probe display state");
+    let entry = widest_text_body_window_matrix(probe);
+    let text_width = entry.text_pixel_bounds.width;
+    let char_width = probe.char_width;
+    let filler = (text_width / char_width).floor() as usize - 5;
+    assert!(filler > 8, "the probe row holds enough columns: {filler}");
+    assert!(
+        200.0 > text_width / 4.0,
+        "the image is past the quarter-width floor: {text_width}px"
+    );
+
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert(&format!("{}i\n", "x".repeat(filler)));
+        buf.put_text_property(
+            filler + 1,
+            filler + 2,
+            Value::symbol("display"),
+            Value::list(vec![
+                Value::symbol("image"),
+                Value::keyword("type"),
+                Value::symbol("png"),
+                Value::keyword("file"),
+                Value::string("./tmp/midrow-image/mid-row.png"),
+            ]),
+        );
+        buf.set_buffer_local("truncate-lines", Value::NIL);
+        buf.set_buffer_local("word-wrap", Value::NIL);
+    }
+
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let entry = widest_text_body_window_matrix(state);
+    let text_rows: Vec<&neomacs_display_protocol::glyph_matrix::MatrixRow> = entry
+        .matrix
+        .rows
+        .iter()
+        .filter(|row| row.enabled && row.role == GlyphRowRole::Text)
+        .collect();
+
+    let row0 = text_rows[0].glyphs[GlyphArea::Text.index()].as_slice();
+    let image_glyphs: Vec<&neomacs_display_protocol::glyph_matrix::Glyph> = text_rows
+        .iter()
+        .flat_map(|row| row.glyphs[GlyphArea::Text.index()].iter())
+        .filter(|glyph| matches!(glyph.glyph_type, GlyphType::Image { .. }))
+        .collect();
+    assert_eq!(
+        image_glyphs.len(),
+        1,
+        "a WINDOW_WRAP row keeps the image it crops"
+    );
+    let image_glyph = image_glyphs[0];
+    assert!(
+        image_glyph.pixel_width < 200.0,
+        "the image is cropped, not deferred whole: {} px",
+        image_glyph.pixel_width
+    );
+    // GNU's invariant for the cropped glyph: it ends exactly at the row's
+    // right edge, so nothing of the row overhangs the text area.
+    let row_width: f32 = row0.iter().map(|glyph| glyph.pixel_width).sum();
+    let prefix_width = row_width - image_glyph.pixel_width;
+    assert!(
+        prefix_width + 200.0 > text_width,
+        "the uncropped image would overhang the text area: \
+         {prefix_width} + 200 vs {text_width}"
+    );
+    assert!(
+        row_width <= text_width + 0.5 && row_width > text_width - char_width,
+        "the cropped row ends at the text area's right edge: {row_width} vs {text_width} \
+         (char width {char_width})"
+    );
+}
+
+/// A mid-row image on a TRUNCATING row is cropped to the row edge too.
+///
+/// Same content and geometry as the WINDOW_WRAP test above, with
+/// `truncate-lines` at its default.  This is the case the first port of
+/// `produce_image_glyph`'s crop left out: it took the word-wrap clause as a
+/// precondition instead of a disjunct, so a row that does not word-wrap fell
+/// through to the row writer's overflow policy and the glyph was rejected.
+///
+/// Measured, GNU Emacs 31.1 under Xvfb, 720 px text area, 9 px column, 64
+/// columns of text (current_x 576): a 180 px image leaves the row 756 px wide
+/// (no crop) and a 181 px image leaves it 720 px (crop), so the crop fires
+/// exactly above `last_visible_x / 4` -- `tmp/midrow-image/crop-truncate.txt`.
+#[test]
+fn layout_frame_rust_crops_a_mid_row_image_on_a_truncating_row() {
+    let mut eval = Context::new();
+    eval.set_display_host(Box::new(MidRowImageHost));
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("layout-truncate-crop", 640, 400, buf_id);
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("frame")
+        .set_window_system(Some(Value::symbol("neo")));
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let probe = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("probe display state");
+    let entry = widest_text_body_window_matrix(probe);
+    let text_width = entry.text_pixel_bounds.width;
+    let char_width = probe.char_width;
+    let filler = (text_width / char_width).floor() as usize - 5;
+    assert!(filler > 8, "the probe row holds enough columns: {filler}");
+    assert!(
+        200.0 > text_width / 4.0,
+        "the image is past the quarter-width floor: {text_width}px"
+    );
+
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert(&format!("{}i\n", "x".repeat(filler)));
+        buf.put_text_property(
+            filler + 1,
+            filler + 2,
+            Value::symbol("display"),
+            Value::list(vec![
+                Value::symbol("image"),
+                Value::keyword("type"),
+                Value::symbol("png"),
+                Value::keyword("file"),
+                Value::string("./tmp/midrow-image/mid-row.png"),
+            ]),
+        );
+        buf.set_buffer_local("truncate-lines", Value::T);
+    }
+
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let entry = widest_text_body_window_matrix(state);
+    let text_rows: Vec<&neomacs_display_protocol::glyph_matrix::MatrixRow> = entry
+        .matrix
+        .rows
+        .iter()
+        .filter(|row| row.enabled && row.role == GlyphRowRole::Text)
+        .collect();
+    let row0 = text_rows[0].glyphs[GlyphArea::Text.index()].as_slice();
+    let image_glyph = row0
+        .iter()
+        .find(|glyph| matches!(glyph.glyph_type, GlyphType::Image { .. }))
+        .expect("the truncating row keeps the image it crops");
+    assert!(
+        image_glyph.pixel_width < 200.0,
+        "the image is cropped: {} px",
+        image_glyph.pixel_width
+    );
+    let row_width: f32 = row0.iter().map(|glyph| glyph.pixel_width).sum();
+    let prefix_width = row_width - image_glyph.pixel_width;
+    assert!(
+        prefix_width + 200.0 > text_width,
+        "the uncropped image would overhang the text area: {prefix_width} + 200 vs {text_width}"
+    );
+    assert!(
+        row_width <= text_width + 0.5 && row_width > text_width - char_width,
+        "the cropped row ends at the text area's right edge: {row_width} vs {text_width}"
+    );
+}
+
+/// A mid-row image on a WORD-WRAPPING row takes the word in front of it down.
+///
+/// `display_line` does not move a display element that does not fit down on its
+/// own while the row holds a word-wrap break candidate: `else if (wrap_row_used
+/// > 0) goto back_to_wrap` wins over the "Restore positions to values before the
+/// element" arm, so the row is cut back to the candidate and the word in front
+/// of the element is re-produced on the continuation row with it
+/// (src/xdisp.c:26379-26406 against :26433-26475, emacs-31.1).
+///
+/// Measured, GNU Emacs 31.1 under Xvfb, 720 px text area, 9 px column, 40
+/// columns of text then " zzz" and a 400 px image: the first screen line is
+/// [1..42) -- the text and the space before the word -- and the second is
+/// [42..47), "zzz" followed by the whole image
+/// (`tmp/midrow-image/case-1.txt`); the same content with `word-wrap` nil keeps
+/// the word on the first line (`case-3.txt`).
+#[test]
+fn layout_frame_rust_word_wrap_takes_the_preceding_word_with_the_image() {
+    let mut eval = Context::new();
+    eval.set_display_host(Box::new(MidRowImageHost));
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("layout-word-wrap-image", 640, 400, buf_id);
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("frame")
+        .set_window_system(Some(Value::symbol("neo")));
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let probe = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("probe display state");
+    let entry = widest_text_body_window_matrix(probe);
+    let text_width = entry.text_pixel_bounds.width;
+    let char_width = probe.char_width;
+    let word = "zzz";
+    // Columns the row holds before the image: `filler` x's, a space, the word,
+    // and the character the image replaces.  The image starts far enough in to
+    // overhang the row by more than a rounding error, while the word and the
+    // image still fit a row of their own.
+    let lead = ((text_width - 200.0) / char_width).floor() as usize + 4;
+    let filler = lead - word.len() - 2;
+    assert!(filler > 8, "the probe row holds enough columns: {filler}");
+    assert!(
+        (word.len() + 1) as f32 * char_width + 200.0 <= text_width,
+        "the word and the image fit a continuation row: {text_width}px"
+    );
+
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        // The image replaces the character right after the word, so the row
+        // breaks at the space and the word travels with it.
+        buf.insert(&format!("{} {}Q\n", "x".repeat(filler), word));
+        buf.put_text_property(
+            filler + word.len() + 2,
+            filler + word.len() + 3,
+            Value::symbol("display"),
+            Value::list(vec![
+                Value::symbol("image"),
+                Value::keyword("type"),
+                Value::symbol("png"),
+                Value::keyword("file"),
+                Value::string("./tmp/midrow-image/mid-row.png"),
+            ]),
+        );
+        buf.set_buffer_local("truncate-lines", Value::NIL);
+        buf.set_buffer_local("word-wrap", Value::T);
+    }
+
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let entry = widest_text_body_window_matrix(state);
+    let text_rows: Vec<&neomacs_display_protocol::glyph_matrix::MatrixRow> = entry
+        .matrix
+        .rows
+        .iter()
+        .filter(|row| row.enabled && row.role == GlyphRowRole::Text)
+        .collect();
+    let row_text = |row: &neomacs_display_protocol::glyph_matrix::MatrixRow| -> String {
+        row.glyphs[GlyphArea::Text.index()]
+            .iter()
+            .filter_map(|glyph| match glyph.glyph_type {
+                GlyphType::Char { ch } => Some(ch),
+                _ => None,
+            })
+            .collect()
+    };
+
+    assert!(
+        !row_text(text_rows[0]).contains('z'),
+        "the word the row broke before stays off the first row: {:?}",
+        row_text(text_rows[0])
+    );
+    assert_eq!(
+        row_text(text_rows[0]),
+        format!("{} ", "x".repeat(filler)),
+        "the first row keeps the text up to the break candidate"
+    );
+    // The continuation row carries the word and then the image.  It also holds
+    // the character the image's `display` property covers: this port appends
+    // the covered character's own glyph as well as the replacement, which GNU
+    // does not -- the property replaces the glyph there.  That is a
+    // pre-existing divergence of the display-property producer, unchanged by
+    // this rule and visible on any row a replacement lands on
+    // (`layout_frame_rust_wraps_a_mid_row_image_onto_the_next_row` shows the
+    // same glyph on the row before the image).
+    let continuation = &text_rows[1].glyphs[GlyphArea::Text.index()];
+    assert!(
+        row_text(text_rows[1]).starts_with(word),
+        "the word moves down WITH the image, ahead of it on the continuation row: {:?}",
+        row_text(text_rows[1])
+    );
+    assert!(
+        matches!(
+            continuation.last().expect("the image").glyph_type,
+            GlyphType::Image { .. }
+        ),
+        "the image follows the word it did not fit behind: {continuation:?}"
+    );
+    let GlyphType::Image { image_id, .. } = continuation.last().expect("the image").glyph_type
+    else {
+        unreachable!("checked just above")
+    };
+    assert_eq!(image_id, 7);
+    assert_eq!(
+        continuation.last().expect("the image").pixel_width,
+        200.0,
+        "re-produced whole on a row of its own"
+    );
+}
+
 #[test]
 fn layout_frame_rust_emits_inline_image_glyphs_for_display_image_specs() {
     let mut eval = Context::new();
@@ -17325,6 +17984,43 @@ fn issue_204_align_to_image_operand_falls_back_without_a_catalog() {
     assert_eq!(geometry.width, 8.0, "GNU falls back to one char width");
 }
 
+/// The \`:align-to\` coordinate contract for buffer replacements: GNU resolves
+/// a raw number against the TEXT AREA's left edge
+/// (\`align_to < 0 -> 0\`, xdisp.c:32878-32884), while this port's pen
+/// (\`progress.row_progress().x()\`) runs in FRAME-ABSOLUTE pixels starting at
+/// \`content_x = body.x + line-number field\`. The resolver therefore re-bases
+/// the bare-number target by \`text_area_left\`. This test pins that re-basing:
+/// dropping it (resolving against the pen directly) would under-width every
+/// align-to replacement in a window whose text area does not start at frame
+/// x 0 (GUI fringes, margins, scroll bars).
+#[test]
+fn align_to_raw_number_rebases_to_the_frame_absolute_pen() {
+    let _eval = Context::new();
+    let mut params = test_window_params();
+    // The window sits at frame x 10; margins/fringes put the text area's left
+    // edge at frame x 40. Char cell 8px.
+    params.bounds = Rect::new(10.0, 0.0, 810.0, 600.0);
+    params.text_bounds = Rect::new(40.0, 0.0, 760.0, 560.0);
+    let spec = Value::list(vec![
+        Value::symbol("space"),
+        Value::keyword("align-to"),
+        Value::fixnum(21),
+    ]);
+
+    // A pen 60 frame pixels in -- GNU's text-area-relative pen is
+    // 60 - 40 = 20px, so the stretch reaches column 21: width
+    // = (40 + 21*8) - 60 = 148.
+    let geometry = DisplaySpaceGeometry::from_display_space_spec(
+        &spec, 60.0, 40.0, 8.0, 8.0, 10.0, 7.0, &params,
+    );
+
+    assert_eq!(
+        geometry.width, 148.0,
+        "a raw :align-to target is measured from the text area's left edge, \
+         re-based into the frame-absolute pen"
+    );
+}
+
 /// An image that finishes decoding must invalidate the window's retained
 /// matrix, not just request a redisplay.
 ///
@@ -17361,7 +18057,7 @@ struct FixedSizeImageCatalog {
 }
 
 impl ImageCatalog for FixedSizeImageCatalog {
-    fn lookup(&self, _request: ImageResolveRequest) -> ImageLookup {
+    fn lookup(&self, _request: ImageResolveRequest, _limit: ImageSizeLimit) -> ImageLookup {
         ImageLookup::Ready(ReadyImage {
             load: test_image_load(9),
             metadata:
@@ -17778,6 +18474,7 @@ fn layout_frame_rust_keeps_mixed_width_advances_correct_after_mid_line_face_chan
         .redisplay_snapshot(selected_window)
         .expect("display snapshot");
     let all_points = snapshot.points.clone();
+    eprintln!("i446dbg all_points = {all_points:?}");
     let a = snapshot
         .point_for_buffer_pos(LispCharPos1::from_one_based_usize(sample_pos))
         .expect("a");
@@ -17904,6 +18601,7 @@ fn layout_frame_rust_keeps_face_positions_after_truncated_multibyte_line() {
         .redisplay_snapshot(selected_window)
         .expect("display snapshot");
     let all_points = snapshot.points.clone();
+    eprintln!("i446dbg all_points = {all_points:?}");
     let a = snapshot
         .point_for_buffer_pos(LispCharPos1::from_one_based_usize(sample_pos))
         .expect("a");
@@ -18675,6 +19373,7 @@ fn layout_frame_rust_retries_window_when_point_starts_below_visible_span() {
 fn next_window_start_from_visible_rows_uses_visual_row_boundaries() {
     let rows = vec![
         DisplayRowSnapshot {
+            truncated_end_buffer_pos: None,
             row: 0,
             y: 0,
             height: 16,
@@ -18688,6 +19387,7 @@ fn next_window_start_from_visible_rows_uses_visual_row_boundaries() {
             fringe: Default::default(),
         },
         DisplayRowSnapshot {
+            truncated_end_buffer_pos: None,
             row: 1,
             y: 16,
             height: 16,
@@ -18701,6 +19401,7 @@ fn next_window_start_from_visible_rows_uses_visual_row_boundaries() {
             fringe: Default::default(),
         },
         DisplayRowSnapshot {
+            truncated_end_buffer_pos: None,
             row: 2,
             y: 32,
             height: 16,
@@ -18714,6 +19415,7 @@ fn next_window_start_from_visible_rows_uses_visual_row_boundaries() {
             fringe: Default::default(),
         },
         DisplayRowSnapshot {
+            truncated_end_buffer_pos: None,
             row: 3,
             y: 48,
             height: 16,
@@ -18759,6 +19461,7 @@ fn next_window_start_from_visible_rows_uses_visual_row_boundaries() {
 fn next_window_start_for_partially_visible_point_row_scrolls_enough_to_fit_row() {
     let rows = vec![
         DisplayRowSnapshot {
+            truncated_end_buffer_pos: None,
             row: 0,
             y: 0,
             height: 20,
@@ -18772,6 +19475,7 @@ fn next_window_start_for_partially_visible_point_row_scrolls_enough_to_fit_row()
             fringe: Default::default(),
         },
         DisplayRowSnapshot {
+            truncated_end_buffer_pos: None,
             row: 1,
             y: 20,
             height: 20,
@@ -18785,6 +19489,7 @@ fn next_window_start_for_partially_visible_point_row_scrolls_enough_to_fit_row()
             fringe: Default::default(),
         },
         DisplayRowSnapshot {
+            truncated_end_buffer_pos: None,
             row: 2,
             y: 40,
             height: 30,
@@ -18831,6 +19536,7 @@ fn next_window_start_for_point_line_continuation_advances_last_visible_row() {
     };
     let rows = vec![
         DisplayRowSnapshot {
+            truncated_end_buffer_pos: None,
             row: 0,
             y: 0,
             height: 16,
@@ -18844,6 +19550,7 @@ fn next_window_start_for_point_line_continuation_advances_last_visible_row() {
             fringe: Default::default(),
         },
         DisplayRowSnapshot {
+            truncated_end_buffer_pos: None,
             row: 1,
             y: 16,
             height: 16,
@@ -18857,6 +19564,7 @@ fn next_window_start_for_point_line_continuation_advances_last_visible_row() {
             fringe: Default::default(),
         },
         DisplayRowSnapshot {
+            truncated_end_buffer_pos: None,
             row: 2,
             y: 32,
             height: 16,
@@ -18879,6 +19587,7 @@ fn next_window_start_for_point_line_continuation_advances_last_visible_row() {
 
     let terminated_rows = vec![
         DisplayRowSnapshot {
+            truncated_end_buffer_pos: None,
             row: 0,
             y: 0,
             height: 16,
@@ -18892,6 +19601,7 @@ fn next_window_start_for_point_line_continuation_advances_last_visible_row() {
             fringe: Default::default(),
         },
         DisplayRowSnapshot {
+            truncated_end_buffer_pos: None,
             row: 1,
             y: 16,
             height: 16,
@@ -18937,6 +19647,7 @@ fn next_window_start_for_point_line_continuation_ignores_newline_terminated_rows
         RustBufferAccess::new(buf)
     };
     let rows = vec![DisplayRowSnapshot {
+        truncated_end_buffer_pos: None,
         row: 0,
         y: 0,
         height: 16,
@@ -18978,6 +19689,7 @@ fn next_window_start_for_point_line_continuation_ignores_tail_clipping_when_poin
     };
     let rows = vec![
         DisplayRowSnapshot {
+            truncated_end_buffer_pos: None,
             row: 0,
             y: 0,
             height: 16,
@@ -18991,6 +19703,7 @@ fn next_window_start_for_point_line_continuation_ignores_tail_clipping_when_poin
             fringe: Default::default(),
         },
         DisplayRowSnapshot {
+            truncated_end_buffer_pos: None,
             row: 1,
             y: 16,
             height: 16,
@@ -19004,6 +19717,7 @@ fn next_window_start_for_point_line_continuation_ignores_tail_clipping_when_poin
             fringe: Default::default(),
         },
         DisplayRowSnapshot {
+            truncated_end_buffer_pos: None,
             row: 2,
             y: 32,
             height: 16,
@@ -19017,6 +19731,7 @@ fn next_window_start_for_point_line_continuation_ignores_tail_clipping_when_poin
             fringe: Default::default(),
         },
         DisplayRowSnapshot {
+            truncated_end_buffer_pos: None,
             row: 3,
             y: 48,
             height: 16,
@@ -19030,6 +19745,7 @@ fn next_window_start_for_point_line_continuation_ignores_tail_clipping_when_poin
             fringe: Default::default(),
         },
         DisplayRowSnapshot {
+            truncated_end_buffer_pos: None,
             row: 4,
             y: 64,
             height: 16,
@@ -21258,6 +21974,7 @@ fn render_buffer_plain_item_source_shadow_row(
         GlyphRowRole::Text,
         base_face_id,
         resolver.default_face(),
+        DisplayRowLineWrap::chrome_row(),
     )
     .render_request(DisplayRowRenderBounds::new(
         DisplayRowPosition::new(0.0, 0),
@@ -21337,6 +22054,7 @@ fn render_buffer_plain_item_prefix_shadow_row_at(
         GlyphRowRole::Text,
         base_face_id,
         resolver.default_face(),
+        DisplayRowLineWrap::chrome_row(),
     )
     .render_request(DisplayRowRenderBounds::new(
         start_position,
@@ -22913,6 +23631,7 @@ fn assert_segmented_plain_shadow_row(
         GlyphRowRole::Text,
         base_face_id,
         resolver.default_face(),
+        DisplayRowLineWrap::chrome_row(),
     )
     .render_request(DisplayRowRenderBounds::new(
         DisplayRowPosition::new(0.0, 0),
@@ -23686,6 +24405,157 @@ fn plain_item_source_shadow_matches_mark_cluster_beside_face_span() {
     );
     assert_eq!(segments.len(), 3, "base / bold / base segments");
     assert_ne!(segments[0].face_id, segments[1].face_id);
+}
+
+#[test]
+fn face_boundary_on_zero_width_extender_keeps_row_glyphs() {
+    // neovm issue #445 (ibuffer group headers like "🛠\u{FE0F}" with the
+    // underline face starting at the selector blanked the whole row): a face
+    // change landing exactly ON a zero-width cluster extender must keep the
+    // row's glyphs — every buffer character of the line stays represented in
+    // the row (the extender in the base's cluster, the remainder under the
+    // new face) — never an empty row. The composition-span shape this fix
+    // targets needs a live composition-function-table, so the end-to-end
+    // regression lives in neomacs-tui-tests `issue_445`; this harness pins
+    // the char-coverage invariant at cell metrics.
+    let text = "a\u{FE0F}bc\nnext\n";
+    // char-cell metrics, matching the -nw TTY frontend where the blank row
+    // was observed (1x1 cells).
+    let mut eval = Context::new();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert(text);
+    }
+    eval.buffer_manager_mut().set_current(buf_id);
+    // 1-based chars [2, 3) = the U+FE0F.
+    eval.eval_str("(put-text-property 2 3 'face '(:underline t))")
+        .expect("face span on the extender");
+    let frame_id = eval.frame_manager_mut().create_frame(
+        "face-boundary-zero-width-extender",
+        120,
+        160,
+        buf_id,
+    );
+    {
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+        frame.char_width = 1.0;
+        frame.char_height = 1.0;
+    }
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let entry = state
+        .window_matrices
+        .iter()
+        .find(|entry| entry.window_id.get() == selected_window.0 as i64)
+        .expect("selected window matrix");
+    let rows: Vec<_> = entry
+        .matrix
+        .rows
+        .iter()
+        .filter(|row| row.enabled && row.role == GlyphRowRole::Text)
+        .cloned()
+        .collect();
+    assert!(rows.len() >= 2, "both lines must lay out");
+    let text_glyphs = &rows[0].glyphs[GlyphArea::Text.index()];
+    assert!(
+        !text_glyphs.is_empty(),
+        "a face boundary on a zero-width extender must not blank the row"
+    );
+    // Every visible character of the line is represented (the appended
+    // newline space included), and nothing but those.
+    assert_eq!(
+        glyphs_logical_text(text_glyphs),
+        "a\u{FE0F}bc ",
+        "the row must account for the whole line despite the face seam"
+    );
+}
+
+#[test]
+fn align_to_stretch_past_the_right_edge_truncates_like_gnu() {
+    // Issue #446 (static half): with truncation on, a `(space :align-to N)`
+    // whose target lies past the window's usable right edge must NOT collapse
+    // so the text after it paints inside the window. GNU clips the stretch at
+    // the edge, advances the pen by the FULL resolved width, and truncates the
+    // row there: the following text is undrawn and the last column carries the
+    // truncation glyph (xdisp.c display_line; the issue's `EEEE-000  $` vs
+    // Neomacs's `EEEE-000FF$`).
+    let text = "EEEE\u{0020}FFFF tail\n";
+    let mut eval = Context::new();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert(text);
+    }
+    eval.buffer_manager_mut().set_current(buf_id);
+    // The recipe's `M-x toggle-truncate-lines`: the row must truncate, not wrap.
+    eval.eval_str("(setq truncate-lines t)")
+        .expect("truncate lines");
+    // 1-based chars [5, 6) = the space; its display spec targets column 105 in
+    // a 100-column window, so FFFF would start entirely PAST the edge — GNU
+    // draws none of it.
+    eval.eval_str("(put-text-property 5 6 'display '(space :align-to 105))")
+        .expect("align-to space spec");
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("align-to-past-right-edge", 100, 160, buf_id);
+    {
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+        frame.char_width = 1.0;
+        frame.char_height = 1.0;
+    }
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let entry = state
+        .window_matrices
+        .iter()
+        .find(|entry| entry.window_id.get() == selected_window.0 as i64)
+        .expect("selected window matrix");
+    let rows: Vec<_> = entry
+        .matrix
+        .rows
+        .iter()
+        .filter(|row| row.enabled && row.role == GlyphRowRole::Text)
+        .cloned()
+        .collect();
+    assert!(rows.len() >= 2, "both lines must lay out");
+    let text_glyphs = &rows[0].glyphs[GlyphArea::Text.index()];
+    // GNU's row: `EEEE` (the text before the spec), the stretch's cells
+    // cropped to the window as blanks, and the truncation glyph in the LAST
+    // column — 100 cells for the 100-column frame. The text after the spec is
+    // undrawn.
+    let expected = format!("EEEE{}$", " ".repeat(95));
+    assert_eq!(
+        glyphs_logical_text(text_glyphs),
+        expected,
+        "a past-the-edge align-to stretch must fill its row and truncate,          leaving the text after it undrawn"
+    );
 }
 
 /// Engagement proof for the composed-cluster extension (flag-on suite gate):
@@ -35803,4 +36673,330 @@ fn hscroll_cursor_publication_preserves_clipping_visible_text_and_eol() {
             .unwrap();
         assert_eq!(replay, full, "point={point}");
     }
+}
+
+mod prepared_viewport_test;
+
+mod offscreen_row_test;
+
+#[test]
+fn borrowed_and_snapshot_views_agree_on_composition_span_queries() {
+    // The two LayoutBufferView implementations derive their composition spans
+    // independently (BorrowedLayoutBuffer::for_window vs
+    // LayoutBufferSnapshot::from_buffer_for_window) and answer the span
+    // queries with different loop shapes (linear find vs partition_point).
+    // A divergence between them silently changes which rows take which
+    // layout path — issue #445/#446's machinery sits on both sides. Pin the
+    // contract: identical answers on every position, both queries, INCLUDING
+    // a position that sits ON a span start (the historical divergence).
+    let mut eval = Context::new();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert("abxycdé x\n");
+    }
+    eval.eval_str(
+        "(progn (setq auto-composition-mode t auto-composition-function 'auto-compose-chars composition-function-table (make-char-table nil)) (aset composition-function-table ?x (list (vector \"xy\" 0 'font-shape-gstring))))",
+    )
+    .expect("composition rule on x");
+
+    let buffer = eval.buffer_manager().get(buf_id).expect("buffer");
+    let obarray = eval.obarray();
+    let target = crate::display_property::DisplayPropertyTarget::Graphical;
+    let snapshot = LayoutBufferSnapshot::from_buffer_for_window(buffer, obarray, None, target);
+    let borrowed = crate::neovm_bridge::BorrowedLayoutBuffer::for_window(
+        buffer,
+        obarray,
+        CharPos0::new(0),
+        usize::MAX,
+        target,
+    );
+
+    use crate::neovm_bridge::LayoutBufferView as _;
+
+    // Engagement: the "xy" rule produced a span, or the sweep is vacuous.
+    let text_len = CharPos0::new(10);
+    assert!(
+        snapshot
+            .layout_next_automatic_composition_start(CharPos0::new(0), text_len)
+            .is_some(),
+        "snapshot view must see the composition span"
+    );
+    assert!(
+        borrowed
+            .layout_next_automatic_composition_start(CharPos0::new(0), text_len)
+            .is_some(),
+        "borrowed view must see the composition span"
+    );
+
+    for pos in 0..=10usize {
+        let p = CharPos0::new(pos);
+        for limit in [text_len, CharPos0::new((pos + 3).min(10))] {
+            assert_eq!(
+                snapshot.layout_next_automatic_composition_start(p, limit),
+                borrowed.layout_next_automatic_composition_start(p, limit),
+                "next-composition-start parity at pos={pos} limit={:?}",
+                limit.get()
+            );
+        }
+        assert_eq!(
+            snapshot.layout_automatic_composition_starting_at(p),
+            borrowed.layout_automatic_composition_starting_at(p),
+            "composition-starting-at parity at pos={pos}"
+        );
+    }
+}
+
+#[test]
+fn wide_char_cut_at_truncation_edge_leaves_both_cells_to_the_marker() {
+    // Issue #446 follow-up (the upstream ibuffer_truncated_wide_name TUI
+    // test): a wide character at columns 38..40 in a forty-column truncating
+    // window is cut at the edge. GNU's truncation pass overwrites BOTH its
+    // cells with the truncation glyph (xdisp.c:26611-26641): the cut is
+    // recorded as the row's WideCut flag and the marker installer fills the
+    // padding cells with the marker. {
+    let mut eval = Context::new();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        // 38 ASCII columns, then a wide char spanning 38..40, then text after:
+        // the wide char exactly fills to the window edge and gets cut.
+        buf.insert(&format!(
+            "{}{}tail\n",
+            "x".repeat(38),
+            char::from_u32(0x65e5).unwrap()
+        ));
+    }
+    eval.buffer_manager_mut().set_current(buf_id);
+    eval.eval_str("(setq truncate-lines t)")
+        .expect("truncate lines");
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("wide-cut-at-edge", 40, 160, buf_id);
+    {
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+        frame.char_width = 1.0;
+        frame.char_height = 1.0;
+    }
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let entry = state
+        .window_matrices
+        .iter()
+        .find(|entry| entry.window_id.get() == selected_window.0 as i64)
+        .expect("selected window matrix");
+    let rows: Vec<_> = entry
+        .matrix
+        .rows
+        .iter()
+        .filter(|row| row.enabled && row.role == GlyphRowRole::Text)
+        .cloned()
+        .collect();
+    assert!(rows.len() >= 2, "both lines must lay out");
+    let text_glyphs = &rows[0].glyphs[GlyphArea::Text.index()];
+    for (i, g) in text_glyphs.iter().enumerate() {
+        eprintln!(
+            "i446dbg wide-cut glyph[{i}]: type={:?} wide={} width={} pos={:?}",
+            g.glyph_type, g.wide, g.pixel_width, g.provenance
+        );
+    }
+    // GNU's contract: the text, then the truncation glyph in BOTH the cut
+    // glyph's cells.
+    assert_eq!(
+        glyphs_logical_text(text_glyphs),
+        format!("x{}$$", "x".repeat(37)),
+        "both cells of the cut wide glyph must carry the truncation glyph"
+    );
+}
+
+#[test]
+fn ligature_rule_composes_through_the_font_shape_driver() {
+    // Issue #447: a ligature.el-style composition rule (font-shape-gstring
+    // over a matched run) on a GUI frame must compose the matched sequence
+    // into a composed glyph shaped through the font.
+    let mut eval = Context::new();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert("a -> b\nc ->> d\n");
+    }
+    eval.buffer_manager_mut().set_current(buf_id);
+    // QUOTED rules (the wiki pattern): the rule vector is data — the
+    // function symbol reaches auto-compose-chars' funcall through the
+    // function cell. Built via format! so no escape-sequence ambiguity.
+    // The Lisp string must read back as the regex `\(?:->\)` (shy group):
+    // the Lisp SOURCE needs doubled backslashes, so the pattern string
+    // carries two literal backslashes around the group.
+    let regex_pattern = String::from_utf8(vec![
+        0x5C, 0x5C, 0x28, 0x3F, 0x3A, 0x2D, 0x3E, 0x5C, 0x5C, 0x29,
+    ])
+    .expect("ASCII");
+    // regex_pattern is the 8-byte string `\(?:->\)`.
+    let rule = format!(
+        "(progn (setq auto-composition-mode t auto-composition-function \
+          'auto-compose-chars composition-function-table (make-char-table nil)) \
+          (aset composition-function-table ?- \
+          '([\"{}\" 0 font-shape-gstring])))",
+        regex_pattern
+    );
+    eval.eval_str(&rule)
+        .expect("the ligature rule setup must evaluate");
+
+    // The installed font-shaping driver: a disjoint FontMetricsService the
+    // runtime owns (RedisplayRuntime::shape_gstring's exact pattern).
+    let metrics = std::sync::Arc::new(std::sync::Mutex::new(
+        crate::font::metrics::FontMetricsService::new(),
+    ));
+    let driver_metrics = metrics.clone();
+    eval.font_shape_fn = Some(Box::new(move |_eval, mut gstring, direction| {
+        let mut metrics = driver_metrics.lock().expect("driver metrics");
+        metrics.shape_gstring_through_font(&mut gstring, direction)
+    }));
+
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("ligature-probe", 200, 160, buf_id);
+    {
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+        frame.set_window_system(Some(Value::symbol("neo")));
+        frame.char_width = 8.0;
+        frame.char_height = 16.0;
+    }
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let entry = state
+        .window_matrices
+        .iter()
+        .find(|entry| entry.window_id.get() == selected_window.0 as i64)
+        .expect("selected window matrix");
+    let text_rows: Vec<_> = entry
+        .matrix
+        .rows
+        .iter()
+        .filter(|row| row.enabled && row.role == GlyphRowRole::Text)
+        .collect();
+    // The '->' sequence must compose into ONE glyph through the driver: an
+    // AutomaticComposite carrying the cluster text.
+    let first_text_glyphs = &text_rows[0].glyphs[GlyphArea::Text.index()];
+    let composed = first_text_glyphs.iter().any(|glyph| {
+        matches!(
+            &glyph.glyph_type,
+            GlyphType::AutomaticComposite { text, .. } if text.as_ref() == "->"
+        )
+    });
+    assert!(
+        composed,
+        "the '->' sequence must compose into one glyph through the \
+         font-shape driver, got {:?}",
+        glyphs_logical_text(first_text_glyphs)
+    )
+}
+
+/// The cadence an image diagnostic may be attached to.
+///
+/// Measured, not assumed, because the two candidates behave very differently in
+/// a user's `*Messages*`.  Repeated layout of an *unchanged* frame consults the
+/// catalog on every pass — the counts below are one extra lookup per pass, all
+/// of them the same request — while GNU's display iterator does not run at all
+/// between glyph regenerations, so `image_error` fires three times for the first
+/// display of a failing image and never again while the frame merely redisplays
+/// (GNU 31.1 under Xvfb, `tmp/imgmsg/`).
+///
+/// Attaching a *Messages* line to the lookup itself would therefore log once per
+/// redisplay tick: the count in `*Messages*` would climb while the user does
+/// nothing.  The diagnostic has to be recorded once per failed load attempt
+/// instead, which is what the catalog ledger does.
+#[test]
+fn unchanged_frame_layout_consults_the_image_catalog_once_per_pass() {
+    let mut eval = Context::new();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    eval.set_display_host(Box::new(RecordingImageDisplayHost {
+        requests: Arc::clone(&requests),
+        video_requests: Arc::new(Mutex::new(Vec::new())),
+        webkit_requests: Arc::new(Mutex::new(Vec::new())),
+        surface_requests: Arc::new(Mutex::new(Vec::new())),
+    }));
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("unchanged-frame-image-lookups", 640, 200, buf_id);
+    realize_test_gui_frame(&mut eval, frame_id);
+    {
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+        frame.char_width = 8.0;
+        frame.char_height = 18.0;
+    }
+    let image_spec = Value::list(vec![
+        Value::symbol("image"),
+        Value::keyword("type"),
+        Value::symbol("png"),
+        Value::keyword("file"),
+        Value::string("/tmp/neomacs-unchanged-frame.png"),
+        Value::keyword("max-width"),
+        Value::fixnum(32),
+        Value::keyword("max-height"),
+        Value::fixnum(24),
+    ]);
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert("HEAD\nX\nbody line\nTAIL\n");
+        assert!(buf.put_text_property(5, 6, Value::symbol("display"), image_spec));
+    }
+
+    let mut engine = LayoutEngine::new();
+    let mut new_lookups = Vec::new();
+    for _ in 0..5 {
+        let before = requests.lock().expect("requests lock").len();
+        engine.layout_frame_rust(&mut eval, frame_id);
+        let after = requests.lock().expect("requests lock").len();
+        new_lookups.push(after - before);
+    }
+    let all = requests.lock().expect("requests lock").clone();
+    let distinct: std::collections::HashSet<_> = all.iter().collect();
+
+    assert_eq!(
+        distinct.len(),
+        1,
+        "an unchanged frame must consult one image request, not several"
+    );
+    assert_eq!(
+        new_lookups,
+        vec![2, 1, 1, 1, 1],
+        "an unchanged frame re-consults its image once per layout pass; a \
+         *Messages* line wired to the lookup would grow on every redisplay"
+    );
 }

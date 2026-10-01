@@ -146,27 +146,74 @@ impl<'a> DisplaySourceResolveParams<'a> {
 #[derive(Default)]
 pub(crate) struct DisplaySourceResolveState {
     face_cache: HashMap<DisplayFaceCacheKey, FaceId>,
+    last_face_lookup: Option<ObservedFaceLookup>,
+    #[cfg(test)]
+    structural_face_lookups: usize,
     height_face_cache: HashMap<DisplayHeightFaceKey, FaceId>,
     resolved_faces: HashMap<FaceId, ResolvedFace>,
 }
 
+struct ObservedFaceLookup {
+    base_face_id: FaceId,
+    value_bits: usize,
+    face_id: FaceId,
+    reads: neovm_core::tagged::collection_reads::CollectionReads,
+}
+
 impl DisplaySourceResolveState {
     pub(crate) fn remember_face(&mut self, face_id: FaceId, face: &ResolvedFace) {
-        self.resolved_faces.insert(face_id, face.clone());
+        // Source cursors recreate their resolver for every item, including
+        // each character of a run that wrapping declined to batch. Keep the
+        // existing payload when its complete attributes are unchanged.
+        match self.resolved_faces.entry(face_id) {
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                if entry.get() != face {
+                    entry.insert(face.clone());
+                }
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(face.clone());
+            }
+        }
     }
 
     pub(crate) fn resolved_face(&self, face_id: FaceId) -> Option<&ResolvedFace> {
         self.resolved_faces.get(&face_id)
     }
 
-    fn cached_face(&self, base_face_id: FaceId, face_value: &Value) -> Option<RenderFaceRef> {
-        self.face_cache
-            .get(&DisplayFaceCacheKey {
+    fn cached_face(&mut self, base_face_id: FaceId, face_value: &Value) -> Option<RenderFaceRef> {
+        if let Some(last) = &self.last_face_lookup
+            && last.base_face_id == base_face_id
+            && last.value_bits == face_value.bits()
+            && last.reads.unchanged_and_observe()
+        {
+            return Some(RenderFaceRef::FaceId(last.face_id));
+        }
+        #[cfg(test)]
+        {
+            self.structural_face_lookups += 1;
+        }
+        let (entry, reads) = neovm_core::tagged::collection_reads::capture(|| {
+            self.face_cache
+                .get_key_value(&DisplayFaceCacheKey {
+                    base_face_id,
+                    face_value: *face_value,
+                })
+                .map(|(key, id)| (key.face_value.bits(), *id))
+        });
+        // Consecutive characters commonly reference the exact same face list.
+        // Keep structural equality for other values and observe every nested
+        // collection on hits so enclosing layout caches retain dependencies.
+        // Only retain identities already held by the structural cache itself.
+        self.last_face_lookup = entry.zip(reads).and_then(|((bits, face_id), reads)| {
+            (bits == face_value.bits()).then_some(ObservedFaceLookup {
                 base_face_id,
-                face_value: *face_value,
+                value_bits: bits,
+                face_id,
+                reads,
             })
-            .copied()
-            .map(RenderFaceRef::FaceId)
+        });
+        entry.map(|(_, id)| RenderFaceRef::FaceId(id))
     }
 
     fn cache_face(
@@ -176,6 +223,7 @@ impl DisplaySourceResolveState {
         face_id: FaceId,
         resolved: &ResolvedFace,
     ) {
+        self.last_face_lookup = None;
         self.face_cache.insert(
             DisplayFaceCacheKey {
                 base_face_id,
@@ -186,14 +234,15 @@ impl DisplaySourceResolveState {
         self.remember_face(face_id, resolved);
     }
 
-    fn resolved_face_for(&self, face: RenderFaceRef, base_face: &ResolvedFace) -> ResolvedFace {
+    fn resolved_face_for<'a>(
+        &'a self,
+        face: RenderFaceRef,
+        base_face: &'a ResolvedFace,
+    ) -> &'a ResolvedFace {
         let RenderFaceRef::FaceId(face_id) = face else {
-            return base_face.clone();
+            return base_face;
         };
-        self.resolved_faces
-            .get(&face_id)
-            .cloned()
-            .unwrap_or_else(|| base_face.clone())
+        self.resolved_faces.get(&face_id).unwrap_or(base_face)
     }
 }
 
@@ -318,35 +367,37 @@ pub(crate) struct ResolvedDisplaySourceItem {
 }
 
 impl ResolvedDisplaySourceItem {
-    pub(crate) fn new(
-        item: Option<DisplayItem>,
-        pending_faces: Vec<PendingDisplaySourceFace>,
-    ) -> Self {
+    pub(crate) fn empty() -> Self {
         Self {
-            item,
-            pending_faces,
+            item: None,
+            pending_faces: Vec::new(),
             pending_non_text_area: Vec::new(),
         }
     }
 
-    fn with_non_text_area(
-        item: Option<DisplayItem>,
-        pending_faces: Vec<PendingDisplaySourceFace>,
-        pending_non_text_area: Vec<crate::display_source::DisplayNonTextAreaEmission>,
-    ) -> Self {
-        Self {
-            item,
-            pending_faces,
-            pending_non_text_area,
-        }
+    /// Replace all output from the previous source step while retaining the
+    /// small face/emission vectors owned by the row loop.
+    pub(crate) fn clear(&mut self) {
+        self.item = None;
+        self.pending_faces.clear();
+        self.pending_non_text_area.clear();
     }
 
-    pub(crate) fn empty() -> Self {
-        Self::new(None, Vec::new())
+    pub(crate) fn set_pending_item(&mut self, item: DisplayItem) {
+        self.clear();
+        self.item = Some(item);
     }
 
     pub(crate) fn item(&self) -> Option<&DisplayItem> {
         self.item.as_ref()
+    }
+
+    pub(crate) fn take_item(&mut self) -> Option<DisplayItem> {
+        self.item.take()
+    }
+
+    pub(crate) fn drain_pending_faces(&mut self) -> std::vec::Drain<'_, PendingDisplaySourceFace> {
+        self.pending_faces.drain(..)
     }
 
     pub(crate) fn take_pending_non_text_area(
@@ -355,6 +406,7 @@ impl ResolvedDisplaySourceItem {
         std::mem::take(&mut self.pending_non_text_area)
     }
 
+    #[cfg(test)]
     pub(crate) fn into_parts(self) -> (Option<DisplayItem>, Vec<PendingDisplaySourceFace>) {
         (self.item, self.pending_faces)
     }
@@ -703,7 +755,7 @@ impl<'a> DisplaySourcePropertyResolver<'a> {
         }
     }
 
-    fn resolve_item_layout(&mut self, mut item: DisplayItem) -> DisplayItem {
+    fn resolve_item_layout(&mut self, item: &mut DisplayItem) {
         if let Some(overlay) = item.kind.semantic_face_overlay() {
             item.face = self.resolve_face_ref(item.face, Value::symbol(overlay.face_name()));
         }
@@ -718,7 +770,6 @@ impl<'a> DisplaySourcePropertyResolver<'a> {
             row_break.line_spacing =
                 self.resolve_line_spacing_policy(item.face, row_break.line_spacing);
         }
-        item
     }
 
     fn resolve_line_spacing_policy(
@@ -827,6 +878,7 @@ fn resolve_source_face_ref(
     };
 
     if same_resolved_face(&resolved, &base_resolved) {
+        let base_resolved = base_resolved.clone();
         state.cache_face(base_face_id, face_value, base_face_id, &base_resolved);
         return RenderFaceRef::FaceId(base_face_id);
     }
@@ -881,18 +933,36 @@ fn resolve_source_face_sources(
     }
 
     let base_face_id = render_face_ref_id(base, face_basis.base_face_id());
+    // A single logical source has the same merge policy as resolve_face_ref.
+    // Reuse its existing, resolver-local cache; multi-source stacks must still
+    // merge every attribute before inverse-video and other terminal effects.
+    let single = sources.single_value();
+    if let Some(value) = single
+        && let Some(cached) = state.cached_face(base_face_id, &value)
+    {
+        return cached;
+    }
     let base_resolved = state.resolved_face_for(base, face_basis.base_face());
     let Some(resolved) = resolve(&base_resolved, sources) else {
         return base;
     };
 
     if same_resolved_face(&resolved, &base_resolved) {
-        state.remember_face(base_face_id, &base_resolved);
+        let base_resolved = base_resolved.clone();
+        if let Some(value) = single {
+            state.cache_face(base_face_id, value, base_face_id, &base_resolved);
+        } else {
+            state.remember_face(base_face_id, &base_resolved);
+        }
         return RenderFaceRef::FaceId(base_face_id);
     }
 
     let face_id = crate::display_row::face_state::stable_face_id_for_resolved(face_ids, &resolved);
-    state.remember_face(face_id, &resolved);
+    if let Some(value) = single {
+        state.cache_face(base_face_id, value, face_id, &resolved);
+    } else {
+        state.remember_face(face_id, &resolved);
+    }
     pending_faces.push(PendingDisplaySourceFace::new(face_id, resolved));
     RenderFaceRef::FaceId(face_id)
 }
@@ -984,6 +1054,39 @@ impl DisplayItemFaceResolver for DisplaySourcePropertyResolver<'_> {
     }
 }
 
+/// Resolve into storage owned by the row loop. In particular, the item layout
+/// is adjusted in place instead of returning a second large item aggregate.
+pub(crate) fn resolve_next_display_source_item_into(
+    source: &mut impl DisplayItemSource,
+    face_scope: DisplaySourceFaceScope,
+    params: DisplaySourceResolveParams<'_>,
+    state: &mut DisplaySourceResolveState,
+    face_ids: &mut FrameFaceAttempt,
+    output: &mut ResolvedDisplaySourceItem,
+) {
+    output.clear();
+    let mut resolver = DisplaySourcePropertyResolver::with_scope(
+        face_scope,
+        params,
+        state,
+        face_ids,
+        &mut output.pending_faces,
+    );
+    let mut context = DisplaySourceContext::with_face_resolver_and_non_text_area_sink(
+        &mut resolver,
+        &mut output.pending_non_text_area,
+        crate::display_property::DisplayPropertyTarget::for_window_system(
+            params.face_basis().face_resolver().is_window_system(),
+        ),
+    )
+    .with_automatic_composition(params.automatic_composition);
+    output.item = source.next_item(&mut context);
+    if let Some(item) = output.item.as_mut() {
+        resolver.resolve_item_layout(item);
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn resolve_next_display_source_item(
     source: &mut impl DisplayItemSource,
     face_scope: DisplaySourceFaceScope,
@@ -991,29 +1094,9 @@ pub(crate) fn resolve_next_display_source_item(
     state: &mut DisplaySourceResolveState,
     face_ids: &mut FrameFaceAttempt,
 ) -> ResolvedDisplaySourceItem {
-    let mut pending_faces = Vec::new();
-    let mut pending_non_text_area = Vec::new();
-    let item = {
-        let mut resolver = DisplaySourcePropertyResolver::with_scope(
-            face_scope,
-            params,
-            state,
-            face_ids,
-            &mut pending_faces,
-        );
-        let mut context = DisplaySourceContext::with_face_resolver_and_non_text_area_sink(
-            &mut resolver,
-            &mut pending_non_text_area,
-            crate::display_property::DisplayPropertyTarget::for_window_system(
-                params.face_basis().face_resolver().is_window_system(),
-            ),
-        )
-        .with_automatic_composition(params.automatic_composition);
-        source
-            .next_item(&mut context)
-            .map(|item| resolver.resolve_item_layout(item))
-    };
-    ResolvedDisplaySourceItem::with_non_text_area(item, pending_faces, pending_non_text_area)
+    let mut output = ResolvedDisplaySourceItem::empty();
+    resolve_next_display_source_item_into(source, face_scope, params, state, face_ids, &mut output);
+    output
 }
 
 #[derive(Clone, Copy)]
@@ -1048,7 +1131,10 @@ fn resolve_image_display_property(
         params.image_scale_environment,
         params.image_dimension_environment,
     );
-    let lookup = params.display_host.image_catalog()?.lookup(request);
+    let lookup = params
+        .display_host
+        .image_catalog()?
+        .lookup(request, params.image_scale_environment.size_limit());
     let placement = lookup.placement();
     let opaque_background = lookup
         .ready_metadata()
@@ -1187,7 +1273,10 @@ fn resolve_surface_channel(
             params.image_scale_environment,
             params.image_dimension_environment,
         );
-        let lookup = params.display_host.image_catalog()?.lookup(request);
+        let lookup = params
+            .display_host
+            .image_catalog()?
+            .lookup(request, params.image_scale_environment.size_limit());
         return Some((
             SurfaceChannelKind::Image,
             lookup.placement().image_id().get(),

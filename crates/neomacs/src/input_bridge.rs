@@ -229,6 +229,26 @@ pub(crate) fn convert_monitor_infos(monitors: &[DisplayMonitorInfo]) -> Vec<Neom
 /// key releases and modifier-only keys). Presented pointer input expands to an
 /// observation immediately followed by its raw evaluator action.
 pub(crate) fn convert_display_event(event: &DisplayEvent) -> EvaluatorInputBatch {
+    if let DisplayEvent::Tracked { receipt, event } = event {
+        let mut batch = convert_display_event(event);
+        if let Some(action) = batch.events.iter_mut().rev().find(|event| event.is_some()) {
+            *action = Some(KbInputEvent::Tracked {
+                receipt: receipt.clone(),
+                event: Box::new(action.take().unwrap()),
+            });
+        }
+        return batch;
+    }
+    if let DisplayEvent::Observed { token, event } = event {
+        let mut batch = convert_display_event(event);
+        if let Some(action) = batch.events.iter_mut().rev().find(|event| event.is_some()) {
+            *action = Some(KbInputEvent::Observed {
+                token: *token,
+                event: Box::new(action.take().unwrap()),
+            });
+        }
+        return batch;
+    }
     if let DisplayEvent::PositionedPointer(input) = event {
         return convert_positioned_pointer_input(*input);
     }
@@ -314,7 +334,11 @@ fn convert_positioned_pointer_input(input: PositionedPointerInput) -> EvaluatorI
 
 fn convert_single_display_event(event: &DisplayEvent) -> Option<KbInputEvent> {
     match event {
-        DisplayEvent::PositionedPointer(_) => unreachable!("handled by convert_display_event"),
+        DisplayEvent::Observed { .. }
+        | DisplayEvent::Tracked { .. }
+        | DisplayEvent::PositionedPointer(_) => {
+            unreachable!("handled by convert_display_event")
+        }
         DisplayEvent::RawTtyBytes {
             bytes,
             emacs_frame_id,

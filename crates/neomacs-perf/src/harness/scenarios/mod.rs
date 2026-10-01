@@ -9,6 +9,7 @@ pub(crate) mod elisp_benchmarks;
 pub(crate) mod mx_tab;
 pub(crate) mod org_journal_open;
 pub(crate) mod rust_lsp;
+pub(crate) mod scrolling;
 pub(crate) mod search_shape;
 pub(crate) mod sustained_native_video;
 pub(crate) mod vm_loop;

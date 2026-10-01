@@ -49,11 +49,20 @@ highlight = "simplest-path"
 
 [sources]
 unknown-registry = "deny"
-unknown-git = "deny"
+# Temporarily "warn" while the fork-pinning workflow is active: sessions
+# pin crate forks in Cargo.toml (cosmic-text, winit, wgpu, zune-image, …)
+# and each new one otherwise fails CI until allowlisted here. Tighten back
+# to "deny" — with the accumulated allow-git entries kept — once the
+# workflow ends.
+unknown-git = "warn"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = [
   "https://github.com/eval-exec/cosmic-text",
   "https://github.com/eval-exec/freetype-sys",
   # Pinned Wayland popup-lifetime and inner-size-hint fixes in Cargo.toml.
   "https://github.com/eval-exec/winit",
+  # The opt-in Vulkan native-presentation timing seam (wgpu-hal).
+  "https://github.com/eval-exec/wgpu",
+  # The JPEG banding decoder fixes (zune-image).
+  "https://github.com/eval-exec/zune-image",
 ]

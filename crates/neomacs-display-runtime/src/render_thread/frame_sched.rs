@@ -174,6 +174,11 @@ demand_reasons! {
     /// are drawn, so it needs frames even when the content is unchanged and
     /// nothing else on screen is moving.
     PaneMotion => "pane_motion",
+    /// A child frame travelling through its lifecycle: a popup fading in or
+    /// out, drifting to a new anchor. Distinct from `PaneMotion` (which is
+    /// whole-layout tiling morphs) so diagnostics can answer why a popup is
+    /// still being redrawn after its parent's layout has settled.
+    ChildFrameMotion => "child_frame_motion",
     Video => "video",
     WebKit => "webkit",
     /// Animated shader surfaces visible in a composited frame
@@ -1124,5 +1129,5 @@ impl FrameCoordinator {
 }
 
 #[cfg(test)]
-#[path = "frame_sched_test.rs"]
+#[path = "tests/frame_sched_test.rs"]
 mod frame_sched_test;

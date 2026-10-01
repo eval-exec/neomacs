@@ -3947,3 +3947,52 @@ fn the_jit_buffer_walk_finds_what_current_buffer_finds() {
     mgr.set_current(first);
     agrees(&mgr, "after making a surviving buffer current again");
 }
+
+#[test]
+fn buffer_property_overlay_and_symbol_roots_survive_collection_after_edits() {
+    let mut eval = crate::emacs_core::eval::Context::new();
+    eval.eval_str(
+        r#"(progn
+        (setq gc-cons-threshold 100000000)
+        (insert "abcdefghijklmnop")
+        (set (make-local-variable 'major-mode) (make-symbol "rooted-mode"))
+        (put-text-property 1 9 'rooted-data (vector "property" (make-symbol "property-symbol")))
+        (let ((o (make-overlay 3 12)))
+          (overlay-put o 'rooted-data (vector "overlay")))
+        (make-indirect-buffer (current-buffer) "rooted-indirect" nil))"#,
+    )
+    .unwrap();
+    for edit in [
+        "nil",
+        r#"(progn (goto-char 4) (insert "XY"))"#,
+        r#"(progn (delete-region 4 6) (put-text-property 10 15 'other-data (vector "split")))"#,
+        "(remove-text-properties 10 15 '(other-data nil))",
+    ] {
+        eval.eval_str(edit).unwrap();
+        // Keep the evaluator's immutable overlay copy rooted as well as the
+        // live overlay objects; GC must preserve both enumeration paths.
+        let current = eval.buffers.current_buffer_id().unwrap();
+        let _snapshot = eval.buffers.get(current).unwrap().overlays.snapshot();
+        eval.gc_collect_exact();
+        assert_eq!(
+            eval.eval_str(r#"(symbol-name major-mode)"#).unwrap(),
+            Value::string("rooted-mode")
+        );
+        assert_eq!(
+            eval.eval_str(r#"(aref (get-text-property 2 'rooted-data) 0)"#)
+                .unwrap(),
+            Value::string("property")
+        );
+        assert_eq!(
+            eval.eval_str(r#"(symbol-name (aref (get-text-property 2 'rooted-data) 1))"#)
+                .unwrap(),
+            Value::string("property-symbol")
+        );
+        assert_eq!(
+            eval.eval_str(r#"(aref (overlay-get (car (overlays-at 7)) 'rooted-data) 0)"#)
+                .unwrap(),
+            Value::string("overlay")
+        );
+        assert_eq!(eval.eval_str(r#"(let ((current (current-buffer))) (set-buffer "rooted-indirect") (prog1 (aref (get-text-property 2 'rooted-data) 0) (set-buffer current)))"#).unwrap(), Value::string("property"));
+    }
+}

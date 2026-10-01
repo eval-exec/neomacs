@@ -15,7 +15,7 @@ fn native_chrome_theme_change_keeps_both_frames_alive() {
         Ok("x11") => GuiBackend::LinuxX11,
         _ => panic!("set NEOMACS_GUI_TEST_BACKEND to the native backend"),
     };
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = neomacs_infra::crate_root!().join("../..");
     let binary = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("target/release/neomacs"));

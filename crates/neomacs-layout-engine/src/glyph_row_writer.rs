@@ -4,11 +4,22 @@ use neomacs_display_protocol::glyph_matrix::{
 };
 use neomacs_display_protocol::types::FaceId;
 
-#[derive(Clone)]
+#[cfg(test)]
+#[path = "glyph_row_writer/tests.rs"]
+mod tests;
+
+#[derive(Clone, Copy)]
 struct BidiGlyphUnit {
     ch: char,
-    cols: Vec<usize>,
-    glyphs: Vec<Glyph>,
+    start: usize,
+    len: usize,
+    edges: neomacs_display_protocol::face::BoxVerticalEdges,
+}
+
+impl BidiGlyphUnit {
+    fn cols(&self) -> std::ops::Range<usize> {
+        self.start..self.start + self.len
+    }
 }
 
 /// Recompute physical terminals from visual adjacency after UAX#9 reordering.
@@ -25,22 +36,17 @@ fn restamp_visual_box_runs(
 ) {
     let available_cols = units
         .iter()
-        .flat_map(|unit| unit.cols.iter().copied())
+        .flat_map(BidiGlyphUnit::cols)
         .collect::<Vec<_>>();
     let mut next_col = 0usize;
     let text = &mut row.glyphs[GlyphArea::Text.index()];
     for (visual_index, &logical_index) in visual_order.iter().enumerate() {
-        let unit_len = units[logical_index].glyphs.len();
+        let unit_len = units[logical_index].len;
         let Some(&target_start) = available_cols.get(next_col) else {
             return;
         };
-        let membership = units[logical_index]
-            .glyphs
-            .iter()
-            .find(|glyph| !glyph.padding)
-            .map(|glyph| glyph.box_vertical_edges.membership())
-            .unwrap_or_default();
-        for glyph in &mut text[target_start..target_start + units[logical_index].glyphs.len()] {
+        let membership = units[logical_index].edges.membership();
+        for glyph in &mut text[target_start..target_start + units[logical_index].len] {
             glyph.box_vertical_edges = neomacs_display_protocol::face::BoxVerticalEdges::Neither
                 .with_membership(membership);
         }
@@ -49,29 +55,18 @@ fn restamp_visual_box_runs(
             next_col = next_col.saturating_add(unit_len);
             continue;
         }
-        let source_edges = units[logical_index]
-            .glyphs
-            .iter()
-            .find(|glyph| !glyph.padding)
-            .map(|glyph| glyph.box_vertical_edges)
-            .unwrap_or_default();
+        let source_edges = units[logical_index].edges;
         let physical_edges = if levels[logical_index] & 1 == 1 {
             source_edges.reversed()
         } else {
             source_edges
         };
-        let previous_boxed = visual_index.checked_sub(1).is_some_and(|index| {
-            units[visual_order[index]]
-                .glyphs
-                .iter()
-                .any(|glyph| !glyph.padding && glyph.box_vertical_edges.membership().is_boxed())
-        });
-        let next_boxed = visual_order.get(visual_index + 1).is_some_and(|&index| {
-            units[index]
-                .glyphs
-                .iter()
-                .any(|glyph| !glyph.padding && glyph.box_vertical_edges.membership().is_boxed())
-        });
+        let previous_boxed = visual_index
+            .checked_sub(1)
+            .is_some_and(|index| units[visual_order[index]].edges.membership().is_boxed());
+        let next_boxed = visual_order
+            .get(visual_index + 1)
+            .is_some_and(|&index| units[index].edges.membership().is_boxed());
         let owns_left = if visual_index == 0 {
             physical_edges.owns_left()
         } else {
@@ -82,7 +77,7 @@ fn restamp_visual_box_runs(
         } else {
             !next_boxed
         };
-        if let Some(glyph) = text[target_start..target_start + units[logical_index].glyphs.len()]
+        if let Some(glyph) = text[target_start..target_start + units[logical_index].len]
             .iter_mut()
             .find(|glyph| !glyph.padding)
         {
@@ -135,86 +130,80 @@ fn apply_bidi_mirroring(glyph: &mut Glyph, level: u8) {
 }
 
 fn collect_bidi_units(text: &[Glyph]) -> Vec<BidiGlyphUnit> {
-    let mut units = Vec::new();
+    let mut units = Vec::with_capacity(text.len());
     let mut idx = 0;
-
     while idx < text.len() {
         let glyph = &text[idx];
         let Some(ch) = bidi_char_for_glyph(glyph) else {
             idx += 1;
             continue;
         };
-
-        let mut cols = vec![idx];
-        let mut glyphs = vec![glyph.clone()];
+        let start = idx;
+        let edges = glyph.box_vertical_edges;
         idx += 1;
-
-        // Absorb this base's trailing padding cells into the same bidi unit so
-        // the glyph stays a contiguous, base-first block under visual
-        // reordering: a 2-column wide char or a multi-column composed run.
-        // Padding is only emitted immediately after its base, so consecutive
-        // padding always belongs to this glyph.
+        // A base and its trailing padding remain one contiguous unit.
         while idx < text.len() && text[idx].padding {
-            cols.push(idx);
-            glyphs.push(text[idx].clone());
             idx += 1;
         }
-
-        units.push(BidiGlyphUnit { ch, cols, glyphs });
+        units.push(BidiGlyphUnit {
+            ch,
+            start,
+            len: idx - start,
+            edges,
+        });
     }
-
     units
 }
 
 fn rewrite_units_into_row(
     row: &mut GlyphRow,
-    original_text: &[Glyph],
     units: &[BidiGlyphUnit],
     levels: &[u8],
     visual_order: &[usize],
     cursor_logical_idx: Option<usize>,
     phys_cursor_logical_idx: Option<usize>,
 ) -> Option<u16> {
-    let available_cols: Vec<usize> = units
-        .iter()
-        .flat_map(|unit| unit.cols.iter().copied())
-        .collect();
+    let available_cols: Vec<usize> = units.iter().flat_map(BidiGlyphUnit::cols).collect();
+    let text = &mut row.glyphs[GlyphArea::Text.index()];
+    // Map each source slot to its destination. Excluded media/orphan padding
+    // remain fixed. Validate every destination before changing any glyph.
+    let mut destinations: Vec<usize> = (0..text.len()).collect();
     let mut next_col = 0usize;
-    let mut reordered = original_text.to_vec();
     let mut visual_cursor_col = None;
     let mut remapped_phys_cursor_col = None;
-
     for &logical_idx in visual_order {
         let unit = &units[logical_idx];
-        let unit_len = unit.glyphs.len();
-        let target_cols = available_cols.get(next_col..next_col + unit_len)?;
+        let target_cols = available_cols.get(next_col..next_col + unit.len)?;
         if !target_cols.windows(2).all(|w| w[1] == w[0] + 1) {
             return None;
         }
-
         let target_start = target_cols[0];
-        let mut placed = unit.glyphs.clone();
-        for glyph in &mut placed {
-            glyph.bidi_level = levels[logical_idx];
+        for (offset, source) in unit.cols().enumerate() {
+            destinations[source] = target_start + offset;
         }
-        if let Some(first) = placed.first_mut() {
-            apply_bidi_mirroring(first, levels[logical_idx]);
-        }
-        for (offset, glyph) in placed.into_iter().enumerate() {
-            reordered[target_start + offset] = glyph;
-        }
-
         if cursor_logical_idx == Some(logical_idx) {
             visual_cursor_col = Some(target_start as u16);
         }
         if phys_cursor_logical_idx == Some(logical_idx) {
             remapped_phys_cursor_col = Some(target_start as u16);
         }
-
-        next_col += unit_len;
+        next_col += unit.len;
     }
-
-    row.glyphs[GlyphArea::Text.index()] = reordered;
+    for (unit, &level) in units.iter().zip(levels) {
+        for glyph in &mut text[unit.cols()] {
+            glyph.bidi_level = level;
+        }
+        apply_bidi_mirroring(&mut text[unit.start], level);
+    }
+    // Cycle swaps move owned payloads and sidecar tokens; no Glyph or string
+    // is cloned, and the row keeps its existing allocation.
+    for index in 0..destinations.len() {
+        while destinations[index] != index {
+            let target = destinations[index];
+            text.swap(index, target);
+            destinations.swap(index, target);
+        }
+    }
     if let Some(col) = visual_cursor_col {
         row.cursor_col = Some(col);
     }
@@ -568,12 +557,12 @@ pub(crate) fn reorder_row_bidi(row: &mut GlyphRow, phys_cursor_col: Option<u16>)
         row.reversed_p,
     );
 
-    let original_text = row.glyphs[GlyphArea::Text.index()].clone();
-    if original_text.is_empty() {
+    let text = &row.glyphs[GlyphArea::Text.index()];
+    if text.is_empty() {
         return None;
     }
 
-    let units = collect_bidi_units(&original_text);
+    let units = collect_bidi_units(text);
     if units.is_empty() {
         return None;
     }
@@ -609,12 +598,12 @@ pub(crate) fn reorder_row_bidi(row: &mut GlyphRow, phys_cursor_col: Option<u16>)
     let cursor_logical_idx = row.cursor_col.and_then(|col| {
         units
             .iter()
-            .position(|unit| unit.cols.contains(&(col as usize)))
+            .position(|unit| unit.cols().contains(&(col as usize)))
     });
     let phys_cursor_logical_idx = phys_cursor_col.and_then(|col| {
         units
             .iter()
-            .position(|unit| unit.cols.contains(&(col as usize)))
+            .position(|unit| unit.cols().contains(&(col as usize)))
     });
 
     let visual_order = if levels.iter().all(|&level| level == 0) {
@@ -625,7 +614,6 @@ pub(crate) fn reorder_row_bidi(row: &mut GlyphRow, phys_cursor_col: Option<u16>)
 
     let remapped_cursor = rewrite_units_into_row(
         row,
-        &original_text,
         &units,
         &levels,
         &visual_order,

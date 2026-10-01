@@ -22,6 +22,62 @@ fn settled_point(
 use super::*;
 
 #[test]
+fn discrete_scroll_preserves_horizontal_direction_and_multiple_steps() {
+    let mut eval = crate::emacs_core::Context::new();
+    let buffer = eval.buffer_manager_mut().create_buffer("wheel-steps");
+    let frame = eval
+        .frame_manager_mut()
+        .create_frame("wheel-steps", 800, 600, buffer);
+    let event = eval
+        .handle_read_char_input_event(
+            InputEvent::MouseScroll {
+                delta_x: -3.0,
+                delta_y: 0.0,
+                x: 30.0,
+                y: 40.0,
+                modifiers: Modifiers::default(),
+                target_frame_id: frame.0,
+            },
+            TtyInputDecoding::KeyboardCodingSystem,
+        )
+        .unwrap()
+        .unwrap();
+    let parts = crate::emacs_core::value::list_to_vec(&event).unwrap();
+    assert_eq!(parts[0].as_symbol_name(), Some("wheel-right"));
+    assert_eq!(parts[3].as_fixnum(), Some(3));
+    assert_eq!(
+        parts.len(),
+        4,
+        "discrete wheel event must not pretend to carry pixels"
+    );
+}
+
+#[test]
+fn invalid_or_empty_wheel_motion_does_not_dispatch_a_command() {
+    let mut eval = crate::emacs_core::Context::new();
+    let buffer = eval.buffer_manager_mut().create_buffer("wheel-invalid");
+    let frame = eval
+        .frame_manager_mut()
+        .create_frame("wheel-invalid", 800, 600, buffer);
+    for (x, y) in [(0.0, 0.0), (f32::NAN, 1.0), (0.0, f32::INFINITY)] {
+        let event = eval
+            .handle_read_char_input_event(
+                InputEvent::MouseScroll {
+                    delta_x: x,
+                    delta_y: y,
+                    x: 30.0,
+                    y: 40.0,
+                    modifiers: Modifiers::default(),
+                    target_frame_id: frame.0,
+                },
+                TtyInputDecoding::KeyboardCodingSystem,
+            )
+            .unwrap();
+        assert!(event.is_none());
+    }
+}
+
+#[test]
 fn precise_scroll_is_a_lisp_wheel_command_with_pixel_payload() {
     let mut eval = crate::emacs_core::Context::new();
     let buffer = eval.buffer_manager_mut().create_buffer("precise-wheel");
@@ -621,6 +677,7 @@ fn tracked_mouse_motion_ignores_keyboard_modifiers_but_keeps_position() {
             shift: true,
             super_: true,
             hyper: true,
+            alt: true,
         },
     ] {
         let event = eval
@@ -1285,6 +1342,7 @@ fn modifier_bits_round_trip() {
         shift: false,
         super_: false,
         hyper: false,
+        alt: false,
     };
     let bits = m.to_bits();
     let m2 = Modifiers::from_bits(bits);
@@ -1301,6 +1359,7 @@ fn modifier_bits_round_trip_all_combinations() {
         ("shift", 1u32 << 25),
         ("super", 1u32 << 23),
         ("hyper", 1u32 << 24),
+        ("alt", 1u32 << 22),
     ] {
         let m = match field {
             "ctrl" => Modifiers {
@@ -1323,6 +1382,10 @@ fn modifier_bits_round_trip_all_combinations() {
                 hyper: true,
                 ..Modifiers::none()
             },
+            "alt" => Modifiers {
+                alt: true,
+                ..Modifiers::none()
+            },
             _ => unreachable!(),
         };
         assert_eq!(m.to_bits(), expected_bit, "bit mismatch for {}", field);
@@ -1341,6 +1404,7 @@ fn modifier_bits_round_trip_all_combinations() {
         shift: true,
         super_: true,
         hyper: true,
+        alt: true,
     };
     assert_eq!(Modifiers::from_bits(all.to_bits()), all);
 
@@ -1363,9 +1427,10 @@ fn prefix_string_various() {
         shift: true,
         super_: true,
         hyper: true,
+        alt: true,
     };
-    // Order: H- s- C- M- S-
-    assert_eq!(all.prefix_string(), "H-s-C-M-S-");
+    // GNU's canonical order (keymap.c:1478): A- C- H- M- S- s-.
+    assert_eq!(all.prefix_string(), "A-C-H-M-S-s-");
 }
 
 #[test]
@@ -2168,4 +2233,66 @@ fn keysym_to_key_event_synthesizes_a_name_for_an_unnamed_keysym() {
     let event = keysym_to_key_event(0x10081000, 0).expect("vendor keysym");
     assert_eq!(event.key, Key::Function("key-268963840".to_string()));
     assert!(keysymdefs::get_item_by_keysym(0x10081000).is_none());
+}
+
+/// Issue #442: the NS modifier policy can cook Option to `alt', and the
+/// transport carries it as RENDER_ALT_MASK; the cooked lisp event must be
+/// `A-x' (KEY_CHAR_ALT | ?x), never plain text.
+#[test]
+fn alt_transport_cooks_the_alt_bit_like_gnu() {
+    let event = crate::keyboard::keysym_to_key_event('x' as u32, crate::keyboard::RENDER_ALT_MASK)
+        .expect("A-x transport event");
+    let value = event.to_emacs_event_value();
+    let expected = crate::emacs_core::keyboard::pure::KEY_CHAR_ALT | ('x' as i64);
+    assert_eq!(
+        value,
+        Value::fixnum(expected),
+        "Option cooked to alt must arrive as A-x"
+    );
+    assert_eq!(
+        crate::keyboard::KeyEvent::to_description(&crate::keyboard::KeyEvent::char_with_mods(
+            'x',
+            crate::keyboard::Modifiers {
+                alt: true,
+                ..Default::default()
+            },
+        )),
+        "A-x"
+    );
+}
+
+#[test]
+fn display_idle_maintenance_yields_to_input_and_avoids_nested_or_timed_reads() {
+    let mut eval = crate::emacs_core::Context::new();
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let observed = calls.clone();
+    eval.display_idle_maintenance_fn = Some(Box::new(move |_| {
+        observed.set(observed.get() + 1);
+        (Some(std::time::Duration::from_millis(1)), false)
+    }));
+    assert!(
+        eval.display_idle_maintenance_deadline(false, false)
+            .is_none()
+    );
+    assert!(eval.display_idle_maintenance_deadline(true, true).is_none());
+    assert_eq!(calls.get(), 0);
+    assert!(
+        eval.display_idle_maintenance_deadline(true, false)
+            .is_some()
+    );
+    assert_eq!(calls.get(), 1);
+    let (sender, receiver) = crossbeam_channel::unbounded();
+    eval.input_rx = Some(receiver);
+    sender
+        .send(InputEvent::Focus {
+            focused: true,
+            emacs_frame_id: 0,
+        })
+        .unwrap();
+    assert!(
+        eval.display_idle_maintenance_deadline(true, false)
+            .is_none()
+    );
+    assert_eq!(calls.get(), 1);
+    assert!(eval.display_idle_maintenance_fn.is_some());
 }

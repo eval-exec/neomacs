@@ -85,7 +85,7 @@ fn aas_function_expansions_see_the_transient_variables_and_run_both_hooks() -> P
     aas-transient-snippet-expansion
     aas-transient-snippet-condition-result)))"##,
         expect![[
-            r#"OK ("bye\n-- Signed, " 16 ((cond 5 t) (pre "sig" 5) (expand "sig" checked t) (post "sig" 16)) nil nil nil)"#
+            r#"OK ("bye\n-- Signed, melpa-test" 26 ((cond 5 t) (pre "sig" 5) (expand "sig" checked t) (post "sig" 26)) nil nil nil)"#
         ]],
     )
 }

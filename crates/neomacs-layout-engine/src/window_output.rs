@@ -1,9 +1,14 @@
-//! Live window-output emission helpers for Rust redisplay.
+//! Window-output recording and evaluator publication for Rust redisplay.
 //!
-//! This layer bridges Rust layout/status-line emission to GNU-like live window
-//! output state. It advances live output through explicit output-cursor moves
-//! while simultaneously recording immutable row snapshots for renderer
-//! handoff.
+//! Owned row geometry accumulates independently of evaluator state. This outer
+//! layer attaches cursor state, rooted chrome strings and freshness when it
+//! prepares a snapshot. Production recording is speculative; focused lifecycle
+//! tests can also mirror output-cursor moves into a live window.
+
+pub(crate) mod prepared_body;
+mod row_geometry;
+mod snapshot_rows;
+use row_geometry::WindowRowGeometry;
 
 use super::display_status_line::{
     ChromeRowRenderServices, DisplayRowOutputProgress, WindowChromeRowsRenderOutcome,
@@ -51,9 +56,9 @@ use neovm_core::buffer::{CharPos0, EmacsBytePos, LispCharPos1, TextPositionAncho
 use neovm_core::emacs_core::Context;
 use neovm_core::window::geometry::CellOrigin;
 use neovm_core::window::{
-    DisplayPointSnapshot, DisplayRowEndSource, DisplayRowSnapshot, MatrixRow0,
-    PresentedWindowChromeArea, PresentedWindowChromeString, PresentedWindowRegions,
-    WindowCursorKind, WindowCursorPos, WindowCursorSnapshot, WindowDisplaySnapshot,
+    DisplayPointSnapshot, DisplayRowSnapshot, MatrixRow0, PresentedWindowChromeArea,
+    PresentedWindowChromeString, PresentedWindowRegions, WindowCursorKind, WindowCursorPos,
+    WindowCursorSnapshot, WindowDisplaySnapshot,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -97,17 +102,6 @@ impl RowMetricsSnapshot {
     pub(crate) fn ascent(self) -> f32 {
         self.ascent
     }
-}
-
-#[derive(Clone, Copy, Debug)]
-struct CurrentRowProgress {
-    display_row_index: Option<usize>,
-    row: i64,
-    y: i64,
-    col: i64,
-    x: i64,
-    start_col: i64,
-    start_x: i64,
 }
 
 /// The cell a row's terminator slot is measured with.
@@ -199,6 +193,7 @@ impl ChromeRowProgress {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct DisplayTextRowMetrics {
+    pub(crate) line_spacing: f32,
     pub(crate) y: f32,
     pub(crate) height: f32,
     pub(crate) ascent: f32,
@@ -499,6 +494,9 @@ pub(crate) fn transition_text_window_row_with_limit(
     max_rows: usize,
 ) -> DisplayTextRowTransition {
     if transition.begin_row.row >= max_rows
+        // Equality can be a continuation marker followed by the target's
+        // real glyph, or another inserted-string row at the same anchor.
+        || output_emitter.query_target.is_some_and(|target| transition.begin_row.start_charpos > target)
         || output.builder().edit_sync_stops_before(
             transition.begin_row.start_charpos,
             transition.begin_row.y,
@@ -670,6 +668,7 @@ fn display_text_row_metrics_request(
         metrics.height,
         metrics.ascent,
     )
+    .with_line_spacing(metrics.line_spacing)
 }
 
 fn finish_output_rows(
@@ -1245,6 +1244,9 @@ pub(crate) trait DisplayProgressSink {
 }
 
 pub(crate) struct WindowOutputEmitter {
+    query_target: Option<LayoutCharPos0>,
+    collect_query_restarts: bool,
+    query_restart_rows: Vec<(LispCharPos1, i64)>,
     /// Whether output-cursor updates are mirrored into the live evaluator
     /// window while this emitter is being built. Production frame layout is
     /// speculative and keeps this false; focused lifecycle tests can use the
@@ -1252,23 +1254,10 @@ pub(crate) struct WindowOutputEmitter {
     publish_live: bool,
     frame_id: neovm_core::window::FrameId,
     window_id: neovm_core::window::WindowId,
-    text_row_base: i64,
-    text_x: f32,
-    window_top: f32,
+    geometry: WindowRowGeometry,
     logical_cursor: Option<WindowCursorPos>,
     phys_cursor: Option<WindowCursorSnapshot>,
-    points: Vec<DisplayPointSnapshot>,
-    rows: Vec<DisplayRowSnapshot>,
     chrome_strings: Vec<PresentedWindowChromeString>,
-    row_metrics: Vec<RowMetricsSnapshot>,
-    current_row_first_display_pos: Option<LispCharPos1>,
-    current_row_last_display_pos: Option<LispCharPos1>,
-    current_row_end_source: DisplayRowEndSource,
-    /// The end this row was closed at, when it is a position that draws no
-    /// glyph of its own. Recorded rather than published on the spot so that
-    /// closing the row is the only thing that can publish it.
-    current_row_terminator: Option<DisplayRowTerminator>,
-    current_row_progress: Option<CurrentRowProgress>,
 }
 
 impl DisplayProgressSink for WindowOutputEmitter {
@@ -1363,118 +1352,116 @@ impl WindowOutputEmitter {
     ) -> Self {
         Self {
             publish_live,
+            query_target: None,
+            collect_query_restarts: false,
+            query_restart_rows: Vec::new(),
             frame_id,
             window_id,
-            text_row_base: text_row_base as i64,
-            text_x,
-            window_top,
+            geometry: WindowRowGeometry::new(text_row_base, text_x, window_top),
             logical_cursor: None,
             phys_cursor: None,
-            points: Vec::new(),
-            rows: Vec::new(),
             chrome_strings: Vec::new(),
-            row_metrics: Vec::new(),
-            current_row_first_display_pos: None,
-            current_row_last_display_pos: None,
-            current_row_end_source: DisplayRowEndSource::Buffer,
-            current_row_terminator: None,
-            current_row_progress: None,
         }
     }
 
-    /// Seed the body half of this emitter from a prior clean pass (Phase 1
-    /// cursor-only replay), in place of walking the buffer. `rows` are the
-    /// retained body [`DisplayRowSnapshot`]s and `points` the retained per-span
-    /// display points — both are point-INDEPENDENT (they describe where glyphs
-    /// render, not where the cursor is), so they replay verbatim. Chrome rows
-    /// are appended afterward by the normal chrome path, and the cursor is set
-    /// separately for the moved point.
+    pub(crate) fn set_query_target(&mut self, target: Option<LayoutCharPos0>) {
+        self.query_target = target;
+    }
+
+    pub(crate) fn set_collect_query_restarts(
+        &mut self,
+        enabled: bool,
+        defaults: crate::display_row::geometry::DisplayRowGeometryDefaults,
+    ) {
+        self.collect_query_restarts = enabled;
+        self.geometry.set_query_translation_tracking(
+            enabled,
+            defaults.text_y,
+            defaults.height,
+            defaults.ascent,
+        );
+    }
+
+    pub(crate) fn note_query_row_advance(&mut self, height: f32, line_spacing: f32) {
+        // Observe height before spacing is added, so fractional inputs cannot
+        // cancel or disappear in the finished row's rounded metric.
+        self.geometry.note_query_metrics(height, line_spacing);
+    }
+
+    pub(crate) fn collects_query_restarts(&self) -> bool {
+        self.collect_query_restarts
+    }
+
+    pub(crate) fn note_query_restart(&mut self, source_start: LispCharPos1) {
+        // Larger queries are ineligible for the bounded query cache. Avoid
+        // growing their transient restart metadata without a bound as well.
+        if self.collect_query_restarts
+            && self.query_restart_rows.len() < 256
+            && let Some(row) = self.geometry.current_output_row()
+        {
+            self.query_restart_rows.push((source_start, row));
+        }
+    }
+
+    pub(crate) fn take_query_restart_rows(&mut self) -> Vec<(LispCharPos1, i64)> {
+        if !self.geometry.query_translation_is_exact() {
+            self.query_restart_rows.clear();
+        }
+        std::mem::take(&mut self.query_restart_rows)
+    }
+
     pub(crate) fn seed_cursor_only_body(
         &mut self,
         rows: Vec<DisplayRowSnapshot>,
         points: Vec<DisplayPointSnapshot>,
     ) {
-        self.rows = rows;
-        self.points = points;
+        self.geometry.seed_cursor_only_body(rows, points)
     }
 
-    /// Append reused (Phase 2 scroll) body rows + points to the emitter, on top
-    /// of the newly-exposed rows the partial walk produced. `finish_snapshot`
-    /// sorts rows by index and points by buffer position, so insertion order does
-    /// not matter. No `row_metrics` are added (reused grid rows are installed
-    /// already-finalized, so the exposed-row finalize pass must not touch them).
     pub(crate) fn push_reused_body(
         &mut self,
         rows: Vec<DisplayRowSnapshot>,
         points: Vec<DisplayPointSnapshot>,
     ) {
-        self.rows.extend(rows);
-        self.points.extend(points);
+        self.geometry.push_reused_body(rows, points)
     }
 
-    /// Normalize the body rows' snapshot columns to the full walk's convention.
-    ///
-    /// Every display row starts emitting at the left edge of the text area —
-    /// GNU's `display_line` opens each glyph row at `it->first_visible_x` —
-    /// so `start_col` is a property of the row itself and not of the row above
-    /// it, and `end_col` for a row whose pen never moved (an empty line, whose
-    /// only content is its own newline) is that same column.
-    ///
-    /// This used to re-derive a CHAIN instead: `start_col` = the column where
-    /// the PREVIOUS row broke. That was faithful to what the walk published,
-    /// because the row transitions opened each output row at the pen of the
-    /// row that had just ended, and it was invisible on any row that draws a
-    /// glyph — the first glyph moves the output cursor and overwrites it. The
-    /// transitions now open a row at the column the walk itself uses
-    /// (`DisplayRowLineBreakTransitionPlan::row_start_col`), so the chain is
-    /// gone from both sides and reused rows need only agree with the row they
-    /// are, not with the row above them.
     pub(crate) fn normalize_body_start_cols(&mut self) {
-        for row in self.rows.iter_mut() {
-            if row.start_buffer_pos.is_none() {
-                continue;
-            }
-            row.start_col = 0;
-            if row.end_x == row.start_x {
-                row.end_col = row.start_col;
-            }
-        }
+        self.geometry.normalize_body_start_cols()
     }
 
     pub(crate) fn display_point_len(&self) -> usize {
-        self.points.len()
+        self.geometry.display_point_len()
     }
 
     pub(crate) fn truncate_display_points(&mut self, len: usize) {
-        self.points.truncate(len);
+        self.geometry.truncate_display_points(len)
     }
 
     pub(crate) fn rows(&self) -> &[DisplayRowSnapshot] {
-        &self.rows
+        self.geometry.rows()
     }
 
+    #[cfg(test)]
     pub(crate) fn point_for_buffer_pos(&self, pos: LispCharPos1) -> Option<&DisplayPointSnapshot> {
-        self.points.iter().find(|point| point.buffer_pos == pos)
+        self.geometry.point_for_buffer_pos(pos)
     }
 
     pub(crate) fn point_for_lisp_buffer_pos(
         &self,
         pos: LispCharPos1,
     ) -> Option<&DisplayPointSnapshot> {
-        self.point_for_buffer_pos(pos)
+        self.geometry.point_for_lisp_buffer_pos(pos)
     }
 
     pub(crate) fn row_metrics(&self) -> &[RowMetricsSnapshot] {
-        &self.row_metrics
+        self.geometry.row_metrics()
     }
 
     pub(crate) fn current_row_display_positions(
         &self,
     ) -> (Option<LispCharPos1>, Option<LispCharPos1>) {
-        (
-            self.current_row_first_display_pos,
-            self.current_row_last_display_pos,
-        )
+        self.geometry.current_row_display_positions()
     }
 
     pub(crate) fn restore_current_row_display_positions(
@@ -1482,20 +1469,20 @@ impl WindowOutputEmitter {
         first: Option<LispCharPos1>,
         last: Option<LispCharPos1>,
     ) {
-        self.current_row_first_display_pos = first;
-        self.current_row_last_display_pos = last;
-        // A restore rewinds the row to a checkpoint taken while it was still
-        // being filled, so by construction the row had not ended yet.
-        self.current_row_terminator = None;
+        self.geometry
+            .restore_current_row_display_positions(first, last)
+    }
+
+    pub(crate) fn restore_current_row_pen(
+        &mut self,
+        position: crate::display_row::builder::DisplayRowPosition,
+    ) {
+        self.geometry
+            .restore_current_row_pen(position.x_px(), position.col());
     }
 
     pub(crate) fn current_row_has_output(&self) -> bool {
-        self.current_row_progress.as_ref().is_some_and(|progress| {
-            progress.x != progress.start_x
-                || progress.col != progress.start_col
-                || self.current_row_first_display_pos.is_some()
-                || self.current_row_last_display_pos.is_some()
-        })
+        self.geometry.current_row_has_output()
     }
 
     fn begin_current_row_progress(
@@ -1506,26 +1493,12 @@ impl WindowOutputEmitter {
         y: i64,
         x: i64,
     ) {
-        self.current_row_progress = Some(CurrentRowProgress {
-            display_row_index,
-            row,
-            y,
-            col,
-            x,
-            start_col: col,
-            start_x: x,
-        });
+        self.geometry
+            .begin_current_row_progress(display_row_index, row, col, y, x)
     }
 
     fn update_current_row_progress(&mut self, row: i64, col: i64, y: i64, x: i64) {
-        match self.current_row_progress.as_mut() {
-            Some(progress) if progress.row == row => {
-                progress.y = y;
-                progress.col = col;
-                progress.x = x;
-            }
-            _ => self.begin_current_row_progress(None, row, col, y, x),
-        }
+        self.geometry.update_current_row_progress(row, col, y, x)
     }
 
     fn with_live_update<T>(
@@ -1542,20 +1515,15 @@ impl WindowOutputEmitter {
     }
 
     pub(crate) fn note_display_buffer_pos(&mut self, buffer_pos: LispCharPos1) {
-        if self.current_row_first_display_pos.is_none() {
-            self.current_row_first_display_pos = Some(buffer_pos);
-        }
-        self.current_row_last_display_pos = Some(buffer_pos);
+        self.geometry.note_display_buffer_pos(buffer_pos)
     }
 
     pub(crate) fn note_display_string_row_end(&mut self, buffer_pos: LispCharPos1) {
-        self.note_display_buffer_pos(buffer_pos);
-        self.current_row_end_source = DisplayRowEndSource::DisplayStringNewline;
+        self.geometry.note_display_string_row_end(buffer_pos)
     }
 
     pub(crate) fn note_display_string_wrap(&mut self, buffer_pos: LispCharPos1) {
-        self.note_display_buffer_pos(buffer_pos);
-        self.current_row_end_source = DisplayRowEndSource::DisplayStringWrap;
+        self.geometry.note_display_string_wrap(buffer_pos)
     }
 
     pub(crate) fn note_overlay_string_row_end(
@@ -1563,121 +1531,18 @@ impl WindowOutputEmitter {
         buffer_pos: LispCharPos1,
         kind: crate::display_origin::OverlayStringKind,
     ) {
-        self.note_display_buffer_pos(buffer_pos);
-        self.current_row_end_source = match kind {
-            crate::display_origin::OverlayStringKind::Before => {
-                DisplayRowEndSource::OverlayBeforeString
-            }
-            crate::display_origin::OverlayStringKind::After => {
-                DisplayRowEndSource::OverlayAfterString
-            }
-        };
+        self.geometry.note_overlay_string_row_end(buffer_pos, kind)
     }
 
-    /// Record where this row's WALK began, for a row whose first drawn glyph is
-    /// not its first position.
-    ///
-    /// GNU takes a row's start before it does anything about the hscroll:
-    /// `row->start = it->start` (src/xdisp.c:25857), and only then
-    /// `move_it_in_display_line_to (it, ZV, it->first_visible_x, MOVE_TO_POS |
-    /// MOVE_TO_X)` skips the columns scrolled off the left (:25878-25890).
-    /// `it->start` is the previous row's end (`it->start = row->end`,
-    /// src/xdisp.c:26855), so a truncating row hscrolled by any amount still
-    /// starts at its LINE start -- measured, GNU Emacs 31.0.90: `vertical-motion
-    /// 0` answers 202 for a line starting at 202 at hscroll 0, 5, 20 and 100
-    /// alike (`scripts/l212-marker-column-probe.el`).
-    ///
-    /// Deliberately narrower than [`Self::note_display_buffer_pos`]: the skipped
-    /// characters are not displayed, so they are the row's START and never its
-    /// END.
     pub(crate) fn note_row_walk_start(&mut self, buffer_pos: LispCharPos1) {
-        if self.current_row_first_display_pos.is_none() {
-            self.current_row_first_display_pos = Some(buffer_pos);
-        }
+        self.geometry.note_row_walk_start(buffer_pos)
     }
 
-    /// Publish the screen column a truncation `$` or continuation `\` covers,
-    /// standing in for the buffer position the walk had reached there.
-    ///
-    /// See [`neovm_core::window::DisplayPointRole`] for the GNU model this
-    /// mirrors. Two things this deliberately does NOT do, both because the
-    /// marker owns no position of its own:
-    ///
-    /// * it does not touch the row's first/last display positions, so a marker
-    ///   changes neither `start_buffer_pos` (which is the walk's start, above)
-    ///   nor `end_buffer_pos`;
-    /// * it publishes with [`DisplayPointRole::OverlaidMarker`], so
-    ///   `point_for_buffer_pos` prefers a drawn glyph for the same position and
-    ///   reaches the marker only when nothing drew one.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn push_overlaid_marker_point(
-        &mut self,
-        buffer_pos: LispCharPos1,
-        glyph_x: f32,
-        glyph_y: f32,
-        width: f32,
-        height: f32,
-        row: i64,
-        col: usize,
-    ) {
-        self.points.push(DisplayPointSnapshot {
-            role: neovm_core::window::DisplayPointRole::OverlaidMarker,
-            buffer_pos,
-            x: (glyph_x - self.text_x).round() as i64,
-            y: (glyph_y - self.window_top).round() as i64,
-            width: width.max(0.0).round() as i64,
-            height: height.max(1.0).round() as i64,
-            row,
-            col: col as i64,
-        });
-    }
-
-    /// Record that this row ends at a buffer position which draws no glyph of
-    /// its own -- GNU's `it->eol_pos`.
-    ///
-    /// This is the row's end in both senses at once: it is the row's last
-    /// display position (so `end_buffer_pos`, and through it `window-end` and
-    /// the screen-line motion goal stops, are unchanged) AND the position that
-    /// owns every screen column past the row's last glyph. Only
-    /// [`Self::push_text_row`] turns it into a display point, so a row cannot
-    /// be closed having recorded a terminator and published no slot for it.
     pub(crate) fn note_row_terminator(&mut self, terminator: DisplayRowTerminator) {
-        self.note_display_buffer_pos(terminator.pos);
-        self.current_row_terminator = Some(terminator);
+        self.geometry.note_row_terminator(terminator)
     }
 
-    /// Publish the slot of a recorded terminator, unless the row already draws
-    /// a glyph at that position.
-    ///
-    /// The guard is not an optimisation: a row whose terminator coincides with
-    /// a drawn glyph -- the accessible end of the buffer, where
-    /// `push_text_insertion_boundary` has already published one -- must keep
-    /// exactly one point per position, because `point_for_buffer_pos` binary
-    /// searches `points` and `point_at_coords` takes the last point at or
-    /// before a column.
-    fn publish_row_terminator_slot(&mut self, progress: &CurrentRowProgress, row_height: f32) {
-        let Some(terminator) = self.current_row_terminator.take() else {
-            return;
-        };
-        if self
-            .points
-            .iter()
-            .any(|point| point.row == progress.row && point.buffer_pos == terminator.pos)
-        {
-            return;
-        }
-        self.points.push(DisplayPointSnapshot {
-            role: neovm_core::window::DisplayPointRole::Glyph,
-            buffer_pos: terminator.pos,
-            x: progress.x,
-            y: progress.y,
-            width: terminator.cell.width.max(0.0).round() as i64,
-            height: row_height.max(terminator.cell.height).max(1.0).round() as i64,
-            row: progress.row,
-            col: progress.col,
-        });
-    }
-
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn push_display_point(
         &mut self,
@@ -1689,17 +1554,8 @@ impl WindowOutputEmitter {
         row: i64,
         col: usize,
     ) {
-        self.note_display_buffer_pos(buffer_pos);
-        self.points.push(DisplayPointSnapshot {
-            role: neovm_core::window::DisplayPointRole::Glyph,
-            buffer_pos,
-            x: (glyph_x - self.text_x).round() as i64,
-            y: (glyph_y - self.window_top).round() as i64,
-            width: width.max(0.0).round() as i64,
-            height: height.max(1.0).round() as i64,
-            row,
-            col: col as i64,
-        });
+        self.geometry
+            .push_display_point(buffer_pos, glyph_x, glyph_y, width, height, row, col)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1713,19 +1569,10 @@ impl WindowOutputEmitter {
         row: usize,
         col: usize,
     ) {
-        self.push_display_point(
-            buffer_pos,
-            glyph_x,
-            glyph_y,
-            width,
-            height,
-            self.text_row_base + row as i64,
-            col,
-        );
+        self.geometry
+            .push_text_display_point(buffer_pos, glyph_x, glyph_y, width, height, row, col)
     }
 
-    /// [`Self::push_overlaid_marker_point`] for a BODY row, whose row index is
-    /// relative to the window's first text row.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn push_text_overlaid_marker_point(
         &mut self,
@@ -1737,19 +1584,10 @@ impl WindowOutputEmitter {
         row: usize,
         col: usize,
     ) {
-        self.push_overlaid_marker_point(
-            buffer_pos,
-            glyph_x,
-            glyph_y,
-            width,
-            height,
-            self.text_row_base + row as i64,
-            col,
-        );
+        self.geometry
+            .push_text_overlaid_marker_point(buffer_pos, glyph_x, glyph_y, width, height, row, col)
     }
 
-    /// Publish a visible insertion boundary that has row geometry but no
-    /// source glyph of its own, such as end-of-buffer.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn push_text_insertion_boundary(
         &mut self,
@@ -1761,7 +1599,8 @@ impl WindowOutputEmitter {
         row: usize,
         col: usize,
     ) {
-        self.push_text_display_point(buffer_pos, x, y, width, height, row, col);
+        self.geometry
+            .push_text_insertion_boundary(buffer_pos, x, y, width, height, row, col)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1822,10 +1661,11 @@ impl WindowOutputEmitter {
         y: f32,
         x: f32,
     ) {
-        let output_row = self.text_row_base + row as i64;
+        self.geometry.note_query_y(y);
+        let output_row = self.geometry.text_row_base + row as i64;
         let output_col = col as i64;
-        let output_y = (y - self.window_top).round() as i64;
-        let output_x = (x - self.text_x).round() as i64;
+        let output_y = (y - self.geometry.window_top).round() as i64;
+        let output_x = (x - self.geometry.text_x).round() as i64;
         self.begin_current_row_progress(
             Some(display_row_index),
             output_row,
@@ -1839,9 +1679,7 @@ impl WindowOutputEmitter {
     }
 
     pub(crate) fn current_display_text_row_index(&self) -> usize {
-        self.current_row_progress
-            .and_then(|progress| progress.display_row_index)
-            .expect("text row must have display row progress before finishing")
+        self.geometry.current_display_text_row_index()
     }
 
     #[cfg(test)]
@@ -1853,11 +1691,24 @@ impl WindowOutputEmitter {
         y: f32,
         x: f32,
     ) {
-        self.begin_display_text_row(evaluator, self.text_row_base as usize + row, row, col, y, x);
+        self.begin_display_text_row(
+            evaluator,
+            self.geometry.text_row_base as usize + row,
+            row,
+            col,
+            y,
+            x,
+        );
     }
 
     fn begin_chrome_row(&mut self, evaluator: &mut Context, row: i64, y: f32) {
-        self.begin_row_output(evaluator, row, 0, (y - self.window_top).round() as i64, 0);
+        self.begin_row_output(
+            evaluator,
+            row,
+            0,
+            (y - self.geometry.window_top).round() as i64,
+            0,
+        );
     }
 
     pub(crate) fn begin_update(&self, evaluator: &mut Context) {
@@ -1888,10 +1739,10 @@ impl WindowOutputEmitter {
     ) {
         self.move_output_to(
             evaluator,
-            self.text_row_base + row as i64,
+            self.geometry.text_row_base + row as i64,
             col as i64,
-            (y - self.window_top).round() as i64,
-            (x - self.text_x).round() as i64,
+            (y - self.geometry.window_top).round() as i64,
+            (x - self.geometry.text_x).round() as i64,
         );
     }
 
@@ -1905,58 +1756,22 @@ impl WindowOutputEmitter {
             evaluator,
             row,
             progress.end_col(),
-            (progress.y() - self.window_top).round() as i64,
+            (progress.y() - self.geometry.window_top).round() as i64,
             progress.end_x().round() as i64,
         );
     }
 
+    pub(crate) fn note_truncated_end(&mut self, end: LispCharPos1) {
+        self.geometry.note_truncated_end(end);
+    }
+
     pub(crate) fn push_text_row(&mut self, row_y_start: f32, row_height: f32, row_ascent: f32) {
-        let row_progress = self
-            .current_row_progress
-            .take()
-            .expect("text row must have live output progress before finishing");
-        // GNU's `display_line` gives the row its own end before the row is
-        // handed on (`it->eol_pos`, then `find_row_edges`); doing it here means
-        // the slot is part of closing a row rather than a step a caller can
-        // forget. The push must precede the `take()`s below, which clear the
-        // row's first/last display positions.
-        self.publish_row_terminator_slot(&row_progress, row_height);
-        self.rows.push(DisplayRowSnapshot {
-            row: row_progress.row,
-            y: row_progress.y,
-            height: row_height.max(1.0).round() as i64,
-            start_x: row_progress.start_x,
-            start_col: row_progress.start_col,
-            end_x: row_progress.x,
-            end_col: row_progress.col,
-            start_buffer_pos: self.current_row_first_display_pos.take(),
-            end_buffer_pos: self.current_row_last_display_pos.take(),
-            end_source: std::mem::take(&mut self.current_row_end_source),
-            // Fringe bitmaps are stamped onto the matrix row after the walk
-            // that pushes this snapshot row, so they are filled in later from
-            // the finished matrix (`fringe_snapshot::publish_row_fringe_bitmaps`).
-            fringe: Default::default(),
-        });
-        self.row_metrics.push(RowMetricsSnapshot::new(
-            row_progress
-                .display_row_index
-                .expect("text row must have display row progress before recording metrics"),
-            row_progress.row.max(0) as usize,
-            row_y_start,
-            row_height.max(1.0),
-            row_ascent.max(0.0).min(row_height.max(1.0)),
-        ));
+        self.geometry
+            .push_text_row(row_y_start, row_height, row_ascent)
     }
 
-    fn push_chrome_row(&mut self, row: DisplayRowSnapshot) {
-        self.rows.push(row);
-    }
-
-    /// Seed the chrome rows a SKIPPED chrome walk would have pushed. Same
-    /// destination as [`Self::push_chrome_row`], so `finish_snapshot` (which
-    /// sorts by row index) cannot tell a reused chrome row from a walked one.
     pub(crate) fn push_reused_chrome(&mut self, rows: Vec<DisplayRowSnapshot>) {
-        self.rows.extend(rows);
+        self.geometry.push_reused_chrome(rows)
     }
 
     pub(crate) fn replace_chrome_area_strings(
@@ -1974,23 +1789,7 @@ impl WindowOutputEmitter {
     }
 
     fn push_chrome_row_progress(&mut self, progress: DisplayRowOutputProgress) {
-        let row_progress = self
-            .current_row_progress
-            .take()
-            .expect("chrome row must have live output progress before finishing");
-        self.push_chrome_row(DisplayRowSnapshot {
-            row: row_progress.row,
-            y: row_progress.y,
-            height: progress.height().round() as i64,
-            start_x: row_progress.start_x,
-            start_col: row_progress.start_col,
-            end_x: row_progress.x,
-            end_col: row_progress.col,
-            start_buffer_pos: None,
-            end_buffer_pos: None,
-            end_source: DisplayRowEndSource::Buffer,
-            fringe: Default::default(),
-        });
+        self.geometry.push_chrome_row_progress(progress)
     }
 
     pub(crate) fn set_logical_cursor(&mut self, cursor: WindowCursorPos) {
@@ -2019,21 +1818,9 @@ impl WindowOutputEmitter {
         let window_id = self.window_id;
         let logical_cursor = self.logical_cursor.take();
         let phys_cursor = self.phys_cursor.take();
-        self.points
-            .sort_by_key(|point| (point.buffer_pos, point.row, point.col, point.x));
-        self.rows.sort_by_key(|row| row.row);
-        let body_origin_y = (regions.text_body.y - regions.outer.y).round() as i64;
-        let mut body_rows: Vec<_> = self
-            .points
-            .iter()
-            .map(|point| neovm_core::window::PresentedBodyRowSnapshot {
-                output_row: point.row,
-                body_row: point.row.saturating_sub(self.text_row_base),
-                body_y: point.y.saturating_sub(body_origin_y),
-            })
-            .collect();
-        body_rows.sort_by_key(|row| row.output_row);
-        body_rows.dedup_by_key(|row| row.output_row);
+        let prepared_rows = self
+            .geometry
+            .finish((regions.text_body.y - regions.outer.y).round() as i64);
         // Record the displayed buffer's modification tick so display primitives
         // that consult this snapshot (notably `vertical-motion` with a column
         // target) can reject it once the buffer is mutated without a fresh
@@ -2056,7 +1843,7 @@ impl WindowOutputEmitter {
             cell_origin,
             regions,
             regions_materialized: true,
-            body_rows,
+            body_rows: prepared_rows.body_rows,
             text_area_left_offset: (regions.text_body.x - regions.outer.x).round() as i64,
             mode_line_height,
             header_line_height,
@@ -2064,8 +1851,8 @@ impl WindowOutputEmitter {
             chrome_strings: self.chrome_strings,
             logical_cursor,
             phys_cursor: phys_cursor.clone(),
-            points: self.points,
-            rows: self.rows,
+            points: prepared_rows.points,
+            rows: prepared_rows.rows,
             buffer_modiff,
             layout_freshness,
             window_end_record: None,

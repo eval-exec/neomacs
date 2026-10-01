@@ -4437,6 +4437,7 @@ fn read_char_mouse_press_uses_clicked_window_geometry() {
                 col: 2,
             }],
             rows: vec![crate::window::DisplayRowSnapshot {
+                truncated_end_buffer_pos: None,
                 row: 0,
                 y: 0,
                 height: 16,
@@ -4561,6 +4562,7 @@ fn read_key_sequence_uses_clicked_window_local_map_for_mouse_event() {
                 col: 2,
             }],
             rows: vec![crate::window::DisplayRowSnapshot {
+                truncated_end_buffer_pos: None,
                 row: 0,
                 y: 0,
                 height: 16,
@@ -4670,6 +4672,7 @@ fn read_key_sequence_drops_unbound_down_mouse_before_bound_click() {
                 col: 2,
             }],
             rows: vec![crate::window::DisplayRowSnapshot {
+                truncated_end_buffer_pos: None,
                 row: 0,
                 y: 0,
                 height: 16,
@@ -5250,6 +5253,7 @@ fn read_key_sequence_uses_clicked_window_buffer_local_minor_mode_maps() {
                 col: 2,
             }],
             rows: vec![crate::window::DisplayRowSnapshot {
+                truncated_end_buffer_pos: None,
                 row: 0,
                 y: 0,
                 height: 16,
@@ -27892,5 +27896,88 @@ fn inlined_bobp_and_eobp_track_the_accessible_bounds_like_gnu() {
     assert_eq!(
         result,
         "OK (((t nil) (nil nil) (nil t) (t nil) (nil t)) 40000)"
+    );
+}
+
+#[test]
+fn native_input_progress_waits_through_command_hooks_and_finalization() {
+    fn probe(ctx: &mut Context, _: Vec<Value>) -> EvalResult {
+        let checkpoints = ctx.input_progress.checkpoint();
+        // The startup post-command hook runs before reading any input.
+        assert!(checkpoints.iter().all(|checkpoint| checkpoint.through == 0));
+        Ok(Value::NIL)
+    }
+    let (mut ev, global_map) = command_loop_error_test_context();
+    ev.noninteractive = false;
+    ev.register_subr(SubrSpec::new(
+        "neo-input-progress-probe",
+        NativeFn::ContextVec(probe),
+        SubrArity::new(0, Some(0)),
+    ));
+    ev.eval_str("(setq pre-command-hook '(neo-input-progress-probe) post-command-hook '(neo-input-progress-probe))").unwrap();
+    crate::emacs_core::keymap::list_keymap_define_seq(
+        global_map,
+        &[Value::fixnum('q' as i64)],
+        Value::symbol("neo-stop-command-loop-error-test-command"),
+    )
+    .unwrap();
+    let stream = neomacs_display_protocol::input_progress::InputStream::default();
+    let receipt = stream.issue().unwrap();
+    let frame = ev.frames.selected_frame().unwrap().id.0;
+    let (tx, rx) = crossbeam_channel::unbounded();
+    ev.input_rx = Some(rx);
+    tx.send(crate::keyboard::InputEvent::Tracked {
+        receipt: receipt.clone(),
+        event: Box::new(crate::keyboard::InputEvent::KeyPress {
+            key: crate::keyboard::KeyEvent::char('q'),
+            emacs_frame_id: frame,
+        }),
+    })
+    .unwrap();
+    ev.command_loop.running = true;
+    ev.recursive_edit_inner().unwrap();
+    assert!(receipt.acknowledged_by(&ev.input_progress.checkpoint()));
+}
+
+#[test]
+fn native_input_progress_completion_requires_a_fresh_presentation() {
+    let mut ev = Context::new();
+    let stream = neomacs_display_protocol::input_progress::InputStream::default();
+    let command = ev.input_progress.begin_command();
+    ev.input_progress.consumed(stream.issue().unwrap());
+    let during_command = ev.redisplay_signature();
+    drop(command);
+    let completed = ev.redisplay_signature();
+    assert_ne!(
+        during_command, completed,
+        "mid-command redisplay must not suppress the completion frame"
+    );
+    assert_eq!(completed, ev.redisplay_signature());
+}
+
+#[test]
+fn fontset_changes_invalidate_redisplay_skip_signature() {
+    let mut ev = Context::new();
+    let calls = Rc::new(RefCell::new(0usize));
+    let observed = Rc::clone(&calls);
+    ev.redisplay_fn = Some(Box::new(move |_ev: &mut Context| {
+        *observed.borrow_mut() += 1;
+    }));
+    ev.redisplay();
+    ev.redisplay();
+    assert_eq!(*calls.borrow(), 1);
+    ev.eval_str("(set-fontset-font t #x25cb '(nil . \"iso10646-1\"))")
+        .unwrap();
+    ev.redisplay();
+    assert_eq!(
+        *calls.borrow(),
+        2,
+        "a font-rule change must schedule fresh layout"
+    );
+    ev.redisplay();
+    assert_eq!(
+        *calls.borrow(),
+        2,
+        "unchanged font policy still permits the idle skip"
     );
 }

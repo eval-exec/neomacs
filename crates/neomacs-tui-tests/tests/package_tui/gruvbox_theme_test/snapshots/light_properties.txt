@@ -1,0 +1,64 @@
+PROPERTIES gruvbox-light-medium E PAGE 1/1
+PROPERTY-COUNT E 13
+RUN E ("; " font-lock-comment-delimiter-face)
+RUN E ("comment Ω\n" font-lock-comment-face)
+RUN E ("(" nil)
+RUN E ("defun" font-lock-keyword-face)
+RUN E (" " nil)
+RUN E ("greet" font-lock-function-name-face)
+RUN E (" (name)\n  " nil)
+RUN E ("\"Doc.\"" font-lock-doc-face)
+RUN E ("\n  (" nil)
+RUN E ("if" font-lock-keyword-face)
+RUN E (" name (message " nil)
+RUN E ("\"Hello %s\"" font-lock-string-face)
+RUN E (" name) nil))\n" nil)
+GRUVBOX-PROPERTIES-E-PAGE-DONE 1/1
+GRUVBOX-PROPERTIES-E-READY
+--
+PROPERTIES gruvbox-light-medium O PAGE 1/2
+PROPERTY-COUNT O 21
+RUN O ("#+title:" org-document-info-keyword)
+RUN O (" " nil)
+RUN O ("Plan Ω\n" org-document-title)
+RUN O ("* " org-level-1)
+RUN O ("TODO" (org-todo org-level-1))
+RUN O (" Ship release" org-level-1)
+RUN O ("\n" nil)
+RUN O ("** " org-level-2)
+RUN O ("DONE" (org-done org-level-2))
+RUN O (" " org-level-2)
+RUN O ("Verify rollback" (org-headline-done org-level-2))
+RUN O ("\nA " nil)
+RUN O ("[[https://example.invalid][link]]" org-link)
+RUN O (" and " nil)
+RUN O ("=code=" (org-verbatim))
+GRUVBOX-PROPERTIES-O-PAGE-DONE 1/2
+--
+PROPERTIES gruvbox-light-medium O PAGE 2/2
+PROPERTY-COUNT O 21
+RUN O (".\n" nil)
+RUN O ("#+begin_src emacs-lisp\n" org-block-begin-line)
+RUN O ("(message " (org-block))
+RUN O ("\"ship\"" (font-lock-string-face org-block))
+RUN O (")\n" (org-block))
+RUN O ("#+end_src\n" org-block-end-line)
+GRUVBOX-PROPERTIES-O-PAGE-DONE 2/2
+GRUVBOX-PROPERTIES-O-READY
+--
+PROPERTIES gruvbox-light-medium D PAGE 1/1
+PROPERTY-COUNT D 12
+RUN D ("diff --git a/a.el b/a.el\n--- " diff-header)
+RUN D ("a/a.el" (diff-file-header diff-header))
+RUN D ("\n+++ " diff-header)
+RUN D ("b/a.el" (diff-file-header diff-header))
+RUN D ("\n" diff-header)
+RUN D ("@@ -1 +1 @@" diff-hunk-header)
+RUN D ("\n" nil)
+RUN D ("-" diff-indicator-removed)
+RUN D ("(old)\n" diff-removed)
+RUN D ("+" diff-indicator-added)
+RUN D ("(new)\n" diff-added)
+RUN D (" context\n" diff-context)
+GRUVBOX-PROPERTIES-D-PAGE-DONE 1/1
+GRUVBOX-PROPERTIES-D-READY

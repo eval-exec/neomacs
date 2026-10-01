@@ -105,7 +105,7 @@ pub const AUTO_COMPLETE_AUCTEX_MELPA_PIN: (&str, &str) = ("auto-complete-auctex"
 
 /// The exact AUCTeX release selected from GNU ELPA for the
 /// auto-complete-auctex integration parity corpus.
-pub const AUCTEX_GNU_ELPA_PIN: (&str, &str) = ("auctex", "14.1.2");
+pub const AUCTEX_GNU_ELPA_PIN: (&str, &str) = ("auctex", "14.2.0");
 
 /// The exact auto-complete-c-headers package selected by the comprehensive
 /// include-path, filesystem-cache, documentation, candidate-source, and
@@ -3262,7 +3262,7 @@ pub const BERT_MELPA_PIN: (&str, &str) = ("bert", "20131117.1014");
 
 /// The exact Compat release selected from GNU ELPA by the comprehensive API
 /// parity corpus.
-pub const COMPAT_GNU_ELPA_PIN: (&str, &str) = ("compat", "31.0.0.2");
+pub const COMPAT_GNU_ELPA_PIN: (&str, &str) = ("compat", "31.1.0.0");
 
 /// The exact Corfu package selected for practical in-buffer completion,
 /// candidate navigation, preview, insertion, cancellation, and extension-mode
@@ -6502,7 +6502,7 @@ fn run_phase_with_validation(
     form: &str,
     check_editor_error_output: bool,
 ) -> Result<PhaseReport, String> {
-    let form_directory = workspace_root().join("tmp/melpa/editor-forms");
+    let form_directory = neomacs_melpa_test_support::melpa_cache_root().join("editor-forms");
     fs::create_dir_all(&form_directory).map_err(|error| {
         format!(
             "failed to create editor-form directory {}: {error}",

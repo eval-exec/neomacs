@@ -9,11 +9,15 @@ use crate::emacs_core::symbol::Obarray;
 use crate::heap_types::LispString;
 use crate::window::Frame;
 pub use neomacs_display_protocol::ImageRealization as ResolvedImageRealization;
+pub use neomacs_display_protocol::image::EncodedBytes;
+use neomacs_display_protocol::image_diagnostic::ImageDiagnostic;
+pub use neomacs_display_protocol::image_diagnostic::ImageLoadIdentity;
+pub use neomacs_display_protocol::image_diagnostic::{ImageDiagnosticSubject, ImageFormatName};
 pub use neomacs_display_protocol::{
     AxisSize, ImageColorContext, ImageEmbeddedMetadata, ImageFrameDelay, ImageFrameIndex,
     ImageHeuristicMask, ImageId, ImageLayoutExtent, ImageLoadAttempt, ImageLoadToken,
-    ImageMaskKind, ImageMaskPolicy, ImageReportedExtent, ImageRotation, ImageSizeSpec,
-    ImageStateEvent,
+    ImageMaskKind, ImageMaskPolicy, ImageNativeExtent, ImageReportedExtent, ImageRotation,
+    ImageSizeLimit, ImageSizeSpec, ImageStateEvent, OversizedImage,
 };
 
 /// A finite, non-negative image scale stored by bits so image requests remain
@@ -65,12 +69,25 @@ pub enum ImageDefaultScale {
     Explicit(ImageScaleFactor),
 }
 
-/// Frame facts needed to resolve semantic GNU image scaling.
+/// Frame facts a GNU image lookup resolves against before it can load
+/// anything: the semantic scaling inputs, and the `max-image-size` bound that
+/// decides whether the image may be decoded at all.
+///
+/// Both come from the same two sources — the frame and the obarray — and are
+/// read at the same moment, because GNU resolves scaling in
+/// `compute_image_size` and the size limit in `check_image_size`
+/// (`src/image.c:1811`) while handling the very same image. Carrying them in
+/// one value is what lets a lookup that has a frame publish the scaling *and*
+/// the limit to the loader, instead of only the scaling.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ImageScaleEnvironment {
     frame_column_width: ImageScaleFactor,
     device_scale: ImageScaleFactor,
     default_scale: ImageDefaultScale,
+    /// GNU's `max-image-size`, measured against this frame. Starts at GNU's
+    /// own default value so an environment nobody resolved a limit for still
+    /// bounds what it loads.
+    size_limit: ImageSizeLimit,
 }
 
 impl ImageScaleEnvironment {
@@ -96,7 +113,21 @@ impl ImageScaleEnvironment {
             device_scale: ImageScaleFactor::try_from(device_scale)
                 .expect("sanitized device scale is valid"),
             default_scale,
+            size_limit: ImageSizeLimit::default(),
         }
+    }
+
+    /// Attach the frame's resolved `max-image-size` bound.
+    #[must_use]
+    pub const fn with_size_limit(mut self, size_limit: ImageSizeLimit) -> Self {
+        self.size_limit = size_limit;
+        self
+    }
+
+    /// The largest native extent this frame will load an image at.
+    #[must_use]
+    pub const fn size_limit(self) -> ImageSizeLimit {
+        self.size_limit
     }
 
     /// The validated logical-to-device scale carried by this frame snapshot.
@@ -167,6 +198,58 @@ pub fn image_scale_environment(frame: &Frame, obarray: &Obarray) -> ImageScaleEn
         frame.device_scale_factor as f32,
         default_scale,
     )
+    .with_size_limit(image_size_limit(frame, obarray))
+}
+
+/// GNU's `max-image-size` (`src/image.c:13037`), resolved against FRAME.
+///
+/// `Vmax_image_size` is an ordinary special variable, so what counts is the
+/// binding in force when the lookup runs — a `let` around the call that makes
+/// the image visible is honoured, and a binding that has already been unwound
+/// is not, which is exactly GNU's behaviour for a load that happens during
+/// redisplay. `DEFVAR_LISP` keeps it out of every buffer, so there is no
+/// buffer-local case to consider.
+#[must_use]
+pub fn image_size_limit(frame: &Frame, obarray: &Obarray) -> ImageSizeLimit {
+    // GNU tests `FIXNUMP` before `FLOATP`; `Value` splits the same way, and
+    // anything else (nil, a string, a symbol) is GNU's "no explicit limit".
+    match obarray.symbol_value("max-image-size").copied() {
+        Some(value) if value.as_int().is_some() => {
+            ImageSizeLimit::from_axis_pixels(value.as_int().expect("tested fixnum"))
+        }
+        Some(value) if value.as_float().is_some() => ImageSizeLimit::from_frame_ratio(
+            value.as_float().expect("tested float"),
+            Some(frame_pixel_extent(frame)),
+        ),
+        _ => ImageSizeLimit::UNLIMITED,
+    }
+}
+
+/// GNU's `FRAME_PIXEL_WIDTH` / `FRAME_PIXEL_HEIGHT` (`src/frame.h`).
+///
+/// Neomacs stores a frame's geometry in logical pixels and publishes the
+/// physical scale beside it, while GNU's macros are already in device pixels:
+/// recover the physical extent so a fractional `max-image-size` means the same
+/// fraction of the same frame on both sides.
+fn frame_pixel_extent(frame: &Frame) -> ImageNativeExtent {
+    let scale = if frame.device_scale_factor.is_finite() && frame.device_scale_factor > 0.0 {
+        frame.device_scale_factor
+    } else {
+        1.0
+    };
+    ImageNativeExtent::new(
+        physical_dimension(frame.width, scale),
+        physical_dimension(frame.height, scale),
+    )
+}
+
+fn physical_dimension(logical: u32, scale: f64) -> u32 {
+    let physical = f64::from(logical) * scale;
+    if physical >= f64::from(u32::MAX) {
+        u32::MAX
+    } else {
+        physical.round().max(0.0) as u32
+    }
 }
 
 #[must_use]
@@ -182,10 +265,24 @@ pub fn numeric_image_scale(value: Value) -> Option<ImageScaleFactor> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ImageDataSource {
     /// Encoded bytes with no authority to resolve external resources.
-    Isolated(Vec<u8>),
+    Isolated(EncodedBytes),
     /// Encoded bytes whose relative resources may be resolved against the
     /// explicitly supplied GNU image `:base-uri`.
-    WithBaseUri { data: Vec<u8>, base_uri: LispString },
+    WithBaseUri {
+        data: EncodedBytes,
+        base_uri: LispString,
+    },
+}
+
+impl ImageDataSource {
+    /// The encoded bytes, whichever authority they carry.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        match self {
+            Self::Isolated(data) => data,
+            Self::WithBaseUri { data, .. } => data,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -215,6 +312,13 @@ pub struct ImageResolveRequest {
     /// Zero-based GNU `:index` selected from a multi-frame source.
     pub frame: ImageFrameIndex,
     pub realization: ResolvedImageRealization,
+    /// The type and subject GNU's loaders word their diagnostics with.
+    ///
+    /// Derived from the same specification the rest of this request is, so it
+    /// cannot disagree with it; it travels here rather than being recomputed
+    /// at the failure site because only this side can print a `:data` image's
+    /// specification the way GNU does.
+    pub identity: ImageLoadIdentity,
 }
 
 /// Cache operation requested by the Lisp image compatibility layer.
@@ -370,9 +474,22 @@ impl ImagePlacement {
     pub const fn height(self) -> u32 {
         self.layout.height()
     }
+
+    /// The slot's logical layout extent as a pair.
+    #[must_use]
+    pub const fn dimensions(self) -> (u32, u32) {
+        (self.width(), self.height())
+    }
 }
 
-/// Stable placeholder geometry while an image is decoded asynchronously.
+/// Geometry for an image that is still being decoded.
+///
+/// The layout is the best the implementation can know without pixels: an
+/// encoded header when one can be read off-thread, otherwise the request's
+/// pinned placeholder. It must agree with the layout the completed decode
+/// reports — a pending slot that moves when the pixels land is worse than a
+/// slot that stayed at the placeholder — so implementations resolve it through
+/// the same sizing inputs the decoder will use, and must not block to get it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingImage {
     load: ImageLoadToken,
@@ -384,7 +501,10 @@ pub struct PendingImage {
 pub struct FailedImage {
     load: ImageLoadToken,
     placement: ImagePlacement,
-    pub error: String,
+    /// GNU's diagnostic for the failure.  It is a value with its own text
+    /// rather than a message string, so a consumer cannot hold the failure
+    /// without also holding what to say about it.
+    pub error: ImageDiagnostic,
 }
 
 impl PendingImage {
@@ -407,7 +527,7 @@ impl PendingImage {
     }
 
     #[must_use]
-    pub fn failed(self, error: String) -> FailedImage {
+    pub fn failed(self, error: ImageDiagnostic) -> FailedImage {
         FailedImage {
             load: self.load,
             placement: self.placement,
@@ -465,8 +585,19 @@ impl ImageLookup {
 pub trait ImageCatalog {
     /// Return the current state immediately. A cache miss schedules decoding
     /// and returns [`ImageLookup::Pending`]. Implementations must not wait for
-    /// renderer queue capacity, metadata locks, file I/O, decode, or upload.
-    fn lookup(&self, request: ImageResolveRequest) -> ImageLookup;
+    /// renderer queue capacity, metadata locks, file I/O, decode, or upload —
+    /// including while resolving the pending layout, which is why header
+    /// geometry arrives from a producer thread rather than from this call.
+    ///
+    /// `limit` is the frame's resolved `max-image-size`
+    /// ([`ImageScaleEnvironment::size_limit`]). It is a parameter rather than a
+    /// property of the request because it is *not* part of an image's identity:
+    /// GNU leaves an already-loaded image alone when the frame is resized, so
+    /// folding the bound into the key would re-decode every image on every
+    /// resize step. It is a parameter rather than a defaulted property of the
+    /// implementation so that a lookup cannot be written without stating the
+    /// bound it loads under.
+    fn lookup(&self, request: ImageResolveRequest, limit: ImageSizeLimit) -> ImageLookup;
 
     /// Apply one explicitly typed cache operation. The next matching lookup
     /// must allocate a fresh renderer identity and decode again. Hosts without
@@ -486,6 +617,21 @@ pub trait ImageCatalog {
         0
     }
 
+    /// Take the failures this catalog has observed since the last call, as
+    /// GNU's `image_error` would have worded them.
+    ///
+    /// A failure is recorded by [`Self::lookup`] itself, so no consumer of a
+    /// failed lookup can consume its geometry and forget the reason. What
+    /// remains is to *say* it: `Context::log_pending_image_diagnostics` is the
+    /// one place that does, and it is called from the same pass that performed
+    /// the lookups. Hosts without a catalog return nothing.
+    ///
+    /// The strings are GNU's C-level text; the caller applies
+    /// `text-quoting-style` exactly as GNU's `vadd_to_log` does.
+    fn take_pending_diagnostics(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Reconcile catalog lifecycle with renderer-published state before a
     /// media-generation rebuild: promote completed `Pending` entries and mark
     /// formerly ready images whose renderer residency disappeared as evicted.
@@ -498,3 +644,7 @@ pub trait ImageCatalog {
 #[cfg(test)]
 #[path = "tests/image_catalog_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/image_size_limit_test.rs"]
+mod size_limit_tests;

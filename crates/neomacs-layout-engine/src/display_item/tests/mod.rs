@@ -378,3 +378,125 @@ fn cropping_an_xwidgets_advance_keeps_its_content_extent() {
         None
     );
 }
+
+/// `produce_image_glyph` crops the glyph's advance *and* its source slice
+/// (`it->pixel_width -= crop; slice.width -= crop;`, src/xdisp.c:32506-32507,
+/// emacs-31.1).  Doing only the first would stretch the whole image into the
+/// narrower box, so the two edits are behind one call.
+#[test]
+fn cropping_an_image_crops_its_advance_and_its_source_slice_together() {
+    let image = DisplayMediaReplacement::image(DisplayImageItem {
+        image_id: 42,
+        source_rect: neomacs_display_protocol::ImageSourceRect::FULL,
+        width: 900.0,
+        height: 100.0,
+        ascent: 100.0,
+        horizontal_margin: 0.0,
+        vertical_margin: 0.0,
+        opaque_background: None,
+    });
+    let source_rect = |media: DisplayMediaReplacement| match media.kind {
+        DisplayMediaReplacementKind::Image { source_rect, .. } => source_rect,
+        other => panic!("still an image, got {other:?}"),
+    };
+
+    let crop = |px: f32| {
+        neomacs_display_protocol::ImageLayoutAdvance::new(neomacs_display_protocol::Px(px))
+            .expect("positive finite advance")
+    };
+    let cropped = image
+        .into_image()
+        .expect("typed image replacement")
+        .crop_to_visible_width(crop(720.0))
+        .expect("720 of the image's 900 px are visible");
+    assert_eq!(cropped.width, 720.0, "the layout advance is cropped");
+    assert_eq!(cropped.height, 100.0);
+    let rect = source_rect(cropped);
+    assert_eq!(rect.x(), 0.0);
+    assert!(
+        (rect.width() - 720.0 / 900.0).abs() < 1e-3,
+        "the slice keeps the visible fraction: {}",
+        rect.width()
+    );
+
+    // An image with horizontal margins advances by `image + 2 * margin`, but
+    // GNU's `crop` comes off the slice's own width, so the margins are not
+    // sampled away with it.
+    let margined = DisplayMediaReplacement::image(DisplayImageItem {
+        image_id: 43,
+        source_rect: neomacs_display_protocol::ImageSourceRect::FULL,
+        width: 300.0,
+        height: 100.0,
+        ascent: 100.0,
+        horizontal_margin: 10.0,
+        vertical_margin: 0.0,
+        opaque_background: None,
+    });
+    assert_eq!(margined.width, 320.0);
+    let cropped_margined = margined
+        .into_image()
+        .unwrap()
+        .crop_to_visible_width(crop(200.0))
+        .expect("100 of the margined advance's 320 px are visible");
+    assert_eq!(cropped_margined.width, 200.0);
+    let rect = source_rect(cropped_margined);
+    // crop = 320 - 200 = 120, taken off the 300 px of painted content.
+    assert!(
+        (rect.width() - 180.0 / 300.0).abs() < 1e-3,
+        "only the painted width is cropped: {}",
+        rect.width()
+    );
+
+    // Cropping cannot widen, and it cannot leave nothing to sample.
+    assert!(
+        image
+            .into_image()
+            .unwrap()
+            .crop_to_visible_width(crop(900.0))
+            .is_none(),
+        "no crop at all is not a crop"
+    );
+    // Cropping finer than the normalized slice's own u16 resolution leaves an
+    // empty rect; the encoding's way of saying "nothing is visible" is the
+    // crop that cannot be applied at all.
+    assert!(
+        image
+            .into_image()
+            .unwrap()
+            .crop_to_visible_width(crop(0.01))
+            .is_some_and(|media| source_rect(media).width() > 0.0),
+        "the finest sliver the slice can still encode is a real crop"
+    );
+    assert!(
+        image
+            .into_image()
+            .unwrap()
+            .crop_to_visible_width(crop(0.001))
+            .is_none(),
+        "a crop below the slice encoding's resolution leaves no glyph"
+    );
+    assert!(
+        DisplayMediaReplacement::video(DisplayVideoItem {
+            video_id: VideoId::new(7),
+            width: 300.0,
+            height: 100.0,
+            opacity: 1.0,
+        })
+        .into_image()
+        .is_err(),
+        "only images carry GNU's image crop"
+    );
+}
+
+#[test]
+fn captured_pointer_range_has_only_protocol_identity_storage() {
+    // Every text item carries this optional range through the row pipeline.
+    // Source positions belong to SourceSpan; pointer capture needs only the
+    // opaque identity that the glyph protocol publishes.
+    assert!(
+        std::mem::size_of::<DisplayPointerSourceRange>()
+            <= std::mem::size_of::<
+                neomacs_display_protocol::glyph_matrix::GlyphPointerSourceIdentity,
+            >()
+    );
+}

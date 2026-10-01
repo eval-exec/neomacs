@@ -15,6 +15,7 @@ fn current_display_row_metrics_tracks_glyph_extents_and_overflow() {
     assert_eq!(
         metrics.finish_current_row(7.0),
         DisplayTextRowMetrics {
+            line_spacing: 0.0,
             y: 7.0,
             height: 24.0,
             ascent: 18.0,
@@ -75,6 +76,7 @@ fn current_display_row_metrics_finishes_row_and_resets_to_default_extents() {
     assert_eq!(
         finished,
         DisplayTextRowMetrics {
+            line_spacing: 0.0,
             y: 7.0,
             height: 24.0,
             ascent: 18.0,
@@ -94,6 +96,7 @@ fn current_display_row_metrics_finishes_current_row_without_resetting_extents() 
     assert_eq!(
         finished,
         DisplayTextRowMetrics {
+            line_spacing: 0.0,
             y: 7.0,
             height: 24.0,
             ascent: 18.0,
@@ -125,6 +128,7 @@ fn current_display_row_metrics_advances_to_next_row_from_finished_extents() {
         advance,
         DisplayRowAdvance {
             finished: DisplayTextRowMetrics {
+                line_spacing: 3.0,
                 y: 7.0,
                 height: 27.0,
                 ascent: 18.0,
@@ -185,6 +189,7 @@ fn logical_cell_geometry_discards_pixel_metrics_and_line_spacing() {
     assert_eq!(
         finished,
         DisplayTextRowMetrics {
+            line_spacing: 0.0,
             y: 10.0,
             height: 16.0,
             ascent: 12.0,
@@ -219,6 +224,7 @@ fn display_row_geometry_cursor_advances_row_position_and_resets_metrics() {
     assert_eq!(
         finished,
         DisplayTextRowMetrics {
+            line_spacing: 4.0,
             y: 42.0,
             height: 28.0,
             ascent: 18.0,
@@ -262,6 +268,7 @@ fn display_row_geometry_cursor_finishes_current_row_without_advancing() {
     assert_eq!(
         cursor.finish_current_row(),
         DisplayTextRowMetrics {
+            line_spacing: 0.0,
             y: 42.0,
             height: 24.0,
             ascent: 18.0,
@@ -296,6 +303,7 @@ fn display_row_geometry_state_builds_cursor_after_row_y_adjustment() {
     assert_eq!(
         cursor.finish_current_row(),
         DisplayTextRowMetrics {
+            line_spacing: 0.0,
             y: 48.0,
             height: 24.0,
             ascent: 18.0,
@@ -407,14 +415,17 @@ fn display_row_geometry_state_reports_current_row_visibility_by_limit() {
     };
 
     assert!(geometry.current_row_is_visible(DisplayRowVisibilityLimit {
+        allow_partial: false,
         max_rows: 5,
         bottom_y: 104.0,
     }));
     assert!(!geometry.current_row_is_visible(DisplayRowVisibilityLimit {
+        allow_partial: false,
         max_rows: 4,
         bottom_y: 104.0,
     }));
     assert!(!geometry.current_row_is_visible(DisplayRowVisibilityLimit {
+        allow_partial: false,
         max_rows: 5,
         bottom_y: 103.9,
     }));
@@ -827,6 +838,7 @@ fn display_row_geometry_cursor_finishes_and_builds_next_display_text_row_begin()
         transition,
         DisplayTextRowGeometryTransition {
             finished_row: DisplayTextRowMetrics {
+                line_spacing: 4.0,
                 y: 42.0,
                 height: 28.0,
                 ascent: 18.0,
@@ -935,6 +947,7 @@ fn display_row_geometry_transition_target_groups_truncation_transition_and_commi
         transition,
         DisplayTextRowGeometryTransition {
             finished_row: DisplayTextRowMetrics {
+                line_spacing: 0.0,
                 y: 42.0,
                 height: 24.0,
                 ascent: 18.0,

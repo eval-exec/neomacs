@@ -572,52 +572,15 @@ impl neomacs_display_protocol::PresentedTextPositionSource for DeferredFrameText
 }
 
 /// A window's text hit positions: one per display point, then the row
-/// fallbacks.
+/// fallbacks ([`body_text_positions`]), appended to `positions`.
 fn push_window_text_positions(
     positions: &mut Vec<PresentedTextPosition>,
     window: DisplayWindowId,
     snapshot: &WindowDisplaySnapshot,
     text_body: neomacs_display_protocol::Rect,
 ) -> Result<(), PresentedHitError> {
-    // Points are ordered by buffer position, so consecutive points almost
-    // always share a row: memoize the last hit in front of the (sorted
-    // body_rows) binary search. The previous per-point linear scan was
-    // O(points x rows) per window per frame.
-    let mut last_body_row: Option<&neovm_core::window::PresentedBodyRowSnapshot> = None;
-    for point in &snapshot.points {
-        let body_row = match last_body_row.filter(|row| row.output_row == point.row) {
-            Some(row) => row,
-            None => {
-                let row = snapshot.body_row_for_output_row(point.row).ok_or(
-                    PresentedHitError::MissingBodyRow {
-                        window,
-                        output_row: point.row,
-                    },
-                )?;
-                last_body_row = Some(row);
-                row
-            }
-        };
-        let raw_x = text_body.x + point.x as f32;
-        let raw_y = text_body.y + body_row.body_y as f32;
-        let left = raw_x.max(text_body.x);
-        let top = raw_y.max(text_body.y);
-        let right = (raw_x + point.width.max(1) as f32).min(text_body.x + text_body.width);
-        let bottom = (raw_y + point.height.max(1) as f32).min(text_body.y + text_body.height);
-        if right <= left || bottom <= top {
-            continue;
-        }
-        let bounds = FrameRect::new(left, top, right - left, bottom - top)
-            .map_err(|_| PresentedHitError::InvalidTextPositionGeometry)?;
-        positions.push(PresentedTextPosition::new(
-            window,
-            bounds,
-            point.buffer_pos.as_i64(),
-            body_row.body_row,
-            point.col,
-        ));
-    }
-    push_row_fallback_positions(positions, window, snapshot, text_body)
+    positions.extend(body_text_positions(window, snapshot, text_body)?);
+    Ok(())
 }
 
 /// Fill the source-position gaps that have no glyph rectangle of their own.
@@ -761,4 +724,54 @@ fn push_region(
         .map_err(|_| PresentedHitError::InvalidRegionGeometry)?;
     regions.push(PresentedHitRegion::new(window, kind, bounds, z_order));
     Ok(())
+}
+
+/// Shared body source geometry for visible rows and bounded scroll coverage.
+/// The caller supplies its own body extent; this grants no query freshness.
+pub(crate) fn body_text_positions(
+    window: DisplayWindowId,
+    snapshot: &WindowDisplaySnapshot,
+    text_body: neomacs_display_protocol::Rect,
+) -> Result<Vec<PresentedTextPosition>, PresentedHitError> {
+    let mut positions = Vec::new();
+    // Points are ordered by buffer position, so consecutive points
+    // almost always share a row: memoize the last hit in front of
+    // the (sorted body_rows) binary search. The previous per-point
+    // linear scan was O(points x rows) per window per frame.
+    let mut last_body_row: Option<&neovm_core::window::PresentedBodyRowSnapshot> = None;
+    for point in &snapshot.points {
+        let body_row = match last_body_row.filter(|row| row.output_row == point.row) {
+            Some(row) => row,
+            None => {
+                let row = snapshot.body_row_for_output_row(point.row).ok_or(
+                    PresentedHitError::MissingBodyRow {
+                        window: window,
+                        output_row: point.row,
+                    },
+                )?;
+                last_body_row = Some(row);
+                row
+            }
+        };
+        let raw_x = text_body.x + point.x as f32;
+        let raw_y = text_body.y + body_row.body_y as f32;
+        let left = raw_x.max(text_body.x);
+        let top = raw_y.max(text_body.y);
+        let right = (raw_x + point.width.max(1) as f32).min(text_body.x + text_body.width);
+        let bottom = (raw_y + point.height.max(1) as f32).min(text_body.y + text_body.height);
+        if right <= left || bottom <= top {
+            continue;
+        }
+        let bounds = FrameRect::new(left, top, right - left, bottom - top)
+            .map_err(|_| PresentedHitError::InvalidTextPositionGeometry)?;
+        positions.push(PresentedTextPosition::new(
+            window,
+            bounds,
+            point.buffer_pos.as_i64(),
+            body_row.body_row,
+            point.col,
+        ));
+    }
+    push_row_fallback_positions(&mut positions, window, snapshot, text_body)?;
+    Ok(positions)
 }

@@ -12,6 +12,7 @@ mod cursor_runtime;
 mod device_loss;
 mod frame_compositor;
 mod frame_ingest;
+mod frame_preparation;
 mod frame_sched;
 mod frame_state;
 pub(crate) mod frame_stats;
@@ -20,9 +21,14 @@ mod gpu_startup;
 mod input;
 mod lifecycle;
 mod media;
+#[cfg(test)]
+#[path = "tests/modifier_policy_cooking_test.rs"]
+mod modifier_policy_cooking_test;
+mod modifier_sides;
 mod pointer_events;
 pub(in crate::render_thread) mod render_pass;
 mod render_quality;
+mod scroll_input;
 mod startup;
 mod state;
 mod surface_readback;
@@ -32,14 +38,14 @@ mod terminal_expansion;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
-#[path = "texture_discipline_test.rs"]
+#[path = "tests/texture_discipline_test.rs"]
 mod texture_discipline_test;
 
 mod geometry_hints;
 mod surface_resize;
 mod thread_handle;
 #[cfg(test)]
-#[path = "time_discipline_test.rs"]
+#[path = "tests/time_discipline_test.rs"]
 mod time_discipline_test;
 mod toolbar;
 mod transitions;
@@ -61,6 +67,14 @@ pub use state::{
     MonitorInfo, SharedImageRenderState, SharedMonitorInfo,
 };
 pub use thread_handle::RenderThread;
+
+/// Header-only image geometry, for placing an image whose pixels have not been
+/// decoded yet (see `neomacs_renderer_wgpu::image_probe`).
+pub use neomacs_renderer_wgpu::image_probe::{ImageProbeSource, probe_image_layout};
+
+/// Rows of an image whose decode is still running, as published by
+/// `ImageDecodeTerminal::Band`.
+pub use neomacs_renderer_wgpu::RowRange;
 
 use winit::event_loop::EventLoopProxy;
 

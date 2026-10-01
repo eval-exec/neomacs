@@ -52,6 +52,18 @@ pub(crate) enum CastEvent {
     Exit(i32),
 }
 
+/// Pacing applied around each key send of a recorded run, in milliseconds,
+/// when `NEOMACS_TUI_RECORD_DELAY_MS` is unset. A scenario that drives
+/// hundreds of keys in a few seconds otherwise produces a cast nobody can
+/// follow.
+///
+/// One send is `sleep, key, sleep`, so a single-session scenario costs
+/// `2 * delay` per key and a paired one `4 * delay`: the paired drivers send
+/// to both editors from one thread, so each `send_both` key pays the leading
+/// and trailing wait of two sessions. At this default that is 4 s and 8 s a
+/// key -- about 150 or 75 keys to reach the 600 s nextest slow-timeout.
+pub(crate) const DEFAULT_RECORDING_DELAY: Duration = Duration::from_millis(2000);
+
 /// Whether TUI sessions emit replayable terminal recordings.
 ///
 /// Recording is off by default. Set `NEOMACS_TUI_RECORD=on` when replayable
@@ -73,6 +85,70 @@ impl RecordingPolicy {
                 "NEOMACS_TUI_RECORD must be `on` or `off`, got {value:?}"
             )),
         }
+    }
+}
+
+fn parse_recording_delay(value: Option<&OsStr>) -> Result<Duration, String> {
+    let Some(value) = value else {
+        return Ok(DEFAULT_RECORDING_DELAY);
+    };
+    // No trimming: a value is either a plain millisecond count or a mistake
+    // worth reporting. `0` is a legitimate explicit opt-out of pacing.
+    value
+        .to_str()
+        .and_then(|text| text.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .ok_or_else(|| {
+            format!(
+                "NEOMACS_TUI_RECORD_DELAY_MS must be a whole number of milliseconds, got {value:?}"
+            )
+        })
+}
+
+/// Whether sessions record, and how much the harness paces itself when they do.
+///
+/// The delay exists only to make a recording watchable, so it is resolved
+/// to zero whenever the policy is [`RecordingPolicy::Off`]: `RecordingConfig`
+/// is the only thing that can produce a delay, and every constructor here
+/// drops it for a non-recording run. `NEOMACS_TUI_RECORD_DELAY_MS` is
+/// therefore not even consulted when recording is off -- a normal run stays
+/// exactly the execution it is today, a typo in a recording-only variable
+/// included.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct RecordingConfig {
+    policy: RecordingPolicy,
+    delay: Duration,
+}
+
+impl RecordingConfig {
+    pub(crate) fn new(policy: RecordingPolicy, delay: Duration) -> Self {
+        Self {
+            policy,
+            delay: match policy {
+                RecordingPolicy::Off => Duration::ZERO,
+                RecordingPolicy::On => delay,
+            },
+        }
+    }
+
+    /// Parse `NEOMACS_TUI_RECORD` and `NEOMACS_TUI_RECORD_DELAY_MS`.
+    pub(crate) fn parse(record: Option<&OsStr>, delay: Option<&OsStr>) -> Result<Self, String> {
+        let policy = RecordingPolicy::parse(record)?;
+        let delay = match policy {
+            RecordingPolicy::Off => Duration::ZERO,
+            RecordingPolicy::On => parse_recording_delay(delay)?,
+        };
+        Ok(Self::new(policy, delay))
+    }
+
+    pub(crate) fn policy(&self) -> RecordingPolicy {
+        self.policy
+    }
+
+    /// How long a session waits on each side of a key it sends while
+    /// recording: `sleep, key, sleep`.
+    pub(crate) fn delay(&self) -> Duration {
+        self.delay
     }
 }
 

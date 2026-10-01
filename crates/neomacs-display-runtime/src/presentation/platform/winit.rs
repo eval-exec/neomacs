@@ -73,10 +73,10 @@ impl PopupSurface {
             color_space: wgpu::SurfaceColorSpace::Auto,
             width: size.width.max(1),
             height: size.height.max(1),
-            present_mode: wgpu::PresentMode::Fifo,
+            present_mode: crate::presentation::pacing::present_mode(&caps.present_modes),
             alpha_mode: caps.alpha_modes[0],
             view_formats: vec![],
-            desired_maximum_frame_latency: 2,
+            desired_maximum_frame_latency: crate::presentation::pacing::MAXIMUM_FRAME_LATENCY,
         };
         surface.configure(device, &config);
         window.request_redraw();

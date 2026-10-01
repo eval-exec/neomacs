@@ -91,10 +91,16 @@ const PRELUDE: &str = r####"
    errors))
 
 (defun fg462-test-verify-messages ()
-  (mapcar (lambda (result)
-            (list :label (flycheck-verification-result-label result)
-                  :message (flycheck-verification-result-message result)))
-          (funcall (flycheck-checker-get 'guile 'verify) 'guile)))
+  ;; The checker's verify step reports whether its executable exists, which
+  ;; is a fact about the machine running the suite: a host with `guild'
+  ;; installed reports its path where this contract pins "Not found".  The
+  ;; cases are about the checker's registration and Geiser state, so look the
+  ;; executable up in an empty path and let the answer be the same everywhere.
+  (let ((exec-path nil))
+    (mapcar (lambda (result)
+              (list :label (flycheck-verification-result-label result)
+                    :message (flycheck-verification-result-message result)))
+            (funcall (flycheck-checker-get 'guile 'verify) 'guile))))
 
 (defun fg462-test-mask-args (args)
   (mapcar (lambda (arg)

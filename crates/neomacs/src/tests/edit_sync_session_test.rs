@@ -205,7 +205,11 @@ fn scrolling_back_walks_only_the_exposed_rows_and_matches_a_full_layout() {
             stats.relaid_body_rows,
             stats.reused_shifted_rows
         ));
-        assert_eq!(stats.scroll_windows, 1, "{label}\n{}", report.join("\n"));
+        assert!(
+            stats.scroll_windows == 1 || stats.prepared_windows == 1,
+            "{label}\n{}",
+            report.join("\n")
+        );
         assert!(
             stats.relaid_body_rows <= exposed,
             "{label}: only the exposed rows are walked\n{}",

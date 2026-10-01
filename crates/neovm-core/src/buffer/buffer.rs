@@ -1982,8 +1982,9 @@ impl Eq for BufferStateMarkers {}
 ///
 /// A snapshot is intentionally separate from [`BufferText`]: callers can read
 /// text and text properties, but cannot observe or mutate the concrete text
-/// backend. `BufferText::Clone` is a deep snapshot, so this is safe to move
-/// across the display boundary.
+/// backend. `BufferText::Clone` isolates mutations, sharing immutable text
+/// and properties copy-on-write. Lisp property values remain evaluator-owned;
+/// this is not an input type for a background row worker.
 #[derive(Clone)]
 pub struct BufferTextSnapshot {
     text: BufferText,
@@ -4358,6 +4359,12 @@ impl Buffer {
             return std::rc::Rc::clone(spans);
         }
         let text = self.buffer_string();
+        tracing::debug!(
+            text_chars = text.chars().count(),
+            table_non_nil = !composition_function_table.is_nil(),
+            buffer_head = ?text.chars().take(24).collect::<Vec<_>>(),
+            "automatic composition spans: scan start"
+        );
         crate::emacs_core::composite::BYTES_SCANNED
             .fetch_add(text.len(), std::sync::atomic::Ordering::Relaxed);
         // Absolute char coordinates, like the visible-bounded scan next door.
@@ -4942,6 +4949,13 @@ impl Buffer {
             Some(RuntimeBindingValue::Bound(value)) => Some(value),
             Some(RuntimeBindingValue::Void) | None => None,
         }
+    }
+
+    /// The actual first alist binding, for the localized-symbol runtime to
+    /// install as its shared valcell. Keep lookup and index coherence owned
+    /// by the buffer; callers must not reconstruct an index of Lisp bindings.
+    pub(crate) fn local_variable_binding_cell(&self, sym_id: SymId) -> Option<Value> {
+        self.local_var_alist.binding_cons(sym_id)
     }
 
     pub fn ordered_buffer_local_bindings(&self) -> Vec<(SymId, RuntimeBindingValue)> {
@@ -7627,17 +7641,21 @@ impl Default for BufferManager {
 
 impl GcTrace for BufferManager {
     fn trace_roots(&self, roots: &mut Vec<Value>) {
+        self.trace_roots_with(&mut |value| roots.push(value));
+    }
+
+    fn trace_roots_with(&self, visit: &mut dyn FnMut(Value)) {
         for buffer in self.buffers.values() {
-            roots.push(buffer.name);
-            roots.push(buffer.last_name);
-            buffer.text.trace_text_prop_roots(roots);
-            buffer.undo_state.trace_roots(roots);
-            buffer.overlays.trace_roots(roots);
+            visit(buffer.name);
+            visit(buffer.last_name);
+            buffer.text.trace_text_prop_roots_with(visit);
+            visit(buffer.undo_state.list());
+            buffer.overlays.trace_roots_with(visit);
             // BUFFER_OBJFWD slot table holds Lisp values that must
             // be GC-rooted. Mirrors GNU's `mark_buffer` walking the
             // C-side BVAR slots in `alloc.c`.
             for slot in &buffer.slots {
-                roots.push(*slot);
+                visit(*slot);
             }
             // Phase 10F: `local_var_alist` is the single source of
             // truth for non-slot per-buffer bindings. The cons
@@ -7645,9 +7663,9 @@ impl GcTrace for BufferManager {
             // every entry's value). A single push of the alist
             // head is sufficient — the GC's reachability walk
             // follows the spine.
-            roots.push(buffer.local_var_alist.as_lisp_alist());
+            visit(buffer.local_var_alist.as_lisp_alist());
             // `local_map` (buffer's keymap) must also be rooted.
-            roots.push(buffer.keymap);
+            visit(buffer.keymap);
             // GNU stores the buffer mark in `BVAR (buffer, mark)`, so
             // `mark_vectorlike (&buffer->header)` in `mark_buffer` roots it
             // with the rest of the buffer's Lisp slots.  Neomacs stores the
@@ -7656,7 +7674,7 @@ impl GcTrace for BufferManager {
             // remains live.
             unsafe {
                 if !buffer.mark_marker_ptr.is_null() {
-                    roots.push(Value::from_veclike_ptr(
+                    visit(Value::from_veclike_ptr(
                         buffer.mark_marker_ptr as *const crate::tagged::header::VecLikeHeader,
                     ));
                 }
@@ -7681,17 +7699,17 @@ impl GcTrace for BufferManager {
                 // to the tagged encoding.
                 unsafe {
                     if !sm.pt_marker_ptr.is_null() {
-                        roots.push(Value::from_veclike_ptr(
+                        visit(Value::from_veclike_ptr(
                             sm.pt_marker_ptr as *const crate::tagged::header::VecLikeHeader,
                         ));
                     }
                     if !sm.begv_marker_ptr.is_null() {
-                        roots.push(Value::from_veclike_ptr(
+                        visit(Value::from_veclike_ptr(
                             sm.begv_marker_ptr as *const crate::tagged::header::VecLikeHeader,
                         ));
                     }
                     if !sm.zv_marker_ptr.is_null() {
-                        roots.push(Value::from_veclike_ptr(
+                        visit(Value::from_veclike_ptr(
                             sm.zv_marker_ptr as *const crate::tagged::header::VecLikeHeader,
                         ));
                     }
@@ -7699,28 +7717,28 @@ impl GcTrace for BufferManager {
             }
         }
         for buffer in self.dead_buffers.values() {
-            roots.push(buffer.name);
-            roots.push(buffer.last_name);
-            buffer.text.trace_text_prop_roots(roots);
-            buffer.undo_state.trace_roots(roots);
-            buffer.overlays.trace_roots(roots);
+            visit(buffer.name);
+            visit(buffer.last_name);
+            buffer.text.trace_text_prop_roots_with(visit);
+            visit(buffer.undo_state.list());
+            buffer.overlays.trace_roots_with(visit);
             for slot in &buffer.slots {
-                roots.push(*slot);
+                visit(*slot);
             }
-            roots.push(buffer.local_var_alist.as_lisp_alist());
-            roots.push(buffer.keymap);
+            visit(buffer.local_var_alist.as_lisp_alist());
+            visit(buffer.keymap);
         }
         // Phase 10D: `buffer_defaults` holds the global default
         // values for every per-buffer slot. Mirrors GNU's
         // `mark_buffer (&buffer_defaults)` in `alloc.c`.
         for slot in &self.buffer_defaults {
-            roots.push(*slot);
+            visit(*slot);
         }
         for (buffer_id, restrictions) in &self.labeled_restrictions {
             let buffer = self.buffers.get(buffer_id);
             for restriction in restrictions {
                 if let LabeledRestrictionLabel::User(label) = restriction.label {
-                    roots.push(label);
+                    visit(label);
                 }
                 // The bounds markers are referenced only by u64 id from this
                 // map; an unmarked marker is spliced out and freed by
@@ -7730,10 +7748,10 @@ impl GcTrace for BufferManager {
                 // these alive via staticpro'd narrowing_locks, editfns.c).
                 if let Some(buffer) = buffer {
                     if let Some(value) = buffer.marker_value_by_id(restriction.beg_marker) {
-                        roots.push(value);
+                        visit(value);
                     }
                     if let Some(value) = buffer.marker_value_by_id(restriction.end_marker) {
-                        roots.push(value);
+                        visit(value);
                     }
                 }
             }

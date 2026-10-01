@@ -1,3 +1,8 @@
+mod pointer;
+pub(crate) use pointer::{
+    DisplayPointerAppearance, DisplayPointerOccurrence, DisplayPointerSourceRange,
+};
+
 use crate::buffer_source::producer::frame::ReplacementCoveredSpan;
 use crate::display_property::DisplayPropertyClassification;
 use crate::display_source_overflow::DisplayXwidgetOverflowAction;
@@ -5,7 +10,7 @@ use neomacs_display_protocol::face::{BoxRunMembership, BoxVerticalEdges};
 use neomacs_display_protocol::glyph_matrix::TerminalComposition;
 use neomacs_display_protocol::types::FaceId;
 use neomacs_display_protocol::{
-    Px, WebViewId, XwidgetContentExtent, XwidgetId, XwidgetLayoutAdvance,
+    ImageLayoutAdvance, Px, WebViewId, XwidgetContentExtent, XwidgetId, XwidgetLayoutAdvance,
 };
 use neovm_core::buffer::{BufferId, CharPos0, EmacsBytePos};
 use neovm_core::emacs_core::Value;
@@ -248,171 +253,6 @@ impl DisplayStringBoxBoundaries {
                 DisplayStringBoxBoundary::StringBase
             },
         }
-    }
-}
-
-/// Semantic source range whose rendered primitives share one transient
-/// `mouse-face` appearance.  The end position (together with the source
-/// identity) is stable when a run is clipped and resumed on a wrapped row.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct DisplayPointerSourceRange {
-    source: DisplaySourcePosition,
-    start_char_index: usize,
-    end_char_index: usize,
-    overlay_owner: Option<Value>,
-    occurrence: DisplayPointerOccurrence,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
-pub(crate) enum DisplayPointerOccurrence {
-    #[default]
-    Source,
-    OverlayString {
-        overlay_id: Value,
-        kind: crate::display_origin::OverlayStringKind,
-    },
-    BufferDisplayReplacement {
-        buffer_id: BufferId,
-        anchor_charpos: CharPos0,
-    },
-}
-
-impl DisplayPointerSourceRange {
-    #[cfg(test)]
-    pub(crate) fn ending_at(source: DisplaySourcePosition, end_char_index: usize) -> Self {
-        Self {
-            source,
-            start_char_index: 0,
-            end_char_index,
-            overlay_owner: None,
-            occurrence: DisplayPointerOccurrence::Source,
-        }
-    }
-
-    pub(crate) fn effective(
-        source: DisplaySourcePosition,
-        start_char_index: usize,
-        end_char_index: usize,
-        overlay_owner: Option<Value>,
-    ) -> Self {
-        Self {
-            source,
-            start_char_index,
-            end_char_index,
-            overlay_owner,
-            occurrence: DisplayPointerOccurrence::Source,
-        }
-    }
-
-    pub(crate) fn in_occurrence(mut self, occurrence: DisplayPointerOccurrence) -> Self {
-        self.occurrence = occurrence;
-        self
-    }
-
-    #[cfg(test)]
-    pub(crate) fn buffer_id(&self) -> Option<BufferId> {
-        match self.source {
-            DisplaySourcePosition::Buffer { buffer_id, .. } => Some(buffer_id),
-            _ => None,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn source_id(&self) -> Option<DisplaySourceId> {
-        match self.source {
-            DisplaySourcePosition::LispString { source_id, .. }
-            | DisplaySourcePosition::Synthetic { source_id, .. } => Some(source_id),
-            _ => None,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) const fn start_char_index(&self) -> usize {
-        self.start_char_index
-    }
-
-    #[cfg(test)]
-    pub(crate) const fn end_char_index(&self) -> usize {
-        self.end_char_index
-    }
-
-    fn protocol_identity(
-        &self,
-    ) -> neomacs_display_protocol::glyph_matrix::GlyphPointerSourceIdentity {
-        use neomacs_display_protocol::glyph_matrix::{
-            GlyphPointerOccurrenceIdentity, GlyphPointerSourceIdentity, GlyphPointerSourceKind,
-        };
-        let (kind, source_id) = match self.source {
-            DisplaySourcePosition::Buffer { buffer_id, .. } => {
-                (GlyphPointerSourceKind::Buffer, buffer_id.0)
-            }
-            DisplaySourcePosition::LispString { source_id, .. } => {
-                (GlyphPointerSourceKind::LispString, source_id.get())
-            }
-            DisplaySourcePosition::Synthetic { source_id, .. } => {
-                (GlyphPointerSourceKind::Synthetic, source_id.get())
-            }
-        };
-        let occurrence = match self.occurrence {
-            DisplayPointerOccurrence::Source => GlyphPointerOccurrenceIdentity::Source,
-            DisplayPointerOccurrence::OverlayString { overlay_id, kind } => {
-                GlyphPointerOccurrenceIdentity::OverlayString {
-                    overlay_id: overlay_id.bits() as u64,
-                    after: matches!(kind, crate::display_origin::OverlayStringKind::After),
-                }
-            }
-            DisplayPointerOccurrence::BufferDisplayReplacement {
-                buffer_id,
-                anchor_charpos,
-            } => GlyphPointerOccurrenceIdentity::BufferDisplayReplacement {
-                buffer_id: buffer_id.0,
-                anchor: anchor_charpos.get() as u64,
-            },
-        };
-        GlyphPointerSourceIdentity {
-            kind,
-            source_id,
-            range_start: self.start_char_index as u64,
-            range_end: self.end_char_index as u64,
-            property_owner: self.overlay_owner.map_or(0, |owner| owner.bits() as u64),
-            occurrence,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct DisplayPointerAppearance {
-    source: DisplayPointerSourceRange,
-    face: RenderFaceRef,
-}
-
-impl DisplayPointerAppearance {
-    pub(crate) const fn new(source: DisplayPointerSourceRange, face: RenderFaceRef) -> Self {
-        Self { source, face }
-    }
-
-    #[cfg(test)]
-    pub(crate) const fn source(&self) -> &DisplayPointerSourceRange {
-        &self.source
-    }
-
-    #[cfg(test)]
-    pub(crate) const fn face(&self) -> RenderFaceRef {
-        self.face
-    }
-
-    pub(crate) fn glyph_metadata(
-        &self,
-    ) -> Option<neomacs_display_protocol::glyph_matrix::GlyphPointerAppearance> {
-        let RenderFaceRef::FaceId(face_id) = self.face else {
-            return None;
-        };
-        Some(
-            neomacs_display_protocol::glyph_matrix::GlyphPointerAppearance {
-                source: self.source.protocol_identity(),
-                face_id,
-            },
-        )
     }
 }
 
@@ -960,6 +800,10 @@ impl DisplaySourceMappedFaceRun {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DisplaySourceMappedText {
     pub(crate) text: Box<str>,
+    /// The canonical replacement policy measures advances with the underlying
+    /// buffer face, independently of the string's paint and vertical metrics.
+    /// Detached capture resolves that iterator state into an owned face ID.
+    pub(crate) measurement_face: Option<neomacs_display_protocol::types::FaceId>,
     /// A semantic face introduced by the mapping itself rather than by a text
     /// property. Octal escapes own `escape-glyph` here so the source character
     /// need not be representable as a Rust `char` downstream.
@@ -977,9 +821,18 @@ pub(crate) struct DisplaySourceMappedText {
 }
 
 impl DisplaySourceMappedText {
+    pub(crate) fn with_measurement_face(
+        mut self,
+        face: Option<neomacs_display_protocol::types::FaceId>,
+    ) -> Self {
+        self.measurement_face = face;
+        self
+    }
+
     pub(crate) fn new(text: impl Into<Box<str>>) -> Self {
         Self {
             text: text.into(),
+            measurement_face: None,
             semantic_face_overlay: None,
             glyph_string_start: None,
             lisp_face_runs: None,
@@ -996,6 +849,7 @@ impl DisplaySourceMappedText {
         ));
         Self {
             text: text.into(),
+            measurement_face: None,
             semantic_face_overlay: None,
             glyph_string_start: Some(glyph_string_start),
             lisp_face_runs: None,
@@ -1032,6 +886,7 @@ impl DisplaySourceMappedText {
     ) -> Self {
         Self {
             text: text.into(),
+            measurement_face: None,
             semantic_face_overlay: None,
             glyph_string_start,
             lisp_face_runs: None,
@@ -1076,6 +931,7 @@ impl DisplaySourceMappedText {
             .nth(emitted_chars)
             .map(|(byte, _)| byte)?;
         Some(Self {
+            measurement_face: self.measurement_face,
             text: self.text[split_byte..].into(),
             semantic_face_overlay: self.semantic_face_overlay,
             glyph_string_start: self
@@ -1418,6 +1274,93 @@ impl DisplayXwidgetReplacement {
     }
 }
 
+/// A media replacement proven to be an inline image.
+///
+/// GNU's right-edge crop for images (`produce_image_glyph`,
+/// [`crate::display_source_overflow::DisplayImageOverflowAction`]) differs from
+/// the xwidget one in the one way that matters here: it edits the glyph's
+/// source *slice* as well as its advance.  Both edits therefore live behind
+/// this type, so a caller cannot shrink the advance without shrinking the
+/// slice -- which would stretch the whole image into the narrower box instead
+/// of showing the left part of it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct DisplayImageReplacement(DisplayMediaReplacement);
+
+impl DisplayImageReplacement {
+    /// GNU's `it->pixel_width` for this image: the image's own width plus its
+    /// horizontal margins, i.e. the row advance before any crop.
+    pub(crate) const fn layout_advance_px(self) -> f32 {
+        self.0.width
+    }
+
+    /// Apply GNU's right-edge crop: the two assignments
+    ///
+    /// ```c
+    ///       it->pixel_width -= crop;
+    ///       slice.width -= crop;
+    /// ```
+    ///
+    /// of `produce_image_glyph` (src/xdisp.c:32506-32507).  `visible_advance`
+    /// is the row space that was left, so the crop is
+    /// `layout_advance_px() - visible_advance`; the pixels the advance loses
+    /// come off the right edge of the image, which is `1 - visible/painted` of
+    /// the slice's x extent.
+    ///
+    /// `None` when the crop would leave nothing to sample, or when
+    /// `visible_advance` is not actually narrower.  GNU emits a zero-width
+    /// glyph in that case (`clip_to_bounds (-1, …)`, :32529); this port leaves
+    /// the glyph uncropped and lets the row's overflow policy decide, the same
+    /// limitation [`DisplayXwidgetOverflowAction`] documents.
+    pub(crate) fn crop_to_visible_width(
+        self,
+        visible_advance: ImageLayoutAdvance,
+    ) -> Option<DisplayMediaReplacement> {
+        let total_px = self.0.width;
+        let visible_px = visible_advance.px().get();
+        let crop_px = total_px - visible_px;
+        if crop_px <= 0.0 {
+            return None;
+        }
+        let DisplayMediaReplacementKind::Image {
+            image_id,
+            source_rect,
+            margin_left,
+            margin_right,
+            margin_top,
+            margin_bottom,
+            opaque_background,
+        } = self.0.kind
+        else {
+            return None;
+        };
+        // GNU's `slice.width`: the advance minus the margins GNU folded in
+        // (`it->pixel_width += img->hmargin` on each side, :32458-32461).  The
+        // crop comes off this content width, not off the margins.
+        let painted_px = total_px - margin_left - margin_right;
+        if painted_px <= 0.0 || crop_px >= painted_px {
+            return None;
+        }
+        Some(DisplayMediaReplacement {
+            kind: DisplayMediaReplacementKind::Image {
+                image_id,
+                source_rect: source_rect
+                    .crop_right_to_fraction((painted_px - crop_px) / painted_px)?,
+                margin_left,
+                margin_right,
+                margin_top,
+                margin_bottom,
+                opaque_background,
+            },
+            width: visible_px,
+            ..self.0
+        })
+    }
+
+    pub(crate) const fn into_media(self) -> DisplayMediaReplacement {
+        self.0
+    }
+}
+
 impl DisplayMediaReplacement {
     pub(crate) fn replacement_stretch(self) -> DisplayStretch {
         DisplayStretch {
@@ -1552,6 +1495,18 @@ impl DisplayMediaReplacement {
         }
     }
 
+    /// Prove this generic media replacement is an inline image before exposing
+    /// GNU's image-only right-edge crop.  Video and surface replacements have
+    /// no `produce_*_glyph` counterpart to port, so they stay on the row's own
+    /// overflow policy.
+    pub(crate) fn into_image(self) -> Result<DisplayImageReplacement, Self> {
+        if matches!(self.kind, DisplayMediaReplacementKind::Image { .. }) {
+            Ok(DisplayImageReplacement(self))
+        } else {
+            Err(self)
+        }
+    }
+
     pub(crate) fn surface(surface: DisplaySurfaceItem) -> Self {
         Self {
             kind: DisplayMediaReplacementKind::Surface {
@@ -1604,7 +1559,7 @@ pub(crate) struct DisplayRowBreak {
     pub(crate) line_spacing: DisplayLineSpacingPolicy,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) enum DisplayLineHeightPolicy {
     /// The newline contributes its face's normal height and configured line
     /// spacing to the display row.
@@ -1613,12 +1568,26 @@ pub(crate) enum DisplayLineHeightPolicy {
     /// GNU `line-height t`: the newline contributes no default height or line
     /// spacing; visible row contents alone determine the row geometry.
     ContentOnly,
+    /// A minimum in pixels, retaining the newline face's descent.
+    Pixels(f32),
+    /// A multiple of the default frame font, overriding the newline font's
+    /// vertical metrics while preserving its horizontal advance.
+    Scale(f32),
 }
 
 impl DisplayLineHeightPolicy {
     pub(crate) fn from_property(value: Option<Value>) -> Self {
         if value.is_some_and(|value| value.is_t()) {
             Self::ContentOnly
+        } else if let Some(value) = value.and_then(|value| value.as_fixnum()) {
+            Self::Pixels(value as f32)
+        } else if let Some(value) = value.filter(|value| value.is_float()) {
+            let factor = value.xfloat() as f32;
+            if factor.is_finite() {
+                Self::Scale(factor)
+            } else {
+                Self::Default
+            }
         } else {
             Self::Default
         }

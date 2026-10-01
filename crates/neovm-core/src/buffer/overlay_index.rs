@@ -1187,10 +1187,32 @@ impl OverlayIndex {
         .map(|record| record.overlay)
     }
 
+    pub(super) fn overlays_in_region(
+        &self,
+        range: EmacsByteRange,
+        accessible_end: EmacsBytePos,
+    ) -> Vec<Value> {
+        let intervals = self.intervals.read();
+        let mut overlays = Vec::new();
+        intervals.records.for_each_match(
+            IntervalBPlusQuery::Region {
+                range,
+                accessible_end,
+            },
+            |record| overlays.push(record.overlay),
+        );
+        overlays
+    }
+
     pub(super) fn all_ascending(&self) -> Vec<Value> {
         let mut overlays = Vec::with_capacity(self.len());
         self.intervals.read().all_ascending(&mut overlays);
         overlays
+    }
+
+    pub(super) fn may_contain_property(&self, property: Value) -> bool {
+        OverlayPropertyFilter::for_properties([property])
+            .subtree_may_match(self.endpoint_index().records.filter_mask())
     }
 
     pub(super) fn endpoint_records_strictly_within(

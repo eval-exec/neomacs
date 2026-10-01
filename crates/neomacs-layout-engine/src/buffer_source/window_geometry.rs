@@ -36,6 +36,7 @@ pub(crate) struct BufferWindowGeometryRequest {
     /// up to this many rows even when the window is currently one row tall.
     max_mini_window_rows: Option<usize>,
     measurement_rows: Option<std::num::NonZeroUsize>,
+    measurement_pixels: Option<std::num::NonZeroUsize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -160,6 +161,7 @@ impl BufferWindowGeometryRequest {
             char_height,
             max_mini_window_rows: None,
             measurement_rows: params.measurement_rows,
+            measurement_pixels: params.measurement_pixels,
         }
     }
 
@@ -227,7 +229,9 @@ impl BufferWindowGeometryRequest {
         // to the real text area (`text_y .. text_y + text_height`).  Otherwise the
         // physical text-area bottom is the limit.
         let physical_bottom_y = self.text_y + self.text_height;
-        let visibility_bottom_y = if self.measurement_rows.is_some() {
+        let visibility_bottom_y = if let Some(height) = self.measurement_pixels {
+            self.text_y + height.get() as f32
+        } else if self.measurement_rows.is_some() {
             // A tall image is still one row. A pixel-height estimate cannot
             // bound a row query; the independent row budget bounds this walk.
             f32::INFINITY
@@ -264,6 +268,10 @@ impl BufferWindowGeometryRequest {
     }
 
     fn visible_max_rows(self) -> usize {
+        if let Some(height) = self.measurement_pixels {
+            // A canonical row occupies at least one pixel.
+            return height.get();
+        }
         if let Some(count) = self.measurement_rows {
             return count.get();
         }
@@ -282,12 +290,10 @@ impl BufferWindowGeometryRequest {
             return ceiling.max(1);
         }
 
-        // Ordinary GUI window with an active vscroll: GNU shifts the content UP by
-        // `vscroll` pixels, top-clipping the first row and exposing one more
-        // partially-visible row at the bottom.  Walk enough rows to cover the
-        // shifted span `[vscroll, vscroll + text_height]` — `base_max_rows + 1`
-        // for a sub-line vscroll, more when vscroll exceeds a row.
-        if self.uses_vscroll_shift() && self.text_height > 0.0 {
+        // Ordinary GUI windows include the partially visible bottom row,
+        // even at zero vscroll. Rounding down there leaves a blank strip that
+        // flashes as a pixel gesture crosses a whole-row boundary.
+        if self.window_system && !self.kind.is_minibuffer() && self.text_height > 0.0 {
             return ((self.vscroll + self.text_height) / self.char_height).ceil() as usize;
         }
 

@@ -4,12 +4,13 @@
 //! are owned by the evaluator's cross-platform wait notifier after the input
 //! bridge queues a converted event.
 
-use crossbeam_channel::{Receiver, Sender, TrySendError, bounded, unbounded};
+use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use neomacs_display_protocol::SealedFramePresentation;
+mod frame_mailbox;
+pub use frame_mailbox::{FrameReceiver, FrameSender, QueuedPresentation, SupersededPresentation};
 use neomacs_display_protocol::{
     ImageColorContext, ImageId, ImageLoadToken, ImageMaskPolicy, ImageRealization, ImageRotation,
     ImageSizeSpec, SelectionOwner, VideoId,
@@ -109,6 +110,15 @@ pub struct PositionedPointerInput {
 /// Input event from render thread to Emacs
 #[derive(Debug, Clone)]
 pub enum InputEvent {
+    Tracked {
+        receipt: neomacs_display_protocol::input_progress::InputDelivery,
+        event: Box<InputEvent>,
+    },
+    /// Diagnostic token paired with one actual command event.
+    Observed {
+        token: neomacs_display_protocol::input_latency::InputToken,
+        event: Box<InputEvent>,
+    },
     /// Bytes read directly from a Unix TTY.
     ///
     /// This transport fact deliberately carries no terminal-sequence or
@@ -319,6 +329,8 @@ pub enum LifecycleCommand {
 /// Window and chrome management commands.
 #[derive(Debug)]
 pub enum WindowCommand {
+    /// Paint an evaluator-resolved viewport while canonical layout is pending.
+    ScrollPreview(neomacs_display_protocol::scroll_coverage::ResolvedScrollIntent),
     /// Scroll blit pixels within pixel buffer
     ScrollBlit {
         x: i32,
@@ -460,6 +472,16 @@ pub enum AssetCommand {
         mask: ImageMaskPolicy,
         frame: neomacs_display_protocol::ImageFrameIndex,
         sequence: neomacs_display_protocol::ImageSequenceId,
+        /// The looking frame's resolved GNU `max-image-size`
+        /// (`check_image_size`, `src/image.c:1811`). The loader refuses a
+        /// source whose encoded header exceeds it before anything is decoded,
+        /// so an image GNU would not load is never allocated here either.
+        limit: neomacs_display_protocol::ImageSizeLimit,
+        /// What GNU calls this image in a failure diagnostic. It is stated by
+        /// the request rather than inferred here, because GNU's `:data` arm
+        /// names the printed specification and only the evaluator can print
+        /// one.
+        identity: neomacs_display_protocol::image_diagnostic::ImageLoadIdentity,
     },
     /// Load image from encoded data bytes (PNG, JPEG, SVG, etc.)
     ImageLoadData {
@@ -474,6 +496,10 @@ pub enum AssetCommand {
         mask: ImageMaskPolicy,
         frame: neomacs_display_protocol::ImageFrameIndex,
         sequence: neomacs_display_protocol::ImageSequenceId,
+        /// See [`AssetCommand::ImageLoadFile::limit`].
+        limit: neomacs_display_protocol::ImageSizeLimit,
+        /// See [`AssetCommand::ImageLoadFile::identity`].
+        identity: neomacs_display_protocol::image_diagnostic::ImageLoadIdentity,
     },
     /// Load image from raw ARGB32 pixel data
     ImageLoadArgb32 {
@@ -631,6 +657,15 @@ pub enum ConfigCommand {
     SetLigaturesEnabled { enabled: bool },
     /// Replace the complete, already validated visual configuration snapshot.
     SetVisualConfig(VisualConfig),
+    /// Replace the compiled NS modifier policy (issue #442).
+    ///
+    /// GNU's `nsterm.m` reads `ns-command-modifier' and friends at every
+    /// `keyDown:'; winit cannot read Lisp per event, so the evaluator
+    /// compiles the policy once per change (`add-variable-watcher' in
+    /// `lisp/term/neo-win.el') and ships it here.  The render thread then
+    /// cooks raw physical modifier facts through the same
+    /// `EV_MODIFIERS2' arithmetic GNU runs.
+    SetModifierPolicy(neomacs_display_protocol::ModifierPolicy),
     /// Toggle scroll indicators and focus ring
     SetScrollIndicators { enabled: bool },
     /// Set custom title bar height (0 = hidden, >0 = show with given height)
@@ -931,8 +966,8 @@ impl SharedRenderCapabilities {
 /// Communication channels between threads
 pub struct ThreadComms {
     /// Frame display state: Emacs → Render
-    pub frame_tx: Sender<SealedFramePresentation>,
-    pub frame_rx: Receiver<SealedFramePresentation>,
+    pub frame_tx: FrameSender,
+    pub frame_rx: FrameReceiver,
 
     /// Commands: Emacs → Render
     pub cmd_tx: Sender<RenderCommand>,
@@ -949,7 +984,7 @@ pub struct ThreadComms {
 impl ThreadComms {
     /// Create new thread communication channels
     pub fn new() -> Self {
-        let (frame_tx, frame_rx) = unbounded();
+        let (frame_tx, frame_rx) = frame_mailbox::channel();
         let (cmd_tx, cmd_rx) = bounded(COMMAND_CHANNEL_CAPACITY);
         let (input_tx, input_rx) = bounded(INPUT_CHANNEL_CAPACITY);
         let capabilities = Arc::new(SharedRenderCapabilities::default());
@@ -976,6 +1011,7 @@ impl ThreadComms {
         };
 
         let render = RenderComms {
+            input_stream: Default::default(),
             tooltip_context: self.tooltip_context,
             frame_rx: self.frame_rx,
             cmd_rx: self.cmd_rx,
@@ -995,7 +1031,7 @@ impl Default for ThreadComms {
 
 /// Emacs thread communication handle
 pub struct EmacsComms {
-    pub frame_tx: Sender<SealedFramePresentation>,
+    pub frame_tx: FrameSender,
     pub cmd_tx: Sender<RenderCommand>,
     pub input_rx: Receiver<InputEvent>,
     pub capabilities: Arc<SharedRenderCapabilities>,
@@ -1004,7 +1040,8 @@ pub struct EmacsComms {
 
 /// Render thread communication handle
 pub struct RenderComms {
-    pub frame_rx: Receiver<SealedFramePresentation>,
+    input_stream: neomacs_display_protocol::input_progress::InputStream,
+    pub frame_rx: FrameReceiver,
     pub cmd_rx: Receiver<RenderCommand>,
     pub input_tx: Sender<InputEvent>,
     pub capabilities: Arc<SharedRenderCapabilities>,
@@ -1012,6 +1049,55 @@ pub struct RenderComms {
 }
 
 impl RenderComms {
+    fn observe_scroll_input(event: InputEvent) -> InputEvent {
+        #[cfg(target_os = "linux")]
+        if neomacs_display_protocol::input_latency::enabled() {
+            let target = match &event {
+                InputEvent::Key {
+                    keysym: 0xff55 | 0xff56,
+                    pressed: true,
+                    emacs_frame_id,
+                    ..
+                } => Some((*emacs_frame_id, "page")),
+                InputEvent::PositionedPointer(PositionedPointerInput {
+                    position,
+                    action: PointerAction::Scroll { delta, .. },
+                    ..
+                }) => Some((
+                    position.target_frame_id,
+                    match delta {
+                        ScrollDelta::Lines { .. } => "wheel",
+                        ScrollDelta::Pixels { .. } => "precise",
+                    },
+                )),
+                _ => None,
+            };
+            if let Some((frame, kind)) = target {
+                let mut time = libc::timespec {
+                    tv_sec: 0,
+                    tv_nsec: 0,
+                };
+                // SAFETY: valid out-pointer, POSIX monotonic clock. The
+                // compositor's clock ID must match before subtraction.
+                if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut time) } == 0 {
+                    let time = neomacs_display_protocol::input_latency::PlatformTimestamp {
+                        clock_id: libc::CLOCK_MONOTONIC as u32,
+                        nanoseconds: time.tv_sec as u64 * 1_000_000_000 + time.tv_nsec as u64,
+                    };
+                    if let Some(token) =
+                        neomacs_display_protocol::input_latency::received(frame, kind, time)
+                    {
+                        return InputEvent::Observed {
+                            token,
+                            event: Box::new(event),
+                        };
+                    }
+                }
+            }
+        }
+        event
+    }
+
     fn is_lossy_input_event(event: &InputEvent) -> bool {
         matches!(
             event,
@@ -1038,6 +1124,9 @@ impl RenderComms {
 
     fn event_name(event: &InputEvent) -> &'static str {
         match event {
+            InputEvent::Observed { event, .. } | InputEvent::Tracked { event, .. } => {
+                Self::event_name(event)
+            }
             InputEvent::RawTtyBytes { .. } => "raw-tty-bytes",
             InputEvent::Key { .. } => "key",
             InputEvent::PositionedPointer(PositionedPointerInput { action, .. }) => match action {
@@ -1090,6 +1179,45 @@ impl RenderComms {
     /// After converting the display event, the bridge owns notifying the
     /// evaluator's wait backend.
     pub fn send_input(&self, event: InputEvent) {
+        let _ = self.send_input_with_receipt(event);
+    }
+
+    pub fn send_input_with_receipt(
+        &self,
+        event: InputEvent,
+    ) -> (
+        Option<neomacs_display_protocol::input_progress::InputReceipt>,
+        Option<neomacs_display_protocol::input_latency::InputToken>,
+    ) {
+        let receipt = if matches!(
+            &event,
+            InputEvent::Key {
+                keysym: 0xff55 | 0xff56,
+                pressed: true,
+                ..
+            } | InputEvent::PositionedPointer(PositionedPointerInput {
+                action: PointerAction::Scroll { .. },
+                ..
+            })
+        ) {
+            self.input_stream.issue()
+        } else {
+            None
+        };
+        let observer = receipt.as_ref().map(|delivery| delivery.receipt());
+        let event = Self::observe_scroll_input(event);
+        let token = match &event {
+            InputEvent::Observed { token, .. } => Some(*token),
+            _ => None,
+        };
+        let event = if let Some(receipt) = receipt {
+            InputEvent::Tracked {
+                receipt,
+                event: Box::new(event),
+            }
+        } else {
+            event
+        };
         let log_delivery = Self::should_log_delivery(&event);
         let event_name = Self::event_name(&event);
         if Self::is_lossy_input_event(&event) {
@@ -1112,7 +1240,7 @@ impl RenderComms {
                     );
                 }
             }
-            return;
+            return (observer, token);
         }
 
         match self.input_tx.send(event) {
@@ -1128,6 +1256,7 @@ impl RenderComms {
                 );
             }
         }
+        (observer, token)
     }
 }
 
@@ -1135,5 +1264,5 @@ impl RenderComms {
 mod tests;
 
 #[cfg(test)]
-#[path = "positioned_input_test.rs"]
+#[path = "tests/positioned_input_test.rs"]
 mod positioned_input_test;

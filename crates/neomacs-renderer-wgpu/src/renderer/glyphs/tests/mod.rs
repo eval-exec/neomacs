@@ -617,7 +617,7 @@ fn cursor_cell_alignment_models_gnu_cursor_shapes() {
                 0.01,
             ),
             CursorCellAlignment::Aligned,
-            "{style:?} resolves from the complete cell rectangle"
+            "{style:?} spans the complete cell width"
         );
     }
     assert_eq!(
@@ -640,6 +640,92 @@ fn cursor_cell_alignment_models_gnu_cursor_shapes() {
         ),
         CursorCellAlignment::Aligned
     );
+}
+
+#[test]
+#[tracing_test::traced_test]
+fn cursor_diagnostic_accepts_layout_height_within_a_taller_text_row() {
+    // Captured rich-scroll frame: a 27px cursor in a 29px row. Row spacing
+    // and other faces can enlarge the advance cell without enlarging the
+    // cursor. Drive the actual diagnostic, including protocol resolution.
+    for style in [
+        CursorStyle::FilledBox,
+        CursorStyle::Hollow,
+        CursorStyle::Hbar(2.0),
+        CursorStyle::Bar(2.0),
+    ] {
+        for level in [0, 1] {
+            let mut frame = FrameGlyphBuffer::new();
+            frame.set_draw_context(DisplayWindowId::new(1), GlyphRowRole::Text, None);
+            frame.add_char('L', 8.0, 0.0, 8.0, 29.0, 24.0, false);
+            let slot_id = frame.glyphs[0].slot_id().unwrap();
+            if let FrameGlyph::Char { bidi_level, .. } = &mut frame.glyphs[0] {
+                *bidi_level = level;
+            }
+            let width = if matches!(style, CursorStyle::Bar(_)) {
+                2.0
+            } else {
+                8.0
+            };
+            let mut cursor = make_cursor(slot_id, 8.0, 0.0, width, style);
+            cursor.height = 27.0;
+            cursor.ascent = 24.0;
+            frame.window_cursors.push(cursor);
+            let chars = [RenderedCharBounds {
+                glyph_index: 0,
+                row_role: GlyphRowRole::Text,
+                slot_id,
+                label: "L".to_owned(),
+                face_id: FaceId::new(26),
+                font_size: 13.0,
+                geometry: RenderedGlyphGeometry::new(
+                    Rect::new(8.0, 0.0, 8.0, 29.0),
+                    Rect::new(9.0, 14.0, 7.0, 9.0),
+                    Rect::new(9.0, 14.0, 7.0, 9.0),
+                ),
+            }];
+            log_cursor_glyph_alignment(4_294_967_296, "text", &frame, &chars);
+        }
+    }
+    assert!(!logs_contain("cursor_glyph_mismatch"));
+}
+
+#[test]
+fn cursor_diagnostic_rejects_vertical_overflow_and_wrong_width_in_taller_rows() {
+    let cell = GlyphCellRect(Rect::new(8.0, 0.0, 8.0, 29.0));
+    for style in [
+        CursorStyle::FilledBox,
+        CursorStyle::Hollow,
+        CursorStyle::Bar(2.0),
+    ] {
+        let width = if matches!(style, CursorStyle::Bar(_)) {
+            2.0
+        } else {
+            8.0
+        };
+        for (y, height) in [(-2.0, 27.0), (3.0, 27.0), (0.0, 30.0), (0.0, 0.0)] {
+            assert!(matches!(
+                cursor_cell_alignment(
+                    style,
+                    CursorInlineDirection::LeftToRight,
+                    ResolvedCursorRect(Rect::new(8.0, y, width, height)),
+                    cell,
+                    0.01,
+                ),
+                CursorCellAlignment::Misaligned { .. }
+            ));
+        }
+    }
+    assert!(matches!(
+        cursor_cell_alignment(
+            CursorStyle::FilledBox,
+            CursorInlineDirection::LeftToRight,
+            ResolvedCursorRect(Rect::new(8.0, 0.0, 7.0, 27.0)),
+            cell,
+            0.01,
+        ),
+        CursorCellAlignment::Misaligned { .. }
+    ));
 }
 
 #[test]
@@ -715,7 +801,7 @@ fn full_cell_cursor_displaced_from_its_cell_is_misaligned() {
             0.01,
         ),
         CursorCellAlignment::Misaligned {
-            expected: CursorCellContract::FullCell,
+            expected: CursorCellContract::FullWidthWithinRow,
         }
     );
 }

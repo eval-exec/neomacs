@@ -11,9 +11,11 @@ use crate::buffer_source::face_resolution::BufferSourceItemLayoutResolutionConte
 use crate::buffer_source::item_render::BufferSourceItemRenderRequest;
 use crate::buffer_source::loop_context::BufferSourceLoopRequestContext;
 use crate::buffer_source::loop_state::BufferSourceLoopMutableState;
+use crate::buffer_source::overflow::BufferSourceWordWrapAction;
+use crate::buffer_source::producer::ProducedStep;
 use crate::buffer_source::row_prelude::BufferSourceRowPreludeRequestContext;
 use crate::buffer_source::text_source::BufferOverlayStringsItem;
-use crate::buffer_source::walk::BufferSourceWalk;
+use crate::buffer_source::walk::{BufferSourceRewind, BufferSourceWalk};
 use crate::coords::layout_i64_char_pos_to_lisp_char_pos;
 use crate::display_face_ref::render_face_ref_id;
 use crate::display_item::BufferDisplayPropertyReplacementItem;
@@ -26,7 +28,7 @@ use crate::display_row::transition::{
     DisplayRowOverflowTransitionPlan, DisplayRowTextWindowEmitContext,
     DisplayRowTransitionContinuation, VisualWrapBreak,
 };
-use crate::display_row::walk_state::TextRowTransitionStatePolicy;
+use crate::display_row::walk_state::{TextRowTransitionStatePolicy, WordWrapBreakCandidate};
 use crate::display_source::DisplaySourceStepChar;
 use crate::display_source::DisplaySourceStepItem;
 use crate::neovm_bridge::LayoutBufferView;
@@ -103,6 +105,137 @@ pub(crate) fn emit_nested_source_visual_wrap(
     )
 }
 
+/// GNU `display_line`'s `back_to_wrap`: roll the row back to the word-wrap
+/// break candidate and continue the walk from there.
+///
+/// A display element that does not fit a continued row is not moved down on its
+/// own while the row holds a break candidate:
+///
+/// ```c
+/// 		  else if (wrap_row_used > 0)
+/// 		    {
+/// 		    back_to_wrap:
+/// 		      ...
+/// 		      row->used[TEXT_AREA] = wrap_row_used;
+/// 		      ...
+/// 		      row->continued_p = true;
+/// 		      ...
+/// 		      RESTORE_IT (it, &wrap_it, wrap_data);
+/// 		      it->continuation_lines_width += wrap_x;
+/// 		    }
+/// ```
+///
+/// (src/xdisp.c:26379-26406, emacs-31.1) -- the arm that wins over "Restore
+/// positions to values before the element" at :26433-26475, so the word in
+/// front of the element moves down WITH it instead of the element moving alone.
+/// `wrap_row_used` is only ever saved under WORD_WRAP (:26091-26116), which is
+/// why the caller tests the row's resolved `it->line_wrap`.
+///
+/// The rollback is the same one a word-wrapping TEXT character performs
+/// (`BufferSourceWordWrapAction` in `buffer_source::overflow`): restore the
+/// row's drawn glyphs, its display points, its `:extend` state, the pen and the
+/// source producer to the candidate, then end the row as continued.  The
+/// candidate character is re-produced on the continuation row by the ordinary
+/// walk, which re-produces everything between it and the refused element too.
+///
+/// Measured, GNU Emacs 31.1 under Xvfb, 720 px text area, 9 px column, 40
+/// columns of text then " zzz" and a 400 px image: with `word-wrap` nil the
+/// first screen line is [1..47) -- all of the text plus the image, cropped to
+/// 720 -- and with `word-wrap` t it is [1..42), ending BEFORE the word, with
+/// [42..47) -- "zzz" and the whole 400 px image -- on the next line
+/// (`tmp/midrow-image/case-3.txt`, `case-1.txt`).
+fn emit_word_wrap_rewind<B: LayoutBufferView>(
+    loop_context: BufferSourceLoopRequestContext,
+    state: BufferSourceLoopMutableState<'_, '_, '_>,
+    source_walk: &mut BufferSourceWalk<'_, B>,
+    break_candidate: WordWrapBreakCandidate,
+) -> DisplayRowTransitionContinuation {
+    let BufferSourceLoopMutableState {
+        mut progress,
+        mut source_render,
+        row_build,
+        mut row_carryover,
+        row_source_start,
+        face_scan,
+        row_y_positions,
+        surface,
+        ..
+    } = state;
+    let action = BufferSourceWordWrapAction::new(break_candidate);
+    let right_edge_px = surface.append_surface.right_edge();
+    progress.continue_physical_line_after_visual_row(
+        action.row_position().x_px(),
+        loop_context.content_x(),
+    );
+    source_render.restore_word_wrap_checkpoint(break_candidate);
+    action.restore_row_extend(row_build.row_extend, row_build.row_geometry);
+    {
+        let box_vertical_edges = source_render.trailing_box_run_terminal();
+        source_render.extend_face_to_end_of_line(
+            row_build.row_extend,
+            row_build.row_geometry,
+            action.row_position().x_px(),
+            right_edge_px,
+            loop_context.frame_background(),
+            box_vertical_edges,
+        );
+    }
+    let mut source_position = progress.source_position();
+    {
+        let (x, col) = progress.row_progress_mut().coordinates_mut();
+        action.apply_before_row_transition(
+            source_render.output_emitter(),
+            &mut source_position,
+            col,
+            row_build.row_extend,
+            x,
+            loop_context.content_x(),
+        );
+    }
+    source_walk.rewind_source_consumption(BufferSourceRewind::WordWrap(source_position));
+    source_walk
+        .source_position_update(source_position)
+        .apply_to_progress(&mut progress);
+
+    let transition = DisplayRowOverflowTransitionPlan::visual_wrap(
+        VisualWrapBreak::AtWordBoundary,
+        TextRowTransitionStatePolicy::visual_wrap(),
+    );
+    let row_transition = DisplayRowTextWindowEmitContext::from_source_render(
+        loop_context.row_geometry_defaults(),
+        loop_context.display_text_row_base(),
+        row_y_positions,
+        loop_context.max_rows(),
+        row_build.row_geometry,
+        row_build.row_flags,
+        loop_context.row_limit(),
+        &mut source_render,
+    )
+    .emit_overflow(
+        transition,
+        LayoutCharPos0::new(progress.charpos()),
+        progress.row_position(),
+    );
+    let continuation = action.apply_after_row_transition_and_prefix(
+        row_transition,
+        transition,
+        &mut source_position,
+        row_source_start,
+        face_scan,
+        row_build.row_geometry,
+        loop_context.row_visibility_limit(),
+        row_carryover.render_state(loop_context.has_prefix()),
+    );
+    // GNU `maybe_produce_line_number`: a wrapped continuation row reserves a
+    // blank (no-number) line-number gutter so its text aligns with the first
+    // row's text column.
+    row_carryover.line_numbers.mark_continuation_row();
+    source_walk
+        .source_position_update(source_position)
+        .apply_to_progress(&mut progress);
+    continuation
+}
+
 pub(crate) struct BufferSourceRenderRequest<'rows, 'request, 'emit, 'surface, 'face> {
     loop_context: BufferSourceLoopRequestContext,
     text: &'request [u8],
@@ -151,7 +284,8 @@ impl<'rows, 'request, 'emit, 'surface, 'face>
     {
         let layout_resolution_context =
             face_resolution_context.source_item_layout_resolution_context();
-        let Some(consumed_item) = source_walk.consume_source_item_for_render(
+        let mut produced = ProducedStep::empty(self.state.progress.source_position());
+        source_walk.consume_source_item_for_render_into(
             &mut self.state.progress,
             face_resolution_context,
             self.state.face_ids,
@@ -159,7 +293,9 @@ impl<'rows, 'request, 'emit, 'surface, 'face>
             self.state.row_build.row_geometry,
             self.state.surface.append_surface,
             self.active_face_state,
-        ) else {
+            &mut produced,
+        );
+        let Some(consumed_item) = produced.source_item else {
             return false;
         };
 
@@ -251,6 +387,33 @@ impl<'rows, 'request, 'emit, 'surface, 'face>
         !continuation.should_break()
     }
 
+    /// Render one `display` replacement, moving a replacement the row refuses
+    /// down to the next row.
+    ///
+    /// GNU `display_line` does not drop a display element that draws past the
+    /// right edge of a *continued* row: it removes it from the row, restores the
+    /// iterator to before it, marks the row continued, and produces the element
+    /// again at the start of the next row (`display_line`,
+    /// src/xdisp.c:26448-26475).  That is also where `produce_image_glyph`'s
+    /// wide-glyph crop does not apply, because the image starts at column zero
+    /// on the new row (:32492-32509), so a mid-row image that does not fit is
+    /// displayed below rather than cropped or lost.
+    ///
+    /// The move happens at most once per replacement: GNU's own guarantee is
+    /// that a glyph at `hpos == 0` is kept (it crops to the row instead of
+    /// refusing), so a replacement the *fresh* row also refuses -- one with no
+    /// room at all, the degenerate geometry this port documents on
+    /// `DisplayImageOverflowAction` -- takes the row's own answer instead of
+    /// being deferred for ever.  A truncating row does not move the
+    /// replacement down either: GNU draws that glyph past the edge.
+    ///
+    /// GNU prefers an earlier break: when the row has a word-wrap break
+    /// candidate, it rewinds to that candidate first and the element moves down
+    /// together with the word in front of it (`else if (wrap_row_used > 0) goto
+    /// back_to_wrap`, src/xdisp.c:26379-26406).  Without a candidate it takes
+    /// the arm below, which moves the element alone.  Both are measured on GNU
+    /// Emacs 31.1 in `emit_word_wrap_rewind`'s note and in
+    /// `tmp/midrow-image/wrap-modes.txt`.
     fn consume_replacement<B: LayoutBufferView>(
         mut self,
         source_walk: &mut BufferSourceWalk<'request, B>,
@@ -261,39 +424,147 @@ impl<'rows, 'request, 'emit, 'surface, 'face>
     where
         'surface: 'request,
     {
-        let replacement_context = BufferDisplayPropertyTextReplacementRenderContext::new(
-            replacement,
-            self.loop_context.text_start_byte(),
-            self.text,
-            self.loop_context.content_x(),
-            self.params,
-            0.0,
-            self.loop_context.char_height(),
-            self.active_face_state,
-            self.state.progress.row_progress().x(),
-            self.state.progress.row_position(),
-        );
-        match replacement_context.render_and_apply(
-            buffer,
-            BufferDisplayPropertyTextReplacementRenderState::new(
+        let mut moved_to_next_row = false;
+        loop {
+            // GNU removes the element and re-produces it on the next row only
+            // while the row can continue; a truncating row draws past its edge
+            // instead, and a replacement a *fresh* row also refuses (a row with
+            // no room at all) has nowhere left to go.
+            //
+            // The row's resolved `it->line_wrap` answers "can it continue",
+            // not `LineWrapMode`: only GNU's two wrapping methods reach the
+            // element-move arms at all.
+            let move_to_next_row =
+                !moved_to_next_row && self.state.surface.append_surface.line_wrap().wraps();
+            // GNU's pen runs in the shared coordinate space that INCLUDES the
+            // hscrolled columns: `it->current_x` starts the row at
+            // `it->first_visible_x` (src/xdisp.c:3500). The row pen here is
+            // screen-relative, so a stretch resolved against it pinned
+            // `:align-to` fields to screen columns while the text around them
+            // scrolled (issue #446). The consumed hscroll columns are the
+            // difference between the two spaces.
+            let hscroll_offset_px = self.state.row_carryover.hscroll_skip.consumed_columns() as f32
+                * self.params.char_width.max(1.0);
+            let replacement_context = BufferDisplayPropertyTextReplacementRenderContext::new(
+                replacement.clone(),
+                self.loop_context.text_start_byte(),
+                self.text,
+                self.loop_context.content_x(),
+                self.params,
+                0.0,
+                self.loop_context.char_height(),
+                self.active_face_state,
+                self.state.progress.row_progress().x() + hscroll_offset_px,
+                self.state.progress.row_position(),
+            );
+            let rendered_state = BufferDisplayPropertyTextReplacementRenderState::new(
                 self.state.source_render.reborrow(),
                 self.state.face_ids,
                 self.state.surface.append_surface,
                 self.state.row_build.row_geometry,
                 self.active_face_state,
-            ),
-            &mut self.state.progress,
-            self.state.cursor_info,
-            self.loop_context.point_charpos(),
-        ) {
-            BufferDisplayPropertyTextReplacementApplyOutcome::Applied => true,
-            BufferDisplayPropertyTextReplacementApplyOutcome::String(session) => self
-                .render_display_string_session(source_walk, buffer, &replacement_context, session),
-            BufferDisplayPropertyTextReplacementApplyOutcome::Fallback(source_item) => {
-                self.render_source_item(source_walk, layout_resolution_context, source_item, buffer)
+            );
+            let outcome = if move_to_next_row {
+                replacement_context.render_and_report_refusal(
+                    buffer,
+                    rendered_state,
+                    &mut self.state.progress,
+                    self.state.cursor_info,
+                    self.loop_context.point_charpos(),
+                )
+            } else {
+                replacement_context.render_and_apply(
+                    buffer,
+                    rendered_state,
+                    &mut self.state.progress,
+                    self.state.cursor_info,
+                    self.loop_context.point_charpos(),
+                )
+            };
+            match outcome {
+                BufferDisplayPropertyTextReplacementApplyOutcome::Applied => return true,
+                BufferDisplayPropertyTextReplacementApplyOutcome::RefusedWhole => {
+                    // `wrap_row_used > 0`: a break candidate stands earlier on
+                    // this row, so the word in front of the element moves down
+                    // with it.  The refused replacement drew no glyph, so the
+                    // candidate is still the row's own and the rollback is
+                    // exactly the one a wrapping text character performs.
+                    if let Some(break_candidate) = self.word_wrap_break_before_replacement() {
+                        let continuation = emit_word_wrap_rewind(
+                            self.loop_context,
+                            self.state.reborrow(),
+                            source_walk,
+                            break_candidate,
+                        );
+                        if continuation.should_break() {
+                            return false;
+                        }
+                        // The continuation row re-produces the candidate and
+                        // everything up to this replacement; the walk resumes
+                        // there, in this call, with the state the rewind left.
+                        return true;
+                    }
+                    moved_to_next_row = true;
+                    // The refused replacement consumed no buffer text and drew
+                    // no glyph, so the row ends exactly where it began and the
+                    // walk position still names the covered character.
+                    if self.emit_replacement_visual_wrap(buffer).should_break() {
+                        return false;
+                    }
+                }
+                BufferDisplayPropertyTextReplacementApplyOutcome::String(session) => {
+                    return self.render_display_string_session(
+                        source_walk,
+                        buffer,
+                        &replacement_context,
+                        session,
+                    );
+                }
+                BufferDisplayPropertyTextReplacementApplyOutcome::Fallback(source_item) => {
+                    return self.render_source_item(
+                        source_walk,
+                        layout_resolution_context,
+                        source_item,
+                        buffer,
+                    );
+                }
+                BufferDisplayPropertyTextReplacementApplyOutcome::Stop => return false,
             }
-            BufferDisplayPropertyTextReplacementApplyOutcome::Stop => false,
         }
+    }
+
+    /// The row's word-wrap break candidate, when rewinding to it would put the
+    /// refused replacement further along the continuation row than it is now.
+    ///
+    /// `None` for a row that cannot word-wrap, for a row without a candidate,
+    /// and for a candidate at or after the pen -- `wrap_row_used > 0` is
+    /// strictly "something was drawn before the break point", and rewinding to
+    /// a point the row has not passed would rewind nothing and loop.
+    fn word_wrap_break_before_replacement(&self) -> Option<WordWrapBreakCandidate> {
+        if !self.state.surface.append_surface.line_wrap().is_word_wrap() {
+            return None;
+        }
+        let candidate = self.state.row_carryover.word_wrap.candidate();
+        (self.state.row_carryover.word_wrap.has_candidate()
+            && candidate.row_position().x_px() < self.state.progress.row_progress().x())
+        .then_some(candidate)
+    }
+
+    /// End the current row for a replacement that has to move down, and start
+    /// the continuation row the retry renders into.
+    ///
+    /// A visual row break, not a display-string one: the replacement belongs to
+    /// a buffer character, so the new row starts at that character and the
+    /// row's end source stays `Buffer`.
+    fn emit_replacement_visual_wrap<B: LayoutBufferView>(
+        &mut self,
+        buffer: &B,
+    ) -> DisplayRowTransitionContinuation {
+        let continuation = emit_nested_source_visual_wrap(self.loop_context, self.state.reborrow());
+        if !continuation.should_break() {
+            self.render_pending_row_prelude(buffer);
+        }
+        continuation
     }
 
     fn render_display_string_session<B: LayoutBufferView>(

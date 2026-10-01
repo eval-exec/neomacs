@@ -76,6 +76,12 @@ const STANDARD_SCENARIOS: &[SuiteScenario] = &[
     suite_scenario(ScenarioId::RustLspTyping, 8.0),
     suite_scenario(ScenarioId::RustLspTypingHeavy, 8.0),
     suite_scenario(ScenarioId::MxTabCompletion, 8.0),
+    // The steady row reproduces to a few percent (warm-up amortized away),
+    // so it carries the same budget as the cold row it complements.
+    suite_scenario(ScenarioId::MxTabCompletionSteady, 8.0),
+    // Scrolling wobbles a few percent with ambient load (TUI redisplay), in
+    // line with the other TUI rows.
+    suite_scenario(ScenarioId::Scrolling, 8.0),
     suite_scenario(ScenarioId::BytecodeCallLoop, 5.0),
     suite_scenario(ScenarioId::EditingSimulation, 8.0),
     suite_scenario(ScenarioId::Startup, 12.0),

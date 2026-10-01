@@ -37,6 +37,10 @@ pub use tree_sitter_grammar::{
 
 pub const DEFAULT_PROCESS_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Root of the melpa caches.  Re-exported so a crate that depends on this
+/// one but not on `neomacs-infra` still resolves the same directory.
+pub use neomacs_infra::melpa_cache_root;
+
 /// Resolve the checkout used by a normal Cargo run or an extracted Nextest
 /// archive.
 pub fn workspace_root() -> PathBuf {
@@ -108,9 +112,9 @@ impl RuntimeDirectory {
 }
 
 impl MelpaSandbox {
-    /// Create a sandbox below `<workspace>/tmp/melpa`.
+    /// Create a sandbox below the melpa cache root.
     pub fn new(label: &str) -> Result<Self, String> {
-        let base = workspace_root().join("tmp/melpa");
+        let base = neomacs_infra::melpa_cache_root();
         fs::create_dir_all(&base).map_err(|error| {
             format!(
                 "failed to create MELPA scratch directory {}: {error}",

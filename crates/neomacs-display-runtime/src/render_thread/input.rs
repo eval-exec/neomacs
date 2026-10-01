@@ -1,6 +1,8 @@
 //! Input translation and window chrome hit-testing.
 
-use crate::backend::wgpu::{NEOMACS_CTRL_MASK, NEOMACS_META_MASK, NEOMACS_SUPER_MASK};
+use crate::backend::wgpu::{
+    NEOMACS_ALT_MASK, NEOMACS_CTRL_MASK, NEOMACS_HYPER_MASK, NEOMACS_META_MASK, NEOMACS_SUPER_MASK,
+};
 use winit::keyboard::{Key, NamedKey, NativeKey};
 
 use super::RenderApp;
@@ -276,9 +278,20 @@ impl RenderApp {
 
     /// Prefer committed text over logical-key fallback for printable input
     /// when no command modifiers are active.
+    ///
+    /// GNU's shift-like vs control-like split (`src/nsterm.m:7318-7339`):
+    /// any non-shift modifier bit makes the chord a command, which now
+    /// includes the policy-cooked `A-' and `H-' bits — GNU cooks
+    /// `parse_solitary_modifier("alt")` to a distinct modifier bit
+    /// (`src/keyboard.c:7941`).
     pub(super) fn translate_committed_text(text: &str, modifiers: u32) -> Option<Vec<u32>> {
-        let command_modifiers_active =
-            modifiers & (NEOMACS_CTRL_MASK | NEOMACS_META_MASK | NEOMACS_SUPER_MASK) != 0;
+        let command_modifiers_active = modifiers
+            & (NEOMACS_CTRL_MASK
+                | NEOMACS_META_MASK
+                | NEOMACS_SUPER_MASK
+                | NEOMACS_ALT_MASK
+                | NEOMACS_HYPER_MASK)
+            != 0;
         if command_modifiers_active {
             return None;
         }

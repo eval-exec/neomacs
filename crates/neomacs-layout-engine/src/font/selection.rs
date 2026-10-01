@@ -115,5 +115,5 @@ fn slant_distance(requested: FontSlant, candidate: FontSlant) -> u32 {
 }
 
 #[cfg(test)]
-#[path = "selection_test.rs"]
+#[path = "tests/selection_test.rs"]
 mod selection_test;

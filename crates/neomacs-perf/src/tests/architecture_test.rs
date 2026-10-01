@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 fn crate_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    neomacs_infra::crate_root!()
 }
 
 fn count_lines(relative: &str) -> usize {
@@ -20,10 +20,12 @@ fn count_lines(relative: &str) -> usize {
 /// and provenance manifest below `harness/scenarios/`. What remains is the
 /// engine: editor launch, the sampling gate, capture, artifact publication,
 /// and the one-line scenario dispatch. New scenario work goes in a child
-/// module for its family (or a new one), not in the orchestrator.
+/// module for its family (or a new one), not in the orchestrator. The
+/// bench display session (neomacs-infra) and the GUI launch-attempt loop
+/// are engine work and live here too.
 #[test]
 fn harness_stays_an_engine_after_the_scenario_split() {
-    const CEILING: usize = 2_200;
+    const CEILING: usize = 2_350;
     let lines = count_lines("src/harness.rs");
     assert!(
         lines <= CEILING,
@@ -46,6 +48,7 @@ fn scenario_modules_stay_family_sized() {
         "mx_tab",
         "org_journal_open",
         "rust_lsp",
+        "scrolling",
         "search_shape",
         "sustained_native_video",
         "vm_loop",
@@ -81,6 +84,7 @@ fn scenario_module_registry_is_pinned() {
             "mx_tab",
             "org_journal_open",
             "rust_lsp",
+            "scrolling",
             "search_shape",
             "sustained_native_video",
             "vm_loop",

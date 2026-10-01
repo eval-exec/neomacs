@@ -11,6 +11,8 @@ use crate::{
 
 use neomacs_melpa_test_support::{EmacsRuntime, MelpaSandbox, PreparedPackageSet};
 
+use crate::git_fixture::{GIT_ENV_LEAKS, GIT_FIXTURE_ENV, GitFixture, GitFixtureSpec};
+
 /// Terminal color capability shared by both editors in a package parity pair.
 ///
 /// Keeping the supported profiles closed prevents a test from accidentally
@@ -106,6 +108,7 @@ pub struct PackageTuiScenario {
     label: String,
     packages: PreparedPackageSet,
     terminal_profile: TerminalProfile,
+    git_fixture: Option<GitFixtureSpec>,
 }
 
 impl PackageTuiScenario {
@@ -114,6 +117,7 @@ impl PackageTuiScenario {
             label: label.into(),
             packages: packages.clone(),
             terminal_profile: TerminalProfile::default(),
+            git_fixture: None,
         }
     }
 
@@ -123,9 +127,26 @@ impl PackageTuiScenario {
         self
     }
 
+    /// Build `spec`'s repository inside each peer's sandbox before it boots and
+    /// point that peer's prelude at it through [`GIT_FIXTURE_ENV`].
+    ///
+    /// Each peer gets its own repository -- a pair must not share a working
+    /// tree -- and the sandbox's drop removes it, so the fixture is never
+    /// visible outside the test that asked for it.
+    #[must_use]
+    pub fn git_fixture(mut self, spec: GitFixtureSpec) -> Self {
+        self.git_fixture = Some(spec);
+        self
+    }
+
     /// Spawn both peers, but expose no sessions until readiness is observed.
     fn spawn(self) -> Result<StartingPackageTuiPair, String> {
-        StartingPackageTuiPair::spawn(&self.label, &self.packages, self.terminal_profile)
+        StartingPackageTuiPair::spawn(
+            &self.label,
+            &self.packages,
+            self.terminal_profile,
+            self.git_fixture,
+        )
     }
 
     pub fn spawn_when_ready<F>(
@@ -169,6 +190,7 @@ impl StartingPackageTuiPair {
         label: &str,
         packages: &PreparedPackageSet,
         terminal_profile: TerminalProfile,
+        git_fixture: Option<GitFixtureSpec>,
     ) -> Result<Self, String> {
         let display_env = SymmetricDisplayEnvironment::from(terminal_profile);
         let gnu_runtime = EmacsRuntime::gnu_emacs();
@@ -184,22 +206,30 @@ impl StartingPackageTuiPair {
         let neo_sandbox = MelpaSandbox::new(&format!("{label}-tui-neo"))?;
         let gnu_startup_file = packages.write_startup_file(gnu_sandbox.root())?;
         let neo_startup_file = packages.write_startup_file(neo_sandbox.root())?;
+        let gnu_git = create_git_fixture(&gnu_sandbox, git_fixture)?;
+        let neo_git = create_git_fixture(&neo_sandbox, git_fixture)?;
 
-        let gnu_launch = editor_launch(
-            gnu_runtime,
-            &gnu_sandbox,
-            packages,
-            &gnu_startup_file,
-            &display_env,
-            true,
+        let gnu_launch = with_git_fixture(
+            editor_launch(
+                gnu_runtime,
+                &gnu_sandbox,
+                packages,
+                &gnu_startup_file,
+                &display_env,
+                true,
+            ),
+            gnu_git.as_ref(),
         );
-        let neo_launch = editor_launch(
-            neo_runtime,
-            &neo_sandbox,
-            packages,
-            &neo_startup_file,
-            &display_env,
-            false,
+        let neo_launch = with_git_fixture(
+            editor_launch(
+                neo_runtime,
+                &neo_sandbox,
+                packages,
+                &neo_startup_file,
+                &display_env,
+                false,
+            ),
+            neo_git.as_ref(),
         );
 
         let recording_scope = TuiRecordingScope::new("neomacs-melpa-tests", label);
@@ -381,6 +411,26 @@ impl SymmetricDisplayEnvironment {
     }
 }
 
+/// Create the scenario's git fixture inside `sandbox`, when it asked for one.
+///
+/// The sandbox owns the tree, so the fixture needs no guard of its own: the
+/// pair's drop removes the repository along with everything else in it.
+fn create_git_fixture(
+    sandbox: &MelpaSandbox,
+    spec: Option<GitFixtureSpec>,
+) -> Result<Option<GitFixture>, String> {
+    spec.map(|spec| GitFixture::create(sandbox.root(), &spec))
+        .transpose()
+}
+
+/// Hand a peer the path of its fixture, for the prelude to read.
+fn with_git_fixture(launch: TuiLaunch, fixture: Option<&GitFixture>) -> TuiLaunch {
+    match fixture {
+        Some(fixture) => launch.env(GIT_FIXTURE_ENV, fixture.path()),
+        None => launch,
+    }
+}
+
 fn editor_launch(
     runtime: EmacsRuntime,
     sandbox: &MelpaSandbox,
@@ -405,7 +455,13 @@ fn editor_launch(
     for key in display_env.removed_entries() {
         launch = launch.env_remove(key);
     }
-    launch
+    // The host's git redirects must not reach the editor either: a leaked
+    // `GIT_DIR` aims magit's own git commands at another repository, and the
+    // system gitconfig can change what the expected grids show.
+    for leak in GIT_ENV_LEAKS {
+        launch = launch.env_remove(*leak);
+    }
+    launch.env("GIT_CONFIG_NOSYSTEM", "1")
 }
 
 #[cfg(test)]

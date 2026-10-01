@@ -14,7 +14,7 @@
 //!   redisplay).
 //!
 //! `NEOMACS_TEXT_SNAPSHOT=copy|share` selects the mode for a same-binary
-//! A/B. Unset means `copy` until the default flips after measurement. Read
+//! A/B. Unset means `share`; explicit `copy` retains the comparison path. Read
 //! once per process, on the first snapshot.
 
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
@@ -43,7 +43,7 @@ static BUFFER_TEXT_COW_COPIES: AtomicUsize = AtomicUsize::new(0);
 /// The mode a value of `NEOMACS_TEXT_SNAPSHOT` selects.
 pub fn parse_text_snapshot_knob(value: Option<&str>) -> TextSnapshotMode {
     let Some(value) = value.map(str::trim) else {
-        return TextSnapshotMode::Copy;
+        return TextSnapshotMode::Share;
     };
     match value.to_ascii_lowercase().as_str() {
         "share" | "cow" | "on" | "1" => TextSnapshotMode::Share,

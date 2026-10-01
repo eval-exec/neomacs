@@ -21,7 +21,7 @@ impl DrawParameters {
 /// Eviction never rewrites GPU storage referenced by another draw.
 pub(in crate::renderer) struct DrawParameterCache {
     layout: wgpu::BindGroupLayout,
-    entries: RefCell<VecDeque<([u32; 3], DrawParameters)>>,
+    entries: RefCell<VecDeque<([u32; 7], DrawParameters)>>,
 }
 
 impl DrawParameterCache {
@@ -37,8 +37,19 @@ impl DrawParameterCache {
         device: &wgpu::Device,
         size: [f32; 2],
         time: f32,
+        content_alpha: f32,
+        content_scale: f32,
+        content_pivot: [f32; 2],
     ) -> DrawParameters {
-        let key = [size[0].to_bits(), size[1].to_bits(), time.to_bits()];
+        let key = [
+            size[0].to_bits(),
+            size[1].to_bits(),
+            time.to_bits(),
+            content_alpha.to_bits(),
+            content_scale.to_bits(),
+            content_pivot[0].to_bits(),
+            content_pivot[1].to_bits(),
+        ];
         let mut entries = self.entries.borrow_mut();
         if let Some(index) = entries.iter().position(|(k, _)| *k == key) {
             let entry = entries.remove(index).unwrap();
@@ -51,7 +62,10 @@ impl DrawParameterCache {
             contents: bytemuck::bytes_of(&Uniforms {
                 screen_size: size,
                 time,
-                _padding: 0.0,
+                content_alpha,
+                content_scale,
+                _pivot_padding: 0.0,
+                content_pivot,
             }),
             // Deliberately no COPY_DST: painters cannot overwrite this snapshot.
             usage: wgpu::BufferUsages::UNIFORM,

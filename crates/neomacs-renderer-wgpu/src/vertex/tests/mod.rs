@@ -31,8 +31,10 @@ fn rounded_rect_vertex_size() {
 
 #[test]
 fn uniforms_size() {
-    // screen_size: [f32; 2] = 8, _padding: [f32; 2] = 8 => 16 bytes
-    assert_eq!(size_of::<Uniforms>(), 16);
+    // screen_size: [f32; 2] = 8, time = 4, content_alpha = 4,
+    // content_scale = 4, _pivot_padding = 4, content_pivot: [f32; 2] = 8
+    // => 32 bytes (the uniform address space's 16-byte multiple)
+    assert_eq!(size_of::<Uniforms>(), 32);
 }
 
 // ---- Alignment tests (all repr(C) with f32 fields, should be 4-byte aligned) ----
@@ -472,7 +474,7 @@ fn uniforms_zeroed_is_valid() {
     let u: Uniforms = bytemuck::Zeroable::zeroed();
     assert_eq!(u.screen_size, [0.0, 0.0]);
     assert_eq!(u.time, 0.0);
-    assert_eq!(u._padding, 0.0);
+    assert_eq!(u.content_alpha, 0.0);
 }
 
 // ---- Bytemuck cast round-trip: struct <-> byte slice ----

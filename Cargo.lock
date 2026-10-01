@@ -1090,7 +1090,7 @@ dependencies = [
 [[package]]
 name = "cosmic-text"
 version = "0.18.2"
-source = "git+https://github.com/eval-exec/cosmic-text?rev=5dd3fec8572e771794e3f203ab6780d828e9ce09#5dd3fec8572e771794e3f203ab6780d828e9ce09"
+source = "git+https://github.com/eval-exec/cosmic-text?rev=5951ae9b0a4c794e594c56f596ba04e5f57416a1#5951ae9b0a4c794e594c56f596ba04e5f57416a1"
 dependencies = [
  "bitflags 2.13.1",
  "fontdb",
@@ -1687,7 +1687,7 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 [[package]]
 name = "dpi"
 version = "0.1.2"
-source = "git+https://github.com/eval-exec/winit?branch=master#6190d7c8df1bbc9533ecf61e137fe38b68c20ca1"
+source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
 
 [[package]]
 name = "dwrote"
@@ -3120,6 +3120,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "jpeg-encoder"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0370574b86f7eca156b9f298392b5e69a23f8c86f3f865add60bbc2e79467a6"
+
+[[package]]
 name = "js-sys"
 version = "0.3.105"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3762,6 +3768,7 @@ name = "neomacs-display-protocol"
 version = "0.0.19"
 dependencies = [
  "bitflags 2.13.1",
+ "neomacs-infra",
  "num_enum",
  "proptest",
  "rustc-hash 2.1.3",
@@ -3937,6 +3944,7 @@ dependencies = [
 name = "neomacs-parity-reference"
 version = "0.0.19"
 dependencies = [
+ "neomacs-infra",
  "sha2",
  "tempfile",
 ]
@@ -3949,6 +3957,7 @@ dependencies = [
  "gstreamer",
  "gstreamer-pbutils",
  "linux-perf-data",
+ "neomacs-infra",
  "neomacs-melpa-test-support",
  "rustix 1.1.4",
  "serde",
@@ -3970,6 +3979,7 @@ dependencies = [
  "fontdb",
  "image",
  "imagesize 0.15.0",
+ "jpeg-encoder",
  "libc",
  "naga",
  "neomacs-display-protocol",
@@ -3978,6 +3988,7 @@ dependencies = [
  "neomacs-layout-engine",
  "neomacs-test-fonts",
  "neomacs-video",
+ "png",
  "pollster",
  "resvg",
  "rustc-hash 2.1.3",
@@ -3989,12 +4000,14 @@ dependencies = [
  "tracing-test",
  "wgpu",
  "wgpu-hal",
+ "zune-jpeg",
 ]
 
 [[package]]
 name = "neomacs-terminfo"
 version = "0.0.19"
 dependencies = [
+ "neomacs-infra",
  "pkg-config",
  "regex",
  "rustix 1.1.4",
@@ -4138,6 +4151,7 @@ dependencies = [
  "memchr",
  "memmap2",
  "neomacs-display-protocol",
+ "neomacs-infra",
  "neomacs-video-model",
  "neovm-host-abi",
  "network-interface",
@@ -4196,6 +4210,7 @@ dependencies = [
  "colored",
  "expect-test",
  "libc",
+ "neomacs-infra",
  "neomacs-parity-reference",
  "neomacs-test-oracle",
  "proptest",
@@ -8075,8 +8090,7 @@ dependencies = [
 [[package]]
 name = "wgpu-hal"
 version = "30.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6b7fb58561a792bc237628ba0792e332de418fefe145f13b5ed8201e6d52f58"
+source = "git+https://github.com/eval-exec/wgpu?rev=9717f9fe277beec2c98df550662a626f8fc0248c#9717f9fe277beec2c98df550662a626f8fc0248c"
 dependencies = [
  "android_system_properties",
  "arrayvec",
@@ -8698,7 +8712,7 @@ checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
 [[package]]
 name = "winit"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?branch=master#6190d7c8df1bbc9533ecf61e137fe38b68c20ca1"
+source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
 dependencies = [
  "bitflags 2.13.1",
  "cfg_aliases 0.2.2",
@@ -8724,7 +8738,7 @@ dependencies = [
 [[package]]
 name = "winit-android"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?branch=master#6190d7c8df1bbc9533ecf61e137fe38b68c20ca1"
+source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
 dependencies = [
  "android-activity",
  "bitflags 2.13.1",
@@ -8739,7 +8753,7 @@ dependencies = [
 [[package]]
 name = "winit-appkit"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?branch=master#6190d7c8df1bbc9533ecf61e137fe38b68c20ca1"
+source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
 dependencies = [
  "bitflags 2.13.1",
  "block2",
@@ -8761,7 +8775,7 @@ dependencies = [
 [[package]]
 name = "winit-common"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?branch=master#6190d7c8df1bbc9533ecf61e137fe38b68c20ca1"
+source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
 dependencies = [
  "block2",
  "dpi",
@@ -8779,7 +8793,7 @@ dependencies = [
 [[package]]
 name = "winit-core"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?branch=master#6190d7c8df1bbc9533ecf61e137fe38b68c20ca1"
+source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
 dependencies = [
  "bitflags 2.13.1",
  "cursor-icon",
@@ -8794,7 +8808,7 @@ dependencies = [
 [[package]]
 name = "winit-orbital"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?branch=master#6190d7c8df1bbc9533ecf61e137fe38b68c20ca1"
+source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
 dependencies = [
  "bitflags 2.13.1",
  "dpi",
@@ -8810,7 +8824,7 @@ dependencies = [
 [[package]]
 name = "winit-uikit"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?branch=master#6190d7c8df1bbc9533ecf61e137fe38b68c20ca1"
+source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
 dependencies = [
  "bitflags 2.13.1",
  "block2",
@@ -8830,7 +8844,7 @@ dependencies = [
 [[package]]
 name = "winit-wayland"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?branch=master#6190d7c8df1bbc9533ecf61e137fe38b68c20ca1"
+source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
 dependencies = [
  "bitflags 2.13.1",
  "calloop",
@@ -8857,7 +8871,7 @@ dependencies = [
 [[package]]
 name = "winit-web"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?branch=master#6190d7c8df1bbc9533ecf61e137fe38b68c20ca1"
+source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
 dependencies = [
  "atomic-waker",
  "bitflags 2.13.1",
@@ -8879,7 +8893,7 @@ dependencies = [
 [[package]]
 name = "winit-win32"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?branch=master#6190d7c8df1bbc9533ecf61e137fe38b68c20ca1"
+source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
 dependencies = [
  "bitflags 2.13.1",
  "cursor-icon",
@@ -8889,6 +8903,8 @@ dependencies = [
  "tracing",
  "unicode-segmentation",
  "url",
+ "windows 0.62.2",
+ "windows-core 0.62.2",
  "windows-sys 0.61.2",
  "winit-common",
  "winit-core",
@@ -8897,7 +8913,7 @@ dependencies = [
 [[package]]
 name = "winit-x11"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?branch=master#6190d7c8df1bbc9533ecf61e137fe38b68c20ca1"
+source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
 dependencies = [
  "bitflags 2.13.1",
  "bytemuck",
@@ -9069,6 +9085,7 @@ version = "0.0.19"
 dependencies = [
  "flate2",
  "rayon",
+ "resvg",
  "serde",
  "serde_json",
  "sha2",
@@ -9230,8 +9247,7 @@ checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
 [[package]]
 name = "zune-core"
 version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb8a0807f7c01457d0379ba880ba6322660448ddebc890ce29bb64da71fb40f9"
+source = "git+https://github.com/eval-exec/zune-image?rev=39dd805e32d74b2092405b5da0bec86747f04e34#39dd805e32d74b2092405b5da0bec86747f04e34"
 
 [[package]]
 name = "zune-inflate"
@@ -9245,8 +9261,7 @@ dependencies = [
 [[package]]
 name = "zune-jpeg"
 version = "0.5.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
+source = "git+https://github.com/eval-exec/zune-image?rev=39dd805e32d74b2092405b5da0bec86747f04e34#39dd805e32d74b2092405b5da0bec86747f04e34"
 dependencies = [
  "zune-core",
 ]

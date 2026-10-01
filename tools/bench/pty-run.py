@@ -46,9 +46,13 @@ elif perf_record:
     perf_argv = [
         "perf", "record", "--quiet", "--no-buildid-cache",
         "--event", os.environ.get("PTY_PERF_EVENT", "cycles:u"),
-        "--freq", os.environ.get("PTY_PERF_FREQUENCY", "999"),
         "--call-graph", os.environ.get("PTY_PERF_CALL_GRAPH", "lbr"),
     ]
+    perf_period = os.environ.get("PTY_PERF_PERIOD", "")
+    if perf_period:
+        perf_argv += ["--count", perf_period]
+    else:
+        perf_argv += ["--freq", os.environ.get("PTY_PERF_FREQUENCY", "999")]
     perf_control = os.environ.get("PTY_PERF_CONTROL", "")
     if perf_control:
         perf_argv += ["--delay=-1", "--control=" + perf_control]

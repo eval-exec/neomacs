@@ -545,8 +545,8 @@ fn prepare_tool_checkout(
     revision: &str,
     timeout: std::time::Duration,
 ) -> Result<PathBuf, String> {
-    let root = workspace_root()
-        .join("tmp/melpa/source-build-tools")
+    let root = crate::melpa_cache_root()
+        .join("source-build-tools")
         .join(label)
         .join(revision);
     fs::create_dir_all(&root).map_err(|error| {
@@ -1019,8 +1019,8 @@ fn prepare_cached_source_artifact_with_tools(
     source: LockedPackageSource<'_>,
     tools: SourceBuildTools<'_>,
 ) -> Result<PathBuf, String> {
-    let root = workspace_root()
-        .join("tmp/melpa/source-package-cache")
+    let root = crate::melpa_cache_root()
+        .join("source-package-cache")
         .join(source.name)
         .join(source.version)
         .join(source.revision)
@@ -1254,8 +1254,8 @@ pub fn prepare_cached_locked_package_plan(
         artifacts.push((*source, prepare_cached_source_artifact(driver, *source)?));
     }
 
-    let root = workspace_root()
-        .join("tmp/melpa/source-install-cache")
+    let root = crate::melpa_cache_root()
+        .join("source-install-cache")
         .join(root_source.name)
         .join(root_source.version)
         .join(root_source.revision)

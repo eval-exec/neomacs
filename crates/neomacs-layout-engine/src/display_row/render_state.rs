@@ -395,7 +395,7 @@ impl CurrentTextRowRenderOutcome {
         if matches!(
             self.stop,
             DisplayRowRenderStop::RowBreak(row_break)
-                if row_break.line_height == DisplayLineHeightPolicy::ContentOnly
+                if row_break.line_height != DisplayLineHeightPolicy::Default
         ) {
             geometry.replace_current_row_metrics(self.row_height_px, self.row_ascent_px);
         } else {

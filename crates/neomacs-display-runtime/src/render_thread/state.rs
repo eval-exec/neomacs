@@ -16,7 +16,7 @@ use neomacs_display_protocol::{
     InteractionId, PointerAppearanceId, PointerAppearanceSelection, PresentationId,
     PresentedResizeAxis, TransitionPolicy, VisualConfig,
 };
-use neomacs_renderer_wgpu::WgpuRenderer;
+use neomacs_renderer_wgpu::{RowRange, WgpuRenderer};
 use neovm_core::emacs_core::image_catalog::ResolvedImageMetadata;
 
 use super::cursor::CursorState;
@@ -27,10 +27,39 @@ use super::render_quality::{RenderBackendProfile, RenderQualityPolicy};
 pub(super) use super::toolbar::ToolbarResources;
 
 /// Decoded image facts shared from the render thread to the evaluator.
+///
+/// Only [`Self::Ready`] and [`Self::Failed`] are *terminal*: they are the
+/// answers to "what happened to this load", and reading one consumes nothing
+/// because the renderer publishes each at most once. [`Self::Band`] is
+/// intermediate — rows of an image whose decode is still running, each
+/// superseding the last — so a reader asking for the terminal state keeps
+/// waiting past any number of bands.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ImageDecodeTerminal {
+    /// One band of a decode still running: rows that exist, in source-row
+    /// coordinates.
+    Band(RowRange),
     Ready(ResolvedImageMetadata),
-    Failed(String),
+    /// The decode ended without pixels.  It carries GNU's diagnostic rather
+    /// than a bare string, because the consumer that shows it to a user is the
+    /// same one that has to word it.
+    Failed(neomacs_display_protocol::image_diagnostic::ImageDiagnostic),
+}
+
+impl ImageDecodeTerminal {
+    /// Whether this publication ends a load, as opposed to advancing one.
+    #[must_use]
+    pub const fn is_terminal(&self) -> bool {
+        match self {
+            Self::Band(_) => false,
+            Self::Ready(_) | Self::Failed(_) => true,
+        }
+    }
+
+    /// The terminal state of a load, if the terminal one is what is published.
+    fn terminal(self) -> Option<Self> {
+        self.is_terminal().then_some(self)
+    }
 }
 
 /// Result of a redisplay-safe, non-blocking terminal-state observation.
@@ -53,6 +82,15 @@ pub struct ImageTerminalPublication<'a> {
 impl ImageTerminalPublication<'_> {
     pub fn publish(&mut self, load: ImageLoadToken, terminal: ImageDecodeTerminal) {
         self.terminals.insert(load, terminal);
+    }
+
+    /// Publish one band of a decode that is still running.
+    ///
+    /// A band replaces the load's previous band and is in turn replaced by the
+    /// terminal state, so a reader that never looks at bands costs one shared
+    /// buffer per in-flight load and nothing else.
+    pub fn publish_band(&mut self, load: ImageLoadToken, rows: RowRange) {
+        self.publish(load, ImageDecodeTerminal::Band(rows));
     }
 
     pub fn remove(&mut self, load: ImageLoadToken) {
@@ -98,8 +136,16 @@ impl ImageRenderState {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    /// The terminal state of `load`, if it has one.
+    ///
+    /// A load whose decode is still running has bands published but no terminal
+    /// state, and reports `None` here — a band is not an answer to "how did
+    /// this load end".
     pub fn terminal(&self, load: ImageLoadToken) -> Option<ImageDecodeTerminal> {
-        self.lock_terminals().get(&load).cloned()
+        self.lock_terminals()
+            .get(&load)
+            .cloned()
+            .and_then(ImageDecodeTerminal::terminal)
     }
 
     pub fn begin_terminal_publication(&self) -> ImageTerminalPublication<'_> {
@@ -111,16 +157,43 @@ impl ImageRenderState {
 
     pub fn try_terminal(&self, load: ImageLoadToken) -> ImageTerminalProbe {
         match self.terminals.try_lock() {
-            Ok(terminals) => ImageTerminalProbe::Available(terminals.get(&load).cloned()),
+            Ok(terminals) => ImageTerminalProbe::Available(
+                terminals
+                    .get(&load)
+                    .cloned()
+                    .and_then(ImageDecodeTerminal::terminal),
+            ),
             Err(std::sync::TryLockError::WouldBlock) => ImageTerminalProbe::Busy,
-            Err(std::sync::TryLockError::Poisoned(poisoned)) => {
-                ImageTerminalProbe::Available(poisoned.into_inner().get(&load).cloned())
-            }
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => ImageTerminalProbe::Available(
+                poisoned
+                    .into_inner()
+                    .get(&load)
+                    .cloned()
+                    .and_then(ImageDecodeTerminal::terminal),
+            ),
         }
     }
 
     pub fn publish_terminal(&self, load: ImageLoadToken, terminal: ImageDecodeTerminal) {
         self.begin_terminal_publication().publish(load, terminal);
+    }
+
+    /// Publish one band of a load whose decode is still running.
+    pub fn publish_band(&self, load: ImageLoadToken, rows: RowRange) {
+        self.begin_terminal_publication().publish_band(load, rows);
+    }
+
+    /// The newest band published for `load`, if one is.
+    ///
+    /// Only the newest: a band supersedes the one before it, so what is
+    /// observable is how far the decode has come, not its history. The
+    /// terminal state supersedes the bands in turn, so a load that has ended
+    /// reports `None` here even though it published bands on the way.
+    pub fn band(&self, load: ImageLoadToken) -> Option<RowRange> {
+        match self.lock_terminals().get(&load) {
+            Some(ImageDecodeTerminal::Band(rows)) => Some(*rows),
+            Some(ImageDecodeTerminal::Ready(_) | ImageDecodeTerminal::Failed(_)) | None => None,
+        }
     }
 
     pub fn remove_terminal(&self, load: ImageLoadToken) {
@@ -139,7 +212,13 @@ impl ImageRenderState {
         let deadline = std::time::Instant::now() + timeout;
         let mut terminals = self.lock_terminals();
         loop {
-            if let Some(terminal) = terminals.get(&load).cloned() {
+            // Bands are skipped, not returned: this waits for the load to end,
+            // and a decode that is emitting bands has not ended.
+            if let Some(terminal) = terminals
+                .get(&load)
+                .cloned()
+                .and_then(ImageDecodeTerminal::terminal)
+            {
                 return Some(terminal);
             }
             let remaining = deadline.checked_duration_since(std::time::Instant::now())?;
@@ -147,7 +226,10 @@ impl ImageRenderState {
                 Ok((guard, result)) => {
                     terminals = guard;
                     if result.timed_out() {
-                        return terminals.get(&load).cloned();
+                        return terminals
+                            .get(&load)
+                            .cloned()
+                            .and_then(ImageDecodeTerminal::terminal);
                     }
                 }
                 Err(poisoned) => {
@@ -841,6 +923,20 @@ pub(super) struct RenderApp {
     /// per-render rebuild entirely.
     pub(super) faces_signature: Vec<(u64, u64)>,
     pub(super) modifiers: u32,
+    /// The compiled NS modifier policy (issue #442).
+    ///
+    /// Defaults to GNU's `syms_of_nsterm` values so a session where Lisp has
+    /// not pushed a policy yet cooks identically to the pre-policy
+    /// hardcode: Option -> meta, Command -> super (Cocoa defaults,
+    /// `src/nsterm.m:11576-11643`).
+    pub(super) modifier_policy: neomacs_display_protocol::ModifierPolicy,
+    /// winit's aggregate answer to "which modifiers are down", kept so a
+    /// key event can be re-cooked with its own GNU kind at send time.
+    pub(super) modifier_state: winit::keyboard::ModifiersState,
+    /// Per-side down/up tracking for the command/option/control families,
+    /// which winit's aggregate `ModifiersState` cannot express; updated
+    /// from the physical modifier keys' own key events.
+    pub(super) modifier_sides: super::modifier_sides::ModifierSides,
     pub(super) pending_file_drops: std::collections::HashSet<winit::event_loop::AsyncRequestSerial>,
 
     pub(super) image_metadata: SharedImageRenderState,
@@ -869,8 +965,8 @@ pub(super) struct RenderApp {
     pub(super) frame_windows: GuiFrameWindowManager,
     /// Latest child snapshots whose immediate ancestry has not been presented
     /// yet. They are retried transactionally when an ancestor arrives.
-    pub(super) pending_child_frames:
-        HashMap<u64, neomacs_display_protocol::SealedFramePresentation>,
+    pub(super) pending_child_frames: HashMap<u64, super::frame_preparation::PreparedFrame>,
+    pub(super) frame_preparation: Option<super::frame_preparation::FramePreparation>,
 
     pub(super) child_frame_style: ChildFrameStyle,
     pub(super) toolbar: ToolbarResources,
@@ -970,6 +1066,8 @@ impl RenderApp {
             .apply_top_level_transition_policy(self.transition_policy);
         self.frame_windows
             .apply_top_level_pane_motion(next_policy.pane_motion());
+        self.frame_windows
+            .apply_top_level_child_frame_motion(next_policy.child_frame_motion());
         self.effects = effective.effects.clone();
         if let Some(renderer) = self.renderer.as_mut() {
             renderer.effects = self.effects.clone();
@@ -1048,6 +1146,9 @@ impl RenderApp {
             faces: rustc_hash::FxHashMap::default(),
             faces_signature: Vec::new(),
             modifiers: 0,
+            modifier_policy: neomacs_display_protocol::ModifierPolicy::gnu_ns_default(),
+            modifier_state: winit::keyboard::ModifiersState::empty(),
+            modifier_sides: super::modifier_sides::ModifierSides::default(),
             pending_file_drops: Default::default(),
             image_metadata,
             cursor_defaults: CursorState::new(
@@ -1070,6 +1171,7 @@ impl RenderApp {
             shared_terminals,
             frame_windows,
             pending_child_frames: HashMap::new(),
+            frame_preparation: None,
             child_frame_style: ChildFrameStyle::default(),
             toolbar: ToolbarResources::default(),
             scroll_indicators_enabled: false,

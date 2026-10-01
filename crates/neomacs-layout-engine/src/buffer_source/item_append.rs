@@ -502,7 +502,7 @@ impl<'source, 'surface, B: LayoutBufferView + ?Sized>
         P: crate::display_row::render_policy::DisplayRowRenderPolicy,
     >(
         &self,
-        geometry: &DisplayRowGeometryState,
+        geometry: &mut DisplayRowGeometryState,
         state: &mut TextRowSourceRenderState<'_>,
         source: &mut S,
         source_state: &mut crate::display_row::source_state::DisplayRowSourceState,
@@ -529,6 +529,10 @@ impl<'source, 'surface, B: LayoutBufferView + ?Sized>
                 render_policy,
                 face_id,
             )?;
+        // Row fitting and glyph emission already measured the vertical box.
+        // Preserve it in the walk's row authority before discarding the render
+        // outcome; a later, shorter newline face must not shrink this row.
+        outcome.include_vertical_metrics(geometry);
         Some(outcome.into_append_progress(position))
     }
 

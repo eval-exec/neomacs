@@ -2,6 +2,7 @@ use crate::display_face_ref::render_face_ref_id;
 use crate::display_item::{DisplayItemKind, RenderFaceRef};
 use crate::display_origin::DisplayOrigin;
 use crate::display_pixel_calc::PixelCalcContext;
+use crate::display_row::append_context::DisplayRowLineWrap;
 use crate::display_row::builder::{
     DisplayRowAppendStartPolicy, DisplayRowAppendStatus, DisplayRowItemMeasurement,
     DisplayRowLayout, DisplayRowPosition, DisplayRowProgressWriter, DisplayTabPolicy,
@@ -81,14 +82,20 @@ pub(crate) struct DisplayRowSourceFragmentFrame<'face> {
 }
 
 impl<'face> DisplayRowSourceFragmentFrame<'face> {
+    /// `line_wrap` is the frame's GNU `it->line_wrap`; see
+    /// [`DisplayRowLineWrap`].  Chrome rows built here are
+    /// [`DisplayRowLineWrap::chrome_row`].
     pub(crate) fn new(
         geometry: DisplayRowGeometry,
         role: GlyphRowRole,
         base_face_id: FaceId,
         base_face: &'face ResolvedFace,
+        line_wrap: DisplayRowLineWrap,
     ) -> Self {
         Self {
-            policy: DisplayRowSourceRequestPolicy::from_display_row_geometry(geometry, role),
+            policy: DisplayRowSourceRequestPolicy::from_display_row_geometry(
+                geometry, role, line_wrap,
+            ),
             base_face_id,
             base_face,
         }
@@ -114,6 +121,9 @@ impl<'face> DisplayRowSourceFragmentFrame<'face> {
         self.render_request(render_bounds).with_glyph_area(area)
     }
 
+    /// A fragment bounded to `matrix_cols` columns of a chrome row: it has no
+    /// continuation row, so its GNU `it->line_wrap` is TRUNCATE
+    /// ([`DisplayRowLineWrap::chrome_row`]).
     pub(crate) fn from_glyph_row_columns(
         row: &GlyphRow,
         matrix_cols: usize,
@@ -136,9 +146,11 @@ impl<'face> DisplayRowSourceFragmentFrame<'face> {
             role,
             base_face_id,
             base_face,
+            DisplayRowLineWrap::chrome_row(),
         )
     }
 
+    /// See [`Self::from_glyph_row_columns`].
     pub(crate) fn from_row_geometry_columns(
         row_geometry: &DisplayRowGeometryState,
         columns: usize,
@@ -160,6 +172,7 @@ impl<'face> DisplayRowSourceFragmentFrame<'face> {
             role,
             base_face_id,
             base_face,
+            DisplayRowLineWrap::chrome_row(),
         )
     }
 
@@ -267,10 +280,17 @@ impl<'a> DisplayRowLispStringSourceRequest<'a> {
             .origin
             .glyph_row_role()
             .expect("display row source origin must map to a glyph row role");
-        let row_request =
-            DisplayRowSourceRequestPolicy::from_display_row_geometry(self.geometry, role)
-                .with_symbol_values(self.symbol_values)
-                .source_request_from_base_face(face_ids, self.base_face);
+        // A Lisp-string row is a mode, header or tab line, or the echo area:
+        // always a chrome row, never the buffer body's own wrapping row
+        // (`display_mode_line` initializes its iterator with its own base face
+        // id, src/xdisp.c:28145).
+        let row_request = DisplayRowSourceRequestPolicy::from_display_row_geometry(
+            self.geometry,
+            role,
+            DisplayRowLineWrap::chrome_row(),
+        )
+        .with_symbol_values(self.symbol_values)
+        .source_request_from_base_face(face_ids, self.base_face);
         DisplayRowLispStringSourceRenderRequest::from_value(
             row_request,
             self.value,
@@ -418,6 +438,7 @@ struct DisplayRowSourceRequestPolicy {
     role: GlyphRowRole,
     symbol_values: std::collections::HashMap<String, Value>,
     image_scale_environment: ImageScaleEnvironment,
+    line_wrap: DisplayRowLineWrap,
 }
 
 impl DisplayRowSourceRequestPolicy {
@@ -436,15 +457,21 @@ impl DisplayRowSourceRequestPolicy {
             role,
             symbol_values: std::collections::HashMap::new(),
             image_scale_environment: ImageScaleEnvironment::default(),
+            line_wrap: DisplayRowLineWrap::chrome_row(),
         }
     }
 
-    fn from_display_row_geometry(geometry: DisplayRowGeometry, role: GlyphRowRole) -> Self {
+    fn from_display_row_geometry(
+        geometry: DisplayRowGeometry,
+        role: GlyphRowRole,
+        line_wrap: DisplayRowLineWrap,
+    ) -> Self {
         Self {
             geometry,
             role,
             symbol_values: std::collections::HashMap::new(),
             image_scale_environment: ImageScaleEnvironment::default(),
+            line_wrap,
         }
     }
 
@@ -485,6 +512,7 @@ impl DisplayRowSourceRequestPolicy {
             self.role,
             self.symbol_values,
             image_scale_environment,
+            self.line_wrap,
         )
     }
 
@@ -494,8 +522,14 @@ impl DisplayRowSourceRequestPolicy {
         base_face: &'face ResolvedFace,
     ) -> DisplayRowSourceRenderRequest<'face> {
         debug_assert!(self.symbol_values.is_empty());
-        DisplayRowSourceRenderRequest::whole_row(self.geometry, base_face_id, base_face, self.role)
-            .with_image_scale_environment(self.image_scale_environment)
+        DisplayRowSourceRenderRequest::whole_row(
+            self.geometry,
+            base_face_id,
+            base_face,
+            self.role,
+            self.line_wrap,
+        )
+        .with_image_scale_environment(self.image_scale_environment)
     }
 }
 
@@ -511,6 +545,7 @@ struct DisplayRowRenderPlan<'a> {
     chrome_text_area_left_px: f32,
     symbol_values: std::collections::HashMap<String, Value>,
     image_scale_environment: ImageScaleEnvironment,
+    line_wrap: DisplayRowLineWrap,
 }
 
 pub(crate) struct DisplayRowSourceRenderRequest<'a> {
@@ -525,6 +560,10 @@ pub(crate) struct DisplayRowSourceRenderRequest<'a> {
     chrome_text_area_left_px: f32,
     symbol_values: std::collections::HashMap<String, Value>,
     image_scale_environment: ImageScaleEnvironment,
+    /// See [`DisplayRowLineWrap`]: the wrapping method of the row this request
+    /// renders into, resolved once from `WindowParams` and carried to the
+    /// glyph writer so it can decide GNU's image-crop rule with it.
+    line_wrap: DisplayRowLineWrap,
 }
 
 impl<'a> DisplayRowSourceRenderRequest<'a> {
@@ -533,6 +572,7 @@ impl<'a> DisplayRowSourceRenderRequest<'a> {
         base_face_id: FaceId,
         base_face: &'a ResolvedFace,
         role: GlyphRowRole,
+        line_wrap: DisplayRowLineWrap,
     ) -> Self {
         let render_bounds = DisplayRowRenderBounds::whole_row(geometry.width());
         Self {
@@ -547,9 +587,11 @@ impl<'a> DisplayRowSourceRenderRequest<'a> {
             chrome_text_area_left_px: 0.0,
             symbol_values: std::collections::HashMap::new(),
             image_scale_environment: ImageScaleEnvironment::default(),
+            line_wrap,
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn from_base_face(
         geometry: DisplayRowGeometry,
         face_ids: &mut FrameFaceAttempt,
@@ -557,6 +599,7 @@ impl<'a> DisplayRowSourceRenderRequest<'a> {
         role: GlyphRowRole,
         symbol_values: std::collections::HashMap<String, Value>,
         image_scale_environment: ImageScaleEnvironment,
+        line_wrap: DisplayRowLineWrap,
     ) -> Self {
         let base_face_id = if base_face.face_id != 0 {
             base_face.display_face_id()
@@ -576,6 +619,7 @@ impl<'a> DisplayRowSourceRenderRequest<'a> {
             chrome_text_area_left_px: 0.0,
             symbol_values,
             image_scale_environment,
+            line_wrap,
         }
     }
 
@@ -584,8 +628,9 @@ impl<'a> DisplayRowSourceRenderRequest<'a> {
         base_face_id: FaceId,
         base_face: &'a ResolvedFace,
         role: GlyphRowRole,
+        line_wrap: DisplayRowLineWrap,
     ) -> Self {
-        DisplayRowSourceRequestPolicy::from_display_row_geometry(geometry, role)
+        DisplayRowSourceRequestPolicy::from_display_row_geometry(geometry, role, line_wrap)
             .source_request_for_base_face_id(base_face_id, base_face)
     }
 
@@ -597,9 +642,13 @@ impl<'a> DisplayRowSourceRenderRequest<'a> {
         role: GlyphRowRole,
         symbol_values: std::collections::HashMap<String, Value>,
     ) -> Self {
-        DisplayRowSourceRequestPolicy::from_display_row_geometry(geometry, role)
-            .with_symbol_values(symbol_values)
-            .source_request_from_base_face(face_ids, base_face)
+        DisplayRowSourceRequestPolicy::from_display_row_geometry(
+            geometry,
+            role,
+            DisplayRowLineWrap::chrome_row(),
+        )
+        .with_symbol_values(symbol_values)
+        .source_request_from_base_face(face_ids, base_face)
     }
 
     #[cfg(test)]
@@ -835,6 +884,7 @@ impl<'a> DisplayRowSourceRenderRequest<'a> {
             chrome_text_area_left_px: self.chrome_text_area_left_px,
             symbol_values: self.symbol_values,
             image_scale_environment: self.image_scale_environment,
+            line_wrap: self.line_wrap,
         }
     }
 }
@@ -1044,6 +1094,7 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
             chrome_text_area_left_px,
             symbol_values,
             image_scale_environment,
+            line_wrap,
         } = plan;
         context.face_ids().reserve_after(base_face_id);
         let mut face_realizer = DisplayRowFaceRealizer::new(&mut *self.font_metrics);
@@ -1057,8 +1108,6 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
         let char_width = face_realizer
             .char_width(&row_face, geometry.char_width())
             .max(1.0);
-        let mut row_faces = vec![row_face.clone()];
-
         // Build the chrome row's pixel-calc context from its own geometry so
         // `(space :width/:align-to …)` forms resolve through the single
         // GNU-faithful evaluator (`calc_pixel_width_or_height`), the same
@@ -1113,7 +1162,15 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
             RenderFaceRef::FaceId(row_face.face_id),
             pixel_calc,
             space_image_params,
+            line_wrap,
         );
+        // Setup above needs the complete default face. The item walk only
+        // needs its identity and background; move the owned face into the
+        // row's realization list instead of cloning its font metadata for
+        // every render or scalar-width probe.
+        let default_row_face_id = row_face.face_id;
+        let default_row_background = row_face.background;
+        let mut row_faces = vec![row_face];
         let mut position = render_bounds.start();
         let mut source_slots = Vec::new();
         let fallback_metrics = DisplayRowFallbackMetrics::from_default_face_extents(
@@ -1122,16 +1179,17 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
             geometry.ascent(),
         );
         let mut row_break_face = None;
+        let mut resolved = crate::display_source_resolver::ResolvedDisplaySourceItem::empty();
         let stop = loop {
             let params = context.source_resolve_params(
-                row_face.face_id,
+                default_row_face_id,
                 base_face,
                 fallback_metrics,
                 image_scale_environment,
             );
-            let resolved = state.next_resolved_item(source, params, context.face_ids());
-            let (item, pending_faces) = resolved.into_parts();
-            for pending in pending_faces {
+            state.next_resolved_item_into(source, params, context.face_ids(), &mut resolved);
+            let item = resolved.take_item();
+            for pending in resolved.drain_pending_faces() {
                 let (face_id, resolved) = pending.into_parts();
                 let row_face = face_realizer.realize_face(
                     face_id,
@@ -1150,19 +1208,19 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
             let Some(item) = item else {
                 break DisplayRowRenderStop::SourceExhausted;
             };
-            let item_face_id = render_face_ref_id(item.face, row_face.face_id);
+            let item_face_id = render_face_ref_id(item.face, default_row_face_id);
             let item_resolved_face = state.resolved_face(item_face_id).unwrap_or(base_face);
             if policy.stop_before_item(&item, item_face_id, item_resolved_face) {
                 break DisplayRowRenderStop::SourceExhausted;
             }
             if let RenderFaceRef::FaceId(face_id) = item.face
-                && face_id != row_face.face_id
+                && face_id != default_row_face_id
                 && !row_faces.iter().any(|face| face.face_id == face_id)
-                && let Some(resolved) = state.resolved_face(face_id).cloned()
+                && let Some(resolved) = state.resolved_face(face_id)
             {
                 let realized = face_realizer.realize_face(
                     face_id,
-                    &resolved,
+                    resolved,
                     char_width,
                     geometry.ascent(),
                     geometry.height(),
@@ -1264,7 +1322,7 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
                 row_break_face_id,
                 line_end_right_edge_x - position.x_px(),
                 fallback_metrics,
-                row_face.background,
+                default_row_background,
                 self.measurement_mode,
                 box_edges,
                 box_membership,
@@ -1277,15 +1335,13 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
             row_layout.height_px
         };
         let progress = display_row_progress(position, geometry.y(), progress_height);
-        let faces = row_faces
-            .into_iter()
-            .map(|face| {
-                context
-                    .face_ids()
-                    .prepare_face(face.render_face())
-                    .expect("row rendering must preserve its realized face identity")
-            })
-            .collect();
+        let mut faces = Vec::with_capacity(row_faces.len());
+        for face in &row_faces {
+            context
+                .face_ids()
+                .prepare_face_into_output(face.render_face(), &mut faces)
+                .expect("row rendering must preserve its realized face identity");
+        }
         Some(DisplayRowRenderIntoRowResult::new(
             progress,
             source_slots,
@@ -1326,3 +1382,4 @@ pub(crate) mod trailing_whitespace;
 pub(crate) mod transition;
 pub(crate) mod walk_state;
 pub(crate) mod width;
+pub(crate) mod word_wrap;

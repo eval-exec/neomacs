@@ -6,6 +6,7 @@
 
 mod measurement;
 pub(crate) mod paging;
+pub(crate) mod pixels;
 mod policy;
 pub(crate) use policy::ScrollGoal;
 
@@ -210,13 +211,13 @@ fn snapshot_row_index_for_pos_or_truncated_line(
         return Some(index);
     }
     rows.iter().enumerate().rev().find_map(|(index, row)| {
-        // The origin stays on this row while it precedes the row below it:
-        // the next row starts where this row's line ends.  The last row has
-        // no row below and owns the end of the buffer itself, which is also
-        // the extent the accessible-boundary branch below assumes of it.
+        // A next row bounds an omitted (e.g. truncated) source tail. Without
+        // one, only an explicitly measured truncation boundary grants ownership.
         let inside_line = match rows.get(index + 1).and_then(|next| next.start_buffer_pos) {
             Some(next_start) => pos < next_start,
-            None => pos <= end_lisp,
+            None => row
+                .truncated_end_buffer_pos
+                .is_some_and(|end| pos <= end.min(end_lisp)),
         };
         (row.start_buffer_pos.is_some_and(|start| start <= pos) && inside_line).then_some(index)
     })

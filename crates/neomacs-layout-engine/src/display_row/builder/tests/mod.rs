@@ -44,6 +44,7 @@ fn layout() -> DisplayRowLayout {
             std::collections::HashMap::new(),
         ),
         space_image_params: None,
+        line_wrap: crate::display_row::append_context::DisplayRowLineWrap::chrome_row(),
     }
 }
 
@@ -391,7 +392,13 @@ fn display_row_progress_writer_clips_glyphless_before_row_mutation() {
 }
 
 #[test]
-fn display_row_progress_writer_clips_stretch_before_row_mutation() {
+fn display_row_progress_writer_keeps_a_right_edge_crossing_stretch_at_full_advance() {
+    // GNU `append_stretch_glyph` (xdisp.c) appends the stretch glyph at its
+    // FULL resolved width -- the painting crops it at the window -- and
+    // `display_line` advances `it->current_x` by that full width, so the row
+    // is over-full and the text after the stretch is not drawn (issue #446:
+    // rejecting the stretch whole left the pen unmoved and painted the text
+    // that follows it).
     let mut row = neomacs_display_protocol::glyph_matrix::GlyphRow::new(GlyphRowRole::Text);
     let row_layout = layout();
     let mut writer = DisplayRowProgressWriter::new(
@@ -404,10 +411,14 @@ fn display_row_progress_writer_clips_stretch_before_row_mutation() {
     let progress = writer.push_item(stretch_item(DisplayLength::Pixels(24.0)));
 
     assert_eq!(progress.status(), DisplayRowAppendStatus::Clipped);
-    assert_eq!(progress.end(), DisplayRowPosition::new(64.0, 8));
-    assert!(progress.slots().is_empty());
-    assert!(row.glyphs[GlyphArea::Text.index()].is_empty());
-    assert!(!row.displays_text);
+    assert_eq!(progress.end(), DisplayRowPosition::new(88.0, 11));
+    assert_eq!(row.glyphs[GlyphArea::Text.index()].len(), 1);
+    assert_eq!(
+        row.glyphs[GlyphArea::Text.index()][0].pixel_width,
+        24.0,
+        "the stretch glyph is kept whole; the display crops it at the window"
+    );
+    assert!(row.displays_text);
 }
 
 #[test]
@@ -2092,4 +2103,210 @@ fn replacement_string_session_stamps_gnu_string_indices() {
         .expect("replacement source metadata");
     assert_eq!(source.string(), expected_string);
     assert_eq!(source.covered_buffer_range(), Some(covered_range));
+}
+
+#[test]
+fn resolved_text_produces_clipped_glyphs_on_a_thread_without_an_evaluator() {
+    let input =
+        crate::row_layout::ResolvedTextInput::capture(independent_text_item("abλ"), FaceId::new(1))
+            .expect("resolved text");
+    let (row, status, end, slots) = std::thread::spawn(move || {
+        let row_layout = layout();
+        let mut row = new_display_row(&row_layout);
+        let progress = DisplayRowProgressWriter::new(
+            &row_layout,
+            &mut row,
+            DisplayRowPosition::new(0.0, 0),
+            16.0,
+        )
+        .push_resolved_text(input);
+        (
+            row,
+            progress.status(),
+            progress.end(),
+            progress.slots().len(),
+        )
+    })
+    .join()
+    .expect("owned text production must not require evaluator TLS");
+    assert_eq!(row_text(&row), "ab");
+    assert_eq!(status, DisplayRowAppendStatus::Clipped);
+    assert_eq!(end, DisplayRowPosition::new(16.0, 2));
+    assert_eq!(slots, 2);
+    assert!(
+        row.glyphs[GlyphArea::Text.index()]
+            .iter()
+            .all(|glyph| glyph.face_id == FaceId::new(2))
+    );
+}
+
+#[test]
+fn resolved_text_concrete_font_output_matches_on_an_evaluator_free_worker() {
+    use crate::display_row::face_state::{
+        DisplayRowFace, DisplayRowGlyphMeasurer, DisplayRowMeasurementMode,
+    };
+    use crate::font::metrics::FontMetricsService;
+    use crate::glyph_advance::GlyphAdvanceQuantization;
+    use crate::neovm_bridge::ResolvedFace;
+
+    fn produce(input: crate::row_layout::ResolvedTextInput) -> (GlyphRow, DisplayRowPosition) {
+        // Each thread owns its font service. No live evaluator/font cache is
+        // transferred, and the row writer sees only the captured text input.
+        let mut fonts = FontMetricsService::new();
+        let faces = [DisplayRowFace::from_resolved(
+            FaceId::new(2),
+            &ResolvedFace::default(),
+        )];
+        let mut measurer = DisplayRowGlyphMeasurer::with_mode(
+            &faces,
+            Some(&mut fonts),
+            8.0,
+            GlyphAdvanceQuantization::PreserveLogicalPixels,
+            DisplayRowMeasurementMode::ConcreteFont,
+        );
+        let row_layout = layout();
+        let mut row = new_display_row(&row_layout);
+        let progress = DisplayRowProgressWriter::with_glyph_measurer(
+            &row_layout,
+            &mut row,
+            &mut measurer,
+            DisplayRowPosition::new(0.0, 0),
+            400.0,
+        )
+        .push_resolved_text(input);
+        assert_eq!(progress.status(), DisplayRowAppendStatus::Complete);
+        (row, progress.end())
+    }
+
+    let input =
+        crate::row_layout::ResolvedTextInput::capture(text_item("office λ سلام"), FaceId::new(1))
+            .expect("resolved text");
+    let expected = produce(input.clone());
+    let actual = std::thread::spawn(move || produce(input))
+        .join()
+        .expect("concrete font production must not require evaluator TLS");
+    assert!(expected.1.x_px() > 0.0);
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn owned_mapped_text_preserves_string_coordinates_and_clipping_on_a_worker() {
+    use crate::row_layout::ResolvedMappedTextInput;
+    fn require_send_sync<T: Send + Sync + 'static>() {}
+    require_send_sync::<ResolvedMappedTextInput>();
+    let _eval = Context::new();
+    let covered = crate::display_item::BufferDisplayReplacementSource::spanning(
+        neovm_core::buffer::BufferId(1),
+        neovm_core::buffer::CharPos0::new(2),
+        neovm_core::buffer::EmacsBytePos::new(3),
+        neovm_core::buffer::CharPos0::new(4),
+        neovm_core::buffer::EmacsBytePos::new(5),
+    );
+    let mut source = crate::display_source::BufferDisplayReplacementStringRequest::new(
+        7,
+        Value::string("STR"),
+        covered,
+    )
+    .into_source(FaceId::new(2))
+    .unwrap();
+    let item = source
+        .next_item(&mut DisplaySourceContext::empty())
+        .unwrap();
+    for width in [16.0, 80.0] {
+        let row_layout = layout();
+        let mut expected_row = new_display_row(&row_layout);
+        let expected_progress = DisplayRowProgressWriter::new(
+            &row_layout,
+            &mut expected_row,
+            DisplayRowPosition::new(0.0, 0),
+            width,
+        )
+        .push_item(item.clone());
+        let input = ResolvedMappedTextInput::capture(item.clone(), FaceId::new(1)).unwrap();
+        let actual = std::thread::spawn(move || {
+            let row_layout = layout();
+            let mut row = new_display_row(&row_layout);
+            let progress = DisplayRowProgressWriter::new(
+                &row_layout,
+                &mut row,
+                DisplayRowPosition::new(0.0, 0),
+                width,
+            )
+            .push_resolved_mapped_text(input);
+            (row, progress)
+        })
+        .join()
+        .unwrap();
+        assert_eq!(actual, (expected_row, expected_progress));
+        let glyphs = &actual.0.glyphs[GlyphArea::Text.index()];
+        assert_eq!(glyphs[0].legacy_charpos(), 0);
+        assert_eq!(glyphs[1].legacy_charpos(), 1);
+        assert_eq!(
+            actual.1.slots()[0].source(),
+            DisplaySourcePosition::buffer(
+                neovm_core::buffer::BufferId(1),
+                neovm_core::buffer::CharPos0::new(2),
+                neovm_core::buffer::EmacsBytePos::new(3),
+            )
+        );
+    }
+}
+
+#[test]
+fn owned_spacing_matches_canonical_metrics_and_clipping_on_a_worker() {
+    use crate::row_layout::ResolvedSpacingInput;
+    fn require_send_sync<T: Send + Sync + 'static>() {}
+    require_send_sync::<ResolvedSpacingInput>();
+    for width in [16.0, 80.0] {
+        for spacing in [
+            DisplayStretchWidth::Length(DisplayLength::Pixels(24.0)),
+            DisplayStretchWidth::Length(DisplayLength::Em(3.0)),
+            DisplayStretchWidth::RelativeToSource {
+                factor: 3.0,
+                source: EmacsChar::from_char('W'),
+            },
+        ] {
+            let item = DisplayItem::new(
+                SourceSpan::synthetic(1, 0, 1),
+                RenderFaceRef::FaceId(FaceId::new(4)),
+                DisplayItemKind::Stretch(DisplayStretch {
+                    width: spacing,
+                    height: Some(DisplayLength::Pixels(24.0)),
+                    ascent: Some(DisplayLength::Pixels(18.0)),
+                }),
+            );
+            let row_layout = layout();
+            let mut expected_row = new_display_row(&row_layout);
+            let expected_progress = DisplayRowProgressWriter::new(
+                &row_layout,
+                &mut expected_row,
+                DisplayRowPosition::new(0.0, 0),
+                width,
+            )
+            .push_item(item.clone());
+            let input = ResolvedSpacingInput::capture(item, FaceId::new(1)).unwrap();
+            let actual = std::thread::spawn(move || {
+                let row_layout = layout();
+                let mut row = new_display_row(&row_layout);
+                let progress = DisplayRowProgressWriter::new(
+                    &row_layout,
+                    &mut row,
+                    DisplayRowPosition::new(0.0, 0),
+                    width,
+                )
+                .push_item(input.into_display_item());
+                (row, progress)
+            })
+            .join()
+            .unwrap();
+            assert_eq!(actual, (expected_row, expected_progress));
+            if width > 24.0 {
+                let glyph = &actual.0.glyphs[GlyphArea::Text.index()][0];
+                assert_eq!(
+                    (glyph.pixel_width, glyph.pixel_height, glyph.pixel_ascent),
+                    (24.0, 24.0, 18.0)
+                );
+            }
+        }
+    }
 }

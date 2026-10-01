@@ -19,7 +19,7 @@ mod core;
 // the fallback looks like the least-run and therefore richest path.  On this
 // host there is no such path to test.  Compat elides each fallback at load
 // time when the host already provides the API, and Emacs 31 provides all of
-// them.  Measured with GNU Emacs 31.0.90 and Compat 31.0.0.2 loaded:
+// them.  Measured with GNU Emacs 31.1 and Compat 31.1.0.0 loaded:
 //
 //     (fboundp 'compat--assoc)         => nil
 //     (fboundp 'compat--string-search) => nil
@@ -27,10 +27,14 @@ mod core;
 //     (fboundp 'compat--take)          => nil
 //     (fboundp 'compat--sort)          => nil
 //     ;; every compat-- function bound after load, via mapatoms:
-//     ;;   1 in total, and it is `compat--maybe-require'
+//     ;;   none in total
 //     (compat-function assoc)  => assoc
 //     (compat-function take)   => take
 //     (compat-function value<) => value<
+//
+// The bump from Compat 31.0.0.2 took the last one with it: that release
+// still defined `compat--maybe-require', and 31.1.0.0 defines no compat--
+// function at all on this host.
 //
 // So `(compat-call assoc ...)' *is* `assoc'.  There is no second
 // implementation to compare the native one against, and no configuration

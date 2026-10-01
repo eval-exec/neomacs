@@ -897,18 +897,23 @@ fn pty_runner_allows_a_profile_wrapper_to_finalize_after_the_sentinel() {
 }
 
 #[test]
-fn gui_runner_keeps_logs_workspace_local_and_owns_its_viewport_size() {
+fn gui_frontend_launches_the_editor_directly_not_a_shell_adapter() {
+    // The display session moved into neomacs-infra
+    // (`WestonBenchSession`), so the harness must never route GUI runs
+    // through the retired bash adapter: perf wrapping and the attempt loop
+    // belong to the engine, and the editor is a direct child process.
     let runner = include_str!(concat!(
         env!("CARGO_WORKSPACE_DIR"),
-        "/tools/bench/gui-run.sh"
+        "/crates/neomacs-perf/src/harness.rs"
     ));
-    assert!(!runner.contains(">/tmp/"));
-    assert!(runner.contains("GUI_WESTON_LOG"));
-    assert!(runner.contains("GUI_APP_LOG"));
-    assert!(runner.contains("GUI_WIDTH"));
-    assert!(runner.contains("GUI_HEIGHT"));
-    assert!(runner.contains("--xwayland"));
-    assert!(runner.contains("DISPLAY=\"$XWAYLAND_DISPLAY\""));
+    assert!(!runner.contains("gui-run.sh"));
+    assert!(runner.contains("GUI_LAUNCH_ATTEMPTS"));
+    let infra = include_str!(concat!(
+        env!("CARGO_WORKSPACE_DIR"),
+        "/crates/neomacs-infra/src/display.rs"
+    ));
+    assert!(infra.contains("--xwayland"));
+    assert!(infra.contains("xserver listening on display "));
 }
 
 #[test]
@@ -1030,6 +1035,23 @@ fn harness_built_from_dirty_tracked_sources_cannot_be_acceptance_evidence() {
     assert!(error.contains("rebuild"));
 }
 
+#[test]
+fn benchmark_environment_preserves_vulkan_driver_discovery() {
+    use std::ffi::OsString;
+    let variables = [
+        ("VK_DRIVER_FILES", "/drivers/radeon.json"),
+        ("VK_ICD_FILENAMES", "/legacy/radeon.json"),
+        ("VK_ADD_DRIVER_FILES", "/extra/radeon.json"),
+    ];
+    let forwarded = crate::harness::passthrough_from(
+        variables.map(|(name, value)| (OsString::from(name), OsString::from(value))),
+    );
+    assert_eq!(
+        forwarded,
+        variables.map(|(name, value)| (name.to_owned(), OsString::from(value)))
+    );
+}
+
 /// The editor child gets the allowlisted host variables plus any operator-set
 /// JIT master switch, `NEOVM_JIT_*` diagnostic knob, explicit OSR trace or
 /// allowlisted collector knob (not the GC trace, not the logging filter).
@@ -1075,11 +1097,11 @@ fn benchmark_environment_forwards_the_allowlist_and_jit_knobs_only() {
             "NEOVM_JIT",
             "NEOVM_JIT_PROFILE",
             "NEOVM_JIT_THRESHOLD",
-            "NEOVM_TEXT_LINE_INDEX",
-            "NEOVM_TEXT_LINE_INDEX_STATS",
             "NEOVM_PPS_PROPERTIZE",
             "NEOVM_SYNTAX_PARSE_CACHE",
             "NEOVM_SYNTAX_PARSE_CACHE_STATS",
+            "NEOVM_TEXT_LINE_INDEX",
+            "NEOVM_TEXT_LINE_INDEX_STATS",
             "PATH"
         ]
     );
@@ -1306,5 +1328,183 @@ fn civil_date_helpers_round_trip_across_the_scenario_year() {
     ] {
         let (year, month, mday) = civil_from_days(days);
         assert_eq!(days_from_civil(year, month, mday), days);
+    }
+}
+
+#[test]
+fn steady_mx_tab_row_requires_its_warmup_and_reports_it() {
+    let workspace_tmp = crate::workspace_root().join("tmp");
+    fs::create_dir_all(&workspace_tmp).expect("create workspace-local test scratch root");
+    let workspace = tempfile::Builder::new()
+        .prefix("neomacs-perf-mx-steady-")
+        .tempdir_in(&workspace_tmp)
+        .expect("create workspace-local test directory");
+    let harness = PerfHarness::new(workspace.path());
+    let request = RunRequest::new(
+        ScenarioId::MxTabCompletionSteady,
+        workspace.path().join("fake-neomacs"),
+        NonZeroU32::new(50).expect("non-zero iterations"),
+    )
+    .with_frontend(Frontend::Tui {
+        rows: 40,
+        columns: 120,
+    });
+    let result_json = r##"{
+              "schema_version": 1,
+              "scenario": "mx-tab-completion-steady",
+              "status": "ok",
+              "iterations": 50,
+              "elapsed_us": 250000,
+              "completion_help_calls": 50,
+              "warmup_completion_help_calls": 5,
+              "completion_visible": true,
+              "completion_mode_correct": true,
+              "known_commands_present": true,
+              "completion_candidate_count": 1024,
+              "candidate_count_stable": true,
+              "completion_hidden_after_exit": true,
+              "minibuffer_depth_restored": true,
+              "selected_buffer_restored": true,
+              "error": null
+            }"##;
+
+    let report = harness
+        .record_fixture_result(&request, result_json)
+        .expect("record fixture result");
+    let RunVerdict::Valid { measurements } = report.artifact.verdict else {
+        panic!("steady row with a warm-up pass was rejected")
+    };
+    let warmup = measurements
+        .iter()
+        .find(|measurement| measurement.name == crate::MetricName::WarmupCompletionHelpCalls)
+        .expect("warm-up metric is reported");
+    assert_eq!(warmup.value, 5.0);
+    // The timed window contains only the timed calls: warm-up never leaks in.
+    let per_completion = measurements
+        .iter()
+        .find(|measurement| measurement.name == crate::MetricName::PerCompletionCpuTime)
+        .expect("per-completion metric");
+    assert_eq!(per_completion.value, 5000.0);
+
+    // A steady row whose warm-up never ran is just a slow cold row: reject.
+    let no_warmup = result_json.replace(
+        "\"warmup_completion_help_calls\": 5",
+        "\"warmup_completion_help_calls\": 0",
+    );
+    let workspace2 = tempfile::Builder::new()
+        .prefix("neomacs-perf-mx-steady-nowarm-")
+        .tempdir_in(&workspace_tmp)
+        .expect("create workspace-local test directory");
+    let report = PerfHarness::new(workspace2.path())
+        .record_fixture_result(&request, &no_warmup)
+        .expect("record fixture result");
+    match report.artifact.verdict {
+        RunVerdict::CorrectnessMismatch { mismatches } => assert!(
+            mismatches
+                .iter()
+                .any(|mismatch| mismatch.invariant == "warmup-completions-ran"),
+            "a warm-up-free steady row must be a typed mismatch"
+        ),
+        verdict => panic!("steady row without warm-up was accepted: {verdict:?}"),
+    }
+}
+
+#[test]
+fn scrolling_row_validates_phases_checksums_and_restoration() {
+    let workspace_tmp = crate::workspace_root().join("tmp");
+    fs::create_dir_all(&workspace_tmp).expect("create workspace-local test scratch root");
+    let workspace = tempfile::Builder::new()
+        .prefix("neomacs-perf-scrolling-ok-")
+        .tempdir_in(&workspace_tmp)
+        .expect("create workspace-local test directory");
+    let harness = PerfHarness::new(workspace.path());
+    let request = RunRequest::new(
+        ScenarioId::Scrolling,
+        workspace.path().join("fake-neomacs"),
+        NonZeroU32::new(10).expect("non-zero iterations"),
+    )
+    .with_frontend(Frontend::Tui {
+        rows: 40,
+        columns: 120,
+    });
+    let result_json = r##"{
+              "schema_version": 1,
+              "scenario": "scrolling",
+              "status": "ok",
+              "iterations": 10,
+              "elapsed_us": 4603000,
+              "elapsed_wall_us": 4690000,
+              "operation_count": 1449,
+              "cold_scroll_us": 173000,
+              "warm_scroll_us": 4430000,
+              "cold_scroll_commands": 69,
+              "warm_scroll_commands": 1380,
+              "initial_checksum": "abc123",
+              "final_checksum": "abc123",
+              "point_restored": true,
+              "window_start_restored": true,
+              "expected_major_mode": "fundamental-mode",
+              "actual_major_mode": "fundamental-mode",
+              "error": null
+            }"##;
+
+    let report = harness
+        .record_fixture_result(&request, result_json)
+        .expect("record fixture result");
+    let RunVerdict::Valid { measurements } = report.artifact.verdict else {
+        panic!("correct scrolling run was rejected")
+    };
+    for expected in [
+        crate::MetricName::ColdScrollPhaseCpuTime,
+        crate::MetricName::WarmScrollPhaseCpuTime,
+        crate::MetricName::ScrollCommandCount,
+    ] {
+        assert!(
+            measurements
+                .iter()
+                .any(|measurement| measurement.name == expected),
+            "scrolling must report {expected:?}"
+        );
+    }
+
+    // A changed buffer during scrolling is a correctness failure, not a
+    // fast sample: scrolling must never mutate what it displays.
+    let mutated = result_json.replace(
+        "\"final_checksum\": \"abc123\"",
+        "\"final_checksum\": \"different\"",
+    );
+    let workspace2 = tempfile::Builder::new()
+        .prefix("neomacs-perf-scrolling-bad-")
+        .tempdir_in(&workspace_tmp)
+        .expect("create workspace-local test directory");
+    let report = PerfHarness::new(workspace2.path())
+        .record_fixture_result(&request, &mutated)
+        .expect("record fixture result");
+    match report.artifact.verdict {
+        RunVerdict::CorrectnessMismatch { mismatches } => assert!(
+            mismatches
+                .iter()
+                .any(|mismatch| mismatch.invariant == "final-buffer-checksum")
+        ),
+        verdict => panic!("scrolling run that changed the buffer was accepted: {verdict:?}"),
+    }
+
+    // Phase counters that do not sum to the operation count mean the
+    // fixture mis-accounted its own work.
+    let miscounted = result_json.replace("\"operation_count\": 1449", "\"operation_count\": 100");
+    let workspace3 = tempfile::Builder::new()
+        .prefix("neomacs-perf-scrolling-mis-")
+        .tempdir_in(&workspace_tmp)
+        .expect("create workspace-local test directory");
+    let report = PerfHarness::new(workspace3.path())
+        .record_fixture_result(&request, &miscounted)
+        .expect("record fixture result");
+    match report.artifact.verdict {
+        RunVerdict::CorrectnessMismatch { mismatches } => assert!(
+            mismatches
+                .iter()
+                .any(|mismatch| mismatch.invariant == "operation-count")
+        ),
+        verdict => panic!("mis-accounted scroll commands were accepted: {verdict:?}"),
     }
 }

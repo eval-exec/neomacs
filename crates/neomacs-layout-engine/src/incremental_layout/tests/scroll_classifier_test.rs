@@ -4,9 +4,11 @@ use neovm_core::window::{WindowDisplaySnapshot, WindowId};
 
 fn synthetic_key(window_start: i64, point: i64) -> RetainedWindowKey {
     RetainedWindowKey {
+        fontset_generation: 1,
         prefixes: Default::default(),
         invisibility: Default::default(),
         char_table_revision: Default::default(),
+        symbol_property_revision: Default::default(),
         display_table: Default::default(),
         media_generation: 0,
         buffer_id: 1,
@@ -136,6 +138,45 @@ fn cursor_only_reuses_an_untouched_window_whose_point_sits_on_the_last_row() {
 }
 
 #[test]
+fn cursor_replay_declines_unmeasured_raised_and_lowered_cursor_rows() {
+    for offset in [-4.0, 4.0] {
+        let mut retained = synthetic_matrix(0, 5);
+        let current = retained.key.clone();
+        assert!(retained.cursor_only_replay(&current).is_ok());
+        let row = MatrixRow::make_mut(&mut retained.matrix.rows[0]);
+        let mut glyph = neomacs_display_protocol::glyph_matrix::Glyph::stretch(
+            1,
+            neomacs_display_protocol::types::FaceId::new(1),
+        );
+        glyph.vertical_offset_px = offset;
+        row.glyphs[neomacs_display_protocol::glyph_matrix::GlyphArea::Text.index()].push(glyph);
+        assert_eq!(
+            retained.cursor_only_replay(&current).err(),
+            Some(CursorOnlyDecline::CursorRowNotReDecoratable),
+        );
+    }
+}
+
+#[test]
+fn forced_start_reuse_still_rejects_a_point_move_into_a_clipped_bottom_row() {
+    let mut retained = synthetic_matrix(0, 5);
+    let mut current = retained.key.clone();
+    current.point = 46;
+    assert!(
+        retained
+            .cursor_only_replay_with_forced_start(&current, true)
+            .is_ok()
+    );
+    MatrixRow::make_mut(&mut retained.matrix.rows[4]).pixel_y = 590.0;
+    assert_eq!(
+        retained
+            .cursor_only_replay_with_forced_start(&current, true)
+            .err(),
+        Some(CursorOnlyDecline::PointMoveMayScrollDown)
+    );
+}
+
+#[test]
 fn scroll_replay_detects_whole_row_scroll_down() {
     let m = synthetic_matrix(0, 5); // rows start at 0,10,20,30,40
     let curr = synthetic_key(20, 25); // scrolled to row 2, point followed
@@ -187,10 +228,15 @@ fn scroll_replay_bails_on_partial_row_scroll() {
 }
 
 #[test]
-fn scroll_replay_bails_on_scroll_up() {
+fn scroll_replay_prepares_backward_synchronization() {
     let m = synthetic_matrix(20, 5); // rows start at 20,30,40,50,60
     let curr = synthetic_key(0, 5); // above the retained top
-    assert!(m.scroll_replay(&curr).is_none());
+    let replay = m.scroll_replay(&curr).expect("backward plan");
+    assert!(replay.sync.is_some());
+    assert!(
+        replay.reused_rows.is_empty(),
+        "the walk must prove synchronization first"
+    );
 }
 
 #[test]
@@ -657,4 +703,36 @@ fn edit_replay_delete_reuses_below_rows_with_negative_shift() {
         expected.last_row_end_charpos, 28,
         "old row-2 end 29 + delta -1"
     );
+}
+
+#[test]
+fn fontset_revision_invalidates_every_retained_row_fast_path() {
+    let before = synthetic_key(0, 0);
+    let mut after = before.clone();
+    after.fontset_generation += 1;
+    assert_eq!(before.differing_fields(&after), vec!["fontset_generation"]);
+    assert!(!RetainedWindowKey::cursor_only_eligible(&before, &after));
+    assert!(!RetainedWindowKey::row_content_eligible(&before, &after));
+    after.window_start += 10;
+    assert!(!RetainedWindowKey::scroll_eligible(&before, &after));
+    after.window_start = before.window_start;
+    after.chars_modified_tick += 1;
+    assert!(!RetainedWindowKey::edit_eligible(&before, &after));
+}
+
+#[test]
+fn wrapped_projection_requires_the_same_source_origin_and_a_complete_join() {
+    let mut retained = synthetic_matrix(0, 5);
+    MatrixRow::make_mut(&mut retained.matrix.rows[0]).continued = true;
+    let mut same_origin = retained.key.clone();
+    same_origin.vscroll = -4;
+    assert!(
+        retained
+            .prepared_projection_prefix(&same_origin, -4.0)
+            .is_some()
+    );
+    assert!(retained.scroll_replay(&same_origin).is_none());
+    let moved = synthetic_key(20, 25);
+    assert!(retained.prepared_projection_prefix(&moved, -4.0).is_none());
+    assert!(retained.scroll_replay(&moved).is_none());
 }

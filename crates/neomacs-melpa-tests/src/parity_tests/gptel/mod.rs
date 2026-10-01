@@ -245,7 +245,7 @@ const PRELUDE: &str = r####"
 fn oracle() -> CachedMelpaOracle {
     CachedMelpaOracle::new(GPTEL_MELPA_PIN, "gptel.el")
         .expect("prepare exact shallow gptel source below ./tmp")
-        .with_melpa_dependency(COMPAT_GNU_ELPA_PIN)
+        .with_gnu_elpa_dependency(COMPAT_GNU_ELPA_PIN)
         .expect("prepare exact Compat dependency below ./tmp")
         .with_melpa_dependency(TRANSIENT_MELPA_PIN)
         .expect("prepare exact Transient dependency below ./tmp")

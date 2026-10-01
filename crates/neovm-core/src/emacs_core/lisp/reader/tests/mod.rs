@@ -80,6 +80,7 @@ fn install_mouse_help_echo_snapshot_with_value(eval: &mut Context, help: Value) 
             col: 0,
         }],
         rows: vec![crate::window::DisplayRowSnapshot {
+            truncated_end_buffer_pos: None,
             row: 0,
             y: 0,
             height: 16,

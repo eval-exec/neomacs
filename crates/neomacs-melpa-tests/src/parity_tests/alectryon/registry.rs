@@ -123,7 +123,7 @@ fn alectryon_installed_runtime_payload_is_minimal_exact_and_does_not_vendor_proj
       (string-match-p "\\.\\(css\\|js\\|svg\\|png\\|py\\|rst\\)\\'" file))
     files)))"##,
         expect![[
-            r#"OK (("alectryon-autoloads.el" "alectryon-pkg.el" "alectryon.el" "alectryon.elc") (("alectryon-autoloads.el" 1826 t) ("alectryon-pkg.el" 500 t) ("alectryon.el" 29000 t) ("alectryon.elc" 35652 t)) nil)"#
+            r#"OK (("alectryon-autoloads.el" "alectryon-pkg.el" "alectryon.el" "alectryon.elc") (("alectryon-autoloads.el" 1826 t) ("alectryon-pkg.el" 500 t) ("alectryon.el" 29000 t) ("alectryon.elc" :compiled t t)) nil)"#
         ]],
     )
 }

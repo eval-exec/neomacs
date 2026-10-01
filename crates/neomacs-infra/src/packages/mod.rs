@@ -22,6 +22,7 @@ pub mod install;
 pub mod seal;
 pub mod source_lock;
 #[cfg(test)]
+#[path = "tests/test_support.rs"]
 pub(crate) mod test_support;
 
 pub use activation::{LoadSuffixes, PackageActivation, package_activation_elisp};
@@ -248,7 +249,7 @@ fn hex_string(bytes: &[u8]) -> String {
 }
 
 fn install_cache_root() -> PathBuf {
-    crate::workspace_root().join("tmp/melpa/source-install-cache")
+    crate::melpa_cache_root().join("source-install-cache")
 }
 
 /// Provision a pinned package: cache hit returns the prepared directory;

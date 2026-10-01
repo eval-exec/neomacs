@@ -1,6 +1,7 @@
 //! Context — special forms, function application, and dispatch.
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::hash::Hash;
 use std::path::Path;
@@ -376,6 +377,10 @@ impl EchoAreaMessageText {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RedisplaySignature {
+    fontset_generation: u64,
+    compositor_scrolling_enabled: bool,
+    compositor_pixel_scroll: bool,
+    input_checkpoint: Vec<neomacs_display_protocol::input_progress::InputCheckpoint>,
     selected_frame: Option<u64>,
     selected_window: Option<u64>,
     current_buffer: Option<u64>,
@@ -384,6 +389,7 @@ struct RedisplaySignature {
     minibuffer_selected_window: Option<u64>,
     face_change_count: u64,
     obarray_function_epoch: u64,
+    symbol_property_revision: crate::emacs_core::symbol::SymbolPropertyRevision,
     redisplay_generation: u64,
     frame: Option<RedisplayFrameSignature>,
 }
@@ -434,6 +440,9 @@ impl RedisplaySignature {
                 }
             };
         }
+        field!(compositor_scrolling_enabled);
+        field!(compositor_pixel_scroll);
+        field!(input_checkpoint);
         field!(selected_frame);
         field!(selected_window);
         field!(current_buffer);
@@ -442,6 +451,7 @@ impl RedisplaySignature {
         field!(minibuffer_selected_window);
         field!(face_change_count);
         field!(obarray_function_epoch);
+        field!(symbol_property_revision);
         field!(redisplay_generation);
         match (&self.frame, &other.frame) {
             (Some(a), Some(b)) => {
@@ -3015,6 +3025,7 @@ pub(crate) enum SymbolValueLookup {
 }
 
 pub struct Context {
+    pub(crate) owned_roots: crate::emacs_core::owned_roots::OwnedRootRegistry,
     /// Tagged pointer heap — sole GC and allocator.
     pub(crate) tagged_heap: Box<crate::tagged::gc::TaggedHeap>,
     /// Mmap-backed pdump image that owns any mapped heap payloads borrowed by
@@ -3306,6 +3317,37 @@ pub struct Context {
     #[allow(clippy::type_complexity)]
     // frontend callback seam avoids a core/layout dependency cycle
     pub redisplay_fn: Option<Box<dyn FnMut(&mut Self)>>,
+    /// Frontend-installed font-shaping driver (GNU `font->driver->shape`).
+    /// The gstring contract lives in src/font.c's `Ffont_shape_gstring`; the
+    /// shaping engine lives in the display layer, so the frontend installs
+    /// this typed seam. `None` means the driver cannot shape (the subr
+    /// answers nil — no composition).
+    #[allow(clippy::type_complexity)]
+    pub font_shape_fn: Option<crate::emacs_core::font::FontShapeFn>,
+    /// Shaped-gstring cache (GNU `gstring_hash_table`,
+    /// composition_gstring_put_cache/lookup_cache, src/composite.c): keyed
+    /// by the gstring header's font family + pixel size + characters, valued
+    /// by the shaped gstring with its ID slot assigned.
+    pub gstring_shape_cache: HashMap<crate::emacs_core::font::GstringShapeCacheKey, Value>,
+    /// Optional GUI observer of a complete marker-backed scroll transition.
+    #[allow(clippy::type_complexity)]
+    pub scroll_preview_fn: Option<
+        Box<
+            dyn FnMut(
+                &Self,
+                crate::window::FrameId,
+                crate::window::WindowId,
+                Vec<neomacs_display_protocol::input_progress::InputReceipt>,
+            ),
+        >,
+    >,
+    /// One bounded, read-only display maintenance step during idle input waits
+    /// or a GUI command boundary when input remains queued. The delay requests
+    /// another idle wakeup; the boolean requests publication after releasing
+    /// the engine borrow. Installing this also enables periodic GUI service.
+    #[allow(clippy::type_complexity)]
+    pub display_idle_maintenance_fn:
+        Option<Box<dyn FnMut(&Self) -> (Option<std::time::Duration>, bool)>>,
     /// Frontend-installed frame snapshot hook (`neomacs--frame-snapshot`).
     /// Same seam pattern as `redisplay_fn`: neovm-core cannot reach the
     /// layout engine, so the frontend lays out the requested frames on
@@ -3366,6 +3408,7 @@ pub struct Context {
     /// a full rebuild (adversarial-review fix). Rare event → a global counter
     /// (over-invalidating all windows) is acceptable and simpler than per-var keys.
     pub display_var_change_count: u64,
+    pub input_progress: neomacs_display_protocol::input_progress::InputProgress,
     /// Explicit redisplay invalidation generation, used for state that GNU
     /// marks with update_mode_lines/window redisplay flags.
     redisplay_generation: u64,
@@ -7229,11 +7272,7 @@ impl Context {
             match sym.redirect() {
                 SymbolRedirect::Localized => {
                     if let Some(buf) = self.buffers.current_buffer()
-                        && let Some(value) = self.obarray.read_localized_for_buffer(
-                            resolved,
-                            buf.id,
-                            buf.local_var_alist_value(),
-                        )
+                        && let Some(value) = self.obarray.read_localized_in_buffer(resolved, buf)
                     {
                         if value.is_unbound() {
                             return None;

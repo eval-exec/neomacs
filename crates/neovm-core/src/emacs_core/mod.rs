@@ -249,6 +249,8 @@ pub mod hashtab;
 pub mod intern;
 #[path = "runtime/jit/mod.rs"]
 pub mod jit;
+#[path = "runtime/owned_roots/mod.rs"]
+pub mod owned_roots;
 #[path = "runtime/pdump/mod.rs"]
 pub mod pdump;
 #[path = "runtime/plist/mod.rs"]

@@ -112,6 +112,11 @@ impl WgpuRenderer {
                     neomacs_display_protocol::Rect::new(*x, *y, *width, *height),
                     clip_rect.as_ref(),
                 ) {
+                    let bg = if paint.face_id() == *face_id {
+                        *bg
+                    } else {
+                        frame_glyphs.resolved_face(paint.face_id()).bg
+                    };
                     let face_id = paint.face_id();
                     let effective_clip = paint.clip();
                     let paint_offset_y = if has_line_anims {
@@ -136,7 +141,7 @@ impl WgpuRenderer {
                     self.add_face_paint_background(
                         &mut non_overlay_rect_vertices,
                         face,
-                        bg,
+                        &bg,
                         paint,
                         0.0,
                         paint_offset_y,
@@ -590,6 +595,11 @@ impl WgpuRenderer {
                     neomacs_display_protocol::Rect::new(*x, *y, *width, *height),
                     clip_rect.as_ref(),
                 ) {
+                    let bg = if paint.face_id() == *face_id {
+                        *bg
+                    } else {
+                        frame_glyphs.resolved_face(paint.face_id()).bg
+                    };
                     let face_id = paint.face_id();
                     let effective_clip = paint.clip();
                     if Self::paint_has_rounded_box_span(
@@ -609,7 +619,7 @@ impl WgpuRenderer {
                     self.add_face_paint_background(
                         &mut overlay_rect_vertices,
                         face,
-                        bg,
+                        &bg,
                         paint,
                         0.0,
                         0.0,

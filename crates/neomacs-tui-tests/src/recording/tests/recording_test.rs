@@ -6,8 +6,8 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::{
-    AsciicastV3Writer, CastEvent, CastHeader, RecordingIdentity, RecordingPolicy, SessionRecording,
-    TerminalSize, TuiRecordingScope,
+    AsciicastV3Writer, CastEvent, CastHeader, RecordingConfig, RecordingIdentity, RecordingPolicy,
+    SessionRecording, TerminalSize, TuiRecordingScope,
 };
 
 #[test]
@@ -179,6 +179,81 @@ fn recording_off_creates_no_artifact_and_environment_values_are_closed() {
     );
     assert!(RecordingPolicy::parse(Some(OsStr::new("sometimes"))).is_err());
     assert!(RecordingPolicy::parse(Some(OsStr::from_bytes(b"on\xff"))).is_err());
+}
+
+#[test]
+fn unset_recording_delay_paces_a_recording_run_at_two_seconds() {
+    let config = RecordingConfig::parse(Some(OsStr::new("on")), None).expect("parse unset delay");
+
+    assert_eq!(config.policy(), RecordingPolicy::On);
+    assert_eq!(config.delay(), Duration::from_millis(2000));
+}
+
+#[test]
+fn explicit_recording_delay_is_honoured_including_zero() {
+    let paced = RecordingConfig::parse(Some(OsStr::new("on")), Some(OsStr::new("250")))
+        .expect("parse explicit delay");
+    assert_eq!(paced.delay(), Duration::from_millis(250));
+
+    // `0` is the escape hatch for a recording that must stay as fast as the
+    // graded run while still producing an artifact.
+    let unpaced = RecordingConfig::parse(Some(OsStr::new("on")), Some(OsStr::new("0")))
+        .expect("parse explicit zero delay");
+    assert_eq!(unpaced.policy(), RecordingPolicy::On);
+    assert_eq!(unpaced.delay(), Duration::ZERO);
+}
+
+#[test]
+fn recording_off_never_sleeps_however_the_delay_is_spelled() {
+    let explicit = RecordingConfig::parse(Some(OsStr::new("off")), Some(OsStr::new("250")))
+        .expect("parse delay without recording");
+    assert_eq!(explicit.delay(), Duration::ZERO);
+
+    // The variable belongs to recording, so a non-recording run stays exactly
+    // today's execution -- a stray value (or typo) in it cannot fail a graded
+    // run, and nothing reads it.
+    let ignored = RecordingConfig::parse(None, Some(OsStr::new("soon")))
+        .expect("an unrecorded run does not consult the delay");
+    assert_eq!(ignored.policy(), RecordingPolicy::Off);
+    assert_eq!(ignored.delay(), Duration::ZERO);
+
+    assert_eq!(RecordingConfig::default().delay(), Duration::ZERO);
+    assert_eq!(
+        RecordingConfig::new(RecordingPolicy::Off, Duration::from_millis(250)).delay(),
+        Duration::ZERO,
+        "a config cannot carry pacing for a run that records nothing"
+    );
+}
+
+#[test]
+fn unparseable_recording_delay_fails_with_a_clear_message() {
+    let error = RecordingConfig::parse(Some(OsStr::new("on")), Some(OsStr::new("25ms")))
+        .expect_err("a delay that is not a millisecond count must fail");
+
+    assert_eq!(
+        error,
+        "NEOMACS_TUI_RECORD_DELAY_MS must be a whole number of milliseconds, got \"25ms\""
+    );
+
+    for value in ["", "-1", "1.5", "soon", " 250", "250ms"] {
+        let error = RecordingConfig::parse(Some(OsStr::new("on")), Some(OsStr::new(value)))
+            .expect_err("unparseable delay")
+            .to_owned();
+        assert!(
+            error.contains("NEOMACS_TUI_RECORD_DELAY_MS must be a whole number of milliseconds"),
+            "message names the variable and the expected form, got {error:?}"
+        );
+        assert!(
+            error.contains(&format!("{:?}", OsStr::new(value))),
+            "message quotes the offending value, got {error:?}"
+        );
+    }
+
+    assert!(
+        RecordingConfig::parse(Some(OsStr::new("on")), Some(OsStr::from_bytes(b"250\xff")))
+            .is_err(),
+        "a non-UTF-8 delay is unparseable too"
+    );
 }
 
 #[test]

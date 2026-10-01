@@ -92,6 +92,17 @@ fn a_position_before_every_row_has_no_row() {
 fn the_last_row_owns_the_buffer_end() {
     // 300 characters, no trailing newline: the buffer ends at 301 and only the
     // truncated row is published.
-    let rows = vec![row(0, 1, 159)];
+    let mut rows = vec![row(0, 1, 159)];
+    rows[0].truncated_end_buffer_pos = Some(LispCharPos1::new(301));
     assert_eq!(lookup_ending_at(&rows, 301, 301), Some(0));
+}
+
+#[test]
+fn a_bounded_last_row_does_not_own_unmeasured_source() {
+    let rows = vec![row(0, 1, 20), row(1, 21, 40)];
+    assert_eq!(lookup(&rows, 90), None);
+    let mut truncated = vec![row(0, 1, 20)];
+    truncated[0].truncated_end_buffer_pos = Some(LispCharPos1::new(50));
+    assert_eq!(lookup(&truncated, 50), Some(0));
+    assert_eq!(lookup(&truncated, 51), None);
 }

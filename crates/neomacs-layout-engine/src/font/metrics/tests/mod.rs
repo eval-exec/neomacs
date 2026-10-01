@@ -328,6 +328,7 @@ fn realized_face_complex_run_shapes_with_the_exact_materialized_fontset_font() {
     let exact_family = match svc
         .build_attrs_for_materialized_font(&materialized)
         .expect("outline font attributes")
+        .as_attrs()
         .family
     {
         cosmic_text::Family::Name(name) => name.to_string(),
@@ -920,7 +921,7 @@ impl crate::text_shaper::TextShaper for RecordingFamilyShaper {
         &mut self,
         _font_system: &mut cosmic_text::FontSystem,
         _text: &str,
-        attrs: &cosmic_text::Attrs<'static>,
+        attrs: &cosmic_text::Attrs<'_>,
         _font_size: f32,
         _line_height: f32,
     ) -> Vec<ShapedGlyph> {
@@ -3737,4 +3738,56 @@ fn pin_file_as_family_opens_deterministic_woff_selected_by_fontconfig() {
         svc.pin_file_as_family(&webfont, 0).is_some(),
         "the exact-font path must use the same container decoder as ordinary font loading"
     );
+}
+
+#[test]
+fn glyph_vertical_metrics_match_canonical_font_selection_across_cache_changes() {
+    let mut service = make_svc();
+    for scale in [1.0, 2.0] {
+        service
+            .set_device_scale(neomacs_display_protocol::geometry::DeviceScale::new(scale).unwrap());
+        for size in [12.0, 18.0] {
+            service.clear_caches();
+            let selection = RealizedFaceFontSelection::new("monospace", 400, false, size);
+            // First ASCII query exercises a cold cache; the rest reuse it.
+            // Non-ASCII characters still use canonical fontset selection.
+            for ch in ['A', ' ', 'z', 'λ', '中', '\u{1f600}'] {
+                let observed = service.vertical_metrics_for_realized_face_char(ch, selection);
+                let canonical = service.resolved_font_for_realized_face_char(ch, selection);
+                assert_eq!(observed.is_some(), canonical.is_some());
+                if let (Some(observed), Some(canonical)) = (observed, canonical) {
+                    assert_eq!(observed.ascent, canonical.ascent_px);
+                    assert_eq!(observed.descent, canonical.descent_px);
+                    assert_eq!(
+                        observed.line_height,
+                        canonical.ascent_px + canonical.descent_px
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn ascii_worker_policy_keeps_unicode_font_caches_warm() {
+    let source = FontMetricsService::new();
+    let mut unicode = source
+        .capture_worker_font_policy(&[("monospace", '中', 400, false, 13.0)], 4096)
+        .unwrap();
+    unicode.symbols.key.use_primary_font = true;
+    unicode.symbols.symbol_ranges = vec![(0x4e2d, 0x4e2d)];
+    let ascii = source.capture_worker_font_policy(&[], 4096).unwrap();
+    let mut worker = FontMetricsService::new();
+    worker.install_worker_font_policy(&unicode);
+    worker.font_metrics("monospace", 400, false, 13.0);
+    let cached = worker.metrics_cache.len();
+    assert!(cached > 0);
+    worker.install_worker_font_policy(&ascii);
+    assert_eq!(
+        worker.metrics_cache.len(),
+        cached,
+        "ASCII does not consume symbol-font policy and must not clear the native cache"
+    );
+    worker.install_worker_font_policy(&unicode);
+    assert_eq!(worker.metrics_cache.len(), cached);
 }

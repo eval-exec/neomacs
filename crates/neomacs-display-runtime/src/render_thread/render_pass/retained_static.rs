@@ -51,6 +51,7 @@ pub(super) fn is_eligible(
     render: &GuiFrameRenderState,
 ) -> bool {
     compositor_only_hint
+        && !render.compositor.input_scroll.active()
         && pane_placements.is_empty()
         && !render.compositor.transitions.has_active()
         && !window_has_active_overlays(render)
@@ -275,6 +276,11 @@ pub(super) fn window_has_active_overlays(render: &GuiFrameRenderState) -> bool {
         // retained scene would freeze it, so a full render is required
         // while it is shown.
         || render.overlays.fps.enabled
+        // A child frame mid-lifecycle-animation (or its retained corpse)
+        // must not be frozen into the retained texture at whatever alpha
+        // the last build saw: the fade draws through full renders until
+        // the corpse is gone and the texture rebuilds without it.
+        || render.compositor.child_frames.has_animation_activity()
 }
 
 pub(super) fn pointer_appearance_allowed(pointer_appearance: &PointerAppearanceState) -> bool {

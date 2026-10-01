@@ -16,6 +16,11 @@ use neomacs_display_protocol::glyph_matrix::GlyphRow;
 #[cfg(test)]
 use neovm_core::emacs_core::Context;
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static SCRATCH_GLYPHS_COPIED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub(crate) struct DisplayRowCurrentRowOutput<'builder> {
     builder: &'builder mut DisplayOutputBuilder,
 }
@@ -45,6 +50,12 @@ impl<'builder> DisplayRowCurrentRowOutput<'builder> {
         }
     }
 
+    pub(crate) fn current_row_vertical_metrics(&self) -> Option<(f32, f32)> {
+        self.builder
+            .current_row_for_render()
+            .map(|row| (row.height_px, row.ascent_px))
+    }
+
     pub(crate) fn current_row_snapshot(&self) -> Option<GlyphRow> {
         self.builder.current_row_for_render().cloned()
     }
@@ -61,6 +72,8 @@ impl<'builder> DisplayRowCurrentRowOutput<'builder> {
         M: DisplayCurrentRowMutation,
     {
         let mut row = self.current_row_snapshot()?;
+        #[cfg(test)]
+        SCRATCH_GLYPHS_COPIED.with(|count| count.set(count.get() + row.total_glyphs()));
         Some(mutation.apply(&mut row))
     }
 
@@ -84,8 +97,10 @@ impl<'builder> DisplayRowCurrentRowOutput<'builder> {
     }
 
     pub(crate) fn cluster_tail(&self) -> Option<(char, bool)> {
-        self.current_row_snapshot()
-            .as_ref()
+        // This is inspected before each source character. Borrow the row;
+        // cloning its growing glyph vectors makes a line quadratic to walk.
+        self.builder
+            .current_row_for_render()
             .and_then(last_text_cluster_tail_in_row)
     }
 }

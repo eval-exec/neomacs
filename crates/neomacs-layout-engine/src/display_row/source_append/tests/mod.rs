@@ -45,6 +45,7 @@ use crate::display_property::{
     DisplayMediaReplacementProperty, DisplayPropertyClassification, DisplayReplacementProperty,
     classify_display_property,
 };
+use crate::display_row::append_context::DisplayRowLineWrap;
 use crate::display_row::append_context::*;
 use crate::display_row::builder::{
     DisplayRowAppendProgress, DisplayRowAppendStatus, DisplayRowGlyphCheckpoint,
@@ -132,7 +133,7 @@ use neomacs_display_protocol::types::{Color, Rect};
 use neovm_core::buffer::{Buffer, BufferId, CharPos0, EmacsBytePos, EmacsByteRange, LispCharPos1};
 use neovm_core::emacs_core::eval::{DisplayHost, GuiFrameHostRequest};
 use neovm_core::emacs_core::image_catalog::{
-    ImageCatalog, ImageLookup, ImageResolveRequest, PendingImage, ReadyImage,
+    ImageCatalog, ImageLookup, ImageResolveRequest, ImageSizeLimit, PendingImage, ReadyImage,
 };
 use neovm_core::emacs_core::value::StringTextPropertyRun;
 use neovm_core::emacs_core::{Context, Value};
@@ -254,6 +255,7 @@ fn emitted_row(
     end_lisp: i64,
 ) -> neovm_core::window::DisplayRowSnapshot {
     neovm_core::window::DisplayRowSnapshot {
+        truncated_end_buffer_pos: None,
         row,
         y,
         height,
@@ -472,6 +474,7 @@ impl DisplayHost for RecordingAppendImageHost {
     fn resolve_image_sync(
         &self,
         _request: ImageResolveRequest,
+        _limit: neovm_core::emacs_core::image_catalog::ImageSizeLimit,
     ) -> Result<Option<ReadyImage>, String> {
         panic!("append display source rendering must not use synchronous image resolution");
     }
@@ -482,7 +485,7 @@ impl DisplayHost for RecordingAppendImageHost {
 }
 
 impl ImageCatalog for RecordingAppendImageHost {
-    fn lookup(&self, request: ImageResolveRequest) -> ImageLookup {
+    fn lookup(&self, request: ImageResolveRequest, _limit: ImageSizeLimit) -> ImageLookup {
         self.requests
             .lock()
             .expect("image requests lock")
@@ -1113,8 +1116,27 @@ fn display_row_transition_render_state_applies_row_start_line_break_policy() {
     );
 }
 
+/// An empty snapshot-backed buffer view for the hscroll-skip fallback tests:
+/// every property lookup misses, so chars count with the ordinary widths.
+fn hscroll_skip_fixture() -> (Context, LayoutBufferSnapshot) {
+    let mut eval = Context::new();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    {
+        let buffer = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buffer.insert("\u{7f}"); // one placeholder char, no display property
+    }
+    let buffer = eval.buffer_manager().get(buf_id).expect("buffer");
+    let snapshot = LayoutBufferSnapshot::from_buffer(buffer);
+    (eval, snapshot)
+}
+
 #[test]
 fn buffer_hscroll_skip_preserves_line_break_action() {
+    let (_eval, snapshot) = hscroll_skip_fixture();
     let mut position = DisplaySourceTextPosition::new(0, 10);
     let mut hscroll_skip = HorizontalScrollSkipState::new(
         LineWrapMode::Truncate,
@@ -1122,8 +1144,15 @@ fn buffer_hscroll_skip_preserves_line_break_action() {
         HorizontalScrollTruncationTarget::FirstVisibleSourceGlyph,
     );
 
-    let action = consume_hscroll_skip_from_position(b"\nnext", &mut position, &mut hscroll_skip, 8)
-        .expect("hscroll skip action");
+    let action = consume_hscroll_skip_from_position(
+        b"\nnext",
+        &mut position,
+        &mut hscroll_skip,
+        8,
+        &snapshot,
+        0,
+    )
+    .expect("hscroll skip action");
 
     assert_eq!(
         action,
@@ -1137,6 +1166,7 @@ fn buffer_hscroll_skip_preserves_line_break_action() {
 
 #[test]
 fn buffer_hscroll_skip_consumes_tab_to_next_stop() {
+    let (_eval, snapshot) = hscroll_skip_fixture();
     let mut position = DisplaySourceTextPosition::new(0, 0);
     let mut hscroll_skip = HorizontalScrollSkipState::new(
         LineWrapMode::Truncate,
@@ -1144,8 +1174,15 @@ fn buffer_hscroll_skip_consumes_tab_to_next_stop() {
         HorizontalScrollTruncationTarget::FirstVisibleSourceGlyph,
     );
 
-    let action = consume_hscroll_skip_from_position(b"\tabc", &mut position, &mut hscroll_skip, 8)
-        .expect("hscroll skip action");
+    let action = consume_hscroll_skip_from_position(
+        b"\tabc",
+        &mut position,
+        &mut hscroll_skip,
+        8,
+        &snapshot,
+        0,
+    )
+    .expect("hscroll skip action");
 
     assert_eq!(
         action,
@@ -1163,6 +1200,7 @@ fn buffer_hscroll_skip_consumes_tab_to_next_stop() {
 
 #[test]
 fn buffer_hscroll_skip_consumes_wide_char_columns() {
+    let (_eval, snapshot) = hscroll_skip_fixture();
     let mut position = DisplaySourceTextPosition::new(0, 3);
     let mut hscroll_skip = HorizontalScrollSkipState::new(
         LineWrapMode::Truncate,
@@ -1170,9 +1208,15 @@ fn buffer_hscroll_skip_consumes_wide_char_columns() {
         HorizontalScrollTruncationTarget::FirstVisibleSourceGlyph,
     );
 
-    let action =
-        consume_hscroll_skip_from_position("界x".as_bytes(), &mut position, &mut hscroll_skip, 8)
-            .expect("hscroll skip action");
+    let action = consume_hscroll_skip_from_position(
+        "界x".as_bytes(),
+        &mut position,
+        &mut hscroll_skip,
+        8,
+        &snapshot,
+        0,
+    )
+    .expect("hscroll skip action");
 
     assert_eq!(
         action,
@@ -1184,9 +1228,15 @@ fn buffer_hscroll_skip_consumes_wide_char_columns() {
     assert_eq!(position, DisplaySourceTextPosition::new("界".len(), 4));
     assert!(hscroll_skip.should_skip());
 
-    let action =
-        consume_hscroll_skip_from_position("界x".as_bytes(), &mut position, &mut hscroll_skip, 8)
-            .expect("left truncation replacement action");
+    let action = consume_hscroll_skip_from_position(
+        "界x".as_bytes(),
+        &mut position,
+        &mut hscroll_skip,
+        8,
+        &snapshot,
+        0,
+    )
+    .expect("left truncation replacement action");
 
     assert_eq!(
         action,
@@ -1204,6 +1254,7 @@ fn buffer_hscroll_skip_consumes_wide_char_columns() {
 
 #[test]
 fn buffer_hscroll_skip_keeps_marker_pending_while_still_skipping() {
+    let (_eval, snapshot) = hscroll_skip_fixture();
     let mut position = DisplaySourceTextPosition::new(0, 0);
     let mut hscroll_skip = HorizontalScrollSkipState::new(
         LineWrapMode::Truncate,
@@ -1211,8 +1262,15 @@ fn buffer_hscroll_skip_keeps_marker_pending_while_still_skipping() {
         HorizontalScrollTruncationTarget::FirstVisibleSourceGlyph,
     );
 
-    let action = consume_hscroll_skip_from_position(b"abc", &mut position, &mut hscroll_skip, 8)
-        .expect("hscroll skip action");
+    let action = consume_hscroll_skip_from_position(
+        b"abc",
+        &mut position,
+        &mut hscroll_skip,
+        8,
+        &snapshot,
+        0,
+    )
+    .expect("hscroll skip action");
 
     assert_eq!(
         action,
@@ -1234,6 +1292,7 @@ fn buffer_hscroll_skip_render_request_appends_left_truncation_marker() {
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let mut byte_idx = 0;
     let mut charpos = 0;
@@ -1525,6 +1584,7 @@ fn buffer_hscroll_skip_action_appends_left_truncation_marker_and_marks_row() {
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
     let mut x = 0.0;
@@ -1908,6 +1968,7 @@ fn buffer_invisible_text_render_request_appends_ellipsis_and_captures_cursor() {
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let overlay_context = BufferOverlayStringTextRowRenderContext::new(
         false,
@@ -2933,6 +2994,7 @@ fn buffer_text_line_break_render_request_emits_row_transition_and_syncs_position
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let overlay_context = BufferOverlayStringTextRowRenderContext::new(
         true,
@@ -3083,6 +3145,7 @@ fn buffer_selective_display_tail_render_request_appends_marker_and_transitions_r
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let text = b"a\rb\nc";
     let mut byte_idx = 2;
@@ -3458,6 +3521,7 @@ fn buffer_text_word_wrap_source_action_applies_transition_state() {
         &mut face_scan,
         &geometry,
         DisplayRowVisibilityLimit {
+            allow_partial: false,
             max_rows: 2,
             bottom_y: 64.0,
         },
@@ -3604,6 +3668,7 @@ fn buffer_text_special_wrap_source_action_applies_transition_state() {
             DisplayTextRowTransition::BeganNextRow,
             &geometry,
             DisplayRowVisibilityLimit {
+                allow_partial: false,
                 max_rows: 2,
                 bottom_y: 64.0,
             },
@@ -3695,6 +3760,7 @@ fn buffer_text_special_overflow_render_request_wraps_then_keeps_prepared_append(
             80.0,
             LineWrapMode::Wrap,
             DisplayRowVisibilityLimit {
+                allow_partial: false,
                 max_rows: 4,
                 bottom_y: 64.0,
             },
@@ -3811,6 +3877,7 @@ fn buffer_text_character_wrap_source_action_applies_transition_state() {
         &mut face_scan,
         &geometry,
         DisplayRowVisibilityLimit {
+            allow_partial: false,
             max_rows: 2,
             bottom_y: 64.0,
         },
@@ -3838,6 +3905,7 @@ fn buffer_text_character_wrap_source_action_skips_state_when_transition_exhauste
         &mut face_scan,
         &geometry,
         DisplayRowVisibilityLimit {
+            allow_partial: false,
             max_rows: 2,
             bottom_y: 64.0,
         },
@@ -3865,6 +3933,7 @@ fn buffer_text_character_wrap_source_action_reports_hidden_after_state_sync() {
         &mut face_scan,
         &geometry,
         DisplayRowVisibilityLimit {
+            allow_partial: false,
             max_rows: 2,
             bottom_y: 64.0,
         },
@@ -3923,7 +3992,7 @@ fn buffer_text_overflow_render_request_handles_character_wrap_transition() {
     let row_limit = context.row_limit;
     let table = FaceTable::new();
     let face_resolver = FaceResolver::new(&table, 0x00ffffff, 0x000000, 14.0, None);
-    let mut font_metrics = None;
+    let mut font_metrics: Option<FontMetricsService> = None;
     let mut cursor_info = CursorCaptureState::new();
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
     context.builder.set_face_attempt(face_ids.clone());
@@ -3938,6 +4007,28 @@ fn buffer_text_overflow_render_request_handles_character_wrap_transition() {
         4,
     );
     let snapshot = current_buffer_snapshot(&context.eval, buf_id);
+    let resolver = FaceResolver::new(&FaceTable::new(), 0x00ffffff, 0x000000, 14.0, None);
+    let base = resolver.default_face().clone();
+    let mut font_metrics = None;
+    let measured = DisplayRowMeasurementPolicy::for_mode(DisplayRowMeasurementMode::LogicalCells)
+        .measured_face(
+            FaceId::new(7),
+            &base,
+            None,
+            8.0,
+            DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
+            &mut font_metrics,
+        );
+    let active_face = DisplayRowActiveFaceState::new(base, measured);
+    let append_context = BufferSourceRowAppendContext::new_with_face_attempt(
+        &snapshot,
+        buf_id,
+        &surface,
+        &active_face,
+        0.0,
+        DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
+        face_ids.clone(),
+    );
     let mut source_walk = BufferSourceWalk::new(buf_id, &snapshot, charpos, 0);
 
     let outcome = BufferSourceOverflowRenderRequest::new(
@@ -3950,6 +4041,7 @@ fn buffer_text_overflow_render_request_handles_character_wrap_transition() {
             LineWrapMode::Wrap,
             word_wrap,
             DisplayRowVisibilityLimit {
+                allow_partial: false,
                 max_rows: 4,
                 bottom_y: 64.0,
             },
@@ -3964,6 +4056,7 @@ fn buffer_text_overflow_render_request_handles_character_wrap_transition() {
         ),
     )
     .render_if_needed_and_apply(
+        &append_context,
         &mut source_walk,
         text,
         BufferSourceLoopMutableState::new(
@@ -4192,7 +4285,7 @@ fn test_append_frame_at(
     metrics: DisplayRowAppendMetrics,
     tab_policy: DisplayTabPolicy,
 ) -> DisplayRowAppendFrame {
-    let surface = DisplayRowAppendSurface::new(area, tab_policy);
+    let surface = DisplayRowAppendSurface::new(area, tab_policy, DisplayRowLineWrap::Truncate);
     let geometry = DisplayRowGeometryState::new(row, y, 0.0, metrics.height(), metrics.ascent());
     surface.frame_from_geometry_state(&geometry, glyph_y - y, metrics)
 }
@@ -4201,6 +4294,7 @@ fn test_advance_resolution_surface() -> DisplayRowAppendSurface {
     DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     )
 }
 
@@ -4581,6 +4675,7 @@ fn display_row_append_frame_builds_from_geometry_state() {
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(10.0, 90.0, 120.0, 6.0, 0.0),
         DisplayTabPolicy::every(4),
+        DisplayRowLineWrap::Truncate,
     );
 
     let frame = surface.frame_from_geometry_state(
@@ -4640,6 +4735,7 @@ fn synthetic_text_append_context_renders_fragment_and_emits_slots() {
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
     let append_context = SyntheticTextRowAppendContext::with_face_attempt(
@@ -4731,6 +4827,7 @@ fn buffer_synthetic_text_render_context_renders_active_marker() {
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
 
@@ -4798,6 +4895,7 @@ fn buffer_synthetic_text_render_context_renders_hscroll_marker() {
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
 
@@ -4887,6 +4985,7 @@ fn buffer_line_prefix_render_context_renders_default_prefix_and_clears_request()
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
     let values = DisplayRowPrefixValues::default_values(Some(Value::string("=>")), None);
@@ -4969,6 +5068,7 @@ fn buffer_line_prefix_render_context_appends_gnu_space_align_to_prefix() {
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 248.0, 248.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 1.0, 1.0);
     let prefix = Value::list(vec![
@@ -5067,6 +5167,7 @@ fn buffer_line_prefix_render_request_applies_rendered_position() {
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
     let values = DisplayRowPrefixValues::default_values(Some(Value::string("=>")), None);
@@ -5201,6 +5302,7 @@ fn buffer_overlay_string_render_context_disabled_keeps_render_state() {
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let render_context = BufferOverlayStringTextRowRenderContext::new(
         false,
@@ -5261,6 +5363,7 @@ fn overlay_string_row_break_context_finishes_current_row() {
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let row_context = OverlayStringRenderRowContext::new(
         &surface,
@@ -5471,7 +5574,8 @@ fn render_natural_display_item_source_into_current_text_row_stamps_slots_at_curr
             2,
             8.0,
             1
-        )]
+        )
+        .with_text_glyph_offset(0)]
     );
     assert_eq!(outcome.end_position(), DisplayRowPosition::new(24.0, 3));
 }
@@ -5566,6 +5670,7 @@ fn append_rendered_display_row_fragment_to_text_row_and_emit_appends_glyphs_and_
             GlyphRowRole::Text,
             FaceId::new(7),
             &base_face,
+            DisplayRowLineWrap::chrome_row(),
         )
         .render_request(DisplayRowRenderBounds::new(
             DisplayRowPosition::new(16.0, 2),
@@ -5633,6 +5738,7 @@ fn display_row_append_surface_builds_positioned_source_requests() {
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(8.0, 120.0, 150.0, 10.0, 0.0),
         tab_policy.clone(),
+        DisplayRowLineWrap::Truncate,
     );
 
     let geometry = DisplayRowGeometryState::new(3, 20.0, 0.0, 16.0, 11.0);
@@ -6073,6 +6179,7 @@ fn display_row_append_surface_builds_frames_with_shared_area() {
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(8.0, 120.0, 150.0, 10.0, 0.0),
         tab_policy.clone(),
+        DisplayRowLineWrap::Truncate,
     );
 
     assert_eq!(surface.content_x(), 8.0);
@@ -6113,6 +6220,7 @@ fn display_row_text_append_context_builds_text_frame_from_shared_surface() {
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(8.0, 120.0, 150.0, 10.0, 0.0),
         DisplayTabPolicy::every(4),
+        DisplayRowLineWrap::Truncate,
     );
     let geometry = DisplayRowGeometryState::new(3, 20.0, 0.0, 16.0, 11.0);
 
@@ -6159,6 +6267,7 @@ fn display_row_append_surface_builds_frame_from_active_face_state() {
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(8.0, 120.0, 150.0, 10.0, 0.0),
         DisplayTabPolicy::every(4),
+        DisplayRowLineWrap::Truncate,
     );
 
     let geometry = DisplayRowGeometryState::new(3, 20.0, 0.0, 16.0, 12.0);
@@ -6645,6 +6754,7 @@ fn lisp_string_append_context_appends_fragment_items() {
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
     let append_context = LispStringRowAppendContext::new(
@@ -6726,6 +6836,7 @@ fn buffer_text_source_append_context_appends_source_char() {
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
 
@@ -6930,6 +7041,7 @@ fn buffer_text_source_render_request_appends_plain_text_run_with_cursor_inside()
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let overlay_context = BufferOverlayStringTextRowRenderContext::new(
         false,
@@ -6985,6 +7097,7 @@ fn buffer_text_source_render_request_appends_plain_text_run_with_cursor_inside()
         false,
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
         DisplayRowVisibilityLimit {
+            allow_partial: false,
             max_rows: 4,
             bottom_y: 64.0,
         },
@@ -7079,6 +7192,7 @@ fn buffer_text_source_render_request_keeps_space_run_whole_when_trailing_enabled
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let overlay_context = BufferOverlayStringTextRowRenderContext::new(
         false,
@@ -7136,6 +7250,7 @@ fn buffer_text_source_render_request_keeps_space_run_whole_when_trailing_enabled
         false,
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
         DisplayRowVisibilityLimit {
+            allow_partial: false,
             max_rows: 4,
             bottom_y: 64.0,
         },
@@ -7239,6 +7354,7 @@ fn buffer_text_source_render_request_keeps_space_run_whole_when_word_wrap_enable
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let overlay_context = BufferOverlayStringTextRowRenderContext::new(
         false,
@@ -7294,6 +7410,7 @@ fn buffer_text_source_render_request_keeps_space_run_whole_when_word_wrap_enable
         false,
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
         DisplayRowVisibilityLimit {
+            allow_partial: false,
             max_rows: 4,
             bottom_y: 64.0,
         },
@@ -7399,6 +7516,7 @@ fn buffer_text_source_render_request_renders_fit_prefix_before_overflow() {
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 32.0, 32.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let overlay_context = BufferOverlayStringTextRowRenderContext::new(
         false,
@@ -7454,6 +7572,7 @@ fn buffer_text_source_render_request_renders_fit_prefix_before_overflow() {
         false,
         DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
         DisplayRowVisibilityLimit {
+            allow_partial: false,
             max_rows: 4,
             bottom_y: 64.0,
         },
@@ -7561,6 +7680,7 @@ fn buffer_text_source_append_context_prepares_current_text_row_source_char() {
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
     let append_context = BufferSourceRowAppendContext::new_with_face_attempt(
@@ -7664,6 +7784,7 @@ fn buffer_overlay_string_context_reports_render_gate() {
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let geometry = DisplayRowGeometryState::new(2, 32.0, 0.0, 16.0, 12.0);
     let past_limit = DisplayRowGeometryState::new(4, 64.0, 0.0, 16.0, 12.0);
@@ -7732,6 +7853,7 @@ fn buffer_end_of_buffer_tail_render_request_captures_cursor_and_renders_overlay(
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let overlay_context = BufferOverlayStringTextRowRenderContext::new(
         true,
@@ -7978,6 +8100,7 @@ fn buffer_text_window_body_install_request_records_positions_and_edge_markers() 
         TextWindowOutputTarget::from_builder(&mut builder),
         &mut output_emitter,
         crate::window_output::DisplayTextRowMetrics {
+            line_spacing: 0.0,
             y: 2.0,
             height: 20.0,
             ascent: 15.0,
@@ -8086,6 +8209,7 @@ fn buffer_text_window_begin_request_opens_window_and_first_text_row() {
         TextWindowOutputTarget::from_builder(&mut builder),
         &mut output_emitter,
         crate::window_output::DisplayTextRowMetrics {
+            line_spacing: 0.0,
             y: 9.0,
             height: 17.0,
             ascent: 12.0,
@@ -8612,7 +8736,7 @@ fn buffer_text_window_visibility_retry_request_detects_partially_visible_point_r
 }
 
 #[test]
-fn buffer_text_window_visibility_retry_request_detects_point_line_continuation() {
+fn buffer_text_window_visibility_retry_keeps_a_fully_visible_continued_point_row() {
     let mut eval = Context::new();
     let buf_id = eval
         .buffer_manager()
@@ -8649,8 +8773,8 @@ fn buffer_text_window_visibility_retry_request_detects_point_line_continuation()
     )
     .decide();
 
-    assert_eq!(outcome.point_line_window_start(), Some(20));
-    assert_eq!(outcome.retry_window_start(), Some(20));
+    assert_eq!(outcome.point_line_window_start(), None);
+    assert_eq!(outcome.retry_window_start(), None);
 }
 
 #[test]
@@ -9589,6 +9713,7 @@ fn buffer_text_item_append_context_builds_mapped_item() {
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
     let append_context = BufferSourceRowAppendContext::new_with_face_attempt(
@@ -9812,6 +9937,7 @@ fn buffer_text_item_append_context_builds_glyphless_item() {
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
     let append_context = BufferSourceRowAppendContext::new_with_face_attempt(
@@ -10009,6 +10135,7 @@ fn lisp_string_source_append_context_preserves_source_after_row_break() {
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let first_geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
     let second_geometry = DisplayRowGeometryState::new(1, 16.0, 0.0, 16.0, 12.0);
@@ -10757,6 +10884,7 @@ fn display_property_replacement_resolve_request_appends_and_reports_outcome() {
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let mut geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
     let active_face = test_active_face_state(FaceId::new(7), 8.0);
@@ -10873,6 +11001,7 @@ fn buffer_display_property_replacement_render_outcome_updates_progress() {
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let mut geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
     let active_face = test_active_face_state(FaceId::new(7), 8.0);
@@ -11002,6 +11131,8 @@ fn test_display_space_window_params() -> WindowParams {
         top_line: 0,
         window_start: 1,
         measurement_rows: None,
+        measurement_pixels: None,
+        query_target: None,
         force_start: false,
         previous_visible_end: None,
         point: 1,
@@ -11618,6 +11749,7 @@ fn display_replacement_append_context_advances_stretch_output() {
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
     let replacement_source = crate::display_item::BufferDisplayReplacementSource::new(
@@ -11702,6 +11834,7 @@ fn display_replacement_append_context_advances_source_mapped_text_output() {
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 16.0, 12.0);
     let replacement_source = crate::display_item::BufferDisplayReplacementSource::new(
@@ -11789,6 +11922,7 @@ fn synthetic_text_append_context_uses_source_append_render_request() {
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 80.0, 80.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let active_face = test_active_face_state(FaceId::new(3), 8.0);
     let geometry = DisplayRowGeometryState::new(0, 0.0, 0.0, 18.0, 13.0);
@@ -11871,6 +12005,7 @@ fn display_replacement_append_context_installs_xwidget_replacements() {
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(text_bounds.x, 160.0, 160.0, 0.0, 0.0),
         DisplayTabPolicy::from_tab_width_and_stops(text_bounds.x, 8, &[]),
+        DisplayRowLineWrap::Truncate,
     );
     let geometry = DisplayRowGeometryState::new(0, 4.0, 0.0, 16.0, 12.0);
     let replacement_source = crate::display_item::BufferDisplayReplacementSource::new(
@@ -12139,6 +12274,357 @@ fn display_replacement_append_context_installs_image_replacements() {
     assert_eq!(
         (image.5, image.6, image.7, image.8),
         (16.0, 24.0, 64.0, 32.0)
+    );
+}
+
+/// GNU crops an image glyph that runs past the row's right edge instead of
+/// dropping it (`produce_image_glyph`, src/xdisp.c:32506-32507).  This test
+/// drives one over-wide image through the real body-text replacement append
+/// path; before the crop was ported the glyph was rejected wholesale, so the
+/// row stayed and the image vanished.
+#[test]
+fn display_replacement_append_context_crops_an_image_wider_than_the_text_area() {
+    let mut eval = Context::new();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("append-wide-image-item", 320, 120, buf_id);
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    let mut output_emitter =
+        crate::window_output::WindowOutputEmitter::new(frame_id, window_id, 0, 0.0, 0.0);
+    output_emitter.begin_update(&mut eval);
+    output_emitter.begin_text_row(&mut eval, 0, 0, 0.0, 0.0);
+    let table = neovm_core::face::FaceTable::new();
+    let face_resolver =
+        crate::neovm_bridge::FaceResolver::new(&table, 0x00ffffff, 0x000000, 14.0, None);
+    let base_face = face_resolver.default_face();
+    let mut font_metrics = None;
+
+    let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    let text_bounds = Rect::new(10.0, 20.0, 160.0, 64.0);
+    builder.begin_window_with_text_bounds(
+        77,
+        1,
+        24,
+        Rect::new(0.0, 0.0, 200.0, 80.0),
+        text_bounds,
+        true,
+    );
+    builder.begin_row(0, GlyphRowRole::Text);
+    let frame = test_append_frame_at(
+        0,
+        4.0,
+        6.0,
+        DisplayRowAppendArea::new(text_bounds.x, 160.0, 160.0, 0.0, 0.0),
+        DisplayRowAppendMetrics::new(
+            16.0,
+            12.0,
+            8.0,
+            8.0,
+            DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
+        ),
+        DisplayTabPolicy::from_tab_width_and_stops(text_bounds.x, 8, &[]),
+    );
+    let replacement_source = crate::display_item::BufferDisplayReplacementSource::new(
+        buf_id,
+        CharPos0::new(0),
+        EmacsBytePos::new(0),
+    );
+
+    // The text area's right edge is 170 and the image starts at 16, so 154 px
+    // of the image's 300 are inside the row.
+    let active_face = test_active_face_state(FaceId::new(3), 8.0);
+    let media_item = DisplayReplacementMediaSourceItem::new(
+        DisplayMediaReplacement::image(DisplayImageItem {
+            image_id: 42,
+            source_rect: neomacs_display_protocol::ImageSourceRect::FULL,
+            width: 300.0,
+            height: 32.0,
+            ascent: 32.0,
+            horizontal_margin: 0.0,
+            vertical_margin: 0.0,
+            opaque_background: None,
+        }),
+        active_face.metrics().row_height(),
+        active_face.metrics().ascent(),
+        false,
+    );
+    let append_context = DisplayReplacementAppendContext::new(FaceId::new(3), base_face, frame);
+    let mut face_ids = FrameFaceAttempt::for_test_with_next_id(4);
+    builder.set_face_attempt(face_ids.clone());
+    let progress = append_context
+        .append_replacement_item_kind_to_text_row_and_emit(
+            &mut text_row_source_render_state(
+                &mut builder,
+                &mut output_emitter,
+                &mut eval,
+                &mut font_metrics,
+                &face_resolver,
+            ),
+            &mut face_ids,
+            replacement_source,
+            DisplayItemKind::MediaReplacement(media_item.media()),
+            DisplayRowPosition::new(16.0, 2),
+        )
+        .expect("append progress");
+
+    assert_eq!(
+        progress.status(),
+        DisplayRowAppendStatus::Complete,
+        "a cropped image glyph completes its row"
+    );
+    builder
+        .edit_current_row_for_test(|row| {
+            let glyph = row.glyphs[1]
+                .first()
+                .expect("the image glyph survives the right-edge overflow");
+            assert_eq!(glyph.pixel_width, 154.0);
+            assert_eq!(glyph.pixel_height, 32.0);
+            let neomacs_display_protocol::glyph_matrix::GlyphType::Image {
+                image_id,
+                width_cols,
+                source_rect,
+                ..
+            } = glyph.glyph_type
+            else {
+                panic!("expected an image glyph");
+            };
+            assert_eq!(image_id, 42);
+            assert_eq!(width_cols, 20);
+            // GNU removes the same pixels from the slice (`slice.width -= crop`)
+            // so the glyph draws the left 154/300 of the image.
+            assert_eq!(source_rect.x(), 0.0);
+            assert!(
+                (source_rect.width() - 154.0 / 300.0).abs() < 1e-3,
+                "source slice keeps only the visible part: {}",
+                source_rect.width()
+            );
+        })
+        .expect("current row");
+
+    builder.end_row();
+    builder.end_window();
+    let state = builder.finish(24, 1, 8.0, 16.0);
+    let frame = state.materialize();
+    let image = frame
+        .glyphs
+        .iter()
+        .find_map(|glyph| match glyph {
+            neomacs_display_protocol::frame_glyphs::FrameGlyph::Image {
+                image_id,
+                x,
+                width,
+                source_rect,
+                ..
+            } => Some((*image_id, *x, *width, *source_rect)),
+            _ => None,
+        })
+        .expect("image materialized from its cropped row glyph");
+    assert_eq!(image.0.get(), 42);
+    assert_eq!((image.1, image.2), (16.0, 154.0));
+    assert!((image.3.x() - 0.0).abs() < 1e-3);
+    assert!((image.3.width() - 154.0 / 300.0).abs() < 1e-3);
+}
+
+/// A row that refuses an image says so.
+///
+/// The refusal is what lets the buffer renderer move the image down to the next
+/// row (GNU `display_line`, src/xdisp.c:26448-26475).  An append that reported
+/// only an unchanged pen left the caller no way to tell a refused replacement
+/// from a placed one, so the covered buffer text stayed and the image vanished.
+#[test]
+fn display_replacement_row_render_reports_an_image_the_row_refuses() {
+    let mut eval = Context::new();
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("refused-mid-row-image", 320, 120, buf_id);
+    let window_id = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    let mut output_emitter =
+        crate::window_output::WindowOutputEmitter::new(frame_id, window_id, 0, 0.0, 0.0);
+    output_emitter.begin_update(&mut eval);
+    output_emitter.begin_text_row(&mut eval, 0, 0, 0.0, 0.0);
+    let table = FaceTable::new();
+    let face_resolver = crate::neovm_bridge::FaceResolver::new(
+        &table,
+        0x00ffffff,
+        0x000000,
+        14.0,
+        Some("neo".to_string()),
+    );
+    let base_face = face_resolver.default_face();
+    let mut font_metrics = None;
+
+    let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    let text_bounds = Rect::new(10.0, 20.0, 160.0, 64.0);
+    builder.begin_window_with_text_bounds(
+        77,
+        1,
+        24,
+        Rect::new(0.0, 0.0, 200.0, 80.0),
+        text_bounds,
+        true,
+    );
+    builder.begin_row(0, GlyphRowRole::Text);
+    let surface = DisplayRowAppendSurface::new(
+        DisplayRowAppendArea::new(text_bounds.x, 160.0, 160.0, 0.0, 0.0),
+        DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
+    );
+    let mut geometry =
+        DisplayRowGeometryDefaults::new(0.0, 16.0, 12.0, DisplayRowMeasurementMode::ConcreteFont)
+            .initial_state();
+    let active_face = test_active_face_state(FaceId::new(3), 8.0);
+    let mut face_ids = FrameFaceAttempt::for_test_with_next_id(4);
+    builder.set_face_attempt(face_ids.clone());
+
+    // The row already holds text, so the image is a mid-row glyph rather than
+    // the row's first: GNU's crop applies to a glyph at column zero and leaves a
+    // mid-row one whole (`produce_image_glyph`, src/xdisp.c:32492-32509).
+    for index in 0..18 {
+        write_char_to_current_row_with_width(&mut builder, 'x', FaceId::new(3), index, 8.0);
+    }
+
+    // 30px of image left at x = 150 of a 160px-wide text area: too wide to fit,
+    // but narrower than a quarter of the row, so GNU leaves the glyph whole
+    // instead of cropping it, and this row's text-area edge policy rejects it.
+    let media_item = DisplayReplacementMediaSourceItem::new(
+        DisplayMediaReplacement::image(DisplayImageItem {
+            image_id: 42,
+            source_rect: neomacs_display_protocol::ImageSourceRect::FULL,
+            width: 30.0,
+            height: 32.0,
+            ascent: 32.0,
+            horizontal_margin: 0.0,
+            vertical_margin: 0.0,
+            opaque_background: None,
+        }),
+        active_face.metrics().row_height(),
+        active_face.metrics().ascent(),
+        false,
+    );
+    let replacement_source = crate::display_item::BufferDisplayReplacementSource::new(
+        buf_id,
+        CharPos0::new(0),
+        EmacsBytePos::new(0),
+    );
+    let snapshot = current_buffer_snapshot(&eval, buf_id);
+    let plan = DisplayPropertyReplacementRowRenderRequest::from_resolved_source_item(
+        replacement_source,
+        DisplayPropertyReplacementSourceItem::Media(
+            DisplayReplacementMediaSourceResolution::Media(media_item),
+        ),
+        0.0,
+        DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
+        DisplayRowPosition::new(150.0, 18),
+    );
+    let render = plan.begin_render_to_text_rows(
+        &snapshot,
+        &mut text_row_source_render_state(
+            &mut builder,
+            &mut output_emitter,
+            &mut eval,
+            &mut font_metrics,
+            &face_resolver,
+        ),
+        &mut face_ids,
+        &surface,
+        &mut geometry,
+        &active_face,
+    );
+    let DisplayPropertyReplacementRowRender::Applied(outcome) = render else {
+        panic!("a media replacement is atomic");
+    };
+
+    assert_eq!(
+        outcome.placement(),
+        DisplayReplacementPlacement::RefusedWhole,
+        "the row refused the image and said so"
+    );
+    assert_eq!(
+        outcome.end_position(),
+        DisplayRowPosition::new(150.0, 18),
+        "a refused replacement leaves the pen where it was"
+    );
+    builder
+        .edit_current_row_for_test(|row| {
+            let text = &row.glyphs[GlyphArea::Text.index()];
+            assert_eq!(text.len(), 18, "only the row's text is on the row");
+            assert!(
+                text.iter()
+                    .all(|glyph| !matches!(glyph.glyph_type, GlyphType::Image { .. })),
+                "not one glyph of the refused image is on the row"
+            );
+        })
+        .expect("current row");
+
+    // The same row places an image the leftover space can hold, and says so:
+    // "refused" is the row's answer, not this append's.
+    let fitting = DisplayPropertyReplacementRowRenderRequest::from_resolved_source_item(
+        replacement_source,
+        DisplayPropertyReplacementSourceItem::Media(
+            DisplayReplacementMediaSourceResolution::Media(DisplayReplacementMediaSourceItem::new(
+                DisplayMediaReplacement::image(DisplayImageItem {
+                    image_id: 43,
+                    source_rect: neomacs_display_protocol::ImageSourceRect::FULL,
+                    width: 15.0,
+                    height: 32.0,
+                    ascent: 32.0,
+                    horizontal_margin: 0.0,
+                    vertical_margin: 0.0,
+                    opaque_background: None,
+                }),
+                active_face.metrics().row_height(),
+                active_face.metrics().ascent(),
+                false,
+            )),
+        ),
+        0.0,
+        DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
+        DisplayRowPosition::new(150.0, 18),
+    );
+    let render = fitting.begin_render_to_text_rows(
+        &snapshot,
+        &mut text_row_source_render_state(
+            &mut builder,
+            &mut output_emitter,
+            &mut eval,
+            &mut font_metrics,
+            &face_resolver,
+        ),
+        &mut face_ids,
+        &surface,
+        &mut geometry,
+        &active_face,
+    );
+    let DisplayPropertyReplacementRowRender::Applied(outcome) = render else {
+        panic!("a media replacement is atomic");
+    };
+    assert_eq!(
+        outcome.placement(),
+        DisplayReplacementPlacement::Placed,
+        "the row keeps an image it has room for"
+    );
+    assert_eq!(
+        outcome.end_position(),
+        DisplayRowPosition::new(165.0, 20),
+        "a placed image advances the pen by its advance"
     );
 }
 
@@ -12523,6 +13009,7 @@ fn display_property_live_render_outcome(
     let surface = DisplayRowAppendSurface::new(
         DisplayRowAppendArea::new(0.0, 800.0, 800.0, 0.0, 0.0),
         DisplayTabPolicy::every(8),
+        DisplayRowLineWrap::Truncate,
     );
     let params = test_display_space_window_params();
     let text_bytes = text.as_bytes();
@@ -12585,6 +13072,7 @@ fn display_property_live_render_outcome(
             false,
             DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
             DisplayRowVisibilityLimit {
+                allow_partial: false,
                 max_rows: 4,
                 bottom_y: 64.0,
             },
@@ -12842,4 +13330,134 @@ fn live_buffer_display_property_mapped_text_replacement_matrix() {
     );
     assert_eq!(outcome.charpos, 3);
     assert_eq!(outcome.byte_idx, 3);
+}
+
+#[test]
+fn independent_source_width_probes_do_not_copy_preceding_glyphs() {
+    use crate::display_current_row_output::SCRATCH_GLYPHS_COPIED;
+    use crate::display_item::{DisplayTextRun, SourceSpan};
+    let mut eval = Context::new();
+    let table = FaceTable::new();
+    let resolver = FaceResolver::new(&table, 0xffffff, 0, 14.0, None);
+    let active = test_active_face_state(FaceId::new(7), 8.0);
+    let mut metrics = None;
+    let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
+    builder.begin_row(0, GlyphRowRole::Text);
+    for i in 0..128 {
+        write_char_to_current_row_with_width(&mut builder, 'W', FaceId::new(7), i, 8.0);
+    }
+    let before = DisplayRowCurrentRowOutput::from_output_builder(&mut builder)
+        .current_row_snapshot()
+        .unwrap();
+    SCRATCH_GLYPHS_COPIED.with(|count| count.set(0));
+    for ch in ' '..='~' {
+        let item = DisplayItem::new(
+            SourceSpan::synthetic(123, 0, 1),
+            RenderFaceRef::FaceId(FaceId::new(7)),
+            DisplayItemKind::TextRun(DisplayTextRun::independent(ch.to_string())),
+        );
+        let request = DisplaySourceNaturalMeasurementRequest::for_range_and_cluster(
+            DisplaySourceTextRange::new(CharPos0::new(128), CharPos0::new(129)),
+            DisplaySourceClusterState::for_char(ch, None),
+        );
+        let width = request.resolve_to_text_row(
+            &mut text_row_source_measure_state(&mut builder, &mut eval, &mut metrics, &resolver),
+            &active,
+            test_append_frame(8.0, 8.0, DisplayTabPolicy::every(8)),
+            DisplayRowPosition::new(1024.0, 128),
+            &item,
+        );
+        assert_eq!(width, 8.0, "{ch}");
+    }
+    assert_eq!(
+        before,
+        DisplayRowCurrentRowOutput::from_output_builder(&mut builder)
+            .current_row_snapshot()
+            .unwrap()
+    );
+    assert_eq!(SCRATCH_GLYPHS_COPIED.with(|count| count.get()), 0);
+}
+
+#[test]
+fn independent_width_probe_matches_full_row_with_modifiers_and_context() {
+    use crate::display_item::{DisplayTextRun, SourceSpan};
+    let mut eval = Context::new();
+    let table = FaceTable::new();
+    let resolver = FaceResolver::new(&table, 0xffffff, 0, 14.0, None);
+    let active = test_active_face_state(FaceId::new(7), 8.0);
+    let mut metrics = None;
+    let mut builder = crate::output::builder::DisplayOutputBuilder::new();
+    builder.begin_window(1, 1, 20, Rect::new(0.0, 0.0, 160.0, 16.0), true);
+    builder.begin_row(0, GlyphRowRole::Text);
+    for prefix in ['W', '中', '\u{200d}'] {
+        builder
+            .edit_current_row_for_test(|row| {
+                row.glyphs[1].clear();
+                row.height_px = 38.0;
+                row.ascent_px = 30.0;
+                row.pixel_x = 7.25;
+                row.start_col = 3;
+            })
+            .unwrap();
+        for i in 0..80 {
+            write_char_to_current_row_with_width(&mut builder, prefix, FaceId::new(7), i, 8.0);
+        }
+        let before = DisplayRowCurrentRowOutput::from_output_builder(&mut builder)
+            .current_row_snapshot()
+            .unwrap();
+        let context = SingleDisplayItemAppendContext::for_source_walk(
+            active.resolved_face(),
+            active.face_id(),
+            test_append_frame(8.0, 8.0, DisplayTabPolicy::every(8)),
+        );
+        for layout in [
+            DisplayItemLayout::default(),
+            DisplayItemLayout {
+                raise: Some(0.3),
+                height: Some(27.0),
+                space_width: Some(2.25),
+                break_after_row: false,
+            },
+        ] {
+            for ch in (' '..='~').chain(['\t', '中', '\u{301}']) {
+                let mut item = DisplayItem::new(
+                    SourceSpan::synthetic(123, 0, 1),
+                    RenderFaceRef::FaceId(active.face_id()),
+                    DisplayItemKind::TextRun(DisplayTextRun::independent(ch.to_string())),
+                );
+                item.layout = layout;
+                let pen = DisplayRowPosition::new(647.25, 83);
+                let kind = if ch == '\t' {
+                    DisplayRowAppendKind::Tab
+                } else {
+                    DisplayRowAppendKind::SourceText
+                };
+                let mut state =
+                    text_row_source_measure_state(&mut builder, &mut eval, &mut metrics, &resolver);
+                let expected = context
+                    .measure_width_with_policy(
+                        &mut state,
+                        item.clone(),
+                        pen,
+                        kind,
+                        &mut NaturalDisplayRowAppendRenderPolicy,
+                    )
+                    .unwrap();
+                let measured = context
+                    .measure_width_naturally(&mut state, item, pen, kind)
+                    .unwrap();
+                assert_eq!(
+                    measured, expected,
+                    "prefix={prefix:?} ch={ch:?} layout={layout:?}"
+                );
+            }
+        }
+        assert_eq!(
+            before,
+            DisplayRowCurrentRowOutput::from_output_builder(&mut builder)
+                .current_row_snapshot()
+                .unwrap()
+        );
+    }
 }

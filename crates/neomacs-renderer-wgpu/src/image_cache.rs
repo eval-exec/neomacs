@@ -6,6 +6,8 @@
 //! - GPU texture upload when ready
 //! - LRU cache with memory limits
 
+use neomacs_display_protocol::image::EncodedBytes;
+use neomacs_display_protocol::image_diagnostic::{ImageDiagnostic, ImageLoadIdentity};
 use neomacs_display_protocol::{
     ImageCacheUsage, ImageColorContext, ImageEmbeddedMetadata, ImageFrameIndex, ImageHeuristicMask,
     ImageId, ImageIntrinsicExtent, ImageLayoutExtent, ImageLoadAttempt, ImageLoadToken,
@@ -15,15 +17,17 @@ use neomacs_display_protocol::{
 };
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
-use std::fs::File;
-use std::io::BufReader;
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
+use crate::image_bands::{
+    BandFilling, BandSource, BandStep, DecodedBand, RasterBand, RowRange, TextureRows,
+    classify_alpha,
+};
 use crate::image_sequence::{ImageSequenceCache, ImageSequenceResolution};
 
 #[cfg(target_os = "linux")]
@@ -31,6 +35,18 @@ use crate::external_buffer::DmaBufBuffer;
 
 /// Maximum texture dimension (width or height)
 const MAX_TEXTURE_SIZE: u32 = 4096;
+
+/// Test-only: abandon a banded attempt after this many bands have been
+/// published. Zero disables it.
+///
+/// The property this serves — a banded decode that stops part-way leaves the
+/// caller with a whole image rather than a truncated one — cannot be expressed
+/// with a fixture: both paths read the same bytes, so a source the row-wise
+/// reader rejects is one the whole-image decoder rejects too. Injecting the cut
+/// leaves the consequence under test exactly as it would be, and `nextest`
+/// gives each test its own process, so the hook cannot leak into another.
+#[cfg(test)]
+static ABANDON_AFTER_BANDS: AtomicU32 = AtomicU32::new(0);
 
 /// Clamp to the renderer's texture limit, preserving aspect ratio.
 ///
@@ -58,6 +74,23 @@ pub(crate) fn constrain_dimensions(width: u32, height: u32) -> (u32, u32) {
 pub(crate) fn constrain_raster_extent(extent: ImageRasterExtent) -> ImageRasterExtent {
     let (width, height) = constrain_dimensions(extent.width(), extent.height());
     ImageRasterExtent::new(width, height)
+}
+
+/// The geometry a decode realizes to, raster clamped by the texture limit.
+///
+/// One function rather than a line in each caller, because two callers must
+/// agree about it: `NativePixels::realize_bitmap` scales the whole image onto
+/// this raster, and a banded decode builds the raster it writes into from it
+/// (`image_bands::BandPlan::target`). A decode writing under a different raster
+/// than the upload that finishes it would leave the texture holding rows from
+/// two scales, which nothing downstream could detect.
+pub(crate) fn realized_geometry(
+    extent: ImageNativeExtent,
+    size: ImageSizeSpec,
+    realization: ImageRealization,
+) -> ResolvedImageGeometry {
+    let geometry = realization.resolve_geometry(size, extent, ImageRotation::None);
+    geometry.with_raster(constrain_raster_extent(geometry.raster()))
 }
 
 /// Maximum total cache memory in bytes (64MB)
@@ -109,6 +142,102 @@ pub enum ImageState {
     Failed(String),
 }
 
+/// How much of a texture holds pixels, as a prefix of its rows.
+///
+/// A banded decode fills from the top: its bands are disjoint, in order, and
+/// the first starts at row 0, so the rows that exist are always a *prefix* of
+/// the texture — never a set, never a hole. That is what lets the draw side ask
+/// one number how far down it may draw, and it is why `filled <= total` is an
+/// invariant of this type rather than a check at each use: a value claiming more
+/// rows than the texture has cannot be built, so "draw a row that was never
+/// uploaded" cannot be said.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FilledRows {
+    filled: u32,
+    total: NonZeroU32,
+}
+
+impl FilledRows {
+    /// Every row of a texture that was written whole.
+    #[must_use]
+    pub fn complete(raster: ImageRasterExtent) -> Self {
+        Self::partial(raster.height(), raster.height())
+    }
+
+    /// A texture whose rows are all still to be written.
+    #[must_use]
+    pub fn empty(raster: ImageRasterExtent) -> Self {
+        Self::partial(0, raster.height())
+    }
+
+    fn partial(filled: u32, total: u32) -> Self {
+        Self {
+            filled,
+            total: NonZeroU32::new(total).unwrap_or(NonZeroU32::MIN),
+        }
+    }
+
+    /// The part of a `total`-row texture that holds pixels.
+    #[must_use]
+    pub const fn filled(&self) -> u32 {
+        self.filled
+    }
+
+    /// How many rows the texture has.
+    #[must_use]
+    pub const fn total(&self) -> NonZeroU32 {
+        self.total
+    }
+
+    /// Whether every row of the texture has been written.
+    #[must_use]
+    pub const fn is_complete(&self) -> bool {
+        self.filled == self.total.get()
+    }
+
+    /// How far down the texture a quad may be drawn, as a texture coordinate.
+    #[must_use]
+    pub fn filled_fraction(&self) -> f32 {
+        self.filled as f32 / self.total.get() as f32
+    }
+
+    /// This prefix extended by `rows`, which must start exactly where it ends.
+    ///
+    /// `None` for a band that would leave a hole or rewrite rows that are
+    /// already there — a band from a superseded decode, or one that was applied
+    /// twice. Holding the extended value is what the write of those rows is
+    /// paired with, so a texture cannot come to claim rows nobody wrote.
+    #[must_use]
+    pub fn extend(self, rows: TextureRows) -> Option<Self> {
+        (rows.start() == self.filled && rows.end() <= self.total.get()).then(|| Self {
+            filled: rows.end(),
+            ..self
+        })
+    }
+
+    /// Trim a drawn span to the rows that hold pixels.
+    ///
+    /// `height` is how many pixels of the glyph are drawn and `v0..v1` the same
+    /// span as texture rows, so the finish is affine and shortening one by a
+    /// fraction shortens the other by the same fraction. `None` when nothing of
+    /// the span is uploaded: the quad must be skipped rather than drawn against
+    /// rows that were never written.
+    #[must_use]
+    pub fn clip_span(self, v0: f32, v1: f32, height: f32) -> Option<(f32, f32)> {
+        if v1 <= v0 {
+            return None;
+        }
+        let limit = self.filled_fraction();
+        if v0 >= limit {
+            return None;
+        }
+        if v1 <= limit {
+            return Some((v1, height));
+        }
+        Some((limit, height * (limit - v0) / (v1 - v0)))
+    }
+}
+
 /// Cached image with GPU texture
 pub struct CachedImage {
     pub texture: wgpu::Texture,
@@ -116,6 +245,13 @@ pub struct CachedImage {
     pub bind_group: wgpu::BindGroup,
     /// Uploaded texture dimensions in physical device pixels.
     pub raster: ImageRasterExtent,
+    /// How much of `raster` has been written.
+    ///
+    /// Everything, for an image that was decoded whole. A banded decode leaves
+    /// this short of `raster` while its rows are still arriving, and every
+    /// consumer that draws the image reads it from here — there is no second
+    /// copy of "how far has it got" to fall out of step with the texture.
+    pub filled: FilledRows,
     pub metadata: Option<ImageMetadata>,
     /// Memory size in bytes
     pub memory_size: usize,
@@ -130,6 +266,24 @@ struct DecodedImage {
     geometry: ResolvedImageGeometry,
     data: Vec<u8>, // RGBA
     metadata: ImageMetadata,
+}
+
+/// What one attempt at a banded decode produced.
+///
+/// The two ways of not completing are separate arms because they mean
+/// different things to a reader — one is a source that never had a row-wise
+/// decoder, the other a decoder that stopped part-way — even though the caller
+/// does the same thing with both.
+enum BandedAttempt {
+    /// Every row was decoded, into the raster the image is realized to.
+    Complete(DecodedPixels),
+    /// The source has no row-wise decoder at this size, or none for its format,
+    /// or no band of it has anywhere to go: decode the whole image.
+    NotBandable,
+    /// A row-wise decode that could not finish. The bands it published are
+    /// abandoned; decoding the whole image is the only way to end up with a
+    /// whole one.
+    Abandoned,
 }
 
 /// Pixels directly emitted by a decoder before an image spec is realized.
@@ -175,12 +329,10 @@ impl NativePixels {
         mask_policy: ImageMaskPolicy,
     ) -> Option<DecodedPixels> {
         let mask = apply_mask_policy(&mut self.rgba, self.extent.dimensions(), mask_policy);
-        let geometry = realization.resolve_geometry(size, self.extent, ImageRotation::None);
-        let raster = constrain_raster_extent(geometry.raster());
-        let geometry = geometry.with_raster(raster);
-        let (raster_width, raster_height) = raster.dimensions();
+        let geometry = realized_geometry(self.extent, size, realization);
+        let (raster_width, raster_height) = geometry.raster().dimensions();
         let (native_width, native_height) = self.extent.dimensions();
-        let rgba = if raster == ImageRasterExtent::new(native_width, native_height) {
+        let rgba = if geometry.raster() == ImageRasterExtent::new(native_width, native_height) {
             self.rgba
         } else {
             let source = image::RgbaImage::from_raw(native_width, native_height, self.rgba)?;
@@ -214,22 +366,6 @@ impl NativePixels {
             mask,
             embedded: self.embedded,
         })
-    }
-}
-
-fn classify_alpha(rgba: &[u8]) -> ImageMaskKind {
-    let mut has_transparent = false;
-    for alpha in rgba.iter().skip(3).step_by(4).copied() {
-        match alpha {
-            255 => {}
-            0 => has_transparent = true,
-            _ => return ImageMaskKind::AlphaChannel,
-        }
-    }
-    if has_transparent {
-        ImageMaskKind::Clipping
-    } else {
-        ImageMaskKind::None
     }
 }
 
@@ -303,15 +439,26 @@ fn apply_mask_policy(
 }
 
 enum WorkerDecodeOutcome {
+    /// One band of a decode that is still running. Intermediate, not terminal:
+    /// it consumes no load generation, and the `Ready` that ends the decode
+    /// supersedes it.
+    Band {
+        load: ImageLoadToken,
+        decoded: DecodedBand,
+    },
     Ready(DecodedImage),
-    Failed(ImageLoadToken),
+    Failed {
+        load: ImageLoadToken,
+        diagnostic: ImageDiagnostic,
+    },
 }
 
 impl WorkerDecodeOutcome {
     fn load(&self) -> ImageLoadToken {
         match self {
+            Self::Band { load, .. } => *load,
             Self::Ready(decoded) => decoded.load,
-            Self::Failed(load) => *load,
+            Self::Failed { load, .. } => *load,
         }
     }
 }
@@ -321,13 +468,23 @@ impl WorkerDecodeOutcome {
 /// residency state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ImageCacheEvent {
+    /// One band of an image whose decode is still running.
+    ///
+    /// Intermediate by construction: the `Ready` for the same load carries the
+    /// whole image, so a consumer that drew this band ends up correct. Only the
+    /// rows are published — they are what says how far the decode has come, and
+    /// the pixels have already gone into the texture.
+    Band {
+        load: ImageLoadToken,
+        rows: RowRange,
+    },
     Ready {
         load: ImageLoadToken,
         metadata: ImageMetadata,
     },
     Failed {
         load: ImageLoadToken,
-        error: String,
+        error: ImageDiagnostic,
     },
     Evicted {
         image: ImageId,
@@ -364,14 +521,32 @@ impl ImageLoadLifecycle {
     }
 
     fn accept(&mut self, load: ImageLoadToken) -> bool {
-        if self.active.get(&load.image()) != Some(&load.attempt()) {
+        if !self.is_current(load) {
             return false;
         }
         self.active.remove(&load.image());
         true
     }
 
+    /// Whether `load` is still the attempt allowed to publish for its image,
+    /// without consuming it.
+    ///
+    /// Intermediate publications — bands — check this and leave the attempt
+    /// alone; only the terminal outcome consumes it.
+    fn is_current(&self, load: ImageLoadToken) -> bool {
+        self.active.get(&load.image()) == Some(&load.attempt())
+    }
+
+    /// Accept `outcome` if its attempt is still the current one.
+    ///
+    /// A band and a terminal outcome differ here: a band is progress from a
+    /// decode that is still running, so it is checked and left alone, while
+    /// only the terminal outcome consumes the attempt — once, so a superseded
+    /// decode can never publish Ready after its replacement has begun.
     fn take_current(&mut self, outcome: WorkerDecodeOutcome) -> Option<WorkerDecodeOutcome> {
+        if matches!(outcome, WorkerDecodeOutcome::Band { .. }) {
+            return self.is_current(outcome.load()).then_some(outcome);
+        }
         self.accept(outcome.load()).then_some(outcome)
     }
 
@@ -490,6 +665,99 @@ struct DecodeRequest {
     colors: ImageColorContext,
     mask: ImageMaskPolicy,
     frame: ImageFrameIndex,
+    /// What GNU calls this source when the decode fails.  It travels with the
+    /// job because the failure is worded by the loader's own rules (`Not a PNG
+    /// file: `%s'`), and the job is the last place that knows both the bytes
+    /// and what they were asked to be.
+    identity: ImageLoadIdentity,
+}
+
+/// What a decode job can still say about a source once the decode chain has
+/// collapsed every reason to `None`.
+///
+/// The chain that answers `Option` — banded attempt, whole-image decode, XPM,
+/// XBM, SVG — loses its reason at every fallback: a banded attempt that cannot
+/// finish hands the same bytes to the whole-image path, which hands them to
+/// the next format. GNU does not have this problem because each of its loaders
+/// checks its own signature and reports its own decoder's message, so the
+/// reason is recovered here from the two facts that survive: which source was
+/// asked for, and what its bytes turned out to be.
+enum DecodeFailureSource {
+    /// A `:file` source, named by the path a load command was given.
+    File { path: String },
+    /// A `:data` source, whose bytes are already in hand.
+    Bytes { data: EncodedBytes },
+    /// Raw pixels handed over by a caller, with no encoded format to name and
+    /// no GNU loader behind them.
+    Raw,
+}
+
+impl DecodeFailureSource {
+    /// Capture the source before the decode consumes it.
+    ///
+    /// Both captures are cheap references to what the job already owns — a
+    /// path clone and a handle to the same bytes — because this runs on the
+    /// decode path for every job, not only the failing ones.
+    fn of(source: &ImageSource) -> Self {
+        match source {
+            ImageSource::File { path, .. } => Self::File { path: path.clone() },
+            ImageSource::Data { data, .. } => Self::Bytes { data: data.clone() },
+            ImageSource::RawArgb32 { .. } | ImageSource::RawRgb24 { .. } => Self::Raw,
+            #[cfg(test)]
+            ImageSource::Panic => Self::Raw,
+        }
+    }
+
+    fn diagnostic(&self, identity: &ImageLoadIdentity) -> ImageDiagnostic {
+        // A source that arrived without a specification has no declared type
+        // and no printed spec, so there is no GNU sentence that is true of it.
+        if identity.is_unspecified() {
+            return ImageDiagnostic::NotDrawable;
+        }
+        match self {
+            // GNU asks `emacs_open` first and only then checks the signature
+            // (`src/image.c:8282-8303`), so "the file is not there" and "the
+            // file is not a PNG" are different sentences. Re-reading on the
+            // failure path is what recovers that distinction: it happens once,
+            // only when the decode has already failed.
+            Self::File { path } => match std::fs::read(path) {
+                Err(_) => identity.not_found(),
+                Ok(bytes) => Self::from_bytes(identity, &bytes),
+            },
+            Self::Bytes { data } => Self::from_bytes(identity, data.as_slice()),
+            Self::Raw => ImageDiagnostic::NotDrawable,
+        }
+    }
+
+    fn from_bytes(identity: &ImageLoadIdentity, data: &[u8]) -> ImageDiagnostic {
+        if image::guess_format(data).is_err() {
+            return identity.wrong_format();
+        }
+        // The format was recognised and the decode failed inside it, which is
+        // GNU's `PNG error: %s` / `Error reading JPEG image ...` arm.
+        let format = identity.format().clone();
+        match image::load_from_memory(data) {
+            // libpng's `png_read_data` reports a short read as `Read error`,
+            // and a stream that ends early is exactly what the `image` crate
+            // calls `UnexpectedEof`. Anything else keeps the decoder's own
+            // words, which is what GNU passes through verbatim
+            // (`image_error ("PNG error: %s", ...)`, `src/image.c:8184`).
+            Err(image::ImageError::IoError(error))
+                if error.kind() == std::io::ErrorKind::UnexpectedEof =>
+            {
+                ImageDiagnostic::FormatError {
+                    format,
+                    detail: "Read error".to_owned(),
+                }
+            }
+            Err(error) => ImageDiagnostic::FormatError {
+                format,
+                detail: error.to_string(),
+            },
+            // The bytes decoded; something after the decoder refused them.
+            Ok(_) => ImageDiagnostic::NotDrawable,
+        }
+    }
 }
 
 /// Image source
@@ -499,7 +767,7 @@ enum ImageSource {
         sequence: ImageSequenceId,
     },
     Data {
-        data: Vec<u8>,
+        data: EncodedBytes,
         resources: crate::svg::SvgResourceContext,
         sequence: ImageSequenceId,
     },
@@ -665,7 +933,26 @@ impl ImageCache {
                         colors,
                         mask,
                         frame,
+                        identity,
                     } = request;
+                    // A banded decode reports each band as it lands, which is
+                    // the whole point of decoding that way: the display side
+                    // can act on a band long before the decode finishes, and
+                    // the render thread can write it into the texture. The sink
+                    // is a borrow of this closure rather than a returned
+                    // collection — a band is worth having before the next one
+                    // exists — and it is optional, because a caller that only
+                    // wants the image decodes the same pixels without any of
+                    // this.
+                    let mut publish_band = |decoded: DecodedBand| {
+                        let _ = tx.send(WorkerDecodeOutcome::Band { load, decoded });
+                    };
+                    let sink: Option<&mut dyn FnMut(DecodedBand)> = Some(&mut publish_band);
+                    // The chain below answers `Option` and each arm collapses
+                    // its own reason, so what the failure is worded *about* is
+                    // captured before the bytes are handed over: the source
+                    // itself, and whether reading it worked at all.
+                    let failure_source = DecodeFailureSource::of(&source);
                     let result = catch_unwind(AssertUnwindSafe(|| match source {
                         #[cfg(test)]
                         ImageSource::Panic => panic!("injected decoder panic"),
@@ -679,13 +966,14 @@ impl ImageCache {
                             frame,
                             &sequence_cache,
                             sequence,
+                            sink,
                         ),
                         ImageSource::Data {
                             data,
                             resources,
                             sequence,
                         } => Self::decode_data(
-                            &data,
+                            data,
                             size,
                             rotation,
                             colors,
@@ -695,6 +983,7 @@ impl ImageCache {
                             resources,
                             &sequence_cache,
                             sequence,
+                            sink,
                         ),
                         ImageSource::RawArgb32 {
                             data,
@@ -722,14 +1011,20 @@ impl ImageCache {
                         Ok(Some(pixels)) => {
                             WorkerDecodeOutcome::Ready(Self::decoded_image(load, pixels))
                         }
-                        Ok(None) => WorkerDecodeOutcome::Failed(load),
+                        Ok(None) => WorkerDecodeOutcome::Failed {
+                            load,
+                            diagnostic: failure_source.diagnostic(&identity),
+                        },
                         Err(_) => {
                             tracing::warn!(
                                 "Decoder thread {} recovered from a panic while decoding image {}",
                                 thread_id,
                                 load.image()
                             );
-                            WorkerDecodeOutcome::Failed(load)
+                            WorkerDecodeOutcome::Failed {
+                                load,
+                                diagnostic: failure_source.diagnostic(&identity),
+                            }
                         }
                     };
                     let _ = tx.send(outcome);
@@ -754,13 +1049,28 @@ impl ImageCache {
         frame: ImageFrameIndex,
         sequence_cache: &ImageSequenceCache,
         sequence: ImageSequenceId,
+        sink: Option<&mut dyn FnMut(DecodedBand)>,
     ) -> Option<DecodedPixels> {
-        let encoded = std::fs::read(path).ok();
-        if let Some(pixels) = encoded
-            .as_deref()
-            .and_then(|data| Self::decode_raster_data(data, frame, sequence_cache, sequence))
-        {
-            return pixels.realize_bitmap(size, rotation, realization, mask);
+        // The bytes the decode will read, owned here and handed to the decode
+        // chain by handle: `std::fs::read` gives the buffer, `EncodedBytes`
+        // moves it, and the fallbacks below still have the handle they need.
+        // The one clone is the atomic a decode job pays for the attempt to
+        // hold the bytes while this copy keeps them for the fallbacks.
+        let encoded = std::fs::read(path).ok().map(EncodedBytes::new);
+        if let Some(pixels) = encoded.as_ref().and_then(|data| {
+            Self::decode_raster_data(
+                data.clone(),
+                frame,
+                sequence_cache,
+                sequence,
+                size,
+                rotation,
+                realization,
+                mask,
+                sink,
+            )
+        }) {
+            return Some(pixels);
         }
         if !frame.is_first() {
             return None;
@@ -800,7 +1110,7 @@ impl ImageCache {
 
     /// Decode image data with size constraints
     fn decode_data(
-        data: &[u8],
+        data: EncodedBytes,
         size: ImageSizeSpec,
         rotation: ImageRotation,
         colors: ImageColorContext,
@@ -810,15 +1120,26 @@ impl ImageCache {
         resources: crate::svg::SvgResourceContext,
         sequence_cache: &ImageSequenceCache,
         sequence: ImageSequenceId,
+        sink: Option<&mut dyn FnMut(DecodedBand)>,
     ) -> Option<DecodedPixels> {
-        if let Some(pixels) = Self::decode_raster_data(data, frame, sequence_cache, sequence) {
-            return pixels.realize_bitmap(size, rotation, realization, mask);
+        if let Some(pixels) = Self::decode_raster_data(
+            data.clone(),
+            frame,
+            sequence_cache,
+            sequence,
+            size,
+            rotation,
+            realization,
+            mask,
+            sink,
+        ) {
+            return Some(pixels);
         }
         if !frame.is_first() {
             return None;
         }
         // Fallback: try XPM
-        if let Some(result) = crate::xpm::decode_xpm_data(data) {
+        if let Some(result) = crate::xpm::decode_xpm_data(&data) {
             return NativePixels::from_raster_tuple(result).realize_bitmap(
                 size,
                 rotation,
@@ -829,7 +1150,7 @@ impl ImageCache {
         // Fallback: try XBM
         let fg = colors.foreground().rgba8();
         let bg = colors.background_rgba8();
-        if let Some(result) = crate::xbm::decode_xbm_data(data, fg, bg) {
+        if let Some(result) = crate::xbm::decode_xbm_data(&data, fg, bg) {
             return NativePixels::from_raster_tuple(result).realize_bitmap(
                 size,
                 rotation,
@@ -838,7 +1159,7 @@ impl ImageCache {
             );
         }
         // Fallback: try SVG via the shared vector backend.
-        Self::decode_svg_data(data, size, rotation, realization, colors, mask, resources)
+        Self::decode_svg_data(&data, size, rotation, realization, colors, mask, resources)
     }
 
     /// Decode a raster source while preserving multi-frame semantics.
@@ -848,26 +1169,142 @@ impl ImageCache {
     /// formats through `AnimationDecoder` first, then use the still-image path
     /// only for frame zero.
     fn decode_raster_data(
-        data: &[u8],
+        data: EncodedBytes,
         frame: ImageFrameIndex,
         sequence_cache: &ImageSequenceCache,
         sequence: ImageSequenceId,
-    ) -> Option<NativePixels> {
-        match sequence_cache.resolve(sequence, data, frame) {
+        size: ImageSizeSpec,
+        rotation: ImageRotation,
+        realization: ImageRealization,
+        mask_policy: ImageMaskPolicy,
+        sink: Option<&mut dyn FnMut(DecodedBand)>,
+    ) -> Option<DecodedPixels> {
+        match sequence_cache.resolve(sequence, &data, frame) {
             ImageSequenceResolution::Frame(frame) => {
                 let (width, height) = frame.dimensions();
                 let (rgba, embedded) = frame.into_parts();
-                Some(NativePixels {
+                NativePixels {
                     extent: ImageNativeExtent::new(width, height),
                     rgba,
                     embedded,
-                })
+                }
+                .realize_bitmap(size, rotation, realization, mask_policy)
             }
             ImageSequenceResolution::MissingFrame => None,
             ImageSequenceResolution::NotAnimated => {
-                Self::process_image(image::load_from_memory(data).ok()?)
+                Self::decode_still_image(data, size, rotation, realization, mask_policy, sink)
             }
         }
+    }
+
+    /// Decode a still raster source, row-wise where the source allows it.
+    ///
+    /// The two arms of [`BandSource`] are the whole decision: a source with a
+    /// row-wise decoder above the size threshold is decoded band by band,
+    /// straight into the raster its texture holds, and everything else — every
+    /// other format, every source below the threshold, and any row-wise decode
+    /// that could not finish — is decoded whole and realized afterwards, which
+    /// is what this code did for every source before banding existed.
+    fn decode_still_image(
+        data: EncodedBytes,
+        size: ImageSizeSpec,
+        rotation: ImageRotation,
+        realization: ImageRealization,
+        mask_policy: ImageMaskPolicy,
+        sink: Option<&mut dyn FnMut(DecodedBand)>,
+    ) -> Option<DecodedPixels> {
+        match Self::attempt_banded(
+            data.clone(),
+            size,
+            realization,
+            BandFilling::of(rotation, mask_policy),
+            sink,
+        ) {
+            BandedAttempt::Complete(pixels) => Some(pixels),
+            BandedAttempt::NotBandable | BandedAttempt::Abandoned => {
+                Self::decode_whole(data)?.realize_bitmap(size, rotation, realization, mask_policy)
+            }
+        }
+    }
+
+    /// One attempt at a banded decode.
+    ///
+    /// The whole attempt resolves to one raster, from the *header's* extent
+    /// through the same `realized_geometry` the finished upload resolves from
+    /// the decoded one, and the source writes its rows into it as it reads
+    /// them. Step 1 pins those two extents equal, so the raster is the raster
+    /// the finished upload would write; if a header ever disagreed with its own
+    /// pixels, the source's own row count would differ from the height the
+    /// target was built for and the attempt is abandoned rather than published.
+    fn attempt_banded(
+        data: EncodedBytes,
+        size: ImageSizeSpec,
+        realization: ImageRealization,
+        filling: BandFilling,
+        mut sink: Option<&mut dyn FnMut(DecodedBand)>,
+    ) -> BandedAttempt {
+        // A band has a destination only where the texture can be built up from
+        // the top: an unrotated realization whose mask policy leaves the pixels
+        // alone. Where it has none — a turn lands a band's rows in the raster's
+        // columns, and a mask that rewrites pixels needs all of them first —
+        // there is nothing to write a band into as it arrives, and the only way
+        // to hold the rows until the end is the native-size buffer this step
+        // exists to remove. Such a source takes the whole-image path, which is
+        // what it took before banding and what it still looks like on screen:
+        // empty until the decode completes, then whole.
+        if filling == BandFilling::Deferred {
+            return BandedAttempt::NotBandable;
+        }
+        let mut source = match BandSource::open(data, size, realization) {
+            BandSource::Banded(source) => source,
+            BandSource::Whole => return BandedAttempt::NotBandable,
+        };
+        #[cfg(test)]
+        let mut published = 0_u32;
+        loop {
+            match source.next_band() {
+                BandStep::Band(band) => {
+                    if let Some(sink) = sink.as_deref_mut() {
+                        sink(band);
+                    }
+                    #[cfg(test)]
+                    {
+                        published += 1;
+                        let abandon_after = ABANDON_AFTER_BANDS.load(Ordering::Relaxed);
+                        if abandon_after != 0 && published >= abandon_after {
+                            return BandedAttempt::Abandoned;
+                        }
+                    }
+                }
+                // A completed source is the only one that yields pixels, so a
+                // prefix cannot escape as an image.
+                BandStep::Done => {
+                    let Some(pixels) = source.into_raster() else {
+                        return BandedAttempt::Abandoned;
+                    };
+                    let geometry = realized_geometry(pixels.native(), size, realization);
+                    debug_assert_eq!(
+                        geometry.raster(),
+                        pixels.raster(),
+                        "a decode fills the raster its realization resolves"
+                    );
+                    let mask = pixels.mask();
+                    return BandedAttempt::Complete(DecodedPixels {
+                        geometry,
+                        rgba: pixels.into_rgba(),
+                        mask,
+                        embedded: ImageEmbeddedMetadata::default(),
+                    });
+                }
+                BandStep::Failed => return BandedAttempt::Abandoned,
+            }
+        }
+    }
+
+    /// The whole image in one decode: the path every source took before
+    /// banding, and the one a banded attempt falls back to.
+    fn decode_whole(data: EncodedBytes) -> Option<NativePixels> {
+        Self::process_image(image::load_from_memory(&data).ok()?)
     }
 
     #[cfg(test)]
@@ -886,7 +1323,7 @@ impl ImageCache {
         frame: ImageFrameIndex,
     ) -> Option<DecodedImage> {
         let pixels = Self::decode_data(
-            data,
+            EncodedBytes::copy_of(data),
             ImageSizeSpec::default(),
             ImageRotation::None,
             ImageColorContext::default(),
@@ -896,6 +1333,7 @@ impl ImageCache {
             crate::svg::SvgResourceContext::Isolated,
             &ImageSequenceCache::new(),
             ImageSequenceId::new(1).expect("non-zero test sequence"),
+            None,
         )?;
         Some(Self::decoded_image(
             ImageLoadToken::new(
@@ -952,7 +1390,7 @@ impl ImageCache {
         realization: ImageRealization,
     ) -> Option<DecodedImage> {
         let pixels = Self::decode_data(
-            data,
+            EncodedBytes::copy_of(data),
             size,
             rotation,
             ImageColorContext::from_pixels(fg_bg.0, fg_bg.1),
@@ -962,6 +1400,7 @@ impl ImageCache {
             crate::svg::SvgResourceContext::Isolated,
             &ImageSequenceCache::new(),
             ImageSequenceId::new(1).expect("non-zero test sequence"),
+            None,
         )?;
         Some(Self::decoded_image(
             ImageLoadToken::new(
@@ -1193,16 +1632,10 @@ impl ImageCache {
     }
 
     fn query_file_intrinsic_extent(path: &str) -> Option<ImageIntrinsicExtent> {
-        let file = File::open(path).ok()?;
-        let reader = BufReader::new(file);
-
-        // Use image crate's dimension reader (reads header only)
-        if let Ok(dims) = image::ImageReader::new(reader)
-            .with_guessed_format()
-            .ok()?
-            .into_dimensions()
-        {
-            return Some(ImageNativeExtent::new(dims.0, dims.1).into());
+        if let Some(extent) = crate::image_probe::probe_intrinsic_extent(
+            crate::image_probe::ImageProbeSource::File(path),
+        ) {
+            return Some(extent);
         }
 
         // Fallback: try SVG.
@@ -1218,27 +1651,8 @@ impl ImageCache {
     }
 
     fn query_data_intrinsic_extent(data: &[u8]) -> Option<ImageIntrinsicExtent> {
-        let cursor = std::io::Cursor::new(data);
-        if let Ok(dims) = image::ImageReader::new(BufReader::new(cursor))
-            .with_guessed_format()
-            .ok()?
-            .into_dimensions()
-        {
-            return Some(ImageNativeExtent::new(dims.0, dims.1).into());
-        }
-
-        // Fallback: try XPM header
-        if let Some((w, h)) = crate::xpm::query_xpm_dimensions(data) {
-            return Some(ImageNativeExtent::new(w, h).into());
-        }
-
-        // Fallback: try XBM header
-        if let Some((w, h)) = crate::xbm::query_xbm_dimensions(data) {
-            return Some(ImageNativeExtent::new(w, h).into());
-        }
-
-        // Fallback: try SVG.
-        crate::svg::query_intrinsic_extent(data)
+        crate::image_probe::probe_intrinsic_extent(crate::image_probe::ImageProbeSource::Data(data))
+            .or_else(|| crate::svg::query_intrinsic_extent(data))
     }
 
     /// Preserve the pixel-query contract: return a bounding integer extent.
@@ -1271,15 +1685,20 @@ impl ImageCache {
             ImageFrameIndex::default(),
             ImageSequenceId::new(u64::from(image.get()))
                 .expect("allocated image identity is non-zero"),
+            ImageLoadIdentity::unspecified(),
         );
         image
     }
 
     /// Load image from data with a pre-allocated ID (for threaded mode)
+    ///
+    /// The bytes arrive as the handle the request already holds, and are moved
+    /// into the decode queue: the caller's buffer is the decode's buffer, which
+    /// is what the catalog's own key to the same request points at too.
     pub fn load_data_with_id(
         &mut self,
         load: ImageLoadToken,
-        data: &[u8],
+        data: EncodedBytes,
         size: ImageSizeSpec,
         rotation: ImageRotation,
         realization: ImageRealization,
@@ -1288,11 +1707,12 @@ impl ImageCache {
         frame: ImageFrameIndex,
         sequence: ImageSequenceId,
         resources: crate::svg::SvgResourceContext,
+        identity: ImageLoadIdentity,
     ) {
         let load = self.begin_load(load);
         let image = load.image();
         // Query dimensions for the pending-image placeholder.
-        if let Some(dims) = Self::query_data_intrinsic_extent(data) {
+        if let Some(dims) = Self::query_data_intrinsic_extent(&data) {
             self.pending_dimensions.insert(
                 image,
                 realization.resolve_geometry(size, dims, rotation).layout(),
@@ -1304,7 +1724,7 @@ impl ImageCache {
         let _ = self.decode_tx.send(DecodeRequest {
             load,
             source: ImageSource::Data {
-                data: data.to_vec(),
+                data,
                 resources,
                 sequence,
             },
@@ -1314,6 +1734,7 @@ impl ImageCache {
             colors,
             mask,
             frame,
+            identity,
         });
     }
 
@@ -1330,6 +1751,7 @@ impl ImageCache {
         mask: ImageMaskPolicy,
         frame: ImageFrameIndex,
         sequence: ImageSequenceId,
+        identity: ImageLoadIdentity,
     ) {
         let load = self.begin_load(load);
         let image = load.image();
@@ -1355,6 +1777,7 @@ impl ImageCache {
             colors,
             mask,
             frame,
+            identity,
         });
     }
 
@@ -1376,6 +1799,9 @@ impl ImageCache {
     }
 
     /// Load image from data (async)
+    ///
+    /// A caller here has a slice and no buffer of its own to hand over, so the
+    /// bytes are materialized into the handle the decode will read.
     pub fn load_data(
         &mut self,
         data: &[u8],
@@ -1401,7 +1827,7 @@ impl ImageCache {
         let _ = self.decode_tx.send(DecodeRequest {
             load,
             source: ImageSource::Data {
-                data: data.to_vec(),
+                data: EncodedBytes::copy_of(data),
                 resources: crate::svg::SvgResourceContext::Isolated,
                 sequence: ImageSequenceId::new(u64::from(image.get()))
                     .expect("allocated image identity is non-zero"),
@@ -1412,6 +1838,7 @@ impl ImageCache {
             colors,
             mask: ImageMaskPolicy::Preserve,
             frame: ImageFrameIndex::default(),
+            identity: ImageLoadIdentity::unspecified(),
         });
 
         image
@@ -1457,6 +1884,7 @@ impl ImageCache {
             colors: ImageColorContext::default(),
             mask: ImageMaskPolicy::default(),
             frame: ImageFrameIndex::default(),
+            identity: ImageLoadIdentity::unspecified(),
         });
 
         image
@@ -1502,6 +1930,7 @@ impl ImageCache {
             colors: ImageColorContext::default(),
             mask: ImageMaskPolicy::default(),
             frame: ImageFrameIndex::default(),
+            identity: ImageLoadIdentity::unspecified(),
         });
 
         image
@@ -1535,6 +1964,7 @@ impl ImageCache {
             colors: ImageColorContext::default(),
             mask: ImageMaskPolicy::default(),
             frame: ImageFrameIndex::default(),
+            identity: ImageLoadIdentity::unspecified(),
         });
     }
 
@@ -1566,6 +1996,7 @@ impl ImageCache {
             colors: ImageColorContext::default(),
             mask: ImageMaskPolicy::default(),
             frame: ImageFrameIndex::default(),
+            identity: ImageLoadIdentity::unspecified(),
         });
     }
 
@@ -1614,6 +2045,8 @@ impl ImageCache {
                     view,
                     bind_group,
                     raster: ImageRasterExtent::new(width, height),
+                    // The imported buffer is the whole image already.
+                    filled: FilledRows::complete(ImageRasterExtent::new(width, height)),
                     metadata: None,
                     memory_size,
                     last_access: Cell::new(self.next_access_stamp()),
@@ -1649,6 +2082,19 @@ impl ImageCache {
                 continue;
             };
             match outcome {
+                WorkerDecodeOutcome::Band { load, decoded } => {
+                    let (source, placed) = decoded.into_parts();
+                    tracing::debug!(
+                        "Image {} decoded rows {}..{} into texture rows {}..{}",
+                        load.image(),
+                        source.start(),
+                        source.end(),
+                        placed.placement().rows().start(),
+                        placed.placement().rows().end(),
+                    );
+                    self.upload_band(device, queue, load, &placed);
+                    events.push(ImageCacheEvent::Band { load, rows: source });
+                }
                 WorkerDecodeOutcome::Ready(decoded) => {
                     events.push(ImageCacheEvent::Ready {
                         load: decoded.load,
@@ -1656,12 +2102,18 @@ impl ImageCache {
                     });
                     self.upload_texture(device, queue, decoded);
                 }
-                WorkerDecodeOutcome::Failed(load) => {
-                    let error = "image decode failed".to_owned();
+                WorkerDecodeOutcome::Failed { load, diagnostic } => {
+                    // A failed decode keeps no texture: a band may already have
+                    // created one, and it holds rows of an image that will never
+                    // arrive. Leaving it would draw them forever.
+                    self.release(load.image());
                     self.states
-                        .insert(load.image(), ImageState::Failed(error.clone()));
+                        .insert(load.image(), ImageState::Failed(diagnostic.message()));
                     self.pending_dimensions.remove(&load.image());
-                    events.push(ImageCacheEvent::Failed { load, error });
+                    events.push(ImageCacheEvent::Failed {
+                        load,
+                        error: diagnostic,
+                    });
                 }
             }
         }
@@ -1671,6 +2123,175 @@ impl ImageCache {
         events
     }
 
+    /// The texture, view and bind group every image in this cache is drawn
+    /// through.
+    ///
+    /// One constructor for the whole cache: a banded decode creates its texture
+    /// here and the finished upload gets the same allocation, so the two cannot
+    /// disagree about format, usage or size.
+    fn create_image_texture(
+        &self,
+        device: &wgpu::Device,
+        raster: ImageRasterExtent,
+    ) -> (wgpu::Texture, wgpu::TextureView, wgpu::BindGroup) {
+        let (width, height) = raster.dimensions();
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Image Texture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            // `COPY_SRC` costs nothing to carry and is what makes these
+            // textures' contents observable: a band-filled texture ending
+            // byte-for-byte as the whole-image path's is a claim only a readback
+            // can settle.
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Image Bind Group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+        });
+        (texture, view, bind_group)
+    }
+
+    /// Write one band's pixels into the image's texture.
+    ///
+    /// The first band creates the texture, and the image is drawable from that
+    /// moment on: the quad is step 1's and does not move, the texture only grows
+    /// downward, and what has not arrived yet is simply not drawn
+    /// (`FilledRows::clip_span`). Every later band appends to it.
+    ///
+    /// A band that does not continue the prefix is dropped rather than written.
+    /// Rows written out of order, or twice, would leave the texture holding
+    /// pixels from two different scalings and nothing downstream could tell; a
+    /// band naming another raster belongs to other pixels entirely. Both are
+    /// states this refuses to enter, and the whole-image upload at the end is
+    /// what makes the refusal invisible.
+    ///
+    /// Writing in place, under a compositor that samples this texture, is a
+    /// deliberate choice over staging into a second texture and swapping: a
+    /// shadow would double the peak allocation for the largest texture this
+    /// cache holds (64 MiB at the 4096 limit) while the decode is already
+    /// holding the whole native image, and the swap would have to rebind a
+    /// texture the frames already presented are sampling. The state a partial
+    /// write describes is a prefix, which [`FilledRows`] expresses exactly; the
+    /// state a swap would need — two textures at two fill levels, and a rule for
+    /// when one may become the other — is the one that would have needed
+    /// policing.
+    fn upload_band(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        load: ImageLoadToken,
+        placed: &RasterBand,
+    ) {
+        let image = load.image();
+        let placement = placed.placement();
+        let raster = placement.raster();
+        if !self.textures.contains_key(&image) {
+            let (texture, view, bind_group) = self.create_image_texture(device, raster);
+            let memory_size = (raster.width() * raster.height() * 4) as usize;
+            self.total_memory += memory_size;
+            self.accounting
+                .push(crate::media_budget::MediaAccounting::Registered {
+                    media_type: crate::media_budget::MediaType::Image,
+                    id: image.get(),
+                    size_bytes: memory_size,
+                });
+            self.textures.insert(
+                image,
+                CachedImage {
+                    texture,
+                    view,
+                    bind_group,
+                    raster,
+                    filled: FilledRows::empty(raster),
+                    metadata: None,
+                    memory_size,
+                    last_access: Cell::new(self.next_access_stamp()),
+                },
+            );
+        }
+        let Some(cached) = self.textures.get_mut(&image) else {
+            return;
+        };
+        if cached.raster != raster {
+            tracing::warn!(
+                "Image {} band for a {}x{} raster into a {}x{} texture",
+                image,
+                raster.width(),
+                raster.height(),
+                cached.raster.width(),
+                cached.raster.height()
+            );
+            return;
+        }
+        let rows = placement.rows();
+        let Some(filled) = cached.filled.extend(rows) else {
+            tracing::debug!(
+                "Image {} band for rows {}..{} does not continue {} written",
+                image,
+                rows.start(),
+                rows.end(),
+                cached.filled.filled()
+            );
+            return;
+        };
+        let (raster_width, raster_height) = raster.dimensions();
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &cached.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: 0,
+                    y: rows.start(),
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            placed.pixels(),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(raster_width * 4),
+                rows_per_image: Some(rows.len().get()),
+            },
+            wgpu::Extent3d {
+                width: raster_width,
+                height: rows.len().get(),
+                depth_or_array_layers: 1,
+            },
+        );
+        cached.filled = filled;
+        tracing::debug!(
+            "Image {} filled rows {}..{} of {} (raster {}x{})",
+            image,
+            rows.start(),
+            rows.end(),
+            raster_height,
+            raster_width,
+            raster_height
+        );
+    }
+
     /// Upload decoded image to GPU texture
     fn upload_texture(
         &mut self,
@@ -1678,22 +2299,46 @@ impl ImageCache {
         queue: &wgpu::Queue,
         decoded: DecodedImage,
     ) {
+        let image = decoded.load.image();
         let raster = decoded.geometry.raster();
         let (raster_width, raster_height) = raster.dimensions();
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Image Texture"),
-            size: wgpu::Extent3d {
-                width: raster_width,
-                height: raster_height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
+        // A banded decode may have already built this image's texture, at
+        // exactly this raster (`realized_geometry` is the one place either side
+        // resolves it). Keep it: the write below covers every texel of it, so
+        // the finished image is the whole-image path's bytes — written by the
+        // same call, to the same shape of texture — and the bind group the
+        // presented frames already sample never changes under them. A texture of
+        // any other raster is not this image's and is released rather than
+        // written into.
+        let existing = self.textures.remove(&image);
+        let (texture, view, bind_group, memory_size) = match existing {
+            Some(cached) if cached.raster == raster => (
+                cached.texture,
+                cached.view,
+                cached.bind_group,
+                cached.memory_size,
+            ),
+            other => {
+                if let Some(cached) = other {
+                    self.total_memory -= cached.memory_size;
+                    self.accounting
+                        .push(crate::media_budget::MediaAccounting::Freed {
+                            media_type: crate::media_budget::MediaType::Image,
+                            id: image.get(),
+                        });
+                }
+                let (texture, view, bind_group) = self.create_image_texture(device, raster);
+                let memory_size = (raster_width * raster_height * 4) as usize;
+                self.total_memory += memory_size;
+                self.accounting
+                    .push(crate::media_budget::MediaAccounting::Registered {
+                        media_type: crate::media_budget::MediaType::Image,
+                        id: image.get(),
+                        size_bytes: memory_size,
+                    });
+                (texture, view, bind_group, memory_size)
+            }
+        };
 
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
@@ -1715,53 +2360,30 @@ impl ImageCache {
             },
         );
 
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Image Bind Group"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        });
-
-        let memory_size = (raster_width * raster_height * 4) as usize;
-        self.total_memory += memory_size;
-        self.accounting
-            .push(crate::media_budget::MediaAccounting::Registered {
-                media_type: crate::media_budget::MediaType::Image,
-                id: decoded.load.image().get(),
-                size_bytes: memory_size,
-            });
-
         let layout = decoded.metadata.layout;
 
         self.textures.insert(
-            decoded.load.image(),
+            image,
             CachedImage {
                 texture,
                 view,
                 bind_group,
                 raster,
+                // The write above covered the whole texture, whether or not a
+                // banded decode had got part of the way through it.
+                filled: FilledRows::complete(raster),
                 metadata: Some(decoded.metadata),
                 memory_size,
                 last_access: Cell::new(self.next_access_stamp()),
             },
         );
 
-        self.states.insert(decoded.load.image(), ImageState::Ready);
-        self.pending_dimensions.remove(&decoded.load.image());
+        self.states.insert(image, ImageState::Ready);
+        self.pending_dimensions.remove(&image);
 
         tracing::debug!(
             "Uploaded image {} (layout {}x{}, raster {}x{}, {}KB)",
-            decoded.load.image(),
+            image,
             layout.width(),
             layout.height(),
             raster_width,
@@ -1776,6 +2398,12 @@ impl ImageCache {
             let victim = lru_unpresented_victim(
                 self.textures
                     .iter()
+                    // A half-filled texture belongs to a decode that is still
+                    // running: the load owns it, and taking it away would leave
+                    // the rows that follow with nowhere to go — the next band
+                    // continues a prefix that no longer exists. It becomes
+                    // evictable the moment the decode ends, one way or another.
+                    .filter(|(_, cached)| cached.filled.is_complete())
                     .map(|(&id, cached)| (id, cached.last_access.get())),
                 &self.retained_images,
             );
@@ -1812,20 +2440,24 @@ impl ImageCache {
 
     /// Get image dimensions (pending or loaded)
     pub fn get_dimensions(&self, image: ImageId) -> Option<ImageLayoutExtent> {
-        // Check loaded textures first
-        if let Some(cached) = self.textures.get(&image) {
-            return Some(
-                cached
-                    .metadata
-                    .as_ref()
-                    .map(|metadata| metadata.layout)
-                    .unwrap_or_else(|| {
-                        ImageLayoutExtent::new(cached.raster.width(), cached.raster.height())
-                    }),
-            );
+        // A texture with metadata is a finished decode, and its layout is the
+        // answer. A texture without one is the prefix a banded decode has
+        // uploaded — its rows say nothing about how big the image is — so the
+        // layout step 1 resolved from the header is the answer until then.
+        if let Some(layout) = self
+            .textures
+            .get(&image)
+            .and_then(|cached| cached.metadata.as_ref())
+            .map(|metadata| metadata.layout)
+        {
+            return Some(layout);
         }
-        // Check pending dimensions
-        self.pending_dimensions.get(&image).copied()
+        if let Some(layout) = self.pending_dimensions.get(&image) {
+            return Some(*layout);
+        }
+        self.textures
+            .get(&image)
+            .map(|cached| ImageLayoutExtent::new(cached.raster.width(), cached.raster.height()))
     }
 
     /// Get image state

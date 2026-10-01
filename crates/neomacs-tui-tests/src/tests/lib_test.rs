@@ -1,7 +1,7 @@
 use super::{
     TuiLaunch, TuiProcessOutcome, TuiSession, TuiTempDirectory, TuiTerminalConfig, emacs_key,
     neomacs_binary_path_from_override,
-    recording::{RecordingIdentity, RecordingPolicy},
+    recording::{RecordingConfig, RecordingIdentity, RecordingPolicy},
 };
 use std::ffi::OsString;
 use std::io::{Read as _, Write as _};
@@ -138,7 +138,7 @@ fn tui_session_records_the_pty_interaction_at_its_public_artifact_path() {
         launch,
         "GNU",
         TuiTerminalConfig::new("xterm-256color", 24, 80),
-        RecordingPolicy::On,
+        RecordingConfig::new(RecordingPolicy::On, std::time::Duration::ZERO),
         artifacts.path(),
         RecordingIdentity::new("neomacs-tui-tests", "pty interaction", "GNU"),
     );
@@ -200,7 +200,7 @@ fn tui_session_recording_is_disabled_by_default() {
         TuiLaunch::new("sh").args(["-c", "printf ignored"]),
         "NEO",
         TuiTerminalConfig::default(),
-        RecordingPolicy::default(),
+        RecordingConfig::new(RecordingPolicy::default(), std::time::Duration::ZERO),
         artifacts.path(),
         RecordingIdentity::new("neomacs-tui-tests", "recording off", "NEO"),
     );
@@ -212,6 +212,54 @@ fn tui_session_recording_is_disabled_by_default() {
             .expect("read recording root")
             .next()
             .is_none()
+    );
+}
+
+#[test]
+fn tui_session_paces_a_recorded_key_on_both_sides_and_a_graded_one_never() {
+    const DELAY: std::time::Duration = std::time::Duration::from_millis(200);
+
+    let artifacts = tempfile::tempdir().expect("create recording root");
+    let mut paced = TuiSession::spawn_launch_for_recording_test(
+        TuiLaunch::new("sh").args(["-c", "read -r line"]),
+        "PACED",
+        TuiTerminalConfig::default(),
+        RecordingConfig::new(RecordingPolicy::On, DELAY),
+        artifacts.path(),
+        RecordingIdentity::new("neomacs-tui-tests", "recording pacing", "PACED"),
+    );
+
+    let started = std::time::Instant::now();
+    paced.send(b"\n");
+    let paced_elapsed = started.elapsed();
+    drop(paced);
+    assert!(
+        paced_elapsed >= DELAY * 2,
+        "a recorded key waits before and after: expect at least {:?}, sent in {:?}",
+        DELAY * 2,
+        paced_elapsed
+    );
+
+    // The delay cannot outlive the recording it exists for, not even when a
+    // caller hands one to a session that records nothing.
+    let unpaced_artifacts = tempfile::tempdir().expect("create recording root");
+    let mut unpaced = TuiSession::spawn_launch_for_recording_test(
+        TuiLaunch::new("sh").args(["-c", "read -r line"]),
+        "UNPACED",
+        TuiTerminalConfig::default(),
+        RecordingConfig::new(RecordingPolicy::Off, DELAY),
+        unpaced_artifacts.path(),
+        RecordingIdentity::new("neomacs-tui-tests", "recording pacing", "UNPACED"),
+    );
+
+    let started = std::time::Instant::now();
+    unpaced.send(b"\n");
+    let unpaced_elapsed = started.elapsed();
+    assert_eq!(unpaced.recording_path(), None);
+    drop(unpaced);
+    assert!(
+        unpaced_elapsed < DELAY,
+        "a graded run's send must not wait: spent {unpaced_elapsed:?} sending one key"
     );
 }
 

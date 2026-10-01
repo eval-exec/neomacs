@@ -207,7 +207,23 @@ enumflags2 = "0.7"
 bytemuck = { version = "1.18", features = ["derive"] }
 memmap2 = "0.9"
 image = "0.25"
+# The renderer decodes PNG rows itself for banded decoding, instead of
+# handing the file to `image` and waiting for the whole frame. Same
+# version `image` itself builds against, so the tree gains no second copy.
+png = "0.18"
+# The renderer reads baseline JPEG one MCU row at a time, for the same reason
+# and through the same `image_bands` seam as `png` above. It is a direct
+# dependency only so this crate can name the reader; `[patch.crates-io]` is
+# what points the version at the fork that has one, and it is the same
+# `zune-jpeg` `image` builds against, so the tree gains no second copy. Its
+# `zune_core` is reached through `zune_jpeg::zune_core`, which is the only way
+# to be sure the two are the same types.
+zune-jpeg = "0.5"
 imagesize = "0.15"
+# Tests only: `image` 0.25's `jpeg` feature is decode-only, so the renderer's
+# JPEG tests encode their own fixtures — baseline and progressive, at sizes
+# either side of `BANDING_MIN_PIXELS`.
+jpeg-encoder = "0.7"
 allsorts = "0.17.0"
 encoding_rs = "0.8"
 
@@ -233,9 +249,8 @@ malachite = "0.9"
 itoa = "1.0"
 
 # GPU / windowing
-# Fork integration includes Wayland popup/size fixes and coordinated X11 event delivery.
-# Select master by name; Cargo.lock pins the tested commit for reproducible builds.
-winit = { git = "https://github.com/eval-exec/winit", branch = "master" }
+# The fork revision and branch are documented in [patch.crates-io].
+winit = "=0.31.0-beta.3"
 # "glsl" gates ShaderSource::Glsl, which the render thread needs to compile
 # composed Shadertoy-dialect surface shaders (shader_surface.rs).
 wgpu = { version = "30", features = ["glsl"] }
@@ -440,5 +455,27 @@ debug = true
 strip = "none"
 
 [patch.crates-io]
-cosmic-text = { git = "https://github.com/eval-exec/cosmic-text", rev = "5dd3fec8572e771794e3f203ab6780d828e9ce09" }
+# Never vendor dependencies into this repository. Always fork the crate on
+# GitHub and make changes on the fork's `patch` branch. Reference an exact Git
+# revision here and document the branch beside each dependency.
+# Fork branch: patch (includes Wayland/X11 fixes, continuous XI2 units, and Windows precision touchpad panning).
+winit = { git = "https://github.com/eval-exec/winit", rev = "2290f91c602f8efdf102972457a25e8b6e36f90c" }
+# Fork branch: neomacs-present-timing.
+# Native presentation IDs/timestamps; see the Vulkan timing seam in this fork.
+wgpu-hal = { git = "https://github.com/eval-exec/wgpu", rev = "9717f9fe277beec2c98df550662a626f8fc0248c" }
+# Fork branch: patch (based on neomacs-variable-weight-match).
+# Scoped font-cache insertion is maintained in the cosmic-text fork.
+cosmic-text = { git = "https://github.com/eval-exec/cosmic-text", rev = "5951ae9b0a4c794e594c56f596ba04e5f57416a1" }
+# Fork branch: fix/bundled-zlib-include.
 freetype-sys = { git = "https://github.com/eval-exec/freetype-sys", rev = "a4eb0a7cf08d9b503bda7d7261c97f8973d34bf1" }
+# Fork branch: patch (based on the 0.5.15 release revision, 31d81fed).
+# Row-wise baseline JPEG: `McuRowReader` hands back one MCU row at a time, and
+# `is_progressive` is public so a progressive image can be routed to the
+# whole-image path instead. See `image_bands`'s JPEG arm. Both crates are
+# listed because the fork is a workspace and `zune-jpeg` reaches `zune-core` by
+# path, so patching only the decoder leaves `image` -- which names `zune-core`
+# itself -- holding a second copy whose `ZCursor` is a different type. That
+# revision's `crates/zune-jpeg` and `crates/zune-core` are otherwise identical
+# to the registry's `zune-jpeg` 0.5.15 and `zune-core` 0.5.1.
+zune-jpeg = { git = "https://github.com/eval-exec/zune-image", rev = "39dd805e32d74b2092405b5da0bec86747f04e34" }
+zune-core = { git = "https://github.com/eval-exec/zune-image", rev = "39dd805e32d74b2092405b5da0bec86747f04e34" }

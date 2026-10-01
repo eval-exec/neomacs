@@ -14,7 +14,7 @@ use super::value::{Value, ValueKind, VecLikeType, list_to_vec};
 use crate::buffer::{BufferId, BufferManager, EmacsBytePos, LispCharPos1};
 use crate::emacs_core::error::LispCondition;
 pub(crate) use crate::emacs_core::error::{
-    expect_args, expect_fixnum, expect_max_args, expect_min_args,
+    expect_args, expect_args_range, expect_fixnum, expect_max_args, expect_min_args,
 };
 use crate::emacs_core::xdisp::LineWrap;
 use crate::emacs_core::xdisp::motion::MotionEngine;
@@ -300,22 +300,218 @@ pub(crate) fn builtin_window_old_pixel_height(
     Ok(Value::fixnum(0))
 }
 
-/// `(window-lines-pixel-dimensions &optional WINDOW ...)`; GNU
-/// `decode_live_window`.
+/// `(window-lines-pixel-dimensions &optional WINDOW FIRST LAST BODY INVERSE LEFT)`
+/// -- GNU `Fwindow_lines_pixel_dimensions` (src/window.c:2159), over the rows
+/// of the window's last redisplay.
 ///
-/// GNU walks the window's display matrix and returns `(width . height)` per
-/// glyph row.  neomacs's matrix lives in the layout engine rather than in
-/// `neovm-core`, so nil -- GNU's documented "no information available", the
-/// same answer it gives on a TTY frame before redisplay -- stands in for the
-/// result.  The DECODE is not a placeholder: an internal or deleted WINDOW
-/// must signal `window-live-p`, not quietly return that nil.
+/// The value is a list of `(X . Y)` conses, one per row, in row order:
+///
+///   * `X` is the pixel x of the row's right edge -- GNU's `row->pixel_width`,
+///     which is `row->x` plus every glyph advance plus the one-cell space
+///     `append_space_for_newline` leaves at the end of a line for the cursor
+///     (src/xdisp.c:24142, summed by `compute_line_metrics`,
+///     src/xdisp.c:24071).  INVERSE reports the distance from that edge back
+///     to the window's right edge instead, which is what measuring the empty
+///     space beside the text wants.
+///   * `Y` is the row's BOTTOM edge, `row->y + row->height`, minus the tab-
+///     and header-line heights when BODY is non-nil.
+///   * LEFT switches from the whole row to its LEFTMOST glyph, for
+///     right-to-left buffers.
+///
+/// BODY also moves both boundaries: the first row becomes the window's first
+/// text row (past the tab and header lines), and `max_y` becomes the text
+/// area's bottom rather than the whole window's.
+///
+/// Rows are reported while `row->y + row->height < max_y`, in the matrix's own
+/// order.  A window with no current matrix -- batch, a pseudo window, or one
+/// whose redisplay has not run since the last change -- gives nil, GNU's "no
+/// information available".
 pub(crate) fn builtin_window_lines_pixel_dimensions(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    expect_max_args("window-lines-pixel-dimensions", &args, 6)?;
-    let _ = decode_live_window_id(eval, args.first())?;
-    Ok(Value::NIL)
+    expect_args_range("window-lines-pixel-dimensions", &args, 0, 6)?;
+    // GNU decodes WINDOW before it looks at any other argument, so a dead or
+    // internal window signals here whatever the rest of the call says.
+    let window_id = decode_live_window_id(eval, args.first())?;
+    let body = args.get(3).is_some_and(|value| value.is_truthy());
+    let inverse = args.get(4).is_some_and(|value| value.is_truthy());
+    let left = args.get(5).is_some_and(|value| value.is_truthy());
+
+    // GNU: `if (noninteractive || w->pseudo_window_p) return Qnil;`
+    if eval.noninteractive() {
+        return Ok(Value::NIL);
+    }
+    let Some((fid, buffer_id)) = eval.frames.find_window_frame_id(window_id).and_then(|fid| {
+        let buffer_id = eval.frames.get(fid)?.find_window(window_id)?.buffer_id()?;
+        Some((fid, buffer_id))
+    }) else {
+        return Ok(Value::NIL);
+    };
+
+    // GNU bails when `!w->window_end_valid || windows_or_buffers_changed ||
+    // b->clip_changed || b->prevent_redisplay_optimizations_p ||
+    // window_outdated (w)` -- redisplay has not run since the last change.
+    // `fresh_window_display_snapshot` is that same gate for retained rows, so
+    // a stale matrix answers nil rather than yesterday's geometry.
+    let Some(snapshot) = eval.fresh_window_display_snapshot(fid, window_id, buffer_id) else {
+        return Ok(Value::NIL);
+    };
+    let Some(frame) = eval.frames.get(fid) else {
+        return Ok(Value::NIL);
+    };
+    let Some(window) = frame.find_window(window_id).cloned() else {
+        return Ok(Value::NIL);
+    };
+    let char_width = frame.char_width.max(1.0).round() as i64;
+    let window_pixel_width = window_width_pixels(&window);
+    let window_pixel_height = window_height_pixels(&window);
+    let body_width = window_body_width_pixels(&eval.frames, fid, &window);
+    // GNU's `window_width`: the whole window, or -- under BODY -- the body
+    // width in pixels that INVERSE measures back from.
+    let reference_width = if body { body_width } else { window_pixel_width };
+    // `window_text_bottom_y (w)`: the top of the mode line.
+    let text_bottom = window_pixel_height.saturating_sub(snapshot.mode_line_height.max(0));
+    let max_y = if body {
+        text_bottom
+    } else {
+        window_pixel_height
+    };
+    // GNU's `subtract`: what the returned y is expressed relative to.
+    let subtract = if body {
+        snapshot.top_chrome_height().max(0)
+    } else {
+        0
+    };
+
+    let mut rows: Vec<crate::window::DisplayRowSnapshot> = snapshot
+        .rows
+        .iter()
+        .filter(|row| row.height > 0 || row.end_x != row.start_x)
+        .cloned()
+        .collect();
+    rows.sort_by(|a, b| a.row.cmp(&b.row));
+
+    let top_chrome_rows = snapshot.top_chrome_rows().max(0);
+    let default_first = if body {
+        rows.iter()
+            .position(|row| row.row >= top_chrome_rows)
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    let default_last = rows.len().saturating_sub(1);
+    // GNU's `check_integer_range (first, 0, matrix->nrows)` admits the
+    // one-past-the-end index its default LAST uses.
+    let index_range = 0..=rows.len() as i64;
+    let start = match args.get(1) {
+        Some(value) if !value.is_nil() => check_row_index(value, index_range.clone())?,
+        _ => default_first,
+    };
+    let end = match args.get(2) {
+        Some(value) if !value.is_nil() => check_row_index(value, index_range)?,
+        _ => default_last,
+    };
+
+    let mut out = Vec::new();
+    for row in rows
+        .iter()
+        .skip(start)
+        .take(end.saturating_sub(start).saturating_add(1))
+    {
+        // GNU: `while (row <= end_row && row->enabled_p && row->y +
+        // row->height < max_y)`.
+        if row.y.saturating_add(row.height) >= max_y {
+            break;
+        }
+        let width = row_pixel_width(row, char_width, body_width);
+        let leftmost = if left {
+            leftmost_glyph_width(snapshot, row, char_width)
+        } else {
+            width
+        };
+        let x = match (left, inverse) {
+            (false, false) => width,
+            (false, true) => reference_width.saturating_sub(width),
+            (true, false) => reference_width.saturating_sub(leftmost),
+            (true, true) => leftmost,
+        };
+        out.push(Value::cons(
+            Value::fixnum(x),
+            Value::fixnum(row.y.saturating_add(row.height).saturating_sub(subtract)),
+        ));
+    }
+    Ok(Value::list(out))
+}
+
+/// GNU's `row->pixel_width`, reconstructed from the row Neomacs rendered.
+///
+/// A [`crate::window::DisplayRowSnapshot`] publishes the pen at each end of the
+/// row (`start_x` / `end_x`), so `end_x - start_x` is the width of the glyphs it
+/// drew -- GNU's `row->x + sum (glyphs[i].pixel_width)` without the end-of-line
+/// space.  GNU's display engine adds that space unconditionally
+/// (`append_space_for_newline`, src/xdisp.c:24142, summed by
+/// `compute_line_metrics`, src/xdisp.c:24071), which is why a row of two
+/// characters measures 27 and not 18 in a 9-pixel cell.
+///
+/// The cell is added here only when the row has one to give: it must have
+/// stopped short of the body's right edge (a row that reaches the edge was
+/// continued or truncated, and a truncated row produces no glyph at all) and
+/// must not carry a truncated tail.  Neomacs really draws that cell -- the
+/// `cursor_col` of a row whose point is at end of line is the column past its
+/// last glyph -- so this reports a cell Neomacs has, not one only GNU has.
+fn row_pixel_width(
+    row: &crate::window::DisplayRowSnapshot,
+    char_width: i64,
+    body_width: i64,
+) -> i64 {
+    let used = row.end_x.saturating_sub(row.start_x).max(0);
+    if used >= body_width || row.truncated_end_buffer_pos.is_some() {
+        return used;
+    }
+    used.saturating_add(char_width)
+}
+
+/// Width of the row's LEFTMOST glyph, for LEFT.
+///
+/// GNU reads `row->glyphs[TEXT_AREA][0].pixel_width` -- one glyph, not the
+/// row.  A Neomacs row publishes each visible span as a
+/// [`crate::window::DisplayPointSnapshot`], so the leftmost span's own width is
+/// that glyph's advance.  A row with no published span (an empty line) falls
+/// back to one character cell, which is the space GNU's engine appends there.
+fn leftmost_glyph_width(
+    snapshot: &crate::window::WindowDisplaySnapshot,
+    row: &crate::window::DisplayRowSnapshot,
+    char_width: i64,
+) -> i64 {
+    snapshot
+        .points
+        .iter()
+        .filter(|point| point.row == row.row && point.width > 0)
+        .min_by_key(|point| point.x)
+        .map(|point| point.width)
+        .unwrap_or(char_width)
+}
+
+fn check_row_index(value: &Value, range: std::ops::RangeInclusive<i64>) -> Result<usize, Flow> {
+    let Some(index) = value.as_int() else {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("integerp"), *value],
+        ));
+    };
+    if !range.contains(&index) {
+        // GNU's `check_integer_range`.
+        return Err(signal(
+            LispCondition::ArgsOutOfRange,
+            vec![
+                Value::fixnum(index),
+                Value::fixnum(*range.start()),
+                Value::fixnum(*range.end()),
+            ],
+        ));
+    }
+    Ok(index as usize)
 }
 
 /// `(window-new-pixel &optional WINDOW)` -> WINDOW's pending pixel size.

@@ -2,7 +2,7 @@ use super::*;
 use crate::core::frame_glyphs::FrameGlyphBuffer;
 use neomacs_display_protocol::glyph_matrix::FrameDisplayState;
 use neomacs_display_protocol::{
-    ImageId, ImageLoadAttempt, ImageLoadToken, ImageStateEvent, VideoId,
+    ImageId, ImageLoadAttempt, ImageLoadToken, ImageStateEvent, SealedFramePresentation, VideoId,
 };
 use neomacs_video_model::{
     InitialPlayback, LoopMode, PlaybackAction, VideoOpenRequest, VideoSource,
@@ -199,7 +199,7 @@ fn thread_comms_frame_channel_roundtrip() {
 
     let buf = FrameGlyphBuffer::new();
     let state = FrameDisplayState::from_frame_glyph_buffer(&buf);
-    comms.frame_tx.send(sealed_test_state(state)).unwrap();
+    comms.frame_tx.submit(sealed_test_state(state)).unwrap();
 
     let received = comms.frame_rx.try_recv().unwrap();
     assert_eq!(received.frame_pixel_width, 0.0);
@@ -207,21 +207,68 @@ fn thread_comms_frame_channel_roundtrip() {
 }
 
 #[test]
-fn thread_comms_frame_channel_is_unbounded() {
+fn pending_frames_keep_only_the_latest_revision() {
     let comms = ThreadComms::new();
-
-    // Send many frames without blocking -- unbounded channel
     for i in 0..100 {
         let buf = FrameGlyphBuffer::with_size(i as f32, i as f32);
         let state = FrameDisplayState::from_frame_glyph_buffer(&buf);
-        comms.frame_tx.send(sealed_test_state(state)).unwrap();
+        let old = comms.frame_tx.submit(sealed_test_state(state)).unwrap();
+        assert_eq!(
+            old.map(|state| state.frame_pixel_width),
+            (i > 0).then_some((i - 1) as f32)
+        );
     }
+    let received = comms.frame_rx.try_recv().unwrap();
+    assert_eq!(received.frame_pixel_width, 99.0);
+    assert!(received.skipped_predecessor);
+    assert!(comms.frame_rx.try_recv().is_err());
+}
 
-    // Drain and verify
-    for i in 0..100 {
-        let received = comms.frame_rx.try_recv().unwrap();
-        assert_eq!(received.frame_pixel_width, i as f32);
+#[test]
+fn frame_mailbox_drains_after_producer_disconnect_and_returns_rejected_submission() {
+    let (emacs, render) = ThreadComms::new().split();
+    emacs
+        .frame_tx
+        .submit(sealed_test_state(FrameDisplayState::new(80, 24, 8.0, 16.0)))
+        .unwrap();
+    drop(emacs);
+    assert!(render.frame_rx.recv().is_ok());
+    assert!(render.frame_rx.recv().is_err());
+
+    let (emacs, render) = ThreadComms::new().split();
+    drop(render);
+    let rejected = emacs
+        .frame_tx
+        .submit(sealed_test_state(FrameDisplayState::new(80, 24, 8.0, 16.0)))
+        .unwrap_err();
+    assert_eq!(rejected.0.presentation().get(), 1);
+}
+
+#[test]
+fn concurrent_take_and_replace_assign_every_revision_exactly_once() {
+    let (emacs, render) = ThreadComms::new().split();
+    let reader = std::thread::spawn(move || {
+        let mut taken = Vec::new();
+        while let Ok(state) = render.frame_rx.recv() {
+            taken.push(state.presentation().get());
+        }
+        taken
+    });
+    let mut retired = Vec::new();
+    for revision in 1..=1000 {
+        let mut state = FrameDisplayState::new(80, 24, 8.0, 16.0);
+        state.presentation_id = neomacs_display_protocol::PresentationId::new(revision);
+        if let Some(old) = emacs.frame_tx.submit(sealed_test_state(state)).unwrap() {
+            retired.push(old.presentation().get());
+        }
     }
+    drop(emacs);
+    let taken = reader.join().unwrap();
+    assert_eq!(taken.last(), Some(&1000));
+    assert!(taken.windows(2).all(|pair| pair[0] < pair[1]));
+    retired.extend(taken);
+    retired.sort_unstable();
+    assert_eq!(retired, (1..=1000).collect::<Vec<_>>());
 }
 
 #[test]
@@ -347,7 +394,7 @@ fn thread_comms_split_channels_work() {
     // Emacs sends frame, render receives
     let buf = FrameGlyphBuffer::with_size(800.0, 600.0);
     let state = FrameDisplayState::from_frame_glyph_buffer(&buf);
-    emacs.frame_tx.send(sealed_test_state(state)).unwrap();
+    emacs.frame_tx.submit(sealed_test_state(state)).unwrap();
     let frame = render.frame_rx.try_recv().unwrap();
     assert_eq!(frame.frame_pixel_width, 800.0);
     assert_eq!(frame.frame_pixel_height, 600.0);
@@ -743,6 +790,8 @@ fn render_command_image_load_file() {
         frame: neomacs_display_protocol::ImageFrameIndex::new(3),
         sequence: neomacs_display_protocol::ImageSequenceId::new(11)
             .expect("non-zero test sequence"),
+        limit: neomacs_display_protocol::ImageSizeLimit::from_axis_pixels(4096),
+        identity: neomacs_display_protocol::image_diagnostic::ImageLoadIdentity::unspecified(),
     });
     match cmd {
         RenderCommand::Asset(AssetCommand::ImageLoadFile {
@@ -755,6 +804,8 @@ fn render_command_image_load_file() {
             mask,
             frame,
             sequence,
+            limit,
+            identity: _,
         }) => {
             assert_eq!(actual_load, load);
             assert_eq!(path, "/home/user/photo.png");
@@ -778,6 +829,10 @@ fn render_command_image_load_file() {
             assert_eq!(
                 sequence,
                 neomacs_display_protocol::ImageSequenceId::new(11).expect("non-zero test sequence")
+            );
+            assert_eq!(
+                limit,
+                neomacs_display_protocol::ImageSizeLimit::from_axis_pixels(4096)
             );
         }
         other => panic!("Expected ImageLoadFile, got {:?}", other),
@@ -1656,7 +1711,7 @@ fn cross_thread_frame_delivery() {
 
     let buf = FrameGlyphBuffer::with_size(1920.0, 1080.0);
     let state = FrameDisplayState::from_frame_glyph_buffer(&buf);
-    emacs.frame_tx.send(sealed_test_state(state)).unwrap();
+    emacs.frame_tx.submit(sealed_test_state(state)).unwrap();
 
     handle.join().unwrap();
 }

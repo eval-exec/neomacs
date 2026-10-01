@@ -31,9 +31,9 @@ const REALIZED_IDENTITY_CAP: usize = 4096;
 /// the face LOOKS like, with enrichment stripped. Font realization may fill
 /// in metrics, the exact font file, and the resolved font handle after row
 /// construction (see [`FrameFaceAttempt::seal`]); two realizations that
-/// differ only in those fields are the same face. This is the single source
-/// of truth for that projection — both the content-addressed id map and
-/// [`merge_compatible_realization`] are built on it.
+/// differ only in those fields are the same face. Stored identity-map entries
+/// own this projection; [`same_face_realization`] compares it while borrowing
+/// complete faces, so validation need not clone discarded payloads.
 pub(crate) fn face_realization_identity(face: &Face) -> Face {
     let mut identity = face.clone();
     identity.id = FaceId::new(0);
@@ -42,6 +42,75 @@ pub(crate) fn face_realization_identity(face: &Face) -> Face {
     identity.font_file_path = None;
     identity.default_resolved_font_id = None;
     identity
+}
+
+/// Compare the complete realization projection without owning or cloning its
+/// strings, gradients, or stipple payload. The exhaustive pattern deliberately
+/// requires newly added protocol fields to choose their identity semantics.
+fn same_face_realization(left: &Face, right: &Face) -> bool {
+    let Face {
+        id: _,
+        foreground,
+        background,
+        terminal_foreground,
+        terminal_background,
+        use_default_foreground,
+        use_default_background,
+        underline_color,
+        terminal_underline_color,
+        overline_color,
+        strike_through_color,
+        box_color,
+        font_family,
+        font_size,
+        font_weight,
+        attributes,
+        underline_style,
+        box_type,
+        box_line_width,
+        box_corner_radius,
+        box_border_style,
+        box_border_speed,
+        box_color2,
+        font_file_path: _,
+        font_ascent: _,
+        font_descent: _,
+        underline_position,
+        underline_thickness,
+        background_gradient,
+        lisp_name,
+        default_resolved_font_id: _,
+        stipple,
+        underline_placement,
+    } = left;
+    foreground == &right.foreground
+        && background == &right.background
+        && terminal_foreground == &right.terminal_foreground
+        && terminal_background == &right.terminal_background
+        && use_default_foreground == &right.use_default_foreground
+        && use_default_background == &right.use_default_background
+        && underline_color == &right.underline_color
+        && terminal_underline_color == &right.terminal_underline_color
+        && overline_color == &right.overline_color
+        && strike_through_color == &right.strike_through_color
+        && box_color == &right.box_color
+        && font_family == &right.font_family
+        && font_size == &right.font_size
+        && font_weight == &right.font_weight
+        && attributes == &right.attributes
+        && underline_style == &right.underline_style
+        && box_type == &right.box_type
+        && box_line_width == &right.box_line_width
+        && box_corner_radius == &right.box_corner_radius
+        && box_border_style == &right.box_border_style
+        && box_border_speed == &right.box_border_speed
+        && box_color2 == &right.box_color2
+        && underline_position == &right.underline_position
+        && underline_thickness == &right.underline_thickness
+        && background_gradient == &right.background_gradient
+        && lisp_name == &right.lisp_name
+        && stipple == &right.stipple
+        && underline_placement == &right.underline_placement
 }
 
 /// Routing hash for the identity buckets. Equality is decided by
@@ -92,7 +161,7 @@ fn realized_identity_lookup(
 ) -> Option<FaceId> {
     map.get(&hash)?
         .iter()
-        .find_map(|(face, id)| (face == identity).then_some(*id))
+        .find_map(|(face, id)| same_face_realization(face, identity).then_some(*id))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -132,6 +201,18 @@ pub(crate) struct FrameFaceArena {
 #[derive(Clone, Debug)]
 pub(crate) struct FrameFaceAttempt {
     state: Rc<RefCell<FrameFaceAttemptState>>,
+}
+
+/// Immutable face identities accompanying prepared rows.
+///
+/// Unlike an arena or attempt this grants no identity-allocation or publication
+/// capability. It can cross a worker boundary; admission still validates its
+/// namespace and every referenced identity against the current arena. The
+/// caller must separately validate the rows' complete layout-input key.
+#[derive(Clone, Debug)]
+pub(crate) struct PreparedFaceSnapshot {
+    owner: Arc<FrameFaceOwner>,
+    faces: Arc<FrameFaceMap>,
 }
 
 /// An immutable realization owned by exactly one speculative attempt.
@@ -233,10 +314,9 @@ impl FrameFaceAttemptState {
         // Use the content index on the hot path. Only a mismatched/imported ID
         // needs a reverse search to produce a useful conflict diagnostic.
         if face_id.get() >= BasicFaceId::SENTINEL {
-            let identity = face_realization_identity(face);
-            let hash = face_identity_hash(&identity);
-            let matched = realized_identity_lookup(&self.fresh_realized, hash, &identity)
-                .or_else(|| realized_identity_lookup(&self.realized, hash, &identity));
+            let hash = face_identity_hash(face);
+            let matched = realized_identity_lookup(&self.fresh_realized, hash, face)
+                .or_else(|| realized_identity_lookup(&self.realized, hash, face));
             if matched != Some(face_id)
                 && let Some((bound, _)) = self
                     .fresh_realized
@@ -255,8 +335,7 @@ impl FrameFaceAttemptState {
             }
         }
         if let Some(existing) = self.faces.get(&face_id) {
-            let mut merged = existing.clone();
-            if !merge_compatible_realization(&mut merged, face) {
+            if !compatible_realization(existing, face) {
                 return Err(FrameFaceConflict {
                     face_id,
                     existing: Box::new(existing.clone()),
@@ -328,6 +407,72 @@ impl Default for FrameFaceArena {
 }
 
 impl FrameFaceArena {
+    /// Reserve identities for evaluator-resolved off-screen work without
+    /// publishing its speculative metrics into the current presentation.
+    pub(crate) fn reserve_prepared(
+        &mut self,
+        attempt: &FrameFaceAttempt,
+    ) -> Result<PreparedFaceSnapshot, FrameFaceReuseError> {
+        let state = attempt.state.borrow();
+        if !Arc::ptr_eq(&self.owner, &state.owner) {
+            return Err(FrameFaceReuseError::ForeignArena);
+        }
+        if !Arc::ptr_eq(&self.snapshot, &state.base_snapshot) {
+            return Err(FrameFaceReuseError::ForeignSnapshot);
+        }
+        self.realized = FrameFaceAttempt::fold_realized(&state);
+        self.next_face_id = self.next_face_id.max(state.next_face_id);
+        // A second attempt based on the old allocator may have minted the
+        // same IDs for different faces. Reservations serialize that lineage
+        // without changing the displayed face table or its generation.
+        self.snapshot = Arc::new(FrameFaceSnapshot);
+        Ok(PreparedFaceSnapshot {
+            owner: Arc::clone(&self.owner),
+            faces: Arc::new(state.faces.clone()),
+        })
+    }
+
+    /// Resume private row acquisition after an unrelated presentation was
+    /// sealed. Every previously reserved ID must still name the same face.
+    pub(crate) fn resume_prepared(
+        &self,
+        prepared: &PreparedFaceSnapshot,
+    ) -> Result<FrameFaceAttempt, FrameFaceReuseError> {
+        let mut attempt = self.begin_attempt();
+        attempt.admit_prepared(prepared.faces.keys().copied(), prepared, self)?;
+        Ok(attempt)
+    }
+
+    pub(crate) fn prepared_snapshot(&self) -> PreparedFaceSnapshot {
+        PreparedFaceSnapshot {
+            owner: Arc::clone(&self.owner),
+            faces: Arc::clone(&self.faces),
+        }
+    }
+
+    /// Join current retained rows and private computed rows without changing
+    /// either namespace. The normal attempt admission still validates every
+    /// referenced identity before this combined snapshot can be replayed.
+    pub(crate) fn prepared_with_retained(
+        &self,
+        prepared: &PreparedFaceSnapshot,
+    ) -> Result<PreparedFaceSnapshot, FrameFaceReuseError> {
+        if !Arc::ptr_eq(&self.owner, &prepared.owner) {
+            return Err(FrameFaceReuseError::ForeignArena);
+        }
+        let mut faces = self.faces.as_ref().clone();
+        for (id, face) in prepared.faces.iter() {
+            if faces.get(id).is_some_and(|current| current != face) {
+                return Err(FrameFaceReuseError::ConflictingFace(*id));
+            }
+            faces.insert(*id, face.clone());
+        }
+        Ok(PreparedFaceSnapshot {
+            owner: Arc::clone(&self.owner),
+            faces: Arc::new(faces),
+        })
+    }
+
     pub(crate) fn generation(&self) -> FrameFaceGeneration {
         self.generation
     }
@@ -362,7 +507,7 @@ impl FrameFaceArena {
 
 impl FrameFaceAttempt {
     /// Checked admission of an existing resolver identity; no output is
-    /// published. This is the sole constructor for a resolved binding.
+    /// published. Resolved bindings are constructed only by the arena.
     pub(crate) fn bind_resolved_face(
         &self,
         id: FaceId,
@@ -374,6 +519,27 @@ impl FrameFaceAttempt {
         Ok(ResolvedFrameFace { resolved, realized })
     }
 
+    /// Bind directly into caller-owned storage without transporting a large
+    /// success result. A failed identity check leaves the prior output intact.
+    pub(crate) fn bind_resolved_face_into(
+        &self,
+        id: FaceId,
+        resolved: crate::neovm_bridge::ResolvedFace,
+        output: &mut Option<ResolvedFrameFace>,
+    ) -> Result<(), FrameFaceConflict> {
+        let face = crate::display_row::face_state::resolved_display_row_face(id, &resolved, None)
+            .render_face();
+        self.state.borrow().validate_face(&face)?;
+        *output = Some(ResolvedFrameFace {
+            resolved,
+            realized: RealizedFrameFace {
+                face,
+                attempt: Rc::downgrade(&self.state),
+            },
+        });
+        Ok(())
+    }
+
     /// Validate a row's realization without publishing speculative metrics.
     /// Dropping this handle leaves the published face table unchanged.
     pub(crate) fn prepare_face(&self, face: Face) -> Result<RealizedFrameFace, FrameFaceConflict> {
@@ -382,6 +548,24 @@ impl FrameFaceAttempt {
             face,
             attempt: Rc::downgrade(&self.state),
         })
+    }
+
+    /// Append a checked realization directly to a row's prepared output. A
+    /// rejected face leaves both that output and the published table unchanged.
+    /// The caller keeps encounter order without transporting a large success
+    /// payload through a separate `Result<RealizedFrameFace, _>`.
+    #[inline]
+    pub(crate) fn prepare_face_into_output(
+        &self,
+        face: Face,
+        output: &mut Vec<RealizedFrameFace>,
+    ) -> Result<(), FrameFaceConflict> {
+        self.state.borrow().validate_face(&face)?;
+        output.push(RealizedFrameFace {
+            face,
+            attempt: Rc::downgrade(&self.state),
+        });
+        Ok(())
     }
 
     pub(crate) fn publish_face(
@@ -563,6 +747,56 @@ impl FrameFaceAttempt {
         Ok(())
     }
 
+    /// Import older prepared content only when its IDs still name the same
+    /// realizations in the current committed namespace. The caller separately
+    /// checks the full layout key (including font-selection invalidation).
+    pub(crate) fn admit_prepared(
+        &mut self,
+        face_ids: impl IntoIterator<Item = FaceId>,
+        source: &PreparedFaceSnapshot,
+        current: &FrameFaceArena,
+    ) -> Result<(), FrameFaceReuseError> {
+        let mut state = self.state.borrow_mut();
+        if !Arc::ptr_eq(&state.owner, &source.owner) || !Arc::ptr_eq(&state.owner, &current.owner) {
+            return Err(FrameFaceReuseError::ForeignArena);
+        }
+        if !Arc::ptr_eq(&state.base_snapshot, &current.snapshot) {
+            return Err(FrameFaceReuseError::ForeignSnapshot);
+        }
+        // Rows repeat face IDs for every glyph. Validate each distinct ID
+        // once, retaining encounter order and the all-or-nothing admission.
+        let mut seen = rustc_hash::FxHashSet::default();
+        let ids: Vec<_> = face_ids.into_iter().filter(|id| seen.insert(*id)).collect();
+        for id in &ids {
+            let face = source
+                .faces
+                .get(id)
+                .ok_or(FrameFaceReuseError::MissingFace(*id))?;
+            if let Some(now) = current.faces.get(id) {
+                if now != face {
+                    return Err(FrameFaceReuseError::ConflictingFace(*id));
+                }
+            } else {
+                if id.get() < BasicFaceId::SENTINEL
+                    || realized_identity_lookup(&current.realized, face_identity_hash(face), face)
+                        != Some(*id)
+                {
+                    return Err(FrameFaceReuseError::MissingFace(*id));
+                }
+            }
+            if state.faces.get(id).is_some_and(|now| now != face) {
+                return Err(FrameFaceReuseError::ConflictingFace(*id));
+            }
+        }
+        for id in ids {
+            state
+                .faces
+                .entry(id)
+                .or_insert_with(|| source.faces[&id].clone());
+        }
+        Ok(())
+    }
+
     fn publish(&mut self, face: Face) -> Result<FaceId, FrameFaceConflict> {
         let mut state = self.state.borrow_mut();
         let face_id = face.id;
@@ -661,7 +895,7 @@ impl FrameFaceAttempt {
             return Err(FrameFaceSealError::MismatchedFaceId { table_id, face_id });
         }
         for (id, finalized) in &finalized_faces {
-            if face_realization_identity(&state.faces[id]) != face_realization_identity(finalized) {
+            if !same_face_realization(&state.faces[id], finalized) {
                 return Err(FrameFaceSealError::ChangedRealization(*id));
             }
             let published = &state.faces[id];
@@ -688,18 +922,8 @@ impl FrameFaceAttempt {
     }
 }
 
-fn merge_compatible_realization(existing: &mut Face, replacement: &Face) -> bool {
-    let mut existing_identity = existing.clone();
-    existing_identity.font_ascent = 0;
-    existing_identity.font_descent = 0;
-    existing_identity.font_file_path = None;
-    existing_identity.default_resolved_font_id = None;
-    let mut replacement_identity = replacement.clone();
-    replacement_identity.font_ascent = 0;
-    replacement_identity.font_descent = 0;
-    replacement_identity.font_file_path = None;
-    replacement_identity.default_resolved_font_id = None;
-    if existing_identity != replacement_identity {
+fn compatible_realization(existing: &Face, replacement: &Face) -> bool {
+    if existing.id != replacement.id || !same_face_realization(existing, replacement) {
         return false;
     }
 
@@ -714,6 +938,14 @@ fn merge_compatible_realization(existing: &mut Face, replacement: &Face) -> bool
             .zip(replacement.default_resolved_font_id.as_ref())
             .is_some_and(|(existing, replacement)| existing != replacement)
     {
+        return false;
+    }
+
+    true
+}
+
+fn merge_compatible_realization(existing: &mut Face, replacement: &Face) -> bool {
+    if !compatible_realization(existing, replacement) {
         return false;
     }
 

@@ -1,6 +1,17 @@
 name: Native display contract
 
 on:
+  pull_request:
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - crates/neomacs-display-runtime/src/render_thread/scroll_input.rs
+      - crates/neomacs-display-runtime/src/render_thread/tests/scroll_input_test.rs
+      - crates/neomacs-display-runtime/src/window_identity.rs
+      - crates/neomacs-gui-tests/tests/native_display.rs
+      - crates/neomacs-gui-tests/fixtures/native-scroll-contract.el
+      - crates/neomacs-perf/fixtures/scrolling-content.el
+      - .github/workflows/native-display-contract.yml
   workflow_dispatch:
     inputs:
       platform:
@@ -9,6 +20,7 @@ on:
         default: all
         options:
           - all
+          - linux
           - macos
           - windows
 
@@ -22,9 +34,10 @@ jobs:
       matrix:
         include: >-
           ${{ fromJSON(
+            inputs.platform == 'linux' && '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"}]' ||
             inputs.platform == 'macos' && '[{"runner":"macos-latest","target":"aarch64-apple-darwin"}]' ||
             inputs.platform == 'windows' && '[{"runner":"windows-latest","target":"x86_64-pc-windows-msvc"}]' ||
-            '[{"runner":"macos-latest","target":"aarch64-apple-darwin"},{"runner":"windows-latest","target":"x86_64-pc-windows-msvc"}]'
+            '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"},{"runner":"macos-latest","target":"aarch64-apple-darwin"},{"runner":"windows-latest","target":"x86_64-pc-windows-msvc"}]'
           ) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 150
@@ -33,6 +46,9 @@ jobs:
       RUST_BACKTRACE: 1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Linux build and headless display dependencies
+        if: runner.os == 'Linux'
+        run: scripts/ci/setup-linux.sh ecosystem
       - name: Install macOS build dependency
         if: runner.os == 'macOS'
         run: brew install pkg-config
@@ -42,7 +58,11 @@ jobs:
           target: ${{ matrix.target }}
           install-nextest: 'true'
       - name: Native resource adapters
+        # Registry/defaults contracts have no Linux tests; nextest rejects an empty run.
+        if: runner.os != 'Linux'
         run: cargo nextest run --locked -p neomacs-display-runtime --test gui_resources_test
+      - name: Fractional input and gesture isolation
+        run: cargo nextest run --locked -p neomacs-display-runtime --lib -E 'test(scroll_input)'
       - name: Public Lisp resource and geometry contracts
         run: cargo nextest run --locked -p neovm-core --lib -E 'test(resources_test)|test(frame_resize_test)'
       - name: Build matching executable and runtime image
@@ -55,7 +75,7 @@ jobs:
       - name: Set resource font on ephemeral Windows runner
         if: runner.os == 'Windows'
         run: reg add 'HKCU\SOFTWARE\GNU\Emacs' /v Emacs.Font /t REG_SZ /d 'Consolas-16' /f
-      - name: Native GUI startup, font and resize
+      - name: Native GUI startup, font, resize and rich scrolling
         # Preferences are changed only on this ephemeral hosted runner. The
         # ordinary -Q smoke test remains a control for native-resource inhibition.
         env:

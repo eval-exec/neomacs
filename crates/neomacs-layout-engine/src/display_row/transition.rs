@@ -117,8 +117,9 @@ impl<'a> DisplayRowBoundaryTransitionRequest<'a> {
     pub(crate) fn emit_with_output(
         self,
         row_geometry: &mut DisplayRowGeometryState,
-        output_render: TextRowOutputRenderState<'_>,
+        mut output_render: TextRowOutputRenderState<'_>,
     ) -> DisplayTextRowTransition {
+        output_render.note_query_row_advance(row_geometry.height(), self.target.line_spacing());
         let geometry_transition = row_geometry.finish_boundary(self.target);
         let transition =
             output_render.transition_text_row_with_limit(geometry_transition, self.max_rows);
@@ -212,7 +213,7 @@ impl<'a, 'emit> DisplayRowTextWindowEmitContext<'a, 'emit> {
         row_geometry: &'emit mut DisplayRowGeometryState,
         row_flags: &'emit mut DisplayRowFlags,
         row_limit: DisplayRowLimit,
-        source_render: &'emit mut TextRowSourceRenderState<'emit>,
+        source_render: &'emit mut TextRowSourceRenderState<'_>,
     ) -> Self {
         Self::new(
             defaults,
@@ -644,7 +645,7 @@ impl<'a> DisplayRowOverflowTransitionRequest<'a> {
         row_geometry: &mut DisplayRowGeometryState,
         row_flags: &mut DisplayRowFlags,
         row_limit: DisplayRowLimit,
-        output_render: TextRowOutputRenderState<'_>,
+        mut output_render: TextRowOutputRenderState<'_>,
     ) -> DisplayTextRowTransition {
         match self.kind {
             DisplayRowOverflowTransitionKind::Truncation => {
@@ -655,6 +656,7 @@ impl<'a> DisplayRowOverflowTransitionRequest<'a> {
                 );
             }
             DisplayRowOverflowTransitionKind::VisualWrap(break_kind) => {
+                output_render.mark_visual_continuation();
                 // GNU sets row->continued_p on every wrap branch; only the
                 // mid-element branches also produce the IT_CONTINUATION glyph.
                 row_geometry.mark_current_row_flag_kind(

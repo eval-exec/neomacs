@@ -64,11 +64,25 @@ impl TerminalPaintTarget {
 #[cfg(all(feature = "webview", target_os = "linux"))]
 use neomacs_renderer_wgpu::WgpuRenderer;
 
+/// Publish one renderer image event, and say whether the evaluator needs to
+/// hear about it.
+///
+/// A band is published to the shared state and goes no further: nothing the
+/// evaluator holds — layout, readiness, cache size — changed when a decode
+/// advanced, so waking it per band would buy a redisplay per band and nothing
+/// else. The terminal events are the ones it reconciles against. What a band
+/// does owe the screen is a *repaint* — the rows it carried are in the texture
+/// now, and the frame already on screen was drawn without them — which is the
+/// render thread's own business and does not go through the evaluator either.
 fn publish_image_cache_event(
     shared: &super::SharedImageRenderState,
     event: neomacs_renderer_wgpu::ImageCacheEvent,
-) -> crate::thread_comm::ImageStateEvent {
+) -> Option<crate::thread_comm::ImageStateEvent> {
     let (event, terminal) = match event {
+        neomacs_renderer_wgpu::ImageCacheEvent::Band { load, rows } => {
+            shared.publish_band(load, rows);
+            return None;
+        }
         neomacs_renderer_wgpu::ImageCacheEvent::Ready { load, metadata } => {
             let metadata = neovm_core::emacs_core::image_catalog::ResolvedImageMetadata {
                 layout: metadata.layout,
@@ -100,7 +114,7 @@ fn publish_image_cache_event(
     } else {
         shared.clear_image_terminals(event.image());
     }
-    event
+    Some(event)
 }
 
 impl RenderApp {
@@ -572,7 +586,21 @@ impl RenderApp {
     }
 
     pub(super) fn handle_image_event(&mut self, event: neomacs_renderer_wgpu::ImageCacheEvent) {
-        let event = publish_image_cache_event(&self.image_metadata, event);
+        if matches!(event, neomacs_renderer_wgpu::ImageCacheEvent::Band { .. }) {
+            // The band's rows are in the image's texture now and nothing else
+            // about the frame moved: step 1 already placed the glyph and the
+            // quad, so what the screen is owed is a repaint of the frame it is
+            // showing, not a redisplay. Marking the content dirty asks for
+            // exactly that, and `handle_about_to_wait` drains these events
+            // before it reconciles frame demands, so the repaint is requested in
+            // the same pass the band is drained in. Without it a band is a
+            // texture write nobody draws: the loop idles between decodes, and
+            // the pixels would wait for the next unrelated frame.
+            self.frame_windows.mark_top_level_dirty();
+        }
+        let Some(event) = publish_image_cache_event(&self.image_metadata, event) else {
+            return;
+        };
         if self
             .toolbar
             .textures()
@@ -591,7 +619,7 @@ impl RenderApp {
     pub(super) fn synchronize_image_residency(&mut self) {
         let mut retained = self.frame_windows.retained_images();
         for pending in self.pending_child_frames.values() {
-            retained.extend(pending.referenced_images().iter());
+            retained.extend(pending.state.referenced_images().iter());
         }
         retained.extend(self.toolbar.textures().values().copied());
         if let Some(renderer) = self.renderer.as_mut() {
@@ -1107,5 +1135,5 @@ mod image_cache_event_tests;
 mod tests;
 
 #[cfg(test)]
-#[path = "media_test.rs"]
+#[path = "tests/media_test.rs"]
 mod followup_tests;

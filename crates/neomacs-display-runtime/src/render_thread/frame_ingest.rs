@@ -155,6 +155,73 @@ struct FrameIngestOutcome {
 }
 
 impl RenderApp {
+    /// Lease and paint the pre-update content of a size-changing child
+    /// frame, when the resize slot is enabled.
+    ///
+    /// Returns the leased picture, the old content's logical size and the
+    /// resize spec that drove the decision, so the attach after the update
+    /// uses the same curve the trigger consulted. Any failure -- the slot
+    /// off, the size unchanged, the pool refusing the lease -- degrades to
+    /// the instant swap GNU Emacs does.
+    fn lease_child_resize_crossfade(
+        render_policy: &crate::render_thread::render_quality::RenderQualityPolicy,
+        renderer: Option<&mut neomacs_renderer_wgpu::WgpuRenderer>,
+        window_state: &mut crate::render_thread::frame_windows::GuiFrameWindowState,
+        frame_id: u64,
+        next: &crate::core::frame_glyphs::FrameGlyphBuffer,
+    ) -> Option<(
+        neomacs_renderer_wgpu::SnapshotLease,
+        f32,
+        f32,
+        neomacs_display_protocol::motion_spec::MotionSpec,
+    )> {
+        let resize_spec = render_policy.child_frame_motion().resize;
+        if resize_spec.is_instant() {
+            return None;
+        }
+        let old_entry = window_state
+            .render
+            .compositor
+            .child_frames
+            .frames
+            .get(&frame_id)?;
+        let old_width = old_entry.frame.width;
+        let old_height = old_entry.frame.height;
+        if (old_width - next.width).abs() < f32::EPSILON
+            && (old_height - next.height).abs() < f32::EPSILON
+        {
+            return None;
+        }
+        let scale = window_state.scale_factor() as f32;
+        let phys_w = (old_width * scale).ceil() as u32;
+        let phys_h = (old_height * scale).ceil() as u32;
+        let Some(size) = neomacs_renderer_wgpu::SnapshotSize::new(phys_w, phys_h) else {
+            return None;
+        };
+        let renderer = renderer?;
+        let lease = renderer.acquire_snapshot(size).ok()?;
+        let view = lease.view().clone();
+        let atlas = window_state.render.compositor.glyph_atlas.as_mut()?;
+        renderer.render_frame_content(
+            &view,
+            &old_entry.frame,
+            atlas,
+            phys_w,
+            phys_h,
+            0.0,
+            0.0,
+            false,
+            None,
+            0.0,
+            None,
+            None,
+            1.0,
+            1.0,
+            [0.0; 2],
+        );
+        Some((lease, old_width, old_height, resize_spec))
+    }
+
     #[cfg(feature = "webview")]
     fn resolved_webview_placements(
         window_state: &GuiFrameWindowState,
@@ -512,16 +579,25 @@ impl RenderApp {
         self.frame_windows.tick_top_level_child_frames();
         let mut queued = std::collections::VecDeque::new();
         queued.extend(std::mem::take(&mut self.pending_child_frames).into_values());
-        queued.extend(self.comms.frame_rx.try_iter());
+        if let Some(worker) = &self.frame_preparation {
+            queued.extend(worker.ready());
+        } else {
+            queued.extend(
+                self.comms
+                    .frame_rx
+                    .drain_pending()
+                    .into_iter()
+                    .map(super::frame_preparation::PreparedFrame::from_queued),
+            );
+        }
         loop {
             let mut deferred = std::collections::HashMap::new();
             let mut made_progress = false;
             while let Some(display_state) = queued.pop_front() {
-                super::frame_stats::note_scene_commit(
-                    neomacs_display_protocol::frame_time::observe_platform_now(),
-                );
-                let frame_id = display_state.frame_placement.frame();
+                super::frame_stats::note_scene_commit(display_state.received);
+                let frame_id = display_state.state.frame_placement.frame();
                 let parent_id = display_state
+                    .state
                     .frame_placement
                     .parent()
                     .unwrap_or(neomacs_display_protocol::DisplayFrameId::new(0));
@@ -529,7 +605,7 @@ impl RenderApp {
                     && !self.frame_windows.has_presented_frame(parent_id.get())
                 {
                     if let Some(superseded) = deferred.insert(frame_id.get(), display_state) {
-                        let placement = superseded.frame_placement;
+                        let placement = superseded.state.frame_placement;
                         self.comms.send_input(
                             crate::thread_comm::InputEvent::PresentationDiscarded {
                                 presentation: placement.presentation().get(),
@@ -541,27 +617,13 @@ impl RenderApp {
                 }
                 made_progress = true;
 
-                // Materialize FrameDisplayState → FrameGlyphBuffer for the
-                // existing rendering code.  The layout engine populates
-                // the grid and non-grid items; materialize() converts the
-                // grid into pixel-positioned glyphs and appends non-grid items.
-                // Reduce rows to scroll anchors before materializing them away:
-                // a FrameGlyphBuffer carries no rows, so this is the last point
-                // at which a later scroll can be measured.
-                let scroll_anchors =
-                    crate::render_thread::frame_compositor::continuity::scroll::anchors_by_window(
-                        &display_state,
-                    );
-                let reflow_imprints =
-                    crate::render_thread::frame_compositor::continuity::reflow::imprints_by_window(
-                        &display_state,
-                    );
-                let frame = display_state.materialize();
-                // Row-damage summary for the renderer's vertex reuse. Built from
-                // exactly this display_state (the one `frame` was materialized
-                // from) so damage and glyphs can never describe different frames.
-                let row_damage =
-                    neomacs_renderer_wgpu::FrameRowDamage::from_display_state(&display_state);
+                let super::frame_preparation::PreparedFrame {
+                    frame,
+                    damage: row_damage,
+                    scroll: scroll_anchors,
+                    reflow: reflow_imprints,
+                    ..
+                } = display_state;
 
                 // ── Observation point: inspect what will be rendered ──
                 // `NEOMACS_DUMP_FRAME_GLYPHS=1`   → counts + role/text + raw glyph Debug.
@@ -821,7 +883,6 @@ impl RenderApp {
                         self.frame_windows.is_primary_frame_id(parent_id.get());
                     let typing_ripple_enabled = self.effects.typing_ripple.enabled;
                     let cursor_trail_fade_enabled = self.effects.cursor_trail_fade.enabled;
-                    let renderer = self.renderer.as_ref();
                     if let Some(window_state) = self
                         .frame_windows
                         .get_mut_by_presented_frame(parent_id.get())
@@ -835,7 +896,33 @@ impl RenderApp {
                             .map(|entry| entry.frame.presentation_id);
                         let new_presentation = frame.presentation_id;
                         let cursor_config = self.cursor_defaults.config_snapshot();
+                        let resize_crossfade = Self::lease_child_resize_crossfade(
+                            &self.render_policy,
+                            self.renderer.as_mut(),
+                            window_state,
+                            frame_id.get(),
+                            &frame,
+                        );
+                        let renderer = self.renderer.as_ref();
                         if window_state.render.update_child_frame(frame) {
+                            if let Some((old, old_width, old_height, resize_spec)) =
+                                resize_crossfade
+                            {
+                                window_state
+                                    .render
+                                    .compositor
+                                    .child_frames
+                                    .begin_resize_crossfade(
+                                        frame_id.get(),
+                                        old,
+                                        old_width,
+                                        old_height,
+                                        resize_spec,
+                                        neomacs_display_protocol::frame_time::observe_platform_now(
+                                        ),
+                                    );
+                                window_state.render.compositor.dirty = true;
+                            }
                             let transition = ActivePresentationTransition::between(
                                 old_presentation,
                                 new_presentation,
@@ -897,7 +984,27 @@ impl RenderApp {
                             .get(&frame_id.get())
                             .map(|entry| entry.frame.presentation_id);
                         let new_presentation = frame.presentation_id;
+                        let resize_crossfade = Self::lease_child_resize_crossfade(
+                            &self.render_policy,
+                            self.renderer.as_mut(),
+                            ws,
+                            frame_id.get(),
+                            &frame,
+                        );
                         if ws.render.update_child_frame(frame) {
+                            if let Some((old, old_width, old_height, resize_spec)) =
+                                resize_crossfade
+                            {
+                                ws.render.compositor.child_frames.begin_resize_crossfade(
+                                    frame_id.get(),
+                                    old,
+                                    old_width,
+                                    old_height,
+                                    resize_spec,
+                                    neomacs_display_protocol::frame_time::observe_platform_now(),
+                                );
+                                ws.render.compositor.dirty = true;
+                            }
                             if let Some(transition) = ActivePresentationTransition::between(
                                 old_presentation,
                                 new_presentation,

@@ -15,11 +15,11 @@ mod presentation;
 mod system;
 
 #[cfg(test)]
-#[path = "backend_test.rs"]
+#[path = "tests/backend_test.rs"]
 mod backend_test;
 
 #[cfg(test)]
-#[path = "system_test.rs"]
+#[path = "tests/system_test.rs"]
 mod system_test;
 
 pub use model::{

@@ -8,6 +8,7 @@ mod counters;
 mod execution_policy;
 mod harness;
 mod host;
+mod input_latency;
 mod native_video;
 mod portable_dump;
 mod profile;
@@ -52,9 +53,9 @@ pub use native_video::{
     NativeVideoGraphicsBackend, NativeVideoMediaMetadata,
 };
 pub use profile::{
-    NativeProfiler, PerfCallGraph, PerfCaptureConfiguration, PerfSamplingEvent, ProfileArtifact,
-    ProfileRejection, ProfileReport, ProfileReportStyle, ProfileRequest, ProfileScope,
-    ProfileVerdict,
+    NativeProfiler, PerfCallGraph, PerfCaptureConfiguration, PerfSamplingEvent, PerfSamplingRate,
+    ProfileArtifact, ProfileRejection, ProfileReport, ProfileReportStyle, ProfileRequest,
+    ProfileScope, ProfileVerdict,
 };
 #[cfg(test)]
 pub(crate) use profile_gate::ProfileGate;

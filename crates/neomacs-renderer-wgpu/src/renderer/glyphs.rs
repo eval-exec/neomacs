@@ -454,11 +454,13 @@ fn cursor_glyph_slot_rect(
 ///
 /// This deliberately models cursor geometry, not glyph ink.  Font ink may be
 /// smaller than its cell or overhang it, while GNU Emacs draws bar cursors as
-/// independent rectangles on a cell edge.  Keeping the style-to-contract
+/// independent rectangles on a cell edge. Row spacing and other faces can
+/// enlarge the advance cell beyond the layout-resolved cursor height.
+/// Keeping the style-to-contract
 /// mapping exhaustive makes a new cursor style a compile-time decision here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CursorCellContract {
-    FullCell,
+    FullWidthWithinRow,
     VerticalLeadingEdge(CursorInlineDirection),
 }
 
@@ -494,7 +496,9 @@ struct GlyphCellRect(Rect);
 impl CursorCellContract {
     fn for_style(style: CursorStyle, direction: CursorInlineDirection) -> Self {
         match style {
-            CursorStyle::FilledBox | CursorStyle::Hbar(_) | CursorStyle::Hollow => Self::FullCell,
+            CursorStyle::FilledBox | CursorStyle::Hbar(_) | CursorStyle::Hollow => {
+                Self::FullWidthWithinRow
+            }
             CursorStyle::Bar(_) => Self::VerticalLeadingEdge(direction),
         }
     }
@@ -505,11 +509,16 @@ impl CursorCellContract {
         GlyphCellRect(cell): GlyphCellRect,
         tolerance: f32,
     ) -> bool {
+        let lies_within_row = cursor.height > 0.0
+            && cursor.y >= cell.y - tolerance
+            && cursor.bottom() <= cell.bottom() + tolerance;
         match self {
-            Self::FullCell => rect_edges_match(cursor, cell, tolerance),
+            Self::FullWidthWithinRow => {
+                lies_within_row
+                    && approx_eq(cursor.x, cell.x, tolerance)
+                    && approx_eq(cursor.right(), cell.right(), tolerance)
+            }
             Self::VerticalLeadingEdge(direction) => {
-                let has_cell_height = approx_eq(cursor.y, cell.y, tolerance)
-                    && approx_eq(cursor.bottom(), cell.bottom(), tolerance);
                 let lies_within_cell = cursor.x >= cell.x - tolerance
                     && cursor.right() <= cell.right() + tolerance
                     && cursor.width > 0.0
@@ -521,7 +530,7 @@ impl CursorCellContract {
                     }
                 };
 
-                has_cell_height && lies_within_cell && touches_leading_edge
+                lies_within_row && lies_within_cell && touches_leading_edge
             }
         }
     }
@@ -544,13 +553,6 @@ fn cursor_cell_alignment(
 
 fn approx_eq(left: f32, right: f32, tolerance: f32) -> bool {
     (left - right).abs() <= tolerance
-}
-
-fn rect_edges_match(left: Rect, right: Rect, tolerance: f32) -> bool {
-    approx_eq(left.x, right.x, tolerance)
-        && approx_eq(left.y, right.y, tolerance)
-        && approx_eq(left.right(), right.right(), tolerance)
-        && approx_eq(left.bottom(), right.bottom(), tolerance)
 }
 
 pub(super) fn log_cursor_glyph_alignment(
@@ -2032,7 +2034,10 @@ impl WgpuRenderer {
         let uniforms = Uniforms {
             screen_size: [logical_w, logical_h],
             time: elapsed,
-            _padding: 0.0,
+            content_alpha: 1.0,
+            content_scale: 1.0,
+            _pivot_padding: 0.0,
+            content_pivot: [0.0; 2],
         };
         let draw = self.parameters(uniforms.screen_size, uniforms.time);
         (logical_w, logical_h, draw)

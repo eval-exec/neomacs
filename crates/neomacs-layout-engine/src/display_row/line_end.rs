@@ -594,7 +594,7 @@ impl DisplayCurrentRowMutation for FillColumnIndicatorMutation {
 }
 
 #[cfg(test)]
-#[path = "fill_column_indicator_test.rs"]
+#[path = "tests/fill_column_indicator_test.rs"]
 mod fill_column_indicator_tests;
 
 #[cfg(test)]

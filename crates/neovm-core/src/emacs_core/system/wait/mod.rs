@@ -695,6 +695,15 @@ impl WaitRequest {
             return Some(WaitCompletion::CommandInputPending);
         }
 
+        // Timer and process callbacks can replace the displayed buffer. Return
+        // to read_char so its bounded display maintenance can discover that
+        // change even when its previous coverage request had no more work.
+        if matches!(self.keyboard, KeyboardWaitPolicy::ReadCommandInput)
+            && (outcome.has_timer_activity() || outcome.ran_process_callbacks())
+        {
+            return Some(WaitCompletion::DisplayActivity);
+        }
+
         if self.processes.satisfied_by(outcome) {
             return Some(WaitCompletion::ProcessActivity);
         }
@@ -728,6 +737,7 @@ impl WaitRequest {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WaitCompletion {
+    DisplayActivity,
     ProcessActivity,
     CommandInputPending,
     SpecialInputActivity,
@@ -753,9 +763,9 @@ impl CommandInputWaitOutcome {
             WaitCompletion::DeadlineElapsed | WaitCompletion::TargetProcessTerminated => {
                 Self::DeadlineElapsed
             }
-            WaitCompletion::ProcessActivity | WaitCompletion::SpecialInputActivity => {
-                Self::Interrupted
-            }
+            WaitCompletion::DisplayActivity
+            | WaitCompletion::ProcessActivity
+            | WaitCompletion::SpecialInputActivity => Self::Interrupted,
         }
     }
 }
@@ -770,7 +780,8 @@ impl ProcessOutputWaitOutcome {
     fn from_completion(completion: WaitCompletion) -> Self {
         match completion {
             WaitCompletion::ProcessActivity => Self::ProcessActivity,
-            WaitCompletion::CommandInputPending
+            WaitCompletion::DisplayActivity
+            | WaitCompletion::CommandInputPending
             | WaitCompletion::SpecialInputActivity
             | WaitCompletion::DeadlineElapsed
             | WaitCompletion::TargetProcessTerminated => Self::NoProcessActivity,

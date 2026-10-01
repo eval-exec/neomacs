@@ -43,6 +43,10 @@ impl BufferSourceConsumptionState {
         Self { text_start_byte }
     }
 
+    pub(crate) fn text_start_byte(&self) -> usize {
+        self.text_start_byte
+    }
+
     fn prepare_render_source_item(
         &mut self,
         source_item: DisplaySourceItem,
@@ -222,6 +226,16 @@ impl BufferSourceConsumptionState {
         item: DisplaySourceItem,
         position: &mut DisplaySourceTextPosition,
     ) -> Option<DisplaySourceItem> {
-        item.consume_for_render(position).ok()
+        // The failure arm names its invariant (typed `SourceItemConsumeFailure`),
+        // and `consume_for_render` already logged it with the item's position.
+        // There is deliberately no skip-and-continue here: a refusal means the
+        // producer emitted an item the walk cannot advance by, and guessing an
+        // advance would corrupt the byte/char position pairing the whole walk
+        // is built on. Aborting the row keeps the damage LOCAL to one row and
+        // attributable, instead of desyncing every following row.
+        match item.consume_for_render(position) {
+            Ok(item) => Some(item),
+            Err((_failure, _unconsumed)) => None,
+        }
     }
 }

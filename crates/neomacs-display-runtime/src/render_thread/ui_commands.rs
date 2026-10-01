@@ -214,6 +214,22 @@ impl RenderApp {
                 self.apply_requested_visual_config();
                 self.frame_windows.mark_top_level_dirty();
             }
+            ConfigCommand::SetModifierPolicy(policy) => {
+                tracing::info!(
+                    "Modifier policy: command={:?} option={:?} control={:?} fn={:?}",
+                    policy.assignment(neomacs_display_protocol::PhysicalModifierKey::LeftCommand),
+                    policy.assignment(neomacs_display_protocol::PhysicalModifierKey::LeftOption),
+                    policy.assignment(neomacs_display_protocol::PhysicalModifierKey::LeftControl),
+                    policy.assignment(neomacs_display_protocol::PhysicalModifierKey::Function),
+                );
+                self.modifier_policy = policy;
+                // Option's command-like-ness decides whether winit rewrites
+                // Option chords as alt (GNU's shift-like vs control-like
+                // split, src/nsterm.m:7306-7316); a new policy re-applies it
+                // to every live window and to windows opened later.
+                self.frame_windows
+                    .apply_option_key_policy(policy.option_as_alt_shape());
+            }
             ConfigCommand::SetScrollIndicators { enabled } => {
                 self.scroll_indicators_enabled = enabled;
                 self.frame_windows.mark_top_level_dirty();

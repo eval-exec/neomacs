@@ -384,6 +384,12 @@ Also store it in `eldoc-last-message' and return that value."
          ;; for us, but do note that the last-message will be gone.
          (setq eldoc-last-message nil))))
 
+;; The GUI may predict scrolling when this exact hook is a no-op because
+;; `eldoc-last-message' is nil. Redefinition/advice revokes that permission.
+(unless (advice--p (symbol-function 'eldoc-pre-command-refresh-echo-area))
+  (put 'eldoc-pre-command-refresh-echo-area 'neomacs--scroll-definition
+       (symbol-function 'eldoc-pre-command-refresh-echo-area)))
+
 ;; The point of `eldoc--request-state' is not to over-request, which
 ;; can happen if the idle timer is restarted on execution of command
 ;; which is guaranteed not to change the conditions that warrant a new

@@ -1,7 +1,7 @@
 use super::*;
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_fixnum};
 use libloading::Library;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use strum::{EnumString, IntoStaticStr};
 use tree_sitter::{
     LANGUAGE_VERSION, Language, MIN_COMPATIBLE_LANGUAGE_VERSION, Parser, Point, Range as TSRange,
@@ -143,6 +143,44 @@ fn default_dynamic_library_suffixes() -> &'static [&'static str] {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         &[".so"]
+    }
+}
+
+/// One `dynlib_open` probe path.
+///
+/// Two birthplaces, both GNU treesit.c:
+/// - [`LibraryProbe::system_loader_name`] leaves the bare
+///   `libtree-sitter-<lang><suffix>` relative on purpose -- those probes go
+///   through the system loader's own search (:793).
+/// - [`LibraryProbe::under_directory`] runs the directory-joined base through
+///   `expand-file-name` (:797 for `user-emacs-directory`, :807 for
+///   `treesit-extra-load-path`). The expansion resolves `~` against $HOME and
+///   relative directories against the cwd, exactly like every Lisp file API.
+///   `dynlib_open`/`dlopen` does NEITHER, so handing it the raw
+///   `"~/.config/emacs/"` string reported every installed grammar as
+///   `not-found` while GNU loaded the same files (issue #413).
+///
+/// The versioned-suffix fan-out only runs on an existing probe
+/// ([`LibraryProbe::versioned_variants`]), so an unexpanded directory cannot
+/// reach the loader again.
+struct LibraryProbe(String);
+
+impl LibraryProbe {
+    fn system_loader_name(base: &str) -> Self {
+        Self(base.to_owned())
+    }
+
+    fn under_directory(dir: &str, joined_base: &str) -> Self {
+        Self(crate::emacs_core::fileio::expand_file_name(
+            joined_base,
+            Some(dir),
+        ))
+    }
+
+    fn versioned_variants(self, suffix: &str) -> impl Iterator<Item = Self> {
+        posix_versioned_candidates(&self.0, suffix)
+            .into_iter()
+            .map(Self)
     }
 }
 
@@ -392,7 +430,7 @@ fn treesit_user_emacs_dir(eval: &super::eval::Context) -> Option<String> {
         .and_then(|value| value.as_str_owned())
 }
 
-fn treesit_candidate_paths(eval: &super::eval::Context, language: SymId) -> Vec<String> {
+pub(crate) fn treesit_candidate_paths(eval: &super::eval::Context, language: SymId) -> Vec<String> {
     let remapped_language = maybe_remap_language(eval, language);
     let remapped_name = resolve_sym(remapped_language);
     let default_lib_base = format!("libtree-sitter-{remapped_name}");
@@ -403,16 +441,21 @@ fn treesit_candidate_paths(eval: &super::eval::Context, language: SymId) -> Vec<
     let mut candidates = Vec::new();
 
     for suffix in default_dynamic_library_suffixes() {
-        candidates.extend(posix_versioned_candidates(&lib_base_name, suffix));
+        candidates.extend(
+            LibraryProbe::system_loader_name(&lib_base_name)
+                .versioned_variants(suffix)
+                .collect::<Vec<_>>(),
+        );
     }
 
     if let Some(user_emacs_dir) = treesit_user_emacs_dir(eval) {
-        let base = Path::new(&user_emacs_dir)
-            .join("tree-sitter")
-            .join(&lib_base_name);
-        let base = base.to_string_lossy().into_owned();
+        let joined = format!("tree-sitter/{lib_base_name}");
         for suffix in default_dynamic_library_suffixes() {
-            candidates.extend(posix_versioned_candidates(&base, suffix));
+            candidates.extend(
+                LibraryProbe::under_directory(&user_emacs_dir, &joined)
+                    .versioned_variants(suffix)
+                    .collect::<Vec<_>>(),
+            );
         }
     }
 
@@ -420,14 +463,16 @@ fn treesit_candidate_paths(eval: &super::eval::Context, language: SymId) -> Vec<
         eval,
         "treesit-extra-load-path",
     )) {
-        let base = Path::new(&dir).join(&lib_base_name);
-        let base = base.to_string_lossy().into_owned();
         for suffix in default_dynamic_library_suffixes() {
-            candidates.extend(posix_versioned_candidates(&base, suffix));
+            candidates.extend(
+                LibraryProbe::under_directory(&dir, &lib_base_name)
+                    .versioned_variants(suffix)
+                    .collect::<Vec<_>>(),
+            );
         }
     }
 
-    candidates
+    candidates.into_iter().map(|probe| probe.0).collect()
 }
 
 fn load_language_from_path(path: &str, c_symbol: &str) -> Result<runtime::LoadedLanguage, String> {
@@ -944,7 +989,14 @@ fn expand_pattern_value(pattern: Value) -> Result<String, Flow> {
         return Ok(format!("[{}]", pieces.join(" ")));
     }
 
-    if let Some(items) = crate::emacs_core::value::list_to_vec(&pattern) {
+    // GNU: only a VECTOR or a non-empty CONS takes the recursive arm —
+    // `nil` is neither (NILP), so it falls through to prin1_to_string and
+    // expands to `nil` (the anonymous node marker). Treating nil as an
+    // empty list produced `()`, a node pattern with no type name that
+    // matches nothing (issue #416).
+    if let Some(items) = crate::emacs_core::value::list_to_vec(&pattern)
+        && !pattern.is_nil()
+    {
         let mut pieces = Vec::with_capacity(items.len());
         for item in items {
             pieces.push(expand_pattern_value(item)?);

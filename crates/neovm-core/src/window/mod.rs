@@ -18,6 +18,7 @@ use neomacs_display_protocol::TransitionDirection;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::hash::Hash;
+use std::sync::Arc;
 
 pub(crate) mod body;
 mod chrome;
@@ -580,7 +581,7 @@ pub struct WindowRedisplayState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FrameLayoutInputState {
     pub(crate) id: FrameId,
-    pub(crate) geometry: (u32, u32, u32, u32, u32),
+    pub(crate) geometry: (u32, u32, u32, u32, u32, u32),
     pub(crate) device_scale_bits: u64,
     pub(crate) visible: bool,
     pub(crate) displays_chrome: bool,
@@ -940,6 +941,12 @@ impl WindowEndRecord {
         self.matrix_row
     }
 
+    /// Reindex a complete measured suffix while preserving its exact source end.
+    /// This creates query geometry; it does not publish a retained window end.
+    pub const fn with_matrix_row(self, matrix_row: MatrixRow0) -> Self {
+        Self { matrix_row, ..self }
+    }
+
     /// Recover GNU's Lisp-visible end position from the current buffer Z.
     pub fn charpos_from_z(self, buffer_z: LispCharPos1) -> LispCharPos1 {
         let buffer_z = buffer_z.to_one_based_usize();
@@ -988,9 +995,21 @@ pub struct WindowLayoutQuery {
 pub enum WindowLayoutQueryScope {
     #[default]
     Viewport,
+    /// A prefix of the live viewport through the complete target row. If the
+    /// target is not reached, walk the viewport. Placement and clipping retain
+    /// the live start and vscroll; the returned end describes this prefix or
+    /// a larger certified observation reused from the query cache.
+    Position { target: LispCharPos1 },
     Rows {
         start: LispCharPos1,
         count: std::num::NonZeroUsize,
+    },
+    /// At least this pixel extent at an explicit source start (or through EOB).
+    /// A certified observation may supply a larger complete prefix. Its end
+    /// and geometry always describe that returned prefix, without cropping.
+    Pixels {
+        start: LispCharPos1,
+        height: std::num::NonZeroUsize,
     },
 }
 
@@ -1036,6 +1055,10 @@ impl WindowLayoutQuery {
 
     pub const fn end(&self) -> LispCharPos1 {
         self.end
+    }
+
+    pub fn geometry(&self) -> Option<&WindowDisplaySnapshot> {
+        self.geometry.as_deref()
     }
 
     pub fn into_geometry(self) -> Option<WindowDisplaySnapshot> {
@@ -2481,6 +2504,10 @@ pub struct DisplayRowSnapshot {
     pub start_buffer_pos: Option<LispCharPos1>,
     /// Last visible/source position associated with this row, if any.
     pub end_buffer_pos: Option<LispCharPos1>,
+    /// Last source position skipped by right truncation, including the line
+    /// terminator but never the following line. None means no truncated tail.
+    /// A bounded query's final row must not implicitly own the rest of a buffer.
+    pub truncated_end_buffer_pos: Option<LispCharPos1>,
     /// Whether the row ended in buffer text or in pushed display text. A
     /// newline or wrap in a display string does not consume its buffer anchor.
     pub end_source: DisplayRowEndSource,
@@ -2730,6 +2757,7 @@ pub struct WindowDisplaySnapshot {
 /// checks that drift apart.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WindowDisplaySnapshotFreshness {
+    pub(crate) fontset_generation: u64,
     pub(crate) context_instance_id: u64,
     pub(crate) window_topology_generation: u64,
     pub(crate) frame: FrameLayoutInputState,
@@ -2740,6 +2768,42 @@ pub struct WindowDisplaySnapshotFreshness {
     pub(crate) redisplay_generation: u64,
     pub(crate) media_generation: u64,
     pub(crate) function_epoch: u64,
+    pub(crate) symbol_property_revision: crate::emacs_core::symbol::SymbolPropertyRevision,
+}
+
+impl WindowDisplaySnapshotFreshness {
+    /// Exact pixel-placement change for a query over the same source rows.
+    /// Unlike scroll-surface compatibility, this preserves point, start and
+    /// redisplay revisions. The consumer must separately prove row coverage.
+    pub fn query_vscroll_delta(&self, current: &Self) -> Option<i64> {
+        let mut placed = current.clone();
+        placed.window.vscroll = self.window.vscroll;
+        placed.window.preserve_vscroll_p = self.window.preserve_vscroll_p;
+        (self == &placed)
+            .then(|| i64::from(current.window.vscroll) - i64::from(self.window.vscroll))
+    }
+
+    /// Row measurements may change placement, but not the point-dependent
+    /// source context. The producer must also validate its captured reads.
+    pub fn same_query_row_content(&self, current: &Self) -> bool {
+        self.window.point == current.window.point && self.same_scroll_content(current)
+    }
+
+    /// A committed scroll may move start/point and hide part of the first row.
+    /// Every source, font, geometry, topology and mutation revision must still
+    /// match before an existing row surface can preview that destination.
+    pub fn same_scroll_content(&self, current: &Self) -> bool {
+        let mut placed = current.clone();
+        placed.window.window_start = self.window.window_start;
+        placed.window.point = self.window.point;
+        placed.window.vscroll = self.window.vscroll;
+        placed.window.preserve_vscroll_p = self.window.preserve_vscroll_p;
+        // A request to repaint echo/chrome is not a body-content mutation.
+        // The source, face, display-variable, media and function revisions
+        // below remain authoritative, as do all window and frame inputs.
+        placed.redisplay_generation = self.redisplay_generation;
+        self == &placed
+    }
 }
 
 /// Canonical logical input identity for one speculative layout leaf.
@@ -2756,6 +2820,7 @@ pub struct WindowDisplaySnapshotFreshness {
 /// a scoped binding that restores its original value did not stale the rows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WindowLayoutAttemptFreshness {
+    fontset_generation: u64,
     context_instance_id: u64,
     window_topology_generation: u64,
     frame: FrameLayoutInputState,
@@ -3362,7 +3427,7 @@ pub struct GuiFrameGeometryHints {
 
 #[derive(Clone, Debug, PartialEq)]
 struct PreparedDisplayPresentation {
-    geometry: geometry::PresentationGeometry,
+    geometry: Arc<geometry::PresentationGeometry>,
     publications: Vec<WindowPresentationSnapshot>,
 }
 
@@ -3370,6 +3435,11 @@ struct PreparedDisplayPresentation {
 struct FramePresentationState {
     prepared: HashMap<geometry::PresentationId, PreparedDisplayPresentation>,
     active: Option<PreparedDisplayPresentation>,
+    /// Accepted Lisp redisplay geometry outlives an unsubmitted renderer ticket.
+    /// Share its allocation with the pending/active presentation, retaining only
+    /// the latest completed geometry when those renderer owners release it.
+    completed_geometry: Option<Arc<geometry::PresentationGeometry>>,
+    /// Allocation high-water mark also rejects identities of discarded tickets.
     last_identity: Option<geometry::PresentationId>,
 }
 
@@ -3856,6 +3926,22 @@ pub struct Frame {
     pub char_width: f32,
     /// Default character height.
     pub char_height: f32,
+    /// The default font's ascent in pixels: how far the text baseline sits
+    /// below the top of a character cell.
+    ///
+    /// GNU's `FONT_BASE` for the frame's default face font (`FRAME_BASELINE` is
+    /// `char_height`-relative, not a pixel count).  A row's height is
+    /// `max (ascent) + max (descent)` over the elements on it
+    /// (`move_it_in_display_line_to`, src/xdisp.c:11203-11207; the image branch
+    /// is `produce_image_glyph`, src/xdisp.c:32447-32463), so a display element
+    /// that rises above the baseline -- an image with `:ascent 100` -- needs
+    /// this number to be measurable at all.  Without it the frame carried only
+    /// the cell's *total* height and every consumer had to guess the split.
+    ///
+    /// Terminal frames keep the cell convention `descent = 0` that
+    /// `neovm_bridge` uses for them (`font_ascent = char_height`); they display
+    /// no images, so the split is unobservable there.
+    pub font_ascent: f32,
     /// One-shot guard used when a live default-font change updates the frame's
     /// character metrics before GNU would commit the follow-up width/height
     /// window-system resize.
@@ -4020,6 +4106,10 @@ impl Frame {
             font_pixel_size: 16.0,
             char_width: 8.0,
             char_height: 16.0,
+            // The cell convention for a frame whose font has not been probed:
+            // the whole cell is above the baseline, so `ascent + descent` stays
+            // equal to `char_height` for every consumer (see `font_ascent`).
+            font_ascent: 16.0,
             device_scale_factor: 1.0,
             defer_next_gui_parameter_resize: false,
             pending_gui_resize: None,
@@ -4165,6 +4255,16 @@ impl Frame {
             })
     }
 
+    /// The default font's ascent, clamped into the frame's character cell.
+    ///
+    /// The clamp makes `ascent + descent == char_height` for every frame,
+    /// including one whose metrics came from different sources (a test or a
+    /// stub host can set `char_height` without a matching `font_ascent`), so a
+    /// text-only row keeps measuring exactly one cell tall.
+    pub fn font_cell_ascent(&self) -> f32 {
+        self.font_ascent.clamp(0.0, self.char_height.max(0.0))
+    }
+
     pub fn layout_inputs(&self) -> FrameLayoutInputState {
         let window_system = self.effective_window_system();
         FrameLayoutInputState {
@@ -4175,6 +4275,7 @@ impl Frame {
                 redisplay_f32_bits(self.char_width),
                 redisplay_f32_bits(self.char_height),
                 redisplay_f32_bits(self.font_pixel_size),
+                redisplay_f32_bits(self.font_ascent),
             ),
             device_scale_bits: self.device_scale_factor.to_bits(),
             visible: self.visibility.is_visible(),
@@ -4973,7 +5074,7 @@ impl Frame {
         )
         .map_err(geometry::PresentationPrepareError::InvalidGeometry)?;
         let prepared = PreparedDisplayPresentation {
-            geometry: candidate,
+            geometry: Arc::new(candidate),
             publications,
         };
         if self
@@ -5007,6 +5108,7 @@ impl Frame {
                 .cloned()
                 .map(|snapshot| (snapshot.window_id, snapshot)),
         );
+        self.presentation_state.completed_geometry = Some(Arc::clone(&prepared.geometry));
         self.presentation_state
             .prepared
             .insert(presentation, prepared);
@@ -5044,6 +5146,8 @@ impl Frame {
     }
 
     /// Discard a presentation that never became renderer-visible.
+    /// Its accepted window output and completed geometry remain Lisp redisplay
+    /// evidence until another completed layout replaces them.
     pub fn discard_display_presentation(&mut self, presentation: geometry::PresentationId) -> bool {
         self.presentation_state
             .prepared
@@ -5073,7 +5177,7 @@ impl Frame {
         !self.presentation_state.prepared.is_empty()
     }
 
-    pub const fn active_presentation(&self) -> Option<geometry::PresentationId> {
+    pub fn active_presentation(&self) -> Option<geometry::PresentationId> {
         match &self.presentation_state.active {
             Some(active) => Some(active.geometry.presentation()),
             _ => None,
@@ -5082,11 +5186,21 @@ impl Frame {
 
     /// Geometry for the presentation currently used by renderer drawing and
     /// hit testing. Prepared geometry is deliberately inaccessible here.
-    pub const fn active_presentation_geometry(&self) -> Option<&geometry::PresentationGeometry> {
+    pub fn active_presentation_geometry(&self) -> Option<&geometry::PresentationGeometry> {
         match &self.presentation_state.active {
-            Some(active) => Some(&active.geometry),
+            Some(active) => Some(active.geometry.as_ref()),
             None => None,
         }
+    }
+
+    /// Geometry from the latest completed redisplay, even before renderer
+    /// acknowledgement. Lisp motion queries may use this only after checking
+    /// the live window's snapshot freshness. Native hit testing uses active
+    /// or event-captured presentation geometry instead.
+    pub(crate) fn completed_presentation_geometry(
+        &self,
+    ) -> Option<&geometry::PresentationGeometry> {
+        self.presentation_state.completed_geometry.as_deref()
     }
 
     /// Typed publication for WINDOW in the renderer-active presentation.

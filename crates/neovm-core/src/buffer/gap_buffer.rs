@@ -332,6 +332,27 @@ impl GapBuffer {
         }
     }
 
+    /// Borrow the contiguous bytes immediately before an exclusive logical
+    /// end. The slice stops at the gap; a backward reader resumes at its
+    /// returned logical start. The borrow prevents gap movement while read.
+    pub(crate) fn contiguous_window_before(
+        &self,
+        end: EmacsBytePos,
+    ) -> Option<(EmacsBytePos, &[u8])> {
+        let end = end.get();
+        if end == 0 || end > self.len() {
+            return None;
+        }
+        if end <= self.gap_start {
+            Some((EmacsBytePos::ZERO, &self.buf[..end]))
+        } else {
+            Some((
+                EmacsBytePos::new(self.gap_start),
+                &self.buf[self.gap_end..self.gap_end + end - self.gap_start],
+            ))
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Range extraction
     // -----------------------------------------------------------------------

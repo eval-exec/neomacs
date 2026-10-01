@@ -94,3 +94,51 @@ impl DisplayRowFallbackMetrics {
         self.ascent
     }
 }
+
+/// GNU newline height resolution, shared by buffer, pushed-string and worker
+/// rows. A factor uses the frame font; an integer keeps the newline face.
+/// Height added by either form goes above the baseline, preserving descent.
+pub(crate) struct DisplayLineHeightMetrics {
+    pub height: f32,
+    pub ascent: f32,
+    pub newline_height: f32,
+    pub newline_ascent: f32,
+}
+
+pub(crate) fn resolve_line_height(
+    policy: crate::display_item::DisplayLineHeightPolicy,
+    content: (f32, f32),
+    face: (f32, f32),
+    default: (f32, f32),
+) -> DisplayLineHeightMetrics {
+    use crate::display_item::DisplayLineHeightPolicy;
+    let (font, minimum) = match policy {
+        DisplayLineHeightPolicy::Scale(factor) => (default, (default.0 * factor).trunc()),
+        DisplayLineHeightPolicy::Pixels(pixels) => (face, pixels),
+        _ => (face, face.0),
+    };
+    // An unrepresentable scaled request cannot produce finite row geometry.
+    // Retain the chosen font's normal extent rather than publishing infinity.
+    let minimum = if minimum.is_finite() { minimum } else { font.0 };
+    let mut descent = (font.0 - font.1).max(0.0);
+    let mut ascent = font.1.max(minimum - descent);
+    let content_descent = (content.0 - content.1).max(0.0);
+    if policy == DisplayLineHeightPolicy::ContentOnly {
+        // xdisp.c's constrain_row_ascent_descent_p newline branch.
+        if descent > content_descent {
+            ascent += descent - content_descent;
+            descent = content_descent;
+        }
+        if ascent > content.1 {
+            descent = content_descent.min(descent + ascent - content.1);
+            ascent = content.1;
+        }
+    }
+    let row_ascent = content.1.max(ascent);
+    DisplayLineHeightMetrics {
+        height: row_ascent + content_descent.max(descent),
+        ascent: row_ascent,
+        newline_height: ascent + descent,
+        newline_ascent: ascent,
+    }
+}

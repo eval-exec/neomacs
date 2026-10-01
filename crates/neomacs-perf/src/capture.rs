@@ -17,8 +17,13 @@ impl CaptureRoute {
         match frontend {
             Frontend::Batch => Self::Direct,
             Frontend::Tui { .. } => Self::Adapter("PTY"),
+            // The GUI frontend launches the editor directly out of the
+            // harness process since the bench display session moved into
+            // neomacs-infra (neomacs-infra::display::WestonBenchSession), so
+            // perf wraps only the editor -- the compositor is a harness-owned
+            // sibling process that was never part of the measured tree.
             Frontend::Gui { .. } if uses_native_display => Self::Direct,
-            Frontend::Gui { .. } => Self::Adapter("GUI"),
+            Frontend::Gui { .. } => Self::Direct,
         }
     }
 

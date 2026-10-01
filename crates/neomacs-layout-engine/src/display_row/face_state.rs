@@ -17,6 +17,11 @@ use neomacs_display_protocol::face::{
 use neomacs_display_protocol::types::Color;
 use neomacs_display_protocol::types::FaceId;
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static GLYPH_MEASURE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn underline_style_from_code(code: u8) -> UnderlineStyle {
     UnderlineStyle::from_gnu_code(code).unwrap_or_default()
 }
@@ -658,6 +663,8 @@ impl<'a> DisplayRowGlyphMeasurer<'a> {
         columns: u8,
         fallback_advance_px: f32,
     ) -> f32 {
+        #[cfg(test)]
+        GLYPH_MEASURE_CALLS.with(|calls| calls.set(calls.get() + 1));
         let face_char_width = face.char_width_px(self.fallback_char_width);
         let column_advance = f32::from(columns) * face_char_width;
         let measured = self
@@ -695,13 +702,13 @@ impl DisplayGlyphMeasurer for DisplayRowGlyphMeasurer<'_> {
             return None;
         }
         let face = self.face(face_id)?;
-        let font = self
+        let metrics = self
             .font_metrics
             .as_mut()?
-            .resolved_font_for_realized_face_char(ch, face.font_selection())?;
-        let height = font.ascent_px + font.descent_px;
+            .vertical_metrics_for_realized_face_char(ch, face.font_selection())?;
+        let height = metrics.line_height;
         (height > 0.0).then(|| {
-            crate::display_row::builder::DisplayRowVerticalMetrics::new(height, font.ascent_px)
+            crate::display_row::builder::DisplayRowVerticalMetrics::new(height, metrics.ascent)
         })
     }
 
@@ -1090,10 +1097,32 @@ impl DisplayRowActiveFaceMeasurementState {
     }
 }
 
-#[derive(Clone, Debug)]
+#[cfg_attr(not(test), derive(Clone))]
+#[derive(Debug)]
 pub(crate) struct DisplayRowActiveFaceState {
     render: DisplayRowActiveFaceRenderState,
     measurement: DisplayRowActiveFaceMeasurementState,
+}
+
+#[cfg(test)]
+thread_local! {
+    static ACTIVE_FACE_CLONES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn take_active_face_clone_count() -> usize {
+    ACTIVE_FACE_CLONES.with(|count| count.replace(0))
+}
+
+#[cfg(test)]
+impl Clone for DisplayRowActiveFaceState {
+    fn clone(&self) -> Self {
+        ACTIVE_FACE_CLONES.with(|count| count.set(count.get() + 1));
+        Self {
+            render: self.render.clone(),
+            measurement: self.measurement.clone(),
+        }
+    }
 }
 
 struct DisplayRowComplexTextRunAdvancePolicy<'a> {

@@ -7,7 +7,7 @@
 use neomacs_display_protocol::cursor::CursorBarWidth;
 use neomacs_display_protocol::types::Rect;
 use neovm_core::emacs_core::image_catalog::{
-    ImageCatalog, ImageLookup, ImageResolveRequest, ImageScaleEnvironment,
+    ImageCatalog, ImageLookup, ImageResolveRequest, ImageScaleEnvironment, ImageSizeLimit,
 };
 
 /// Parameters for a window that the layout engine needs.
@@ -185,9 +185,12 @@ impl WindowParams {
 }
 
 impl SharedImageCatalog {
+    /// `limit` is the looking frame's resolved `max-image-size`; it travels
+    /// with the request rather than being read here, because the layout engine
+    /// holds no obarray.
     #[must_use]
-    pub fn lookup(&self, request: ImageResolveRequest) -> ImageLookup {
-        self.0.lookup(request)
+    pub fn lookup(&self, request: ImageResolveRequest, limit: ImageSizeLimit) -> ImageLookup {
+        self.0.lookup(request, limit)
     }
 }
 
@@ -243,6 +246,10 @@ pub struct WindowParams {
     /// A stack-local measurement is bounded by rows, not viewport pixels.
     /// Redisplay leaves this absent and uses the physical window extent.
     pub measurement_rows: Option<std::num::NonZeroUsize>,
+    /// Explicit pixel extent for a synchronous query, independent of the viewport.
+    pub measurement_pixels: Option<std::num::NonZeroUsize>,
+    /// Complete a live viewport query once its target row has been emitted.
+    pub query_target: Option<LayoutCharPos0>,
     /// GNU `w->force_start`: `window_start` was set explicitly (scroll /
     /// set-window-start), so layout must display from it and move POINT into
     /// the window when point ended up outside — never recompute the start
@@ -429,9 +436,12 @@ impl WindowParams {
     pub(crate) fn source_interpretation_rows(&self) -> usize {
         self.measurement_rows.map_or_else(
             || {
-                (self.text_bounds.height / self.char_height.max(1.0))
-                    .ceil()
-                    .max(1.0) as usize
+                (self
+                    .measurement_pixels
+                    .map_or(self.text_bounds.height, |height| height.get() as f32)
+                    / self.char_height.max(1.0))
+                .ceil()
+                .max(1.0) as usize
             },
             std::num::NonZeroUsize::get,
         )

@@ -134,6 +134,45 @@ fn every_linux_package_uses_the_canonical_desktop_asset_installer() {
     }
 }
 
+/// macOS has no SVG icon format and `sips` cannot read SVG, so the bundle
+/// icon cannot be the canonical SVG directly; and the one bitmap the script
+/// once shipped from (`assets/logo-128.png`) no longer exists.  Pin the
+/// script to the canonical rasterizer: `cargo xtask render-window-icon`
+/// renders the exact SVG the runtime embeds (`window_icon.rs`
+/// `include_bytes!`s it), and `iconutil` assembles the `.icns` that
+/// `CFBundleIconFile` names.
+#[test]
+fn the_macos_package_renders_the_canonical_window_icon() {
+    let script = include_str!(concat!(
+        env!("CARGO_WORKSPACE_DIR"),
+        "/scripts/package-macos-app.sh"
+    ));
+    assert!(
+        script.contains("cargo xtask render-window-icon"),
+        "macOS packaging must render the app icon from the canonical window icon"
+    );
+    assert!(
+        script.contains("iconutil -c icns"),
+        "macOS packaging must assemble the .icns with iconutil"
+    );
+    assert!(
+        script.contains(".VolumeIcon.icns") && script.contains("SetFile -a C"),
+        "the DMG volume icon must be stamped the supported way: \
+         `hdiutil create` has no icon option on current macOS"
+    );
+    assert!(
+        !script.contains("assets/logo-128.png"),
+        "macOS packaging still uses the removed legacy PNG"
+    );
+
+    let canonical = repository_root().join(crate::window_icon::CANONICAL_ICON);
+    assert!(
+        canonical.is_file(),
+        "{} must exist: the runtime embeds it with include_bytes!",
+        canonical.display()
+    );
+}
+
 #[test]
 #[cfg(unix)]
 fn linux_ci_setup_profiles_expose_capabilities_and_reject_unknown_profiles() {

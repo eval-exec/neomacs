@@ -8,24 +8,22 @@
 # them checked *which* one.  A reference that VANISHED was caught; a reference
 # that CHANGED would have been scored in silence.
 #
-# WHAT IDENTIFIES THE BUILD.  `fingerprint' is GNU's own: lib/fingerprint.h
-# declares `unsigned char fingerprint[32]' and says it exists so that we "have
-# a unique value that we can use to pair data files (like a dump file) with a
-# specific build of Emacs".  lib-src/make-fingerprint.c computes it as a
-# SHA-256 over the temacs executable and patches it into the binary; pdumper.c
-# writes it into the dump header (offset 16, after the 16-byte magic
-# "DUMPEDGNUEMACS\0\0") and src/pdumper.c:5687 REFUSES to load a dump whose
-# fingerprint does not match the binary's.  So the fingerprint identifies the
-# binary and its dump as a PAIR, and reading it costs one 48-byte file read.
-# This binary carries no .note.gnu.build-id -- it is stripped and the link did
-# not emit one -- so the fingerprint is the only free identity available.
+# WHAT IDENTIFIES THE BUILD.  The parity reference is a RELEASE, not a
+# byte-exact artifact: the tag emacs-31.1, which the running editor reports as
+# `emacs-version'.  That is the only identity an installed GNU can prove.  It
+# embeds no repository revision -- `emacs-repository-version' is computed by
+# running git in `source-directory' (lisp/version.el), and `make install'
+# creates no source tree to ask.  GNU's own `fingerprint' (lib/fingerprint.h;
+# lib-src/make-fingerprint.c hashes the temacs executable into the dump header,
+# src/pdumper.c:116 and 361-367) identifies a binary-and-dump PAIR, which
+# src/pdumper.c:5687 enforces when the editor runs -- but it is a BUILD
+# identity, so a rebuild on another toolchain differs while the source is
+# unchanged.
 #
-# The SHA-256 digests are the complete content identity and are what an
-# `exhaustive' attestation checks.  The fingerprint is a BUILD identity: it
-# catches every rebuild, which is the incident this file exists for, but it is
-# computed over temacs at build time and so does not cover a shipped file
-# edited afterwards.  See crates/neomacs-parity-reference/src/lib.rs for the two
-# depths and what each one is worth.
+# The fingerprint and SHA-256 fields below are PROVENANCE, recorded by
+# `pin-reference' and `observe()': they name the build the numbers were first
+# measured against, and they move only through a re-baselining.  Attestation
+# gates on the release version; see crates/neomacs-parity-reference/src/lib.rs.
 #
 # RE-BASELINING.  A rebuild of the GNU mirror is its own change with its own
 # re-baselining, never a side effect of a session.  To re-pin, run

@@ -2416,6 +2416,10 @@ impl BufferText {
         self.storage.borrow().text_props.trace_roots(roots);
     }
 
+    pub(crate) fn trace_text_prop_roots_with(&self, visit: &mut dyn FnMut(Value)) {
+        self.storage.borrow().text_props.for_each_root(visit);
+    }
+
     /// Register a marker in this buffer. Updates `LispMarker` fields
     /// authoritatively (buffer/bytepos/charpos/marker_id/insertion_type)
     /// and splices the marker into this buffer's intrusive chain at head.
@@ -3521,6 +3525,11 @@ fn scan_forward(
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static BACKWARD_SCAN_BYTE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Walk backward from `anchor` to reach `target` chars.
 /// Returns the byte position.
 fn scan_backward(
@@ -3536,15 +3545,28 @@ fn scan_backward(
     if !backend.is_multibyte() {
         return bp.saturating_sub_len(EmacsByteLen::new(cp.saturating_offset_from(target).get()));
     }
-    // Walk back `remaining` characters in windows (chunk-counted, no per-byte
-    // lookups); the window that contains the answer is resolved by listing
-    // its character starts.  `remaining` characters span at most
-    // MAX_MULTIBYTE_LENGTH bytes each, so a window that size holds the answer:
-    // a one-character step reads a few bytes, not a whole fixed window twice
-    // (GNU `buf_charpos_to_bytepos` likewise walks only the distance).
+    // Borrow each physical span and stop at the requested character boundary.
+    // This crosses the gap without copying, per-byte backend lookups, or an
+    // oversized forward scan to count and then locate the same character.
     const WINDOW: usize = 4096;
     let mut remaining = cp.saturating_offset_from(target).get();
     while remaining > 0 {
+        if let Some((start, chunk)) = backend.contiguous_window_before(bp) {
+            for (offset, &byte) in chunk.iter().enumerate().rev() {
+                #[cfg(test)]
+                BACKWARD_SCAN_BYTE_VISITS.with(|visits| visits.set(visits.get() + 1));
+                if (byte & 0xC0) != 0x80 {
+                    remaining -= 1;
+                    if remaining == 0 {
+                        return EmacsBytePos::new(start.get() + offset);
+                    }
+                }
+            }
+            bp = start;
+            continue;
+        }
+        // Retain the chunked fallback for storage without a borrowed span.
+        // Normal tree-backed conversions use the backend index before here.
         let span = remaining
             .saturating_mul(crate::emacs_core::emacs_char::MAX_MULTIBYTE_LENGTH)
             .min(WINDOW);
@@ -3552,6 +3574,8 @@ fn scan_backward(
         let range = EmacsByteRange::new(win_start, bp);
         let mut count = 0usize;
         let _ = backend.for_each_emacs_byte_range_chunk(range, |chunk| {
+            #[cfg(test)]
+            BACKWARD_SCAN_BYTE_VISITS.with(|visits| visits.set(visits.get() + chunk.len()));
             count += chunk.iter().filter(|&&b| (b & 0xC0) != 0x80).count();
             Ok::<(), ()>(())
         });
@@ -3563,6 +3587,8 @@ fn scan_backward(
             let mut pos = win_start.get();
             let found = backend.for_each_emacs_byte_range_chunk(range, |chunk| {
                 for &b in chunk {
+                    #[cfg(test)]
+                    BACKWARD_SCAN_BYTE_VISITS.with(|visits| visits.set(visits.get() + 1));
                     if (b & 0xC0) != 0x80 {
                         if seen == wanted {
                             return Err(pos);
@@ -3650,5 +3676,5 @@ fn scan_backward_bytes(
 mod tests;
 
 #[cfg(test)]
-#[path = "buffer_text_chain_test.rs"]
+#[path = "tests/buffer_text_chain_test.rs"]
 mod chain_test;

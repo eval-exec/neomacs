@@ -58,6 +58,15 @@ pub enum ScenarioId {
     RustLspTyping,
     RustLspTypingHeavy,
     MxTabCompletion,
+    /// The same `M-x TAB` lifecycle as `mx-tab-completion`, but the fixture
+    /// first runs an UNTIMED warm-up pass and only then opens the timing
+    /// window. `mx-tab-completion` measures cold start + warm-up (a real
+    /// first-completion user experience); this row measures the STEADY-STATE
+    /// per-completion cost that warm-up otherwise buries: at the cold row's
+    /// default 5 calls, run-to-run medians on one machine moved 12.7k-16.9k
+    /// microseconds per completion while the steady row reproduced within a
+    /// few percent. The two rows are complementary, never substitutes.
+    MxTabCompletionSteady,
     BytecodeCallLoop,
     /// Rare-call tier-entry diagnostics, excluded from the whole-editor suite.
     LexicalLoop,
@@ -187,6 +196,15 @@ pub enum ScenarioId {
     /// serializer gap (issue #173) survived unseen in the suite. Payload
     /// size is the variable this row exists to hold at a realistic value.
     LspJsonRpc,
+    /// Page up/down (`scroll-up`/`scroll-down`) over a deterministic
+    /// face-rich buffer, with two separately timed phases: a COLD pass that
+    /// displays every line for the first time (paying JIT, layout, and face
+    /// realisation warm-up) and WARM passes over already-laid-out rows.
+    /// Scrolling is the one editing gesture where the window start moves,
+    /// and no other row times it; the phase split keeps the warm-up cost
+    /// this row necessarily pays from contaminating the steady-state
+    /// number. One operation is one scroll command.
+    Scrolling,
 }
 
 impl ScenarioId {
@@ -735,6 +753,31 @@ const SCENARIOS: &[ScenarioSpec] = &[
         primary_metric: MetricName::PerOperationWallTime,
         cross_editor_parity_metrics: &[],
     },
+    ScenarioSpec {
+        id: ScenarioId::MxTabCompletionSteady,
+        description: "Steady-state M-x TAB over 1,024 controlled commands: the cold row's lifecycle after an untimed warm-up pass, so per-process warm-up no longer buries the per-completion cost",
+        default_frontend: Frontend::Tui {
+            rows: 40,
+            columns: 120,
+        },
+        default_iterations: NonZeroU32::new(50).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerCompletionCpuTime,
+        cross_editor_parity_metrics: &[CrossEditorParityMetric::CompletionCandidateCount],
+    },
+    ScenarioSpec {
+        id: ScenarioId::Scrolling,
+        description: "Page scrolling over a deterministic face-rich buffer with separately timed cold (first display) and warm (re-display) phases",
+        default_frontend: Frontend::Tui {
+            rows: 40,
+            columns: 120,
+        },
+        // One iteration is one full warm pass down and back up the buffer
+        // (the cold pass runs once and is timed separately). Ten passes give
+        // the median a few hundred scroll operations to stand on.
+        default_iterations: NonZeroU32::new(10).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
 ];
 
 pub fn scenarios() -> &'static [ScenarioSpec] {
@@ -802,6 +845,8 @@ pub const fn scenario(id: ScenarioId) -> &'static ScenarioSpec {
         ScenarioId::FileOpen => &SCENARIOS[19],
         ScenarioId::MagitStatusHeavy => &SCENARIOS[18],
         ScenarioId::OrgEditingHeavy => &SCENARIOS[17],
+        ScenarioId::MxTabCompletionSteady => &SCENARIOS[52],
+        ScenarioId::Scrolling => &SCENARIOS[53],
     }
 }
 

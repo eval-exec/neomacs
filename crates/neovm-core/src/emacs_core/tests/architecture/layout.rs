@@ -5,7 +5,7 @@ const DOMAINS: &[&str] = &[
     "commands", "display", "editing", "lisp", "runtime", "system", "tests", "text",
 ];
 fn emacs_core_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/emacs_core")
+    neomacs_infra::crate_root!().join("src/emacs_core")
 }
 
 fn unexpected_root_domains(root: &Path) -> Vec<String> {
@@ -319,7 +319,7 @@ fn bytecode_obj_is_only_named_by_its_chokepoints() {
         }
     }
 
-    let src_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    let src_root = neomacs_infra::crate_root!().join("src");
     let allowed_exact = [
         "tagged/header.rs",
         "tagged/gc.rs",

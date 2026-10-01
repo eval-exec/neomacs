@@ -209,6 +209,7 @@ fn arithmetic_opcode_slow_arm_results_and_frameless_signal() {
 
 /// `call_spec_subr_stack` (the framed stack route of a speculated subr):
 /// success, arity, and a signal the hook sees under the frame.
+#[cfg(feature = "jit")]
 #[test]
 fn spec_subr_stack_results_arity_and_signal_frame() {
     crate::test_utils::init_test_tracing();

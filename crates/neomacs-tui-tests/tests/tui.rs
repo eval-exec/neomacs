@@ -10,7 +10,7 @@ mod support;
 
 #[path = "overlay_face_render.rs"]
 mod overlay_face_render;
-#[path = "package_tui.rs"]
+#[path = "package_tui/mod.rs"]
 mod package_tui;
 
 #[path = "basic.rs"]
@@ -21,6 +21,8 @@ mod buffers;
 mod child_frames;
 #[path = "command_loop_subreads.rs"]
 mod command_loop_subreads;
+#[path = "display_line_numbers.rs"]
+mod display_line_numbers;
 #[path = "editing.rs"]
 mod editing;
 #[path = "editing_motion.rs"]
@@ -39,6 +41,8 @@ mod files_dired;
 mod frame_visibility;
 #[path = "help_describe.rs"]
 mod help_describe;
+#[path = "ibuffer.rs"]
+mod ibuffer;
 #[path = "input_methods.rs"]
 mod input_methods;
 #[path = "issue_140_hscroll.rs"]
@@ -49,6 +53,12 @@ mod issue_170_centered_buffer;
 mod issue_254;
 #[path = "issue_383_dashboard_banner.rs"]
 mod issue_383_dashboard_banner;
+#[path = "issue_445.rs"]
+mod issue_445;
+#[path = "issue_445_ibuffer_filter_groups.rs"]
+mod issue_445_ibuffer_filter_groups;
+#[path = "issue_446_align_to_hscroll.rs"]
+mod issue_446_align_to_hscroll;
 #[path = "mark_region_fill.rs"]
 mod mark_region_fill;
 #[path = "menu_bar.rs"]

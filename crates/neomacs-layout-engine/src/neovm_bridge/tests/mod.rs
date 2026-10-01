@@ -593,6 +593,46 @@ fn window_params_from_neovm_uses_default_header_line_and_tab_line_values() {
 }
 
 #[test]
+fn display_line_numbers_any_non_nil_value_is_absolute_like_gnu() {
+    // GNU dispatches only `relative` and `visual` specially (xdisp.c:22687
+    // maybe_produce_line_number); every other non-nil value -- `t`, the
+    // `'absolute` a user init sets, anything else truthy -- is ABSOLUTE line
+    // numbers. Treating unknown symbols as Off switched the whole gutter off
+    // for `(setq display-line-numbers-type 'absolute)` (issue #441).
+    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let buf_id = evaluator
+        .buffer_manager_mut()
+        .create_buffer("*line-numbers*");
+    let mode_for = |evaluator: &neovm_core::emacs_core::Context| {
+        let buffer = evaluator.buffer_manager().get(buf_id).unwrap();
+        let snapshot = LayoutBufferSnapshot::from_buffer_with_obarray(buffer, evaluator.obarray());
+        buffer_display_line_numbers_mode(&snapshot)
+    };
+    let set_local = |evaluator: &mut neovm_core::emacs_core::Context, value: Value| {
+        evaluator
+            .buffer_manager_mut()
+            .get_mut(buf_id)
+            .unwrap()
+            .set_buffer_local("display-line-numbers", value);
+    };
+
+    set_local(&mut evaluator, Value::symbol("absolute"));
+    assert_eq!(
+        mode_for(&evaluator),
+        DisplayLineNumbersMode::Absolute,
+        "`'absolute` must render absolute gutters"
+    );
+    set_local(&mut evaluator, Value::symbol("whatever"));
+    assert_eq!(
+        mode_for(&evaluator),
+        DisplayLineNumbersMode::Absolute,
+        "any unrecognized non-nil value falls back to absolute, like GNU"
+    );
+    set_local(&mut evaluator, Value::NIL);
+    assert_eq!(mode_for(&evaluator), DisplayLineNumbersMode::Off);
+}
+
+#[test]
 fn layout_snapshot_buffer_local_value_falls_back_to_default_values() {
     let mut evaluator = neovm_core::emacs_core::Context::new();
     let buf_id = evaluator

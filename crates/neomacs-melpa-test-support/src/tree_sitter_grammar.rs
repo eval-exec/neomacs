@@ -4,7 +4,6 @@ use std::process::Command;
 
 use crate::{
     CommandError, EmacsRuntime, configure_process_environment, elisp_string, output_with_timeout,
-    workspace_root,
 };
 
 #[derive(Clone, Copy)]
@@ -26,8 +25,8 @@ struct GrammarCachePaths {
 
 impl GrammarCachePaths {
     fn for_source(source: GrammarSourceSpec<'_>) -> Self {
-        let root = workspace_root()
-            .join("tmp/melpa/tree-sitter-grammar-cache")
+        let root = neomacs_infra::melpa_cache_root()
+            .join("tree-sitter-grammar-cache")
             .join(source.language)
             .join(source.revision);
         let home = root.join("home");
@@ -47,7 +46,7 @@ impl GrammarCachePaths {
 }
 
 /// Build one exact Tree-sitter grammar into a cross-process cache below
-/// `<workspace>/tmp/melpa/tree-sitter-grammar-cache`.
+/// `<melpa cache root>/tree-sitter-grammar-cache`.
 ///
 /// GNU Emacs performs the build through its native grammar installer so the
 /// compiler and shared-library conventions match the host platform. The

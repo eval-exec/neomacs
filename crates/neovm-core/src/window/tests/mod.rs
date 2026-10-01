@@ -18,6 +18,30 @@ fn layout_variable_enum_covers_the_display_dirty_registry() {
 }
 
 #[test]
+fn measured_suffix_reindexes_end_record_without_changing_source_offsets() {
+    let original = WindowEndRecord::from_positions(
+        LispCharPos1::new(200),
+        EmacsBytePos::new(340),
+        LispCharPos1::new(150),
+        EmacsBytePos::new(225),
+        MatrixRow0::new(8),
+    );
+    let suffix_end = original.with_matrix_row(MatrixRow0::new(3));
+    assert_eq!(suffix_end.char_offset_from_z(), CharLen::new(50));
+    assert_eq!(suffix_end.byte_offset_from_z(), EmacsByteLen::new(115));
+    assert_eq!(
+        suffix_end.charpos_from_z(LispCharPos1::new(200)),
+        LispCharPos1::new(150)
+    );
+    assert_eq!(
+        suffix_end.bytepos_from_z(EmacsBytePos::new(340)),
+        EmacsBytePos::new(225)
+    );
+    assert_eq!(suffix_end.matrix_row(), MatrixRow0::new(3));
+    assert_eq!(original.matrix_row(), MatrixRow0::new(8));
+}
+
+#[test]
 fn window_end_state_preserves_one_atomic_record_across_invalidation() {
     let mut window = Window::new_leaf(WindowId(11), BufferId(1), Rect::new(0.0, 0.0, 800.0, 600.0));
 
@@ -227,6 +251,82 @@ fn snapshot_window_geometry_keeps_pixel_spaces_and_cell_origin_distinct() {
     assert_eq!(frame_point.frame(), FrameId(7));
     assert_eq!(frame_point.x().get(), 643.0);
     assert_eq!(frame_point.y().get(), 364.0);
+}
+
+#[test]
+fn presented_coordinate_queries_cover_the_full_mixed_font_row() {
+    use super::geometry::{PresentationGeometry, PresentationId, WindowCoordinateQuery};
+    use neomacs_display_protocol::types::Rect as TransportRect;
+    let presentation = PresentationId::new(1);
+    let window = WindowId(1);
+    // Short glyphs still own the full line's hit area. The first row is
+    // partially scrolled, with only its extra descent/spacing visible.
+    for vscroll in [0, 29] {
+        let snapshot = WindowDisplaySnapshot {
+            window_id: window,
+            regions: PresentedWindowRegions {
+                outer: TransportRect::new(0.0, 0.0, 800.0, 600.0),
+                text_body: TransportRect::new(0.0, 0.0, 800.0, 600.0),
+                ..PresentedWindowRegions::default()
+            },
+            regions_materialized: true,
+            rows: vec![DisplayRowSnapshot {
+                row: 0,
+                y: -vscroll,
+                height: 35,
+                start_buffer_pos: Some(LispCharPos1::ONE),
+                end_buffer_pos: Some(LispCharPos1::new(3)),
+                ..DisplayRowSnapshot::default()
+            }],
+            body_rows: vec![PresentedBodyRowSnapshot {
+                output_row: 0,
+                body_row: 0,
+                body_y: -vscroll,
+            }],
+            points: vec![
+                DisplayPointSnapshot {
+                    role: DisplayPointRole::Glyph,
+                    buffer_pos: LispCharPos1::ONE,
+                    x: 0,
+                    y: -vscroll,
+                    width: 10,
+                    height: 12,
+                    row: 0,
+                    col: 0,
+                },
+                DisplayPointSnapshot {
+                    role: DisplayPointRole::Glyph,
+                    buffer_pos: LispCharPos1::new(2),
+                    x: 10,
+                    y: -vscroll,
+                    width: 20,
+                    height: 29,
+                    row: 0,
+                    col: 1,
+                },
+            ],
+            ..WindowDisplaySnapshot::default()
+        };
+        let geometry = PresentationGeometry::new(FrameId(1), presentation, [snapshot]).unwrap();
+        for y in 0..35 - vscroll {
+            for (x, expected, glyph_height) in [(0, 1, 12.0), (15, 2, 29.0)] {
+                let point = geometry
+                    .resolve(WindowCoordinateQuery::in_text_body(
+                        presentation,
+                        window,
+                        x,
+                        y,
+                    ))
+                    .unwrap_or_else(|error| panic!("vscroll={vscroll}, ({x},{y}): {error:?}"));
+                assert_eq!(
+                    point.buffer_pos(),
+                    LispCharPos1::new(expected),
+                    "vscroll={vscroll}, ({x},{y}) selected another font's glyph"
+                );
+                assert_eq!(point.height().get(), glyph_height);
+            }
+        }
+    }
 }
 
 #[test]
@@ -583,6 +683,7 @@ fn preparing_accepted_presentation_commits_live_window_output() {
                 window_id,
                 logical_cursor: Some(logical_cursor),
                 rows: vec![DisplayRowSnapshot {
+                    truncated_end_buffer_pos: None,
                     row: 1,
                     y: 29,
                     height: 16,
@@ -606,6 +707,183 @@ fn preparing_accepted_presentation_commits_live_window_output() {
         .expect("window display state");
     assert_eq!(display.cursor, Some(logical_cursor));
     assert_eq!(display.output_cursor, Some(logical_cursor));
+}
+
+#[test]
+fn discarded_snapshot_preserves_latest_completed_coordinate_queries() {
+    use super::geometry::PresentationId;
+    use crate::emacs_core::Context;
+    use neomacs_display_protocol::types::Rect as TransportRect;
+
+    let mut eval = Context::new();
+    let buffer_id = eval
+        .buffer_manager()
+        .current_buffer_id()
+        .expect("scratch buffer");
+    eval.buffer_manager_mut()
+        .get_mut(buffer_id)
+        .unwrap()
+        .insert("ab\n");
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("snapshot-observer", 800, 600, buffer_id);
+    eval.frame_manager_mut().select_frame(frame_id);
+    let window_id = eval.frame_manager().get(frame_id).unwrap().selected_window;
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .unwrap()
+        .set_window_system(Some(Value::symbol("x")));
+    let snapshot = |position| WindowDisplaySnapshot {
+        window_id,
+        regions_materialized: true,
+        regions: PresentedWindowRegions {
+            outer: TransportRect::new(0.0, 0.0, 800.0, 600.0),
+            text_body: TransportRect::new(0.0, 0.0, 800.0, 600.0),
+            ..Default::default()
+        },
+        points: vec![DisplayPointSnapshot {
+            role: DisplayPointRole::Glyph,
+            buffer_pos: LispCharPos1::new(position),
+            x: 0,
+            y: 0,
+            width: 8,
+            height: 16,
+            row: 0,
+            col: 0,
+        }],
+        body_rows: vec![PresentedBodyRowSnapshot {
+            output_row: 0,
+            body_row: 0,
+            body_y: 0,
+        }],
+        rows: vec![DisplayRowSnapshot {
+            row: 0,
+            y: 0,
+            height: 16,
+            start_buffer_pos: Some(LispCharPos1::new(position)),
+            end_buffer_pos: Some(LispCharPos1::new(position)),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let frame = eval.frame_manager_mut().get_mut(frame_id).unwrap();
+    frame
+        .prepare_live_window_presentation(PresentationId::new(41), vec![snapshot(1)])
+        .unwrap();
+    frame
+        .activate_display_presentation(PresentationId::new(41))
+        .unwrap();
+    assert_eq!(
+        eval.eval_str("(nth 1 (posn-at-x-y 0 0))").unwrap().as_int(),
+        Some(1)
+    );
+
+    // Frame snapshots accept output, then discard the renderer ticket.
+    let frame = eval.frame_manager_mut().get_mut(frame_id).unwrap();
+    frame
+        .prepare_live_window_presentation(PresentationId::new(42), vec![snapshot(2)])
+        .unwrap();
+    assert!(frame.discard_display_presentation(PresentationId::new(42)));
+    assert_eq!(frame.active_presentation(), Some(PresentationId::new(41)));
+    assert_eq!(
+        eval.eval_str("(nth 1 (posn-at-x-y 0 0))")
+            .expect("snapshot discard must preserve coordinate queries")
+            .as_int(),
+        Some(2)
+    );
+    assert_eq!(
+        eval.frame_manager()
+            .get(frame_id)
+            .unwrap()
+            .completed_presentation_geometry()
+            .unwrap()
+            .presentation(),
+        PresentationId::new(42)
+    );
+}
+
+#[test]
+fn completed_geometry_survives_initial_snapshot_discard_and_renderer_retirement() {
+    use super::geometry::PresentationId;
+
+    let mut manager = FrameManager::new();
+    let frame_id = manager.create_frame("snapshot-only", 800, 600, BufferId(1));
+    let frame = manager.get_mut(frame_id).unwrap();
+    frame
+        .prepare_live_window_presentation(PresentationId::new(41), Vec::new())
+        .unwrap();
+    assert!(frame.discard_display_presentation(PresentationId::new(41)));
+    assert_eq!(frame.active_presentation(), None);
+    assert_eq!(
+        frame
+            .completed_presentation_geometry()
+            .unwrap()
+            .presentation(),
+        PresentationId::new(41)
+    );
+
+    frame
+        .prepare_live_window_presentation(PresentationId::new(42), Vec::new())
+        .unwrap();
+    frame
+        .activate_display_presentation(PresentationId::new(42))
+        .unwrap();
+    assert!(frame.retire_display_presentation(PresentationId::new(42)));
+    assert_eq!(frame.active_presentation_geometry(), None);
+    assert_eq!(
+        frame
+            .completed_presentation_geometry()
+            .unwrap()
+            .presentation(),
+        PresentationId::new(42)
+    );
+}
+
+#[test]
+fn completed_geometry_releases_superseded_discarded_snapshots() {
+    use super::geometry::PresentationId;
+
+    let mut manager = FrameManager::new();
+    let frame_id = manager.create_frame("completed-geometry-ownership", 800, 600, BufferId(1));
+    let frame = manager.get_mut(frame_id).unwrap();
+    frame
+        .prepare_live_window_presentation(PresentationId::new(41), Vec::new())
+        .unwrap();
+    let first = Arc::downgrade(
+        frame
+            .presentation_state
+            .completed_geometry
+            .as_ref()
+            .unwrap(),
+    );
+    assert!(Arc::ptr_eq(
+        frame
+            .presentation_state
+            .completed_geometry
+            .as_ref()
+            .unwrap(),
+        &frame.presentation_state.prepared[&PresentationId::new(41)].geometry,
+    ));
+    assert!(frame.discard_display_presentation(PresentationId::new(41)));
+    assert!(first.upgrade().is_some());
+
+    frame
+        .prepare_live_window_presentation(PresentationId::new(42), Vec::new())
+        .unwrap();
+    assert!(frame.discard_display_presentation(PresentationId::new(42)));
+    assert!(
+        first.upgrade().is_none(),
+        "only the latest completed geometry is retained"
+    );
+    let latest = Arc::downgrade(
+        frame
+            .presentation_state
+            .completed_geometry
+            .as_ref()
+            .unwrap(),
+    );
+    drop(manager);
+    assert!(latest.upgrade().is_none());
 }
 
 #[test]
@@ -2563,6 +2841,7 @@ fn completed_redisplay_syncs_live_window_cursor_state() {
         window_id: wid,
         phys_cursor: Some(cursor.clone()),
         rows: vec![DisplayRowSnapshot {
+            truncated_end_buffer_pos: None,
             row: 1,
             y: 29,
             height: 16,
@@ -2602,6 +2881,7 @@ fn completed_redisplay_replaces_old_output_cursor_progress() {
     frame.commit_redisplay_cache_for_test(vec![WindowDisplaySnapshot {
         window_id: wid,
         rows: vec![DisplayRowSnapshot {
+            truncated_end_buffer_pos: None,
             row: 1,
             y: 29,
             height: 16,
@@ -2620,6 +2900,7 @@ fn completed_redisplay_replaces_old_output_cursor_progress() {
     frame.commit_redisplay_cache_for_test(vec![WindowDisplaySnapshot {
         window_id: wid,
         rows: vec![DisplayRowSnapshot {
+            truncated_end_buffer_pos: None,
             row: 3,
             y: 61,
             height: 16,
@@ -2676,6 +2957,7 @@ fn cache_only_fixture_preserves_live_window_cursor_state() {
         window_id: wid,
         phys_cursor: Some(cursor.clone()),
         rows: vec![DisplayRowSnapshot {
+            truncated_end_buffer_pos: None,
             row: 1,
             y: 29,
             height: 16,
@@ -2736,6 +3018,7 @@ fn no_op_set_window_vscroll_preserves_display_snapshot() {
                 col: 4,
             }],
             rows: vec![DisplayRowSnapshot {
+                truncated_end_buffer_pos: None,
                 row: 0,
                 y: 0,
                 height: 33,
@@ -2783,6 +3066,7 @@ fn completed_redisplay_preserves_logical_cursor_without_physical_cursor() {
         window_id: wid,
         logical_cursor: Some(logical_cursor),
         rows: vec![DisplayRowSnapshot {
+            truncated_end_buffer_pos: None,
             row: 1,
             y: 16,
             height: 16,
@@ -2870,6 +3154,7 @@ fn clear_physical_cursor_state_preserves_committed_cursor_history() {
         window_id: WindowId(1),
         phys_cursor: Some(cursor.clone()),
         rows: vec![DisplayRowSnapshot {
+            truncated_end_buffer_pos: None,
             row: 2,
             y: 21,
             height: 16,
@@ -3036,6 +3321,7 @@ fn output_pass_commits_output_cursor_from_row_geometry() {
         window_id: WindowId(1),
         phys_cursor: Some(cursor.clone()),
         rows: vec![DisplayRowSnapshot {
+            truncated_end_buffer_pos: None,
             row: 2,
             y: 32,
             height: 16,
@@ -3184,6 +3470,7 @@ fn explicit_window_output_finalization_preserves_live_logical_and_physical_curso
         logical_cursor: Some(WindowCursorPos::from_snapshot(&snapshot_phys)),
         phys_cursor: Some(snapshot_phys),
         rows: vec![DisplayRowSnapshot {
+            truncated_end_buffer_pos: None,
             row: 4,
             y: 64,
             height: 16,
@@ -3248,6 +3535,7 @@ fn finish_window_output_update_preserves_live_cursor_state_with_snapshot_output_
     let snapshot = WindowDisplaySnapshot {
         window_id: wid,
         rows: vec![DisplayRowSnapshot {
+            truncated_end_buffer_pos: None,
             row: 4,
             y: 64,
             height: 16,
@@ -3306,6 +3594,7 @@ fn output_pass_keeps_cursor_target_and_output_progress_separate() {
         phys_cursor: Some(cursor.clone()),
         rows: vec![
             DisplayRowSnapshot {
+                truncated_end_buffer_pos: None,
                 row: 0,
                 y: 0,
                 height: 16,
@@ -3319,6 +3608,7 @@ fn output_pass_keeps_cursor_target_and_output_progress_separate() {
                 fringe: Default::default(),
             },
             DisplayRowSnapshot {
+                truncated_end_buffer_pos: None,
                 row: 1,
                 y: 16,
                 height: 16,
@@ -3332,6 +3622,7 @@ fn output_pass_keeps_cursor_target_and_output_progress_separate() {
                 fringe: Default::default(),
             },
             DisplayRowSnapshot {
+                truncated_end_buffer_pos: None,
                 row: 2,
                 y: 32,
                 height: 16,
@@ -3802,4 +4093,40 @@ fn a_prepared_presentation_shares_its_window_snapshots() {
         std::ptr::eq(active, &*shared),
         "the publication shares the snapshot"
     );
+}
+
+#[test]
+fn fontset_changes_invalidate_window_query_and_attempt_freshness() {
+    let mut eval = crate::emacs_core::Context::new();
+    let buffer = eval.buffer_manager().current_buffer().unwrap().id();
+    let frame = eval
+        .frame_manager_mut()
+        .create_frame("fontset-freshness", 800, 600, buffer);
+    let window = eval.frame_manager().get(frame).unwrap().selected_window;
+    let before = eval
+        .window_display_snapshot_freshness(frame, window, buffer)
+        .unwrap();
+    let attempt = eval
+        .window_layout_attempt_freshness(frame, window, buffer)
+        .unwrap();
+    eval.eval_str("(set-fontset-font t #x25cb '(nil . \"iso10646-1\"))")
+        .unwrap();
+    let after = eval
+        .window_display_snapshot_freshness(frame, window, buffer)
+        .unwrap();
+    let after_attempt = eval
+        .window_layout_attempt_freshness(frame, window, buffer)
+        .unwrap();
+    assert_ne!(
+        before, after,
+        "geometry queries must not return old font measurements"
+    );
+    assert!(!before.same_scroll_content(&after));
+    assert!(before.query_vscroll_delta(&after).is_none());
+    for boundary in [
+        WindowLayoutLispBoundary::BufferBody,
+        WindowLayoutLispBoundary::WindowChrome,
+    ] {
+        assert!(!attempt.remains_valid_across(&after_attempt, boundary));
+    }
 }

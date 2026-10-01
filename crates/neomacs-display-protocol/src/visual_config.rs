@@ -5,6 +5,10 @@
 //! subsystems.  Keeping that distinction behind `VisualConfig` gives Elisp a
 //! single named, typed, atomic interface without flattening the runtime model.
 
+use crate::child_frame_animation::{
+    ChildFrameAnimation, ChildFrameAnimationsConfig, default_child_frame_close,
+    default_child_frame_movement, default_child_frame_open, default_child_frame_resize,
+};
 use crate::window_animation::{
     WindowAnimation, WindowAnimationsConfig, default_window_close, default_window_movement,
     default_window_open, default_window_resize,
@@ -153,6 +157,21 @@ pub struct VisualConfig {
     /// A surviving window that only moves. Drives geometry.
     #[serde(default = "default_window_movement")]
     pub window_movement: WindowAnimation,
+    /// Global controls over every child-frame-animation slot below.
+    #[serde(default)]
+    pub child_frame_animations: ChildFrameAnimationsConfig,
+    /// A child frame appearing: posframe and Corfu popups fading in.
+    #[serde(default = "default_child_frame_open")]
+    pub child_frame_open: ChildFrameAnimation,
+    /// A child frame going away: `delete-frame` on a child frame.
+    #[serde(default = "default_child_frame_close")]
+    pub child_frame_close: ChildFrameAnimation,
+    /// A child frame whose anchor moved. Drives placement only.
+    #[serde(default = "default_child_frame_movement")]
+    pub child_frame_movement: ChildFrameAnimation,
+    /// A child frame whose size changes. Reserved for content crossfades.
+    #[serde(default = "default_child_frame_resize")]
+    pub child_frame_resize: ChildFrameAnimation,
 }
 
 /// Written out rather than derived, because the four window-animation slots do
@@ -174,6 +193,11 @@ impl Default for VisualConfig {
             window_close: default_window_close(),
             window_resize: default_window_resize(),
             window_movement: default_window_movement(),
+            child_frame_animations: ChildFrameAnimationsConfig::default(),
+            child_frame_open: default_child_frame_open(),
+            child_frame_close: default_child_frame_close(),
+            child_frame_movement: default_child_frame_movement(),
+            child_frame_resize: default_child_frame_resize(),
         }
     }
 }

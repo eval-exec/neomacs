@@ -9,6 +9,7 @@ use crate::display_row::metrics::DisplayRowFallbackMetrics;
 use crate::display_row::replacement::{
     DisplayPropertyReplacementAppendOutcome, DisplayPropertyReplacementRowRender,
     DisplayPropertyReplacementRowRenderRequest, DisplayPropertyReplacementStringRender,
+    DisplayReplacementPlacement,
 };
 use crate::display_row::source_render::TextRowSourceRenderState;
 use crate::display_source::DisplaySourceTextPosition;
@@ -44,9 +45,30 @@ pub(crate) enum BufferDisplayPropertyTextReplacementRenderOutcome {
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum BufferDisplayPropertyTextReplacementApplyOutcome {
     Applied,
+    /// The row refused this replacement whole, so none of it is drawn and the
+    /// covered buffer text is still unrendered.  GNU `display_line` removes
+    /// such an element and re-produces it at the start of the next row
+    /// (src/xdisp.c:26448-26475); the caller owns that row transition.  Only a
+    /// caller that asked for the refusal to be reported
+    /// ([`BufferDisplayPropertyTextReplacementRenderContext::render_and_report_refusal`])
+    /// can receive this.
+    RefusedWhole,
     String(DisplayPropertyReplacementStringRender),
     Fallback(DisplaySourceStepItem),
     Stop,
+}
+
+/// What a caller asks the replacement renderer to do with a replacement the row
+/// refused whole.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RefusedReplacementDisposition {
+    /// Consume the covered text and draw nothing, the row's own answer for a
+    /// replacement it cannot place (and the only answer available to a caller
+    /// that cannot continue the row).
+    Consume,
+    /// Draw nothing and *stop*, leaving the covered text unrendered so the
+    /// caller can end the row and produce the replacement again on the next one.
+    Report,
 }
 
 pub(crate) struct BufferDisplayPropertyTextReplacementRenderContext<'a, 'face> {
@@ -133,10 +155,52 @@ impl<'a, 'face> BufferDisplayPropertyTextReplacementRenderContext<'a, 'face> {
     pub(crate) fn render_and_apply<B: LayoutBufferView>(
         &self,
         buffer: &B,
+        state: BufferDisplayPropertyTextReplacementRenderState<'_>,
+        progress: &mut DisplaySourceProgressState<'_>,
+        cursor_info: &mut CursorCaptureState,
+        point_charpos: i64,
+    ) -> BufferDisplayPropertyTextReplacementApplyOutcome {
+        self.render_and_apply_with_disposition(
+            buffer,
+            state,
+            progress,
+            cursor_info,
+            point_charpos,
+            RefusedReplacementDisposition::Consume,
+        )
+    }
+
+    /// Like [`render_and_apply`](Self::render_and_apply), but a replacement the
+    /// row refuses whole is reported instead of consumed, so the caller can end
+    /// the row and produce it again at the start of the next one (GNU
+    /// `display_line`, src/xdisp.c:26448-26475).  The covered buffer text stays
+    /// unrendered: it belongs to the row that will show the replacement.
+    pub(crate) fn render_and_report_refusal<B: LayoutBufferView>(
+        &self,
+        buffer: &B,
+        state: BufferDisplayPropertyTextReplacementRenderState<'_>,
+        progress: &mut DisplaySourceProgressState<'_>,
+        cursor_info: &mut CursorCaptureState,
+        point_charpos: i64,
+    ) -> BufferDisplayPropertyTextReplacementApplyOutcome {
+        self.render_and_apply_with_disposition(
+            buffer,
+            state,
+            progress,
+            cursor_info,
+            point_charpos,
+            RefusedReplacementDisposition::Report,
+        )
+    }
+
+    fn render_and_apply_with_disposition<B: LayoutBufferView>(
+        &self,
+        buffer: &B,
         mut state: BufferDisplayPropertyTextReplacementRenderState<'_>,
         progress: &mut DisplaySourceProgressState<'_>,
         cursor_info: &mut CursorCaptureState,
         point_charpos: i64,
+        refused: RefusedReplacementDisposition,
     ) -> BufferDisplayPropertyTextReplacementApplyOutcome {
         match self.request.render_with_state(
             buffer,
@@ -145,6 +209,13 @@ impl<'a, 'face> BufferDisplayPropertyTextReplacementRenderContext<'a, 'face> {
             self.start_position,
         ) {
             BufferDisplayPropertyTextReplacementRenderOutcome::Rendered(outcome) => {
+                if outcome.replacement.placement() == DisplayReplacementPlacement::RefusedWhole
+                    && refused == RefusedReplacementDisposition::Report
+                {
+                    // Nothing was drawn, so nothing may be applied: the walk
+                    // keeps the covered text and the caller ends the row.
+                    return BufferDisplayPropertyTextReplacementApplyOutcome::RefusedWhole;
+                }
                 self.apply_rendered_outcome(
                     outcome,
                     progress,

@@ -59,9 +59,7 @@ pub(crate) fn render_source_char_and_apply<B: LayoutBufferView>(
     // producer's position IS the resume state. The remainder used to be
     // split into N single-character items and pushed back through a pending
     // queue for later iterations to pop.
-    if let Some(first) = source_item.clone().first_text_run_char(text_start_byte) {
-        source_item = first;
-    }
+    source_item.retain_first_text_run_char(text_start_byte);
 
     let (source_step_char, source_end_charpos, source_end_byte_idx, source_item) =
         source_item.into_render_parts();
@@ -207,7 +205,7 @@ pub(crate) fn render_source_char_and_apply<B: LayoutBufferView>(
             loop_context.frame_background(),
         ),
     )
-    .render_if_needed_and_apply(source_walk, text, state.reborrow());
+    .render_if_needed_and_apply(append_context, source_walk, text, state.reborrow());
     if overflow_outcome.should_break() {
         return BufferSourceItemRenderOutcome::Stop;
     }
@@ -261,6 +259,9 @@ pub(crate) fn render_source_char_and_apply<B: LayoutBufferView>(
     {
         return BufferSourceItemRenderOutcome::Stop;
     }
+    state
+        .source_render
+        .include_current_row_metrics(state.row_build.row_geometry);
     if let Some(end_charpos) = source_end_charpos {
         state.progress.max_charpos(end_charpos);
     }
@@ -370,7 +371,7 @@ fn render_display_table_vector_and_apply<B: LayoutBufferView>(
                 state.progress.apply_row_position(append_progress.end());
                 if params.wrap_mode == crate::types::LineWrapMode::Truncate {
                     let overflow_outcome = BufferSourceOverflowRenderRequest::new(
-                        prepared_append,
+                        &prepared_append,
                         source_step_char,
                         BufferSourceOverflowRenderContext::new(
                             source_step_char.ch(),
@@ -390,6 +391,7 @@ fn render_display_table_vector_and_apply<B: LayoutBufferView>(
                         ),
                     )
                     .render_if_needed_and_apply(
+                        append_context,
                         source_walk,
                         text,
                         state.reborrow(),

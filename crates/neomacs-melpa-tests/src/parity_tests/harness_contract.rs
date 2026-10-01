@@ -33,9 +33,9 @@ fn installed_autoload_activation_never_loads_the_package_source() {
 }
 
 #[test]
-fn sandbox_keeps_process_state_under_workspace_tmp_and_socket_paths_bounded() {
+fn sandbox_keeps_process_state_under_the_cache_root_and_socket_paths_bounded() {
     let sandbox = MelpaSandbox::new("environment-contract").expect("create MELPA sandbox");
-    let scratch_base = workspace_root().join("tmp/melpa");
+    let scratch_base = neomacs_infra::melpa_cache_root();
 
     assert!(sandbox.root().starts_with(&scratch_base));
     assert!(sandbox.home().starts_with(sandbox.root()));

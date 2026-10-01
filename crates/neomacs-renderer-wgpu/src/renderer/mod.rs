@@ -29,7 +29,7 @@ mod dynamic_buffer;
 pub use draw::DrawContext;
 mod paint;
 mod target;
-pub use target::{NativeContentPlacement, NativePlacementError, RenderTarget};
+pub use target::{NativeContentPlacement, NativePlacementError, RenderTarget, SnapshotRegion};
 mod effect_common;
 mod effects_state;
 mod frame_pass;
@@ -1924,6 +1924,13 @@ impl WgpuRenderer {
         self.surface_format
     }
 
+    /// The image cache, for a caller that needs a texture's own state rather
+    /// than the draw path's view of it — how much of it holds pixels, say, or
+    /// the texture itself.
+    pub fn image_cache(&self) -> &ImageCache {
+        &self.caches.image
+    }
+
     /// Get the image bind group layout (for creating bind groups for offscreen textures)
     pub fn image_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         self.caches.image.bind_group_layout()
@@ -1935,7 +1942,32 @@ impl WgpuRenderer {
     }
 
     fn parameters(&self, size: [f32; 2], time: f32) -> draw::DrawParameters {
-        self.draw_parameters.get(&self.device, size, time)
+        self.parameters_with_alpha(size, time, 1.0)
+    }
+
+    /// Draw parameters carrying a global content-alpha multiplier.
+    ///
+    /// Only the child-frame composition path passes anything other than 1.0:
+    /// a child frame appearing or fading out scales every color it draws --
+    /// background, border, shadow and glyphs alike -- by one value, and
+    /// carrying that in the shared uniform snapshot is what keeps the
+    /// multiply out of every vertex builder.
+    fn parameters_with_alpha(&self, size: [f32; 2], time: f32, alpha: f32) -> draw::DrawParameters {
+        self.parameters_for(size, time, alpha, 1.0, [0.0; 2])
+    }
+
+    /// Draw parameters carrying the full child-frame picture transform:
+    /// alpha, scale and its anchor.
+    fn parameters_for(
+        &self,
+        size: [f32; 2],
+        time: f32,
+        alpha: f32,
+        scale: f32,
+        pivot: [f32; 2],
+    ) -> draw::DrawParameters {
+        self.draw_parameters
+            .get(&self.device, size, time, alpha, scale, pivot)
     }
 
     fn frame_parameters(&self) -> draw::DrawParameters {

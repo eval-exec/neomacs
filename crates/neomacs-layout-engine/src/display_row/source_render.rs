@@ -74,8 +74,18 @@ use neovm_core::emacs_core::Value;
 use neovm_core::emacs_core::eval::DisplayHost;
 use neovm_core::window::DisplayRowSnapshot;
 
-/// Current-row mutation that attaches a resolved fringe bitmap to the row's
-/// left or right fringe slot.
+/// Preserve the source boundary independently of fringe decoration.
+struct MarkVisualContinuation;
+
+impl DisplayCurrentRowMutation for MarkVisualContinuation {
+    type Output = ();
+
+    fn apply(self, row: &mut GlyphRow) {
+        row.continued = true;
+    }
+}
+
+/// Attach a resolved fringe bitmap to the row's left or right slot.
 struct SetRowFringeBitmapMutation {
     side: DisplayFringeSide,
     info: FringeBitmapInfo,
@@ -453,6 +463,7 @@ impl DisplayCurrentRowMutation for RowExtendFillMutation {
 /// position is rewound to the same boundary.
 struct DisplayRowGlyphCheckpointRestoreMutation {
     checkpoint: DisplayRowGlyphCheckpoint,
+    source_end: Option<usize>,
 }
 
 impl DisplayCurrentRowMutation for DisplayRowGlyphCheckpointRestoreMutation {
@@ -460,6 +471,9 @@ impl DisplayCurrentRowMutation for DisplayRowGlyphCheckpointRestoreMutation {
 
     fn apply(self, row: &mut GlyphRow) -> Self::Output {
         self.checkpoint.restore(row);
+        if let Some(end) = self.source_end {
+            row.end_charpos = end;
+        }
     }
 }
 
@@ -718,6 +732,16 @@ impl<'a> TextRowOutputRenderState<'a> {
         f(self.output, self.output_emitter, self.evaluator)
     }
 
+    pub(crate) fn mark_visual_continuation(&mut self) {
+        self.current_row_output()
+            .apply_current_row_mutation(MarkVisualContinuation);
+    }
+
+    pub(crate) fn note_query_row_advance(&mut self, height: f32, line_spacing: f32) {
+        self.output_emitter
+            .note_query_row_advance(height, line_spacing);
+    }
+
     pub(crate) fn transition_text_row_with_limit(
         self,
         transition: DisplayTextRowGeometryTransition,
@@ -832,10 +856,14 @@ impl<'a> TextRowOutputRenderState<'a> {
 
     /// Truncate the current output row's drawn glyphs back to `checkpoint`,
     /// dropping the partial-word glyphs that the word-wrap break rewinds past.
+    #[cfg(test)]
     fn restore_current_row_glyph_checkpoint(&mut self, checkpoint: DisplayRowGlyphCheckpoint) {
-        self.output
-            .current_row_output()
-            .apply_current_row_mutation(DisplayRowGlyphCheckpointRestoreMutation { checkpoint });
+        self.output.current_row_output().apply_current_row_mutation(
+            DisplayRowGlyphCheckpointRestoreMutation {
+                checkpoint,
+                source_end: None,
+            },
+        );
     }
 
     /// Append a trailing `:extend` fill stretch to the current row's TEXT area
@@ -949,6 +977,19 @@ impl<'a> TextRowSourceRenderState<'a> {
         self.output_render.reborrow()
     }
 
+    /// Keep the buffer walk's geometry in sync with the glyph writer after
+    /// an ordinary item append. Reading the accumulated extents is O(1) and
+    /// does not clone or rescan the growing row.
+    pub(crate) fn include_current_row_metrics(&mut self, geometry: &mut DisplayRowGeometryState) {
+        if let Some((height, ascent)) = self
+            .output_render
+            .current_row_output()
+            .current_row_vertical_metrics()
+        {
+            geometry.include_glyph_vertical_metrics(height, ascent);
+        }
+    }
+
     pub(crate) fn current_row_snapshot(&mut self) -> Option<GlyphRow> {
         self.output_render
             .current_row_output()
@@ -1048,15 +1089,12 @@ impl<'a> TextRowSourceRenderState<'a> {
         }
     }
 
-    fn resolved_measured_face(
+    fn concrete_font_metrics_for_face(
         &mut self,
         measurement_policy: DisplayRowMeasurementPolicy,
-        face: crate::frame_face_arena::ResolvedFrameFace,
-        fallback_char_width: f32,
-        fallback_metrics: DisplayRowFallbackMetrics,
-    ) -> DisplayRowResolvedMeasuredFace {
-        let resolved = face.resolved();
-        let metrics = if measurement_policy.uses_concrete_font_geometry() {
+        resolved: &ResolvedFace,
+    ) -> Option<crate::font::metrics::FontMetrics> {
+        if measurement_policy.uses_concrete_font_geometry() {
             self.font_metrics.as_mut().map(|svc| {
                 svc.font_metrics(
                     &resolved.font_family,
@@ -1067,7 +1105,18 @@ impl<'a> TextRowSourceRenderState<'a> {
             })
         } else {
             None
-        };
+        }
+    }
+
+    fn resolved_measured_face(
+        &mut self,
+        measurement_policy: DisplayRowMeasurementPolicy,
+        face: crate::frame_face_arena::ResolvedFrameFace,
+        fallback_char_width: f32,
+        fallback_metrics: DisplayRowFallbackMetrics,
+    ) -> DisplayRowResolvedMeasuredFace {
+        let resolved = face.resolved();
+        let metrics = self.concrete_font_metrics_for_face(measurement_policy, resolved);
         measurement_policy.resolved_measured_face(
             face,
             metrics,
@@ -1113,6 +1162,41 @@ impl<'a> TextRowSourceRenderState<'a> {
         self.output_render
             .install_resolved_measured_face(&resolved_face);
         resolved_face.into_active_face_state()
+    }
+
+    /// Install a producer-owned pending face without creating an active row
+    /// state. Pending faces can describe inspected neighbours, so this must
+    /// retain measurement and publication without changing row geometry.
+    pub(crate) fn install_pending_resolved_measured_face(
+        &mut self,
+        id: FaceId,
+        face: ResolvedFace,
+        measurement_policy: DisplayRowMeasurementPolicy,
+        fallback_char_width: f32,
+        fallback_metrics: DisplayRowFallbackMetrics,
+    ) {
+        let mut bound = None;
+        self.output_render
+            .output
+            .builder()
+            .bind_resolved_face_into(id, face, &mut bound);
+        let bound = bound.as_ref().expect("successful binding fills its output");
+        let resolved = bound.resolved();
+        let metrics = self.concrete_font_metrics_for_face(measurement_policy, resolved);
+        // Keep the same font-service work (including space measurement) as
+        // resolved_measured_face. Only the discarded active-state wrapper is
+        // omitted; installation still follows completed measurement.
+        let _measured_face = measurement_policy.measured_face(
+            bound.face_id(),
+            resolved,
+            metrics,
+            fallback_char_width,
+            fallback_metrics,
+            self.font_metrics,
+        );
+        self.output_render
+            .output
+            .install_resolved_face(bound, metrics);
     }
 
     pub(crate) fn resolve_named_face(&self, face_name: &str) -> ResolvedFace {
@@ -1336,6 +1420,9 @@ impl<'a> TextRowSourceRenderState<'a> {
             neomacs_display_protocol::frame_glyphs::GlyphRowRole::Text,
             margin_face_id,
             &margin_face,
+            // A margin lane is a structural lane of its own: it never
+            // continues onto another row.
+            crate::display_row::append_context::DisplayRowLineWrap::chrome_row(),
         )
         .render_request_from_column_for_area(0, columns, area);
 
@@ -1695,9 +1782,22 @@ impl<'a> TextRowSourceRenderState<'a> {
 
     /// Roll the current row's drawn glyphs back to `checkpoint` when the
     /// word-wrap break rewinds to a word boundary.
+    #[cfg(test)]
     pub(crate) fn restore_glyph_checkpoint(&mut self, checkpoint: DisplayRowGlyphCheckpoint) {
         self.output_render
             .restore_current_row_glyph_checkpoint(checkpoint);
+    }
+
+    pub(crate) fn restore_word_wrap_checkpoint(
+        &mut self,
+        candidate: crate::display_row::walk_state::WordWrapBreakCandidate,
+    ) {
+        self.output_render
+            .current_row_output()
+            .apply_current_row_mutation(DisplayRowGlyphCheckpointRestoreMutation {
+                checkpoint: candidate.glyph_checkpoint(),
+                source_end: Some(candidate.source_position().charpos() as usize),
+            });
     }
 
     /// The source-derived end terminal owned by the last glyph that remains
@@ -1767,6 +1867,49 @@ impl<'a> TextRowSourceMeasureState<'a> {
 
     pub(crate) fn current_cluster_tail(&self) -> Option<(char, bool)> {
         self.row_output.cluster_tail()
+    }
+
+    /// Width-only probe for an independent scalar at the source iterator's
+    /// authoritative pen. The caller proves that no preceding glyph can
+    /// participate in composition; height and source slots do not escape.
+    pub(crate) fn measure_independent_text_width(
+        &mut self,
+        face_ids: &mut FrameFaceAttempt,
+        item: DisplayItem,
+        row_request: DisplayRowSourceRenderRequest<'_>,
+        position: DisplayRowPosition,
+    ) -> Option<f32> {
+        // Preserve the ordinary probe's no-current-row fallback contract.
+        self.row_output.current_row_vertical_metrics()?;
+        let mut row = GlyphRow::new(neomacs_display_protocol::frame_glyphs::GlyphRowRole::Text);
+        let mut source = DisplayItemSegmentSource::new(item);
+        let mut source_state = DisplayRowSourceState::frame_local();
+        let mut policy = crate::display_source_append_plan::NaturalDisplayRowAppendRenderPolicy;
+        let mutation = DisplayRowCurrentSourceStepMutation {
+            row_request,
+            renderer: DisplayRowRenderer::new(self.font_metrics, self.measurement_mode),
+            source: &mut source,
+            source_state: &mut source_state,
+            context: DisplayRowRenderContext::new(
+                self.face_resolver,
+                self.evaluator.display_host.as_deref(),
+                face_ids,
+            )
+            .with_automatic_composition(self.automatic_composition),
+            render_policy: &mut policy,
+        };
+        let (result, row_height_px, row_ascent_px) = mutation.apply(&mut row)?;
+        Some(
+            DisplayRowCurrentTextSourceStepResult {
+                result,
+                row_height_px,
+                row_ascent_px,
+            }
+            .into_measure_outcome()
+            .into_append_progress(position)
+            .metrics()
+            .width_px(),
+        )
     }
 
     pub(crate) fn measure_display_item_source_against_current_text_row<

@@ -32,7 +32,7 @@ slow-timeout = { period = "600s", terminate-after = 1, grace-period = "0s" }
 # with EAGAIN). The guardrail exists for unit-test allocation backtraces,
 # not for constraining a spawned production GUI stack.
 [[profile.default.scripts]]
-filter = 'not binary_id(neomacs-gui-tests::real_gui_smoke)'
+filter = 'not binary_id(neomacs-gui-tests::real_gui_smoke) and not binary_id(neomacs-gui-tests::child_frame_animation)'
 # `prlimit` is a Linux util-linux executable, not a generic Unix interface.
 # macOS is cfg(unix) too, but has no `prlimit`; selecting by the actual host OS
 # keeps hosted native tests executable instead of failing before test startup.
@@ -161,3 +161,16 @@ slow-timeout = { period = "30s", terminate-after = 1, grace-period = "0s" }
 filter = 'binary_id(neomacs-gui-tests::macos_native_menus)'
 platform = { host = 'cfg(target_os = "macos")' }
 threads-required = "num-test-threads"
+
+# The interactive package-TUI suites pair a GNU Emacs and a Neomacs in PTYs and
+# drive them by screen state, so every pair needs CPU to keep its own deadlines.
+# At the default budget a family run starts all thirteen pairs at once, and pairs
+# then miss those deadlines while waiting their turn: over three uncapped family
+# runs, leuven's readiness marker and helm-gitignore's HTTP-failure screen each
+# timed out once, while both pass alone, repeatedly.  Reserve four threads per
+# test so a few pairs run at a time.  The suites are I/O-bound, so this costs no
+# wall clock -- capped family runs took 59.6s and 61.4s against 60.7s and 64.0s
+# uncapped, both 13/13.
+[[profile.default.overrides]]
+filter = 'test(~package_tui::)'
+threads-required = 4
