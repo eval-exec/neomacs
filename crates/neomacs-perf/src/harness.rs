@@ -1552,6 +1552,8 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     // Text hit positions built while composing (`eager`, default) or on the
     // first pointer query (`lazy`).
     "NEOMACS_PRESENT_HIT",
+    // C6 compact row point storage and per-window row hits: off (default), on, verify.
+    "NEOMACS_PRESENT_POINT_ROWS",
     // The mini-window stands still when what it shows is unchanged: `on`.
     "NEOMACS_LAYOUT_MINI_STILL",
     // The visible automatic-composition scan's ASCII fast path and memo: `on`.

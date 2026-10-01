@@ -36,6 +36,11 @@ pub use invisibility_input::LayoutInvisibilityInput;
 mod parameters;
 pub mod part;
 mod pixel_input;
+mod point_rows;
+pub use point_rows::{
+    DisplayPointRow, DisplayPointRowIter, DisplayPointRows, DisplayPointRowsIter,
+    DisplayPointRowsMode, PointCell, display_point_rows_mode,
+};
 mod scroll_bar;
 mod sibling_layout;
 pub mod split;
