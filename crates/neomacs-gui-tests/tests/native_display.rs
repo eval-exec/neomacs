@@ -51,7 +51,11 @@ fn native_rich_scroll_commands_preserve_pixel_offset() {
                 .unwrap()
                 .iter()
                 .any(|window| {
-                    window["window_start"] == state["final-start"]
+                    // Protocol offsets are zero-based; Lisp positions start at one.
+                    window["window_start"]
+                        .as_u64()
+                        .and_then(|start| start.checked_add(1))
+                        == state["final-start"].as_u64()
                         && window["buffer_size"]
                             .as_u64()
                             .is_some_and(|size| size > 1_000_000)
