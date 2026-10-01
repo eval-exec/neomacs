@@ -862,6 +862,7 @@ pub(crate) fn emit_direct_bytecode_call(
 /// SAFETY: `neovm_jit_call_spec`'s contract; `slot` is the executing
 /// leaf's spec slot of this site.
 #[allow(clippy::too_many_arguments, clippy::not_unsafe_ptr_arg_deref)]
+#[cold]
 #[inline(never)]
 #[unsafe(no_mangle)]
 pub(crate) extern "C" fn neovm_jit_direct_slow(
