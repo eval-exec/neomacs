@@ -31,9 +31,9 @@ const REALIZED_IDENTITY_CAP: usize = 4096;
 /// the face LOOKS like, with enrichment stripped. Font realization may fill
 /// in metrics, the exact font file, and the resolved font handle after row
 /// construction (see [`FrameFaceAttempt::seal`]); two realizations that
-/// differ only in those fields are the same face. This is the single source
-/// of truth for that projection — both the content-addressed id map and
-/// [`merge_compatible_realization`] are built on it.
+/// differ only in those fields are the same face. Stored identity-map entries
+/// own this projection; [`same_face_realization`] compares it while borrowing
+/// complete faces, so validation need not clone discarded payloads.
 pub(crate) fn face_realization_identity(face: &Face) -> Face {
     let mut identity = face.clone();
     identity.id = FaceId::new(0);
@@ -42,6 +42,75 @@ pub(crate) fn face_realization_identity(face: &Face) -> Face {
     identity.font_file_path = None;
     identity.default_resolved_font_id = None;
     identity
+}
+
+/// Compare the complete realization projection without owning or cloning its
+/// strings, gradients, or stipple payload. The exhaustive pattern deliberately
+/// requires newly added protocol fields to choose their identity semantics.
+fn same_face_realization(left: &Face, right: &Face) -> bool {
+    let Face {
+        id: _,
+        foreground,
+        background,
+        terminal_foreground,
+        terminal_background,
+        use_default_foreground,
+        use_default_background,
+        underline_color,
+        terminal_underline_color,
+        overline_color,
+        strike_through_color,
+        box_color,
+        font_family,
+        font_size,
+        font_weight,
+        attributes,
+        underline_style,
+        box_type,
+        box_line_width,
+        box_corner_radius,
+        box_border_style,
+        box_border_speed,
+        box_color2,
+        font_file_path: _,
+        font_ascent: _,
+        font_descent: _,
+        underline_position,
+        underline_thickness,
+        background_gradient,
+        lisp_name,
+        default_resolved_font_id: _,
+        stipple,
+        underline_placement,
+    } = left;
+    foreground == &right.foreground
+        && background == &right.background
+        && terminal_foreground == &right.terminal_foreground
+        && terminal_background == &right.terminal_background
+        && use_default_foreground == &right.use_default_foreground
+        && use_default_background == &right.use_default_background
+        && underline_color == &right.underline_color
+        && terminal_underline_color == &right.terminal_underline_color
+        && overline_color == &right.overline_color
+        && strike_through_color == &right.strike_through_color
+        && box_color == &right.box_color
+        && font_family == &right.font_family
+        && font_size == &right.font_size
+        && font_weight == &right.font_weight
+        && attributes == &right.attributes
+        && underline_style == &right.underline_style
+        && box_type == &right.box_type
+        && box_line_width == &right.box_line_width
+        && box_corner_radius == &right.box_corner_radius
+        && box_border_style == &right.box_border_style
+        && box_border_speed == &right.box_border_speed
+        && box_color2 == &right.box_color2
+        && underline_position == &right.underline_position
+        && underline_thickness == &right.underline_thickness
+        && background_gradient == &right.background_gradient
+        && lisp_name == &right.lisp_name
+        && stipple == &right.stipple
+        && underline_placement == &right.underline_placement
 }
 
 /// Routing hash for the identity buckets. Equality is decided by
@@ -92,7 +161,7 @@ fn realized_identity_lookup(
 ) -> Option<FaceId> {
     map.get(&hash)?
         .iter()
-        .find_map(|(face, id)| (face == identity).then_some(*id))
+        .find_map(|(face, id)| same_face_realization(face, identity).then_some(*id))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -245,10 +314,9 @@ impl FrameFaceAttemptState {
         // Use the content index on the hot path. Only a mismatched/imported ID
         // needs a reverse search to produce a useful conflict diagnostic.
         if face_id.get() >= BasicFaceId::SENTINEL {
-            let identity = face_realization_identity(face);
-            let hash = face_identity_hash(&identity);
-            let matched = realized_identity_lookup(&self.fresh_realized, hash, &identity)
-                .or_else(|| realized_identity_lookup(&self.realized, hash, &identity));
+            let hash = face_identity_hash(face);
+            let matched = realized_identity_lookup(&self.fresh_realized, hash, face)
+                .or_else(|| realized_identity_lookup(&self.realized, hash, face));
             if matched != Some(face_id)
                 && let Some((bound, _)) = self
                     .fresh_realized
@@ -267,8 +335,7 @@ impl FrameFaceAttemptState {
             }
         }
         if let Some(existing) = self.faces.get(&face_id) {
-            let mut merged = existing.clone();
-            if !merge_compatible_realization(&mut merged, face) {
+            if !compatible_realization(existing, face) {
                 return Err(FrameFaceConflict {
                     face_id,
                     existing: Box::new(existing.clone()),
@@ -671,13 +738,9 @@ impl FrameFaceAttempt {
                     return Err(FrameFaceReuseError::ConflictingFace(*id));
                 }
             } else {
-                let identity = face_realization_identity(face);
                 if id.get() < BasicFaceId::SENTINEL
-                    || realized_identity_lookup(
-                        &current.realized,
-                        face_identity_hash(&identity),
-                        &identity,
-                    ) != Some(*id)
+                    || realized_identity_lookup(&current.realized, face_identity_hash(face), face)
+                        != Some(*id)
                 {
                     return Err(FrameFaceReuseError::MissingFace(*id));
                 }
@@ -793,7 +856,7 @@ impl FrameFaceAttempt {
             return Err(FrameFaceSealError::MismatchedFaceId { table_id, face_id });
         }
         for (id, finalized) in &finalized_faces {
-            if face_realization_identity(&state.faces[id]) != face_realization_identity(finalized) {
+            if !same_face_realization(&state.faces[id], finalized) {
                 return Err(FrameFaceSealError::ChangedRealization(*id));
             }
             let published = &state.faces[id];
@@ -820,18 +883,8 @@ impl FrameFaceAttempt {
     }
 }
 
-fn merge_compatible_realization(existing: &mut Face, replacement: &Face) -> bool {
-    let mut existing_identity = existing.clone();
-    existing_identity.font_ascent = 0;
-    existing_identity.font_descent = 0;
-    existing_identity.font_file_path = None;
-    existing_identity.default_resolved_font_id = None;
-    let mut replacement_identity = replacement.clone();
-    replacement_identity.font_ascent = 0;
-    replacement_identity.font_descent = 0;
-    replacement_identity.font_file_path = None;
-    replacement_identity.default_resolved_font_id = None;
-    if existing_identity != replacement_identity {
+fn compatible_realization(existing: &Face, replacement: &Face) -> bool {
+    if existing.id != replacement.id || !same_face_realization(existing, replacement) {
         return false;
     }
 
@@ -846,6 +899,14 @@ fn merge_compatible_realization(existing: &mut Face, replacement: &Face) -> bool
             .zip(replacement.default_resolved_font_id.as_ref())
             .is_some_and(|(existing, replacement)| existing != replacement)
     {
+        return false;
+    }
+
+    true
+}
+
+fn merge_compatible_realization(existing: &mut Face, replacement: &Face) -> bool {
+    if !compatible_realization(existing, replacement) {
         return false;
     }
 

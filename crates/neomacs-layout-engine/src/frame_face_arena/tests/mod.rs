@@ -175,6 +175,303 @@ fn sealing_rejects_changed_styling_without_losing_the_published_face() {
 
 use neomacs_display_protocol::types::Color;
 
+#[test]
+fn borrowed_realization_comparison_matches_canonical_projection_for_every_field() {
+    use neomacs_display_protocol::face::{
+        BoxBorderStyle, BoxLineWidth, BoxType, FaceAttributes, UnderlinePosition, UnderlineStyle,
+    };
+    use neomacs_display_protocol::font::ResolvedFontId;
+    use neomacs_display_protocol::frame_glyphs::StipplePattern;
+    use neomacs_display_protocol::gradient::{ColorStop, Gradient};
+    use neomacs_display_protocol::terminal_color::TerminalColor;
+
+    let base = Face::new(FaceId::new(0));
+    let changes: &[(&str, fn(&mut Face), bool)] = &[
+        ("id", |face| face.id = FaceId::new(37), true),
+        ("foreground", |face| face.foreground = Color::BLACK, false),
+        ("background", |face| face.background = Color::WHITE, false),
+        (
+            "terminal_foreground",
+            |face| face.terminal_foreground = Some(TerminalColor::Indexed(2)),
+            false,
+        ),
+        (
+            "terminal_background",
+            |face| face.terminal_background = Some(TerminalColor::Indexed(3)),
+            false,
+        ),
+        (
+            "use_default_foreground",
+            |face| face.use_default_foreground = !face.use_default_foreground,
+            false,
+        ),
+        (
+            "use_default_background",
+            |face| face.use_default_background = !face.use_default_background,
+            false,
+        ),
+        (
+            "underline_color",
+            |face| face.underline_color = Some(Color::WHITE),
+            false,
+        ),
+        (
+            "terminal_underline_color",
+            |face| face.terminal_underline_color = Some(TerminalColor::Indexed(4)),
+            false,
+        ),
+        (
+            "overline_color",
+            |face| face.overline_color = Some(Color::WHITE),
+            false,
+        ),
+        (
+            "strike_through_color",
+            |face| face.strike_through_color = Some(Color::WHITE),
+            false,
+        ),
+        (
+            "box_color",
+            |face| face.box_color = Some(Color::WHITE),
+            false,
+        ),
+        (
+            "font_family",
+            |face| face.font_family = "different family".into(),
+            false,
+        ),
+        ("font_size", |face| face.font_size *= 1.5, false),
+        ("font_weight", |face| face.font_weight = 700, false),
+        (
+            "attributes",
+            |face| face.attributes = FaceAttributes::BOLD,
+            false,
+        ),
+        (
+            "underline_style",
+            |face| face.underline_style = UnderlineStyle::Wave,
+            false,
+        ),
+        ("box_type", |face| face.box_type = BoxType::Raised3D, false),
+        (
+            "box_line_width",
+            |face| face.box_line_width = BoxLineWidth::from_gnu(3),
+            false,
+        ),
+        (
+            "box_corner_radius",
+            |face| face.box_corner_radius = 4,
+            false,
+        ),
+        (
+            "box_border_style",
+            |face| face.box_border_style = BoxBorderStyle::Neon,
+            false,
+        ),
+        (
+            "box_border_speed",
+            |face| face.box_border_speed = 2.0,
+            false,
+        ),
+        (
+            "box_color2",
+            |face| face.box_color2 = Some(Color::WHITE),
+            false,
+        ),
+        (
+            "font_file_path",
+            |face| face.font_file_path = Some("/fonts/enriched.ttf".into()),
+            true,
+        ),
+        ("font_ascent", |face| face.font_ascent = 17, true),
+        ("font_descent", |face| face.font_descent = 5, true),
+        (
+            "underline_position",
+            |face| face.underline_position = 9,
+            false,
+        ),
+        (
+            "underline_thickness",
+            |face| face.underline_thickness = 3,
+            false,
+        ),
+        (
+            "background_gradient",
+            |face| {
+                face.background_gradient = Some(Box::new(Gradient::Linear {
+                    angle: 90.0,
+                    stops: vec![
+                        ColorStop::new(0.0, Color::BLACK),
+                        ColorStop::new(1.0, Color::WHITE),
+                    ],
+                }))
+            },
+            false,
+        ),
+        (
+            "lisp_name",
+            |face| face.lisp_name = Some("borrowed identity".into()),
+            false,
+        ),
+        (
+            "default_resolved_font_id",
+            |face| face.default_resolved_font_id = Some(ResolvedFontId(7)),
+            true,
+        ),
+        (
+            "stipple",
+            |face| {
+                face.stipple = Some(Box::new(StipplePattern {
+                    width: 8,
+                    height: 2,
+                    bits: vec![0x55, 0xaa],
+                }))
+            },
+            false,
+        ),
+        (
+            "underline_placement",
+            |face| face.underline_placement = UnderlinePosition::DescentLine { pixels_above: 2 },
+            false,
+        ),
+    ];
+    for (field, change, expected_same) in changes {
+        let mut changed = base.clone();
+        change(&mut changed);
+        let expected = face_realization_identity(&base) == face_realization_identity(&changed);
+        assert_eq!(expected, *expected_same, "fixture must change {field}");
+        assert_eq!(same_face_realization(&base, &changed), expected, "{field}");
+        assert_eq!(
+            same_face_realization(&changed, &base),
+            expected,
+            "{field}, reversed"
+        );
+    }
+
+    // Preserve PartialEq rather than replacing floating comparisons with bit
+    // equality or making NaN faces reflexive as a pointer fast path might do.
+    let mut positive_zero = base.clone();
+    positive_zero.font_size = 0.0;
+    let mut negative_zero = positive_zero.clone();
+    negative_zero.font_size = -0.0;
+    assert!(same_face_realization(&positive_zero, &negative_zero));
+    let mut nan = base;
+    nan.font_size = f32::NAN;
+    assert!(!same_face_realization(&nan, &nan));
+}
+
+#[test]
+fn borrowed_realization_compares_nested_payload_contents_and_float_semantics() {
+    use neomacs_display_protocol::frame_glyphs::StipplePattern;
+    use neomacs_display_protocol::gradient::{ColorStop, Gradient};
+
+    let mut face = Face::new(FaceId::new(0));
+    face.lisp_name = Some("nested payload face".into());
+    face.background_gradient = Some(Box::new(Gradient::Linear {
+        angle: 90.0,
+        stops: vec![
+            ColorStop::new(0.0, Color::BLACK),
+            ColorStop::new(1.0, Color::WHITE),
+        ],
+    }));
+    face.stipple = Some(Box::new(StipplePattern {
+        width: 8,
+        height: 2,
+        bits: vec![0x55, 0xaa],
+    }));
+    let mut changed = face.clone();
+    assert!(
+        same_face_realization(&face, &changed),
+        "equal independently owned payloads match"
+    );
+    changed.stipple.as_mut().unwrap().bits[1] ^= 1;
+    assert!(!same_face_realization(&face, &changed));
+    assert_eq!(
+        same_face_realization(&face, &changed),
+        face_realization_identity(&face) == face_realization_identity(&changed)
+    );
+    changed = face.clone();
+    let Gradient::Linear { stops, .. } = changed.background_gradient.as_deref_mut().unwrap() else {
+        unreachable!()
+    };
+    stops[1].position = 0.75;
+    assert!(!same_face_realization(&face, &changed));
+    assert_eq!(
+        same_face_realization(&face, &changed),
+        face_realization_identity(&face) == face_realization_identity(&changed)
+    );
+    let Gradient::Linear { stops, .. } = changed.background_gradient.as_deref_mut().unwrap() else {
+        unreachable!()
+    };
+    stops[1].position = f32::NAN;
+    assert!(
+        !same_face_realization(&changed, &changed),
+        "nested NaN remains nonreflexive"
+    );
+}
+
+#[test]
+fn borrowed_validation_preserves_enrichment_conflicts_without_mutating_published_faces() {
+    use neomacs_display_protocol::font::ResolvedFontId;
+
+    let mut base = Face::new(FaceId::new(0));
+    base.font_family = "complete face identity".into();
+    base.font_file_path = Some("/fonts/exact.ttf".into());
+    base.default_resolved_font_id = Some(ResolvedFontId(7));
+    base.font_ascent = 12;
+    base.font_descent = 4;
+    let mut attempt = FrameFaceArena::default().begin_attempt();
+    attempt.import_face(base.clone()).unwrap();
+    for path in [None, Some("/fonts/exact.ttf"), Some("/fonts/different.ttf")] {
+        for font_id in [None, Some(ResolvedFontId(7)), Some(ResolvedFontId(8))] {
+            let mut replacement = base.clone();
+            replacement.font_file_path = path.map(str::to_owned);
+            replacement.default_resolved_font_id = font_id;
+            replacement.font_ascent = 18;
+            replacement.font_descent = 0;
+            let compatible =
+                path != Some("/fonts/different.ttf") && font_id != Some(ResolvedFontId(8));
+            assert_eq!(compatible_realization(&base, &replacement), compatible);
+            assert_eq!(
+                attempt.prepare_face(replacement.clone()).is_ok(),
+                compatible
+            );
+            assert_eq!(
+                attempt.face(base.id),
+                Some(base.clone()),
+                "preparation is speculative"
+            );
+
+            let mut merged = base.clone();
+            assert_eq!(
+                merge_compatible_realization(&mut merged, &replacement),
+                compatible
+            );
+            if compatible {
+                assert_eq!(merged.font_ascent, 18);
+                assert_eq!(
+                    merged.font_descent, 4,
+                    "zero replacement metrics preserve enrichment"
+                );
+                assert_eq!(merged.font_file_path, base.font_file_path);
+                assert_eq!(
+                    merged.default_resolved_font_id,
+                    base.default_resolved_font_id
+                );
+            } else {
+                assert_eq!(merged, base, "a conflicting merge is atomic");
+            }
+        }
+    }
+    let mut wrong_id = base.clone();
+    wrong_id.id = FaceId::new(1);
+    assert!(same_face_realization(&base, &wrong_id));
+    assert!(
+        !compatible_realization(&base, &wrong_id),
+        "merging must also preserve the slot ID"
+    );
+}
+
 fn identity_with_fg(pixel: u32) -> Face {
     let mut face = Face::new(FaceId::new(0));
     face.foreground = Color::from_pixel(pixel);
