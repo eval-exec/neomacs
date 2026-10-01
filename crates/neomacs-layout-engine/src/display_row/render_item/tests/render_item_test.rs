@@ -60,6 +60,59 @@ fn media_replacement_remains_one_authoritative_row_item() {
 }
 
 #[test]
+fn writer_clipping_retains_original_source_for_next_row() {
+    use crate::display_row::builder::{
+        DisplayRowAppendStatus, DisplayRowLayout, DisplayRowPosition, DisplayRowProgressWriter,
+        DisplayTabPolicy,
+    };
+    use neomacs_display_protocol::frame_glyphs::GlyphRowRole;
+    use neomacs_display_protocol::glyph_matrix::{GlyphArea, GlyphRow};
+    use neomacs_display_protocol::types::FaceId;
+
+    let face = RenderFaceRef::FaceId(FaceId::new(3));
+    let source = DisplayItem::new(
+        SourceSpan::lisp_string(7, 4, 8, 4, 8),
+        face,
+        DisplayItemKind::TextRun(DisplayTextRun::independent("abcd")),
+    );
+    let rendered = DisplayRowRenderItem::from_source_item(source);
+    let layout = DisplayRowLayout {
+        role: GlyphRowRole::Text,
+        y_px: 0.0,
+        height_px: 16.0,
+        ascent_px: 12.0,
+        char_width_px: 8.0,
+        tab_policy: DisplayTabPolicy::every(4),
+        line_number_width_px: 0.0,
+        base_face: face,
+        pixel_calc: crate::display_pixel_calc::PixelCalcContext::for_chrome_row(
+            16.0,
+            8.0,
+            16.0,
+            std::collections::HashMap::new(),
+        ),
+        space_image_params: None,
+        line_wrap: crate::display_row::append_context::DisplayRowLineWrap::chrome_row(),
+    };
+    let mut row = GlyphRow::new(GlyphRowRole::Text);
+    let progress =
+        DisplayRowProgressWriter::new(&layout, &mut row, DisplayRowPosition::new(0.0, 0), 16.0)
+            .push_item(rendered.row_item_for_write());
+    assert_eq!(progress.status(), DisplayRowAppendStatus::Clipped);
+    assert_eq!(row.glyphs[GlyphArea::Text.index()].len(), 2);
+    let DisplayRowClippedRemainder::Resume(remainder) = rendered.clipped_remainder(&progress)
+    else {
+        panic!("the unrendered text must continue on the next row");
+    };
+    assert_eq!(remainder.span, SourceSpan::lisp_string(7, 6, 8, 6, 8));
+    assert_eq!(remainder.face, face);
+    assert_eq!(
+        remainder.kind,
+        DisplayItemKind::TextRun(DisplayTextRun::independent("cd"))
+    );
+}
+
+#[test]
 fn clipped_string_mapped_text_preserves_and_advances_its_string_origin() {
     let source = DisplayItem {
         span: SourceSpan::synthetic(1, 10, 12),

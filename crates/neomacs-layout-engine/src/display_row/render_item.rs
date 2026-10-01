@@ -7,18 +7,16 @@ use crate::display_row::builder::DisplayRowAppendProgress;
 
 pub(crate) struct DisplayRowRenderItem {
     source_item: DisplayItem,
-    row_item: DisplayItem,
 }
 
 impl DisplayRowRenderItem {
     pub(crate) fn from_source_item(source_item: DisplayItem) -> Self {
         // Preserve media as one row item.  The row writer now emits a typed
         // media glyph that owns both its layout metrics and drawable identity.
-        let row_item = source_item.clone();
-        Self {
-            source_item,
-            row_item,
-        }
+        // Measurement, writing and continuation all use the same item. Keep
+        // its owned source representation once; the writer's copy is needed
+        // only because a clipped item may still have to resume on another row.
+        Self { source_item }
     }
 
     pub(crate) fn source_item(&self) -> &DisplayItem {
@@ -27,15 +25,15 @@ impl DisplayRowRenderItem {
 
     #[cfg(test)]
     pub(crate) fn row_face(&self) -> RenderFaceRef {
-        self.row_item.face
+        self.source_item.face
     }
 
     pub(crate) fn row_item(&self) -> &DisplayItem {
-        &self.row_item
+        &self.source_item
     }
 
     pub(crate) fn row_item_for_write(&self) -> DisplayItem {
-        self.row_item.clone()
+        self.source_item.clone()
     }
 
     pub(crate) fn clipped_remainder(
