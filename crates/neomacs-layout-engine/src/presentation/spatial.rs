@@ -521,8 +521,8 @@ pub(crate) fn set_presented_text_positions_mode_for_test(mode: Option<PresentedT
 }
 
 /// The knob, read once per process: `lazy` selects
-/// [`PresentedTextPositionsMode::Lazy`]; unset or anything else keeps
-/// [`PresentedTextPositionsMode::Eager`].
+/// [`PresentedTextPositionsMode::Lazy`], as does unset; explicit off or any
+/// other value keeps [`PresentedTextPositionsMode::Eager`].
 fn presented_text_positions_mode() -> PresentedTextPositionsMode {
     #[cfg(test)]
     if let Some(mode) = TEXT_POSITIONS_MODE_OVERRIDE.with(std::cell::Cell::get) {
@@ -535,7 +535,7 @@ fn presented_text_positions_mode() -> PresentedTextPositionsMode {
             .map(|value| value.trim().to_ascii_lowercase())
             .as_deref()
         {
-            Some("lazy" | "rows" | "on" | "1") => PresentedTextPositionsMode::Lazy,
+            None | Some("lazy" | "rows" | "on" | "1") => PresentedTextPositionsMode::Lazy,
             _ => PresentedTextPositionsMode::Eager,
         }
     })
