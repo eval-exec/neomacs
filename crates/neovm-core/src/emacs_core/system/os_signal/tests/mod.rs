@@ -95,6 +95,49 @@ fn kill_self_and_wait(signal: HandledSignal) {
     }
 }
 
+/// Fatal signals are captured without calling Lisp in the handler, then run
+/// the ordinary kill-emacs boundary even under inhibit-quit. Later deliveries
+/// cannot recursively run exit hooks while shutdown is in progress.
+#[test]
+#[cfg(unix)]
+fn termination_capture_runs_kill_emacs_at_safe_point_once() {
+    os_signal::install_termination(false);
+    for sig in [libc::SIGTERM, libc::SIGHUP] {
+        let mut eval = crate::emacs_core::eval::Context::new();
+        eval.eval_str("(setq signal-hook-count 0 inhibit-quit t kill-emacs-hook (list (lambda () (setq signal-hook-count (1+ signal-hook-count)))))").unwrap();
+        super::TERMINATION_SIGNAL.store(0, std::sync::atomic::Ordering::Release);
+        let _ = os_signal::take_pending();
+        kill_self(sig);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while super::TERMINATION_SIGNAL.load(std::sync::atomic::Ordering::Acquire) == 0
+            || !os_signal::pending()
+        {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert!(eval.shutdown_request().is_none(), "handler entered Lisp");
+        assert!(matches!(
+            eval.maybe_quit(),
+            Err(crate::emacs_core::error::Flow::Shutdown(_))
+        ));
+        assert_eq!(eval.shutdown_request().unwrap().exit_code, sig);
+        assert_eq!(
+            eval.obarray.symbol_value("signal-hook-count").copied(),
+            Some(crate::emacs_core::Value::fixnum(1))
+        );
+        // Synchronous handler invocation avoids a later cross-thread delivery
+        // escaping this test's process-global reset into another case.
+        super::deliver_user_signal(sig);
+        assert_eq!(os_signal::take_termination_signal(), None);
+        assert_eq!(
+            eval.obarray.symbol_value("signal-hook-count").copied(),
+            Some(crate::emacs_core::Value::fixnum(1))
+        );
+    }
+    super::TERMINATION_SIGNAL.store(0, std::sync::atomic::Ordering::Release);
+    let _ = os_signal::take_pending();
+}
+
 /// The red this entry started from: with no handler installed, this test's
 /// process is TERMINATED by the signal and nextest reports it killed rather
 /// than failed.  It survives only because [`os_signal::install`] ran.
@@ -527,7 +570,7 @@ fn a_delivered_sigchld_reaches_nothing_here_and_never_touches_pending_signals() 
          `grep -n 'pending_signals = ' src/*.c` has no hit in process.c"
     );
 
-    let drain = os_signal::drain_pending_os_signals(&mut eval);
+    let drain = os_signal::drain_pending_os_signals(&mut eval).unwrap();
     assert_eq!(
         drain,
         Default::default(),

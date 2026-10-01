@@ -145,8 +145,9 @@ mod platform;
 /// The list is closed and mechanically derivable: `grep -n 'add_user_signal ('
 /// src/sysdep.c` gives exactly the two user-signal calls.  Every other signal
 /// GNU names in `init_signals` is unclaimed here and recorded as such in
-/// ledger 184 -- SIGWINCH, SIGINT, SIGHUP and SIGPIPE are all still in the
-/// hole ledger 180 §9.6 opened.
+/// ledger 184 -- SIGWINCH, SIGINT and SIGPIPE are all still in the
+/// hole ledger 180 §9.6 opened. SIGTERM/SIGHUP instead use GNU's fatal-signal
+/// path: capture the numeric status, then call kill-emacs at a safe point.
 ///
 /// **SIGCHLD is deliberately NOT here** (ledger 208).  GNU's
 /// `catch_child_signal` (src/process.c:8645-8660) exists to make the child
@@ -330,22 +331,13 @@ pub(crate) enum PreviousDisposition {
 pub(crate) struct InstallReport {
     previous: [PreviousDisposition; HandledSignal::COUNT],
     installed: [bool; HandledSignal::COUNT],
-    /// The owned self-pipe, or `None` if this target has no signal capability
-    /// or portable pipe setup failed.
+    /// The owned self-pipe, or `None` on a target without POSIX signals.
+    /// On Unix setup failure aborts startup rather than losing idle wakeups.
     ///
-    /// **Not registered with the wait poller** -- ledger 184's declared
-    /// residual, and ledger 200 measured what that costs: nothing collects the
-    /// byte, and `polling::Poller::wait` catches `ErrorKind::Interrupted` and
-    /// re-enters the wait (polling-3.11.0/src/lib.rs:751-764), so a delivery
-    /// does not shorten a block either -- a confirmed SIGCHLD 200ms into a 3s
-    /// block left it running 3.000038747s, while a real child's `pidfd`
-    /// returned the same block at once.  **What the trigger is for is
-    /// therefore the RECORD and not the wake**: its counter is this port's
-    /// only "a child status changed since the last notify" gate, which is what
-    /// GNU spells with `process_tick` (:5540, :5845), and ledger 200 measured
-    /// that removing it costs four melpa packages.  The pipe exists because
-    /// the handler's wake must be a `write` (GNU's `child_signal_notify`,
-    /// src/process.c:7648) and because the fd is what a registration needs.
+    /// Registered by ProcessWaitBackend, including for an idle daemon. EINTR
+    /// alone is insufficient: polling retries interrupted waits internally.
+    /// The handler's nonblocking write returns that wait even when the signal
+    /// lands on another thread. Pending atomics, not bytes, own delivery counts.
     wake_pipe: Option<platform::WakePipe>,
 }
 
@@ -358,8 +350,8 @@ impl InstallReport {
         self.installed.iter().filter(|done| **done).count()
     }
 
-    /// The self-pipe read end, for the poller registration ledger 184 leaves
-    /// open.  `None` when the pipe could not be created.
+    /// The process-lifetime self-pipe read end for evaluator wait pollers.
+    /// `None` on a target without POSIX signals.
     pub(crate) fn self_pipe_read_fd(&self) -> Option<libc::c_int> {
         self.wake_pipe
             .as_ref()
@@ -399,6 +391,12 @@ static PENDING: [AtomicU32; HandledSignal::COUNT] =
 #[cfg(unix)]
 static SELF_PIPE_WRITE_FD: AtomicI32 = AtomicI32::new(-1);
 
+/// GNU emacs.c:fatal_error_signal calls Fkill_emacs with the signal number for
+/// SIGTERM/SIGHUP. Keep the first pending request; only the evaluator can
+/// consume it. No Lisp state is touched by the handler.
+#[cfg(unix)]
+static TERMINATION_SIGNAL: AtomicI32 = AtomicI32::new(0);
+
 /// A capability token that exists only for the duration of a signal handler.
 ///
 /// Its two methods are the only two operations this port performs in signal
@@ -426,6 +424,10 @@ impl AsyncSignalScope {
     /// drain to the wrong safe point.
     fn record(&self, signal: HandledSignal) {
         PENDING[signal as usize].fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_termination(&self, sig: libc::c_int) {
+        let _ = TERMINATION_SIGNAL.compare_exchange(0, sig, Ordering::Release, Ordering::Relaxed);
     }
 
     /// GNU's `pending_signals = true` (src/keyboard.c:8512, :8431), the flag
@@ -480,7 +482,12 @@ extern "C" fn deliver_user_signal(sig: libc::c_int) {
     // restoring it is what GNU does at src/sysdep.c:1733 and :1750.
     let saved_errno = platform::save_errno();
 
-    if let Some(signal) = HandledSignal::from_raw(sig) {
+    if sig == libc::SIGTERM || sig == libc::SIGHUP {
+        let scope = AsyncSignalScope(std::marker::PhantomData);
+        scope.record_termination(sig);
+        scope.set_pending_signals();
+        scope.wake();
+    } else if let Some(signal) = HandledSignal::from_raw(sig) {
         let scope = AsyncSignalScope(std::marker::PhantomData);
         match signal.disposition() {
             // Every arm may use only `scope`, and `scope` has only these three
@@ -529,7 +536,8 @@ pub(crate) fn install() -> &'static InstallReport {
 
 #[cfg(unix)]
 fn install_once() -> InstallReport {
-    let wake_pipe = platform::create_wake_pipe();
+    let wake_pipe =
+        Some(platform::create_wake_pipe().expect("cannot create evaluator signal wake pipe"));
     if let Some(pipe) = &wake_pipe {
         SELF_PIPE_WRITE_FD.store(pipe.write_fd(), Ordering::Release);
     }
@@ -619,6 +627,46 @@ fn install_once() -> InstallReport {
     }
 }
 
+/// Install termination capture only once the host knows batch/interactive mode.
+/// Process-manager construction may create the wake pipe, but must not choose
+/// fatal-signal policy. GNU maybe_fatal_sig preserves SIG_IGN in batch mode.
+pub(crate) fn install_termination(noninteractive: bool) {
+    #[cfg(unix)]
+    {
+        install();
+        for sig in [libc::SIGTERM, libc::SIGHUP] {
+            // SAFETY: valid signals and initialized local sigaction storage.
+            let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
+            if unsafe { libc::sigaction(sig, std::ptr::null(), &mut old) } != 0 {
+                panic!(
+                    "cannot inspect shutdown signal {sig}: {}",
+                    std::io::Error::last_os_error()
+                );
+            }
+            if noninteractive && old.sa_sigaction == libc::SIG_IGN {
+                continue;
+            }
+            let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+            action.sa_sigaction = deliver_user_signal as *const () as usize;
+            action.sa_flags = libc::SA_RESTART;
+            // SAFETY: initialized action, valid signal set and signal numbers.
+            unsafe {
+                libc::sigemptyset(&mut action.sa_mask);
+                libc::sigaddset(&mut action.sa_mask, libc::SIGTERM);
+                libc::sigaddset(&mut action.sa_mask, libc::SIGHUP);
+                if libc::sigaction(sig, &action, std::ptr::null_mut()) != 0 {
+                    panic!(
+                        "cannot install orderly shutdown signal {sig}: {}",
+                        std::io::Error::last_os_error()
+                    );
+                }
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = noninteractive;
+}
+
 #[cfg(unix)]
 fn classify_previous(old: &libc::sigaction) -> PreviousDisposition {
     match old.sa_sigaction {
@@ -643,6 +691,33 @@ fn classify_previous(old: &libc::sigaction) -> PreviousDisposition {
 pub(crate) fn pending() -> bool {
     crate::emacs_core::eval::ASYNC_ATTENTION
         .is_raised(crate::emacs_core::eval::AsyncSource::OsSignal)
+}
+
+/// Consume a captured fatal-signal request only on the evaluator thread.
+pub(crate) fn take_termination_signal() -> Option<i32> {
+    #[cfg(unix)]
+    {
+        // Latch shutdown for the process lifetime: further signals arriving
+        // inside kill-emacs-hook cannot recursively run the hook again.
+        let sig = TERMINATION_SIGNAL.load(Ordering::Acquire);
+        if sig > 0 {
+            TERMINATION_SIGNAL
+                .compare_exchange(sig, -1, Ordering::AcqRel, Ordering::Relaxed)
+                .ok()
+        } else {
+            None
+        }
+    }
+    #[cfg(not(unix))]
+    None
+}
+
+/// Wake bytes coalesce; pending atomics remain the delivery authority.
+#[cfg(unix)]
+pub(crate) fn drain_wake_pipe(fd: libc::c_int) {
+    let mut bytes = [0u8; 128];
+    // SAFETY: fd is the process-lifetime nonblocking pipe's read end.
+    while unsafe { libc::read(fd, bytes.as_mut_ptr().cast(), bytes.len()) } > 0 {}
 }
 
 /// The pending count for one signal, without consuming it.
@@ -742,9 +817,21 @@ pub(crate) struct UserSignalDrain {
 /// what keeps it a residual rather than a lost event.
 pub(crate) fn drain_pending_os_signals(
     eval: &mut crate::emacs_core::eval::Context,
-) -> UserSignalDrain {
+) -> Result<UserSignalDrain, crate::emacs_core::error::Flow> {
     // GNU's `process_pending_signals` opens with `pending_signals = false;`.
     crate::emacs_core::eval::ASYNC_ATTENTION.take(crate::emacs_core::eval::AsyncSource::OsSignal);
+    // Recheck after the acquiring attention drain: a fatal signal may have
+    // arrived between maybe_quit's first check and clearing this attention bit.
+    // Never clear its only wake without consuming the published request.
+    if let Some(sig) = take_termination_signal()
+        && eval.shutdown_request().is_none()
+        && !eval.shutdown_in_progress
+    {
+        crate::emacs_core::builtins::symbols::builtin_kill_emacs(
+            eval,
+            vec![crate::emacs_core::Value::fixnum(i64::from(sig))],
+        )?;
+    }
 
     let debug_on_event = eval.debug_on_event_signal_name();
     let mut drain = UserSignalDrain::default();
@@ -771,7 +858,7 @@ pub(crate) fn drain_pending_os_signals(
             }
         }
     }
-    drain
+    Ok(drain)
 }
 
 #[cfg(test)]

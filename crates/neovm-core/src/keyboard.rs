@@ -5047,7 +5047,10 @@ impl crate::emacs_core::eval::Context {
             self,
             crate::emacs_core::terminal::pure::TERMINAL_ID,
         );
-        self.request_shutdown(0, false);
+        let _ = self.shutdown_with_hooks(crate::emacs_core::eval::ShutdownRequest {
+            exit_code: 0,
+            restart: false,
+        });
     }
 
     /// Translate a freshly read character event through

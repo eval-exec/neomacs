@@ -3007,6 +3007,15 @@ pub(crate) enum SymbolValueLookup {
     Unbound,
 }
 
+/// Host notification used by GNU's daemon-initialized primitive.
+pub type DaemonNotifier = Box<dyn FnMut() -> Result<(), String> + Send>;
+
+pub(crate) struct DaemonState {
+    pub(crate) name: Option<String>,
+    pub(crate) initialized: bool,
+    pub(crate) notify: Option<DaemonNotifier>,
+}
+
 pub struct Context {
     pub(crate) owned_roots: crate::emacs_core::owned_roots::OwnedRootRegistry,
     /// Tagged pointer heap — sole GC and allocator.
@@ -3251,6 +3260,9 @@ pub struct Context {
     /// Pending orderly shutdown requested by GNU C-owned primitives such as
     /// `kill-emacs`.
     pub(crate) shutdown_request: Option<ShutdownRequest>,
+    /// First shutdown entry owns the hooks; the request is published after them.
+    pub(crate) shutdown_in_progress: bool,
+    pub(crate) daemon: Option<DaemonState>,
     /// Batch-compatible input-mode interrupt flag for `current-input-mode`.
     pub(crate) input_mode_interrupt: bool,
     /// Lisp-visible `quit_char` used by `current-input-mode` and low-level

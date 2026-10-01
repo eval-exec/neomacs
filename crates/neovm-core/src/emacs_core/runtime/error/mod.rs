@@ -2259,14 +2259,15 @@ impl super::eval::Context {
         if !is_minibuffer_quit && self.noninteractive() {
             eprintln!("{context_text}{rendered}");
             // GNU calls Fkill_emacs (-1) here, which runs kill-emacs-hook and
-            // exits with status 255. Same path as the kill-emacs builtin, so
-            // the exit code is recorded before the flow unwinds.
-            let _ = self.run_hook_if_bound("kill-emacs-hook");
-            self.request_shutdown(-1, false);
-            return Err(Flow::shutdown(super::eval::ShutdownRequest {
-                exit_code: -1,
-                restart: false,
-            }));
+            // exits with status 255. Same path as the kill-emacs builtin: the
+            // guarded shutdown boundary owns status 255 before its hooks and
+            // records the exit code before the flow unwinds.
+            return self
+                .shutdown_with_hooks(super::eval::ShutdownRequest {
+                    exit_code: -1,
+                    restart: false,
+                })
+                .map(|_| ());
         }
         let text = format!("{context_text}{rendered}");
         super::builtins::misc_pure::builtin_message(self, vec![Value::string(text)])?;

@@ -215,7 +215,24 @@ pub(crate) static STANDARD_ARGS: &[StandardArg] = &[
         priority: 100,
         nargs: 1,
     },
-    // -daemon family omitted (no daemon mode).
+    StandardArg {
+        name: "-daemon",
+        longname: Some("--daemon"),
+        priority: 99,
+        nargs: 0,
+    },
+    StandardArg {
+        name: "-bg-daemon",
+        longname: Some("--bg-daemon"),
+        priority: 99,
+        nargs: 0,
+    },
+    StandardArg {
+        name: "-fg-daemon",
+        longname: Some("--fg-daemon"),
+        priority: 99,
+        nargs: 0,
+    },
     StandardArg {
         name: "-help",
         longname: Some("--help"),

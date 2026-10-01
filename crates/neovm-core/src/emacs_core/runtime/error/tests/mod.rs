@@ -254,6 +254,66 @@ fn minibuffer_quit_does_not_take_down_a_noninteractive_session() {
 }
 
 #[test]
+fn batch_fatal_report_and_nested_shutdown_share_first_entry_hook_ownership() {
+    crate::test_utils::init_test_tracing();
+    for request in [
+        crate::emacs_core::eval::ShutdownRequest {
+            exit_code: -1,
+            restart: false,
+        },
+        crate::emacs_core::eval::ShutdownRequest {
+            exit_code: 7,
+            restart: true,
+        },
+    ] {
+        let mut eval = Context::new();
+        eval.set_variable("noninteractive", Value::T);
+        eval.eval_str(
+            "(setq shutdown-count 0 shutdown-continued nil shutdown-later nil \
+             kill-emacs-hook (list (lambda () (setq shutdown-count (1+ shutdown-count)) \
+             (kill-emacs 19) \
+             (command-error-default-function '(error \"nested fatal\") \"\" nil) \
+             (setq shutdown-continued t)) (lambda () (setq shutdown-later t))))",
+        )
+        .unwrap();
+        let reported = if request.exit_code == -1 {
+            eval.command_error_default_report(
+                Value::list(vec![
+                    Value::symbol("error"),
+                    Value::string("original fatal"),
+                ]),
+                Value::string(""),
+            )
+        } else {
+            eval.shutdown_with_hooks(request).map(|_| ())
+        };
+        assert!(matches!(reported, Err(Flow::Shutdown(actual)) if actual == request));
+        assert_eq!(eval.shutdown_request(), Some(request));
+        assert_eq!(
+            eval.obarray.symbol_value("shutdown-count").copied(),
+            Some(Value::fixnum(1))
+        );
+        assert_eq!(
+            eval.obarray.symbol_value("shutdown-continued").copied(),
+            Some(Value::T)
+        );
+        assert_eq!(
+            eval.obarray.symbol_value("shutdown-later").copied(),
+            Some(Value::T)
+        );
+        let repeated = eval.shutdown_with_hooks(crate::emacs_core::eval::ShutdownRequest {
+            exit_code: 42,
+            restart: false,
+        });
+        assert!(matches!(repeated, Err(Flow::Shutdown(actual)) if actual == request));
+        assert_eq!(
+            eval.obarray.symbol_value("shutdown-count").copied(),
+            Some(Value::fixnum(1))
+        );
+    }
+}
+
+#[test]
 fn raw_condition_inheriting_minibuffer_quit_does_not_take_down_session() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();

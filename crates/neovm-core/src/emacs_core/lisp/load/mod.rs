@@ -6332,6 +6332,7 @@ pub fn create_bootstrap_evaluator_for_loadup(
         // If loadup.el set a shutdown request (via kill-emacs at the end
         // of the dump flow), clear it so the caller gets a usable evaluator.
         eval.shutdown_request = None;
+        eval.shutdown_in_progress = false;
 
         tracing::info!("\n=== LOADUP BOOTSTRAP COMPLETE ===");
 

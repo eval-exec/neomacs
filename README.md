@@ -141,6 +141,8 @@ https://github.com/user-attachments/assets/275c6d9a-fced-44f6-8f43-3bbd2984d672
 - **Pure-Rust core** — no C left: the Elisp evaluator, bytecode VM, GC, portable
   dump, and editor internals are all memory-safe, modern Rust
 - **GUI or terminal** — the same binary renders on the GPU or in a TTY (`neomacs -nw`)
+- **Headless daemon** — keep Lisp running and use named local clients for evaluation
+  or TTY editing ([daemon guide](docs/daemon.md))
 - **What's next** — true multi-threaded Elisp and a concurrent zero-pause GC
   ([status](#status))
 
