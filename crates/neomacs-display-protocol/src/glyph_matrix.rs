@@ -1507,6 +1507,8 @@ impl GlyphRow {
     ///
     /// Pointer appearances are render dependencies even when none of the row's
     /// glyphs use their hover/pressed face as their normal paint face.
+    /// Left/right fringe and overlay-arrow bitmaps also need their own faces,
+    /// including rows with no text glyphs.
     pub fn referenced_face_ids(&self) -> impl Iterator<Item = FaceId> + '_ {
         self.glyphs
             .iter()
@@ -1516,6 +1518,16 @@ impl GlyphRow {
                 self.pointer_appearances
                     .iter()
                     .map(|appearance| appearance.face_id),
+            )
+            .chain(
+                [
+                    self.left_fringe_bitmap,
+                    self.right_fringe_bitmap,
+                    self.overlay_arrow_bitmap,
+                ]
+                .into_iter()
+                .flatten()
+                .map(|bitmap| bitmap.face_id),
             )
     }
 
@@ -3710,3 +3722,7 @@ pub trait RedisplayInterface {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "glyph_matrix/tests/replay_face_test.rs"]
+mod replay_face_test;
