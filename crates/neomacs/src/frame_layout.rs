@@ -111,6 +111,24 @@ struct SnapshotDoc<'a> {
     frames: &'a [FrameDisplayState],
 }
 
+/// Geometry-only diagnostics borrow the protocol's authoritative window data.
+/// Serializing the whole state can repeat large in-memory font assets in the
+/// resolved font tables and off-screen coverage (notably CoreText fonts).
+#[derive(serde::Serialize)]
+struct SnapshotGeometryFrame<'a> {
+    presentation_id: &'a neomacs_display_protocol::frame_chrome::PresentationId,
+    frame_cols: usize,
+    frame_rows: usize,
+    frame_pixel_width: f32,
+    frame_pixel_height: f32,
+    window_infos: &'a [neomacs_display_protocol::frame_glyphs::WindowInfo],
+}
+
+#[derive(serde::Serialize)]
+struct SnapshotGeometryDoc<'a> {
+    frames: Vec<SnapshotGeometryFrame<'a>>,
+}
+
 /// Install the `neomacs--frame-snapshot` hook (`Context::frame_snapshot_fn`).
 ///
 /// Called by both frontends right where they install `redisplay_fn`; batch
@@ -123,6 +141,21 @@ pub fn install_frame_snapshot_fn(evaluator: &mut Context) {
         Ok(match request.format {
             SnapshotFormat::Json => serde_json::to_string(&SnapshotDoc { frames: &states })
                 .map_err(|error| format!("frame snapshot JSON serialization failed: {error}"))?,
+            SnapshotFormat::JsonGeometry => {
+                let frames = states
+                    .iter()
+                    .map(|state| SnapshotGeometryFrame {
+                        presentation_id: &state.presentation_id,
+                        frame_cols: state.frame_cols,
+                        frame_rows: state.frame_rows,
+                        frame_pixel_width: state.frame_pixel_width,
+                        frame_pixel_height: state.frame_pixel_height,
+                        window_infos: &state.window_infos,
+                    })
+                    .collect();
+                serde_json::to_string(&SnapshotGeometryDoc { frames })
+                    .map_err(|error| format!("frame geometry JSON serialization failed: {error}"))?
+            }
             SnapshotFormat::Text => states
                 .iter()
                 .map(|state| state.render_text())

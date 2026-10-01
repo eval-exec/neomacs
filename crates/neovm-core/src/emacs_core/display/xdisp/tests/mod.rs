@@ -6457,6 +6457,8 @@ fn frame_snapshot_forwards_request_to_installed_hook() {
         .expect("all/json snapshot");
     eval.eval_str("(neomacs--frame-snapshot nil 'text-faces)")
         .expect("selected/text-faces snapshot");
+    eval.eval_str("(neomacs--frame-snapshot t 'json-geometry)")
+        .expect("all/geometry snapshot");
 
     assert_eq!(
         *seen.borrow(),
@@ -6464,6 +6466,7 @@ fn frame_snapshot_forwards_request_to_installed_hook() {
             (SnapshotTarget::Selected, SnapshotFormat::Text),
             (SnapshotTarget::All, SnapshotFormat::Json),
             (SnapshotTarget::Selected, SnapshotFormat::TextFaces),
+            (SnapshotTarget::All, SnapshotFormat::JsonGeometry),
         ]
     );
 }
