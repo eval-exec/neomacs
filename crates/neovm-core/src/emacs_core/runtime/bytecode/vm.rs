@@ -1910,10 +1910,21 @@ impl SymbolByteCodeCallCache {
     const fn index(symbol: SymId) -> usize {
         symbol.0 as usize & (SYMBOL_BYTECODE_CALL_CACHE_CAPACITY - 1)
     }
+    /// The entry for `symbol` when it is current at `function_epoch`: proven
+    /// at that clock value, or -- after an epoch move for other symbols --
+    /// re-proven by `symbol`'s stamp ([`Self::refresh`]).
     #[inline(always)]
-    fn get(&self, symbol: SymId, function_epoch: u64) -> Option<ResolvedStackCallTarget> {
-        let entry = &self.entries[Self::index(symbol)];
-        if entry.function_epoch != function_epoch || entry.symbol != symbol {
+    fn get(
+        &mut self,
+        symbol: SymId,
+        function_epoch: u64,
+        obarray: &crate::emacs_core::symbol::Obarray,
+    ) -> Option<ResolvedStackCallTarget> {
+        let entry = &mut self.entries[Self::index(symbol)];
+        if entry.symbol != symbol
+            || (entry.function_epoch != function_epoch
+                && !Self::refresh(entry, function_epoch, obarray))
+        {
             return None;
         }
         match entry.callee {
@@ -1926,6 +1937,35 @@ impl SymbolByteCodeCallCache {
             }
             CachedStackCallee::Empty => None,
         }
+    }
+    /// P1.3 A4a (design `p1-3-per-symbol-versions` §4.4 C4): an entry whose
+    /// epoch went stale is current again when its symbol's function binding
+    /// is provably unchanged since the entry's epoch and no change of every
+    /// symbol's resolution happened since -- an overrides toggle raises that
+    /// floor, so the hit path's "written while the overrides were inactive"
+    /// argument still holds ([`Obarray::fn_unchanged_since`],
+    /// `NEOVM_FN_STAMPS`; always `false` with the knob off). The entry then
+    /// moves to `now`, the clock its caller read before probing. The EMPTY
+    /// entry's epoch (`u64::MAX`) never validates. Cold: once per entry per
+    /// epoch move.
+    ///
+    /// [`Obarray::fn_unchanged_since`]: crate::emacs_core::symbol::Obarray::fn_unchanged_since
+    #[cold]
+    #[inline(never)]
+    fn refresh(
+        entry: &mut SymbolByteCodeCallCacheEntry,
+        now: u64,
+        obarray: &crate::emacs_core::symbol::Obarray,
+    ) -> bool {
+        if !obarray.fn_unchanged_since(entry.symbol, entry.function_epoch) {
+            return false;
+        }
+        entry.function_epoch = now;
+        #[cfg(feature = "jit")]
+        crate::emacs_core::jit::stats::epoch::note_cache_refresh(
+            crate::emacs_core::jit::stats::epoch::CacheRefresh::SymbolCall,
+        );
+        true
     }
     #[inline(always)]
     fn insert_bytecode(
@@ -8678,10 +8718,10 @@ impl<'a> Vm<'a> {
             },
             ValueKind::Symbol(sym_id) => {
                 let function_epoch = self.ctx.obarray.function_epoch();
-                if let Some(target) = self
-                    .ctx
-                    .symbol_bytecode_call_cache
-                    .get(sym_id, function_epoch)
+                let ctx = &mut *self.ctx;
+                if let Some(target) =
+                    ctx.symbol_bytecode_call_cache
+                        .get(sym_id, function_epoch, &ctx.obarray)
                 {
                     return target;
                 }
@@ -9602,6 +9642,10 @@ mod builtin_result_return_tests;
 #[cfg(test)]
 #[path = "tests/arith_integer_fast_path.rs"]
 mod arith_integer_fast_path_tests;
+
+#[cfg(all(test, feature = "jit"))]
+#[path = "tests/call_cache_refresh.rs"]
+mod call_cache_refresh_tests;
 
 impl ArithGenericKind {
     /// The builtin this kind's slow arm calls: the SAME cached symbol ids the
