@@ -83,3 +83,47 @@ fn explicit_actions_and_forced_interpreter_must_match_provenance() {
         overrides
     );
 }
+
+#[test]
+fn regex_dfa_actions_preserve_values_and_validate_provenance() {
+    for mode in ["off", "on", "verify"] {
+        let input = format!("NEOVM_REGEX_DFA={mode}");
+        let action: ExecutionOverride = input.parse().unwrap();
+        assert_eq!(String::from(action.clone()), input);
+        let encoded = serde_json::to_string(&action).unwrap();
+        assert_eq!(
+            serde_json::from_str::<ExecutionOverride>(&encoded).unwrap(),
+            action
+        );
+    }
+    let overrides = policy(&[
+        "NEOVM_REGEX_DFA=verify",
+        "NEOVM_REGEX_DFA_COLD=on",
+        "NEOVM_REGEX_DFA_FIRST_STEP",
+    ]);
+    let mut environment = BTreeMap::from([
+        ("NEOVM_REGEX_DFA".to_owned(), OsString::from("off")),
+        (
+            "NEOVM_REGEX_DFA_FIRST_STEP".to_owned(),
+            OsString::from("on"),
+        ),
+    ]);
+    overrides.apply_to(&mut environment);
+    assert_eq!(environment["NEOVM_REGEX_DFA"], "verify");
+    assert_eq!(environment["NEOVM_REGEX_DFA_COLD"], "on");
+    assert!(!environment.contains_key("NEOVM_REGEX_DFA_FIRST_STEP"));
+    let mut recorded = environment
+        .into_iter()
+        .map(|(key, value)| (key, value.into_string().unwrap()))
+        .collect::<BTreeMap<_, _>>();
+    assert!(overrides.validate_recorded(&recorded).is_ok());
+    recorded.insert("NEOVM_REGEX_DFA".to_owned(), "on".to_owned());
+    assert!(overrides.validate_recorded(&recorded).is_err());
+    for invalid in [
+        "NEOVM_REGEX_DFA=maybe",
+        "NEOVM_REGEX_DFA_COLD=verify",
+        "NEOVM_REGEX_DFA_FIRST_STEP=verify",
+    ] {
+        assert!(invalid.parse::<ExecutionOverride>().is_err(), "{invalid}");
+    }
+}

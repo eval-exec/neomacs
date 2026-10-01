@@ -115,7 +115,7 @@ enum PerfSubcommand {
 
 #[derive(Debug, Args)]
 struct RunArgs {
-    /// JIT setting: NAME=VALUE sets; NAME alone removes an inherited setting. Repeatable.
+    /// Runtime setting: NAME=VALUE sets; NAME alone removes an inherited setting. Repeatable.
     #[arg(long = "env", value_name = "NAME[=VALUE]")]
     execution_overrides: Vec<crate::ExecutionOverride>,
     /// Registered scenario to execute.
@@ -131,10 +131,10 @@ struct RunArgs {
 
 #[derive(Debug, Args)]
 struct CompareArgs {
-    /// JIT setting: NAME=VALUE sets; NAME alone removes an inherited setting. Repeatable.
+    /// Runtime setting: NAME=VALUE sets; NAME alone removes an inherited setting. Repeatable.
     #[arg(long = "baseline-env", value_name = "NAME[=VALUE]")]
     baseline_execution_overrides: Vec<crate::ExecutionOverride>,
-    /// JIT setting: NAME=VALUE sets; NAME alone removes an inherited setting. Repeatable.
+    /// Runtime setting: NAME=VALUE sets; NAME alone removes an inherited setting. Repeatable.
     #[arg(long = "candidate-env", value_name = "NAME[=VALUE]")]
     candidate_execution_overrides: Vec<crate::ExecutionOverride>,
     /// Registered scenario to execute.
@@ -156,7 +156,7 @@ struct CompareArgs {
 
 #[derive(Debug, Args)]
 struct ProfileArgs {
-    /// JIT setting: NAME=VALUE sets; NAME alone removes an inherited setting. Repeatable.
+    /// Runtime setting: NAME=VALUE sets; NAME alone removes an inherited setting. Repeatable.
     #[arg(long = "env", value_name = "NAME[=VALUE]")]
     execution_overrides: Vec<crate::ExecutionOverride>,
     /// Registered scenario to execute.

@@ -1,4 +1,4 @@
-//! Request-owned JIT policy for controlled same-binary comparisons.
+//! Request-owned runtime policy for controlled same-binary comparisons.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -25,21 +25,31 @@ impl FromStr for ExecutionOverride {
         };
         let supported = matches!(
             name,
-            "NEOVM_JIT" | "NEOVM_JIT_OSR" | "NEOVM_JIT_THRESHOLD" | "NEOVM_JIT_LOOP_HEAT"
+            "NEOVM_JIT"
+                | "NEOVM_JIT_OSR"
+                | "NEOVM_JIT_THRESHOLD"
+                | "NEOVM_JIT_LOOP_HEAT"
+                | "NEOVM_REGEX_DFA"
+                | "NEOVM_REGEX_DFA_COLD"
+                | "NEOVM_REGEX_DFA_FIRST_STEP"
         );
         if !supported {
             return Err(format!(
-                "unsupported execution setting {name:?}; expected NEOVM_JIT, NEOVM_JIT_OSR, NEOVM_JIT_THRESHOLD or NEOVM_JIT_LOOP_HEAT"
+                "unsupported execution setting {name:?}; expected a supported NEOVM_JIT or NEOVM_REGEX_DFA setting"
             ));
         }
         if let Some(value) = value {
             let valid = match name {
-                "NEOVM_JIT" | "NEOVM_JIT_OSR" => {
+                "NEOVM_JIT"
+                | "NEOVM_JIT_OSR"
+                | "NEOVM_REGEX_DFA_COLD"
+                | "NEOVM_REGEX_DFA_FIRST_STEP" => {
                     matches!(
                         value,
                         "0" | "off" | "false" | "no" | "1" | "on" | "true" | "yes"
                     )
                 }
+                "NEOVM_REGEX_DFA" => matches!(value, "off" | "on" | "verify"),
                 "NEOVM_JIT_THRESHOLD" => value.parse::<u32>().is_ok_and(|v| v > 0),
                 "NEOVM_JIT_LOOP_HEAT" => value.parse::<u32>().is_ok(),
                 _ => unreachable!("validated name"),
