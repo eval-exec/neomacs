@@ -5,7 +5,9 @@
 //! single `(lo, len)` range over owner addresses:
 //!
 //! - **ALL** while a concurrent mark runs (the SATB log) or owner tracking is
-//!   on (the dirty-owner tables): every heap write is recorded. Also ALL for
+//!   on (the dirty-owner tables): every heap write is recorded. Stage A also
+//!   uses ALL with generations enabled so unchanged compiled cons stores
+//!   reach the outlined unlogged-bit gate; C2.8 adds their inline bitmap test. Also ALL for
 //!   the whole life of a heap under the census's remembered-set probe
 //!   (`census.rs`), which must see every store.
 //! - **The dump span** when only the dump partition is active (the steady
@@ -15,8 +17,8 @@
 //!
 //! An owner at address `a` needs the out-of-line barrier iff
 //! `a.wrapping_sub(lo) < len`, or it is a non-cons owner that is tenured and
-//! not yet remembered (see `barrier_gate`). A cons is never tenured, so
-//! outside the window a cons store is a plain store.
+//! not yet remembered (see `barrier_gate`). With generations disabled,
+//! a cons outside the window is stored inline.
 //!
 //! The window is PROTOCOL STATE, like `TAGGED_HEAP_CONCURRENT_ACTIVE`: it is
 //! recomputed and republished by [`TaggedHeap::publish_barrier_window`] at
@@ -77,7 +79,8 @@ impl BarrierWindow {
 impl TaggedHeap {
     /// The window this heap's current state implies (see the module doc).
     pub(crate) fn barrier_window(&self) -> BarrierWindow {
-        if self.concurrent_mark_running
+        if self.generational_enabled()
+            || self.concurrent_mark_running
             || self.write_tracking_mode != WriteTrackingMode::Disabled
             || self.census.as_deref().is_some_and(GenCensus::remset_probe)
         {

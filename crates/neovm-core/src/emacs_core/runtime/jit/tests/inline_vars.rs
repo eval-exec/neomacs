@@ -507,6 +507,9 @@ fn type_rules_match_the_interpreter() {
 #[test]
 fn a_concurrent_mark_sends_every_store_to_the_shim() {
     let mut ev = fixture();
+    // This test pins the legacy window's shim counts. Generational Stage A
+    // keeps ALL until C2.8, including the BLV store guard's marking test.
+    ev.tagged_heap.disable_generations_for_test();
     warm(&mut ev, &["ivt-loc"]);
     eval_ok(&mut ev, "(setq ivt-plain (list 'old-plain))");
     let set_plain = compile(&ev, ALL, &Prog::setq(), "ivt-plain");

@@ -3860,6 +3860,7 @@ impl TaggedValue {
     }
 
     /// Get hash table reference.
+    #[inline]
     pub fn as_hash_table(self) -> Option<&'static LispHashTable> {
         if self.is_hash_table() {
             let ptr = self.as_veclike_ptr().unwrap() as *mut HashTableObj;
@@ -3870,13 +3871,28 @@ impl TaggedValue {
             // already hydrated (the permanent state).
             unsafe {
                 if (*ptr).table.needs_hydration() {
-                    (*ptr).table.hydrate_pending();
+                    self.hydrate_hash_table_for_access(ptr);
                 }
                 Some(&(*ptr).table)
             }
         } else {
             None
         }
+    }
+
+    // Keep the generation-aware hydration repair out of the hot accessor:
+    // outlining the already-hydrated read adds work to every gethash/puthash.
+    #[cold]
+    #[inline(never)]
+    fn hydrate_hash_table_for_access(self, ptr: *mut HashTableObj) {
+        // A parked structural key without a snapshot can be reconstructed as
+        // a fresh heap object. Remember the owner before creating that edge.
+        if with_tagged_heap(|heap| heap.generational_enabled()) {
+            note_heap_write(self, HeapWriteKind::HashTableData);
+        }
+        // SAFETY: as_hash_table has checked the type and holds no reference
+        // to the payload until this pre-publication hydration has completed.
+        unsafe { (*ptr).table.hydrate_pending() };
     }
 
     /// Mutate a hash table through the centralized tagged-runtime write path.
@@ -5556,3 +5572,7 @@ mod metadata_capture_tests;
 #[cfg(test)]
 #[path = "tests/heap_mut_closure_guard.rs"]
 mod heap_mut_closure_guard;
+
+#[cfg(test)]
+#[path = "tests/gc_generational_hydration.rs"]
+mod gc_generational_hydration;

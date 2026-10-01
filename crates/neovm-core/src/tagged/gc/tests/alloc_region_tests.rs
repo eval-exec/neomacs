@@ -201,7 +201,10 @@ fn the_counter_views_are_exact_with_the_region_open_or_closed() {
         heap.close_alloc_regions();
         assert_eq!(counts(&heap), want, "{n} conses, region closed");
         assert_eq!(heap.bytes_since_gc(), heap.bytes_since_gc_exact());
-        assert_eq!(heap.allocated_count, heap.allocated_count());
+        assert_eq!(
+            heap.current_mutator_gc().allocated_count,
+            heap.allocated_count()
+        );
     }
 }
 

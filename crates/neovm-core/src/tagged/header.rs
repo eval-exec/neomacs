@@ -15,7 +15,7 @@ use super::value::TaggedValue;
 use malachite::integer::Integer;
 use neomacs_display_protocol::{VideoId, WebViewId};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
 // ---------------------------------------------------------------------------
 // ConsCell — no header, minimal size
@@ -188,13 +188,14 @@ pub struct GcHeader {
     /// Remembered: this (tenured) object is already in the heap's dump
     /// remembered set (`TaggedHeap::mapped_remembered`), so a write by it has
     /// nothing left for the partition-only write barrier to record. Set ONLY
-    /// by `TaggedHeap::remember_owner`, right after the insert; the set is
-    /// never cleared and tenured objects are never freed, so a set bit
-    /// cannot outlive its fact. Never read for mapped objects (they sit in
+    /// by `TaggedHeap::remember_owner`: logged implies membership in a
+    /// mutator's R log, the collector's R_seed, or mapped_remembered. In
+    /// generational mode it is claimed atomically and reset each cycle.
+    /// Never read for mapped objects (they sit in
     /// the barrier window) and always `false` for young ones. Atomic, and a
     /// byte of its own, so the mutator's store cannot race the GC thread's
     /// claim-time `tenured` read. Occupies padding too (byte 3).
-    pub remembered: AtomicBool,
+    pub remembered: AtomicU8,
     /// Byte 4, reserved for P3.2 L2's `type_tag` (P3.0 §3.1); always 0.
     reserved_type_tag: u8,
     /// Byte 5: object flags ([`HeaderFlags`], P3.0 §3.1's `flags` byte;
@@ -326,6 +327,13 @@ pub(crate) enum CollectionScope {
     Full,
 }
 
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RememberedState {
+    Unlogged = 0,
+    Logged = 1,
+}
+
 // The header byte map (P3.0 §3.1; owner P3.1 C2.1/C2.2). P3.2 fills the
 // reserved bytes; compiled code bakes byte 2 (`GC_HEADER_TENURED_OFFSET`,
 // with byte 3 as one `u16`).
@@ -355,7 +363,7 @@ impl GcHeader {
             marked: AtomicU8::new(UNMARKED_AT_REST),
             kind,
             tenured: false,
-            remembered: AtomicBool::new(false),
+            remembered: AtomicU8::new(RememberedState::Unlogged as u8),
             reserved_type_tag: 0,
             flags: HeaderFlags::NONE,
             generation: GenBits::NONE,
@@ -410,7 +418,27 @@ impl GcHeader {
     /// `header` must point at a live `GcHeader`.
     #[inline(always)]
     pub(crate) unsafe fn needs_remembering(header: *const GcHeader) -> bool {
-        unsafe { (*header).tenured && !(*header).remembered.load(Ordering::Relaxed) }
+        unsafe { (*header).tenured && !(*header).is_remembered() }
+    }
+
+    #[inline]
+    pub(crate) fn is_remembered(&self) -> bool {
+        self.remembered.load(Ordering::Relaxed) == RememberedState::Logged as u8
+    }
+
+    /// Claim logging responsibility once across mutators. This flag does
+    /// not publish a log: the future stop-all handshake must wait for every
+    /// in-flight barrier to append before draining the mutators' logs.
+    #[inline]
+    pub(crate) fn claim_remembered(&self) -> bool {
+        self.remembered
+            .compare_exchange(
+                RememberedState::Unlogged as u8,
+                RememberedState::Logged as u8,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            )
+            .is_ok()
     }
 
     /// Read the RAW mark byte (relaxed). Only meaningful compared against

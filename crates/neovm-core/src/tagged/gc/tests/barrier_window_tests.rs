@@ -8,6 +8,15 @@
 use super::fake_image::FakeImage;
 use super::*;
 
+// These tests pin the generation-disabled reference gate. Generational
+// stores are exercised independently by generational_tests.
+fn legacy_gate_heap() -> TaggedHeap {
+    let mut heap = TaggedHeap::new();
+    heap.generational.enabled = false;
+    heap.publish_barrier_window();
+    heap
+}
+
 /// The gate this lever replaced, kept verbatim as the reference model: its
 /// three thread-local flags, the partition-only cons span test, then the
 /// (unchanged) outlined rejects. `true` means the write reaches the heap.
@@ -51,6 +60,7 @@ fn header_remembered(owner: TaggedValue) -> bool {
         (*(addr as *const GcHeader))
             .remembered
             .load(Ordering::Relaxed)
+            == RememberedState::Logged as u8
     }
 }
 
@@ -147,7 +157,7 @@ fn check_every_owner(heap: &mut TaggedHeap, owners: &Owners) {
 #[test]
 fn a_bare_heap_records_nothing() {
     crate::test_utils::init_test_tracing();
-    let mut heap = TaggedHeap::new();
+    let mut heap = legacy_gate_heap();
     set_tagged_heap(&mut heap);
     assert_eq!(published_barrier_window(), BarrierWindow::NONE);
     let cons = heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
@@ -163,7 +173,7 @@ fn a_bare_heap_records_nothing() {
 #[test]
 fn partition_only_matches_the_old_gate_for_every_owner() {
     crate::test_utils::init_test_tracing();
-    let mut heap = TaggedHeap::new();
+    let mut heap = legacy_gate_heap();
     set_tagged_heap(&mut heap);
     let owners = partitioned_heap_owners(&mut heap);
     let window = published_barrier_window();
@@ -193,7 +203,7 @@ fn partition_only_matches_the_old_gate_for_every_owner() {
 #[test]
 fn a_concurrent_mark_matches_the_old_gate_for_every_owner() {
     crate::test_utils::init_test_tracing();
-    let mut heap = TaggedHeap::new();
+    let mut heap = legacy_gate_heap();
     set_tagged_heap(&mut heap);
     let owners = partitioned_heap_owners(&mut heap);
     heap.set_concurrent_active_for_test(true);
@@ -211,7 +221,7 @@ fn a_concurrent_mark_matches_the_old_gate_for_every_owner() {
 #[test]
 fn owner_tracking_matches_the_old_gate_for_every_owner() {
     crate::test_utils::init_test_tracing();
-    let mut heap = TaggedHeap::new();
+    let mut heap = legacy_gate_heap();
     set_tagged_heap(&mut heap);
     let owners = partitioned_heap_owners(&mut heap);
     heap.set_write_tracking_mode(WriteTrackingMode::OwnersAndRecords);
@@ -236,7 +246,7 @@ fn owner_tracking_matches_the_old_gate_for_every_owner() {
 #[test]
 fn owner_tracking_on_a_bare_heap_records_every_owner() {
     crate::test_utils::init_test_tracing();
-    let mut heap = TaggedHeap::new();
+    let mut heap = legacy_gate_heap();
     set_tagged_heap(&mut heap);
     heap.set_write_tracking_mode(WriteTrackingMode::OwnersAndRecords);
     let cons = heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
@@ -254,7 +264,7 @@ fn owner_tracking_on_a_bare_heap_records_every_owner() {
 #[test]
 fn the_window_is_republished_at_every_writer_of_its_inputs() {
     crate::test_utils::init_test_tracing();
-    let mut heap = TaggedHeap::new();
+    let mut heap = legacy_gate_heap();
     set_tagged_heap(&mut heap);
     assert_eq!(published_barrier_window(), BarrierWindow::NONE);
 
@@ -300,7 +310,7 @@ fn the_window_is_republished_at_every_writer_of_its_inputs() {
 
     // Installing another heap re-derives its window; reinstalling this one
     // re-derives this one's; uninstalling clears it.
-    let mut other = TaggedHeap::new();
+    let mut other = legacy_gate_heap();
     set_tagged_heap(&mut other);
     assert_eq!(
         published_barrier_window(),
@@ -340,7 +350,7 @@ fn the_window_covers_exactly_its_span() {
 #[test]
 fn the_remembered_bit_is_set_exactly_when_the_owner_is_remembered() {
     crate::test_utils::init_test_tracing();
-    let mut heap = TaggedHeap::new();
+    let mut heap = legacy_gate_heap();
     set_tagged_heap(&mut heap);
     let image = FakeImage::leak(false).register_vector(&mut heap);
     let quiet = heap.alloc_vector(vec![TaggedValue::NIL; 2]);
@@ -408,7 +418,7 @@ fn the_remembered_bit_is_set_exactly_when_the_owner_is_remembered() {
 #[test]
 fn compiled_code_and_rust_stores_see_the_same_window() {
     crate::test_utils::init_test_tracing();
-    let mut heap = TaggedHeap::new();
+    let mut heap = legacy_gate_heap();
     set_tagged_heap(&mut heap);
     let same = |heap: &TaggedHeap, what: &str| {
         assert_eq!(

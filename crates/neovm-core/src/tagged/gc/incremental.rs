@@ -92,13 +92,14 @@ impl TaggedHeap {
         // sweep_buffer -> unchain_dead_markers). Reads marks, which are intact.
         let unchain_t0 = std::time::Instant::now();
         self.unchain_dead_markers();
+        self.reset_generational_remembered_world_stopped();
         self.handshake.last_term_unchain_us = unchain_t0.elapsed().as_micros() as u64;
 
         // The generation census reads the final marks before the sweep
         // detaches the young list (no-op unless `NEOVM_GC_CENSUS`).
         if self.census.is_some() {
             let mark_window_alloc = self
-                .bytes_since_gc
+                .bytes_since_gc()
                 .saturating_sub(self.pace_mark_start_bytes);
             self.census_at_termination(CensusCycleKind::Concurrent, mark_window_alloc);
         }
@@ -152,7 +153,7 @@ impl TaggedHeap {
             .map(|t0| t0.elapsed().as_micros() as u64)
             .unwrap_or(0);
         let pace_alloc = self
-            .bytes_since_gc
+            .bytes_since_gc()
             .saturating_sub(self.pace_mark_start_bytes);
         self.sweep_mark_window_alloc_bytes = pace_alloc;
         let forced = self.forced_termination_pending;
@@ -313,7 +314,8 @@ impl TaggedHeap {
                     self.non_cons_object_addrs.remove(&(current as usize));
                     self.unregister_vector_object(current);
                     self.free_gc_object(current);
-                    self.allocated_count = self.allocated_count.saturating_sub(1);
+                    self.current_mutator_gc_mut().allocated_count =
+                        self.current_mutator_gc().allocated_count.saturating_sub(1);
                     noncons_freed += 1;
                 }
             }
@@ -373,11 +375,13 @@ impl TaggedHeap {
         // allocated_count carries the tracked cons live count; replace it with
         // the true recount (delta may be negative -> use checked sub).
         if recount >= self.cons_live_count {
-            self.allocated_count = self
+            self.current_mutator_gc_mut().allocated_count = self
+                .current_mutator_gc()
                 .allocated_count
                 .saturating_add(recount - self.cons_live_count);
         } else {
-            self.allocated_count = self
+            self.current_mutator_gc_mut().allocated_count = self
+                .current_mutator_gc()
                 .allocated_count
                 .saturating_sub(self.cons_live_count - recount);
         }
@@ -1075,7 +1079,8 @@ impl TaggedHeap {
         }
 
         self.cons_live_count = new_live;
-        self.allocated_count = self
+        self.current_mutator_gc_mut().allocated_count = self
+            .current_mutator_gc()
             .allocated_count
             .saturating_sub(old_live)
             .saturating_add(new_live);
@@ -1197,7 +1202,8 @@ impl TaggedHeap {
                     self.non_cons_object_addrs.remove(&(current as usize));
                     self.unregister_vector_object(current);
                     self.free_gc_object(current);
-                    self.allocated_count = self.allocated_count.saturating_sub(1);
+                    self.current_mutator_gc_mut().allocated_count =
+                        self.current_mutator_gc().allocated_count.saturating_sub(1);
                     current = next;
                 }
             }
@@ -1286,7 +1292,10 @@ impl TaggedHeap {
             debug_assert!(removed, "freed page vector was not in the registry");
         });
         let freed = ff + sf + vf + bf + laf + maf + ref_ + swf + mkf + bgf;
-        self.allocated_count = self.allocated_count.saturating_sub(freed);
+        self.current_mutator_gc_mut().allocated_count = self
+            .current_mutator_gc()
+            .allocated_count
+            .saturating_sub(freed);
         (fl + sl + vl + bl + lal + mal + rel + swl + mkl + bgl, freed)
     }
 

@@ -193,16 +193,6 @@ thread_local! {
     /// and re-derived whenever a heap is (re)installed.
     static TAGGED_HEAP_BARRIER_WINDOW: Cell<BarrierWindow> =
         const { Cell::new(BarrierWindow::NONE) };
-    /// Owners already inserted into `mapped_remembered`, direct-mapped by
-    /// [`barrier_cache_slot`]. That set is append-only for the life of the heap
-    /// ("permanent root") and its owners (mapped or tenured) are never freed,
-    /// so a hit means a write by that owner has nothing to add on the
-    /// partition-only path (owner tracking Disabled, no concurrent mark — both
-    /// re-checked before this cache is consulted). One entry used to be kept;
-    /// elb nbody writes five tenured body vectors in turn and missed a third
-    /// of the time. Cleared whenever a heap is (re)installed.
-    static TAGGED_HEAP_REMEMBERED_CACHE: [Cell<usize>; BARRIER_CACHE_SLOTS] =
-        const { [const { Cell::new(0) }; BARRIER_CACHE_SLOTS] };
     /// Non-cons owners already in this cycle's `satb_snapshotted_owners`,
     /// direct-mapped like the remembered cache. During a concurrent mark a
     /// write by such an owner has nothing to add: its pre-image was logged at
@@ -332,6 +322,8 @@ impl CanonicalEmptyStrings {
 
 /// The tagged pointer heap. Owns all heap-allocated Lisp objects.
 pub struct TaggedHeap {
+    /// Collector-owned generation state; mutator logs live in MutatorGcState.
+    generational: generational::GenState,
     /// State compiled code reads and writes in place (`jit_state.rs`): the
     /// allocation region cursors and the barrier window. Reached as
     /// `vmctx -> Context.tagged_heap -> jit`.
@@ -395,24 +387,14 @@ pub struct TaggedHeap {
     /// set of live owned Vector objects at every handshake.
     vector_object_addrs: FxHashSet<usize>,
 
-    /// Total number of allocated objects (cons + non-cons), CHARGED: an
-    /// open allocation region counts whole. [`Self::allocated_count`] is
-    /// the exact view.
-    allocated_count: usize,
-    /// Lisp-visible allocation statistics backing `memory-use-counts`.
-    memory_use_counts: [u64; MEMORY_USE_COUNT_LEN],
+    /// The single mutator's allocation accounting and barrier buffers.
+    mutator_gc: MutatorGcState,
 
     /// GC threshold in approximate Lisp heap bytes.
     gc_threshold: usize,
     /// When true, `gc_threshold` was explicitly overridden by tests or host
     /// code and should not be recomputed from Lisp-visible GC variables.
     gc_threshold_overridden: bool,
-    /// Approximate Lisp heap bytes allocated since the last full collection.
-    bytes_since_gc: usize,
-    /// Monotonic managed allocation bytes used by the Lisp memory profiler.
-    /// Bytes allocated before the most recent `bytes_since_gc` reset; see
-    /// [`TaggedHeap::total_allocated_bytes`].
-    bytes_banked_at_resets: u64,
     /// Approximate bytes retained by the live heap after the last sweep.
     live_bytes: usize,
 
@@ -946,6 +928,9 @@ impl TaggedHeap {
         super::collection_reads::initialize();
         let chunk_map = knobs::chunk_map_on().then(|| std::sync::Arc::new(ChunkMap::new()));
         let heap = Self {
+            generational: generational::GenState::new(
+                std::env::var("NEOVM_GC_GENERATIONAL").as_deref() == Ok("1"),
+            ),
             jit: JitHeapState::new(),
             region_book: RegionBook::new(),
             region_stats: RegionStats::default(),
@@ -958,12 +943,9 @@ impl TaggedHeap {
             tenured_objects: std::ptr::null_mut(),
             non_cons_object_addrs: FxHashSet::default(),
             vector_object_addrs: FxHashSet::default(),
-            allocated_count: 0,
-            memory_use_counts: [0; MEMORY_USE_COUNT_LEN],
+            mutator_gc: MutatorGcState::new(),
             gc_threshold: 1_000_000 * size_of::<usize>(),
             gc_threshold_overridden: false,
-            bytes_since_gc: 0,
-            bytes_banked_at_resets: 0,
             live_bytes: 0,
             must_finish_count: 0,
             forced_termination_pending: false,
@@ -1146,7 +1128,7 @@ impl TaggedHeap {
     }
 
     pub fn should_collect(&self) -> bool {
-        self.bytes_since_gc >= self.gc_threshold
+        self.bytes_since_gc() >= self.gc_threshold
     }
 
     /// Record that the in-flight concurrent mark is being force-terminated by
@@ -1160,7 +1142,7 @@ impl TaggedHeap {
             eprintln!(
                 "NEOVM_GC must_finish#{} bytes_since_gc={} threshold={} lead={}",
                 self.must_finish_count,
-                self.bytes_since_gc,
+                self.bytes_since_gc(),
                 self.gc_threshold,
                 self.pace_lead_bytes,
             );
@@ -1229,8 +1211,12 @@ impl TaggedHeap {
 
     /// Allocated objects (cons + non-cons), exact: the open allocation
     /// regions' unused cells are not counted.
+    #[inline]
     pub fn allocated_count(&self) -> usize {
-        self.allocated_count - self.open_cons_unused() - self.open_float_unused()
+        let delta = self.allocation_region_deltas();
+        self.mutators()
+            .map(|state| state.exact_allocated_count(delta))
+            .sum()
     }
 
     /// Total number of completed GC collection cycles since this heap was
@@ -1281,7 +1267,8 @@ impl TaggedHeap {
     #[inline]
     pub(crate) fn add_memory_use_count(&mut self, slot: MemoryUseCountSlot, delta: u64) {
         let index = slot.index();
-        self.memory_use_counts[index] = self.memory_use_counts[index].wrapping_add(delta);
+        let counts = &mut self.current_mutator_gc_mut().memory_use_counts;
+        counts[index] = counts[index].wrapping_add(delta);
     }
 
     /// The Lisp-visible allocation counts (`memory-use-counts`), exact: one
@@ -1289,12 +1276,15 @@ impl TaggedHeap {
     /// excluded (they were charged when the region was granted).
     #[inline]
     pub(crate) fn memory_use_counts_snapshot(&self) -> [u64; MEMORY_USE_COUNT_LEN] {
-        let mut counts = self.memory_use_counts;
-        let conses = MemoryUseCountSlot::ConsCells.index();
-        counts[conses] = counts[conses].wrapping_sub(self.open_cons_unused() as u64);
-        let floats = MemoryUseCountSlot::Floats.index();
-        counts[floats] = counts[floats].wrapping_sub(self.open_float_unused() as u64);
-        counts
+        let delta = self.allocation_region_deltas();
+        self.mutators()
+            .map(|state| state.exact_memory_use_counts(delta))
+            .fold([0; MEMORY_USE_COUNT_LEN], |mut total, counts| {
+                for (sum, count) in total.iter_mut().zip(counts) {
+                    *sum = sum.wrapping_add(count);
+                }
+                total
+            })
     }
 
     /// Bytes allocated since the last collection, as CHARGED: an open
@@ -1302,17 +1292,20 @@ impl TaggedHeap {
     /// region is never granted past the threshold
     /// (`TaggedHeap::region_budget`), so the pacing gates that read this
     /// collect when they did before — at most one region early, never late.
+    #[inline]
     pub fn bytes_since_gc(&self) -> usize {
-        self.bytes_since_gc
+        self.mutators().map(|state| state.bytes_since_gc).sum()
     }
 
     /// Bytes allocated since the last collection, exact (GNU's `since_gc`):
     /// the open allocation regions' unused cells excluded. What
     /// `garbage-collect-maybe`'s FACTOR test and the memory profiler read.
+    #[inline]
     pub fn bytes_since_gc_exact(&self) -> usize {
-        self.bytes_since_gc
-            - self.open_cons_unused() * size_of::<ConsCell>()
-            - self.open_float_unused() * size_of::<FloatObj>()
+        let delta = self.allocation_region_deltas();
+        self.mutators()
+            .map(|state| state.exact_bytes_since_gc(delta))
+            .sum()
     }
 
     /// The one place `bytes_since_gc` returns to zero.
@@ -1323,10 +1316,12 @@ impl TaggedHeap {
     pub(crate) fn reset_bytes_since_gc(&mut self) {
         // Close first, so what is banked is exactly what was handed out.
         self.close_alloc_regions();
-        self.bytes_banked_at_resets = self
-            .bytes_banked_at_resets
-            .saturating_add(self.bytes_since_gc as u64);
-        self.bytes_since_gc = 0;
+        for state in self.mutators_mut() {
+            state.bytes_banked_at_resets = state
+                .bytes_banked_at_resets
+                .saturating_add(state.bytes_since_gc as u64);
+            state.bytes_since_gc = 0;
+        }
     }
 
     pub fn live_bytes(&self) -> usize {
@@ -1394,7 +1389,8 @@ impl TaggedHeap {
         self.extend_dump_span(start as usize, len.saturating_mul(size_of::<ConsCell>()));
         self.mapped_cons_ranges
             .push(MappedConsRange::new(start, len));
-        self.allocated_count = self.allocated_count.saturating_add(len);
+        let state = self.current_mutator_gc_mut();
+        state.allocated_count = state.allocated_count.saturating_add(len);
         self.live_bytes = self
             .live_bytes
             .saturating_add(len.saturating_mul(size_of::<ConsCell>()));
@@ -1413,7 +1409,8 @@ impl TaggedHeap {
         self.extend_dump_span(start as usize, len.saturating_mul(size_of::<FloatObj>()));
         self.mapped_float_ranges
             .push(MappedFloatRange::new(start, len));
-        self.allocated_count = self.allocated_count.saturating_add(len);
+        let state = self.current_mutator_gc_mut();
+        state.allocated_count = state.allocated_count.saturating_add(len);
         self.live_bytes = self
             .live_bytes
             .saturating_add(len.saturating_mul(size_of::<FloatObj>()));
@@ -1451,7 +1448,8 @@ impl TaggedHeap {
         debug_assert!(prev.is_none(), "mapped vectorlike object registered twice");
         self.mapped_veclike_objects
             .push(MappedVecLikeObject::new(header, byte_len));
-        self.allocated_count = self.allocated_count.saturating_add(1);
+        let state = self.current_mutator_gc_mut();
+        state.allocated_count = state.allocated_count.saturating_add(1);
         self.live_bytes = self.live_bytes.saturating_add(byte_len);
     }
 
@@ -1475,7 +1473,8 @@ impl TaggedHeap {
         debug_assert!(prev.is_none(), "mapped string object registered twice");
         self.mapped_string_objects
             .push(MappedStringObject::new(ptr, byte_len));
-        self.allocated_count = self.allocated_count.saturating_add(1);
+        let state = self.current_mutator_gc_mut();
+        state.allocated_count = state.allocated_count.saturating_add(1);
         self.live_bytes = self.live_bytes.saturating_add(byte_len);
 
         let string = unsafe { &(*ptr).data };
@@ -1529,36 +1528,26 @@ impl TaggedHeap {
         // root; a false negative would be a use-after-free, so the span test
         // must cover every mapped object (see `register_mapped_*`).
         debug_assert!(
-            self.partition_dump || !self.value_is_tenured(record.owner),
-            "a tenured owner without the dump partition: the barrier window \
-             would miss it ({:?})",
+            self.generational.enabled
+                || self.partition_dump
+                || !self.value_is_tenured(record.owner),
+            "tenured owner without partition or generations: {:?}",
             record.owner,
         );
         #[cfg(debug_assertions)]
-        if !record.owner.is_cons()
-            && !self.owner_is_mapped(record.owner)
-            && let Some(addr) = Self::value_heap_addr(record.owner)
-        {
-            // SAFETY: a non-cons heap value points at a live `GcHeader`.
-            let remembered = unsafe {
-                (*(addr as *const GcHeader))
-                    .remembered
-                    .load(Ordering::Relaxed)
-            };
-            debug_assert!(
-                !remembered || self.mapped_remembered.contains(&record.owner.bits()),
-                "a remembered header whose owner is not in the remembered set: {:?}",
-                record.owner,
-            );
-        }
-        if self.partition_dump
+        self.debug_assert_remembered_membership(record.owner);
+        if self.generational.enabled {
+            // There are no mutator stores during a minor. Major-window SATB
+            // remains today's barrier; C2.6 will add P-all promotion.
+            if self.concurrent_mark_running || record.value.is_none_or(|value| !value.is_fixnum()) {
+                self.remember_owner(record.owner);
+            }
+        } else if self.partition_dump
             && (self.owner_is_mapped(record.owner) || self.value_is_tenured(record.owner))
         {
             let bits = record.owner.bits();
             self.remember_owner(record.owner);
-            // Arm the barrier's repeat-owner reject: this entry is permanent,
-            // so the partition-only path can skip the same owner's next write.
-            TAGGED_HEAP_REMEMBERED_CACHE.with(|slots| slots[barrier_cache_slot(bits)].set(bits));
+            self.current_mutator_gc_mut().remembered_cache[barrier_cache_slot(bits)] = bits;
         }
         // SATB (snapshot-at-the-beginning) barrier. Runs BEFORE the store, so the
         // owner's current children are its PRE-overwrite values; logging them
@@ -1582,24 +1571,66 @@ impl TaggedHeap {
         }
     }
 
-    /// Add `owner` to the dump remembered set — THE insert every site uses,
-    /// so the header's `remembered` byte is set exactly when (and only
-    /// after) the owner is in the set. The set is append-only and tenured
-    /// objects are never freed, so the bit can never outlive its fact; a
-    /// spurious bit would let the inline barrier skip an owner whose young
-    /// children nothing re-seeds (a use-after-free), which is why no other
-    /// code writes it. Image owners are left alone: they sit in the barrier
-    /// window, so their byte is never read.
+    /// Single setter of logged state: remembered implies membership in a
+    /// mutator R log, collector R_seed, or the persistent mapped set.
+    /// Atomic claims deduplicate owned headers/conses across mutators;
+    /// mapped dedup is per-mutator and duplicates are merged at the drain.
+    /// The stop-all boundary must wait for claims to finish appending.
     pub(super) fn remember_owner(&mut self, owner: TaggedValue) {
+        if self.generational.enabled {
+            let mapped = self.owner_is_mapped(owner);
+            // Today's concurrent cycles still need the persistent partition
+            // fact. Session-old objects cannot exist in C2.4 yet; C2.5 runs
+            // them through STW minors, and C2.6 supplies major promotion.
+            if self.concurrent_mark_running {
+                let permanent = !owner.is_cons()
+                    && Self::value_heap_addr(owner).is_some_and(|addr| unsafe {
+                        (*(addr as *const GcHeader)).generation.permanent()
+                    });
+                if mapped || permanent {
+                    self.mapped_remembered.insert(owner.bits());
+                }
+                return;
+            }
+            if mapped {
+                self.mapped_remembered.insert(owner.bits());
+                if self
+                    .current_mutator_gc_mut()
+                    .r_mapped_seen
+                    .insert(owner.bits())
+                {
+                    self.current_mutator_gc_mut().remset.push(owner);
+                }
+            } else if owner.is_cons() {
+                if let Some((trailer, index)) = self.old_cons_trailer(owner)
+                    && trailer.try_claim_unlogged(index)
+                {
+                    self.current_mutator_gc_mut().remset.push(owner);
+                }
+            } else if let Some(addr) = Self::value_heap_addr(owner) {
+                let header = unsafe { &*(addr as *const GcHeader) };
+                if !header.tenured {
+                    return;
+                }
+                if header.generation.permanent() {
+                    self.mapped_remembered.insert(owner.bits());
+                }
+                if header.claim_remembered() {
+                    self.current_mutator_gc_mut().remset.push(owner);
+                }
+            }
+            return;
+        }
         self.mapped_remembered.insert(owner.bits());
         if owner.is_cons() || self.owner_is_mapped(owner) {
             return;
         }
         if let Some(addr) = Self::value_heap_addr(owner) {
-            // SAFETY: a non-cons heap value points at a live `GcHeader`.
             let header = unsafe { &*(addr as *const GcHeader) };
             debug_assert!(header.tenured, "only tenured owners are remembered");
-            header.remembered.store(true, Ordering::Relaxed);
+            header
+                .remembered
+                .store(RememberedState::Logged as u8, Ordering::Relaxed);
         }
     }
 
@@ -1615,12 +1646,16 @@ impl TaggedHeap {
     /// `false`, doing nothing, for anything but a mapped cons of a heap with
     /// the dump partition on.
     pub(crate) fn remember_mapped_cons_ahead_of_writes(&mut self, cons: TaggedValue) -> bool {
-        if !cons.is_cons() || !self.partition_dump || !self.owner_is_mapped(cons) {
+        if self.generational.enabled
+            || !cons.is_cons()
+            || !self.partition_dump
+            || !self.owner_is_mapped(cons)
+        {
             return false;
         }
         let bits = cons.bits();
         self.remember_owner(cons);
-        TAGGED_HEAP_REMEMBERED_CACHE.with(|slots| slots[barrier_cache_slot(bits)].set(bits));
+        self.current_mutator_gc_mut().remembered_cache[barrier_cache_slot(bits)] = bits;
         true
     }
 
@@ -1702,7 +1737,7 @@ impl TaggedHeap {
         // has accumulated since.  Every cons in the engine paid for that
         // extra saturating add.
         // A plain add: a usize of allocated bytes cannot overflow.
-        self.bytes_since_gc += bytes;
+        self.current_mutator_gc_mut().bytes_since_gc += bytes;
     }
 
     /// Every byte this heap has ever allocated.
@@ -1711,8 +1746,14 @@ impl TaggedHeap {
     /// [`Self::reset_bytes_since_gc`], the one place `bytes_since_gc` returns
     /// to zero, so the sum is exact by construction.
     pub(crate) fn total_allocated_bytes(&self) -> u64 {
-        self.bytes_banked_at_resets
-            .saturating_add(self.bytes_since_gc_exact() as u64)
+        let delta = self.allocation_region_deltas();
+        self.mutators()
+            .map(|state| {
+                state
+                    .bytes_banked_at_resets
+                    .saturating_add(state.exact_bytes_since_gc(delta) as u64)
+            })
+            .fold(0, u64::saturating_add)
     }
 
     fn vector_storage_bytes<T>(values: &Vec<T>) -> usize {
@@ -2244,10 +2285,10 @@ impl TaggedHeap {
             .saturating_add(mapped.copied_veclike_capacity_bytes);
 
         HeapLayoutStats {
-            allocated_objects: self.allocated_count,
+            allocated_objects: self.mutators().map(|state| state.allocated_count).sum(),
             // `live_bytes` is what the last sweep counted, so add what has been
             // allocated since to keep reporting the current managed size.
-            managed_live_bytes: self.live_bytes.saturating_add(self.bytes_since_gc),
+            managed_live_bytes: self.live_bytes.saturating_add(self.bytes_since_gc()),
             page_backing_bytes,
             known_payload_capacity_bytes,
             cons,
@@ -2554,6 +2595,8 @@ mod allocation;
 
 mod mark_sweep;
 
+mod generational;
+
 mod concurrent;
 
 mod incremental;
@@ -2578,6 +2621,9 @@ mod barrier_window;
 pub(crate) use barrier_window::BarrierWindow;
 
 mod jit_state;
+
+mod mutator_gc;
+use mutator_gc::MutatorGcState;
 
 mod knobs;
 
@@ -2676,3 +2722,7 @@ fn maybe_resize_for_test(ht: &mut crate::emacs_core::value::LispHashTable) {
 #[cfg(test)]
 #[path = "gc/tests/generational_tests.rs"]
 mod generational_tests;
+
+#[cfg(test)]
+#[path = "gc/tests/symbol_barrier_tests.rs"]
+mod symbol_barrier_tests;

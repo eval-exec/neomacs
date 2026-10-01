@@ -150,6 +150,9 @@ impl TaggedHeap {
         // the snapshot of an owner whose children differ this cycle).
         self.satb_snapshotted_owners.clear();
         clear_barrier_cache(&TAGGED_HEAP_SATB_CACHE);
+        for mutator in self.mutators_mut() {
+            mutator.remembered_cache.fill(0);
+        }
         // CONCURRENT STRING MARKING: same per-cycle reset for the enforced
         // in-mutator string interval pre-image dedup (`note_string_interval_preimage`).
         self.satb_string_preimage_addrs.clear();
@@ -175,6 +178,7 @@ impl TaggedHeap {
         self.clear_dirty_owners();
         self.clear_dirty_writes();
         self.seed_internal_runtime_roots();
+        self.seed_generational_remembered();
         if partitioned {
             // Re-scan dumped/tenured objects mutated to point at young heap
             // objects: those children must be kept live even though the dump and
@@ -1711,6 +1715,7 @@ impl TaggedHeap {
         // Reading `header.gc.marked` is sound here because the
         // allocation is still live until `sweep_objects` runs below.
         self.unchain_dead_markers();
+        self.reset_generational_remembered_world_stopped();
 
         // -- Sweep phase --
         let cons_live_bytes = self.sweep_cons();

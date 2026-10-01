@@ -332,7 +332,7 @@ impl TaggedHeap {
         self.handshake.last_start_jobasm_us = jobasm_t0.elapsed().as_micros() as u64;
         // Pacer: open this cycle's mark window (closed by `incremental_finish`).
         self.pace_mark_start = Some(std::time::Instant::now());
-        self.pace_mark_start_bytes = self.bytes_since_gc;
+        self.pace_mark_start_bytes = self.bytes_since_gc();
     }
 
     /// The ownership snapshot a concurrent mark starting now hands the GC

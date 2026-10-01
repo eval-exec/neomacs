@@ -986,8 +986,9 @@ pub fn set_tagged_heap(heap: &mut TaggedHeap) {
     // The barrier window is re-derived, not restored: this is its
     // panic-recovery point, as for the concurrent flag above.
     TAGGED_HEAP_BARRIER_WINDOW.with(|w| w.set(heap.barrier_window()));
-    // Owner bits are heap-specific: a different heap invalidates the caches.
-    clear_barrier_cache(&TAGGED_HEAP_REMEMBERED_CACHE);
+    // The remembered cache belongs to this heap's mutator. Reinstallation
+    // invalidates repeat-owner rejects, just as the former TLS cache did.
+    heap.current_mutator_gc_mut().remembered_cache.fill(0);
     clear_barrier_cache(&TAGGED_HEAP_SATB_CACHE);
 }
 
@@ -1016,7 +1017,6 @@ pub fn clear_tagged_heap_if_installed(heap: &TaggedHeap) {
             TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(false));
             TAGGED_HEAP_DUMP_SPAN.with(|s| s.set((usize::MAX, 0)));
             TAGGED_HEAP_BARRIER_WINDOW.with(|w| w.set(BarrierWindow::NONE));
-            clear_barrier_cache(&TAGGED_HEAP_REMEMBERED_CACHE);
             clear_barrier_cache(&TAGGED_HEAP_SATB_CACHE);
         }
     });
@@ -1104,26 +1104,12 @@ pub fn note_heap_slot_write(
     }
 }
 
-/// The barrier's inline part: does a write by `owner` need the out-of-line
-/// barrier at all?
-///
-/// Inside the published window (`barrier_window.rs`: ALL during a concurrent
-/// mark or owner tracking, the dump span when only the partition is active,
-/// empty otherwise) it does. Outside it a cons never does — a cons is never
-/// tenured, so the only thing the partition-only barrier could record for it
-/// is a mapped (in-span) owner — and any other heap value points at a
-/// `GcHeader` whose `tenured` byte is what `value_is_tenured` reads, so only
-/// a tenured owner can have something to record, and only once: its
-/// `remembered` byte says the remembered set already holds it (the set is
-/// append-only, so that insert has nothing more to add).
-///
-/// Case by case against the gate this replaced (three thread-local flags, a
-/// span test for conses, then the outlined `barrier_needs_heap`): a
-/// non-heap owner returns in both; with the window empty no heap state is
-/// set, so neither records anything (a non-cons reads `tenured == false`:
-/// only the partition's first cycle ever tenures); a partition-only cons
-/// outside the span returns in both; inside the window both take the
-/// outlined `barrier_needs_heap`, unchanged.
+/// The owner window handles marking, tracking and mapped owners. Outside
+/// it, a non-cons tests its logged header, exactly as in the legacy gate.
+/// Stage A widens the enabled window to ALL until C2.8 adds the cons test
+/// to generated stores; all stores then use the same outlined gate. Only
+/// that enabled outlined arm filters edge-free values: bare symbols need
+/// side-table marking even though they are not heap pointers.
 #[inline(always)]
 fn barrier_gate(owner: TaggedValue) -> bool {
     if !owner.is_heap_object() {
@@ -1178,16 +1164,57 @@ pub(super) fn barrier_needs_heap(
 ) -> bool {
     let bits = record.owner.bits();
     if disabled && !concurrent {
+        // The generational Stage A ALL window also covers inline cons stores
+        // whose C2.8 bitmap gate has not landed. Reject irrelevant writes here.
+        // Tracking and concurrent marking use the legacy barrier below and
+        // must not pay for a generational heap lookup.
+        let gen_decision = with_tagged_heap(|heap| {
+            if !heap.generational_enabled() {
+                return None;
+            }
+            // Characters have fixnum encoding. Symbols (including nil/t) and
+            // all pointer/handle tags remain conservative: symbols have GC
+            // side-table liveness, and SymbolWithPos is a traced heap object.
+            if record.value.is_some_and(TaggedValue::is_fixnum) {
+                return Some(false);
+            }
+            let needs_log = if heap.owner_is_mapped(record.owner) {
+                !heap
+                    .current_mutator_gc()
+                    .r_mapped_seen
+                    .contains(&record.owner.bits())
+            } else if record.owner.is_cons() {
+                heap.old_cons_trailer(record.owner)
+                    .is_some_and(|(trailer, index)| trailer.is_unlogged(index))
+            } else {
+                TaggedHeap::value_heap_addr(record.owner).is_some_and(|addr| unsafe {
+                    GcHeader::needs_remembering(addr as *const GcHeader)
+                })
+            };
+            Some(needs_log)
+        });
+        if let Some(needs_log) = gen_decision {
+            return needs_log;
+        }
         // Partition-only path: the barrier's sole job is the append-only dump
         // remembered set (see `record_heap_write`), whose only effect here is
-        // inserting a mapped or tenured owner, so two cheap thread-local
+        // inserting a mapped or tenured owner, so two cheap
         // rejects apply. (1) An owner already inserted has nothing to add —
         // its entry is permanent. (2) An owner outside the dump span that is
         // not tenured is not inserted: a cons never is (`value_is_tenured` is
         // false for cons), and any other heap value points at a `GcHeader`
         // whose `tenured` byte is exactly what `value_is_tenured` reads.
-        if TAGGED_HEAP_REMEMBERED_CACHE.with(|slots| slots[barrier_cache_slot(bits)].get()) == bits
-        {
+        let cached = TAGGED_HEAP.with(|current| {
+            let heap = current.get();
+            // SAFETY: an installed heap is live until its owner uninstalls it.
+            // Only this mutator accesses the cache, and this check is reached
+            // through the outlined store barrier.
+            !heap.is_null()
+                && unsafe {
+                    (*heap).current_mutator_gc().remembered_cache[barrier_cache_slot(bits)] == bits
+                }
+        });
+        if cached {
             return false;
         }
         if let Some(addr) = TaggedHeap::value_heap_addr(record.owner) {

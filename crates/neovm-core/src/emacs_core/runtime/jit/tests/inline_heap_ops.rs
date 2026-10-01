@@ -67,6 +67,15 @@ fn keep(eval: &mut Context, srcs: &[&str]) -> Vec<Value> {
     crate::emacs_core::value::list_to_vec(&list).expect("list")
 }
 
+// This module checks the pre-generational emitter's inline/slow-path counts.
+// Stage A deliberately widens the generational window until C2.8; its stores
+// and survival behavior are tested in gc_generational through real entry points.
+fn legacy_context() -> Context {
+    let mut context = Context::new();
+    context.tagged_heap.disable_generations_for_test();
+    context
+}
+
 fn shim_calls() -> usize {
     super::dispatch::LIST_STORE_SHIM_CALLS.with(|c| c.get())
 }
@@ -91,7 +100,7 @@ const VALUES: &[&str] = &["0", "'x", "nil", "(cons 3 4)", "\"s\"", "2.5", "(vect
 /// only sees the non-conses, whose signal it raises.
 #[test]
 fn cons_stores_match_the_interpreter_natively() {
-    let mut eval = Context::new();
+    let mut eval = legacy_context();
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     for op in [Op::Setcar, Op::Setcdr] {
         let f = store_fn(op.clone());
@@ -127,7 +136,7 @@ fn cons_stores_match_the_interpreter_natively() {
 #[test]
 fn a_covering_window_sends_every_store_to_the_barrier() {
     use crate::tagged::gc::WriteTrackingMode;
-    let mut eval = Context::new();
+    let mut eval = legacy_context();
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let leaf = compile_bytecode_function(&store_fn(Op::Setcar)).expect("compiles");
     let args = keep(&mut eval, &["(cons 1 2)", "(list 'new)"]);
@@ -147,7 +156,11 @@ fn a_covering_window_sends_every_store_to_the_barrier() {
 
     let before = shim_calls();
     assert_eq!(native(ctx_ptr, &leaf, &[cell, Value::T], "untracked"), "t");
-    assert_eq!(shim_calls(), before, "an empty window stores inline");
+    assert_eq!(
+        shim_calls() - before,
+        usize::from(eval.tagged_heap.generational_enabled()),
+        "Stage A generations keep the window covering until C2.8"
+    );
     assert_eq!(print_value(&cell), "(t . 2)");
 }
 
@@ -157,7 +170,7 @@ fn a_covering_window_sends_every_store_to_the_barrier() {
 /// inline and log nothing.
 #[test]
 fn a_store_during_a_concurrent_mark_logs_its_pre_image() {
-    let mut eval = Context::new();
+    let mut eval = legacy_context();
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let leaf = compile_bytecode_function(&store_fn(Op::Setcar)).expect("compiles");
     let args = keep(&mut eval, &["(list 'old)", "(cons nil 2)"]);
@@ -189,7 +202,7 @@ fn a_store_during_a_concurrent_mark_logs_its_pre_image() {
 /// barrier, which remembers it; a heap cons beside it is stored inline.
 #[test]
 fn an_image_owner_is_remembered_and_a_heap_owner_is_not() {
-    let mut eval = Context::new();
+    let mut eval = legacy_context();
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let leaf = compile_bytecode_function(&store_fn(Op::Setcdr)).expect("compiles");
     let image =
@@ -257,7 +270,7 @@ fn check_counted_list(list: Value, n: i64, what: &str) {
 
 #[test]
 fn a_store_loop_survives_collections_at_every_safe_point() {
-    let mut eval = Context::new();
+    let mut eval = legacy_context();
     eval.eval_str("(fset (quote inline-heap-probe) (lambda (x) (list x (cons x x))))")
         .expect("probe");
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
@@ -293,7 +306,7 @@ fn a_store_loop_survives_collections_at_every_safe_point() {
 fn the_inline_heap_write_knob_turns_the_inline_stores_off() {
     unsafe { std::env::set_var("NEOVM_JIT_INLINE_HEAP_WRITE", "off") };
     assert!(!super::jit_inline_heap_write_on());
-    let mut eval = Context::new();
+    let mut eval = legacy_context();
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     #[cfg(debug_assertions)]
     let emitted =
@@ -362,7 +375,7 @@ fn the_owned_storage_probe_answers_on_this_toolchain() {
 /// `array_sites_match_the_interpreter_natively`, run with this inline path).
 #[test]
 fn plain_vector_and_record_stores_stay_inline() {
-    let mut eval = Context::new();
+    let mut eval = legacy_context();
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let f = aset_fn();
     // Without the string intrinsic (`NEOVM_JIT_LEAF=string`), whatever the
@@ -438,7 +451,7 @@ fn plain_vector_and_record_stores_stay_inline() {
 fn a_string_store_still_reaches_the_string_inline_behind_the_vector_store() {
     #[cfg(debug_assertions)]
     use std::sync::atomic::Ordering;
-    let mut eval = Context::new();
+    let mut eval = legacy_context();
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let f = aset_fn();
     #[cfg(debug_assertions)]
@@ -517,7 +530,7 @@ fn a_string_store_still_reaches_the_string_inline_behind_the_vector_store() {
 /// shim, which answers the general call.
 #[test]
 fn a_function_cell_write_sends_the_next_aset_to_the_shim() {
-    let mut eval = Context::new();
+    let mut eval = legacy_context();
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let leaf = compile_bytecode_function(&aset_fn()).expect("aset compiles");
     let v = eval
@@ -571,7 +584,7 @@ fn a_function_cell_write_sends_the_next_aset_to_the_shim() {
 /// mapped storage a store must copy) always goes to the shim.
 #[test]
 fn tenured_owners_store_inline_once_remembered() {
-    let mut eval = Context::new();
+    let mut eval = legacy_context();
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let leaf = compile_bytecode_function(&aset_fn()).expect("aset compiles");
     // The owners exist (and are reachable) before a fake image turns the
@@ -710,7 +723,7 @@ fn cons_loop_fn(half: i64) -> ByteCodeFunction {
 /// interpreter's.
 #[test]
 fn a_cons_loop_allocates_inline_and_counts_exactly() {
-    let mut eval = Context::new();
+    let mut eval = legacy_context();
     eval.eval_str("(fset 'inline-alloc-probe (lambda () (garbage-collect) nil))")
         .expect("probe");
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
@@ -750,7 +763,7 @@ fn a_cons_loop_allocates_inline_and_counts_exactly() {
 /// entry, which hoists the heap pointer the loop's inline cons reads.
 #[test]
 fn osr_into_a_cons_loop_allocates_inline() {
-    let mut ctx = Context::new();
+    let mut ctx = legacy_context();
     let mut f = cons_loop_fn(-1);
     f.seal_hand_assembled_ops();
     let snapshot = [Value::make_int(500), Value::NIL];
@@ -769,7 +782,7 @@ fn osr_into_a_cons_loop_allocates_inline() {
 /// allocates nothing at all.
 #[test]
 fn mir_conses_allocate_inline_or_not_at_all() {
-    let mut eval = Context::new();
+    let mut eval = legacy_context();
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     // (lambda (a b) (cons a (cons b nil))): both escape.
     let escaping = lexical_fn(
@@ -828,7 +841,7 @@ fn mir_conses_allocate_inline_or_not_at_all() {
 #[test]
 fn float_boxes_are_inline_and_counted_once() {
     use crate::emacs_core::jit::NumericFeedback as NF;
-    let mut eval = Context::new();
+    let mut eval = legacy_context();
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     for mode in [FlonumMode::Off, FlonumMode::Resident] {
         let mut f = lexical_fn(
@@ -867,7 +880,7 @@ fn float_boxes_are_inline_and_counted_once() {
 fn the_inline_alloc_knob_turns_inline_allocation_off() {
     unsafe { std::env::set_var("NEOVM_JIT_INLINE_ALLOC", "off") };
     assert!(!super::jit_inline_alloc_on());
-    let mut eval = Context::new();
+    let mut eval = legacy_context();
     eval.eval_str("(fset 'inline-alloc-probe (lambda () nil))")
         .expect("probe");
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
@@ -913,7 +926,7 @@ fn aref_shim_calls() -> usize {
 /// slot 0, as GNU does.
 #[test]
 fn inline_aref_and_aset_have_no_slot0_test() {
-    let mut eval = Context::new();
+    let mut eval = legacy_context();
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let f = aref_fn();
     let g = aset_fn();

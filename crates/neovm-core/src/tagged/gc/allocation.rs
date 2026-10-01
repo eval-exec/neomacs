@@ -108,7 +108,7 @@ impl TaggedHeap {
         }
         #[cfg(test)]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe { Self::string_object_bytes(&*ptr) });
         let value = unsafe { TaggedValue::from_string_ptr(ptr) };
         if let Some(kind) = empty_kind {
@@ -194,7 +194,7 @@ impl TaggedHeap {
         );
         #[cfg(test)]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(
             size_of::<VectorObj>()
                 .saturating_add(Self::lisp_value_vec_storage_bytes(unsafe { &(*ptr).data })),
@@ -226,7 +226,7 @@ impl TaggedHeap {
         });
         let ptr = Box::into_raw(obj);
         self.link_veclike(ptr as *mut VecLikeHeader);
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe {
             size_of::<CharTableObj>()
                 .saturating_add(Self::lisp_value_vec_storage_bytes(&(*ptr).extras))
@@ -250,7 +250,7 @@ impl TaggedHeap {
         });
         let ptr = Box::into_raw(obj);
         self.link_veclike(ptr as *mut VecLikeHeader);
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe {
             size_of::<SubCharTableObj>()
                 .saturating_add(Self::lisp_value_vec_storage_bytes(&(*ptr).contents))
@@ -270,7 +270,7 @@ impl TaggedHeap {
         });
         let ptr = Box::into_raw(obj);
         self.link_veclike(ptr as *mut VecLikeHeader);
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe { Self::hash_table_object_bytes(&*ptr) });
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
@@ -285,7 +285,7 @@ impl TaggedHeap {
         });
         let ptr = Box::into_raw(obj);
         self.link_veclike(ptr as *mut VecLikeHeader);
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe { Self::obarray_object_bytes(&*ptr) });
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
@@ -324,7 +324,7 @@ impl TaggedHeap {
         }
         #[cfg(test)]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe { Self::lambda_object_bytes(&*ptr) });
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
@@ -359,7 +359,7 @@ impl TaggedHeap {
         }
         #[cfg(test)]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe { Self::macro_object_bytes(&*ptr) });
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
@@ -381,7 +381,7 @@ impl TaggedHeap {
         });
         let ptr = Box::into_raw(obj);
         self.link_veclike(ptr as *mut VecLikeHeader);
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<BufferObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
@@ -394,7 +394,7 @@ impl TaggedHeap {
         });
         let ptr = Box::into_raw(obj);
         self.link_veclike(ptr as *mut VecLikeHeader);
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<WindowObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
@@ -407,7 +407,7 @@ impl TaggedHeap {
         });
         let ptr = Box::into_raw(obj);
         self.link_veclike(ptr as *mut VecLikeHeader);
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<FrameObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
@@ -420,7 +420,7 @@ impl TaggedHeap {
         });
         let ptr = Box::into_raw(obj);
         self.link_veclike(ptr as *mut VecLikeHeader);
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<TimerObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
@@ -433,7 +433,7 @@ impl TaggedHeap {
         });
         let ptr = Box::into_raw(obj);
         self.link_veclike(ptr as *mut VecLikeHeader);
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<ProcessObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
@@ -446,7 +446,7 @@ impl TaggedHeap {
         });
         let ptr = Box::into_raw(obj);
         self.link_veclike(ptr as *mut VecLikeHeader);
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<TerminalObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
@@ -478,7 +478,7 @@ impl TaggedHeap {
         });
         let ptr = Box::into_raw(obj);
         self.link_veclike(ptr as *mut VecLikeHeader);
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<XwidgetObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
@@ -496,7 +496,7 @@ impl TaggedHeap {
         let obj = Box::new(BoolVectorObj::new(nbits, words));
         let ptr = Box::into_raw(obj);
         self.link_veclike(ptr as *mut VecLikeHeader);
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<BoolVectorObj>() + nwords * size_of::<u64>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
@@ -514,7 +514,7 @@ impl TaggedHeap {
         });
         let ptr = Box::into_raw(obj);
         self.link_veclike(ptr as *mut VecLikeHeader);
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<SurfaceObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
@@ -539,7 +539,7 @@ impl TaggedHeap {
         });
         let ptr = Box::into_raw(obj);
         self.link_veclike(ptr as *mut VecLikeHeader);
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<ThreadingHandleObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
@@ -555,7 +555,7 @@ impl TaggedHeap {
         });
         let ptr = Box::into_raw(obj);
         self.link_veclike(ptr as *mut VecLikeHeader);
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<VideoObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
@@ -589,7 +589,7 @@ impl TaggedHeap {
         });
         let ptr = Box::into_raw(obj);
         self.link_veclike(ptr as *mut VecLikeHeader);
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<XwidgetViewObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
@@ -642,7 +642,7 @@ impl TaggedHeap {
         }
         #[cfg(test)]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe { Self::bytecode_object_bytes(&*ptr) });
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
@@ -751,7 +751,7 @@ impl TaggedHeap {
         }
         #[cfg(test)]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe { Self::bytecode_object_bytes(&*ptr) });
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
@@ -782,7 +782,7 @@ impl TaggedHeap {
         });
         let ptr = Box::into_raw(obj);
         self.link_veclike(ptr as *mut VecLikeHeader);
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe { Self::font_object_bytes(&*ptr) });
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
@@ -822,7 +822,7 @@ impl TaggedHeap {
         }
         #[cfg(test)]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(unsafe { Self::record_object_bytes(&*ptr) });
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
@@ -835,7 +835,7 @@ impl TaggedHeap {
         });
         let ptr = Box::into_raw(obj);
         self.link_veclike(ptr as *mut VecLikeHeader);
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<OverlayObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
@@ -861,7 +861,7 @@ impl TaggedHeap {
         }
         #[cfg(test)]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<MarkerObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
@@ -912,7 +912,7 @@ impl TaggedHeap {
         }
         #[cfg(test)]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         // Pacing unchanged: the 56-byte object, as for the boxed bignum. GNU
         // does not count GMP limb memory toward `consing_until_gc` either.
         self.note_allocation_bytes(size_of::<BignumObj>());
@@ -946,7 +946,7 @@ impl TaggedHeap {
         }
         #[cfg(test)]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<SymbolWithPosObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
@@ -963,7 +963,7 @@ impl TaggedHeap {
         let ptr = Box::into_raw(obj);
         self.link_veclike(ptr as *mut VecLikeHeader);
         self.finalizer_registry.push(ptr);
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<FinalizerObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
@@ -977,7 +977,7 @@ impl TaggedHeap {
         });
         let ptr = Box::into_raw(obj);
         self.link_veclike(ptr as *mut VecLikeHeader);
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<SqliteObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
@@ -995,7 +995,7 @@ impl TaggedHeap {
         });
         let raw = Box::into_raw(obj);
         self.link_veclike(raw as *mut VecLikeHeader);
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<UserPtrObj>());
         unsafe { TaggedValue::from_veclike_ptr(raw as *const VecLikeHeader) }
     }
@@ -1022,7 +1022,7 @@ impl TaggedHeap {
         });
         let raw = Box::into_raw(obj);
         self.link_veclike(raw as *mut VecLikeHeader);
-        self.allocated_count += 1;
+        self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<ModuleFunctionObj>());
         unsafe { TaggedValue::from_veclike_ptr(raw as *const VecLikeHeader) }
     }

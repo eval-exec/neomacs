@@ -1,9 +1,15 @@
 use super::*;
 
-fn assert_empty_barrier_caches() {
-    for cache in [&TAGGED_HEAP_REMEMBERED_CACHE, &TAGGED_HEAP_SATB_CACHE] {
-        cache.with(|slots| assert!(slots.iter().all(|slot| slot.get() == 0)));
+fn assert_empty_barrier_caches(heap: Option<&TaggedHeap>) {
+    if let Some(heap) = heap {
+        assert!(
+            heap.current_mutator_gc()
+                .remembered_cache
+                .iter()
+                .all(|&bits| bits == 0)
+        );
     }
+    TAGGED_HEAP_SATB_CACHE.with(|slots| assert!(slots.iter().all(|slot| slot.get() == 0)));
 }
 
 #[test]
@@ -12,18 +18,19 @@ fn gc_tls_ownership_activation_clears_weak_barrier_owner_words() {
     set_tagged_heap(&mut first);
     let owner = first.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
     let slot = barrier_cache_slot(owner.bits());
-    TAGGED_HEAP_REMEMBERED_CACHE.with(|slots| slots[slot].set(owner.bits()));
+    first.current_mutator_gc_mut().remembered_cache[slot] = owner.bits();
     TAGGED_HEAP_SATB_CACHE.with(|slots| slots[slot].set(owner.bits()));
 
     let mut second = Box::new(TaggedHeap::new());
+    second.current_mutator_gc_mut().remembered_cache[slot] = owner.bits();
     set_tagged_heap(&mut second);
-    assert_empty_barrier_caches();
+    assert_empty_barrier_caches(Some(&second));
     assert_eq!(current_tagged_heap_identity(), Some(second.identity()));
     drop(first);
     assert_eq!(current_tagged_heap_identity(), Some(second.identity()));
     drop(second);
     assert!(current_tagged_heap_identity().is_none());
-    assert_empty_barrier_caches();
+    assert_empty_barrier_caches(None);
     TAGGED_HEAP_DUMP_SPAN.with(|span| assert_eq!(span.get(), (usize::MAX, 0)));
     TAGGED_HEAP_BARRIER_WINDOW.with(|window| assert_eq!(window.get(), BarrierWindow::NONE));
 }

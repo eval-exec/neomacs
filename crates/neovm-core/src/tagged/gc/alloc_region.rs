@@ -224,7 +224,7 @@ impl TaggedHeap {
     /// on the same allocation the exact one would. Already over (a
     /// collection pending or inhibited, or a mark running): `max`.
     pub(super) fn region_budget(&self, size: usize, max: usize) -> usize {
-        let remaining = self.gc_threshold.saturating_sub(self.bytes_since_gc);
+        let remaining = self.gc_threshold.saturating_sub(self.bytes_since_gc());
         if remaining == 0 {
             max
         } else {
@@ -235,7 +235,7 @@ impl TaggedHeap {
     /// Charge a granted region of `n` conses to every consing counter.
     fn charge_conses(&mut self, n: usize) {
         self.add_memory_use_count(MemoryUseCountSlot::ConsCells, n as u64);
-        self.allocated_count += n;
+        self.current_mutator_gc_mut().allocated_count += n;
         self.cons_live_count += n;
         self.note_allocation_bytes(n * size_of::<ConsCell>());
     }
@@ -243,10 +243,11 @@ impl TaggedHeap {
     /// Refund `m` never-handed-out conses of a closing region.
     fn refund_conses(&mut self, m: usize) {
         let index = MemoryUseCountSlot::ConsCells.index();
-        self.memory_use_counts[index] = self.memory_use_counts[index].wrapping_sub(m as u64);
-        self.allocated_count -= m;
+        self.current_mutator_gc_mut().memory_use_counts[index] =
+            self.current_mutator_gc().memory_use_counts[index].wrapping_sub(m as u64);
+        self.current_mutator_gc_mut().allocated_count -= m;
         self.cons_live_count -= m;
-        self.bytes_since_gc -= m * size_of::<ConsCell>();
+        self.current_mutator_gc_mut().bytes_since_gc -= m * size_of::<ConsCell>();
     }
 
     /// Cells of the open cons region not handed out yet (0 when closed).
@@ -337,16 +338,17 @@ impl TaggedHeap {
     /// Charge a granted region of `n` floats.
     fn charge_floats(&mut self, n: usize) {
         self.add_memory_use_count(MemoryUseCountSlot::Floats, n as u64);
-        self.allocated_count += n;
+        self.current_mutator_gc_mut().allocated_count += n;
         self.note_allocation_bytes(n * size_of::<FloatObj>());
     }
 
     /// Refund `m` never-handed-out floats of a closing region.
     fn refund_floats(&mut self, m: usize) {
         let index = MemoryUseCountSlot::Floats.index();
-        self.memory_use_counts[index] = self.memory_use_counts[index].wrapping_sub(m as u64);
-        self.allocated_count -= m;
-        self.bytes_since_gc -= m * size_of::<FloatObj>();
+        self.current_mutator_gc_mut().memory_use_counts[index] =
+            self.current_mutator_gc().memory_use_counts[index].wrapping_sub(m as u64);
+        self.current_mutator_gc_mut().allocated_count -= m;
+        self.current_mutator_gc_mut().bytes_since_gc -= m * size_of::<FloatObj>();
     }
 
     /// Close the float region: refund its unhanded slots and give them back
