@@ -1015,6 +1015,10 @@ fn select_automatic_composition_spans(
 
     let bytes = text.as_bytes();
     let mut spans = Vec::new();
+    let trace_composition = std::env::var_os("NEOMACS_TRACE_COMPOSITION").is_some();
+    if trace_composition {
+        eprintln!("i447trace: select spans start len={} rules_for_dash={:?}", text.len(), ascii_rules.get(0x2D).map(|rule| !rule.is_nil()));
+    }
     let mut committed_end = 0usize;
     let mut trigger = 0usize;
     let trace = std::env::var_os("NEOMACS_TRACE_COMPOSITION").is_some();
