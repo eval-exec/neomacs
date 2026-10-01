@@ -285,7 +285,7 @@ impl PerfHarness {
         } else {
             let mut capture = PerfCapture::new(
                 &context.directory,
-                request.profiler.capture_configuration(),
+                request.configuration,
                 request.scope,
                 request.timeout,
             )
@@ -316,7 +316,7 @@ impl PerfHarness {
             profiler: request.profiler,
             scope: request.scope,
             report_style: request.report_style,
-            configuration: request.profiler.capture_configuration(),
+            configuration: request.configuration,
             run_artifact_path: PathBuf::from("artifact.json"),
             verdict,
         };
@@ -482,6 +482,26 @@ impl PerfHarness {
                 path: relative_artifact_path(&dump_status),
             });
         }
+        if !output.status.success() {
+            // A profiler can fail to open the requested PMU before it launches
+            // the editor. No client will connect to the edit-loop gate then;
+            // cancel it before joining instead of waiting for the deadline.
+            if let Some(profile) = profile.as_deref_mut() {
+                profile.cancel_gate();
+            }
+            if let Some(counters) = counters.as_mut() {
+                counters.cancel_gate();
+            }
+            return context.infrastructure_failure(
+                format!(
+                    "{} {} exited with status {} after {attempt} launch attempt(s)",
+                    frontend_name(request.frontend()),
+                    capture_route.process_role(),
+                    output.status
+                ),
+                files,
+            );
+        }
         if let Some(profile) = profile {
             if let Err(message) = profile.finish_gate() {
                 return context.infrastructure_failure(message, files);
@@ -509,17 +529,6 @@ impl PerfHarness {
             None
         };
 
-        if !output.status.success() {
-            return context.infrastructure_failure(
-                format!(
-                    "{} {} exited with status {} after {attempt} launch attempt(s)",
-                    frontend_name(request.frontend()),
-                    capture_route.process_role(),
-                    output.status
-                ),
-                files,
-            );
-        }
         if let Err(message) = prepared.verify_inputs_unchanged() {
             return context.infrastructure_failure(message, files);
         }
@@ -889,7 +898,14 @@ impl PerfCapture {
         if let crate::CaptureRoute::Adapter(prefix) = route {
             command.env(format!("{prefix}_PERF_RECORD"), &self.data);
             for (name, value) in self.configuration.adapter_record_environment(prefix) {
-                command.env(name, value);
+                match value {
+                    Some(value) => {
+                        command.env(name, value);
+                    }
+                    None => {
+                        command.env_remove(name);
+                    }
+                }
             }
             self.configure_gate_environment(&mut command, Some(prefix));
             return Ok(command);
@@ -946,7 +962,7 @@ impl PerfCapture {
         }
     }
 
-    fn cancel_gate(&mut self) {
+    pub(crate) fn cancel_gate(&mut self) {
         self.gate.take();
     }
 

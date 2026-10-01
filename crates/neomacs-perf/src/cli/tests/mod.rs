@@ -4,8 +4,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::{
-    ComparisonSampleCount, CounterScope, Frontend, MachinePolicy, NativeProfiler, PerfCommand,
-    ProfileReportStyle, ProfileScope, ScenarioId, SuiteId, parse_perf_command,
+    ComparisonSampleCount, CounterScope, Frontend, MachinePolicy, NativeProfiler, PerfCallGraph,
+    PerfCaptureConfiguration, PerfCommand, PerfSamplingEvent, PerfSamplingRate, ProfileReportStyle,
+    ProfileScope, ScenarioId, SuiteId, parse_perf_command,
 };
 
 fn parse(args: &[&str]) -> Result<PerfCommand, crate::PerfCliError> {
@@ -203,6 +204,7 @@ fn profile_command_selects_native_sampling_without_becoming_a_comparison() {
             profiler: NativeProfiler::Perf,
             scope: ProfileScope::EditLoop,
             report_style: ProfileReportStyle::CallGraph,
+            configuration: PerfCaptureConfiguration::standard(),
             editor: Some(PathBuf::from("target/profiling/neomacs")),
             iterations: NonZeroU32::new(40).expect("non-zero literal"),
             frontend: Some(Frontend::Tui {
@@ -408,5 +410,84 @@ fn counter_scope_accepts_the_main_thread_scopes() {
             panic!("run command must remain typed")
         };
         assert_eq!(counters, Some(scope), "{text}");
+    }
+}
+
+#[test]
+fn profile_command_selects_instruction_period_and_lbr_without_changing_defaults() {
+    for (name, event) in [
+        ("instructions", PerfSamplingEvent::UserInstructions),
+        ("core-instructions", PerfSamplingEvent::UserCoreInstructions),
+    ] {
+        let PerfCommand::Profile {
+            configuration,
+            scope,
+            ..
+        } = parse(&[
+            "profile",
+            "scrolling",
+            "--sampling-event",
+            name,
+            "--sample-period",
+            "4000000",
+            "--call-graph",
+            "lbr",
+        ])
+        .expect("parse instruction profile")
+        else {
+            panic!("typed profile")
+        };
+        assert_eq!(
+            configuration,
+            PerfCaptureConfiguration {
+                event,
+                sampling: PerfSamplingRate::Period {
+                    sample_period: std::num::NonZeroU64::new(4_000_000).unwrap()
+                },
+                call_graph: PerfCallGraph::Lbr,
+            }
+        );
+        assert_eq!(scope, ProfileScope::EditLoop);
+    }
+    let PerfCommand::Profile { configuration, .. } =
+        parse(&["profile", "scrolling", "--sampling-event", "instructions"])
+            .expect("default instruction period")
+    else {
+        panic!("typed profile")
+    };
+    assert!(
+        matches!(configuration.sampling, PerfSamplingRate::Period { sample_period } if sample_period.get() == 4_000_000)
+    );
+    assert_eq!(
+        configuration.call_graph,
+        PerfCaptureConfiguration::standard().call_graph
+    );
+    let PerfCommand::Profile { configuration, .. } =
+        parse(&["profile", "scrolling", "--sample-frequency", "77"]).expect("custom frequency")
+    else {
+        panic!("typed profile")
+    };
+    assert!(
+        matches!(configuration.sampling, PerfSamplingRate::Frequency { frequency_hz } if frequency_hz.get() == 77)
+    );
+}
+
+#[test]
+fn profile_command_rejects_zero_and_conflicting_sample_rates() {
+    for arguments in [
+        vec!["profile", "scrolling", "--sample-period", "0"],
+        vec!["profile", "scrolling", "--sample-frequency", "0"],
+        vec![
+            "profile",
+            "scrolling",
+            "--sample-frequency",
+            "999",
+            "--sample-period",
+            "4000000",
+        ],
+        vec!["profile", "scrolling", "--sampling-event", "unknown"],
+        vec!["profile", "scrolling", "--call-graph", "unknown"],
+    ] {
+        assert!(parse(&arguments).is_err(), "{arguments:?}");
     }
 }

@@ -43,6 +43,7 @@ pub struct ProfileRequest {
     pub(crate) profiler: NativeProfiler,
     pub(crate) scope: ProfileScope,
     pub(crate) report_style: ProfileReportStyle,
+    pub(crate) configuration: PerfCaptureConfiguration,
     pub(crate) frontend: Option<Frontend>,
     pub(crate) timeout: Duration,
     pub(crate) machine: MachinePolicy,
@@ -65,6 +66,7 @@ impl ProfileRequest {
             profiler,
             scope: ProfileScope::EditLoop,
             report_style: ProfileReportStyle::default(),
+            configuration: profiler.capture_configuration(),
             frontend: None,
             timeout: Duration::from_secs(300),
             machine: MachinePolicy::default(),
@@ -91,6 +93,11 @@ impl ProfileRequest {
 
     pub fn with_report_style(mut self, report_style: ProfileReportStyle) -> Self {
         self.report_style = report_style;
+        self
+    }
+
+    pub fn with_capture_configuration(mut self, configuration: PerfCaptureConfiguration) -> Self {
+        self.configuration = configuration;
         self
     }
 
@@ -124,28 +131,72 @@ impl ProfileRequest {
 #[serde(rename_all = "kebab-case")]
 pub enum PerfSamplingEvent {
     UserCpuClock,
+    /// Retired user-space instructions on any supported hardware PMU.
+    UserInstructions,
+    /// Retired user-space instructions on Linux's explicit P-core PMU.
+    UserCoreInstructions,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum PerfCallGraph {
     Dwarf { stack_size_bytes: NonZeroU32 },
+    Lbr,
+}
+
+/// A frequency requests adaptive sampling; a period counts events per sample.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum PerfSamplingRate {
+    Frequency { frequency_hz: NonZeroU32 },
+    Period { sample_period: NonZeroU64 },
 }
 
 /// Exact Linux perf recording settings persisted with every profile.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct PerfCaptureConfiguration {
     pub event: PerfSamplingEvent,
-    pub frequency_hz: NonZeroU32,
+    pub sampling: PerfSamplingRate,
     pub call_graph: PerfCallGraph,
+}
+
+// Schemas 3 and 4 recorded only frequency_hz. Read that representation without
+// allowing an ambiguous artifact to claim both a period and a frequency.
+impl<'de> Deserialize<'de> for PerfCaptureConfiguration {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Configuration {
+            event: PerfSamplingEvent,
+            sampling: Option<PerfSamplingRate>,
+            frequency_hz: Option<NonZeroU32>,
+            call_graph: PerfCallGraph,
+        }
+        let configuration = Configuration::deserialize(deserializer)?;
+        let sampling = match (configuration.sampling, configuration.frequency_hz) {
+            (Some(sampling), None) => sampling,
+            (None, Some(frequency_hz)) => PerfSamplingRate::Frequency { frequency_hz },
+            _ => {
+                return Err(serde::de::Error::custom(
+                    "expected exactly one sampling or legacy frequency_hz setting",
+                ));
+            }
+        };
+        Ok(Self {
+            event: configuration.event,
+            sampling,
+            call_graph: configuration.call_graph,
+        })
+    }
 }
 
 impl PerfCaptureConfiguration {
     pub const fn standard() -> Self {
         Self {
             event: PerfSamplingEvent::UserCpuClock,
-            frequency_hz: NonZeroU32::new(999).expect("999 is non-zero"),
+            sampling: PerfSamplingRate::Frequency {
+                frequency_hz: NonZeroU32::new(999).expect("999 is non-zero"),
+            },
             call_graph: PerfCallGraph::Dwarf {
                 stack_size_bytes: NonZeroU32::new(16_384).expect("16384 is non-zero"),
             },
@@ -157,17 +208,17 @@ impl PerfCaptureConfiguration {
         output: &Path,
         control: Option<(&Path, &Path)>,
     ) -> Vec<OsString> {
-        let PerfCallGraph::Dwarf { stack_size_bytes } = self.call_graph;
+        let (rate_flag, rate_value) = self.sampling.record_argument();
         let mut arguments = vec![
             OsString::from("record"),
             OsString::from("--quiet"),
             OsString::from("--no-buildid-cache"),
             OsString::from("--event"),
             OsString::from(self.event.perf_name()),
-            OsString::from("--freq"),
-            OsString::from(self.frequency_hz.get().to_string()),
+            OsString::from(rate_flag),
+            OsString::from(rate_value),
             OsString::from("--call-graph"),
-            OsString::from(format!("dwarf,{}", stack_size_bytes.get())),
+            OsString::from(self.call_graph.perf_name()),
         ];
         if let Some((command, acknowledgement)) = control {
             arguments.push(OsString::from("--delay=-1"));
@@ -188,22 +239,45 @@ impl PerfCaptureConfiguration {
     pub(crate) fn adapter_record_environment(
         self,
         prefix: &'static str,
-    ) -> [(String, OsString); 3] {
-        let PerfCallGraph::Dwarf { stack_size_bytes } = self.call_graph;
+    ) -> [(String, Option<OsString>); 4] {
+        let (frequency, period) = match self.sampling {
+            PerfSamplingRate::Frequency { frequency_hz } => {
+                (Some(OsString::from(frequency_hz.get().to_string())), None)
+            }
+            PerfSamplingRate::Period { sample_period } => {
+                (None, Some(OsString::from(sample_period.get().to_string())))
+            }
+        };
         [
             (
                 format!("{prefix}_PERF_EVENT"),
-                OsString::from(self.event.perf_name()),
+                Some(OsString::from(self.event.perf_name())),
             ),
-            (
-                format!("{prefix}_PERF_FREQUENCY"),
-                OsString::from(self.frequency_hz.get().to_string()),
-            ),
+            (format!("{prefix}_PERF_FREQUENCY"), frequency),
+            (format!("{prefix}_PERF_PERIOD"), period),
             (
                 format!("{prefix}_PERF_CALL_GRAPH"),
-                OsString::from(format!("dwarf,{}", stack_size_bytes.get())),
+                Some(OsString::from(self.call_graph.perf_name())),
             ),
         ]
+    }
+}
+
+impl PerfSamplingRate {
+    fn record_argument(self) -> (&'static str, String) {
+        match self {
+            Self::Frequency { frequency_hz } => ("--freq", frequency_hz.get().to_string()),
+            Self::Period { sample_period } => ("--count", sample_period.get().to_string()),
+        }
+    }
+}
+
+impl PerfCallGraph {
+    fn perf_name(self) -> String {
+        match self {
+            Self::Dwarf { stack_size_bytes } => format!("dwarf,{}", stack_size_bytes.get()),
+            Self::Lbr => "lbr".to_string(),
+        }
     }
 }
 
@@ -224,7 +298,13 @@ impl ProfileReportStyle {
             }),
         ];
         if self == Self::SelfTime {
-            arguments.extend([OsString::from("--sort"), OsString::from("symbol")]);
+            // Inline expansion invokes DWARF lookup even without call graphs,
+            // which can dominate reporting for a large optimized editor binary.
+            arguments.extend([
+                OsString::from("--no-inline"),
+                OsString::from("--sort"),
+                OsString::from("symbol"),
+            ]);
         }
         arguments
     }
@@ -234,6 +314,8 @@ impl PerfSamplingEvent {
     const fn perf_name(self) -> &'static str {
         match self {
             Self::UserCpuClock => "cpu-clock:u",
+            Self::UserInstructions => "instructions:u",
+            Self::UserCoreInstructions => "cpu_core/instructions/u",
         }
     }
 }
@@ -299,7 +381,7 @@ pub struct ProfileArtifact {
 }
 
 impl ProfileArtifact {
-    pub const SCHEMA_VERSION: u32 = 4;
+    pub const SCHEMA_VERSION: u32 = 5;
 }
 
 #[derive(Clone, Debug, PartialEq)]
