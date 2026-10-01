@@ -22,8 +22,8 @@
 //! Existing shim IDs and signatures keep their order. New JIT-only shape
 //! and census shims are appended in optional groups; with their knobs off
 //! they are never imported, including under eager imports. Their exported
-//! names extend the ABI-salted name set (ABI v22), while AOT emission keeps
-//! both new groups off.
+//! names extend the ABI-salted name set (ABI v23), while AOT emission keeps
+//! these optional groups off.
 
 use std::cell::Cell;
 
@@ -53,6 +53,8 @@ pub(crate) enum ShimGroup {
     DirectShapes,
     /// The call-shape measurement mode (JIT only).
     CallCensus,
+    /// The contained framed direct call (JIT only, independent shape bit).
+    DirectFramed,
 }
 
 /// Every runtime shim generated code calls, in declaration order.
@@ -140,6 +142,8 @@ pub(crate) enum Shim {
     CallCensus,
     /// Exact accepted spec-shim entries, selected only for a census build.
     CallSpecCensus,
+    /// The contained framed direct-entry trampoline (JIT only).
+    DirectFramed,
 }
 
 /// The parameter shapes of the shim signatures.
@@ -213,6 +217,7 @@ impl Shim {
             Shim::DirectSlow => "neovm_jit_direct_slow",
             Shim::CallCensus => "neovm_jit_call_census",
             Shim::CallSpecCensus => "neovm_jit_call_spec_census",
+            Shim::DirectFramed => "neovm_jit_direct_framed",
         }
     }
 
@@ -232,6 +237,7 @@ impl Shim {
             | Shim::T2ApplyUseProf
             | Shim::T2RecordCallUseTarget => ShimGroup::Tier2Profile,
             Shim::DirectSlow => ShimGroup::DirectShapes,
+            Shim::DirectFramed => ShimGroup::DirectFramed,
             Shim::CallCensus | Shim::CallSpecCensus => ShimGroup::CallCensus,
             Shim::RootwinGrow
             | Shim::Cons
@@ -369,6 +375,8 @@ impl Shim {
             Shim::ArithSpec => (&[Ptr, I64, I64, I64, I64, I64, I64, Ptr], true),
             // (vmctx, sym, expected, slot, args, nargs, out, shape) -> status
             Shim::DirectSlow => (&[Ptr, I64, I64, I64, Ptr, I64, Ptr, I64], true),
+            // (vmctx, callee, leaf, const_base, args, nargs, bt_count, out)
+            Shim::DirectFramed => (&[Ptr, I64, I64, I64, Ptr, I64, I64, Ptr], true),
             // (vmctx, site, callee_or_slot, arg0, nargs) -> ()
             Shim::CallCensus => (&[Ptr, I64, I64, I64, I64], false),
         }
@@ -405,6 +413,7 @@ pub(crate) struct ShimGroups {
     pub(crate) tier2_profile: bool,
     pub(crate) direct_shapes: bool,
     pub(crate) call_census: bool,
+    pub(crate) direct_framed: bool,
 }
 
 impl ShimGroups {
@@ -416,6 +425,7 @@ impl ShimGroups {
             ShimGroup::Tier2Profile => self.tier2_profile,
             ShimGroup::DirectShapes => self.direct_shapes,
             ShimGroup::CallCensus => self.call_census,
+            ShimGroup::DirectFramed => self.direct_framed,
         }
     }
 }

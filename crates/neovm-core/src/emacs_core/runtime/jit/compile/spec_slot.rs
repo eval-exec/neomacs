@@ -11,7 +11,7 @@
 //! | `epoch` | 0 | clock at the last validation ([`SPEC_EPOCH_DISARMED`] never matches) | same |
 //! | `leaf` | 8 | `*const CompiledLeaf`, or 0 | the expected subr's bits (immutable) |
 //! | `direct_consts` | 16 | the shim's key: constant base with `KEY_*` flags, or 0 | the site's `SymId` (immutable) |
-//! | `direct_entry` | 24 | the register-ABI entry a direct call may take, or 0 | 0 |
+//! | `direct_entry` | 24 | the register-ABI entry, [`DirectEntryTag::Framed`], or 0 | 0 |
 //!
 //! Only a [`SpecSlotKind::Bytecode`] slot's `leaf`, `direct_consts` and
 //! `direct_entry` ever change after the slot is built, so only those are
@@ -21,6 +21,21 @@
 //! reference path), so `clear_leaf` refuses one in debug builds.
 
 use super::*;
+
+/// A non-code direct-entry word: framed memory entries are entered through
+/// the contained trampoline rather than called with the register ABI.
+/// Threading: immutable tags; each slot retains its existing atomic,
+/// publish-last/clear-first protocol and belongs to its caller's mutator.
+/// A Release store publishes the tag after leaf/key initialization; framed
+/// generated loads are atomic with Acquire or stronger ordering. The live
+/// or retired cache retains the leaf for the entire native-call extent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u64)]
+pub(crate) enum DirectEntryTag {
+    /// Not a native code address. Generated code tests this before any
+    /// register-ABI indirect call when the framed shape is compile-enabled.
+    Framed = 1,
+}
 
 /// What a spec slot's words hold (see the module table), decided by its
 /// site's [`SpecCalleeKind`] when the leaf is built.
@@ -87,8 +102,12 @@ impl SpecCalleeKind {
 /// `direct_entry` is the key of a site that calls the leaf itself (a direct
 /// call, `NEOVM_JIT_DIRECT_CALL`): the leaf's register-ABI entry when the
 /// site may enter it with its arguments in registers and `direct_consts`'s
-/// constant base as its `aux` word, else 0. Armed LAST and cleared FIRST, so
-/// a site that sees it set sees the leaf and key it goes with.
+/// constant base as its `aux` word, or [`DirectEntryTag::Framed`] for an
+/// exact-arity framed JIT leaf under `NEOVM_JIT_DIRECT_SHAPES=framed`, else
+/// 0. The framed trampoline retains the leaf's memory ABI. Armed LAST and cleared FIRST, so
+/// a site that sees it set sees the leaf and key it goes with. Publication
+/// uses Release, paired with an atomic Acquire-or-stronger generated load
+/// when framed sites are enabled; existing off-mode loads are unchanged.
 #[repr(C)]
 pub(crate) struct SpecSlot {
     pub(super) epoch: AtomicU64,
@@ -163,7 +182,7 @@ impl SpecSlot {
     /// (generated code reads the word itself; tests read it here).
     #[cfg(test)]
     pub(crate) fn direct_entry(&self) -> *const u8 {
-        self.direct_entry.load(Ordering::Relaxed) as usize as *const u8
+        self.direct_entry.load(Ordering::Acquire) as usize as *const u8
     }
 
     /// Cache `leaf` for the armed callee; `direct_consts` is the callee's
@@ -204,8 +223,8 @@ impl SpecSlot {
         self.direct_consts.store(key, Ordering::Relaxed);
     }
 
-    /// Arm the direct entry of the leaf [`Self::arm_leaf`] just cached:
-    /// written last, after the leaf and the key it goes with.
+    /// Arm the register entry or framed tag of the leaf [`Self::arm_leaf`]
+    /// just cached: published with Release last, after the leaf/key/epoch.
     #[inline]
     pub(crate) fn arm_direct_entry(&self, entry: *const u8) {
         debug_assert!(
@@ -213,13 +232,17 @@ impl SpecSlot {
             "a subr site never calls directly"
         );
         debug_assert!(!self.leaf_ptr().is_null(), "a direct entry needs its leaf");
-        debug_assert_eq!(
-            self.direct_consts.load(Ordering::Relaxed) & !Self::KEY_SHORT_CALL & Self::KEY_FLAGS,
-            Self::KEY_REGISTER,
-            "a direct call is frameless and enters the register ABI"
+        let flags = self.direct_consts.load(Ordering::Relaxed) & Self::KEY_FLAGS;
+        debug_assert!(
+            if entry as usize as u64 == DirectEntryTag::Framed as u64 {
+                flags == Self::KEY_FRAMED
+            } else {
+                flags & !Self::KEY_SHORT_CALL == Self::KEY_REGISTER
+            },
+            "the direct entry's ABI must match its slot key"
         );
         self.direct_entry
-            .store(entry as usize as u64, Ordering::Relaxed);
+            .store(entry as usize as u64, Ordering::Release);
     }
 
     /// `direct_consts` flag: the site's call is not the leaf's frame as laid
@@ -303,7 +326,9 @@ pub(crate) static DIRECT_ENTRIES_ARMED: AtomicU64 = AtomicU64::new(0);
 /// constant base with no flag but [`SpecSlot::KEY_REGISTER`] (the site
 /// passes the base as `aux`), and the lean backtrace frame the site pushes
 /// has a probed layout. Anything else leaves the entry 0 and the site on
-/// the shim. Once per arming, so cold.
+/// the shim. Under the framed shape knob, an exact required-only JIT memory
+/// leaf with bindings or handlers publishes the framed trampoline tag
+/// instead. AOT sidecars remain excluded. Once per arming, so cold.
 #[cold]
 #[inline(never)]
 pub(crate) fn arm_direct_entry_if_eligible(slot: &SpecSlot, leaf: &CompiledLeaf, nargs: usize) {
@@ -321,7 +346,30 @@ pub(crate) fn arm_direct_entry_if_eligible(slot: &SpecSlot, leaf: &CompiledLeaf,
     if eligible {
         slot.arm_direct_entry(leaf.entry);
         DIRECT_ENTRIES_ARMED.fetch_add(1, Ordering::Relaxed);
+    } else if super::knobs::jit_direct_shapes().framed
+        && framed_direct_eligible(leaf, nargs)
+        && key != 0
+        && key & SpecSlot::KEY_FLAGS == SpecSlot::KEY_FRAMED
+        && super::jit_layout::backtrace_layout().is_some()
+    {
+        slot.arm_direct_entry(DirectEntryTag::Framed as u64 as usize as *const u8);
+        DIRECT_ENTRIES_ARMED.fetch_add(1, Ordering::Relaxed);
     }
+}
+
+/// Initial framed reach is exact required-only calls of JIT memory leaves;
+/// AOT sidecars and argument normalization remain on the reference path.
+/// Threading: reads immutable facts of a live, mutator-owned cache leaf.
+#[inline]
+pub(crate) fn framed_direct_eligible(leaf: &CompiledLeaf, nargs: usize) -> bool {
+    leaf.abi == LeafAbi::Memory
+        && leaf.entry_shape == super::leaf::EntryShape::Framed
+        && leaf.sidecar.is_none()
+        && (leaf.has_binds || leaf.has_handlers)
+        && leaf.required == leaf.arity
+        && !leaf.has_rest
+        && leaf.arity == nargs
+        && nargs <= super::direct_call::MAX_REST_CALL_ARGS
 }
 
 /// Arm `slot`'s direct entry for the leaf the spec shim cached in it, for a

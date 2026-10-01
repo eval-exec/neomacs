@@ -102,4 +102,5 @@ const NEOVM_JIT_SHIM_NAMES: &[&str] = &[
     "neovm_jit_direct_slow",
     "neovm_jit_call_census",
     "neovm_jit_call_spec_census",
+    "neovm_jit_direct_framed",
 ];

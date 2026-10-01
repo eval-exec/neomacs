@@ -3734,6 +3734,7 @@ fn build_leaf_fn<S: LeafSink>(
                 tier2_profile: emit.t2.is_some(),
                 direct_shapes: !aot && (shapes.optional || shapes.rest),
                 call_census: !aot && jit_call_census_on(),
+                direct_framed: !aot && shapes.framed,
             };
             let refs = RtRefs::new(
                 sink.shim_ids(call_conv, ptr_ty, groups)?,

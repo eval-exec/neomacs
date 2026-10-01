@@ -237,6 +237,8 @@ struct Run {
     /// Direct calls that left their hit path through the cold finish
     /// during the observation.
     cold_exits: u64,
+    /// Calls entering the contained framed helper during the observation.
+    framed_calls: u64,
 }
 
 /// Run PROGRAM (defines, byte-compiles and warms) then OBSERVE (one form,
@@ -280,12 +282,15 @@ fn run_in_with(
             let spec0 = ev.specpdl.len();
             let calls0 = SPEC_CALL_COUNT.load(Ordering::Relaxed);
             let cold0 = super::direct_call::DIRECT_COLD_EXITS.load(Ordering::Relaxed);
+            let framed0 = super::direct_call::DIRECT_FRAMED_CALLS.load(Ordering::Relaxed);
             let out = match ev.eval_str(observe) {
                 Ok(v) => crate::emacs_core::print::print_value(&v),
                 Err(e) => format!("escaped {e:?}"),
             };
             let shim_calls = SPEC_CALL_COUNT.load(Ordering::Relaxed) - calls0;
             let cold_exits = super::direct_call::DIRECT_COLD_EXITS.load(Ordering::Relaxed) - cold0;
+            let framed_calls =
+                super::direct_call::DIRECT_FRAMED_CALLS.load(Ordering::Relaxed) - framed0;
             assert_eq!(ev.depth, depth0, "{mode:?}: depth restored");
             assert_eq!(ev.specpdl.len(), spec0, "{mode:?}: specpdl restored");
             let direct_sites = super::direct_call::direct_sites_emitted_for_test();
@@ -300,6 +305,7 @@ fn run_in_with(
                 direct_sites,
                 shim_calls,
                 cold_exits,
+                framed_calls,
             }
         })
         .expect("spawn")
@@ -714,3 +720,7 @@ mod shapes;
 #[path = "direct_call_shape_parity.rs"]
 #[cfg(test)]
 mod shape_parity;
+
+#[cfg(test)]
+#[path = "direct_call_framed.rs"]
+mod framed;

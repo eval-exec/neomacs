@@ -1,0 +1,1 @@
+((3 (normal)) (2.5 (float)) (wrong-type-argument number-or-marker-p bad) (7 (recovered)) 4 ((normal) (float) (signal) (recovered)) outside)

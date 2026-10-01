@@ -1233,8 +1233,9 @@ pub(crate) fn jit_direct_sites() -> DirectSitesMode {
 
 /// The call shapes beyond a named exact-arity call that direct sites take
 /// (`NEOVM_JIT_DIRECT_SHAPES`, design `p1-1-direct-native-calls` Stage 2,
-/// P1.0 S2.5), with direct calls on. Each part also gives the bodies such a
-/// site enters the register ABI (`LeafAbi::for_build`).
+/// P1.0 S2.5), with direct calls on. Optional/rest parts also permit their
+/// frameless bodies to use the register ABI (`LeafAbi::for_build`); framed
+/// bodies retain the memory ABI and their own native cleanup extent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) struct DirectShapesKnob {
     /// `optional` (2a): a named call of an `&optional` callee with fewer
@@ -1246,6 +1247,9 @@ pub(crate) struct DirectShapesKnob {
     /// `constant` (2b): a call whose callee is a constant byte-code object
     /// (a `cl-flet` local, a `lambda` literal) the fuser left a call.
     pub(crate) constant: bool,
+    /// `framed` (2c): an exact-arity JIT body with dynamic bindings or
+    /// handler frames, entered through the contained framed trampoline.
+    pub(crate) framed: bool,
 }
 
 impl DirectShapesKnob {
@@ -1253,16 +1257,18 @@ impl DirectShapesKnob {
         optional: false,
         rest: false,
         constant: false,
+        framed: false,
     };
     pub(crate) const ALL: Self = Self {
         optional: true,
         rest: true,
         constant: true,
+        framed: true,
     };
 
     /// Unset/`off`/`0`/`none`: nothing (the default); `all`/`on`/`1`:
     /// every shape; otherwise a comma list of `optional`, `rest`,
-    /// `constant`.
+    /// `constant`, `framed`.
     pub(crate) fn parse(value: Option<&str>) -> Self {
         let Some(value) = value.map(str::trim) else {
             return Self::OFF;
@@ -1278,11 +1284,12 @@ impl DirectShapesKnob {
                 "optional" => knob.optional = true,
                 "rest" => knob.rest = true,
                 "constant" => knob.constant = true,
+                "framed" => knob.framed = true,
                 "" => {}
                 other => tracing::warn!(
                     target: "neovm_jit",
                     part = other,
-                    "NEOVM_JIT_DIRECT_SHAPES: unknown part ignored (expected optional, rest, constant)"
+                    "NEOVM_JIT_DIRECT_SHAPES: unknown part ignored (expected optional, rest, constant, framed)"
                 ),
             }
         }

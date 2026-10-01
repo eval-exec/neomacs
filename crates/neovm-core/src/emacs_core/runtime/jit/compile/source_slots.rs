@@ -90,7 +90,8 @@ pub(crate) fn add_source_sites(
 /// constant byte-code object -- a `cl-flet` local, a `lambda` literal the
 /// fuser left a call -- that a direct call can enter: a call as laid out
 /// (exactly its required parameters, at most `MAX_REG_ARGS`) of a frameless
-/// body that may take the register ABI, in a caller that pays a direct
+/// body that may take the register ABI, or an exact framed body under the
+/// independent `framed` bit, in a caller that pays a direct
 /// site back ([`super::DirectSitesMode`]). The site is a source site of the
 /// object's own source ([`SpecCalleeKind::Constant`]): the object cannot be
 /// redefined, so the slot's only validation is its leaf's epoch, and the
@@ -147,8 +148,8 @@ pub(crate) fn add_constant_sites(
 
 /// Whether a direct site can enter the constant byte-code callee `bc` with
 /// a call of `nargs` arguments as laid out: exactly its required
-/// parameters, in registers, of a frameless body a direct call may enter
-/// (`LeafAbi::for_build`'s conditions on the body).
+/// parameters, of a frameless register body or, under `framed`, a framed
+/// memory body the contained trampoline may enter.
 fn constant_callee_takes_direct_calls(bc: &ByteCodeFunction, nargs: usize) -> bool {
     let ops = bc.executable_ops();
     bc.params.required.len() == nargs
@@ -156,8 +157,8 @@ fn constant_callee_takes_direct_calls(bc: &ByteCodeFunction, nargs: usize) -> bo
         && bc.params.rest.is_none()
         && nargs <= super::reg_abi::MAX_REG_ARGS
         && (bc.jit_runtime().patched_prefix() == 0 || jit_spec_sources_on())
-        && !super::leaf::body_has_binds(ops)
-        && !super::leaf::body_has_handlers(ops)
+        && (jit_direct_shapes().framed
+            || (!super::leaf::body_has_binds(ops) && !super::leaf::body_has_handlers(ops)))
 }
 
 impl SpecSlot {
@@ -174,16 +175,18 @@ impl SpecSlot {
         self.direct_consts.load(Ordering::Relaxed)
     }
 
-    /// Arm a source slot with its source's leaf and that leaf's register
-    /// entry, valid under `epoch` (the `leaf_slot_epoch` the leaf was armed
-    /// under): the epoch and the leaf first, the entry last.
+    /// Arm a source slot with its source's leaf and its register entry or
+    /// framed tag, valid under `epoch` (the `leaf_slot_epoch` the leaf was
+    /// armed under): epoch/leaf first, entry published with Release last.
+    /// Framed generated readers use an atomic Acquire-or-stronger load;
+    /// the slot and leaf retain the existing mutator-owned cache lifetime.
     pub(crate) fn arm_source(&self, leaf: *const CompiledLeaf, entry: *const u8, epoch: u64) {
         // A direct entry never outlives the leaf it was armed for.
         self.direct_entry.store(0, Ordering::Relaxed);
         self.epoch.store(epoch, Ordering::Relaxed);
         self.leaf.store(leaf as usize as u64, Ordering::Relaxed);
         self.direct_entry
-            .store(entry as usize as u64, Ordering::Relaxed);
+            .store(entry as usize as u64, Ordering::Release);
     }
 
     /// Drop a source slot's leaf: the entry first (the arming order,
@@ -417,8 +420,10 @@ pub(crate) extern "C" fn neovm_jit_call_source_spec(
 /// Remember `leaf`, the source's current armed leaf, in a source site's
 /// slot, with its direct entry under `NEOVM_JIT_DIRECT_CALL` when the site
 /// may enter it (its register ABI takes exactly `nargs` words, it is
-/// frameless, and the lean frame layout was probed). Out of line: once per
-/// leaf the source runs.
+/// frameless, and the lean frame layout was probed). Under the framed shape
+/// knob an exact required-only framed JIT memory leaf publishes the framed
+/// tag instead; no AOT sidecar is admitted. Out of line: once per leaf the
+/// source runs.
 #[cold]
 #[inline(never)]
 fn arm_source_direct_entry(slot: &SpecSlot, leaf: &CompiledLeaf, nargs: usize, epoch: u64) {
@@ -433,12 +438,17 @@ fn arm_source_direct_entry(slot: &SpecSlot, leaf: &CompiledLeaf, nargs: usize, e
         && !leaf.has_rest
         && leaf.direct_call_eligible()
         && super::jit_layout::backtrace_layout().is_some();
+    let framed = jit_direct_shapes().framed
+        && super::spec_slot::framed_direct_eligible(leaf, nargs)
+        && super::jit_layout::backtrace_layout().is_some();
     // The slot remembers the leaf either way, so the shim's compare holds
     // until the leaf changes; the entry only when the site may enter it.
     slot.arm_source(
         leaf,
         if eligible {
             leaf.entry
+        } else if framed {
+            super::spec_slot::DirectEntryTag::Framed as u64 as usize as *const u8
         } else {
             std::ptr::null()
         },

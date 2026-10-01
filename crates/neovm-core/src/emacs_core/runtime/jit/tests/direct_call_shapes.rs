@@ -332,7 +332,16 @@ fn shaped_slots_arm_the_callee_entry_only_under_the_knob() {
                             let callee = cached_leaf(&ev, name).expect("compiled");
                             let slot = slot_calling(caller, callee).expect("slot");
                             let direct = slot.direct_entry();
-                            assert!(direct.is_null() || direct == callee.entry, "{name}");
+                            let framed_tag =
+                                crate::emacs_core::jit::compile::spec_slot::DirectEntryTag::Framed
+                                    as usize;
+                            assert!(
+                                direct.is_null()
+                                    || direct == callee.entry
+                                    || (callee.entry_shape == EntryShape::Framed
+                                        && direct as usize == framed_tag),
+                                "{name}"
+                            );
                             (name, !direct.is_null())
                         })
                         .collect();

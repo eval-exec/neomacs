@@ -30,6 +30,13 @@
 //! the reference protocol. So every path but the hit is today's code, and
 //! the hit does exactly what the shim's fast path does.
 //!
+//! `NEOVM_JIT_DIRECT_SHAPES=framed` (Stage 2c) admits exact required-only
+//! JIT bodies with bindings or handlers. Their slot publishes
+//! `DirectEntryTag::Framed`, not a register entry. After the same guards,
+//! original frame push and depth increment, the lazy-table trampoline owns
+//! the memory-ABI invocation, boxed precise deopt and all frame/depth cleanup.
+//! The generated register call and pop are never taken for a framed tag.
+//!
 //! The finish is called by its baked address, never imported: direct calls
 //! are JIT-only, and an AOT object can never reference it.
 
@@ -41,7 +48,7 @@ use super::jit_layout::{
 use super::lowering::{RtCtx, iadd_imm_p, icmp_imm_p, ishl_imm_p};
 use super::reg_abi::MAX_REG_ARGS;
 use super::spec_slot::{
-    SPEC_SLOT_DIRECT_ENTRY_OFFSET, SPEC_SLOT_EPOCH_OFFSET, SPEC_SLOT_KEY_OFFSET,
+    DirectEntryTag, SPEC_SLOT_DIRECT_ENTRY_OFFSET, SPEC_SLOT_EPOCH_OFFSET, SPEC_SLOT_KEY_OFFSET,
     SPEC_SLOT_LEAF_OFFSET,
 };
 use super::*;
@@ -55,6 +62,12 @@ pub(crate) const DIRECT_SITE_CAP: u32 = 8;
 pub(crate) static DIRECT_SITES_EMITTED: AtomicU64 = AtomicU64::new(0);
 /// Direct calls that left the hit path through [`neovm_jit_direct_finish`].
 pub(crate) static DIRECT_COLD_EXITS: AtomicU64 = AtomicU64::new(0);
+
+#[path = "direct_call/framed.rs"]
+mod framed;
+#[cfg(test)]
+pub(crate) use framed::DIRECT_FRAMED_CALLS;
+pub(crate) use framed::neovm_jit_direct_framed;
 
 std::thread_local! {
     /// Whether the body being compiled on this thread does unbounded work
@@ -141,6 +154,16 @@ impl CalleeShape {
 /// conses the words past the callee's `nonrest` slots inline.
 pub(crate) const MAX_REST_CALL_ARGS: usize = 8;
 
+/// The immutable entry protocol a site can emit. A named callee's body is
+/// known at compile time; a source site selects between the two at runtime.
+/// Threading: compiler facts with no Lisp state or mutable shared storage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DirectSiteEntry {
+    RawRegister,
+    Framed,
+    DynamicSource,
+}
+
 /// A site the lowering will emit as a direct call: its constants and the
 /// probed layouts its push and pop use.
 /// Threading: belongs to one compiler's lowering; the emitted slot belongs
@@ -152,6 +175,7 @@ pub(crate) struct DirectSite {
     nargs: usize,
     /// How the call enters the callee's register words.
     callee: CalleeShape,
+    entry: DirectSiteEntry,
     frame: EntryTemplate,
     small: u32,
     specpdl: VecOffsets,
@@ -190,9 +214,11 @@ impl DirectSite {
     /// register words, both layout probes succeeded, and the leaf's budget
     /// of direct sites is not spent.
     ///
-    /// The callee must also be a body `LeafAbi::for_build` gives the
-    /// register ABI: not `make-closure`-patched, and frameless (no dynamic
-    /// bindings, no handler frames). Any other callee's leaf never arms a
+    /// Frameless callees must be bodies `LeafAbi::for_build` gives the
+    /// register ABI. Under `framed`, exact required-only callees with
+    /// bindings or handlers keep the memory ABI and use the contained
+    /// trampoline (at most eight arguments). Neither may be
+    /// `make-closure`-patched here. Any other callee's leaf never arms a
     /// direct entry, so its site would only pay the direct site's compile
     /// and its unarmed test on every call. And the caller must be a body
     /// whose calls run often enough to pay the site's compile back
@@ -218,18 +244,31 @@ impl DirectSite {
         } else {
             callee.required == nargs
         };
-        if !callable
-            || callee.arity() > MAX_REG_ARGS
-            || (!callee.rest && nargs > MAX_REG_ARGS)
-            || rt.direct_sites.get() >= DIRECT_SITE_CAP
-        {
+        if !callable || rt.direct_sites.get() >= DIRECT_SITE_CAP {
+            return None;
+        }
+        let exceeds_register_arity =
+            callee.arity() > MAX_REG_ARGS || (!callee.rest && nargs > MAX_REG_ARGS);
+        // Keep the original cheap declines before scanning the body with
+        // framed reach off: unsupported/wide/over-budget sites must not
+        // add an O(callee ops) scan to byte compilation.
+        if !shapes.framed && exceeds_register_arity {
             return None;
         }
         if bc.jit_runtime().patched_prefix() > 0 {
             return None;
         }
         let ops = bc.executable_ops();
-        if super::leaf::body_has_binds(ops) || super::leaf::body_has_handlers(ops) {
+        let framed = super::leaf::body_has_binds(ops) || super::leaf::body_has_handlers(ops);
+        if !framed && exceeds_register_arity {
+            return None;
+        }
+        if framed
+            && (!shapes.framed
+                || callee.rest
+                || callee.required != callee.nonrest
+                || callee.required != nargs)
+        {
             return None;
         }
         let layout: BacktraceLayout = super::jit_layout::backtrace_layout()?;
@@ -240,6 +279,11 @@ impl DirectSite {
             expected,
             nargs,
             callee,
+            entry: if framed {
+                DirectSiteEntry::Framed
+            } else {
+                DirectSiteEntry::RawRegister
+            },
             frame,
             small,
             specpdl,
@@ -268,6 +312,11 @@ impl DirectSite {
             expected: 0,
             nargs,
             callee: CalleeShape::exact(nargs),
+            entry: if jit_direct_shapes().framed {
+                DirectSiteEntry::DynamicSource
+            } else {
+                DirectSiteEntry::RawRegister
+            },
             frame,
             small,
             specpdl,
@@ -324,14 +373,32 @@ pub(crate) fn emit_direct_bytecode_call(
         fb.seal_block(block);
     };
     // 1. Armed.
-    let entry = fb.ins().load(
-        types::I64,
-        flags,
-        slot_v,
-        SPEC_SLOT_DIRECT_ENTRY_OFFSET as i32,
-    );
+    let framed_enabled = jit_direct_shapes().framed;
+    let entry = if framed_enabled {
+        // Atomic publication: leaf/key/epoch are initialized before the
+        // Release store of the framed tag. CLIF atomic loads provide at
+        // least Acquire ordering. The off arm is the original load verbatim.
+        let at = iadd_imm_p(fb, slot_v, SPEC_SLOT_DIRECT_ENTRY_OFFSET as i64);
+        fb.ins().atomic_load(types::I64, flags, at)
+    } else {
+        fb.ins().load(
+            types::I64,
+            flags,
+            slot_v,
+            SPEC_SLOT_DIRECT_ENTRY_OFFSET as i32,
+        )
+    };
     let unarmed = icmp_imm_p(fb, IntCC::Equal, entry, 0);
     next(fb, unarmed);
+    if site.entry == DirectSiteEntry::Framed {
+        let wrong_entry = icmp_imm_p(fb, IntCC::NotEqual, entry, DirectEntryTag::Framed as i64);
+        next(fb, wrong_entry);
+    } else if framed_enabled && matches!(callee, DirectCallee::Symbol { .. }) {
+        // The immutable named plan admits only the register ABI. Fail
+        // closed if a future body transformation changes that classification.
+        let framed_entry = icmp_imm_p(fb, IntCC::Equal, entry, DirectEntryTag::Framed as i64);
+        next(fb, framed_entry);
+    }
     // 2. Attention: the shim gate's mask, and the asynchronous word (a
     // JIT-only bake of a process address).
     let attention = fb
@@ -429,6 +496,17 @@ pub(crate) fn emit_direct_bytecode_call(
         }
         _ => None,
     };
+    if site.entry == DirectSiteEntry::Framed {
+        // A framed tag must describe an exact memory-ABI framed key. A
+        // source slot's key is its immutable identity instead; its arming
+        // validates EntryShape/ABI directly before publishing the tag.
+        let key = fb
+            .ins()
+            .load(types::I64, flags, slot_v, SPEC_SLOT_KEY_OFFSET as i32);
+        let key_flags = super::lowering::band_imm_p(fb, key, SpecSlot::KEY_FLAGS as i64);
+        let wrong_key = icmp_imm_p(fb, IntCC::NotEqual, key_flags, SpecSlot::KEY_FRAMED as i64);
+        next(fb, wrong_key);
+    }
     fb.seal_block(slow);
     // The callee's register words: the given arguments in its `nonrest`
     // slots, nil for each slot the call lacks, then the `&rest` list of the
@@ -524,142 +602,198 @@ pub(crate) fn emit_direct_bytecode_call(
             super::lowering::band_imm_p(fb, key, !(SpecSlot::KEY_FLAGS as i64))
         }
     };
-    let sig = fb.import_signature(
-        LeafAbi::Register {
-            arity: site.callee.arity() as u8,
+    if site.entry != DirectSiteEntry::RawRegister {
+        let raw = (site.entry == DirectSiteEntry::DynamicSource).then(|| fb.create_block());
+        if let Some(raw) = raw {
+            let framed = fb.create_block();
+            let is_framed = icmp_imm_p(fb, IntCC::Equal, entry, DirectEntryTag::Framed as i64);
+            fb.ins().brif(is_framed, framed, &[], raw, &[]);
+            fb.switch_to_block(framed);
+            fb.seal_block(framed);
         }
-        .signature(rt.refs.call_conv, ptr_ty),
-    );
-    let mut call_args: SmallVec<[ClifValue; 8]> = SmallVec::new();
-    call_args.extend([vmctx, aux]);
-    call_args.extend(regs.iter().copied());
-    let call = fb.ins().call_indirect(sig, entry, &call_args);
-    let (value, status) = {
-        let r = fb.inst_results(call);
-        (r[0], r[1])
-    };
-    let cold = fb.create_block();
-    fb.append_block_param(cold, types::I64); // status
-    fb.append_block_param(cold, types::I64); // value
-    fb.set_cold_block(cold);
-    let returned = fb.create_block();
-    let ok = icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
-    fb.ins().brif(
-        ok,
-        returned,
-        &[],
-        cold,
-        &[BlockArg::Value(status), BlockArg::Value(value)],
-    );
-    // The pop: the specpdl is back to our frame, and the frame is still the
-    // one we pushed (a flagged or promoted frame goes to the finish, which
-    // runs the exit debugger).
-    fb.switch_to_block(returned);
-    fb.seal_block(returned);
-    // Recomputed rather than kept: Cranelift does not rematerialize, and a
-    // value kept across the call costs a callee-saved register or a spill.
-    let status_ok = fb.ins().iconst(types::I64, STATUS_OK);
-    let len1 = iadd_imm_p(fb, len, 1);
-    let len2 = fb.ins().load(types::I64, flags, vmctx, spec_len_off);
-    let balanced = fb.ins().icmp(IntCC::Equal, len2, len1);
-    let ours_check = fb.create_block();
-    fb.ins().brif(
-        balanced,
-        ours_check,
-        &[],
-        cold,
-        &[BlockArg::Value(status_ok), BlockArg::Value(value)],
-    );
-    fb.switch_to_block(ours_check);
-    fb.seal_block(ours_check);
-    // Reloaded: a nested push may have reallocated the specpdl.
-    let base2 = fb.ins().load(ptr_ty, flags, vmctx, spec_ptr_off);
-    let byte_off2 = ishl_imm_p(fb, len, 5);
-    let at2 = fb.ins().iadd(base2, byte_off2);
-    let word = fb
-        .ins()
-        .load(types::I64, flags, at2, site.frame.header_offset as i32);
-    let mask = fb.ins().iconst(types::I64, site.frame.header_mask as i64);
-    let masked = fb.ins().band(word, mask);
-    let header2 = fb
-        .ins()
-        .iconst(types::I64, site.frame.header_with(site.small) as i64);
-    let ours = fb.ins().icmp(IntCC::Equal, masked, header2);
-    let pop = fb.create_block();
-    fb.ins().brif(
-        ours,
-        pop,
-        &[],
-        cold,
-        &[BlockArg::Value(status_ok), BlockArg::Value(value)],
-    );
-    fb.seal_block(cold);
-    fb.switch_to_block(pop);
-    fb.seal_block(pop);
-    fb.ins().store(flags, len, vmctx, spec_len_off);
-    let depth2 = fb
-        .ins()
-        .load(types::I64, flags, vmctx, CONTEXT_DEPTH_OFFSET as i32);
-    let depth3 = iadd_imm_p(fb, depth2, -1);
-    fb.ins()
-        .store(flags, depth3, vmctx, CONTEXT_DEPTH_OFFSET as i32);
-    fb.def_var(result, value);
-    match hot_done {
-        Some(hot_done) => {
-            fb.ins().jump(hot_done, &[]);
+        // The trampoline consumes the original call's arguments, including
+        // the one/two-word frames whose arguments are otherwise inline.
+        for (i, &a) in args.iter().enumerate() {
+            fb.ins()
+                .stack_store(ptr_ty, a, rt.call_args_slot, (i * 8) as i32);
         }
-        None => {
-            // A source site: the value where the other paths leave theirs.
-            fb.ins().stack_store(ptr_ty, value, rt.call_result_slot, 0);
-            let ok = fb.ins().iconst(types::I64, STATUS_OK);
-            fb.def_var(status_var, ok);
+        let args_addr = fb.ins().stack_addr(ptr_ty, rt.call_args_slot, 0);
+        let out_addr = fb.ins().stack_addr(ptr_ty, rt.call_result_slot, 0);
+        // The status join loads this word even on a signal. It is then
+        // ignored, but keep it a valid value before any exceptional return.
+        let nil = fb.ins().iconst(types::I64, Value::NIL.bits() as i64);
+        fb.ins().stack_store(ptr_ty, nil, rt.call_result_slot, 0);
+        let n_val = fb.ins().iconst(types::I64, site.nargs as i64);
+        let expected = match callee {
+            DirectCallee::Symbol { exp_v, .. } => exp_v,
+            DirectCallee::Source { callee } => callee,
+        };
+        let trampoline = rt
+            .refs
+            .try_get(fb.func, Shim::DirectFramed)
+            .expect("a framed direct site declares its trampoline");
+        let call = fb.ins().call(
+            trampoline,
+            &[vmctx, expected, leaf, aux, args_addr, n_val, len, out_addr],
+        );
+        let status = fb.inst_results(call)[0];
+        fb.def_var(status_var, status);
+        let loaded = fb
+            .ins()
+            .stack_load(ptr_ty, types::I64, rt.call_result_slot, 0);
+        fb.def_var(result, loaded);
+        // Rust owns every cleanup. A contained panic deliberately retains
+        // detached depth/frame residue for caller healing. The generated
+        // raw pop below must never run for this call.
+        if let Some(hot_done) = hot_done {
+            let ok = icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
+            fb.ins().brif(ok, hot_done, &[], join, &[]);
+        } else {
             fb.ins().jump(join, &[]);
         }
+        if let Some(raw) = raw {
+            fb.switch_to_block(raw);
+            fb.seal_block(raw);
+        }
     }
+    if site.entry != DirectSiteEntry::Framed {
+        let sig = fb.import_signature(
+            LeafAbi::Register {
+                arity: site.callee.arity() as u8,
+            }
+            .signature(rt.refs.call_conv, ptr_ty),
+        );
+        let mut call_args: SmallVec<[ClifValue; 8]> = SmallVec::new();
+        call_args.extend([vmctx, aux]);
+        call_args.extend(regs.iter().copied());
+        let call = fb.ins().call_indirect(sig, entry, &call_args);
+        let (value, status) = {
+            let r = fb.inst_results(call);
+            (r[0], r[1])
+        };
+        let cold = fb.create_block();
+        fb.append_block_param(cold, types::I64); // status
+        fb.append_block_param(cold, types::I64); // value
+        fb.set_cold_block(cold);
+        let returned = fb.create_block();
+        let ok = icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
+        fb.ins().brif(
+            ok,
+            returned,
+            &[],
+            cold,
+            &[BlockArg::Value(status), BlockArg::Value(value)],
+        );
+        // The pop: the specpdl is back to our frame, and the frame is still the
+        // one we pushed (a flagged or promoted frame goes to the finish, which
+        // runs the exit debugger).
+        fb.switch_to_block(returned);
+        fb.seal_block(returned);
+        // Recomputed rather than kept: Cranelift does not rematerialize, and a
+        // value kept across the call costs a callee-saved register or a spill.
+        let status_ok = fb.ins().iconst(types::I64, STATUS_OK);
+        let len1 = iadd_imm_p(fb, len, 1);
+        let len2 = fb.ins().load(types::I64, flags, vmctx, spec_len_off);
+        let balanced = fb.ins().icmp(IntCC::Equal, len2, len1);
+        let ours_check = fb.create_block();
+        fb.ins().brif(
+            balanced,
+            ours_check,
+            &[],
+            cold,
+            &[BlockArg::Value(status_ok), BlockArg::Value(value)],
+        );
+        fb.switch_to_block(ours_check);
+        fb.seal_block(ours_check);
+        // Reloaded: a nested push may have reallocated the specpdl.
+        let base2 = fb.ins().load(ptr_ty, flags, vmctx, spec_ptr_off);
+        let byte_off2 = ishl_imm_p(fb, len, 5);
+        let at2 = fb.ins().iadd(base2, byte_off2);
+        let word = fb
+            .ins()
+            .load(types::I64, flags, at2, site.frame.header_offset as i32);
+        let mask = fb.ins().iconst(types::I64, site.frame.header_mask as i64);
+        let masked = fb.ins().band(word, mask);
+        let header2 = fb
+            .ins()
+            .iconst(types::I64, site.frame.header_with(site.small) as i64);
+        let ours = fb.ins().icmp(IntCC::Equal, masked, header2);
+        let pop = fb.create_block();
+        fb.ins().brif(
+            ours,
+            pop,
+            &[],
+            cold,
+            &[BlockArg::Value(status_ok), BlockArg::Value(value)],
+        );
+        fb.seal_block(cold);
+        fb.switch_to_block(pop);
+        fb.seal_block(pop);
+        fb.ins().store(flags, len, vmctx, spec_len_off);
+        let depth2 = fb
+            .ins()
+            .load(types::I64, flags, vmctx, CONTEXT_DEPTH_OFFSET as i32);
+        let depth3 = iadd_imm_p(fb, depth2, -1);
+        fb.ins()
+            .store(flags, depth3, vmctx, CONTEXT_DEPTH_OFFSET as i32);
+        fb.def_var(result, value);
+        match hot_done {
+            Some(hot_done) => {
+                fb.ins().jump(hot_done, &[]);
+            }
+            None => {
+                // A source site: the value where the other paths leave theirs.
+                fb.ins().stack_store(ptr_ty, value, rt.call_result_slot, 0);
+                let ok = fb.ins().iconst(types::I64, STATUS_OK);
+                fb.def_var(status_var, ok);
+                fb.ins().jump(join, &[]);
+            }
+        }
 
-    // The cold exit: the shim's own (`call_spec_finish`), by baked address.
-    fb.switch_to_block(cold);
-    let cold_status = fb.block_params(cold)[0];
-    let cold_value = fb.block_params(cold)[1];
-    let vmctx_c = fb.use_var(rt.vmctx_var);
-    let exp_c = match callee {
-        DirectCallee::Symbol { .. } => fb.ins().iconst(types::I64, site.expected as i64),
-        DirectCallee::Source { callee } => callee,
-    };
-    let args_c = if site.nargs <= 2 {
-        // The frame holds the arguments; the finish reads them there.
-        fb.ins().iconst(ptr_ty, 0)
-    } else {
-        fb.ins().stack_addr(ptr_ty, rt.call_args_slot, 0)
-    };
-    let nargs_c = fb.ins().iconst(types::I64, site.nargs as i64);
-    let out_c = fb.ins().stack_addr(ptr_ty, rt.call_result_slot, 0);
-    let finish_sig = fb.import_signature(finish_signature(rt.refs.call_conv, ptr_ty));
-    let finish_addr = fb
-        .ins()
-        .iconst(ptr_ty, neovm_jit_direct_finish as *const () as usize as i64);
-    let finish = fb.ins().call_indirect(
-        finish_sig,
-        finish_addr,
-        &[
-            vmctx_c,
-            exp_c,
-            leaf,
-            cold_status,
-            cold_value,
-            len,
-            args_c,
-            nargs_c,
-            out_c,
-        ],
-    );
-    let finished = fb.inst_results(finish)[0];
-    fb.def_var(status_var, finished);
-    let loaded = fb
-        .ins()
-        .stack_load(ptr_ty, types::I64, rt.call_result_slot, 0);
-    fb.def_var(result, loaded);
-    fb.ins().jump(join, &[]);
+        // The cold exit: the shim's own (`call_spec_finish`), by baked address.
+        fb.switch_to_block(cold);
+        let cold_status = fb.block_params(cold)[0];
+        let cold_value = fb.block_params(cold)[1];
+        let vmctx_c = fb.use_var(rt.vmctx_var);
+        let exp_c = match callee {
+            DirectCallee::Symbol { .. } => fb.ins().iconst(types::I64, site.expected as i64),
+            DirectCallee::Source { callee } => callee,
+        };
+        let args_c = if site.nargs <= 2 {
+            // The frame holds the arguments; the finish reads them there.
+            fb.ins().iconst(ptr_ty, 0)
+        } else {
+            fb.ins().stack_addr(ptr_ty, rt.call_args_slot, 0)
+        };
+        let nargs_c = fb.ins().iconst(types::I64, site.nargs as i64);
+        let out_c = fb.ins().stack_addr(ptr_ty, rt.call_result_slot, 0);
+        let finish_sig = fb.import_signature(finish_signature(rt.refs.call_conv, ptr_ty));
+        let finish_addr = fb
+            .ins()
+            .iconst(ptr_ty, neovm_jit_direct_finish as *const () as usize as i64);
+        let finish = fb.ins().call_indirect(
+            finish_sig,
+            finish_addr,
+            &[
+                vmctx_c,
+                exp_c,
+                leaf,
+                cold_status,
+                cold_value,
+                len,
+                args_c,
+                nargs_c,
+                out_c,
+            ],
+        );
+        let finished = fb.inst_results(finish)[0];
+        fb.def_var(status_var, finished);
+        let loaded = fb
+            .ins()
+            .stack_load(ptr_ty, types::I64, rt.call_result_slot, 0);
+        fb.def_var(result, loaded);
+        fb.ins().jump(join, &[]);
+    }
 
     // The shim, verbatim: the reference protocol.
     fb.switch_to_block(slow);

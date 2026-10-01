@@ -363,6 +363,7 @@ impl SharedJit {
                         tier2_profile: true,
                         direct_shapes: true,
                         call_census: true,
+                        direct_framed: true,
                     },
                 )?;
             }
@@ -384,6 +385,7 @@ impl SharedJit {
                 tier2_profile,
                 direct_shapes: true,
                 call_census: true,
+                direct_framed: true,
             },
         )?;
         *slot = Some(SharedModule {

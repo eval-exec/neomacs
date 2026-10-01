@@ -807,7 +807,7 @@ pub(crate) struct ShimAddr(*const ());
 unsafe impl Sync for ShimAddr {}
 
 #[used]
-pub(crate) static JIT_SHIM_TABLE: [(&str, ShimAddr); 63] = [
+pub(crate) static JIT_SHIM_TABLE: [(&str, ShimAddr); 64] = [
     ("neovm_jit_apply", ShimAddr(neovm_jit_apply as *const ())),
     ("neovm_jit_aref", ShimAddr(neovm_jit_aref as *const ())),
     ("neovm_jit_aset", ShimAddr(neovm_jit_aset as *const ())),
@@ -1014,6 +1014,10 @@ pub(crate) static JIT_SHIM_TABLE: [(&str, ShimAddr); 63] = [
     (
         "neovm_jit_call_spec_census",
         ShimAddr(super::dispatch::neovm_jit_call_spec_census as *const ()),
+    ),
+    (
+        "neovm_jit_direct_framed",
+        ShimAddr(super::direct_call::neovm_jit_direct_framed as *const ()),
     ),
 ];
 
