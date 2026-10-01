@@ -7,6 +7,7 @@
 //! moves it.
 
 use super::*;
+use neomacs_display_protocol::image_diagnostic::{ImageDiagnostic, ImageFormatName};
 use neomacs_display_runtime::render_thread::{ImageDecodeTerminal, RowRange};
 use neovm_core::emacs_core::image_catalog::{
     ImageLayoutExtent, ImageLoadAttempt, ImageLookup, ImagePlacement, PendingImage,
@@ -81,7 +82,10 @@ fn a_failure_after_bands_fails_the_slot() {
     let _ = image_lookup_from_terminal(pending.clone(), band(8));
     let lookup = image_lookup_from_terminal(
         pending.clone(),
-        ImageDecodeTerminal::Failed("truncated".to_owned()),
+        ImageDecodeTerminal::Failed(ImageDiagnostic::FormatError {
+            format: ImageFormatName::Png,
+            detail: "Read error".to_owned(),
+        }),
     );
 
     let ImageLookup::Failed(failed) = lookup else {
@@ -105,7 +109,7 @@ fn only_ready_and_failed_end_a_load() {
         ))
         .is_terminal()
     );
-    assert!(ImageDecodeTerminal::Failed("nope".to_owned()).is_terminal());
+    assert!(ImageDecodeTerminal::Failed(ImageDiagnostic::InvalidSize).is_terminal());
 }
 
 /// The placement a band publishes is the placement the load published, so a

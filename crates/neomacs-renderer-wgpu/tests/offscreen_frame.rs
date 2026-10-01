@@ -2123,6 +2123,7 @@ fn drive_banded_load(
         ImageFrameIndex::default(),
         ImageSequenceId::new(u64::from(image)).expect("non-zero test sequence"),
         neomacs_renderer_wgpu::SvgResourceContext::Isolated,
+        neomacs_display_protocol::image_diagnostic::ImageLoadIdentity::unspecified(),
     );
     let image_id = ImageId::new(image);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
@@ -2561,6 +2562,7 @@ fn a_failed_banded_decode_leaves_no_partial_texture() {
         ImageFrameIndex::default(),
         ImageSequenceId::new(909).expect("non-zero test sequence"),
         neomacs_renderer_wgpu::SvgResourceContext::Isolated,
+        neomacs_display_protocol::image_diagnostic::ImageLoadIdentity::unspecified(),
     );
     let image_id = ImageId::new(909);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);

@@ -130,13 +130,19 @@ fn ready_and_failed_terminals_consume_their_active_generations() {
     assert_eq!(loads.active.len(), 1);
 
     assert!(matches!(
-        loads.take_current(WorkerDecodeOutcome::Failed(failed)),
-        Some(WorkerDecodeOutcome::Failed(_))
+        loads.take_current(WorkerDecodeOutcome::Failed {
+            load: failed,
+            diagnostic: test_diagnostic()
+        }),
+        Some(WorkerDecodeOutcome::Failed { .. })
     ));
     assert!(loads.active.is_empty());
     assert!(
         loads
-            .take_current(WorkerDecodeOutcome::Failed(failed))
+            .take_current(WorkerDecodeOutcome::Failed {
+                load: failed,
+                diagnostic: test_diagnostic()
+            })
             .is_none()
     );
 }
@@ -167,6 +173,7 @@ fn decoder_worker_survives_a_panicking_request() {
             colors: ImageColorContext::default(),
             mask: ImageMaskPolicy::default(),
             frame: ImageFrameIndex::default(),
+            identity: test_load_identity(),
         })
         .unwrap();
     request_tx
@@ -183,13 +190,14 @@ fn decoder_worker_survives_a_panicking_request() {
             colors: ImageColorContext::default(),
             mask: ImageMaskPolicy::default(),
             frame: ImageFrameIndex::default(),
+            identity: test_load_identity(),
         })
         .unwrap();
     drop(request_tx);
 
     assert!(matches!(
         outcome_rx.recv().unwrap(),
-        WorkerDecodeOutcome::Failed(load) if load == panicking
+        WorkerDecodeOutcome::Failed { load, .. } if load == panicking
     ));
     assert!(matches!(
         outcome_rx.recv().unwrap(),
@@ -2635,4 +2643,20 @@ fn a_jpeg_below_the_threshold_publishes_no_bands() {
         !above.is_empty(),
         "a JPEG at the threshold decodes in bands"
     );
+}
+
+#[path = "decode_diagnostic.rs"]
+mod decode_diagnostic;
+
+/// A diagnostic for tests that only exercise scheduling, not wording.
+fn test_diagnostic() -> neomacs_display_protocol::image_diagnostic::ImageDiagnostic {
+    neomacs_display_protocol::image_diagnostic::ImageDiagnostic::InvalidSize
+}
+
+fn test_load_identity() -> neomacs_display_protocol::image_diagnostic::ImageLoadIdentity {
+    use neomacs_display_protocol::image_diagnostic::{ImageDiagnosticSubject, ImageFormatName};
+    ImageLoadIdentity::new(
+        ImageFormatName::Png,
+        ImageDiagnosticSubject::File(String::new()),
+    )
 }

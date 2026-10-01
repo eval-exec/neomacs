@@ -1594,9 +1594,21 @@ impl LayoutEngine {
     ) -> FrameLayoutAttempt {
         debug_assert!(purpose.query_window().is_none());
         self.layout_frame_rust_for_purpose_inner(evaluator, frame_id, purpose);
+        self.report_image_failures(evaluator);
         self.last_frame_display_state
             .take()
             .map_or(FrameLayoutAttempt::Aborted, FrameLayoutAttempt::Prepared)
+    }
+
+    /// Report every image failure this pass observed.
+    ///
+    /// One point, after the pass that performed the lookups, because that is
+    /// where GNU reports too: `lookup_image` runs from the display iterator and
+    /// its `image_error` lands in the same redisplay. Putting it here rather
+    /// than at each of this engine's exits is what makes it unmissable — a new
+    /// early return cannot skip it.
+    fn report_image_failures(&self, evaluator: &mut neovm_core::emacs_core::Context) {
+        evaluator.log_pending_image_diagnostics();
     }
 
     fn layout_frame_rust_for_purpose_inner(
@@ -3535,6 +3547,7 @@ impl LayoutEngine {
                 )
             },
         );
+        self.report_image_failures(evaluator);
         let query = query.ok_or(neovm_core::window::WindowLayoutQueryFailure::DidNotConverge)?;
         let query_restart_rows = std::mem::take(&mut self.query_restart_rows);
         tracing::trace!(target: "neomacs_layout_engine::query_cache",

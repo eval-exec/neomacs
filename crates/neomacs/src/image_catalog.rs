@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, TryLockError};
 use std::time::Duration;
 
+use neomacs_display_protocol::image_diagnostic::ImageDiagnostic;
 use neomacs_display_protocol::{ImageSequenceId, ImageSequenceRetirement};
 use neomacs_display_runtime::render_thread::{
     ImageDecodeTerminal, ImageProbeSource, ImageTerminalProbe, SharedImageRenderState,
@@ -160,6 +161,25 @@ pub(super) struct AsyncImageCatalog {
     /// GNU `image_find_image_fd` search path (`data-directory/images`, then
     /// `x-bitmap-file-path`), used to resolve relative image `:file`s.
     search_path: Vec<String>,
+    /// Failures a display path has observed and the evaluator has not yet
+    /// logged, in observation order.
+    ///
+    /// Filled inside `lookup` rather than at its call sites, which is the
+    /// point: a consumer that only wants the placeholder geometry would
+    /// otherwise drop the reason, and that is exactly how this codebase came
+    /// to have no image-failure path at all.
+    failed_diagnostics: RefCell<Vec<ImageDiagnostic>>,
+    /// The load attempt each image's failure has already been reported for.
+    ///
+    /// GNU reports from inside `lookup_image` and can afford to, because its
+    /// display iterator does not run between glyph regenerations. Neomacs'
+    /// layout consults this catalog once per pass whether or not anything
+    /// changed, so a report per lookup would grow a line in *Messages* on
+    /// every redisplay tick. Keying the report on the load attempt keeps the
+    /// cadence a user sees the same as GNU's: one line when the image first
+    /// fails to draw, none while the frame merely redisplays, and another
+    /// whenever the image is loaded again.
+    reported_failures: RefCell<HashMap<ImageId, ImageLoadToken>>,
 }
 
 impl AsyncImageCatalog {
@@ -182,6 +202,8 @@ impl AsyncImageCatalog {
             size_limit: Cell::new(ImageSizeLimit::default()),
             home_directory: home_directory_from_environment(),
             search_path: vec![image_data_directory().to_string_lossy().into_owned()],
+            failed_diagnostics: RefCell::new(Vec::new()),
+            reported_failures: RefCell::new(HashMap::new()),
         }
     }
 
@@ -288,7 +310,7 @@ impl AsyncImageCatalog {
                         %error,
                         "failed to re-queue image decode after display reset"
                     );
-                    CatalogEntry::Failed(pending.failed(error))
+                    CatalogEntry::Failed(pending.failed(ImageDiagnostic::NotDrawable))
                 }
             };
         }
@@ -300,10 +322,16 @@ impl AsyncImageCatalog {
         limit: ImageSizeLimit,
     ) -> Result<Option<ReadyImage>, String> {
         let normalized_request = self.classify_request(request.clone()).0;
-        let pending = match self.lookup(request.clone(), limit) {
+        let pending = match self.lookup_inner(request.clone(), limit) {
             ImageLookup::Ready(image) => return Ok(Some(image)),
             ImageLookup::Pending(image) => image,
-            ImageLookup::Failed(failed) => return Err(failed.error),
+            ImageLookup::Failed(failed) => {
+                // `image-size` asks about one image and GNU logs every time it
+                // is asked, so this path reports even a failure the display
+                // side has already reported.
+                self.record_failure_always(&failed);
+                return Err(failed.error.message());
+            }
         };
         let placement = pending.placement();
 
@@ -324,7 +352,7 @@ impl AsyncImageCatalog {
 
         match state {
             ImageLookup::Ready(image) => Ok(Some(image)),
-            ImageLookup::Failed(failed) => Err(failed.error),
+            ImageLookup::Failed(failed) => Err(failed.error.message()),
             ImageLookup::Pending(_) => unreachable!("terminal decode cannot remain pending"),
         }
     }
@@ -332,6 +360,53 @@ impl AsyncImageCatalog {
 
 impl ImageCatalog for AsyncImageCatalog {
     fn lookup(&self, request: ImageResolveRequest, limit: ImageSizeLimit) -> ImageLookup {
+        let lookup = self.lookup_inner(request, limit);
+        // Every return path of the inner lookup funnels through here,
+        // including ones added later, so a failed lookup cannot be consumed
+        // without the failure being recorded.
+        if let ImageLookup::Failed(failed) = &lookup {
+            self.record_failure(failed);
+        }
+        lookup
+    }
+
+    fn take_pending_diagnostics(&self) -> Vec<String> {
+        self.failed_diagnostics
+            .borrow_mut()
+            .drain(..)
+            .map(|diagnostic| diagnostic.message())
+            .collect()
+    }
+}
+
+impl AsyncImageCatalog {
+    /// Report a failure unless this load attempt has already been reported.
+    fn record_failure(&self, failed: &FailedImage) {
+        let image = failed.load().image();
+        let mut reported = self.reported_failures.borrow_mut();
+        if reported.get(&image) == Some(&failed.load()) {
+            return;
+        }
+        reported.insert(image, failed.load());
+        self.failed_diagnostics
+            .borrow_mut()
+            .push(failed.error.clone());
+    }
+
+    /// Report a failure regardless of whether it has been reported before.
+    ///
+    /// For the synchronous path, where the caller asked about this one image
+    /// and GNU answers with `image_error` every time it is asked.
+    fn record_failure_always(&self, failed: &FailedImage) {
+        self.reported_failures
+            .borrow_mut()
+            .insert(failed.load().image(), failed.load());
+        self.failed_diagnostics
+            .borrow_mut()
+            .push(failed.error.clone());
+    }
+
+    fn lookup_inner(&self, request: ImageResolveRequest, limit: ImageSizeLimit) -> ImageLookup {
         self.size_limit.set(limit);
         let (request, resolution) = self.classify_request(request);
         let mut entries = self.entries.borrow_mut();
@@ -349,7 +424,13 @@ impl ImageCatalog for AsyncImageCatalog {
                 resolution.as_ref(),
             ) {
                 Ok(()) => CatalogEntry::Pending(pending),
-                Err(error) => CatalogEntry::Failed(pending.failed(error)),
+                Err(error) => {
+                    // Not a decode failure: the render thread could not be
+                    // handed the job at all. GNU has no sentence for this,
+                    // because it has no second thread to lose.
+                    tracing::warn!(%error, "image load command could not be scheduled");
+                    CatalogEntry::Failed(pending.failed(ImageDiagnostic::NotDrawable))
+                }
             };
             entries.insert(request.clone(), state);
             self.schedule_header_probe(&request, resolution.as_ref(), load);
@@ -370,7 +451,13 @@ impl ImageCatalog for AsyncImageCatalog {
                 resolution.as_ref(),
             ) {
                 Ok(()) => CatalogEntry::Pending(pending),
-                Err(error) => CatalogEntry::Failed(pending.failed(error)),
+                Err(error) => {
+                    // Not a decode failure: the render thread could not be
+                    // handed the job at all. GNU has no sentence for this,
+                    // because it has no second thread to lose.
+                    tracing::warn!(%error, "image load command could not be scheduled");
+                    CatalogEntry::Failed(pending.failed(ImageDiagnostic::NotDrawable))
+                }
             };
             self.schedule_header_probe(&request, resolution.as_ref(), load);
         }
@@ -614,6 +701,12 @@ impl AsyncImageCatalog {
     }
 
     fn retire_image_ids(&self, removed: Vec<ImageId>) {
+        {
+            let mut reported = self.reported_failures.borrow_mut();
+            for image in &removed {
+                reported.remove(image);
+            }
+        }
         for image in removed {
             let command = RenderCommand::Asset(AssetCommand::ImageRetire { image });
             if let Err(error) =
@@ -851,6 +944,7 @@ fn image_load_command(
             frame: request.frame,
             sequence,
             limit,
+            identity: request.identity.clone(),
         }),
         ImageResolveSource::Data(data) => RenderCommand::Asset(AssetCommand::ImageLoadData {
             load,
@@ -863,6 +957,7 @@ fn image_load_command(
             frame: request.frame,
             sequence,
             limit,
+            identity: request.identity.clone(),
         }),
     }
 }

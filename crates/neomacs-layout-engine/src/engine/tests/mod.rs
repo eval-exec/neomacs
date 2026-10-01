@@ -36949,9 +36949,9 @@ fn unchanged_frame_layout_consults_the_image_catalog_once_per_pass() {
         .current_buffer()
         .expect("current buffer")
         .id();
-    let frame_id = eval
-        .frame_manager_mut()
-        .create_frame("unchanged-frame-image-lookups", 640, 200, buf_id);
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("unchanged-frame-image-lookups", 640, 200, buf_id);
     realize_test_gui_frame(&mut eval, frame_id);
     {
         let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");

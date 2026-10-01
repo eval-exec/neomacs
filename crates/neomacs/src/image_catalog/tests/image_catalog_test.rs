@@ -1,4 +1,5 @@
 use super::*;
+use neomacs_display_protocol::image_diagnostic::ImageDiagnostic;
 use neomacs_display_runtime::render_thread::ImageRenderState;
 use neovm_core::emacs_core::Context;
 use neovm_core::emacs_core::Value;
@@ -622,14 +623,15 @@ fn a_refused_load_is_a_failed_lookup_carrying_gnus_diagnostic() {
 
     metadata.publish_terminal(
         load,
-        ImageDecodeTerminal::Failed(OversizedImage::MESSAGE.to_owned()),
+        ImageDecodeTerminal::Failed(ImageDiagnostic::InvalidSize),
     );
 
     let ImageLookup::Failed(failed) = catalog.lookup(request, ImageSizeLimit::UNLIMITED) else {
         panic!("a refused load must not stay pending");
     };
     assert_eq!(failed.load(), load);
-    assert_eq!(failed.error, OversizedImage::MESSAGE);
+    assert_eq!(failed.error, ImageDiagnostic::InvalidSize);
+    assert_eq!(failed.error.message(), OversizedImage::MESSAGE);
     assert_eq!(
         failed.placement().dimensions(),
         slot.dimensions(),

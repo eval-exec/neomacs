@@ -791,6 +791,7 @@ fn render_command_image_load_file() {
         sequence: neomacs_display_protocol::ImageSequenceId::new(11)
             .expect("non-zero test sequence"),
         limit: neomacs_display_protocol::ImageSizeLimit::from_axis_pixels(4096),
+        identity: neomacs_display_protocol::image_diagnostic::ImageLoadIdentity::unspecified(),
     });
     match cmd {
         RenderCommand::Asset(AssetCommand::ImageLoadFile {
@@ -804,6 +805,7 @@ fn render_command_image_load_file() {
             frame,
             sequence,
             limit,
+            identity: _,
         }) => {
             assert_eq!(actual_load, load);
             assert_eq!(path, "/home/user/photo.png");

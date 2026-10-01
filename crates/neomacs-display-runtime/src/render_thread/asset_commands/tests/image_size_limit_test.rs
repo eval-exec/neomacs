@@ -23,7 +23,7 @@ fn load(image: u32) -> ImageLoadToken {
 
 fn refused(event: Option<neomacs_renderer_wgpu::ImageCacheEvent>) -> String {
     match event {
-        Some(neomacs_renderer_wgpu::ImageCacheEvent::Failed { error, .. }) => error,
+        Some(neomacs_renderer_wgpu::ImageCacheEvent::Failed { error, .. }) => error.message(),
         other => panic!("expected a refused load, got {other:?}"),
     }
 }
@@ -39,7 +39,15 @@ fn an_image_over_the_limit_is_refused_with_gnus_own_diagnostic() {
         ImageSizeLimit::from_axis_pixels(100),
     );
 
-    assert_eq!(refused(event), OversizedImage::MESSAGE);
+    let Some(neomacs_renderer_wgpu::ImageCacheEvent::Failed { error, .. }) = event else {
+        panic!("expected a refused load, got {event:?}");
+    };
+    assert_eq!(
+        error,
+        neomacs_display_protocol::image_diagnostic::ImageDiagnostic::InvalidSize,
+        "the refusal is GNU's own size diagnostic, not a bare message"
+    );
+    assert_eq!(error.message(), OversizedImage::MESSAGE);
     assert_eq!(
         OversizedImage::MESSAGE,
         "Invalid image size (see `max-image-size')"

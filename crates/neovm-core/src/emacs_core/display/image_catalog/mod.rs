@@ -10,7 +10,9 @@ use crate::heap_types::LispString;
 use crate::window::Frame;
 pub use neomacs_display_protocol::ImageRealization as ResolvedImageRealization;
 pub use neomacs_display_protocol::image::EncodedBytes;
-use neomacs_display_protocol::image_diagnostic::{ImageDiagnosticSubject, ImageFormatName};
+use neomacs_display_protocol::image_diagnostic::ImageDiagnostic;
+pub use neomacs_display_protocol::image_diagnostic::ImageLoadIdentity;
+pub use neomacs_display_protocol::image_diagnostic::{ImageDiagnosticSubject, ImageFormatName};
 pub use neomacs_display_protocol::{
     AxisSize, ImageColorContext, ImageEmbeddedMetadata, ImageFrameDelay, ImageFrameIndex,
     ImageHeuristicMask, ImageId, ImageLayoutExtent, ImageLoadAttempt, ImageLoadToken,
@@ -291,41 +293,6 @@ pub enum ImageResolveSource {
 
 pub use crate::image_identity::ImageSpecIdentity;
 
-/// What GNU calls the source a load command is about.
-///
-/// GNU words its image diagnostics with the *declared* type and with the
-/// subject the source actually has. The type is a fact about the request, not
-/// about the bytes: an image declared `png` whose bytes are a JPEG is a PNG its
-/// loader refused, and GNU says so (`Not a PNG file: `%s'`, `src/image.c:8302`).
-/// The subject differs the same way — a `:data` image has no file to name, so
-/// GNU prints the whole specification instead (`src/image.c:8323`). Both have
-/// to reach the loader that words the failure, and this is the last point at
-/// which the specification is still a Lisp object to print.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ImageLoadIdentity {
-    format: ImageFormatName,
-    subject: ImageDiagnosticSubject,
-}
-
-impl ImageLoadIdentity {
-    #[must_use]
-    pub const fn new(format: ImageFormatName, subject: ImageDiagnosticSubject) -> Self {
-        Self { format, subject }
-    }
-
-    /// The image's declared GNU type, as its loaders spell it.
-    #[must_use]
-    pub const fn format(&self) -> &ImageFormatName {
-        &self.format
-    }
-
-    /// What GNU names when it has to say which image failed.
-    #[must_use]
-    pub const fn subject(&self) -> &ImageDiagnosticSubject {
-        &self.subject
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ImageResolveRequest {
     /// Full Lisp-spec identity. Parsed fields below are the materialization
@@ -534,7 +501,10 @@ pub struct PendingImage {
 pub struct FailedImage {
     load: ImageLoadToken,
     placement: ImagePlacement,
-    pub error: String,
+    /// GNU's diagnostic for the failure.  It is a value with its own text
+    /// rather than a message string, so a consumer cannot hold the failure
+    /// without also holding what to say about it.
+    pub error: ImageDiagnostic,
 }
 
 impl PendingImage {
@@ -557,7 +527,7 @@ impl PendingImage {
     }
 
     #[must_use]
-    pub fn failed(self, error: String) -> FailedImage {
+    pub fn failed(self, error: ImageDiagnostic) -> FailedImage {
         FailedImage {
             load: self.load,
             placement: self.placement,
@@ -645,6 +615,21 @@ pub trait ImageCatalog {
     /// `image-cache-size`. Default 0 when the host does not track accounting.
     fn cached_size_bytes(&self) -> i64 {
         0
+    }
+
+    /// Take the failures this catalog has observed since the last call, as
+    /// GNU's `image_error` would have worded them.
+    ///
+    /// A failure is recorded by [`Self::lookup`] itself, so no consumer of a
+    /// failed lookup can consume its geometry and forget the reason. What
+    /// remains is to *say* it: `Context::log_pending_image_diagnostics` is the
+    /// one place that does, and it is called from the same pass that performed
+    /// the lookups. Hosts without a catalog return nothing.
+    ///
+    /// The strings are GNU's C-level text; the caller applies
+    /// `text-quoting-style` exactly as GNU's `vadd_to_log` does.
+    fn take_pending_diagnostics(&self) -> Vec<String> {
+        Vec::new()
     }
 
     /// Reconcile catalog lifecycle with renderer-published state before a

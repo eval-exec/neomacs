@@ -138,6 +138,61 @@ impl Display for ImageDiagnosticSubject {
     }
 }
 
+/// What GNU calls the source a load command is about.
+///
+/// GNU words its image diagnostics with the *declared* type and with the
+/// subject the source actually has. The type is a fact about the request, not
+/// about the bytes: an image declared `png` whose bytes are a JPEG is a PNG its
+/// loader refused, and GNU says so (`Not a PNG file: `%s'`, `src/image.c:8302`).
+/// The subject differs the same way — a `:data` image has no file to name, so
+/// GNU prints the whole specification instead (`src/image.c:8323`). Both have
+/// to reach the loader that words the failure.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ImageLoadIdentity {
+    format: ImageFormatName,
+    subject: ImageDiagnosticSubject,
+}
+
+impl ImageLoadIdentity {
+    #[must_use]
+    pub const fn new(format: ImageFormatName, subject: ImageDiagnosticSubject) -> Self {
+        Self { format, subject }
+    }
+
+    /// The image's declared GNU type, as its loaders spell it.
+    #[must_use]
+    pub const fn format(&self) -> &ImageFormatName {
+        &self.format
+    }
+
+    /// What GNU names when it has to say which image failed.
+    #[must_use]
+    pub const fn subject(&self) -> &ImageDiagnosticSubject {
+        &self.subject
+    }
+
+    /// An identity for a source that arrived with no specification at all.
+    ///
+    /// Only the specification-free load entry points use this. GNU has no such
+    /// path — every image it loads comes from a Lisp specification that names
+    /// its type — so a failure here has no GNU wording to borrow, and
+    /// [`Self::is_unspecified`] is what stops one from being dressed in some.
+    #[must_use]
+    pub fn unspecified() -> Self {
+        Self {
+            format: ImageFormatName::Other(String::new()),
+            subject: ImageDiagnosticSubject::Spec(String::new()),
+        }
+    }
+
+    /// Whether this source came with no specification to word a failure with.
+    #[must_use]
+    pub fn is_unspecified(&self) -> bool {
+        matches!((&self.format, &self.subject), (ImageFormatName::Other(name), ImageDiagnosticSubject::Spec(printed))
+            if name.is_empty() && printed.is_empty())
+    }
+}
+
 /// One GNU image-failure diagnostic.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ImageDiagnostic {
@@ -170,6 +225,15 @@ pub enum ImageDiagnostic {
     /// `check_image_size` (`src/image.c:1811`) for a source over
     /// `max-image-size`.
     InvalidSize,
+    /// The bytes decoded, and Neomacs still could not turn them into something
+    /// drawable.
+    ///
+    /// This variant exists to keep a gap visible rather than to fill it: GNU
+    /// has no single sentence for this case, because its loaders report their
+    /// own allocation failures in their own words (`Unable to create X
+    /// pixmap`, `Unable to allocate X image`). Dressing a Neomacs limitation
+    /// in GNU's vocabulary would make a divergence look like compatibility.
+    NotDrawable,
 }
 
 impl ImageDiagnostic {
@@ -203,6 +267,7 @@ impl ImageDiagnostic {
                 other => format!("{other} error: {detail}"),
             },
             Self::InvalidSize => Self::INVALID_SIZE_MESSAGE.to_owned(),
+            Self::NotDrawable => "Unable to create image".to_owned(),
         }
     }
 }
@@ -216,3 +281,26 @@ impl Display for ImageDiagnostic {
 #[cfg(test)]
 #[path = "image_diagnostic/tests/diagnostic_test.rs"]
 mod diagnostic_tests;
+
+impl ImageLoadIdentity {
+    /// The diagnostic for bytes that are not this image's declared format.
+    ///
+    /// The subject decides GNU's noun: a `:file` gives `Not a PNG file:`, a
+    /// `:data` gives `Not a PNG image:`, and a loader with neither arm for its
+    /// type reports invalid data instead.
+    #[must_use]
+    pub fn wrong_format(&self) -> ImageDiagnostic {
+        ImageDiagnostic::NotAFormat {
+            format: self.format.clone(),
+            subject: self.subject.clone(),
+        }
+    }
+
+    /// The diagnostic for a source whose bytes could not be read at all.
+    #[must_use]
+    pub fn not_found(&self) -> ImageDiagnostic {
+        ImageDiagnostic::FileNotFound {
+            file: self.subject.as_str().to_owned(),
+        }
+    }
+}

@@ -1030,7 +1030,16 @@ pub(crate) fn builtin_image_size_in_context(eval: &mut Context, args: Vec<Value>
 
     let resolved = display_host
         .resolve_image_sync(request, environment.size_limit())
-        .map_err(|message| signal("error", vec![Value::string(message)]))?;
+        .map_err(|message| {
+            // `image-size` on a failing image logs in GNU (`lookup_image` runs
+            // inside `Fimage_size`) even though it also returns the
+            // placeholder size rather than signalling. The message is reported
+            // here, on the way out, so the diagnostic does not have to wait for
+            // a redisplay that may never come.
+            eval.log_pending_image_diagnostics();
+            signal("error", vec![Value::string(message)])
+        })?;
+    eval.log_pending_image_diagnostics();
     let Some(image) = resolved else {
         return Err(signal(
             "error",
@@ -1829,3 +1838,39 @@ pub(crate) fn builtin_image_transforms_p(
 #[cfg(test)]
 #[path = "tests/mod.rs"]
 mod tests;
+
+impl Context {
+    /// Report every image failure a display path has observed since the last
+    /// call, in GNU's words.
+    ///
+    /// GNU reports from inside `lookup_image` (`src/image.c:3568`): an image a
+    /// user never displays is never reported, and one that fails to draw says
+    /// so the moment something tries to draw it. Neomacs' display path reaches
+    /// the catalog through `DisplayHost::image_catalog`, which has no evaluator
+    /// to log with — so the catalog records the failure where it observes it
+    /// and this drains it, in the same pass and on the same thread. That is
+    /// what keeps the *when* the same even though the *where* cannot be.
+    ///
+    /// The text passes through `text-quoting-style` because GNU's `vadd_to_log`
+    /// runs each diagnostic through `Fformat_message` before logging it.
+    /// Without that step `*Messages*` would hold the grave accents of
+    /// `src/image.c`'s string literals, where GNU shows `‘…’`.
+    pub fn log_pending_image_diagnostics(&mut self) {
+        // Collect first so the immutable borrow of the display host has ended
+        // by the time `add_to_log` appends to *Messages*.
+        let diagnostics = self
+            .display_host
+            .as_ref()
+            .and_then(|host| host.image_catalog())
+            .map(|catalog| catalog.take_pending_diagnostics())
+            .unwrap_or_default();
+        if diagnostics.is_empty() {
+            return;
+        }
+        let quoting = crate::emacs_core::coding::effective_text_quoting_style(&self.obarray);
+        for diagnostic in diagnostics {
+            let message = crate::emacs_core::coding::requote_c_error_message(&diagnostic, quoting);
+            self.add_to_log(&message);
+        }
+    }
+}

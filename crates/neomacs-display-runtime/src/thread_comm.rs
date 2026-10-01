@@ -477,6 +477,11 @@ pub enum AssetCommand {
         /// source whose encoded header exceeds it before anything is decoded,
         /// so an image GNU would not load is never allocated here either.
         limit: neomacs_display_protocol::ImageSizeLimit,
+        /// What GNU calls this image in a failure diagnostic. It is stated by
+        /// the request rather than inferred here, because GNU's `:data` arm
+        /// names the printed specification and only the evaluator can print
+        /// one.
+        identity: neomacs_display_protocol::image_diagnostic::ImageLoadIdentity,
     },
     /// Load image from encoded data bytes (PNG, JPEG, SVG, etc.)
     ImageLoadData {
@@ -493,6 +498,8 @@ pub enum AssetCommand {
         sequence: neomacs_display_protocol::ImageSequenceId,
         /// See [`AssetCommand::ImageLoadFile::limit`].
         limit: neomacs_display_protocol::ImageSizeLimit,
+        /// See [`AssetCommand::ImageLoadFile::identity`].
+        identity: neomacs_display_protocol::image_diagnostic::ImageLoadIdentity,
     },
     /// Load image from raw ARGB32 pixel data
     ImageLoadArgb32 {

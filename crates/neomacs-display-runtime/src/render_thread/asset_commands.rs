@@ -36,7 +36,7 @@ fn oversized_load_event(
     );
     Some(neomacs_renderer_wgpu::ImageCacheEvent::Failed {
         load,
-        error: neomacs_display_protocol::OversizedImage::MESSAGE.to_owned(),
+        error: neomacs_display_protocol::image_diagnostic::ImageDiagnostic::InvalidSize,
     })
 }
 
@@ -99,6 +99,7 @@ impl RenderApp {
                 frame,
                 sequence,
                 limit,
+                identity,
             } => {
                 clear_image_terminals(&self.image_metadata, load.image());
                 if let Some(event) = oversized_load_event(
@@ -121,6 +122,7 @@ impl RenderApp {
                         mask,
                         frame,
                         sequence,
+                        identity,
                     );
                 } else {
                     tracing::warn!("Renderer not initialized, cannot load image {}", load);
@@ -138,6 +140,7 @@ impl RenderApp {
                 frame,
                 sequence,
                 limit,
+                identity,
             } => {
                 clear_image_terminals(&self.image_metadata, load.image());
                 if let Some(event) = oversized_load_event(
@@ -180,6 +183,7 @@ impl RenderApp {
                         frame,
                         sequence,
                         resources,
+                        identity,
                     );
                 } else {
                     tracing::warn!("Renderer not initialized, cannot load image data {}", load);

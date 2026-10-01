@@ -9,6 +9,7 @@ use crate::emacs_core::image_catalog::{
 };
 use crate::emacs_core::value::list_to_vec;
 use crate::face::{Color, FaceTable};
+use neomacs_display_protocol::image_diagnostic::ImageDiagnostic;
 use std::sync::{Arc, Mutex};
 
 fn test_image_load(id: u32) -> ImageLoadToken {
@@ -1923,4 +1924,126 @@ fn image_request_uses_the_default_face_colors_like_gnu() {
 
     assert_eq!(request.colors.foreground().rgb24(), 0x00112233);
     assert_eq!(request.colors.background().rgb24(), 0x00445566);
+}
+
+// -----------------------------------------------------------------------
+// Image failures in *Messages*
+// -----------------------------------------------------------------------
+
+/// A catalog the evaluator can ask for failures that a display path observed.
+struct FailingImageDisplayHost {
+    pending: Mutex<Vec<ImageDiagnostic>>,
+    lookups: Mutex<usize>,
+}
+
+impl FailingImageDisplayHost {
+    fn new(pending: Vec<ImageDiagnostic>) -> Self {
+        Self {
+            pending: Mutex::new(pending),
+            lookups: Mutex::new(0),
+        }
+    }
+}
+
+impl DisplayHost for FailingImageDisplayHost {
+    fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn image_catalog(&self) -> Option<&dyn ImageCatalog> {
+        Some(self)
+    }
+}
+
+impl ImageCatalog for FailingImageDisplayHost {
+    fn lookup(&self, _request: ImageResolveRequest, _limit: ImageSizeLimit) -> ImageLookup {
+        *self.lookups.lock().expect("lookup count") += 1;
+        ImageLookup::Failed(
+            PendingImage::new(test_image_load(9), ImageLayoutExtent::new(8, 8))
+                .failed(ImageDiagnostic::InvalidSize),
+        )
+    }
+
+    fn take_pending_diagnostics(&self) -> Vec<String> {
+        self.pending
+            .lock()
+            .expect("pending diagnostics")
+            .drain(..)
+            .map(|diagnostic| diagnostic.message())
+            .collect()
+    }
+}
+
+fn messages_text(eval: &Context) -> String {
+    eval.buffers
+        .find_buffer_by_name("*Messages*")
+        .map(|id| {
+            eval.buffers
+                .get(id)
+                .map(|buffer| buffer.buffer_string())
+                .unwrap_or_default()
+        })
+        .unwrap_or_default()
+}
+
+/// What a failed image puts in `*Messages*`, character for character.
+///
+/// GNU's `vadd_to_log` runs every `image_error` through `Fformat_message`, so
+/// the grave accents of `src/image.c`'s string literals reach a user as `‘…’`.
+/// Dropping that step would leave a line that differs from GNU's in exactly
+/// the characters a reader would notice first.
+#[test]
+fn a_failed_image_reaches_messages_with_gnus_quoting() {
+    let mut eval = Context::new();
+    eval.set_display_host(Box::new(FailingImageDisplayHost::new(vec![
+        ImageDiagnostic::FileNotFound {
+            file: "/tmp/imgmsg/does-not-exist.png".to_owned(),
+        },
+        ImageDiagnostic::InvalidSize,
+    ])));
+
+    eval.log_pending_image_diagnostics();
+
+    assert_eq!(
+        messages_text(&eval),
+        "Cannot find image file ‘/tmp/imgmsg/does-not-exist.png’\n\
+         Invalid image size (see ‘max-image-size’)\n",
+        "GNU 31.1's own lines, with the quotes `Fformat_message` produces"
+    );
+}
+
+/// A drain drains: the same failure is not logged again by the next call.
+#[test]
+fn a_drained_failure_is_not_logged_twice() {
+    let mut eval = Context::new();
+    eval.set_display_host(Box::new(FailingImageDisplayHost::new(vec![
+        ImageDiagnostic::InvalidSize,
+    ])));
+
+    eval.log_pending_image_diagnostics();
+    let once = messages_text(&eval);
+    eval.log_pending_image_diagnostics();
+
+    assert_eq!(once, "Invalid image size (see ‘max-image-size’)\n");
+    assert_eq!(messages_text(&eval), once);
+}
+
+/// `message-log-max` is GNU's switch for this, and it switches this off too:
+/// the diagnostic goes through the same `message_dolog` as any other message.
+#[test]
+fn a_nil_message_log_max_silences_image_diagnostics() {
+    let mut eval = Context::new();
+    eval.obarray_mut()
+        .set_symbol_value("message-log-max", Value::NIL);
+    eval.set_display_host(Box::new(FailingImageDisplayHost::new(vec![
+        ImageDiagnostic::InvalidSize,
+    ])));
+
+    eval.log_pending_image_diagnostics();
+
+    assert_eq!(messages_text(&eval), "");
 }

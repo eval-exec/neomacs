@@ -7,6 +7,7 @@
 //! - LRU cache with memory limits
 
 use neomacs_display_protocol::image::EncodedBytes;
+use neomacs_display_protocol::image_diagnostic::{ImageDiagnostic, ImageLoadIdentity};
 use neomacs_display_protocol::{
     ImageCacheUsage, ImageColorContext, ImageEmbeddedMetadata, ImageFrameIndex, ImageHeuristicMask,
     ImageId, ImageIntrinsicExtent, ImageLayoutExtent, ImageLoadAttempt, ImageLoadToken,
@@ -446,7 +447,10 @@ enum WorkerDecodeOutcome {
         decoded: DecodedBand,
     },
     Ready(DecodedImage),
-    Failed(ImageLoadToken),
+    Failed {
+        load: ImageLoadToken,
+        diagnostic: ImageDiagnostic,
+    },
 }
 
 impl WorkerDecodeOutcome {
@@ -454,7 +458,7 @@ impl WorkerDecodeOutcome {
         match self {
             Self::Band { load, .. } => *load,
             Self::Ready(decoded) => decoded.load,
-            Self::Failed(load) => *load,
+            Self::Failed { load, .. } => *load,
         }
     }
 }
@@ -480,7 +484,7 @@ pub enum ImageCacheEvent {
     },
     Failed {
         load: ImageLoadToken,
-        error: String,
+        error: ImageDiagnostic,
     },
     Evicted {
         image: ImageId,
@@ -661,6 +665,99 @@ struct DecodeRequest {
     colors: ImageColorContext,
     mask: ImageMaskPolicy,
     frame: ImageFrameIndex,
+    /// What GNU calls this source when the decode fails.  It travels with the
+    /// job because the failure is worded by the loader's own rules (`Not a PNG
+    /// file: `%s'`), and the job is the last place that knows both the bytes
+    /// and what they were asked to be.
+    identity: ImageLoadIdentity,
+}
+
+/// What a decode job can still say about a source once the decode chain has
+/// collapsed every reason to `None`.
+///
+/// The chain that answers `Option` — banded attempt, whole-image decode, XPM,
+/// XBM, SVG — loses its reason at every fallback: a banded attempt that cannot
+/// finish hands the same bytes to the whole-image path, which hands them to
+/// the next format. GNU does not have this problem because each of its loaders
+/// checks its own signature and reports its own decoder's message, so the
+/// reason is recovered here from the two facts that survive: which source was
+/// asked for, and what its bytes turned out to be.
+enum DecodeFailureSource {
+    /// A `:file` source, named by the path a load command was given.
+    File { path: String },
+    /// A `:data` source, whose bytes are already in hand.
+    Bytes { data: EncodedBytes },
+    /// Raw pixels handed over by a caller, with no encoded format to name and
+    /// no GNU loader behind them.
+    Raw,
+}
+
+impl DecodeFailureSource {
+    /// Capture the source before the decode consumes it.
+    ///
+    /// Both captures are cheap references to what the job already owns — a
+    /// path clone and a handle to the same bytes — because this runs on the
+    /// decode path for every job, not only the failing ones.
+    fn of(source: &ImageSource) -> Self {
+        match source {
+            ImageSource::File { path, .. } => Self::File { path: path.clone() },
+            ImageSource::Data { data, .. } => Self::Bytes { data: data.clone() },
+            ImageSource::RawArgb32 { .. } | ImageSource::RawRgb24 { .. } => Self::Raw,
+            #[cfg(test)]
+            ImageSource::Panic => Self::Raw,
+        }
+    }
+
+    fn diagnostic(&self, identity: &ImageLoadIdentity) -> ImageDiagnostic {
+        // A source that arrived without a specification has no declared type
+        // and no printed spec, so there is no GNU sentence that is true of it.
+        if identity.is_unspecified() {
+            return ImageDiagnostic::NotDrawable;
+        }
+        match self {
+            // GNU asks `emacs_open` first and only then checks the signature
+            // (`src/image.c:8282-8303`), so "the file is not there" and "the
+            // file is not a PNG" are different sentences. Re-reading on the
+            // failure path is what recovers that distinction: it happens once,
+            // only when the decode has already failed.
+            Self::File { path } => match std::fs::read(path) {
+                Err(_) => identity.not_found(),
+                Ok(bytes) => Self::from_bytes(identity, &bytes),
+            },
+            Self::Bytes { data } => Self::from_bytes(identity, data.as_slice()),
+            Self::Raw => ImageDiagnostic::NotDrawable,
+        }
+    }
+
+    fn from_bytes(identity: &ImageLoadIdentity, data: &[u8]) -> ImageDiagnostic {
+        if image::guess_format(data).is_err() {
+            return identity.wrong_format();
+        }
+        // The format was recognised and the decode failed inside it, which is
+        // GNU's `PNG error: %s` / `Error reading JPEG image ...` arm.
+        let format = identity.format().clone();
+        match image::load_from_memory(data) {
+            // libpng's `png_read_data` reports a short read as `Read error`,
+            // and a stream that ends early is exactly what the `image` crate
+            // calls `UnexpectedEof`. Anything else keeps the decoder's own
+            // words, which is what GNU passes through verbatim
+            // (`image_error ("PNG error: %s", ...)`, `src/image.c:8184`).
+            Err(image::ImageError::IoError(error))
+                if error.kind() == std::io::ErrorKind::UnexpectedEof =>
+            {
+                ImageDiagnostic::FormatError {
+                    format,
+                    detail: "Read error".to_owned(),
+                }
+            }
+            Err(error) => ImageDiagnostic::FormatError {
+                format,
+                detail: error.to_string(),
+            },
+            // The bytes decoded; something after the decoder refused them.
+            Ok(_) => ImageDiagnostic::NotDrawable,
+        }
+    }
 }
 
 /// Image source
@@ -836,6 +933,7 @@ impl ImageCache {
                         colors,
                         mask,
                         frame,
+                        identity,
                     } = request;
                     // A banded decode reports each band as it lands, which is
                     // the whole point of decoding that way: the display side
@@ -850,6 +948,11 @@ impl ImageCache {
                         let _ = tx.send(WorkerDecodeOutcome::Band { load, decoded });
                     };
                     let sink: Option<&mut dyn FnMut(DecodedBand)> = Some(&mut publish_band);
+                    // The chain below answers `Option` and each arm collapses
+                    // its own reason, so what the failure is worded *about* is
+                    // captured before the bytes are handed over: the source
+                    // itself, and whether reading it worked at all.
+                    let failure_source = DecodeFailureSource::of(&source);
                     let result = catch_unwind(AssertUnwindSafe(|| match source {
                         #[cfg(test)]
                         ImageSource::Panic => panic!("injected decoder panic"),
@@ -908,14 +1011,20 @@ impl ImageCache {
                         Ok(Some(pixels)) => {
                             WorkerDecodeOutcome::Ready(Self::decoded_image(load, pixels))
                         }
-                        Ok(None) => WorkerDecodeOutcome::Failed(load),
+                        Ok(None) => WorkerDecodeOutcome::Failed {
+                            load,
+                            diagnostic: failure_source.diagnostic(&identity),
+                        },
                         Err(_) => {
                             tracing::warn!(
                                 "Decoder thread {} recovered from a panic while decoding image {}",
                                 thread_id,
                                 load.image()
                             );
-                            WorkerDecodeOutcome::Failed(load)
+                            WorkerDecodeOutcome::Failed {
+                                load,
+                                diagnostic: failure_source.diagnostic(&identity),
+                            }
                         }
                     };
                     let _ = tx.send(outcome);
@@ -1576,6 +1685,7 @@ impl ImageCache {
             ImageFrameIndex::default(),
             ImageSequenceId::new(u64::from(image.get()))
                 .expect("allocated image identity is non-zero"),
+            ImageLoadIdentity::unspecified(),
         );
         image
     }
@@ -1597,6 +1707,7 @@ impl ImageCache {
         frame: ImageFrameIndex,
         sequence: ImageSequenceId,
         resources: crate::svg::SvgResourceContext,
+        identity: ImageLoadIdentity,
     ) {
         let load = self.begin_load(load);
         let image = load.image();
@@ -1623,6 +1734,7 @@ impl ImageCache {
             colors,
             mask,
             frame,
+            identity,
         });
     }
 
@@ -1639,6 +1751,7 @@ impl ImageCache {
         mask: ImageMaskPolicy,
         frame: ImageFrameIndex,
         sequence: ImageSequenceId,
+        identity: ImageLoadIdentity,
     ) {
         let load = self.begin_load(load);
         let image = load.image();
@@ -1664,6 +1777,7 @@ impl ImageCache {
             colors,
             mask,
             frame,
+            identity,
         });
     }
 
@@ -1724,6 +1838,7 @@ impl ImageCache {
             colors,
             mask: ImageMaskPolicy::Preserve,
             frame: ImageFrameIndex::default(),
+            identity: ImageLoadIdentity::unspecified(),
         });
 
         image
@@ -1769,6 +1884,7 @@ impl ImageCache {
             colors: ImageColorContext::default(),
             mask: ImageMaskPolicy::default(),
             frame: ImageFrameIndex::default(),
+            identity: ImageLoadIdentity::unspecified(),
         });
 
         image
@@ -1814,6 +1930,7 @@ impl ImageCache {
             colors: ImageColorContext::default(),
             mask: ImageMaskPolicy::default(),
             frame: ImageFrameIndex::default(),
+            identity: ImageLoadIdentity::unspecified(),
         });
 
         image
@@ -1847,6 +1964,7 @@ impl ImageCache {
             colors: ImageColorContext::default(),
             mask: ImageMaskPolicy::default(),
             frame: ImageFrameIndex::default(),
+            identity: ImageLoadIdentity::unspecified(),
         });
     }
 
@@ -1878,6 +1996,7 @@ impl ImageCache {
             colors: ImageColorContext::default(),
             mask: ImageMaskPolicy::default(),
             frame: ImageFrameIndex::default(),
+            identity: ImageLoadIdentity::unspecified(),
         });
     }
 
@@ -1983,16 +2102,18 @@ impl ImageCache {
                     });
                     self.upload_texture(device, queue, decoded);
                 }
-                WorkerDecodeOutcome::Failed(load) => {
-                    let error = "image decode failed".to_owned();
+                WorkerDecodeOutcome::Failed { load, diagnostic } => {
                     // A failed decode keeps no texture: a band may already have
                     // created one, and it holds rows of an image that will never
                     // arrive. Leaving it would draw them forever.
                     self.release(load.image());
                     self.states
-                        .insert(load.image(), ImageState::Failed(error.clone()));
+                        .insert(load.image(), ImageState::Failed(diagnostic.message()));
                     self.pending_dimensions.remove(&load.image());
-                    events.push(ImageCacheEvent::Failed { load, error });
+                    events.push(ImageCacheEvent::Failed {
+                        load,
+                        error: diagnostic,
+                    });
                 }
             }
         }

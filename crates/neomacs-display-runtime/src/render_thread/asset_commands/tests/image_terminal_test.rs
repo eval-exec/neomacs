@@ -13,7 +13,9 @@ fn free_or_reload_clears_shared_image_terminal() {
     let second = ImageLoadToken::new(image, ImageLoadAttempt::new(2).unwrap());
     shared.publish_terminal(
         first,
-        super::super::ImageDecodeTerminal::Failed("old failure".to_owned()),
+        super::super::ImageDecodeTerminal::Failed(
+            neomacs_display_protocol::image_diagnostic::ImageDiagnostic::NotDrawable,
+        ),
     );
 
     clear_image_terminals(&shared, image);

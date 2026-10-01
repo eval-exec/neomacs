@@ -22,6 +22,7 @@ use super::super::{
 };
 #[cfg(feature = "video")]
 use neomacs_display_protocol::VideoId;
+use neomacs_display_protocol::image_diagnostic::{ImageDiagnostic, ImageFormatName};
 use neomacs_display_protocol::{SelectionOwner, WebViewId};
 use neomacs_display_runtime::render_thread::{
     ImageDecodeTerminal, ImageRenderState, SharedImageRenderState,
@@ -120,7 +121,6 @@ fn shared_primary_window_size(width: u32, height: u32) -> Arc<Mutex<PrimaryWindo
 thread_local! {
     static IMAGE_SPEC_TEST_CONTEXT: Context = Context::new();
 }
-
 
 /// The declared type and subject GNU would use for a test image source.
 ///
@@ -2936,13 +2936,16 @@ fn failed_image_decode_wakes_waiter_and_is_negative_cached() {
     let publisher = Arc::clone(&shared);
     let worker = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(10));
-        publisher.publish_terminal(load, ImageDecodeTerminal::Failed("bad image".to_owned()));
+        publisher.publish_terminal(
+            load,
+            ImageDecodeTerminal::Failed(ImageDiagnostic::InvalidSize),
+        );
     });
 
     let started = Instant::now();
     assert_eq!(
         wait_for_image_metadata(&shared, load, Duration::from_secs(1)),
-        Some(ImageDecodeTerminal::Failed("bad image".to_owned()))
+        Some(ImageDecodeTerminal::Failed(ImageDiagnostic::InvalidSize))
     );
     assert!(
         started.elapsed() < Duration::from_millis(250),
@@ -2953,7 +2956,7 @@ fn failed_image_decode_wakes_waiter_and_is_negative_cached() {
     let cached = Instant::now();
     assert_eq!(
         wait_for_image_metadata(&shared, load, Duration::from_secs(1)),
-        Some(ImageDecodeTerminal::Failed("bad image".to_owned()))
+        Some(ImageDecodeTerminal::Failed(ImageDiagnostic::InvalidSize))
     );
     assert!(
         cached.elapsed() < Duration::from_millis(250),
@@ -3005,9 +3008,13 @@ fn primary_display_host_resolve_image_sync_returns_cached_decode_failure_promptl
     };
     image_metadata.publish_terminal(
         image.load(),
-        ImageDecodeTerminal::Failed("image decode failed".to_owned()),
+        ImageDecodeTerminal::Failed(ImageDiagnostic::FormatError {
+            format: ImageFormatName::Png,
+            detail: "Read error".to_owned(),
+        }),
     );
 
+    let mut reported = Vec::new();
     for _ in 0..2 {
         let started = Instant::now();
         let ImageLookup::Failed(failed) = unbounded_lookup(&host.image_catalog, request.clone())
@@ -3015,12 +3022,23 @@ fn primary_display_host_resolve_image_sync_returns_cached_decode_failure_promptl
             panic!("failed decode should be negative-cached");
         };
         assert_eq!(failed.placement(), image.placement());
-        assert_eq!(failed.error, "image decode failed");
+        assert_eq!(failed.error.message(), "PNG error: Read error");
+        reported.push(host.image_catalog.take_pending_diagnostics());
         assert!(
             started.elapsed() < Duration::from_millis(100),
             "failed catalog lookup should return from the negative cache"
         );
     }
+    // Two lookups of the same failed attempt report once.  Neomacs' layout
+    // consults the catalog on every pass whether or not the frame changed, so
+    // reporting per lookup would add a line to *Messages* per redisplay tick;
+    // GNU's iterator does not run between glyph regenerations and so never
+    // repeats itself here.
+    assert_eq!(
+        reported,
+        vec![vec!["PNG error: Read error".to_owned()], Vec::new()],
+        "a repeated lookup of one failed attempt must not report twice"
+    );
 
     for _ in 0..2 {
         let started = Instant::now();
@@ -3030,7 +3048,7 @@ fn primary_display_host_resolve_image_sync_returns_cached_decode_failure_promptl
                 request.clone(),
                 ImageSizeLimit::UNLIMITED,
             ),
-            Err("image decode failed".to_owned())
+            Err("PNG error: Read error".to_owned()) // GNU's own words for the same bytes, not a generic failure string.
         );
         assert!(
             started.elapsed() < Duration::from_millis(250),
