@@ -22,6 +22,45 @@ use crate::heap_types::LispString;
 mod spawn;
 pub(crate) use spawn::{ChildCommand, ChildStdio, SpawnedChild};
 
+/// Retain child exit status until its owning waiter reaps it.
+///
+/// Call before creating children, including the early daemon fork. Explicit
+/// SIG_IGN and SA_NOCLDWAIT discard children and invalidate numeric PID ownership;
+/// SIG_DFL ignores delivery but retains zombies. Preserve compatible library
+/// handlers. This process-wide policy stays in force for every child's lifetime:
+/// libraries must not enable auto-reap or reap children owned by the editor.
+#[cfg(unix)]
+pub fn retain_child_exit_status() -> std::io::Result<()> {
+    let mut action = child_status_disposition()?;
+    if action.sa_sigaction == libc::SIG_IGN || action.sa_flags & libc::SA_NOCLDWAIT != 0 {
+        if action.sa_sigaction == libc::SIG_IGN {
+            action.sa_sigaction = libc::SIG_DFL;
+        }
+        action.sa_flags &= !libc::SA_NOCLDWAIT;
+        // SAFETY: initialized action; the editor owns child retention policy.
+        if unsafe { libc::sigaction(libc::SIGCHLD, &action, std::ptr::null_mut()) } < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn child_status_disposition() -> std::io::Result<libc::sigaction> {
+    // SAFETY: sigaction initializes the supplied writable local.
+    let mut action = unsafe { std::mem::zeroed() };
+    if unsafe { libc::sigaction(libc::SIGCHLD, std::ptr::null(), &mut action) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(action)
+}
+
+#[cfg(unix)]
+fn child_exit_status_retained() -> std::io::Result<bool> {
+    let action = child_status_disposition()?;
+    Ok(action.sa_sigaction != libc::SIG_IGN && action.sa_flags & libc::SA_NOCLDWAIT == 0)
+}
+
 #[cfg(test)]
 thread_local! {
     static NEW_CHILD_COMMAND_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -842,9 +881,10 @@ fn run_process_command_in_state(
     }
     configure_subprocess_environment(eval, &mut command, subprocess_dir.as_deref());
     configure_call_process_stdin(&mut command, infile.as_ref())?;
-    let output = command
-        .output()
+    let child = command
+        .spawn()
         .map_err(|e| super::process::signal_process_io("Searching for program", None, e))?;
+    let output = wait_for_process_output(eval, child, "Reading process output")?;
 
     let decoding = resolve_call_process_output_decoding(eval, operation_args, &destination_spec)?;
     route_captured_output_in_state(
@@ -857,9 +897,38 @@ fn run_process_command_in_state(
     Ok(call_process_status_value(output.status))
 }
 
+/// Keep all synchronous evaluator-owned subprocess entries on one attention
+/// boundary, preserving the original Flow after the child has been cleaned up.
+fn wait_for_process_output(
+    eval: &mut super::eval::Context,
+    child: spawn::SpawnedChild,
+    error_context: &str,
+) -> Result<std::process::Output, Flow> {
+    #[cfg(unix)]
+    let result = {
+        let mut interrupted = None;
+        let result = child.wait_with_output_interruptible(|| {
+            eval.maybe_quit().map_err(|flow| {
+                interrupted = Some(flow);
+                std::io::Error::from(std::io::ErrorKind::Interrupted)
+            })
+        });
+        if let Some(flow) = interrupted {
+            return Err(flow);
+        }
+        result
+    };
+    #[cfg(not(unix))]
+    let result = {
+        let _ = eval;
+        child.wait_with_output()
+    };
+    result.map_err(|e| super::process::signal_process_io(error_context, None, e))
+}
+
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn run_process_capture_output(
-    eval: &super::eval::Context,
+    eval: &mut super::eval::Context,
     program: &LispString,
     cmd_args: &[LispString],
 ) -> Result<(i32, Vec<u8>), Flow> {
@@ -874,9 +943,10 @@ fn run_process_capture_output(
         command.current_dir(dir);
     }
     configure_subprocess_environment(eval, &mut command, subprocess_dir.as_deref());
-    let output = command
-        .output()
+    let child = command
+        .spawn()
         .map_err(|e| super::process::signal_process_io("Searching for program", None, e))?;
+    let output = wait_for_process_output(eval, child, "Searching for program")?;
     Ok((output.status.code().unwrap_or(-1), output.stdout))
 }
 
@@ -1311,6 +1381,27 @@ fn builtin_call_process_region_impl(
     };
     let destination_spec = parse_call_process_destination(&eval.buffers, destination)?;
 
+    // GNU does NOT pipe the region into the child. `Fcall_process_region'
+    // writes it to a temp file with `create_temp_file' and hands that to
+    // `call_process' as INFILE (src/callproc.c:1063-1094), so the child's
+    // stdin is a seekable FILE.
+    //
+    // This also applies to integer/no-wait destinations. Pipe delivery can
+    // block the evaluator before it ever transfers the child to its waiter if
+    // the child does not read stdin, or fills stdout while input is written.
+    //
+    // A temp file also preserves the behaviour a pipe cannot: a program that
+    // seeks on stdin gets what it gets under GNU.
+    let mut region_file = tempfile::NamedTempFile::new()
+        .map_err(|e| super::process::signal_process_io("Creating process input file", None, e))?;
+    region_file
+        .write_all(&region_text)
+        .and_then(|()| region_file.as_file_mut().sync_data())
+        .map_err(|e| super::process::signal_process_io("Writing process input file", None, e))?;
+    let region_stdin = region_file
+        .reopen()
+        .map_err(|e| super::process::signal_process_io("Opening process input file", None, e))?;
+
     if destination_spec.no_wait {
         let mut command = new_child_command(&program_os);
         if let Some(dir) = &subprocess_dir {
@@ -1319,7 +1410,7 @@ fn builtin_call_process_region_impl(
         subprocess_env.apply_to_child_command(&mut command);
         command
             .args(cmd_args.iter().map(lisp_string_to_os_string))
-            .stdin(ChildStdio::Piped)
+            .stdin(ChildStdio::from(region_stdin))
             .stdout(ChildStdio::Null);
         match destination_spec.stderr {
             StderrTarget::Discard | StderrTarget::ToStdoutTarget => {
@@ -1345,10 +1436,6 @@ fn builtin_call_process_region_impl(
             .spawn()
             .map_err(|e| super::process::signal_process_io("Searching for program", None, e))?;
 
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(&region_text);
-        }
-
         std::thread::spawn(move || {
             let _ = child.wait();
         });
@@ -1361,28 +1448,6 @@ fn builtin_call_process_region_impl(
         command.current_dir(dir);
     }
     subprocess_env.apply_to_child_command(&mut command);
-    // GNU does NOT pipe the region into the child. `Fcall_process_region'
-    // writes it to a temp file with `create_temp_file' and hands that to
-    // `call_process' as INFILE (src/callproc.c:1063-1094), so the child's
-    // stdin is a seekable FILE.
-    //
-    // Piping it deadlocks. The parent blocks in `write_all' on stdin while
-    // the child blocks writing stdout that nobody is draining yet, because
-    // `wait_with_output' -- the only thing that drains it -- is not reached
-    // until the write finishes. Any region past the pipe buffer (~64KB) hangs
-    // forever with no C-g escape: `M-| tr a-z A-Z' over 256KB never returned.
-    //
-    // A temp file also preserves the behaviour a pipe cannot: a program that
-    // seeks on stdin gets what it gets under GNU.
-    let mut region_file = tempfile::NamedTempFile::new()
-        .map_err(|e| super::process::signal_process_io("Creating process input file", None, e))?;
-    region_file
-        .write_all(&region_text)
-        .and_then(|()| region_file.as_file_mut().sync_data())
-        .map_err(|e| super::process::signal_process_io("Writing process input file", None, e))?;
-    let region_stdin = region_file
-        .reopen()
-        .map_err(|e| super::process::signal_process_io("Opening process input file", None, e))?;
 
     let child = command
         .args(cmd_args.iter().map(lisp_string_to_os_string))
@@ -1392,9 +1457,7 @@ fn builtin_call_process_region_impl(
         .spawn()
         .map_err(|e| super::process::signal_process_io("Searching for program", None, e))?;
 
-    let output = child
-        .wait_with_output()
-        .map_err(|e| super::process::signal_process_io("Process error", None, e))?;
+    let output = wait_for_process_output(eval, child, "Process error")?;
 
     // GNU `Fcall_process_region` reshapes its arguments into `call_process`'s
     // own vector — PROGRAM, the temp INFILE, BUFFER, DISPLAY, then ARGS

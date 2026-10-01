@@ -6879,6 +6879,14 @@ pub(crate) fn builtin_x_create_frame(
     mut args: Vec<Value>,
 ) -> EvalResult {
     expect_args("x-create-frame", &args, 1)?;
+    if eval.daemon.is_some() && eval.display_host.is_none() {
+        return Err(signal(
+            "error",
+            vec![Value::string(
+                "Graphical frames are not yet supported by the headless Neomacs daemon; use a TTY client",
+            )],
+        ));
+    }
     // GNU gui_display_get_arg resolves frame alist, default-frame-alist,
     // then the display resource. Keep explicit nil distinct from absence.
     let font_key = intern("font");
@@ -7282,6 +7290,15 @@ pub(crate) fn delete_frame_owned(
             } else {
                 "Attempt to delete the sole visible or iconified frame"
             })],
+        ));
+    }
+    if !force_non_nil
+        && eval.daemon.is_some()
+        && eval.frames.get(fid).is_some_and(|frame| frame.initial)
+    {
+        return Err(signal(
+            "error",
+            vec![Value::string("Attempt to delete daemon's initial frame")],
         ));
     }
     for child_id in direct_child_frame_ids(eval, fid) {

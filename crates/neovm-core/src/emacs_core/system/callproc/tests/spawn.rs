@@ -65,6 +65,7 @@ fn forking_command_keeps_the_session_isolation() {
         .stderr(ChildStdio::Null);
     let mut child = command
         .into_forking_command()
+        .expect("retain child exit status")
         .spawn()
         .expect("spawn forked child");
     let pid = child.id() as libc::pid_t;
@@ -92,6 +93,84 @@ fn output_captures_both_streams_and_the_exit_status() {
     assert_eq!(output.stdout, b"out");
     assert_eq!(output.stderr, b"err");
     assert_eq!(output.status.code(), Some(3));
+}
+
+#[test]
+#[cfg(unix)]
+fn externally_reaped_child_permanently_revokes_signal_authority() {
+    // A competing exact-PID reaper violates the owner contract. Subsequent
+    // waits must not revive a handle whose loss has already been observed.
+    for fork in [false, true] {
+        let mut command = sh("exit 0");
+        let mut child = if fork {
+            super::super::SpawnedChild::from_std(
+                command.into_forking_command().unwrap().spawn().unwrap(),
+            )
+        } else {
+            command.spawn().unwrap()
+        };
+        let mut status = 0;
+        assert_eq!(
+            unsafe { libc::waitpid(child.id() as i32, &mut status, 0) },
+            child.id() as i32
+        );
+        assert_eq!(
+            child.try_wait().unwrap_err().raw_os_error(),
+            Some(libc::ECHILD)
+        );
+        assert_eq!(child.kill().unwrap_err().raw_os_error(), Some(libc::ECHILD));
+        assert_eq!(child.wait().unwrap_err().raw_os_error(), Some(libc::ECHILD));
+        assert_eq!(child.kill().unwrap_err().raw_os_error(), Some(libc::ECHILD));
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn interruptible_output_reaps_the_exact_child_even_without_open_output_pipes() {
+    for script in ["exec sleep 3600", "exec 1>&- 2>&-; exec sleep 3600"] {
+        for piped in [false, true] {
+            let mut command = sh(script);
+            command
+                .stdin(ChildStdio::Null)
+                .stdout(if piped {
+                    ChildStdio::Piped
+                } else {
+                    ChildStdio::Null
+                })
+                .stderr(if piped {
+                    ChildStdio::Piped
+                } else {
+                    ChildStdio::Null
+                });
+            let child = command.spawn().unwrap();
+            let pid = child.id() as libc::pid_t;
+            let mut polls = 0;
+            let start = std::time::Instant::now();
+            let error = child
+                .wait_with_output_interruptible(|| {
+                    polls += 1;
+                    if polls < 2 {
+                        Ok(())
+                    } else {
+                        Err(std::io::ErrorKind::Interrupted.into())
+                    }
+                })
+                .unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+            assert!(start.elapsed() < std::time::Duration::from_secs(5));
+            let mut status = 0;
+            // SAFETY: this read-only WNOHANG probe must find no waitable child;
+            // the synchronous owner already killed AND reaped it.
+            assert_eq!(
+                unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) },
+                -1
+            );
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::ECHILD)
+            );
+        }
+    }
 }
 
 #[test]

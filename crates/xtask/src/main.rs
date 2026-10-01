@@ -1,3 +1,4 @@
+mod daemon_lifecycle;
 mod dependency_coherence;
 mod gc_stress;
 mod production_capabilities;
@@ -437,6 +438,13 @@ fn try_main() -> Result<()> {
 
 fn run_xtask(repo_root: PathBuf, args: impl IntoIterator<Item = OsString>) -> Result<()> {
     let mut args = args.into_iter().peekable();
+    if matches!(
+        args.peek().and_then(|arg| arg.to_str()),
+        Some("test-daemon-lifecycle")
+    ) {
+        args.next();
+        return daemon_lifecycle::run(repo_root, args);
+    }
     if matches!(
         args.peek().and_then(|arg| arg.to_str()),
         Some("check-dependency-coherence")
@@ -4647,6 +4655,7 @@ fn print_usage() {
 fn usage_text() -> &'static str {
     "\
 Usage: cargo xtask [fresh-build] (--release | --profile NAME) [--bin-dir DIR] [--runtime-root DIR] [--dry-run] [--low-memory|--jobs N] [--native-comp|--no-native-comp] [--skip-build] [--no-byte-compile] [--aot-preload|--no-aot-preload]
+       cargo xtask test-daemon-lifecycle
        cargo xtask check-dependency-coherence
        cargo xtask render-window-icon --out-dir DIR [--source PATH]
        cargo xtask perf list

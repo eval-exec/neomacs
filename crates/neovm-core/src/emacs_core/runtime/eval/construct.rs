@@ -2232,6 +2232,8 @@ impl Context {
             minibuffer_selected_window: None,
             active_minibuffer_window: None,
             shutdown_request: None,
+            shutdown_in_progress: false,
+            daemon: None,
             input_mode_interrupt: true,
             quit_char: 7,
             waiting_for_user_input: false,

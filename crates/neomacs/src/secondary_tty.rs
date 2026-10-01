@@ -23,6 +23,19 @@ pub struct SecondaryTtyRegistry {
 }
 
 impl SecondaryTtyRegistry {
+    /// Restore every attached client's terminal before daemon exit or exec.
+    /// Drop sessions outside the registry lock: their readers must be joined.
+    pub fn close_all(&self) {
+        let sessions = {
+            let mut registry = self
+                .sessions
+                .lock()
+                .expect("secondary TTY registry poisoned");
+            std::mem::take(&mut *registry)
+        };
+        drop(sessions);
+    }
+
     pub fn render_selected(&self, eval: &mut neovm_core::emacs_core::Context) -> bool {
         #[cfg(not(unix))]
         {
