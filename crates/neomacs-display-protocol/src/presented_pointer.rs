@@ -599,10 +599,43 @@ impl std::error::Error for PresentedHitError {}
 /// Where a deferred hit index finds its text positions
 /// ([`PresentedHitIndex::with_deferred_text`]).
 ///
-/// The positions are what an eager index would have been built with; the
-/// source runs at most once, on the first query that needs them.
+/// The positions are what an eager index would have been built with. Sources
+/// are immutable and may be queried concurrently by rendering and input
+/// threads; they must contain no mutator-local Lisp state. The index publishes
+/// materialized positions through a `OnceLock`, at most once per index.
 pub trait PresentedTextPositionSource: Send + Sync + std::fmt::Debug {
     fn text_positions(&self) -> Result<Vec<PresentedTextPosition>, PresentedHitError>;
+
+    /// Resolve within one window without flattening the frame, if supported.
+    ///
+    /// A supported source must validate all of its geometry before resolving,
+    /// and return the same first position in original vector order that
+    /// `text_positions` would yield for this window and half-open cell bounds.
+    /// `Resolved(Ok(None))` is a completed miss and never requests flattening.
+    /// Existing sources retain the materialized lookup through `Unsupported`.
+    fn hit_text_position(
+        &self,
+        _window: DisplayWindowId,
+        _x: f32,
+        _y: f32,
+    ) -> PresentedTextPositionHit {
+        PresentedTextPositionHit::Unsupported
+    }
+
+    /// Whether the validated source contains no positions, when cheaply known.
+    ///
+    /// Returning `None` retains the materialized emptiness check. This does
+    /// not authorize skipping geometry validation for a supported source.
+    fn is_empty(&self) -> Option<bool> {
+        None
+    }
+}
+
+/// A direct immutable-source lookup, distinct from an unsupported lookup.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PresentedTextPositionHit {
+    Unsupported,
+    Resolved(Result<Option<PresentedTextPosition>, PresentedHitError>),
 }
 
 /// The text positions of a hit index and their buckets, built at
@@ -646,6 +679,21 @@ impl PresentedTextIndex {
             source: Some(source),
             built: std::sync::OnceLock::new(),
         }
+    }
+
+    fn is_empty(&self) -> bool {
+        if let Some(parts) = self.built.get() {
+            return parts.positions.is_empty();
+        }
+        if let Some(empty) = self.source.as_ref().and_then(|source| source.is_empty()) {
+            return empty;
+        }
+        self.parts().positions.is_empty()
+    }
+
+    fn fail_direct_lookup(&self, error: PresentedHitError) {
+        tracing::error!(?error, "deferred hit index: no text positions");
+        let _ = self.built.set(PresentedTextParts::default());
     }
 
     fn parts(&self) -> &PresentedTextParts {
@@ -968,6 +1016,34 @@ impl PresentedHitIndex {
         if region.kind != PresentedRegionKind::TextBody {
             return None;
         }
+        if self.text.built.get().is_none()
+            && let (Some(source), Some(window)) = (&self.text.source, region.window)
+        {
+            match source.hit_text_position(window, x, y) {
+                PresentedTextPositionHit::Unsupported => {}
+                PresentedTextPositionHit::Resolved(Ok(None)) => return None,
+                PresentedTextPositionHit::Resolved(Ok(Some(position))) => {
+                    if !rect_has_valid_geometry(position.bounds) {
+                        self.text
+                            .fail_direct_lookup(PresentedHitError::InvalidTextPositionGeometry);
+                        return None;
+                    }
+                    if position.window != window {
+                        self.text
+                            .fail_direct_lookup(PresentedHitError::WindowGeometryMismatch {
+                                window,
+                                region: PresentedRegionKind::TextBody,
+                            });
+                        return None;
+                    }
+                    return contains(position.bounds, x, y).then_some(position);
+                }
+                PresentedTextPositionHit::Resolved(Err(error)) => {
+                    self.text.fail_direct_lookup(error);
+                    return None;
+                }
+            }
+        }
         let text = self.text.parts();
         let mut selected = None;
         for_each_presented_hit_candidate(
@@ -1016,7 +1092,7 @@ impl PresentedHitIndex {
     pub fn is_empty(&self) -> bool {
         self.regions.is_empty()
             && self.resize_handles.is_empty()
-            && self.text.parts().positions.is_empty()
+            && self.text.is_empty()
             && self.string_positions.is_empty()
     }
 
@@ -1081,14 +1157,16 @@ impl PresentedHitIndex {
         &self.text.parts().positions
     }
 
-    /// Replace the text positions with ones SOURCE builds on first use.
+    /// Replace the text positions with ones SOURCE supplies on demand.
     ///
     /// Every frame's index used to carry one position per visible character,
     /// built and sorted into buckets as the frame was composed, although only
     /// a pointer query ever reads them (GNU hit-tests its current matrix on
     /// demand). The source is expected to produce exactly what the eager
-    /// index would have been built with; geometry it gets wrong is logged
-    /// and yields no text position, where the eager index refused the frame.
+    /// index would have been built with. Sources may answer window-local hits
+    /// without materializing positions; serialization and equality still build
+    /// the eager positions. Invalid geometry is logged and yields no text
+    /// position, where the eager index refused the frame.
     #[must_use]
     pub fn with_deferred_text(
         mut self,
@@ -2526,3 +2604,7 @@ mod scroll;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "presented_pointer/tests/row_hit_test.rs"]
+mod row_hit_test;
