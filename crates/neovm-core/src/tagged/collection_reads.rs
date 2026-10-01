@@ -16,7 +16,7 @@ use std::sync::{
 /// | Knob | Default | Effect |
 /// | --- | --- | --- |
 /// | `NEOVM_COLLECTION_READ_GLOBAL=on` | off | Skip TLS when no mutator has an active capture. |
-/// | `NEOVM_COLLECTION_READ_HOIST=on` | off | Select an unobserved list walk outside callback-free loops. |
+/// | `NEOVM_COLLECTION_READ_HOIST=on` | off | Select unobserved traversal reads when this mutator has no capture. |
 /// | `NEOVM_COLLECTION_WRITE_LAZY=on` | off | Skip revision/journal work until the first process capture. |
 ///
 /// Scope state and journals remain local to each mutator. The process gates
@@ -238,10 +238,21 @@ impl Drop for CollectionReadScope {
 
 #[inline]
 pub(crate) fn observe(value: TaggedValue) {
-    if !is_active() {
+    if CAPTURE_SCOPES.load(Ordering::Relaxed) == 0 {
         return;
     }
-    observe_bits(value.bits());
+    observe_active(value.bits());
+}
+
+// Keep the entire active recorder out of ordinary pointer extraction. Even
+// its recent-read filter otherwise displaces small type/equality helpers from
+// their callers and forces inactive list walks to save its scratch registers.
+#[cold]
+#[inline(never)]
+fn observe_active(bits: usize) {
+    if ACTIVE.with(Cell::get) {
+        observe_bits(bits);
+    }
 }
 
 fn clear_recent_reads() {

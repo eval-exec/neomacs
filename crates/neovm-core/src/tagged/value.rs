@@ -571,6 +571,20 @@ impl TaggedValue {
         self.as_symbol_with_pos().map(|swp| swp.sym)
     }
 
+    /// Same capture precondition as [`Self::cons_car_unobserved`]. A pure
+    /// scan can unwrap positioned symbols without another scope check.
+    #[inline(always)]
+    pub(crate) fn as_symbol_with_pos_sym_unobserved(self) -> Option<TaggedValue> {
+        if !self.is_veclike() {
+            return None;
+        }
+        let ptr = (self.0 & !TAG_MASK) as *const VecLikeHeader;
+        if unsafe { (*ptr).type_tag } != VecLikeType::SymbolWithPos {
+            return None;
+        }
+        Some(unsafe { (*(ptr as *const SymbolWithPosObj)).sym })
+    }
+
     /// If this is a symbol-with-pos, return the position as i64.
     pub fn as_symbol_with_pos_pos(&self) -> Option<i64> {
         self.as_symbol_with_pos()
@@ -759,8 +773,9 @@ impl TaggedValue {
     }
 
     /// Read only after the caller has established that no capture is active
-    /// on this mutator. The caller must not invoke Lisp or a capture between
-    /// that check and this read. Other mutators' captures observe their own
+    /// on this mutator. This state must hold at every unobserved read; a
+    /// synchronous nested callback may run captures if it restores that state
+    /// before traversal resumes. Other mutators' captures observe their own
     /// reads and do not require this mutator to record dependencies.
     #[inline(always)]
     pub(crate) fn cons_car_unobserved(self) -> Self {

@@ -5,6 +5,10 @@ use smallvec::SmallVec;
 
 type MapResultVec = SmallVec<[Value; 8]>;
 
+#[cfg(test)]
+#[path = "tests/higher_order_capture.rs"]
+mod higher_order_capture;
+
 pub(crate) fn gnu_mapconcat_unfilled_slot_value() -> Value {
     // GNU `Fmapconcat` allocates the concat argument vector before calling
     // `mapcar1`.  In non-checking builds, a callback that shortens a list
@@ -204,6 +208,48 @@ where
 pub(crate) fn mapcar1_eval_from<F>(
     eval: &mut super::eval::Context,
     len: usize,
+    values: MapSink<'_>,
+    sequence: Value,
+    cursor: Value,
+    start_index: usize,
+    call: F,
+) -> Result<usize, Flow>
+where
+    F: FnMut(&mut super::eval::Context, Value) -> Result<Value, Flow>,
+{
+    if crate::tagged::collection_reads::hoist_reads()
+        && !crate::tagged::collection_reads::is_active()
+    {
+        mapcar1_eval_from_with_reads::<false, _>(
+            eval,
+            len,
+            values,
+            sequence,
+            cursor,
+            start_index,
+            call,
+        )
+    } else {
+        mapcar1_eval_from_with_reads::<true, _>(
+            eval,
+            len,
+            values,
+            sequence,
+            cursor,
+            start_index,
+            call,
+        )
+    }
+}
+
+/// Capture scopes are synchronous and private to the calling mutator. Nested
+/// callback captures end before traversal resumes, and callback reads retain
+/// their ordinary observing accessors. Select the policy anew on each resumed
+/// activation; saved mapping state contains no observation policy.
+#[inline]
+fn mapcar1_eval_from_with_reads<const OBSERVED: bool, F>(
+    eval: &mut super::eval::Context,
+    len: usize,
     mut values: MapSink<'_>,
     sequence: Value,
     mut cursor: Value,
@@ -218,24 +264,27 @@ where
         ValueKind::Cons => {
             let mut mapped = start_index;
             // GNU walks the list in a stack local that its conservative
-            // collector scans for free (`mapcar1`, src/fns.c).  Rooting the
-            // cursor with a fresh push per element instead made the VM root
-            // vector grow by one entry for every element of the sequence and
-            // never shrink until the whole map finished -- for a mapcar over
-            // an N-element list, N roots to keep one live cursor reachable.
-            // Only the current cursor needs to be a root, so it gets one slot,
-            // rewritten in place.
+            // collector scans for free (`mapcar1`, src/fns.c). Only the current
+            // cursor needs a root, rewritten in place across callbacks.
             let cursor_root = eval.push_vm_frame_root_slot(cursor);
             for _ in start_index..len {
                 if !cursor.is_cons() {
                     return Ok(mapped);
                 }
                 eval.set_vm_frame_root_slot(cursor_root, cursor);
-                let item = cursor.cons_car();
+                let item = if OBSERVED {
+                    cursor.cons_car()
+                } else {
+                    cursor.cons_car_unobserved()
+                };
                 let value = call(eval, item)?;
                 values.store(eval, mapped, value);
                 mapped += 1;
-                cursor = cursor.cons_cdr();
+                cursor = if OBSERVED {
+                    cursor.cons_cdr()
+                } else {
+                    cursor.cons_cdr_unobserved()
+                };
             }
             Ok(mapped)
         }
@@ -253,6 +302,10 @@ where
 #[cfg(test)]
 #[path = "tests/map_resume.rs"]
 mod map_resume;
+
+#[cfg(test)]
+#[path = "tests/map_resume_capture.rs"]
+mod map_resume_capture;
 
 #[inline]
 fn apply0(eval: &mut super::eval::Context, func: Value) -> EvalResult {
@@ -452,12 +505,7 @@ pub(crate) fn builtin_mapconcat(eval: &mut super::eval::Context, args: Vec<Value
     // anything -- `string-join' is exactly this call.
     let mapconcat_result =
         if func.as_symbol_id() == Some(identity_symbol_id()) && sequence.is_cons() {
-            let mut tail = sequence;
-            while tail.is_cons() {
-                parts.push(tail.cons_car());
-                tail = tail.cons_cdr();
-            }
-            Ok(parts.len())
+            Ok(mapconcat_identity_list(sequence, &mut parts))
         } else {
             mapcar1_eval(
                 eval,
@@ -490,6 +538,38 @@ pub(crate) fn builtin_mapconcat(eval: &mut super::eval::Context, args: Vec<Value
     let result = builtin_concat(concat_args);
     eval.restore_vm_roots(roots);
     result
+}
+
+#[inline]
+fn mapconcat_identity_list(sequence: Value, parts: &mut MapResultVec) -> usize {
+    if crate::tagged::collection_reads::hoist_reads()
+        && !crate::tagged::collection_reads::is_active()
+    {
+        mapconcat_identity_list_scan::<false>(sequence, parts)
+    } else {
+        mapconcat_identity_list_scan::<true>(sequence, parts)
+    }
+}
+
+#[inline]
+fn mapconcat_identity_list_scan<const OBSERVED: bool>(
+    sequence: Value,
+    parts: &mut MapResultVec,
+) -> usize {
+    let mut tail = sequence;
+    while tail.is_cons() {
+        parts.push(if OBSERVED {
+            tail.cons_car()
+        } else {
+            tail.cons_car_unobserved()
+        });
+        tail = if OBSERVED {
+            tail.cons_cdr()
+        } else {
+            tail.cons_cdr_unobserved()
+        };
+    }
+    parts.len()
 }
 
 pub(crate) fn builtin_mapcan(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {

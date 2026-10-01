@@ -294,9 +294,8 @@ fn rassq_exact(key: Value, alist: Value) -> EvalResult {
     }
 }
 
-#[inline]
 fn builtin_rassq_values_swp_scan<const OBSERVED: bool>(key: Value, alist: Value) -> EvalResult {
-    let bare = key.as_symbol_with_pos_sym().unwrap_or(key);
+    let bare = crate::emacs_core::builtins::positioned_symbol_scan::<OBSERVED>(key).unwrap_or(key);
     if !bare.is_symbol() {
         return builtin_rassq_values_scan::<OBSERVED>(key, alist, false);
     }
@@ -311,7 +310,10 @@ fn builtin_rassq_values_swp_scan<const OBSERVED: bool>(key: Value, alist: Value)
         }
         let pair = rassq_car::<OBSERVED>(tail);
         if pair.is_cons()
-            && crate::emacs_core::builtins::eq_bare_symbol_swp(rassq_cdr::<OBSERVED>(pair), bare)
+            && crate::emacs_core::builtins::eq_bare_symbol_swp_scan::<OBSERVED>(
+                rassq_cdr::<OBSERVED>(pair),
+                bare,
+            )
         {
             return Ok(pair);
         }

@@ -1270,10 +1270,23 @@ fn memq_exact(target: Value, list: Value) -> EvalResult {
 /// position, so a caller whose key is no symbol at all compares bits instead.
 #[inline(always)]
 pub(crate) fn eq_bare_symbol_swp(value: Value, bare: Value) -> bool {
+    eq_bare_symbol_swp_scan::<true>(value, bare)
+}
+
+#[inline(always)]
+pub(crate) fn positioned_symbol_scan<const OBSERVED: bool>(value: Value) -> Option<Value> {
+    if OBSERVED {
+        value.as_symbol_with_pos_sym()
+    } else {
+        value.as_symbol_with_pos_sym_unobserved()
+    }
+}
+
+#[inline(always)]
+pub(crate) fn eq_bare_symbol_swp_scan<const OBSERVED: bool>(value: Value, bare: Value) -> bool {
     value.bits() == bare.bits()
         || (value.is_veclike()
-            && value
-                .as_symbol_with_pos_sym()
+            && positioned_symbol_scan::<OBSERVED>(value)
                 .is_some_and(|sym| sym.bits() == bare.bits()))
 }
 
@@ -1296,9 +1309,8 @@ pub(crate) fn listp_error(list: Value) -> Flow {
 // comes here: one test per element against the target's bare symbol, not a
 // closure unwrapping both sides of every comparison (246 instructions a call,
 // 13.5% of compiling elb-smie.el). The same budgeted scan as the plain case.
-#[inline]
 fn builtin_memq_values_swp_scan<const OBSERVED: bool>(target: Value, list: Value) -> EvalResult {
-    let bare = target.as_symbol_with_pos_sym().unwrap_or(target);
+    let bare = positioned_symbol_scan::<OBSERVED>(target).unwrap_or(target);
     if !bare.is_symbol() {
         return builtin_memq_values_scan::<OBSERVED>(target, list, false);
     }
@@ -1311,7 +1323,7 @@ fn builtin_memq_values_swp_scan<const OBSERVED: bool>(target: Value, list: Value
             }
             break;
         }
-        if eq_bare_symbol_swp(scan_car::<OBSERVED>(tail), bare) {
+        if eq_bare_symbol_swp_scan::<OBSERVED>(scan_car::<OBSERVED>(tail), bare) {
             return Ok(tail);
         }
         tail = scan_cdr::<OBSERVED>(tail);
@@ -1586,9 +1598,8 @@ pub(crate) fn assq_exact_for_test(key: Value, list: Value, swp: bool) -> EvalRes
     }
 }
 
-#[inline]
 fn builtin_assq_values_swp_scan<const OBSERVED: bool>(key: Value, list: Value) -> EvalResult {
-    let bare = key.as_symbol_with_pos_sym().unwrap_or(key);
+    let bare = positioned_symbol_scan::<OBSERVED>(key).unwrap_or(key);
     if !bare.is_symbol() {
         return builtin_assq_values_scan::<OBSERVED>(key, list, false);
     }
@@ -1602,7 +1613,7 @@ fn builtin_assq_values_swp_scan<const OBSERVED: bool>(key: Value, list: Value) -
             break;
         }
         let pair = scan_car::<OBSERVED>(tail);
-        if pair.is_cons() && eq_bare_symbol_swp(scan_car::<OBSERVED>(pair), bare) {
+        if pair.is_cons() && eq_bare_symbol_swp_scan::<OBSERVED>(scan_car::<OBSERVED>(pair), bare) {
             return Ok(pair);
         }
         tail = scan_cdr::<OBSERVED>(tail);

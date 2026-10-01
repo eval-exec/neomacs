@@ -3721,7 +3721,6 @@ impl<'a> Vm<'a> {
         #[cfg(test)]
         let _run_loop_depth = RunLoopDepthGuard::enter();
         crate::emacs_core::subr::leaf::debug_assert_no_leaf_active!("the bytecode interpreter");
-
         // Sealed-dispatch safety gate. The driver fetches instructions without
         // a per-op bound check, which is sound only for `seal_ops`-normalized
         // code (trailing `Return`, in-bounds branch targets, in-range
@@ -3799,6 +3798,11 @@ impl<'a> Vm<'a> {
         aux_stack: &mut InterpreterFrameAuxStack,
         driver_quitcounter: &mut u8,
     ) -> EvalResult {
+        // Capture guards are synchronous and private: callbacks finish their
+        // nested scopes before this driver resumes. A reentrant driver checks
+        // its own enclosing scope, so this local policy is valid for this call.
+        let observe_collections = !crate::tagged::collection_reads::hoist_reads()
+            || crate::tagged::collection_reads::is_active();
         // A6, extended across frames: base+len of the operand stack live in
         // registers for the whole DRIVER, not just one frame (GNU keeps
         // top/pc in locals across setup_frame/Breturn, bytecode.c). Escapes
@@ -5469,7 +5473,11 @@ impl<'a> Vm<'a> {
                     Op::Car => {
                         let top = stk!().last_mut().unwrap();
                         if top.is_cons() {
-                            *top = top.cons_car();
+                            *top = if observe_collections {
+                                top.cons_car()
+                            } else {
+                                top.cons_car_unobserved()
+                            };
                         } else if !top.is_nil() {
                             let val = *top;
                             stk!().pop();
@@ -5483,7 +5491,11 @@ impl<'a> Vm<'a> {
                     Op::Cdr => {
                         let top = stk!().last_mut().unwrap();
                         if top.is_cons() {
-                            *top = top.cons_cdr();
+                            *top = if observe_collections {
+                                top.cons_cdr()
+                            } else {
+                                top.cons_cdr_unobserved()
+                            };
                         } else if !top.is_nil() {
                             let val = *top;
                             stk!().pop();
@@ -5496,7 +5508,11 @@ impl<'a> Vm<'a> {
                     Op::CarSafe => {
                         let top = stk!().last_mut().unwrap();
                         *top = if top.is_cons() {
-                            top.cons_car()
+                            if observe_collections {
+                                top.cons_car()
+                            } else {
+                                top.cons_car_unobserved()
+                            }
                         } else {
                             Value::NIL
                         };
@@ -5504,7 +5520,11 @@ impl<'a> Vm<'a> {
                     Op::CdrSafe => {
                         let top = stk!().last_mut().unwrap();
                         *top = if top.is_cons() {
-                            top.cons_cdr()
+                            if observe_collections {
+                                top.cons_cdr()
+                            } else {
+                                top.cons_cdr_unobserved()
+                            }
                         } else {
                             Value::NIL
                         };
@@ -9638,6 +9658,10 @@ mod builtin_result_return_tests;
 #[cfg(test)]
 #[path = "tests/arith_integer_fast_path.rs"]
 mod arith_integer_fast_path_tests;
+
+#[cfg(test)]
+#[path = "tests/collection_capture.rs"]
+mod collection_capture_tests;
 
 impl ArithGenericKind {
     /// The builtin this kind's slow arm calls: the SAME cached symbol ids the
