@@ -84,9 +84,7 @@ pub fn install_frame_snapshot_fn(evaluator: &mut Context) {
 /// the same cosmic machinery the row walk uses, so the font's `liga`
 /// feature applies.
 pub fn install_font_shape_driver(evaluator: &mut Context) {
-    evaluator.font_shape_fn = Some(Box::new(|eval, gstring, direction| {
-        REDISPLAY_RUNTIME.with(|runtime| runtime.shape_gstring(gstring, direction))
-    }));
+    REDISPLAY_RUNTIME.with(|runtime| runtime.install_font_shape_driver(evaluator));
 }
 
 pub fn install_window_layout_query_fn(evaluator: &mut Context) {
