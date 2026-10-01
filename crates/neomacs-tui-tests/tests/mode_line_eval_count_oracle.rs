@@ -14,8 +14,9 @@
 //! no redisplay and cannot answer this.
 //!
 //! The comparison runs under `NEOMACS_MODE_LINE_GATE=gnu`. The default
-//! (`legacy`) gate is pinned separately with the divergences it is known to
-//! have, so a change to either shows up here.
+//! (`legacy`) gate is pinned separately against its original edit-replay
+//! path, with the divergences it is known to have, so a change to either
+//! shows up here.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -121,7 +122,15 @@ fn neomacs_counts(gate: &str) -> String {
         "neomacs binary not found at {}",
         program.display()
     );
-    run_probe("Neomacs", program, &[], &[("NEOMACS_MODE_LINE_GATE", gate)])
+    let mut environment = vec![("NEOMACS_MODE_LINE_GATE", gate)];
+    if gate == "legacy" {
+        // The historical gate counts regenerated rows. Sync replay removes
+        // predecessor widening and can satisfy that weaker rule on typemid,
+        // so its recorded baseline also needs the original prove replay.
+        // The GNU oracle above keeps inheriting every optimization knob.
+        environment.push(("NEOMACS_LAYOUT_EDIT_SYNC", "prove"));
+    }
+    run_probe("Neomacs", program, &[], &environment)
 }
 
 #[test]
