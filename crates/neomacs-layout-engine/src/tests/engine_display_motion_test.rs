@@ -78,6 +78,217 @@ fn position_query_finishes_the_target_row_without_publishing_or_certifying_a_vie
 }
 
 #[test]
+fn position_queries_reuse_full_viewports_with_exact_inputs_only() {
+    use crate::engine::viewport_retry_depth_probe as probe;
+    use neovm_core::{buffer::LispCharPos1, window::WindowLayoutQueryScope};
+    let (mut eval, frame, window) = position_query_fixture(&"ordinary row\n".repeat(100), 400, 240);
+    eval.eval_str("(setq position-cache-face (list :height 100)) (put-text-property 1 30 'face position-cache-face)").unwrap();
+    let target = LispCharPos1::new(50);
+    let scope = WindowLayoutQueryScope::Position { target };
+    let mut query = WindowLayoutQueryEngine::new_without_font_metrics();
+    let full = query
+        .query_window_layout(&mut eval, frame, window, WindowLayoutQueryScope::Viewport)
+        .unwrap();
+    for target in [target, LispCharPos1::new(1000)] {
+        probe::reset();
+        let actual = query
+            .query_window_layout(
+                &mut eval,
+                frame,
+                window,
+                WindowLayoutQueryScope::Position { target },
+            )
+            .unwrap();
+        assert_eq!(
+            probe::max_depth(),
+            0,
+            "exact viewport was walked again for target {target:?}"
+        );
+        assert_eq!(actual.geometry(), full.geometry());
+        let fresh = WindowLayoutQueryEngine::new_without_font_metrics()
+            .query_window_layout(
+                &mut eval,
+                frame,
+                window,
+                WindowLayoutQueryScope::Position { target },
+            )
+            .unwrap();
+        assert_eq!(
+            actual.geometry().unwrap().point_for_buffer_pos(target),
+            fresh.geometry().unwrap().point_for_buffer_pos(target)
+        );
+    }
+    for mutation in [
+        "(setcar (cdr position-cache-face) 200)",
+        "(goto-char 20)",
+        "(set-window-start nil 14 t)",
+    ] {
+        eval.eval_str(mutation).unwrap();
+        probe::reset();
+        let actual = query
+            .query_window_layout(&mut eval, frame, window, scope)
+            .unwrap();
+        assert!(
+            probe::max_depth() > 0,
+            "changed source reused a full viewport: {mutation}"
+        );
+        let fresh = WindowLayoutQueryEngine::new_without_font_metrics()
+            .query_window_layout(&mut eval, frame, window, scope)
+            .unwrap();
+        assert_eq!(actual.geometry(), fresh.geometry(), "{mutation}");
+    }
+}
+
+#[test]
+fn position_prefixes_reposition_complete_rows_with_variable_heights_and_overlays() {
+    use crate::engine::viewport_retry_depth_probe as probe;
+    use neovm_core::{buffer::LispCharPos1, window::WindowLayoutQueryScope};
+    for decoration in [
+        "nil",
+        "(put-text-property 1 40 'face '(:height 150))",
+        "(let ((o (make-overlay 14 25))) (overlay-put o 'before-string \"prefix\") (overlay-put o 'after-string \"suffix\") (overlay-put o 'face '(:height 125)))",
+        "(put-text-property 1 40 'line-height 1.3) (put-text-property 18 21 'display '(raise 0.2))",
+    ] {
+        let (mut eval, frame, window) =
+            position_query_fixture(&"ordinary row\n".repeat(200), 400, 240);
+        eval.eval_str("(goto-char 1000) (set-window-vscroll nil 2 t t)")
+            .unwrap();
+        eval.eval_str(decoration).unwrap();
+        let scope = WindowLayoutQueryScope::Position {
+            target: LispCharPos1::new(60),
+        };
+        let mut query = WindowLayoutQueryEngine::new_without_font_metrics();
+        query
+            .query_window_layout(&mut eval, frame, window, scope)
+            .unwrap();
+        let mut reused = 0;
+        for pixels in 3..16 {
+            eval.eval_str(&format!("(set-window-vscroll nil {pixels} t t)"))
+                .unwrap();
+            probe::reset();
+            let actual = query
+                .query_window_layout(&mut eval, frame, window, scope)
+                .unwrap();
+            reused += usize::from(probe::max_depth() == 0);
+            let fresh = WindowLayoutQueryEngine::new_without_font_metrics()
+                .query_window_layout(&mut eval, frame, window, scope)
+                .unwrap();
+            assert_eq!(actual.end(), fresh.end(), "pixels={pixels}, {decoration}");
+            assert_eq!(
+                actual.geometry(),
+                fresh.geometry(),
+                "pixels={pixels}, {decoration}"
+            );
+        }
+        if decoration.contains("line-height") {
+            assert_eq!(reused, 0, "fractional noncontiguous rows were translated");
+        } else {
+            assert!(
+                reused > 0,
+                "complete target prefix was walked again: {decoration}"
+            );
+        }
+        // Crossing the first-row edge requires a fresh canonical observation.
+        eval.eval_str("(set-window-vscroll nil 80 t t)").unwrap();
+        probe::reset();
+        let actual = query
+            .query_window_layout(&mut eval, frame, window, scope)
+            .unwrap();
+        assert!(
+            probe::max_depth() > 0,
+            "first-row edge crossing reused a prefix"
+        );
+        let fresh = WindowLayoutQueryEngine::new_without_font_metrics()
+            .query_window_layout(&mut eval, frame, window, scope)
+            .unwrap();
+        assert_eq!(actual.end(), fresh.end());
+        assert_eq!(actual.geometry(), fresh.geometry());
+    }
+}
+
+#[test]
+fn position_prefix_reposition_preserves_partial_bottom_target_row_clipping() {
+    use crate::engine::viewport_retry_depth_probe as probe;
+    use neovm_core::{buffer::LispCharPos1, window::WindowLayoutQueryScope};
+    let (mut eval, frame, window) = position_query_fixture(&"ordinary row\n".repeat(200), 400, 160);
+    eval.eval_str("(goto-char 1000) (set-window-vscroll nil 2 t t) (put-text-property 119 129 'face '(:height 150))").unwrap();
+    let target = LispCharPos1::new(128);
+    let scope = WindowLayoutQueryScope::Position { target };
+    let mut query = WindowLayoutQueryEngine::new_without_font_metrics();
+    let first = query
+        .query_window_layout(&mut eval, frame, window, scope)
+        .unwrap();
+    let snapshot = first.geometry().unwrap();
+    let point = snapshot
+        .point_for_buffer_pos(target)
+        .expect("partial bottom target");
+    let row = snapshot.row_metrics(point.row).unwrap();
+    let top = (snapshot.regions.text_body.y - snapshot.regions.outer.y) as i64;
+    let bottom = top + snapshot.regions.text_body.height as i64;
+    assert!(
+        row.y < bottom && row.y + row.height > bottom,
+        "fixture target must begin partially clipped"
+    );
+    for pixels in 3..16 {
+        eval.eval_str(&format!("(set-window-vscroll nil {pixels} t t)"))
+            .unwrap();
+        probe::reset();
+        let actual = query
+            .query_window_layout(&mut eval, frame, window, scope)
+            .unwrap();
+        assert_eq!(
+            probe::max_depth(),
+            0,
+            "partial target row was walked again at {pixels}"
+        );
+        let fresh = WindowLayoutQueryEngine::new_without_font_metrics()
+            .query_window_layout(&mut eval, frame, window, scope)
+            .unwrap();
+        assert_eq!(actual.end(), fresh.end());
+        assert_eq!(
+            actual.geometry(),
+            fresh.geometry(),
+            "partial target at {pixels}"
+        );
+    }
+}
+
+#[test]
+fn position_prefix_reposition_falls_back_for_missing_targets_and_clipped_cursors() {
+    use crate::engine::viewport_retry_depth_probe as probe;
+    use neovm_core::{buffer::LispCharPos1, window::WindowLayoutQueryScope};
+    for (point, target) in [(1000, 2000), (1, 50)] {
+        let (mut eval, frame, window) =
+            position_query_fixture(&"ordinary row\n".repeat(200), 400, 240);
+        eval.eval_str(&format!(
+            "(goto-char {point}) (set-window-vscroll nil 2 t t)"
+        ))
+        .unwrap();
+        let scope = WindowLayoutQueryScope::Position {
+            target: LispCharPos1::new(target),
+        };
+        let mut query = WindowLayoutQueryEngine::new_without_font_metrics();
+        query
+            .query_window_layout(&mut eval, frame, window, scope)
+            .unwrap();
+        eval.eval_str("(set-window-vscroll nil 3 t t)").unwrap();
+        probe::reset();
+        let actual = query
+            .query_window_layout(&mut eval, frame, window, scope)
+            .unwrap();
+        assert!(
+            probe::max_depth() > 0,
+            "ambiguous target/cursor placement reused rows: point={point}, target={target}"
+        );
+        let fresh = WindowLayoutQueryEngine::new_without_font_metrics()
+            .query_window_layout(&mut eval, frame, window, scope)
+            .unwrap();
+        assert_eq!(actual.end(), fresh.end());
+        assert_eq!(actual.geometry(), fresh.geometry());
+    }
+}
+
+#[test]
 fn position_queries_preserve_wrap_overlay_hidden_and_partial_row_geometry() {
     use neovm_core::{buffer::LispCharPos1, window::WindowLayoutQueryScope};
     for decoration in [
@@ -253,43 +464,49 @@ fn position_query_cache_observes_newly_enabled_existing_fontification_hooks() {
     use neovm_core::{buffer::LispCharPos1, window::WindowLayoutQueryScope};
     let hidden = "hidden\n".repeat(2000);
     let tail = 7 + hidden.len();
-    let (mut eval, frame, window) =
-        position_query_fixture(&format!("first\n{hidden}TAIL\n"), 360, 140);
-    // Prepare the function before caching so enabling it does not change the
-    // function epoch, buffer properties or any captured collection identity.
-    eval.eval_str(&format!(
-        r#"(setq buffer-invisibility-spec t) (put-text-property 7 {tail} 'invisible t)
+    let scope = WindowLayoutQueryScope::Position {
+        target: LispCharPos1::new(2),
+    };
+    for initial_scope in [scope, WindowLayoutQueryScope::Viewport] {
+        let (mut eval, frame, window) =
+            position_query_fixture(&format!("first\n{hidden}TAIL\n"), 360, 140);
+        // Prepare the function before caching so enabling it does not change the
+        // function epoch, buffer properties or any captured collection identity.
+        eval.eval_str(&format!(
+            r#"(setq buffer-invisibility-spec t) (put-text-property 7 {tail} 'invisible t)
         (setq fontification-functions nil position-fontify-calls nil)
         (setq prepared-position-fontify-hooks
             (list (lambda (start)
                 (setq position-fontify-calls (cons start position-fontify-calls))
                 (put-text-property start (min (point-max) (+ start 80)) 'fontified t))))"#
-    ))
-    .unwrap();
-    let scope = WindowLayoutQueryScope::Position {
-        target: LispCharPos1::new(2),
-    };
-    let mut query = WindowLayoutQueryEngine::new_without_font_metrics();
-    let first = query
-        .query_window_layout(&mut eval, frame, window, scope)
+        ))
         .unwrap();
-    assert_eq!(first.geometry().unwrap().rows.len(), 1);
-    eval.eval_str("(setq fontification-functions prepared-position-fontify-hooks)")
-        .unwrap();
-    let second = query
-        .query_window_layout(&mut eval, frame, window, scope)
-        .unwrap();
-    assert!(
-        second.geometry().unwrap().rows.len() > 1,
-        "cached prefix bypassed newly installed hooks"
-    );
-    assert!(
-        eval.eval_str(&format!("(get-text-property {tail} 'fontified)"))
-            .unwrap()
-            .is_t(),
-        "cached prefix omitted the post-fold callback"
-    );
-    assert!(!eval.eval_str("position-fontify-calls").unwrap().is_nil());
+        let mut query = WindowLayoutQueryEngine::new_without_font_metrics();
+        let first = query
+            .query_window_layout(&mut eval, frame, window, initial_scope)
+            .unwrap();
+        if initial_scope == scope {
+            assert_eq!(first.geometry().unwrap().rows.len(), 1);
+        } else {
+            assert!(first.geometry().unwrap().rows.len() > 1);
+        }
+        eval.eval_str("(setq fontification-functions prepared-position-fontify-hooks)")
+            .unwrap();
+        let second = query
+            .query_window_layout(&mut eval, frame, window, scope)
+            .unwrap();
+        assert!(
+            second.geometry().unwrap().rows.len() > 1,
+            "cached prefix bypassed newly installed hooks"
+        );
+        assert!(
+            eval.eval_str(&format!("(get-text-property {tail} 'fontified)"))
+                .unwrap()
+                .is_t(),
+            "cached prefix omitted the post-fold callback"
+        );
+        assert!(!eval.eval_str("position-fontify-calls").unwrap().is_nil());
+    }
 }
 
 #[test]
@@ -1561,7 +1778,9 @@ fn identical_geometry_queries_reuse_rows_and_mutations_force_a_new_walk() {
                     0,
                     "absolute rows moved with the viewport"
                 );
-            } else {
+            } else if !(matches!(scope, WindowLayoutQueryScope::Position { .. })
+                && change == "(set-window-vscroll nil 3 t)")
+            {
                 assert!(
                     probe::max_depth() > 0,
                     "mutation reused stale rows: {change}"

@@ -69,6 +69,9 @@ impl QueryCache {
                 "query cache lookup");
             let covers_scope = entry.scope == scope || matches!(
                 (entry.scope, scope),
+                (WindowLayoutQueryScope::Viewport, WindowLayoutQueryScope::Position { .. })
+            ) || matches!(
+                (entry.scope, scope),
                 (WindowLayoutQueryScope::Pixels { start: cached_start, height: cached_height },
                  WindowLayoutQueryScope::Pixels { start, height })
                     if cached_start == start && cached_height >= height
@@ -94,8 +97,15 @@ impl QueryCache {
             if entry.query.geometry()?.layout_freshness.as_ref() == Some(&current) {
                 return Some(entry.query.clone());
             }
-            if matches!(scope, WindowLayoutQueryScope::Position { .. }) {
-                return None;
+            if let WindowLayoutQueryScope::Position { target } = scope {
+                // A full observation keeps the existing viewport-edge proof.
+                // A target prefix needs its complete final row, rather than
+                // coverage of unrelated rows below the target.
+                return if matches!(entry.scope, WindowLayoutQueryScope::Viewport) {
+                    placement::reposition(&entry.query, &current, source_point)
+                } else {
+                    placement::reposition_position(&entry.query, &current, source_point, target)
+                };
             }
             if matches!(scope, WindowLayoutQueryScope::Rows { .. } | WindowLayoutQueryScope::Pixels { .. }) {
                 let source = evaluator.buffer_manager().get(buffer)?;

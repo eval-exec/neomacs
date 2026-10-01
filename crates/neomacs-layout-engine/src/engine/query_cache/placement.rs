@@ -10,6 +10,26 @@ pub(super) fn reposition(
     current: &WindowDisplaySnapshotFreshness,
     source_point: LispCharPos1,
 ) -> Option<WindowLayoutQuery> {
+    reposition_complete_rows(query, current, source_point, None)
+}
+
+/// A complete target prefix can retain its rows while unrelated rows enter or
+/// leave the viewport below it. Start, point and source inputs still match.
+pub(super) fn reposition_position(
+    query: &WindowLayoutQuery,
+    current: &WindowDisplaySnapshotFreshness,
+    source_point: LispCharPos1,
+    target: LispCharPos1,
+) -> Option<WindowLayoutQuery> {
+    reposition_complete_rows(query, current, source_point, Some(target))
+}
+
+fn reposition_complete_rows(
+    query: &WindowLayoutQuery,
+    current: &WindowDisplaySnapshotFreshness,
+    source_point: LispCharPos1,
+    target: Option<LispCharPos1>,
+) -> Option<WindowLayoutQuery> {
     let snapshot = query.geometry()?;
     let dy = snapshot
         .layout_freshness
@@ -28,14 +48,22 @@ pub(super) fn reposition(
     let bottom = top.checked_add(body.height as i64)?;
     let first = snapshot.rows.first()?;
     let last = snapshot.rows.last()?;
-    // A row entering or leaving either edge needs a new canonical walk. The
-    // current producer finishes partial rows, so an unchanged set preserves
-    // the exact end record, including wrapped/display-string row endings.
+    if let Some(target) = target
+        && snapshot.point_for_buffer_pos(target)?.row != last.row
+    {
+        // Missing targets and long strings that keep emitting rows at the
+        // same source anchor require the canonical source walker.
+        return None;
+    }
+    // Keep the first row at the top edge and the final row intersecting the
+    // viewport. Full viewport observations must also cover the bottom edge;
+    // a target prefix already completed its own final row at the source stop.
     for offset in [0, dy] {
         if first.y.checked_add(offset)? > top
             || first.y.checked_add(first.height)?.checked_add(offset)? <= top
             || last.y.checked_add(offset)? >= bottom
-            || last.y.checked_add(last.height)?.checked_add(offset)? < bottom
+            || last.y.checked_add(last.height)?.checked_add(offset)? <= top
+            || (target.is_none() && last.y.checked_add(last.height)?.checked_add(offset)? < bottom)
         {
             return None;
         }
