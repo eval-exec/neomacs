@@ -2276,7 +2276,11 @@ impl<'a> Vm<'a> {
         let knobs = VmProcessKnobs::get();
         #[cfg(all(feature = "jit", test))]
         let knobs = VmProcessKnobs {
-            tier_policy: knobs.tier_policy.with_test_feedback_override(),
+            tier_policy: if crate::emacs_core::jit::jit_forced_off_for_test() {
+                BytecodeTierPolicy::InterpreterOnly
+            } else {
+                knobs.tier_policy.with_test_feedback_override()
+            },
             ..knobs
         };
         Self {
@@ -3828,6 +3832,12 @@ impl<'a> Vm<'a> {
             let ops_len = ops.len();
             let ops_ptr = ops.as_ptr();
             let mut pc_local = callers.active().pc();
+            // F-I2 must visit every original instruction, including handlers
+            // ordinarily combined by the straight-line dispatch shortcuts.
+            #[cfg(test)]
+            let allow_skip_ops = !resumed_chain_probe::armed();
+            #[cfg(not(test))]
+            let allow_skip_ops = true;
             let mut quitcounter = *driver_quitcounter;
             // OSR (on-stack replacement): once a hot loop is detected at a backward
             // branch, transfer the rest of this interpreted call into native code at
@@ -4171,6 +4181,20 @@ impl<'a> Vm<'a> {
                 // `run_loop` and the iterative-callee gate in
                 // `can_enter_interpreter_frame_iteratively` reject unsealed
                 // hand-assembled chunks before dispatch.
+                // Test builds only: the chain-resume falsifier's per-op probe
+                // (`tests/resumed_chain_probe.rs`), which may take this
+                // driver's frames over and finish them as a resumed chain.
+                #[cfg(test)]
+                if resumed_chain_probe::armed() {
+                    cursor.publish(self.ctx);
+                    callers
+                        .active_mut()
+                        .save_execution_state(pc_local, osr_tried);
+                    if let Some(result) = self.resumed_chain_probe(callers, aux_stack) {
+                        return result;
+                    }
+                    cursor = StackCursor::acquire(self.ctx);
+                }
                 let op = unsafe { &*ops_ptr.add(pc_local) };
                 pc_local += 1;
                 #[cfg(test)]
@@ -4202,7 +4226,7 @@ impl<'a> Vm<'a> {
                         // SAFETY: seal_ops — a non-Return op is never last,
                         // so `pc_local` is in bounds after the increment.
                         let next = unsafe { &*ops_ptr.add(pc_local) };
-                        if let Op::StackRef(n) = next {
+                        if allow_skip_ops && let Op::StackRef(n) = next {
                             pc_local += 1;
                             #[cfg(feature = "vm-profile")]
                             vm_profile::bump(next);
@@ -4233,7 +4257,7 @@ impl<'a> Vm<'a> {
                         stk!().pop();
                     }
                     Op::Dup => {
-                        if pc_local + 2 < ops_len {
+                        if allow_skip_ops && pc_local + 2 < ops_len {
                             let next0 = unsafe { &*ops_ptr.add(pc_local) };
                             let next1 = unsafe { &*ops_ptr.add(pc_local + 1) };
                             let next2 = unsafe { &*ops_ptr.add(pc_local + 2) };
@@ -4318,7 +4342,7 @@ impl<'a> Vm<'a> {
                             // SAFETY: seal_ops — a non-Return op is never
                             // last, so `pc_local` is in bounds here.
                             let next = unsafe { &*ops_ptr.add(pc_local) };
-                            if matches!(next, Op::Return) {
+                            if allow_skip_ops && matches!(next, Op::Return) {
                                 ensure_stack_push_capacity!();
                                 pc_local += 1;
                                 #[cfg(feature = "vm-profile")]
@@ -9588,6 +9612,18 @@ fn sym_id_at(constants: &[Value], idx: u16) -> SymId {
 }
 #[path = "vm_leaf.rs"]
 mod vm_leaf;
+
+// No producer until the JIT reads deopt chains back (P2.3 commit 4); the
+// F-I2 tests drive it from the running interpreter meanwhile.
+#[cfg_attr(not(test), allow(dead_code))]
+#[path = "resumed_chain.rs"]
+mod resumed_chain;
+#[cfg_attr(not(test), allow(unused_imports))]
+pub(crate) use resumed_chain::{ChainBacktrace, ChainFrame, ChainLink, InlinedChainFrame};
+
+#[cfg(test)]
+#[path = "tests/resumed_chain_probe.rs"]
+pub(crate) mod resumed_chain_probe;
 #[cfg(feature = "jit")]
 pub(crate) use vm_leaf::render_vm_leaf_stats;
 

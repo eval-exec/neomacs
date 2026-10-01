@@ -684,6 +684,63 @@ impl Context {
             .any(|entry| entry.let_bound_symbol() == Some(symbol))
     }
 
+    /// Re-anchor the backtrace frame at `index`, which compiled code pushed
+    /// for an inlined call, onto the caller's operand stack that a chain
+    /// resume has just seeded at `bc_buf[args_start..args_start + nargs]`
+    /// (`Vm::run_resumed_chain`).
+    ///
+    /// A `BacktraceNative` entry reads its arguments through the physical
+    /// leaf's call-args slot, which died when the leaf returned its deopt
+    /// status; it becomes the bytecode-stack shape a Tier-0 `Bcall` pushes
+    /// (`push_backtrace_frame_from_bc_stack`), naming the same function. A
+    /// bytecode-stack entry gets the new span and keeps its `debug_on_exit`
+    /// bit. `Backtrace1`, `Backtrace2` and an owned `Backtrace` already hold
+    /// their argument values and stay as they are: the frame's function, its
+    /// arguments and its flag are what a reader sees, and none changes.
+    ///
+    /// Returns whether `index` holds a backtrace frame at all; anything else
+    /// means the deopt metadata named the wrong entry.
+    #[cfg_attr(not(test), allow(dead_code))] // until the JIT reads deopt chains back
+    pub(crate) fn rebind_resumed_backtrace_frame(
+        &mut self,
+        index: usize,
+        args_start: usize,
+        nargs: usize,
+    ) -> bool {
+        debug_assert!(
+            args_start
+                .checked_add(nargs)
+                .is_some_and(|end| end <= self.bc_buf.len()),
+            "a resumed frame's arguments must be a live caller-stack span"
+        );
+        let Some(span) = BytecodeBacktraceSpan::try_new(args_start, nargs) else {
+            // An `Op::Call` takes at most u16::MAX arguments, which the span
+            // always holds; keep whatever self-contained shape is there.
+            return self.specpdl_entry_is_backtrace(index);
+        };
+        match self.specpdl.get_mut(index) {
+            Some(entry @ SpecBinding::BacktraceNative { .. }) => {
+                let SpecBinding::BacktraceNative { function, .. } = *entry else {
+                    unreachable!("matched just above")
+                };
+                *entry = SpecBinding::Backtrace {
+                    function,
+                    args: BacktraceArgs::evaluated_bc_stack(span),
+                    debug_on_exit: false,
+                };
+                true
+            }
+            Some(SpecBinding::Backtrace { args, .. }) => {
+                if args.as_bc_stack_span().is_some() {
+                    *args = BacktraceArgs::evaluated_bc_stack(span);
+                }
+                true
+            }
+            Some(SpecBinding::Backtrace1 { .. } | SpecBinding::Backtrace2 { .. }) => true,
+            _ => false,
+        }
+    }
+
     /// GNU `backtrace_debug_on_exit` (`src/lisp.h:3733-3738`) for the frame at
     /// `index`, answering `false` for anything that is not a backtrace frame so
     /// that a caller unbinding a plain `let` region asks the question safely.

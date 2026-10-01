@@ -726,6 +726,10 @@ pub fn loop_heat_per_wrap() -> u32 {
 /// (also `off`/`false`/`no`) forces the interpreter — a kill switch and the
 /// A/B-measurement knob (no more `NEOVM_JIT_THRESHOLD=<huge>` hack).
 pub fn jit_runtime_enabled() -> bool {
+    #[cfg(test)]
+    if jit_forced_off_for_test() {
+        return false;
+    }
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
         !matches!(
@@ -733,6 +737,25 @@ pub fn jit_runtime_enabled() -> bool {
             Some("0" | "off" | "false" | "no")
         )
     })
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static JIT_OFF_FOR_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run this thread as `NEOVM_JIT=0` would (tests only): no tier-up, no OSR,
+/// and every new `Vm` interprets. For tests that compare interpreter runs
+/// op for op, where a callee turning hot between runs would change the
+/// trace.
+#[cfg(test)]
+pub fn force_jit_off_for_test(off: bool) {
+    JIT_OFF_FOR_TEST.with(|c| c.set(off));
+}
+
+#[cfg(test)]
+pub(crate) fn jit_forced_off_for_test() -> bool {
+    JIT_OFF_FOR_TEST.with(|c| c.get())
 }
 
 #[cfg(test)]

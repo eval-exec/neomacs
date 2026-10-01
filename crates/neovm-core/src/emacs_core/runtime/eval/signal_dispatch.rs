@@ -56,6 +56,41 @@ impl Context {
         }
     }
 
+    /// [`Self::rebase_resumed_vm_handler_stack_lens`] for one frame of a
+    /// resumed chain (`Vm::run_resumed_chain`): the frame's `count` handlers
+    /// are the first `count` Vm catch/condition-case frames at or above
+    /// `condition_stack[start]`, below the handlers of the frames it called.
+    /// Returns the index just past the last one, where the next frame's
+    /// handlers begin.
+    #[cfg_attr(not(test), allow(dead_code))] // until the JIT reads deopt chains back
+    pub(crate) fn rebase_resumed_vm_handler_range(
+        &mut self,
+        start: usize,
+        count: usize,
+        frame_base: usize,
+    ) -> usize {
+        let mut remaining = count;
+        let mut index = start;
+        while remaining > 0 && index < self.condition_stack.len() {
+            let resume = match &mut self.condition_stack[index] {
+                ConditionFrame::Catch { resume, .. }
+                | ConditionFrame::ConditionCase { resume, .. } => Some(resume),
+                _ => None,
+            };
+            if let Some(
+                ResumeTarget::VmCatch { stack_len, .. }
+                | ResumeTarget::VmConditionCase { stack_len, .. },
+            ) = resume
+            {
+                *stack_len += frame_base;
+                remaining -= 1;
+            }
+            index += 1;
+        }
+        debug_assert_eq!(remaining, 0, "a resumed frame's handlers are registered");
+        index
+    }
+
     pub(crate) fn condition_stack_len(&self) -> usize {
         self.condition_stack.len()
     }
