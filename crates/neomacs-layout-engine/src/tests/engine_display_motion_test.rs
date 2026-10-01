@@ -3039,14 +3039,22 @@ fn cross_start_pixels_match_cold_eob_after_a_decorated_final_newline() {
     use crate::engine::viewport_retry_depth_probe as probe;
     use neovm_core::window::WindowLayoutQueryScope;
     use std::num::NonZeroUsize;
-    for face in ["'(:height 2.0)", "'(:family \"serif\" :height 2.0)"] {
+    for (face, tail) in [
+        ("'(:height 2.0)", ""),
+        ("'(:family \"serif\" :height 2.0)", ""),
+        ("'(:height 2.0)", "hidden"),
+    ] {
         let (mut eval, frame, window) =
-            position_query_fixture(&"ordinary row\n".repeat(5), 400, 200);
-        eval.eval_str(&format!(
-            "(put-text-property (1- (point-max)) (point-max) 'face {face})"
-        ))
-        .unwrap();
-        let start = eval.eval_str("(point-max)").unwrap().as_fixnum().unwrap() as usize;
+            position_query_fixture(&format!("{}{tail}", "ordinary row\n".repeat(5)), 400, 200);
+        eval.eval_str(&format!("(put-text-property 65 66 'face {face})"))
+            .unwrap();
+        if !tail.is_empty() {
+            eval.eval_str(
+                "(setq buffer-invisibility-spec t) (put-text-property 66 (point-max) 'invisible t)",
+            )
+            .unwrap();
+        }
+        let start = 66;
         let scope = |start, height| WindowLayoutQueryScope::Pixels {
             start: LispCharPos1::from_one_based_usize(start),
             height: NonZeroUsize::new(height).unwrap(),
@@ -3062,7 +3070,17 @@ fn cross_start_pixels_match_cold_eob_after_a_decorated_final_newline() {
         if probe::max_depth() == 0 {
             // A warm EOB tail may inherit the final newline's active face;
             // a cold EOB walk starts with the default face and no characters.
-            assert_cross_start_pixel_observation(&mut eval, frame, window, &actual, start, 1, face);
+            // The same applies when an entirely hidden tail reaches EOB
+            // without resolving any fresh buffer face at its initial anchor.
+            assert_cross_start_pixel_observation(
+                &mut eval,
+                frame,
+                window,
+                &actual,
+                start,
+                1,
+                &format!("final newline {face}, tail={tail:?}"),
+            );
         } else {
             let expected = WindowLayoutQueryEngine::new()
                 .query_window_layout(&mut eval, frame, window, scope(start, 1))

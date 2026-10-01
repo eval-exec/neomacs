@@ -344,6 +344,16 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
         {
             return false;
         }
+        // The invisible checkpoint precedes face acquisition. A hidden prefix
+        // can draw an ellipsis or reach EOB using the preceding newline's face,
+        // unlike a fresh cursor. Use the checkpoint's visibility context here
+        // and classify only this anchor, without scanning the entire fold.
+        if RustTextPropAccess::new(self.buffer)
+            .invisible_status_at(char_pos.get() as i64)
+            .hidden()
+        {
+            return false;
+        }
         let properties = RustTextPropAccess::new_for_optional_window(self.buffer, self.window_id);
         ["line-prefix", "wrap-prefix"].iter().all(|name| {
             properties

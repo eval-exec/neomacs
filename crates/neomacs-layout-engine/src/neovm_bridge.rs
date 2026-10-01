@@ -2912,7 +2912,7 @@ impl<'a, B: LayoutBufferView + ?Sized> RustTextPropAccess<'a, B> {
 
     /// Combined `invisible` status at `charpos` from the `invisible` text
     /// property and the highest-priority overlay (GNU `invisible_p`).
-    fn invisible_status_at(&self, charpos: i64) -> InvisibleStatus {
+    pub(crate) fn invisible_status_at(&self, charpos: i64) -> InvisibleStatus {
         let bytepos = buffer_i64_charpos_to_emacs_byte_pos(self.buffer, charpos);
         let spec = self
             .buffer
