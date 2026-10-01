@@ -24,6 +24,17 @@ use crate::emacs_core::value::Value;
 /// `bytecode_nth_values` signals or walks it. Must agree with that function
 /// wherever it answers.
 pub(crate) fn nth_fast(_: &Context, args: &[Value; 4]) -> Option<Value> {
+    if crate::tagged::collection_reads::hoist_reads()
+        && !crate::tagged::collection_reads::is_active()
+    {
+        nth_fast_walk::<false>(args)
+    } else {
+        nth_fast_walk::<true>(args)
+    }
+}
+
+#[inline]
+fn nth_fast_walk<const OBSERVE: bool>(args: &[Value; 4]) -> Option<Value> {
     let [n, list, _, _] = *args;
     let n = n.as_fixnum()?;
     if !(0..=127).contains(&n) {
@@ -34,10 +45,18 @@ pub(crate) fn nth_fast(_: &Context, args: &[Value; 4]) -> Option<Value> {
         if !tail.is_cons() {
             break;
         }
-        tail = tail.cons_cdr();
+        tail = if OBSERVE {
+            tail.cons_cdr()
+        } else {
+            tail.cons_cdr_unobserved()
+        };
     }
     if tail.is_cons() {
-        Some(tail.cons_car())
+        Some(if OBSERVE {
+            tail.cons_car()
+        } else {
+            tail.cons_car_unobserved()
+        })
     } else if tail.is_nil() {
         Some(Value::NIL)
     } else {

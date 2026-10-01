@@ -419,6 +419,25 @@ fn aref_slow(ctx: *mut u8, array: Value, index: Value) -> i64 {
 /// its cycle check).
 const LIST_SHIM_FAST_STEPS: usize = 64;
 
+// These bounded shims never invoke Lisp or start a capture while walking.
+#[inline(always)]
+fn scan_car<const OBSERVE: bool>(cell: Value) -> Value {
+    if OBSERVE {
+        cell.cons_car()
+    } else {
+        cell.cons_car_unobserved()
+    }
+}
+
+#[inline(always)]
+fn scan_cdr<const OBSERVE: bool>(cell: Value) -> Value {
+    if OBSERVE {
+        cell.cons_cdr()
+    } else {
+        cell.cons_cdr_unobserved()
+    }
+}
+
 /// `(memq ELT LIST)` for a short list, bit-identity only. `None` when
 /// `symbols-with-pos-enabled` (`eq` then looks through positions), the
 /// list is improper before a match, or it is longer than
@@ -427,6 +446,17 @@ const LIST_SHIM_FAST_STEPS: usize = 64;
 /// every distinct cons has been visited.
 #[inline(always)]
 fn memq_fast(ctx: &Context, elt: Value, list: Value) -> Option<Value> {
+    if crate::tagged::collection_reads::hoist_reads()
+        && !crate::tagged::collection_reads::is_active()
+    {
+        memq_fast_walk::<false>(ctx, elt, list)
+    } else {
+        memq_fast_walk::<true>(ctx, elt, list)
+    }
+}
+
+#[inline(always)]
+fn memq_fast_walk<const OBSERVE: bool>(ctx: &Context, elt: Value, list: Value) -> Option<Value> {
     if ctx.symbols_with_pos_enabled {
         return None;
     }
@@ -435,10 +465,10 @@ fn memq_fast(ctx: &Context, elt: Value, list: Value) -> Option<Value> {
         if !tail.is_cons() {
             return tail.is_nil().then_some(Value::NIL);
         }
-        if tail.cons_car().bits() == elt.bits() {
+        if scan_car::<OBSERVE>(tail).bits() == elt.bits() {
             return Some(tail);
         }
-        tail = tail.cons_cdr();
+        tail = scan_cdr::<OBSERVE>(tail);
     }
     None
 }
@@ -447,6 +477,17 @@ fn memq_fast(ctx: &Context, elt: Value, list: Value) -> Option<Value> {
 /// that is a cons whose car is KEY's bits.
 #[inline(always)]
 fn assq_fast(ctx: &Context, key: Value, list: Value) -> Option<Value> {
+    if crate::tagged::collection_reads::hoist_reads()
+        && !crate::tagged::collection_reads::is_active()
+    {
+        assq_fast_walk::<false>(ctx, key, list)
+    } else {
+        assq_fast_walk::<true>(ctx, key, list)
+    }
+}
+
+#[inline(always)]
+fn assq_fast_walk<const OBSERVE: bool>(ctx: &Context, key: Value, list: Value) -> Option<Value> {
     if ctx.symbols_with_pos_enabled {
         return None;
     }
@@ -455,11 +496,11 @@ fn assq_fast(ctx: &Context, key: Value, list: Value) -> Option<Value> {
         if !tail.is_cons() {
             return tail.is_nil().then_some(Value::NIL);
         }
-        let entry = tail.cons_car();
-        if entry.is_cons() && entry.cons_car().bits() == key.bits() {
+        let entry = scan_car::<OBSERVE>(tail);
+        if entry.is_cons() && scan_car::<OBSERVE>(entry).bits() == key.bits() {
             return Some(entry);
         }
-        tail = tail.cons_cdr();
+        tail = scan_cdr::<OBSERVE>(tail);
     }
     None
 }

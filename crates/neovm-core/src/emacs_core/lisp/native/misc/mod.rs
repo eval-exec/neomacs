@@ -166,6 +166,31 @@ fn builtin_rassoc_with_symbols(args: Vec<Value>, symbols_with_pos_enabled: bool)
     }
 }
 
+/// Only no-callback scans may retain this thread's capture state across
+/// iterations. Captures on other mutator threads do not observe our reads.
+#[inline]
+fn unobserved_rassq_scan() -> bool {
+    crate::tagged::collection_reads::hoist_reads() && !crate::tagged::collection_reads::is_active()
+}
+
+#[inline(always)]
+fn rassq_car<const OBSERVED: bool>(value: Value) -> Value {
+    if OBSERVED {
+        value.cons_car()
+    } else {
+        value.cons_car_unobserved()
+    }
+}
+
+#[inline(always)]
+fn rassq_cdr<const OBSERVED: bool>(value: Value) -> Value {
+    if OBSERVED {
+        value.cons_cdr()
+    } else {
+        value.cons_cdr_unobserved()
+    }
+}
+
 /// `(rassq KEY ALIST)` -- like rassoc but uses `eq` for comparison.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_rassq(args: Vec<Value>) -> EvalResult {
@@ -193,8 +218,21 @@ pub(crate) fn builtin_rassq_values(
     alist: Value,
     symbols_with_pos_enabled: bool,
 ) -> EvalResult {
+    if unobserved_rassq_scan() {
+        builtin_rassq_values_scan::<false>(key, alist, symbols_with_pos_enabled)
+    } else {
+        builtin_rassq_values_scan::<true>(key, alist, symbols_with_pos_enabled)
+    }
+}
+
+#[inline]
+fn builtin_rassq_values_scan<const OBSERVED: bool>(
+    key: Value,
+    alist: Value,
+    symbols_with_pos_enabled: bool,
+) -> EvalResult {
     if symbols_with_pos_enabled {
-        return builtin_rassq_values_swp(key, alist);
+        return builtin_rassq_values_swp_scan::<OBSERVED>(key, alist);
     }
     let key_bits = key.bits();
     let mut tail = alist;
@@ -206,11 +244,11 @@ pub(crate) fn builtin_rassq_values(
             }
             break;
         }
-        let pair = tail.cons_car();
-        if pair.is_cons() && pair.cons_cdr().bits() == key_bits {
+        let pair = rassq_car::<OBSERVED>(tail);
+        if pair.is_cons() && rassq_cdr::<OBSERVED>(pair).bits() == key_bits {
             return Ok(pair);
         }
-        tail = tail.cons_cdr();
+        tail = rassq_cdr::<OBSERVED>(tail);
         budget -= 1;
     }
     rassq_exact(key, alist)
@@ -256,10 +294,11 @@ fn rassq_exact(key: Value, alist: Value) -> EvalResult {
     }
 }
 
-fn builtin_rassq_values_swp(key: Value, alist: Value) -> EvalResult {
+#[inline]
+fn builtin_rassq_values_swp_scan<const OBSERVED: bool>(key: Value, alist: Value) -> EvalResult {
     let bare = key.as_symbol_with_pos_sym().unwrap_or(key);
     if !bare.is_symbol() {
-        return builtin_rassq_values(key, alist, false);
+        return builtin_rassq_values_scan::<OBSERVED>(key, alist, false);
     }
     let mut tail = alist;
     let mut budget = crate::emacs_core::builtins::LIST_SCAN_BUDGET;
@@ -270,18 +309,19 @@ fn builtin_rassq_values_swp(key: Value, alist: Value) -> EvalResult {
             }
             break;
         }
-        let pair = tail.cons_car();
-        if pair.is_cons() && crate::emacs_core::builtins::eq_bare_symbol_swp(pair.cons_cdr(), bare)
+        let pair = rassq_car::<OBSERVED>(tail);
+        if pair.is_cons()
+            && crate::emacs_core::builtins::eq_bare_symbol_swp(rassq_cdr::<OBSERVED>(pair), bare)
         {
             return Ok(pair);
         }
-        tail = tail.cons_cdr();
+        tail = rassq_cdr::<OBSERVED>(tail);
         budget -= 1;
     }
     rassq_swp_exact(bare, alist)
 }
 
-/// [`builtin_rassq_values_swp`]'s exact algorithm, from the head.
+/// [`builtin_rassq_values_swp_scan`]'s exact algorithm, from the head.
 #[cold]
 #[inline(never)]
 fn rassq_swp_exact(bare: Value, alist: Value) -> EvalResult {

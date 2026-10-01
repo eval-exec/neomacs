@@ -127,35 +127,67 @@ impl SafeTailGuard {
 /// Walk `plist` looking for `prop`. Returns the associated value or None.
 /// Matches GNU `Fplist_get` when keys compare by eq.
 pub fn plist_get(plist: Value, prop: &Value) -> Option<Value> {
-    plist_get_with::<ExactIdentity>(plist, prop)
+    plist_get_select::<ExactIdentity>(plist, prop)
 }
 
 /// Walk `plist` looking for `prop`, using GNU's symbol-with-position aware
 /// `EQ` semantics when `symbols_with_pos_enabled` is true.
 pub fn plist_get_swp(plist: Value, prop: &Value, symbols_with_pos_enabled: bool) -> Option<Value> {
     if symbols_with_pos_enabled {
-        plist_get_with::<SymbolWithPositionTransparent>(plist, prop)
+        plist_get_select::<SymbolWithPositionTransparent>(plist, prop)
     } else {
-        plist_get_with::<ExactIdentity>(plist, prop)
+        plist_get_select::<ExactIdentity>(plist, prop)
     }
 }
 
 #[inline]
-fn plist_get_with<Comparison: PlistKeyComparison>(plist: Value, prop: &Value) -> Option<Value> {
+fn plist_get_select<Comparison: PlistKeyComparison>(plist: Value, prop: &Value) -> Option<Value> {
+    if crate::tagged::collection_reads::hoist_reads()
+        && !crate::tagged::collection_reads::is_active()
+    {
+        plist_get_with::<Comparison, false>(plist, prop)
+    } else {
+        plist_get_with::<Comparison, true>(plist, prop)
+    }
+}
+
+#[inline(always)]
+fn read_car<const OBSERVE: bool>(cell: Value) -> Value {
+    if OBSERVE {
+        cell.cons_car()
+    } else {
+        cell.cons_car_unobserved()
+    }
+}
+
+#[inline(always)]
+fn read_cdr<const OBSERVE: bool>(cell: Value) -> Value {
+    if OBSERVE {
+        cell.cons_cdr()
+    } else {
+        cell.cons_cdr_unobserved()
+    }
+}
+
+#[inline]
+fn plist_get_with<Comparison: PlistKeyComparison, const OBSERVE: bool>(
+    plist: Value,
+    prop: &Value,
+) -> Option<Value> {
     #[cfg(test)]
     note_plist_get_walk();
     let mut tail = plist;
     let mut safe_tail = SafeTailGuard::new(tail);
     while tail.is_cons() {
-        let key = tail.cons_car();
-        let rest = tail.cons_cdr();
+        let key = read_car::<OBSERVE>(tail);
+        let rest = read_cdr::<OBSERVE>(tail);
         if !rest.is_cons() {
             return None;
         }
         if Comparison::matches(&key, prop) {
-            return Some(rest.cons_car());
+            return Some(read_car::<OBSERVE>(rest));
         }
-        tail = rest.cons_cdr();
+        tail = read_cdr::<OBSERVE>(rest);
         if safe_tail.found_cycle_after_advance(tail) {
             return None;
         }
@@ -180,6 +212,22 @@ pub fn plist_put(plist: Value, prop: Value, value: Value) -> Result<(Value, bool
 /// `plist_put` variant whose key comparison mirrors GNU `EQ` while
 /// `symbols-with-pos-enabled` is non-nil.
 pub fn plist_put_swp(
+    plist: Value,
+    prop: Value,
+    value: Value,
+    symbols_with_pos_enabled: bool,
+) -> Result<(Value, bool), Flow> {
+    if crate::tagged::collection_reads::hoist_reads()
+        && !crate::tagged::collection_reads::is_active()
+    {
+        plist_put_walk::<false>(plist, prop, value, symbols_with_pos_enabled)
+    } else {
+        plist_put_walk::<true>(plist, prop, value, symbols_with_pos_enabled)
+    }
+}
+
+#[inline]
+fn plist_put_walk<const OBSERVE: bool>(
     plist: Value,
     prop: Value,
     value: Value,
@@ -214,8 +262,8 @@ pub fn plist_put_swp(
             }
             return Ok((plist, !value.is_nil()));
         }
-        let key = tail.cons_car();
-        let rest = tail.cons_cdr();
+        let key = read_car::<OBSERVE>(tail);
+        let rest = read_cdr::<OBSERVE>(tail);
         if !rest.is_cons() {
             // Odd-length plist (non-cons tail after key). Signal as malformed.
             if !rest.is_nil() {
@@ -231,12 +279,13 @@ pub fn plist_put_swp(
             ));
         }
         if eq_value_swp(&key, &prop, symbols_with_pos_enabled) {
-            let changed = !eq_value_swp(&rest.cons_car(), &value, symbols_with_pos_enabled);
+            let changed =
+                !eq_value_swp(&read_car::<OBSERVE>(rest), &value, symbols_with_pos_enabled);
             rest.set_car(value);
             return Ok((plist, changed));
         }
         last_value_cell = Some(rest);
-        tail = rest.cons_cdr();
+        tail = read_cdr::<OBSERVE>(rest);
     }
 }
 

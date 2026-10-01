@@ -3,6 +3,32 @@ use crate::emacs_core::error::{expect_args, expect_args_range, expect_fixnum};
 use crate::emacs_core::value::{ValueKind, VecLikeType, eq_value};
 use malachite::integer::Integer;
 
+/// A scan can keep this choice for its whole duration only when it runs no
+/// Lisp callbacks. Captures are thread scoped: another mutator's scope does
+/// not change which reads belong to the current thread.
+#[inline]
+fn unobserved_list_scan() -> bool {
+    crate::tagged::collection_reads::hoist_reads() && !crate::tagged::collection_reads::is_active()
+}
+
+#[inline(always)]
+fn scan_car<const OBSERVED: bool>(value: Value) -> Value {
+    if OBSERVED {
+        value.cons_car()
+    } else {
+        value.cons_car_unobserved()
+    }
+}
+
+#[inline(always)]
+fn scan_cdr<const OBSERVED: bool>(value: Value) -> Value {
+    if OBSERVED {
+        value.cons_cdr()
+    } else {
+        value.cons_cdr_unobserved()
+    }
+}
+
 // ===========================================================================
 // Cons / List operations
 // ===========================================================================
@@ -49,7 +75,15 @@ fn for_each_tail_cycle_tail(
     }
 }
 
-fn for_each_proper_list_tail<F>(
+fn for_each_proper_list_tail<F>(list: Value, improper_error_object: Value, visit: F) -> EvalResult
+where
+    F: FnMut(Value) -> Result<Option<Value>, Flow>,
+{
+    for_each_proper_list_tail_scan::<true, _>(list, improper_error_object, visit)
+}
+
+#[inline]
+fn for_each_proper_list_tail_scan<const OBSERVED: bool, F>(
     list: Value,
     improper_error_object: Value,
     mut visit: F,
@@ -68,7 +102,7 @@ where
             return Ok(result);
         }
 
-        tail = tail.cons_cdr();
+        tail = scan_cdr::<OBSERVED>(tail);
         if tail.is_cons()
             && let Some(cycle_tail) =
                 for_each_tail_cycle_tail(tail, &mut tortoise, &mut max, &mut n, &mut q)
@@ -88,6 +122,15 @@ where
 }
 
 pub(crate) fn proper_list_length_or_signal(list: Value) -> Result<usize, Flow> {
+    if unobserved_list_scan() {
+        proper_list_length_or_signal_scan::<false>(list)
+    } else {
+        proper_list_length_or_signal_scan::<true>(list)
+    }
+}
+
+#[inline]
+fn proper_list_length_or_signal_scan<const OBSERVED: bool>(list: Value) -> Result<usize, Flow> {
     let mut len = 0usize;
     let mut tail = list;
     let mut tortoise = list;
@@ -98,7 +141,7 @@ pub(crate) fn proper_list_length_or_signal(list: Value) -> Result<usize, Flow> {
     while tail.is_cons() {
         len = len.saturating_add(1);
 
-        tail = tail.cons_cdr();
+        tail = scan_cdr::<OBSERVED>(tail);
         if tail.is_cons()
             && let Some(cycle_tail) =
                 for_each_tail_cycle_tail(tail, &mut tortoise, &mut max, &mut n, &mut q)
@@ -473,14 +516,26 @@ fn vector_sequence_length(sequence: &Value) -> i64 {
     })
 }
 
-fn list_length_internal_for_predicate(mut sequence: Value, mut len: i64) -> Result<i64, Flow> {
+fn list_length_internal_for_predicate(sequence: Value, len: i64) -> Result<i64, Flow> {
+    if unobserved_list_scan() {
+        list_length_internal_for_predicate_scan::<false>(sequence, len)
+    } else {
+        list_length_internal_for_predicate_scan::<true>(sequence, len)
+    }
+}
+
+#[inline]
+fn list_length_internal_for_predicate_scan<const OBSERVED: bool>(
+    mut sequence: Value,
+    mut len: i64,
+) -> Result<i64, Flow> {
     if len < 0xffff {
         while sequence.is_cons() {
             len -= 1;
             if len <= 0 {
                 return Ok(-1);
             }
-            sequence = sequence.cons_cdr();
+            sequence = scan_cdr::<OBSERVED>(sequence);
         }
         return Ok(len);
     }
@@ -495,7 +550,7 @@ fn list_length_internal_for_predicate(mut sequence: Value, mut len: i64) -> Resu
             return Ok(-1);
         }
 
-        sequence = sequence.cons_cdr();
+        sequence = scan_cdr::<OBSERVED>(sequence);
         if sequence.is_cons()
             && let Some(cycle_tail) =
                 for_each_tail_cycle_tail(sequence, &mut tortoise, &mut max, &mut n, &mut q)
@@ -631,9 +686,18 @@ pub(crate) fn builtin_nth_2(
 }
 
 pub(crate) fn builtin_nth_values(n_value: Value, list: Value) -> EvalResult {
-    let tail = nthcdr_impl(n_value, list)?;
+    if unobserved_list_scan() {
+        builtin_nth_values_scan::<false>(n_value, list)
+    } else {
+        builtin_nth_values_scan::<true>(n_value, list)
+    }
+}
+
+#[inline]
+fn builtin_nth_values_scan<const OBSERVED: bool>(n_value: Value, list: Value) -> EvalResult {
+    let tail = nthcdr_impl_scan::<OBSERVED>(n_value, list)?;
     match tail.kind() {
-        ValueKind::Cons => Ok(tail.cons_car()),
+        ValueKind::Cons => Ok(scan_car::<OBSERVED>(tail)),
         ValueKind::Nil => Ok(Value::NIL),
         _ => Err(signal(
             LispCondition::WrongTypeArgument,
@@ -648,6 +712,15 @@ pub(crate) fn builtin_nth_values(n_value: Value, list: Value) -> EvalResult {
 /// whole list. Byte-compiled `(nth 2 '(a . b))` is `(wrong-type-argument
 /// listp b)` in GNU. Any other count is `Fnth`'s.
 pub(crate) fn bytecode_nth_values(n_value: Value, list: Value) -> EvalResult {
+    if unobserved_list_scan() {
+        bytecode_nth_values_scan::<false>(n_value, list)
+    } else {
+        bytecode_nth_values_scan::<true>(n_value, list)
+    }
+}
+
+#[inline]
+fn bytecode_nth_values_scan<const OBSERVED: bool>(n_value: Value, list: Value) -> EvalResult {
     if let Some(n) = n_value.as_fixnum()
         && (0..=127).contains(&n)
     {
@@ -656,17 +729,17 @@ pub(crate) fn bytecode_nth_values(n_value: Value, list: Value) -> EvalResult {
             if !tail.is_cons() {
                 break;
             }
-            tail = tail.cons_cdr();
+            tail = scan_cdr::<OBSERVED>(tail);
         }
         return if tail.is_cons() {
-            Ok(tail.cons_car())
+            Ok(scan_car::<OBSERVED>(tail))
         } else if tail.is_nil() {
             Ok(Value::NIL)
         } else {
             Err(listp_error(tail))
         };
     }
-    builtin_nth_values(n_value, list)
+    builtin_nth_values_scan::<OBSERVED>(n_value, list)
 }
 
 enum NthcdrCount {
@@ -694,6 +767,15 @@ fn expect_nthcdr_count(value: Value) -> Result<NthcdrCount, Flow> {
 }
 
 fn nthcdr_impl(n_value: Value, list: Value) -> EvalResult {
+    if unobserved_list_scan() {
+        nthcdr_impl_scan::<false>(n_value, list)
+    } else {
+        nthcdr_impl_scan::<true>(n_value, list)
+    }
+}
+
+#[inline]
+fn nthcdr_impl_scan<const OBSERVED: bool>(n_value: Value, list: Value) -> EvalResult {
     let count = expect_nthcdr_count(n_value)?;
 
     if matches!(count, NthcdrCount::Fixnum(n) if n <= 0)
@@ -710,7 +792,7 @@ fn nthcdr_impl(n_value: Value, list: Value) -> EvalResult {
         for _ in 0..(*n as usize) {
             match tail.kind() {
                 ValueKind::Cons => {
-                    tail = tail.cons_cdr();
+                    tail = scan_cdr::<OBSERVED>(tail);
                 }
                 ValueKind::Nil => return Ok(Value::NIL),
                 _ => {
@@ -724,10 +806,15 @@ fn nthcdr_impl(n_value: Value, list: Value) -> EvalResult {
         return Ok(tail);
     }
 
-    nthcdr_large_or_bignum(count, tail, list)
+    nthcdr_large_or_bignum_scan::<OBSERVED>(count, tail, list)
 }
 
-fn nthcdr_large_or_bignum(count: NthcdrCount, mut tail: Value, list: Value) -> EvalResult {
+#[inline]
+fn nthcdr_large_or_bignum_scan<const OBSERVED: bool>(
+    count: NthcdrCount,
+    mut tail: Value,
+    list: Value,
+) -> EvalResult {
     let large_num = i64::MAX;
     let (mut num, original_bignum) = match count {
         NthcdrCount::Fixnum(n) => (n, None),
@@ -748,7 +835,7 @@ fn nthcdr_large_or_bignum(count: NthcdrCount, mut tail: Value, list: Value) -> E
             tortoise_num = num;
         }
 
-        saved_tail = tail.cons_cdr();
+        saved_tail = scan_cdr::<OBSERVED>(tail);
         num -= 1;
         if num == 0 {
             return Ok(saved_tail);
@@ -785,7 +872,7 @@ fn nthcdr_large_or_bignum(count: NthcdrCount, mut tail: Value, list: Value) -> E
     num %= cycle_length;
 
     for _ in 0..num {
-        tail = tail.cons_cdr();
+        tail = scan_cdr::<OBSERVED>(tail);
     }
     Ok(tail)
 }
@@ -1070,6 +1157,19 @@ pub(crate) fn builtin_member_values(
     list: Value,
     symbols_with_pos_enabled: bool,
 ) -> EvalResult {
+    if unobserved_list_scan() {
+        builtin_member_values_scan::<false>(target, list, symbols_with_pos_enabled)
+    } else {
+        builtin_member_values_scan::<true>(target, list, symbols_with_pos_enabled)
+    }
+}
+
+#[inline]
+fn builtin_member_values_scan<const OBSERVED: bool>(
+    target: Value,
+    list: Value,
+    symbols_with_pos_enabled: bool,
+) -> EvalResult {
     if list.is_t() {
         tracing::error!(
             "(member {} t) — list is bare t! target={:?}",
@@ -1077,8 +1177,8 @@ pub(crate) fn builtin_member_values(
             target.kind()
         );
     }
-    for_each_proper_list_tail(list, list, |tail| {
-        let pair_car = tail.cons_car();
+    for_each_proper_list_tail_scan::<OBSERVED, _>(list, list, |tail| {
+        let pair_car = scan_car::<OBSERVED>(tail);
         if equal_value_swp(&target, &pair_car, 0, symbols_with_pos_enabled) {
             Ok(Some(tail))
         } else {
@@ -1113,8 +1213,21 @@ pub(crate) fn builtin_memq_values(
     list: Value,
     symbols_with_pos_enabled: bool,
 ) -> EvalResult {
+    if unobserved_list_scan() {
+        builtin_memq_values_scan::<false>(target, list, symbols_with_pos_enabled)
+    } else {
+        builtin_memq_values_scan::<true>(target, list, symbols_with_pos_enabled)
+    }
+}
+
+#[inline]
+fn builtin_memq_values_scan<const OBSERVED: bool>(
+    target: Value,
+    list: Value,
+    symbols_with_pos_enabled: bool,
+) -> EvalResult {
     if symbols_with_pos_enabled {
-        return builtin_memq_values_swp(target, list);
+        return builtin_memq_values_swp_scan::<OBSERVED>(target, list);
     }
     let target_bits = target.bits();
     let mut tail = list;
@@ -1126,10 +1239,10 @@ pub(crate) fn builtin_memq_values(
             }
             break;
         }
-        if tail.cons_car().bits() == target_bits {
+        if scan_car::<OBSERVED>(tail).bits() == target_bits {
             return Ok(tail);
         }
-        tail = tail.cons_cdr();
+        tail = scan_cdr::<OBSERVED>(tail);
         budget -= 1;
     }
     memq_exact(target, list)
@@ -1183,10 +1296,11 @@ pub(crate) fn listp_error(list: Value) -> Flow {
 // comes here: one test per element against the target's bare symbol, not a
 // closure unwrapping both sides of every comparison (246 instructions a call,
 // 13.5% of compiling elb-smie.el). The same budgeted scan as the plain case.
-fn builtin_memq_values_swp(target: Value, list: Value) -> EvalResult {
+#[inline]
+fn builtin_memq_values_swp_scan<const OBSERVED: bool>(target: Value, list: Value) -> EvalResult {
     let bare = target.as_symbol_with_pos_sym().unwrap_or(target);
     if !bare.is_symbol() {
-        return builtin_memq_values(target, list, false);
+        return builtin_memq_values_scan::<OBSERVED>(target, list, false);
     }
     let mut tail = list;
     let mut budget = LIST_SCAN_BUDGET;
@@ -1197,16 +1311,16 @@ fn builtin_memq_values_swp(target: Value, list: Value) -> EvalResult {
             }
             break;
         }
-        if eq_bare_symbol_swp(tail.cons_car(), bare) {
+        if eq_bare_symbol_swp(scan_car::<OBSERVED>(tail), bare) {
             return Ok(tail);
         }
-        tail = tail.cons_cdr();
+        tail = scan_cdr::<OBSERVED>(tail);
         budget -= 1;
     }
     memq_swp_exact(bare, list)
 }
 
-/// [`builtin_memq_values_swp`]'s exact algorithm, from the head.
+/// [`builtin_memq_values_swp_scan`]'s exact algorithm, from the head.
 #[cold]
 #[inline(never)]
 fn memq_swp_exact(bare: Value, list: Value) -> EvalResult {
@@ -1253,8 +1367,21 @@ pub(crate) fn builtin_memql_2(
 }
 
 fn builtin_memql_values(target: Value, list: Value, symbols_with_pos_enabled: bool) -> EvalResult {
-    for_each_proper_list_tail(list, list, |tail| {
-        let pair_car = tail.cons_car();
+    if unobserved_list_scan() {
+        builtin_memql_values_scan::<false>(target, list, symbols_with_pos_enabled)
+    } else {
+        builtin_memql_values_scan::<true>(target, list, symbols_with_pos_enabled)
+    }
+}
+
+#[inline]
+fn builtin_memql_values_scan<const OBSERVED: bool>(
+    target: Value,
+    list: Value,
+    symbols_with_pos_enabled: bool,
+) -> EvalResult {
+    for_each_proper_list_tail_scan::<OBSERVED, _>(list, list, |tail| {
+        let pair_car = scan_car::<OBSERVED>(tail);
         if eql_value_swp(&target, &pair_car, symbols_with_pos_enabled) {
             Ok(Some(tail))
         } else {
@@ -1281,10 +1408,23 @@ pub(crate) fn builtin_assoc_3(
 /// `assoc` without a TESTFN: the first entry whose car is KEY (`eq`, then
 /// `equal`). Runs no Lisp; shared with the builtin's leaf.
 pub(crate) fn assoc_values(key: Value, list: Value, symbols_with_pos_enabled: bool) -> EvalResult {
-    for_each_proper_list_tail(list, list, |tail| {
-        let pair_car = tail.cons_car();
+    if unobserved_list_scan() {
+        assoc_values_scan::<false>(key, list, symbols_with_pos_enabled)
+    } else {
+        assoc_values_scan::<true>(key, list, symbols_with_pos_enabled)
+    }
+}
+
+#[inline]
+fn assoc_values_scan<const OBSERVED: bool>(
+    key: Value,
+    list: Value,
+    symbols_with_pos_enabled: bool,
+) -> EvalResult {
+    for_each_proper_list_tail_scan::<OBSERVED, _>(list, list, |tail| {
+        let pair_car = scan_car::<OBSERVED>(tail);
         if pair_car.is_cons() {
-            let entry_key = pair_car.cons_car();
+            let entry_key = scan_car::<OBSERVED>(pair_car);
             if entry_key.bits() == key.bits()
                 || equal_value_swp(&key, &entry_key, 0, symbols_with_pos_enabled)
             {
@@ -1360,8 +1500,21 @@ pub(crate) fn builtin_assq_values(
     list: Value,
     symbols_with_pos_enabled: bool,
 ) -> EvalResult {
+    if unobserved_list_scan() {
+        builtin_assq_values_scan::<false>(key, list, symbols_with_pos_enabled)
+    } else {
+        builtin_assq_values_scan::<true>(key, list, symbols_with_pos_enabled)
+    }
+}
+
+#[inline]
+fn builtin_assq_values_scan<const OBSERVED: bool>(
+    key: Value,
+    list: Value,
+    symbols_with_pos_enabled: bool,
+) -> EvalResult {
     if symbols_with_pos_enabled {
-        return builtin_assq_values_swp(key, list);
+        return builtin_assq_values_swp_scan::<OBSERVED>(key, list);
     }
     let key_bits = key.bits();
     let mut tail = list;
@@ -1373,11 +1526,11 @@ pub(crate) fn builtin_assq_values(
             }
             break;
         }
-        let pair = tail.cons_car();
-        if pair.is_cons() && pair.cons_car().bits() == key_bits {
+        let pair = scan_car::<OBSERVED>(tail);
+        if pair.is_cons() && scan_car::<OBSERVED>(pair).bits() == key_bits {
             return Ok(pair);
         }
-        tail = tail.cons_cdr();
+        tail = scan_cdr::<OBSERVED>(tail);
         budget -= 1;
     }
     assq_exact(key, list)
@@ -1433,10 +1586,11 @@ pub(crate) fn assq_exact_for_test(key: Value, list: Value, swp: bool) -> EvalRes
     }
 }
 
-fn builtin_assq_values_swp(key: Value, list: Value) -> EvalResult {
+#[inline]
+fn builtin_assq_values_swp_scan<const OBSERVED: bool>(key: Value, list: Value) -> EvalResult {
     let bare = key.as_symbol_with_pos_sym().unwrap_or(key);
     if !bare.is_symbol() {
-        return builtin_assq_values(key, list, false);
+        return builtin_assq_values_scan::<OBSERVED>(key, list, false);
     }
     let mut tail = list;
     let mut budget = LIST_SCAN_BUDGET;
@@ -1447,17 +1601,17 @@ fn builtin_assq_values_swp(key: Value, list: Value) -> EvalResult {
             }
             break;
         }
-        let pair = tail.cons_car();
-        if pair.is_cons() && eq_bare_symbol_swp(pair.cons_car(), bare) {
+        let pair = scan_car::<OBSERVED>(tail);
+        if pair.is_cons() && eq_bare_symbol_swp(scan_car::<OBSERVED>(pair), bare) {
             return Ok(pair);
         }
-        tail = tail.cons_cdr();
+        tail = scan_cdr::<OBSERVED>(tail);
         budget -= 1;
     }
     assq_swp_exact(bare, list)
 }
 
-/// [`builtin_assq_values_swp`]'s exact algorithm, from the head.
+/// [`builtin_assq_values_swp_scan`]'s exact algorithm, from the head.
 #[cold]
 #[inline(never)]
 fn assq_swp_exact(bare: Value, list: Value) -> EvalResult {
@@ -1592,7 +1746,18 @@ pub(crate) fn copy_sequence_value(arg: Value) -> EvalResult {
 // Extended list operations
 // ===========================================================================
 
-fn delete_from_list_in_place_result<F>(seq: &Value, mut should_delete: F) -> Result<Value, Flow>
+fn delete_from_list_in_place_result<F>(seq: &Value, should_delete: F) -> Result<Value, Flow>
+where
+    F: FnMut(&Value) -> Result<bool, Flow>,
+{
+    delete_from_list_in_place_result_scan::<true, _>(seq, should_delete)
+}
+
+#[inline]
+fn delete_from_list_in_place_result_scan<const OBSERVED: bool, F>(
+    seq: &Value,
+    mut should_delete: F,
+) -> Result<Value, Flow>
 where
     F: FnMut(&Value) -> Result<bool, Flow>,
 {
@@ -1606,10 +1771,10 @@ where
 
     while tail.is_cons() {
         let remove = {
-            let pair_car = tail.cons_car();
+            let pair_car = scan_car::<OBSERVED>(tail);
             should_delete(&pair_car)?
         };
-        let next = tail.cons_cdr();
+        let next = scan_cdr::<OBSERVED>(tail);
         if remove {
             if prev.is_nil() {
                 list = next;
@@ -1728,9 +1893,17 @@ pub(crate) fn builtin_delq_values(
 ) -> EvalResult {
     match list.kind() {
         ValueKind::Nil => Ok(Value::NIL),
-        ValueKind::Cons => delete_from_list_in_place(&list, |item| {
-            eq_value_swp(&elt, item, symbols_with_pos_enabled)
-        }),
+        ValueKind::Cons => {
+            if unobserved_list_scan() {
+                delete_from_list_in_place_result_scan::<false, _>(&list, |item| {
+                    Ok(eq_value_swp(&elt, item, symbols_with_pos_enabled))
+                })
+            } else {
+                delete_from_list_in_place(&list, |item| {
+                    eq_value_swp(&elt, item, symbols_with_pos_enabled)
+                })
+            }
+        }
         _ => Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("listp"), list],
@@ -1803,7 +1976,16 @@ pub(crate) fn builtin_nconc_slice(_eval: &mut super::eval::Context, args: &[Valu
 }
 
 pub(crate) fn builtin_nconc_slice_values(args: &[Value]) -> EvalResult {
-    fn last_cons_for_nconc(list: Value) -> Result<Value, Flow> {
+    if unobserved_list_scan() {
+        builtin_nconc_slice_values_scan::<false>(args)
+    } else {
+        builtin_nconc_slice_values_scan::<true>(args)
+    }
+}
+
+#[inline]
+fn builtin_nconc_slice_values_scan<const OBSERVED: bool>(args: &[Value]) -> EvalResult {
+    fn last_cons_for_nconc<const OBSERVED: bool>(list: Value) -> Result<Value, Flow> {
         let mut last = list;
         let mut tail = list;
         let mut tortoise = list;
@@ -1812,7 +1994,7 @@ pub(crate) fn builtin_nconc_slice_values(args: &[Value]) -> EvalResult {
 
         while tail.is_cons() {
             last = tail;
-            tail = tail.cons_cdr();
+            tail = scan_cdr::<OBSERVED>(tail);
             if tail.is_cons() {
                 distance = distance.saturating_add(1);
                 if tail.bits() == tortoise.bits() {
@@ -1857,7 +2039,7 @@ pub(crate) fn builtin_nconc_slice_values(args: &[Value]) -> EvalResult {
                     prev.set_cdr(*arg);
                 }
 
-                last_tail = Some(last_cons_for_nconc(*arg)?);
+                last_tail = Some(last_cons_for_nconc::<OBSERVED>(*arg)?);
             }
             _ => {
                 return Err(signal(
@@ -1872,3 +2054,7 @@ pub(crate) fn builtin_nconc_slice_values(args: &[Value]) -> EvalResult {
 }
 
 // ===========================================================================
+
+#[cfg(test)]
+#[path = "tests/collection_scan_capture.rs"]
+mod collection_scan_capture;
