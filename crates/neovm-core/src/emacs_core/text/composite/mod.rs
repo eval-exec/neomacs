@@ -853,7 +853,8 @@ pub const MAX_AUTO_COMPOSITION_LOOKBACK: usize = 3;
 
 /// `NEOMACS_COMPOSITION_FASTPATH` (P3.5 F): the visible scan returns at once
 /// for pure-ASCII text when no ASCII character has a rule, and otherwise is
-/// memoized per buffer. Read once per process; default off.
+/// memoized per buffer. Read once per process; default on.
+/// Explicit off, empty and unknown settings keep the full scan.
 pub mod fast_path {
     use std::cell::Cell;
     use std::sync::OnceLock;
@@ -881,7 +882,7 @@ pub mod fast_path {
                     .ok()
                     .map(|value| value.trim().to_ascii_lowercase())
                     .as_deref(),
-                Some("on" | "1" | "true" | "yes")
+                None | Some("on" | "1" | "true" | "yes")
             )
         })
     }
