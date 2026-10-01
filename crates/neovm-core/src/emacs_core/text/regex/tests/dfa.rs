@@ -962,10 +962,12 @@ fn search(
 
 #[test]
 fn the_knob_reads_off_on_and_verify() {
-    assert_eq!(DfaMode::parse(None), DfaMode::Off);
+    assert_eq!(DfaMode::parse(None), DfaMode::On);
     assert_eq!(DfaMode::parse(Some("off")), DfaMode::Off);
     assert_eq!(DfaMode::parse(Some("0")), DfaMode::Off);
-    assert_eq!(DfaMode::parse(Some("bogus")), DfaMode::Off);
+    assert_eq!(DfaMode::parse(Some(" OFF ")), DfaMode::Off);
+    assert_eq!(DfaMode::parse(Some("no")), DfaMode::Off);
+    assert_eq!(DfaMode::parse(Some("bogus")), DfaMode::On);
     assert_eq!(DfaMode::parse(Some("on")), DfaMode::On);
     assert_eq!(DfaMode::parse(Some(" 1 ")), DfaMode::On);
     assert_eq!(DfaMode::parse(Some("ON")), DfaMode::On);

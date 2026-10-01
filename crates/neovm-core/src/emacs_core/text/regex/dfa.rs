@@ -35,7 +35,7 @@
 //!
 //! # Knobs (read once per process)
 //!
-//! * `NEOVM_REGEX_DFA`: `off` (default), `on`, `verify` ([`DfaMode`]).
+//! * `NEOVM_REGEX_DFA`: `on` (default), `off`, `verify` ([`DfaMode`]).
 //! * `NEOVM_REGEX_DFA_STATS=1`: with the filter on, print this thread's
 //!   [`DfaStats`] as one `[neovm-regex-dfa]` line on stderr at exit.
 
@@ -1839,10 +1839,10 @@ impl ExistenceDfa {
 /// existence DFA.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DfaMode {
-    /// The default: no DFA; the search path is unchanged but for one branch
-    /// per search and per candidate.
+    /// No DFA: the search path is unchanged but for one branch per search
+    /// and per candidate.
     Off,
-    /// A candidate the DFA rejects is skipped.
+    /// The default: a candidate the DFA rejects is skipped.
     On,
     /// Every candidate runs the matcher too, and a verdict the matcher
     /// contradicts is reported (`tracing::error!`, and the stats' mismatch
@@ -1851,13 +1851,13 @@ pub(crate) enum DfaMode {
 }
 
 impl DfaMode {
-    /// The mode a value of `NEOVM_REGEX_DFA` selects: `on`/`1`/`true`/`yes`,
-    /// `verify`, anything else (or unset) off.
+    /// The mode a value of `NEOVM_REGEX_DFA` selects: `off`/`0`/`false`/`no`,
+    /// `verify`, anything else (or unset) on.
     pub(crate) fn parse(value: Option<&str>) -> Self {
         match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
             Some("verify") => Self::Verify,
-            Some("1" | "on" | "true" | "yes") => Self::On,
-            _ => Self::Off,
+            Some("0" | "off" | "false" | "no") => Self::Off,
+            _ => Self::On,
         }
     }
 }

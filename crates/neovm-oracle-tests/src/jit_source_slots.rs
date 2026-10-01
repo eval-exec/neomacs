@@ -54,7 +54,9 @@ fn oracle_jit_source_slot_calls_frames_and_instances() {
           (neovm--ss-call f2 'show)
           neovm--ss-seen
           (neovm--ss-call f1 7))))"#;
-    let expect = expect_test::expect![[r#""OK (4501500 15 105 10 12 10 ((byte-code-function (show)) (neovm--ss-call (byte-code-function show))) 8)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (4501500 15 105 10 12 10 ((byte-code-function (show)) (neovm--ss-call (byte-code-function show))) 8)""#
+    ]];
     crate::common::assert_oracle_parity_with_env_expect(form, SOURCE_SLOT_ENV, expect);
 }
 
@@ -75,7 +77,9 @@ fn oracle_jit_source_slot_depth_limit() {
             (condition-case err (neovm--ssd-call f 100000) (error err)))
           (neovm--ssd-call f 50)
           (neovm--ssd-call (neovm--ssd-make 1000) 10))))"#;
-    let expect = expect_test::expect![[r#""OK ((error \"Lisp nesting exceeds ‘max-lisp-eval-depth’\") 50 1010)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((error \"Lisp nesting exceeds ‘max-lisp-eval-depth’\") 50 1010)""#
+    ]];
     crate::common::assert_oracle_parity_with_env_expect(form, SOURCE_SLOT_ENV, expect);
 }
 
@@ -97,6 +101,8 @@ fn oracle_jit_source_slot_argument_counts() {
           (neovm--ssa-call2 o 5 6)
           (neovm--ssa-call1 r 7)
           (neovm--ssa-call2 r 7 8))))"#;
-    let expect = expect_test::expect![[r#""OK (wrong-number-of-arguments (5 nil 2) (5 6 2) (7 nil 3) (7 (8) 3))""#]];
+    let expect = expect_test::expect![[
+        r#""OK (wrong-number-of-arguments (5 nil 2) (5 6 2) (7 nil 3) (7 (8) 3))""#
+    ]];
     crate::common::assert_oracle_parity_with_env_expect(form, SOURCE_SLOT_ENV, expect);
 }
