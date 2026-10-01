@@ -1,12 +1,13 @@
 //! Collector knobs: environment switches read once per process, each the
-//! same-binary A/B of one measured behaviour. All default off.
+//! same-binary A/B of one measured behaviour. All default off except the
+//! chunk map.
 //!
 //! | knob | default | effect |
 //! |---|---|---|
 //! | `NEOVM_GC_CENSUS=1` | off | the generation census, one record per cycle (`census.rs`) |
 //! | `NEOVM_GC_CENSUS_REMSET=1` | off | the census plus its remembered-set estimate: the barrier window covers every owner, so every store reaches the census |
 //! | `NEOVM_GC_CENSUS_FILE=<path>` | unset | also append each census record to this file (read once, by `census.rs`) |
-//! | `NEOVM_GC_CHUNK_MAP=1` | off | page and block ownership through the chunk map (`chunk_map.rs`), on the mutator and on the GC thread |
+//! | `NEOVM_GC_CHUNK_MAP` | on (`=0` disables) | page and block ownership through the chunk map (`chunk_map.rs`), on the mutator and on the GC thread |
 //! | `NEOVM_GC_VEC_SCAN=defer` | `snapshot` | MEASUREMENT ONLY (falsifier F-G (c), P3.2 F1b): no Tier-B vector snapshot and no vector claims, so page vectors defer to the stop-the-world termination and are traced by reachability |
 //!
 //! A heap reads the knobs once, in `TaggedHeap::new`; tests override them
@@ -88,9 +89,15 @@ pub(crate) fn chunk_map_on() -> bool {
     }
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| {
-        let on = env_is_on("NEOVM_GC_CHUNK_MAP");
-        if on {
-            note_knob("NEOVM_GC_CHUNK_MAP", "1");
+        // On by default since the same-binary A/B: owns_* share 7.15% ->
+        // 0.01% on the GC probe (-4.05% instructions), and the elb rows
+        // -0.2..-1.1% (bubble, pidigits, elb-bytecomp, elb-pcase).
+        let on = !matches!(
+            std::env::var("NEOVM_GC_CHUNK_MAP").ok().as_deref(),
+            Some("0" | "off" | "false" | "no")
+        );
+        if !on {
+            note_knob("NEOVM_GC_CHUNK_MAP", "0");
         }
         on
     })
