@@ -1,7 +1,7 @@
 //! Context — special forms, function application, and dispatch.
 
-use std::collections::HashMap;
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::hash::Hash;
 use std::path::Path;
@@ -3343,8 +3343,7 @@ pub struct Context {
     /// composition_gstring_put_cache/lookup_cache, src/composite.c): keyed
     /// by the gstring header's font family + pixel size + characters, valued
     /// by the shaped gstring with its ID slot assigned.
-    pub gstring_shape_cache:
-        HashMap<crate::emacs_core::font::GstringShapeCacheKey, Value>,
+    pub gstring_shape_cache: HashMap<crate::emacs_core::font::GstringShapeCacheKey, Value>,
     /// Optional GUI observer of a complete marker-backed scroll transition.
     #[allow(clippy::type_complexity)]
     pub scroll_preview_fn: Option<

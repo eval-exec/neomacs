@@ -4057,8 +4057,7 @@ fn composition_gstring_adjust_zero_width(gstring: &Value) {
         let this_from = glyph
             .as_ref()
             .and_then(|g| g.as_ref().and_then(|g| g[0].as_int()));
-        let group_ends =
-            end_of_run || this_from.is_none_or(|this_from| this_from != from);
+        let group_ends = end_of_run || this_from.is_none_or(|this_from| this_from != from);
         if group_ends {
             if width == 0 && index > group_start {
                 // GNU: LGLYPH_SET_ADJUSTMENT(last, …) — the glyph's
@@ -4086,10 +4085,8 @@ fn composition_gstring_adjust_zero_width(gstring: &Value) {
                         ]),
                     );
                 } else {
-                    let mut adjustment =
-                        glyph_vec[5].as_vector_data().expect("adj").to_vec();
-                    adjustment[2] =
-                        Value::fixnum(adjustment[2].as_int().unwrap_or(0) + 1);
+                    let mut adjustment = glyph_vec[5].as_vector_data().expect("adj").to_vec();
+                    adjustment[2] = Value::fixnum(adjustment[2].as_int().unwrap_or(0) + 1);
                     glyph_value.set_vector_slot(5, Value::vector(adjustment));
                 }
             }
@@ -4118,8 +4115,8 @@ fn composition_gstring_adjust_zero_width(gstring: &Value) {
 fn gstring_shape_cache_key(gstring: &Value) -> crate::emacs_core::font::GstringShapeCacheKey {
     let slots = gstring.as_vector_data().expect("g");
     let header = slots[0].as_vector_data().expect("header");
-    let (family, pixel_size) = font_object_family_and_pixel_size(&header[0])
-        .unwrap_or_else(|| (String::from("?"), 0.0));
+    let (family, pixel_size) =
+        font_object_family_and_pixel_size(&header[0]).unwrap_or_else(|| (String::from("?"), 0.0));
     let chars: Vec<i64> = header[1..]
         .iter()
         .map(|char_slot| char_slot.as_int().unwrap_or(0))

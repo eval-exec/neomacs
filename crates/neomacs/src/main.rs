@@ -3682,7 +3682,6 @@ fn run_gui_evaluator_worker(
         move || session_render_waker.wake(),
     );
 
-
     tracing::info!("Entering GNU command loop on GUI evaluator worker...");
     let stopped = session.run_until_stopped(|evaluator| {
         // R2-C3: native-from-call-1 — prepopulate after the pdump hook and

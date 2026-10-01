@@ -6,8 +6,7 @@
 #![cfg(target_os = "linux")]
 
 use neomacs_gui_tests::{
-    GuiBackend, GuiRunOptions, GuiRunStatus, GuiScenario, GuiTestPlan,
-    ProcessGuiCommandRunner,
+    GuiBackend, GuiRunOptions, GuiRunStatus, GuiScenario, GuiTestPlan, ProcessGuiCommandRunner,
 };
 use std::{path::PathBuf, time::Duration};
 
@@ -39,7 +38,10 @@ fn run_case(tag: &str, ligature_enabled: bool) -> (PathBuf, PathBuf) {
     )
     .with_program(binary)
     .with_env("RUST_LOG", "info")
-    .with_env("NEOMACS_LIGATURE_ENABLED", if ligature_enabled { "1" } else { "0" })
+    .with_env(
+        "NEOMACS_LIGATURE_ENABLED",
+        if ligature_enabled { "1" } else { "0" },
+    )
     .with_env("NEOMACS_SELECTION_READY", ready.to_string_lossy())
     .with_env("NEOMACS_DEBUG_SURFACE_READBACK", "10000");
     for (key, value) in session.env() {
