@@ -433,7 +433,12 @@ pub fn image_load_identity(spec: &Value, items: &[Value]) -> ImageLoadIdentity {
     }
     let subject = match file {
         Some(path) => ImageDiagnosticSubject::File(path),
-        None => ImageDiagnosticSubject::Spec(super::print::print_value(spec)),
+        // GNU reaches the specification through `%s`, which is `princ`: the
+        // strings inside it lose their quotes (`:data x`, not `:data "x"`).
+        None => ImageDiagnosticSubject::Spec(crate::emacs_core::print::print_value_with_options(
+            spec,
+            crate::emacs_core::print::PrintOptions::princ(),
+        )),
     };
     ImageLoadIdentity::new(
         format.unwrap_or_else(|| ImageFormatName::Other(String::new())),

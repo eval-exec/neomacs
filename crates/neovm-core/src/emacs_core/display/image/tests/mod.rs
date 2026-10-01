@@ -9,7 +9,9 @@ use crate::emacs_core::image_catalog::{
 };
 use crate::emacs_core::value::list_to_vec;
 use crate::face::{Color, FaceTable};
-use neomacs_display_protocol::image_diagnostic::ImageDiagnostic;
+use neomacs_display_protocol::image_diagnostic::{
+    ImageDiagnostic, ImageDiagnosticSubject, ImageFormatName,
+};
 use std::sync::{Arc, Mutex};
 
 fn test_image_load(id: u32) -> ImageLoadToken {
@@ -2046,4 +2048,57 @@ fn a_nil_message_log_max_silences_image_diagnostics() {
     eval.log_pending_image_diagnostics();
 
     assert_eq!(messages_text(&eval), "");
+}
+
+// -----------------------------------------------------------------------
+// What an image is called in a failure diagnostic
+// -----------------------------------------------------------------------
+
+/// A `:file` image is named by its file, the way GNU's `:file` arms name it
+/// (`image_not_found_error`, `src/image.c:8285`).
+#[test]
+fn a_file_image_is_named_by_its_file() {
+    let spec = builtin_create_image(vec![
+        Value::string("/tmp/missing.png"),
+        Value::symbol("png"),
+    ])
+    .expect("create-image");
+    let items = list_to_vec(&spec).expect("image spec is a list");
+    let identity = image_load_identity(&spec, &items);
+
+    assert_eq!(identity.format(), &ImageFormatName::Png);
+    assert_eq!(
+        identity.subject(),
+        &ImageDiagnosticSubject::File("/tmp/missing.png".to_owned())
+    );
+}
+
+/// A `:data` image has no file to name, so GNU names the whole specification —
+/// through `%s`, which is `princ`, so the string inside it keeps no quotes.
+///
+/// This is GNU 31.1's own line for the same input, character for character:
+/// `(create-image "definitely not an image" 'png t)` then a redisplay gives
+/// `Not a PNG image: ‘(image :type png :data definitely not an image :scale
+/// default)’`. Printing the specification with `prin1` instead would put
+/// quotes around the data and make the line a different one.
+#[test]
+fn a_data_image_is_named_by_its_princ_printed_specification() {
+    let spec = builtin_create_image(vec![
+        Value::string("definitely not an image"),
+        Value::symbol("png"),
+        Value::T,
+    ])
+    .expect("create-image");
+    let items = list_to_vec(&spec).expect("image spec is a list");
+    let identity = image_load_identity(&spec, &items);
+
+    assert_eq!(identity.format(), &ImageFormatName::Png);
+    assert_eq!(
+        identity.subject().as_str(),
+        "(image :type png :data definitely not an image :scale default)"
+    );
+    assert_eq!(
+        identity.wrong_format().message(),
+        "Not a PNG image: `(image :type png :data definitely not an image :scale default)'"
+    );
 }
