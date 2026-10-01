@@ -87,7 +87,10 @@ fn the_same_bytes_as_data_are_named_by_their_specification() {
 #[test]
 fn a_truncated_png_reports_the_loaders_own_failure() {
     let path = fixture("truncated.png");
-    assert_eq!(diagnostic_for_file(&path).message(), "PNG error: Read error");
+    assert_eq!(
+        diagnostic_for_file(&path).message(),
+        "PNG error: Read error"
+    );
 }
 
 /// A source that arrived with no specification has no GNU sentence that is
