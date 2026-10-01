@@ -238,7 +238,7 @@ impl Drop for CollectionReadScope {
 
 #[inline]
 pub(crate) fn observe(value: TaggedValue) {
-    if CAPTURE_SCOPES.load(Ordering::Relaxed) == 0 {
+    if CAPTURE_SCOPES.load(Ordering::Relaxed) == 0 || !ACTIVE.with(Cell::get) {
         return;
     }
     observe_active(value.bits());
@@ -250,9 +250,7 @@ pub(crate) fn observe(value: TaggedValue) {
 #[cold]
 #[inline(never)]
 fn observe_active(bits: usize) {
-    if ACTIVE.with(Cell::get) {
-        observe_bits(bits);
-    }
+    observe_bits(bits);
 }
 
 fn clear_recent_reads() {

@@ -1216,8 +1216,20 @@ pub(crate) fn builtin_memq_values(
     if unobserved_list_scan() {
         builtin_memq_values_scan::<false>(target, list, symbols_with_pos_enabled)
     } else {
-        builtin_memq_values_scan::<true>(target, list, symbols_with_pos_enabled)
+        builtin_memq_values_observed(target, list, symbols_with_pos_enabled)
     }
+}
+
+// Keep the recorder's calls and live registers out of the unobserved scan's
+// public entry, so they do not impose a stack frame on every invocation.
+#[cold]
+#[inline(never)]
+fn builtin_memq_values_observed(
+    target: Value,
+    list: Value,
+    symbols_with_pos_enabled: bool,
+) -> EvalResult {
+    builtin_memq_values_scan::<true>(target, list, symbols_with_pos_enabled)
 }
 
 #[inline]
@@ -1515,8 +1527,18 @@ pub(crate) fn builtin_assq_values(
     if unobserved_list_scan() {
         builtin_assq_values_scan::<false>(key, list, symbols_with_pos_enabled)
     } else {
-        builtin_assq_values_scan::<true>(key, list, symbols_with_pos_enabled)
+        builtin_assq_values_observed(key, list, symbols_with_pos_enabled)
     }
+}
+
+#[cold]
+#[inline(never)]
+fn builtin_assq_values_observed(
+    key: Value,
+    list: Value,
+    symbols_with_pos_enabled: bool,
+) -> EvalResult {
+    builtin_assq_values_scan::<true>(key, list, symbols_with_pos_enabled)
 }
 
 #[inline]

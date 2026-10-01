@@ -221,8 +221,20 @@ pub(crate) fn builtin_rassq_values(
     if unobserved_rassq_scan() {
         builtin_rassq_values_scan::<false>(key, alist, symbols_with_pos_enabled)
     } else {
-        builtin_rassq_values_scan::<true>(key, alist, symbols_with_pos_enabled)
+        builtin_rassq_values_observed(key, alist, symbols_with_pos_enabled)
     }
+}
+
+// The observed scan's recorder calls must not force register saves in the
+// unobserved public entry.
+#[cold]
+#[inline(never)]
+fn builtin_rassq_values_observed(
+    key: Value,
+    alist: Value,
+    symbols_with_pos_enabled: bool,
+) -> EvalResult {
+    builtin_rassq_values_scan::<true>(key, alist, symbols_with_pos_enabled)
 }
 
 #[inline]

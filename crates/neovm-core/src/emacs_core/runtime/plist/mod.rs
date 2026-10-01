@@ -53,14 +53,14 @@ pub(crate) fn plist_get_walks() -> usize {
 /// transparency is a separate runtime mode; selecting a monomorphized policy
 /// before walking keeps that mode check out of every plist entry comparison.
 trait PlistKeyComparison {
-    fn matches(left: &Value, right: &Value) -> bool;
+    fn matches<const OBSERVE: bool>(left: &Value, right: &Value) -> bool;
 }
 
 struct ExactIdentity;
 
 impl PlistKeyComparison for ExactIdentity {
     #[inline]
-    fn matches(left: &Value, right: &Value) -> bool {
+    fn matches<const OBSERVE: bool>(left: &Value, right: &Value) -> bool {
         eq_value(left, right)
     }
 }
@@ -69,11 +69,35 @@ struct SymbolWithPositionTransparent;
 
 impl PlistKeyComparison for SymbolWithPositionTransparent {
     #[inline]
-    fn matches(left: &Value, right: &Value) -> bool {
+    fn matches<const OBSERVE: bool>(left: &Value, right: &Value) -> bool {
         #[cfg(test)]
         note_symbol_with_pos_plist_comparison();
-        eq_value_swp(left, right, true)
+        compare_swp::<OBSERVE>(left, right, true)
     }
+}
+
+/// Plist walks make no Lisp callbacks, so an inactive scope stays inactive
+/// through both the cons traversal and its comparisons. Other mutators'
+/// captures do not include this thread's reads. Preserve the existing
+/// observing comparator whenever this mutator's capture is active.
+#[inline(always)]
+fn compare_swp<const OBSERVE: bool>(
+    left: &Value,
+    right: &Value,
+    symbols_with_pos_enabled: bool,
+) -> bool {
+    if OBSERVE {
+        return eq_value_swp(left, right, symbols_with_pos_enabled);
+    }
+    if left.bits() == right.bits() {
+        return true;
+    }
+    if !symbols_with_pos_enabled {
+        return false;
+    }
+    let left = left.as_symbol_with_pos_sym_unobserved().unwrap_or(*left);
+    let right = right.as_symbol_with_pos_sym_unobserved().unwrap_or(*right);
+    left.bits() == right.bits()
 }
 
 fn plist_entry(prop: Value, value: Value, tail: Value) -> Value {
@@ -184,7 +208,7 @@ fn plist_get_with<Comparison: PlistKeyComparison, const OBSERVE: bool>(
         if !rest.is_cons() {
             return None;
         }
-        if Comparison::matches(&key, prop) {
+        if Comparison::matches::<OBSERVE>(&key, prop) {
             return Some(read_car::<OBSERVE>(rest));
         }
         tail = read_cdr::<OBSERVE>(rest);
@@ -278,9 +302,12 @@ fn plist_put_walk<const OBSERVE: bool>(
                 vec![Value::symbol("plistp"), plist],
             ));
         }
-        if eq_value_swp(&key, &prop, symbols_with_pos_enabled) {
-            let changed =
-                !eq_value_swp(&read_car::<OBSERVE>(rest), &value, symbols_with_pos_enabled);
+        if compare_swp::<OBSERVE>(&key, &prop, symbols_with_pos_enabled) {
+            let changed = !compare_swp::<OBSERVE>(
+                &read_car::<OBSERVE>(rest),
+                &value,
+                symbols_with_pos_enabled,
+            );
             rest.set_car(value);
             return Ok((plist, changed));
         }
@@ -339,3 +366,7 @@ pub fn plist_member(plist: Value, prop: &Value) -> Value {
         tail = rest.cons_cdr();
     }
 }
+
+#[cfg(test)]
+#[path = "tests/collection_capture.rs"]
+mod collection_capture;
