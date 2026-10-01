@@ -47,7 +47,9 @@
                     (< (float-time) deadline))
           (unless (process-live-p process)
             (error "edit-loop profile gate disconnected during %s" command))
-          (accept-process-output process 0.05))
+          ;; Suppress timers and unrelated processes during the perf
+          ;; handshake; their callbacks are outside the measured workload.
+          (accept-process-output process 0.05 nil 1))
         (unless (equal neomacs-perf--profile-gate-response "ack\n")
           (error "edit-loop profile gate rejected %s: %S"
                  command neomacs-perf--profile-gate-response))))))
@@ -63,7 +65,7 @@
 (defun neomacs-perf--write-result
     (path status iterations elapsed-us major-mode-name parser-language
           text-unchanged point-unchanged overlay-count lsp-diagnostic-count
-          error-message)
+          gc-start-count gc-end-count gc-start-us gc-end-us error-message)
   (with-temp-file path
     (insert
      (json-serialize
@@ -72,6 +74,14 @@
         (status . ,status)
         (iterations . ,iterations)
         (elapsed_us . ,elapsed-us)
+        ;; Enclose both sampling handshakes so GC work at the gate boundaries
+        ;; remains visible alongside the loop's collections.
+        (gcs_done_start . ,gc-start-count)
+        (gcs_done_end . ,gc-end-count)
+        (gcs_done_delta . ,(- gc-end-count gc-start-count))
+        (gc_elapsed_us_start . ,gc-start-us)
+        (gc_elapsed_us_end . ,gc-end-us)
+        (gc_elapsed_us_delta . ,(- gc-end-us gc-start-us))
         (major_mode . ,major-mode-name)
         (lsp_mode_loaded . ,(neomacs-perf--json-boolean (featurep 'lsp-mode)))
         (treesit_parser_language . ,parser-language)
@@ -161,6 +171,8 @@
                        (neomacs-perf--required-environment
                         "NEOMACS_PERF_ITERATIONS")))
           (elapsed-us 0)
+          (gc-start-count 0) (gc-end-count 0)
+          (gc-start-us 0) (gc-end-us 0)
           (major-mode-name "uninitialized")
           (parser-language "unavailable")
           (text-unchanged nil)
@@ -197,6 +209,13 @@
                      (initial-point (point)))
                  (neomacs-perf--apply-diagnostic-replay workspace replay-json)
                  (redisplay t)
+                 ;; Start from a completed collection, rather than inherit a
+                 ;; preparation mark whose remaining work falls inside perf.
+                 (garbage-collect)
+                 (setq gc-start-count gcs-done
+                       gc-end-count gc-start-count
+                       gc-start-us (round (* 1000000 gc-elapsed))
+                       gc-end-us gc-start-us)
                  (let ((sampling-enabled nil))
                    (neomacs-perf--sampling-command "enable")
                    (setq sampling-enabled t)
@@ -216,7 +235,9 @@
                          (setq elapsed-us
                                (- (car (current-cpu-time)) started)))
                      (when sampling-enabled
-                       (neomacs-perf--sampling-command "disable"))))
+                       (neomacs-perf--sampling-command "disable")
+                       (setq gc-end-count gcs-done
+                             gc-end-us (round (* 1000000 gc-elapsed))))))
                  (setq major-mode-name (symbol-name major-mode)
                        parser-language
                        (symbol-name
@@ -236,7 +257,7 @@
      (neomacs-perf--write-result
       result-path status iterations elapsed-us major-mode-name parser-language
       text-unchanged point-unchanged overlay-count lsp-diagnostic-count
-      error-message)
+      gc-start-count gc-end-count gc-start-us gc-end-us error-message)
      (write-region "done\n" nil sentinel-path nil 'silent)
     (kill-emacs exit-code)))
 

@@ -33,7 +33,9 @@
                     (< (float-time) deadline))
           (unless (process-live-p neomacs-perf-workload--gate-process)
             (error "performance gate disconnected during %s" command))
-          (accept-process-output neomacs-perf-workload--gate-process 0.05)))
+          ;; Wait only for the controller; due timers must not add unrelated
+          ;; callback work after perf has enabled its counters.
+          (accept-process-output neomacs-perf-workload--gate-process 0.05 nil 1)))
       (unless (equal neomacs-perf-workload--gate-response "ack\n")
         (error "performance gate rejected %s: %S"
                command neomacs-perf-workload--gate-response)))))
@@ -515,7 +517,7 @@ Both engines run the same code here, so the number is comparable."
 (defun neomacs-perf-workload--write-result
     (path scenario status iterations elapsed-us elapsed-wall-us operation-count
           initial-checksum final-checksum point-restored expected-mode actual-mode
-          phases error-message)
+          phases gc-start-count gc-end-count gc-start-us gc-end-us error-message)
   (with-temp-file path
     (insert
      (json-serialize
@@ -548,6 +550,15 @@ Both engines run the same code here, so the number is comparable."
         ;; in --batch (its adaptive pacer's live-growth term is a strict max
         ;; over gc-cons-threshold), so a batch row silently charges GNU for
         ;; collection the other engine skipped.
+        ;; These boundaries enclose the gate handshake as well as the loop.
+        ;; The cumulative totals below include preparation and cannot explain
+        ;; collection-sized variation in the edit-loop instruction count.
+        (gcs_done_start . ,gc-start-count)
+        (gcs_done_end . ,gc-end-count)
+        (gcs_done_delta . ,(- gc-end-count gc-start-count))
+        (gc_elapsed_us_start . ,gc-start-us)
+        (gc_elapsed_us_end . ,gc-end-us)
+        (gc_elapsed_us_delta . ,(- gc-end-us gc-start-us))
         (gcs_done . ,gcs-done)
         (gc_elapsed_us . ,(round (* 1000000 gc-elapsed)))
         (max_rss_kb . ,(neomacs-perf-workload--max-rss-kb))
@@ -593,6 +604,8 @@ GNU has no such variable and ignores this."
          (sentinel-path (neomacs-perf-workload--required-environment "SENTINEL"))
          (status "error") (error-message nil) (exit-code 2)
          (elapsed-us 0) (elapsed-wall-us 0)
+         (gc-start-count 0) (gc-end-count 0)
+         (gc-start-us 0) (gc-end-us 0)
          (initial-checksum "") (final-checksum "")
          (initial-point 1) (point-restored nil) (expected-mode "")
          (actual-mode "")
@@ -608,6 +621,10 @@ GNU has no such variable and ignores this."
                 initial-checksum (neomacs-perf-workload--checksum)
                 initial-point (point))
           (garbage-collect)
+          (setq gc-start-count gcs-done
+                gc-end-count gc-start-count
+                gc-start-us (round (* 1000000 gc-elapsed))
+                gc-end-us gc-start-us)
           (neomacs-perf-workload--sampling-command "enable")
           (let ((started (neomacs-perf-workload--cpu-us))
                 (wall-started (float-time)))
@@ -616,7 +633,9 @@ GNU has no such variable and ignores this."
                       elapsed-us (max 1 (- (neomacs-perf-workload--cpu-us) started))
                       elapsed-wall-us
                       (max 1 (round (* 1000000 (- (float-time) wall-started)))))
-              (neomacs-perf-workload--sampling-command "disable")))
+              (neomacs-perf-workload--sampling-command "disable")
+              (setq gc-end-count gcs-done
+                    gc-end-us (round (* 1000000 gc-elapsed)))))
           (setq final-checksum (neomacs-perf-workload--checksum)
                 point-restored (= (point) initial-point)
                 actual-mode (symbol-name major-mode)
@@ -629,7 +648,7 @@ GNU has no such variable and ignores this."
     (neomacs-perf-workload--write-result
      result-path scenario status iterations elapsed-us elapsed-wall-us iterations
      initial-checksum final-checksum point-restored expected-mode actual-mode phases
-     error-message)
+     gc-start-count gc-end-count gc-start-us gc-end-us error-message)
     (neomacs-perf-workload--maybe-write-latency-trace)
     (write-region "done\n" nil sentinel-path nil 'silent)
     (kill-emacs exit-code)))

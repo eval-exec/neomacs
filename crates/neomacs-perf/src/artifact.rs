@@ -55,6 +55,14 @@ pub enum MetricName {
     PerCompletionCpuTime,
     PerBytecodeCallCpuTime,
     Iterations,
+    /// Cumulative collection counters at the sampling gate boundaries.
+    GcsDoneStart,
+    GcsDoneEnd,
+    GcsDoneDelta,
+    /// Cumulative GC time at the sampling gate boundaries, in microseconds.
+    GcElapsedStart,
+    GcElapsedEnd,
+    GcElapsedDelta,
     Edits,
     Redisplays,
     CompletionHelpCalls,
@@ -138,7 +146,10 @@ impl MetricName {
     /// The only unit in which this metric is valid in persisted artifacts.
     pub const fn canonical_unit(self) -> MetricUnit {
         match self {
-            Self::WorkloadCpuTime
+            Self::GcElapsedStart
+            | Self::GcElapsedEnd
+            | Self::GcElapsedDelta
+            | Self::WorkloadCpuTime
             | Self::WorkloadWallTime
             | Self::ProcessWallTime
             | Self::TypePhaseCpuTime
@@ -174,7 +185,10 @@ impl MetricName {
             Self::VideoPresentationFramesPerSecond | Self::VideoDecodeFramesPerSecond => {
                 MetricUnit::FramesPerSecond
             }
-            Self::Iterations
+            Self::GcsDoneStart
+            | Self::GcsDoneEnd
+            | Self::GcsDoneDelta
+            | Self::Iterations
             | Self::Edits
             | Self::Redisplays
             | Self::CompletionHelpCalls

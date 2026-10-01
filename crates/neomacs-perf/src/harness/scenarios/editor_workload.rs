@@ -382,6 +382,7 @@ fn prepare_working_magit_repository(repository: &Path) -> Result<(), String> {
 #[derive(Debug, Deserialize)]
 #[serde(try_from = "EditorWorkloadResultWire")]
 pub(crate) struct EditorWorkloadResult {
+    gc_window: [Option<u64>; 6],
     schema_version: u32,
     /// How much collection each engine actually did for this row, so a
     /// comparison can say whether the two did comparable work.
@@ -423,6 +424,19 @@ pub(crate) struct EditorWorkloadResult {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct EditorWorkloadResultWire {
+    // Optional edit-loop GC boundaries; legacy schema-1 artifacts omit them.
+    #[serde(default, deserialize_with = "super::deserialize_gc_boundary")]
+    gcs_done_start: Option<u64>,
+    #[serde(default, deserialize_with = "super::deserialize_gc_boundary")]
+    gcs_done_end: Option<u64>,
+    #[serde(default, deserialize_with = "super::deserialize_gc_boundary")]
+    gcs_done_delta: Option<u64>,
+    #[serde(default, deserialize_with = "super::deserialize_gc_boundary")]
+    gc_elapsed_us_start: Option<u64>,
+    #[serde(default, deserialize_with = "super::deserialize_gc_boundary")]
+    gc_elapsed_us_end: Option<u64>,
+    #[serde(default, deserialize_with = "super::deserialize_gc_boundary")]
+    gc_elapsed_us_delta: Option<u64>,
     schema_version: u32,
     /// Collection parity, added after the shared schema version 1 and so
     /// optional: the other four fixtures do not report it yet.
@@ -469,7 +483,17 @@ impl TryFrom<EditorWorkloadResultWire> for EditorWorkloadResult {
     type Error = String;
 
     fn try_from(wire: EditorWorkloadResultWire) -> Result<Self, Self::Error> {
+        let gc_window = [
+            wire.gcs_done_start,
+            wire.gcs_done_end,
+            wire.gcs_done_delta,
+            wire.gc_elapsed_us_start,
+            wire.gc_elapsed_us_end,
+            wire.gc_elapsed_us_delta,
+        ];
+        super::validate_gc_window(gc_window)?;
         Ok(Self {
+            gc_window,
             schema_version: wire.schema_version,
             gcs_done: wire.gcs_done,
             gc_elapsed_us: wire.gc_elapsed_us,
@@ -757,6 +781,7 @@ pub(crate) fn valid_editor_workload_measurements(
             unit: MetricUnit::Count,
         },
     ];
+    super::append_gc_window_measurements(&mut measurements, result.gc_window);
     if result.scenario == ScenarioId::SustainedEditing {
         let edits = result.operation_count.saturating_mul(2);
         measurements.push(Measurement {

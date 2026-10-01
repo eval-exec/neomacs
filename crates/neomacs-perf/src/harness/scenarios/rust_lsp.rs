@@ -161,6 +161,7 @@ pub(crate) fn prepare(
 #[derive(Debug, Deserialize)]
 #[serde(try_from = "RustLspTypingResultWire")]
 pub(crate) struct RustLspTypingResult {
+    gc_window: [Option<u64>; 6],
     schema_version: u32,
     scenario: ScenarioId,
     outcome: ScenarioOutcome,
@@ -179,6 +180,19 @@ pub(crate) struct RustLspTypingResult {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RustLspTypingResultWire {
+    // Optional edit-loop GC boundaries; legacy schema-1 artifacts omit them.
+    #[serde(default, deserialize_with = "super::deserialize_gc_boundary")]
+    gcs_done_start: Option<u64>,
+    #[serde(default, deserialize_with = "super::deserialize_gc_boundary")]
+    gcs_done_end: Option<u64>,
+    #[serde(default, deserialize_with = "super::deserialize_gc_boundary")]
+    gcs_done_delta: Option<u64>,
+    #[serde(default, deserialize_with = "super::deserialize_gc_boundary")]
+    gc_elapsed_us_start: Option<u64>,
+    #[serde(default, deserialize_with = "super::deserialize_gc_boundary")]
+    gc_elapsed_us_end: Option<u64>,
+    #[serde(default, deserialize_with = "super::deserialize_gc_boundary")]
+    gc_elapsed_us_delta: Option<u64>,
     schema_version: u32,
     scenario: ScenarioId,
     status: ScenarioStatus,
@@ -199,8 +213,18 @@ impl TryFrom<RustLspTypingResultWire> for RustLspTypingResult {
     type Error = String;
 
     fn try_from(wire: RustLspTypingResultWire) -> Result<Self, Self::Error> {
+        let gc_window = [
+            wire.gcs_done_start,
+            wire.gcs_done_end,
+            wire.gcs_done_delta,
+            wire.gc_elapsed_us_start,
+            wire.gc_elapsed_us_end,
+            wire.gc_elapsed_us_delta,
+        ];
+        super::validate_gc_window(gc_window)?;
         let outcome = scenario_outcome(wire.status, wire.error)?;
         Ok(Self {
+            gc_window,
             schema_version: wire.schema_version,
             scenario: wire.scenario,
             outcome,
@@ -303,7 +327,7 @@ pub(crate) fn valid_rust_lsp_typing_measurements(
     wall_elapsed_us: u128,
 ) -> Vec<Measurement> {
     let edits = u64::from(result.iterations) * 2;
-    vec![
+    let mut measurements = vec![
         Measurement {
             name: MetricName::ProcessWallTime,
             value: wall_elapsed_us as f64,
@@ -344,7 +368,9 @@ pub(crate) fn valid_rust_lsp_typing_measurements(
             value: result.lsp_diagnostic_count as f64,
             unit: MetricUnit::Count,
         },
-    ]
+    ];
+    super::append_gc_window_measurements(&mut measurements, result.gc_window);
+    measurements
 }
 
 fn copy_grammar_libraries(
