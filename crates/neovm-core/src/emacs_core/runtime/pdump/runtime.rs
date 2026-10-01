@@ -151,4 +151,5 @@ pub(crate) fn run_after_pdump_load_hook(eval: &mut Context) {
 }
 
 #[cfg(test)]
+#[path = "runtime/tests/runtime_test.rs"]
 mod tests;
