@@ -352,47 +352,6 @@ fn window_position_publication(
 /// marker and made any hook observe the wrong transaction.  Return a typed
 /// resolved value so the render walk can replay this exact decision instead of
 /// resolving it a second time.
-/// The retained KEY with the window start the MATRIX was laid out from.
-///
-/// A key is taken from a window's inputs before its layout. When the layout
-/// itself moves the start -- point left the window, GNU's `try_scrolling` or
-/// recentering inside `redisplay_window` -- it resolves the new start within
-/// the same attempt, so the key still names the old one while the matrix
-/// shows the new. The next frame's inputs then carry the new start, the keys
-/// differ, and that frame is laid out in full: after `M->` from a distant
-/// point the first keystroke evaluated the mode line where GNU's optimization
-/// 1 keeps it (GNU's `w->start` is the start it displayed), and a forced idle
-/// redisplay that would have settled the key was skipped under
-/// `NEOMACS_REDISPLAY_IDLE_SKIP` (the mode-line oracle's `typenofl` case).
-///
-/// The start is corrected only when the live window's start (LIVE_START) is
-/// where the matrix's first text row begins; otherwise the key is kept, and
-/// the next frame is laid out in full as before.
-pub(crate) fn key_with_displayed_window_start(
-    key: &RetainedWindowKey,
-    matrix: &neomacs_display_protocol::glyph_matrix::GlyphMatrix,
-    live_start: Option<i64>,
-) -> RetainedWindowKey {
-    let mut key = key.clone();
-    let Some(live_start) = live_start else {
-        return key;
-    };
-    if live_start == key.window_start {
-        return key;
-    }
-    let first_text_row_start = matrix
-        .rows
-        .iter()
-        .find(|row| {
-            row.enabled && row.displays_text && !RetainedWindowMatrix::is_chrome_role(row.role)
-        })
-        .map(|row| row.start_charpos as i64);
-    if first_text_row_start == Some(live_start) {
-        key.window_start = live_start;
-    }
-    key
-}
-
 fn resolve_leaf_window_start(
     evaluator: &neovm_core::emacs_core::Context,
     params: &WindowParams,
@@ -3293,25 +3252,11 @@ impl LayoutEngine {
                     else {
                         continue;
                     };
-                    let displayed_key = key_with_displayed_window_start(
-                        key,
-                        &entry.matrix,
-                        evaluator
-                            .frame_manager()
-                            .get(frame_id)
-                            .and_then(|frame| {
-                                frame.find_window(neovm_core::window::WindowId(
-                                    window_id.get() as u64
-                                ))
-                            })
-                            .and_then(neovm_core::window::Window::window_start)
-                            .map(crate::coords::lisp_char_pos_to_layout_i64),
-                    );
                     retained.insert(
                         window_id,
                         RetainedWindowMatrix {
                             matrix: entry.matrix.clone(),
-                            key: displayed_key,
+                            key: key.clone(),
                             // Every enabled body row now carries real
                             // MATRIX_ROW_START/END_CHARPOS values (empty lines
                             // hold their line's position; the EOB placeholder
