@@ -2225,20 +2225,33 @@ fn pixel_size_image_context() -> (Context, i64) {
         frame.font_pixel_size = 16.0;
         frame.font_ascent = 15.0;
         frame.set_window_system(Some(Value::symbol("x")));
-        // `create_frame' sized the window in pixels from the frame's UNSCALED
-        // cell, so it is 200 px wide however wide the cell is.  X-LIMIT nil
-        // means the window's body width (GNU `init_iterator`:
-        // `it.last_visible_x = it.first_visible_x + body_width`), so a
-        // 200 px window would truncate every one of these rows; give it the
-        // real reference frame's 80 columns instead, as the GNU runs in
-        // `tmp/textsize/` had.
-        frame.root_window_mut().set_bounds(crate::window::Rect::new(
+    }
+    // `create_frame' sized the window in pixels from the frame's UNSCALED cell,
+    // so it is 200 px wide however wide the cell is.  X-LIMIT nil means the
+    // window's body width (GNU `init_iterator`: `it.last_visible_x =
+    // it.first_visible_x + body_width`), so a 200 px window would truncate
+    // every one of these rows; give it the real reference frame's 80 columns
+    // instead, as the GNU runs in `tmp/textsize/` had.
+    //
+    // The bounds also have to carry the scroll bars, fringes, margins and
+    // dividers that the BODY excludes, or the body would be 774 px -- 77.4
+    // cells -- and a soft wrap would land in the middle of a character, which
+    // is a frame geometry no window has.
+    let chrome = {
+        let frame = eval.frames.get(frame_id).expect("frame");
+        let bounds = *frame.root_window().bounds();
+        (bounds.width - window_body_width(&eval.frames, frame_id)).max(0.0)
+    };
+    eval.frames
+        .get_mut(frame_id)
+        .expect("frame")
+        .root_window_mut()
+        .set_bounds(crate::window::Rect::new(
             0.0,
             0.0,
-            80.0 * 10.0,
+            80.0 * 10.0 + chrome,
             24.0 * 20.0,
         ));
-    }
     eval.set_display_host(Box::new(DecodedImageHost));
     let selected_window = eval.frames.get(frame_id).expect("frame").selected_window.0 as i64;
     (eval, selected_window)
@@ -2293,6 +2306,16 @@ impl ImageCatalog for DecodedImageHost {
             ),
         })
     }
+}
+
+/// The root window's body width in pixels, after `char_width` has been scaled
+/// to the fixture's 10-pixel cell.
+fn window_body_width(frames: &crate::window::FrameManager, fid: crate::window::FrameId) -> f32 {
+    let Some(frame) = frames.get(fid) else {
+        return 0.0;
+    };
+    crate::emacs_core::window_cmds::window_body_width_pixels(frames, fid, frame.root_window())
+        as f32
 }
 
 /// `(image :type png :file FILE :width W :height H ...)`, the spec
@@ -7108,16 +7131,29 @@ fn window_text_pixel_size_rewinds_to_the_wrapped_display_line() {
     crate::test_utils::init_test_tracing();
     let long = format!("{}\n", "x".repeat(200));
     let body = reference_frame_body_width();
+    // The wrap boundary is one whole cell past the body's last, so derive it
+    // from the measured body rather than assuming an 80-column window.
+    let columns = (body / 10).max(1);
+    let second_row_start = columns + 1;
     assert_eq!(
         probe_text_region(&long, false, Some(41), None, Value::NIL, Value::NIL),
         (body, 60),
         "GNU: (720 . 60) -- FROM 41 is on the first wrapped row"
     );
+    // FROM exactly at the second row's first position: the row break belongs
+    // to the prefix GNU rewinds past, so the first row contributes neither
+    // width nor height.
     assert_eq!(
-        probe_text_region(&long, false, Some(81), None, Value::NIL, Value::NIL),
+        probe_text_region(
+            &long,
+            false,
+            Some(second_row_start),
+            None,
+            Value::NIL,
+            Value::NIL
+        ),
         (body, 40),
-        "GNU: (720 . 40) -- FROM 81 starts the second wrapped row, so the \
-         first row contributes neither width nor height"
+        "GNU: (720 . 40) from 81, which starts the second wrapped row"
     );
 }
 

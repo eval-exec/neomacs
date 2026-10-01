@@ -1046,9 +1046,20 @@ impl ScanState {
     /// `it.max_descent` across the rewind: a range that ends where it starts
     /// (`FROM` == `TO`) still reports the row it sits on, one cell tall.
     fn reach_origin(&mut self) {
-        if self.origin_pos.take().is_none() {
+        if !self.before_origin() {
             return;
         }
+        // GNU rewinds to the start of FROM's SCREEN line, so a row break that
+        // is already due at FROM belongs to the prefix: without this, FROM at
+        // the first position of a wrapped row reports the row the prefix had
+        // just filled, and counts it in the height.  The break is taken while
+        // `before_origin` still holds, so it cannot mark a crossing.
+        if let Some(edge) = self.wrapping_edge()
+            && self.line_width() >= edge
+        {
+            self.soft_wrap();
+        }
+        self.origin_pos = None;
         self.origin_x = self.line_width();
         self.max_width = 0.0;
         self.height = 0.0;
