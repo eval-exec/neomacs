@@ -334,6 +334,10 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
     /// alone cannot certify a restart in pushed replacement text.
     pub(crate) fn can_restart_after_buffer_newline(&self, char_pos: CharPos0) -> bool {
         if self.char_pos != char_pos
+            // At EOB no next source item refreshes the active face. The tail
+            // can retain the preceding newline's metrics, while a fresh EOB
+            // walk starts with default metrics, so it is not a restart seam.
+            || char_pos >= self.end
             || !self.replacement_strings.is_empty()
             || self.overlay_strings_produced_at == Some(char_pos)
             || self.produces_single_chars_at(char_pos)

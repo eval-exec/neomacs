@@ -737,6 +737,11 @@ impl<'a> TextRowOutputRenderState<'a> {
             .apply_current_row_mutation(MarkVisualContinuation);
     }
 
+    pub(crate) fn note_query_row_advance(&mut self, height: f32, line_spacing: f32) {
+        self.output_emitter
+            .note_query_row_advance(height, line_spacing);
+    }
+
     pub(crate) fn transition_text_row_with_limit(
         self,
         transition: DisplayTextRowGeometryTransition,

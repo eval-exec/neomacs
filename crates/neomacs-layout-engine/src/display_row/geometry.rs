@@ -422,6 +422,12 @@ pub(crate) struct DisplayRowBoundaryTarget<'a> {
     transition: DisplayRowGeometryTransitionTarget<'a>,
 }
 
+impl DisplayRowBoundaryTarget<'_> {
+    pub(crate) fn line_spacing(&self) -> f32 {
+        self.transition.kind.line_spacing().pixels()
+    }
+}
+
 impl DisplayRowYFallback {
     fn y_for_row(self, row: usize) -> f32 {
         self.text_y + row as f32 * self.default_height + self.row_extra_y

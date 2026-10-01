@@ -1368,8 +1368,24 @@ impl WindowOutputEmitter {
         self.query_target = target;
     }
 
-    pub(crate) fn set_collect_query_restarts(&mut self, enabled: bool) {
+    pub(crate) fn set_collect_query_restarts(
+        &mut self,
+        enabled: bool,
+        defaults: crate::display_row::geometry::DisplayRowGeometryDefaults,
+    ) {
         self.collect_query_restarts = enabled;
+        self.geometry.set_query_translation_tracking(
+            enabled,
+            defaults.text_y,
+            defaults.height,
+            defaults.ascent,
+        );
+    }
+
+    pub(crate) fn note_query_row_advance(&mut self, height: f32, line_spacing: f32) {
+        // Observe height before spacing is added, so fractional inputs cannot
+        // cancel or disappear in the finished row's rounded metric.
+        self.geometry.note_query_metrics(height, line_spacing);
     }
 
     pub(crate) fn collects_query_restarts(&self) -> bool {
@@ -1388,6 +1404,9 @@ impl WindowOutputEmitter {
     }
 
     pub(crate) fn take_query_restart_rows(&mut self) -> Vec<(LispCharPos1, i64)> {
+        if !self.geometry.query_translation_is_exact() {
+            self.query_restart_rows.clear();
+        }
         std::mem::take(&mut self.query_restart_rows)
     }
 
@@ -1642,6 +1661,7 @@ impl WindowOutputEmitter {
         y: f32,
         x: f32,
     ) {
+        self.geometry.note_query_y(y);
         let output_row = self.geometry.text_row_base + row as i64;
         let output_col = col as i64;
         let output_y = (y - self.geometry.window_top).round() as i64;

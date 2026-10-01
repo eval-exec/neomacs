@@ -117,8 +117,9 @@ impl<'a> DisplayRowBoundaryTransitionRequest<'a> {
     pub(crate) fn emit_with_output(
         self,
         row_geometry: &mut DisplayRowGeometryState,
-        output_render: TextRowOutputRenderState<'_>,
+        mut output_render: TextRowOutputRenderState<'_>,
     ) -> DisplayTextRowTransition {
+        output_render.note_query_row_advance(row_geometry.height(), self.target.line_spacing());
         let geometry_transition = row_geometry.finish_boundary(self.target);
         let transition =
             output_render.transition_text_row_with_limit(geometry_transition, self.max_rows);

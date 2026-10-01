@@ -506,7 +506,10 @@ impl BufferSourceWalkSetup {
     ) -> (WindowOutputEmitter, BufferSourcePostLoopRenderOutcome) {
         let mut output_emitter = output.begin_text_window_output(begin_request);
         output_emitter.set_query_target(params.query_target);
-        output_emitter.set_collect_query_restarts(params.measurement_pixels.is_some());
+        output_emitter.set_collect_query_restarts(
+            params.measurement_pixels.is_some(),
+            self.row_geometry_defaults,
+        );
         let source_render = output.source_render_state(
             &mut output_emitter,
             font_metrics,

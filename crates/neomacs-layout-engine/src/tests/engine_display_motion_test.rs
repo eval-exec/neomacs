@@ -3035,6 +3035,134 @@ fn cross_start_pixels_preserve_multibyte_end_records_and_eob_rows() {
 }
 
 #[test]
+fn cross_start_pixels_match_cold_eob_after_a_decorated_final_newline() {
+    use crate::engine::viewport_retry_depth_probe as probe;
+    use neovm_core::window::WindowLayoutQueryScope;
+    use std::num::NonZeroUsize;
+    for face in ["'(:height 2.0)", "'(:family \"serif\" :height 2.0)"] {
+        let (mut eval, frame, window) =
+            position_query_fixture(&"ordinary row\n".repeat(5), 400, 200);
+        eval.eval_str(&format!(
+            "(put-text-property (1- (point-max)) (point-max) 'face {face})"
+        ))
+        .unwrap();
+        let start = eval.eval_str("(point-max)").unwrap().as_fixnum().unwrap() as usize;
+        let scope = |start, height| WindowLayoutQueryScope::Pixels {
+            start: LispCharPos1::from_one_based_usize(start),
+            height: NonZeroUsize::new(height).unwrap(),
+        };
+        let mut engine = WindowLayoutQueryEngine::new();
+        engine
+            .query_window_layout(&mut eval, frame, window, scope(1, 500))
+            .unwrap();
+        probe::reset();
+        let actual = engine
+            .query_window_layout(&mut eval, frame, window, scope(start, 1))
+            .unwrap();
+        if probe::max_depth() == 0 {
+            // A warm EOB tail may inherit the final newline's active face;
+            // a cold EOB walk starts with the default face and no characters.
+            assert_cross_start_pixel_observation(&mut eval, frame, window, &actual, start, 1, face);
+        } else {
+            let expected = WindowLayoutQueryEngine::new()
+                .query_window_layout(&mut eval, frame, window, scope(start, 1))
+                .unwrap();
+            assert_eq!(actual.end(), expected.end(), "{face}");
+            assert_eq!(actual.geometry(), expected.geometry(), "{face}");
+        }
+    }
+}
+
+#[test]
+fn cross_start_pixels_match_fractional_row_origins_and_extents() {
+    use crate::engine::viewport_retry_depth_probe as probe;
+    use neovm_core::window::WindowLayoutQueryScope;
+    use std::num::NonZeroUsize;
+    for (leading_fraction, suffix_fraction) in
+        [(0.3_f64, 0.4_f64), (0.4, 0.3), (0.15, 0.2), (0.8, 0.6)]
+    {
+        let (mut eval, frame, window) =
+            position_query_fixture(&"ordinary row\n".repeat(100), 400, 200);
+        let calibration = WindowLayoutQueryEngine::new()
+            .query_window_layout(
+                &mut eval,
+                frame,
+                window,
+                WindowLayoutQueryScope::Rows {
+                    start: LispCharPos1::ONE,
+                    count: NonZeroUsize::new(1).unwrap(),
+                },
+            )
+            .unwrap();
+        let cell_height = calibration.geometry().unwrap().rows[0].height as f64;
+        let leading_height = (cell_height * 2.0 + leading_fraction) / cell_height;
+        let suffix_height = (cell_height + suffix_fraction) / cell_height;
+        eval.eval_str(&format!(
+            "(put-text-property 1 2 'display '(space :relative-height {leading_height}))
+             (put-text-property 14 15 'display '(space :relative-height {leading_height}))
+             (put-text-property 27 28 'display '(space :relative-height {suffix_height}))
+             (put-text-property 40 41 'display '(space :relative-height {suffix_height}))
+             (put-text-property 53 54 'display '(space :relative-height {suffix_height}))"
+        ))
+        .unwrap();
+        // With a measured 23px font, two leading 46.3px rows followed by
+        // three 23.4px rows expose a rounding phase change: old integer
+        // origins 93,116,139 look contiguous, but a fresh suffix begins at
+        // 0,23,47, not 0,23,46. Frame grid height need not match this font.
+        let requested_height = (suffix_height * cell_height * 2.5).ceil() as usize;
+        let initial_height = (leading_height * cell_height * 2.0
+            + suffix_height * cell_height * 2.5)
+            .ceil() as usize;
+        let scope = |start, height| WindowLayoutQueryScope::Pixels {
+            start: LispCharPos1::from_one_based_usize(start),
+            height: NonZeroUsize::new(height).unwrap(),
+        };
+        let mut engine = WindowLayoutQueryEngine::new();
+        let original = engine
+            .query_window_layout(&mut eval, frame, window, scope(1, initial_height))
+            .unwrap();
+        let reproduces_rounding_phase = leading_fraction == 0.3 && suffix_fraction == 0.4;
+        if reproduces_rounding_phase {
+            let rows = &original.geometry().unwrap().rows[2..];
+            assert_eq!(rows.len(), 3, "fixture must complete three suffix rows");
+            assert!(
+                rows.windows(2)
+                    .all(|pair| pair[0].y + pair[0].height == pair[1].y),
+                "fractional fixture must defeat integer-contiguity checks"
+            );
+        }
+        probe::reset();
+        let actual = engine
+            .query_window_layout(&mut eval, frame, window, scope(27, requested_height))
+            .unwrap();
+        let depth = probe::max_depth();
+        if depth == 0 {
+            assert_cross_start_pixel_observation(
+                &mut eval,
+                frame,
+                window,
+                &actual,
+                27,
+                requested_height,
+                &format!("fractional leading={leading_height}, suffix={suffix_height}"),
+            );
+        } else {
+            let expected = WindowLayoutQueryEngine::new()
+                .query_window_layout(&mut eval, frame, window, scope(27, requested_height))
+                .unwrap();
+            assert_eq!(actual.end(), expected.end());
+            assert_eq!(actual.geometry(), expected.geometry());
+        }
+        if reproduces_rounding_phase {
+            assert!(
+                depth > 0,
+                "rounded-contiguous fractional rows need a fresh walk"
+            );
+        }
+    }
+}
+
+#[test]
 fn cross_start_pixels_match_canonical_context_sensitive_rows() {
     use crate::engine::viewport_retry_depth_probe as probe;
     use neovm_core::window::WindowLayoutQueryScope;

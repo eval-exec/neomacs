@@ -25,6 +25,8 @@ pub(super) struct WindowRowGeometry {
     pub(super) text_row_base: i64,
     pub(super) text_x: f32,
     pub(super) window_top: f32,
+    /// Enabled only while collecting restart certificates for pixel queries.
+    query_translation_exact: Option<bool>,
     points: Vec<DisplayPointSnapshot>,
     rows: Vec<DisplayRowSnapshot>,
     row_metrics: Vec<RowMetricsSnapshot>,
@@ -45,6 +47,7 @@ impl WindowRowGeometry {
             text_row_base: text_row_base as i64,
             text_x,
             window_top,
+            query_translation_exact: None,
             points: Vec::new(),
             rows: Vec::new(),
             row_metrics: Vec::new(),
@@ -54,6 +57,53 @@ impl WindowRowGeometry {
             truncated_end_buffer_pos: None,
             current_row_terminator: None,
             current_row_progress: None,
+        }
+    }
+
+    // Integers in this conservative range remain exact through the nominal
+    // grid (at most 256 rows of at most 4096 pixels), its signed correction,
+    // and frame/window origin subtraction. Rounded snapshot coordinates alone
+    // cannot prove this: subtracting a rounded fractional origin changes phase.
+    const QUERY_COORDINATE_BOUND: f32 = 1_048_576.0;
+    const QUERY_METRIC_BOUND: f32 = 4096.0;
+
+    fn exact_query_value(value: f32, bound: f32) -> bool {
+        value.is_finite() && value.abs() <= bound && value.fract() == 0.0
+    }
+
+    pub(super) fn set_query_translation_tracking(
+        &mut self,
+        enabled: bool,
+        text_y: f32,
+        default_height: f32,
+        default_ascent: f32,
+    ) {
+        self.query_translation_exact = enabled.then(|| {
+            Self::exact_query_value(self.window_top, Self::QUERY_COORDINATE_BOUND)
+                && Self::exact_query_value(text_y, Self::QUERY_COORDINATE_BOUND)
+                && Self::exact_query_value(default_height, Self::QUERY_METRIC_BOUND)
+                && Self::exact_query_value(default_ascent, Self::QUERY_METRIC_BOUND)
+        });
+    }
+
+    pub(super) fn query_translation_is_exact(&self) -> bool {
+        self.query_translation_exact == Some(true)
+    }
+
+    pub(super) fn note_query_y(&mut self, y: f32) {
+        if self.query_translation_exact == Some(true)
+            && !Self::exact_query_value(y, Self::QUERY_COORDINATE_BOUND)
+        {
+            self.query_translation_exact = Some(false);
+        }
+    }
+
+    pub(super) fn note_query_metrics(&mut self, height: f32, ascent: f32) {
+        if self.query_translation_exact == Some(true)
+            && !(Self::exact_query_value(height, Self::QUERY_METRIC_BOUND)
+                && Self::exact_query_value(ascent, Self::QUERY_METRIC_BOUND))
+        {
+            self.query_translation_exact = Some(false);
         }
     }
 
@@ -293,6 +343,8 @@ impl WindowRowGeometry {
         row: i64,
         col: usize,
     ) {
+        self.note_query_y(glyph_y);
+        self.note_query_metrics(height, 0.0);
         self.points.push(DisplayPointSnapshot {
             role: neovm_core::window::DisplayPointRole::OverlaidMarker,
             buffer_pos,
@@ -363,6 +415,8 @@ impl WindowRowGeometry {
         col: usize,
     ) {
         self.note_display_buffer_pos(buffer_pos);
+        self.note_query_y(glyph_y);
+        self.note_query_metrics(height, 0.0);
         self.points.push(DisplayPointSnapshot {
             role: neovm_core::window::DisplayPointRole::Glyph,
             buffer_pos,
@@ -452,6 +506,11 @@ impl WindowRowGeometry {
     }
 
     pub(super) fn push_text_row(&mut self, row_y_start: f32, row_height: f32, row_ascent: f32) {
+        self.note_query_y(row_y_start);
+        self.note_query_metrics(row_height, row_ascent);
+        if self.rows.len() >= 256 {
+            self.query_translation_exact = self.query_translation_exact.map(|_| false);
+        }
         let row_progress = self
             .current_row_progress
             .take()
