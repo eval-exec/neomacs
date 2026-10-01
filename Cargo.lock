@@ -1687,7 +1687,7 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 [[package]]
 name = "dpi"
 version = "0.1.2"
-source = "git+https://github.com/eval-exec/winit?rev=9b10f225fd00bedc9f02d95c4e892b32f1f6641b#9b10f225fd00bedc9f02d95c4e892b32f1f6641b"
+source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
 
 [[package]]
 name = "dwrote"
@@ -8712,7 +8712,7 @@ checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
 [[package]]
 name = "winit"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?rev=9b10f225fd00bedc9f02d95c4e892b32f1f6641b#9b10f225fd00bedc9f02d95c4e892b32f1f6641b"
+source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
 dependencies = [
  "bitflags 2.13.1",
  "cfg_aliases 0.2.2",
@@ -8738,7 +8738,7 @@ dependencies = [
 [[package]]
 name = "winit-android"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?rev=9b10f225fd00bedc9f02d95c4e892b32f1f6641b#9b10f225fd00bedc9f02d95c4e892b32f1f6641b"
+source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
 dependencies = [
  "android-activity",
  "bitflags 2.13.1",
@@ -8753,7 +8753,7 @@ dependencies = [
 [[package]]
 name = "winit-appkit"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?rev=9b10f225fd00bedc9f02d95c4e892b32f1f6641b#9b10f225fd00bedc9f02d95c4e892b32f1f6641b"
+source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
 dependencies = [
  "bitflags 2.13.1",
  "block2",
@@ -8775,7 +8775,7 @@ dependencies = [
 [[package]]
 name = "winit-common"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?rev=9b10f225fd00bedc9f02d95c4e892b32f1f6641b#9b10f225fd00bedc9f02d95c4e892b32f1f6641b"
+source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
 dependencies = [
  "block2",
  "dpi",
@@ -8793,7 +8793,7 @@ dependencies = [
 [[package]]
 name = "winit-core"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?rev=9b10f225fd00bedc9f02d95c4e892b32f1f6641b#9b10f225fd00bedc9f02d95c4e892b32f1f6641b"
+source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
 dependencies = [
  "bitflags 2.13.1",
  "cursor-icon",
@@ -8808,7 +8808,7 @@ dependencies = [
 [[package]]
 name = "winit-orbital"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?rev=9b10f225fd00bedc9f02d95c4e892b32f1f6641b#9b10f225fd00bedc9f02d95c4e892b32f1f6641b"
+source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
 dependencies = [
  "bitflags 2.13.1",
  "dpi",
@@ -8824,7 +8824,7 @@ dependencies = [
 [[package]]
 name = "winit-uikit"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?rev=9b10f225fd00bedc9f02d95c4e892b32f1f6641b#9b10f225fd00bedc9f02d95c4e892b32f1f6641b"
+source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
 dependencies = [
  "bitflags 2.13.1",
  "block2",
@@ -8844,7 +8844,7 @@ dependencies = [
 [[package]]
 name = "winit-wayland"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?rev=9b10f225fd00bedc9f02d95c4e892b32f1f6641b#9b10f225fd00bedc9f02d95c4e892b32f1f6641b"
+source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
 dependencies = [
  "bitflags 2.13.1",
  "calloop",
@@ -8871,7 +8871,7 @@ dependencies = [
 [[package]]
 name = "winit-web"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?rev=9b10f225fd00bedc9f02d95c4e892b32f1f6641b#9b10f225fd00bedc9f02d95c4e892b32f1f6641b"
+source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
 dependencies = [
  "atomic-waker",
  "bitflags 2.13.1",
@@ -8893,7 +8893,7 @@ dependencies = [
 [[package]]
 name = "winit-win32"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?rev=9b10f225fd00bedc9f02d95c4e892b32f1f6641b#9b10f225fd00bedc9f02d95c4e892b32f1f6641b"
+source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
 dependencies = [
  "bitflags 2.13.1",
  "cursor-icon",
@@ -8913,7 +8913,7 @@ dependencies = [
 [[package]]
 name = "winit-x11"
 version = "0.31.0-beta.3"
-source = "git+https://github.com/eval-exec/winit?rev=9b10f225fd00bedc9f02d95c4e892b32f1f6641b#9b10f225fd00bedc9f02d95c4e892b32f1f6641b"
+source = "git+https://github.com/eval-exec/winit?rev=2290f91c602f8efdf102972457a25e8b6e36f90c#2290f91c602f8efdf102972457a25e8b6e36f90c"
 dependencies = [
  "bitflags 2.13.1",
  "bytemuck",
