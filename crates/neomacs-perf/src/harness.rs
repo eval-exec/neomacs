@@ -1535,25 +1535,27 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     // compilation census alone cannot explain why that loop stays interpreted.
     // Capture the opt-in rejection trace in the editor's stderr artifact.
     "NEOMACS_OSR_DEBUG",
-    // P3.5 redisplay knobs (same-binary A/B; each defaults to the old path).
-    // Buffer-text snapshots: `copy` (default) or `share` (copy-on-write).
+    // P3.5 redisplay knobs (same-binary A/B; explicit off retains baseline arms).
+    // Buffer-text snapshots: `copy` or `share` (default, copy-on-write).
     "NEOMACS_TEXT_SNAPSHOT",
     // TTY silent frames: `off` (default) or `on`.
     "NEOMACS_TTY_SILENT",
-    // TTY damage-proportional repaint: `off` (default), `verify` or `on`, and
+    // TTY damage-proportional repaint: `off`, `verify` or `on` (default), and
     // the per-frame verify report.
     "NEOMACS_TTY_DAMAGE",
     "NEOMACS_TTY_DAMAGE_REPORT_FILE",
-    // What names a window row in a TTY painter key: `address` (default) or
-    // `appearance` (position-only copies keep their row).
+    // What names a window row in a TTY painter key: `address` or
+    // `appearance` (default; position-only copies keep their row).
     "NEOMACS_TTY_ROW_IDENTITY",
-    // Chrome string positions from chrome rows: `frame` (default) or `rows`.
+    // Chrome string positions from chrome rows: `frame` or `rows` (default).
     "NEOMACS_PRESENT_CHROME_POS",
-    // Text hit positions built while composing (`eager`, default) or on the
-    // first pointer query (`lazy`).
+    // Text hit positions built while composing (`eager`) or on the
+    // first pointer query (`lazy`, default).
     "NEOMACS_PRESENT_HIT",
     // C6 compact row point storage and per-window row hits: off (default), on, verify.
     "NEOMACS_PRESENT_POINT_ROWS",
+    // Source newline counting: off (default), on, verify; indexed counts unchanged.
+    "NEOMACS_LAYOUT_LINE_COUNT",
     // The mini-window stands still when what it shows is unchanged: `on`.
     "NEOMACS_LAYOUT_MINI_STILL",
     // The visible automatic-composition scan's ASCII fast path and memo: `on`.

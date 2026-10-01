@@ -2,6 +2,14 @@
 //!
 //! Provides functions to build `WindowParams` and `FrameParams` from
 //! the Rust Context's state, replacing C FFI data sources.
+//!
+//! | Knob | Default | Values | Gate |
+//! | --- | --- | --- | --- |
+//! | `NEOMACS_LAYOUT_LINE_COUNT` | `off` | `off`, `on`, `verify` | Count source newlines with `memchr` over the same backend chunks; verify compares with the scalar scan. |
+//! The numeric mode is read once per process. Indexed counts and byte-range
+//! clamping precede the fallback scan in every mode. Concurrent readers share
+//! only the initialized numeric mode; each scan borrows its own backend view
+//! and creates no buffer-specific or Lisp-state cache.
 
 use std::cmp::Ordering;
 
@@ -2017,6 +2025,38 @@ pub fn collect_layout_params_with_font_sizing(
     Some((frame_params, window_params))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LayoutLineCountMode {
+    Off,
+    On,
+    Verify,
+}
+
+impl LayoutLineCountMode {
+    #[inline]
+    fn from_setting(setting: Option<&str>) -> Self {
+        match setting
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("on" | "1" | "true" | "yes") => Self::On,
+            Some("verify") => Self::Verify,
+            _ => Self::Off,
+        }
+    }
+}
+
+#[inline]
+fn layout_line_count_mode() -> LayoutLineCountMode {
+    static MODE: std::sync::OnceLock<LayoutLineCountMode> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| {
+        LayoutLineCountMode::from_setting(
+            std::env::var("NEOMACS_LAYOUT_LINE_COUNT").ok().as_deref(),
+        )
+    })
+}
+
 /// Buffer accessor for the layout engine.
 ///
 /// Wraps a reference to a neovm-core `Buffer` and provides the operations
@@ -2103,10 +2143,25 @@ impl<'a, B: LayoutBufferView> RustBufferAccess<'a, B> {
         if let Some(count) = self.buffer.layout_indexed_newline_count(range) {
             return count as i64;
         }
+        self.count_line_chunks(range, layout_line_count_mode())
+    }
+
+    #[inline]
+    fn count_line_chunks(&self, range: EmacsByteRange, mode: LayoutLineCountMode) -> i64 {
         let mut count: i64 = 0;
         self.buffer
             .layout_try_for_each_emacs_byte_range_chunk(range, |chunk| {
-                count += chunk.iter().filter(|byte| **byte == b'\n').count() as i64;
+                let found = match mode {
+                    LayoutLineCountMode::Off => chunk.iter().filter(|byte| **byte == b'\n').count(),
+                    LayoutLineCountMode::On => memchr::memchr_iter(b'\n', chunk).count(),
+                    LayoutLineCountMode::Verify => {
+                        let found = memchr::memchr_iter(b'\n', chunk).count();
+                        let scalar = chunk.iter().filter(|byte| **byte == b'\n').count();
+                        assert_eq!(found, scalar, "line count verify: chunk scan disagrees");
+                        found
+                    }
+                };
+                count += found as i64;
                 Ok::<(), std::convert::Infallible>(())
             })
             .expect("newline counting is infallible");
@@ -5013,3 +5068,7 @@ fn box_style_to_u8(style: &NeoBoxStyle) -> u8 {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "neovm_bridge/line_count_test.rs"]
+mod line_count_test;
