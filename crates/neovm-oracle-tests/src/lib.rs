@@ -171,6 +171,7 @@ mod iso8601_semantics;
 mod jit_builtin_leaves;
 mod jit_call_frames;
 mod jit_flonum_semantics;
+mod jit_source_slots;
 mod json_availability_semantics;
 mod json_semantics;
 mod kbd_event_advanced;
