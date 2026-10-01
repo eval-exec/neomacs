@@ -4480,7 +4480,7 @@ impl Context {
             if active != self.compiler_function_overrides_active {
                 // The stack-call cache keys on the function epoch; a change
                 // here changes what every symbol resolves to.
-                self.obarray.bump_function_epoch(
+                self.obarray.invalidate_all_function_bindings(
                     crate::emacs_core::symbol::FunctionEpochBump::CompilerOverrides,
                 );
             }

@@ -92,7 +92,7 @@ fn jit_fn_epoch_bump_still_skips_the_disarmed_sentinel() {
     let mut ev = Context::new();
     ev.obarray.set_function_epoch_for_test(u64::MAX - 1);
     ev.obarray
-        .bump_function_epoch(FunctionEpochBump::SubrRewrite);
+        .invalidate_all_function_bindings(FunctionEpochBump::SubrRewrite);
     assert_eq!(ev.obarray.function_epoch(), 0);
     ev.obarray.set_function_epoch_for_test(u64::MAX - 1);
     crate::emacs_core::builtins::builtin_fset_2(

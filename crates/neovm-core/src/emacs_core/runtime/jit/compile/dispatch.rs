@@ -933,7 +933,7 @@ pub extern "C" fn neovm_jit_save_window_excursion(ctx: *mut u8, body: i64, out: 
 /// now-different binding would run the WRONG op. Both `neovm_jit_call_spec` and
 /// `subr_spec_armed` short-circuit to their not-armed (generic / strict-symbol)
 /// path on this value BEFORE any re-validate/re-arm. `u64::MAX` is RESERVED: the
-/// live obarray `function_epoch` skips it on wrap (`advance_function_epoch`), so a
+/// live obarray `function_epoch` skips it on wrap (`next_function_epoch`), so a
 /// legitimately-armed slot never collides with it. JIT leaves never store it, so
 /// the extra compare is a perfectly-predicted never-taken branch there (~0 tax).
 pub(crate) const SPEC_EPOCH_DISARMED: u64 = u64::MAX;
@@ -1610,7 +1610,7 @@ pub(crate) fn arith_intrinsic_op_by_name(name: &str, nargs: usize) -> Option<u8>
 /// compiler overrides and no force harness (the two conditions besides a
 /// stale epoch that leave its compare, both bits of the attention word) and
 /// an epoch equal to the obarray's. The reference then answers `true` as
-/// well: a DISARMED slot never equals a live epoch (`advance_function_epoch`
+/// well: a DISARMED slot never equals a live epoch (`next_function_epoch`
 /// skips `u64::MAX`), so it would pass its DISARMED test, find no overrides,
 /// no force, and an equal epoch. Every other state runs the reference body
 /// unchanged.

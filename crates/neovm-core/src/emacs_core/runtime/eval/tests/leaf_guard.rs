@@ -60,8 +60,9 @@ fn leaf_active_asserts_at_every_safe_point() {
         (
             "a function-epoch bump",
             Box::new(|ctx: &mut Context| {
-                ctx.obarray
-                    .bump_function_epoch(crate::emacs_core::symbol::FunctionEpochBump::SubrRewrite);
+                ctx.obarray.invalidate_all_function_bindings(
+                    crate::emacs_core::symbol::FunctionEpochBump::SubrRewrite,
+                );
             }),
         ),
         (

@@ -27,7 +27,10 @@
 //! the legacy `SymbolValue` enum during the transition; Phases 4-8 cut them
 //! over to the redirect dispatch and Phase 10 deletes the legacy enum.
 
+mod fn_stamps;
 mod property_revision;
+#[cfg(test)]
+pub(crate) use fn_stamps::force_fn_stamps_for_test;
 pub use property_revision::SymbolPropertyRevision;
 
 use super::defvar_bool::ByteBooleanVars;
@@ -1178,16 +1181,18 @@ struct SymbolChunks {
     /// no longer races the mutator's in-place flag flips / fresh fills — presence
     /// is now the atomic write-once `name` cell (task #23).
     chunks: Vec<Box<[LispSymbol; OBARRAY_CHUNK]>>,
-    /// Per-chunk seqlock (one `AtomicU32` per chunk, index-aligned with `chunks`).
-    /// Boxed so the counter address stays stable for the concurrent GC reader even
-    /// when the `Vec` spine reallocs. Even = stable; odd = a `(flags, val)` write
-    /// is in flight in that chunk. Only ever bumped while a concurrent mark is
-    /// active (Stage 1b); zero cost otherwise. The GC reads it with the standard
-    /// seqlock protocol (retry while odd / changed).
-    // Each counter must keep a stable address while the Vec spine grows; the
+    /// Per-chunk side data (one box per chunk, index-aligned with `chunks`):
+    /// the chunk's seqlock and its function-binding stamps
+    /// ([`fn_stamps::ChunkSide`]). Boxed so the seqlock's address stays stable
+    /// for the concurrent GC reader even when the `Vec` spine reallocs. Seqlock:
+    /// even = stable; odd = a `(flags, val)` write is in flight in that chunk.
+    /// Only ever bumped while a concurrent mark is active (Stage 1b); zero cost
+    /// otherwise. The GC reads it with the standard seqlock protocol (retry
+    /// while odd / changed).
+    // Each side must keep a stable address while the Vec spine grows; the
     // per-element box is the concurrency invariant, not redundant storage.
     #[allow(clippy::vec_box)]
-    seqs: Vec<Box<std::sync::atomic::AtomicU32>>,
+    sides: Vec<Box<fn_stamps::ChunkSide>>,
     /// Logical slot count; grows to a chunk boundary as chunks are appended.
     len: usize,
     /// Address of `chunks`' buffer — an array of thin pointers, one per chunk
@@ -1283,15 +1288,16 @@ const _: () = {
 impl Clone for SymbolChunks {
     fn clone(&self) -> Self {
         // A cloned obarray is never concurrently marked, so the seqlocks reset
-        // to 0 (even). (`AtomicU32` is not `Clone`, hence the manual impl.)
+        // to 0 (even); the function stamps carry over. (The side boxes hold
+        // atomics, which are not `Clone`, hence the manual impl.)
         let chunks = self.chunks.clone();
         let spine_addr = chunks.as_ptr() as usize;
         Self {
             chunks,
-            seqs: self
-                .chunks
+            sides: self
+                .sides
                 .iter()
-                .map(|_| Box::new(std::sync::atomic::AtomicU32::new(0)))
+                .map(|side| Box::new(side.clone_for_new_obarray()))
                 .collect(),
             len: self.len,
             spine_addr,
@@ -1305,7 +1311,7 @@ impl SymbolChunks {
         let spine_addr = chunks.as_ptr() as usize;
         Self {
             chunks,
-            seqs: Vec::new(),
+            sides: Vec::new(),
             len: 0,
             spine_addr,
         }
@@ -1365,8 +1371,11 @@ impl SymbolChunks {
                 .try_into()
                 .unwrap_or_else(|_| unreachable!("chunk built with OBARRAY_CHUNK elements"));
             self.chunks.push(chunk);
-            self.seqs
-                .push(Box::new(std::sync::atomic::AtomicU32::new(0)));
+            // Every chunk carries the same function-stamp floor; a new one
+            // takes the current value (none yet: no floor was ever raised,
+            // `raise_fn_floor` creates chunk 0 first).
+            let floor = self.sides.first().map_or(0, |side| side.floor());
+            self.sides.push(Box::new(fn_stamps::ChunkSide::new(floor)));
             // The push may have moved the spine; publish it BEFORE `len` covers
             // the new slots, so a reader bounded by `len` never indexes a
             // stale spine.
@@ -1401,9 +1410,51 @@ impl SymbolChunks {
     // Used by the write-site seqlock bump + the GC scan in the next increment.
     #[inline(always)]
     fn chunk_seq_ptr(&self, idx: usize) -> Option<*const std::sync::atomic::AtomicU32> {
-        self.seqs
+        self.sides
             .get(idx >> 12)
-            .map(|b| &**b as *const std::sync::atomic::AtomicU32)
+            .map(|b| &b.seq as *const std::sync::atomic::AtomicU32)
+    }
+
+    /// The function-stamp validity rule for slot `idx` (see
+    /// [`fn_stamps`]): its function binding has not changed, and no change of
+    /// every symbol's resolution happened, since the clock read `since`. A
+    /// slot past the last chunk proves nothing.
+    #[inline]
+    fn fn_unchanged_since(&self, idx: usize, since: u64) -> bool {
+        let Some(side) = self.sides.get(idx >> 12) else {
+            return false;
+        };
+        since != u64::MAX && since >= side.floor() && side.stamp(idx & (OBARRAY_CHUNK - 1)) <= since
+    }
+
+    /// Record that slot `idx`'s function binding changed at clock value
+    /// `epoch` (before the clock moves there). Grows the store to cover the
+    /// slot, so a later fill of that chunk cannot lose the stamp.
+    fn stamp_function(&mut self, idx: usize, epoch: u64) {
+        if self.len <= idx {
+            self.grow_for(idx);
+        }
+        self.sides[idx >> 12].set_stamp(idx & (OBARRAY_CHUNK - 1), epoch);
+    }
+
+    /// Void every entry validated before clock value `floor`, for every
+    /// slot (before the clock moves there). Chunk 0 is created if none
+    /// exists, so the chunks created later copy the floor.
+    fn raise_fn_floor(&mut self, floor: u64) {
+        if self.sides.is_empty() {
+            self.grow_for(0);
+        }
+        for side in &self.sides {
+            side.set_floor(floor);
+        }
+    }
+
+    /// Whether slot `idx`'s chunk holds a stamp array (tests).
+    #[cfg(test)]
+    fn chunk_has_fn_stamps(&self, idx: usize) -> bool {
+        self.sides
+            .get(idx >> 12)
+            .is_some_and(|side| side.has_stamps())
     }
 
     /// Capture the start-of-cycle scan parts for the Stage 1b concurrent obarray
@@ -1422,11 +1473,11 @@ impl SymbolChunks {
         let parts = self
             .chunks
             .iter()
-            .zip(self.seqs.iter())
-            .map(|(chunk, seqbox)| {
+            .zip(self.sides.iter())
+            .map(|(chunk, side)| {
                 (
                     chunk.as_ptr(),
-                    &**seqbox as *const std::sync::atomic::AtomicU32,
+                    &side.seq as *const std::sync::atomic::AtomicU32,
                 )
             })
             .collect();
@@ -3997,30 +4048,58 @@ impl Obarray {
         }
     }
 
-    /// Record that function-call behavior changed WITHOUT a cell write — the
-    /// static subr table (`register_global_subr_entry`) rewrites a subr's fn
-    /// pointer/arity in place, invisibly to the cells. Bumping here keeps
-    /// `function_epoch` a complete "any function binding may have changed"
-    /// signal, which JIT call speculation relies on for validity. `why` is
-    /// observability only (the JIT's epoch report counts per reason).
-    pub(crate) fn bump_function_epoch(&mut self, why: FunctionEpochBump) {
+    /// Record that function-call behavior changed for EVERY symbol without a
+    /// cell write -- the static subr table (`register_global_subr_entry`)
+    /// rewrites a subr's fn pointer/arity in place, invisibly to the cells
+    /// (and to every other cell holding the same `#<subr>`), and the
+    /// compiler-overrides toggle changes what every symbol resolves to. The
+    /// clock moves, keeping `function_epoch` a complete "any function binding
+    /// may have changed" signal, and the per-symbol stamp floor rises to the
+    /// new value, so [`Self::fn_unchanged_since`] proves nothing validated
+    /// before it. `why` is observability only (the JIT's epoch report counts
+    /// per reason).
+    pub(crate) fn invalidate_all_function_bindings(&mut self, why: FunctionEpochBump) {
         crate::emacs_core::subr::leaf::debug_assert_no_leaf_active!("a function-epoch bump");
-        self.advance_function_epoch();
+        let epoch = self.next_function_epoch();
+        // Floor first, then the clock (the publication order, `fn_stamps`).
+        self.symbols.raise_fn_floor(epoch);
+        self.function_epoch = epoch;
         crate::emacs_core::eval::note_function_epoch_move(why, None);
         #[cfg(feature = "jit")]
         crate::emacs_core::jit::stats::note_function_epoch_bump(why, None);
     }
 
-    /// Move `function_epoch` by one, skipping the reserved `u64::MAX`.
-    fn advance_function_epoch(&mut self) {
-        self.function_epoch = self.function_epoch.wrapping_add(1);
+    /// The value `function_epoch` moves to next: one more, skipping the
+    /// reserved `u64::MAX`.
+    fn next_function_epoch(&self) -> u64 {
+        let next = self.function_epoch.wrapping_add(1);
         // u64::MAX is RESERVED as the JIT/AOT spec DISARMED sentinel
         // (jit::compile::SPEC_EPOCH_DISARMED); a live epoch must never equal it or
         // a legitimately-armed spec slot would read as disarmed. Skip it on the
-        // (astronomically unreachable) wrap.
-        if self.function_epoch == u64::MAX {
-            self.function_epoch = 0;
-        }
+        // (astronomically unreachable) wrap, which would also make the
+        // per-symbol stamps non-monotone (design I3).
+        if next == u64::MAX { 0 } else { next }
+    }
+
+    /// Whether `id`'s function binding is provably the one it held when the
+    /// function clock read `since`: it has not changed since, and no change
+    /// of every symbol's resolution happened since (design §4.1, I1-I4). The
+    /// caller must have loaded the clock BEFORE calling, and record THAT
+    /// value as its entry's new epoch (see `fn_stamps` for why that order
+    /// keeps a resync racing a redefinition sound). `since == u64::MAX` (every
+    /// cache's EMPTY / DISARMED sentinel) never validates. Always `false`
+    /// unless `NEOVM_FN_STAMPS` is on. Cold paths only: hot paths keep their
+    /// one compare against the clock and ask this after it fails.
+    #[inline]
+    pub(crate) fn fn_unchanged_since(&self, id: SymId, since: u64) -> bool {
+        fn_stamps::fn_stamps_enabled()
+            && self.symbols.fn_unchanged_since(Self::slot_index(id), since)
+    }
+
+    /// Test hook: whether `id`'s chunk has allocated its stamp array.
+    #[cfg(test)]
+    pub(crate) fn chunk_has_fn_stamps_for_test(&self, id: SymId) -> bool {
+        self.symbols.chunk_has_fn_stamps(Self::slot_index(id))
     }
 
     /// A specific function `id` was redefined (cell write / fmakunbound): bump the
@@ -4036,7 +4115,12 @@ impl Obarray {
     /// alive while such a frame lives (`jit::cache::pin_redefined_function`;
     /// GNU's bytecode frame holds its `fun`, src/bytecode.c:518).
     fn note_function_redefined(&mut self, id: SymId, why: FunctionEpochBump, previous: Value) {
-        self.advance_function_epoch();
+        let epoch = self.next_function_epoch();
+        // The symbol's stamp first, then the clock (the publication order,
+        // `fn_stamps`): every cache entry made before this change fails its
+        // clock compare, and then its per-symbol test, for exactly `id`.
+        self.symbols.stamp_function(Self::slot_index(id), epoch);
+        self.function_epoch = epoch;
         crate::emacs_core::eval::note_function_epoch_move(why, Some(id));
         #[cfg(feature = "jit")]
         {
@@ -4950,6 +5034,9 @@ impl Obarray {
                 .expect("pdump function-unbound entry must reference a loaded symbol")
                 .function_unbound = true;
         }
+        // The cells were written without stamps: nothing validated before
+        // the restored clock may be proven current through them.
+        ob.symbols.raise_fn_floor(function_epoch);
         ob
     }
 }
@@ -5054,6 +5141,10 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/jit_layout.rs"]
 mod jit_layout_tests;
+
+#[cfg(test)]
+#[path = "tests/fn_stamps.rs"]
+mod fn_stamps_tests;
 
 /// Ledger 196: the buffer-local-read class ledger 191 named, pinned per site.
 #[cfg(test)]
