@@ -35,9 +35,11 @@
 //!
 //! # Knobs (read once per process)
 //!
-//! * `NEOVM_REGEX_DFA`: `on` (default), `off`, `verify` ([`DfaMode`]).
-//! * `NEOVM_REGEX_DFA_STATS=1`: with the filter on, print this thread's
-//!   [`DfaStats`] as one `[neovm-regex-dfa]` line on stderr at exit.
+//! | Knob | Values (default) | Effect |
+//! |------|------------------|--------|
+//! | `NEOVM_REGEX_DFA` | `on` (default), `off`, `verify` | Candidate existence filter ([`DfaMode`]). |
+//! | `NEOVM_REGEX_DFA_COLD` | `off` (default), `on` | Defer the slot lease until a cold candidate fails ([`cold_path_enabled`]). |
+//! | `NEOVM_REGEX_DFA_STATS` | unset (default), `1` | Print this thread's [`DfaStats`] on stderr at exit with the filter on. |
 
 use super::{
     CompiledPattern, LookupClassKey, MatchRegisters, MatchScratch, RegexOp, SyntaxAssertion,
@@ -1881,6 +1883,42 @@ pub(crate) fn with_dfa_mode<R>(mode: DfaMode, f: impl FnOnce() -> R) -> R {
     f()
 }
 
+#[cfg(any(test, feature = "fuzzing"))]
+thread_local! {
+    // A test-only knob override, not a cache of Lisp state.
+    static DFA_COLD_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Run `f` with the cold-path knob forced to `on` on this thread.
+#[cfg(any(test, feature = "fuzzing"))]
+pub(crate) fn with_cold_path<R>(on: bool, f: impl FnOnce() -> R) -> R {
+    struct Guard(Option<bool>);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            DFA_COLD_OVERRIDE.with(|slot| slot.set(self.0));
+        }
+    }
+    let _guard = Guard(DFA_COLD_OVERRIDE.with(|slot| slot.replace(Some(on))));
+    f()
+}
+
+/// `NEOVM_REGEX_DFA_COLD=on` (default off): a never-built slot pays no lease
+/// or candidate wrapper until a candidate actually fails. Read once per process.
+#[inline]
+pub(crate) fn cold_path_enabled() -> bool {
+    #[cfg(any(test, feature = "fuzzing"))]
+    if let Some(on) = DFA_COLD_OVERRIDE.with(|slot| slot.get()) {
+        return on;
+    }
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        let on = super::regex_knob_on(std::env::var("NEOVM_REGEX_DFA_COLD").ok().as_deref());
+        tracing::debug!(target: "neovm::regex", on, "NEOVM_REGEX_DFA_COLD");
+        on
+    })
+}
+
 /// The `NEOVM_REGEX_DFA` mode, read once per process.
 #[inline]
 pub(crate) fn dfa_mode() -> DfaMode {
@@ -2070,13 +2108,26 @@ pub(crate) enum DfaSlot {
     Disabled(#[allow(dead_code)] DfaGaveUp),
 }
 
-/// `CompiledPattern`'s DFA slot.  A clone starts cold: the DFA's caches
+/// `CompiledPattern`'s DFA slot. A clone starts cold: the DFA's caches
 /// belong to one pattern object.
-pub(crate) struct DfaCell(RefCell<DfaSlot>);
+///
+/// Threading: compiled patterns and their `RefCell` slots are mutator-owned,
+/// not `Sync`; another mutator cannot borrow or mutate this slot concurrently.
+/// The atomic is an advisory publication hint, not permission to share the slot:
+/// Release publishes a fully initialized non-cold slot, and Acquire reads it
+/// before trying the existing checked borrow. A false hint runs the matcher.
+/// Re-entrant searches still fall back when the slot is borrowed.
+pub(crate) struct DfaCell {
+    slot: RefCell<DfaSlot>,
+    initialized: std::sync::atomic::AtomicBool,
+}
 
 impl Default for DfaCell {
     fn default() -> Self {
-        Self(RefCell::new(DfaSlot::Cold { failed: 0 }))
+        Self {
+            slot: RefCell::new(DfaSlot::Cold { failed: 0 }),
+            initialized: std::sync::atomic::AtomicBool::new(false),
+        }
     }
 }
 
@@ -2090,7 +2141,18 @@ impl DfaCell {
     /// The slot, for tests.
     #[cfg(test)]
     pub(crate) fn slot(&self) -> std::cell::Ref<'_, DfaSlot> {
-        self.0.borrow()
+        self.slot.borrow()
+    }
+
+    /// Whether initialization has published a non-cold slot.
+    #[inline]
+    pub(crate) fn initialized(&self) -> bool {
+        self.initialized.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    fn publish_initialized(&self) {
+        self.initialized
+            .store(true, std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -2191,7 +2253,7 @@ impl<'p> DfaLease<'p> {
                 stat(|s| s.frontier += 1);
             }
         }
-        let mut slot = pattern.dfa.0.try_borrow_mut().ok()?;
+        let mut slot = pattern.dfa.slot.try_borrow_mut().ok()?;
         let mut counters_before = None;
         match &mut *slot {
             DfaSlot::Cold { .. } => {}
@@ -2220,6 +2282,35 @@ impl<'p> DfaLease<'p> {
             skipped: 0,
             overflow_guarded: 0,
         })
+    }
+
+    /// A classic cold candidate failed without overflow. Record it without
+    /// holding the slot across successful candidates; at the threshold, build
+    /// and return a lease for the remaining candidates of this same search.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn after_cold_failure(
+        pattern: &'p CompiledPattern,
+        syntax: &dyn SyntaxLookup,
+        max_stop: usize,
+    ) -> Option<Self> {
+        {
+            let mut slot = pattern.dfa.slot.try_borrow_mut().ok()?;
+            let DfaSlot::Cold { failed } = &mut *slot else {
+                return None;
+            };
+            *failed += 1;
+            if *failed < COLD_THRESHOLD {
+                return None;
+            }
+        }
+        let mut lease = Self::acquire(pattern, syntax, max_stop)?;
+        lease.build(pattern, syntax);
+        if matches!(*lease.slot, DfaSlot::Live(_)) {
+            Some(lease)
+        } else {
+            None
+        }
     }
 
     /// Decide one candidate: the DFA's verdict, then the matcher unless the
@@ -2415,6 +2506,9 @@ impl<'p> DfaLease<'p> {
                 *self.slot = DfaSlot::Ineligible(why);
             }
         }
+        // Publish only after the new state and its complete DFA are written.
+        // A lookup without a class identity leaves the slot cold for a retry.
+        pattern.dfa.publish_initialized();
     }
 }
 
@@ -2430,7 +2524,8 @@ pub(crate) fn prime(
     if let Some(context) = ClassContext::of_search(pattern, dfa.nfa(), syntax) {
         dfa.classes.sync(context);
     }
-    *pattern.dfa.0.borrow_mut() = DfaSlot::Live(Box::new(LiveDfa::new(dfa)));
+    *pattern.dfa.slot.borrow_mut() = DfaSlot::Live(Box::new(LiveDfa::new(dfa)));
+    pattern.dfa.publish_initialized();
     Ok(())
 }
 

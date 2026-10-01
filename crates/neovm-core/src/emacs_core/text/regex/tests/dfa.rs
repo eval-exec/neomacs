@@ -974,6 +974,71 @@ fn the_knob_reads_off_on_and_verify() {
     assert_eq!(DfaMode::parse(Some("verify")), DfaMode::Verify);
 }
 
+/// A search whose candidates always succeed never borrows a cold DFA slot.
+#[test]
+fn cold_successful_searches_take_no_dfa_lease() {
+    let syntax = DefaultSyntaxLookup;
+    let compiled = regex_compile("(defun \\([-a-z0-9]+\\)", false, true).unwrap();
+    let text = b"(defun example-name)";
+    let expected = with_dfa_mode(DfaMode::Off, || {
+        search(&compiled, text, 0, text.len() as isize, &syntax, 0)
+    });
+    assert!(expected.0.is_some());
+    reset_dfa_stats();
+    with_cold_path(true, || {
+        with_dfa_mode(DfaMode::On, || {
+            for _ in 0..64 {
+                assert_eq!(
+                    search(&compiled, text, 0, text.len() as isize, &syntax, 0),
+                    expected
+                );
+            }
+        });
+    });
+    assert!(!compiled.dfa.initialized());
+    assert!(matches!(*compiled.dfa.slot(), DfaSlot::Cold { failed: 0 }));
+    let stats = dfa_stats();
+    assert_eq!(stats.searches, 0, "{stats:?}");
+    assert_eq!(stats.builds, 0, "{stats:?}");
+}
+
+/// The threshold failure publishes the slot and leases it for the remaining
+/// candidates of the same search, without counting its classic attempt twice.
+#[test]
+fn cold_failure_threshold_filters_the_rest_of_the_same_search() {
+    let syntax = DefaultSyntaxLookup;
+    let compiled = regex_compile("z[0-9]", false, false).unwrap();
+    let dense = vec![b'z'; 128];
+    reset_dfa_stats();
+    with_cold_path(true, || {
+        with_dfa_mode(DfaMode::On, || {
+            for _ in 1..COLD_THRESHOLD {
+                // A zero range tries only position 0 (and cannot consume):
+                // an unbounded one-byte search also tries its end position.
+                assert_eq!(search(&compiled, b"z", 0, 0, &syntax, 0), (None, false));
+            }
+            assert!(!compiled.dfa.initialized());
+            assert!(matches!(
+                *compiled.dfa.slot(),
+                DfaSlot::Cold { failed } if failed == COLD_THRESHOLD - 1
+            ));
+            assert_eq!(dfa_stats().searches, 0);
+            let before = matcher_entry_count();
+            assert_eq!(
+                search(&compiled, &dense, 0, dense.len() as isize, &syntax, 0),
+                (None, false)
+            );
+            assert_eq!(matcher_entry_count() - before, 1);
+        });
+    });
+    assert!(compiled.dfa.initialized());
+    assert!(matches!(*compiled.dfa.slot(), DfaSlot::Live(_)));
+    let stats = dfa_stats();
+    assert_eq!(stats.builds, 1, "{stats:?}");
+    assert_eq!(stats.searches, 1, "{stats:?}");
+    assert!(stats.skipped > 100, "{stats:?}");
+}
+
 /// Off: the slot is never touched.  On: after 16 failed entries the DFA is
 /// built, then skips candidates; the results are those of the matcher alone.
 #[test]

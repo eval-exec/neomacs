@@ -9147,15 +9147,18 @@ pub(crate) fn re_search(
     // `NEOVM_REGEX_DFA`: the existence DFA filters the candidates, when on
     // and usable for this search (see `dfa::DfaLease::acquire`).  Every
     // candidate of a search stops at most at `max_stop`.
-    let mut dfa_lease = if dfa::dfa_mode() == dfa::DfaMode::Off || fastmap_force_disabled() {
+    let dfa_enabled = dfa::dfa_mode() != dfa::DfaMode::Off && !fastmap_force_disabled();
+    let mut dfa_cold_pending =
+        dfa_enabled && dfa::cold_path_enabled() && !pattern.dfa.initialized();
+    let dfa_max_stop = if range >= 0 {
+        start.saturating_add(range as usize).min(text_len)
+    } else {
+        start
+    };
+    let mut dfa_lease = if !dfa_enabled || dfa_cold_pending {
         None
     } else {
-        let max_stop = if range >= 0 {
-            start.saturating_add(range as usize).min(text_len)
-        } else {
-            start
-        };
-        dfa::DfaLease::acquire(pattern, syntax, max_stop)
+        dfa::DfaLease::acquire(pattern, syntax, dfa_max_stop)
     };
     macro_rules! try_candidate {
         ($pos:expr, $stop:expr) => {{
@@ -9176,6 +9179,13 @@ pub(crate) fn re_search(
                 None => {
                     if matcher_overflow_pending() {
                         return None;
+                    }
+                    if dfa_cold_pending {
+                        dfa_lease =
+                            dfa::DfaLease::after_cold_failure(pattern, syntax, dfa_max_stop);
+                        // Ineligible/disabled slots stop counting too. A
+                        // classless lookup stays cold and retries later.
+                        dfa_cold_pending = !pattern.dfa.initialized();
                     }
                     None
                 }
