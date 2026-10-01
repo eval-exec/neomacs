@@ -3,6 +3,58 @@
 //! Every emission a knob gates is decided at compile time, so both sides of
 //! an A/B run in one binary.
 
+/// P2.3's staged inliner modes. The current stage changes the front's
+/// ordering and side tables for existing constant callees only; named,
+/// closure and HOF producers arrive in later stages. Threading: immutable
+/// process configuration, read only by each mutator's compiler.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Inline2Mode {
+    #[default]
+    Off,
+    Named,
+    Closure,
+    Hof,
+    All,
+}
+
+impl Inline2Mode {
+    pub(crate) fn parse(value: Option<&str>) -> Self {
+        match value.map(str::trim) {
+            Some("named") => Self::Named,
+            Some("closure") => Self::Closure,
+            Some("hof") => Self::Hof,
+            Some("all") => Self::All,
+            _ => Self::Off,
+        }
+    }
+
+    pub(crate) fn enabled(self) -> bool {
+        self != Self::Off
+    }
+}
+
+/// Compile-time mode; the default preserves the original MIR-first front
+/// and all original generated CLIF. It never changes a running leaf.
+pub(crate) fn jit_inline2_mode() -> Inline2Mode {
+    #[cfg(test)]
+    if let Some(mode) = INLINE2_TEST_OVERRIDE.with(|mode| mode.get()) {
+        return mode;
+    }
+    static MODE: std::sync::OnceLock<Inline2Mode> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| Inline2Mode::parse(std::env::var("NEOVM_JIT_INLINE2").ok().as_deref()))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Scalar configuration override, never mutator Lisp state.
+    static INLINE2_TEST_OVERRIDE: std::cell::Cell<Option<Inline2Mode>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn force_inline2_for_test(mode: Option<Inline2Mode>) {
+    INLINE2_TEST_OVERRIDE.with(|current| current.set(mode));
+}
+
 #[cfg(test)]
 thread_local! {
     /// Per-thread override for the profitability gate, set by tests that need to

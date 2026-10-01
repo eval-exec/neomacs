@@ -50,6 +50,10 @@ mod census;
 pub(crate) use census::CensusShape;
 pub(crate) use census::{CensusSite, census_callee_verdict, census_sites};
 
+#[path = "compile/inline_v2.rs"]
+mod v2;
+pub(crate) use v2::{FusedV2, fuse_calls_v2};
+
 /// Ops of a callee body, at most, for one splice.
 pub(crate) const MAX_INLINE_BODY: usize = 40;
 
@@ -57,6 +61,9 @@ pub(crate) const MAX_INLINE_BODY: usize = 40;
 /// a deopt inside them must rebuild.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct InlineRegion {
+    /// The immediately enclosing region, for v2 nested frame states.
+    /// Existing constant-callee splices are flat and have no parent.
+    pub(crate) parent: Option<usize>,
     /// Fused pc range of the spliced ops, `[start, end)`.
     pub(crate) start: usize,
     pub(crate) end: usize,
@@ -79,6 +86,9 @@ pub(crate) struct InlineRegion {
 /// A caller's ops with one or more callee bodies spliced in.
 #[derive(Clone, Debug)]
 pub(crate) struct FusedBody {
+    /// V2 annotations are present only for the opt-in early-fuser path.
+    /// The legacy fuser retains replay semantics and has no annotations.
+    pub(crate) v2: Option<FusedV2>,
     pub(crate) ops: Vec<Op>,
     pub(crate) constants: Vec<Value>,
     /// Per-site numeric feedback for the fused ops: the caller's own for its
@@ -98,6 +108,9 @@ pub(crate) struct FusedBody {
 }
 
 impl FusedBody {
+    pub(crate) fn is_v2(&self) -> bool {
+        self.v2.is_some()
+    }
     /// The region a fused pc belongs to.
     pub(crate) fn region_at(&self, pc: usize) -> Option<&InlineRegion> {
         self.region_of
@@ -540,6 +553,7 @@ fn splice_sites(
             };
         }
         regions.push(InlineRegion {
+            parent: None,
             start: region_start,
             end: region_end,
             call_site_pc: i,
@@ -588,6 +602,7 @@ fn splice_sites(
         return None;
     }
     Some(FusedBody {
+        v2: None,
         ops: out,
         constants: fused_constants,
         feedback: out_feedback,
@@ -695,3 +710,7 @@ thread_local! {
 pub(crate) fn force_inline_for_test(on: Option<bool>) {
     FORCE_INLINE.with(|f| f.set(on));
 }
+
+#[cfg(test)]
+#[path = "tests/inline_v2.rs"]
+mod v2_tests;

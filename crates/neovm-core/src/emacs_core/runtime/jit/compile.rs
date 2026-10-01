@@ -1053,6 +1053,29 @@ fn compile_bytecode_function_inner(
     } else {
         &f.constants
     };
+    // P2.3's opt-in front splices before the backend decision. Legacy MIR
+    // cannot preserve the v2 annotations, so a fused-v2 body stays on the
+    // baseline until the opt builder consumes its frame states. Off keeps
+    // the original MIR-first, late-fuser path below.
+    let inline2 = jit_inline2_mode();
+    let early_fused = if inline2.enabled() && inline::jit_inline_on() {
+        let _phase = enter_phase(CompilePhase::Fuse);
+        let feedback: Vec<_> = (0..ops.len()).map(active_numeric_feedback).collect();
+        inline::fuse_calls_v2(
+            ops,
+            constants,
+            f.executable_gnu_byte_offset_map(),
+            native_arity,
+            &feedback,
+        )
+        .map(std::rc::Rc::new)
+    } else {
+        None
+    };
+    let fused_v2 = early_fused.as_ref().is_some_and(|body| body.is_v2());
+    let (ops, constants) = early_fused.as_ref().map_or((ops, constants), |body| {
+        (body.ops.as_slice(), body.constants.as_slice())
+    });
     // MIR funnel instrumentation (`NEOVM_JIT_COMPILE_STATS=1`): the MIR tier is
     // the ONLY place inlining, cross-boundary unboxing and guard elision happen,
     // so a body that never reaches it gets none of them. Count each gate
@@ -1074,21 +1097,27 @@ fn compile_bytecode_function_inner(
     if reopt_gate {
         super::stats::record_mir(super::stats::MirFunnel::GateReopt);
     }
+    if fused_v2 {
+        super::stats::record_mir(super::stats::MirFunnel::TierRejected);
+        super::stats::record_mir_bail("gate:fused-v2".to_string());
+    }
     drop(gate_phase);
     let mir_phase = enter_phase(CompilePhase::MirBuild);
-    let mir_built =
-        (!has_rest && f.params.optional.is_empty() && dynamic_prefix == 0 && !reopt_gate).then(
-            || {
-                mir::build_mir_with_feedback(
-                    ops,
-                    constants,
-                    f.executable_gnu_byte_offset_map(),
-                    native_arity,
-                    jit_mir_reach(),
-                    &active_numeric_feedback,
-                )
-            },
-        );
+    let mir_built = (!has_rest
+        && f.params.optional.is_empty()
+        && dynamic_prefix == 0
+        && !reopt_gate
+        && !fused_v2)
+        .then(|| {
+            mir::build_mir_with_feedback(
+                ops,
+                constants,
+                f.executable_gnu_byte_offset_map(),
+                native_arity,
+                jit_mir_reach(),
+                &active_numeric_feedback,
+            )
+        });
     if let Some(built) = mir_built
         && let Ok(mut mir) = built.inspect_err(|e| {
             super::stats::record_mir(super::stats::MirFunnel::BuildFailed);
@@ -1210,19 +1239,23 @@ fn compile_bytecode_function_inner(
     // (`inline::fuse_calls`). The profitability gate below then judges the
     // fused shape: a body whose calls are gone is no longer call-dominated.
     let fuse_phase = enter_phase(CompilePhase::Fuse);
-    let fused = inline::jit_inline_on()
-        .then(|| {
-            let caller_feedback: Vec<_> = (0..ops.len()).map(active_numeric_feedback).collect();
-            inline::fuse_calls(
-                ops,
-                constants,
-                f.executable_gnu_byte_offset_map(),
-                native_arity,
-                &caller_feedback,
-            )
-        })
-        .flatten()
-        .map(std::rc::Rc::new);
+    let fused = if inline2.enabled() {
+        early_fused.clone()
+    } else {
+        inline::jit_inline_on()
+            .then(|| {
+                let caller_feedback: Vec<_> = (0..ops.len()).map(active_numeric_feedback).collect();
+                inline::fuse_calls(
+                    ops,
+                    constants,
+                    f.executable_gnu_byte_offset_map(),
+                    native_arity,
+                    &caller_feedback,
+                )
+            })
+            .flatten()
+            .map(std::rc::Rc::new)
+    };
     let (ops, constants) = match &fused {
         Some(fused) => (fused.ops.as_slice(), fused.constants.as_slice()),
         None => (ops, constants),
@@ -4557,6 +4590,7 @@ pub(crate) mod direct_call;
 pub(crate) mod jit_layout;
 pub(crate) mod reg_abi;
 pub(crate) use reg_abi::LeafAbi;
+pub(crate) mod chain_framestate;
 pub(crate) mod resumed_chain;
 pub(crate) mod snapshot;
 pub(crate) mod source_slots;
