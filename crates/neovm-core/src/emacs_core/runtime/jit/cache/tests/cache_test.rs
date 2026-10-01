@@ -758,8 +758,18 @@ fn unlink_spec_slots_to_clears_only_bytecode_slots_caching_the_dead_leaf() {
     assert_eq!(leaf.spec_slots[0].leaf_ptr(), dead_ptr);
     assert_eq!(leaf.unlink_spec_slots_to(dead_ptr), 1);
     assert!(leaf.spec_slots[0].leaf_ptr().is_null(), "cleared");
-    // The same word in a slot of another kind is left alone.
-    for kind in [SpecSlotKind::Subr, SpecSlotKind::Source] {
+    // A closure source slot caching the dead leaf (its direct entry) is
+    // cleared too (P2.1 C5).
+    leaf.spec_slot_kinds = Box::new([SpecSlotKind::Source]);
+    leaf.spec_slots[0].clear_leaf();
+    leaf.spec_slots[0].arm_leaf(dead_ptr, std::ptr::null(), false, false, false);
+    assert_eq!(leaf.unlink_spec_slots_to(dead_ptr), 1);
+    assert!(
+        leaf.spec_slots[0].leaf_ptr().is_null(),
+        "a source slot is cleared"
+    );
+    // The same word in a builtin slot is left alone.
+    for kind in [SpecSlotKind::Subr] {
         leaf.spec_slot_kinds = Box::new([kind]);
         leaf.spec_slots[0].clear_leaf();
         leaf.spec_slots[0].arm_leaf(dead_ptr, std::ptr::null(), false, false, false);
