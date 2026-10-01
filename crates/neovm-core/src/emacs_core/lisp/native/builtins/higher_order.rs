@@ -101,7 +101,10 @@ pub(crate) fn map_sequence_element(sequence: Value, index: usize) -> Result<Valu
 /// made by a callback takes effect at the next element, and one made by the
 /// debugger or `post-gc-hook` inside an element's funcall prologue takes
 /// effect for that element, as in GNU.
-enum MapCallee {
+///
+/// Threading: one mapping activation owns this value and its mutator's
+/// `Context`; it contains no cache shared with other mutators.
+pub(crate) enum MapCallee {
     Generic(Value),
     Subr {
         designator: Value,
@@ -111,7 +114,7 @@ enum MapCallee {
 }
 
 impl MapCallee {
-    fn resolve(eval: &mut super::eval::Context, func: Value) -> Self {
+    pub(crate) fn resolve(eval: &mut super::eval::Context, func: Value) -> Self {
         match eval.resolve_mapped_subr_callee(func) {
             Some((subr, epoch)) => MapCallee::Subr {
                 designator: func,
@@ -123,7 +126,7 @@ impl MapCallee {
     }
 
     #[inline]
-    fn call(&self, eval: &mut super::eval::Context, item: Value) -> EvalResult {
+    pub(crate) fn call(&self, eval: &mut super::eval::Context, item: Value) -> EvalResult {
         match *self {
             MapCallee::Generic(func) => apply1(eval, func, item),
             MapCallee::Subr {
@@ -135,8 +138,12 @@ impl MapCallee {
     }
 }
 
-/// Where [`mapcar1_eval`] puts each callback's result.
-enum MapSink<'a> {
+/// Where [`mapcar1_eval_from`] puts each callback's result.
+///
+/// Threading: a sink belongs to one mapping activation and one mutator's
+/// `Context`. Root-slot indices refer to that context's active VM root frame;
+/// neither the sink nor those indices may be transferred to another mutator.
+pub(crate) enum MapSink<'a> {
     /// `mapc`: nowhere.
     Discard,
     /// Pushed onto a vector (and the root stack, to keep it alive).
@@ -147,7 +154,7 @@ enum MapSink<'a> {
 
 impl MapSink<'_> {
     #[inline]
-    fn store(&mut self, eval: &mut super::eval::Context, index: usize, value: Value) {
+    pub(crate) fn store(&mut self, eval: &mut super::eval::Context, index: usize, value: Value) {
         match self {
             MapSink::Discard => {}
             MapSink::Collect(results) => {
@@ -159,21 +166,57 @@ impl MapSink<'_> {
     }
 }
 
+#[inline]
 fn mapcar1_eval<F>(
+    eval: &mut super::eval::Context,
+    len: usize,
+    values: MapSink<'_>,
+    sequence: Value,
+    call: F,
+) -> Result<usize, Flow>
+where
+    F: FnMut(&mut super::eval::Context, Value) -> Result<Value, Flow>,
+{
+    mapcar1_eval_from(eval, len, values, sequence, sequence, 0, call)
+}
+
+/// Continue GNU `mapcar1` between callbacks, returning the total mapped count.
+/// `len` is the original, validated length, never the remaining tail's length.
+/// `start_index` callback results have already been stored in `values`; for a
+/// list, `cursor` is the tail for the NEXT callback. `sequence` preserves the
+/// original sequence kind even if a callback shortened the tail to nil or an
+/// atom. For indexed sequences, `cursor` is unused.
+///
+/// A deopt inside callback `i` must first finish that callback, store its result
+/// at slot `i`, and then read the callback's current tail's cdr, in that order,
+/// before calling here with index `i + 1`. Reading the cdr before the callback
+/// would miss its `setcdr` side effects. Do not re-run the length prewalk: a
+/// callback may have introduced a dotted tail or a cycle after validation.
+///
+/// The caller owns a VM root scope rooting `sequence`, the callback designator
+/// and all completed results (including any `Collect` prefix). This helper
+/// roots the current list cursor in one reusable slot, so a callback that
+/// disconnects it from `sequence` cannot collect it. The slot is released by
+/// the caller's enclosing scope, as for the ordinary mapping path.
+///
+/// Threading: all state belongs to the calling mutator's exclusive `Context`;
+/// no Lisp state is cached globally or shared between mutators.
+pub(crate) fn mapcar1_eval_from<F>(
     eval: &mut super::eval::Context,
     len: usize,
     mut values: MapSink<'_>,
     sequence: Value,
+    mut cursor: Value,
+    start_index: usize,
     mut call: F,
 ) -> Result<usize, Flow>
 where
     F: FnMut(&mut super::eval::Context, Value) -> Result<Value, Flow>,
 {
     match sequence.kind() {
-        ValueKind::Nil => Ok(0),
+        ValueKind::Nil => Ok(start_index),
         ValueKind::Cons => {
-            let mut cursor = sequence;
-            let mut mapped = 0usize;
+            let mut mapped = start_index;
             // GNU walks the list in a stack local that its conservative
             // collector scans for free (`mapcar1`, src/fns.c).  Rooting the
             // cursor with a fresh push per element instead made the VM root
@@ -183,7 +226,7 @@ where
             // Only the current cursor needs to be a root, so it gets one slot,
             // rewritten in place.
             let cursor_root = eval.push_vm_frame_root_slot(cursor);
-            for _ in 0..len {
+            for _ in start_index..len {
                 if !cursor.is_cons() {
                     return Ok(mapped);
                 }
@@ -197,7 +240,7 @@ where
             Ok(mapped)
         }
         _ => {
-            for index in 0..len {
+            for index in start_index..len {
                 let item = map_sequence_element(sequence, index)?;
                 let value = call(eval, item)?;
                 values.store(eval, index, value);
@@ -206,6 +249,10 @@ where
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/map_resume.rs"]
+mod map_resume;
 
 #[inline]
 fn apply0(eval: &mut super::eval::Context, func: Value) -> EvalResult {
