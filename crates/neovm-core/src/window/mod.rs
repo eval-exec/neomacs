@@ -18,6 +18,7 @@ use neomacs_display_protocol::TransitionDirection;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::hash::Hash;
+use std::sync::Arc;
 
 pub(crate) mod body;
 mod chrome;
@@ -3415,7 +3416,7 @@ pub struct GuiFrameGeometryHints {
 
 #[derive(Clone, Debug, PartialEq)]
 struct PreparedDisplayPresentation {
-    geometry: geometry::PresentationGeometry,
+    geometry: Arc<geometry::PresentationGeometry>,
     publications: Vec<WindowPresentationSnapshot>,
 }
 
@@ -3423,6 +3424,11 @@ struct PreparedDisplayPresentation {
 struct FramePresentationState {
     prepared: HashMap<geometry::PresentationId, PreparedDisplayPresentation>,
     active: Option<PreparedDisplayPresentation>,
+    /// Accepted Lisp redisplay geometry outlives an unsubmitted renderer ticket.
+    /// Share its allocation with the pending/active presentation, retaining only
+    /// the latest completed geometry when those renderer owners release it.
+    completed_geometry: Option<Arc<geometry::PresentationGeometry>>,
+    /// Allocation high-water mark also rejects identities of discarded tickets.
     last_identity: Option<geometry::PresentationId>,
 }
 
@@ -5028,7 +5034,7 @@ impl Frame {
         )
         .map_err(geometry::PresentationPrepareError::InvalidGeometry)?;
         let prepared = PreparedDisplayPresentation {
-            geometry: candidate,
+            geometry: Arc::new(candidate),
             publications,
         };
         if self
@@ -5062,6 +5068,7 @@ impl Frame {
                 .cloned()
                 .map(|snapshot| (snapshot.window_id, snapshot)),
         );
+        self.presentation_state.completed_geometry = Some(Arc::clone(&prepared.geometry));
         self.presentation_state
             .prepared
             .insert(presentation, prepared);
@@ -5099,6 +5106,8 @@ impl Frame {
     }
 
     /// Discard a presentation that never became renderer-visible.
+    /// Its accepted window output and completed geometry remain Lisp redisplay
+    /// evidence until another completed layout replaces them.
     pub fn discard_display_presentation(&mut self, presentation: geometry::PresentationId) -> bool {
         self.presentation_state
             .prepared
@@ -5128,7 +5137,7 @@ impl Frame {
         !self.presentation_state.prepared.is_empty()
     }
 
-    pub const fn active_presentation(&self) -> Option<geometry::PresentationId> {
+    pub fn active_presentation(&self) -> Option<geometry::PresentationId> {
         match &self.presentation_state.active {
             Some(active) => Some(active.geometry.presentation()),
             _ => None,
@@ -5137,9 +5146,9 @@ impl Frame {
 
     /// Geometry for the presentation currently used by renderer drawing and
     /// hit testing. Prepared geometry is deliberately inaccessible here.
-    pub const fn active_presentation_geometry(&self) -> Option<&geometry::PresentationGeometry> {
+    pub fn active_presentation_geometry(&self) -> Option<&geometry::PresentationGeometry> {
         match &self.presentation_state.active {
-            Some(active) => Some(&active.geometry),
+            Some(active) => Some(active.geometry.as_ref()),
             None => None,
         }
     }
@@ -5151,15 +5160,7 @@ impl Frame {
     pub(crate) fn completed_presentation_geometry(
         &self,
     ) -> Option<&geometry::PresentationGeometry> {
-        let latest = self.presentation_state.last_identity?;
-        self.presentation_state
-            .prepared
-            .get(&latest)
-            .map(|prepared| &prepared.geometry)
-            .or_else(|| {
-                self.active_presentation_geometry()
-                    .filter(|active| active.presentation() == latest)
-            })
+        self.presentation_state.completed_geometry.as_deref()
     }
 
     /// Typed publication for WINDOW in the renderer-active presentation.

@@ -4793,8 +4793,9 @@ fn posn_at_x_y_uses_one_presented_transform_for_text_window_and_frame_coordinate
             Value::NIL,
         ],
     ];
-    for args in cases {
-        let result = builtin_posn_at_x_y(&mut eval, args).expect("presented coordinate query");
+    for args in &cases {
+        let result =
+            builtin_posn_at_x_y(&mut eval, args.clone()).expect("presented coordinate query");
         assert_eq!(
             super::super::print::print_value(&result),
             format!(
@@ -4811,17 +4812,26 @@ fn posn_at_x_y_uses_one_presented_transform_for_text_window_and_frame_coordinate
             .retire_display_presentation(crate::window::geometry::PresentationId::new(1))
     );
     assert!(
-        builtin_posn_at_x_y(
-            &mut eval,
-            vec![
-                Value::fixnum(72),
-                Value::fixnum(51),
-                Value::make_window(window_id.0),
-            ],
-        )
-        .is_err(),
-        "GUI coordinates must not fall back to live-window approximation"
+        eval.frames
+            .get(frame_id)
+            .expect("frame")
+            .active_presentation_geometry()
+            .is_none()
     );
+    // Renderer retirement releases native interaction geometry. Accepted Lisp
+    // redisplay geometry still supplies the exact transform, including the
+    // materialized body rows rather than the stale live compatibility offsets.
+    for args in cases {
+        let result = builtin_posn_at_x_y(&mut eval, args)
+            .expect("completed coordinate query after renderer retirement");
+        assert_eq!(
+            super::super::print::print_value(&result),
+            format!(
+                "(#<window {}> 1 (72 . 34) 0 nil 1 (9 . 2) nil (0 . 0) (7 . 17))",
+                window_id.0
+            )
+        );
+    }
 }
 
 #[test]

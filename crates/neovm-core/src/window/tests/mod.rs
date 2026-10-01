@@ -688,6 +688,183 @@ fn preparing_accepted_presentation_commits_live_window_output() {
 }
 
 #[test]
+fn discarded_snapshot_preserves_latest_completed_coordinate_queries() {
+    use super::geometry::PresentationId;
+    use crate::emacs_core::Context;
+    use neomacs_display_protocol::types::Rect as TransportRect;
+
+    let mut eval = Context::new();
+    let buffer_id = eval
+        .buffer_manager()
+        .current_buffer_id()
+        .expect("scratch buffer");
+    eval.buffer_manager_mut()
+        .get_mut(buffer_id)
+        .unwrap()
+        .insert("ab\n");
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("snapshot-observer", 800, 600, buffer_id);
+    eval.frame_manager_mut().select_frame(frame_id);
+    let window_id = eval.frame_manager().get(frame_id).unwrap().selected_window;
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .unwrap()
+        .set_window_system(Some(Value::symbol("x")));
+    let snapshot = |position| WindowDisplaySnapshot {
+        window_id,
+        regions_materialized: true,
+        regions: PresentedWindowRegions {
+            outer: TransportRect::new(0.0, 0.0, 800.0, 600.0),
+            text_body: TransportRect::new(0.0, 0.0, 800.0, 600.0),
+            ..Default::default()
+        },
+        points: vec![DisplayPointSnapshot {
+            role: DisplayPointRole::Glyph,
+            buffer_pos: LispCharPos1::new(position),
+            x: 0,
+            y: 0,
+            width: 8,
+            height: 16,
+            row: 0,
+            col: 0,
+        }],
+        body_rows: vec![PresentedBodyRowSnapshot {
+            output_row: 0,
+            body_row: 0,
+            body_y: 0,
+        }],
+        rows: vec![DisplayRowSnapshot {
+            row: 0,
+            y: 0,
+            height: 16,
+            start_buffer_pos: Some(LispCharPos1::new(position)),
+            end_buffer_pos: Some(LispCharPos1::new(position)),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let frame = eval.frame_manager_mut().get_mut(frame_id).unwrap();
+    frame
+        .prepare_live_window_presentation(PresentationId::new(41), vec![snapshot(1)])
+        .unwrap();
+    frame
+        .activate_display_presentation(PresentationId::new(41))
+        .unwrap();
+    assert_eq!(
+        eval.eval_str("(nth 1 (posn-at-x-y 0 0))").unwrap().as_int(),
+        Some(1)
+    );
+
+    // Frame snapshots accept output, then discard the renderer ticket.
+    let frame = eval.frame_manager_mut().get_mut(frame_id).unwrap();
+    frame
+        .prepare_live_window_presentation(PresentationId::new(42), vec![snapshot(2)])
+        .unwrap();
+    assert!(frame.discard_display_presentation(PresentationId::new(42)));
+    assert_eq!(frame.active_presentation(), Some(PresentationId::new(41)));
+    assert_eq!(
+        eval.eval_str("(nth 1 (posn-at-x-y 0 0))")
+            .expect("snapshot discard must preserve coordinate queries")
+            .as_int(),
+        Some(2)
+    );
+    assert_eq!(
+        eval.frame_manager()
+            .get(frame_id)
+            .unwrap()
+            .completed_presentation_geometry()
+            .unwrap()
+            .presentation(),
+        PresentationId::new(42)
+    );
+}
+
+#[test]
+fn completed_geometry_survives_initial_snapshot_discard_and_renderer_retirement() {
+    use super::geometry::PresentationId;
+
+    let mut manager = FrameManager::new();
+    let frame_id = manager.create_frame("snapshot-only", 800, 600, BufferId(1));
+    let frame = manager.get_mut(frame_id).unwrap();
+    frame
+        .prepare_live_window_presentation(PresentationId::new(41), Vec::new())
+        .unwrap();
+    assert!(frame.discard_display_presentation(PresentationId::new(41)));
+    assert_eq!(frame.active_presentation(), None);
+    assert_eq!(
+        frame
+            .completed_presentation_geometry()
+            .unwrap()
+            .presentation(),
+        PresentationId::new(41)
+    );
+
+    frame
+        .prepare_live_window_presentation(PresentationId::new(42), Vec::new())
+        .unwrap();
+    frame
+        .activate_display_presentation(PresentationId::new(42))
+        .unwrap();
+    assert!(frame.retire_display_presentation(PresentationId::new(42)));
+    assert_eq!(frame.active_presentation_geometry(), None);
+    assert_eq!(
+        frame
+            .completed_presentation_geometry()
+            .unwrap()
+            .presentation(),
+        PresentationId::new(42)
+    );
+}
+
+#[test]
+fn completed_geometry_releases_superseded_discarded_snapshots() {
+    use super::geometry::PresentationId;
+
+    let mut manager = FrameManager::new();
+    let frame_id = manager.create_frame("completed-geometry-ownership", 800, 600, BufferId(1));
+    let frame = manager.get_mut(frame_id).unwrap();
+    frame
+        .prepare_live_window_presentation(PresentationId::new(41), Vec::new())
+        .unwrap();
+    let first = Arc::downgrade(
+        frame
+            .presentation_state
+            .completed_geometry
+            .as_ref()
+            .unwrap(),
+    );
+    assert!(Arc::ptr_eq(
+        frame
+            .presentation_state
+            .completed_geometry
+            .as_ref()
+            .unwrap(),
+        &frame.presentation_state.prepared[&PresentationId::new(41)].geometry,
+    ));
+    assert!(frame.discard_display_presentation(PresentationId::new(41)));
+    assert!(first.upgrade().is_some());
+
+    frame
+        .prepare_live_window_presentation(PresentationId::new(42), Vec::new())
+        .unwrap();
+    assert!(frame.discard_display_presentation(PresentationId::new(42)));
+    assert!(
+        first.upgrade().is_none(),
+        "only the latest completed geometry is retained"
+    );
+    let latest = Arc::downgrade(
+        frame
+            .presentation_state
+            .completed_geometry
+            .as_ref()
+            .unwrap(),
+    );
+    drop(manager);
+    assert!(latest.upgrade().is_none());
+}
+
+#[test]
 fn discarded_display_presentation_cannot_be_activated() {
     use super::geometry::{PresentationActivateError, PresentationId, PresentationPrepareError};
 
