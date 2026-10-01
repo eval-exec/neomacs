@@ -1300,7 +1300,9 @@ mod tests {
             assert_eq!(joined.source, whole.source);
             assert_eq!(joined.end_kind, whole.end_kind);
             assert_eq!(joined.slots.len(), whole.slots.len());
-            assert_eq!(format!("{:?}", joined.row), format!("{:?}", whole.row));
+            // `==`, not the Debug text: each row carries its own appearance
+            // id (`RowAppearance`), an identity that row equality ignores.
+            assert_eq!(joined.row, whole.row);
         }
     }
 
