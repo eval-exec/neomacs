@@ -390,6 +390,9 @@ fn target_key(target: Value) -> u64 {
     if let Some(id) = target.as_symbol_id() {
         return (u64::from(id.0) << 3) | TAG_SYM;
     }
+    #[cfg(not(feature = "jit"))]
+    return STATE_MEGA;
+    #[cfg(feature = "jit")]
     match target.bytecode_runtime_word() {
         Some(word) if word != 0 => {
             debug_assert_eq!(word as u64 & TAG_BITS, 0, "an Arc is 8-aligned");
@@ -539,8 +542,16 @@ impl CallSiteFeedback {
         }
     }
 
+    /// Without the JIT a byte-code object has no source identity
+    /// (`ByteCodeFunction::runtime` is JIT-only), so no key names one.
+    #[cfg(not(feature = "jit"))]
+    fn remember_source(&self, _i: usize, _target: Value) -> bool {
+        false
+    }
+
     /// Keep a `Weak` of `target`'s source in slot `i`; false when `target`
     /// has no source (never: the key said it has one).
+    #[cfg(feature = "jit")]
     fn remember_source(&self, i: usize, target: Value) -> bool {
         let Some(bc) = target.bytecode_data_if_materialized() else {
             return false;
@@ -557,7 +568,14 @@ impl CallSiteFeedback {
         true
     }
 
+    /// Without the JIT no site holds a source.
+    #[cfg(not(feature = "jit"))]
+    fn holds_source(&self, _n: usize, _target: Value) -> bool {
+        false
+    }
+
     /// Whether `target`'s source is among the first `n` the site holds.
+    #[cfg(feature = "jit")]
     fn holds_source(&self, n: usize, target: Value) -> bool {
         let Some(runtime) = target
             .bytecode_data_if_materialized()

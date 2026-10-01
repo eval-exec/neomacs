@@ -9588,6 +9588,7 @@ fn sym_id_at(constants: &[Value], idx: u16) -> SymId {
 }
 #[path = "vm_leaf.rs"]
 mod vm_leaf;
+#[cfg(feature = "jit")]
 pub(crate) use vm_leaf::render_vm_leaf_stats;
 
 #[cfg(test)]

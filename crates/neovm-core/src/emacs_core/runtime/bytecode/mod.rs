@@ -13,6 +13,7 @@ pub mod opcode;
 pub mod vm;
 
 // Re-export main types
+#[cfg(any(feature = "jit", test))]
 pub(crate) use arith_kind::ArithGenericKind;
 pub(crate) use chunk::fresh_bytecode_source_id;
 pub use chunk::{ByteCodeFunction, ByteCodeStructuralPart};
