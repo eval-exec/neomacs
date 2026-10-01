@@ -565,10 +565,68 @@ fn a_sixteen_bit_sample_is_scaled_to_eight_bits_by_rounding() {
     );
 }
 
-/// Adam7 rows are partial rows, so an interlaced source has no bands to take.
-/// The `png` encoder cannot write one, so the flag is set on an otherwise
-/// valid file with a corrected IHDR checksum — enough for the rule this pins,
-/// which is decided from the header alone.
+/// The seven Adam7 passes as the format defines them: where each pass starts in
+/// each axis and how far apart its samples are.
+///
+/// Restated here rather than read from the crate, whose copy is `pub(crate)`.
+/// That privacy is the same wall the decoder hits rather than the reason for the
+/// exclusion this test pins, and the pass geometry is small, published, and
+/// stable enough to write down.
+const ADAM7_PASSES: [(u32, u32, u32, u32); 7] = [
+    // (x offset, x step, y offset, y step)
+    (0, 8, 0, 8),
+    (4, 8, 0, 8),
+    (0, 4, 4, 8),
+    (2, 4, 0, 4),
+    (0, 2, 2, 4),
+    (1, 2, 0, 2),
+    (0, 1, 1, 2),
+];
+
+/// How many samples one Adam7 pass carries in a `width` x `height` image.
+fn pass_samples((x, x_step, y, y_step): (u32, u32, u32, u32), width: u32, height: u32) -> u64 {
+    let columns = width.saturating_sub(x).div_ceil(x_step);
+    let rows = height.saturating_sub(y).div_ceil(y_step);
+    u64::from(columns) * u64::from(rows)
+}
+
+/// An interlaced source is read whole, and this is the ordering that says why —
+/// not the privacy of the pass geometry.
+///
+/// Adam7 decodes a source in seven passes, and the first six reach only even
+/// output rows: each of them samples `y` on an even step from an even offset, so
+/// an odd row of the picture exists nowhere before the seventh. The banding this
+/// module does is a prefix of those rows — the display side draws the top of a
+/// picture before the bottom has been read — and an interlaced source has no
+/// prefix worth having. The second output row, which is the least a two-row band
+/// could carry, is not decodable until every even row the first six passes hold
+/// has been read, and those six are at least half of the source's samples at any
+/// size — exactly half when its dimensions are multiples of eight, which is the
+/// shape most pictures are. So that band costs half the file whether the picture
+/// is a thousand pixels tall or a hundred thousand, where the same band of a
+/// non-interlaced source costs `rows / height` and tends to nothing. A banded
+/// decode would take as long to show half the picture as the whole-image path
+/// takes to show all of it.
+///
+/// A one-row band is no way out either, which is the part that makes the
+/// exclusion total rather than a matter of degree. A band has to fill whole
+/// rows of the raster, and the first complete output row is spread across passes
+/// 1, 2, 4 and 6 — three quarters of the passes between them — which are eleven
+/// thirty-seconds of a multiple-of-eight source. One row of an interlaced
+/// picture costs a third of the file; the same row of a non-interlaced one costs
+/// `1 / height`.
+///
+/// Exposing the pass geometry would not rescue it either, which is the part an
+/// earlier version of this test got wrong. It blamed
+/// `InterlaceInfo::line_number` being crate-private; that number counts *within
+/// a pass*, so decoded rows 0, 1 and 2 of a 16x16 carry lines 0, 1 and 0 while
+/// they belong at output rows 0, 8 and 0. A cursor built on it would place bands
+/// at rows the picture does not have them at, which is worse than not banding —
+/// so the exclusion is the right answer rather than a limitation to lift.
+///
+/// The `png` encoder cannot write an interlaced file, so the flag is set on an
+/// otherwise valid one with a corrected IHDR checksum — enough for the rule
+/// this pins, which is decided from the header alone.
 #[test]
 fn an_interlaced_png_declines_banding() {
     let mut data = varying_png(8, 8);
@@ -584,6 +642,110 @@ fn an_interlaced_png_declines_banding() {
         matches!(open_banded(&data), BandSource::Whole),
         "interlaced rows are read whole"
     );
+}
+
+/// The ordering the test above declines on, held to account on its own, so that
+/// the reason is checkable rather than only described: it is what the even rows
+/// cost that makes an interlaced source hopeless to band.
+#[test]
+fn adam7_reaches_an_odd_row_only_in_its_last_pass_and_only_after_half_the_source() {
+    // Every pass but the last samples `y` on an even step from an even offset,
+    // so the odd rows belong to the last one alone.
+    let (even_rows, last) = ADAM7_PASSES.split_at(6);
+    assert!(
+        even_rows
+            .iter()
+            .all(|&(_, _, y, y_step)| y % 2 == 0 && y_step % 2 == 0),
+        "a pass before the last that could reach an odd row would break the \
+         argument, and the exclusion with it"
+    );
+    assert_eq!(
+        last,
+        [(0, 1, 1, 2)],
+        "the last pass is the one that carries the odd rows"
+    );
+
+    // The first complete output row is carried by the passes that reach row
+    // zero, and a band has to fill whole output rows.
+    let reaching_row_zero: Vec<_> = ADAM7_PASSES
+        .iter()
+        .copied()
+        .filter(|&(_, _, y, y_step)| y % y_step == 0)
+        .collect();
+    assert_eq!(
+        reaching_row_zero.len(),
+        4,
+        "four of the seven passes reach the first output row: {reaching_row_zero:?}"
+    );
+    let mut columns = [false; 8];
+    for (x, x_step, _, _) in &reaching_row_zero {
+        for column in (*x..8).step_by(*x_step as usize) {
+            columns[column as usize] = true;
+        }
+    }
+    assert!(
+        columns.iter().all(|&covered| covered),
+        "the passes that reach the first output row must cover every column of \
+         it, or the row is not decodable from them at all"
+    );
+
+    // What those two facts cost, at the sizes a picture usually is. Half the
+    // source before a second row can be had, and a third of it before even the
+    // first — neither of which improves as the picture grows, where a
+    // non-interlaced source's `rows / height` does.
+    for (width, height) in [(8, 8), (16, 16), (64, 48), (512, 4096), (4000, 3000)] {
+        let total: u64 = ADAM7_PASSES
+            .iter()
+            .map(|&pass| pass_samples(pass, width, height))
+            .sum();
+        assert_eq!(
+            total,
+            u64::from(width) * u64::from(height),
+            "the seven passes tile a {width}x{height} source"
+        );
+        let first_six: u64 = even_rows
+            .iter()
+            .map(|&pass| pass_samples(pass, width, height))
+            .sum();
+        assert_eq!(
+            first_six * 2,
+            total,
+            "the even rows of a {width}x{height} source are half of it"
+        );
+        let first_row: u64 = reaching_row_zero
+            .iter()
+            .map(|&pass| pass_samples(pass, width, height))
+            .sum();
+        assert_eq!(
+            first_row * 32,
+            total * 11,
+            "one row of a {width}x{height} source is eleven thirty-seconds of it"
+        );
+    }
+
+    // The weaker half of the claim, which is the one that holds at every size:
+    // the even rows are never *less* than half of a source, however awkward its
+    // dimensions. This is what makes the exclusion a rule rather than a
+    // measurement of the sizes someone happened to try.
+    for (width, height) in [(1, 1), (5, 5), (7, 9), (23, 61), (100, 1), (3, 997)] {
+        let total: u64 = ADAM7_PASSES
+            .iter()
+            .map(|&pass| pass_samples(pass, width, height))
+            .sum();
+        assert_eq!(
+            total,
+            u64::from(width) * u64::from(height),
+            "the seven passes tile a {width}x{height} source"
+        );
+        let first_six: u64 = even_rows
+            .iter()
+            .map(|&pass| pass_samples(pass, width, height))
+            .sum();
+        assert!(
+            first_six * 2 >= total,
+            "the even rows of a {width}x{height} source are not less than half"
+        );
+    }
 }
 
 /// A source that runs out mid-stream fails rather than reporting the rows it
