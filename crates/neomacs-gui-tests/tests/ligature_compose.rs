@@ -1,8 +1,8 @@
 //! Issue #447 GUI verification: a `composition-function-table` rule with
-//! `font-shape-gstring` must compose "->" through the font — the rendered
-//! surface with the ligature rule enabled differs from the run with the
-//! rule stripped (the composition changes at least one cell's pixels), and
-//! the row's glyph matrix records the composed glyph.
+//! `font-shape-gstring` must compose "->" through the font — the row's glyph
+//! matrix records the AutomaticComposite glyph (one width-carrying base cell
+//! plus zero-width member cells, like GNU's terminal composer), and the
+//! matrix differs from the run with the rule stripped.
 #![cfg(target_os = "linux")]
 
 use neomacs_gui_tests::{
@@ -98,44 +98,63 @@ fn ligature_rule_composes_on_the_rendered_surface() {
     // Control: the run with the rule stripped must boot and render cleanly
     // (it did before #447's driver). If the ENABLED run crashes where this
     // passes, the crash is in the composition render path.
-    let (_disabled_snapshot, disabled_png) = run_case("off", false);
-    let (enabled_snapshot, enabled_png) = run_case("on", true);
-    // The composed glyph must be recorded in the row's matrix.
+    let (disabled_snapshot, _disabled_png) = run_case("off", false);
+    let (enabled_snapshot, _enabled_png) = run_case("on", true);
+    // The composed glyph must be recorded in the row's matrix as an
+    // AutomaticComposite whose terminal decomposition spans the whole rule
+    // match: GNU's terminal composer writes the base cell with cmp->width and
+    // zero-width member cells for the rest of the run (src/term.c
+    // produce_composition_glyph), so "->" is one 2-cell base plus a padding
+    // member cell — not two independent chars.
     let snapshot: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&enabled_snapshot).unwrap()).unwrap();
     let rows = snapshot["frames"][0]["window_matrices"][0]["matrix"]["rows"]
         .as_array()
         .expect("matrix rows");
-    let composed = rows
-        .iter()
-        .filter_map(|row| row["glyphs"][1].as_array())
-        .flatten()
-        .any(|glyph| {
-            glyph["glyph_type"]["Composite"]["text"]
+    let mut composed = false;
+    for row in rows.iter().filter_map(|row| row["glyphs"][1].as_array()) {
+        for (index, glyph) in row.iter().enumerate() {
+            let Some(text) = glyph["glyph_type"]["AutomaticComposite"]["text"]
                 .as_str()
-                .is_some_and(|text| text.contains("->"))
-        });
+                .filter(|text| text.contains("->"))
+            else {
+                continue;
+            };
+            let base_width = glyph["pixel_width"].as_f64().unwrap_or(0.0);
+            let members = row[index + 1..]
+                .iter()
+                .take(text.chars().count().saturating_sub(1))
+                .collect::<Vec<_>>();
+            let members_carry_the_rest = members.iter().all(|member| {
+                member["padding"].as_bool() == Some(true)
+                    && member["pixel_width"].as_f64() == Some(0.0)
+            });
+            assert!(
+                members_carry_the_rest,
+                "the composed run's remaining columns must be zero-width member cells: {row:?}"
+            );
+            assert!(
+                base_width > 0.0,
+                "the composed glyph's base cell must carry the run width"
+            );
+            composed = true;
+        }
+    }
     assert!(
         composed,
         "the matrix must record the composed '->' glyph: {snapshot}"
     );
 
-    // The rendered surface with the ligature rule must differ from the run
-    // without it (the composed glyph changes at least one cell).
-    let enabled = image::open(format!("{}.png", enabled_png.display()))
-        .unwrap()
-        .to_rgba8();
-    let disabled = image::open(format!("{}.png", disabled_png.display()))
-        .unwrap()
-        .to_rgba8();
-    assert_eq!(enabled.dimensions(), disabled.dimensions());
-    let differing = enabled
-        .pixels()
-        .zip(disabled.pixels())
-        .filter(|(a, b)| a != b)
-        .count();
-    assert!(
-        differing > 0,
-        "the ligature rule must change the rendered surface"
+    // The MATRIX with the ligature rule must differ from the run without it.
+    // (The pixels deliberately stay identical: DejaVu Sans Mono has no '->'
+    // ligature, so GNU renders the same cells either way — the contract is
+    // the composition GLYPH, which is what a real ligature font would paint
+    // differently.)
+    let disabled: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&disabled_snapshot).unwrap()).unwrap();
+    assert_ne!(
+        snapshot["frames"][0]["window_matrices"][0]["matrix"]["rows"],
+        disabled["frames"][0]["window_matrices"][0]["matrix"]["rows"],
+        "the ligature rule must change the recorded row matrix"
     );
 }

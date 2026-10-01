@@ -11,8 +11,8 @@
    (setq auto-composition-mode t
          auto-composition-function 'auto-compose-chars
          composition-function-table (make-char-table nil))
-   (aset composition-function-table ?-
-         '([("\\(?:->\\)" 0 font-shape-gstring)]))
+    (aset composition-function-table ?-
+          '(["\\(?:->\\)" 0 font-shape-gstring]))
    (let ((enable (getenv "NEOMACS_LIGATURE_ENABLED")))
      (if (equal enable "0")
          (setq composition-function-table (make-char-table nil))))
