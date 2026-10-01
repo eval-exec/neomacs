@@ -1421,6 +1421,22 @@ pub(crate) fn compiled_leaf_ptr_for_test(id: u64) -> Option<*const CompiledLeaf>
     })
 }
 
+/// The installed OSR leaf at this header (tests only). Its owning mutator
+/// retains it until eviction/clear; callers must not keep it across either.
+#[cfg(test)]
+pub(crate) fn osr_leaf_ptr_for_test(
+    func: &ByteCodeFunction,
+    pc: usize,
+) -> Option<*const CompiledLeaf> {
+    let id = func.jit_runtime().compiled_id()?;
+    OSR_CACHE.with(|c| {
+        c.borrow()
+            .get(&(id, pc))
+            .and_then(|entry| entry.as_ref())
+            .map(|entry| Rc::as_ptr(&entry.leaf))
+    })
+}
+
 /// Test-only: is a compiled leaf currently cached for `id` on this thread?
 #[cfg(test)]
 pub(crate) fn is_compiled_for_test(id: u64) -> bool {

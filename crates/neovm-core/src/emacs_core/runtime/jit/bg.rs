@@ -1244,6 +1244,10 @@ mod first_sight_tests;
 #[path = "bg/tests/osr_pending_test.rs"]
 mod osr_pending_tests;
 
+#[cfg(test)]
+#[path = "bg/tests/osr_best_test.rs"]
+mod osr_best_tests;
+
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 #[path = "bg/tests/queue_test.rs"]
 mod queue_tests;
