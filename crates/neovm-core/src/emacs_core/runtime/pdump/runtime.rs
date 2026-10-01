@@ -31,9 +31,10 @@ struct PdumpRuntimeState {
 thread_local! {
     static PDUMP_RUNTIME_STATE: RefCell<PdumpRuntimeState> =
         RefCell::new(PdumpRuntimeState::default());
+    // The registry and the heap-owned caches its hooks reset belong to this
+    // thread. A process-wide guard would leave later threads unregistered.
+    static CORE_PDUMP_HOOKS: Once = const { Once::new() };
 }
-
-static CORE_PDUMP_HOOKS: Once = Once::new();
 
 fn hook_identity(hook: LoadHook) -> usize {
     hook as usize
@@ -62,21 +63,29 @@ fn run_registered_load_hooks() {
 }
 
 fn register_core_load_hooks() {
-    CORE_PDUMP_HOOKS.call_once(|| {
-        pdumper_do_now_and_after_load(crate::emacs_core::syntax::reset_syntax_thread_locals);
-        pdumper_do_now_and_after_load(crate::emacs_core::casetab::reset_casetab_thread_locals);
-        pdumper_do_now_and_after_load(crate::emacs_core::string_pos_cache::reset_string_pos_cache);
-        pdumper_do_now_and_after_load(crate::emacs_core::category::reset_category_thread_locals);
-        pdumper_do_now_and_after_load(crate::tagged::value::reset_current_subrs);
-        pdumper_do_now_and_after_load(crate::emacs_core::value::reset_string_text_properties);
-        pdumper_do_now_and_after_load(crate::emacs_core::ccl::reset_ccl_registry);
-        pdumper_do_now_and_after_load(
-            crate::emacs_core::dispnew::pure::reset_dispnew_thread_locals,
-        );
-        pdumper_do_now_and_after_load(crate::emacs_core::xfaces::clear_font_cache_state);
-        pdumper_do_now_and_after_load(crate::emacs_core::builtins::reset_builtins_thread_locals);
-        pdumper_do_now_and_after_load(crate::emacs_core::charset::reset_charset_registry);
-        pdumper_do_now_and_after_load(crate::emacs_core::timefns::reset_timefns_thread_locals);
+    CORE_PDUMP_HOOKS.with(|once| {
+        once.call_once(|| {
+            pdumper_do_now_and_after_load(crate::emacs_core::syntax::reset_syntax_thread_locals);
+            pdumper_do_now_and_after_load(crate::emacs_core::casetab::reset_casetab_thread_locals);
+            pdumper_do_now_and_after_load(
+                crate::emacs_core::string_pos_cache::reset_string_pos_cache,
+            );
+            pdumper_do_now_and_after_load(
+                crate::emacs_core::category::reset_category_thread_locals,
+            );
+            pdumper_do_now_and_after_load(crate::tagged::value::reset_current_subrs);
+            pdumper_do_now_and_after_load(crate::emacs_core::value::reset_string_text_properties);
+            pdumper_do_now_and_after_load(crate::emacs_core::ccl::reset_ccl_registry);
+            pdumper_do_now_and_after_load(
+                crate::emacs_core::dispnew::pure::reset_dispnew_thread_locals,
+            );
+            pdumper_do_now_and_after_load(crate::emacs_core::xfaces::clear_font_cache_state);
+            pdumper_do_now_and_after_load(
+                crate::emacs_core::builtins::reset_builtins_thread_locals,
+            );
+            pdumper_do_now_and_after_load(crate::emacs_core::charset::reset_charset_registry);
+            pdumper_do_now_and_after_load(crate::emacs_core::timefns::reset_timefns_thread_locals);
+        })
     });
 }
 
@@ -110,7 +119,7 @@ pub(crate) fn pdumper_stats_value() -> Option<Value> {
 }
 
 pub(crate) fn reset_runtime_for_new_heap(mode: HeapResetMode) {
-    let hooks_already_registered = CORE_PDUMP_HOOKS.is_completed();
+    let hooks_already_registered = CORE_PDUMP_HOOKS.with(Once::is_completed);
     register_core_load_hooks();
     if hooks_already_registered {
         run_registered_load_hooks();
@@ -140,3 +149,6 @@ pub(crate) fn reset_runtime_for_new_heap(mode: HeapResetMode) {
 pub(crate) fn run_after_pdump_load_hook(eval: &mut Context) {
     let _ = hook_runtime::safe_run_named_hook(eval, intern("after-pdump-load-hook"), &[]);
 }
+
+#[cfg(test)]
+mod tests;
