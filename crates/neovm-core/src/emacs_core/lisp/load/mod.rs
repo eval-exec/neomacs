@@ -3266,6 +3266,29 @@ fn runtime_root_candidates(exe: &Path) -> Vec<PathBuf> {
     candidates
 }
 
+fn runtime_project_root_from_paths(
+    compile_root: &Path,
+    exe: Option<&Path>,
+    nextest_root: Option<&Path>,
+) -> Option<PathBuf> {
+    if is_runtime_root(compile_root) {
+        return Some(compile_root.to_path_buf());
+    }
+    if let Some(exe) = exe {
+        for candidate in runtime_root_candidates(exe) {
+            if is_runtime_root(&candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+    // nextest archives retain the producer's compile-time workspace path,
+    // but run under target/debug/deps in the consumer's remapped checkout.
+    // Use that checkout only after checking the executable's installed tree.
+    nextest_root
+        .filter(|root| is_runtime_root(root))
+        .map(Path::to_path_buf)
+}
+
 fn runtime_project_root() -> PathBuf {
     if let Ok(root) = std::env::var(RUNTIME_ROOT_ENV) {
         let path = PathBuf::from(root);
@@ -3279,18 +3302,14 @@ fn runtime_project_root() -> PathBuf {
     }
 
     let compile_root = compile_time_project_root();
-    if is_runtime_root(&compile_root) {
-        return compile_root;
-    }
-
-    if let Ok(exe) = std::env::current_exe()
-        && let Ok(resolved) = exe.canonicalize()
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.canonicalize().ok());
+    let nextest_root = std::env::var_os("NEXTEST_WORKSPACE_ROOT").map(PathBuf::from);
+    if let Some(root) =
+        runtime_project_root_from_paths(&compile_root, exe.as_deref(), nextest_root.as_deref())
     {
-        for candidate in runtime_root_candidates(&resolved) {
-            if is_runtime_root(&candidate) {
-                return candidate;
-            }
-        }
+        return root;
     }
 
     panic!(
