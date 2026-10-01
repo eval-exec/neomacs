@@ -111,7 +111,8 @@ pub(crate) const ABI_TAG: u32 = compute_abi_tag();
 // v19: T2.2's stable budgeted upgrades: leaf/runtime fields for the upgrade job, the rooted T1 fallback and counted T2 deopts (P2.1 C7/C9, P2.4 B11).
 // v20: native T1 feedback recording follows the actual T1 window (FEEDBACK=use), new leaf/runtime feedback fields.
 // v21: shaped direct-call fallback and call census extend the gated, ABI-salted shim set.
-const ABI_TAG_VERSION: u32 = 21;
+// v22: the gated census group adds the counted spec-entry shim.
+const ABI_TAG_VERSION: u32 = 22;
 
 /// Format version of the AOT descriptor spec-section + the runtime spec ABI
 /// (`SpecSlot`/`spec_expected` sidecar bases, the loader re-classify+arm protocol).

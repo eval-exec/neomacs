@@ -196,3 +196,113 @@ fn the_census_does_not_count_a_sidecar_as_a_lisp_frame() {
     force_direct_shapes_for_test(None);
     force_direct_call_for_test(None);
 }
+
+/// Warm both callees before compiling the caller, leaving the caller's
+/// named slots cold. The branch keeps the exact callee out of the fuser;
+/// the special binding gives the other callee a real native Lisp frame.
+const SPEC_FAST_PROGRAM: &str = r#"(progn
+  (defvar neovm--cc-fast-special nil)
+  (defun neovm--cc-fast-exact (a b) (if (> a b) (- a b) (+ a b)))
+  (defun neovm--cc-fast-framed (a)
+    (let ((neovm--cc-fast-special a)) (1+ neovm--cc-fast-special)))
+  (dolist (f '(neovm--cc-fast-exact neovm--cc-fast-framed))
+    (byte-compile f))
+  (dotimes (i 1500)
+    (neovm--cc-fast-exact i 1)
+    (neovm--cc-fast-framed i))
+  (defun neovm--cc-fast-caller (x)
+    (list (neovm--cc-fast-exact x 1) (neovm--cc-fast-framed x)))
+  (byte-compile 'neovm--cc-fast-caller))"#;
+
+/// Count only accepted spec-shim fast paths. The first native call arms
+/// the two slots through the slow path; the second accepts both slots.
+/// Each nextest test runs in its own process, so resetting the process-wide
+/// counters here cannot race another census test.
+fn accepted_spec_fast_counts(on: bool) -> ((u64, u64), (u64, u64)) {
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || {
+            crate::test_utils::init_test_tracing();
+            force_profit_gate_for_test(false);
+            force_deopt_for_test(false);
+            force_slow_spec_for_test(Some(false));
+            crate::emacs_core::jit::inline::force_inline_for_test(Some(true));
+            crate::emacs_core::jit::force_profit_defer_for_test(Some(1));
+            force_direct_call_for_test(Some(false));
+            force_direct_shapes_for_test(Some(DirectShapesKnob::OFF));
+            force_call_census_for_test(Some(on));
+            let mut ev = crate::test_utils::runtime_startup_context();
+            ev.refresh_attention_for_test();
+            ev.eval_str(SPEC_FAST_PROGRAM).expect("callees warmed");
+            let caller = ev
+                .obarray
+                .symbol_function_id(crate::emacs_core::intern::intern("neovm--cc-fast-caller"))
+                .expect("caller defined");
+            let leaf = compile_bytecode_function_with(
+                caller.get_bytecode_data().expect("caller byte-compiled"),
+                Some(&ev.obarray),
+            )
+            .expect("caller compiles");
+            assert_eq!(
+                leaf.bytecode_spec_slots().count(),
+                2,
+                "calls remain named sites"
+            );
+            assert!(
+                leaf.bytecode_spec_slots()
+                    .all(|slot| slot.leaf_ptr().is_null()),
+                "the caller's spec slots are cold"
+            );
+            reset_for_test();
+            let mut first = (0, 0);
+            for pass in 0..2 {
+                assert!(matches!(
+                    leaf.call(core::ptr::from_mut(&mut ev).cast(), &[Value::make_int(9)]),
+                    NativeRun::Ok(_)
+                ));
+                if pass == 0 {
+                    first = spec_fast_counts_for_test();
+                    assert_eq!(first, (0, 0), "first calls arm the slots");
+                    assert!(
+                        leaf.bytecode_spec_slots()
+                            .all(|slot| slot.direct_consts.load(Ordering::Relaxed) != 0),
+                        "both named sites are armed for the second call"
+                    );
+                }
+            }
+            let fast = spec_fast_counts_for_test();
+            force_call_census_for_test(None);
+            force_direct_shapes_for_test(None);
+            force_direct_call_for_test(None);
+            force_slow_spec_for_test(None);
+            crate::emacs_core::jit::inline::force_inline_for_test(None);
+            crate::emacs_core::jit::force_profit_defer_for_test(None);
+            (first, fast)
+        })
+        .expect("spawn")
+        .join()
+        .expect("no crash")
+}
+
+#[test]
+fn the_census_counts_only_accepted_named_fast_paths_and_their_actual_frames() {
+    assert_eq!(accepted_spec_fast_counts(true), ((0, 0), (2, 1)));
+}
+
+#[test]
+fn the_normal_spec_shim_does_not_record_exact_fast_census_counts() {
+    assert_eq!(accepted_spec_fast_counts(false), ((0, 0), (0, 0)));
+}
+
+/// The accepted framed-entry bit counts actual framed runs, including a
+/// sidecar entry that needs that protocol without binding Lisp variables.
+#[test]
+fn the_exact_fast_census_accumulates_the_actual_framed_entry_bit_and_resets() {
+    reset_for_test();
+    record_spec_fast_for_census(false);
+    record_spec_fast_for_census(true);
+    record_spec_fast_for_census(true);
+    assert_eq!(spec_fast_counts_for_test(), (3, 2));
+    reset_for_test();
+    assert_eq!(spec_fast_counts_for_test(), (0, 0));
+}

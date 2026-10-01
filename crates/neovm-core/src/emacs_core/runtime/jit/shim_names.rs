@@ -101,4 +101,5 @@ const NEOVM_JIT_SHIM_NAMES: &[&str] = &[
     // JIT-only emission, named and registered through the lazy shim table.
     "neovm_jit_direct_slow",
     "neovm_jit_call_census",
+    "neovm_jit_call_spec_census",
 ];

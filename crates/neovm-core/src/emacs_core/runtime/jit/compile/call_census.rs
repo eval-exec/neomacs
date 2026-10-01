@@ -133,6 +133,40 @@ const ROW: [AtomicU64; SHAPES] = [ZERO; SHAPES];
 /// Calls counted, by site kind and callee shape.
 static COUNTS: [[AtomicU64; SHAPES]; SITES] = [ROW; SITES];
 
+/// Exact accepted spec-shim entries. Only the compile-time-selected counted
+/// shim updates these; the ordinary shim has no counter or runtime knob test.
+/// Threading: process-wide diagnostics, relaxed atomic increments from every
+/// mutator; snapshots are nontransactional and contain no Lisp state.
+static SPEC_FAST_ARMED: AtomicU64 = AtomicU64::new(0);
+static SPEC_FAST_FRAMED: AtomicU64 = AtomicU64::new(0);
+
+#[inline]
+pub(super) fn record_spec_fast_for_census(framed: bool) {
+    SPEC_FAST_ARMED.fetch_add(1, Ordering::Relaxed);
+    if framed {
+        SPEC_FAST_FRAMED.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+fn spec_fast_counts_for_test() -> (u64, u64) {
+    (
+        SPEC_FAST_ARMED.load(Ordering::Relaxed),
+        SPEC_FAST_FRAMED.load(Ordering::Relaxed),
+    )
+}
+
+#[cfg(test)]
+fn reset_for_test() {
+    for row in &COUNTS {
+        for count in row {
+            count.store(0, Ordering::Relaxed);
+        }
+    }
+    SPEC_FAST_ARMED.store(0, Ordering::Relaxed);
+    SPEC_FAST_FRAMED.store(0, Ordering::Relaxed);
+}
+
 /// The shape of a named site's callee, from its spec slot.
 fn named_shape(slot: &SpecSlot) -> CallShape {
     let leaf = slot.leaf_ptr();
@@ -355,7 +389,12 @@ pub(crate) fn render_call_census() -> Option<String> {
             .into_iter()
             .map(|(site, shape, n)| format!("{site}.{shape}={n}"))
             .collect();
-        format!("call-census:{}", cells.join(","))
+        format!(
+            "call-census:{} spec-shim-fast:armed={},framed={}",
+            cells.join(","),
+            SPEC_FAST_ARMED.load(Ordering::Relaxed),
+            SPEC_FAST_FRAMED.load(Ordering::Relaxed),
+        )
     })
 }
 

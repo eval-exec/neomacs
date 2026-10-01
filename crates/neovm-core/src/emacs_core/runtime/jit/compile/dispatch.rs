@@ -1056,6 +1056,187 @@ fn stack_call_from_native(
     res
 }
 
+/// Expand the spec-call protocol into its ordinary and census entry points.
+/// The census flag is a compile-time literal: the ordinary entry has no
+/// counter, runtime knob branch or additional invocation/inlining boundary.
+/// Function argument identifiers are explicit to preserve macro hygiene.
+///
+/// Threading: both expansions use the caller's mutator-owned Context and
+/// existing atomic spec slot; no Lisp state is cached. Census increments
+/// are process-wide relaxed atomics and never change the call's state.
+macro_rules! spec_call_body {
+    ($census:expr, $ctx:ident, $sym_bits:ident, $expected:ident, $slot:ident,
+     $args_ptr:ident, $nargs:ident, $out:ident) => {{
+        // Evidence that speculation actually engages, including in release
+        // unit tests. Non-test release builds carry no counter.
+        #[cfg(any(test, debug_assertions))]
+        SPEC_CALL_COUNT.fetch_add(1, Ordering::Relaxed);
+        // SAFETY: see neovm_jit_call's function-level contract; `slot` points
+        // into the executing leaf's spec_slots.
+        let ctx_ref = unsafe { &mut *($ctx as *mut Context) };
+        let slot_ref = unsafe { &*($slot as *const SpecSlot) };
+        let direct_consts = slot_ref.direct_consts.load(Ordering::Relaxed);
+        if direct_consts != 0
+            && ctx_ref.attention_clear(AttentionMask::SPEC_CALL)
+            && slot_ref.epoch.load(Ordering::Relaxed) == ctx_ref.obarray.function_epoch_exclusive()
+            && !ctx_ref.debug_on_next_call_is_armed()
+            && ctx_ref.depth < ctx_ref.max_depth
+        {
+            #[cfg(any(test, debug_assertions))]
+            {
+                SPEC_FAST_CALL_COUNT.fetch_add(1, Ordering::Relaxed);
+                SPEC_SHIM_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
+            }
+            // SAFETY: a non-null slot leaf names a live or retired cache leaf
+            // (`resolve_compiled_leaf_ptr`'s invariant), and `direct_consts` is
+            // the constant base of the object the slot was armed for, which the
+            // epoch proof keeps alive (the slot is cleared on every re-arm).
+            let leaf = unsafe { &*slot_ref.leaf_ptr() };
+            let callee = Value::from_bits($expected as usize);
+            let $nargs = $nargs as usize;
+            let bt_count = ctx_ref.specpdl.len();
+            // SAFETY: args_ptr addresses `nargs` valid tagged words (the caller's
+            // call-args slot). The frame records the called SYMBOL, as GNU's
+            // `Bcall` does (src/bytecode.c:792-796); `callee` stays alive through
+            // the symbol's function cell, or past a redefinition through the
+            // frame (`cache::pin_redefined_function`).
+            unsafe {
+                ctx_ref.push_backtrace_frame_from_native_args(
+                    Value::from_bits($sym_bits as usize),
+                    $args_ptr,
+                    $nargs,
+                )
+            };
+            ctx_ref.depth += 1;
+            // The callee's frame: the call as laid out when the count is the
+            // leaf's arity, otherwise the given words followed by nil for each
+            // missing `&optional` slot, in a buffer of this frame (the arming
+            // condition bounds the arity; the backtrace entry above still
+            // records the call's own arguments). The nils need no rooting.
+            let mut padded = core::mem::MaybeUninit::<[i64; FAST_PATH_MAX_ARITY]>::uninit();
+            let frame_args: *const i64 = if direct_consts & SpecSlot::KEY_SHORT_CALL == 0 {
+                $args_ptr
+            } else {
+                let arity = leaf.arity;
+                let buf = padded.as_mut_ptr() as *mut i64;
+                if leaf.has_rest {
+                    // SAFETY: arity <= FAST_PATH_MAX_ARITY (the arming
+                    // condition), and args_ptr addresses `nargs` words.
+                    unsafe { spec_rest_frame(ctx_ref, $args_ptr, $nargs, arity - 1, buf) };
+                } else {
+                    // SAFETY: nargs < arity <= FAST_PATH_MAX_ARITY (the arming
+                    // condition), and args_ptr addresses `nargs` words.
+                    unsafe {
+                        core::ptr::copy_nonoverlapping($args_ptr, buf, $nargs);
+                        for i in $nargs..arity {
+                            *buf.add(i) = Value::NIL.bits() as i64;
+                        }
+                    }
+                }
+                buf as *const i64
+            };
+            // One test picks the memory-ABI raw entry (the flags the slot was
+            // armed with say the leaf is frameless with the memory ABI); the
+            // register-ABI raw entry and the framed run are the other two.
+            let run = if direct_consts & (SpecSlot::KEY_FRAMED | SpecSlot::KEY_REGISTER) == 0 {
+                if $census {
+                    $crate::emacs_core::jit::compile::call_census::record_spec_fast_for_census(
+                        false,
+                    );
+                }
+                // The constant base is the key without its flags. Worked out
+                // here, for this call alone: the other two take the key and
+                // mask it themselves, so the base's register is this call's.
+                let consts = (direct_consts & !SpecSlot::KEY_FLAGS) as usize as *const Value;
+                let mut bits: i64 = 0;
+                // SAFETY: `frame_args` addresses `arity` live words for the
+                // call (the slot or this frame's buffer) of a frameless
+                // memory-ABI leaf; `ctx` is the dormant seam Context.
+                let status =
+                    unsafe { leaf.entry_call_raw_memory($ctx, consts, frame_args, &mut bits) };
+                if status == STATUS_OK {
+                    #[cfg(any(test, debug_assertions))]
+                    crate::emacs_core::jit::cache::NATIVE_OK_COUNT.fetch_add(1, Ordering::Relaxed);
+                    if ctx_ref.pop_native_backtrace_frame(bt_count) {
+                        ctx_ref.depth -= 1;
+                        // SAFETY: `out` is the generated code's result stack slot.
+                        unsafe { *$out = bits };
+                        return STATUS_OK;
+                    }
+                    FastRun::Done(Value::from_bits(bits as usize))
+                } else {
+                    FastRun::Raw(status)
+                }
+            } else if direct_consts & SpecSlot::KEY_FRAMED == 0 {
+                if $census {
+                    $crate::emacs_core::jit::compile::call_census::record_spec_fast_for_census(
+                        false,
+                    );
+                }
+                // SAFETY: as above, for a frameless register-ABI leaf.
+                let ret = unsafe { call_spec_register_run($ctx, frame_args, leaf, direct_consts) };
+                if ret.status == STATUS_OK {
+                    #[cfg(any(test, debug_assertions))]
+                    crate::emacs_core::jit::cache::NATIVE_OK_COUNT.fetch_add(1, Ordering::Relaxed);
+                    if ctx_ref.pop_native_backtrace_frame(bt_count) {
+                        ctx_ref.depth -= 1;
+                        // SAFETY: `out` is the generated code's result stack slot.
+                        unsafe { *$out = ret.value };
+                        return STATUS_OK;
+                    }
+                    FastRun::Done(Value::from_bits(ret.value as usize))
+                } else {
+                    FastRun::Raw(ret.status)
+                }
+            } else {
+                if $census {
+                    $crate::emacs_core::jit::compile::call_census::record_spec_fast_for_census(
+                        true,
+                    );
+                }
+                match call_spec_framed_run($ctx, leaf, direct_consts, frame_args) {
+                    NativeRun::Ok(bits) => {
+                        #[cfg(any(test, debug_assertions))]
+                        crate::emacs_core::jit::cache::NATIVE_OK_COUNT
+                            .fetch_add(1, Ordering::Relaxed);
+                        if ctx_ref.pop_native_backtrace_frame(bt_count) {
+                            ctx_ref.depth -= 1;
+                            // SAFETY: as above.
+                            unsafe { *$out = bits as i64 };
+                            return STATUS_OK;
+                        }
+                        FastRun::Done(Value::from_bits(bits))
+                    }
+                    // A panic contained in the framed entry: leave its marker
+                    // and the residue -- this frame's backtrace entry, the
+                    // depth count -- to the caller's healing points, exactly
+                    // as the single-frame containment did. Folding it here
+                    // would consume the marker before `cold_frame_exit` or the
+                    // match shim could restore the caller's boundary.
+                    // The residue keeps this frame, but not its reads of the
+                    // caller's slot, which dies when the caller leaf exits.
+                    NativeRun::Signal if shim_panic_pending() => {
+                        // SAFETY: `args_ptr` is the caller's live call-args slot.
+                        unsafe { ctx_ref.detach_native_frames_into($args_ptr) };
+                        return STATUS_SIGNAL;
+                    }
+                    other => FastRun::Framed(other),
+                }
+            };
+            return call_spec_finish($ctx, callee, leaf, $args_ptr, $nargs, $out, bt_count, run);
+        }
+        call_spec_slow(
+            $ctx,
+            $sym_bits,
+            $expected,
+            slot_ref,
+            $args_ptr,
+            $nargs as usize,
+            $out,
+        )
+    }};
+}
+
 /// Speculated direct call (`Op::Call` whose callee slot provably holds a
 /// constant symbol that was fbound to a bytecode object at compile time).
 /// Quit poll FIRST (the interpreter's Op::Call order — quit processing can run
@@ -1108,166 +1289,12 @@ pub extern "C" fn neovm_jit_call_spec(
     nargs: i64,
     out: *mut i64,
 ) -> i64 {
-    // Evidence that speculation actually engages, including in release
-    // unit tests. Non-test release builds carry no counter.
-    #[cfg(any(test, debug_assertions))]
-    SPEC_CALL_COUNT.fetch_add(1, Ordering::Relaxed);
-    // SAFETY: see neovm_jit_call's function-level contract; `slot` points
-    // into the executing leaf's spec_slots.
-    let ctx_ref = unsafe { &mut *(ctx as *mut Context) };
-    let slot_ref = unsafe { &*(slot as *const SpecSlot) };
-    let direct_consts = slot_ref.direct_consts.load(Ordering::Relaxed);
-    if direct_consts != 0
-        && ctx_ref.attention_clear(AttentionMask::SPEC_CALL)
-        && slot_ref.epoch.load(Ordering::Relaxed) == ctx_ref.obarray.function_epoch_exclusive()
-        && !ctx_ref.debug_on_next_call_is_armed()
-        && ctx_ref.depth < ctx_ref.max_depth
-    {
-        #[cfg(any(test, debug_assertions))]
-        {
-            SPEC_FAST_CALL_COUNT.fetch_add(1, Ordering::Relaxed);
-            SPEC_SHIM_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
-        }
-        // SAFETY: a non-null slot leaf names a live or retired cache leaf
-        // (`resolve_compiled_leaf_ptr`'s invariant), and `direct_consts` is
-        // the constant base of the object the slot was armed for, which the
-        // epoch proof keeps alive (the slot is cleared on every re-arm).
-        let leaf = unsafe { &*slot_ref.leaf_ptr() };
-        let callee = Value::from_bits(expected as usize);
-        let nargs = nargs as usize;
-        let bt_count = ctx_ref.specpdl.len();
-        // SAFETY: args_ptr addresses `nargs` valid tagged words (the caller's
-        // call-args slot). The frame records the called SYMBOL, as GNU's
-        // `Bcall` does (src/bytecode.c:792-796); `callee` stays alive through
-        // the symbol's function cell, or past a redefinition through the
-        // frame (`cache::pin_redefined_function`).
-        unsafe {
-            ctx_ref.push_backtrace_frame_from_native_args(
-                Value::from_bits(sym_bits as usize),
-                args_ptr,
-                nargs,
-            )
-        };
-        ctx_ref.depth += 1;
-        // The callee's frame: the call as laid out when the count is the
-        // leaf's arity, otherwise the given words followed by nil for each
-        // missing `&optional` slot, in a buffer of this frame (the arming
-        // condition bounds the arity; the backtrace entry above still
-        // records the call's own arguments). The nils need no rooting.
-        let mut padded = core::mem::MaybeUninit::<[i64; FAST_PATH_MAX_ARITY]>::uninit();
-        let frame_args: *const i64 = if direct_consts & SpecSlot::KEY_SHORT_CALL == 0 {
-            args_ptr
-        } else {
-            let arity = leaf.arity;
-            let buf = padded.as_mut_ptr() as *mut i64;
-            if leaf.has_rest {
-                // SAFETY: arity <= FAST_PATH_MAX_ARITY (the arming
-                // condition), and args_ptr addresses `nargs` words.
-                unsafe { spec_rest_frame(ctx_ref, args_ptr, nargs, arity - 1, buf) };
-            } else {
-                // SAFETY: nargs < arity <= FAST_PATH_MAX_ARITY (the arming
-                // condition), and args_ptr addresses `nargs` words.
-                unsafe {
-                    core::ptr::copy_nonoverlapping(args_ptr, buf, nargs);
-                    for i in nargs..arity {
-                        *buf.add(i) = Value::NIL.bits() as i64;
-                    }
-                }
-            }
-            buf as *const i64
-        };
-        // One test picks the memory-ABI raw entry (the flags the slot was
-        // armed with say the leaf is frameless with the memory ABI); the
-        // register-ABI raw entry and the framed run are the other two.
-        let run = if direct_consts & (SpecSlot::KEY_FRAMED | SpecSlot::KEY_REGISTER) == 0 {
-            // The constant base is the key without its flags. Worked out
-            // here, for this call alone: the other two take the key and
-            // mask it themselves, so the base's register is this call's.
-            let consts = (direct_consts & !SpecSlot::KEY_FLAGS) as usize as *const Value;
-            let mut bits: i64 = 0;
-            // SAFETY: `frame_args` addresses `arity` live words for the
-            // call (the slot or this frame's buffer) of a frameless
-            // memory-ABI leaf; `ctx` is the dormant seam Context.
-            let status = unsafe { leaf.entry_call_raw_memory(ctx, consts, frame_args, &mut bits) };
-            if status == STATUS_OK {
-                #[cfg(any(test, debug_assertions))]
-                crate::emacs_core::jit::cache::NATIVE_OK_COUNT.fetch_add(1, Ordering::Relaxed);
-                if ctx_ref.pop_native_backtrace_frame(bt_count) {
-                    ctx_ref.depth -= 1;
-                    // SAFETY: `out` is the generated code's result stack slot.
-                    unsafe { *out = bits };
-                    return STATUS_OK;
-                }
-                FastRun::Done(Value::from_bits(bits as usize))
-            } else {
-                FastRun::Raw(status)
-            }
-        } else if direct_consts & SpecSlot::KEY_FRAMED == 0 {
-            // A frameless register-ABI leaf: one call through its arity's
-            // thunk, which takes the key as is (it strips the flags).
-            // SAFETY: as above.
-            let ret = unsafe {
-                (leaf.register_thunk)(
-                    leaf.entry,
-                    ctx,
-                    direct_consts as usize as *const u8,
-                    frame_args,
-                )
-            };
-            if ret.status == STATUS_OK {
-                #[cfg(any(test, debug_assertions))]
-                crate::emacs_core::jit::cache::NATIVE_OK_COUNT.fetch_add(1, Ordering::Relaxed);
-                if ctx_ref.pop_native_backtrace_frame(bt_count) {
-                    ctx_ref.depth -= 1;
-                    // SAFETY: `out` is the generated code's result stack slot.
-                    unsafe { *out = ret.value };
-                    return STATUS_OK;
-                }
-                FastRun::Done(Value::from_bits(ret.value as usize))
-            } else {
-                FastRun::Raw(ret.status)
-            }
-        } else {
-            match call_spec_framed_run(ctx, leaf, direct_consts, frame_args) {
-                NativeRun::Ok(bits) => {
-                    #[cfg(any(test, debug_assertions))]
-                    crate::emacs_core::jit::cache::NATIVE_OK_COUNT.fetch_add(1, Ordering::Relaxed);
-                    if ctx_ref.pop_native_backtrace_frame(bt_count) {
-                        ctx_ref.depth -= 1;
-                        // SAFETY: as above.
-                        unsafe { *out = bits as i64 };
-                        return STATUS_OK;
-                    }
-                    FastRun::Done(Value::from_bits(bits))
-                }
-                // A panic contained in the framed entry: leave its marker
-                // and the residue -- this frame's backtrace entry, the
-                // depth count -- to the caller's healing points, exactly
-                // as the single-frame containment did. Folding it here
-                // would consume the marker before `cold_frame_exit` or the
-                // match shim could restore the caller's boundary.
-                // The residue keeps this frame, but not its reads of the
-                // caller's slot, which dies when the caller leaf exits.
-                NativeRun::Signal if shim_panic_pending() => {
-                    // SAFETY: `args_ptr` is the caller's live call-args slot.
-                    unsafe { ctx_ref.detach_native_frames_into(args_ptr) };
-                    return STATUS_SIGNAL;
-                }
-                other => FastRun::Framed(other),
-            }
-        };
-        return call_spec_finish(ctx, callee, leaf, args_ptr, nargs, out, bt_count, run);
-    }
-    call_spec_slow(
-        ctx,
-        sym_bits,
-        expected,
-        slot_ref,
-        args_ptr,
-        nargs as usize,
-        out,
-    )
+    spec_call_body!(false, ctx, sym_bits, expected, slot, args_ptr, nargs, out)
 }
+
+#[path = "dispatch/census.rs"]
+mod census;
+pub(crate) use census::neovm_jit_call_spec_census;
 
 /// The spec fast path's frame for a `&rest` callee of `nonrest + 1` slots:
 /// the given words, nil for each missing `&optional` slot, and the words
@@ -1335,6 +1362,24 @@ pub(super) fn call_spec_framed_run(
     jit_shim_contain!(ctx, NativeRun::Signal, {
         leaf.call_premarshaled_consts(ctx, consts, args_ptr)
     })
+}
+
+/// The fast path's raw entry of a frameless register-ABI leaf
+/// (`SpecSlot::KEY_REGISTER`), out of the shim's frame: the memory-ABI raw
+/// entry is the one the shim calls in line. `key` is the slot's fast-path
+/// key, the constant base with its flags.
+///
+/// SAFETY: as `CompiledLeaf::entry_call_raw_register`.
+#[inline(never)]
+unsafe fn call_spec_register_run(
+    ctx: *mut u8,
+    args_ptr: *const i64,
+    leaf: &CompiledLeaf,
+    key: u64,
+) -> super::reg_abi::NativeRet {
+    let consts = (key & !SpecSlot::KEY_FLAGS) as usize as *const Value;
+    // SAFETY: the caller's contract.
+    unsafe { leaf.entry_call_raw_register(ctx, consts, args_ptr) }
 }
 
 /// How a fast-path native run ended when it did not end in a balanced OK.

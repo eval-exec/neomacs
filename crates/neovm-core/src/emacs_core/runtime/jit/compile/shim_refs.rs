@@ -22,7 +22,7 @@
 //! Existing shim IDs and signatures keep their order. New JIT-only shape
 //! and census shims are appended in optional groups; with their knobs off
 //! they are never imported, including under eager imports. Their exported
-//! names extend the ABI-salted name set (ABI v21), while AOT emission keeps
+//! names extend the ABI-salted name set (ABI v22), while AOT emission keeps
 //! both new groups off.
 
 use std::cell::Cell;
@@ -138,6 +138,8 @@ pub(crate) enum Shim {
     DirectSlow,
     /// `neovm_jit_call_census`: read-only call-shape measurement.
     CallCensus,
+    /// Exact accepted spec-shim entries, selected only for a census build.
+    CallSpecCensus,
 }
 
 /// The parameter shapes of the shim signatures.
@@ -210,6 +212,7 @@ impl Shim {
             Shim::T2RecordCallUseTarget => "neovm_jit_t2_record_call_use_target",
             Shim::DirectSlow => "neovm_jit_direct_slow",
             Shim::CallCensus => "neovm_jit_call_census",
+            Shim::CallSpecCensus => "neovm_jit_call_spec_census",
         }
     }
 
@@ -229,7 +232,7 @@ impl Shim {
             | Shim::T2ApplyUseProf
             | Shim::T2RecordCallUseTarget => ShimGroup::Tier2Profile,
             Shim::DirectSlow => ShimGroup::DirectShapes,
-            Shim::CallCensus => ShimGroup::CallCensus,
+            Shim::CallCensus | Shim::CallSpecCensus => ShimGroup::CallCensus,
             Shim::RootwinGrow
             | Shim::Cons
             | Shim::MakeFloat
@@ -356,7 +359,9 @@ impl Shim {
             Shim::NamedBuiltin | Shim::CbsymRead => (&[Ptr, I64, I64, Ptr, I64, Ptr], true),
             // (vmctx, sym, expected, slot_ptr, args_ptr, nargs, out_ptr) -> status;
             // CallSpec's `sym` is the symbol's tagged bits, CallSubrSpec's its id
-            Shim::CallSpec | Shim::CallSubrSpec => (&[Ptr, I64, I64, I64, Ptr, I64, Ptr], true),
+            Shim::CallSpec | Shim::CallSubrSpec | Shim::CallSpecCensus => {
+                (&[Ptr, I64, I64, I64, Ptr, I64, Ptr], true)
+            }
             // pred: (vmctx, kind, sym, expected, slot_ptr, a, out_ptr)
             // eq:   (vmctx, sym, expected, slot_ptr, a, b, out_ptr)
             Shim::PredSpec | Shim::EqInclPropsSpec => (&[Ptr, I64, I64, I64, I64, I64, Ptr], true),
@@ -501,6 +506,11 @@ impl RtRefs {
     /// The callable ref of a base shim (always declared).
     pub(crate) fn get(&self, func: &mut Function, shim: Shim) -> FuncRef {
         debug_assert_eq!(shim.group(), ShimGroup::Base, "{shim:?}: use try_get");
+        let shim = if shim == Shim::CallSpec && self.groups.call_census {
+            Shim::CallSpecCensus
+        } else {
+            shim
+        };
         self.try_get(func, shim)
             .unwrap_or_else(|| panic!("base shim {shim:?} is always declared"))
     }

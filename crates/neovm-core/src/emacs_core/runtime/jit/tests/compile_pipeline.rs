@@ -452,6 +452,7 @@ fn jit_pipeline_optional_shim_groups_follow_the_leaf_not_the_module() {
     assert!(refs.try_get(&mut func, Shim::TierRequest).is_none());
     assert!(refs.try_get(&mut func, Shim::DirectSlow).is_none());
     assert!(refs.try_get(&mut func, Shim::CallCensus).is_none());
+    assert!(refs.try_get(&mut func, Shim::CallSpecCensus).is_none());
     let cons = refs.get(&mut func, Shim::Cons);
     assert_eq!(refs.get(&mut func, Shim::Cons), cons, "imported once");
     assert_eq!(func.dfg.ext_funcs.len(), 1);
@@ -477,7 +478,7 @@ fn jit_pipeline_optional_shim_groups_follow_the_leaf_not_the_module() {
             .try_get(&mut eager_func, Shim::CallCensus)
             .is_none()
     );
-    for shim in [Shim::DirectSlow, Shim::CallCensus] {
+    for shim in [Shim::DirectSlow, Shim::CallCensus, Shim::CallSpecCensus] {
         let id = ids.get(shim).expect("backend declares every group");
         assert!(
             eager_func
