@@ -2038,6 +2038,27 @@ impl<'a> BufferSourceLineBreakRenderRequest<'a> {
                 row_carryover.line_numbers,
             )
             .apply_to_progress(&mut progress);
+        // Certify the next source line only in an explicit pixel measurement.
+        // The ordinary transition above resets tabs, wrap/hscroll progress and
+        // trailing whitespace. The producer must additionally have no pushed
+        // replacement source or consumed insertion at the new anchor. Prefix,
+        // gutter and cross-row box state need a separate restart proof.
+        if source_render.output_emitter().collects_query_restarts()
+            && self.display_string_line_break.is_none()
+            && context.text.get(self.source_char.start_byte_idx()) == Some(&b'\n')
+            && progress.charpos() == self.source_char.start_charpos() + 1
+            && context.selective_display == 0
+            && !context.has_prefix
+            && !row_carryover.line_numbers.is_enabled()
+            && !row_build.box_face.is_active()
+            && self.line_height == crate::display_item::DisplayLineHeightPolicy::Default
+            && self.line_spacing == crate::display_item::DisplayLineSpacingPolicy::Inherit
+            && source_walk.can_restart_after_buffer_newline(progress.charpos())
+        {
+            source_render
+                .output_emitter()
+                .note_query_restart(layout_i64_char_pos_to_lisp_char_pos(progress.charpos()));
+        }
         DisplayRowTransitionContinuation::Continue
     }
 

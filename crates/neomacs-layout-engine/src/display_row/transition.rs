@@ -212,7 +212,7 @@ impl<'a, 'emit> DisplayRowTextWindowEmitContext<'a, 'emit> {
         row_geometry: &'emit mut DisplayRowGeometryState,
         row_flags: &'emit mut DisplayRowFlags,
         row_limit: DisplayRowLimit,
-        source_render: &'emit mut TextRowSourceRenderState<'emit>,
+        source_render: &'emit mut TextRowSourceRenderState<'_>,
     ) -> Self {
         Self::new(
             defaults,

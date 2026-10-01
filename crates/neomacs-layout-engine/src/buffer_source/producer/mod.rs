@@ -203,6 +203,13 @@ impl<'request, B: LayoutBufferView> BufferElementProducer<'request, B> {
             .produces_single_chars_at(CharPos0::new(charpos.max(0) as usize))
     }
 
+    pub(crate) fn can_restart_after_buffer_newline(&self, charpos: i64) -> bool {
+        usize::try_from(charpos).is_ok_and(|position| {
+            self.source_cursor
+                .can_restart_after_buffer_newline(CharPos0::new(position))
+        })
+    }
+
     /// Whether production at `source_position` must first yield an anchored
     /// overlay-string insertion.  This does not move or mark the cursor; the
     /// regular production step remains the sole consumer of the element.

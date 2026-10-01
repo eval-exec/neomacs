@@ -194,6 +194,10 @@ impl<'request, B: LayoutBufferView> BufferSourceWalk<'request, B> {
             .has_pending_overlay_strings_at(source_position)
     }
 
+    pub(crate) fn can_restart_after_buffer_newline(&self, charpos: i64) -> bool {
+        self.producer.can_restart_after_buffer_newline(charpos)
+    }
+
     /// Reseat the producer at a row-wrap retry position so the current character
     /// is re-produced on the continuation row.
     pub(crate) fn rewind_source_consumption(&mut self, rewind: BufferSourceRewind) {

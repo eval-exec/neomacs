@@ -1011,6 +1011,7 @@ impl BufferSourceOutputSetup {
             );
             return BufferSourceRenderAttemptOutcome::Finished {
                 redisplay_positions,
+                query_restart_rows: Vec::new(),
                 window_end_record: publish_request.window_end_record(redisplay_positions),
                 freshness_before_chrome,
                 effective_default_face,
@@ -1435,6 +1436,7 @@ impl BufferSourceOutputSetup {
             );
             return BufferSourceRenderAttemptOutcome::Finished {
                 redisplay_positions,
+                query_restart_rows: Vec::new(),
                 window_end_record: publish_request.window_end_record(redisplay_positions),
                 freshness_before_chrome,
                 effective_default_face,
@@ -1628,6 +1630,7 @@ impl BufferSourceOutputSetup {
             Ok(metrics) => metrics,
             Err(changed) => return changed.into(),
         };
+        let query_restart_rows = output_emitter.take_query_restart_rows();
         tail_context.finish_and_install(
             TextWindowFinishState::new(output, output_emitter, evaluator),
             measured_chrome_heights,
@@ -1635,6 +1638,7 @@ impl BufferSourceOutputSetup {
         );
         BufferSourceRenderAttemptOutcome::Finished {
             redisplay_positions,
+            query_restart_rows,
             window_end_record: publish_request.window_end_record(redisplay_positions),
             freshness_before_chrome,
             effective_default_face,

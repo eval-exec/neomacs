@@ -1245,6 +1245,8 @@ pub(crate) trait DisplayProgressSink {
 
 pub(crate) struct WindowOutputEmitter {
     query_target: Option<LayoutCharPos0>,
+    collect_query_restarts: bool,
+    query_restart_rows: Vec<(LispCharPos1, i64)>,
     /// Whether output-cursor updates are mirrored into the live evaluator
     /// window while this emitter is being built. Production frame layout is
     /// speculative and keeps this false; focused lifecycle tests can use the
@@ -1351,6 +1353,8 @@ impl WindowOutputEmitter {
         Self {
             publish_live,
             query_target: None,
+            collect_query_restarts: false,
+            query_restart_rows: Vec::new(),
             frame_id,
             window_id,
             geometry: WindowRowGeometry::new(text_row_base, text_x, window_top),
@@ -1362,6 +1366,29 @@ impl WindowOutputEmitter {
 
     pub(crate) fn set_query_target(&mut self, target: Option<LayoutCharPos0>) {
         self.query_target = target;
+    }
+
+    pub(crate) fn set_collect_query_restarts(&mut self, enabled: bool) {
+        self.collect_query_restarts = enabled;
+    }
+
+    pub(crate) fn collects_query_restarts(&self) -> bool {
+        self.collect_query_restarts
+    }
+
+    pub(crate) fn note_query_restart(&mut self, source_start: LispCharPos1) {
+        // Larger queries are ineligible for the bounded query cache. Avoid
+        // growing their transient restart metadata without a bound as well.
+        if self.collect_query_restarts
+            && self.query_restart_rows.len() < 256
+            && let Some(row) = self.geometry.current_output_row()
+        {
+            self.query_restart_rows.push((source_start, row));
+        }
+    }
+
+    pub(crate) fn take_query_restart_rows(&mut self) -> Vec<(LispCharPos1, i64)> {
+        std::mem::take(&mut self.query_restart_rows)
     }
 
     pub(crate) fn seed_cursor_only_body(

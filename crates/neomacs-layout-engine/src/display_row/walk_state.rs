@@ -933,6 +933,10 @@ impl HorizontalScrollSkipState {
 }
 
 impl LineNumberRenderState {
+    pub(crate) fn is_enabled(self) -> bool {
+        !matches!(self.phase, LineNumberRenderPhase::Disabled)
+    }
+
     pub(crate) fn new(enabled: bool, current_line: i64, point_line: i64) -> Self {
         Self {
             current_line,

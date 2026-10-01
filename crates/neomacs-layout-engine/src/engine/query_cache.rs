@@ -7,6 +7,7 @@ use neovm_core::{
 use std::collections::VecDeque;
 
 mod placement;
+mod slicing;
 
 // A page plan uses several row budgets at both ends. Bound payload as well
 // as entry count so these small observations can coexist without increasing
@@ -24,6 +25,7 @@ struct Entry {
     source_point: neovm_core::buffer::LispCharPos1,
     collections: neovm_core::tagged::collection_reads::CollectionReads,
     query: WindowLayoutQuery,
+    restart_rows: Vec<(neovm_core::buffer::LispCharPos1, i64)>,
 }
 
 #[derive(Default)]
@@ -85,6 +87,12 @@ impl QueryCache {
                 (WindowLayoutQueryScope::Pixels { start: cached_start, height: cached_height },
                  WindowLayoutQueryScope::Pixels { start, height })
                     if cached_start == start && cached_height >= height
+            ) || matches!(
+                (entry.scope, scope),
+                (WindowLayoutQueryScope::Pixels { start: cached_start, .. },
+                 WindowLayoutQueryScope::Pixels { start, .. })
+                    if cached_start < start && entry.restart_rows.iter()
+                        .any(|(anchor, _)| *anchor == start)
             );
             if !(entry.frame == frame
                 && entry.window == window
@@ -103,6 +111,21 @@ impl QueryCache {
                 if fontification.is_some_and(|value| !value.is_nil()) {
                     return None;
                 }
+            }
+            if let (
+                WindowLayoutQueryScope::Pixels { start: cached_start, .. },
+                WindowLayoutQueryScope::Pixels { start, height },
+            ) = (entry.scope, scope)
+                && cached_start < start
+            {
+                return slicing::pixels_suffix(
+                    &entry.query,
+                    &current,
+                    source_point,
+                    start,
+                    height,
+                    &entry.restart_rows,
+                );
             }
             if entry.query.geometry()?.layout_freshness.as_ref() == Some(&current) {
                 return Some(entry.query.clone());
@@ -147,6 +170,7 @@ impl QueryCache {
         scope: WindowLayoutQueryScope,
         query: &WindowLayoutQuery,
         collections: neovm_core::tagged::collection_reads::CollectionReads,
+        mut restart_rows: Vec<(neovm_core::buffer::LispCharPos1, i64)>,
     ) {
         let Some(snapshot) = query.geometry() else {
             return;
@@ -174,6 +198,15 @@ impl QueryCache {
             return;
         };
         let source_point = buffer.point_lisp_char_pos();
+        restart_rows.retain(|(anchor, index)| {
+            snapshot
+                .rows
+                .iter()
+                .any(|row| row.row == *index && row.start_buffer_pos == Some(*anchor))
+        });
+        restart_rows.sort_unstable_by_key(|(_, index)| *index);
+        restart_rows.dedup_by_key(|(_, index)| *index);
+        restart_rows.truncate(MAX_ROWS);
         // Motion commands temporarily move point while querying the same
         // viewport. Retain those independent observations within the existing
         // global bound, so returning from save-excursion does not force a new
@@ -196,6 +229,7 @@ impl QueryCache {
             source_point,
             collections,
             query: query.clone(),
+            restart_rows,
         });
         while self.entries.len() > MAX_ENTRIES
             || self

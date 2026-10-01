@@ -164,6 +164,7 @@ pub(crate) enum BufferSourceRenderAttemptOutcome {
     ReplayMispredicted,
     Finished {
         redisplay_positions: TextWindowRedisplayPositions,
+        query_restart_rows: Vec<(neovm_core::buffer::LispCharPos1, i64)>,
         window_end_record: neovm_core::window::WindowEndRecord,
         /// Exact canonical inputs after body production and immediately before
         /// GNU's late `display_mode_lines` phase enters Lisp.

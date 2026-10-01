@@ -2773,6 +2773,406 @@ fn pixel_coverage_reuses_a_larger_certified_observation() {
     assert_eq!(changed.geometry(), fresh.geometry());
 }
 
+// Pixels may return a larger complete observation than requested. Compare
+// that observation to the canonical producer at its own returned extent,
+// including all row numbers, points, cursor coordinates and end records.
+fn assert_cross_start_pixel_observation(
+    eval: &mut Context,
+    frame: neovm_core::window::FrameId,
+    window: neovm_core::window::WindowId,
+    actual: &neovm_core::window::WindowLayoutQuery,
+    start: usize,
+    requested_height: usize,
+    case: &str,
+) {
+    use neovm_core::window::WindowLayoutQueryScope;
+    use std::num::NonZeroUsize;
+    let geometry = actual.geometry().unwrap();
+    let first = geometry.rows.first().unwrap();
+    let last = geometry.rows.last().unwrap();
+    let extent = usize::try_from(last.y + last.height - first.y).unwrap();
+    let height = extent.max(requested_height);
+    let expected = WindowLayoutQueryEngine::new()
+        .query_window_layout(
+            eval,
+            frame,
+            window,
+            WindowLayoutQueryScope::Pixels {
+                start: LispCharPos1::from_one_based_usize(start),
+                height: NonZeroUsize::new(height).unwrap(),
+            },
+        )
+        .unwrap();
+    assert_eq!(actual.end(), expected.end(), "{case}: translated end");
+    assert_eq!(
+        actual.geometry(),
+        expected.geometry(),
+        "{case}: translated rows, points, cursors and end record"
+    );
+}
+
+#[test]
+fn cross_start_pixels_reuse_complete_physical_line_suffixes() {
+    use crate::engine::viewport_retry_depth_probe as probe;
+    use neovm_core::window::WindowLayoutQueryScope;
+    use std::num::NonZeroUsize;
+    for decoration in [
+        "nil",
+        r#"(progn
+            (put-text-property 27 40 'face '(:family "monospace" :height 2.0 :weight bold))
+            (put-text-property 40 53 'face '(:family "serif" :height 0.75 :slant italic))
+            (put-text-property 53 66 'face '(:family "sans-serif" :height 1.5))
+            (overlay-put (make-overlay 69 74) 'face '(:height 1.25 :underline t)))"#,
+    ] {
+        for point in [1, 1000] {
+            let (mut eval, frame, window) =
+                position_query_fixture(&"ordinary row\n".repeat(100), 400, 200);
+            eval.eval_str(decoration).unwrap();
+            eval.eval_str(&format!("(goto-char {point})")).unwrap();
+            let before = eval
+                .eval_str("(list (window-start) (window-vscroll nil t) (point))")
+                .unwrap();
+            let scope = |start, height| WindowLayoutQueryScope::Pixels {
+                start: LispCharPos1::from_one_based_usize(start),
+                height: NonZeroUsize::new(height).unwrap(),
+            };
+            let mut engine = WindowLayoutQueryEngine::new();
+            let original = engine
+                .query_window_layout(&mut eval, frame, window, scope(1, 500))
+                .unwrap();
+            probe::reset();
+            let shifted = engine
+                .query_window_layout(&mut eval, frame, window, scope(27, 120))
+                .unwrap();
+            let depth = probe::max_depth();
+            assert_cross_start_pixel_observation(
+                &mut eval, frame, window, &shifted, 27, 120, decoration,
+            );
+            assert_eq!(
+                eval.eval_str("(list (window-start) (window-vscroll nil t) (point))")
+                    .unwrap(),
+                before,
+                "measurement changed the live viewport"
+            );
+            assert!(
+                original.geometry().unwrap().rows.len() > shifted.geometry().unwrap().rows.len(),
+                "discarded leading rows were retained"
+            );
+            assert_eq!(
+                depth, 0,
+                "overlapping clean source rows were measured again: {decoration}, point={point}"
+            );
+        }
+    }
+}
+
+#[test]
+fn cross_start_pixels_reject_changed_source_point_collections_and_callbacks() {
+    use crate::engine::viewport_retry_depth_probe as probe;
+    use neovm_core::window::WindowLayoutQueryScope;
+    use std::num::NonZeroUsize;
+    for mutation in [
+        "(goto-char 44)",
+        "(put-text-property 30 35 'face '(:height 2.0))",
+        "(overlay-put cross-start-overlay 'face '(:height 1.5))",
+        "(setcar (cdr cross-start-face) 200)",
+        "(setq fontification-functions cross-start-hooks)",
+        "(setq tab-width 3)",
+        "(narrow-to-region 1 200)",
+    ] {
+        let (mut eval, frame, window) =
+            position_query_fixture(&"ordinary row\n".repeat(100), 400, 200);
+        eval.eval_str(
+            r#"(setq cross-start-face (list :height 100))
+            (put-text-property 27 80 'face cross-start-face)
+            (setq cross-start-overlay (make-overlay 80 100))
+            (overlay-put cross-start-overlay 'face '(:height 1.25))
+            (setq fontification-functions nil cross-start-hooks
+                (list (lambda (start) (put-text-property start (point-max) 'fontified t))))"#,
+        )
+        .unwrap();
+        let scope = |start, height| WindowLayoutQueryScope::Pixels {
+            start: LispCharPos1::from_one_based_usize(start),
+            height: NonZeroUsize::new(height).unwrap(),
+        };
+        let mut engine = WindowLayoutQueryEngine::new();
+        engine
+            .query_window_layout(&mut eval, frame, window, scope(1, 500))
+            .unwrap();
+        eval.eval_str(mutation).unwrap();
+        probe::reset();
+        let actual = engine
+            .query_window_layout(&mut eval, frame, window, scope(27, 120))
+            .unwrap();
+        let depth = probe::max_depth();
+        let expected = WindowLayoutQueryEngine::new()
+            .query_window_layout(&mut eval, frame, window, scope(27, 120))
+            .unwrap();
+        assert_eq!(actual.end(), expected.end(), "{mutation}");
+        assert_eq!(actual.geometry(), expected.geometry(), "{mutation}");
+        assert!(
+            depth > 0,
+            "changed inputs reused a cross-start suffix: {mutation}"
+        );
+    }
+}
+
+#[test]
+fn cross_start_pixels_walk_for_retained_cursor_and_missing_coverage() {
+    use crate::engine::viewport_retry_depth_probe as probe;
+    use neovm_core::window::WindowLayoutQueryScope;
+    use std::num::NonZeroUsize;
+    for (point, start, height) in [(44, 27, 120), (1, 27, 600), (1, 1, 120)] {
+        let (mut eval, frame, window) =
+            position_query_fixture(&"ordinary row\n".repeat(100), 400, 200);
+        eval.eval_str(&format!("(goto-char {point})")).unwrap();
+        let scope = |start, height| WindowLayoutQueryScope::Pixels {
+            start: LispCharPos1::from_one_based_usize(start),
+            height: NonZeroUsize::new(height).unwrap(),
+        };
+        let mut engine = WindowLayoutQueryEngine::new();
+        // Starting after the requested source start cannot certify its prefix.
+        let cached_start = if start == 1 { 27 } else { 1 };
+        engine
+            .query_window_layout(&mut eval, frame, window, scope(cached_start, 500))
+            .unwrap();
+        probe::reset();
+        let actual = engine
+            .query_window_layout(&mut eval, frame, window, scope(start, height))
+            .unwrap();
+        let depth = probe::max_depth();
+        let expected = WindowLayoutQueryEngine::new()
+            .query_window_layout(&mut eval, frame, window, scope(start, height))
+            .unwrap();
+        assert_eq!(actual.end(), expected.end());
+        assert_eq!(actual.geometry(), expected.geometry());
+        assert!(
+            depth > 0,
+            "uncertified suffix reused: point={point}, start={start}, height={height}"
+        );
+    }
+}
+
+#[test]
+fn cross_start_pixels_walk_when_a_cached_wrap_row_has_no_restart_proof() {
+    use crate::engine::viewport_retry_depth_probe as probe;
+    use neovm_core::window::WindowLayoutQueryScope;
+    use std::num::NonZeroUsize;
+    let text =
+        "words with tabs\tand wrapping repeated many times on one physical line\n".repeat(100);
+    let (mut eval, frame, window) = position_query_fixture(&text, 180, 200);
+    eval.eval_str("(setq word-wrap t) (put-text-property 1 (point-max) 'wrap-prefix \"w>\")")
+        .unwrap();
+    let scope = |start, height| WindowLayoutQueryScope::Pixels {
+        start: LispCharPos1::from_one_based_usize(start),
+        height: NonZeroUsize::new(height).unwrap(),
+    };
+    let mut engine = WindowLayoutQueryEngine::new();
+    let original = engine
+        .query_window_layout(&mut eval, frame, window, scope(1, 500))
+        .unwrap();
+    let start = original
+        .geometry()
+        .unwrap()
+        .rows
+        .iter()
+        .filter_map(|row| row.start_buffer_pos)
+        .map(|position| position.as_i64() as usize)
+        .find(|start| *start > 1 && text.as_bytes()[start - 2] != b'\n')
+        .expect("fixture must materialize a continuation with an exact source anchor");
+    probe::reset();
+    let actual = engine
+        .query_window_layout(&mut eval, frame, window, scope(start, 120))
+        .unwrap();
+    let depth = probe::max_depth();
+    let expected = WindowLayoutQueryEngine::new()
+        .query_window_layout(&mut eval, frame, window, scope(start, 120))
+        .unwrap();
+    assert_eq!(actual.end(), expected.end());
+    assert_eq!(actual.geometry(), expected.geometry());
+    assert!(depth > 0, "a matching wrap row is not a restart proof");
+}
+
+#[test]
+fn cross_start_pixels_preserve_multibyte_end_records_and_eob_rows() {
+    use crate::engine::viewport_retry_depth_probe as probe;
+    use neovm_core::window::WindowLayoutQueryScope;
+    use std::num::NonZeroUsize;
+    for lines in [100, 5] {
+        let (mut eval, frame, window) =
+            position_query_fixture(&"αβ🙂 row\n".repeat(lines), 400, 200);
+        let scope = |start, height| WindowLayoutQueryScope::Pixels {
+            start: LispCharPos1::from_one_based_usize(start),
+            height: NonZeroUsize::new(height).unwrap(),
+        };
+        let mut engine = WindowLayoutQueryEngine::new();
+        engine
+            .query_window_layout(&mut eval, frame, window, scope(1, 500))
+            .unwrap();
+        probe::reset();
+        let actual = engine
+            .query_window_layout(&mut eval, frame, window, scope(17, 120))
+            .unwrap();
+        let depth = probe::max_depth();
+        if depth == 0 {
+            assert_cross_start_pixel_observation(
+                &mut eval,
+                frame,
+                window,
+                &actual,
+                17,
+                120,
+                "multibyte end record and EOB",
+            );
+        } else {
+            let expected = WindowLayoutQueryEngine::new()
+                .query_window_layout(&mut eval, frame, window, scope(17, 120))
+                .unwrap();
+            assert_eq!(actual.end(), expected.end());
+            assert_eq!(actual.geometry(), expected.geometry());
+        }
+    }
+}
+
+#[test]
+fn cross_start_pixels_match_canonical_context_sensitive_rows() {
+    use crate::engine::viewport_retry_depth_probe as probe;
+    use neovm_core::window::WindowLayoutQueryScope;
+    use std::num::NonZeroUsize;
+    let wrapped_line = "words with tabs\tand wrapping repeated many times on one physical line\n";
+    for (text, width, decoration, start) in [
+        (
+            "words with tabs\tand wrapping repeated many times on one physical line\n".repeat(100),
+            180,
+            "(setq word-wrap t)",
+            12,
+        ),
+        (
+            wrapped_line.repeat(100),
+            180,
+            "(setq word-wrap t)",
+            wrapped_line.len() + 1,
+        ),
+        (
+            wrapped_line.repeat(100),
+            180,
+            "(setq truncate-lines t) (set-window-hscroll nil 3)",
+            wrapped_line.len() + 1,
+        ),
+        (
+            "ordinary row\n".repeat(100),
+            400,
+            "(set-window-hscroll nil 3)",
+            27,
+        ),
+        (
+            "ordinary row\n".repeat(100),
+            400,
+            "(put-text-property 20 50 'face '(:box (:line-width 2 :color \"red\") :height 1.5))",
+            27,
+        ),
+        (
+            "ordinary row\n".repeat(100),
+            400,
+            "(put-text-property 1 27 'line-height 3.0) (put-text-property 27 40 'line-height 1.5)",
+            27,
+        ),
+        (
+            "ordinary row\n".repeat(100),
+            400,
+            "(setq line-spacing 3) (put-text-property 1 27 'line-spacing 8) (put-text-property 27 40 'line-spacing 1)",
+            27,
+        ),
+        (
+            "ordinary row\n".repeat(100),
+            400,
+            "(setq header-line-format '(\"header\") tab-line-format '(\"tabs\"))",
+            27,
+        ),
+        (
+            "ordinary row\n".repeat(100),
+            400,
+            "(put-text-property 1 (point-max) 'line-prefix \"p>\")",
+            27,
+        ),
+        (
+            "words with tabs\tand wrapping repeated many times on one physical line\n".repeat(100),
+            180,
+            "(setq word-wrap t) (put-text-property 1 (point-max) 'wrap-prefix \"w>\")",
+            12,
+        ),
+        (
+            "abc אבג مرحبا tail\n".repeat(100),
+            400,
+            "(setq bidi-display-reordering t bidi-paragraph-direction 'right-to-left)",
+            20,
+        ),
+        (
+            "ordinary row\n".repeat(100),
+            400,
+            "(setq buffer-invisibility-spec t) (put-text-property 20 35 'invisible t)",
+            40,
+        ),
+        (
+            "ordinary row\n".repeat(100),
+            400,
+            "(put-text-property 20 35 'display \"replacement\")",
+            40,
+        ),
+        (
+            "ordinary row\n".repeat(100),
+            400,
+            "(overlay-put (make-overlay 27 40) 'before-string \"one\\ntwo\\nthree\")",
+            27,
+        ),
+        (
+            "ordinary row\n".repeat(100),
+            400,
+            "(overlay-put (make-overlay 14 27) 'after-string \"one\\ntwo\\nthree\")",
+            27,
+        ),
+        (
+            "ordinary row\n".repeat(100),
+            400,
+            "(overlay-put (make-overlay 27 40) 'before-string \"inline-prefix\")",
+            27,
+        ),
+        (
+            "ordinary row\n".repeat(100),
+            400,
+            "(overlay-put (make-overlay 14 27) 'after-string \"inline-suffix\")",
+            27,
+        ),
+    ] {
+        let (mut eval, frame, window) = position_query_fixture(&text, width, 200);
+        eval.eval_str(decoration).unwrap();
+        let scope = |start, height| WindowLayoutQueryScope::Pixels {
+            start: LispCharPos1::from_one_based_usize(start),
+            height: NonZeroUsize::new(height).unwrap(),
+        };
+        let mut engine = WindowLayoutQueryEngine::new();
+        engine
+            .query_window_layout(&mut eval, frame, window, scope(1, 500))
+            .unwrap();
+        probe::reset();
+        let actual = engine
+            .query_window_layout(&mut eval, frame, window, scope(start, 120))
+            .unwrap();
+        let walked = probe::max_depth() > 0;
+        if walked {
+            let expected = WindowLayoutQueryEngine::new()
+                .query_window_layout(&mut eval, frame, window, scope(start, 120))
+                .unwrap();
+            assert_eq!(actual.end(), expected.end(), "{decoration}");
+            assert_eq!(actual.geometry(), expected.geometry(), "{decoration}");
+        } else {
+            assert_cross_start_pixel_observation(
+                &mut eval, frame, window, &actual, start, 120, decoration,
+            );
+        }
+    }
+}
+
 #[test]
 fn backward_page_growth_handles_different_physical_line_lengths() {
     use std::{cell::Cell, rc::Rc};

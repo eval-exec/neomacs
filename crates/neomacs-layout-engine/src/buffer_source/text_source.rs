@@ -329,6 +329,25 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
             && self.overlay_strings_at(char_pos).is_some()
     }
 
+    /// A fresh buffer cursor seated here produces the same next source item.
+    /// This is used only after an ordinary consumed newline; source anchors
+    /// alone cannot certify a restart in pushed replacement text.
+    pub(crate) fn can_restart_after_buffer_newline(&self, char_pos: CharPos0) -> bool {
+        if self.char_pos != char_pos
+            || !self.replacement_strings.is_empty()
+            || self.overlay_strings_produced_at == Some(char_pos)
+            || self.produces_single_chars_at(char_pos)
+        {
+            return false;
+        }
+        let properties = RustTextPropAccess::new_for_optional_window(self.buffer, self.window_id);
+        ["line-prefix", "wrap-prefix"].iter().all(|name| {
+            properties
+                .get_property(char_pos.get() as i64, Value::symbol(name))
+                .is_none_or(|value| value.is_nil())
+        })
+    }
+
     /// A produced run must never CROSS an overlay-string anchor: anchors are
     /// surfaced as their own element at the position they anchor, and the
     /// producer only looks for them at a run's START, so a run that swallowed

@@ -443,6 +443,10 @@ impl WindowRowGeometry {
             .expect("text row must have display row progress before finishing")
     }
 
+    pub(super) fn current_output_row(&self) -> Option<i64> {
+        self.current_row_progress.map(|progress| progress.row)
+    }
+
     pub(super) fn note_truncated_end(&mut self, end: LispCharPos1) {
         self.truncated_end_buffer_pos = Some(end);
     }

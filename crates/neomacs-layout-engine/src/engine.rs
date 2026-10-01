@@ -779,6 +779,7 @@ pub struct LayoutEngine {
     /// inactive echo area from being detached from their cache policy while
     /// the frame converges.
     window_snapshots: Vec<WindowPresentationSnapshot>,
+    query_restart_rows: Vec<(neovm_core::buffer::LispCharPos1, i64)>,
     /// Granted only by the canonical walk's semantic reuse barrier. Geometry
     /// queries with evaluated Lisp conditions must never skip that walk.
     query_body_reuse_allowed: bool,
@@ -1288,6 +1289,7 @@ impl LayoutEngine {
         self.frame_output.reset();
         self.pending_tab_bar_pointer = None;
         self.window_snapshots.clear();
+        self.query_restart_rows.clear();
         self.cursor_only_window_ids.clear();
         self.prepared_window_ids.clear();
         self.scroll_window_ids.clear();
@@ -1432,6 +1434,7 @@ impl LayoutEngine {
         Self {
             text_buf: Vec::with_capacity(64 * 1024), // 64KB initial
             window_snapshots: Vec::new(),
+            query_restart_rows: Vec::new(),
             query_body_reuse_allowed: false,
             query_cache: Default::default(),
             font_metrics: Some(FontMetricsService::new()),
@@ -1470,6 +1473,7 @@ impl LayoutEngine {
         Self {
             text_buf: Vec::with_capacity(64 * 1024),
             window_snapshots: Vec::new(),
+            query_restart_rows: Vec::new(),
             query_body_reuse_allowed: false,
             query_cache: Default::default(),
             font_metrics: None,
@@ -2738,7 +2742,19 @@ impl LayoutEngine {
                 }
                 frame_window_end_attempts.reject_all(evaluator);
                 evaluator.retire_interaction_presentation(presentation_id);
+                let mut query_restart_rows = std::mem::take(&mut self.query_restart_rows);
+                query_restart_rows.retain(|(anchor, index)| {
+                    geometry.as_ref().is_some_and(|snapshot| {
+                        snapshot
+                            .rows
+                            .iter()
+                            .any(|row| row.row == *index && row.start_buffer_pos == Some(*anchor))
+                    })
+                });
                 self.reset_frame_attempt_state();
+                // The completed query owns these small certificates until
+                // `query_window_layout` transfers them into its cache entry.
+                self.query_restart_rows = query_restart_rows;
                 return Some(neovm_core::window::WindowLayoutQuery::new(end, geometry));
             }
 
@@ -3505,6 +3521,7 @@ impl LayoutEngine {
             return Ok(query);
         }
         self.query_body_reuse_allowed = true;
+        self.query_restart_rows.clear();
         let (query, collections) = neovm_core::tagged::collection_reads::capture_normalized(
             evaluator,
             |evaluator| {
@@ -3519,14 +3536,22 @@ impl LayoutEngine {
             },
         );
         let query = query.ok_or(neovm_core::window::WindowLayoutQueryFailure::DidNotConverge)?;
+        let query_restart_rows = std::mem::take(&mut self.query_restart_rows);
         tracing::trace!(target: "neomacs_layout_engine::query_cache",
             body_reuse_allowed = self.query_body_reuse_allowed,
             collections_captured = collections.is_some(), "query completed");
         if self.query_body_reuse_allowed
             && let Some(collections) = collections
         {
-            self.query_cache
-                .remember(evaluator, frame_id, window_id, scope, &query, collections);
+            self.query_cache.remember(
+                evaluator,
+                frame_id,
+                window_id,
+                scope,
+                &query,
+                collections,
+                query_restart_rows,
+            );
         }
         Ok(query)
     }
@@ -4485,6 +4510,7 @@ impl LayoutEngine {
             }
             BufferSourceRenderAttemptOutcome::Finished {
                 redisplay_positions,
+                query_restart_rows,
                 window_end_record,
                 freshness_before_chrome: _,
                 effective_default_face,
@@ -4492,6 +4518,9 @@ impl LayoutEngine {
                 reused_matrix_rows,
                 line_number_field_width,
             } => {
+                if params.measurement_pixels.is_some() {
+                    self.query_restart_rows = query_restart_rows;
+                }
                 if let Some(snapshot) = self
                     .window_snapshots
                     .iter_mut()

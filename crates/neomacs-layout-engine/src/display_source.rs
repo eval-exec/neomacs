@@ -3031,7 +3031,6 @@ impl LispStringSourceStack {
             .unwrap_or_else(|| DisplaySourcePosition::synthetic(0, 0))
     }
 
-    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.frames.is_empty()
     }
