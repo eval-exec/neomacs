@@ -62,6 +62,44 @@ impl LispCollectionRevision {
     }
 }
 
+#[cfg(debug_assertions)]
+std::thread_local! {
+    /// GEN-5: a bulk mutation may install new children after its pre-write
+    /// barrier, so no collector safe point may occur until the closure ends.
+    static IN_HEAP_MUT_CLOSURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(debug_assertions)]
+pub(crate) struct HeapMutClosureGuard(bool);
+
+#[cfg(debug_assertions)]
+impl HeapMutClosureGuard {
+    #[inline]
+    pub(crate) fn enter() -> Self {
+        Self(IN_HEAP_MUT_CLOSURE.with(|active| active.replace(true)))
+    }
+}
+
+#[cfg(debug_assertions)]
+impl Drop for HeapMutClosureGuard {
+    #[inline]
+    fn drop(&mut self) {
+        // Restore the enclosing extent on both a normal return and unwind.
+        IN_HEAP_MUT_CLOSURE.with(|active| active.set(self.0));
+    }
+}
+
+#[cfg(debug_assertions)]
+#[inline]
+pub(crate) fn debug_assert_no_heap_mut_closure() {
+    IN_HEAP_MUT_CLOSURE.with(|active| {
+        assert!(
+            !active.get(),
+            "GC safe point inside a with_*_mut heap mutation closure (GEN-5)"
+        );
+    });
+}
+
 #[inline]
 pub fn set_cons_car(cell: TaggedValue, value: TaggedValue) -> bool {
     if !record_projected_write(cell, WriteProjection::Cons) {
@@ -113,6 +151,8 @@ pub fn with_vector_data_mut<R>(
         super::gc::with_tagged_heap(|heap| heap.concurrent_clone_on_write_vector(value));
     }
     let ptr = value.as_veclike_ptr().unwrap() as *mut VectorObj;
+    #[cfg(debug_assertions)]
+    let _guard = HeapMutClosureGuard::enter();
     Some(f(unsafe { (*ptr).data.ensure_owned() }))
 }
 
@@ -154,6 +194,8 @@ pub fn with_record_data_mut<R>(
     }
     note_heap_write(value, HeapWriteKind::RecordBulk);
     let ptr = value.as_veclike_ptr().unwrap() as *mut RecordObj;
+    #[cfg(debug_assertions)]
+    let _guard = HeapMutClosureGuard::enter();
     Some(f(unsafe { (*ptr).data.ensure_owned() }))
 }
 
@@ -196,6 +238,8 @@ pub fn with_closure_slots_mut<R>(
             unsafe {
                 let obj = &mut *ptr;
                 let _ = obj.parsed_params.take();
+                #[cfg(debug_assertions)]
+                let _guard = HeapMutClosureGuard::enter();
                 Some(f(obj.data.ensure_owned()))
             }
         }
@@ -204,6 +248,8 @@ pub fn with_closure_slots_mut<R>(
             unsafe {
                 let obj = &mut *ptr;
                 let _ = obj.parsed_params.take();
+                #[cfg(debug_assertions)]
+                let _guard = HeapMutClosureGuard::enter();
                 Some(f(obj.data.ensure_owned()))
             }
         }
@@ -256,6 +302,8 @@ pub fn with_string_text_props_mut<R>(
     LispCollectionRevision::changed(value);
     let ptr = value.as_string_ptr()? as *mut StringObj;
     note_heap_write(value, HeapWriteKind::StringTextProps);
+    #[cfg(debug_assertions)]
+    let _guard = HeapMutClosureGuard::enter();
     Some(f(unsafe { (*ptr).data.intervals_mut() }))
 }
 
@@ -267,6 +315,8 @@ pub fn with_lisp_string_mut<R>(
     LispCollectionRevision::changed(value);
     let ptr = value.as_string_ptr()? as *mut StringObj;
     note_heap_write(value, HeapWriteKind::StringData);
+    #[cfg(debug_assertions)]
+    let _guard = HeapMutClosureGuard::enter();
     Some(f(unsafe { &mut (*ptr).data }))
 }
 
@@ -318,6 +368,8 @@ pub fn with_hash_table_mut<R>(
     // equal one compiled against this object.
     let epoch = unsafe { (*ptr).table.data.switch_epoch.wrapping_add(1) };
     unsafe { (*ptr).table.data.switch_epoch = epoch };
+    #[cfg(debug_assertions)]
+    let _guard = HeapMutClosureGuard::enter();
     let result = f(unsafe { &mut (*ptr).table });
     unsafe { (*ptr).table.data.switch_epoch = epoch };
     Some(result)
@@ -384,6 +436,8 @@ pub fn with_bytecode_data_mut_for_test<R>(
     }
     note_heap_write(value, HeapWriteKind::ByteCodeData);
     let ptr = value.as_veclike_ptr().unwrap() as *mut ByteCodeObj;
+    #[cfg(debug_assertions)]
+    let _guard = HeapMutClosureGuard::enter();
     Some(f(unsafe { &mut (*ptr).data }))
 }
 
@@ -397,6 +451,8 @@ pub fn with_marker_data_mut<R>(
     }
     note_heap_write(value, HeapWriteKind::LispMarker);
     let ptr = value.as_veclike_ptr().unwrap() as *mut MarkerObj;
+    #[cfg(debug_assertions)]
+    let _guard = HeapMutClosureGuard::enter();
     Some(f(unsafe { &mut (*ptr).data }))
 }
 
@@ -411,6 +467,8 @@ pub fn with_overlay_data_mut<R>(
     }
     note_heap_write(value, HeapWriteKind::OverlayData);
     let ptr = value.as_veclike_ptr().unwrap() as *mut OverlayObj;
+    #[cfg(debug_assertions)]
+    let _guard = HeapMutClosureGuard::enter();
     Some(f(unsafe { &mut (*ptr).data }))
 }
 
@@ -421,6 +479,8 @@ pub fn with_xwidget_mut<R>(value: TaggedValue, f: impl FnOnce(&mut XwidgetObj) -
     }
     note_heap_write(value, HeapWriteKind::XwidgetData);
     let ptr = value.as_veclike_ptr().unwrap() as *mut XwidgetObj;
+    #[cfg(debug_assertions)]
+    let _guard = HeapMutClosureGuard::enter();
     Some(f(unsafe { &mut *ptr }))
 }
 
@@ -434,5 +494,12 @@ pub fn with_xwidget_view_mut<R>(
     }
     note_heap_write(value, HeapWriteKind::XwidgetViewData);
     let ptr = value.as_veclike_ptr().unwrap() as *mut XwidgetViewObj;
+    #[cfg(debug_assertions)]
+    let _guard = HeapMutClosureGuard::enter();
     Some(f(unsafe { &mut *ptr }))
 }
+
+#[cfg(test)]
+#[cfg(debug_assertions)]
+#[path = "gc/tests/heap_mut_closure_tests.rs"]
+mod gc_heap_mut_closure_tests;

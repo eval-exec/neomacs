@@ -8,38 +8,7 @@ use super::*;
 /// GNU Emacs keeps conses in fixed-size aligned blocks and derives the owning
 /// block/index directly from the cons pointer. Keep the same shape here so
 /// mark/ownership checks stay O(1) instead of linearly scanning `cons_blocks`.
-pub(crate) const CONS_BLOCK_BYTES: usize = 64 * 1024;
 pub(super) const CONS_BLOCK_ALIGN: usize = CONS_BLOCK_BYTES;
-pub(super) const CONS_MARK_BITS_PER_WORD: usize = usize::BITS as usize;
-
-pub(super) const fn cons_mark_words(cell_count: usize) -> usize {
-    cell_count.div_ceil(CONS_MARK_BITS_PER_WORD)
-}
-
-pub(super) const fn cons_block_cell_count() -> usize {
-    let cons_size = size_of::<ConsCell>();
-    let mark_word_size = size_of::<usize>();
-    let mut cells = CONS_BLOCK_BYTES / cons_size;
-    while cells > 0 {
-        let marks_bytes = cons_mark_words(cells) * mark_word_size;
-        if cells * cons_size + marks_bytes <= CONS_BLOCK_BYTES {
-            return cells;
-        }
-        cells -= 1;
-    }
-    0
-}
-
-pub(crate) const CONS_BLOCK_SIZE: usize = cons_block_cell_count();
-pub(crate) const CONS_MARK_WORDS: usize = cons_mark_words(CONS_BLOCK_SIZE);
-pub(super) const CONS_CELLS_BYTES: usize = CONS_BLOCK_SIZE * size_of::<ConsCell>();
-pub(crate) const CONS_MARKS_OFFSET: usize = CONS_CELLS_BYTES;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct ConsMarkBit {
-    pub(super) word_index: usize,
-    pub(super) mask: usize,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ConsBlockCacheEntry {
@@ -57,9 +26,9 @@ impl ConsBlockCacheEntry {
 }
 
 /// A GNU-shaped cons block with cells at the front of a fixed-size aligned
-/// storage area, followed by packed mark bits.
+/// storage area, followed by the mark, old and unlogged bitmaps.
 pub(super) struct ConsBlock {
-    /// Aligned raw storage for cons cells plus mark bits.
+    /// Aligned raw storage for cons cells plus `ConsBlockTrailer`.
     pub(super) storage: *mut u8,
     /// Index of the first never-allocated cell in this block.
     pub(super) next_index: u16,
@@ -93,8 +62,9 @@ impl ConsBlock {
     }
 
     #[inline]
-    pub(super) fn mark_words_ptr(&self) -> *mut usize {
-        unsafe { self.storage.add(CONS_MARKS_OFFSET).cast() }
+    pub(super) fn trailer(&self) -> &ConsBlockTrailer {
+        // SAFETY: the block owns this storage for the duration of the borrow.
+        unsafe { ConsBlockTrailer::from_block_base(self.base_addr()) }
     }
 
     #[inline]
@@ -120,12 +90,7 @@ impl ConsBlock {
 
     #[inline]
     pub(super) fn mark_bit(index: usize) -> ConsMarkBit {
-        let word = index / CONS_MARK_BITS_PER_WORD;
-        let bit = index % CONS_MARK_BITS_PER_WORD;
-        ConsMarkBit {
-            word_index: word,
-            mask: 1usize << bit,
-        }
+        ConsBlockTrailer::mark_bit(index)
     }
 
     /// View a mark-bitmap word as an atomic. The cons mark bits are accessed
@@ -134,15 +99,12 @@ impl ConsBlock {
     /// relaxed atomic load/store is a plain mov, so this is free single-threaded.
     #[inline]
     pub(super) fn mark_word(&self, word_index: usize) -> &AtomicUsize {
-        unsafe { &*(self.mark_words_ptr().add(word_index) as *const AtomicUsize) }
+        self.trailer().mark_word(word_index)
     }
 
     #[inline]
     pub(super) fn is_marked_ptr(&self, ptr: *const ConsCell) -> bool {
-        let index = Self::index_of_ptr(ptr);
-        let mark = Self::mark_bit(index);
-        debug_assert!(mark.word_index < CONS_MARK_WORDS);
-        (self.mark_word(mark.word_index).load(Ordering::Relaxed) & mark.mask) != 0
+        self.trailer().is_marked(Self::index_of_ptr(ptr))
     }
 
     /// Mark the cell at `offset` bytes into this block's cells, reporting
@@ -155,16 +117,7 @@ impl ConsBlock {
     /// rust-lsp-typing capture.
     #[inline]
     pub(super) fn mark_cell_offset(&mut self, offset: usize) -> bool {
-        let index = offset / size_of::<ConsCell>();
-        let word_index = index / CONS_MARK_BITS_PER_WORD;
-        let mask = 1usize << (index % CONS_MARK_BITS_PER_WORD);
-        debug_assert!(word_index < CONS_MARK_WORDS);
-        let word = self.mark_word(word_index);
-        if word.load(Ordering::Relaxed) & mask != 0 {
-            return false;
-        }
-        word.fetch_or(mask, Ordering::Relaxed);
-        true
+        self.trailer().mark_cell(offset / size_of::<ConsCell>())
     }
 
     /// Reserve up to `want` never-used cells from this block's bump cursor
@@ -195,38 +148,17 @@ impl ConsBlock {
     /// or its unused tail unmarked at close. Needs no `&mut` block, so a
     /// region names its block by address alone.
     pub(super) fn mark_run_at(base: usize, start: usize, n: usize, set: bool) {
-        debug_assert!(start + n <= CONS_BLOCK_SIZE);
-        let words = (base + CONS_MARKS_OFFSET) as *const AtomicUsize;
-        let end = start + n;
-        let mut i = start;
-        while i < end {
-            let bit = i % CONS_MARK_BITS_PER_WORD;
-            let span = (CONS_MARK_BITS_PER_WORD - bit).min(end - i);
-            let mask = if span == CONS_MARK_BITS_PER_WORD {
-                usize::MAX
-            } else {
-                ((1usize << span) - 1) << bit
-            };
-            // SAFETY: `base` is a live block's storage and the word index is
-            // below `CONS_MARK_WORDS` (`i < CONS_BLOCK_SIZE`).
-            let word = unsafe { &*words.add(i / CONS_MARK_BITS_PER_WORD) };
-            if set {
-                word.fetch_or(mask, Ordering::Relaxed);
-            } else {
-                word.fetch_and(!mask, Ordering::Relaxed);
-            }
-            i += span;
-        }
+        // SAFETY: the allocation region names an owned block held live for
+        // the duration of its extent. Its tail ranges stay inside the cells.
+        unsafe { ConsBlockTrailer::from_block_base(base) }.mark_run(start, n, set);
     }
 
     /// Clear all mark bits used by this block. Runs stop-the-world (at
     /// `begin_collection`), but stores atomically so the representation stays
     /// consistent with the concurrent reads/writes elsewhere.
     pub(super) fn clear_marks(&mut self) {
-        let used_words = cons_mark_words(self.next_index as usize);
-        for w in 0..used_words {
-            self.mark_word(w).store(0, Ordering::Relaxed);
-        }
+        self.trailer()
+            .clear_marks_world_stopped(self.next_index as usize);
     }
 
     /// Count currently-marked (live) cells via mark-bitmap popcount. Bits at or
@@ -234,12 +166,7 @@ impl ConsBlock {
     /// Cheap O(cells/64); used to recompute the live count after an incremental
     /// sweep without a second cell walk.
     pub(super) fn count_marked(&self) -> usize {
-        let used_words = cons_mark_words(self.next_index as usize);
-        let mut live = 0usize;
-        for w in 0..used_words {
-            live += self.mark_word(w).load(Ordering::Relaxed).count_ones() as usize;
-        }
-        live
+        self.trailer().count_marked(self.next_index as usize)
     }
 
     /// Sweep: thread reclaimed cells into the global intrusive free list and
@@ -251,9 +178,7 @@ impl ConsBlock {
         // cells themselves instead of rebuilding an external index vector.
         for i in (0..self.next_index as usize).rev() {
             let cell = unsafe { self.cells_ptr().add(i) };
-            let mark = Self::mark_bit(i);
-            let marked = (self.mark_word(mark.word_index).load(Ordering::Relaxed) & mark.mask) != 0;
-            if marked {
+            if self.trailer().is_marked(i) {
                 live += 1;
             } else {
                 unsafe {

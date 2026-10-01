@@ -1893,6 +1893,8 @@ impl Context {
     /// termination + sweep. The first cycle and non-incremental builds take the
     /// stop-the-world path.
     pub(super) fn gc_collect_from_current_roots_impl(&mut self, force_complete: bool) {
+        #[cfg(debug_assertions)]
+        crate::tagged::mutate::debug_assert_no_heap_mut_closure();
         // Collection also compacts undo state, materializes thread buffer
         // objects and publishes GC statistics. Those operations can allocate
         // or consult semantic TLS, so activate the collecting Context before
@@ -2581,6 +2583,8 @@ impl Context {
 
     #[inline(always)]
     pub(super) fn gc_safe_point_exact_should_collect(&mut self) -> bool {
+        #[cfg(debug_assertions)]
+        crate::tagged::mutate::debug_assert_no_heap_mut_closure();
         // The common answer, decided from plain fields without a call: no
         // collection is in flight, none is pending or forced, and the
         // allocation pacing has not tripped. Everything else takes the
@@ -3062,3 +3066,8 @@ impl Context {
         self.maybe_quit()
     }
 }
+
+#[cfg(test)]
+#[cfg(debug_assertions)]
+#[path = "tests/gc_heap_mut_closure.rs"]
+mod gc_heap_mut_closure_tests;

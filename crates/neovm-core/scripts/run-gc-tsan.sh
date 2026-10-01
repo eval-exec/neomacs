@@ -16,7 +16,7 @@
 #   re-execs and dies with "ThreadSanitizer setrlimit() failed 22". We therefore
 #   build the instrumented libtest binary with `cargo nextest list` (binaries
 #   only, without running it), then drive it DIRECTLY,
-#   one process per test (== nextest's isolation), in parallel across all cores.
+#   one process per test (== nextest's isolation), at most eight at a time.
 #
 # WHY build-std + nightly + --no-default-features:
 #   `-Zsanitizer=thread` instruments user code; `-Zbuild-std` rebuilds std/core
@@ -43,8 +43,10 @@ cd "$(git rev-parse --show-toplevel)"
 
 TARGET="x86_64-unknown-linux-gnu"
 TOOLCHAIN="nightly"
-OUTDIR="${NEOVM_GC_TSAN_LOG_DIR:-./tmp/codex/gc-tsan-logs}"
+OUTDIR="${OUTDIR:-${NEOVM_GC_TSAN_LOG_DIR:-$PWD/tmp/codex/gc-tsan-logs}}"
 FILTER="${1:-}"
+: "${CARGO_TARGET_DIR:?Set CARGO_TARGET_DIR to this worktree target directory}"
+export CARGO_TARGET_DIR
 FEATURE_ARGS=(--no-default-features)
 if [ -n "${NEOVM_GC_TSAN_FEATURES:-}" ]; then
   FEATURE_ARGS+=(--features "$NEOVM_GC_TSAN_FEATURES")
@@ -54,9 +56,14 @@ fi
 # concurrent_* / parity_* / finalizer_* tests) plus the eval/symbol concurrent
 # tests. Single-threaded unit tests in these modules also run (they just pass).
 SURFACE_RE='^tagged::gc::(ownership|float_arena|bytecode_arena|arena_promotion|alloc_region|barrier_window|chunk_map|census|slot_store|generation|vec_scan)_tests::'
+SURFACE_RE+='|^tagged::gc::cons_block_trailer::cons_trailer_tests::'
+SURFACE_RE+='|^tagged::mutate::gc_heap_mut_closure_tests::'
+SURFACE_RE+='|^emacs_core::eval::command_loop::gc_heap_mut_closure_tests::'
+SURFACE_RE+='|^emacs_core::value::heap_mut_closure_guard::'
 SURFACE_RE+='|^emacs_core::symbol::tests::seqlock'
 SURFACE_RE+='|^emacs_core::eval::tests::gc_concurrent'
 SURFACE_RE+='|^emacs_core::eval::tests::gc_safe_point_runs_concurrent'
+SURFACE_RE+='|^emacs_core::eval::tests::gc_generational::'
 SURFACE_RE+='|^emacs_core::builtins::closure_slot_identity_test::'
 SURFACE_RE+='|^emacs_core::eval::cconv_memo_tests::'
 SURFACE_RE+='|^emacs_core::eval::gc_root_ownership_tests::'
@@ -133,7 +140,7 @@ run_one() {
 export -f run_one
 
 RESULTS="$OUTDIR/results.txt"
-xargs -P "$(nproc)" -I{} bash -c 'run_one "$@"' _ {} < "$LIST" | tee "$RESULTS"
+xargs -P 8 -I{} bash -c 'run_one "$@"' _ {} < "$LIST" | tee "$RESULTS"
 
 # --- Summary ---------------------------------------------------------------
 PASS=$(grep -c '^PASS ' "$RESULTS" || true)

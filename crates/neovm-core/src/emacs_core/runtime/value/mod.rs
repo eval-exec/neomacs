@@ -3725,6 +3725,8 @@ impl TaggedValue {
             return None;
         }
         let ptr = self.as_veclike_ptr().unwrap() as *mut BoolVectorObj;
+        #[cfg(debug_assertions)]
+        let _guard = mutate::HeapMutClosureGuard::enter();
         Some(f(unsafe { &mut *ptr }))
     }
 
@@ -3752,6 +3754,8 @@ impl TaggedValue {
         mutate::LispCollectionRevision::changed(self);
         note_heap_write(self, HeapWriteKind::CharTableData);
         let ptr = self.as_veclike_ptr().unwrap() as *mut CharTableObj;
+        #[cfg(debug_assertions)]
+        let _guard = mutate::HeapMutClosureGuard::enter();
         Some(f(unsafe { &mut *ptr }))
     }
 
@@ -3779,6 +3783,8 @@ impl TaggedValue {
         mutate::LispCollectionRevision::changed(self);
         note_heap_write(self, HeapWriteKind::SubCharTableData);
         let ptr = self.as_veclike_ptr().unwrap() as *mut SubCharTableObj;
+        #[cfg(debug_assertions)]
+        let _guard = mutate::HeapMutClosureGuard::enter();
         Some(f(unsafe { &mut *ptr }))
     }
 
@@ -3904,6 +3910,8 @@ impl TaggedValue {
         mutate::LispCollectionRevision::changed(self);
         note_heap_write(self, HeapWriteKind::ObarrayData);
         let ptr = self.as_veclike_ptr().unwrap() as *mut ObarrayObj;
+        #[cfg(debug_assertions)]
+        let _guard = mutate::HeapMutClosureGuard::enter();
         Some(f(unsafe { &mut *ptr }))
     }
 
@@ -5544,3 +5552,7 @@ mod bytecode_capture_tests;
 #[cfg(test)]
 #[path = "tests/metadata_capture.rs"]
 mod metadata_capture_tests;
+
+#[cfg(test)]
+#[path = "tests/heap_mut_closure_guard.rs"]
+mod heap_mut_closure_guard;

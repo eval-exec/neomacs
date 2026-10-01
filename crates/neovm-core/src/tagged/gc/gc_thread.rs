@@ -224,10 +224,7 @@ pub(super) unsafe fn atomic_mark_owned_cons_ptr(ptr: *const ConsCell) -> bool {
     let addr = ptr as usize;
     let base = addr & !(CONS_BLOCK_ALIGN - 1);
     let index = (addr - base) / size_of::<ConsCell>();
-    let word_index = index / CONS_MARK_BITS_PER_WORD;
-    let mask = 1usize << (index % CONS_MARK_BITS_PER_WORD);
-    let word = unsafe { &*((base + CONS_MARKS_OFFSET) as *const AtomicUsize).add(word_index) };
-    (word.fetch_or(mask, Ordering::Relaxed) & mask) == 0
+    unsafe { ConsBlockTrailer::from_block_base(base) }.try_mark(index)
 }
 
 /// CONCURRENT STRING MARKING: try to mark one discovered string on the GC

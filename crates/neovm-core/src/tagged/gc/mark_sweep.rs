@@ -59,6 +59,8 @@ impl TaggedHeap {
     /// (`begin_stw_collection`) called it: only that entry pre-marks the
     /// image for a first partition cycle (`premark_mapped_image`).
     pub(super) fn begin_collection_with(&mut self, stw_entry: bool) {
+        #[cfg(debug_assertions)]
+        crate::tagged::mutate::debug_assert_no_heap_mut_closure();
         // (Pre-mark verification removed — unmarked objects may have stale data
         //  that will be swept. Only post-mark verification is meaningful.)
 

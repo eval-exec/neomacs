@@ -2558,13 +2558,15 @@ mod concurrent;
 
 mod incremental;
 
+mod cons_block_trailer;
+use cons_block_trailer::*;
 mod cons_blocks;
-use cons_blocks::*;
 /// The cons-block trailer's shape, for `jit_layout::heap`.
 #[cfg_attr(not(feature = "jit"), allow(unused_imports))]
-pub(crate) use cons_blocks::{
+pub(crate) use cons_block_trailer::{
     CONS_BLOCK_BYTES, CONS_BLOCK_SIZE as CONS_BLOCK_CELLS, CONS_MARK_WORDS, CONS_MARKS_OFFSET,
 };
+use cons_blocks::*;
 
 mod arena_pages;
 pub(crate) use arena_pages::*;
@@ -2670,3 +2672,7 @@ fn maybe_resize_for_test(ht: &mut crate::emacs_core::value::LispHashTable) {
         ht.data.reserve(ht.size as usize);
     }
 }
+
+#[cfg(test)]
+#[path = "gc/tests/generational_tests.rs"]
+mod generational_tests;
