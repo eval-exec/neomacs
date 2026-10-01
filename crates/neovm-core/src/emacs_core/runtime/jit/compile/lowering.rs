@@ -2772,6 +2772,7 @@ pub(super) fn lower_mir_with_plan(
         feedback_holds: Box::from([]),
         abi,
         entry_shape: super::EntryShape::of(abi, false, false, false),
+        register_thunk: super::reg_abi::register_thunk_for(abi),
         entry,
         _backing: defined.backing,
     })

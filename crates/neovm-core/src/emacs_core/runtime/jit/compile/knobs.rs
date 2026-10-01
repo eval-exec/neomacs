@@ -1185,3 +1185,48 @@ pub(crate) fn jit_tier2_policy() -> Tier2PolicyKnob {
     static KNOB: std::sync::OnceLock<Tier2PolicyKnob> = std::sync::OnceLock::new();
     *KNOB.get_or_init(|| Tier2PolicyKnob::from_env(|name| std::env::var(name).ok()))
 }
+
+/// Which bodies emit direct call sites (`direct_call`), when direct calls
+/// are on: `NEOVM_JIT_DIRECT_SITES=all` or `unbounded` (the default).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DirectSitesMode {
+    /// Every body.
+    All,
+    /// A body whose work per entry is unbounded -- a back edge, a call of
+    /// itself -- or a re-tier of one that proved hot (the bodies the full
+    /// allocator is for, call-heavy ones included). A direct site costs its
+    /// caller's compile about a hundred IR instructions and fourteen blocks
+    /// more than a shim call; in a straight-line body entered a few
+    /// thousand times it never pays that back (elb-bytecomp: 163 of 170
+    /// sites, +12% codegen, ~2,000 calls a site).
+    Unbounded,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static DIRECT_SITES_TEST_OVERRIDE: std::cell::Cell<Option<DirectSitesMode>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Force the direct-sites mode for compiles on the current thread (tests
+/// only); `None` returns to the environment's.
+#[cfg(test)]
+pub(crate) fn force_direct_sites_for_test(mode: Option<DirectSitesMode>) {
+    DIRECT_SITES_TEST_OVERRIDE.with(|c| c.set(mode));
+}
+
+/// `NEOVM_JIT_DIRECT_SITES` (see [`DirectSitesMode`]). Read at compile time.
+pub(crate) fn jit_direct_sites() -> DirectSitesMode {
+    #[cfg(test)]
+    if let Some(mode) = DIRECT_SITES_TEST_OVERRIDE.with(|c| c.get()) {
+        return mode;
+    }
+    use std::sync::OnceLock;
+    static MODE: OnceLock<DirectSitesMode> = OnceLock::new();
+    *MODE.get_or_init(
+        || match std::env::var("NEOVM_JIT_DIRECT_SITES").ok().as_deref() {
+            Some("all") => DirectSitesMode::All,
+            _ => DirectSitesMode::Unbounded,
+        },
+    )
+}

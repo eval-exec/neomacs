@@ -2762,7 +2762,9 @@ pub(crate) fn run_resolved_leaf_native(
     // of its own (prologue, epilogue and the call) on every native call. The
     // shape was decided when the leaf was built (`EntryShape`), one compare
     // for the frameless memory-ABI body; the register-ABI raw entry, the
-    // framed half and every cold exit stay out of line.
+    // framed half and every cold exit stay out of line, each in a function
+    // of its own (the register entry's inlined here cost the memory path's
+    // callers five instructions a call in register moves).
     if leaf.entry_shape == super::compile::EntryShape::RawMemory {
         let mut out: i64 = 0;
         // SAFETY: args_ptr addresses leaf.arity live words (the caller's
@@ -2780,36 +2782,48 @@ pub(crate) fn run_resolved_leaf_native(
         count_native_status(status);
         return direct_call_cold(ctx, func, func_value, leaf, status);
     }
-    run_resolved_leaf_native_outlined(ctx, func, func_value, leaf, args_ptr)
+    if leaf.entry_shape == super::compile::EntryShape::RawRegister {
+        return run_resolved_leaf_native_register(ctx, func, func_value, leaf, args_ptr);
+    }
+    run_resolved_leaf_native_framed(ctx, func, func_value, leaf, args_ptr)
 }
 
-/// The out-of-line shapes of [`run_resolved_leaf_native`]: a frameless
-/// register-ABI body's raw entry, and the framed half, where a body with
-/// bindings, handler frames or a sidecar runs under its own `invoke_native`
-/// frame. Out of line so the memory-ABI raw path above, inlined into the
-/// call shims, stays a raw entry call and a status compare.
+/// The register-ABI raw entry of [`run_resolved_leaf_native`]: one call
+/// through the leaf's arity thunk and a status compare, in a frame of its
+/// own so the memory-ABI path's callers keep their register assignment.
 #[inline(never)]
-fn run_resolved_leaf_native_outlined(
+fn run_resolved_leaf_native_register(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     func_value: Value,
     leaf: &CompiledLeaf,
     args_ptr: *const i64,
 ) -> NativeCallOutcome {
-    if leaf.entry_shape == super::compile::EntryShape::RawRegister {
-        // SAFETY: as the memory-ABI raw path's.
-        let ret = unsafe {
-            leaf.entry_call_raw_register(ctx as *mut u8, func.jit_constant_base(), args_ptr)
-        };
-        if ret.status == super::compile::STATUS_OK {
-            #[cfg(any(test, debug_assertions))]
-            NATIVE_OK_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            return NativeCallOutcome::Value(Value::from_bits(ret.value as usize));
-        }
+    // SAFETY: as the memory-ABI raw path's.
+    let ret =
+        unsafe { leaf.entry_call_raw_register(ctx as *mut u8, func.jit_constant_base(), args_ptr) };
+    if ret.status == super::compile::STATUS_OK {
         #[cfg(any(test, debug_assertions))]
-        count_native_status(ret.status);
-        return direct_call_cold(ctx, func, func_value, leaf, ret.status);
+        NATIVE_OK_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        return NativeCallOutcome::Value(Value::from_bits(ret.value as usize));
     }
+    #[cfg(any(test, debug_assertions))]
+    count_native_status(ret.status);
+    direct_call_cold(ctx, func, func_value, leaf, ret.status)
+}
+
+/// The framed half of [`run_resolved_leaf_native`]: a body with bindings,
+/// handler frames or a sidecar runs under its own `invoke_native` frame.
+/// Out of line so the raw paths above, inlined into the call shims, stay a
+/// raw entry call and a status compare.
+#[inline(never)]
+fn run_resolved_leaf_native_framed(
+    ctx: *mut Context,
+    func: &ByteCodeFunction,
+    func_value: Value,
+    leaf: &CompiledLeaf,
+    args_ptr: *const i64,
+) -> NativeCallOutcome {
     let outcome = leaf.call_premarshaled_consts(ctx as *mut u8, func.jit_constant_base(), args_ptr);
     finish_framed_run(ctx, func, func_value, leaf, outcome)
 }

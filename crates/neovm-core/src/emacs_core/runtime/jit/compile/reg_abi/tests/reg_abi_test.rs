@@ -44,7 +44,8 @@ fn build_probe(module: &mut JITModule, k: u8) -> cranelift_module::FuncId {
 }
 
 /// T1: both return words, the two register parameters and every argument
-/// (the fifth and sixth on the stack) arrive where each side puts them.
+/// (the fifth and sixth on the stack) arrive where each side puts them,
+/// called directly and through the arity's thunk.
 #[test]
 fn rust_and_cranelift_agree_on_the_register_abi_for_every_arity() {
     let isa = super::lowering::jit_isa().expect("isa");
@@ -80,6 +81,17 @@ fn rust_and_cranelift_agree_on_the_register_abi_for_every_arity() {
             },
             "arity {k}"
         );
+        // The leaf's thunk for the arity answers the same, and strips the
+        // spec slot's key flags from `aux`.
+        let thunk = register_thunk_for(LeafAbi::Register { arity: k as u8 });
+        for flagged in [
+            aux,
+            (aux as usize | SpecSlot::KEY_REGISTER as usize) as *const u8,
+        ] {
+            // SAFETY: as above.
+            let via_thunk = unsafe { thunk(entry, vmctx, flagged, args.as_ptr()) };
+            assert_eq!(via_thunk, ret, "arity {k} through its thunk");
+        }
     }
 }
 

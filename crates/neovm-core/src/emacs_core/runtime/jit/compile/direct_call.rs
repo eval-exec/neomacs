@@ -56,6 +56,37 @@ pub(crate) static DIRECT_SITES_EMITTED: AtomicU64 = AtomicU64::new(0);
 /// Direct calls that left the hit path through [`neovm_jit_direct_finish`].
 pub(crate) static DIRECT_COLD_EXITS: AtomicU64 = AtomicU64::new(0);
 
+std::thread_local! {
+    /// Whether the body being compiled on this thread does unbounded work
+    /// per entry (see [`UnboundedBodyScope`]); true outside any scope.
+    static UNBOUNDED_BODY: core::cell::Cell<bool> = const { core::cell::Cell::new(true) };
+}
+
+/// Whether the body being compiled does unbounded work per entry
+/// ([`DirectSitesMode::Unbounded`]); a lowering outside a compile request
+/// (an OSR entry, the tests' direct builds) counts as such.
+pub(crate) fn unbounded_body() -> bool {
+    UNBOUNDED_BODY.with(core::cell::Cell::get)
+}
+
+/// For its lifetime, the verdict [`unbounded_body`] answers:
+/// `compile_bytecode_function_requested` sets it from the body's shape (a
+/// back edge, a call of itself) and the request (a re-tier of a leaf that
+/// proved hot); the previous one is restored on drop.
+pub(crate) struct UnboundedBodyScope(bool);
+
+impl UnboundedBodyScope {
+    pub(crate) fn enter(unbounded: bool) -> Self {
+        Self(UNBOUNDED_BODY.with(|c| c.replace(unbounded)))
+    }
+}
+
+impl Drop for UnboundedBodyScope {
+    fn drop(&mut self) {
+        UNBOUNDED_BODY.with(|c| c.set(self.0));
+    }
+}
+
 /// A site the lowering will emit as a direct call: its constants and the
 /// probed layouts its push and pop use.
 #[derive(Clone, Copy, Debug)]
@@ -94,8 +125,19 @@ impl DirectSite {
     /// is on, the force harness off, the build JIT, the callee takes exactly
     /// `nargs` required arguments in registers, both layout probes
     /// succeeded, and the leaf's budget of direct sites is not spent.
+    ///
+    /// The callee must also be a body `LeafAbi::for_build` gives the
+    /// register ABI: not `make-closure`-patched, and frameless (no dynamic
+    /// bindings, no handler frames). Any other callee's leaf never arms a
+    /// direct entry, so its site would only pay the direct site's compile
+    /// and its unarmed test on every call. And the caller must be a body
+    /// whose calls run often enough to pay the site's compile back
+    /// ([`DirectSitesMode`], [`UnboundedBodyScope`]).
     pub(crate) fn plan(rt: &RtCtx, aot: bool, expected: u64, nargs: usize) -> Option<Self> {
         if aot || !jit_direct_call_on() || jit_force_slow_spec() || nargs > MAX_REG_ARGS {
+            return None;
+        }
+        if jit_direct_sites() == DirectSitesMode::Unbounded && !unbounded_body() {
             return None;
         }
         let bc = Value::from_bits(expected as usize).bytecode_data_if_materialized()?;
@@ -103,6 +145,13 @@ impl DirectSite {
             && bc.params.optional.is_empty()
             && bc.params.rest.is_none();
         if !exact || rt.direct_sites.get() >= DIRECT_SITE_CAP {
+            return None;
+        }
+        if bc.jit_runtime().patched_prefix() > 0 {
+            return None;
+        }
+        let ops = bc.executable_ops();
+        if super::leaf::body_has_binds(ops) || super::leaf::body_has_handlers(ops) {
             return None;
         }
         let layout: BacktraceLayout = super::jit_layout::backtrace_layout()?;
@@ -625,7 +674,8 @@ pub(crate) fn render_direct_call_stats() -> Option<String> {
     let sites = DIRECT_SITES_EMITTED.load(Ordering::Relaxed);
     (sites > 0).then(|| {
         format!(
-            "direct-call:sites={sites},cold={}",
+            "direct-call:sites={sites},armed={},cold={}",
+            super::spec_slot::DIRECT_ENTRIES_ARMED.load(Ordering::Relaxed),
             DIRECT_COLD_EXITS.load(Ordering::Relaxed)
         )
     })

@@ -18,8 +18,8 @@
 //!   `#[repr(C)]` two-word struct ([`NativeRet`]). A compiled caller can
 //!   then call the body with no memory round trip at all (a direct call).
 //!
-//! Rust callers need no adapter: [`call_register_entry`] transmutes the
-//! entry to the function type of its arity. The body's own code differs from
+//! Rust callers need no adapter: the leaf's [`RegisterThunk`], picked for
+//! its arity when it is built, loads the words and tail-calls the entry. The body's own code differs from
 //! the memory shape only at its edges: the entry block takes the arguments
 //! as parameters, and every exit returns two words instead of storing one
 //! and returning the other ([`emit_leaf_return`]).
@@ -178,7 +178,8 @@ pub(crate) struct NativeRet {
     pub(crate) status: i64,
 }
 
-/// Call a register-ABI entry with `arity` argument words read from `args`.
+/// Call a register-ABI entry with `arity` argument words read from `args`
+/// (the tests' reference for the [`RegisterThunk`]s).
 ///
 /// # Safety
 ///
@@ -186,7 +187,7 @@ pub(crate) struct NativeRet {
 /// `arity` arguments ([`LeafAbi::Register`]), `args` addresses `arity` live
 /// tagged words, and `vmctx`/`aux` meet the body's contract (see
 /// `CompiledLeaf::invoke_native`).
-#[inline(always)]
+#[cfg(test)]
 pub(crate) unsafe fn call_register_entry(
     entry: *const u8,
     arity: u8,
@@ -243,6 +244,85 @@ const _: () = assert!(
     MAX_REG_ARGS == 6,
     "call_register_entry has one arm per arity"
 );
+
+/// A Rust caller's way into a register-ABI entry of one arity, chosen when
+/// the leaf is built (`CompiledLeaf::register_thunk`) so no caller matches
+/// on the arity per call: it loads the arity's words from `args` and calls
+/// `entry` with `aux` stripped of the spec slot's key flags (the spec shim
+/// passes its key as is; every other caller's base has none). With four
+/// words or fewer the call is a tail call, so the body returns straight to
+/// the thunk's caller.
+pub(crate) type RegisterThunk = unsafe extern "C" fn(
+    entry: *const u8,
+    vmctx: *mut u8,
+    aux: *const u8,
+    args: *const i64,
+) -> NativeRet;
+
+/// `aux` without the key flags (`SpecSlot::KEY_FLAGS`).
+#[inline(always)]
+fn base_of(aux: *const u8) -> *const u8 {
+    (aux as usize & !(SpecSlot::KEY_FLAGS as usize)) as *const u8
+}
+
+macro_rules! register_thunk {
+    ($name:ident, $($i:literal),*) => {
+        /// The [`RegisterThunk`] of its arity.
+        ///
+        /// SAFETY: `entry` has the register ABI for exactly this many
+        /// words, which `args` addresses; `vmctx` and `aux` meet the body's
+        /// contract.
+        unsafe extern "C" fn $name(
+            entry: *const u8,
+            vmctx: *mut u8,
+            aux: *const u8,
+            args: *const i64,
+        ) -> NativeRet {
+            let _ = args;
+            // SAFETY: the contract above.
+            unsafe {
+                let f: extern "C" fn(*mut u8, *const u8 $(, register_thunk!(@word $i))*) -> NativeRet =
+                    core::mem::transmute(entry);
+                f(vmctx, base_of(aux) $(, *args.add($i))*)
+            }
+        }
+    };
+    (@word $i:literal) => { i64 };
+}
+
+register_thunk!(register_thunk_0,);
+register_thunk!(register_thunk_1, 0);
+register_thunk!(register_thunk_2, 0, 1);
+register_thunk!(register_thunk_3, 0, 1, 2);
+register_thunk!(register_thunk_4, 0, 1, 2, 3);
+register_thunk!(register_thunk_5, 0, 1, 2, 3, 4);
+register_thunk!(register_thunk_6, 0, 1, 2, 3, 4, 5);
+
+/// The thunk of a memory-ABI leaf, which has no register entry: never
+/// called (every caller tests `EntryShape` first).
+unsafe extern "C" fn no_register_entry(
+    _entry: *const u8,
+    _vmctx: *mut u8,
+    _aux: *const u8,
+    _args: *const i64,
+) -> NativeRet {
+    unreachable!("a memory-ABI leaf has no register entry")
+}
+
+/// The [`RegisterThunk`] a leaf of `abi` stores.
+pub(crate) fn register_thunk_for(abi: LeafAbi) -> RegisterThunk {
+    match abi {
+        LeafAbi::Memory => no_register_entry,
+        LeafAbi::Register { arity: 0 } => register_thunk_0,
+        LeafAbi::Register { arity: 1 } => register_thunk_1,
+        LeafAbi::Register { arity: 2 } => register_thunk_2,
+        LeafAbi::Register { arity: 3 } => register_thunk_3,
+        LeafAbi::Register { arity: 4 } => register_thunk_4,
+        LeafAbi::Register { arity: 5 } => register_thunk_5,
+        LeafAbi::Register { arity: 6 } => register_thunk_6,
+        LeafAbi::Register { .. } => unreachable!("at most MAX_REG_ARGS register words"),
+    }
+}
 
 #[cfg(test)]
 #[path = "reg_abi/tests/reg_abi_test.rs"]

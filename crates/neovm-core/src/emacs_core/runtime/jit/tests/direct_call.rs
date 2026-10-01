@@ -57,6 +57,9 @@ fn armed_entries(direct: bool) -> Vec<(&'static str, *const u8, *const u8)> {
     crate::emacs_core::jit::inline::force_inline_for_test(Some(false));
     crate::emacs_core::jit::force_profit_defer_for_test(Some(1));
     force_direct_call_for_test(Some(direct));
+    // Every caller here is a small straight-line body: pin direct sites on
+    // for every body, not only the unbounded ones (`DirectSitesMode`).
+    force_direct_sites_for_test(Some(DirectSitesMode::All));
     let mut ev = crate::test_utils::runtime_startup_context();
     ev.eval_str(ARMING).expect("warmed");
     let caller = cached_leaf(&ev, "neovm--dc-caller").expect("the caller is compiled");
@@ -76,6 +79,7 @@ fn armed_entries(direct: bool) -> Vec<(&'static str, *const u8, *const u8)> {
     })
     .collect();
     force_direct_call_for_test(None);
+    force_direct_sites_for_test(None);
     out
 }
 
@@ -95,6 +99,73 @@ fn spec_slots_arm_a_direct_entry_only_for_exact_frameless_register_callees() {
     }
 }
 
+/// Direct sites go where they pay their compile back
+/// (`DirectSitesMode::Unbounded`, the default): a caller whose body loops or
+/// calls itself, or a re-tier of one that proved hot; a straight-line caller
+/// keeps the shim call. `NEOVM_JIT_DIRECT_SITES=all` emits them in every
+/// body.
+#[test]
+fn only_callers_that_loop_recurse_or_proved_hot_emit_direct_sites() {
+    use crate::emacs_core::jit::compile::lowering::RegallocPolicy;
+    crate::test_utils::init_test_tracing();
+    force_profit_gate_for_test(false);
+    crate::emacs_core::jit::inline::force_inline_for_test(Some(false));
+    force_direct_call_for_test(Some(true));
+    force_direct_sites_for_test(Some(DirectSitesMode::Unbounded));
+    let mut ev = crate::test_utils::runtime_startup_context();
+    ev.eval_str(
+        r#"(progn
+  (defun neovm--dcu-callee (a b) (if (> a b) (- a b) (+ a b)))
+  (defun neovm--dcu-straight (x) (neovm--dcu-callee x 1))
+  (defun neovm--dcu-loop (n)
+    (let ((s 0))
+      (while (> n 0) (setq s (neovm--dcu-callee s n) n (1- n)))
+      s))
+  (defun neovm--dcu-rec (n) (if (= n 0) 0 (neovm--dcu-callee (neovm--dcu-rec (1- n)) 1)))
+  (dolist (f '(neovm--dcu-callee neovm--dcu-straight neovm--dcu-loop neovm--dcu-rec))
+    (byte-compile f)))"#,
+    )
+    .expect("defined");
+    let sites = |ev: &Context, name: &str, policy: RegallocPolicy| {
+        let f = ev
+            .obarray
+            .symbol_function_id(intern(name))
+            .expect("defined");
+        let bc = f.get_bytecode_data().expect("byte-compiled");
+        let before = direct_call::direct_sites_emitted_for_test();
+        compile_bytecode_function_tiered(bc, Some(&ev.obarray), policy).expect("compiles");
+        direct_call::direct_sites_emitted_for_test() - before
+    };
+    assert_eq!(
+        sites(&ev, "neovm--dcu-straight", RegallocPolicy::Auto),
+        0,
+        "a straight-line caller keeps the shim call"
+    );
+    assert_eq!(
+        sites(&ev, "neovm--dcu-straight", RegallocPolicy::Full),
+        1,
+        "a re-tier of a caller that proved hot calls directly"
+    );
+    assert_eq!(
+        sites(&ev, "neovm--dcu-loop", RegallocPolicy::Auto),
+        1,
+        "a caller that loops calls directly"
+    );
+    assert_eq!(
+        sites(&ev, "neovm--dcu-rec", RegallocPolicy::Auto),
+        2,
+        "a caller that recurses calls itself and its callee directly"
+    );
+    force_direct_sites_for_test(Some(DirectSitesMode::All));
+    assert_eq!(
+        sites(&ev, "neovm--dcu-straight", RegallocPolicy::Auto),
+        1,
+        "`all`: every caller"
+    );
+    force_direct_sites_for_test(None);
+    force_direct_call_for_test(None);
+}
+
 /// T12: every clear drops the direct entry with the leaf -- a re-validation
 /// (`clear_leaf`) and a retired callee (`unlink_spec_slots`) alike -- and
 /// the next call through the site arms it again.
@@ -105,6 +176,9 @@ fn clearing_a_slot_drops_its_direct_entry_and_the_next_call_rearms_it() {
     crate::emacs_core::jit::inline::force_inline_for_test(Some(false));
     crate::emacs_core::jit::force_profit_defer_for_test(Some(1));
     force_direct_call_for_test(Some(true));
+    // Every caller here is a small straight-line body: pin direct sites on
+    // for every body, not only the unbounded ones (`DirectSitesMode`).
+    force_direct_sites_for_test(Some(DirectSitesMode::All));
     let mut ev = crate::test_utils::runtime_startup_context();
     ev.eval_str(ARMING).expect("warmed");
     let caller = cached_leaf(&ev, "neovm--dc-caller").expect("caller");
@@ -128,6 +202,7 @@ fn clearing_a_slot_drops_its_direct_entry_and_the_next_call_rearms_it() {
     ev.eval_str("(neovm--dc-caller 6)").expect("runs");
     assert_eq!(slot.direct_entry(), callee.entry);
     force_direct_call_for_test(None);
+    force_direct_sites_for_test(None);
 }
 
 // ---------------------------------------------------------------------------
@@ -178,6 +253,9 @@ fn run_in(mode: Mode, program: &'static str, observe: &'static str) -> Run {
             force_profit_gate_for_test(false);
             crate::emacs_core::jit::inline::force_inline_for_test(Some(false));
             force_direct_call_for_test(Some(mode != Mode::Shim));
+            // Every caller here is a small straight-line body: pin direct sites on
+            // for every body, not only the unbounded ones (`DirectSitesMode`).
+            force_direct_sites_for_test(Some(DirectSitesMode::All));
             force_slow_spec_for_test(Some(mode == Mode::DirectForcedSlow));
             // Tier up at the hot threshold, callers included, so the
             // warm-ups stay short (they run under GC stress too).
@@ -201,6 +279,7 @@ fn run_in(mode: Mode, program: &'static str, observe: &'static str) -> Run {
             let direct_sites = super::direct_call::direct_sites_emitted_for_test();
             force_slow_spec_for_test(None);
             force_direct_call_for_test(None);
+            force_direct_sites_for_test(None);
             crate::emacs_core::jit::inline::force_inline_for_test(None);
             crate::emacs_core::jit::force_profit_defer_for_test(None);
             Run {
@@ -428,6 +507,9 @@ fn a_cross_thread_quit_request_stops_a_direct_recursion() {
                 force_profit_gate_for_test(false);
                 crate::emacs_core::jit::inline::force_inline_for_test(Some(false));
                 force_direct_call_for_test(Some(mode == Mode::Direct));
+                // Every caller here is a small straight-line body: pin direct sites on
+                // for every body, not only the unbounded ones (`DirectSitesMode`).
+                force_direct_sites_for_test(Some(DirectSitesMode::All));
                 let mut ev = crate::test_utils::runtime_startup_context();
                 ev.eval_str(
                     r#"(progn
@@ -454,6 +536,7 @@ fn a_cross_thread_quit_request_stops_a_direct_recursion() {
                 raiser.join().expect("raiser");
                 assert_eq!(ev.depth, depth0);
                 force_direct_call_for_test(None);
+                force_direct_sites_for_test(None);
                 out
             })
             .expect("spawn")

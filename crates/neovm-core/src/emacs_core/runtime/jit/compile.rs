@@ -846,6 +846,13 @@ pub fn compile_bytecode_function_requested(
         call_heavy,
         self_recursive,
     ));
+    // Direct call sites pay their compile back in a body whose calls run
+    // often per entry, or in one that proved hot (`DirectSitesMode`).
+    let _direct_sites = direct_call::UnboundedBodyScope::enter(
+        has_back_edge(f.executable_ops())
+            || self_recursive
+            || request.regalloc == lowering::RegallocPolicy::Full,
+    );
     let outer = (
         BYPASS_PROFIT_GATE.with(|b| b.replace(request.bypass_profit_gate)),
         ACTIVE_CALL_HEAVY.with(|b| b.replace(call_heavy)),
@@ -3479,6 +3486,7 @@ pub fn lower_leaf_full_osr(
         feedback_holds: holds.finish(),
         abi,
         entry_shape: EntryShape::of(abi, has_binds, has_handlers, /*has_sidecar=*/ false),
+        register_thunk: reg_abi::register_thunk_for(abi),
         entry,
         _backing: defined.backing,
     })

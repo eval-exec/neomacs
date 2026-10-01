@@ -1203,8 +1203,17 @@ pub extern "C" fn neovm_jit_call_spec(
                 FastRun::Raw(status)
             }
         } else if direct_consts & SpecSlot::KEY_FRAMED == 0 {
-            // SAFETY: as above, for a frameless register-ABI leaf.
-            let ret = unsafe { call_spec_register_run(ctx, frame_args, leaf, direct_consts) };
+            // A frameless register-ABI leaf: one call through its arity's
+            // thunk, which takes the key as is (it strips the flags).
+            // SAFETY: as above.
+            let ret = unsafe {
+                (leaf.register_thunk)(
+                    leaf.entry,
+                    ctx,
+                    direct_consts as usize as *const u8,
+                    frame_args,
+                )
+            };
             if ret.status == STATUS_OK {
                 #[cfg(any(test, debug_assertions))]
                 crate::emacs_core::jit::cache::NATIVE_OK_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -1326,24 +1335,6 @@ pub(super) fn call_spec_framed_run(
     jit_shim_contain!(ctx, NativeRun::Signal, {
         leaf.call_premarshaled_consts(ctx, consts, args_ptr)
     })
-}
-
-/// The fast path's raw entry of a frameless register-ABI leaf
-/// (`SpecSlot::KEY_REGISTER`), out of the shim's frame: the memory-ABI raw
-/// entry is the one the shim calls in line. `key` is the slot's fast-path
-/// key, the constant base with its flags.
-///
-/// SAFETY: as `CompiledLeaf::entry_call_raw_register`.
-#[inline(never)]
-unsafe fn call_spec_register_run(
-    ctx: *mut u8,
-    args_ptr: *const i64,
-    leaf: &CompiledLeaf,
-    key: u64,
-) -> super::reg_abi::NativeRet {
-    let consts = (key & !SpecSlot::KEY_FLAGS) as usize as *const Value;
-    // SAFETY: the caller's contract.
-    unsafe { leaf.entry_call_raw_register(ctx, consts, args_ptr) }
 }
 
 /// How a fast-path native run ended when it did not end in a balanced OK.

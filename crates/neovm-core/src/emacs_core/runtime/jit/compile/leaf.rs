@@ -698,6 +698,9 @@ pub struct CompiledLeaf {
     /// How a native-to-native caller enters this body ([`EntryShape`]),
     /// decided once from `abi` and the frame facts when the leaf is built.
     pub(crate) entry_shape: EntryShape,
+    /// A Rust caller's way into the register entry, for the entry's arity
+    /// (`reg_abi::register_thunk_for`); never called on a memory-ABI leaf.
+    pub(crate) register_thunk: super::reg_abi::RegisterThunk,
     // Field order matters for drop: `entry` points into `_backing`'s memory (the
     // JITModule's executable pages or the loaded `.so`'s code); keep `_backing`
     // alive — and dropped AFTER `entry` — as long as the handle exists.
@@ -1014,6 +1017,7 @@ impl CompiledLeaf {
             abi: LeafAbi::Memory,
             // The sidecar makes every AOT leaf framed.
             entry_shape: EntryShape::Framed,
+            register_thunk: super::reg_abi::register_thunk_for(LeafAbi::Memory),
             entry,
             _backing: LeafBacking::Aot(backing),
         }
@@ -1175,11 +1179,13 @@ impl CompiledLeaf {
 
     /// [`Self::entry_call_raw_memory`] for a frameless register-ABI body
     /// ([`EntryShape::RawRegister`]): the arguments go in registers and the
-    /// answer comes back in two, `aux` being the constant base. Its callers
-    /// call it out of line, so the memory entry's callers keep their size.
+    /// answer comes back in two, `aux` being the constant base (with or
+    /// without the spec slot's key flags: the thunk strips them). One
+    /// indirect call through the arity's thunk, chosen when the leaf was
+    /// built, which tail-calls the body.
     ///
     /// SAFETY: as [`Self::entry_call_raw_memory`].
-    #[inline]
+    #[inline(always)]
     pub(crate) unsafe fn entry_call_raw_register(
         &self,
         vmctx: *mut u8,
@@ -1187,15 +1193,9 @@ impl CompiledLeaf {
         args_ptr: *const i64,
     ) -> super::reg_abi::NativeRet {
         debug_assert_eq!(self.entry_shape, EntryShape::RawRegister);
-        let LeafAbi::Register { arity } = self.abi else {
-            unreachable!("a raw register entry has the register ABI")
-        };
-        // SAFETY: the register entry of exactly `arity` words, and
-        // `args_ptr` addresses them (the contract above); `aux` is the
-        // constant base, as the memory ABI's fourth word.
-        unsafe {
-            super::reg_abi::call_register_entry(self.entry, arity, vmctx, consts.cast(), args_ptr)
-        }
+        // SAFETY: the thunk of the entry's arity, and `args_ptr` addresses
+        // that many words (the contract above).
+        unsafe { (self.register_thunk)(self.entry, vmctx, consts.cast(), args_ptr) }
     }
 
     /// The raw entry of a frameless body of either ABI
@@ -1427,21 +1427,10 @@ impl CompiledLeaf {
         // unwind forms), so a `cache::clear()` under a live leaf asserts.
         let _native_depth = super::super::cache::NativeDepthGuard::enter();
         let mut status = if REGISTER {
-            let LeafAbi::Register { arity } = self.abi else {
-                unreachable!("the register specialization has the register ABI")
-            };
             // SAFETY: a JIT leaf (no sidecar), so `sidecar` is the callee
-            // constant base, the register ABI's `aux`; the entry takes
-            // exactly `arity` words, which `args_ptr` addresses.
-            let ret = unsafe {
-                super::reg_abi::call_register_entry(
-                    self.entry,
-                    arity,
-                    vmctx,
-                    sidecar.cast(),
-                    args_ptr,
-                )
-            };
+            // constant base, the register ABI's `aux`; the thunk is the
+            // entry's arity's, and `args_ptr` addresses that many words.
+            let ret = unsafe { (self.register_thunk)(self.entry, vmctx, sidecar.cast(), args_ptr) };
             out = ret.value;
             ret.status
         } else {

@@ -290,8 +290,8 @@ impl SpecSlot {
     }
 }
 
-/// Direct entries armed (tests and debug builds: engagement evidence).
-#[cfg(any(test, debug_assertions))]
+/// Direct entries armed, process-wide (the `direct-call:` census entry;
+/// engagement evidence). Counted once per arming, off every hot path.
 pub(crate) static DIRECT_ENTRIES_ARMED: AtomicU64 = AtomicU64::new(0);
 
 /// Arm `slot`'s direct entry for `leaf`, which [`SpecSlot::arm_leaf`] just
@@ -320,7 +320,6 @@ pub(crate) fn arm_direct_entry_if_eligible(slot: &SpecSlot, leaf: &CompiledLeaf,
         && super::jit_layout::backtrace_layout().is_some();
     if eligible {
         slot.arm_direct_entry(leaf.entry);
-        #[cfg(any(test, debug_assertions))]
         DIRECT_ENTRIES_ARMED.fetch_add(1, Ordering::Relaxed);
     }
 }
