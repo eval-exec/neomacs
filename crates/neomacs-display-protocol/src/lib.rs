@@ -23,6 +23,7 @@ pub mod geometry;
 pub mod glyph_matrix;
 pub mod gradient;
 pub mod image;
+pub mod image_diagnostic;
 pub mod input_progress;
 pub mod interaction_projection;
 pub mod menu;
