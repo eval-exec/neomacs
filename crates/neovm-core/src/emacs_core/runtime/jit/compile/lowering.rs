@@ -7085,7 +7085,7 @@ fn lower_simple_op_arms(
             if spec.is_some()
                 && !aot
                 && n > 0
-                && let Some(site) = super::call_feedback::recording_site_at(pc)
+                && let Some(site) = super::call_feedback::recording_site_at(pc, rt)
                 // SAFETY: the leaf keeps its source's table alive.
                 && unsafe { &*site }.shape() == crate::emacs_core::jit::feedback::SiteShape::CallbackArg
             {
@@ -7362,7 +7362,7 @@ fn lower_simple_op_arms(
                     // source's call-site table records calls the recording shim
                     // (P2.1 C3/C4); with the knob off there is no such site.
                     None => match (!aot)
-                        .then(|| super::call_feedback::recording_site_at(pc))
+                        .then(|| super::call_feedback::recording_site_at(pc, rt))
                         .flatten()
                     {
                         Some(site) => super::call_feedback::emit_prof_call(
@@ -7440,7 +7440,7 @@ fn lower_simple_op_arms(
                 // A recording site records here too (`NEOVM_JIT_FEEDBACK`):
                 // a source site's misses and declines reach the lattice.
                 let call_gen = match (!aot)
-                    .then(|| super::call_feedback::recording_site_at(pc))
+                    .then(|| super::call_feedback::recording_site_at(pc, rt))
                     .flatten()
                 {
                     Some(site) => super::call_feedback::emit_prof_call(

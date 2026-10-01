@@ -64,9 +64,10 @@ pub enum FeedbackMode {
     /// The interpreter records (as [`Self::Record`]) and compiles read the
     /// targets through their snapshot: the input of
     /// `NEOVM_JIT_SPEC_SOURCES` (which implies it). Compiled sites do not
-    /// record: until a later tier recompiles from their feedback, nothing
-    /// would read it (and it was most of `record`'s cost on the rows,
-    /// F-1 R1).
+    /// record except inside a T1 leaf's open `NEOVM_JIT_TIER2` window, where
+    /// C7 compares target stability before recompiling. That leaf window
+    /// also covers stable/reverted windows past the site's STABLE_WINDOW;
+    /// OSR, T2 and knob-off Use sites retain their recording-free emission.
     Use,
 }
 
@@ -93,7 +94,9 @@ impl FeedbackMode {
         matches!(self, FeedbackMode::Use)
     }
 
-    /// Whether compiled sites record (through the recording call shims).
+    /// Whether compiled sites record independently of a T1 leaf window.
+    /// Use remains false here; its TIER2-on T1 exception is selected by the
+    /// lowering's actual leaf emission and stops when that leaf closes.
     #[inline(always)]
     pub fn records_compiled(self) -> bool {
         matches!(self, FeedbackMode::Record | FeedbackMode::Census)

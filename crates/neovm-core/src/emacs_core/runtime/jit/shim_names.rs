@@ -95,4 +95,7 @@ const NEOVM_JIT_SHIM_NAMES: &[&str] = &[
     "neovm_jit_t2_call_subr_prof",
     "neovm_jit_t2_call_feedback_prof",
     "neovm_jit_t2_call_feedback_census",
+    "neovm_jit_t2_call_use_prof",
+    "neovm_jit_t2_apply_use_prof",
+    "neovm_jit_t2_record_call_use_target",
 ];

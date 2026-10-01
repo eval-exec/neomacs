@@ -3,8 +3,9 @@
 //! leaf's prologue countdown, the back-edge poll block's tick counter and
 //! loop credit, and the mapping-builtin credit.
 //!
-//! Every emission here is JIT-only (baked addresses; AOT passes
-//! [`super::LeafEmit::NONE`]) and absent unless a report knob (the tick
+//! Every emission here is JIT-only (baked leaf-state addresses, optional
+//! lazy-table shim imports; AOT passes [`super::LeafEmit::NONE`]) and absent
+//! unless a report knob (the tick
 //! counter, with the entry counter) or `NEOVM_JIT_TIER2` (the rest) asked
 //! for it at compile time. With both off the CLIF is unchanged.
 //!
@@ -185,6 +186,25 @@ pub(crate) fn emit_feedback_prof_call(
     windowed: bool,
     args: &[ClifValue],
 ) -> Option<cranelift_codegen::ir::Inst> {
+    if crate::emacs_core::jit::feedback::feedback_mode().uses() {
+        // Actual leaf emission is the gate: no T2Emit in OSR, T2 or knob-off
+        // Use. Native target recording does not require HOF loop credit.
+        let t2 = rt.poll.t2?;
+        let name = if apply {
+            Shim::T2ApplyUseProf
+        } else {
+            Shim::T2CallUseProf
+        };
+        let shim = rt.refs.try_get(fb.func, name).expect("profiling refs");
+        let mut args = args.to_vec();
+        args.push(fb.ins().iconst(rt.ptr_ty, t2.obs as i64));
+        if !apply {
+            // Pass the compile-time credit choice explicitly, never read a
+            // runtime knob or change the leaf's layout to carry it.
+            args.push(fb.ins().iconst(types::I64, i64::from(t2.loop_credit)));
+        }
+        return Some(fb.ins().call(shim, &args));
+    }
     if apply {
         return None;
     }
@@ -327,3 +347,69 @@ pub extern "C" fn neovm_jit_t2_call_feedback_census(
 #[cfg(test)]
 #[path = "t2_profile/tests/emission_test.rs"]
 mod tests;
+
+/// Use-mode target recording belongs to the mutator's live T1 window,
+/// not the source site's census window. Source sites may already have 15000
+/// calls, and a reverted T1 reopens its own window against widened feedback.
+/// Generated callers hold both the leaf and its source table; recording only
+/// joins existing atomics/Weak identities and cannot allocate Lisp or collect.
+#[unsafe(no_mangle)]
+pub extern "C" fn neovm_jit_t2_call_use_prof(
+    ctx: *mut u8,
+    func_bits: i64,
+    args_ptr: *const i64,
+    nargs: i64,
+    out: *mut i64,
+    site: *const CallSiteFeedback,
+    obs: *const LeafObs,
+    loop_credit: i64,
+) -> i64 {
+    if credit_window_open(obs) {
+        // Record before HOF credit can request: the decision sees the target
+        // of the current call. The plain shim still owns the full Lisp call.
+        super::call_feedback::record_at(site, func_bits, args_ptr, nargs);
+        if loop_credit != 0 {
+            credit_generic(ctx, func_bits, args_ptr, nargs, obs);
+        }
+    }
+    neovm_jit_call(ctx, func_bits, args_ptr, nargs, out)
+}
+
+/// The same leaf window for Op::Apply, retaining its tail-spreading protocol.
+/// It receives no HOF credit, as with the existing apply profiler.
+#[unsafe(no_mangle)]
+pub extern "C" fn neovm_jit_t2_apply_use_prof(
+    ctx: *mut u8,
+    func_bits: i64,
+    args_ptr: *const i64,
+    nargs: i64,
+    out: *mut i64,
+    site: *const CallSiteFeedback,
+    obs: *const LeafObs,
+) -> i64 {
+    if credit_window_open(obs) {
+        super::call_feedback::record_at(site, func_bits, args_ptr, nargs);
+    }
+    neovm_jit_apply(ctx, func_bits, args_ptr, nargs, out)
+}
+
+/// A statically speculated mapping call records its callback through this
+/// leaf-gated helper before the existing subr protocol, just as Record/Census
+/// record the attempted callback before that protocol. It is a separate lazy
+/// import because the original site-only recorder cannot know the T1 window.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn neovm_jit_t2_record_call_use_target(
+    site: *const CallSiteFeedback,
+    target: i64,
+    obs: *const LeafObs,
+) {
+    if credit_window_open(obs) {
+        // SAFETY: the calling leaf keeps its source's table alive.
+        unsafe { &*site }.observe_counted(Value::from_bits(target as usize));
+    }
+}
+
+#[cfg(test)]
+#[path = "t2_profile/tests/native_feedback_test.rs"]
+mod native_feedback_tests;

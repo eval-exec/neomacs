@@ -1,7 +1,8 @@
 //! Call-target feedback in compiled code (design `p2-1-feedback-reopt`
 //! §3.3, P2.1 C3/C4): the recording call shims a JIT leaf calls at its
-//! non-constant call sites while `NEOVM_JIT_FEEDBACK` records, and the
-//! compile-time view of the source's call-site table.
+//! non-constant call sites while `NEOVM_JIT_FEEDBACK` records, or while a
+//! Use-mode T1 leaf profiles under `NEOVM_JIT_TIER2`, and the compile-time
+//! view of the source's call-site table.
 //!
 //! A site records when the source's table has one for its pc
 //! (`jit::feedback::CallSites`: a call whose callee the code does not name
@@ -10,9 +11,11 @@
 //! the execution, join the target into the site's lattice and make the call
 //! the plain shim would have made; a speculated mapping-builtin call records
 //! its callback through [`neovm_jit_record_call_target`] first. The shims
-//! are JIT-only and called by baked address (never an AOT import), and the
-//! site pointer they take points into the compiling source's table, which
-//! the leaf keeps alive ([`FeedbackHolds`]).
+//! here retain Record/Census's JIT-only baked-address calls. Use-mode T1
+//! shims in `t2_profile` use optional lazy-table imports and receive the
+//! owning leaf's observation pointer to stop at its window boundary. Every
+//! site pointer points into the compiling source's table, which the leaf
+//! keeps alive ([`FeedbackHolds`]). None is emitted by AOT.
 //!
 //! With the knob off nothing here is reached and the lowering is unchanged.
 
@@ -117,10 +120,12 @@ fn original_pc(pc: usize) -> Option<usize> {
 }
 
 /// The recording site of the call at lowered pc `pc`, when compiled sites
-/// record (`record`, `census`) and the compiling source has one there.
+/// record (`record`, `census`), or `use` in a profiling T1, and the
+/// compiling source has one there. OSR, T2 and knob-off `use` do not record.
 /// Keeps the source alive for the leaf.
-pub(crate) fn recording_site_at(pc: usize) -> Option<*const CallSiteFeedback> {
-    if !crate::emacs_core::jit::feedback::feedback_mode().records_compiled() {
+pub(crate) fn recording_site_at(pc: usize, rt: &RtCtx) -> Option<*const CallSiteFeedback> {
+    let mode = crate::emacs_core::jit::feedback::feedback_mode();
+    if !mode.records_compiled() && !(mode.uses() && rt.poll.t2.is_some()) {
         return None;
     }
     let pc = original_pc(pc)?;
@@ -239,7 +244,12 @@ pub(crate) extern "C" fn neovm_jit_record_call_target<const WINDOWED: bool>(
 /// atomics and, on a transition, Rust-heap `Weak`s: no Lisp allocation, no
 /// safepoint, no unwind.
 #[inline(always)]
-fn record_at(site: *const CallSiteFeedback, func_bits: i64, args_ptr: *const i64, nargs: i64) {
+pub(super) fn record_at(
+    site: *const CallSiteFeedback,
+    func_bits: i64,
+    args_ptr: *const i64,
+    nargs: i64,
+) {
     // SAFETY: the calling leaf keeps its source's table alive.
     let site = unsafe { &*site };
     let arg0 = if nargs > 0 {
@@ -276,8 +286,9 @@ pub(crate) fn emit_prof_call(
     n_val: ClifValue,
     out_addr: ClifValue,
 ) -> cranelift_codegen::ir::Inst {
-    let windowed = crate::emacs_core::jit::feedback::feedback_mode().windowed();
-    if rt.poll.t2.is_some() && !apply {
+    let mode = crate::emacs_core::jit::feedback::feedback_mode();
+    let windowed = mode.windowed();
+    if rt.poll.t2.is_some() && (!apply || mode.uses()) {
         let site_v = fb.ins().iconst(rt.ptr_ty, site as usize as i64);
         if let Some(call) = super::t2_profile::emit_feedback_prof_call(
             fb,
@@ -313,6 +324,17 @@ pub(crate) fn emit_record_call_target(
     site: *const CallSiteFeedback,
     target: ClifValue,
 ) {
+    if crate::emacs_core::jit::feedback::feedback_mode().uses() {
+        let t2 = rt.poll.t2.expect("Use recording requires a profiling T1");
+        let shim = rt
+            .refs
+            .try_get(fb.func, Shim::T2RecordCallUseTarget)
+            .expect("profiling refs");
+        let site_v = fb.ins().iconst(rt.ptr_ty, site as usize as i64);
+        let obs_v = fb.ins().iconst(rt.ptr_ty, t2.obs as i64);
+        fb.ins().call(shim, &[site_v, target, obs_v]);
+        return;
+    }
     let mut sig = Signature::new(rt.refs.call_conv);
     sig.params.push(AbiParam::new(rt.ptr_ty));
     sig.params.push(AbiParam::new(types::I64));

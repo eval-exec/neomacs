@@ -124,6 +124,9 @@ pub(crate) enum Shim {
     T2CallSubrProf,
     T2CallFeedbackProf,
     T2CallFeedbackCensus,
+    T2CallUseProf,
+    T2ApplyUseProf,
+    T2RecordCallUseTarget,
 }
 
 /// The parameter shapes of the shim signatures.
@@ -191,6 +194,9 @@ impl Shim {
             Shim::T2CallSubrProf => "neovm_jit_t2_call_subr_prof",
             Shim::T2CallFeedbackProf => "neovm_jit_t2_call_feedback_prof",
             Shim::T2CallFeedbackCensus => "neovm_jit_t2_call_feedback_census",
+            Shim::T2CallUseProf => "neovm_jit_t2_call_use_prof",
+            Shim::T2ApplyUseProf => "neovm_jit_t2_apply_use_prof",
+            Shim::T2RecordCallUseTarget => "neovm_jit_t2_record_call_use_target",
         }
     }
 
@@ -205,7 +211,10 @@ impl Shim {
             | Shim::T2CallProf
             | Shim::T2CallSubrProf
             | Shim::T2CallFeedbackProf
-            | Shim::T2CallFeedbackCensus => ShimGroup::Tier2Profile,
+            | Shim::T2CallFeedbackCensus
+            | Shim::T2CallUseProf
+            | Shim::T2ApplyUseProf
+            | Shim::T2RecordCallUseTarget => ShimGroup::Tier2Profile,
             Shim::RootwinGrow
             | Shim::Cons
             | Shim::MakeFloat
@@ -265,6 +274,12 @@ impl Shim {
             Shim::T2CallFeedbackProf | Shim::T2CallFeedbackCensus => {
                 (&[Ptr, I64, Ptr, I64, Ptr, Ptr, Ptr], true)
             }
+            // Use T1: call ABI + site + obs + compile-time HOF credit.
+            Shim::T2CallUseProf => (&[Ptr, I64, Ptr, I64, Ptr, Ptr, Ptr, I64], true),
+            // Use T1: apply ABI + site + obs.
+            Shim::T2ApplyUseProf => (&[Ptr, I64, Ptr, I64, Ptr, Ptr, Ptr], true),
+            // Use T1: (site, callback, obs) -> ().
+            Shim::T2RecordCallUseTarget => (&[Ptr, I64, Ptr], false),
             // (vmctx, need) -> ()
             Shim::RootwinGrow => (&[Ptr, I64], false),
             // (car, cdr) -> cons bits
