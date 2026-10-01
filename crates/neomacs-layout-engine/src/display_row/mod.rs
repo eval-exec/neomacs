@@ -1108,8 +1108,6 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
         let char_width = face_realizer
             .char_width(&row_face, geometry.char_width())
             .max(1.0);
-        let mut row_faces = vec![row_face.clone()];
-
         // Build the chrome row's pixel-calc context from its own geometry so
         // `(space :width/:align-to …)` forms resolve through the single
         // GNU-faithful evaluator (`calc_pixel_width_or_height`), the same
@@ -1166,6 +1164,13 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
             space_image_params,
             line_wrap,
         );
+        // Setup above needs the complete default face. The item walk only
+        // needs its identity and background; move the owned face into the
+        // row's realization list instead of cloning its font metadata for
+        // every render or scalar-width probe.
+        let default_row_face_id = row_face.face_id;
+        let default_row_background = row_face.background;
+        let mut row_faces = vec![row_face];
         let mut position = render_bounds.start();
         let mut source_slots = Vec::new();
         let fallback_metrics = DisplayRowFallbackMetrics::from_default_face_extents(
@@ -1176,7 +1181,7 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
         let mut row_break_face = None;
         let stop = loop {
             let params = context.source_resolve_params(
-                row_face.face_id,
+                default_row_face_id,
                 base_face,
                 fallback_metrics,
                 image_scale_environment,
@@ -1202,13 +1207,13 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
             let Some(item) = item else {
                 break DisplayRowRenderStop::SourceExhausted;
             };
-            let item_face_id = render_face_ref_id(item.face, row_face.face_id);
+            let item_face_id = render_face_ref_id(item.face, default_row_face_id);
             let item_resolved_face = state.resolved_face(item_face_id).unwrap_or(base_face);
             if policy.stop_before_item(&item, item_face_id, item_resolved_face) {
                 break DisplayRowRenderStop::SourceExhausted;
             }
             if let RenderFaceRef::FaceId(face_id) = item.face
-                && face_id != row_face.face_id
+                && face_id != default_row_face_id
                 && !row_faces.iter().any(|face| face.face_id == face_id)
                 && let Some(resolved) = state.resolved_face(face_id).cloned()
             {
@@ -1316,7 +1321,7 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
                 row_break_face_id,
                 line_end_right_edge_x - position.x_px(),
                 fallback_metrics,
-                row_face.background,
+                default_row_background,
                 self.measurement_mode,
                 box_edges,
                 box_membership,
