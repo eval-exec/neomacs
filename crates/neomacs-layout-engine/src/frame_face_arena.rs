@@ -507,7 +507,7 @@ impl FrameFaceArena {
 
 impl FrameFaceAttempt {
     /// Checked admission of an existing resolver identity; no output is
-    /// published. This is the sole constructor for a resolved binding.
+    /// published. Resolved bindings are constructed only by the arena.
     pub(crate) fn bind_resolved_face(
         &self,
         id: FaceId,
@@ -517,6 +517,27 @@ impl FrameFaceAttempt {
             .render_face();
         let realized = self.prepare_face(face)?;
         Ok(ResolvedFrameFace { resolved, realized })
+    }
+
+    /// Bind directly into caller-owned storage without transporting a large
+    /// success result. A failed identity check leaves the prior output intact.
+    pub(crate) fn bind_resolved_face_into(
+        &self,
+        id: FaceId,
+        resolved: crate::neovm_bridge::ResolvedFace,
+        output: &mut Option<ResolvedFrameFace>,
+    ) -> Result<(), FrameFaceConflict> {
+        let face = crate::display_row::face_state::resolved_display_row_face(id, &resolved, None)
+            .render_face();
+        self.state.borrow().validate_face(&face)?;
+        *output = Some(ResolvedFrameFace {
+            resolved,
+            realized: RealizedFrameFace {
+                face,
+                attempt: Rc::downgrade(&self.state),
+            },
+        });
+        Ok(())
     }
 
     /// Validate a row's realization without publishing speculative metrics.

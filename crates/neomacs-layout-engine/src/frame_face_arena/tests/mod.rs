@@ -974,3 +974,73 @@ fn repeated_prepared_faces_still_validate_each_source_namespace() {
     ));
     assert_eq!(attempt.faces(), before);
 }
+
+#[test]
+fn resolved_binding_slot_matches_owned_binding_without_publishing() {
+    let mut attempt = FrameFaceArena::default().begin_attempt();
+    let mut resolved = crate::neovm_bridge::ResolvedFace::default();
+    resolved.font_family = "slot-family".into();
+    resolved.font_size = 19.0;
+    resolved.font_ascent = 14.0;
+    resolved.font_line_height = 19.0;
+    resolved.italic = true;
+    resolved.font_weight = 700;
+    let id = crate::display_row::face_state::stable_face_id_for_resolved(&mut attempt, &resolved);
+    let expected = attempt.bind_resolved_face(id, resolved.clone()).unwrap();
+    let mut output = None;
+    attempt
+        .bind_resolved_face_into(id, resolved.clone(), &mut output)
+        .unwrap();
+    let bound = output.as_ref().unwrap();
+    assert_eq!(bound.face_id(), expected.face_id());
+    assert_eq!(bound.resolved(), expected.resolved());
+    assert_eq!(bound.realized(None).face(), expected.realized(None).face());
+    assert!(attempt.faces().is_empty());
+    let measured_metrics = crate::font::metrics::FontMetrics {
+        ascent: 20.0,
+        descent: 6.0,
+        line_height: 26.0,
+        char_width: 11.0,
+        space_width: 10.0,
+    };
+    let realized = bound.realized(Some(measured_metrics));
+    assert_eq!(realized.face().font_ascent, 20);
+    assert_eq!(realized.face().font_descent, 6);
+    assert_eq!(bound.resolved(), &resolved);
+    assert!(attempt.faces().is_empty());
+    assert_eq!(attempt.use_face(&realized).unwrap(), id);
+    assert!(
+        FrameFaceArena::default()
+            .begin_attempt()
+            .publish_face(&realized)
+            .is_err()
+    );
+    attempt.publish_face(&realized).unwrap();
+    assert_eq!(attempt.face(id).as_ref(), Some(realized.face()));
+}
+
+#[test]
+fn conflicting_resolved_binding_leaves_caller_slot_and_publication_unchanged() {
+    let mut attempt = FrameFaceArena::default().begin_attempt();
+    let resolved = crate::neovm_bridge::ResolvedFace::default();
+    let id = crate::display_row::face_state::stable_face_id_for_resolved(&mut attempt, &resolved);
+    let mut output = None;
+    attempt
+        .bind_resolved_face_into(id, resolved.clone(), &mut output)
+        .unwrap();
+    let retained = output.as_ref().unwrap().realized(None);
+    attempt.publish_face(&retained).unwrap();
+    let before = attempt.faces();
+    let mut conflicting = resolved.clone();
+    conflicting.font_size *= 0.75;
+    assert!(
+        attempt
+            .bind_resolved_face_into(id, conflicting, &mut output)
+            .is_err()
+    );
+    let unchanged = output.as_ref().unwrap();
+    assert_eq!(unchanged.resolved(), &resolved);
+    assert_eq!(unchanged.realized(None).face(), retained.face());
+    assert_eq!(attempt.faces(), before);
+    assert_eq!(attempt.use_face(&unchanged.realized(None)).unwrap(), id);
+}

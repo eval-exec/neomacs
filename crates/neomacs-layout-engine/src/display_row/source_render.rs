@@ -1089,15 +1089,12 @@ impl<'a> TextRowSourceRenderState<'a> {
         }
     }
 
-    fn resolved_measured_face(
+    fn concrete_font_metrics_for_face(
         &mut self,
         measurement_policy: DisplayRowMeasurementPolicy,
-        face: crate::frame_face_arena::ResolvedFrameFace,
-        fallback_char_width: f32,
-        fallback_metrics: DisplayRowFallbackMetrics,
-    ) -> DisplayRowResolvedMeasuredFace {
-        let resolved = face.resolved();
-        let metrics = if measurement_policy.uses_concrete_font_geometry() {
+        resolved: &ResolvedFace,
+    ) -> Option<crate::font::metrics::FontMetrics> {
+        if measurement_policy.uses_concrete_font_geometry() {
             self.font_metrics.as_mut().map(|svc| {
                 svc.font_metrics(
                     &resolved.font_family,
@@ -1108,7 +1105,18 @@ impl<'a> TextRowSourceRenderState<'a> {
             })
         } else {
             None
-        };
+        }
+    }
+
+    fn resolved_measured_face(
+        &mut self,
+        measurement_policy: DisplayRowMeasurementPolicy,
+        face: crate::frame_face_arena::ResolvedFrameFace,
+        fallback_char_width: f32,
+        fallback_metrics: DisplayRowFallbackMetrics,
+    ) -> DisplayRowResolvedMeasuredFace {
+        let resolved = face.resolved();
+        let metrics = self.concrete_font_metrics_for_face(measurement_policy, resolved);
         measurement_policy.resolved_measured_face(
             face,
             metrics,
@@ -1154,6 +1162,41 @@ impl<'a> TextRowSourceRenderState<'a> {
         self.output_render
             .install_resolved_measured_face(&resolved_face);
         resolved_face.into_active_face_state()
+    }
+
+    /// Install a producer-owned pending face without creating an active row
+    /// state. Pending faces can describe inspected neighbours, so this must
+    /// retain measurement and publication without changing row geometry.
+    pub(crate) fn install_pending_resolved_measured_face(
+        &mut self,
+        id: FaceId,
+        face: ResolvedFace,
+        measurement_policy: DisplayRowMeasurementPolicy,
+        fallback_char_width: f32,
+        fallback_metrics: DisplayRowFallbackMetrics,
+    ) {
+        let mut bound = None;
+        self.output_render
+            .output
+            .builder()
+            .bind_resolved_face_into(id, face, &mut bound);
+        let bound = bound.as_ref().expect("successful binding fills its output");
+        let resolved = bound.resolved();
+        let metrics = self.concrete_font_metrics_for_face(measurement_policy, resolved);
+        // Keep the same font-service work (including space measurement) as
+        // resolved_measured_face. Only the discarded active-state wrapper is
+        // omitted; installation still follows completed measurement.
+        let _measured_face = measurement_policy.measured_face(
+            bound.face_id(),
+            resolved,
+            metrics,
+            fallback_char_width,
+            fallback_metrics,
+            self.font_metrics,
+        );
+        self.output_render
+            .output
+            .install_resolved_face(bound, metrics);
     }
 
     pub(crate) fn resolve_named_face(&self, face_name: &str) -> ResolvedFace {

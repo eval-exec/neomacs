@@ -653,6 +653,17 @@ impl DisplayOutputBuilder {
             .expect("resolver identity must match its rendering")
     }
 
+    pub(crate) fn bind_resolved_face_into(
+        &self,
+        id: FaceId,
+        face: crate::neovm_bridge::ResolvedFace,
+        output: &mut Option<crate::frame_face_arena::ResolvedFrameFace>,
+    ) {
+        self.face_attempt
+            .bind_resolved_face_into(id, face, output)
+            .expect("resolver identity must match its rendering");
+    }
+
     pub(crate) fn window_content_height_px(
         &self,
         window_id: i64,

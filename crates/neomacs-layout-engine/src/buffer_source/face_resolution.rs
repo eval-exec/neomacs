@@ -286,15 +286,13 @@ impl<'a, B: LayoutBufferView> BufferSourceFaceResolutionContext<'a, B> {
         // and appended items account for the faces actually used by it.
         for pending in pending_faces {
             let (face_id, resolved) = pending.into_parts();
-            {
-                let bound = source_render.bind_resolved_face(face_id, &resolved);
-                source_render.resolve_and_install_measured_face(
-                    self.measurement_policy,
-                    bound,
-                    self.window_metrics.char_width(),
-                    self.window_metrics,
-                )
-            };
+            source_render.install_pending_resolved_measured_face(
+                face_id,
+                resolved,
+                self.measurement_policy,
+                self.window_metrics.char_width(),
+                self.window_metrics,
+            );
         }
     }
 
