@@ -125,6 +125,46 @@ fn lisp_font_queries_are_reentrant_during_redisplay() {
 }
 
 #[test]
+fn installed_font_shaping_is_reentrant_during_redisplay() {
+    let (mut eval, runtime) = scalable_session();
+    eval.eval_str("(insert \"fi\")").unwrap();
+
+    eval.eval_str(
+        r##"
+        (setq font-shape-during-layout nil)
+        (setq mode-line-format
+          '((:eval
+             (progn
+               (let* ((font (font-at (point-min)))
+                      (gstring (composition-get-gstring 0 2 font "fi")))
+                 (setq font-shape-during-layout (font-shape-gstring gstring nil)))
+               "font-shape"))))
+        "##,
+    )
+    .unwrap();
+    let frame = eval.frame_manager().selected_frame().unwrap().id;
+    assert!(
+        runtime
+            .prepare_frame(
+                &mut eval,
+                frame,
+                neomacs_app::presentation::FrameLayoutPurpose::Snapshot,
+            )
+            .is_some()
+    );
+    assert_eq!(
+        eval.eval_str(
+            "(and (vectorp font-shape-during-layout) \
+                  (> (length font-shape-during-layout) 2) \
+                  (> (aref (aref font-shape-during-layout 2) 4) 0))",
+        )
+        .unwrap(),
+        Value::T,
+        "composition during redisplay must reach the session's font driver",
+    );
+}
+
+#[test]
 fn cell_grid_session_does_not_claim_graphical_fonts() {
     let mut eval = Context::new();
     let runtime = EditorPresentationRuntime::new(PresentationMetrics::CellGrid);

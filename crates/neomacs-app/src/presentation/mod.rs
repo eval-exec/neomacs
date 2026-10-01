@@ -224,6 +224,14 @@ impl EditorPresentationRuntime {
         });
     }
 
+    /// Shape composition glyphs through this runtime's independent font service.
+    pub fn install_font_shape_driver(&self, evaluator: &mut Context) {
+        let shaping = self.clone();
+        evaluator.font_shape_fn = Some(Box::new(move |_eval, gstring, direction| {
+            shaping.runtime.shape_gstring(gstring, direction)
+        }));
+    }
+
     /// Install evaluator observation and font queries owned by this runtime.
     /// Native displays retain their font provider; direct surfaces gain fonts
     /// without acquiring window-management or popup capabilities.
@@ -233,6 +241,7 @@ impl EditorPresentationRuntime {
         }
         self.install_frame_snapshot_hook(evaluator);
         self.install_window_layout_query_hook(evaluator);
+        self.install_font_shape_driver(evaluator);
     }
 
     /// Publish every visible native-window frame through one host transport.
