@@ -54,9 +54,8 @@ fn global_display_line_numbers_lights_the_gutter_in_a_buffer_created_after_start
     // the gutter, before the text — GNU's right-aligned number column plus
     // one space.
     let gutter = |grid: &[String]| {
-        grid.iter().any(|row| {
-            row.contains('1') && row.contains(BODY) && row.find('1') < row.find(BODY)
-        })
+        grid.iter()
+            .any(|row| row.contains('1') && row.contains(BODY) && row.find('1') < row.find(BODY))
     };
     let gnu_ok = gutter(&gnu.text_grid());
     let neo_ok = gutter(&neo.text_grid());
@@ -75,9 +74,5 @@ fn global_display_line_numbers_lights_the_gutter_in_a_buffer_created_after_start
 
     // Fall through to the exact-pair match: it pins the full rendered grid —
     // gutters on every line, the mode line, everything.
-    support::assert_pair_exact_display(
-        "global_display_line_numbers_lights_the_gutter",
-        &gnu,
-        &neo,
-    );
+    support::assert_pair_exact_display("global_display_line_numbers_lights_the_gutter", &gnu, &neo);
 }

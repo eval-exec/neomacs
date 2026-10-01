@@ -89,8 +89,9 @@ impl DisplayLineNumbersMode {
             // switched the whole gutter off for
             // `(setq display-line-numbers-type 'absolute)` (issue #441).
             Some(value) if value.is_truthy() => {
-                match DisplayLineNumbersSymbol::from_symbol_name(value.as_symbol_name().unwrap_or(""))
-                {
+                match DisplayLineNumbersSymbol::from_symbol_name(
+                    value.as_symbol_name().unwrap_or(""),
+                ) {
                     Some(DisplayLineNumbersSymbol::Relative) => Self::Relative,
                     Some(DisplayLineNumbersSymbol::Visual) => Self::Visual,
                     // GNU's absolute: `t`, `'absolute`, any other truthy value.

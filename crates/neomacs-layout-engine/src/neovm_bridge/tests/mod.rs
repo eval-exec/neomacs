@@ -605,18 +605,16 @@ fn display_line_numbers_any_non_nil_value_is_absolute_like_gnu() {
         .create_buffer("*line-numbers*");
     let mode_for = |evaluator: &neovm_core::emacs_core::Context| {
         let buffer = evaluator.buffer_manager().get(buf_id).unwrap();
-        let snapshot =
-            LayoutBufferSnapshot::from_buffer_with_obarray(buffer, evaluator.obarray());
+        let snapshot = LayoutBufferSnapshot::from_buffer_with_obarray(buffer, evaluator.obarray());
         buffer_display_line_numbers_mode(&snapshot)
     };
-    let set_local =
-        |evaluator: &mut neovm_core::emacs_core::Context, value: Value| {
-            evaluator
-                .buffer_manager_mut()
-                .get_mut(buf_id)
-                .unwrap()
-                .set_buffer_local("display-line-numbers", value);
-        };
+    let set_local = |evaluator: &mut neovm_core::emacs_core::Context, value: Value| {
+        evaluator
+            .buffer_manager_mut()
+            .get_mut(buf_id)
+            .unwrap()
+            .set_buffer_local("display-line-numbers", value);
+    };
 
     set_local(&mut evaluator, Value::symbol("absolute"));
     assert_eq!(
