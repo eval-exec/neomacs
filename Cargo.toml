@@ -474,8 +474,8 @@ strip = "none"
 # Never vendor dependencies into this repository. Always fork the crate on
 # GitHub and make changes on the fork's `patch` branch. Reference an exact Git
 # revision here and document the branch beside each dependency.
-# Fork branch: patch (includes existing Wayland/X11 fixes and continuous XI2 units).
-winit = { git = "https://github.com/eval-exec/winit", rev = "54c340ae4bcf9effb051d0e51e72fed439e01f97" }
+# Fork branch: neomacs-android-wayland-integration (Android destroy/IME, Wayland/X11 fixes, and continuous XI2 units).
+winit = { git = "https://github.com/eval-exec/winit", rev = "4ea1d82aa563d09467a9decb4ecf637584d2fe5a" }
 # Fork branch: neomacs-present-timing.
 # Native presentation IDs/timestamps; see the Vulkan timing seam in this fork.
 wgpu-hal = { git = "https://github.com/eval-exec/wgpu", rev = "9717f9fe277beec2c98df550662a626f8fc0248c" }
