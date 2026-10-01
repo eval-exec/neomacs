@@ -40,6 +40,7 @@
 //! | `NEOVM_REGEX_DFA` | `on` (default), `off`, `verify` | Candidate existence filter ([`DfaMode`]). |
 //! | `NEOVM_REGEX_DFA_COLD` | `off` (default), `on` | Defer the slot lease until a cold candidate fails ([`cold_path_enabled`]). |
 //! | `NEOVM_REGEX_DFA_STATS` | unset (default), `1` | Print this thread's [`DfaStats`] on stderr at exit with the filter on. |
+//! | `NEOVM_REGEX_DFA_FIRST_STEP` | `off` (default), `on` | Reject through an existing cached first-step dead transition ([`first_step_enabled`]). |
 
 use super::{
     CompiledPattern, LookupClassKey, MatchRegisters, MatchScratch, RegexOp, SyntaxAssertion,
@@ -1488,13 +1489,87 @@ impl ExistenceDfa {
                 return Exists::Unknown;
             }
         }
-        let verdict = self.run(pattern, text, p, stop, point, syntax);
+        let verdict =
+            if first_step_enabled() && self.cached_first_step_dead(pattern, text, p, stop, point) {
+                Exists::No { consumed: 0 }
+            } else {
+                self.run(pattern, text, p, stop, point, syntax)
+            };
         match verdict {
             Exists::Yes => self.counters.yes += 1,
             Exists::No { .. } => self.counters.no += 1,
             Exists::Unknown => self.counters.unknown += 1,
         }
         verdict
+    }
+
+    /// A cached first-step rejection, without classifying, interning, or
+    /// reading syntax. Called only after the give-up and memory-cap guards.
+    ///
+    /// Threading: this cache and its compiled pattern are mutator-owned, not
+    /// shared concurrently. `DfaLease::acquire` synchronizes character maps
+    /// with the search context before calling this helper. A context change
+    /// clears those maps; the context-independent transitions remain valid.
+    #[inline]
+    fn cached_first_step_dead(
+        &self,
+        pattern: &CompiledPattern,
+        text: &[u8],
+        p: usize,
+        stop: usize,
+        point: usize,
+    ) -> bool {
+        if p >= stop.min(text.len())
+            || p >= self.search.read_limit
+            || (self.has_at_dot && p == point)
+        {
+            return false;
+        }
+        let class = self.classes.byte_class[text[p] as usize];
+        if class == UNKNOWN_CLASS {
+            return false;
+        }
+        let reads_prev_syntax = self.prev_mask.0 & !(Facts::EDGE.0 | Facts::NEWLINE.0) != 0;
+        if self.search.positional {
+            // The current class is a base-table class. Previous word/symbol
+            // facts require base syntax at p - 1 too, in the same known run.
+            let from = if p > 0 && reads_prev_syntax { p - 1 } else { p };
+            if from < self.plain.start || p >= self.plain.end {
+                return false;
+            }
+        }
+        let facts = if p == 0 {
+            Facts::EDGE.0
+        } else if !reads_prev_syntax {
+            // EDGE and newline facts do not depend on syntax or decoding.
+            if text[p - 1] == b'\n' {
+                Facts::NEWLINE.0
+            } else {
+                0
+            }
+        } else {
+            let byte = text[p - 1];
+            if pattern.target_multibyte && byte >= 0x80 {
+                return false;
+            }
+            let prev_class = self.classes.byte_class[byte as usize];
+            if prev_class != UNKNOWN_CLASS {
+                self.classes.facts(prev_class).0
+            } else {
+                let facts = self.classes.byte_facts[byte as usize];
+                if facts == NO_FACTS {
+                    return false;
+                }
+                facts
+            }
+        };
+        let start = self.start[(facts & self.prev_mask.0) as usize];
+        if start == 0 {
+            return false;
+        }
+        let row = start << self.stride_shift;
+        // Only DEAD is a rejection. UNKNOWN/SLOW/live/MATCH all use run().
+        self.trans[row as usize + class as usize] == DEAD
     }
 
     /// The end of the property-free stretch from `at` (see
@@ -1944,6 +2019,42 @@ fn read_dfa_mode() -> DfaMode {
         STATS_ON.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     mode
+}
+
+#[cfg(any(test, feature = "fuzzing"))]
+thread_local! {
+    // A test-only knob override; the runtime has no additional TLS cache.
+    static DFA_FIRST_STEP_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Run `f` with the cached first-step knob forced to `on` on this thread.
+#[cfg(any(test, feature = "fuzzing"))]
+pub(crate) fn with_first_step<R>(on: bool, f: impl FnOnce() -> R) -> R {
+    struct Guard(Option<bool>);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            DFA_FIRST_STEP_OVERRIDE.with(|slot| slot.set(self.0));
+        }
+    }
+    let _guard = Guard(DFA_FIRST_STEP_OVERRIDE.with(|slot| slot.replace(Some(on))));
+    f()
+}
+
+/// `NEOVM_REGEX_DFA_FIRST_STEP=on` (default off): consult an existing dead
+/// transition from a start state before the general candidate loop.
+#[inline]
+pub(crate) fn first_step_enabled() -> bool {
+    #[cfg(any(test, feature = "fuzzing"))]
+    if let Some(on) = DFA_FIRST_STEP_OVERRIDE.with(|slot| slot.get()) {
+        return on;
+    }
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        let on = super::regex_knob_on(std::env::var("NEOVM_REGEX_DFA_FIRST_STEP").ok().as_deref());
+        tracing::debug!(target: "neovm::regex", on, "NEOVM_REGEX_DFA_FIRST_STEP");
+        on
+    })
 }
 
 /// Whether the filter keeps its counters: under `NEOVM_REGEX_DFA_STATS=1`,

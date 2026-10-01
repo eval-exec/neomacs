@@ -1527,6 +1527,218 @@ fn a_candidate_reaching_the_frontier_is_left_to_the_matcher() {
     assert_eq!(dfa.counters.frontier_unknown, 2);
 }
 
+// ---------------------------------------------------------------------------
+// Cached first-step rejection (same-binary knob)
+// ---------------------------------------------------------------------------
+
+fn first_step_dfa(pattern: &CompiledPattern, syntax: &dyn SyntaxLookup) -> ExistenceDfa {
+    let mut dfa = ExistenceDfa::new(Nfa::build(pattern).unwrap());
+    let context = ClassContext::of_search(pattern, dfa.nfa(), syntax).unwrap();
+    dfa.classes.sync(context);
+    dfa.begin_search(pattern, syntax);
+    dfa
+}
+
+#[test]
+fn cached_first_step_rejections_equal_the_matcher() {
+    let syntax = DefaultSyntaxLookup;
+    for source in ["\\<foo", "^foo", "\\`foo", "\\(?:bar\\|baz\\)"] {
+        let compiled = regex_compile(source, false, false).unwrap();
+        let mut dfa = first_step_dfa(&compiled, &syntax);
+        let text = b"xfoo";
+        let p = 1;
+        assert_eq!(
+            with_first_step(false, || {
+                dfa.anchored_exists(&compiled, text, p, text.len(), 0, &syntax)
+            }),
+            Exists::No { consumed: 0 },
+            "{source}"
+        );
+        assert!(dfa.cached_first_step_dead(&compiled, text, p, text.len(), 0));
+        let before = dfa.counters;
+        assert_eq!(
+            with_first_step(true, || {
+                dfa.anchored_exists(&compiled, text, p, text.len(), 0, &syntax)
+            }),
+            Exists::No { consumed: 0 }
+        );
+        assert_eq!(dfa.counters.no, before.no + 1);
+        assert_eq!(dfa.counters.bytes, before.bytes);
+        assert_eq!(dfa.counters.states, before.states);
+        assert!(re_match(&compiled, text, p, text.len(), &syntax, 0).is_none());
+    }
+}
+
+#[test]
+fn cached_first_step_respects_point_stop_and_unknown_entries() {
+    let syntax = DefaultSyntaxLookup;
+    let compiled = regex_compile("\\=foo", false, false).unwrap();
+    let mut dfa = first_step_dfa(&compiled, &syntax);
+    let text = b"xfoo";
+    with_first_step(false, || {
+        assert_eq!(
+            dfa.anchored_exists(&compiled, text, 1, text.len(), 0, &syntax),
+            Exists::No { consumed: 0 }
+        );
+    });
+    assert!(dfa.cached_first_step_dead(&compiled, text, 1, text.len(), 0));
+    // The same candidate now satisfies point: the cached failure is invalid.
+    assert!(!dfa.cached_first_step_dead(&compiled, text, 1, text.len(), 1));
+    assert_eq!(
+        with_first_step(true, || {
+            dfa.anchored_exists(&compiled, text, 1, text.len(), 1, &syntax)
+        }),
+        Exists::Yes
+    );
+    assert!(re_match(&compiled, text, 1, text.len(), &syntax, 1).is_some());
+    assert!(!dfa.cached_first_step_dead(&compiled, text, 1, 1, 0));
+    assert!(!dfa.cached_first_step_dead(&compiled, text, text.len(), text.len(), 0));
+    // A byte that has never been classified must use the normal loop.
+    assert!(!dfa.cached_first_step_dead(&compiled, b"xqoo", 1, text.len(), 0));
+    let class = dfa.classes.byte_class[b'f' as usize];
+    let start = dfa.start[0] << dfa.stride_shift;
+    let at = start as usize + class as usize;
+    let original = dfa.trans[at];
+    for unresolved in [UNKNOWN, SLOW, MATCH, start] {
+        dfa.trans[at] = unresolved;
+        assert!(!dfa.cached_first_step_dead(&compiled, text, 1, text.len(), 0));
+    }
+    dfa.trans[at] = original;
+    dfa.clear_states();
+    assert!(!dfa.cached_first_step_dead(&compiled, text, 1, text.len(), 0));
+}
+
+#[test]
+fn cached_first_step_keeps_memory_and_give_up_guards() {
+    let syntax = DefaultSyntaxLookup;
+    let compiled = regex_compile("z[0-9]", false, false).unwrap();
+    let mut dfa = first_step_dfa(&compiled, &syntax);
+    let text = b"y";
+    with_first_step(false, || {
+        assert_eq!(
+            dfa.anchored_exists(&compiled, text, 0, text.len(), 0, &syntax),
+            Exists::No { consumed: 0 }
+        );
+    });
+    assert!(dfa.cached_first_step_dead(&compiled, text, 0, text.len(), 0));
+    dfa.memory = MEMORY_CAP + 1;
+    let clears = dfa.counters.clears;
+    assert_eq!(
+        with_first_step(true, || {
+            dfa.anchored_exists(&compiled, text, 0, text.len(), 0, &syntax)
+        }),
+        Exists::No { consumed: 0 }
+    );
+    assert_eq!(dfa.counters.clears, clears + 1);
+    dfa.gave_up = Some(DfaGaveUp::StateExplosion);
+    assert_eq!(
+        with_first_step(true, || {
+            dfa.anchored_exists(&compiled, text, 0, text.len(), 0, &syntax)
+        }),
+        Exists::Unknown
+    );
+}
+
+#[test]
+fn cached_first_step_context_changes_clear_character_maps() {
+    let syntax = DefaultSyntaxLookup;
+    let compiled = regex_compile("\\<foo", false, false).unwrap();
+    let mut dfa = first_step_dfa(&compiled, &syntax);
+    let text = b"xfoo";
+    with_first_step(false, || {
+        assert_eq!(
+            dfa.anchored_exists(&compiled, text, 1, text.len(), 0, &syntax),
+            Exists::No { consumed: 0 }
+        );
+    });
+    assert!(dfa.cached_first_step_dead(&compiled, text, 1, text.len(), 0));
+    let prev_class = dfa.classes.byte_class[b'x' as usize];
+    let prev_facts = dfa.classes.byte_facts[b'x' as usize];
+    dfa.classes.byte_class[b'x' as usize] = UNKNOWN_CLASS;
+    dfa.classes.byte_facts[b'x' as usize] = NO_FACTS;
+    assert!(!dfa.cached_first_step_dead(&compiled, text, 1, text.len(), 0));
+    dfa.classes.byte_class[b'x' as usize] = prev_class;
+    dfa.classes.byte_facts[b'x' as usize] = prev_facts;
+    // A multibyte previous character cannot borrow an ASCII byte's facts.
+    assert!(!dfa.cached_first_step_dead(&compiled, "中foo".as_bytes(), 3, 6, 0));
+    let mut changed = ClassContext::of_search(&compiled, dfa.nfa(), &syntax).unwrap();
+    changed.tick = changed.tick.wrapping_add(1);
+    dfa.classes.sync(changed);
+    assert!(!dfa.cached_first_step_dead(&compiled, text, 1, text.len(), 0));
+    let actual = with_first_step(true, || {
+        dfa.anchored_exists(&compiled, text, 1, text.len(), 0, &syntax)
+    });
+    assert_eq!(actual, Exists::No { consumed: 0 });
+    assert!(re_match(&compiled, text, 1, text.len(), &syntax, 0).is_none());
+}
+
+#[test]
+fn cached_first_step_properties_and_frontier_leave_stale_rejects_unused() {
+    let compiled = regex_compile("\\<foo", false, false).unwrap();
+    let text = b"xfoo";
+    let mut dfa = first_step_dfa(&compiled, &DefaultSyntaxLookup);
+    with_first_step(false, || {
+        assert_eq!(
+            dfa.anchored_exists(&compiled, text, 1, text.len(), 0, &DefaultSyntaxLookup),
+            Exists::No { consumed: 0 }
+        );
+    });
+    // A property on the previous character turns this rejected candidate
+    // into a real word beginning. Covering only p is insufficient.
+    let lookup = PropertyRunLookup::new(
+        &DefaultSyntaxLookup,
+        vec![(0, 1, RunSyntax::Descriptor(SyntaxClass::Punctuation))],
+    );
+    dfa.begin_search(&compiled, &lookup);
+    dfa.plain = 1..usize::MAX;
+    assert!(!dfa.cached_first_step_dead(&compiled, text, 1, text.len(), 0));
+    assert_eq!(
+        with_first_step(true, || {
+            dfa.anchored_exists(&compiled, text, 1, text.len(), 0, &lookup)
+        }),
+        Exists::Yes
+    );
+    assert!(re_match(&compiled, text, 1, text.len(), &lookup, 0).is_some());
+    // A frontier at p must be handled by the matcher, which records its read.
+    let mut frontier = PropertyRunLookup::new(&DefaultSyntaxLookup, Vec::new());
+    frontier.frontier = 1;
+    dfa.begin_search(&compiled, &frontier);
+    dfa.plain = 0..usize::MAX;
+    assert!(!dfa.cached_first_step_dead(&compiled, text, 1, text.len(), 0));
+    assert_eq!(
+        with_first_step(true, || {
+            dfa.anchored_exists(&compiled, text, 1, text.len(), 0, &frontier)
+        }),
+        Exists::Unknown
+    );
+    assert_eq!(frontier.crossed.get(), None);
+    assert!(re_match(&compiled, text, 1, text.len(), &frontier, 0).is_none());
+    assert_eq!(frontier.crossed.get(), Some(1));
+    // A property on the current character invalidates its base-table class.
+    let compiled = regex_compile("\\s-q", false, false).unwrap();
+    let text = b"yq";
+    let mut dfa = first_step_dfa(&compiled, &DefaultSyntaxLookup);
+    with_first_step(false, || {
+        assert_eq!(
+            dfa.anchored_exists(&compiled, text, 0, text.len(), 0, &DefaultSyntaxLookup),
+            Exists::No { consumed: 0 }
+        );
+    });
+    let lookup = PropertyRunLookup::new(
+        &DefaultSyntaxLookup,
+        vec![(0, 1, RunSyntax::Descriptor(SyntaxClass::Whitespace))],
+    );
+    dfa.begin_search(&compiled, &lookup);
+    assert!(!dfa.cached_first_step_dead(&compiled, text, 0, text.len(), 0));
+    assert_eq!(
+        with_first_step(true, || {
+            dfa.anchored_exists(&compiled, text, 0, text.len(), 0, &lookup)
+        }),
+        Exists::Yes
+    );
+    assert!(re_match(&compiled, text, 0, text.len(), &lookup, 0).is_some());
+}
+
 /// The filter's one-compare overflow bound answers exactly as the bound (for
 /// every span a text can have: `consumed` is below `usize::MAX`).
 #[test]
