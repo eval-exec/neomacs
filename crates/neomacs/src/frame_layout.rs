@@ -286,6 +286,20 @@ pub fn install_tty_redisplay_callback_with_popup_redraw(
     force_full_redraw: Option<Arc<AtomicBool>>,
     mut try_render_selected_auxiliary: Option<TryRenderSelectedTerminal>,
 ) {
+    if startup.daemon.is_some() {
+        // No primary terminal exists. Attached client TTYs own their renderers
+        // and are the only valid destination for daemon redisplay.
+        REDISPLAY_RUNTIME.with(RedisplayRuntime::disable_cosmic_metrics);
+        evaluator.redisplay_fn = Some(Box::new(move |eval: &mut Context| {
+            if let Some(render) = try_render_selected_auxiliary.as_mut() {
+                render(eval);
+            }
+        }));
+        install_frame_snapshot_fn(evaluator);
+        install_window_layout_query_fn(evaluator);
+        install_font_shape_driver(evaluator);
+        return;
+    }
     if !tty_init::should_enable_live_tty_io(startup) {
         return;
     }

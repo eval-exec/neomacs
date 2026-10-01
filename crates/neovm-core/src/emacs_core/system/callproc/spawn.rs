@@ -261,6 +261,7 @@ impl ChildCommand {
     /// Spawn, wait, and collect the output.  Unset descriptors default the
     /// way `std::process::Command::output` defaults them: stdin closed,
     /// stdout and stderr captured.
+    #[cfg(test)]
     pub(crate) fn output(&mut self) -> io::Result<Output> {
         let stdin = self.stdin.take().unwrap_or(ChildStdio::Null);
         let stdout = self.stdout.take().unwrap_or(ChildStdio::Piped);
@@ -278,6 +279,7 @@ impl ChildCommand {
         stdout: ChildStdio,
         stderr: ChildStdio,
     ) -> io::Result<SpawnedChild> {
+        super::retain_child_exit_status()?;
         posix::spawn(self, stdin, stdout, stderr)
     }
 
@@ -290,6 +292,8 @@ impl ChildCommand {
         stdout: ChildStdio,
         stderr: ChildStdio,
     ) -> io::Result<SpawnedChild> {
+        #[cfg(unix)]
+        super::retain_child_exit_status()?;
         let mut command = self.forking_command();
         command.stdin(std_stdio(stdin));
         command.stdout(std_stdio(stdout));
@@ -301,7 +305,9 @@ impl ChildCommand {
     /// the session isolation already installed.  For children that need
     /// post-fork setup `posix_spawn` cannot express (a pty as controlling
     /// terminal); GNU likewise falls back to `vfork` for pty children.
-    pub(crate) fn into_forking_command(mut self) -> std::process::Command {
+    pub(crate) fn into_forking_command(mut self) -> io::Result<std::process::Command> {
+        #[cfg(unix)]
+        super::retain_child_exit_status()?;
         let mut command = self.forking_command();
         if let Some(stdin) = self.stdin.take() {
             command.stdin(std_stdio(stdin));
@@ -312,7 +318,7 @@ impl ChildCommand {
         if let Some(stderr) = self.stderr.take() {
             command.stderr(std_stdio(stderr));
         }
-        command
+        Ok(command)
     }
 
     fn forking_command(&self) -> std::process::Command {
@@ -350,6 +356,8 @@ pub(crate) struct SpawnedChild {
     pub(crate) stdout: Option<File>,
     pub(crate) stderr: Option<File>,
     backend: ChildBackend,
+    // ECHILD revokes numeric signalling; it is not an exit status.
+    signal_authority: bool,
 }
 
 enum ChildBackend {
@@ -375,6 +383,7 @@ impl SpawnedChild {
             stdout,
             stderr,
             backend: ChildBackend::Std(child),
+            signal_authority: true,
         }
     }
 
@@ -383,44 +392,69 @@ impl SpawnedChild {
     }
 
     pub(crate) fn wait(&mut self) -> io::Result<ExitStatus> {
-        match &mut self.backend {
+        let result = match &mut self.backend {
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
             ChildBackend::Pid { status } => {
                 if let Some(status) = status {
                     return Ok(*status);
                 }
-                let collected = posix::wait_blocking(self.pid)?;
-                *status = Some(collected);
-                Ok(collected)
+                posix::wait_blocking(self.pid).inspect(|collected| *status = Some(*collected))
             }
             ChildBackend::Std(child) => child.wait(),
-        }
+        };
+        self.revoke_lost_child(&result);
+        result
     }
 
-    /// Non-blocking status probe.  The unix reaper probes by pid through
-    /// `waitpid` directly (it needs the stop/continue detail), so only the
-    /// non-unix reaper and tests reach this method there.
+    /// Non-blocking status probe. The Unix reaper also probes by PID directly
+    /// for stop/continue detail; synchronous ownership stays on this handle.
     #[cfg_attr(unix, allow(dead_code))]
     pub(crate) fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
-        match &mut self.backend {
+        let result = match &mut self.backend {
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
             ChildBackend::Pid { status } => {
                 if status.is_some() {
                     return Ok(*status);
                 }
-                let collected = posix::wait_nonblocking(self.pid)?;
-                if collected.is_some() {
-                    *status = collected;
-                }
-                Ok(collected)
+                posix::wait_nonblocking(self.pid).inspect(|collected| {
+                    if collected.is_some() {
+                        *status = *collected;
+                    }
+                })
             }
             ChildBackend::Std(child) => child.try_wait(),
+        };
+        self.revoke_lost_child(&result);
+        result
+    }
+
+    fn revoke_lost_child<T>(&mut self, result: &io::Result<T>) {
+        #[cfg(unix)]
+        if result
+            .as_ref()
+            .is_err_and(|error| error.raw_os_error() == Some(libc::ECHILD))
+        {
+            self.signal_authority = false;
         }
     }
 
     /// Force the child to exit.  Like `std::process::Child::kill`, a child
     /// that has already been reaped is left alone and `Ok(())` is returned.
     pub(crate) fn kill(&mut self) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            // Retention was established BEFORE creation; opening a pidfd on
+            // an ambiguously recycled PID afterward cannot restore ownership.
+            // No other editor owner may reap this child or enable auto-reap
+            // during its lifetime. Fail closed if that contract was broken.
+            if !self.signal_authority || !super::child_exit_status_retained()? {
+                self.signal_authority = false;
+                return Err(io::Error::from_raw_os_error(libc::ECHILD));
+            }
+            if self.try_wait()?.is_some() {
+                return Ok(());
+            }
+        }
         match &mut self.backend {
             #[cfg(all(target_os = "linux", target_env = "gnu"))]
             ChildBackend::Pid { status } => {
@@ -433,7 +467,48 @@ impl SpawnedChild {
         }
     }
 
+    /// Synchronous evaluator-owned wait. Attention is serviced on that owner,
+    /// never in the handler or a worker. On interruption/error this exact,
+    /// unreaped child is killed and reaped before control unwinds into the host.
+    #[cfg(unix)]
+    pub(crate) fn wait_with_output_interruptible(
+        mut self,
+        mut attention: impl FnMut() -> io::Result<()>,
+    ) -> io::Result<Output> {
+        drop(self.stdin.take());
+        let result = (|| {
+            let (stdout, stderr) = drain_pipes_with_attention(
+                self.stdout.take(),
+                self.stderr.take(),
+                crate::emacs_core::os_signal::install().self_pipe_read_fd(),
+                50,
+                &mut attention,
+            )?;
+            let status = loop {
+                attention()?;
+                if let Some(status) = self.try_wait()? {
+                    break status;
+                }
+                // The child can close both pipes before exiting. Do not then
+                // fall back to an uninterruptible waitpid.
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            };
+            Ok(Output {
+                status,
+                stdout,
+                stderr,
+            })
+        })();
+        if result.is_err() {
+            if self.kill().is_ok() {
+                let _ = self.wait();
+            }
+        }
+        result
+    }
+
     /// Close stdin, drain stdout and stderr to completion, then wait.
+    #[cfg(any(test, not(unix)))]
     pub(crate) fn wait_with_output(mut self) -> io::Result<Output> {
         drop(self.stdin.take());
         let (stdout, stderr) = drain_pipes(self.stdout.take(), self.stderr.take())?;
@@ -459,66 +534,68 @@ fn std_pipe_into_file<T: Into<std::os::windows::io::OwnedHandle>>(pipe: T) -> Fi
 /// Read both output pipes to EOF without letting either fill and block the
 /// child.  Unix multiplexes with `poll`; elsewhere a helper thread drains
 /// stderr while this thread drains stdout.
-#[cfg(unix)]
+#[cfg(all(unix, test))]
 fn drain_pipes(stdout: Option<File>, stderr: Option<File>) -> io::Result<(Vec<u8>, Vec<u8>)> {
-    use std::io::Read;
-    use std::os::fd::AsRawFd;
+    drain_pipes_with_attention(stdout, stderr, None, -1, &mut || Ok(()))
+}
 
+/// Multiplex all synchronous pipes and the evaluator's signal wake. A bounded
+/// poll also services non-signal attention and the pipe-less wait case.
+#[cfg(unix)]
+fn drain_pipes_with_attention(
+    stdout: Option<File>,
+    stderr: Option<File>,
+    wake: Option<libc::c_int>,
+    timeout: libc::c_int,
+    attention: &mut impl FnMut() -> io::Result<()>,
+) -> io::Result<(Vec<u8>, Vec<u8>)> {
+    use std::os::fd::AsRawFd;
     let mut out = Vec::new();
     let mut err = Vec::new();
-    match (stdout, stderr) {
-        (None, None) => {}
-        (Some(mut stdout), None) => {
-            stdout.read_to_end(&mut out)?;
+    let mut sources = [stdout.map(|f| (f, &mut out)), stderr.map(|f| (f, &mut err))];
+    for (file, _) in sources.iter().flatten() {
+        set_nonblocking(file.as_raw_fd())?;
+    }
+    while sources.iter().any(Option::is_some) {
+        attention()?;
+        let mut fds: Vec<libc::pollfd> = sources
+            .iter()
+            .flatten()
+            .map(|(file, _)| libc::pollfd {
+                fd: file.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            })
+            .collect();
+        if let Some(fd) = wake {
+            fds.push(libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            });
         }
-        (None, Some(mut stderr)) => {
-            stderr.read_to_end(&mut err)?;
-        }
-        (Some(stdout), Some(stderr)) => {
-            for file in [&stdout, &stderr] {
-                set_nonblocking(file.as_raw_fd())?;
+        // SAFETY: initialized pollfd array with its exact length.
+        if unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout) } < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
             }
-            let mut sources = [Some((stdout, &mut out)), Some((stderr, &mut err))];
-            loop {
-                let mut fds: Vec<libc::pollfd> = sources
+            return Err(error);
+        }
+        if let Some(fd) = wake
+            && fds.iter().any(|p| p.fd == fd && p.revents != 0)
+        {
+            crate::emacs_core::os_signal::drain_wake_pipe(fd);
+        }
+        attention()?;
+        for source in &mut sources {
+            if let Some((file, buffer)) = source
+                && fds
                     .iter()
-                    .flatten()
-                    .map(|(file, _)| libc::pollfd {
-                        fd: file.as_raw_fd(),
-                        events: libc::POLLIN,
-                        revents: 0,
-                    })
-                    .collect();
-                if fds.is_empty() {
-                    break;
-                }
-                // SAFETY: `fds` is a valid, initialized array of `pollfd`s and
-                // the length passed matches it.
-                let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, -1) };
-                if ready < 0 {
-                    let error = io::Error::last_os_error();
-                    if error.kind() == io::ErrorKind::Interrupted {
-                        continue;
-                    }
-                    return Err(error);
-                }
-                for source in sources.iter_mut() {
-                    let Some((file, buffer)) = source else {
-                        continue;
-                    };
-                    let fd = file.as_raw_fd();
-                    let Some(pollfd) = fds.iter().find(|pollfd| pollfd.fd == fd) else {
-                        continue;
-                    };
-                    if pollfd.revents == 0 {
-                        continue;
-                    }
-                    match read_available(file, buffer) {
-                        Ok(true) => *source = None,
-                        Ok(false) => {}
-                        Err(error) => return Err(error),
-                    }
-                }
+                    .any(|p| p.fd == file.as_raw_fd() && p.revents != 0)
+                && read_available(file, buffer)?
+            {
+                *source = None;
             }
         }
     }
@@ -546,7 +623,8 @@ fn read_available(file: &mut File, buffer: &mut Vec<u8>) -> io::Result<bool> {
     use std::io::Read;
 
     let mut chunk = [0u8; 8192];
-    loop {
+    // A continuously writing child must not starve evaluator attention.
+    for _ in 0..64 {
         match file.read(&mut chunk) {
             Ok(0) => return Ok(true),
             Ok(n) => buffer.extend_from_slice(&chunk[..n]),
@@ -555,6 +633,7 @@ fn read_available(file: &mut File, buffer: &mut Vec<u8>) -> io::Result<bool> {
             Err(error) => return Err(error),
         }
     }
+    Ok(false)
 }
 
 #[cfg(not(unix))]
@@ -972,6 +1051,7 @@ mod posix {
                 stdout: stdout.parent_end.take(),
                 stderr: stderr.parent_end.take(),
                 backend: ChildBackend::Pid { status: None },
+                signal_authority: true,
             })
         }
     }

@@ -109,6 +109,7 @@ cfg_select! {
 
 mod args;
 mod build_info;
+mod daemon;
 pub(crate) mod frame_layout;
 mod image_catalog;
 mod input_bridge;
@@ -302,6 +303,7 @@ pub(crate) struct StartupOptions {
     forwarded_args: Vec<String>,
     terminal_device: Option<String>,
     noninteractive: bool,
+    daemon: Option<daemon::Options>,
     temacs_mode: Option<LoadupDumpMode>,
     dump_file_override: Option<PathBuf>,
     /// Set by `-Q` (peek) and `-x` (consumed). Mirrors GNU
@@ -572,6 +574,7 @@ fn parse_startup_options(args: impl IntoIterator<Item = String>) -> Result<Start
     let mut frontend = FrontendKind::Gui;
     let mut terminal_device = None;
     let mut noninteractive = false;
+    let mut daemon = None;
     let mut temacs_mode = None;
     let mut dump_file_override = None;
     let mut no_site_lisp = false;
@@ -594,6 +597,13 @@ fn parse_startup_options(args: impl IntoIterator<Item = String>) -> Result<Start
         if next == "--" {
             forwarded_args.extend(parsed[idx + 1..].iter().cloned());
             break;
+        }
+
+        if let Some(options) = daemon::parse_option(next) {
+            daemon = Some(options);
+            frontend = FrontendKind::Tty;
+            idx += 1;
+            continue;
         }
 
         // -chdir / --chdir DIR (GNU emacs.c:1538-1561). Must run before
@@ -845,6 +855,9 @@ fn parse_startup_options(args: impl IntoIterator<Item = String>) -> Result<Start
         idx += 1;
     }
 
+    if daemon.is_some() {
+        frontend = FrontendKind::Tty;
+    }
     if frontend == FrontendKind::Tty {
         // A TTY/batch session never opens the X display: GNU -batch/-nw do
         // not, and native display observation belongs to the GUI runtime.
@@ -896,6 +909,7 @@ fn parse_startup_options(args: impl IntoIterator<Item = String>) -> Result<Start
         forwarded_args,
         terminal_device,
         noninteractive,
+        daemon,
         temacs_mode,
         dump_file_override,
         no_site_lisp,
@@ -4204,6 +4218,13 @@ pub fn run(mode: RuntimeMode) {
         std::process::exit(1);
     });
 
+    // Fork before tracing, display, evaluator, or worker threads exist. The
+    // original invocation exits only when Lisp calls daemon-initialized.
+    let daemon_notifier = daemon::prepare(startup.daemon.as_ref()).unwrap_or_else(|error| {
+        eprintln!("neomacs: {error}");
+        std::process::exit(1);
+    });
+
     // GNU parses `--no-site-lisp` (and `-Q` / `-x`) into a C global that
     // `init_lread` reads while it builds `load-path` (src/emacs.c:2126,
     // src/lread.c:5514).  neovm-core never sees argv, so hand it the
@@ -4241,6 +4262,7 @@ pub fn run(mode: RuntimeMode) {
         },
     };
     let _logging_guard = neovm_core::logging::init(log_target);
+    Context::initialize_termination_signals(startup.noninteractive);
 
     if mode == RuntimeMode::Raw
         && let Some(temacs_mode) = startup.temacs_mode
@@ -4279,7 +4301,8 @@ pub fn run(mode: RuntimeMode) {
     } else {
         None
     };
-    let interactivity = Interactivity::from_noninteractive(startup.noninteractive);
+    let interactivity =
+        Interactivity::from_noninteractive(startup.noninteractive || startup.daemon.is_some());
     let mut gui_font_observer = None;
     let bootstrap_display = if let Some(event_loop) = gui_event_loop.as_ref() {
         let observation = observe_event_loop_display(event_loop);
@@ -4343,6 +4366,9 @@ pub fn run(mode: RuntimeMode) {
     //    command loop evaluate `top-level`/`normal-top-level`.
     let mut evaluator = create_startup_evaluator_for_mode(mode, &startup);
     evaluator.setup_thread_locals();
+    if let Some(options) = &startup.daemon {
+        evaluator.configure_daemon(options.name.clone(), daemon_notifier);
+    }
     if tty_init::should_enable_live_tty_io(&startup) {
         reset_terminal_host();
         configure_terminal_runtime(tty_init::detect_tty_runtime(&startup));
@@ -4408,7 +4434,7 @@ pub fn run(mode: RuntimeMode) {
     }
 
     // 5. Spawn the frontend loop matching the requested startup mode.
-    let frontend = if startup.noninteractive {
+    let frontend = if startup.noninteractive || startup.daemon.is_some() {
         // Batch mode: no terminal I/O, matching GNU which skips
         // init_display() for --batch (emacs.c:1835).
         tracing::info!("TTY batch mode — skipping terminal init");
@@ -4447,7 +4473,11 @@ pub fn run(mode: RuntimeMode) {
         // their tab / header lines) render below the chrome.  Batch sessions
         // skip this block, leaving `displays_chrome` false so their
         // `window-edges` stay GNU-batch-compatible (root at line 0).
-        for frame in evaluator.frame_manager_mut().frames_mut() {
+        for frame in evaluator
+            .frame_manager_mut()
+            .frames_mut()
+            .filter(|_| startup.daemon.is_none())
+        {
             frame.displays_chrome = true;
             frame.sync_window_area_bounds();
         }
@@ -4468,7 +4498,8 @@ pub fn run(mode: RuntimeMode) {
         let secondary_input_tx = input_tx.clone();
         let secondary_input_notifier = input_notifier.clone();
         let secondary_quit_requested = quit_requested.clone();
-        std::thread::Builder::new()
+        if startup.daemon.is_none() {
+            std::thread::Builder::new()
             .name("input-bridge".to_string())
             .spawn(move || {
                 while let Ok(event) = display_input_rx.recv() {
@@ -4508,6 +4539,7 @@ pub fn run(mode: RuntimeMode) {
                 }
             })
             .expect("Failed to spawn input bridge thread");
+        }
 
         // 7. Connect evaluator to input system
         evaluator.init_input_system(input_rx);
@@ -4521,6 +4553,7 @@ pub fn run(mode: RuntimeMode) {
     }
 
     // 8. Set up redisplay callback (layout engine + TTY RIF render).
+    let daemon_tty_cleanup = secondary_ttys.clone();
     frame_layout::install_tty_redisplay_callback_with_popup_redraw(
         &mut evaluator,
         &startup,
@@ -4569,10 +4602,21 @@ pub fn run(mode: RuntimeMode) {
     // R2 increment C: persist this session's proven-hot JIT leaves before exit
     // (Context still alive on this eval thread; runs BEFORE the shutdown-request
     // early return so it fires on kill-emacs too). No-op unless NEOVM_AOT_PGO set.
-    maybe_drain_aot_pgo(mode, &evaluator);
+    // Optional persistence invokes an unbounded external compiler. Daemon
+    // shutdown must reach required TTY/process cleanup without waiting for it.
+    if startup.daemon.is_none() {
+        maybe_drain_aot_pgo(mode, &evaluator);
+    }
 
     if let Some(request) = evaluator.shutdown_request() {
+        if startup.daemon.is_some() {
+            daemon_tty_cleanup.close_all();
+            evaluator.close_processes_for_exit();
+        }
         if request.restart {
+            if startup.daemon.is_some() {
+                daemon::restart(&process_args);
+            }
             tracing::warn!("restart requested via kill-emacs, but restart is not implemented yet");
         }
         if request.exit_code != 0 {
@@ -5319,6 +5363,16 @@ fn configure_gnu_startup_state(eval: &mut Context, frame_id: FrameId, startup: &
         tracing::warn!(?error, "failed to record initially displayed buffer");
     }
     eval.set_variable("terminal-frame", terminal_frame);
+    if startup.daemon.is_some()
+        && let Some(frame) = eval.frame_manager_mut().get_mut(frame_id)
+    {
+        frame.initial = true;
+        // GNU's initial daemon frame is logically visible even though
+        // its initial terminal has no real display. This also allows
+        // deleting the last attached client frame without FORCE.
+        frame.visibility = FrameVisibility::Visible;
+        frame.displays_chrome = false;
+    }
     eval.set_variable("frame-initial-frame", frame_initial_frame);
     eval.set_variable("default-minibuffer-frame", default_minibuffer_frame);
     // COMPUTE the initial frame's display-derived parameters, and realize its

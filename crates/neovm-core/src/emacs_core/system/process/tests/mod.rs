@@ -15066,6 +15066,43 @@ fn a_childs_own_descriptor_returns_the_block_which_is_what_gnu_uses_sigchld_for(
     );
 }
 
+/// A signal arriving on another thread must wake a real idle evaluator poll,
+/// not wait out its timeout. This exercises the registered self-pipe; EINTR
+/// alone is swallowed by polling. USR1 uses the same wake as TERM/HUP without
+/// terminating this test's evaluator.
+#[test]
+#[cfg(all(unix, not(target_os = "android")))]
+fn captured_os_signal_wakes_idle_process_poller() {
+    let eval = Context::new();
+    let report = crate::emacs_core::os_signal::install();
+    crate::emacs_core::os_signal::take_pending();
+    crate::emacs_core::os_signal::drain_wake_pipe(report.self_pipe_read_fd().unwrap());
+    let (ready, start) = std::sync::mpsc::channel();
+    let sender = std::thread::spawn(move || {
+        start.recv().unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        // SAFETY: signal this test process after dispositions are installed.
+        assert_eq!(unsafe { libc::kill(libc::getpid(), libc::SIGUSR1) }, 0);
+    });
+    ready.send(()).unwrap();
+    let started = Instant::now();
+    let events = eval.processes.wait_for_backend_events(
+        Duration::from_secs(5),
+        ProcessWaitBackendInterest::ProcessesOnly,
+    );
+    sender.join().unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "signal did not wake idle poll: {events:?}"
+    );
+    assert!(
+        events.unwrap().has_notification_wakeup(),
+        "wake was not projected to evaluator"
+    );
+    crate::emacs_core::os_signal::take_pending();
+    crate::emacs_core::os_signal::drain_wake_pipe(report.self_pipe_read_fd().unwrap());
+}
+
 /// Assert that this build installs NO SIGCHLD disposition, which is what the
 /// tests below claim to be measuring.
 ///
