@@ -238,18 +238,21 @@ impl Drop for CollectionReadScope {
 
 #[inline]
 pub(crate) fn observe(value: TaggedValue) {
-    if CAPTURE_SCOPES.load(Ordering::Relaxed) == 0 || !ACTIVE.with(Cell::get) {
+    if CAPTURE_SCOPES.load(Ordering::Relaxed) == 0 {
         return;
     }
     observe_active(value.bits());
 }
 
-// Keep the entire active recorder out of ordinary pointer extraction. Even
-// its recent-read filter otherwise displaces small type/equality helpers from
-// their callers and forces inactive list walks to save its scratch registers.
+// Keep TLS membership and the active recorder behind the same cold boundary.
+// Inlining the short-circuit TLS predicate also leaves redundant boolean
+// branches in ordinary metadata getters, even when the process count is zero.
 #[cold]
 #[inline(never)]
 fn observe_active(bits: usize) {
+    if !ACTIVE.with(Cell::get) {
+        return;
+    }
     observe_bits(bits);
 }
 

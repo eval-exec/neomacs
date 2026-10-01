@@ -3241,8 +3241,11 @@ impl TaggedValue {
     pub fn get_bytecode_data(self) -> Option<&'static super::bytecode::ByteCodeFunction> {
         #[cfg(test)]
         BYTECODE_DATA_ACCESS_COUNT.with(|count| count.set(count.get() + 1));
-        if self.veclike_type()? == VecLikeType::ByteCode {
-            let ptr = self.as_veclike_ptr().unwrap() as *const ByteCodeObj;
+        // Observe before the header and data projections, which share this
+        // identity and have no intervening Lisp call or write.
+        let header = self.as_veclike_ptr()?;
+        if unsafe { (*header).type_tag } == VecLikeType::ByteCode {
+            let ptr = header as *const ByteCodeObj;
             let data = unsafe { &(*ptr).data };
             if data.is_pdump_stub() {
                 crate::emacs_core::pdump::materialize_and_publish_stub(self);
@@ -5503,3 +5506,7 @@ use hash_index::{HashIndex, fx_hash_key, stored_hash};
 #[cfg(test)]
 #[path = "tests/mod.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/bytecode_capture.rs"]
+mod bytecode_capture_tests;
