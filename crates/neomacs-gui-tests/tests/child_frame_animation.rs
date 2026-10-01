@@ -300,7 +300,24 @@ focus_follows_mouse yes
         bounds["width"].as_f64().unwrap() >= 280.0 && bounds["height"].as_f64().unwrap() >= 140.0,
         "popup outer rect must cover the sampled crop: {bounds:?}"
     );
-    capture(&display_env, &artifacts, "settled.png");
+    // The settled capture polls for reality: on a loaded runner the
+    // composited output can lag the fixture's timer chain by seconds, so a
+    // single capture could land mid-fade where the blended popup no longer
+    // reads as red. Wait until the popup is fully opaque at its placement.
+    let settled_image = {
+        let deadline = Instant::now() + Duration::from_secs(45);
+        loop {
+            let pixels = capture(&display_env, &artifacts, "settled.png");
+            if locate_popup(&pixels).is_some() {
+                break pixels;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the popup never reached full opacity at its placement"
+            );
+            thread::sleep(Duration::from_millis(400));
+        }
+    };
 
     // --- The anchor-track drift: the popup departs its original area and
     // glides into the new one. The spring is slowed 20x like every other
@@ -393,8 +410,7 @@ focus_follows_mouse yes
     thread::sleep(Duration::from_millis(300));
     capture(&display_env, &artifacts, "pruned.png");
 
-    // --- Locate the popup from the settled capture...
-    let settled_image = image::open(artifacts.join("settled.png")).unwrap();
+    // --- Locate the popup from the polled settled capture...
     let rect =
         locate_popup(&settled_image).expect("the settled capture must contain the red popup");
 
