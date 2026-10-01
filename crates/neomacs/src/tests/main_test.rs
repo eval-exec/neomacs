@@ -58,8 +58,9 @@ use neovm_core::emacs_core::eval::{
 use neovm_core::emacs_core::image_catalog::{AxisSize, ImageRotation, ImageSizeSpec};
 use neovm_core::emacs_core::image_catalog::{
     EncodedBytes, ImageAnimationInvalidation, ImageCatalog, ImageColorContext, ImageDataSource,
-    ImageFrameIndex, ImageId, ImageLoadAttempt, ImageLoadToken, ImageLookup, ImageResolveRequest,
-    ImageResolveSource, ImageSizeLimit, ImageSpecIdentity, ResolvedImageMetadata,
+    ImageFrameIndex, ImageId, ImageLoadAttempt, ImageLoadIdentity, ImageLoadToken, ImageLookup,
+    ImageResolveRequest, ImageResolveSource, ImageSizeLimit, ImageSpecIdentity,
+    ResolvedImageMetadata,
 };
 use neovm_core::emacs_core::intern::intern;
 use neovm_core::emacs_core::load::{
@@ -118,6 +119,27 @@ fn shared_primary_window_size(width: u32, height: u32) -> Arc<Mutex<PrimaryWindo
 
 thread_local! {
     static IMAGE_SPEC_TEST_CONTEXT: Context = Context::new();
+}
+
+
+/// The declared type and subject GNU would use for a test image source.
+///
+/// Tests that only exercise cache mechanics still have to state what the image
+/// *is*, because that is what a failure on it would be reported as.
+fn test_file_image_identity(path: &str) -> ImageLoadIdentity {
+    use neomacs_display_protocol::image_diagnostic::{ImageDiagnosticSubject, ImageFormatName};
+    ImageLoadIdentity::new(
+        ImageFormatName::Png,
+        ImageDiagnosticSubject::File(path.to_owned()),
+    )
+}
+
+fn test_data_image_identity() -> ImageLoadIdentity {
+    use neomacs_display_protocol::image_diagnostic::{ImageDiagnosticSubject, ImageFormatName};
+    ImageLoadIdentity::new(
+        ImageFormatName::Png,
+        ImageDiagnosticSubject::Spec(String::new()),
+    )
 }
 
 fn test_image_spec_identity(label: &str) -> ImageSpecIdentity {
@@ -2589,6 +2611,7 @@ fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_threa
         source: ImageResolveSource::File(LispString::from_utf8(
             image_path.to_str().expect("utf8 path"),
         )),
+        identity: test_file_image_identity(image_path.to_str().expect("utf8 path")),
         size: ImageSizeSpec::new(AxisSize::AtMost(50), AxisSize::AtMost(50)),
         rotation: ImageRotation::None,
         colors: ImageColorContext::default(),
@@ -2666,6 +2689,7 @@ fn animation_frames_share_sequence_identity_and_retirement_advances_generation()
     let mut request = ImageResolveRequest {
         spec: test_image_spec_identity("animated.gif"),
         source: source.clone(),
+        identity: test_file_image_identity("animated.gif"),
         size: ImageSizeSpec::default(),
         rotation: ImageRotation::None,
         colors: ImageColorContext::default(),
@@ -2715,6 +2739,7 @@ fn primary_image_catalog_does_not_block_on_render_command_backpressure() {
         source: ImageResolveSource::Data(ImageDataSource::Isolated(EncodedBytes::new(vec![
             0x89, b'P', b'N', b'G',
         ]))),
+        identity: test_data_image_identity(),
         size: ImageSizeSpec::new(AxisSize::AtMost(24), AxisSize::AtMost(24)),
         rotation: ImageRotation::None,
         colors: ImageColorContext::default(),
@@ -2814,6 +2839,7 @@ fn primary_image_catalog_does_not_wait_for_renderer_metadata_lock() {
         source: ImageResolveSource::Data(ImageDataSource::Isolated(EncodedBytes::new(vec![
             0x89, b'P', b'N', b'G',
         ]))),
+        identity: test_data_image_identity(),
         size: ImageSizeSpec::new(AxisSize::AtMost(18), AxisSize::AtMost(18)),
         rotation: ImageRotation::None,
         colors: ImageColorContext::default(),
@@ -2877,6 +2903,7 @@ fn primary_display_host_expands_tilde_in_image_file_before_render_command() {
     let request = ImageResolveRequest {
         spec: test_image_spec_identity("~/Pictures/Pik.png"),
         source: ImageResolveSource::File(LispString::from_utf8("~/Pictures/Pik.png")),
+        identity: test_file_image_identity("~/Pictures/Pik.png"),
         size: ImageSizeSpec::new(AxisSize::AtMost(0), AxisSize::AtMost(24)),
         rotation: ImageRotation::None,
         colors: ImageColorContext::default(),
@@ -2965,6 +2992,7 @@ fn primary_display_host_resolve_image_sync_returns_cached_decode_failure_promptl
         source: ImageResolveSource::Data(ImageDataSource::Isolated(EncodedBytes::new(vec![
             0xde, 0xad,
         ]))),
+        identity: test_data_image_identity(),
         size: ImageSizeSpec::new(AxisSize::AtMost(0), AxisSize::AtMost(0)),
         rotation: ImageRotation::None,
         colors: ImageColorContext::default(),

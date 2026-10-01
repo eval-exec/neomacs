@@ -36919,3 +36919,82 @@ fn ligature_rule_composes_through_the_font_shape_driver() {
         glyphs_logical_text(first_text_glyphs)
     )
 }
+
+/// The cadence an image diagnostic may be attached to.
+///
+/// Measured, not assumed, because the two candidates behave very differently in
+/// a user's `*Messages*`.  Repeated layout of an *unchanged* frame consults the
+/// catalog on every pass — the counts below are one extra lookup per pass, all
+/// of them the same request — while GNU's display iterator does not run at all
+/// between glyph regenerations, so `image_error` fires three times for the first
+/// display of a failing image and never again while the frame merely redisplays
+/// (GNU 31.1 under Xvfb, `tmp/imgmsg/`).
+///
+/// Attaching a *Messages* line to the lookup itself would therefore log once per
+/// redisplay tick: the count in `*Messages*` would climb while the user does
+/// nothing.  The diagnostic has to be recorded once per failed load attempt
+/// instead, which is what the catalog ledger does.
+#[test]
+fn unchanged_frame_layout_consults_the_image_catalog_once_per_pass() {
+    let mut eval = Context::new();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    eval.set_display_host(Box::new(RecordingImageDisplayHost {
+        requests: Arc::clone(&requests),
+        video_requests: Arc::new(Mutex::new(Vec::new())),
+        webkit_requests: Arc::new(Mutex::new(Vec::new())),
+        surface_requests: Arc::new(Mutex::new(Vec::new())),
+    }));
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("unchanged-frame-image-lookups", 640, 200, buf_id);
+    realize_test_gui_frame(&mut eval, frame_id);
+    {
+        let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+        frame.char_width = 8.0;
+        frame.char_height = 18.0;
+    }
+    let image_spec = Value::list(vec![
+        Value::symbol("image"),
+        Value::keyword("type"),
+        Value::symbol("png"),
+        Value::keyword("file"),
+        Value::string("/tmp/neomacs-unchanged-frame.png"),
+        Value::keyword("max-width"),
+        Value::fixnum(32),
+        Value::keyword("max-height"),
+        Value::fixnum(24),
+    ]);
+    {
+        let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        buf.insert("HEAD\nX\nbody line\nTAIL\n");
+        assert!(buf.put_text_property(5, 6, Value::symbol("display"), image_spec));
+    }
+
+    let mut engine = LayoutEngine::new();
+    let mut new_lookups = Vec::new();
+    for _ in 0..5 {
+        let before = requests.lock().expect("requests lock").len();
+        engine.layout_frame_rust(&mut eval, frame_id);
+        let after = requests.lock().expect("requests lock").len();
+        new_lookups.push(after - before);
+    }
+    let all = requests.lock().expect("requests lock").clone();
+    let distinct: std::collections::HashSet<_> = all.iter().collect();
+
+    assert_eq!(
+        distinct.len(),
+        1,
+        "an unchanged frame must consult one image request, not several"
+    );
+    assert_eq!(
+        new_lookups,
+        vec![2, 1, 1, 1, 1],
+        "an unchanged frame re-consults its image once per layout pass; a \
+         *Messages* line wired to the lookup would grow on every redisplay"
+    );
+}

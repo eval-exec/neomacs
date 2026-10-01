@@ -2,11 +2,13 @@ use super::*;
 use neomacs_display_runtime::render_thread::ImageRenderState;
 use neovm_core::emacs_core::Context;
 use neovm_core::emacs_core::Value;
+use neovm_core::emacs_core::image::image_load_identity;
 use neovm_core::emacs_core::image_catalog::ImageSizeLimit;
 use neovm_core::emacs_core::image_catalog::{
     AxisSize, ImageColorContext, ImageDefaultScale, ImageScaleEnvironment, ImageScalePolicy,
     ImageSizeSpec, ImageSpecIdentity,
 };
+use neovm_core::emacs_core::value::list_to_vec;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -24,8 +26,10 @@ fn file_request(path: &str) -> ImageResolveRequest {
             Value::string(path),
         ])
     });
+    let items = list_to_vec(&spec).expect("test image spec is a list");
     ImageResolveRequest {
         spec: ImageSpecIdentity::from_lisp_spec(&spec).expect("test image spec"),
+        identity: image_load_identity(&spec, &items),
         source: ImageResolveSource::File(LispString::from_utf8(path)),
         size: ImageSizeSpec::new(AxisSize::AtMost(24), AxisSize::AtMost(24)),
         rotation: Default::default(),

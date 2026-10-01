@@ -10,6 +10,7 @@ use crate::heap_types::LispString;
 use crate::window::Frame;
 pub use neomacs_display_protocol::ImageRealization as ResolvedImageRealization;
 pub use neomacs_display_protocol::image::EncodedBytes;
+use neomacs_display_protocol::image_diagnostic::{ImageDiagnosticSubject, ImageFormatName};
 pub use neomacs_display_protocol::{
     AxisSize, ImageColorContext, ImageEmbeddedMetadata, ImageFrameDelay, ImageFrameIndex,
     ImageHeuristicMask, ImageId, ImageLayoutExtent, ImageLoadAttempt, ImageLoadToken,
@@ -290,6 +291,41 @@ pub enum ImageResolveSource {
 
 pub use crate::image_identity::ImageSpecIdentity;
 
+/// What GNU calls the source a load command is about.
+///
+/// GNU words its image diagnostics with the *declared* type and with the
+/// subject the source actually has. The type is a fact about the request, not
+/// about the bytes: an image declared `png` whose bytes are a JPEG is a PNG its
+/// loader refused, and GNU says so (`Not a PNG file: `%s'`, `src/image.c:8302`).
+/// The subject differs the same way — a `:data` image has no file to name, so
+/// GNU prints the whole specification instead (`src/image.c:8323`). Both have
+/// to reach the loader that words the failure, and this is the last point at
+/// which the specification is still a Lisp object to print.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ImageLoadIdentity {
+    format: ImageFormatName,
+    subject: ImageDiagnosticSubject,
+}
+
+impl ImageLoadIdentity {
+    #[must_use]
+    pub const fn new(format: ImageFormatName, subject: ImageDiagnosticSubject) -> Self {
+        Self { format, subject }
+    }
+
+    /// The image's declared GNU type, as its loaders spell it.
+    #[must_use]
+    pub const fn format(&self) -> &ImageFormatName {
+        &self.format
+    }
+
+    /// What GNU names when it has to say which image failed.
+    #[must_use]
+    pub const fn subject(&self) -> &ImageDiagnosticSubject {
+        &self.subject
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ImageResolveRequest {
     /// Full Lisp-spec identity. Parsed fields below are the materialization
@@ -309,6 +345,13 @@ pub struct ImageResolveRequest {
     /// Zero-based GNU `:index` selected from a multi-frame source.
     pub frame: ImageFrameIndex,
     pub realization: ResolvedImageRealization,
+    /// The type and subject GNU's loaders word their diagnostics with.
+    ///
+    /// Derived from the same specification the rest of this request is, so it
+    /// cannot disagree with it; it travels here rather than being recomputed
+    /// at the failure site because only this side can print a `:data` image's
+    /// specification the way GNU does.
+    pub identity: ImageLoadIdentity,
 }
 
 /// Cache operation requested by the Lisp image compatibility layer.

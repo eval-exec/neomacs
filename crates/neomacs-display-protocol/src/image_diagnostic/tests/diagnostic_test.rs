@@ -23,9 +23,9 @@ fn missing_file_matches_gnu_31_1() {
 /// GNU 31.1: the same probe against a file whose bytes are not a PNG.
 #[test]
 fn undecodable_file_names_the_declared_format_and_the_file() {
-    let diagnostic = ImageDiagnostic::NotAFormatFile {
+    let diagnostic = ImageDiagnostic::NotAFormat {
         format: ImageFormatName::Png,
-        file: "/tmp/imgmsg/fixtures/notimage.png".to_owned(),
+        subject: ImageDiagnosticSubject::File("/tmp/imgmsg/fixtures/notimage.png".to_owned()),
     };
     assert_eq!(
         diagnostic.message(),
@@ -37,7 +37,7 @@ fn undecodable_file_names_the_declared_format_and_the_file() {
 /// file to report.
 #[test]
 fn undecodable_data_names_the_spec_not_a_file() {
-    let diagnostic = ImageDiagnostic::NotAFormatImage {
+    let diagnostic = ImageDiagnostic::NotAFormat {
         format: ImageFormatName::Png,
         subject: ImageDiagnosticSubject::Spec(
             "(image :type png :data definitely not an image :scale default)".to_owned(),
@@ -100,11 +100,11 @@ fn every_variant_carries_gnu_text() {
         ImageDiagnostic::FileNotFound {
             file: "f".to_owned(),
         },
-        ImageDiagnostic::NotAFormatFile {
+        ImageDiagnostic::NotAFormat {
             format: ImageFormatName::Pbm,
-            file: "f".to_owned(),
+            subject: ImageDiagnosticSubject::File("f".to_owned()),
         },
-        ImageDiagnostic::NotAFormatImage {
+        ImageDiagnostic::NotAFormat {
             format: ImageFormatName::Png,
             subject: ImageDiagnosticSubject::Spec("s".to_owned()),
         },
@@ -117,4 +117,16 @@ fn every_variant_carries_gnu_text() {
     for diagnostic in all {
         assert!(!diagnostic.message().is_empty());
     }
+}
+
+/// A loader with no `Not a <TYPE> file:` arm reports a signature mismatch the
+/// way GNU does: as invalid data, naming the subject and not the type.  The
+/// declared type must not leak into a sentence GNU never writes.
+#[test]
+fn a_loader_gnu_does_not_word_this_way_reports_invalid_data() {
+    let diagnostic = ImageDiagnostic::NotAFormat {
+        format: ImageFormatName::Jpeg,
+        subject: ImageDiagnosticSubject::File("/tmp/x.jpg".to_owned()),
+    };
+    assert_eq!(diagnostic.message(), "Invalid image data `/tmp/x.jpg'");
 }

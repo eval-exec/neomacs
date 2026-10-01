@@ -148,14 +148,15 @@ pub enum ImageDiagnostic {
     /// the found file will not open, so it is the "the bytes are not there"
     /// verdict, not the "there are no bytes like that" one.
     FileNotFound { file: String },
-    /// The bytes are not the declared format, and that format's loader is one
-    /// of the two GNU words this way.
-    NotAFormatFile {
-        format: ImageFormatName,
-        file: String,
-    },
-    /// The same refusal for a `:data` source, where GNU names the spec.
-    NotAFormatImage {
+    /// The bytes are not the declared format.
+    ///
+    /// GNU words this two ways and the subject decides which: the `:file` arms
+    /// pass the file to `image_error ("Not a PNG file: `%s'", file)`
+    /// (`src/image.c:8302`) and the `:data` arms pass the whole spec
+    /// (`src/image.c:8323`), because a data image has no file to name. Only
+    /// PNG and PBM have this arm at all; every other loader reports a
+    /// signature mismatch as invalid data.
+    NotAFormat {
         format: ImageFormatName,
         subject: ImageDiagnosticSubject,
     },
@@ -181,12 +182,16 @@ impl ImageDiagnostic {
     pub fn message(&self) -> String {
         match self {
             Self::FileNotFound { file } => format!("Cannot find image file `{file}'"),
-            Self::NotAFormatFile { format, file } => {
-                format!("Not a {format} file: `{file}'")
+            Self::NotAFormat { format, subject } if format.words_signature_mismatch() => {
+                let noun = match subject {
+                    ImageDiagnosticSubject::File(_) => "file",
+                    ImageDiagnosticSubject::Spec(_) => "image",
+                };
+                format!("Not a {format} {noun}: `{subject}'")
             }
-            Self::NotAFormatImage { format, subject } => {
-                format!("Not a {format} image: `{subject}'")
-            }
+            // `image_invalid_data_error` (`src/image.c:1420`) is what every
+            // other loader reports a signature mismatch through.
+            Self::NotAFormat { subject, .. } => format!("Invalid image data `{subject}'"),
             Self::FormatError { format, detail } => match format {
                 // GNU's PNG loader hands libpng's message straight to
                 // `image_error ("PNG error: %s", ...)` (`src/image.c:8184`).

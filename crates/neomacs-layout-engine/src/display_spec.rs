@@ -10,13 +10,13 @@ use neovm_core::emacs_core::eval::{
     ShaderSurfaceLanguage, SurfaceResolveRequest, WebKitResolveRequest, WebKitResolveSource,
 };
 use neovm_core::emacs_core::image::{
-    ImageSpecKey, image_frame_index_from_lisp, image_mask_policy_from_items,
+    ImageSpecKey, image_frame_index_from_lisp, image_load_identity, image_mask_policy_from_items,
     image_resolve_source_from_items,
 };
 use neovm_core::emacs_core::image_catalog::{
-    AxisSize, ImageColorContext, ImageFrameIndex, ImageMaskPolicy, ImageResolveRequest,
-    ImageResolveSource, ImageRotation, ImageScaleEnvironment, ImageScalePolicy, ImageSizeSpec,
-    ImageSpecIdentity, numeric_image_scale,
+    AxisSize, ImageColorContext, ImageFrameIndex, ImageLoadIdentity, ImageMaskPolicy,
+    ImageResolveRequest, ImageResolveSource, ImageRotation, ImageScaleEnvironment,
+    ImageScalePolicy, ImageSizeSpec, ImageSpecIdentity, numeric_image_scale,
 };
 use neovm_core::emacs_core::value::{ValueKind, list_to_vec};
 use neovm_core::emacs_core::video::{VideoDisplayReference, parse_video_display_reference};
@@ -88,6 +88,10 @@ struct UnresolvedDisplayImageRequest {
     colors: ImageColorContext,
     mask: ImageMaskPolicy,
     frame: ImageFrameIndex,
+    /// What GNU calls this image in a failure diagnostic.  The layout engine
+    /// parses the same specification the evaluator does and must not name it
+    /// differently, so both ask [`neovm_core::emacs_core::image::image_load_identity`].
+    identity: ImageLoadIdentity,
 }
 
 /// Active-face metrics used by GNU image dimensions `(N . em/ch/cw)`.
@@ -347,6 +351,7 @@ impl DisplayImageLayout {
             mask: self.request.mask,
             frame: self.request.frame,
             realization: environment.resolve(self.scale),
+            identity: self.request.identity,
         }
     }
 }
@@ -480,6 +485,7 @@ pub(crate) fn parse_display_image_layout(
     }
 
     let source = image_resolve_source_from_items(&items)?;
+    let identity = image_load_identity(prop_val, &items);
     let spec = ImageSpecIdentity::from_lisp_spec(prop_val)?;
     // Kept apart per GNU: `:width`/`:height` are targets, `:max-*` are clamps.
     let (mut width, mut max_width) = (None, None);
@@ -553,6 +559,7 @@ pub(crate) fn parse_display_image_layout(
             colors: ImageColorContext::from_pixels(fg_color, bg_color),
             mask: image_mask_policy_from_items(&items),
             frame,
+            identity,
         },
         scale,
         ascent,

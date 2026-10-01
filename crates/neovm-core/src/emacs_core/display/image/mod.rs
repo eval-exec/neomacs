@@ -19,12 +19,13 @@ use crate::emacs_core::error::{expect_args, expect_args_range, expect_max_args, 
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::image_catalog::{
     AxisSize, EncodedBytes, ImageAnimationInvalidation, ImageColorContext, ImageDataSource,
-    ImageFrameIndex, ImageHeuristicMask, ImageInvalidation, ImageMaskKind, ImageMaskPolicy,
-    ImageResolveRequest, ImageResolveSource, ImageRotation, ImageScaleEnvironment,
+    ImageFrameIndex, ImageHeuristicMask, ImageInvalidation, ImageLoadIdentity, ImageMaskKind,
+    ImageMaskPolicy, ImageResolveRequest, ImageResolveSource, ImageRotation, ImageScaleEnvironment,
     ImageScalePolicy, ImageSizeSpec, ImageSpecIdentity, image_scale_environment,
     numeric_image_scale,
 };
 use crate::window::FRAME_ID_BASE;
+use neomacs_display_protocol::image_diagnostic::{ImageDiagnosticSubject, ImageFormatName};
 use strum::{EnumString, IntoStaticStr};
 
 // ---------------------------------------------------------------------------
@@ -402,6 +403,45 @@ fn validate_image_area(area: Value) -> Result<(), Flow> {
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+/// What GNU calls an image specification when it reports a failure on it.
+///
+/// Both parsers of an image specification — this one, which builds the
+/// evaluator's resolve request, and the layout engine's display-spec parser —
+/// describe the same image, and GNU words a failure from facts about the
+/// request rather than about the bytes. One function for those facts is what
+/// keeps the two from naming the same image differently in *Messages*.
+///
+/// The type is GNU's `image_spec_value (spec, QCtype, NULL)` under the name the
+/// loaders spell it with. The subject follows GNU's own split: an image with a
+/// `:file` is named by that file, and an image with only `:data` is named by
+/// the whole printed specification, because it has no file to report
+/// (`src/image.c:8285`, `:8302`, `:8323`).
+#[must_use]
+pub fn image_load_identity(spec: &Value, items: &[Value]) -> ImageLoadIdentity {
+    let mut format = None;
+    let mut file = None;
+    let mut index = 1;
+    while index + 1 < items.len() {
+        let value = items[index + 1];
+        match ImageSpecKey::from_lisp_value(items[index]) {
+            Some(ImageSpecKey::Type) => {
+                format = value.as_symbol_name().map(ImageFormatName::from_lisp_type);
+            }
+            Some(ImageSpecKey::File) => file = value.as_utf8_str().map(str::to_owned),
+            _ => {}
+        }
+        index += 2;
+    }
+    let subject = match file {
+        Some(path) => ImageDiagnosticSubject::File(path),
+        None => ImageDiagnosticSubject::Spec(super::print::print_value(spec)),
+    };
+    ImageLoadIdentity::new(
+        format.unwrap_or_else(|| ImageFormatName::Other(String::new())),
+        subject,
+    )
+}
+
 fn infer_image_type_from_filename(path: &str) -> Option<&'static str> {
     ImageFilenameType::from_file_name(path).map(ImageFilenameType::name)
 }
@@ -563,8 +603,13 @@ pub(crate) fn image_resolve_request_from_spec(
         return None;
     }
 
-    let spec = ImageSpecIdentity::from_lisp_spec(spec)?;
     let source = image_resolve_source_from_items(&items)?;
+    // Built before `spec` is consumed into its opaque cache identity: GNU's
+    // `:data` diagnostic prints the specification, and this is the last point
+    // that still owns one.
+    let identity = image_load_identity(spec, &items);
+
+    let spec = ImageSpecIdentity::from_lisp_spec(spec)?;
     // GNU keeps these four apart: `:width`/`:height` are targets that override
     // their `:max-` counterpart, `:max-width`/`:max-height` are clamps.
     let (mut width, mut max_width) = (None, None);
@@ -629,6 +674,7 @@ pub(crate) fn image_resolve_request_from_spec(
         mask: image_mask_policy_from_items(&items),
         frame,
         realization: environment.resolve(scale),
+        identity,
     })
 }
 
