@@ -392,7 +392,7 @@ pub(crate) fn set_chrome_position_source_for_test(source: Option<ChromePositionS
 }
 
 /// The knob, read once per process: `rows` selects [`ChromePositionSource::Rows`];
-/// unset or anything else keeps [`ChromePositionSource::Frame`].
+/// unset selects rows; explicit off or any other value keeps [`ChromePositionSource::Frame`].
 fn chrome_position_source() -> ChromePositionSource {
     #[cfg(test)]
     if let Some(source) = CHROME_POSITION_SOURCE_OVERRIDE.with(|cell| cell.get()) {
@@ -405,7 +405,7 @@ fn chrome_position_source() -> ChromePositionSource {
             .map(|value| value.trim().to_ascii_lowercase())
             .as_deref()
         {
-            Some("rows" | "on" | "1") => ChromePositionSource::Rows,
+            None | Some("rows" | "on" | "1") => ChromePositionSource::Rows,
             _ => ChromePositionSource::Frame,
         }
     })
