@@ -12,11 +12,13 @@ Unicode fallback within those families remains the editor's responsibility."
          (families nil)
          (overlay-count 0))
     (dolist (family '("DejaVu Sans Mono" "DejaVu Serif" "DejaVu Sans"
-                      "Liberation Mono" "Liberation Serif" "Liberation Sans"))
+                      "Liberation Mono" "Liberation Serif" "Liberation Sans"
+                      "Consolas" "Arial" "Times New Roman"
+                      "Menlo" "Helvetica" "Times" "Georgia"))
       (when (member family available)
         (setq families (append families (list family)))))
     (unless (>= (length families) 3)
-      (error "Rich scrolling requires three installed DejaVu/Liberation families: %S" families))
+      (error "Rich scrolling requires three installed font families: %S" families))
     (let* ((faces
             (vector
              `(:family ,(nth 0 families) :height 100 :weight normal :foreground "#b0c4de")
