@@ -21,6 +21,8 @@ mod buffers;
 mod child_frames;
 #[path = "command_loop_subreads.rs"]
 mod command_loop_subreads;
+#[path = "display_line_numbers.rs"]
+mod display_line_numbers;
 #[path = "editing.rs"]
 mod editing;
 #[path = "editing_motion.rs"]

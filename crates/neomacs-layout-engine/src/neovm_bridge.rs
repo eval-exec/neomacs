@@ -81,16 +81,23 @@ impl DisplayLineNumbersSymbol {
 impl DisplayLineNumbersMode {
     fn from_lisp_value(value: Option<Value>) -> Self {
         match value {
-            Some(v) if v.bits() == Value::T.bits() => Self::Absolute,
-            Some(value) => value
-                .as_symbol_name()
-                .and_then(DisplayLineNumbersSymbol::from_symbol_name)
-                .map(|symbol| match symbol {
-                    DisplayLineNumbersSymbol::Relative => Self::Relative,
-                    DisplayLineNumbersSymbol::Visual => Self::Visual,
-                })
-                .unwrap_or(Self::Off),
-            None => Self::Off,
+            // GNU dispatches only the two special symbols
+            // (`xdisp.c` maybe_produce_line_number: `EQ (..., Qrelative)`
+            // and `EQ (..., Qvisual)`); every other non-nil value — `t`,
+            // the `'absolute` a user init sets, anything else truthy — is
+            // ABSOLUTE line numbers. Rejecting unrecognized symbols here
+            // switched the whole gutter off for
+            // `(setq display-line-numbers-type 'absolute)` (issue #441).
+            Some(value) if value.is_truthy() => {
+                match DisplayLineNumbersSymbol::from_symbol_name(value.as_symbol_name().unwrap_or(""))
+                {
+                    Some(DisplayLineNumbersSymbol::Relative) => Self::Relative,
+                    Some(DisplayLineNumbersSymbol::Visual) => Self::Visual,
+                    // GNU's absolute: `t`, `'absolute`, any other truthy value.
+                    None => Self::Absolute,
+                }
+            }
+            _ => Self::Off,
         }
     }
 }
