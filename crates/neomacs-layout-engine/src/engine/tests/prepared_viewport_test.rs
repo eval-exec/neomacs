@@ -38,7 +38,7 @@ fn returning_to_a_prepared_page_reuses_body_and_matches_fresh_layout() {
             );
             assert!(
                 engine.last_layout_stats().reused_rows > 10,
-                "returning to a prepared page must reuse its body: {:?}",
+                "step {step}, start {start}: returning to a prepared page must reuse its body: {:?}",
                 engine.last_layout_stats()
             );
         }

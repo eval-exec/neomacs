@@ -35,6 +35,8 @@ mod line_spacing;
 mod display_motion;
 
 mod chrome_memo_engine_test;
+#[cfg(test)]
+mod displayed_start_key_test;
 mod edit_replay_point_visibility_test;
 mod edit_replay_row_extent_test;
 mod edit_sync_engine_test;

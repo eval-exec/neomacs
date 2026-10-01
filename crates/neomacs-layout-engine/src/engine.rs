@@ -343,6 +343,47 @@ fn window_position_publication(
     WindowPositionPublication::Redisplay
 }
 
+/// The retained KEY with the window start the MATRIX was laid out from.
+///
+/// A key is taken from a window's inputs before its layout. When the layout
+/// itself moves the start -- point left the window, GNU's `try_scrolling` or
+/// recentering inside `redisplay_window` -- it resolves the new start within
+/// the same attempt, so the key still names the old one while the matrix
+/// shows the new. The next frame's inputs then carry the new start, the keys
+/// differ, and that frame is laid out in full: after `M->` from a distant
+/// point the first keystroke evaluated the mode line where GNU's optimization
+/// 1 keeps it (GNU's `w->start` is the start it displayed), and a forced idle
+/// redisplay that would have settled the key was skipped under
+/// `NEOMACS_REDISPLAY_IDLE_SKIP` (the mode-line oracle's `typenofl` case).
+///
+/// The start is corrected only when the live window's start (LIVE_START) is
+/// where the matrix's first text row begins; otherwise the key is kept, and
+/// the next frame is laid out in full as before.
+pub(crate) fn key_with_displayed_window_start(
+    key: &RetainedWindowKey,
+    matrix: &neomacs_display_protocol::glyph_matrix::GlyphMatrix,
+    live_start: Option<i64>,
+) -> RetainedWindowKey {
+    let mut key = key.clone();
+    let Some(live_start) = live_start else {
+        return key;
+    };
+    if live_start == key.window_start {
+        return key;
+    }
+    let first_text_row_start = matrix
+        .rows
+        .iter()
+        .find(|row| {
+            row.enabled && row.displays_text && !RetainedWindowMatrix::is_chrome_role(row.role)
+        })
+        .map(|row| row.start_charpos as i64);
+    if first_text_row_start == Some(live_start) {
+        key.window_start = live_start;
+    }
+    key
+}
+
 /// Select the semantic viewport start before the leaf can enter Lisp.
 ///
 /// GNU decides its start, commits `w->start`, and runs
@@ -2179,6 +2220,34 @@ impl LayoutEngine {
                     } else {
                         None
                     };
+                    // With no partial walk, the leaf may resolve a different
+                    // semantic start before producing rows. History keys name
+                    // that displayed start. Preserve ordinary scroll/edit plans,
+                    // which consume the input start exactly, but prefer a full
+                    // historical viewport over shifting a subset of that page.
+                    if cursor_only.is_none() && scroll.is_none() {
+                        let resolved_start = resolve_leaf_window_start(
+                            evaluator,
+                            params,
+                            &frame_params,
+                            layout_box,
+                            WindowPositionPublication::Redisplay,
+                            false,
+                        );
+                        if resolved_start.get() != key.window_start {
+                            let mut prepared_key = key.clone();
+                            prepared_key.window_start = resolved_start.get();
+                            if let Some((replay, faces)) = self.prepared_viewports.replay(
+                                frame_id,
+                                DisplayWindowId::new(params.window_id),
+                                &prepared_key,
+                                params.force_start,
+                            ) {
+                                cursor_only = Some(replay);
+                                prepared_faces = Some(faces);
+                            }
+                        }
+                    }
                     // A cached page supplies content, not a new viewport
                     // decision. Point motion alone must still run recentering.
                     // Prefer an existing backward synchronization plan over
@@ -3252,11 +3321,25 @@ impl LayoutEngine {
                     else {
                         continue;
                     };
+                    let displayed_key = key_with_displayed_window_start(
+                        key,
+                        &entry.matrix,
+                        evaluator
+                            .frame_manager()
+                            .get(frame_id)
+                            .and_then(|frame| {
+                                frame.find_window(neovm_core::window::WindowId(
+                                    window_id.get() as u64
+                                ))
+                            })
+                            .and_then(neovm_core::window::Window::window_start)
+                            .map(crate::coords::lisp_char_pos_to_layout_i64),
+                    );
                     retained.insert(
                         window_id,
                         RetainedWindowMatrix {
                             matrix: entry.matrix.clone(),
-                            key: key.clone(),
+                            key: displayed_key,
                             // Every enabled body row now carries real
                             // MATRIX_ROW_START/END_CHARPOS values (empty lines
                             // hold their line's position; the EOB placeholder
