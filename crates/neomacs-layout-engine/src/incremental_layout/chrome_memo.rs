@@ -28,8 +28,8 @@
 //! chrome rows (their face ids stay valid for the same reason a retained
 //! chrome's do), so a full layout never hits it.
 //!
-//! * `off` (the default): no fingerprints, no memo.
-//! * `on`: a hit installs the previous row.
+//! * `off`: no fingerprints, no memo.
+//! * `on` (the default): a hit installs the previous row.
 //! * `verify`: a hit renders anyway and compares the two rows; a mismatch is
 //!   logged and counted, and the rendered row stands.
 
@@ -77,7 +77,7 @@ pub(crate) fn set_chrome_memo_mode_for_test(mode: Option<ChromeMemoMode>) {
     MODE_OVERRIDE.with(|cell| cell.set(mode));
 }
 
-/// The mode in effect. Read once per process; default off.
+/// The mode in effect. Read once per process; default on.
 pub(crate) fn chrome_memo_mode() -> ChromeMemoMode {
     #[cfg(test)]
     if let Some(mode) = MODE_OVERRIDE.with(std::cell::Cell::get) {
@@ -90,7 +90,7 @@ pub(crate) fn chrome_memo_mode() -> ChromeMemoMode {
             .map(|value| value.trim().to_ascii_lowercase())
             .as_deref()
         {
-            Some("on" | "1" | "true" | "yes") => ChromeMemoMode::On,
+            None | Some("on" | "1" | "true" | "yes") => ChromeMemoMode::On,
             Some("verify") => ChromeMemoMode::Verify,
             _ => ChromeMemoMode::Off,
         }
