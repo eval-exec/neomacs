@@ -421,6 +421,8 @@ fn jit_pipeline_optional_shim_groups_follow_the_leaf_not_the_module() {
         subr_spec: true,
         cbsym_spec: true,
         tier2_profile: true,
+        direct_shapes: true,
+        call_census: true,
     };
     let ids = ShimIds::declare(&mut module, CallConv::SystemV, types::I64, every).expect("ids");
     let again = ShimIds::declare(&mut module, CallConv::SystemV, types::I64, every).expect("ids");
@@ -436,6 +438,8 @@ fn jit_pipeline_optional_shim_groups_follow_the_leaf_not_the_module() {
         subr_spec: false,
         cbsym_spec: false,
         tier2_profile: false,
+        direct_shapes: false,
+        call_census: false,
     };
     let refs = RtRefs::new(ids, base_only, &mut func, CallConv::SystemV, types::I64);
     assert_eq!(
@@ -446,9 +450,45 @@ fn jit_pipeline_optional_shim_groups_follow_the_leaf_not_the_module() {
     assert!(refs.try_get(&mut func, Shim::CallSubrSpec).is_none());
     assert!(refs.try_get(&mut func, Shim::CbsymRead).is_none());
     assert!(refs.try_get(&mut func, Shim::TierRequest).is_none());
+    assert!(refs.try_get(&mut func, Shim::DirectSlow).is_none());
+    assert!(refs.try_get(&mut func, Shim::CallCensus).is_none());
     let cons = refs.get(&mut func, Shim::Cons);
     assert_eq!(refs.get(&mut func, Shim::Cons), cons, "imported once");
     assert_eq!(func.dfg.ext_funcs.len(), 1);
+
+    // Eager mode must also leave disabled shape/census imports absent.
+    shim_refs::force_lazy_shims_for_test(false);
+    let mut eager_func =
+        Function::with_name_signature(UserFuncName::user(0, 0), Signature::new(CallConv::SystemV));
+    let eager_refs = RtRefs::new(
+        ids,
+        base_only,
+        &mut eager_func,
+        CallConv::SystemV,
+        types::I64,
+    );
+    assert!(
+        eager_refs
+            .try_get(&mut eager_func, Shim::DirectSlow)
+            .is_none()
+    );
+    assert!(
+        eager_refs
+            .try_get(&mut eager_func, Shim::CallCensus)
+            .is_none()
+    );
+    for shim in [Shim::DirectSlow, Shim::CallCensus] {
+        let id = ids.get(shim).expect("backend declares every group");
+        assert!(
+            eager_func
+                .params
+                .user_named_funcs()
+                .values()
+                .all(|name| name.index != id.as_u32()),
+            "{shim:?}: disabled group imported eagerly"
+        );
+    }
+    shim_refs::force_lazy_shims_for_test(true);
 }
 
 /// [`compile_corpus`] for the persistent-module tests.

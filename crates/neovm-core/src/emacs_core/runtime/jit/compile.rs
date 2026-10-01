@@ -3727,10 +3727,13 @@ fn build_leaf_fn<S: LeafSink>(
             // this for the baseline `ObjectModule` and the two shims become imports
             // resolved against the host at `dlopen`.
             let cbsym_spec = spec_sites.values().any(|site| site.kind.is_cbsym());
+            let shapes = jit_direct_shapes();
             let groups = ShimGroups {
                 subr_spec,
                 cbsym_spec,
                 tier2_profile: emit.t2.is_some(),
+                direct_shapes: !aot && (shapes.optional || shapes.rest),
+                call_census: !aot && jit_call_census_on(),
             };
             let refs = RtRefs::new(
                 sink.shim_ids(call_conv, ptr_ty, groups)?,

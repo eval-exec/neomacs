@@ -98,4 +98,7 @@ const NEOVM_JIT_SHIM_NAMES: &[&str] = &[
     "neovm_jit_t2_call_use_prof",
     "neovm_jit_t2_apply_use_prof",
     "neovm_jit_t2_record_call_use_target",
+    // JIT-only emission, named and registered through the lazy shim table.
+    "neovm_jit_direct_slow",
+    "neovm_jit_call_census",
 ];

@@ -94,6 +94,8 @@ fn tier2_profile_shims_are_optional_for_a_leaf() {
         subr_spec: true,
         cbsym_spec: true,
         tier2_profile: false,
+        direct_shapes: false,
+        call_census: false,
     };
     assert!(!groups.contains(super::super::shim_refs::ShimGroup::Tier2Profile));
 }

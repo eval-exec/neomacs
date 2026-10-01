@@ -49,6 +49,8 @@ pub(crate) fn pure_entry_refs<S: sink::LeafSink>(
         subr_spec: false,
         cbsym_spec: false,
         tier2_profile: true,
+        direct_shapes: false,
+        call_census: false,
     };
     Ok(RtRefs::new(
         sink.shim_ids(call_conv, ptr_ty, groups)?,

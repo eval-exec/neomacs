@@ -5,7 +5,7 @@
 //! framed.
 //!
 //! Under the knob every JIT `Op::Call`/`Op::Apply` site first calls
-//! [`neovm_jit_call_census`] (by baked address; never in an AOT object) with
+//! [`neovm_jit_call_census`] (through the lazy shim table; JIT only) with
 //! its kind and the word that names its callee, and the shim classifies the
 //! callee from state the call itself would read: a named spec site from its
 //! slot (the leaf and key flags its previous calls armed), a call of a value
@@ -229,6 +229,7 @@ fn applied_shape(function: Value) -> CallShape {
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[cold]
 #[inline(never)]
+#[unsafe(no_mangle)]
 pub(crate) extern "C" fn neovm_jit_call_census(
     ctx: *mut u8,
     site: i64,
@@ -279,16 +280,10 @@ pub(crate) fn emit_census_call(
     word: ClifValue,
     args: &[ClifValue],
 ) {
-    let mut sig = Signature::new(rt.refs.call_conv);
-    sig.params.push(AbiParam::new(rt.ptr_ty));
-    for _ in 0..4 {
-        sig.params.push(AbiParam::new(types::I64));
-    }
-    let sig = fb.import_signature(sig);
-    let addr = fb.ins().iconst(
-        rt.ptr_ty,
-        neovm_jit_call_census as *const () as usize as i64,
-    );
+    let census = rt
+        .refs
+        .try_get(fb.func, Shim::CallCensus)
+        .expect("the enabled JIT census declares its shim");
     let site_v = fb.ins().iconst(types::I64, site as i64);
     let arg0 = match args.first() {
         Some(&a) => a,
@@ -296,8 +291,7 @@ pub(crate) fn emit_census_call(
     };
     let n_v = fb.ins().iconst(types::I64, args.len() as i64);
     let vmctx = fb.use_var(rt.vmctx_var);
-    fb.ins()
-        .call_indirect(sig, addr, &[vmctx, site_v, word, arg0, n_v]);
+    fb.ins().call(census, &[vmctx, site_v, word, arg0, n_v]);
 }
 
 /// Emit the census call of the `Op::Call`/`Op::Apply` site `op` about to be

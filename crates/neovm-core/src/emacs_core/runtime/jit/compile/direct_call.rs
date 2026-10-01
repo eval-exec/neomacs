@@ -682,14 +682,13 @@ pub(crate) fn emit_direct_bytecode_call(
         DirectCallee::Symbol { sym_v, exp_v } => {
             // A call the shim's exact path does not arm: the shim, then
             // this site's own arming of its shape.
-            let slow_sig = fb.import_signature(slow_signature(rt.refs.call_conv, ptr_ty));
-            let slow_addr = fb
-                .ins()
-                .iconst(ptr_ty, neovm_jit_direct_slow as *const () as usize as i64);
+            let slow = rt
+                .refs
+                .try_get(fb.func, Shim::DirectSlow)
+                .expect("a shaped direct site declares its slow shim");
             let shape = fb.ins().iconst(types::I64, site.callee.word());
-            fb.ins().call_indirect(
-                slow_sig,
-                slow_addr,
+            fb.ins().call(
+                slow,
                 &[
                     vmctx_s, sym_v, exp_v, slot_v, args_addr, n_val, out_addr, shape,
                 ],
@@ -717,26 +716,6 @@ pub(crate) fn emit_direct_bytecode_call(
     }
 }
 
-/// [`neovm_jit_direct_slow`]'s Cranelift signature: `neovm_jit_call_spec`'s
-/// and the site's shape word.
-fn slow_signature(call_conv: cranelift_codegen::isa::CallConv, ptr_ty: types::Type) -> Signature {
-    let mut sig = Signature::new(call_conv);
-    for ty in [
-        ptr_ty,     // vmctx
-        types::I64, // the called symbol
-        types::I64, // expected
-        types::I64, // slot
-        ptr_ty,     // args
-        types::I64, // nargs
-        ptr_ty,     // out
-        types::I64, // the callee's shape (`CalleeShape::word`)
-    ] {
-        sig.params.push(AbiParam::new(ty));
-    }
-    sig.returns.push(AbiParam::new(types::I64));
-    sig
-}
-
 /// The slow path of a direct site whose call is not its callee's frame as
 /// laid out (a short call of an `&optional` callee, a call of a `&rest`
 /// one): `neovm_jit_call_spec`, the reference protocol, and then -- the
@@ -750,6 +729,7 @@ fn slow_signature(call_conv: cranelift_codegen::isa::CallConv, ptr_ty: types::Ty
 /// leaf's spec slot of this site.
 #[allow(clippy::too_many_arguments, clippy::not_unsafe_ptr_arg_deref)]
 #[inline(never)]
+#[unsafe(no_mangle)]
 pub(crate) extern "C" fn neovm_jit_direct_slow(
     ctx: *mut u8,
     sym_bits: i64,

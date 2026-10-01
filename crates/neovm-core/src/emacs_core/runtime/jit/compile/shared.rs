@@ -361,6 +361,8 @@ impl SharedJit {
                         subr_spec: true,
                         cbsym_spec: true,
                         tier2_profile: true,
+                        direct_shapes: true,
+                        call_census: true,
                     },
                 )?;
             }
@@ -380,6 +382,8 @@ impl SharedJit {
                 subr_spec: true,
                 cbsym_spec: true,
                 tier2_profile,
+                direct_shapes: true,
+                call_census: true,
             },
         )?;
         *slot = Some(SharedModule {

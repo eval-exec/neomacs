@@ -19,9 +19,11 @@
 //! Either way the machine code is the same: an import that is never called
 //! emits nothing.
 //!
-//! The shim NAMES and SIGNATURES are unchanged (`ABI_TAG_VERSION` stays): an
-//! AOT object imports exactly the shims its code calls, all of which were
-//! already in its import set.
+//! Existing shim IDs and signatures keep their order. New JIT-only shape
+//! and census shims are appended in optional groups; with their knobs off
+//! they are never imported, including under eager imports. Their exported
+//! names extend the ABI-salted name set (ABI v21), while AOT emission keeps
+//! both new groups off.
 
 use std::cell::Cell;
 
@@ -47,6 +49,10 @@ pub(crate) enum ShimGroup {
     CbsymSpec,
     /// T1 profiling only; never selected by AOT or a knob-off leaf.
     Tier2Profile,
+    /// Argument-normalizing direct calls (JIT only).
+    DirectShapes,
+    /// The call-shape measurement mode (JIT only).
+    CallCensus,
 }
 
 /// Every runtime shim generated code calls, in declaration order.
@@ -127,6 +133,11 @@ pub(crate) enum Shim {
     T2CallUseProf,
     T2ApplyUseProf,
     T2RecordCallUseTarget,
+    /// Append new shims after existing IDs to preserve off-mode imports.
+    /// `neovm_jit_direct_slow`: the reference call and shaped-entry arming.
+    DirectSlow,
+    /// `neovm_jit_call_census`: read-only call-shape measurement.
+    CallCensus,
 }
 
 /// The parameter shapes of the shim signatures.
@@ -197,6 +208,8 @@ impl Shim {
             Shim::T2CallUseProf => "neovm_jit_t2_call_use_prof",
             Shim::T2ApplyUseProf => "neovm_jit_t2_apply_use_prof",
             Shim::T2RecordCallUseTarget => "neovm_jit_t2_record_call_use_target",
+            Shim::DirectSlow => "neovm_jit_direct_slow",
+            Shim::CallCensus => "neovm_jit_call_census",
         }
     }
 
@@ -215,6 +228,8 @@ impl Shim {
             | Shim::T2CallUseProf
             | Shim::T2ApplyUseProf
             | Shim::T2RecordCallUseTarget => ShimGroup::Tier2Profile,
+            Shim::DirectSlow => ShimGroup::DirectShapes,
+            Shim::CallCensus => ShimGroup::CallCensus,
             Shim::RootwinGrow
             | Shim::Cons
             | Shim::MakeFloat
@@ -347,6 +362,10 @@ impl Shim {
             Shim::PredSpec | Shim::EqInclPropsSpec => (&[Ptr, I64, I64, I64, I64, I64, Ptr], true),
             // (vmctx, kind, sym, expected, slot_ptr, a, b, out_ptr)
             Shim::ArithSpec => (&[Ptr, I64, I64, I64, I64, I64, I64, Ptr], true),
+            // (vmctx, sym, expected, slot, args, nargs, out, shape) -> status
+            Shim::DirectSlow => (&[Ptr, I64, I64, I64, Ptr, I64, Ptr, I64], true),
+            // (vmctx, site, callee_or_slot, arg0, nargs) -> ()
+            Shim::CallCensus => (&[Ptr, I64, I64, I64, I64], false),
         }
     }
 
@@ -368,13 +387,19 @@ impl Shim {
     }
 }
 
-/// The groups a leaf declares: the base set always, the two optional groups
-/// when the body has sites that call them.
+/// The groups a leaf declares: the base set always, speculation groups
+/// when the body has their sites, and JIT-only shapes/census groups only
+/// under their knobs. The frontend keeps optional groups off even when the
+/// persistent backend declared them, preserving eager-import CLIF identity.
+/// Threading: these immutable compile facts belong to one leaf build; the
+/// table stores no Lisp state and each mutator owns its compilation module.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ShimGroups {
     pub(crate) subr_spec: bool,
     pub(crate) cbsym_spec: bool,
     pub(crate) tier2_profile: bool,
+    pub(crate) direct_shapes: bool,
+    pub(crate) call_census: bool,
 }
 
 impl ShimGroups {
@@ -384,6 +409,8 @@ impl ShimGroups {
             ShimGroup::SubrSpec => self.subr_spec,
             ShimGroup::CbsymSpec => self.cbsym_spec,
             ShimGroup::Tier2Profile => self.tier2_profile,
+            ShimGroup::DirectShapes => self.direct_shapes,
+            ShimGroup::CallCensus => self.call_census,
         }
     }
 }
