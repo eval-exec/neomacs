@@ -1179,6 +1179,7 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
             geometry.ascent(),
         );
         let mut row_break_face = None;
+        let mut resolved = crate::display_source_resolver::ResolvedDisplaySourceItem::empty();
         let stop = loop {
             let params = context.source_resolve_params(
                 default_row_face_id,
@@ -1186,9 +1187,9 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
                 fallback_metrics,
                 image_scale_environment,
             );
-            let resolved = state.next_resolved_item(source, params, context.face_ids());
-            let (item, pending_faces) = resolved.into_parts();
-            for pending in pending_faces {
+            state.next_resolved_item_into(source, params, context.face_ids(), &mut resolved);
+            let item = resolved.take_item();
+            for pending in resolved.drain_pending_faces() {
                 let (face_id, resolved) = pending.into_parts();
                 let row_face = face_realizer.realize_face(
                     face_id,

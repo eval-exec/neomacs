@@ -3,7 +3,7 @@ use crate::display_row::render_item::DisplayRowClippedRemainder;
 use crate::display_source::DisplayItemSource;
 use crate::display_source_resolver::{
     DisplaySourceFaceScope, DisplaySourceResolveParams, DisplaySourceResolveState,
-    ResolvedDisplaySourceItem, resolve_next_display_source_item,
+    ResolvedDisplaySourceItem, resolve_next_display_source_item_into,
 };
 use crate::frame_face_arena::FrameFaceAttempt;
 use crate::neovm_bridge::ResolvedFace;
@@ -38,31 +38,46 @@ impl DisplayRowSourceState {
         self.face_scope
     }
 
+    pub(crate) fn next_resolved_item_into(
+        &mut self,
+        source: &mut impl DisplayItemSource,
+        params: DisplaySourceResolveParams<'_>,
+        face_ids: &mut FrameFaceAttempt,
+        output: &mut ResolvedDisplaySourceItem,
+    ) {
+        if self.is_finished() {
+            output.clear();
+            return;
+        }
+        if let Some(item) = self.take_pending_item() {
+            output.set_pending_item(item);
+            return;
+        }
+        resolve_next_display_source_item_into(
+            source,
+            self.face_scope,
+            params,
+            &mut self.resolve_state,
+            face_ids,
+            output,
+        );
+        self.pending_non_text_area
+            .extend(output.take_pending_non_text_area());
+        if output.item().is_none() {
+            self.mark_exhausted();
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn next_resolved_item(
         &mut self,
         source: &mut impl DisplayItemSource,
         params: DisplaySourceResolveParams<'_>,
         face_ids: &mut FrameFaceAttempt,
     ) -> ResolvedDisplaySourceItem {
-        if self.is_finished() {
-            return ResolvedDisplaySourceItem::empty();
-        }
-        if let Some(item) = self.take_pending_item() {
-            return ResolvedDisplaySourceItem::new(Some(item), Vec::new());
-        }
-        let mut resolved = resolve_next_display_source_item(
-            source,
-            self.face_scope,
-            params,
-            &mut self.resolve_state,
-            face_ids,
-        );
-        self.pending_non_text_area
-            .extend(resolved.take_pending_non_text_area());
-        if resolved.item().is_none() {
-            self.mark_exhausted();
-        }
-        resolved
+        let mut output = ResolvedDisplaySourceItem::empty();
+        self.next_resolved_item_into(source, params, face_ids, &mut output);
+        output
     }
 
     /// Drain non-text-area output collected while resolving this source.
@@ -107,3 +122,7 @@ impl DisplayRowSourceState {
         self.exhausted && self.pending_item.is_none()
     }
 }
+
+#[cfg(test)]
+#[path = "source_state/tests/mod.rs"]
+mod tests;

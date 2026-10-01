@@ -367,35 +367,37 @@ pub(crate) struct ResolvedDisplaySourceItem {
 }
 
 impl ResolvedDisplaySourceItem {
-    pub(crate) fn new(
-        item: Option<DisplayItem>,
-        pending_faces: Vec<PendingDisplaySourceFace>,
-    ) -> Self {
+    pub(crate) fn empty() -> Self {
         Self {
-            item,
-            pending_faces,
+            item: None,
+            pending_faces: Vec::new(),
             pending_non_text_area: Vec::new(),
         }
     }
 
-    fn with_non_text_area(
-        item: Option<DisplayItem>,
-        pending_faces: Vec<PendingDisplaySourceFace>,
-        pending_non_text_area: Vec<crate::display_source::DisplayNonTextAreaEmission>,
-    ) -> Self {
-        Self {
-            item,
-            pending_faces,
-            pending_non_text_area,
-        }
+    /// Replace all output from the previous source step while retaining the
+    /// small face/emission vectors owned by the row loop.
+    pub(crate) fn clear(&mut self) {
+        self.item = None;
+        self.pending_faces.clear();
+        self.pending_non_text_area.clear();
     }
 
-    pub(crate) fn empty() -> Self {
-        Self::new(None, Vec::new())
+    pub(crate) fn set_pending_item(&mut self, item: DisplayItem) {
+        self.clear();
+        self.item = Some(item);
     }
 
     pub(crate) fn item(&self) -> Option<&DisplayItem> {
         self.item.as_ref()
+    }
+
+    pub(crate) fn take_item(&mut self) -> Option<DisplayItem> {
+        self.item.take()
+    }
+
+    pub(crate) fn drain_pending_faces(&mut self) -> std::vec::Drain<'_, PendingDisplaySourceFace> {
+        self.pending_faces.drain(..)
     }
 
     pub(crate) fn take_pending_non_text_area(
@@ -404,6 +406,7 @@ impl ResolvedDisplaySourceItem {
         std::mem::take(&mut self.pending_non_text_area)
     }
 
+    #[cfg(test)]
     pub(crate) fn into_parts(self) -> (Option<DisplayItem>, Vec<PendingDisplaySourceFace>) {
         (self.item, self.pending_faces)
     }
@@ -752,7 +755,7 @@ impl<'a> DisplaySourcePropertyResolver<'a> {
         }
     }
 
-    fn resolve_item_layout(&mut self, mut item: DisplayItem) -> DisplayItem {
+    fn resolve_item_layout(&mut self, item: &mut DisplayItem) {
         if let Some(overlay) = item.kind.semantic_face_overlay() {
             item.face = self.resolve_face_ref(item.face, Value::symbol(overlay.face_name()));
         }
@@ -767,7 +770,6 @@ impl<'a> DisplaySourcePropertyResolver<'a> {
             row_break.line_spacing =
                 self.resolve_line_spacing_policy(item.face, row_break.line_spacing);
         }
-        item
     }
 
     fn resolve_line_spacing_policy(
@@ -1052,6 +1054,39 @@ impl DisplayItemFaceResolver for DisplaySourcePropertyResolver<'_> {
     }
 }
 
+/// Resolve into storage owned by the row loop. In particular, the item layout
+/// is adjusted in place instead of returning a second large item aggregate.
+pub(crate) fn resolve_next_display_source_item_into(
+    source: &mut impl DisplayItemSource,
+    face_scope: DisplaySourceFaceScope,
+    params: DisplaySourceResolveParams<'_>,
+    state: &mut DisplaySourceResolveState,
+    face_ids: &mut FrameFaceAttempt,
+    output: &mut ResolvedDisplaySourceItem,
+) {
+    output.clear();
+    let mut resolver = DisplaySourcePropertyResolver::with_scope(
+        face_scope,
+        params,
+        state,
+        face_ids,
+        &mut output.pending_faces,
+    );
+    let mut context = DisplaySourceContext::with_face_resolver_and_non_text_area_sink(
+        &mut resolver,
+        &mut output.pending_non_text_area,
+        crate::display_property::DisplayPropertyTarget::for_window_system(
+            params.face_basis().face_resolver().is_window_system(),
+        ),
+    )
+    .with_automatic_composition(params.automatic_composition);
+    output.item = source.next_item(&mut context);
+    if let Some(item) = output.item.as_mut() {
+        resolver.resolve_item_layout(item);
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn resolve_next_display_source_item(
     source: &mut impl DisplayItemSource,
     face_scope: DisplaySourceFaceScope,
@@ -1059,29 +1094,9 @@ pub(crate) fn resolve_next_display_source_item(
     state: &mut DisplaySourceResolveState,
     face_ids: &mut FrameFaceAttempt,
 ) -> ResolvedDisplaySourceItem {
-    let mut pending_faces = Vec::new();
-    let mut pending_non_text_area = Vec::new();
-    let item = {
-        let mut resolver = DisplaySourcePropertyResolver::with_scope(
-            face_scope,
-            params,
-            state,
-            face_ids,
-            &mut pending_faces,
-        );
-        let mut context = DisplaySourceContext::with_face_resolver_and_non_text_area_sink(
-            &mut resolver,
-            &mut pending_non_text_area,
-            crate::display_property::DisplayPropertyTarget::for_window_system(
-                params.face_basis().face_resolver().is_window_system(),
-            ),
-        )
-        .with_automatic_composition(params.automatic_composition);
-        source
-            .next_item(&mut context)
-            .map(|item| resolver.resolve_item_layout(item))
-    };
-    ResolvedDisplaySourceItem::with_non_text_area(item, pending_faces, pending_non_text_area)
+    let mut output = ResolvedDisplaySourceItem::empty();
+    resolve_next_display_source_item_into(source, face_scope, params, state, face_ids, &mut output);
+    output
 }
 
 #[derive(Clone, Copy)]
