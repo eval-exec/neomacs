@@ -1413,6 +1413,27 @@ fn call_spec_slow(
         "a speculated call site's callee is a symbol"
     );
     let sym = called.xsymbol_id();
+    // A slot gone stale for an UNRELATED redefinition is current again once
+    // its symbol's stamp proves the binding unchanged (P1.3 A3,
+    // `NEOVM_FN_STAMPS`), keeping its cached leaf; when that leaf keys the
+    // fast path, the call re-enters the gate, which takes it unless the
+    // quit poll, the debugger or the depth needs the slow half. At most once
+    // per call: the slot now holds the clock, so a second slow entry finds
+    // nothing to resync. A resync whose leaf is gone falls through with the
+    // slot current, to the arming below.
+    if resync_spec_slot(ctx, sym, slot) && slot.direct_consts.load(Ordering::Relaxed) != 0 {
+        use crate::emacs_core::jit::stats::epoch::{SpecRevalidation, note_spec_revalidation};
+        note_spec_revalidation(SpecRevalidation::StampReentered);
+        return neovm_jit_call_spec(
+            ctx,
+            sym_bits,
+            expected,
+            slot as *const SpecSlot as i64,
+            args_ptr,
+            nargs as i64,
+            out,
+        );
+    }
     jit_shim_contain!(detach args_ptr, ctx, STATUS_SIGNAL, {
         // Build a rooted LispArgVec from the caller's call-args slot — used only by
         // the strict-call fallback paths (call_for_jit), inside their own
@@ -1535,6 +1556,46 @@ fn call_spec_slow(
             }
         }
     })
+}
+
+/// P1.3 A3 (design `p1-3-per-symbol-versions` §4.4 C1): move a slot whose
+/// armed epoch is stale to the clock when its symbol's function binding is
+/// provably the one it was armed for -- unchanged since the armed epoch, by
+/// the symbol's stamp ([`Obarray::fn_unchanged_since`], `NEOVM_FN_STAMPS`).
+/// That proof is identity, not bits, so the cached leaf may stay -- the
+/// bits re-arm below must drop it (an equal-bits object may be another
+/// function) -- unless the leaf was retired (re-tier, eviction, a deopt
+/// invalidation; design I5), which [`SpecSlot::clear_leaf`] then drops so
+/// the next call resolves the current one. Answers whether it moved the
+/// slot; `false` leaves everything to today's re-validation: a current or
+/// DISARMED slot (`u64::MAX` never validates), a redefined symbol, a raised
+/// floor, the force harness, the knob off.
+///
+/// Pure: no GC, no Lisp, no unwind, so it runs before the containment
+/// frame and needs no quit poll (the re-entered gate and the slow half
+/// poll). Threading: the clock is read BEFORE the stamps and that value is
+/// what the slot records (see `symbol::fn_stamps`); the slot words have the
+/// single-writer assumption of the rest of the slow half (a leaf's slots
+/// belong to one thread's cache).
+#[inline(never)]
+fn resync_spec_slot(ctx: *mut u8, sym: SymId, slot: &SpecSlot) -> bool {
+    // SAFETY: the shim contract's dormant Context, only read here.
+    let ctx = unsafe { &*(ctx as *const Context) };
+    let armed = slot.epoch.load(Ordering::Relaxed);
+    let now = ctx.obarray.function_epoch();
+    if armed == now || jit_force_slow_spec() || !ctx.obarray.fn_unchanged_since(sym, armed) {
+        return false;
+    }
+    let leaf = slot.leaf_ptr();
+    // SAFETY: a non-null slot leaf names a live or retired cache leaf, and a
+    // retired leaf stays allocated (`resolve_compiled_leaf_ptr`).
+    if !leaf.is_null() && unsafe { (*leaf).retired.get() } {
+        slot.clear_leaf();
+    }
+    slot.epoch.store(now, Ordering::Relaxed);
+    use crate::emacs_core::jit::stats::epoch::{SpecRevalidation, note_spec_revalidation};
+    note_spec_revalidation(SpecRevalidation::StampResynced);
+    true
 }
 
 /// Predicate discriminator for [`neovm_jit_pred_spec`] (baked as an iconst by

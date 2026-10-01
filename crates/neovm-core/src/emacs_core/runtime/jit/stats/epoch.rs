@@ -31,6 +31,15 @@ pub(crate) enum SpecRevalidation {
     /// The binding changed: the site takes the strict call.
     #[strum(serialize = "spec-rebind")]
     BindingChanged,
+    /// The site's symbol is provably unchanged since its armed epoch
+    /// (`NEOVM_FN_STAMPS`, `dispatch::resync_spec_slot`): the slot moved to
+    /// the clock without a binding lookup, keeping its cached leaf.
+    #[strum(serialize = "spec-stamp-resync")]
+    StampResynced,
+    /// Of those, the calls that re-entered the fast gate (the leaf was kept
+    /// and keys the fast path).
+    #[strum(serialize = "spec-stamp-reenter")]
+    StampReentered,
 }
 
 const SPEC_KINDS: usize = SpecRevalidation::COUNT;
