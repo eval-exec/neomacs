@@ -7,6 +7,7 @@
 //! - GPU texture upload when ready
 //! - LRU cache with memory limits
 
+use neomacs_display_protocol::image::EncodedBytes;
 use neomacs_display_protocol::{
     ImageCacheUsage, ImageColorContext, ImageFrameIndex, ImageId, ImageIntrinsicExtent,
     ImageLayoutExtent, ImageLoadAttempt, ImageLoadToken, ImageMaskKind, ImageMaskPolicy,
@@ -635,7 +636,7 @@ impl ImageCache {
     pub fn load_data_with_id(
         &mut self,
         load: ImageLoadToken,
-        data: &[u8],
+        data: EncodedBytes,
         size: ImageSizeSpec,
         rotation: ImageRotation,
         realization: ImageRealization,
@@ -648,7 +649,7 @@ impl ImageCache {
         let load = self.begin_load(load);
         let image = load.image();
         // Query dimensions for the pending-image placeholder.
-        if let Some(dims) = Self::query_data_intrinsic_extent(data) {
+        if let Some(dims) = Self::query_data_intrinsic_extent(&data) {
             self.pending_dimensions.insert(
                 image,
                 realization.resolve_geometry(size, dims, rotation).layout(),
@@ -660,7 +661,7 @@ impl ImageCache {
         self.decoder.submit(DecodeRequest {
             load,
             source: ImageSource::Data {
-                data: data.to_vec(),
+                data,
                 resources,
                 sequence,
             },
@@ -760,7 +761,7 @@ impl ImageCache {
         self.decoder.submit(DecodeRequest {
             load,
             source: ImageSource::Data {
-                data: data.to_vec(),
+                data: EncodedBytes::copy_of(data),
                 resources: neomacs_image::SvgResourceContext::Isolated,
                 sequence: ImageSequenceId::new(u64::from(image.get()))
                     .expect("allocated image identity is non-zero"),

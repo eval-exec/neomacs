@@ -10,7 +10,7 @@ use neomacs_display_protocol::{
 /// One encoded image realization; matches the native decoder's inputs.
 pub struct EncodedImage {
     pub load: ImageLoadToken,
-    pub bytes: Vec<u8>,
+    pub bytes: neomacs_display_protocol::image::EncodedBytes,
     pub size: ImageSizeSpec,
     pub rotation: ImageRotation,
     pub realization: ImageRealization,

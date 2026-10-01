@@ -4,6 +4,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use neomacs_display_protocol::image::EncodedBytes;
 use neomacs_display_protocol::{DecodedImage, ImageSequenceId};
 use neomacs_image::portable::{EncodedImage, PortableImageDecoder};
 use neovm_core::emacs_core::display_host::ImageHost;
@@ -49,10 +50,11 @@ impl BrowserImages {
                 ImageResolveSource::File(path) => {
                     let path = std::str::from_utf8(path.as_bytes())
                         .map_err(|_| "browser image file names must be UTF-8")?;
-                    self.resources.as_ref()
-                        .and_then(|resources| resources.file_contents(std::path::Path::new(path)))
-                        .ok_or("browser image file is not a packaged runtime resource; supply user images as :data")?
-                        .to_vec()
+                    EncodedBytes::copy_of(
+                        self.resources.as_ref()
+                            .and_then(|resources| resources.file_contents(std::path::Path::new(path)))
+                            .ok_or("browser image file is not a packaged runtime resource; supply user images as :data")?
+                    )
                 }
             };
             let limit = self.limits.borrow()[request];

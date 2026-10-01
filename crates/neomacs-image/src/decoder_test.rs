@@ -69,7 +69,7 @@ fn toolbar_png_keeps_intrinsic_colors_and_alpha() {
 
 fn decode_toolbar_pixels(data: &[u8]) -> Vec<u8> {
     let pixels = ImageDecoder::decode_data(
-        data,
+        EncodedBytes::copy_of(data),
         ImageSizeSpec::default(),
         ImageRotation::None,
         ImageColorContext::from_pixels(0xff0000, 0xabcdef)
@@ -1729,7 +1729,7 @@ fn varying_png(width: u32, height: u32) -> Vec<u8> {
 }
 
 fn whole_pixels(data: &[u8]) -> NativePixels {
-    ImageDecoder::decode_whole(data).expect("fixture decodes whole")
+    ImageDecoder::decode_whole(EncodedBytes::copy_of(data)).expect("fixture decodes whole")
 }
 
 fn decode_with_bands(
@@ -1738,7 +1738,7 @@ fn decode_with_bands(
     bands: &mut Vec<DecodedBand>,
 ) -> Option<DecodedPixels> {
     ImageDecoder::decode_data(
-        data,
+        EncodedBytes::copy_of(data),
         ImageSizeSpec::default(),
         ImageRotation::None,
         ImageColorContext::default(),
@@ -1880,7 +1880,7 @@ fn every_band_lands_in_the_raster_the_finished_upload_resolves() {
         let realization = ImageRealization::with_device_scale(scale, scale);
         let mut bands = Vec::new();
         let decoded = ImageDecoder::decode_data(
-            &data,
+            EncodedBytes::copy_of(&data),
             ImageSizeSpec::default(),
             ImageRotation::None,
             ImageColorContext::default(),
@@ -1954,7 +1954,7 @@ fn a_rotation_or_a_rewriting_mask_decodes_the_whole_image() {
     for (name, rotation, mask) in cases {
         let mut bands = Vec::new();
         let decoded = ImageDecoder::decode_data(
-            &data,
+            EncodedBytes::copy_of(&data),
             ImageSizeSpec::default(),
             rotation,
             ImageColorContext::default(),
@@ -2001,7 +2001,7 @@ fn a_source_below_the_threshold_keeps_the_whole_image_paths_filter() {
     let data = varying_png(width, height);
     let mut bands = Vec::new();
     let decoded = ImageDecoder::decode_data(
-        &data,
+        EncodedBytes::copy_of(&data),
         ImageSizeSpec::new(AxisSize::Exact(20), AxisSize::Exact(15)),
         ImageRotation::None,
         ImageColorContext::default(),
@@ -2035,7 +2035,7 @@ fn the_rows_a_band_hands_over_are_the_rows_the_finished_image_holds() {
     // A realization that really reduces: the raster is 500x500, so a band of
     // source rows has to be filtered rather than passed through.
     let decoded = ImageDecoder::decode_data(
-        &data,
+        EncodedBytes::copy_of(&data),
         ImageSizeSpec::new(AxisSize::Exact(500), AxisSize::Exact(500)),
         ImageRotation::None,
         ImageColorContext::default(),
@@ -2117,7 +2117,7 @@ fn the_texture_a_banded_decode_fills_ends_as_the_whole_image_paths() {
     // The finished upload, as `ImageDecoder::upload_texture` runs it when the
     // decode completes: the whole-image realization, written over the whole
     // texture in one call.
-    let whole = ImageDecoder::decode_whole(&data)
+    let whole = ImageDecoder::decode_whole(EncodedBytes::copy_of(&data))
         .expect("fixture decodes whole")
         .realize_bitmap(
             size,
@@ -2296,5 +2296,103 @@ fn a_jpeg_below_the_threshold_publishes_no_bands() {
     assert!(
         !above.is_empty(),
         "a JPEG at the threshold decodes in bands"
+    );
+}
+
+/// The acceptance criterion at the shape a large JPEG actually has on screen: a
+/// source wider than `MAX_TEXTURE_SIZE`, so the raster is the clamp and the
+/// filter is the streamed Lanczos3 from `f7bc3b18f8` rather than the identity.
+///
+/// Two things are pinned. **The bands are slices of the finished pixels** —
+/// they assemble into exactly the raster the decode ends with, so the preview
+/// during a decode is not an approximation of the image but the part of it that
+/// exists. And **the finished texture is the whole-image path's**: the same
+/// kernel over the same source rows, differing only where two implementations
+/// of one kernel round differently, by at most one level of 255 here.
+///
+/// That last clause is the same one the PNG arm carries and is not new here:
+/// `RasterTarget` accumulates in `i32` and clamps once at the end, where
+/// `image::imageops::resize` clamps per axis, so the two agree exactly wherever
+/// the filter is the identity — which is what
+/// `a_large_baseline_jpeg_bands_that_add_up_to_the_whole_image` pins byte for
+/// byte — and differ by rounding at a reduced raster. The bound is asserted
+/// rather than the equality so that a wrong kernel, a dropped band or a band at
+/// the wrong offset, all of which move a channel by far more than one level,
+/// still fail this test.
+#[test]
+fn a_clamped_baseline_jpeg_ends_as_the_whole_image_paths_texture() {
+    let (width, height) = (4400_u32, 1000_u32);
+    assert!(u64::from(width) * u64::from(height) >= crate::image_bands::BANDING_MIN_PIXELS);
+    let data = varying_jpeg(width, height);
+    let mut bands = Vec::new();
+
+    let decoded = decode_with_bands(&data, 1.0, &mut bands).expect("decode");
+    let raster = decoded.geometry.raster();
+    assert!(
+        raster.width() < width,
+        "the source is wider than the texture limit, got a {}x{} raster",
+        raster.width(),
+        raster.height()
+    );
+    assert!(
+        bands.len() > 1,
+        "a four-megapixel source wider than the texture limit bands, got {} band(s)",
+        bands.len()
+    );
+
+    let stride = raster.width() as usize * 4;
+    let mut assembled = vec![0_u8; stride * raster.height() as usize];
+    let mut expected_start = 0;
+    for band in &bands {
+        let rows = band.placed().placement().rows();
+        assert_eq!(rows.start(), expected_start, "bands tile the raster");
+        assembled[rows.start() as usize * stride..rows.end() as usize * stride]
+            .copy_from_slice(band.placed().pixels());
+        expected_start = rows.end();
+    }
+    assert_eq!(
+        expected_start,
+        raster.height(),
+        "the bands cover the raster"
+    );
+    assert_eq!(
+        assembled, decoded.rgba,
+        "a band is a slice of the finished pixels, not an approximation of them"
+    );
+
+    let whole = ImageDecoder::decode_whole(EncodedBytes::copy_of(&data))
+        .expect("the fixture decodes whole")
+        .realize_bitmap(
+            ImageSizeSpec::default(),
+            ImageRotation::None,
+            ImageRealization::default(),
+            ImageMaskPolicy::Preserve,
+        )
+        .expect("realize");
+    assert_eq!(whole.geometry.raster(), raster);
+    let (mut differing, mut worst) = (0_usize, 0_i32);
+    for (banded, whole) in decoded.rgba.iter().zip(&whole.rgba) {
+        let delta = i32::from(*banded) - i32::from(*whole);
+        if delta != 0 {
+            differing += 1;
+        }
+        worst = worst.max(delta.abs());
+    }
+    assert!(
+        worst <= 1,
+        "the banded raster is {worst} levels from the whole-image path's; \
+         one level is the filter's rounding, more is a different filter"
+    );
+    assert!(
+        differing * 4 < decoded.rgba.len(),
+        "{differing} of {} bytes differ, which is more than rounding",
+        decoded.rgba.len()
+    );
+    tracing::debug!(
+        differing,
+        worst,
+        width = raster.width(),
+        height = raster.height(),
+        "banded against whole at the clamped raster"
     );
 }
