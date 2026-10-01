@@ -8,13 +8,14 @@
 # the immediate-join wake, size-class ObjectArenas). This landed with ZERO TSan
 # coverage; this script is the repeatable gate that pays that verification debt.
 #
-# WHY NOT `cargo nextest`:
+# WHY run test binaries directly:
 #   TSan reserves a huge (~tens of TB) shadow-memory VA region and REQUIRES an
 #   UNLIMITED virtual address space (RLIMIT_AS). This repo's `.config/nextest.toml`
 #   runs every test under a `prlimit --as=8G` wrapper (so unit-test OOMs abort
 #   with a backtrace). 8G < TSan's shadow map, so a nextest-run TSan binary
 #   re-execs and dies with "ThreadSanitizer setrlimit() failed 22". We therefore
-#   build the instrumented libtest binary with cargo and drive it DIRECTLY,
+#   build the instrumented libtest binary with `cargo nextest list` (binaries
+#   only, without running it), then drive it DIRECTLY,
 #   one process per test (== nextest's isolation), in parallel across all cores.
 #
 # WHY build-std + nightly + --no-default-features:
@@ -23,13 +24,18 @@
 #   `rust-toolchain.toml` stays pinned at stable). `--no-default-features` drops
 #   the cranelift/JIT stack (not exercised by the GC, and a big compile saving);
 #   the concurrent GC tests do not need the `jit` feature.
+#   NEOVM_GC_TSAN_FEATURES optionally enables features such as `jit` while
+#   retaining --no-default-features. The sanitizer flags still instrument the
+#   GC and rebuilt standard library in that configuration.
 #
 # Prereqs (side-install, does NOT touch the repo pin):
 #   rustup toolchain install nightly --component rust-src
+#   python3 (for nextest's binary metadata)
 #
 # Usage:
 #   crates/neovm-core/scripts/run-gc-tsan.sh                 # full concurrent surface
 #   crates/neovm-core/scripts/run-gc-tsan.sh 'concurrent_mark_races'   # substring filter
+#   NEOVM_GC_TSAN_FEATURES=jit crates/neovm-core/scripts/run-gc-tsan.sh
 #
 # Exit status: 0 iff every selected test passed with NO ThreadSanitizer report.
 set -uo pipefail
@@ -37,8 +43,12 @@ cd "$(git rev-parse --show-toplevel)"
 
 TARGET="x86_64-unknown-linux-gnu"
 TOOLCHAIN="nightly"
-OUTDIR="${TMPDIR:-./tmp}/gc-tsan-logs"
+OUTDIR="${TMPDIR:-./tmp/codex}/gc-tsan-logs"
 FILTER="${1:-}"
+FEATURE_ARGS=(--no-default-features)
+if [ -n "${NEOVM_GC_TSAN_FEATURES:-}" ]; then
+  FEATURE_ARGS+=(--features "$NEOVM_GC_TSAN_FEATURES")
+fi
 
 # The concurrent-GC + seqlock surface. Module-scoped (auto-picks up new
 # concurrent_* / parity_* / finalizer_* tests) plus the eval/symbol concurrent
@@ -47,6 +57,10 @@ SURFACE_RE='^tagged::gc::(ownership|float_arena|bytecode_arena|arena_promotion|a
 SURFACE_RE+='|^emacs_core::symbol::tests::seqlock'
 SURFACE_RE+='|^emacs_core::eval::tests::gc_concurrent'
 SURFACE_RE+='|^emacs_core::eval::tests::gc_safe_point_runs_concurrent'
+SURFACE_RE+='|^emacs_core::builtins::closure_slot_identity_test::'
+SURFACE_RE+='|^emacs_core::eval::cconv_memo_tests::'
+SURFACE_RE+='|^emacs_core::eval::gc_root_ownership_tests::'
+SURFACE_RE+='|^emacs_core::terminal::tests::gc_heap_ownership::'
 
 # --- TSan needs an unlimited virtual address space -------------------------
 ulimit -v unlimited 2>/dev/null || true
@@ -57,25 +71,41 @@ if [ "$(ulimit -v)" != "unlimited" ]; then
   exit 2
 fi
 
-echo ">>> Building TSan-instrumented neovm-core test binary (build-std, --no-default-features)..."
-BUILD_LOG="$(mktemp)"
+echo ">>> Building TSan-instrumented neovm-core test binary (build-std, ${FEATURE_ARGS[*]})..."
+mkdir -p "$OUTDIR"
+BUILD_LOG="$OUTDIR/build.log"
+BUILD_JSON="$OUTDIR/build-metadata.json"
 # -fuse-ld=mold: the GNU-ld link of the TSan-instrumented binary OOM-SIGKILLs
 # under memory contention (sibling builds); mold links it comfortably.
 if ! RUSTFLAGS="-Zsanitizer=thread -Clink-arg=-fuse-ld=mold" \
-      cargo "+$TOOLCHAIN" test -p neovm-core --lib --no-run \
-      -Zbuild-std --target "$TARGET" --no-default-features >"$BUILD_LOG" 2>&1; then
+      cargo "+$TOOLCHAIN" nextest list -p neovm-core --lib \
+      --list-type binaries-only --message-format json \
+      -Zbuild-std --target "$TARGET" "${FEATURE_ARGS[@]}" \
+      >"$BUILD_JSON" 2>"$BUILD_LOG"; then
   echo "BUILD FAILED:" >&2; cat "$BUILD_LOG" >&2; exit 1
 fi
 # The lib unittest binary carries all tagged::/emacs_core:: tests.
-BIN="$(sed -n 's/.*Executable unittests[^(]*(\(.*\))/\1/p' "$BUILD_LOG" | head -1)"
-rm -f "$BUILD_LOG"
+if ! BIN="$(python3 - "$BUILD_JSON" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1]) as stream:
+    metadata = json.load(stream)
+binaries = [entry["binary-path"] for entry in metadata["rust-binaries"].values()
+            if entry["kind"] == "lib"]
+if len(binaries) != 1:
+    raise SystemExit(f"expected one lib test binary, found {len(binaries)}")
+print(binaries[0])
+PY
+)"; then
+  echo "ERROR: could not read the built test binary from $BUILD_JSON." >&2; exit 1
+fi
 if [ -z "${BIN:-}" ] || [ ! -x "$BIN" ]; then
   echo "ERROR: could not locate the built test binary." >&2; exit 1
 fi
 echo ">>> Test binary: $BIN"
 
 # --- Select tests ----------------------------------------------------------
-mkdir -p "$OUTDIR"
 LIST="$OUTDIR/selected.txt"
 "$BIN" --list 2>/dev/null | sed 's/: test$//' | grep -E "$SURFACE_RE" \
   | { [ -n "$FILTER" ] && grep -F "$FILTER" || cat; } | sort -u > "$LIST"
