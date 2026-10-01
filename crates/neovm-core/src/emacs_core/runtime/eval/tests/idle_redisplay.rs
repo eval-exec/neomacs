@@ -61,6 +61,7 @@ fn an_idle_redisplay_skips_layout_but_runs_pre_redisplay_function() {
 
 #[test]
 fn a_forced_idle_redisplay_lays_out_unless_the_idle_skip_is_on() {
+    crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(Some(false));
     let (mut eval, layouts) = idle_context();
     eval.eval_str("(redisplay t)").expect("first");
     eval.eval_str("(redisplay t)").expect("second");

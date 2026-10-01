@@ -6633,7 +6633,7 @@ pub(crate) fn set_redisplay_idle_skip_for_test(enabled: Option<bool>) {
 /// `NEOMACS_REDISPLAY_IDLE_SKIP=on` (P3.5 J): `(redisplay t)` also skips the
 /// layout when the visible state is unchanged. GNU's FORCE only means "do not
 /// stop for pending input"; a redisplay with nothing to do writes nothing.
-/// Read once; default off.
+/// Read once; default on. Explicit off retains forced layout.
 pub(crate) fn redisplay_idle_skip_enabled() -> bool {
     #[cfg(test)]
     if let Some(enabled) = REDISPLAY_IDLE_SKIP_OVERRIDE.with(std::cell::Cell::get) {
@@ -6646,7 +6646,7 @@ pub(crate) fn redisplay_idle_skip_enabled() -> bool {
                 .ok()
                 .map(|value| value.trim().to_ascii_lowercase())
                 .as_deref(),
-            Some("on" | "1" | "true" | "yes")
+            None | Some("on" | "1" | "true" | "yes")
         )
     })
 }
