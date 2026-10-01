@@ -42,11 +42,34 @@ fn native_rich_scroll_commands_preserve_pixel_offset() {
     assert_eq!(state["pixel-returned"], true);
     assert_eq!(state["page-advanced"], true);
     assert_eq!(state["page-returned"], true);
+    let snapshot: serde_json::Value =
+        serde_json::from_slice(&fs::read(&result.artifacts.frame_snapshot_json).unwrap()).unwrap();
+    assert!(
+        snapshot["frames"].as_array().unwrap().iter().any(|frame| {
+            frame["window_infos"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|window| {
+                    window["window_start"] == state["final-start"]
+                        && window["buffer_size"]
+                            .as_u64()
+                            .is_some_and(|size| size > 1_000_000)
+                })
+        }),
+        "native snapshot did not contain the final rich viewport"
+    );
     let pixels = image::open(&result.artifacts.png).unwrap().to_rgba8();
     let first = pixels.get_pixel(0, 0);
     assert!(
         pixels.pixels().any(|pixel| pixel != first),
         "scroll readback is blank"
+    );
+    assert!(
+        pixels
+            .pixels()
+            .any(|pixel| { pixel[0].abs_diff(pixel[2]) > 60 || pixel[1].abs_diff(pixel[2]) > 60 }),
+        "readback did not contain the rich buffer's colored faces"
     );
 }
 
@@ -123,6 +146,10 @@ fn run_native_contract(name: &str, fixture: &str, resources: bool) -> GuiRunResu
     )
     .with_program(binary)
     .with_env("RUST_LOG", "info");
+    if name == "native-display-scroll" {
+        // Keep readback active until the rich fixture and its scrolls render.
+        plan = plan.with_env("NEOMACS_DEBUG_SURFACE_READBACK", "100");
+    }
     if resources {
         plan = plan.with_args(vec![
             "--no-init-file".into(),
