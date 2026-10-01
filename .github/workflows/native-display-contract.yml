@@ -58,6 +58,8 @@ jobs:
           target: ${{ matrix.target }}
           install-nextest: 'true'
       - name: Native resource adapters
+        # Registry/defaults contracts have no Linux tests; nextest rejects an empty run.
+        if: runner.os != 'Linux'
         run: cargo nextest run --locked -p neomacs-display-runtime --test gui_resources_test
       - name: Fractional input and gesture isolation
         run: cargo nextest run --locked -p neomacs-display-runtime --lib -E 'test(scroll_input)'
