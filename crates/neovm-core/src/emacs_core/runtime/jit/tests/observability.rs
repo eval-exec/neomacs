@@ -262,8 +262,9 @@ fn jit_obs_signal_exit_counted() {
     assert_eq!(row_for(g_id, cache::LeafState::Live).obs.signals, 2);
 }
 
-/// An epoch move for an UNRELATED symbol makes an armed site re-validate
-/// and re-arm (`spec-rearm`); rebinding its own callee is `spec-rebind`.
+/// An epoch move for an UNRELATED symbol makes an armed site re-arm through
+/// its stamp when enabled, or re-validate its binding (`spec-rearm`);
+/// rebinding its own callee is `spec-rebind` in either mode.
 #[test]
 fn jit_obs_spec_revalidation_counts_rearm_and_rebind() {
     // Exact native outcomes: immune to a NEOVM_JIT_FORCE_DEOPT=1 suite run.
@@ -304,18 +305,55 @@ fn jit_obs_spec_revalidation_counts_rearm_and_rebind() {
     call(4);
     call(4);
     let base = EpochCounters::snapshot();
+    let armed_epoch = ev.obarray.function_epoch();
     ev.eval_str("(fset 'jit-obs-rearm-unrelated (lambda () 1))")
         .expect("unrelated fset");
+    let now = ev.obarray.function_epoch();
+    assert!(now > armed_epoch, "the unrelated fset moved the clock");
+    // Ask the same validity oracle as the consumer: it includes the active
+    // test override and the process's once-read knob, unlike reading env here.
+    let stamp_resync = !jit_force_slow_spec()
+        && ev
+            .obarray
+            .fn_unchanged_since(step.as_symbol_id().unwrap(), armed_epoch);
     let ctx = &mut ev as *mut Context as *mut u8;
     assert_eq!(
         leaf.call(ctx, &[Value::make_int(5)]),
         NativeRun::Ok(Value::make_int(4).bits())
     );
     let d = EpochCounters::snapshot().since(&base);
-    if jit_force_slow_spec() {
-        assert!(d.spec_for(SpecRevalidation::Rearmed) >= 1, "{}", d.render());
+    if stamp_resync {
+        assert_eq!(
+            d.spec_for(SpecRevalidation::StampResynced),
+            1,
+            "{}",
+            d.render()
+        );
+        assert_eq!(
+            d.spec_for(SpecRevalidation::StampReentered),
+            1,
+            "{}",
+            d.render()
+        );
+        assert_eq!(d.spec_for(SpecRevalidation::Rearmed), 0, "{}", d.render());
     } else {
-        assert_eq!(d.spec_for(SpecRevalidation::Rearmed), 1, "{}", d.render());
+        assert_eq!(
+            d.spec_for(SpecRevalidation::StampResynced),
+            0,
+            "{}",
+            d.render()
+        );
+        assert_eq!(
+            d.spec_for(SpecRevalidation::StampReentered),
+            0,
+            "{}",
+            d.render()
+        );
+        if jit_force_slow_spec() {
+            assert!(d.spec_for(SpecRevalidation::Rearmed) >= 1, "{}", d.render());
+        } else {
+            assert_eq!(d.spec_for(SpecRevalidation::Rearmed), 1, "{}", d.render());
+        }
     }
     assert_eq!(d.spec_for(SpecRevalidation::BindingChanged), 0);
 
