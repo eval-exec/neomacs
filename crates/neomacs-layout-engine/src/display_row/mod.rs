@@ -1216,11 +1216,11 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
             if let RenderFaceRef::FaceId(face_id) = item.face
                 && face_id != default_row_face_id
                 && !row_faces.iter().any(|face| face.face_id == face_id)
-                && let Some(resolved) = state.resolved_face(face_id).cloned()
+                && let Some(resolved) = state.resolved_face(face_id)
             {
                 let realized = face_realizer.realize_face(
                     face_id,
-                    &resolved,
+                    resolved,
                     char_width,
                     geometry.ascent(),
                     geometry.height(),
