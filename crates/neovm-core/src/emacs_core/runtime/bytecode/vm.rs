@@ -1835,6 +1835,10 @@ impl SymbolByteCodeCallCacheEntry {
 /// Per-`Context` cache of what a symbol's function cell resolves to for a
 /// stack call, tagged with the function epoch so any `fset` (or a change of
 /// `compiler_function_overrides`, which bumps the same epoch) invalidates it.
+/// Threading: this cache belongs to one Context and its mutator; refresh
+/// and refill require exclusive access. Prepared callees are Context-local
+/// and never shared between mutators. The binding stamps and floor it reads
+/// are shared atomics; refresh records the clock sampled before that proof.
 pub(crate) struct SymbolByteCodeCallCache {
     entries: Box<[SymbolByteCodeCallCacheEntry; SYMBOL_BYTECODE_CALL_CACHE_CAPACITY]>,
 }
@@ -1959,6 +1963,29 @@ impl SymbolByteCodeCallCache {
     ) -> bool {
         if !obarray.fn_unchanged_since(entry.symbol, entry.function_epoch) {
             return false;
+        }
+        #[cfg(debug_assertions)]
+        {
+            // Obarray read access keeps the function cell stable (shared
+            // obarrays must retain their read guard through this check).
+            // The snapshot bypasses the lookup counter used by T-A4.
+            use crate::emacs_core::symbol::FunctionCellSnapshot;
+            let cached = match entry.callee {
+                CachedStackCallee::ByteCode(value) => Some(value),
+                CachedStackCallee::Builtin(callee) | CachedStackCallee::BuiltinLeaf(callee, _) => {
+                    Some(callee.0)
+                }
+                CachedStackCallee::Empty => None,
+            };
+            let live = match obarray.function_cell_snapshot(entry.symbol) {
+                FunctionCellSnapshot::Bound(value) => Some(value),
+                _ => None,
+            };
+            debug_assert_eq!(
+                cached.map(Value::bits),
+                live.map(Value::bits),
+                "missed function stamp"
+            );
         }
         entry.function_epoch = now;
         #[cfg(feature = "jit")]
