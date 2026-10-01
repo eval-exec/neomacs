@@ -67,9 +67,19 @@ impl QueryCache {
                 collections_match = entry.collections.unchanged(),
                 freshness_matches = entry.query.geometry().and_then(|g| g.layout_freshness.as_ref()) == Some(&current),
                 "query cache lookup");
+            // A later target completes all earlier exact source points. A
+            // hidden target resolved through a neighbor is insufficient: the
+            // canonical earlier stop might not yet have emitted that neighbor.
             let covers_scope = entry.scope == scope || matches!(
                 (entry.scope, scope),
                 (WindowLayoutQueryScope::Viewport, WindowLayoutQueryScope::Position { .. })
+            ) || matches!(
+                (entry.scope, scope),
+                (WindowLayoutQueryScope::Position { target: cached_target },
+                 WindowLayoutQueryScope::Position { target })
+                    if cached_target >= target && entry.query.geometry()
+                        .and_then(|geometry| geometry.point_for_buffer_pos(target))
+                        .is_some_and(|point| point.buffer_pos == target)
             ) || matches!(
                 (entry.scope, scope),
                 (WindowLayoutQueryScope::Pixels { start: cached_start, height: cached_height },
@@ -104,7 +114,16 @@ impl QueryCache {
                 return if matches!(entry.scope, WindowLayoutQueryScope::Viewport) {
                     placement::reposition(&entry.query, &current, source_point)
                 } else {
-                    placement::reposition_position(&entry.query, &current, source_point, target)
+                    // Re-place the complete certified prefix, including its
+                    // original final row. An earlier requested point cannot
+                    // turn that coverage proof into a shorter row-set proof.
+                    let completed_target = match entry.scope {
+                        WindowLayoutQueryScope::Position { target } => target,
+                        _ => target,
+                    };
+                    placement::reposition_position(
+                        &entry.query, &current, source_point, completed_target,
+                    )
                 };
             }
             if matches!(scope, WindowLayoutQueryScope::Rows { .. } | WindowLayoutQueryScope::Pixels { .. }) {

@@ -140,6 +140,270 @@ fn position_queries_reuse_full_viewports_with_exact_inputs_only() {
 }
 
 #[test]
+fn position_prefix_reuses_earlier_complete_rows_with_exact_inputs() {
+    use crate::engine::viewport_retry_depth_probe as probe;
+    use neovm_core::{buffer::LispCharPos1, window::WindowLayoutQueryScope};
+    let (mut eval, frame, window) = position_query_fixture(&"ordinary row\n".repeat(100), 400, 240);
+    eval.eval_str("(goto-char 1000) (set-window-vscroll nil 2 t t)")
+        .unwrap();
+    let mut query = WindowLayoutQueryEngine::new_without_font_metrics();
+    let prefix = query
+        .query_window_layout(
+            &mut eval,
+            frame,
+            window,
+            WindowLayoutQueryScope::Position {
+                target: LispCharPos1::new(60),
+            },
+        )
+        .unwrap();
+    for pixels in [2, 3, 7, 2] {
+        eval.eval_str(&format!("(set-window-vscroll nil {pixels} t t)"))
+            .unwrap();
+        for position in [1, 3, 14, 39, 59, 60] {
+            let target = LispCharPos1::new(position);
+            let scope = WindowLayoutQueryScope::Position { target };
+            probe::reset();
+            let actual = query
+                .query_window_layout(&mut eval, frame, window, scope)
+                .unwrap();
+            assert_eq!(
+                probe::max_depth(),
+                0,
+                "prefix walked again at {position}, vscroll {pixels}"
+            );
+            let expected = WindowLayoutQueryEngine::new_without_font_metrics()
+                .query_window_layout(&mut eval, frame, window, scope)
+                .unwrap();
+            assert_eq!(actual.end(), prefix.end());
+            let actual = actual.geometry().unwrap();
+            let expected = expected.geometry().unwrap();
+            let point = expected.point_for_buffer_pos(target).unwrap();
+            assert_eq!(actual.point_for_buffer_pos(target), Some(point));
+            assert_eq!(
+                actual.row_metrics(point.row),
+                expected.row_metrics(point.row)
+            );
+            assert_eq!(actual.regions, expected.regions);
+        }
+    }
+    for position in [61, 1000] {
+        let scope = WindowLayoutQueryScope::Position {
+            target: LispCharPos1::new(position),
+        };
+        probe::reset();
+        let actual = query
+            .query_window_layout(&mut eval, frame, window, scope)
+            .unwrap();
+        assert!(
+            probe::max_depth() > 0,
+            "prefix claimed an uncertified target {position}"
+        );
+        let expected = WindowLayoutQueryEngine::new_without_font_metrics()
+            .query_window_layout(&mut eval, frame, window, scope)
+            .unwrap();
+        assert_eq!(actual.geometry(), expected.geometry());
+    }
+}
+
+#[test]
+fn position_prefix_reuse_preserves_wrap_inserted_strings_and_hidden_target_points() {
+    use crate::engine::viewport_retry_depth_probe as probe;
+    use neovm_core::{buffer::LispCharPos1, window::WindowLayoutQueryScope};
+    for decoration in [
+        "(setq word-wrap t) (put-text-property 1 150 'wrap-prefix \"p>\")",
+        "(let ((o (make-overlay 5 12))) (overlay-put o 'before-string \"before\\nmore\\n\") (overlay-put o 'after-string \"after\\nend\")) (put-text-property 45 60 'display \"replace\\nnext\\nlast\")",
+        "(setq buffer-invisibility-spec t) (put-text-property 15 60 'invisible t)",
+    ] {
+        let (mut eval, frame, window) = position_query_fixture(
+            &"ab\twords around the wrapping edge and more\n".repeat(100),
+            160,
+            400,
+        );
+        eval.eval_str("(goto-char 3000)").unwrap();
+        eval.eval_str(decoration).unwrap();
+        let mut query = WindowLayoutQueryEngine::new_without_font_metrics();
+        let prefix = query
+            .query_window_layout(
+                &mut eval,
+                frame,
+                window,
+                WindowLayoutQueryScope::Position {
+                    target: LispCharPos1::new(80),
+                },
+            )
+            .unwrap();
+        let covered: Vec<_> = (1..80)
+            .map(LispCharPos1::new)
+            .filter(|target| {
+                prefix
+                    .geometry()
+                    .unwrap()
+                    .point_for_buffer_pos(*target)
+                    .is_some_and(|point| point.buffer_pos == *target)
+            })
+            .collect();
+        assert!(!covered.is_empty(), "empty fixture: {decoration}");
+        for target in covered {
+            probe::reset();
+            let scope = WindowLayoutQueryScope::Position { target };
+            let actual = query
+                .query_window_layout(&mut eval, frame, window, scope)
+                .unwrap();
+            assert_eq!(
+                probe::max_depth(),
+                0,
+                "covered target rewalked: {decoration}, {target:?}"
+            );
+            let expected = WindowLayoutQueryEngine::new_without_font_metrics()
+                .query_window_layout(&mut eval, frame, window, scope)
+                .unwrap();
+            assert_eq!(
+                actual.geometry().unwrap().point_for_buffer_pos(target),
+                expected.geometry().unwrap().point_for_buffer_pos(target),
+                "{decoration}, {target:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn position_prefix_reuse_falls_back_for_hidden_neighbor_and_missing_points() {
+    use crate::engine::viewport_retry_depth_probe as probe;
+    use neovm_core::{buffer::LispCharPos1, window::WindowLayoutQueryScope};
+    let (mut eval, frame, window) = position_query_fixture(&"ordinary row\n".repeat(100), 400, 240);
+    eval.eval_str(
+        "(goto-char 1000) (setq buffer-invisibility-spec t) (put-text-property 3 8 'invisible t)",
+    )
+    .unwrap();
+    let mut query = WindowLayoutQueryEngine::new_without_font_metrics();
+    let prefix = query
+        .query_window_layout(
+            &mut eval,
+            frame,
+            window,
+            WindowLayoutQueryScope::Position {
+                target: LispCharPos1::new(60),
+            },
+        )
+        .unwrap();
+    let hidden = LispCharPos1::new(5);
+    assert_ne!(
+        prefix
+            .geometry()
+            .unwrap()
+            .point_for_buffer_pos(hidden)
+            .unwrap()
+            .buffer_pos,
+        hidden,
+        "fixture must resolve hidden position through a neighbor"
+    );
+    for target in [hidden, LispCharPos1::new(0)] {
+        let scope = WindowLayoutQueryScope::Position { target };
+        probe::reset();
+        let actual = query
+            .query_window_layout(&mut eval, frame, window, scope)
+            .unwrap();
+        assert!(
+            probe::max_depth() > 0,
+            "prefix claimed absent exact point {target:?}"
+        );
+        let expected = WindowLayoutQueryEngine::new_without_font_metrics()
+            .query_window_layout(&mut eval, frame, window, scope)
+            .unwrap();
+        assert_eq!(actual.geometry(), expected.geometry());
+    }
+}
+
+#[test]
+fn position_prefix_reuse_rejects_changed_collections_point_callbacks_and_clipped_cursor() {
+    use crate::engine::viewport_retry_depth_probe as probe;
+    use neovm_core::{buffer::LispCharPos1, window::WindowLayoutQueryScope};
+    for mutation in [
+        "(setcar (cdr position-prefix-face) 200)",
+        "(goto-char 20)",
+        "(setq fontification-functions position-prefix-hooks)",
+        "(set-window-vscroll nil 80 t t)",
+    ] {
+        let (mut eval, frame, window) =
+            position_query_fixture(&"ordinary row\n".repeat(100), 400, 240);
+        eval.eval_str(
+            r#"(goto-char 1000) (set-window-vscroll nil 2 t t)
+            (setq position-prefix-face (list :height 100))
+            (put-text-property 1 80 'face position-prefix-face)
+            (setq fontification-functions nil position-prefix-hooks
+                (list (lambda (start) (put-text-property start (point-max) 'fontified t))))"#,
+        )
+        .unwrap();
+        let mut query = WindowLayoutQueryEngine::new_without_font_metrics();
+        query
+            .query_window_layout(
+                &mut eval,
+                frame,
+                window,
+                WindowLayoutQueryScope::Position {
+                    target: LispCharPos1::new(60),
+                },
+            )
+            .unwrap();
+        eval.eval_str(mutation).unwrap();
+        let scope = WindowLayoutQueryScope::Position {
+            target: LispCharPos1::new(14),
+        };
+        probe::reset();
+        let actual = query
+            .query_window_layout(&mut eval, frame, window, scope)
+            .unwrap();
+        assert!(
+            probe::max_depth() > 0,
+            "changed inputs reused prefix: {mutation}"
+        );
+        let expected = WindowLayoutQueryEngine::new_without_font_metrics()
+            .query_window_layout(&mut eval, frame, window, scope)
+            .unwrap();
+        assert_eq!(actual.geometry(), expected.geometry(), "{mutation}");
+    }
+    for decoration in [
+        "(goto-char 1)",
+        r#"(goto-char 1000) (setq prefix-condition-calls 0)
+            (put-text-property 1 2 'display
+                '(when (progn (setq prefix-condition-calls (1+ prefix-condition-calls)) nil) . "unused"))"#,
+    ] {
+        let (mut eval, frame, window) =
+            position_query_fixture(&"ordinary row\n".repeat(100), 400, 240);
+        eval.eval_str(decoration).unwrap();
+        eval.eval_str("(set-window-vscroll nil 2 t t)").unwrap();
+        let mut query = WindowLayoutQueryEngine::new_without_font_metrics();
+        query
+            .query_window_layout(
+                &mut eval,
+                frame,
+                window,
+                WindowLayoutQueryScope::Position {
+                    target: LispCharPos1::new(60),
+                },
+            )
+            .unwrap();
+        eval.eval_str("(set-window-vscroll nil 3 t t)").unwrap();
+        let scope = WindowLayoutQueryScope::Position {
+            target: LispCharPos1::new(14),
+        };
+        probe::reset();
+        let actual = query
+            .query_window_layout(&mut eval, frame, window, scope)
+            .unwrap();
+        assert!(
+            probe::max_depth() > 0,
+            "callback/clipped cursor reused prefix: {decoration}"
+        );
+        let expected = WindowLayoutQueryEngine::new_without_font_metrics()
+            .query_window_layout(&mut eval, frame, window, scope)
+            .unwrap();
+        assert_eq!(actual.geometry(), expected.geometry());
+    }
+}
+
+#[test]
 fn position_prefixes_reposition_complete_rows_with_variable_heights_and_overlays() {
     use crate::engine::viewport_retry_depth_probe as probe;
     use neovm_core::{buffer::LispCharPos1, window::WindowLayoutQueryScope};
