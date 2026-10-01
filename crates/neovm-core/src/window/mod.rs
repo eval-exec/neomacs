@@ -989,6 +989,10 @@ pub struct WindowLayoutQuery {
 pub enum WindowLayoutQueryScope {
     #[default]
     Viewport,
+    /// A prefix of the live viewport through the complete target row. If the
+    /// target is not reached, walk the viewport. Placement and clipping retain
+    /// the live start and vscroll; the returned end describes this prefix.
+    Position { target: LispCharPos1 },
     Rows {
         start: LispCharPos1,
         count: std::num::NonZeroUsize,

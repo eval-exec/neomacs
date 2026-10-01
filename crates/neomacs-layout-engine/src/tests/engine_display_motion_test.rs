@@ -3,6 +3,295 @@
 use super::*;
 use neovm_core::window::WindowLayoutQueryOutcome;
 
+fn position_query_fixture(
+    text: &str,
+    width: u32,
+    height: u32,
+) -> (
+    Context,
+    neovm_core::window::FrameId,
+    neovm_core::window::WindowId,
+) {
+    let mut eval = Context::new();
+    let buffer = eval.buffer_manager().current_buffer().unwrap().id();
+    eval.buffer_manager_mut()
+        .get_mut(buffer)
+        .unwrap()
+        .insert(text);
+    let frame = eval
+        .frame_manager_mut()
+        .create_frame("position-query", width, height, buffer);
+    eval.frame_manager_mut()
+        .get_mut(frame)
+        .unwrap()
+        .window_system = Some(Value::symbol("neomacs"));
+    let window = eval.frame_manager().get(frame).unwrap().selected_window;
+    eval.eval_str("(setq mode-line-format nil header-line-format nil tab-line-format nil) (goto-char 1) (set-window-start nil 1 t)").unwrap();
+    (eval, frame, window)
+}
+
+#[test]
+fn position_query_finishes_the_target_row_without_publishing_or_certifying_a_viewport() {
+    use neovm_core::{buffer::LispCharPos1, window::WindowLayoutQueryScope};
+    let (mut eval, frame, window) = position_query_fixture(&"ordinary row\n".repeat(100), 400, 320);
+    eval.eval_str("(put-text-property 9 12 'face '(:height 200))")
+        .unwrap();
+    let start_before = eval.eval_str("(window-start)").unwrap();
+    let target = LispCharPos1::new(3);
+    let mut query = WindowLayoutQueryEngine::new_without_font_metrics();
+    let prefix = query
+        .query_window_layout(
+            &mut eval,
+            frame,
+            window,
+            WindowLayoutQueryScope::Position { target },
+        )
+        .unwrap();
+    let full = query
+        .query_window_layout(&mut eval, frame, window, WindowLayoutQueryScope::Viewport)
+        .unwrap();
+    let actual = prefix.geometry().unwrap();
+    let expected = full.geometry().unwrap();
+    assert_eq!(actual.rows.len(), 1, "target query walked later rows");
+    assert!(
+        expected.rows.len() > actual.rows.len(),
+        "prefix was reused as a viewport"
+    );
+    assert_eq!(
+        actual.rows[0], expected.rows[0],
+        "late target-row metrics were omitted"
+    );
+    assert_eq!(
+        actual.point_for_buffer_pos(target),
+        expected.point_for_buffer_pos(target)
+    );
+    assert_eq!(actual.regions, expected.regions);
+    assert!(prefix.end() < full.end());
+    assert_eq!(eval.eval_str("(window-start)").unwrap(), start_before);
+    assert!(
+        eval.frame_manager()
+            .get(frame)
+            .unwrap()
+            .redisplay_snapshot(window)
+            .is_none()
+    );
+}
+
+#[test]
+fn position_queries_preserve_wrap_overlay_hidden_and_partial_row_geometry() {
+    use neovm_core::{buffer::LispCharPos1, window::WindowLayoutQueryScope};
+    for decoration in [
+        "nil",
+        "(setq word-wrap t) (put-text-property 1 180 'wrap-prefix \"p>\")",
+        "(put-text-property 1 20 'line-height 1.3) (put-text-property 8 10 'display '(raise 0.2)) (put-text-property 30 55 'face '(:height 175))",
+        "(let ((o (make-overlay 5 12))) (overlay-put o 'before-string \"before\\nmore\\n\") (overlay-put o 'after-string \"after\\nend\")) (put-text-property 45 60 'display \"replace\\nnext\\nlast\")",
+        "(setq buffer-invisibility-spec t) (put-text-property 15 60 'invisible t)",
+        "(setq truncate-lines t) (set-window-hscroll nil 3)",
+    ] {
+        let (mut eval, frame, window) = position_query_fixture(
+            &"ab\twords around the wrapping edge and more\n".repeat(100),
+            160,
+            150,
+        );
+        eval.eval_str(decoration).unwrap();
+        for vscroll in [0, 3, 15] {
+            eval.eval_str(&format!("(set-window-vscroll nil {vscroll} t t)"))
+                .unwrap();
+            let full = WindowLayoutQueryEngine::new_without_font_metrics()
+                .query_window_layout(&mut eval, frame, window, WindowLayoutQueryScope::Viewport)
+                .unwrap()
+                .into_geometry()
+                .unwrap();
+            let mut targets = vec![
+                LispCharPos1::new(1),
+                LispCharPos1::new(16),
+                LispCharPos1::new(46),
+                LispCharPos1::new(1000),
+            ];
+            // Row starts include exact wrap boundaries and the partial bottom row.
+            targets.extend(full.rows.iter().filter_map(|row| row.start_buffer_pos));
+            targets.sort();
+            targets.dedup();
+            for target in targets {
+                let prefix = WindowLayoutQueryEngine::new_without_font_metrics()
+                    .query_window_layout(
+                        &mut eval,
+                        frame,
+                        window,
+                        WindowLayoutQueryScope::Position { target },
+                    )
+                    .unwrap()
+                    .into_geometry()
+                    .unwrap();
+                let actual = prefix.point_for_buffer_pos(target);
+                let expected = full.point_for_buffer_pos(target);
+                assert_eq!(
+                    actual, expected,
+                    "target={target:?}, vscroll={vscroll}, {decoration}"
+                );
+                assert_eq!(prefix.regions, full.regions);
+                if let Some(point) = expected {
+                    assert_eq!(
+                        prefix.row_metrics(point.row),
+                        full.row_metrics(point.row),
+                        "target row incomplete: target={target:?}, {decoration}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn position_queries_preserve_end_of_buffer_insertion_rows() {
+    use neovm_core::{buffer::LispCharPos1, window::WindowLayoutQueryScope};
+    for text in ["", "last", "last\n"] {
+        let (mut eval, frame, window) = position_query_fixture(text, 240, 160);
+        let target = LispCharPos1::new(text.chars().count() as i64 + 1);
+        let full = WindowLayoutQueryEngine::new_without_font_metrics()
+            .query_window_layout(&mut eval, frame, window, WindowLayoutQueryScope::Viewport)
+            .unwrap();
+        let prefix = WindowLayoutQueryEngine::new_without_font_metrics()
+            .query_window_layout(
+                &mut eval,
+                frame,
+                window,
+                WindowLayoutQueryScope::Position { target },
+            )
+            .unwrap();
+        assert_eq!(prefix.end(), full.end(), "{text:?}");
+        assert_eq!(
+            prefix.geometry().unwrap().rows,
+            full.geometry().unwrap().rows,
+            "{text:?}"
+        );
+        assert_eq!(
+            prefix.geometry().unwrap().point_for_buffer_pos(target),
+            full.geometry().unwrap().point_for_buffer_pos(target),
+            "{text:?}"
+        );
+    }
+}
+
+#[test]
+fn position_queries_keep_full_sparse_fontification_callback_extent() {
+    use neovm_core::{buffer::LispCharPos1, window::WindowLayoutQueryScope};
+    let hidden = "hidden\n".repeat(2000);
+    let text = format!("first\n{hidden}TAIL\n");
+    let tail = 7 + hidden.len();
+    let mut observations = Vec::new();
+    for scope in [
+        WindowLayoutQueryScope::Viewport,
+        WindowLayoutQueryScope::Position {
+            target: LispCharPos1::new(2),
+        },
+    ] {
+        let (mut eval, frame, window) = position_query_fixture(&text, 360, 140);
+        eval.eval_str(&format!(r#"(setq buffer-invisibility-spec t) (put-text-property 7 {tail} 'invisible t)
+            (setq position-fontify-calls nil fontification-functions
+                (list (lambda (start) (setq position-fontify-calls (cons start position-fontify-calls))
+                    (put-text-property start (min (point-max) (+ start 80)) 'fontified t))))"#)).unwrap();
+        let result = WindowLayoutQueryEngine::new_without_font_metrics()
+            .query_window_layout(&mut eval, frame, window, scope)
+            .unwrap();
+        let calls = eval
+            .eval_str("(prin1-to-string position-fontify-calls)")
+            .unwrap()
+            .as_runtime_string_owned()
+            .unwrap();
+        let tail_fontified = eval
+            .eval_str(&format!("(get-text-property {tail} 'fontified)"))
+            .unwrap();
+        assert!(
+            tail_fontified.is_t(),
+            "post-fold callback was omitted: {scope:?}"
+        );
+        observations.push((result.geometry().unwrap().rows.clone(), calls));
+    }
+    assert_eq!(observations[0], observations[1]);
+}
+
+#[test]
+fn position_queries_disable_the_row_stop_when_display_conditions_install_fontification() {
+    use neovm_core::{buffer::LispCharPos1, window::WindowLayoutQueryScope};
+    let (mut eval, frame, window) = position_query_fixture(&"ordinary row\n".repeat(100), 400, 240);
+    eval.eval_str(r#"(setq fontification-functions nil position-fontify-calls nil)
+        (put-text-property 1 2 'display
+            '(when (progn
+                (if fontification-functions nil
+                    (setq fontification-functions
+                        (list (lambda (start)
+                            (setq position-fontify-calls (cons start position-fontify-calls))
+                            (put-text-property start (min (point-max) (+ start 80)) 'fontified t)))))
+                nil) . "unused"))"#).unwrap();
+    let prefix = WindowLayoutQueryEngine::new_without_font_metrics()
+        .query_window_layout(
+            &mut eval,
+            frame,
+            window,
+            WindowLayoutQueryScope::Position {
+                target: LispCharPos1::new(3),
+            },
+        )
+        .unwrap();
+    let full = WindowLayoutQueryEngine::new_without_font_metrics()
+        .query_window_layout(&mut eval, frame, window, WindowLayoutQueryScope::Viewport)
+        .unwrap();
+    assert!(
+        prefix.geometry().unwrap().rows.len() > 1,
+        "callbacks installed during preparation left a prefix stop"
+    );
+    assert_eq!(
+        prefix.geometry().unwrap().rows,
+        full.geometry().unwrap().rows
+    );
+    assert!(!eval.eval_str("position-fontify-calls").unwrap().is_nil());
+}
+
+#[test]
+fn position_query_cache_observes_newly_enabled_existing_fontification_hooks() {
+    use neovm_core::{buffer::LispCharPos1, window::WindowLayoutQueryScope};
+    let hidden = "hidden\n".repeat(2000);
+    let tail = 7 + hidden.len();
+    let (mut eval, frame, window) =
+        position_query_fixture(&format!("first\n{hidden}TAIL\n"), 360, 140);
+    // Prepare the function before caching so enabling it does not change the
+    // function epoch, buffer properties or any captured collection identity.
+    eval.eval_str(&format!(
+        r#"(setq buffer-invisibility-spec t) (put-text-property 7 {tail} 'invisible t)
+        (setq fontification-functions nil position-fontify-calls nil)
+        (setq prepared-position-fontify-hooks
+            (list (lambda (start)
+                (setq position-fontify-calls (cons start position-fontify-calls))
+                (put-text-property start (min (point-max) (+ start 80)) 'fontified t))))"#
+    ))
+    .unwrap();
+    let scope = WindowLayoutQueryScope::Position {
+        target: LispCharPos1::new(2),
+    };
+    let mut query = WindowLayoutQueryEngine::new_without_font_metrics();
+    let first = query
+        .query_window_layout(&mut eval, frame, window, scope)
+        .unwrap();
+    assert_eq!(first.geometry().unwrap().rows.len(), 1);
+    eval.eval_str("(setq fontification-functions prepared-position-fontify-hooks)")
+        .unwrap();
+    let second = query
+        .query_window_layout(&mut eval, frame, window, scope)
+        .unwrap();
+    assert!(
+        second.geometry().unwrap().rows.len() > 1,
+        "cached prefix bypassed newly installed hooks"
+    );
+    assert!(
+        eval.eval_str(&format!("(get-text-property {tail} 'fontified)"))
+            .unwrap()
+            .is_t(),
+        "cached prefix omitted the post-fold callback"
+    );
+    assert!(!eval.eval_str("position-fontify-calls").unwrap().is_nil());
+}
+
 #[test]
 fn redisplay_keeps_a_fully_visible_cursor_row_when_its_source_line_continues() {
     use neovm_core::window::WindowLayoutQueryScope;
@@ -1209,6 +1498,9 @@ fn identical_geometry_queries_reuse_rows_and_mutations_force_a_new_walk() {
     use std::num::NonZeroUsize;
     for scope in [
         WindowLayoutQueryScope::Viewport,
+        WindowLayoutQueryScope::Position {
+            target: LispCharPos1::new(50),
+        },
         WindowLayoutQueryScope::Rows {
             start: LispCharPos1::ONE,
             count: NonZeroUsize::new(8).unwrap(),

@@ -7100,7 +7100,10 @@ fn live_position_visibility(
     if let Some(snapshot) = eval.fresh_window_display_snapshot(fid, wid, buffer_id) {
         return Ok(Some(measure(snapshot)));
     }
-    match eval.query_window_layout(fid, wid) {
+    let scope = pos.map_or(crate::window::WindowLayoutQueryScope::Viewport, |target| {
+        crate::window::WindowLayoutQueryScope::Position { target }
+    });
+    match eval.query_window_layout_scope(fid, wid, scope) {
         crate::window::WindowLayoutQueryOutcome::Ready(query) => {
             Ok(query.into_geometry().as_ref().map(measure))
         }

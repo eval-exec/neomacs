@@ -1667,6 +1667,7 @@ pub fn window_params_from_neovm_with_font_sizing(
         window_start: lisp_char_pos_to_layout_i64(window_start),
         measurement_rows: None,
         measurement_pixels: None,
+        query_target: None,
         force_start,
         // GNU stores this as an offset from Z; recover the Lisp position and
         // normalize to the layout engine's 0-based space.

@@ -637,8 +637,12 @@ impl crate::emacs_core::eval::Context {
         };
         // Redisplay observes the outermost restriction; motion observes the
         // caller's accessible region. Do not widen a measured motion query.
-        let saved_restrictions = matches!(scope, crate::window::WindowLayoutQueryScope::Viewport)
-            .then(|| self.buffers.reset_outermost_restrictions());
+        let saved_restrictions = matches!(
+            scope,
+            crate::window::WindowLayoutQueryScope::Viewport
+                | crate::window::WindowLayoutQueryScope::Position { .. }
+        )
+        .then(|| self.buffers.reset_outermost_restrictions());
         let record = query(self, frame_id, window_id, scope);
         if let Some(saved_restrictions) = saved_restrictions {
             self.buffers

@@ -248,6 +248,8 @@ pub struct WindowParams {
     pub measurement_rows: Option<std::num::NonZeroUsize>,
     /// Explicit pixel extent for a synchronous query, independent of the viewport.
     pub measurement_pixels: Option<std::num::NonZeroUsize>,
+    /// Complete a live viewport query once its target row has been emitted.
+    pub query_target: Option<LayoutCharPos0>,
     /// GNU `w->force_start`: `window_start` was set explicitly (scroll /
     /// set-window-start), so layout must display from it and move POINT into
     /// the window when point ended up outside — never recompute the start

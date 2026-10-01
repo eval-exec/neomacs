@@ -20,7 +20,9 @@ impl PreparedViewports {
         let start = match scope {
             WindowLayoutQueryScope::Rows { start, .. }
             | WindowLayoutQueryScope::Pixels { start, .. } => start,
-            WindowLayoutQueryScope::Viewport => return None,
+            WindowLayoutQueryScope::Viewport | WindowLayoutQueryScope::Position { .. } => {
+                return None;
+            }
         };
         if !scroll_coverage::inactive_overlay_arrows(evaluator) {
             return None;
@@ -80,7 +82,9 @@ impl PreparedViewports {
                     .iter()
                     .take_while(|row| row.y < pixel_bottom.expect("pixel extent"))
                     .count(),
-                WindowLayoutQueryScope::Viewport => return None,
+                WindowLayoutQueryScope::Viewport | WindowLayoutQueryScope::Position { .. } => {
+                    return None;
+                }
             };
             let selected = available.get(..count)?;
             let first_row = selected.first()?;

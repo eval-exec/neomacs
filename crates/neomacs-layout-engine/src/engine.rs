@@ -481,6 +481,16 @@ fn resolve_window_display_source_params(
                 params.measurement_pixels = Some(height);
                 Some(start)
             }
+            WindowLayoutQueryScope::Position { target } => {
+                // A viewport can reach sparse fontification sites after a
+                // fold beyond the target. Preserve that callback extent.
+                if !window_source_has_fontification_callbacks(evaluator, params.buffer_id) {
+                    params.query_target = Some(crate::types::LayoutCharPos0::new(
+                        target.as_i64().saturating_sub(1),
+                    ));
+                }
+                None
+            }
             WindowLayoutQueryScope::Viewport => None,
         };
         if let Some(start) = start {
@@ -559,6 +569,23 @@ fn resolve_window_display_source_params(
         params: resolved,
         source: WindowDisplaySource::InactiveEchoArea,
     }
+}
+
+fn window_source_has_fontification_callbacks(
+    evaluator: &neovm_core::emacs_core::Context,
+    buffer_id: u64,
+) -> bool {
+    evaluator
+        .buffer_manager()
+        .get(neovm_core::buffer::BufferId(buffer_id))
+        .and_then(|buffer| buffer.buffer_local_value("fontification-functions"))
+        .or_else(|| {
+            evaluator
+                .obarray()
+                .symbol_value("fontification-functions")
+                .copied()
+        })
+        .is_some_and(|value| !value.is_nil())
 }
 
 /// Canonical live inputs for one leaf at a Lisp-visible layout boundary.
@@ -4059,6 +4086,22 @@ impl LayoutEngine {
         if freshness_after_fontification != freshness_before_fontification {
             return LeafLayoutAttempt::LogicalInputsChanged;
         }
+
+        // Conditional display can install fontification callbacks during
+        // preparation. Check the final callback state before bounding rows.
+        let callback_params;
+        let params = if params.query_target.is_some()
+            && window_source_has_fontification_callbacks(evaluator, params.buffer_id)
+        {
+            callback_params = {
+                let mut resolved = params.clone();
+                resolved.query_target = None;
+                resolved
+            };
+            &callback_params
+        } else {
+            params
+        };
 
         let scroll_dvpos = scroll_replay
             .as_ref()

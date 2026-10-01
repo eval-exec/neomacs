@@ -505,6 +505,7 @@ impl BufferSourceWalkSetup {
         buf_access: &RustBufferAccess<'buf, B>,
     ) -> (WindowOutputEmitter, BufferSourcePostLoopRenderOutcome) {
         let mut output_emitter = output.begin_text_window_output(begin_request);
+        output_emitter.set_query_target(params.query_target);
         let source_render = output.source_render_state(
             &mut output_emitter,
             font_metrics,

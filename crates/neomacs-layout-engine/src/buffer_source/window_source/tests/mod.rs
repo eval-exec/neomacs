@@ -22,6 +22,7 @@ fn window_params() -> WindowParams {
         window_start: 17,
         measurement_rows: None,
         measurement_pixels: None,
+        query_target: None,
         force_start: false,
         previous_visible_end: None,
         point: 21,

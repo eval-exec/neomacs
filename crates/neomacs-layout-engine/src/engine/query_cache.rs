@@ -48,6 +48,14 @@ impl QueryCache {
             .get(frame)?
             .find_window(window)?
             .buffer_id()?;
+        // Scalar symbol values are not captured collection reads. A hook
+        // installed after a callback-free prefix must run the full viewport,
+        // even when all of that prefix's geometry inputs still match.
+        if matches!(scope, WindowLayoutQueryScope::Position { .. })
+            && super::window_source_has_fontification_callbacks(evaluator, buffer.0)
+        {
+            return None;
+        }
         let current = evaluator.window_display_snapshot_freshness(frame, window, buffer)?;
         let source_point = evaluator
             .buffer_manager()
@@ -85,6 +93,9 @@ impl QueryCache {
             }
             if entry.query.geometry()?.layout_freshness.as_ref() == Some(&current) {
                 return Some(entry.query.clone());
+            }
+            if matches!(scope, WindowLayoutQueryScope::Position { .. }) {
+                return None;
             }
             if matches!(scope, WindowLayoutQueryScope::Rows { .. } | WindowLayoutQueryScope::Pixels { .. }) {
                 let source = evaluator.buffer_manager().get(buffer)?;

@@ -3888,6 +3888,45 @@ fn test_pos_visible_in_window_p_eval_returns_partial_geometry_for_live_window() 
 }
 
 #[test]
+fn pos_visible_queries_target_rows_but_last_row_still_queries_the_viewport() {
+    use crate::window::{WindowLayoutQueryOutcome, WindowLayoutQueryScope};
+    let mut eval = interactive_context();
+    let buffer = eval.buffers.current_buffer().unwrap().id;
+    eval.buffers
+        .get_mut(buffer)
+        .unwrap()
+        .insert("first\nsecond\nthird\n");
+    let frame = eval.frames.create_frame("target-query", 160, 96, buffer);
+    let window = eval.frames.get(frame).unwrap().selected_window;
+    eval.eval_str("(goto-char 5)").unwrap();
+    let scopes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let observed = scopes.clone();
+    eval.install_window_layout_query(move |_, _, _, scope| {
+        observed.borrow_mut().push(scope);
+        WindowLayoutQueryOutcome::Unavailable
+    });
+    for pos in [Value::fixnum(3), Value::NIL, Value::T] {
+        builtin_pos_visible_in_window_p_ctx(
+            &mut eval,
+            vec![pos, Value::make_window(window.0), Value::T],
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        scopes.borrow().as_slice(),
+        &[
+            WindowLayoutQueryScope::Position {
+                target: LispCharPos1::new(3)
+            },
+            WindowLayoutQueryScope::Position {
+                target: LispCharPos1::new(5)
+            },
+            WindowLayoutQueryScope::Viewport,
+        ]
+    );
+}
+
+#[test]
 fn pos_visible_in_new_live_window_falls_back_when_active_presentation_predates_it() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();

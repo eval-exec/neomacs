@@ -494,6 +494,9 @@ pub(crate) fn transition_text_window_row_with_limit(
     max_rows: usize,
 ) -> DisplayTextRowTransition {
     if transition.begin_row.row >= max_rows
+        // Equality can be a continuation marker followed by the target's
+        // real glyph, or another inserted-string row at the same anchor.
+        || output_emitter.query_target.is_some_and(|target| transition.begin_row.start_charpos > target)
         || output.builder().edit_sync_stops_before(
             transition.begin_row.start_charpos,
             transition.begin_row.y,
@@ -1241,6 +1244,7 @@ pub(crate) trait DisplayProgressSink {
 }
 
 pub(crate) struct WindowOutputEmitter {
+    query_target: Option<LayoutCharPos0>,
     /// Whether output-cursor updates are mirrored into the live evaluator
     /// window while this emitter is being built. Production frame layout is
     /// speculative and keeps this false; focused lifecycle tests can use the
@@ -1346,6 +1350,7 @@ impl WindowOutputEmitter {
     ) -> Self {
         Self {
             publish_live,
+            query_target: None,
             frame_id,
             window_id,
             geometry: WindowRowGeometry::new(text_row_base, text_x, window_top),
@@ -1353,6 +1358,10 @@ impl WindowOutputEmitter {
             phys_cursor: None,
             chrome_strings: Vec::new(),
         }
+    }
+
+    pub(crate) fn set_query_target(&mut self, target: Option<LayoutCharPos0>) {
+        self.query_target = target;
     }
 
     pub(crate) fn seed_cursor_only_body(
