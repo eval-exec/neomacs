@@ -2391,6 +2391,7 @@ impl Context {
 
     #[cfg(feature = "jit")]
     fn apply1_bytecode(&mut self, function: Value, arg0: Value) -> EvalResult {
+        crate::emacs_core::jit::stats::inline_census::note_callback(function);
         self.maybe_quit_before_gc()?;
         self.enter_interpreted_eval_depth()?;
         let bt_count = self.specpdl.len();

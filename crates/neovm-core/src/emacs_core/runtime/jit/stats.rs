@@ -440,6 +440,15 @@ pub(crate) enum ReportTag {
     /// Exit report: background compilation (`jit::bg`), unless legacy.
     #[strum(serialize = "neovm-jit-final-bg")]
     FinalBg,
+    /// Exit report: P2.3's opt-in census of candidate inlining sites.
+    #[strum(serialize = "neovm-jit-final-inline-census")]
+    FinalInlineCensus,
+    /// Exit report: one source's candidate inlining sites.
+    #[strum(serialize = "neovm-jit-final-inline-source")]
+    FinalInlineSource,
+    /// Exit report: bytecode callbacks entered through `apply1_bytecode`.
+    #[strum(serialize = "neovm-jit-final-inline-callback")]
+    FinalInlineCallback,
 }
 
 /// The process-wide report sink, chosen once from `NEOVM_JIT_STATS_FILE`.
@@ -815,6 +824,7 @@ thread_local! {
 /// deltas. Called once, right before the outer `recursive_edit`, on the eval
 /// thread. A no-op unless a report knob is set.
 pub fn mark_command_loop_entry() {
+    inline_census::mark_command_loop_entry();
     if !report_requested() {
         return;
     }
@@ -876,6 +886,7 @@ pub(crate) fn naming_enabled() -> bool {
 /// thread-local compile aggregates and caches. Read-only on `ctx`: no
 /// interning, no Lisp allocation, no safepoint.
 pub fn report_at_exit(ctx: &crate::emacs_core::eval::Context) {
+    inline_census::report_at_exit(ctx);
     if !report_requested() {
         return;
     }
@@ -1094,6 +1105,7 @@ pub(crate) fn reset_compile_stats() {
 pub(crate) mod asm_dump;
 pub(crate) mod calls;
 pub(crate) mod epoch;
+pub(crate) mod inline_census;
 pub(crate) mod perf_map;
 pub(crate) mod phases;
 mod report;

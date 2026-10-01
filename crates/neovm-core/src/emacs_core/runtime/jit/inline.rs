@@ -44,6 +44,12 @@ use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::jit::NumericFeedback;
 use crate::emacs_core::value::Value;
 
+#[path = "compile/inline_census.rs"]
+mod census;
+#[cfg(test)]
+pub(crate) use census::CensusShape;
+pub(crate) use census::{CensusSite, census_callee_verdict, census_sites};
+
 /// Ops of a callee body, at most, for one splice.
 pub(crate) const MAX_INLINE_BODY: usize = 40;
 

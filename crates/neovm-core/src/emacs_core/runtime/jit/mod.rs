@@ -98,6 +98,7 @@
 //! ## Verification harnesses (force the cold path everywhere; run the suite with each ON)
 //! | Knob | Forces |
 //! |---|---|
+//! | `NEOVM_JIT_INLINE_CENSUS` | off; `=1` records P2.3 candidate sites at compile attempts and bytecode callbacks entered through `apply1_bytecode`, with source/target rows at exit and callback counts since command-loop entry. Read once per process; no generated code changes. Measurement-only: remove after the inlining policy is qualified; keep off during performance gates. |
 //! | `NEOVM_JIT_FORCE_DEOPT=1` | Every speculation guard fails → every deopt path executes. |
 //! | `NEOVM_JIT_FORCE_SLOW_SPEC=1` | Every spec-call shim takes its stale-epoch re-validate branch on every call. |
 //! | `NEOVM_JIT_FORCE_CBSYM_GENERIC=1` | Every CallBuiltinSym intrinsic bounces to its generic fallback. |

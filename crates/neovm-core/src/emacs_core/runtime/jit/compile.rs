@@ -828,6 +828,7 @@ pub fn compile_bytecode_function_requested(
     obarray: Option<&Obarray>,
     request: CompileRequest,
 ) -> Result<CompiledLeaf, CompileError> {
+    super::stats::inline_census::note_compile(f, obarray);
     let gate_phase = super::stats::enter_phase(super::stats::CompilePhase::Gate);
     // Publish this body's per-site operand types and no-inline call sites
     // for the whole compile, before anything below reads them.
@@ -855,6 +856,7 @@ pub fn compile_bytecode_function_requested(
     let started = std::time::Instant::now();
     super::stats::verdict::begin();
     let mut result = compile_bytecode_function_inner(f, obarray);
+    super::stats::inline_census::note_compile_outcome(f, &result);
     let mir_verdict = super::stats::verdict::take();
     if let Ok(leaf) = &mut result {
         leaf.obs.mir_verdict = mir_verdict.clone();
