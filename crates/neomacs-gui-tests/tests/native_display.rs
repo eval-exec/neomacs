@@ -4,6 +4,10 @@ use neomacs_gui_tests::{
 };
 use std::{fs, path::PathBuf, time::Duration};
 
+#[cfg(target_os = "linux")]
+#[path = "native_display/linux_scroll.rs"]
+mod linux_scroll;
+
 #[test]
 // Prerequisites: requires a fresh release binary/pdump and a native graphical session.
 fn native_startup_font_and_resize_contract() {
@@ -27,7 +31,19 @@ fn native_startup_font_and_resize_contract() {
 #[test]
 // Canonical commands and native rendering; physical device transport is tested separately.
 fn native_rich_scroll_commands_preserve_pixel_offset() {
-    let result = run_native_contract("native-display-scroll", "native-scroll-contract.el", false);
+    #[cfg(target_os = "linux")]
+    for result in linux_scroll::run_rich_pixel_contracts() {
+        assert_native_scroll_contract(&result);
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let result =
+            run_native_contract("native-display-scroll", "native-scroll-contract.el", false);
+        assert_native_scroll_contract(&result);
+    }
+}
+
+fn assert_native_scroll_contract(result: &GuiRunResult) {
     let state: serde_json::Value =
         serde_json::from_slice(&fs::read(&result.artifacts.gui_state).unwrap()).unwrap();
     assert_eq!(state["contract"], "native-scroll");
@@ -39,6 +55,11 @@ fn native_rich_scroll_commands_preserve_pixel_offset() {
     );
     assert_eq!(state["content"]["font-selection"], "installed");
     assert!(state["content"]["overlays"].as_u64().unwrap() >= 12_500);
+    assert_eq!(state["pixel-down"][0], state["pixel-origin"][0]);
+    assert_eq!(
+        state["pixel-down"][1].as_i64().unwrap() - state["pixel-origin"][1].as_i64().unwrap(),
+        7
+    );
     assert_eq!(state["pixel-returned"], true);
     assert_eq!(state["page-advanced"], true);
     assert_eq!(state["page-returned"], true);
