@@ -108,7 +108,8 @@ pub(crate) const ABI_TAG: u32 = compute_abi_tag();
 // (version 16). F1 parks that consumer and restores 32; reject both old
 // layouts instead of reusing an earlier ABI version after the rollback.
 // v18: T2.1's per-leaf t2 budget cell and the countdown/poll-credit entry (NEOVM_JIT_TIER2).
-const ABI_TAG_VERSION: u32 = 18;
+// v19: T2.2's stable budgeted upgrades: leaf/runtime fields for the upgrade job, the rooted T1 fallback and counted T2 deopts (P2.1 C7/C9, P2.4 B11).
+const ABI_TAG_VERSION: u32 = 19;
 
 /// Format version of the AOT descriptor spec-section + the runtime spec ABI
 /// (`SpecSlot`/`spec_expected` sidecar bases, the loader re-classify+arm protocol).

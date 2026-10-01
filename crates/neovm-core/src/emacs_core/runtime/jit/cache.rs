@@ -62,6 +62,11 @@ enum CacheEntry {
     /// cache borrow — compiled code can `Call` back into elisp, and a hot callee
     /// re-enters this cache (a nested `borrow_mut` would panic).
     Compiled(Rc<CompiledLeaf>),
+    /// A tier-spine upgrade in flight. The old leaf keeps serving native
+    /// calls; both leaves' constants remain roots until install or cancel.
+    /// Owned by one mutator, like Compiled; only the job's atomic cell is
+    /// shared with its backend worker.
+    CompiledUpgrading(Rc<CompiledLeaf>, Box<super::bg::PendingJob>),
     /// The body is outside the baseline JIT's supported subset; never retried.
     NotCompilable,
     /// Interpreted for now (see [`DeferReason`]); the runtime carries the
@@ -72,6 +77,17 @@ enum CacheEntry {
     /// a probe installs its leaf. The pending leaf's reloc constants are GC
     /// roots like a compiled leaf's; dropping the entry cancels the job.
     Pending(Box<super::bg::PendingJob>),
+}
+
+impl CacheEntry {
+    /// The native leaf currently serving calls, including while upgrading.
+    #[inline]
+    fn live_leaf(&self) -> Option<&Rc<CompiledLeaf>> {
+        match self {
+            Self::Compiled(leaf) | Self::CompiledUpgrading(leaf, _) => Some(leaf),
+            Self::NotCompilable | Self::Deferred(_) | Self::Pending(_) => None,
+        }
+    }
 }
 
 /// Dense per-thread compiled-leaf store indexed by `compiled_id`. Ids are
@@ -105,7 +121,10 @@ impl DenseCache {
             // guard already handles behavioral staleness. Bounded: eviction is
             // rare (inlined re-JITs on redefinition). `clear()` still drops
             // everything - a heap swap invalidates slots and leaves together.
-            if let CacheEntry::Compiled(leaf) = entry {
+            if let CacheEntry::Compiled(leaf) | CacheEntry::CompiledUpgrading(leaf, _) = entry {
+                if leaf.obs.t2.due().is_some() {
+                    super::tier2::upgrade_failed(&leaf);
+                }
                 self.retire(leaf);
             }
             // Every armed leaf slot (RuntimeState::leaf_slot) re-resolves:
@@ -122,7 +141,12 @@ impl DenseCache {
         let Some(slot) = self.slots.get_mut(id as usize) else {
             return;
         };
-        if let Some(CacheEntry::Compiled(leaf)) = std::mem::replace(slot, next) {
+        if let Some(CacheEntry::Compiled(leaf) | CacheEntry::CompiledUpgrading(leaf, _)) =
+            std::mem::replace(slot, next)
+        {
+            if leaf.obs.t2.due().is_some() {
+                super::tier2::upgrade_failed(&leaf);
+            }
             self.retire(leaf);
         }
     }
@@ -140,8 +164,18 @@ impl DenseCache {
         if self.slots.len() <= idx {
             self.slots.resize_with(idx + 1, || None);
         }
-        if let Some(CacheEntry::Compiled(old)) = self.slots[idx].replace(entry) {
-            fold_dropped_leaf(&old);
+        match self.slots[idx].replace(entry) {
+            Some(CacheEntry::Compiled(old)) => {
+                if old.obs.t2.due().is_some() {
+                    super::tier2::upgrade_failed(&old);
+                }
+                fold_dropped_leaf(&old);
+            }
+            Some(CacheEntry::CompiledUpgrading(old, _)) => {
+                super::tier2::upgrade_failed(&old);
+                self.retire(old);
+            }
+            _ => {}
         }
     }
 
@@ -184,7 +218,10 @@ impl DenseCache {
 
     fn clear(&mut self) {
         for entry in self.slots.iter().flatten() {
-            if let CacheEntry::Compiled(leaf) = entry {
+            if let Some(leaf) = entry.live_leaf() {
+                if leaf.obs.t2.due().is_some() {
+                    super::tier2::upgrade_failed(leaf);
+                }
                 fold_dropped_leaf(leaf);
             }
         }
@@ -208,11 +245,34 @@ thread_local! {
 /// Fold a leaf that is about to leave every cache into the dropped totals.
 #[cold]
 fn fold_dropped_leaf(leaf: &CompiledLeaf) {
-    let snap = leaf.obs.snapshot();
-    DROPPED_LEAF_TOTALS.with(|t| {
-        let mut totals = t.get();
-        totals.add(&snap);
-        t.set(totals);
+    visit_leaf_family(leaf, &mut |leaf| {
+        let snap = leaf.obs.snapshot();
+        DROPPED_LEAF_TOTALS.with(|t| {
+            let mut totals = t.get();
+            totals.add(&snap);
+            t.set(totals);
+        });
+    });
+}
+
+/// Visit the live/retired leaf and its retained T1 fallback. Each family
+/// belongs to this mutator's cache; workers cannot access the fallback.
+fn visit_leaf_family(leaf: &CompiledLeaf, visit: &mut impl FnMut(&CompiledLeaf)) {
+    visit(leaf);
+    if let Some(fallback) = leaf.tier1_fallback.borrow().as_ref() {
+        visit_leaf_family(fallback, visit);
+    }
+}
+
+fn leaf_reloc_count(leaf: &CompiledLeaf) -> usize {
+    let mut count = 0;
+    visit_leaf_family(leaf, &mut |leaf| count += leaf.reloc_values().len());
+    count
+}
+
+fn leaf_gc_roots(leaf: &CompiledLeaf, roots: &mut Vec<Value>) {
+    visit_leaf_family(leaf, &mut |leaf| {
+        roots.extend_from_slice(leaf.reloc_values())
     });
 }
 
@@ -225,6 +285,8 @@ pub(crate) enum LeafState {
     /// Replaced (re-tier, stale inline, patched-prefix widening) but kept
     /// allocated for any spec slot still pointing at it.
     Retired,
+    /// A T1 leaf retained by its T2 upgrade for a counted deopt's revert.
+    Fallback,
     /// An OSR variant, entered only from the interpreter.
     Osr,
 }
@@ -263,12 +325,22 @@ pub(crate) fn leaf_report_rows() -> (Vec<LeafRow>, LeafTotals) {
     COMPILED.with(|c| {
         let cache = c.borrow();
         for (id, entry) in cache.iter() {
-            if let CacheEntry::Compiled(leaf) = entry {
+            if let Some(leaf) = entry.live_leaf() {
                 rows.push(LeafRow::of(id, leaf, LeafState::Live));
+                if let Some(fallback) = leaf.tier1_fallback.borrow().as_ref() {
+                    visit_leaf_family(fallback, &mut |fallback| {
+                        rows.push(LeafRow::of(id, fallback, LeafState::Fallback))
+                    });
+                }
             }
         }
         for leaf in &cache.retired {
             rows.push(LeafRow::of(leaf.obs.id, leaf, LeafState::Retired));
+            if let Some(fallback) = leaf.tier1_fallback.borrow().as_ref() {
+                visit_leaf_family(fallback, &mut |fallback| {
+                    rows.push(LeafRow::of(leaf.obs.id, fallback, LeafState::Fallback))
+                });
+            }
         }
     });
     OSR_CACHE.with(|c| {
@@ -853,9 +925,17 @@ fn register_inline_deps(id: u64, leaf: &CompiledLeaf) {
     // (the `evict_inline_dependents` invariant; tripped by the 2026-09-05
     // gate-off census run).
     forget_inline_deps(id);
-    for &sym in leaf.inline_deps() {
-        INLINE_DEPS.with(|m| m.borrow_mut().entry(sym).or_default().insert(id));
-    }
+    add_inline_deps(id, leaf);
+}
+
+/// During an upgrade either body can become stale: keep both dependency
+/// sets until install/discard chooses the leaf that remains reachable.
+fn add_inline_deps(id: u64, leaf: &CompiledLeaf) {
+    visit_leaf_family(leaf, &mut |leaf| {
+        for &sym in leaf.inline_deps() {
+            INLINE_DEPS.with(|m| m.borrow_mut().entry(sym).or_default().insert(id));
+        }
+    });
 }
 
 /// Drop `id` from every inline-dependency set (empty sets are removed).
@@ -927,6 +1007,8 @@ fn compile_cache_entry(
     // remember the verdict like any rejected body. Also re-applies the level
     // after a `clear()` forgot the entry.
     let rt = func.jit_runtime();
+    let spine_upgrade = super::compile::jit_tier2().on
+        && matches!(request.tier, super::tier2::CompileTier::Upgrade(_));
     if rt.reopt_level() == ReoptLevel::Interpreter {
         rt.mark_native_rejected(rejection_epoch());
         return CacheEntry::NotCompilable;
@@ -946,15 +1028,29 @@ fn compile_cache_entry(
         // No room for its backend: no front either. Asked again once the
         // heat doubled, as the queue's own drops are.
         let heat = rt.heat();
-        rt.defer_tier_up(heat.saturating_mul(2).max(heat.saturating_add(1)));
+        if !spine_upgrade {
+            rt.defer_tier_up(heat.saturating_mul(2).max(heat.saturating_add(1)));
+        }
         return CacheEntry::Deferred(DeferReason::Backlog);
     }
     let defer = super::bg::DeferScope::enter(class);
     let clock = stats::CompileClock::start(request.origin);
+    let cpu_started = spine_upgrade.then(super::tier2::cpu_time_us);
     let result = compile_bytecode_function_requested(func, obarray, request);
     drop(defer);
     let mut deferred = super::bg::take_deferred();
     let elapsed = clock.finish(result.is_ok());
+    if let Some(started) = cpu_started {
+        let finished = super::tier2::cpu_time_us();
+        // A missing CPU clock must not make every upgrade free. Wall
+        // elapsed conservatively charges the fixed startup budget floor.
+        let charged = if started == 0 || finished == 0 {
+            elapsed
+        } else {
+            std::time::Duration::from_micros(finished.saturating_sub(started))
+        };
+        super::tier2::charge_compile(charged);
+    }
     stats::record_compile(elapsed, func.executable_ops().len(), &result);
     if result.is_err()
         && let Some(code) = deferred.take()
@@ -968,10 +1064,18 @@ fn compile_cache_entry(
             leaf.obs.note_compile_time(elapsed);
             // Registered when the front finishes, so a redefinition of an
             // inlined callee removes a pending leaf as it would a compiled one.
-            register_inline_deps(id, &leaf);
+            if spine_upgrade {
+                add_inline_deps(id, &leaf);
+            } else {
+                register_inline_deps(id, &leaf);
+            }
             match deferred {
                 None => CacheEntry::Compiled(Rc::new(leaf)),
-                Some(code) => CacheEntry::Pending(super::bg::PendingJob::new(id, leaf, code, rt)),
+                Some(code) => CacheEntry::Pending(if spine_upgrade {
+                    super::bg::PendingJob::new_upgrade(id, leaf, code, rt)
+                } else {
+                    super::bg::PendingJob::new(id, leaf, code, rt)
+                }),
             }
         }
         Err(CompileError::NotProfitable) if super::profit_defer_factor() != 0 => {
@@ -981,7 +1085,9 @@ fn compile_cache_entry(
             let at = super::hot_threshold()
                 .saturating_mul(super::profit_defer_factor())
                 .max(rt.heat().saturating_add(1));
-            rt.defer_tier_up(at);
+            if !spine_upgrade {
+                rt.defer_tier_up(at);
+            }
             CacheEntry::Deferred(DeferReason::NotProfitable)
         }
         Err(_) => {
@@ -992,7 +1098,9 @@ fn compile_cache_entry(
             // copy, scratch-root save/restore, cache probe, fallback — to be
             // told `NotCompilable` again; that trip was the bulk of the JIT's
             // +1.0% instruction tax on that workload.
-            func.jit_runtime().mark_native_rejected(rejection_epoch());
+            if !spine_upgrade {
+                func.jit_runtime().mark_native_rejected(rejection_epoch());
+            }
             CacheEntry::NotCompilable
         }
     }
@@ -1070,18 +1178,24 @@ pub(crate) fn evict_compiled(id: u64) {
 /// invalidation (`jit::reopt`), the re-tier (`try_run_compiled`) and, later,
 /// a per-symbol resync. Must run outside any `COMPILED`/`OSR_CACHE` borrow.
 pub(crate) fn unlink_spec_slots(dead: *const CompiledLeaf) -> usize {
+    COMPILED.with(|c| unlink_spec_slots_in(&c.borrow(), dead))
+}
+
+/// The install has already borrowed the cache; unlink before publishing
+/// the replacement, without recursively borrowing COMPILED.
+fn unlink_spec_slots_in(cache: &DenseCache, dead: *const CompiledLeaf) -> usize {
     let mut cleared = 0;
-    COMPILED.with(|c| {
-        let cache = c.borrow();
-        for entry in cache.values() {
-            if let CacheEntry::Compiled(leaf) = entry {
-                cleared += leaf.unlink_spec_slots_to(dead);
-            }
+    for entry in cache.values() {
+        if let Some(leaf) = entry.live_leaf() {
+            visit_leaf_family(leaf, &mut |leaf| cleared += leaf.unlink_spec_slots_to(dead));
         }
-        for leaf in &cache.retired {
-            cleared += leaf.unlink_spec_slots_to(dead);
+        if let CacheEntry::Pending(job) | CacheEntry::CompiledUpgrading(_, job) = entry {
+            cleared += job.leaf().unlink_spec_slots_to(dead);
         }
-    });
+    }
+    for leaf in &cache.retired {
+        visit_leaf_family(leaf, &mut |leaf| cleared += leaf.unlink_spec_slots_to(dead));
+    }
     OSR_CACHE.with(|c| {
         for entry in c.borrow().values().flatten() {
             cleared += entry.leaf.unlink_spec_slots_to(dead);
@@ -1190,7 +1304,7 @@ pub(crate) fn leaf_is_current(
     match origin {
         LeafOrigin::Entry => COMPILED.with(|c| {
             c.try_borrow().is_ok_and(|c| {
-                matches!(c.get(id), Some(CacheEntry::Compiled(l)) if std::ptr::eq(Rc::as_ptr(l), leaf))
+                c.get(id).and_then(CacheEntry::live_leaf).is_some_and(|l| std::ptr::eq(Rc::as_ptr(l), leaf))
             })
         }),
         LeafOrigin::Osr { header_pc, .. } => OSR_CACHE.with(|c| {
@@ -1257,7 +1371,7 @@ pub(crate) fn invalidate_for_reopt(
             return None;
         };
         let (old, earned) = match c.get(id) {
-            Some(CacheEntry::Compiled(l)) => (
+            Some(CacheEntry::Compiled(l) | CacheEntry::CompiledUpgrading(l, _)) => (
                 Some(Rc::clone(l)),
                 (l.regalloc, l.profit_gate_bypassed, l.call_heavy),
             ),
@@ -1381,7 +1495,11 @@ pub(crate) fn evict_inline_dependents(sym: SymId) {
             // deliberately no epoch, and the 2026-09-05 gate-off census tripped
             // the epoch-based version of this assertion on exactly that.
             debug_assert!(
-                !matches!(cache.get(id), Some(CacheEntry::Compiled(l)) if l.inline_deps().is_empty()),
+                !matches!(cache.get(id), Some(CacheEntry::Compiled(leaf)) if {
+                    let mut has_deps = false;
+                    visit_leaf_family(leaf, &mut |leaf| has_deps |= !leaf.inline_deps().is_empty());
+                    !has_deps
+                }),
                 "precise eviction must only touch leaves that recorded inline deps"
             );
             cache.remove(id);
@@ -1394,6 +1512,7 @@ pub(crate) fn evict_inline_dependents(sym: SymId) {
 pub(crate) fn cache_entry_kind_for_test(id: u64) -> &'static str {
     COMPILED.with(|c| match c.borrow().get(id) {
         Some(CacheEntry::Compiled(_)) => "compiled",
+        Some(CacheEntry::CompiledUpgrading(_, _)) => "upgrading",
         Some(CacheEntry::NotCompilable) => "not-compilable",
         Some(CacheEntry::Deferred(DeferReason::NotProfitable)) => "deferred",
         Some(CacheEntry::Deferred(DeferReason::Reoptimize { .. })) => "deferred-reopt",
@@ -1407,7 +1526,7 @@ pub(crate) fn cache_entry_kind_for_test(id: u64) -> &'static str {
 #[cfg(test)]
 pub(crate) fn compiled_regalloc_for_test(id: u64) -> Option<RegallocChoice> {
     COMPILED.with(|c| match c.borrow().get(id) {
-        Some(CacheEntry::Compiled(l)) => Some(l.regalloc),
+        Some(CacheEntry::Compiled(l) | CacheEntry::CompiledUpgrading(l, _)) => Some(l.regalloc),
         _ => None,
     })
 }
@@ -1416,7 +1535,9 @@ pub(crate) fn compiled_regalloc_for_test(id: u64) -> Option<RegallocChoice> {
 #[cfg(test)]
 pub(crate) fn compiled_leaf_ptr_for_test(id: u64) -> Option<*const CompiledLeaf> {
     COMPILED.with(|c| match c.borrow().get(id) {
-        Some(CacheEntry::Compiled(leaf)) => Some(Rc::as_ptr(leaf)),
+        Some(CacheEntry::Compiled(leaf) | CacheEntry::CompiledUpgrading(leaf, _)) => {
+            Some(Rc::as_ptr(leaf))
+        }
         _ => None,
     })
 }
@@ -1440,7 +1561,7 @@ pub(crate) fn osr_leaf_ptr_for_test(
 /// Test-only: is a compiled leaf currently cached for `id` on this thread?
 #[cfg(test)]
 pub(crate) fn is_compiled_for_test(id: u64) -> bool {
-    COMPILED.with(|c| matches!(c.borrow().get(id), Some(CacheEntry::Compiled(_))))
+    COMPILED.with(|c| c.borrow().get(id).and_then(CacheEntry::live_leaf).is_some())
 }
 
 /// Test-only: whether the cached leaf for `id` is AOT-backed (served from a
@@ -1448,7 +1569,9 @@ pub(crate) fn is_compiled_for_test(id: u64) -> bool {
 #[cfg(test)]
 pub(crate) fn cached_leaf_is_aot_for_test(id: u64) -> Option<bool> {
     COMPILED.with(|c| match c.borrow().get(id) {
-        Some(CacheEntry::Compiled(leaf)) => Some(leaf.is_aot_backed()),
+        Some(CacheEntry::Compiled(leaf) | CacheEntry::CompiledUpgrading(leaf, _)) => {
+            Some(leaf.is_aot_backed())
+        }
         _ => None,
     })
 }
@@ -1460,7 +1583,9 @@ pub(crate) fn cached_leaf_is_aot_for_test(id: u64) -> Option<bool> {
 pub(crate) fn cached_leaf_is_aot_for_func(func: &ByteCodeFunction) -> Option<bool> {
     let id = func.jit_runtime().compiled_id_or_assign();
     COMPILED.with(|c| match c.borrow().get(id) {
-        Some(CacheEntry::Compiled(leaf)) => Some(leaf.is_aot_backed()),
+        Some(CacheEntry::Compiled(leaf) | CacheEntry::CompiledUpgrading(leaf, _)) => {
+            Some(leaf.is_aot_backed())
+        }
         _ => None,
     })
 }
@@ -1483,7 +1608,11 @@ pub(crate) fn jit_compiled_ids() -> HashSet<u64> {
         c.borrow()
             .iter()
             .filter_map(|(id, e)| match e {
-                CacheEntry::Compiled(leaf) if !leaf.is_aot_backed() => Some(id),
+                CacheEntry::Compiled(leaf) | CacheEntry::CompiledUpgrading(leaf, _)
+                    if !leaf.is_aot_backed() =>
+                {
+                    Some(id)
+                }
                 _ => None,
             })
             .collect()
@@ -1608,12 +1737,16 @@ pub(crate) fn collect_jit_reloc_gc_roots(roots: &mut Vec<Value>) {
         let cache = c.borrow();
         for entry in cache.values() {
             match entry {
-                CacheEntry::Compiled(leaf) => roots.extend_from_slice(leaf.reloc_values()),
+                CacheEntry::Compiled(leaf) => leaf_gc_roots(leaf, roots),
+                CacheEntry::CompiledUpgrading(leaf, job) => {
+                    leaf_gc_roots(leaf, roots);
+                    leaf_gc_roots(job.leaf(), roots);
+                }
                 // A pending leaf's code will load these once installed (its
                 // front already assigned their reloc slots), and nothing else
                 // may keep them alive meanwhile: its source may die, and an
                 // inlined callee may be redefined.
-                CacheEntry::Pending(job) => roots.extend_from_slice(job.leaf().reloc_values()),
+                CacheEntry::Pending(job) => leaf_gc_roots(job.leaf(), roots),
                 CacheEntry::NotCompilable | CacheEntry::Deferred(_) => {}
             }
         }
@@ -1628,7 +1761,7 @@ pub(crate) fn collect_jit_reloc_gc_roots(roots: &mut Vec<Value>) {
         // compile, so no barrier is involved. Bounded: retiring is rare
         // (re-tier, stale inline, patched prefix, deopt invalidation).
         for leaf in &cache.retired {
-            roots.extend_from_slice(leaf.reloc_values());
+            leaf_gc_roots(leaf, roots);
         }
     });
     // OSR leaves also bake heap-constant reloc vectors — root them too, else a GC
@@ -1657,12 +1790,15 @@ pub(crate) fn compiled_cache_probe() -> (usize, usize) {
         let live: usize = cache
             .values()
             .map(|entry| match entry {
-                CacheEntry::Compiled(leaf) => leaf.reloc_values().len(),
-                CacheEntry::Pending(job) => job.leaf().reloc_values().len(),
+                CacheEntry::Compiled(leaf) => leaf_reloc_count(leaf),
+                CacheEntry::CompiledUpgrading(leaf, job) => {
+                    leaf_reloc_count(leaf) + leaf_reloc_count(job.leaf())
+                }
+                CacheEntry::Pending(job) => leaf_reloc_count(job.leaf()),
                 CacheEntry::NotCompilable | CacheEntry::Deferred(_) => 0,
             })
             .sum();
-        let retired: usize = cache.retired.iter().map(|l| l.reloc_values().len()).sum();
+        let retired: usize = cache.retired.iter().map(|l| leaf_reloc_count(l)).sum();
         let osr_pending: usize = OSR_PENDING.with(|p| {
             p.borrow()
                 .values()
@@ -1797,6 +1933,176 @@ fn probe_pending(
     }
 }
 
+/// Publish a completed countdown upgrade. The cache slot has been taken
+/// already, so the old leaf is moved either to the retired list (T1') or
+/// the new T2's fallback. All of this runs on the owning mutator, with no
+/// Lisp allocation or safepoint. Worker code is published with Release;
+/// install acquires completion and serializes instruction fetch before
+/// this mutator publishes the replacement cache entry.
+#[cold]
+#[inline(never)]
+fn publish_upgrade(
+    cache: &mut DenseCache,
+    id: u64,
+    old: Rc<CompiledLeaf>,
+    leaf: Rc<CompiledLeaf>,
+    kind: super::tier2::T2Upgrade,
+    rt: &super::RuntimeState,
+) -> Rc<CompiledLeaf> {
+    match kind {
+        super::tier2::T2Upgrade::Retier => cache.retire(Rc::clone(&old)),
+        super::tier2::T2Upgrade::Feedback => {
+            *leaf.tier1_fallback.borrow_mut() = Some(Rc::clone(&old));
+        }
+    }
+    register_inline_deps(id, &leaf);
+    let dead = Rc::as_ptr(&old);
+    let mut unlinked = unlink_spec_slots_in(cache, dead);
+    visit_leaf_family(&leaf, &mut |leaf| {
+        unlinked += leaf.unlink_spec_slots_to(dead)
+    });
+    rt.disarm_leaf_slot();
+    super::tier2::note_upgraded(&old, kind);
+    cache.insert(id, CacheEntry::Compiled(Rc::clone(&leaf)));
+    tracing::debug!(target: "neovm_jit::tier2", id, unlinked, ?kind, "upgrade installed");
+    leaf
+}
+
+/// Compile an upgrade without removing the running T1 first. A refusal
+/// or failure leaves that T1 native; a worker job retains it in the cache
+/// until install. Entry compiles continue using their interpreter hold.
+#[cold]
+#[inline(never)]
+fn request_upgrade(
+    cache: &mut DenseCache,
+    id: u64,
+    func: &ByteCodeFunction,
+    old: Rc<CompiledLeaf>,
+    kind: super::tier2::T2Upgrade,
+    ctx: *mut Context,
+) -> Rc<CompiledLeaf> {
+    let rt = func.jit_runtime();
+    // SAFETY: the dormant Context provided by the native dispatch seam.
+    let obarray = (!ctx.is_null()).then(|| unsafe { &(*ctx).obarray });
+    let name_hint = stats::naming_enabled()
+        .then(|| callee_name_hint(ctx, id))
+        .flatten();
+    let _vars = super::compile::inline_vars::CompileEnvScope::enter(ctx);
+    if kind == super::tier2::T2Upgrade::Retier {
+        stats::record_retier();
+    }
+    let entry = compile_cache_entry(
+        id,
+        func,
+        obarray,
+        CompileRequest {
+            regalloc: RegallocPolicy::Full,
+            bypass_profit_gate: old.profit_gate_bypassed,
+            origin: stats::CompileOrigin::Retier,
+            tier: super::tier2::CompileTier::Upgrade(kind),
+        },
+        name_hint,
+    );
+    match entry {
+        CacheEntry::Compiled(leaf) => {
+            let _ = cache.take(id);
+            publish_upgrade(cache, id, old, leaf, kind, rt)
+        }
+        CacheEntry::Pending(mut job) => {
+            job.set_cancel_estimate(old.obs.t2.reserved_us.get());
+            // Keep old and new inline dependencies until one is chosen.
+            add_inline_deps(id, &old);
+            let _ = cache.take(id);
+            cache.insert(id, CacheEntry::CompiledUpgrading(Rc::clone(&old), job));
+            old
+        }
+        CacheEntry::Deferred(_) => {
+            register_inline_deps(id, &old);
+            super::tier2::upgrade_deferred(rt, &old);
+            old
+        }
+        CacheEntry::NotCompilable => {
+            register_inline_deps(id, &old);
+            super::tier2::upgrade_failed(&old);
+            old
+        }
+        CacheEntry::CompiledUpgrading(_, _) => unreachable!("a fresh compile is not upgrading"),
+    }
+}
+
+/// Probe an upgrade, serving the old native leaf until the backend is
+/// ready. Unlike an entry probe, this never holds the interpreter.
+#[cold]
+#[inline(never)]
+fn probe_upgrade(cache: &mut DenseCache, id: u64, ctx: Option<&Context>) -> Rc<CompiledLeaf> {
+    match cache.get(id) {
+        Some(CacheEntry::CompiledUpgrading(_, job)) if job.is_ready() => {}
+        Some(CacheEntry::CompiledUpgrading(old, _)) => return Rc::clone(old),
+        _ => unreachable!("probe only an upgrade"),
+    }
+    let Some(CacheEntry::CompiledUpgrading(old, job)) = cache.take(id) else {
+        unreachable!("take only an upgrade")
+    };
+    let rt = job.upgrade_runtime().expect("upgrade holds its runtime");
+    let super::tier2::T2Origin::Upgrade(kind) = job.leaf().obs.t2.origin else {
+        unreachable!("upgrade job holds an upgraded front")
+    };
+    match super::bg::install(job, Some(&rt), ctx) {
+        Ok(leaf) => publish_upgrade(cache, id, old, Rc::new(leaf), kind, &rt),
+        Err(reason) => {
+            register_inline_deps(id, &old);
+            match reason {
+                super::bg::Discard::Rejected => super::tier2::upgrade_failed(&old),
+                super::bg::Discard::Stale(_) => super::tier2::upgrade_deferred(&rt, &old),
+            }
+            cache.insert(id, CacheEntry::Compiled(Rc::clone(&old)));
+            old
+        }
+    }
+}
+
+/// Revert a counted T2 deopt to its retained T1 if this exact T2 remains
+/// current. The owning mutator takes the fallback, retires/unlinks T2 and
+/// reopens T1's countdown; a deopt from an obsolete activation cannot
+/// replace a newer cache entry. No Lisp allocation or safepoint.
+#[cold]
+#[inline(never)]
+pub(crate) fn revert_t2_to_t1(func: &ByteCodeFunction, leaf: &CompiledLeaf) -> bool {
+    let rt = func.jit_runtime();
+    let Some(id) = rt.compiled_id() else {
+        return false;
+    };
+    COMPILED.with(|c| {
+        let Ok(mut cache) = c.try_borrow_mut() else {
+            return false;
+        };
+        if !cache
+            .get(id)
+            .and_then(CacheEntry::live_leaf)
+            .is_some_and(|current| std::ptr::eq(Rc::as_ptr(current), leaf))
+        {
+            return false;
+        }
+        let Some(old) = leaf.tier1_fallback.borrow_mut().take() else {
+            return false;
+        };
+        let Some(CacheEntry::Compiled(t2)) = cache.take(id) else {
+            unreachable!("T2 is not upgrading")
+        };
+        cache.retire(t2);
+        old.retired.set(false);
+        super::tier2::rearm_fallback(rt, &old);
+        register_inline_deps(id, &old);
+        unlink_spec_slots_in(&cache, leaf);
+        // The fallback was detached before retiring T2, so the cache
+        // walker cannot see its self slots until it is inserted below.
+        old.unlink_spec_slots_to(leaf);
+        rt.disarm_leaf_slot();
+        cache.insert(id, CacheEntry::Compiled(old));
+        true
+    })
+}
+
 /// Install `id`'s ready pending job: its leaf becomes the `Compiled` entry,
 /// a failed backend makes the body `NotCompilable` (as a failed in-line
 /// compile does), and a stale leaf leaves the entry empty for the next hot
@@ -1842,6 +2148,11 @@ fn drain_ready_in(cache: &mut DenseCache, ctx: Option<&Context>) {
             false
         }
         Some(CacheEntry::Pending(_)) => true,
+        Some(CacheEntry::CompiledUpgrading(_, job)) if job.is_ready() => {
+            probe_upgrade(cache, id, ctx);
+            false
+        }
+        Some(CacheEntry::CompiledUpgrading(_, _)) => true,
         _ => false,
     });
 }
@@ -1952,6 +2263,20 @@ pub fn try_run_compiled(
         // for compile-time speculation. A null ctx (shim-free test bodies) just
         // disables speculation.
         let obarray = (!ctx.is_null()).then(|| unsafe { &(*ctx).obarray });
+        // A countdown upgrade keeps its T1 live until the replacement
+        // really installs. The legacy heat-driven re-tier below is unchanged.
+        if matches!(cache.get(id), Some(CacheEntry::CompiledUpgrading(_, _))) {
+            let live = (!ctx.is_null()).then(|| unsafe { &*ctx });
+            return Some(probe_upgrade(&mut cache, id, live))
+                .filter(|leaf| leaf.accepts(args.len()));
+        }
+        if let Some(CacheEntry::Compiled(old)) = cache.get(id)
+            && let Some(kind) = old.obs.t2.due()
+        {
+            let old = Rc::clone(old);
+            return Some(request_upgrade(&mut cache, id, func, old, kind, ctx))
+                .filter(|leaf| leaf.accepts(args.len()));
+        }
         // A leaf that inlined a callee needs no epoch check here: every write
         // of a function cell (`note_function_redefined`: fset, defalias,
         // fmakunbound, the silent clear) evicts exactly the leaves that
@@ -1970,41 +2295,35 @@ pub fn try_run_compiled(
         // would rebuild `Fast` forever.
         // Under `NEOVM_JIT_TIER2` the re-tier is the upgrade a leaf's
         // countdown asked for (`tier2`); the heat crossing below is off.
-        let (prev_regalloc, prev_bypassed, prev_call_heavy, upgrade) = match cache.get(id) {
-            Some(CacheEntry::Compiled(l)) => (
-                Some(l.regalloc),
-                l.profit_gate_bypassed,
-                l.call_heavy,
-                l.obs.t2.due(),
-            ),
+        let (prev_regalloc, prev_bypassed, prev_call_heavy) = match cache.get(id) {
+            Some(CacheEntry::Compiled(l)) => {
+                (Some(l.regalloc), l.profit_gate_bypassed, l.call_heavy)
+            }
+            Some(CacheEntry::CompiledUpgrading(_, _)) => unreachable!("handled above"),
             Some(CacheEntry::Pending(_)) => {
                 // SAFETY: the dormant seam-provided Context (shared reads).
                 let live = (!ctx.is_null()).then(|| unsafe { &*ctx });
                 return probe_pending(&mut cache, id, func, live)
                     .filter(|leaf| leaf.accepts(args.len()));
             }
-            Some(CacheEntry::NotCompilable | CacheEntry::Deferred(_)) => (None, false, false, None),
+            Some(CacheEntry::NotCompilable | CacheEntry::Deferred(_)) => (None, false, false),
             None => {
                 // A miss compiles below: install what finished meanwhile.
                 if super::bg::pending_count() != 0 {
                     // SAFETY: as above.
                     drain_ready_in(&mut cache, (!ctx.is_null()).then(|| unsafe { &*ctx }));
                 }
-                (None, false, false, None)
+                (None, false, false)
             }
         };
         // A call-heavy body stays on the fast allocator however hot it gets:
         // its time is in its shim calls, not in the code around them.
-        let retier = upgrade == Some(super::tier2::T2Upgrade::Retier)
-            || prev_regalloc == Some(RegallocChoice::Fast)
-                && !prev_call_heavy
-                && forced_regalloc().is_none()
-                && super::retier_heat().is_some_and(|at| func.jit_runtime().heat() >= at);
+        let retier = prev_regalloc == Some(RegallocChoice::Fast)
+            && !prev_call_heavy
+            && forced_regalloc().is_none()
+            && super::retier_heat().is_some_and(|at| func.jit_runtime().heat() >= at);
         if retier {
             if let Some(CacheEntry::Compiled(old)) = cache.get(id) {
-                if upgrade.is_some() {
-                    super::tier2::note_upgraded(old, super::tier2::T2Upgrade::Retier);
-                }
                 retiered = Some(Rc::clone(old));
             }
             cache.remove(id);
@@ -2270,44 +2589,25 @@ pub(crate) fn resolve_compiled_leaf_ptr(
     if id > max_compiled_id() {
         return None;
     }
-    // The leaf an upgrade compiled here replaces, to unlink once the cache
-    // borrow ends.
-    let mut upgraded: Option<Rc<CompiledLeaf>> = None;
-    let resolved = COMPILED.with(|cache| {
+    COMPILED.with(|cache| {
         let mut cache = cache.borrow_mut();
-        // A pending compile: install it if its backend finished, else take
-        // the strict path meanwhile (the entry answers `None` below).
+        // SAFETY: same dormant-Context contract as try_run_compiled.
+        let live = (!ctx.is_null()).then(|| unsafe { &*ctx });
         if matches!(cache.get(id), Some(CacheEntry::Pending(job)) if job.is_ready()) {
-            // SAFETY: same dormant-Context contract as try_run_compiled.
-            let live = (!ctx.is_null()).then(|| unsafe { &*ctx });
             install_pending(&mut cache, id, Some(func.jit_runtime()), live);
         }
-        // An upgrade the leaf's countdown asked for (`tier2`): its spec
-        // callers were unlinked to come here, where the function is known.
-        let upgrade = match cache.get(id) {
-            Some(CacheEntry::Compiled(old)) => old.obs.t2.due().map(|kind| {
-                super::tier2::note_upgraded(old, kind);
-                upgraded = Some(Rc::clone(old));
-                kind
-            }),
-            _ => None,
-        };
-        let (regalloc, origin, tier) = match upgrade {
-            Some(kind @ super::tier2::T2Upgrade::Retier) => {
-                cache.remove(id);
-                stats::record_retier();
-                (
-                    RegallocPolicy::Full,
-                    stats::CompileOrigin::Retier,
-                    super::tier2::CompileTier::Upgrade(kind),
-                )
-            }
-            None => (
-                RegallocPolicy::Auto,
-                stats::CompileOrigin::FirstSight,
-                super::tier2::CompileTier::T1,
-            ),
-        };
+        if matches!(cache.get(id), Some(CacheEntry::CompiledUpgrading(_, _))) {
+            probe_upgrade(&mut cache, id, live);
+        }
+        // An unfinished upgrade deliberately does not re-arm raw/spec
+        // slots with old: those paths would stop probing forever. The
+        // strict call path still enters old through try_run_compiled.
+        if let Some(CacheEntry::Compiled(old)) = cache.get(id)
+            && let Some(kind) = old.obs.t2.due()
+        {
+            let old = Rc::clone(old);
+            request_upgrade(&mut cache, id, func, old, kind, ctx);
+        }
         match cache.get_or_insert_with(id, || {
             // SAFETY: same dormant-Context contract as try_run_compiled.
             let obarray = (!ctx.is_null()).then(|| unsafe { &(*ctx).obarray });
@@ -2320,11 +2620,10 @@ pub(crate) fn resolve_compiled_leaf_ptr(
                 func,
                 obarray,
                 CompileRequest {
-                    regalloc,
-                    bypass_profit_gate: upgrade.is_some()
-                        && upgraded.as_ref().is_some_and(|l| l.profit_gate_bypassed),
-                    origin,
-                    tier,
+                    regalloc: RegallocPolicy::Auto,
+                    bypass_profit_gate: false,
+                    origin: stats::CompileOrigin::FirstSight,
+                    tier: super::tier2::CompileTier::T1,
                 },
                 name_hint,
             )
@@ -2347,12 +2646,7 @@ pub(crate) fn resolve_compiled_leaf_ptr(
             }
             _ => None,
         }
-    });
-    if let Some(old) = upgraded {
-        let unlinked = unlink_spec_slots(Rc::as_ptr(&old));
-        tracing::debug!(target: "neovm_jit::tier2", id, unlinked, "upgrade replaced the leaf");
-    }
-    resolved
+    })
 }
 
 /// The cached leaf whose `LeafObs` is `obs`, while it is its source's
@@ -2363,7 +2657,9 @@ pub(crate) fn current_leaf_of(obs: &super::compile::LeafObs) -> Option<Rc<Compil
     COMPILED.with(|c| {
         let c = c.try_borrow().ok()?;
         match c.get(obs.id) {
-            Some(CacheEntry::Compiled(leaf)) if std::ptr::eq(&*leaf.obs, obs) => {
+            Some(CacheEntry::Compiled(leaf) | CacheEntry::CompiledUpgrading(leaf, _))
+                if std::ptr::eq(&*leaf.obs, obs) =>
+            {
                 Some(Rc::clone(leaf))
             }
             _ => None,

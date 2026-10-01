@@ -126,6 +126,8 @@ fn serve(backend: &mut WorkerBackend, job: BackendJob) {
         return;
     }
     let started = Instant::now();
+    let cpu_started =
+        (class == super::JobClass::Upgrade).then(crate::emacs_core::jit::tier2::cpu_time_us);
     let queue_wait_us = started.saturating_duration_since(enqueued_at).as_micros() as u64;
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         if super::take_forced_panic() {
@@ -140,7 +142,7 @@ fn serve(backend: &mut WorkerBackend, job: BackendJob) {
             // fresh one (the old code stays mapped, as always).
             *backend = WorkerBackend::new();
             WORKER_STATS.panics.fetch_add(1, Ordering::Relaxed);
-            tracing::error!(target: "neovm_jit::bg", "a JIT backend job panicked; the body stays interpreted");
+            tracing::error!(target: "neovm_jit::bg", "a JIT backend job panicked; the dispatcher keeps its current tier");
             Err(CompileError::Backend(BackendError::Define(
                 "the background backend panicked".into(),
             )))
@@ -158,6 +160,14 @@ fn serve(backend: &mut WorkerBackend, job: BackendJob) {
     cell.publish(BackendOut {
         result: result.map(|code| code.entry),
         backend_us,
+        backend_cpu_us: cpu_started.map_or(0, |started| {
+            let finished = crate::emacs_core::jit::tier2::cpu_time_us();
+            if started == 0 || finished == 0 {
+                backend_us
+            } else {
+                finished.saturating_sub(started)
+            }
+        }),
         queue_wait_us,
         asm,
         dropped: false,

@@ -1,47 +1,29 @@
-//! The tier spine's trigger (design `p2-0-integration` §3.1, P2.1 C6 + W1):
-//! when a T1 leaf has done enough work to be worth a second compile, and
-//! what that compile is.
+//! The tier spine's countdown and cold C7/C9 policy (P2.1 C6/C7/C9 + W1).
 //!
-//! Under `NEOVM_JIT_TIER2=on` ([`super::compile::jit_tier2`]) a T1 entry
-//! leaf -- a baseline or MIR whole-function leaf a tier-up compiled -- is a
-//! PROFILING leaf: its [`LeafObs`] carries a countdown ([`T2Cells::budget`],
-//! `NEOVM_JIT_T2_WINDOW` at the build) that three places take from:
+//! A T1 leaf under `NEOVM_JIT_TIER2=on` has a per-leaf budget: entry takes
+//! one, an entered cold back-edge poll takes `T2_LOOP_CREDIT`, and a mapping
+//! builtin's profiling shim takes `len / 64` only during the profile window.
+//! The existing 255-taken-back-edge quit-poll cadence and its hot code stay
+//! unchanged. Optional lazy-table imports call the cold request without Lisp
+//! allocation or a safepoint; the current activation continues in T1.
 //!
-//! | where | takes | cost |
-//! |---|---|---|
-//! | the prologue | 1 per native entry | a load, a subtract, a store and a branch per entry |
-//! | the back-edge poll's cold block (W1) | `NEOVM_JIT_T2_LOOP_CREDIT` per poll tick (255 taken back edges) | none in the loop body: the poll block runs once per 255 back edges, and continues into the poll as before, so the quit cadence is unchanged |
-//! | a mapping builtin's call site (W1-HOF) | `len / 64` of the mapped sequence | a call before the builtin's, while the countdown runs |
-//!
-//! When it runs out the leaf calls [`neovm_jit_tier_request`] (cold, by
-//! baked address: JIT code only) and continues in T1. The request runs no
-//! Lisp, allocates nothing on the Lisp heap and cannot collect. It decides
-//! ([`decide`]), disarms the countdown, and when the decision is an upgrade
-//! makes every caller of the leaf reach a seam that knows its function:
-//! the source's interpreter leaf slot is disarmed and the spec slots that
-//! cache the leaf are unlinked. The next entry through
-//! `cache::try_run_compiled` or `cache::resolve_compiled_leaf_ptr` compiles
-//! the upgrade there, retires the T1 leaf and unlinks it, as the old
-//! heat-driven re-tier did.
-//!
-//! [`decide`] is the one owner of every second compile (P2.0 §3.1, "who
-//! plugs in"). Today it decides T1' only: the old fast-to-full allocator
-//! re-tier, moved from the heat crossing at `RETIER_FACTOR x threshold` to
-//! the countdown (the heat arm is off under the knob: `super::retier_heat`).
-//! Every other leaf is kept as it is, with its countdown disarmed.
-//!
-//! With the knob off nothing here is reached, no leaf carries a countdown
-//! and the re-tier is today's.
+//! The first request captures feedback and requires one stable work window.
+//! Later requests compare exact lattice snapshots, reserve the compile budget,
+//! and choose full-allocator T1' or the existing backend with feedback. Upgrade
+//! jobs retain the working T1 until installation. A feedback upgrade retains T1
+//! as its fallback; a conclusive/repeated T2 deopt widens the existing source
+//! policy before reverting to T1. The bounded source ban survives cache evictions.
+//! Off, profiling emission and the heat-driven re-tier stay unchanged.
 //!
 //! # Threading
 //!
-//! A leaf belongs to one mutator thread (`CompiledLeaf` is `!Send`; each
-//! thread compiles and caches its own), so its [`T2Cells`] are plain `Cell`s,
-//! written only by that thread's generated code and its cold request. A
-//! second mutator thread has leaves, and countdowns, of its own; nothing
-//! here is shared between threads except the source's `RuntimeState`, whose
-//! leaf slot the request disarms with the same relaxed store an
-//! invalidation uses. The counters are per thread ([`T2Stats`]).
+//! Leaves and their plain `Cell`/`RefCell` policy state belong to one mutator.
+//! The scoped compile publication is per compiler thread, never a cache of
+//! Lisp values, and is restored after nested compiles. Shared source feedback
+//! and bans use their existing atomic accessors; exact snapshots are conservative
+//! observations, not transactional reads. All generated type/epoch/source guards
+//! remain in force if another mutator widens feedback. Per-mutator budget TLS
+//! contains resource counters only, and workers return CPU costs to their owner.
 
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
@@ -59,6 +41,9 @@ pub(crate) enum T2Upgrade {
     /// no profiling code (the former heat-driven re-tier of a
     /// fast-allocator leaf).
     Retier,
+    /// T2: the existing backend consumes the source's stable feedback until
+    /// the optimizing IR is available. Its T1 leaf remains available to C9.
+    Feedback,
 }
 
 /// What a compile is in the tier spine (a [`super::compile::CompileRequest`]
@@ -131,8 +116,13 @@ pub(crate) struct T2Cells {
     /// `(entries, polls)` when the request fired.
     pub(crate) at_request: Cell<(u64, u64)>,
     /// The source whose interpreter leaf slot an upgrade request disarms;
-    /// held only while the countdown runs (the request takes it).
+    /// retained across unstable and deferred windows; never holds a Lisp value.
     pub(crate) source: RefCell<Option<Arc<RuntimeState>>>,
+    /// Cold policy state owned by this leaf's mutator, never sent to a worker.
+    pub(crate) policy: RefCell<policy::PolicyState>,
+    /// CPU budget reserved for its in-flight upgrade; charged/released by the
+    /// owning mutator at installation, failure or cancellation.
+    pub(crate) reserved_us: Cell<u64>,
 }
 
 impl T2Cells {
@@ -149,6 +139,8 @@ impl T2Cells {
             state: Cell::new(T2State::Idle),
             at_request: Cell::new((0, 0)),
             source: RefCell::new(source),
+            policy: RefCell::new(policy::PolicyState::default()),
+            reserved_us: Cell::new(0),
         }
     }
 
@@ -205,6 +197,8 @@ struct ActiveBuild {
     origin: T2Origin,
     source: Option<Arc<RuntimeState>>,
     window: u32,
+    ops_len: usize,
+    loop_or_recursive: bool,
 }
 
 thread_local! {
@@ -223,17 +217,32 @@ impl BuildScope {
     /// `NEOVM_JIT_TIER2` builds a profiling leaf, an upgrade an upgraded
     /// one, anything else an unprofiled one.
     pub(crate) fn enter(tier: CompileTier, source: &super::Runtime) -> Self {
+        Self::enter_for(tier, source, 0, false)
+    }
+
+    /// The cache compile supplies its executable body shape for the cold
+    /// worth-it test. `enter` remains available to runtime-free emission tests.
+    pub(crate) fn enter_for(
+        tier: CompileTier,
+        source: &super::Runtime,
+        ops_len: usize,
+        loop_or_recursive: bool,
+    ) -> Self {
         let knob = jit_tier2();
         let build = match tier {
             CompileTier::T1 if knob.on => Some(ActiveBuild {
                 origin: T2Origin::Profiling,
                 source: Some(source.share_state()),
                 window: knob.window,
+                ops_len,
+                loop_or_recursive,
             }),
             CompileTier::Upgrade(kind) => Some(ActiveBuild {
                 origin: T2Origin::Upgrade(kind),
                 source: None,
                 window: 0,
+                ops_len,
+                loop_or_recursive,
             }),
             CompileTier::T1 | CompileTier::Plain => None,
         };
@@ -253,11 +262,19 @@ impl Drop for BuildScope {
 pub(crate) fn cells_for_build() -> T2Cells {
     ACTIVE_BUILD.with(|a| match a.borrow().as_ref() {
         Some(build) => match build.origin {
-            T2Origin::Profiling => T2Cells::with_origin(
-                T2Origin::Profiling,
-                i64::from(build.window),
-                build.source.clone(),
-            ),
+            T2Origin::Profiling => {
+                let cells = T2Cells::with_origin(
+                    T2Origin::Profiling,
+                    i64::from(build.window),
+                    build.source.clone(),
+                );
+                {
+                    let mut policy = cells.policy.borrow_mut();
+                    policy.ops_len = build.ops_len;
+                    policy.loop_or_recursive = build.loop_or_recursive;
+                }
+                cells
+            }
             origin => T2Cells::with_origin(origin, DISARMED, None),
         },
         None => T2Cells::unprofiled(),
@@ -298,11 +315,11 @@ pub(crate) enum T2Decision {
     Upgrade(T2Upgrade),
 }
 
-/// The decision for a current profiling leaf. T1' only for now: a
-/// fast-allocator leaf that is not call-heavy is rebuilt with the full
+/// Existing allocator-upgrade admissibility, used as the C7 policy's
+/// fallback decision. A fast leaf that is not call-heavy uses the full
 /// allocator (the old re-tier set, with its two vetoes: a forced allocator
 /// would rebuild `Fast` forever, and `NEOVM_JIT_RETIER_FACTOR=0` turns the
-/// re-tier off). Everything else is kept.
+/// re-tier off). Other leaves need the feedback policy's separate admission.
 pub(crate) fn decide(leaf: &CompiledLeaf) -> T2Decision {
     use super::compile::lowering::{RegallocChoice, forced_regalloc};
     if leaf.regalloc == RegallocChoice::Fast
@@ -317,8 +334,8 @@ pub(crate) fn decide(leaf: &CompiledLeaf) -> T2Decision {
 }
 
 /// The request a profiling leaf makes when its countdown runs out (see the
-/// module docs). Called by baked address from the prologue, the poll
-/// block and the mapping-builtin credit; returns to the leaf, which
+/// module docs). Called through the optional lazy shim table from the
+/// prologue and poll block, and directly by a profiling shim; returns to the leaf, which
 /// continues in T1.
 ///
 /// SAFETY: `obs` is the calling leaf's own `LeafObs`, alive as long as the
@@ -406,22 +423,35 @@ pub(crate) fn request(obs: &LeafObs) {
         return;
     }
     t2.at_request.set((obs.entries.get(), t2.polls.get()));
-    let source = t2.source.try_borrow_mut().ok().and_then(|mut s| s.take());
+    // Retain the source across every unstable/deferred window. Taking it
+    // here would leave the eventual Due request unable to disarm its slot.
+    let source = t2
+        .source
+        .try_borrow()
+        .ok()
+        .and_then(|source| source.clone());
     let leaf = super::cache::current_leaf_of(obs);
-    let state = match leaf.as_deref().map(decide) {
-        None => T2State::Stale,
-        Some(T2Decision::Keep) => T2State::Kept,
-        Some(T2Decision::Upgrade(kind)) => T2State::Due(kind),
+    let decision = match (&leaf, &source) {
+        (Some(leaf), Some(source)) => policy::request_decision(leaf, source),
+        _ => Some(T2Decision::Keep),
+    };
+    bump_stats(|s| s.requests += 1);
+    // A changed snapshot has rearmed the budget. The activation continues
+    // in this T1 and every caller may keep using its slots during the window.
+    let Some(decision) = decision else {
+        return;
+    };
+    let state = match (&leaf, decision) {
+        (None, _) => T2State::Stale,
+        (Some(_), T2Decision::Keep) => T2State::Kept,
+        (Some(_), T2Decision::Upgrade(kind)) => T2State::Due(kind),
     };
     t2.state.set(state);
-    bump_stats(|s| {
-        s.requests += 1;
-        match state {
-            T2State::Kept => s.kept += 1,
-            T2State::Stale => s.stale += 1,
-            T2State::Due(_) => s.due += 1,
-            T2State::Idle | T2State::Upgraded(_) => {}
-        }
+    bump_stats(|s| match state {
+        T2State::Kept => s.kept += 1,
+        T2State::Stale => s.stale += 1,
+        T2State::Due(_) => s.due += 1,
+        T2State::Idle | T2State::Upgraded(_) => {}
     });
     if let (T2State::Due(kind), Some(leaf)) = (state, leaf) {
         // Every way into the leaf now leads to a seam that compiles the
@@ -444,6 +474,7 @@ pub(crate) fn request(obs: &LeafObs) {
 
 /// Mark `old`, which the seam just replaced with its `kind` upgrade.
 pub(crate) fn note_upgraded(old: &CompiledLeaf, kind: T2Upgrade) {
+    policy::release(old);
     old.obs.t2.state.set(T2State::Upgraded(kind));
     bump_stats(|s| s.upgraded += 1);
 }
@@ -467,11 +498,23 @@ pub(crate) struct T2Stats {
     pub(crate) upgraded: u64,
     /// Mapping-builtin credits taken.
     pub(crate) hof_credits: u64,
+    /// Requests rearmed because their feedback snapshot changed.
+    pub(crate) unstable: u64,
+    /// Upgrade requests denied by the compile CPU budget.
+    pub(crate) budget_denied: u64,
+    /// Stable leaves whose body/feedback offers no admissible improvement.
+    pub(crate) not_worth: u64,
+    /// Upgrade jobs deferred or superseded while retaining T1.
+    pub(crate) deferred: u64,
+    /// Failed upgrades whose T1 remains native.
+    pub(crate) failed: u64,
+    /// Feedback upgrades reverted to their retained T1.
+    pub(crate) reverted: u64,
 }
 
 thread_local! {
     static T2_STATS: Cell<T2Stats> = const {
-        Cell::new(T2Stats { requests: 0, kept: 0, stale: 0, due: 0, upgraded: 0, hof_credits: 0 })
+        Cell::new(T2Stats { requests: 0, kept: 0, stale: 0, due: 0, upgraded: 0, hof_credits: 0, unstable: 0, budget_denied: 0, not_worth: 0, deferred: 0, failed: 0, reverted: 0 })
     };
 }
 
@@ -496,3 +539,13 @@ pub(crate) fn knob() -> Tier2Knob {
 #[cfg(test)]
 #[path = "tier2/tests/tier2_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tier2/tests/reach_test.rs"]
+mod reach_tests;
+
+mod policy;
+pub(crate) use policy::{
+    charge_compile, cpu_time_us, rearm_fallback, release, revert_if_t2, upgrade_deferred,
+    upgrade_failed,
+};

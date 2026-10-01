@@ -10,11 +10,22 @@ use crate::emacs_core::eval::{
 use crate::emacs_core::intern::{SymId, intern};
 use crate::emacs_core::jit::cache;
 use crate::emacs_core::jit::compile::lowering::{RegallocChoice, forced_regalloc};
-use crate::emacs_core::jit::compile::{force_profit_gate_for_test, force_tier2_for_test};
+use crate::emacs_core::jit::compile::{
+    Tier2PolicyKnob, force_profit_gate_for_test, force_tier2_for_test, force_tier2_policy_for_test,
+};
 use crate::emacs_core::jit::stats::{ObserveOverride, force_observe_for_test};
 use crate::emacs_core::value::{LambdaParams, Value};
 
 fn knob(window: u32, loop_credit: u32) -> Tier2Knob {
+    // C6 tests use one additional stable work unit and unlimited compile
+    // budget; the C7 family tests the full policy independently.
+    force_tier2_policy_for_test(Some(Tier2PolicyKnob {
+        stable: 1,
+        attempts: 4,
+        budget_pct: 0,
+        floor_ms: 5,
+        max_reopt: 3,
+    }));
     Tier2Knob {
         on: true,
         window,
@@ -131,6 +142,7 @@ fn tier2_turns_the_heat_retier_off() {
         (factor != 0).then(|| crate::emacs_core::jit::hot_threshold() * factor)
     );
     force_tier2_for_test(None);
+    force_tier2_policy_for_test(None);
 }
 
 /// With the knob off a tier-up leaf carries no countdown and never
@@ -152,6 +164,7 @@ fn tier2_off_leaves_carry_no_countdown() {
     assert_eq!(leaf.obs.t2.state.get(), T2State::Idle);
     assert_eq!(stats().requests, 0);
     force_tier2_for_test(None);
+    force_tier2_policy_for_test(None);
 }
 
 /// C6: a fast-allocator leaf entered through the tier-up seam requests
@@ -178,8 +191,15 @@ fn tier2_fast_leaf_retiers_at_the_countdown() {
     }
     assert_eq!(
         t1.obs.t2.state.get(),
+        T2State::Idle,
+        "first request starts the stable window"
+    );
+    assert_eq!(t1.obs.t2.budget.get(), 1);
+    assert_eq!(run(&mut ev, &f, &[]), Some(Value::make_int(7)));
+    assert_eq!(
+        t1.obs.t2.state.get(),
         T2State::Due(T2Upgrade::Retier),
-        "the {WINDOW}th entry requested"
+        "the stable entry requested the upgrade"
     );
     assert_eq!(t1.obs.t2.budget.get(), DISARMED);
     assert_eq!(run(&mut ev, &f, &[]), Some(Value::make_int(7)));
@@ -191,12 +211,13 @@ fn tier2_fast_leaf_retiers_at_the_countdown() {
     assert_eq!(t1.obs.t2.state.get(), T2State::Upgraded(T2Upgrade::Retier));
     assert!(t1.retired.get());
     let s = stats();
-    assert_eq!((s.requests, s.due, s.upgraded), (1, 1, 1));
+    assert_eq!((s.requests, s.due, s.upgraded), (2, 1, 1));
     for _ in 0..50 {
         assert_eq!(run(&mut ev, &f, &[]), Some(Value::make_int(7)));
     }
     assert!(std::ptr::eq(current(&f), t1p), "upgraded once");
     force_tier2_for_test(None);
+    force_tier2_policy_for_test(None);
 }
 
 /// X7 (T2.1's form): a leaf reached only through its caller's spec slot
@@ -251,7 +272,7 @@ fn tier2_spec_reached_leaf_upgrades_and_serves_the_work() {
     let total: u64 = callee_rows.iter().map(|r| r.obs.entries).sum();
     let upgraded_entries = upgraded.obs.entries.get();
     assert_eq!(total, u64::from(CALLS), "every call counted once");
-    let after_window = total - u64::from(WINDOW);
+    let after_window = total - u64::from(WINDOW + 1);
     assert!(
         upgraded_entries * 10 >= after_window * 9,
         "the upgrade serves >= 90% of the entries after the window: {upgraded_entries} of {after_window}"
@@ -271,6 +292,7 @@ fn tier2_spec_reached_leaf_upgrades_and_serves_the_work() {
         );
     }
     force_tier2_for_test(None);
+    force_tier2_policy_for_test(None);
 }
 
 /// X8 (W1): a loop leaf called once requests during that call, from its
@@ -308,9 +330,11 @@ fn tier2_loop_credit_requests_inside_one_call_at_the_poll_cadence() {
         on_polls, off_polls,
         "the loop credit leaves the cadence alone"
     );
-    // T2.1 decides T1' only, and a loop leaf already has the full
-    // allocator: kept (T2.2's tier is what it would get).
-    assert_eq!(on_state, T2State::Kept, "the poll credit requested");
+    assert_eq!(
+        on_state,
+        T2State::Due(T2Upgrade::Feedback),
+        "cold polls finish both profile windows"
+    );
     let (entry_only_polls, entry_only_state) = polls_with(knob(15_000, 0));
     assert_eq!(entry_only_polls, off_polls);
     assert_eq!(
@@ -319,14 +343,22 @@ fn tier2_loop_credit_requests_inside_one_call_at_the_poll_cadence() {
         "LOOP_CREDIT=0: one entry never reaches the window"
     );
     force_tier2_for_test(None);
+    force_tier2_policy_for_test(None);
 }
 
-/// The request fires within the first call at the expected tick: 15,000 /
-/// 64 = 235 ticks, i.e. after about 60k iterations.
+/// Both requests fire within the first call: tick 235 starts the stable
+/// window, and tick 298 requests the upgrade without changing the quit polls.
 #[test]
 fn tier2_loop_credit_requests_at_the_expected_tick() {
     count_work();
     force_tier2_for_test(Some(knob(15_000, 64)));
+    force_tier2_policy_for_test(Some(Tier2PolicyKnob {
+        stable: 4_000,
+        attempts: 4,
+        budget_pct: 0,
+        floor_ms: 5,
+        max_reopt: 3,
+    }));
     let mut ev = Context::new();
     let f = countdown_loop();
     assert_eq!(
@@ -336,10 +368,11 @@ fn tier2_loop_credit_requests_at_the_expected_tick() {
     let obs = &current(&f).obs;
     let (entries_at, polls_at) = obs.t2.at_request.get();
     assert_eq!(entries_at, 1);
-    // budget 15,000 - 1 (the entry), 64 per tick: the 235th tick.
-    assert_eq!(polls_at, 235);
+    // First request at tick 235, then ceil(4000/64)=63 stable-window ticks.
+    assert_eq!(polls_at, 298);
     assert_eq!(obs.t2.polls.get(), 1_000_000 / 255);
     force_tier2_for_test(None);
+    force_tier2_policy_for_test(None);
 }
 
 /// W1-HOF: a mapping builtin's sequence length credits the countdown of a
@@ -371,15 +404,21 @@ fn tier2_mapping_builtin_credits_its_sequence() {
         crate::emacs_core::eval::push_scratch_gc_root(identity);
         crate::emacs_core::eval::push_scratch_gc_root(list);
         assert_eq!(run(&mut ev, &caller, &[identity, list]), Some(list));
+        assert_eq!(current(&caller).obs.t2.state.get(), T2State::Idle);
+        assert_eq!(run(&mut ev, &caller, &[identity, list]), Some(list));
         let state = current(&caller).obs.t2.state.get();
         cache::clear();
         state
     };
     let before = stats().hof_credits;
-    assert_eq!(requested_with(knob(10, 64)), T2State::Kept);
+    assert_eq!(
+        requested_with(knob(10, 64)),
+        T2State::Due(T2Upgrade::Feedback)
+    );
     assert_eq!(stats().hof_credits, before + 1);
     assert_eq!(requested_with(knob(10, 0)), T2State::Idle);
     force_tier2_for_test(None);
+    force_tier2_policy_for_test(None);
 }
 
 /// A request from a leaf that is no longer its source's current one (here:
@@ -397,4 +436,5 @@ fn tier2_request_of_a_leaf_outside_the_cache_is_stale() {
     assert_eq!(leaf.obs.t2.state.get(), T2State::Stale);
     assert_eq!(leaf.obs.t2.budget.get(), DISARMED);
     force_tier2_for_test(None);
+    force_tier2_policy_for_test(None);
 }

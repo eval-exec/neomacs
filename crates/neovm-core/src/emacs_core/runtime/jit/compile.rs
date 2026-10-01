@@ -839,11 +839,12 @@ pub fn compile_bytecode_function_requested(
     // for the whole compile, before anything below reads them.
     let _numeric = publish_numeric_feedback(f);
     let call_heavy = body_is_call_heavy(f.executable_ops(), &f.constants);
+    let self_recursive = body_calls_itself(f, obarray);
     let _scope = lowering::RegallocScope::enter(regalloc_for_shape(
         request.regalloc,
         f.executable_ops(),
         call_heavy,
-        body_calls_itself(f, obarray),
+        self_recursive,
     ));
     let outer = (
         BYPASS_PROFIT_GATE.with(|b| b.replace(request.bypass_profit_gate)),
@@ -858,7 +859,12 @@ pub fn compile_bytecode_function_requested(
         }
     }
     let _restore = Restore(outer);
-    let _t2 = super::tier2::BuildScope::enter(request.tier, f.jit_runtime());
+    let _t2 = super::tier2::BuildScope::enter_for(
+        request.tier,
+        f.jit_runtime(),
+        f.executable_ops().len(),
+        jit_tier2().on && (has_back_edge(f.executable_ops()) || self_recursive),
+    );
     let started = std::time::Instant::now();
     super::stats::verdict::begin();
     let mut result = compile_bytecode_function_inner(f, obarray);
@@ -3468,6 +3474,7 @@ pub fn lower_leaf_full_osr(
         obs,
         compiled_level: crate::emacs_core::jit::ReoptLevel::Speculative,
         retired: core::cell::Cell::new(false),
+        tier1_fallback: std::cell::RefCell::new(None),
         spec_slot_kinds,
         feedback_holds: holds.finish(),
         abi,

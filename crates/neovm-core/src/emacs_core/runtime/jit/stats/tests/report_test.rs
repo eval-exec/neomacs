@@ -119,7 +119,7 @@ fn jit_final_report_renders_every_section() {
     assert_eq!(
         body_of(&lines, ReportTag::FinalRuns),
         "entries_all=6000087 entries_seam=4975 deopt_at=6000003 deopt_rerun=2 signals=1 \
-         osr_transfers=2 seam_fallbacks=17 leaves_live=2 leaves_retired=1 leaves_osr=0 \
+         osr_transfers=2 seam_fallbacks=17 leaves_live=2 leaves_retired=1 leaves_fallback=0 leaves_osr=0 \
          leaves_dropped=1"
     );
     let leaf_lines: Vec<&str> = lines
@@ -495,12 +495,13 @@ fn jit_final_report_prints_the_bg_line_off_the_legacy_path() {
     for key in [
         "mode=on",
         "workers=1",
-        "enqueued=osr:0,first_sight:0,entry:0",
+        "enqueued=osr:0,first_sight:0,entry:0,upgrade:0",
         "discarded=superseded:0,heap_changed:0,epoch_moved:0,failed:0,dropped:0",
         "backend_us=0",
         "pending_probes=0",
         "osr_waits=0",
         "refused=0",
+        "native_calls_while_pending=0",
         "in_flight_at_exit=2",
         "worker_panics=0",
     ] {
@@ -560,7 +561,8 @@ fn jit_final_report_t2_line_renders_the_work_split() {
     assert!(
         line.starts_with(
             "tier2=on window=10 loop_credit=64 requests=2 kept=1 stale=0 due=1 upgraded=1 \
-             hof_credits=0 work=206 upgraded_work=90 (43.7%) reached_work=190 (92.2%) top="
+             hof_credits=0 unstable=0 budget_denied=0 not_worth=0 \
+             deferred=0 failed=0 reverted=0 work=206 upgraded_work=90 (43.7%) reached_work=190 (92.2%) top="
         ),
         "{line}"
     );

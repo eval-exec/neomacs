@@ -13,7 +13,7 @@
 //! |---|---|---|
 //! | `legacy` (default) | `Legacy` | the persistent per-thread module defines each leaf in place (the B4 path, unchanged) |
 //! | `sync` | `Sync` | the split, run in line: the eval thread's backend compiles each packaged function at once. Deterministic |
-//! | `on` | `Threaded` | entry tier-ups, first-sight and OSR compiles hand their package to a worker thread (`bg::worker`); the function stays interpreted (a native caller takes the strict call path; a hot loop interprets on without latching) until its leaf is installed; re-tiers and the AOT drain run as under `sync`. x86-64 Linux; elsewhere `on` is `sync` |
+//! | `on` | `Threaded` | entry tier-ups, first-sight and OSR compiles hand their package to a worker thread (`bg::worker`); the function stays interpreted until its leaf is installed. Under `NEOVM_JIT_TIER2=on`, upgrades use a worker too, and the old native leaf keeps serving calls until install. Other re-tiers and the AOT drain run as under `sync`. x86-64 Linux; elsewhere `on` is `sync` |
 //! | `auto` | `Threaded` or `Sync` | `on` when the process's affinity has at least two CPUs, else `sync` (a worker on the eval thread's only CPU just competes with it) |
 //!
 //! The companions -- worker count, queue caps, the classes that defer, worker
@@ -186,7 +186,7 @@ pub(crate) fn worker_affinity() -> Option<Vec<usize>> {
 }
 
 /// `NEOVM_JIT_BG_CLASSES=<class>[,<class>...]` (`osr`, `first_sight`,
-/// `entry`; default all): the classes whose compiles may defer, the others
+/// `entry`, `upgrade`; default all): the classes whose compiles may defer, the others
 /// running in line (measurement: `entry` alone is P2.4 B7).
 fn class_enabled(class: JobClass) -> bool {
     static MASK: OnceLock<u32> = OnceLock::new();
@@ -228,13 +228,15 @@ pub(crate) enum JobClass {
     FirstSight = 1,
     /// A `dispatch_sized` tier-up, or the re-attempt after a deferral.
     Entry = 2,
+    /// A tier-spine upgrade: its existing native leaf serves calls while
+    /// the backend runs. Its priority follows interpreted entry compiles.
+    Upgrade = 3,
 }
 
 impl JobClass {
     /// The class a compile of `origin` defers under, or `None` when that
-    /// compile always runs in line (re-tiers keep the leaf they replace
-    /// only once B11's upgrade jobs exist; AOT drains and direct compiles
-    /// want their leaf at once).
+    /// compile always runs in line. Countdown upgrades may defer only
+    /// under the tier-spine knob; legacy heat re-tiers keep their path.
     pub(crate) fn for_origin(origin: CompileOrigin) -> Option<JobClass> {
         JobClass::for_origin_any(origin).filter(|class| class_enabled(*class))
     }
@@ -244,6 +246,7 @@ impl JobClass {
             CompileOrigin::Dispatch | CompileOrigin::DeferralExpired => Some(JobClass::Entry),
             CompileOrigin::FirstSight => Some(JobClass::FirstSight),
             CompileOrigin::Osr => Some(JobClass::Osr),
+            CompileOrigin::Retier if super::compile::jit_tier2().on => Some(JobClass::Upgrade),
             CompileOrigin::Retier | CompileOrigin::AotDrain | CompileOrigin::Direct => None,
         }
     }
@@ -287,6 +290,10 @@ pub(crate) struct BackendOut {
     pub(crate) result: Result<usize, CompileError>,
     /// Backend time: module setup, codegen, finalize.
     pub(crate) backend_us: u64,
+    /// Backend CPU time, excluding queue wait and scheduler preemption,
+    /// with wall elapsed as a conservative fallback if the CPU clock is
+    /// unavailable. Charged to the compile budget only for upgrades.
+    pub(crate) backend_cpu_us: u64,
     /// From the front's hand-over to the backend's start.
     pub(crate) queue_wait_us: u64,
     /// The disassembly, under `NEOVM_JIT_DUMP_ASM`.
@@ -336,6 +343,7 @@ impl JobCell {
                 "dropped from the full background queue".into(),
             ))),
             backend_us: 0,
+            backend_cpu_us: 0,
             queue_wait_us: 0,
             asm: None,
             dropped: true,
@@ -361,6 +369,10 @@ impl JobCell {
 pub(crate) struct DeferredCode {
     cell: Arc<JobCell>,
     class: JobClass,
+    /// An inline backend ran inside the frontend CPU interval, so its
+    /// cost is already charged by the mutator at compile return. This
+    /// scalar remains mutator-owned alongside DeferredCode.
+    backend_charged_in_front: bool,
     enqueued_at: Instant,
     /// The job's sequence number (the stress soak's seed).
     seq: u64,
@@ -381,7 +393,9 @@ pub(crate) const MAX_BACKOFF: u32 = 1024;
 
 /// A compile whose backend runs elsewhere, as its cache entry holds it
 /// (see the module docs). Lives on the eval thread; only its
-/// [`JobCell`] is shared.
+/// [`JobCell`] is shared. Each mutator owns its own cache and pending jobs;
+/// workers see plain backend payloads and the Release/Acquire rendezvous,
+/// never this structure or its Lisp state.
 pub(crate) struct PendingJob {
     /// The function's `compiled_id`.
     id: u64,
@@ -397,6 +411,18 @@ pub(crate) struct PendingJob {
     saved_hold: u32,
     backoff: Cell<u32>,
     requested_heat: u32,
+    /// The upgrade's source runtime, so an idle drain can restore its hold
+    /// and disarm its leaf slot. Owned by this mutator's job; never sent
+    /// to the worker, which only sees JobCell and plain backend payloads.
+    upgrade_runtime: Option<Arc<RuntimeState>>,
+    /// Reserved compile estimate for an upgrade cancelled before its
+    /// backend result can be measured. Charging this on cancellation
+    /// conservatively accounts for work already running on the worker.
+    /// Completed jobs charge their measured backend CPU instead.
+    cancel_estimate_us: u64,
+    /// See DeferredCode::backend_charged_in_front. A ready inline backend
+    /// must not be charged again at install or cancellation.
+    backend_charged_in_front: bool,
     enqueued_at: Instant,
     /// Installed, or discarded with its reason counted.
     settled: Cell<bool>,
@@ -428,6 +454,9 @@ impl PendingJob {
             saved_hold,
             backoff: Cell::new(FIRST_BACKOFF.saturating_mul(2)),
             requested_heat: heat,
+            upgrade_runtime: None,
+            cancel_estimate_us: 0,
+            backend_charged_in_front: code.backend_charged_in_front,
             enqueued_at: code.enqueued_at,
             settled: Cell::new(false),
             stress_skips: Cell::new(stress_probe_skips(code.seq)),
@@ -449,10 +478,43 @@ impl PendingJob {
             saved_hold: 0,
             backoff: Cell::new(0),
             requested_heat: 0,
+            upgrade_runtime: None,
+            cancel_estimate_us: 0,
+            backend_charged_in_front: code.backend_charged_in_front,
             enqueued_at: code.enqueued_at,
             settled: Cell::new(false),
             stress_skips: Cell::new(stress_probe_skips(code.seq)),
         })
+    }
+
+    /// An upgrade of a running native leaf. Unlike an entry compile, it
+    /// leaves the runtime's hold unchanged: callers continue entering the
+    /// old leaf. The mutator's drain list installs it even if calls stop.
+    pub(crate) fn new_upgrade(
+        id: u64,
+        leaf: CompiledLeaf,
+        code: DeferredCode,
+        rt: &super::Runtime,
+    ) -> Box<PendingJob> {
+        let saved_hold = rt.deferred_heat();
+        let mut job = Self::new_osr(id, leaf, code);
+        job.saved_hold = saved_hold;
+        job.requested_heat = rt.heat();
+        job.upgrade_runtime = Some(rt.share_state());
+        PENDING_IDS.with(|ids| ids.borrow_mut().push(id));
+        job
+    }
+
+    /// An upgrade's runtime for cache install/drain, when the caller has
+    /// no live function object. Entry and OSR jobs do not hold one here.
+    pub(crate) fn upgrade_runtime(&self) -> Option<Arc<RuntimeState>> {
+        self.upgrade_runtime.as_ref().map(Arc::clone)
+    }
+
+    /// The running T1's reservation, copied by the cache when the job
+    /// becomes CompiledUpgrading. Plain resource accounting, no Lisp state.
+    pub(crate) fn set_cancel_estimate(&mut self, estimate_us: u64) {
+        self.cancel_estimate_us = estimate_us;
     }
 
     /// The front's leaf (entry null): its reloc constants are GC roots.
@@ -513,6 +575,13 @@ impl Drop for PendingJob {
     fn drop(&mut self) {
         let _ = PENDING_COUNT.try_with(|c| c.set(c.get().saturating_sub(1)));
         if !self.settled.get() {
+            if self.class == JobClass::Upgrade && !self.backend_charged_in_front {
+                let cost = self
+                    .cell
+                    .take_out()
+                    .map_or(self.cancel_estimate_us, |out| out.backend_cpu_us);
+                super::tier2::charge_compile(std::time::Duration::from_micros(cost));
+            }
             self.cell.cancel();
             self.settle(Settled::Discarded(DiscardReason::Superseded));
         }
@@ -545,10 +614,15 @@ pub(crate) fn install(
     ctx: Option<&Context>,
 ) -> Result<CompiledLeaf, Discard> {
     let out = job.cell.take_out().expect("install only a ready job");
+    if job.class == JobClass::Upgrade && !job.backend_charged_in_front {
+        super::tier2::charge_compile(std::time::Duration::from_micros(out.backend_cpu_us));
+    }
     if out.dropped {
         // Asked again only once the heat doubled: bounds the thrash of a
         // backlog that keeps dropping it.
-        if let Some(rt) = rt {
+        if job.class != JobClass::Upgrade
+            && let Some(rt) = rt
+        {
             let heat = rt.heat();
             rt.defer_tier_up(heat.saturating_mul(2).max(heat.saturating_add(1)));
         }
@@ -558,7 +632,13 @@ pub(crate) fn install(
     if let Some(rt) = rt {
         rt.defer_tier_up(job.saved_hold);
         let calls = u64::from(rt.heat().saturating_sub(job.requested_heat));
-        bump_stats(|s| s.interp_calls_while_pending += calls);
+        bump_stats(|s| {
+            if job.class == JobClass::Upgrade {
+                s.native_calls_while_pending += calls;
+            } else {
+                s.interp_calls_while_pending += calls;
+            }
+        });
     }
     bump_stats(|s| {
         s.backend_us += out.backend_us;
@@ -669,6 +749,9 @@ pub(crate) struct BgStats {
     /// Heat a function gained between its request and its install (the
     /// calls it interpreted meanwhile), over the installs that know it.
     pub(crate) interp_calls_while_pending: u64,
+    /// Calls the source gained while an upgrade's old native leaf remained
+    /// available; counted at installs that know the live runtime.
+    pub(crate) native_calls_while_pending: u64,
     /// Spec slots an install re-armed at the live epoch (their binding held
     /// while a redefinition elsewhere moved it).
     pub(crate) spec_restamps: u64,
@@ -742,7 +825,7 @@ impl BgReport {
         format!(
             "mode={} workers={} enqueued={} installed={} discarded={discarded} backend_us={} \
              backend_max_us={} queue_wait_us={} latency_hist_us[<100,<250,<500,<1ms,<2.5ms,<5ms,<10ms,>=10ms]={latency} \
-             pending_probes={} osr_waits={} refused={} interp_calls_while_pending={} spec_restamps={} in_flight_at_exit={} worker_jobs={} \
+             pending_probes={} osr_waits={} refused={} interp_calls_while_pending={} native_calls_while_pending={} spec_restamps={} in_flight_at_exit={} worker_jobs={} \
              worker_skipped={} worker_panics={} worker_code_bytes={} worker_backend_max_us={}",
             self.mode,
             self.workers,
@@ -755,6 +838,7 @@ impl BgReport {
             self.stats.osr_waits,
             self.stats.refused,
             self.stats.interp_calls_while_pending,
+            self.stats.native_calls_while_pending,
             self.stats.spec_restamps,
             self.in_flight_at_exit,
             self.worker_jobs,
@@ -921,7 +1005,7 @@ pub(crate) fn enqueue(class: JobClass, payload: JobPayload) -> Result<(), JobPay
     };
     match queue::pool().push(job) {
         Ok(()) => {
-            stash_deferred(cell, class, enqueued_at, seq);
+            stash_deferred(cell, class, enqueued_at, seq, false);
             Ok(())
         }
         Err(job) => Err(job.payload),
@@ -1004,10 +1088,17 @@ fn serialize_instruction_stream() {
 }
 
 /// Record the job the compile in progress deferred (the sink's side).
-pub(crate) fn stash_deferred(cell: Arc<JobCell>, class: JobClass, enqueued_at: Instant, seq: u64) {
+fn stash_deferred(
+    cell: Arc<JobCell>,
+    class: JobClass,
+    enqueued_at: Instant,
+    seq: u64,
+    backend_charged_in_front: bool,
+) {
     let code = DeferredCode {
         cell,
         class,
+        backend_charged_in_front,
         enqueued_at,
         seq,
         spec_bindings: Box::default(),
@@ -1045,6 +1136,7 @@ pub(crate) fn defer_in_line(
     let cell = JobCell::new();
     let enqueued_at = Instant::now();
     let seq = NEXT_SEQ.fetch_add(1, Ordering::Relaxed);
+    let cpu_started = (class == JobClass::Upgrade).then(super::tier2::cpu_time_us);
     #[cfg(test)]
     let result = if FAIL_BACKEND_TEST.with(|c| c.replace(false)) {
         Err(CompileError::Backend(super::backend::BackendError::Define(
@@ -1056,9 +1148,18 @@ pub(crate) fn defer_in_line(
     #[cfg(not(test))]
     let result = backend();
     let asm = asm_dump::take_stashed();
+    let backend_us = enqueued_at.elapsed().as_micros() as u64;
     let out = BackendOut {
         result,
-        backend_us: enqueued_at.elapsed().as_micros() as u64,
+        backend_us,
+        backend_cpu_us: cpu_started.map_or(0, |started| {
+            let finished = super::tier2::cpu_time_us();
+            if started == 0 || finished == 0 {
+                backend_us
+            } else {
+                finished.saturating_sub(started)
+            }
+        }),
         queue_wait_us: 0,
         asm,
         dropped: false,
@@ -1066,11 +1167,11 @@ pub(crate) fn defer_in_line(
     #[cfg(test)]
     if HOLD_PUBLISH_TEST.with(Cell::get) {
         HELD_TEST.with(|h| h.borrow_mut().push((Arc::clone(&cell), out)));
-        stash_deferred(cell, class, enqueued_at, seq);
+        stash_deferred(cell, class, enqueued_at, seq, true);
         return;
     }
     cell.publish(out);
-    stash_deferred(cell, class, enqueued_at, seq);
+    stash_deferred(cell, class, enqueued_at, seq, true);
 }
 
 /// `NEOVM_JIT_BG_STRESS=1`: drive every interleaving of the soak -- each
@@ -1247,6 +1348,10 @@ mod osr_pending_tests;
 #[cfg(test)]
 #[path = "bg/tests/osr_best_test.rs"]
 mod osr_best_tests;
+
+#[cfg(test)]
+#[path = "bg/tests/upgrade_test.rs"]
+mod upgrade_tests;
 
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 #[path = "bg/tests/queue_test.rs"]

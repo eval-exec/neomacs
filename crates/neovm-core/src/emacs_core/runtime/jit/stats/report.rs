@@ -254,7 +254,8 @@ impl T2Line {
         let st = &self.stats;
         format!(
             "tier2={} window={} loop_credit={} requests={} kept={} stale={} due={} \
-             upgraded={} hof_credits={} work={work} upgraded_work={upgraded} ({}%) \
+             upgraded={} hof_credits={} unstable={} budget_denied={} not_worth={} \
+             deferred={} failed={} reverted={} work={work} upgraded_work={upgraded} ({}%) \
              reached_work={reached} ({}%) top={}",
             if self.on { "on" } else { "off" },
             self.window,
@@ -265,6 +266,12 @@ impl T2Line {
             st.due,
             st.upgraded,
             st.hof_credits,
+            st.unstable,
+            st.budget_denied,
+            st.not_worth,
+            st.deferred,
+            st.failed,
+            st.reverted,
             percent(upgraded, work),
             percent(reached, work),
             if top.is_empty() {
@@ -371,7 +378,7 @@ impl FinalReport {
             self.dropped.deopt_rerun,
             self.dropped.signals,
         );
-        let (mut live, mut retired, mut osr) = (0u64, 0u64, 0u64);
+        let (mut live, mut retired, mut fallback, mut osr) = (0u64, 0u64, 0u64, 0u64);
         for r in &self.leaves {
             entries_all += r.entries;
             deopt_at += r.deopt_at;
@@ -380,6 +387,7 @@ impl FinalReport {
             match r.state {
                 "live" => live += 1,
                 "retired" => retired += 1,
+                "fallback" => fallback += 1,
                 _ => osr += 1,
             }
         }
@@ -389,7 +397,7 @@ impl FinalReport {
                 "entries_all={entries_all} entries_seam={} deopt_at={deopt_at} \
                  deopt_rerun={deopt_rerun} signals={signals} \
                  osr_transfers={} seam_fallbacks={} leaves_live={live} leaves_retired={retired} \
-                 leaves_osr={osr} leaves_dropped={}",
+                 leaves_fallback={fallback} leaves_osr={osr} leaves_dropped={}",
                 self.compile.native_entries,
                 self.osr_transfers,
                 self.seam_fallbacks,

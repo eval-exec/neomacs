@@ -1066,7 +1066,11 @@ impl Tier2Knob {
             on,
             // A zero window would request on the first entry of every leaf
             // and again after each re-arm: one entry is the smallest.
-            window: num("NEOVM_JIT_T2_WINDOW", Self::DEFAULT_WINDOW).max(1),
+            window: if matches!(get("NEOVM_JIT_T2_STRESS").as_deref(), Some("1" | "on")) {
+                1
+            } else {
+                num("NEOVM_JIT_T2_WINDOW", Self::DEFAULT_WINDOW).max(1)
+            },
             loop_credit: num("NEOVM_JIT_T2_LOOP_CREDIT", Self::DEFAULT_LOOP_CREDIT),
         }
     }
@@ -1111,4 +1115,55 @@ pub(crate) fn jit_tier2() -> Tier2Knob {
 #[cfg(test)]
 pub(crate) fn tier2_forced_for_test() -> Option<Tier2Knob> {
     TIER2_TEST_OVERRIDE.with(std::cell::Cell::get)
+}
+
+/// Cold Tier-2 policy controls, process immutable; test overrides are per mutator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Tier2PolicyKnob {
+    pub(crate) stable: u32,
+    pub(crate) attempts: u32,
+    pub(crate) budget_pct: u32,
+    pub(crate) floor_ms: u32,
+    pub(crate) max_reopt: u8,
+}
+impl Tier2PolicyKnob {
+    pub(crate) fn from_env(get: impl Fn(&str) -> Option<String>) -> Self {
+        let num = |name: &str, default: u32| {
+            get(name)
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(default)
+        };
+        let stress = matches!(get("NEOVM_JIT_T2_STRESS").as_deref(), Some("1" | "on"));
+        Self {
+            stable: if stress {
+                1
+            } else {
+                num("NEOVM_JIT_T2_STABLE", 4_000).max(1)
+            },
+            attempts: num("NEOVM_JIT_T2_ATTEMPTS", 4).max(1),
+            budget_pct: if stress {
+                0
+            } else {
+                num("NEOVM_JIT_T2_BUDGET", 2)
+            },
+            floor_ms: num("NEOVM_JIT_T2_BUDGET_FLOOR_MS", 5),
+            max_reopt: num("NEOVM_JIT_T2_MAX_REOPT", 3).min(u8::MAX.into()) as u8,
+        }
+    }
+}
+#[cfg(test)]
+std::thread_local! {
+    static TIER2_POLICY_TEST_OVERRIDE: std::cell::Cell<Option<Tier2PolicyKnob>> = const { std::cell::Cell::new(None) };
+}
+#[cfg(test)]
+pub(crate) fn force_tier2_policy_for_test(knob: Option<Tier2PolicyKnob>) {
+    TIER2_POLICY_TEST_OVERRIDE.with(|c| c.set(knob));
+}
+pub(crate) fn jit_tier2_policy() -> Tier2PolicyKnob {
+    #[cfg(test)]
+    if let Some(knob) = TIER2_POLICY_TEST_OVERRIDE.with(std::cell::Cell::get) {
+        return knob;
+    }
+    static KNOB: std::sync::OnceLock<Tier2PolicyKnob> = std::sync::OnceLock::new();
+    *KNOB.get_or_init(|| Tier2PolicyKnob::from_env(|name| std::env::var(name).ok()))
 }

@@ -553,6 +553,17 @@ fn respond(
         _ => return ReoptVerdict::Kept,
     };
     if super::cache::leaf_is_current(physical, leaf, origin) {
+        // The existing cause policy has widened feedback and computed the
+        // monotone floor. C9 preserves both before rearming its retained T1.
+        // The leaf is the physical caller's, so is the pc a chain exit
+        // reports.
+        let pc = physical_pc.or(match event {
+            DeoptEvent::Precise { pc, .. } => Some(pc),
+            DeoptEvent::Rerun => None,
+        });
+        if !origin.is_osr() && super::tier2::revert_if_t2(physical, leaf, pc, floor) {
+            return ReoptVerdict::Invalidated;
+        }
         super::cache::invalidate_for_reopt(physical, origin, floor, reprofile);
         ReoptVerdict::Invalidated
     } else {

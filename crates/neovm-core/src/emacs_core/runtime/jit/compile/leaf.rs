@@ -686,6 +686,10 @@ pub struct CompiledLeaf {
     /// (`cache::collect_jit_reloc_gc_roots` walks the retired list).
     /// Never cleared: a retired leaf is never cached again.
     pub(crate) retired: Cell<bool>,
+    /// T1 retained by a feedback upgrade, including its reloc/feedback roots.
+    /// Only this leaf's owning mutator reads/writes it; backend workers never
+    /// receive the leaf. A T1' upgrade retires T1 instead of retaining it.
+    pub(crate) tier1_fallback: RefCell<Option<std::rc::Rc<CompiledLeaf>>>,
     /// The entry's shape ([`LeafAbi`]): how every Rust caller passes the
     /// arguments and takes the answer. AOT and OSR leaves are always
     /// [`LeafAbi::Memory`], and so is every body with a frame of its own
@@ -1004,6 +1008,7 @@ impl CompiledLeaf {
             obs: LeafObs::new(false),
             compiled_level: crate::emacs_core::jit::ReoptLevel::Speculative,
             retired: Cell::new(false),
+            tier1_fallback: RefCell::new(None),
             spec_slot_kinds,
             feedback_holds: Box::from([]),
             abi: LeafAbi::Memory,

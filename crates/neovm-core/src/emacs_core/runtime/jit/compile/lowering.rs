@@ -2767,6 +2767,7 @@ pub(super) fn lower_mir_with_plan(
         obs,
         compiled_level: crate::emacs_core::jit::ReoptLevel::Speculative,
         retired: core::cell::Cell::new(false),
+        tier1_fallback: std::cell::RefCell::new(None),
         spec_slot_kinds,
         feedback_holds: Box::from([]),
         abi,
