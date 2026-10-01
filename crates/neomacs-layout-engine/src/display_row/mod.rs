@@ -1335,15 +1335,13 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
             row_layout.height_px
         };
         let progress = display_row_progress(position, geometry.y(), progress_height);
-        let faces = row_faces
-            .iter()
-            .map(|face| {
-                context
-                    .face_ids()
-                    .prepare_face(face.render_face())
-                    .expect("row rendering must preserve its realized face identity")
-            })
-            .collect();
+        let mut faces = Vec::with_capacity(row_faces.len());
+        for face in &row_faces {
+            context
+                .face_ids()
+                .prepare_face_into_output(face.render_face(), &mut faces)
+                .expect("row rendering must preserve its realized face identity");
+        }
         Some(DisplayRowRenderIntoRowResult::new(
             progress,
             source_slots,

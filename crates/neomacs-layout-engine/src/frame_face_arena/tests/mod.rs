@@ -43,6 +43,86 @@ fn discarded_row_preparation_does_not_publish_faces_or_replace_metrics() {
 }
 
 #[test]
+fn prepared_output_append_preserves_order_attempt_scope_and_speculative_metrics() {
+    let arena = FrameFaceArena::default();
+    let mut attempt = arena.begin_attempt();
+    let mut first = Face::new(FaceId::new(0));
+    first.font_family = "prepared output family".into();
+    first.font_size = 13.0;
+    first.id = attempt.stable_face_id(face_realization_identity(&first));
+    attempt.import_face(first.clone()).unwrap();
+
+    let mut measured = first.clone();
+    measured.font_ascent = 18;
+    measured.font_descent = 4;
+    let mut second = Face::new(FaceId::new(1));
+    second.foreground = Color::from_pixel(0x00112233);
+    let mut output = Vec::with_capacity(3);
+    for face in [&first, &measured, &second] {
+        attempt
+            .prepare_face_into_output(face.clone(), &mut output)
+            .unwrap();
+    }
+    assert_eq!(output.len(), 3);
+    for (prepared, expected) in output.iter().zip([&first, &measured, &second]) {
+        assert_eq!(prepared.face(), expected);
+        assert_eq!(attempt.use_face(prepared), Ok(expected.id));
+        assert_eq!(
+            arena.begin_attempt().use_face(prepared),
+            Err(FrameFaceUseError::ForeignAttempt),
+            "another attempt cannot consume a caller-owned prepared handle"
+        );
+    }
+    assert_eq!(attempt.face(first.id), Some(first.clone()));
+    assert!(attempt.face(second.id).is_none());
+    assert_eq!(attempt.faces().len(), 1);
+    drop(output);
+    assert_eq!(
+        attempt.face(first.id),
+        Some(first),
+        "discarding prepared output must not publish measured enrichment"
+    );
+}
+
+#[test]
+fn prepared_output_rejects_identity_and_font_conflicts_without_partial_append() {
+    use neomacs_display_protocol::font::ResolvedFontId;
+
+    let mut attempt = FrameFaceArena::default().begin_attempt();
+    let mut face = Face::new(FaceId::new(0));
+    face.font_family = "retained prepared payload".into();
+    face.font_file_path = Some("/fonts/exact.ttf".into());
+    face.default_resolved_font_id = Some(ResolvedFontId(7));
+    face.id = attempt.stable_face_id(face_realization_identity(&face));
+    attempt.import_face(face.clone()).unwrap();
+    let mut output = Vec::with_capacity(4);
+    attempt
+        .prepare_face_into_output(face.clone(), &mut output)
+        .unwrap();
+    let storage = output.as_ptr();
+    let capacity = output.capacity();
+    let mut different_identity = face.clone();
+    different_identity.font_size *= 1.5;
+    let mut different_path = face.clone();
+    different_path.font_file_path = Some("/fonts/conflicting.ttf".into());
+    let mut different_font = face.clone();
+    different_font.default_resolved_font_id = Some(ResolvedFontId(8));
+    for rejected in [different_identity, different_path, different_font] {
+        let expected = attempt.prepare_face(rejected.clone()).unwrap_err();
+        assert_eq!(
+            attempt.prepare_face_into_output(rejected, &mut output),
+            Err(expected),
+            "output append must use the same checked admission as owned preparation"
+        );
+        assert_eq!(output.len(), 1);
+        assert_eq!(output.as_ptr(), storage);
+        assert_eq!(output.capacity(), capacity);
+        assert_eq!(output[0].face(), &face);
+        assert_eq!(attempt.face(face.id), Some(face.clone()));
+    }
+}
+
+#[test]
 fn sealing_can_complete_but_not_replace_or_erase_an_exact_font_binding() {
     let mut attempt = FrameFaceArena::default().begin_attempt();
     let mut face = Face::new(FaceId::new(0));

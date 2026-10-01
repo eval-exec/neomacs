@@ -529,6 +529,24 @@ impl FrameFaceAttempt {
         })
     }
 
+    /// Append a checked realization directly to a row's prepared output. A
+    /// rejected face leaves both that output and the published table unchanged.
+    /// The caller keeps encounter order without transporting a large success
+    /// payload through a separate `Result<RealizedFrameFace, _>`.
+    #[inline]
+    pub(crate) fn prepare_face_into_output(
+        &self,
+        face: Face,
+        output: &mut Vec<RealizedFrameFace>,
+    ) -> Result<(), FrameFaceConflict> {
+        self.state.borrow().validate_face(&face)?;
+        output.push(RealizedFrameFace {
+            face,
+            attempt: Rc::downgrade(&self.state),
+        });
+        Ok(())
+    }
+
     pub(crate) fn publish_face(
         &mut self,
         face: &RealizedFrameFace,
