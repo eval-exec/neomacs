@@ -40,7 +40,7 @@
 //! | `NEOVM_REGEX_DFA` | `on` (default), `off`, `verify` | Candidate existence filter ([`DfaMode`]). |
 //! | `NEOVM_REGEX_DFA_COLD` | `off` (default), `on` | Defer the slot lease until a cold candidate fails ([`cold_path_enabled`]). |
 //! | `NEOVM_REGEX_DFA_STATS` | unset (default), `1` | Print this thread's [`DfaStats`] on stderr at exit with the filter on. |
-//! | `NEOVM_REGEX_DFA_FIRST_STEP` | `off` (default), `on` | Reject through an existing cached first-step dead transition ([`first_step_enabled`]). |
+//! | `NEOVM_REGEX_DFA_FIRST_STEP` | `off` (default), `on` | Reject cached first-step failures inline; verify also checks the predicate against the matcher ([`first_step_enabled`]). |
 
 use super::{
     CompiledPattern, LookupClassKey, MatchRegisters, MatchScratch, RegexOp, SyntaxAssertion,
@@ -1480,6 +1480,22 @@ impl ExistenceDfa {
         point: usize,
         syntax: &dyn SyntaxLookup,
     ) -> Exists {
+        self.anchored_exists_inner::<true>(pattern, text, p, stop, point, syntax)
+    }
+
+    /// The candidate path after a caller's inline probe omits that probe
+    /// here (`FIRST_STEP == false`); direct and verify calls retain it.
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn anchored_exists_inner<const FIRST_STEP: bool>(
+        &mut self,
+        pattern: &CompiledPattern,
+        text: &[u8],
+        p: usize,
+        stop: usize,
+        point: usize,
+        syntax: &dyn SyntaxLookup,
+    ) -> Exists {
         if self.gave_up.is_some() {
             return Exists::Unknown;
         }
@@ -1489,12 +1505,14 @@ impl ExistenceDfa {
                 return Exists::Unknown;
             }
         }
-        let verdict =
-            if first_step_enabled() && self.cached_first_step_dead(pattern, text, p, stop, point) {
-                Exists::No { consumed: 0 }
-            } else {
-                self.run(pattern, text, p, stop, point, syntax)
-            };
+        let verdict = if FIRST_STEP
+            && first_step_enabled()
+            && self.cached_first_step_dead(pattern, text, p, stop, point)
+        {
+            Exists::No { consumed: 0 }
+        } else {
+            self.run(pattern, text, p, stop, point, syntax)
+        };
         match verdict {
             Exists::Yes => self.counters.yes += 1,
             Exists::No { .. } => self.counters.no += 1,
@@ -1519,26 +1537,22 @@ impl ExistenceDfa {
         stop: usize,
         point: usize,
     ) -> bool {
-        if p >= stop.min(text.len())
-            || p >= self.search.read_limit
-            || (self.has_at_dot && p == point)
-        {
+        // Establish memory safety first. The remaining guards apply only
+        // once an existing DEAD entry could actually reject this candidate.
+        if p >= text.len() {
             return false;
         }
         let class = self.classes.byte_class[text[p] as usize];
         if class == UNKNOWN_CLASS {
             return false;
         }
-        let reads_prev_syntax = self.prev_mask.0 & !(Facts::EDGE.0 | Facts::NEWLINE.0) != 0;
-        if self.search.positional {
-            // The current class is a base-table class. Previous word/symbol
-            // facts require base syntax at p - 1 too, in the same known run.
-            let from = if p > 0 && reads_prev_syntax { p - 1 } else { p };
-            if from < self.plain.start || p >= self.plain.end {
-                return false;
-            }
-        }
-        let facts = if p == 0 {
+        let prev_mask = self.prev_mask.0;
+        let reads_prev_syntax = prev_mask & !(Facts::EDGE.0 | Facts::NEWLINE.0) != 0;
+        let facts = if prev_mask == 0 {
+            // No assertion reads the previous character: use start[0]
+            // without inspecting point zero or the preceding byte.
+            0
+        } else if p == 0 {
             Facts::EDGE.0
         } else if !reads_prev_syntax {
             // EDGE and newline facts do not depend on syntax or decoding.
@@ -1563,13 +1577,29 @@ impl ExistenceDfa {
                 facts
             }
         };
-        let start = self.start[(facts & self.prev_mask.0) as usize];
+        let start = self.start[(facts & prev_mask) as usize];
         if start == 0 {
             return false;
         }
         let row = start << self.stride_shift;
         // Only DEAD is a rejection. UNKNOWN/SLOW/live/MATCH all use run().
-        self.trans[row as usize + class as usize] == DEAD
+        if self.trans[row as usize + class as usize] != DEAD {
+            return false;
+        }
+        // Cached metadata reads above have no syntax or frontier side
+        // effects. Its rejection is valid only after these semantic guards.
+        if p >= stop || p >= self.search.read_limit || (self.has_at_dot && p == point) {
+            return false;
+        }
+        if self.search.positional {
+            // The current class is a base-table class. Previous word/symbol
+            // facts require base syntax at p - 1 too, in the same known run.
+            let from = if p > 0 && reads_prev_syntax { p - 1 } else { p };
+            if from < self.plain.start || p >= self.plain.end {
+                return false;
+            }
+        }
+        true
     }
 
     /// The end of the property-free stretch from `at` (see
@@ -2424,12 +2454,55 @@ impl<'p> DfaLease<'p> {
         }
     }
 
+    /// Select the inline path once for a search that actually has a lease.
+    /// Verify keeps its anchored probe and always runs the matcher too.
+    #[inline]
+    pub(super) fn inline_first_step_enabled(&self) -> bool {
+        self.mode == DfaMode::On && first_step_enabled()
+    }
+
+    /// Skip one cached first-step rejection without entering `candidate`.
+    /// The caller selected this path with `inline_first_step_enabled`.
+    ///
+    /// Threading: this search holds its mutator-owned slot's checked borrow.
+    /// Context maps have already been synchronized by `acquire` or `build`;
+    /// the cache lookup reads no Lisp state and calls no syntax lookup.
+    #[inline]
+    pub(super) fn try_inline_first_step_skip(
+        &mut self,
+        pattern: &CompiledPattern,
+        text: &[u8],
+        pos: usize,
+        stop: usize,
+        point: usize,
+    ) -> bool {
+        debug_assert_eq!(self.mode, DfaMode::On);
+        let DfaSlot::Live(live) = &mut *self.slot else {
+            return false;
+        };
+        // Leave state clearing, retirement, and a possible overflow to the
+        // outlined path. Its original ordering and accounting stay intact.
+        if live.dfa.gave_up.is_some()
+            || live.dfa.memory > MEMORY_CAP
+            || live.overflow_free_span == 0
+            || !live
+                .dfa
+                .cached_first_step_dead(pattern, text, pos, stop, point)
+        {
+            return false;
+        }
+        live.dfa.counters.no += 1;
+        live.note(Exists::No { consumed: 0 });
+        self.skipped += 1;
+        true
+    }
+
     /// Decide one candidate: the DFA's verdict, then the matcher unless the
     /// verdict is a rejection the fail-stack bound allows acting on.
     /// Returns what `re_match_candidate_in` would, with its side effects.
     #[inline(never)]
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn candidate(
+    pub(super) fn candidate<const FIRST_STEP: bool>(
         &mut self,
         scratch: &mut MatchScratch,
         pattern: &CompiledPattern,
@@ -2445,7 +2518,7 @@ impl<'p> DfaLease<'p> {
         {
             let verdict = live
                 .dfa
-                .anchored_exists(pattern, text, pos, stop, point, syntax);
+                .anchored_exists_inner::<FIRST_STEP>(pattern, text, pos, stop, point, syntax);
             live.note(verdict);
             // A rejection within the fail-stack bound: the matcher would
             // fail here without a side effect.  (A DFA that gave up answers
@@ -2643,6 +2716,7 @@ pub(crate) fn prime(
 impl LiveDfa {
     /// Count a verdict toward the adaptive bypass: a window of mostly "yes"
     /// sends the pattern on holiday.
+    #[inline]
     fn note(&mut self, verdict: Exists) {
         self.decisions += 1;
         if verdict == Exists::Yes {

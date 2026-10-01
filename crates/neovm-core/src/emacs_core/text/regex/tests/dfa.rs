@@ -1539,6 +1539,92 @@ fn first_step_dfa(pattern: &CompiledPattern, syntax: &dyn SyntaxLookup) -> Exist
     dfa
 }
 
+/// A real candidate rejected from the cached start transition avoids the
+/// outlined matcher, while a successful fallback and verify keep all registers.
+#[test]
+fn inline_first_step_rejects_and_success_fallback_agree_with_verify() {
+    let syntax = DefaultSyntaxLookup;
+    let compiled = regex_compile("\\<\\(foo\\)\\([0-9]\\);", false, false).unwrap();
+    let text = b"xfoo7; foo8;";
+    let expected = with_dfa_mode(DfaMode::Off, || {
+        search(&compiled, text, 0, text.len() as isize, &syntax, 0)
+    });
+    assert!(expected.0.is_some());
+    prime(&compiled, &syntax).unwrap();
+    // Warm an actual DEAD start transition and the successful continuation.
+    with_first_step(false, || {
+        with_dfa_mode(DfaMode::On, || {
+            assert_eq!(
+                search(&compiled, text, 0, text.len() as isize, &syntax, 0),
+                expected
+            );
+        });
+    });
+    reset_dfa_stats();
+    with_first_step(true, || {
+        with_dfa_mode(DfaMode::On, || {
+            let mut lease = DfaLease::acquire(&compiled, &syntax, text.len()).unwrap();
+            assert!(lease.inline_first_step_enabled());
+            let (before_no, before_decisions) = match &*lease.slot {
+                DfaSlot::Live(live) => (live.dfa.counters.no, live.decisions),
+                _ => panic!("primed slot should be live"),
+            };
+            let entries = matcher_entry_count();
+            assert!(lease.try_inline_first_step_skip(&compiled, text, 1, text.len(), 0));
+            assert_eq!(matcher_entry_count(), entries);
+            let DfaSlot::Live(live) = &*lease.slot else {
+                panic!("a cached rejection keeps the slot live");
+            };
+            assert_eq!(live.dfa.counters.no, before_no + 1);
+            assert_eq!(live.decisions, before_decisions + 1);
+            assert_eq!(lease.skipped, 1);
+            // The real match falls through exactly once, with full registers.
+            assert!(!lease.try_inline_first_step_skip(&compiled, text, 7, text.len(), 0));
+            let mut scratch = MatchScratch::default();
+            let mut registers = MatchRegisters::default();
+            let end = lease.candidate::<false>(
+                &mut scratch,
+                &compiled,
+                text,
+                7,
+                text.len(),
+                &syntax,
+                0,
+                &mut registers,
+            );
+            assert_eq!(end, Some(text.len()));
+            assert_eq!(matcher_entry_count() - entries, 1);
+            assert_eq!(
+                Some((7, registers.start.to_vec(), registers.end.to_vec())),
+                expected.0
+            );
+        });
+        assert_eq!(dfa_stats().skipped, 1);
+        assert_eq!(dfa_stats().no, 1);
+        assert_eq!(dfa_stats().yes, 1);
+        // Exercise the actual re_search macro, then the verify-only path.
+        reset_dfa_stats();
+        let entries = matcher_entry_count();
+        let on = with_dfa_mode(DfaMode::On, || {
+            search(&compiled, text, 0, text.len() as isize, &syntax, 0)
+        });
+        assert_eq!(on, expected);
+        assert_eq!(matcher_entry_count() - entries, 1);
+        assert_eq!(dfa_stats().skipped, 1);
+        let entries = matcher_entry_count();
+        let verified = with_dfa_mode(DfaMode::Verify, || {
+            let lease = DfaLease::acquire(&compiled, &syntax, text.len()).unwrap();
+            assert!(!lease.inline_first_step_enabled());
+            drop(lease);
+            search(&compiled, text, 0, text.len() as isize, &syntax, 0)
+        });
+        assert_eq!(verified, expected);
+        assert_eq!(matcher_entry_count() - entries, 2);
+        let stats = dfa_stats();
+        assert_eq!(stats.verify_bad_no + stats.verify_bad_yes, 0, "{stats:?}");
+    });
+}
+
 #[test]
 fn cached_first_step_rejections_equal_the_matcher() {
     let syntax = DefaultSyntaxLookup;
@@ -1670,6 +1756,31 @@ fn cached_first_step_context_changes_clear_character_maps() {
     });
     assert_eq!(actual, Exists::No { consumed: 0 });
     assert!(re_match(&compiled, text, 1, text.len(), &syntax, 0).is_none());
+
+    // A real table switch changes this candidate from a cached rejection
+    // to a match: `-` is Word in CustomTableLookup, Symbol in standard.
+    let text = b"-foo";
+    let mut dfa = first_step_dfa(&compiled, &CustomTableLookup);
+    with_first_step(false, || {
+        assert_eq!(
+            dfa.anchored_exists(&compiled, text, 1, text.len(), 0, &CustomTableLookup),
+            Exists::No { consumed: 0 }
+        );
+    });
+    assert!(dfa.cached_first_step_dead(&compiled, text, 1, text.len(), 0));
+    assert!(re_match(&compiled, text, 1, text.len(), &CustomTableLookup, 0).is_none());
+    let standard = ClassContext::of_search(&compiled, dfa.nfa(), &syntax).unwrap();
+    dfa.classes.sync(standard);
+    dfa.begin_search(&compiled, &syntax);
+    assert_eq!(dfa.classes.byte_facts[b'-' as usize], NO_FACTS);
+    assert!(!dfa.cached_first_step_dead(&compiled, text, 1, text.len(), 0));
+    assert_eq!(
+        with_first_step(true, || {
+            dfa.anchored_exists(&compiled, text, 1, text.len(), 0, &syntax)
+        }),
+        Exists::Yes
+    );
+    assert!(re_match(&compiled, text, 1, text.len(), &syntax, 0).is_some());
 }
 
 #[test]

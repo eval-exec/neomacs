@@ -9160,6 +9160,12 @@ pub(crate) fn re_search(
     } else {
         dfa::DfaLease::acquire(pattern, syntax, dfa_max_stop)
     };
+    // Never-built successful searches have no lease under the cold path,
+    // so they never read the first-step knob. A newly built lease renews
+    // this flag below; there is no per-candidate knob lookup in inline mode.
+    let mut dfa_first_step = dfa_lease
+        .as_ref()
+        .is_some_and(|lease| lease.inline_first_step_enabled());
     macro_rules! try_candidate {
         ($pos:expr, $stop:expr) => {{
             let found = match dfa_lease.as_mut() {
@@ -9170,9 +9176,23 @@ pub(crate) fn re_search(
                         scratch, pattern, text, $pos, $stop, syntax, point, &mut regs,
                     )
                 }
-                Some(lease) => lease.candidate(
-                    scratch, pattern, text, $pos, $stop, syntax, point, &mut regs,
-                ),
+                Some(lease) => {
+                    if dfa_first_step {
+                        if lease.try_inline_first_step_skip(pattern, text, $pos, $stop, point) {
+                            None
+                        } else {
+                            // The inline check already tried the cached
+                            // rejection: do not repeat it inside candidate.
+                            lease.candidate::<false>(
+                                scratch, pattern, text, $pos, $stop, syntax, point, &mut regs,
+                            )
+                        }
+                    } else {
+                        lease.candidate::<true>(
+                            scratch, pattern, text, $pos, $stop, syntax, point, &mut regs,
+                        )
+                    }
+                }
             };
             match found {
                 Some(end) => Some((end, std::mem::take(&mut regs))),
@@ -9183,6 +9203,9 @@ pub(crate) fn re_search(
                     if dfa_cold_pending {
                         dfa_lease =
                             dfa::DfaLease::after_cold_failure(pattern, syntax, dfa_max_stop);
+                        dfa_first_step = dfa_lease
+                            .as_ref()
+                            .is_some_and(|lease| lease.inline_first_step_enabled());
                         // Ineligible/disabled slots stop counting too. A
                         // classless lookup stays cold and retries later.
                         dfa_cold_pending = !pattern.dfa.initialized();
