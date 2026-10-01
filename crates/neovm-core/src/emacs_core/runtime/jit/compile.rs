@@ -765,6 +765,7 @@ pub(crate) fn compile_bytecode_function_tiered(
             regalloc: policy,
             bypass_profit_gate: false,
             origin: super::stats::CompileOrigin::Direct,
+            tier: super::tier2::CompileTier::Plain,
         },
     )
 }
@@ -780,6 +781,10 @@ pub struct CompileRequest {
     pub bypass_profit_gate: bool,
     /// Why the compile runs (the `[neovm-jit-*phases]` origin rows).
     pub(crate) origin: super::stats::CompileOrigin,
+    /// What the compile is in the tier spine (`tier2`): a T1 entry compile
+    /// builds a profiling leaf under `NEOVM_JIT_TIER2`, an upgrade a leaf
+    /// without profiling code.
+    pub(crate) tier: super::tier2::CompileTier,
 }
 
 thread_local! {
@@ -853,6 +858,7 @@ pub fn compile_bytecode_function_requested(
         }
     }
     let _restore = Restore(outer);
+    let _t2 = super::tier2::BuildScope::enter(request.tier, f.jit_runtime());
     let started = std::time::Instant::now();
     super::stats::verdict::begin();
     let mut result = compile_bytecode_function_inner(f, obarray);
@@ -3014,6 +3020,9 @@ fn emit_backedge_jump_with_args(
     lowering::rootwin_carry_reset();
     let one = fb.ins().iconst(types::I64, 1);
     fb.ins().stack_store(rt.ptr_ty, one, counter_slot, 0);
+    // The tick counter and the tier spine's loop credit, when asked for at
+    // compile time; the poll below runs either way.
+    t2_profile::emit_poll_extras(fb, rt);
     // Materialize tagged roots only after entering the rare poll path.
     // The successor variables and MIR edge arguments keep their representations.
     let tagged_vals;
@@ -3342,8 +3351,12 @@ pub fn lower_leaf_full_osr(
     #[cfg(test)]
     super::stats::perf_map::record_entry_name_for_test(entry_name);
     // Allocated before the build: with entry counting on, the prologue bakes
-    // the address of `obs.entries`.
+    // the address of `obs.entries`, and a profiling leaf's code the address
+    // of its countdown (`tier2`; an OSR leaf never profiles).
     let mut obs = LeafObs::new(super::stats::entry_counting_enabled());
+    if osr_pc.is_none() {
+        obs.t2 = super::tier2::cells_for_build();
+    }
 
     // Baseline tier runs Cranelift at the default opt_level="none": its job is
     // FAST compilation (low tier-up latency; the soak compiles every function).
@@ -3390,7 +3403,7 @@ pub fn lower_leaf_full_osr(
             Linkage::Local,
             osr_pc,
             dynamic_prefix,
-            obs.entry_counter(),
+            obs.emit(),
             abi,
         )
     })?;
@@ -3561,8 +3574,8 @@ pub(crate) fn build_baseline_leaf_object<S: LeafSink>(
         entry_name,
         Linkage::Export,
         /*osr_pc=*/ None, // OSR is JIT-only
-        /*dynamic_prefix=*/ 0, // AOT never targets a patched source
-        /*entry_counter=*/ None,            // AOT code never counts entries
+        /*dynamic_prefix=*/ 0,               // AOT never targets a patched source
+        LeafEmit::NONE,  // AOT code never counts or profiles
         LeafAbi::Memory, // AOT keeps the memory ABI
     )?;
     Ok(BaselineAotMeta {
@@ -3629,10 +3642,12 @@ fn build_leaf_fn<S: LeafSink>(
     // constant slots load through the callee constant base in the 4th entry
     // param instead of baking. 0 = plain function / AOT.
     dynamic_prefix: usize,
-    // JIT only, and only when entry counting was on at compile time: the
-    // leaf's `LeafObs::entries` cell, incremented first thing in the entry
-    // block (`lowering::emit_entry_count`). `None` = no counter at all.
-    entry_counter: Option<&core::cell::Cell<u64>>,
+    // JIT only: what the code writes into the leaf's `LeafObs` -- the entry
+    // counter (incremented first thing in the entry block,
+    // `lowering::emit_entry_count`) and the poll tick counter when entry
+    // counting was on at compile time, and a profiling leaf's countdown
+    // (`t2_profile`). `LeafEmit::NONE` = none of them.
+    emit: LeafEmit<'_>,
     // The entry's shape (`reg_abi`): the memory ABI for AOT and OSR, the
     // register ABI for an eligible JIT body when the knob is on.
     abi: LeafAbi,
@@ -3691,6 +3706,7 @@ fn build_leaf_fn<S: LeafSink>(
             let groups = ShimGroups {
                 subr_spec,
                 cbsym_spec,
+                tier2_profile: emit.t2.is_some(),
             };
             let refs = RtRefs::new(
                 sink.shim_ids(call_conv, ptr_ty, groups)?,
@@ -3728,7 +3744,18 @@ fn build_leaf_fn<S: LeafSink>(
                 heap: None,
                 inline_alloc: !aot && jit_inline_alloc_on(),
                 direct_sites: std::cell::Cell::new(0),
+                poll: emit.poll(),
             })
+        } else {
+            None
+        };
+
+        // A pure profiling leaf needs only the tier-request import. Keeping
+        // this separate preserves its existing runtime-free shape when off.
+        let t2_refs = if emit.t2.is_some() && rt.is_none() {
+            Some(t2_profile::pure_entry_refs(
+                sink, fb.func, call_conv, ptr_ty,
+            )?)
         } else {
             None
         };
@@ -3768,11 +3795,20 @@ fn build_leaf_fn<S: LeafSink>(
         let entry = fb.create_block();
         fb.append_block_params_for_function_params(entry);
         fb.switch_to_block(entry);
-        if let Some(counter) = entry_counter {
+        if let Some(counter) = emit.entry_counter {
             debug_assert!(!aot, "AOT code never counts entries");
             lowering::emit_entry_count(&mut fb, ptr_ty, counter);
         }
         let entry_params = fb.block_params(entry).to_vec();
+        if let Some(t2) = emit.t2 {
+            debug_assert!(!aot && osr_pc.is_none(), "only a JIT entry leaf profiles");
+            let refs = rt
+                .as_ref()
+                .map(|rt| &rt.refs)
+                .or(t2_refs.as_ref())
+                .expect("profiling refs");
+            t2_profile::emit_entry_countdown(&mut fb, ptr_ty, refs, t2);
+        }
         // A function entry that can re-enter Lisp signals "Bytecode stack
         // overflow" before the native stack runs out (`stack_guard`); the
         // rest of the entry code then runs in the block after the guard, on
@@ -4594,6 +4630,7 @@ pub(crate) mod chain_framestate;
 pub(crate) mod resumed_chain;
 pub(crate) mod snapshot;
 pub(crate) mod source_slots;
+pub(crate) mod t2_profile;
 pub(crate) use snapshot::{
     active_numeric_feedback, arith_site_takes_generic, call_site_inlinable_at,
     publish_numeric_feedback, publish_numeric_feedback_vec,

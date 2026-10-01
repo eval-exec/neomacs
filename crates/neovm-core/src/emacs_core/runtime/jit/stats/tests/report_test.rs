@@ -1,4 +1,4 @@
-use super::report::{FinalReport, LeafReportRow, ranked_leaves};
+use super::report::{FinalReport, LeafReportRow, T2Line, ranked_leaves};
 use super::*;
 
 fn stats_with(compiles: u64, entries: u64, mir_taken: u64) -> CompileStats {
@@ -73,6 +73,7 @@ fn jit_final_report_renders_every_section() {
         },
         builtin_leaves: String::new(),
         bg: None,
+        t2: None,
     };
     let lines = report.render();
     let tags: Vec<&'static str> = lines.iter().map(|(t, _)| (*t).into()).collect();
@@ -207,6 +208,7 @@ fn leaf_row(id: u64, deopt_at: u64, deopt_rerun: u64) -> LeafReportRow {
         deopt_pc_overflow: if deopt_at > 0 { 3 } else { 0 },
         compile_us: 0,
         mir: Some("taken".into()),
+        t2: Default::default(),
     }
 }
 
@@ -333,6 +335,7 @@ fn jit_final_report_profile_leaf_rows_have_fewer_than_13_columns() {
         [
             "#leaf,5,weird;name,mir,7,9,3,1,0,12:3\n",
             "#leaf,6,-,mir,-,-,0,0,0,-\n",
+            "#t2,5,weird;name,7,,,9,0,0,0\n",
         ]
     );
     for row in &rows {
@@ -509,5 +512,60 @@ fn jit_final_report_prints_the_bg_line_off_the_legacy_path() {
             .iter()
             .all(|(tag, _)| *tag != ReportTag::FinalBg),
         "no line on the legacy path"
+    );
+}
+
+/// The exit line: knobs, counters, and the per-source work split.
+#[test]
+fn jit_final_report_t2_line_renders_the_work_split() {
+    use crate::emacs_core::jit::tier2::{T2Snapshot, T2Stats};
+    let row = |id, entries, polls, origin: &'static str, state: &'static str, at: (u64, u64)| {
+        LeafReportRow {
+            id,
+            name: Some("f".to_string()),
+            entry_counted: true,
+            entries,
+            t2: T2Snapshot {
+                origin,
+                state,
+                polls,
+                requested: state != "idle",
+                entries_at_request: at.0,
+                polls_at_request: at.1,
+                upgraded_leaf: origin == "upgrade",
+            },
+            ..Default::default()
+        }
+    };
+    let rows = vec![
+        // id 1: T1 requested at 10 entries, then an upgrade served 90.
+        row(1, 10, 0, "profiling", "upgraded", (10, 0)),
+        row(1, 90, 0, "upgrade", "idle", (0, 0)),
+        // id 2: a kept loop leaf, requested at tick 5 of 105.
+        row(2, 1, 105, "profiling", "kept", (1, 5)),
+    ];
+    let line = T2Line {
+        on: true,
+        window: 10,
+        loop_credit: 64,
+        stats: T2Stats {
+            requests: 2,
+            kept: 1,
+            due: 1,
+            upgraded: 1,
+            ..Default::default()
+        },
+    }
+    .render(&rows);
+    assert!(
+        line.starts_with(
+            "tier2=on window=10 loop_credit=64 requests=2 kept=1 stale=0 due=1 upgraded=1 \
+             hof_credits=0 work=206 upgraded_work=90 (43.7%) reached_work=190 (92.2%) top="
+        ),
+        "{line}"
+    );
+    assert!(
+        line.contains("top=2:f:106:0.0:94.3,1:f:100:90.0:90.0"),
+        "{line}"
     );
 }

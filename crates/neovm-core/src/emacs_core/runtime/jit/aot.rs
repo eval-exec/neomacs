@@ -107,7 +107,8 @@ pub(crate) const ABI_TAG: u32 = compute_abi_tag();
 // S2.7's provisional stamp reentry token changed SpecSlot's stride to 40
 // (version 16). F1 parks that consumer and restores 32; reject both old
 // layouts instead of reusing an earlier ABI version after the rollback.
-const ABI_TAG_VERSION: u32 = 17;
+// v18: T2.1's per-leaf t2 budget cell and the countdown/poll-credit entry (NEOVM_JIT_TIER2).
+const ABI_TAG_VERSION: u32 = 18;
 
 /// Format version of the AOT descriptor spec-section + the runtime spec ABI
 /// (`SpecSlot`/`spec_expected` sidecar bases, the loader re-classify+arm protocol).
@@ -5211,7 +5212,7 @@ fn define_leaf_into_module(
         entry_name,
         Linkage::Export,
         /*aot=*/ true,
-        /*entry_counter=*/ None,                            // AOT code never counts entries
+        super::compile::LeafEmit::NONE, // AOT code never counts or profiles
         super::compile::LeafAbi::Memory, // AOT keeps the memory ABI
     )?;
 

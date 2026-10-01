@@ -452,6 +452,10 @@ pub(crate) enum ReportTag {
     /// Exit report: bytecode callbacks entered through `apply1_bytecode`.
     #[strum(serialize = "neovm-jit-final-inline-callback")]
     FinalInlineCallback,
+    /// Exit report: the tier spine's requests and where the work ran
+    /// (`tier2`), when it is on or counted anything.
+    #[strum(serialize = "neovm-jit-final-t2")]
+    FinalT2,
 }
 
 /// The process-wide report sink, chosen once from `NEOVM_JIT_STATS_FILE`.
@@ -964,6 +968,16 @@ fn collect_final_report(ctx: &crate::emacs_core::eval::Context) -> report::Final
         dropped,
         builtin_leaves: super::compile::leaf_abi::render_leaf_stats(),
         bg: super::bg::BgReport::collect(),
+        t2: {
+            let knob = super::tier2::knob();
+            let stats = super::tier2::stats();
+            (knob.on || stats != super::tier2::T2Stats::default()).then_some(report::T2Line {
+                on: knob.on,
+                window: knob.window,
+                loop_credit: knob.loop_credit,
+                stats,
+            })
+        },
     }
 }
 
@@ -1055,6 +1069,7 @@ fn leaf_report_rows(
                 deopt_pc_overflow: row.obs.deopt_pc_overflow,
                 compile_us: row.obs.compile_us,
                 mir: row.obs.mir_verdict,
+                t2: row.obs.t2,
             }
         })
         .collect();

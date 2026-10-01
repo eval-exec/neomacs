@@ -420,6 +420,7 @@ fn jit_pipeline_optional_shim_groups_follow_the_leaf_not_the_module() {
     let every = ShimGroups {
         subr_spec: true,
         cbsym_spec: true,
+        tier2_profile: true,
     };
     let ids = ShimIds::declare(&mut module, CallConv::SystemV, types::I64, every).expect("ids");
     let again = ShimIds::declare(&mut module, CallConv::SystemV, types::I64, every).expect("ids");
@@ -434,6 +435,7 @@ fn jit_pipeline_optional_shim_groups_follow_the_leaf_not_the_module() {
     let base_only = ShimGroups {
         subr_spec: false,
         cbsym_spec: false,
+        tier2_profile: false,
     };
     let refs = RtRefs::new(ids, base_only, &mut func, CallConv::SystemV, types::I64);
     assert_eq!(
@@ -443,6 +445,7 @@ fn jit_pipeline_optional_shim_groups_follow_the_leaf_not_the_module() {
     );
     assert!(refs.try_get(&mut func, Shim::CallSubrSpec).is_none());
     assert!(refs.try_get(&mut func, Shim::CbsymRead).is_none());
+    assert!(refs.try_get(&mut func, Shim::TierRequest).is_none());
     let cons = refs.get(&mut func, Shim::Cons);
     assert_eq!(refs.get(&mut func, Shim::Cons), cons, "imported once");
     assert_eq!(func.dfg.ext_funcs.len(), 1);

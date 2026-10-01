@@ -88,4 +88,11 @@ const NEOVM_JIT_SHIM_NAMES: &[&str] = &[
     "neovm_jit_varbind",
     "neovm_jit_varref",
     "neovm_jit_varset",
+    // Tier profiling is emitted only by JIT leaves. Keep the exported shim
+    // list/table aligned; their signatures are salted by ABI_TAG_VERSION.
+    "neovm_jit_tier_request",
+    "neovm_jit_t2_call_prof",
+    "neovm_jit_t2_call_subr_prof",
+    "neovm_jit_t2_call_feedback_prof",
+    "neovm_jit_t2_call_feedback_census",
 ];

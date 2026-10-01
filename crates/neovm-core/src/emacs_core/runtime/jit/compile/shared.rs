@@ -41,7 +41,7 @@ use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{FuncId, Linkage, Module, default_libcall_names};
 
 use super::lowering::{RegallocChoice, active_regalloc_choice, jit_isa, jit_isa_for};
-use super::shim_refs::{ShimGroups, ShimIds};
+use super::shim_refs::{Shim, ShimGroups, ShimIds};
 use super::sink::{LeafEntry, LeafSink, define_in_place, define_with_context};
 use super::{CompileError, LeafBacking};
 use crate::emacs_core::jit::backend::BackendError;
@@ -329,7 +329,14 @@ impl SharedJit {
 
     /// Make sure `choice`'s module exists and has room, creating it (or
     /// replacing a full one) under the ISA of the compile in progress.
-    fn ensure_module(&mut self, choice: RegallocChoice) -> Result<(), CompileError> {
+    /// Profiling imports are appended only when a frontend or payload needs
+    /// them, preserving every knob-off declaration id. The module belongs
+    /// to this compiler thread; no mutator shares its declaration table.
+    fn ensure_module(
+        &mut self,
+        choice: RegallocChoice,
+        tier2_profile: bool,
+    ) -> Result<(), CompileError> {
         let slot = &mut self.modules[choice.index()];
         if slot
             .as_ref()
@@ -340,7 +347,23 @@ impl SharedJit {
             *slot = None;
             bump_stats(|s| s.modules_retired += 1);
         }
-        if slot.is_some() {
+        if let Some(shared) = slot.as_mut() {
+            // Test overrides can enable profiling after this module was
+            // created without it. Redeclaration is idempotent: existing ids
+            // stay fixed, and only the absent group is appended.
+            if tier2_profile && shared.shims.get(Shim::TierRequest).is_none() {
+                let config = shared.module.target_config();
+                shared.shims = ShimIds::declare(
+                    &mut shared.module,
+                    config.default_call_conv,
+                    config.pointer_type(),
+                    ShimGroups {
+                        subr_spec: true,
+                        cbsym_spec: true,
+                        tier2_profile: true,
+                    },
+                )?;
+            }
             return Ok(());
         }
         let mut builder = JITBuilder::with_isa(jit_isa_for(choice)?, default_libcall_names());
@@ -356,6 +379,7 @@ impl SharedJit {
             ShimGroups {
                 subr_spec: true,
                 cbsym_spec: true,
+                tier2_profile,
             },
         )?;
         *slot = Some(SharedModule {
@@ -375,7 +399,7 @@ fn define_shared(
     let setup_phase = enter_phase(CompilePhase::Setup);
     let jit = jit.get_or_insert_with(SharedJit::fresh);
     let choice = active_regalloc_choice();
-    jit.ensure_module(choice)?;
+    jit.ensure_module(choice, super::jit_tier2().on)?;
     drop(setup_phase);
     let SharedJit {
         modules,

@@ -29,7 +29,7 @@ use cranelift_module::{FuncId, Linkage, Module};
 use strum::IntoEnumIterator;
 
 use super::super::lowering::{RegallocChoice, active_regalloc_choice};
-use super::super::shim_refs::{Shim, ShimIds};
+use super::super::shim_refs::{Shim, ShimGroup, ShimIds};
 use super::super::sink::{LeafEntry, define_with_context};
 use super::super::{CompileError, LeafBacking};
 use super::{JitDefined, JitSink, SharedJit, bump_stats, declare_leaf_entry, entry_is_named};
@@ -173,7 +173,13 @@ impl SharedJit {
         mut payload: JobPayload,
     ) -> Result<DefinedCode, CompileError> {
         let setup_phase = enter_phase(CompilePhase::Setup);
-        self.ensure_module(payload.regalloc)?;
+        // Workers do not inherit frontend test overrides. The payload's
+        // imported names are the complete declaration requirement instead.
+        let tier2_profile = payload
+            .imports
+            .iter()
+            .any(|(_, shim)| shim.group() == ShimGroup::Tier2Profile);
+        self.ensure_module(payload.regalloc, tier2_profile)?;
         drop(setup_phase);
         let SharedJit { modules, ctx, .. } = self;
         let shared = modules[payload.regalloc.index()]
@@ -227,7 +233,7 @@ pub(super) fn define_split(
     let setup_phase = enter_phase(CompilePhase::Setup);
     let jit = jit.get_or_insert_with(SharedJit::fresh);
     let choice = active_regalloc_choice();
-    jit.ensure_module(choice)?;
+    jit.ensure_module(choice, super::super::jit_tier2().on)?;
     drop(setup_phase);
     let payload = {
         let SharedJit { modules, fbctx, .. } = &mut *jit;

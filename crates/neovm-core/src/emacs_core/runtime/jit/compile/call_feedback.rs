@@ -276,8 +276,20 @@ pub(crate) fn emit_prof_call(
     n_val: ClifValue,
     out_addr: ClifValue,
 ) -> cranelift_codegen::ir::Inst {
-    let sig = fb.import_signature(prof_call_signature(rt.refs.call_conv, rt.ptr_ty));
     let windowed = crate::emacs_core::jit::feedback::feedback_mode().windowed();
+    if rt.poll.t2.is_some() && !apply {
+        let site_v = fb.ins().iconst(rt.ptr_ty, site as usize as i64);
+        if let Some(call) = super::t2_profile::emit_feedback_prof_call(
+            fb,
+            rt,
+            apply,
+            windowed,
+            &[vmctx, func_val, args_addr, n_val, out_addr, site_v],
+        ) {
+            return call;
+        }
+    }
+    let sig = fb.import_signature(prof_call_signature(rt.refs.call_conv, rt.ptr_ty));
     let shim = match (apply, windowed) {
         (true, true) => neovm_jit_apply_prof::<true> as *const () as usize,
         (true, false) => neovm_jit_apply_prof::<false> as *const () as usize,

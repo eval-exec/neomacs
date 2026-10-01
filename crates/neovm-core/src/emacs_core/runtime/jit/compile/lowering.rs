@@ -2671,8 +2671,10 @@ pub(super) fn lower_mir_with_plan(
     #[cfg(test)]
     super::super::stats::perf_map::record_entry_name_for_test(entry_name);
     // Before the build: with entry counting on, the prologue bakes the
-    // address of `obs.entries`.
+    // address of `obs.entries`, and a profiling leaf's code the address of
+    // its countdown (`tier2`).
     let mut obs = LeafObs::new(super::super::stats::entry_counting_enabled());
+    obs.t2 = super::super::tier2::cells_for_build();
 
     // Build + define the leaf via the module-generic seam (`build_mir_leaf_fn`)
     // into the thread's persistent module (or a module of its own; see
@@ -2686,22 +2688,23 @@ pub(super) fn lower_mir_with_plan(
         /*aot=*/ false, /*osr=*/ false, m.arity, /*frameless=*/ true,
         /*dynamic_prefix=*/ 0,
     );
-    let defined = super::shared::define_jit_leaf(plan.needs_rt, |sink| {
-        build_mir_leaf_fn(
-            sink,
-            m,
-            &deopt_spill,
-            &deopt_meta,
-            &reloc_data,
-            &reloc_index,
-            &plan,
-            entry_name,
-            Linkage::Local,
-            /*aot=*/ false,
-            obs.entry_counter(),
-            abi,
-        )
-    })?;
+    let defined =
+        super::shared::define_jit_leaf(plan.needs_rt || obs.emit().t2.is_some(), |sink| {
+            build_mir_leaf_fn(
+                sink,
+                m,
+                &deopt_spill,
+                &deopt_meta,
+                &reloc_data,
+                &reloc_index,
+                &plan,
+                entry_name,
+                Linkage::Local,
+                /*aot=*/ false,
+                obs.emit(),
+                abi,
+            )
+        })?;
 
     let entry = defined.entry;
     if entry.is_null() {
@@ -3078,8 +3081,9 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
     // the per-thread `LeafSidecar`, since the addresses are session-specific). The
     // CLIF body is otherwise identical — same RESULTS either way.
     aot: bool,
-    // JIT only, and only under entry counting: see `build_leaf_fn`.
-    entry_counter: Option<&core::cell::Cell<u64>>,
+    // JIT only: the entry and poll counters and a profiling leaf's
+    // countdown; see `build_leaf_fn`.
+    emit: super::LeafEmit<'_>,
     // The entry's shape (`reg_abi`): memory for AOT, register for an
     // eligible JIT body when the knob is on.
     abi: super::LeafAbi,
@@ -3149,6 +3153,7 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
             let groups = super::ShimGroups {
                 subr_spec: plan.spec_sites.values().any(|s| s.kind.is_round1_subr()),
                 cbsym_spec: plan.has_named_builtin,
+                tier2_profile: emit.t2.is_some(),
             };
             let refs = super::RtRefs::new(
                 sink.shim_ids(call_conv, ptr_ty, groups)?,
@@ -3175,7 +3180,15 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
                 heap: None,
                 inline_alloc: !aot && super::jit_inline_alloc_on(),
                 direct_sites: std::cell::Cell::new(0),
+                poll: emit.poll(),
             })
+        } else {
+            None
+        };
+        let t2_refs = if emit.t2.is_some() && rt.is_none() {
+            Some(super::t2_profile::pure_entry_refs(
+                sink, fb.func, call_conv, ptr_ty,
+            )?)
         } else {
             None
         };
@@ -3245,11 +3258,20 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
         let entry = fb.create_block();
         fb.append_block_params_for_function_params(entry);
         fb.switch_to_block(entry);
-        if let Some(counter) = entry_counter {
+        if let Some(counter) = emit.entry_counter {
             debug_assert!(!aot, "AOT code never counts entries");
             emit_entry_count(&mut fb, ptr_ty, counter);
         }
         let entry_params = fb.block_params(entry).to_vec();
+        if let Some(t2) = emit.t2 {
+            debug_assert!(!aot, "only a JIT entry leaf profiles");
+            let refs = rt
+                .as_ref()
+                .map(|rt| &rt.refs)
+                .or(t2_refs.as_ref())
+                .expect("profiling refs");
+            super::t2_profile::emit_entry_countdown(&mut fb, ptr_ty, refs, t2);
+        }
         // A body that can re-enter Lisp guards the native stack at entry
         // (`stack_guard`); the rest of the entry code then runs in the block
         // after the guard, on its parameters.
@@ -4023,6 +4045,9 @@ pub(crate) struct RtCtx {
     /// Direct call sites emitted so far in this function
     /// (`direct_call::DIRECT_SITE_CAP` bounds them).
     pub(crate) direct_sites: std::cell::Cell<u32>,
+    /// What the back-edge poll block writes besides the poll: the leaf's
+    /// tick counter and its tier-spine loop credit (`t2_profile`).
+    pub(crate) poll: super::t2_profile::PollEmit,
 }
 
 /// The residual root window's frame base, loaded once at entry, with its
@@ -7245,14 +7270,29 @@ fn lower_simple_op_arms(
                         // declare is keyed on exactly that condition).
                         match (kind, &reg_args) {
                             (SpecCalleeKind::SubrGeneral, _) => {
-                                let f = rt
-                                    .refs
-                                    .try_get(fb.func, Shim::CallSubrSpec)
-                                    .ok_or(CompileError::UnsupportedOp("subr-spec-refs"))?;
-                                fb.ins().call(
-                                    f,
-                                    &[vmctx, sym_v, exp_v, slot_v, args_addr, n_val, out_addr],
-                                )
+                                if let Some(t2) = super::t2_profile::subr_profiler(rt, expected) {
+                                    let f = rt
+                                        .refs
+                                        .try_get(fb.func, Shim::T2CallSubrProf)
+                                        .expect("profiling refs");
+                                    let obs = fb.ins().iconst(rt.ptr_ty, t2.obs as i64);
+                                    fb.ins().call(
+                                        f,
+                                        &[
+                                            vmctx, sym_v, exp_v, slot_v, args_addr, n_val,
+                                            out_addr, obs,
+                                        ],
+                                    )
+                                } else {
+                                    let f = rt
+                                        .refs
+                                        .try_get(fb.func, Shim::CallSubrSpec)
+                                        .ok_or(CompileError::UnsupportedOp("subr-spec-refs"))?;
+                                    fb.ins().call(
+                                        f,
+                                        &[vmctx, sym_v, exp_v, slot_v, args_addr, n_val, out_addr],
+                                    )
+                                }
                             }
                             (
                                 SpecCalleeKind::PredRecordp
@@ -7336,9 +7376,18 @@ fn lower_simple_op_arms(
                             out_addr,
                         ),
                         None => {
-                            let shim = rt.refs.get(fb.func, shim);
-                            fb.ins()
-                                .call(shim, &[vmctx, func_val, args_addr, n_val, out_addr])
+                            if let Some(call) = super::t2_profile::emit_generic_prof_call(
+                                fb,
+                                rt,
+                                matches!(op, Op::Apply(_)),
+                                &[vmctx, func_val, args_addr, n_val, out_addr],
+                            ) {
+                                call
+                            } else {
+                                let shim = rt.refs.get(fb.func, shim);
+                                fb.ins()
+                                    .call(shim, &[vmctx, func_val, args_addr, n_val, out_addr])
+                            }
                         }
                     },
                 };
@@ -7405,9 +7454,18 @@ fn lower_simple_op_arms(
                         out_addr,
                     ),
                     None => {
-                        let shim = rt.refs.get(fb.func, shim);
-                        fb.ins()
-                            .call(shim, &[vmctx_gen, func_val, args_addr, n_val, out_addr])
+                        if let Some(call) = super::t2_profile::emit_generic_prof_call(
+                            fb,
+                            rt,
+                            matches!(op, Op::Apply(_)),
+                            &[vmctx_gen, func_val, args_addr, n_val, out_addr],
+                        ) {
+                            call
+                        } else {
+                            let shim = rt.refs.get(fb.func, shim);
+                            fb.ins()
+                                .call(shim, &[vmctx_gen, func_val, args_addr, n_val, out_addr])
+                        }
                     }
                 };
                 let status_gen = fb.inst_results(call_gen)[0];

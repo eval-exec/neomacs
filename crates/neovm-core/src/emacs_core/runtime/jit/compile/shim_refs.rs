@@ -45,6 +45,8 @@ pub(crate) enum ShimGroup {
     Base,
     SubrSpec,
     CbsymSpec,
+    /// T1 profiling only; never selected by AOT or a knob-off leaf.
+    Tier2Profile,
 }
 
 /// Every runtime shim generated code calls, in declaration order.
@@ -116,6 +118,12 @@ pub(crate) enum Shim {
     /// (AOT baseline leaves included: both are exported).
     CbsymSpec,
     CbsymRead,
+    // Appended to preserve every existing module declaration id/order.
+    TierRequest,
+    T2CallProf,
+    T2CallSubrProf,
+    T2CallFeedbackProf,
+    T2CallFeedbackCensus,
 }
 
 /// The parameter shapes of the shim signatures.
@@ -178,6 +186,11 @@ impl Shim {
             Shim::ArithSpec => "neovm_jit_arith_spec",
             Shim::CbsymSpec => "neovm_jit_cbsym_spec",
             Shim::CbsymRead => "neovm_jit_cbsym_read",
+            Shim::TierRequest => "neovm_jit_tier_request",
+            Shim::T2CallProf => "neovm_jit_t2_call_prof",
+            Shim::T2CallSubrProf => "neovm_jit_t2_call_subr_prof",
+            Shim::T2CallFeedbackProf => "neovm_jit_t2_call_feedback_prof",
+            Shim::T2CallFeedbackCensus => "neovm_jit_t2_call_feedback_census",
         }
     }
 
@@ -188,6 +201,11 @@ impl Shim {
                 ShimGroup::SubrSpec
             }
             Shim::CbsymSpec | Shim::CbsymRead => ShimGroup::CbsymSpec,
+            Shim::TierRequest
+            | Shim::T2CallProf
+            | Shim::T2CallSubrProf
+            | Shim::T2CallFeedbackProf
+            | Shim::T2CallFeedbackCensus => ShimGroup::Tier2Profile,
             Shim::RootwinGrow
             | Shim::Cons
             | Shim::MakeFloat
@@ -237,6 +255,16 @@ impl Shim {
     fn shape(self) -> (&'static [P], bool) {
         use P::{F64, I64, Ptr};
         match self {
+            // (leaf_obs) -> ()
+            Shim::TierRequest => (&[Ptr], false),
+            // Generic call's ABI plus the leaf's observation pointer.
+            Shim::T2CallProf => (&[Ptr, I64, Ptr, I64, Ptr, Ptr], true),
+            // Subr spec's ABI plus the leaf's observation pointer.
+            Shim::T2CallSubrProf => (&[Ptr, I64, I64, I64, Ptr, I64, Ptr, Ptr], true),
+            // Feedback call's ABI plus the leaf's observation pointer.
+            Shim::T2CallFeedbackProf | Shim::T2CallFeedbackCensus => {
+                (&[Ptr, I64, Ptr, I64, Ptr, Ptr, Ptr], true)
+            }
             // (vmctx, need) -> ()
             Shim::RootwinGrow => (&[Ptr, I64], false),
             // (car, cdr) -> cons bits
@@ -331,6 +359,7 @@ impl Shim {
 pub(crate) struct ShimGroups {
     pub(crate) subr_spec: bool,
     pub(crate) cbsym_spec: bool,
+    pub(crate) tier2_profile: bool,
 }
 
 impl ShimGroups {
@@ -339,6 +368,7 @@ impl ShimGroups {
             ShimGroup::Base => true,
             ShimGroup::SubrSpec => self.subr_spec,
             ShimGroup::CbsymSpec => self.cbsym_spec,
+            ShimGroup::Tier2Profile => self.tier2_profile,
         }
     }
 }

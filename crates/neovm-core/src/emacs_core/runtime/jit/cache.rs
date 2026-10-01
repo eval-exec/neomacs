@@ -1494,6 +1494,7 @@ pub(crate) fn compile_and_cache_jit_leaf(
             regalloc: RegallocPolicy::Auto,
             bypass_profit_gate: false,
             origin: stats::CompileOrigin::AotDrain,
+            tier: super::tier2::CompileTier::Plain,
         },
         None,
     );
@@ -1951,34 +1952,43 @@ pub fn try_run_compiled(
         // keeps it when an evicted inline makes it recompile: the tier is
         // earned, not re-decided. Never under a forced allocator, which
         // would rebuild `Fast` forever.
-        let (prev_regalloc, prev_bypassed, prev_call_heavy) = match cache.get(id) {
-            Some(CacheEntry::Compiled(l)) => {
-                (Some(l.regalloc), l.profit_gate_bypassed, l.call_heavy)
-            }
+        // Under `NEOVM_JIT_TIER2` the re-tier is the upgrade a leaf's
+        // countdown asked for (`tier2`); the heat crossing below is off.
+        let (prev_regalloc, prev_bypassed, prev_call_heavy, upgrade) = match cache.get(id) {
+            Some(CacheEntry::Compiled(l)) => (
+                Some(l.regalloc),
+                l.profit_gate_bypassed,
+                l.call_heavy,
+                l.obs.t2.due(),
+            ),
             Some(CacheEntry::Pending(_)) => {
                 // SAFETY: the dormant seam-provided Context (shared reads).
                 let live = (!ctx.is_null()).then(|| unsafe { &*ctx });
                 return probe_pending(&mut cache, id, func, live)
                     .filter(|leaf| leaf.accepts(args.len()));
             }
-            Some(CacheEntry::NotCompilable | CacheEntry::Deferred(_)) => (None, false, false),
+            Some(CacheEntry::NotCompilable | CacheEntry::Deferred(_)) => (None, false, false, None),
             None => {
                 // A miss compiles below: install what finished meanwhile.
                 if super::bg::pending_count() != 0 {
                     // SAFETY: as above.
                     drain_ready_in(&mut cache, (!ctx.is_null()).then(|| unsafe { &*ctx }));
                 }
-                (None, false, false)
+                (None, false, false, None)
             }
         };
         // A call-heavy body stays on the fast allocator however hot it gets:
         // its time is in its shim calls, not in the code around them.
-        let retier = prev_regalloc == Some(RegallocChoice::Fast)
-            && !prev_call_heavy
-            && forced_regalloc().is_none()
-            && super::retier_heat().is_some_and(|at| func.jit_runtime().heat() >= at);
+        let retier = upgrade == Some(super::tier2::T2Upgrade::Retier)
+            || prev_regalloc == Some(RegallocChoice::Fast)
+                && !prev_call_heavy
+                && forced_regalloc().is_none()
+                && super::retier_heat().is_some_and(|at| func.jit_runtime().heat() >= at);
         if retier {
             if let Some(CacheEntry::Compiled(old)) = cache.get(id) {
+                if upgrade.is_some() {
+                    super::tier2::note_upgraded(old, super::tier2::T2Upgrade::Retier);
+                }
                 retiered = Some(Rc::clone(old));
             }
             cache.remove(id);
@@ -2033,6 +2043,11 @@ pub fn try_run_compiled(
             regalloc: policy,
             bypass_profit_gate,
             origin: stats::CompileOrigin::Dispatch,
+            tier: if retier {
+                super::tier2::CompileTier::Upgrade(super::tier2::T2Upgrade::Retier)
+            } else {
+                super::tier2::CompileTier::T1
+            },
         };
         match cache.get_or_insert_with(id, || {
             // R1c-6: consult AOT FIRST (additive — a miss/error falls through to
@@ -2239,7 +2254,10 @@ pub(crate) fn resolve_compiled_leaf_ptr(
     if id > max_compiled_id() {
         return None;
     }
-    COMPILED.with(|cache| {
+    // The leaf an upgrade compiled here replaces, to unlink once the cache
+    // borrow ends.
+    let mut upgraded: Option<Rc<CompiledLeaf>> = None;
+    let resolved = COMPILED.with(|cache| {
         let mut cache = cache.borrow_mut();
         // A pending compile: install it if its backend finished, else take
         // the strict path meanwhile (the entry answers `None` below).
@@ -2248,6 +2266,32 @@ pub(crate) fn resolve_compiled_leaf_ptr(
             let live = (!ctx.is_null()).then(|| unsafe { &*ctx });
             install_pending(&mut cache, id, Some(func.jit_runtime()), live);
         }
+        // An upgrade the leaf's countdown asked for (`tier2`): its spec
+        // callers were unlinked to come here, where the function is known.
+        let upgrade = match cache.get(id) {
+            Some(CacheEntry::Compiled(old)) => old.obs.t2.due().map(|kind| {
+                super::tier2::note_upgraded(old, kind);
+                upgraded = Some(Rc::clone(old));
+                kind
+            }),
+            _ => None,
+        };
+        let (regalloc, origin, tier) = match upgrade {
+            Some(kind @ super::tier2::T2Upgrade::Retier) => {
+                cache.remove(id);
+                stats::record_retier();
+                (
+                    RegallocPolicy::Full,
+                    stats::CompileOrigin::Retier,
+                    super::tier2::CompileTier::Upgrade(kind),
+                )
+            }
+            None => (
+                RegallocPolicy::Auto,
+                stats::CompileOrigin::FirstSight,
+                super::tier2::CompileTier::T1,
+            ),
+        };
         match cache.get_or_insert_with(id, || {
             // SAFETY: same dormant-Context contract as try_run_compiled.
             let obarray = (!ctx.is_null()).then(|| unsafe { &(*ctx).obarray });
@@ -2260,9 +2304,11 @@ pub(crate) fn resolve_compiled_leaf_ptr(
                 func,
                 obarray,
                 CompileRequest {
-                    regalloc: RegallocPolicy::Auto,
-                    bypass_profit_gate: false,
-                    origin: stats::CompileOrigin::FirstSight,
+                    regalloc,
+                    bypass_profit_gate: upgrade.is_some()
+                        && upgraded.as_ref().is_some_and(|l| l.profit_gate_bypassed),
+                    origin,
+                    tier,
                 },
                 name_hint,
             )
@@ -2282,6 +2328,27 @@ pub(crate) fn resolve_compiled_leaf_ptr(
                 if leaf.inline_deps().is_empty() || leaf.inline_epoch().is_none() =>
             {
                 Some(Rc::as_ptr(leaf))
+            }
+            _ => None,
+        }
+    });
+    if let Some(old) = upgraded {
+        let unlinked = unlink_spec_slots(Rc::as_ptr(&old));
+        tracing::debug!(target: "neovm_jit::tier2", id, unlinked, "upgrade replaced the leaf");
+    }
+    resolved
+}
+
+/// The cached leaf whose `LeafObs` is `obs`, while it is its source's
+/// current entry leaf on this thread (`tier2`'s request asks). `None` for a
+/// retired leaf, a leaf built outside the cache, or a cache borrowed by the
+/// caller (the request then keeps the leaf).
+pub(crate) fn current_leaf_of(obs: &super::compile::LeafObs) -> Option<Rc<CompiledLeaf>> {
+    COMPILED.with(|c| {
+        let c = c.try_borrow().ok()?;
+        match c.get(obs.id) {
+            Some(CacheEntry::Compiled(leaf)) if std::ptr::eq(&*leaf.obs, obs) => {
+                Some(Rc::clone(leaf))
             }
             _ => None,
         }

@@ -70,6 +70,9 @@
 //! | `NEOVM_JIT_LEAF` | `opcode,bcall,string` (unset); `=all`/`=on` adds the default-off parts; `=off`, or a comma list of `opcode`, `bcall`, `string`, `vars`, `batch` | Leaf builtins (design `p1-2-builtin-intrinsics`, `compile/leaf_abi.rs`). `opcode`: `Op::Get/Length/Nth/Nthcdr/Elt/Member/Equal/StringEqual/StringLessp` sites call their leaf's bare trampoline (register args, the result's bits or a tag-`001` sentinel) instead of the `neovm_jit_builtin1/2` table shim. `bcall`: an `Op::Call` site speculated on `gethash`, `plist-get` or `get-char-property` (any symbol bound to them) calls the leaf's Bcall trampoline: a guard (no pending quit/signal/profiler tick/throw-on-input, no compiler overrides, not `NEOVM_JIT_FORCE_SLOW_SPEC`, no `debug-on-next-call`, depth below the limit, the function cell unchanged) then the leaf, with no frame on success; a signal pushes GNU's `Bcall` frame lazily (`neovm_jit_leaf_signal_frame`) before dispatch; any guard miss or declined shape runs today's `neovm_jit_call_subr_spec` protocol. `string`: `aref` of a unibyte or all-ASCII multibyte string reads the byte inline (I1), and `aset` stores a same-width byte into owned string storage inline behind the `aset` redefinition gate (I2); every other shape calls `neovm_jit_aref`/`neovm_jit_aset` as before. `vars` (default off): `Op::SymbolValue` sites call the `symbol-value` leaf's bare trampoline and `Op::Call` sites on `buffer-local-value` its armed one; both are their references' bodies; `buffer-local-value` answers a buffer-local variable loaded for the current buffer through P1.4 Stage A's `Context::read_var_cached`. `batch` (default off): `Op::Call` sites on the first leaf batch -- `assoc` (a TESTFN bounces), `rassq`, `delq`, `copy-sequence`, `symbol-name`, `boundp`, `keywordp` -- call their armed trampolines. Read at compile time only. `opcode,bcall,string` default ON since the F-B gate passed (dhrystone -18% instructions, elb-eieio -4.7%, pack-unpack -4%, board org-editing -1%, no row worse); `=off` emits the former code exactly (single-build A/B). Exit census: `[neovm-jit-final-builtin-leaves]` under `NEOVM_JIT_COMPILE_STATS=1`. |
 //! | `NEOVM_JIT_FEEDBACK` | `=record`, `=use` | P2.1 C3/C4 call-target feedback (`jit/feedback.rs`, `compile/call_feedback.rs`): `record` makes the interpreter's `Op::Call` record the targets of the body's NON-constant call sites (a callee that is a variable or a closure, the function an `apply` spreads into, the callback of `mapc`/`mapcar`/`mapcan`/`mapconcat`) into the source's call-site table (a symbol, up to 4 closure sources, or megamorphic; closure instances of one source are one target), compiled code record and count them through the JIT-only `neovm_jit_call_prof`/`_apply_prof`/`_record_call_target` shims for a site's first 15,000 counted executions (its profiling window; after it the shim is a count test and a tail call), and the exit report adds `[neovm-jit-final-calls]` (the census: sites by shape and state, executions, the stability window's late transitions) under `NEOVM_JIT_COMPILE_STATS`. `census`: `record` with no window (every compiled call records, so the census sees transitions after the window: a measurement mode). `use`: the interpreter records and compiles read the targets (`NEOVM_JIT_SPEC_SOURCES` implies it); compiled sites do not record (no tier reads their feedback yet). Unset/`off`: nothing recorded, the interpreter's `Op::Call` pays one field compare as before and the lowering is CLIF-identical (single-build A/B). `NEOVM_JIT_CALL_FEEDBACK=on` is an alias of `record`. Blocker: F-1 R1 (recording tax <= 0.3% instructions on every row). |
 //! | `NEOVM_JIT_SPEC_SOURCES` | `=on` | P2.1 C5 closure source slots (`compile/source_slots.rs`): a baseline T1 or OSR compile turns an `Op::Call` whose callee is not a constant and whose recorded target (`NEOVM_JIT_FEEDBACK`, which `on` raises to `use`) is ONE closure source into a guarded call: the callee's source identity (its `runtime` word, `jit_layout::BYTECODE_RUNTIME_WORD_OFFSET`) against the recorded source's, then `neovm_jit_call_source_spec` -- the spec shim's fast path on the source's armed leaf with the instance's own constant base and a frame recording the called object -- which answers `STATUS_NEED_GENERIC` for anything it declines; a miss or a decline runs the site's generic call, so the site never deopts. `NEOVM_JIT_FORCE_SLOW_SPEC=1` declines every call. With `NEOVM_JIT_DIRECT_CALL=on` the shim arms the slot with the source's register entry (exact arity, frameless) and the site then enters the leaf itself (the named direct call's checks, with the leaf-slot epoch in place of the function epoch, a frame recording the called object, the instance's own constant base as `aux`), the shim being its slow path. Read at compile time; unset/`off` builds no source site, CLIF-identical (single-build A/B). Blocker: F-1 R2 (closure kernel >= -25%, and eieio <= -1.5% or org <= -0.5% or pack-unpack <= -1%). |
+//! | `NEOVM_JIT_TIER2` | `=on` | The tier spine's trigger (`jit/tier2.rs`, design `p2-0-integration` §3.1, P2.1 C6 + W1): a T1 entry leaf (baseline or MIR, a tier-up's compile) profiles -- a prologue countdown of `NEOVM_JIT_T2_WINDOW` entries, which the back-edge poll's cold block and speculated `mapc`/`mapcar`/`mapcan`/`mapconcat` calls also take from -- and when it runs out the leaf's cold request decides the upgrade (today T1' only: the fast-to-full allocator re-tier, which leaves the heat crossing; every other leaf is kept, its countdown disarmed), compiled at the next entry through a seam that knows the function. Off (the default) is today's code, CLIF-identical, and the heat-driven re-tier. Blocker: F-W (`p2-0-integration` §5). |
+//! | `NEOVM_JIT_T2_WINDOW` | 15000 | Under `NEOVM_JIT_TIER2`: T1 entries before a leaf's request (the old re-tier crossing, `(RETIER_FACTOR - 1) x threshold` after the tier-up). Read at compile time. |
+//! | `NEOVM_JIT_T2_LOOP_CREDIT` | 64 | Under `NEOVM_JIT_TIER2` (W1): what one back-edge poll tick (255 taken back edges) takes from the countdown, so a loop leaf requests after about 60k iterations; the mapping-builtin credit is `len / 64` per call. `0` = entry-only: no poll credit and no mapping-builtin credit. Read at compile time. |
 //! | `NEOVM_JIT_INTRINSICS` | off; `=on`/`=all`, or a comma list of `length`, `nth`, `memq`, `symbol-value` | CLIF intrinsics for leaf builtins (design `p1-2-builtin-intrinsics` §2.7, `compile/intrinsics.rs`), each an inline PREFIX of its opcode site whose miss falls through to the site's usual call (leaf trampoline, value shim or table shim), never to a deopt. `length` (I3): nil, a proper list of at most 64 conses (a bounded walk), a string, a plain vector or record. `nth` (I4): `nth`/`nthcdr`/`elt` of a list at a constant index 0..4, unrolled. `memq` (I5): `memq`/`assq`, and `member` with a fixnum or bare-symbol key, over the first 16 conses by bit identity, only while `symbols-with-pos-enabled` is off. `symbol-value` (I6): a bare symbol whose value cell is plain and bound (the `Op::VarRef` inline read; a nil value is refused unless the symbol is a known constant that is not a dedicated buffer-local). JIT only; read at compile time; unset/`off` emits the former code exactly (single-build A/B). Census: `intrinsic-<name>:inline_sites=` in `[neovm-jit-final-builtin-leaves]`. |
 //! | `NEOVM_JIT_LEAF_EFFECTS` | off; `=on` | MIR leaf effects (design `p1-2-builtin-intrinsics` §2.8, commit 11): an opcode site that calls a leaf builtin's body -- its trampoline, the `memq`/`assq` value shims or a pure table entry -- and whose lowering is GC-free (`calls::opcode_site_effects`: the leaf's declared `Effects`, which exclude MAY_GC, MAY_REENTER and MAY_DEOPT; the inline-lowered `aref`/`setcar`/`setcdr` are excluded, measured slower in MIR) no longer keeps a looping body out of the MIR tier (`gate:loop-opaque:<Op>`), and inside a MIR leaf it is no safepoint: the values live across it stay raw and unrooted (`mir_force_tagged` is skipped). JIT only; read at compile time; unset/`off` admits and lowers exactly as before (single-build A/B). The census is the MIR bail keys of `NEOVM_JIT_COMPILE_STATS=1`. |
 //! | `NEOVM_REGEX_ANCHOR_ALT` | on (`=off` disables) | P3.3 Stage 0 (`text/regex/emacs.rs` `start_anchor`): a regexp whose every alternative begins with `^` (or `` \` ``) searches line starts (or position 0) only; read when a pattern compiles. Default ON since the board A/B (org-editing -1.4% instructions). |
@@ -178,6 +181,12 @@ pub(crate) mod bg;
 /// Per-source feedback (`SourceFeedback`). Always built: `RuntimeState`
 /// holds it.
 pub(crate) mod feedback;
+
+/// The tier spine's trigger: the T1 countdown, its request and the upgrade
+/// decision (`NEOVM_JIT_TIER2`). Only built with the `jit` feature. See
+/// `jit/tier2.rs`.
+#[cfg(feature = "jit")]
+pub(crate) mod tier2;
 
 /// Always-on metering of the synchronous compile stalls the cache-miss path
 /// pays on the eval thread — the evidence base for background compilation.
@@ -643,16 +652,22 @@ pub(crate) fn force_profit_defer_for_test(factor: Option<u32>) {
     PROFIT_DEFER_TEST_OVERRIDE.with(|c| c.set(factor));
 }
 
-/// Heat at which a fast-allocator leaf is rebuilt with the full allocator
-/// ([`RuntimeState::RETIER_FACTOR`] × [`hot_threshold`]); `None` = never
-/// (`NEOVM_JIT_RETIER_FACTOR=0`).
 /// `retier_heat` cache: `0` = not read yet, `u64::MAX` = no re-tier crossing,
 /// else `1 + heat`. The env var it derives from cannot change under us, so a
 /// racing double read resolves to the same value.
 static RETIER_HEAT_CACHE: AtomicU64 = AtomicU64::new(0);
 
+/// Heat at which a fast-allocator leaf is rebuilt with the full allocator
+/// ([`RuntimeState::RETIER_FACTOR`] × [`hot_threshold`]); `None` = never
+/// (`NEOVM_JIT_RETIER_FACTOR=0`). Under `NEOVM_JIT_TIER2=on` there is no
+/// heat crossing either: the T1 leaf's countdown requests the re-tier
+/// instead (`tier2`).
 #[inline]
 pub fn retier_heat() -> Option<u32> {
+    #[cfg(all(test, feature = "jit"))]
+    if let Some(at) = retier_heat_test_override() {
+        return at;
+    }
     // A plain relaxed load rather than a `OnceLock<Option<u32>>` read: the
     // armed-leaf entry consults this on EVERY compiled call, and there a
     // `OnceLock` costs its initialized-flag branch plus an acquire fence.
@@ -663,14 +678,46 @@ pub fn retier_heat() -> Option<u32> {
     }
 }
 
+/// `NEOVM_JIT_RETIER_FACTOR` ([`RuntimeState::RETIER_FACTOR`] unset); `0`
+/// turns the re-tier off, under either trigger.
+pub fn retier_factor() -> u32 {
+    static FACTOR: OnceLock<u32> = OnceLock::new();
+    *FACTOR.get_or_init(|| {
+        std::env::var("NEOVM_JIT_RETIER_FACTOR")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(RuntimeState::RETIER_FACTOR)
+    })
+}
+
+/// The heat crossing for a process with `factor` and the tier spine `t2`.
+fn retier_heat_for(factor: u32, t2: bool) -> Option<u32> {
+    (factor != 0 && !t2).then(|| hot_threshold().saturating_mul(factor))
+}
+
+/// Whether the tier spine owns the re-tier (`NEOVM_JIT_TIER2`).
+fn tier2_on() -> bool {
+    #[cfg(feature = "jit")]
+    {
+        compile::jit_tier2().on
+    }
+    #[cfg(not(feature = "jit"))]
+    {
+        false
+    }
+}
+
+/// A test thread that forced the tier-spine knobs answers from them, not
+/// from the process cache.
+#[cfg(all(test, feature = "jit"))]
+fn retier_heat_test_override() -> Option<Option<u32>> {
+    compile::tier2_forced_for_test().map(|knob| retier_heat_for(retier_factor(), knob.on))
+}
+
 #[cold]
 #[inline(never)]
 fn retier_heat_init() -> Option<u32> {
-    let factor = std::env::var("NEOVM_JIT_RETIER_FACTOR")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(RuntimeState::RETIER_FACTOR);
-    let at = (factor != 0).then(|| hot_threshold().saturating_mul(factor));
+    let at = retier_heat_for(retier_factor(), tier2_on());
     RETIER_HEAT_CACHE.store(
         at.map_or(u64::MAX, |heat| u64::from(heat) + 1),
         Ordering::Relaxed,

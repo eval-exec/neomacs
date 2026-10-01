@@ -44,11 +44,32 @@ pub(crate) struct LeafReportRow {
     /// Why the MIR tier did or did not take the leaf's body (a report token,
     /// see `stats::verdict`); `None` prints `-`.
     pub(crate) mir: Option<Box<str>>,
+    /// The tier spine's view of the leaf (`tier2`).
+    pub(crate) t2: crate::emacs_core::jit::tier2::T2Snapshot,
 }
 
 impl LeafReportRow {
     fn deopts(&self) -> u64 {
         self.deopt_at + self.deopt_rerun
+    }
+
+    /// The leaf's work: native entries plus back-edge poll ticks (each
+    /// 255 taken back edges), both counted only under entry counting.
+    pub(crate) fn work(&self) -> u64 {
+        self.entries + self.t2.polls
+    }
+
+    /// The work an upgraded leaf served (all of it), or the work a leaf
+    /// did after its countdown's request fired.
+    pub(crate) fn work_reached(&self) -> u64 {
+        if self.t2.upgraded_leaf {
+            self.work()
+        } else if self.t2.requested {
+            self.work()
+                .saturating_sub(self.t2.entries_at_request + self.t2.polls_at_request)
+        } else {
+            0
+        }
     }
 
     pub(crate) fn render(&self) -> String {
@@ -152,6 +173,109 @@ pub(crate) fn ranked_leaves(rows: &[LeafReportRow]) -> Vec<&LeafReportRow> {
     by_deopts
 }
 
+/// Sources the `[neovm-jit-final-t2]` line names, most work first.
+pub(crate) const T2_TOP_SOURCES: usize = 8;
+
+/// The tier spine's exit line (`tier2`): the knobs, the request counters
+/// and where the work ran.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct T2Line {
+    pub(crate) on: bool,
+    pub(crate) window: u32,
+    pub(crate) loop_credit: u32,
+    pub(crate) stats: crate::emacs_core::jit::tier2::T2Stats,
+}
+
+/// One source's work for the tier-spine line: all of it, what upgraded
+/// leaves served, what ran after the request (upgraded included).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct T2SourceWork {
+    pub(crate) id: u64,
+    pub(crate) name: Option<String>,
+    pub(crate) work: u64,
+    pub(crate) upgraded: u64,
+    pub(crate) reached: u64,
+}
+
+/// Per-source work over `rows` (every leaf of a source: entry, retired,
+/// OSR), most work first, ties by id.
+pub(crate) fn t2_source_work(rows: &[LeafReportRow]) -> Vec<T2SourceWork> {
+    let mut by_id: std::collections::BTreeMap<u64, T2SourceWork> = Default::default();
+    for r in rows {
+        let w = by_id.entry(r.id).or_insert_with(|| T2SourceWork {
+            id: r.id,
+            ..Default::default()
+        });
+        if w.name.is_none() {
+            w.name = r.name.clone();
+        }
+        w.work += r.work();
+        w.reached += r.work_reached();
+        if r.t2.upgraded_leaf {
+            w.upgraded += r.work();
+        }
+    }
+    let mut v: Vec<T2SourceWork> = by_id.into_values().collect();
+    v.sort_by(|a, b| b.work.cmp(&a.work).then(a.id.cmp(&b.id)));
+    v
+}
+
+/// `part` as a percentage of `whole`, one decimal (`-` for no whole).
+fn percent(part: u64, whole: u64) -> String {
+    if whole == 0 {
+        "-".to_string()
+    } else {
+        format!("{:.1}", part as f64 * 100.0 / whole as f64)
+    }
+}
+
+impl T2Line {
+    /// The line's body for `rows`.
+    pub(crate) fn render(&self, rows: &[LeafReportRow]) -> String {
+        let sources = t2_source_work(rows);
+        let work: u64 = sources.iter().map(|s| s.work).sum();
+        let upgraded: u64 = sources.iter().map(|s| s.upgraded).sum();
+        let reached: u64 = sources.iter().map(|s| s.reached).sum();
+        let top: Vec<String> = sources
+            .iter()
+            .filter(|s| s.work > 0)
+            .take(T2_TOP_SOURCES)
+            .map(|s| {
+                format!(
+                    "{}:{}:{}:{}:{}",
+                    s.id,
+                    csv_field(s.name.as_deref().unwrap_or("-")),
+                    s.work,
+                    percent(s.upgraded, s.work),
+                    percent(s.reached, s.work),
+                )
+            })
+            .collect();
+        let st = &self.stats;
+        format!(
+            "tier2={} window={} loop_credit={} requests={} kept={} stale={} due={} \
+             upgraded={} hof_credits={} work={work} upgraded_work={upgraded} ({}%) \
+             reached_work={reached} ({}%) top={}",
+            if self.on { "on" } else { "off" },
+            self.window,
+            self.loop_credit,
+            st.requests,
+            st.kept,
+            st.stale,
+            st.due,
+            st.upgraded,
+            st.hof_credits,
+            percent(upgraded, work),
+            percent(reached, work),
+            if top.is_empty() {
+                "-".to_string()
+            } else {
+                top.join(",")
+            },
+        )
+    }
+}
+
 /// Commas would split a CSV column: `name` fields use `;` instead.
 fn csv_field(s: &str) -> String {
     s.replace(',', ";")
@@ -198,6 +322,8 @@ pub(crate) struct FinalReport {
     pub(crate) builtin_leaves: String,
     /// Background compilation (`jit::bg`), unless on the legacy path.
     pub(crate) bg: Option<crate::emacs_core::jit::bg::BgReport>,
+    /// The tier spine (`tier2`), when it is on or counted anything.
+    pub(crate) t2: Option<T2Line>,
 }
 
 impl FinalReport {
@@ -282,6 +408,9 @@ impl FinalReport {
         if !self.builtin_leaves.is_empty() {
             lines.push((ReportTag::FinalBuiltinLeaves, self.builtin_leaves.clone()));
         }
+        if let Some(t2) = &self.t2 {
+            lines.push((ReportTag::FinalT2, t2.render(&self.leaves)));
+        }
         for row in ranked_leaves(&self.leaves) {
             lines.push((ReportTag::FinalLeaf, row.render()));
         }
@@ -296,32 +425,49 @@ impl FinalReport {
     /// compile row, so it skips them; they join the compile rows on
     /// `compiled_id`.
     pub(crate) fn profile_leaf_rows(&self) -> Vec<String> {
-        self.leaves
-            .iter()
-            .map(|r| {
-                let osr = r
-                    .osr_pc
-                    .map_or_else(|| "-".to_string(), |pc| pc.to_string());
-                let entries = if r.entry_counted {
-                    r.entries.to_string()
-                } else {
-                    "-".to_string()
-                };
-                let top_pc = r
-                    .deopt_pcs
-                    .first()
-                    .map_or_else(|| "-".to_string(), |(pc, n, _)| format!("{pc}:{n}"));
-                format!(
-                    "#leaf,{},{},{},{osr},{entries},{},{},{},{top_pc}\n",
-                    r.id,
-                    csv_field(r.name.as_deref().unwrap_or("-")),
-                    r.tier,
-                    r.deopt_at,
-                    r.deopt_rerun,
-                    r.signals,
-                )
-            })
-            .collect()
+        let leaf_rows = self.leaves.iter().map(|r| {
+            let osr = r
+                .osr_pc
+                .map_or_else(|| "-".to_string(), |pc| pc.to_string());
+            let entries = if r.entry_counted {
+                r.entries.to_string()
+            } else {
+                "-".to_string()
+            };
+            let top_pc = r
+                .deopt_pcs
+                .first()
+                .map_or_else(|| "-".to_string(), |(pc, n, _)| format!("{pc}:{n}"));
+            format!(
+                "#leaf,{},{},{},{osr},{entries},{},{},{},{top_pc}\n",
+                r.id,
+                csv_field(r.name.as_deref().unwrap_or("-")),
+                r.tier,
+                r.deopt_at,
+                r.deopt_rerun,
+                r.signals,
+            )
+        });
+        // The tier spine's rows, for the leaves whose work was counted:
+        // `#t2,compiled_id,name,osr_pc,origin,state,entries,polls,
+        // entries_at_request,polls_at_request` (ten columns, like `#leaf`).
+        let t2_rows = self.leaves.iter().filter(|r| r.entry_counted).map(|r| {
+            let osr = r
+                .osr_pc
+                .map_or_else(|| "-".to_string(), |pc| pc.to_string());
+            format!(
+                "#t2,{},{},{osr},{},{},{},{},{},{}\n",
+                r.id,
+                csv_field(r.name.as_deref().unwrap_or("-")),
+                r.t2.origin,
+                r.t2.state,
+                r.entries,
+                r.t2.polls,
+                r.t2.entries_at_request,
+                r.t2.polls_at_request,
+            )
+        });
+        leaf_rows.chain(t2_rows).collect()
     }
 }
 

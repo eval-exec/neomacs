@@ -351,6 +351,11 @@ pub(crate) struct LeafObs {
     pub(crate) mir_verdict: Option<Box<str>>,
     /// Precise deopts at a pc beyond the first [`Self::MAX_DEOPT_PCS`].
     deopt_pc_overflow: Cell<u64>,
+    /// The tier spine's countdown and request state
+    /// ([`crate::emacs_core::jit::tier2`]); unprofiled unless a T1 compile
+    /// ran under `NEOVM_JIT_TIER2`. Its `budget` cell's address is baked
+    /// into a profiling leaf's code, like `entries`.
+    pub(crate) t2: crate::emacs_core::jit::tier2::T2Cells,
 }
 
 impl LeafObs {
@@ -372,7 +377,18 @@ impl LeafObs {
             deopt_pc_overflow: Cell::new(0),
             compile_us: Cell::new(0),
             mir_verdict: None,
+            t2: crate::emacs_core::jit::tier2::T2Cells::unprofiled(),
         })
+    }
+
+    /// The cells the generated code of this leaf writes (see
+    /// [`LeafEmit`]). Taken after every field the code bakes is final.
+    pub(crate) fn emit(&self) -> LeafEmit<'_> {
+        LeafEmit {
+            entry_counter: self.entry_counter(),
+            poll_counter: self.entry_counted.then_some(&self.t2.polls),
+            t2: crate::emacs_core::jit::tier2::T2Emit::of(self),
+        }
     }
 
     /// Record the compile stall that produced this leaf.
@@ -459,6 +475,35 @@ impl LeafObs {
             deopt_pc_overflow: self.deopt_pc_overflow.get(),
             compile_us: self.compile_us.get(),
             mir_verdict: self.mir_verdict.clone(),
+            t2: self.t2.snapshot(),
+        }
+    }
+}
+
+/// What a JIT leaf's generated code writes into its [`LeafObs`]: the
+/// prologue's entry counter, the back-edge poll's tick counter (both only
+/// when entry counting was on at compile time) and a profiling leaf's
+/// countdown (`NEOVM_JIT_TIER2`). AOT leaves write none ([`Self::NONE`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LeafEmit<'a> {
+    pub(crate) entry_counter: Option<&'a Cell<u64>>,
+    pub(crate) poll_counter: Option<&'a Cell<u64>>,
+    pub(crate) t2: Option<crate::emacs_core::jit::tier2::T2Emit>,
+}
+
+impl LeafEmit<'_> {
+    /// No counter and no countdown (AOT code).
+    pub(crate) const NONE: LeafEmit<'static> = LeafEmit {
+        entry_counter: None,
+        poll_counter: None,
+        t2: None,
+    };
+
+    /// What the back-edge poll block writes.
+    pub(crate) fn poll(&self) -> super::t2_profile::PollEmit {
+        super::t2_profile::PollEmit {
+            count: self.poll_counter.map(|c| c.as_ptr() as usize),
+            t2: self.t2,
         }
     }
 }
@@ -480,6 +525,7 @@ pub(crate) struct LeafObsSnapshot {
     pub(crate) deopt_pc_overflow: u64,
     pub(crate) compile_us: u32,
     pub(crate) mir_verdict: Option<Box<str>>,
+    pub(crate) t2: crate::emacs_core::jit::tier2::T2Snapshot,
 }
 
 /// Summed counters of leaves a cache dropped (a heap-swap `clear`, an OSR

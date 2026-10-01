@@ -1025,3 +1025,90 @@ pub(crate) fn jit_spec_sources_on() -> bool {
         on
     })
 }
+
+/// The tier spine's trigger knobs (design `p2-0-integration` §3.1-§3.2,
+/// P2.1 C6 + W1; `jit::tier2`). Read once per process (tests override them
+/// per thread), at compile time and on the cold request path only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Tier2Knob {
+    /// `NEOVM_JIT_TIER2=on`: a T1 entry leaf profiles (the prologue
+    /// countdown, the back-edge poll credit, the mapping-builtin credit) and
+    /// its upgrade is decided by `tier2::tier_request`; the heat-driven
+    /// re-tier of `cache::try_run_compiled` is off. `off` (the default):
+    /// today's code, CLIF-identical.
+    pub(crate) on: bool,
+    /// `NEOVM_JIT_T2_WINDOW`: T1 entries before the first request (15,000:
+    /// the old re-tier crossing, `RETIER_FACTOR - 1` thresholds after the
+    /// tier-up).
+    pub(crate) window: u32,
+    /// `NEOVM_JIT_T2_LOOP_CREDIT`: what one back-edge poll tick (255 taken
+    /// back edges) takes from the countdown (64). `0` = entry-only: no poll
+    /// credit and no mapping-builtin credit.
+    pub(crate) loop_credit: u32,
+}
+
+impl Tier2Knob {
+    pub(crate) const DEFAULT_WINDOW: u32 = 15_000;
+    pub(crate) const DEFAULT_LOOP_CREDIT: u32 = 64;
+
+    /// The knobs from the environment (`get` reads one variable).
+    pub(crate) fn from_env(get: impl Fn(&str) -> Option<String>) -> Self {
+        let on = matches!(
+            get("NEOVM_JIT_TIER2").as_deref().map(str::trim),
+            Some("on" | "1" | "true" | "yes")
+        );
+        let num = |name: &str, default: u32| {
+            get(name)
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(default)
+        };
+        Self {
+            on,
+            // A zero window would request on the first entry of every leaf
+            // and again after each re-arm: one entry is the smallest.
+            window: num("NEOVM_JIT_T2_WINDOW", Self::DEFAULT_WINDOW).max(1),
+            loop_credit: num("NEOVM_JIT_T2_LOOP_CREDIT", Self::DEFAULT_LOOP_CREDIT),
+        }
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static TIER2_TEST_OVERRIDE: std::cell::Cell<Option<Tier2Knob>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Force the tier-spine knobs on the current thread (tests only; `None`
+/// returns to the process setting).
+#[cfg(test)]
+pub(crate) fn force_tier2_for_test(knob: Option<Tier2Knob>) {
+    TIER2_TEST_OVERRIDE.with(|c| c.set(knob));
+}
+
+/// The tier-spine knobs this thread's compiles and requests use.
+pub(crate) fn jit_tier2() -> Tier2Knob {
+    #[cfg(test)]
+    if let Some(knob) = TIER2_TEST_OVERRIDE.with(std::cell::Cell::get) {
+        return knob;
+    }
+    use std::sync::OnceLock;
+    static KNOB: OnceLock<Tier2Knob> = OnceLock::new();
+    *KNOB.get_or_init(|| {
+        let knob = Tier2Knob::from_env(|name| std::env::var(name).ok());
+        if knob.on {
+            tracing::info!(
+                target: "neovm::jit::knobs",
+                window = knob.window,
+                loop_credit = knob.loop_credit,
+                "NEOVM_JIT_TIER2=on is on in this process"
+            );
+        }
+        knob
+    })
+}
+
+/// The tier-spine knobs this test thread forced, if any.
+#[cfg(test)]
+pub(crate) fn tier2_forced_for_test() -> Option<Tier2Knob> {
+    TIER2_TEST_OVERRIDE.with(std::cell::Cell::get)
+}

@@ -807,7 +807,7 @@ pub(crate) struct ShimAddr(*const ());
 unsafe impl Sync for ShimAddr {}
 
 #[used]
-pub(crate) static JIT_SHIM_TABLE: [(&str, ShimAddr); 52] = [
+pub(crate) static JIT_SHIM_TABLE: [(&str, ShimAddr); 57] = [
     ("neovm_jit_apply", ShimAddr(neovm_jit_apply as *const ())),
     ("neovm_jit_aref", ShimAddr(neovm_jit_aref as *const ())),
     ("neovm_jit_aset", ShimAddr(neovm_jit_aset as *const ())),
@@ -971,6 +971,26 @@ pub(crate) static JIT_SHIM_TABLE: [(&str, ShimAddr); 52] = [
     ),
     ("neovm_jit_varref", ShimAddr(neovm_jit_varref as *const ())),
     ("neovm_jit_varset", ShimAddr(neovm_jit_varset as *const ())),
+    (
+        "neovm_jit_tier_request",
+        ShimAddr(super::super::tier2::neovm_jit_tier_request as *const ()),
+    ),
+    (
+        "neovm_jit_t2_call_prof",
+        ShimAddr(super::t2_profile::neovm_jit_t2_call_prof as *const ()),
+    ),
+    (
+        "neovm_jit_t2_call_subr_prof",
+        ShimAddr(super::t2_profile::neovm_jit_t2_call_subr_prof as *const ()),
+    ),
+    (
+        "neovm_jit_t2_call_feedback_prof",
+        ShimAddr(super::t2_profile::neovm_jit_t2_call_feedback_prof as *const ()),
+    ),
+    (
+        "neovm_jit_t2_call_feedback_census",
+        ShimAddr(super::t2_profile::neovm_jit_t2_call_feedback_census as *const ()),
+    ),
 ];
 
 /// Register every shim in [`JIT_SHIM_TABLE`] with a JIT module builder. Both

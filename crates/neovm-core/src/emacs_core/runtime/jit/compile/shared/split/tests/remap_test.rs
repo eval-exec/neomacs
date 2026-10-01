@@ -12,6 +12,7 @@ use cranelift_module::default_libcall_names;
 const ALL_GROUPS: ShimGroups = ShimGroups {
     subr_spec: true,
     cbsym_spec: true,
+    tier2_profile: true,
 };
 
 /// A JIT module whose first `padding` declarations are unrelated functions,
