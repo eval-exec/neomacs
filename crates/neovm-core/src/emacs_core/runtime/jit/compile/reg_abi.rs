@@ -54,7 +54,9 @@ impl LeafAbi {
     ///   framed callers make no ABI test (`CompiledLeaf::call_premarshaled_consts`);
     /// * `dynamic_prefix == 0`: not a `make-closure`-patched source, whose
     ///   bodies are closures that `mapc`/`funcall` (Rust callers) run far
-    ///   more often than a symbol's function cell does;
+    ///   more often than a symbol's function cell does -- unless
+    ///   `NEOVM_JIT_SPEC_SOURCES` is on, whose closure source sites
+    ///   (`source_slots`) enter exactly those bodies directly;
     /// * a lambda list of required parameters only ([`exact_lambda_list`]):
     ///   a direct site calls with exactly that many arguments.
     ///
@@ -71,7 +73,7 @@ impl LeafAbi {
             && !osr
             && arity <= MAX_REG_ARGS
             && frameless
-            && dynamic_prefix == 0
+            && (dynamic_prefix == 0 || super::knobs::jit_spec_sources_on())
             && exact_lambda_list()
             && jit_register_abi_on()
         {
