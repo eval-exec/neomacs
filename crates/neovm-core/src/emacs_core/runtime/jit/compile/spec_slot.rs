@@ -2,7 +2,7 @@
 //! state compiled code and the call shims share, and the one statement of
 //! what each of its words means for each kind of site.
 //!
-//! A slot starts with four generated-code words, baked into generated code by address (JIT) or
+//! A slot is four words, baked into generated code by address (JIT) or
 //! indexed off the sidecar (AOT, stride `size_of::<SpecSlot>()`, salted into
 //! the ABI tag):
 //!
@@ -21,7 +21,6 @@
 //! reference path), so `clear_leaf` refuses one in debug builds.
 
 use super::*;
-use std::sync::atomic::AtomicBool;
 
 /// What a spec slot's words hold (see the module table), decided by its
 /// site's [`SpecCalleeKind`] when the leaf is built.
@@ -77,13 +76,6 @@ impl SpecCalleeKind {
 /// see `resolve_compiled_leaf_ptr`; NOT "the cache never evicts", audit #1).
 /// `repr(C)` pins the field order the baked pointer arithmetic relies on.
 ///
-/// Threading: slots belong to their mutator's compiled cache; that mutator
-/// serializes arming and clearing. The words remain atomic for concurrent
-/// observation, but a leaf and its Context are not transferable between
-/// mutators. The cold stamp-resync guard prevents nested re-entry even if
-/// another mutator changes the shared binding clock between the proof and
-/// the re-entered gate.
-///
 /// `direct_consts` is the shim's own fast-path key: the cached leaf's
 /// constant base when that leaf takes this site's call -- as the generated
 /// code laid it out, or normalized into a frame buffer of at most
@@ -103,21 +95,6 @@ pub(crate) struct SpecSlot {
     pub(super) leaf: AtomicU64,
     pub(super) direct_consts: AtomicU64,
     pub(super) direct_entry: AtomicU64,
-    /// Cold-only ownership token, held until the re-entered gate returns.
-    /// Acquire claims the token; Release publishes its relinquishment.
-    /// It is appended so all four generated-code offsets stay unchanged.
-    stamp_resync_active: AtomicBool,
-}
-
-/// One bounded resync attempt. A second slow entry at this slot falls back
-/// to bits while this token is held, even if the global clock moved again.
-/// This contains no Lisp state and may be observed by other threads.
-pub(super) struct StampResyncGuard<'a>(&'a AtomicBool);
-
-impl Drop for StampResyncGuard<'_> {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
-    }
 }
 
 /// Byte offsets of the four words, for generated code.
@@ -128,7 +105,7 @@ pub(crate) const SPEC_SLOT_DIRECT_ENTRY_OFFSET: usize =
     core::mem::offset_of!(SpecSlot, direct_entry);
 
 const _: () = {
-    assert!(core::mem::size_of::<SpecSlot>() == 40);
+    assert!(core::mem::size_of::<SpecSlot>() == 32);
     assert!(SPEC_SLOT_EPOCH_OFFSET == 0);
     assert!(SPEC_SLOT_LEAF_OFFSET == 8);
     assert!(SPEC_SLOT_KEY_OFFSET == 16);
@@ -142,15 +119,6 @@ const _: () = {
 pub(crate) const FAST_PATH_MAX_ARITY: usize = 16;
 
 impl SpecSlot {
-    /// Claim one cold resync attempt without changing the generated-code
-    /// words. Re-entry at this slot must use the existing bits path.
-    pub(super) fn begin_stamp_resync(&self) -> Option<StampResyncGuard<'_>> {
-        self.stamp_resync_active
-            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .ok()
-            .map(|_| StampResyncGuard(&self.stamp_resync_active))
-    }
-
     /// A slot armed at `epoch` with no cached leaf.
     pub(crate) const fn at_epoch(epoch: u64) -> Self {
         Self {
@@ -158,7 +126,6 @@ impl SpecSlot {
             leaf: AtomicU64::new(0),
             direct_consts: AtomicU64::new(0),
             direct_entry: AtomicU64::new(0),
-            stamp_resync_active: AtomicBool::new(false),
         }
     }
 

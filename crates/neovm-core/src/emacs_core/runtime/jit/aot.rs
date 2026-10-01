@@ -104,9 +104,10 @@ pub(crate) const ABI_TAG: u32 = compute_abi_tag();
 /// v15: `BufferManager` gains its `current_raw` word (P1.4 Stage B), which
 /// moves every `Context` field laid out after `buffers` -- among them the
 /// root-window words AOT code stores through.
-/// v16: the stamp-resync ownership token is appended to SpecSlot, so AOT
-/// slot arrays have a 40-byte stride; the first four word offsets stay fixed.
-const ABI_TAG_VERSION: u32 = 16;
+// S2.7's provisional stamp reentry token changed SpecSlot's stride to 40
+// (version 16). F1 parks that consumer and restores 32; reject both old
+// layouts instead of reusing an earlier ABI version after the rollback.
+const ABI_TAG_VERSION: u32 = 17;
 
 /// Format version of the AOT descriptor spec-section + the runtime spec ABI
 /// (`SpecSlot`/`spec_expected` sidecar bases, the loader re-classify+arm protocol).

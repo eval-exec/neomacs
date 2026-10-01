@@ -1835,10 +1835,6 @@ impl SymbolByteCodeCallCacheEntry {
 /// Per-`Context` cache of what a symbol's function cell resolves to for a
 /// stack call, tagged with the function epoch so any `fset` (or a change of
 /// `compiler_function_overrides`, which bumps the same epoch) invalidates it.
-/// Threading: this cache belongs to one Context and its mutator; refresh
-/// and refill require exclusive access. Prepared callees are Context-local
-/// and never shared between mutators. The binding stamps and floor it reads
-/// are shared atomics; refresh records the clock sampled before that proof.
 pub(crate) struct SymbolByteCodeCallCache {
     entries: Box<[SymbolByteCodeCallCacheEntry; SYMBOL_BYTECODE_CALL_CACHE_CAPACITY]>,
 }
@@ -1914,21 +1910,10 @@ impl SymbolByteCodeCallCache {
     const fn index(symbol: SymId) -> usize {
         symbol.0 as usize & (SYMBOL_BYTECODE_CALL_CACHE_CAPACITY - 1)
     }
-    /// The entry for `symbol` when it is current at `function_epoch`: proven
-    /// at that clock value, or -- after an epoch move for other symbols --
-    /// re-proven by `symbol`'s stamp ([`Self::refresh`]).
     #[inline(always)]
-    fn get(
-        &mut self,
-        symbol: SymId,
-        function_epoch: u64,
-        obarray: &crate::emacs_core::symbol::Obarray,
-    ) -> Option<ResolvedStackCallTarget> {
-        let entry = &mut self.entries[Self::index(symbol)];
-        if entry.symbol != symbol
-            || (entry.function_epoch != function_epoch
-                && !Self::refresh(entry, function_epoch, obarray))
-        {
+    fn get(&self, symbol: SymId, function_epoch: u64) -> Option<ResolvedStackCallTarget> {
+        let entry = &self.entries[Self::index(symbol)];
+        if entry.function_epoch != function_epoch || entry.symbol != symbol {
             return None;
         }
         match entry.callee {
@@ -1941,58 +1926,6 @@ impl SymbolByteCodeCallCache {
             }
             CachedStackCallee::Empty => None,
         }
-    }
-    /// P1.3 A4a (design `p1-3-per-symbol-versions` §4.4 C4): an entry whose
-    /// epoch went stale is current again when its symbol's function binding
-    /// is provably unchanged since the entry's epoch and no change of every
-    /// symbol's resolution happened since -- an overrides toggle raises that
-    /// floor, so the hit path's "written while the overrides were inactive"
-    /// argument still holds ([`Obarray::fn_unchanged_since`],
-    /// `NEOVM_FN_STAMPS`; always `false` with the knob off). The entry then
-    /// moves to `now`, the clock its caller read before probing. The EMPTY
-    /// entry's epoch (`u64::MAX`) never validates. Cold: once per entry per
-    /// epoch move.
-    ///
-    /// [`Obarray::fn_unchanged_since`]: crate::emacs_core::symbol::Obarray::fn_unchanged_since
-    #[cold]
-    #[inline(never)]
-    fn refresh(
-        entry: &mut SymbolByteCodeCallCacheEntry,
-        now: u64,
-        obarray: &crate::emacs_core::symbol::Obarray,
-    ) -> bool {
-        if !obarray.fn_unchanged_since(entry.symbol, entry.function_epoch) {
-            return false;
-        }
-        #[cfg(debug_assertions)]
-        {
-            // Obarray read access keeps the function cell stable (shared
-            // obarrays must retain their read guard through this check).
-            // The snapshot bypasses the lookup counter used by T-A4.
-            use crate::emacs_core::symbol::FunctionCellSnapshot;
-            let cached = match entry.callee {
-                CachedStackCallee::ByteCode(value) => Some(value),
-                CachedStackCallee::Builtin(callee) | CachedStackCallee::BuiltinLeaf(callee, _) => {
-                    Some(callee.0)
-                }
-                CachedStackCallee::Empty => None,
-            };
-            let live = match obarray.function_cell_snapshot(entry.symbol) {
-                FunctionCellSnapshot::Bound(value) => Some(value),
-                _ => None,
-            };
-            debug_assert_eq!(
-                cached.map(Value::bits),
-                live.map(Value::bits),
-                "missed function stamp"
-            );
-        }
-        entry.function_epoch = now;
-        #[cfg(feature = "jit")]
-        crate::emacs_core::jit::stats::epoch::note_cache_refresh(
-            crate::emacs_core::jit::stats::epoch::CacheRefresh::SymbolCall,
-        );
-        true
     }
     #[inline(always)]
     fn insert_bytecode(
@@ -8745,10 +8678,10 @@ impl<'a> Vm<'a> {
             },
             ValueKind::Symbol(sym_id) => {
                 let function_epoch = self.ctx.obarray.function_epoch();
-                let ctx = &mut *self.ctx;
-                if let Some(target) =
-                    ctx.symbol_bytecode_call_cache
-                        .get(sym_id, function_epoch, &ctx.obarray)
+                if let Some(target) = self
+                    .ctx
+                    .symbol_bytecode_call_cache
+                    .get(sym_id, function_epoch)
                 {
                     return target;
                 }
@@ -9669,10 +9602,6 @@ mod builtin_result_return_tests;
 #[cfg(test)]
 #[path = "tests/arith_integer_fast_path.rs"]
 mod arith_integer_fast_path_tests;
-
-#[cfg(all(test, feature = "jit"))]
-#[path = "tests/call_cache_refresh.rs"]
-mod call_cache_refresh_tests;
 
 impl ArithGenericKind {
     /// The builtin this kind's slow arm calls: the SAME cached symbol ids the

@@ -4638,9 +4638,6 @@ mod osr_entry_guard_tests;
 #[cfg(test)]
 #[path = "tests/osr_raw.rs"]
 mod osr_raw_tests;
-#[cfg(test)]
-#[path = "tests/per_symbol_rearm.rs"]
-mod per_symbol_rearm_tests;
 
 #[cfg(test)]
 #[path = "tests/inline_vars.rs"]

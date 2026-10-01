@@ -31,32 +31,9 @@ pub(crate) enum SpecRevalidation {
     /// The binding changed: the site takes the strict call.
     #[strum(serialize = "spec-rebind")]
     BindingChanged,
-    /// The site's symbol is provably unchanged since its armed epoch
-    /// (`NEOVM_FN_STAMPS`, `dispatch::resync_spec_slot`): the slot moved to
-    /// the clock without a binding lookup, keeping its cached leaf.
-    #[strum(serialize = "spec-stamp-resync")]
-    StampResynced,
-    /// Of those, the calls that re-entered the fast gate (the leaf was kept
-    /// and keys the fast path).
-    #[strum(serialize = "spec-stamp-reenter")]
-    StampReentered,
 }
 
 const SPEC_KINDS: usize = SpecRevalidation::COUNT;
-
-/// A per-symbol call cache whose entry went stale with `function_epoch` and
-/// was proven current again by its symbol's stamp (`NEOVM_FN_STAMPS`)
-/// instead of being refilled.
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, strum::EnumCount, strum::EnumIter, strum::IntoStaticStr,
-)]
-pub(crate) enum CacheRefresh {
-    /// The Tier-0 symbol call cache (`SymbolByteCodeCallCache`, design C4).
-    #[strum(serialize = "refresh-symbol-call")]
-    SymbolCall,
-}
-
-const REFRESH_KINDS: usize = CacheRefresh::COUNT;
 
 thread_local! {
     /// Bumps per [`FunctionEpochBump`] reason.
@@ -71,18 +48,6 @@ thread_local! {
         const { [const { Cell::new(0) }; SPEC_KINDS] };
     /// Compiled leaves evicted because a callee they inlined was redefined.
     static INLINE_EVICTED_LEAVES: Cell<u64> = const { Cell::new(0) };
-    /// Stamp refreshes per [`CacheRefresh`] cache.
-    static CACHE_REFRESHES: [Cell<u64>; REFRESH_KINDS] =
-        const { [const { Cell::new(0) }; REFRESH_KINDS] };
-}
-
-/// Count one stamp refresh of a call-cache entry.
-#[inline]
-pub(crate) fn note_cache_refresh(kind: CacheRefresh) {
-    CACHE_REFRESHES.with(|c| {
-        let c = &c[kind as usize];
-        c.set(c.get() + 1);
-    });
 }
 
 /// Count one speculated-call-site re-validation (the slow half only).
@@ -137,8 +102,6 @@ pub(crate) struct EpochCounters {
     /// Indexed by `SpecRevalidation as usize`.
     pub(crate) spec: [u64; SPEC_KINDS],
     pub(crate) inline_evicted_leaves: u64,
-    /// Indexed by `CacheRefresh as usize`.
-    pub(crate) refresh: [u64; REFRESH_KINDS],
 }
 
 impl EpochCounters {
@@ -156,18 +119,11 @@ impl EpochCounters {
                 *slot = cell.get();
             }
         });
-        let mut refresh = [0u64; REFRESH_KINDS];
-        CACHE_REFRESHES.with(|c| {
-            for (slot, cell) in refresh.iter_mut().zip(c.iter()) {
-                *slot = cell.get();
-            }
-        });
         EpochCounters {
             bumps,
             unchanged_writes: FN_CELL_UNCHANGED.with(Cell::get),
             spec,
             inline_evicted_leaves: INLINE_EVICTED_LEAVES.with(Cell::get),
-            refresh,
         }
     }
 
@@ -181,10 +137,6 @@ impl EpochCounters {
         for (i, slot) in spec.iter_mut().enumerate() {
             *slot = self.spec[i].saturating_sub(base.spec[i]);
         }
-        let mut refresh = [0u64; REFRESH_KINDS];
-        for (i, slot) in refresh.iter_mut().enumerate() {
-            *slot = self.refresh[i].saturating_sub(base.refresh[i]);
-        }
         EpochCounters {
             bumps,
             unchanged_writes: self.unchanged_writes.saturating_sub(base.unchanged_writes),
@@ -192,18 +144,12 @@ impl EpochCounters {
             inline_evicted_leaves: self
                 .inline_evicted_leaves
                 .saturating_sub(base.inline_evicted_leaves),
-            refresh,
         }
     }
 
     /// Re-validations with one outcome.
     pub(crate) fn spec_for(&self, kind: SpecRevalidation) -> u64 {
         self.spec[kind as usize]
-    }
-
-    /// Stamp refreshes of one cache.
-    pub(crate) fn refresh_for(&self, kind: CacheRefresh) -> u64 {
-        self.refresh[kind as usize]
     }
 
     /// Bumps for one reason.
@@ -232,10 +178,6 @@ impl EpochCounters {
             let name: &'static str = kind.into();
             out.push_str(&format!(" {name}={}", self.spec_for(kind)));
         }
-        for kind in CacheRefresh::iter() {
-            let name: &'static str = kind.into();
-            out.push_str(&format!(" {name}={}", self.refresh_for(kind)));
-        }
         out
     }
 
@@ -261,13 +203,6 @@ impl EpochCounters {
         }
         for kind in SpecRevalidation::iter() {
             let n = self.spec_for(kind);
-            if n > 0 {
-                let name: &'static str = kind.into();
-                out.push_str(&format!(" {name}={n}"));
-            }
-        }
-        for kind in CacheRefresh::iter() {
-            let n = self.refresh_for(kind);
             if n > 0 {
                 let name: &'static str = kind.into();
                 out.push_str(&format!(" {name}={n}"));
@@ -323,5 +258,4 @@ pub(crate) fn reset_epoch_counters_for_test() {
     FN_REDEFINED.with(|m| m.borrow_mut().clear());
     SPEC_REVALIDATIONS.with(|c| c.iter().for_each(|cell| cell.set(0)));
     INLINE_EVICTED_LEAVES.with(|c| c.set(0));
-    CACHE_REFRESHES.with(|c| c.iter().for_each(|cell| cell.set(0)));
 }
