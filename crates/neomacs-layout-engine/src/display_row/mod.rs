@@ -1336,7 +1336,7 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
         };
         let progress = display_row_progress(position, geometry.y(), progress_height);
         let faces = row_faces
-            .into_iter()
+            .iter()
             .map(|face| {
                 context
                     .face_ids()
