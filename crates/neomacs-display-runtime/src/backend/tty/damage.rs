@@ -53,7 +53,7 @@
 //! | --- | --- | --- |
 //! | `NEOMACS_TTY_SILENT` | `off` | `off` |
 //! | `NEOMACS_TTY_DAMAGE` | `on` | `off` |
-//! | `NEOMACS_TTY_ROW_IDENTITY` | `address` | `address` or `off` |
+//! | `NEOMACS_TTY_ROW_IDENTITY` | `appearance` | `address` or `off` |
 //!
 //! Empty or unknown settings retain each knob's explicit baseline.
 
@@ -125,14 +125,15 @@ pub enum TtyRowIdentity {
     Appearance,
 }
 
-/// The identity a value of `NEOMACS_TTY_ROW_IDENTITY` selects.
+/// The identity a value of `NEOMACS_TTY_ROW_IDENTITY` selects; unset defaults to `appearance`.
 pub fn parse_tty_row_identity_knob(value: Option<&str>) -> TtyRowIdentity {
     match value
         .map(|value| value.trim().to_ascii_lowercase())
         .as_deref()
     {
         Some("appearance" | "on" | "1") => TtyRowIdentity::Appearance,
-        None | Some("" | "address" | "off" | "0") => TtyRowIdentity::Address,
+        None => TtyRowIdentity::Appearance,
+        Some("" | "address" | "off" | "0") => TtyRowIdentity::Address,
         Some(other) => {
             tracing::warn!(
                 value = other,
