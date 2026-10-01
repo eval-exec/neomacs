@@ -104,7 +104,8 @@ pub(crate) fn apply_platform_window_identity(
     // units so a system multiplier is not applied a second time by mwheel.el.
     attrs.with_platform_attributes(Box::new(
         winit::platform::windows::WindowAttributesWindows::default()
-            .with_use_system_scroll_speed(false),
+            .with_use_system_scroll_speed(false)
+            .with_precision_touchpad(true),
     ))
 }
 
