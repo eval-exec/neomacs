@@ -30,6 +30,7 @@ use std::io::Cursor;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
+use neomacs_display_protocol::image::EncodedBytes;
 use neomacs_display_protocol::{
     ImageIntrinsicExtent, ImageMaskKind, ImageMaskPolicy, ImageNativeExtent, ImageRasterExtent,
     ImageRealization, ImageRotation, ImageSizeSpec,
@@ -69,12 +70,7 @@ pub const BAND_MAX_BYTES: usize = 4 * 1024 * 1024;
 /// produce the rows above it.
 pub const BAND_TARGET_COUNT: u32 = 32;
 
-/// Receives each band as the decode produces it.
-///
-/// A sink rather than a returned collection: a band is worth having before the
-/// next one exists, which is the whole point of decoding this way. `None`
-/// decodes the same pixels without reporting progress, for the callers that
-/// only want the image.
+/// Receives each band while the shared decoder produces it.
 pub type BandSink<'sink> = Option<&'sink mut dyn FnMut(DecodedBand)>;
 
 /// Whether one decode's bands have somewhere to go.
@@ -314,9 +310,9 @@ pub enum BandStep {
 ///
 /// Matched exhaustively wherever a source is consumed: a third route has to be
 /// a deliberate addition rather than something a wildcard swallows.
-pub enum BandSource<'a> {
+pub enum BandSource {
     /// Whole source rows, in order, one band at a time.
-    Banded(BandedSource<'a>),
+    Banded(BandedSource),
     /// One all-or-nothing decode of the whole image — this renderer's
     /// behaviour before banding existed. Every format whose decoder has no
     /// row-wise entry point lands here, and so does every source too small for
@@ -333,18 +329,18 @@ pub enum BandSource<'a> {
 /// in [`BandSource::open`] names every format `image` reports and falls back
 /// for formats `image` might add, and this enum is where a *banded* addition
 /// is caught.
-pub enum BandedSource<'a> {
+pub enum BandedSource {
     /// PNG, whose reader yields one transformed row at a time
     /// (`png-0.18.1` `src/decoder/mod.rs:513` `next_row`).
-    Png(PngRows<'a>),
+    Png(PngRows),
     /// Baseline JPEG, whose decoder yields one MCU row at a time
     /// (`zune-jpeg` `McuRowReader::next_row` — the fork `Cargo.toml`'s
     /// `[patch.crates-io]` block pins, since `zune-jpeg` 0.5.15's public
     /// surface is `decode`/`decode_into` and nothing else).
-    Jpeg(JpegRows<'a>),
+    Jpeg(JpegRows),
 }
 
-impl<'a> BandedSource<'a> {
+impl BandedSource {
     /// Take the next band, or learn that there are no more.
     pub fn next_band(&mut self) -> BandStep {
         match self {
@@ -449,7 +445,7 @@ pub fn merge_mask(left: ImageMaskKind, right: ImageMaskKind) -> ImageMaskKind {
     }
 }
 
-impl<'a> BandSource<'a> {
+impl BandSource {
     /// Classify an encoded source and, when banding applies, open its row-wise
     /// decoder.
     ///
@@ -458,7 +454,7 @@ impl<'a> BandSource<'a> {
     /// row is worth. Rotation is deliberately not an input — GNU turns the
     /// image after sizing (`src/image.c:3169-3201`), so the unrotated geometry
     /// is the one whose vertical scale maps source rows onto display rows.
-    pub fn open(data: &'a [u8], size: ImageSizeSpec, realization: ImageRealization) -> Self {
+    pub fn open(data: EncodedBytes, size: ImageSizeSpec, realization: ImageRealization) -> Self {
         Self::open_at_least(data, size, realization, BANDING_MIN_PIXELS)
     }
 
@@ -468,17 +464,21 @@ impl<'a> BandSource<'a> {
     /// what banding does, so the tests that are about what it does read a
     /// small source rather than encode a four-megapixel one.
     #[cfg(test)]
-    pub fn open_forced(data: &'a [u8], size: ImageSizeSpec, realization: ImageRealization) -> Self {
+    pub fn open_forced(
+        data: EncodedBytes,
+        size: ImageSizeSpec,
+        realization: ImageRealization,
+    ) -> Self {
         Self::open_at_least(data, size, realization, 0)
     }
 
     fn open_at_least(
-        data: &'a [u8],
+        data: EncodedBytes,
         size: ImageSizeSpec,
         realization: ImageRealization,
         min_pixels: u64,
     ) -> Self {
-        match image::guess_format(data) {
+        match image::guess_format(&data) {
             Ok(image::ImageFormat::Png) => {
                 PngRows::open(data, BandPlan::new(size, realization), min_pixels)
                     .map_or(Self::Whole, |rows| Self::Banded(BandedSource::Png(rows)))
@@ -601,7 +601,7 @@ mod tests;
 /// whole MCU rows: the budget decides how many of them one band is, the way it
 /// decides how many rows one band of a PNG is, and neither can be finer than
 /// its own decoder's unit of work.
-type JpegReader<'a> = zune_jpeg::McuRowReader<ZuneCursor<&'a [u8]>>;
+type JpegReader = zune_jpeg::McuRowReader<ZuneCursor<EncodedBytes>>;
 
 /// A baseline JPEG being read one MCU row at a time, straight into the raster
 /// it will be drawn from.
@@ -610,12 +610,12 @@ type JpegReader<'a> = zune_jpeg::McuRowReader<ZuneCursor<&'a [u8]>>;
 /// image. Each source row is expanded to RGBA, resampled into the target's
 /// coordinates and filtered into whichever output rows cover it, and what is
 /// left at the end is the raster the texture takes.
-pub struct JpegRows<'a> {
+pub struct JpegRows {
     /// The row-wise decoder. It carries its own cursor: the bands it hands back
     /// are the next MCU rows and nothing else can be asked of it, which is
     /// where "bands cannot overlap, skip or arrive out of order" comes from
     /// here.
-    reader: JpegReader<'a>,
+    reader: JpegReader,
     /// The colours the decoder was configured to output, and how a row of them
     /// widens to RGBA.
     format: RowFormat,
@@ -637,7 +637,7 @@ pub struct JpegRows<'a> {
     failed: bool,
 }
 
-impl<'a> JpegRows<'a> {
+impl JpegRows {
     /// Open `data` for row-wise reading, or decline.
     ///
     /// `None` hands the source back to the whole-image path, and means one of:
@@ -646,7 +646,7 @@ impl<'a> JpegRows<'a> {
     /// landed, the output is not one of the colour types below, the source is
     /// too small for banding to pay ([`BANDING_MIN_PIXELS`]), or the
     /// realization asks for it *larger* than it is.
-    fn open(data: &'a [u8], plan: BandPlan, min_pixels: u64) -> Option<Self> {
+    fn open(data: EncodedBytes, plan: BandPlan, min_pixels: u64) -> Option<Self> {
         // The options `image`'s own JPEG decoder configures
         // (`image-0.25.10` `src/codecs/jpeg/decoder.rs:34-38`): non-strict, and
         // no dimension limits. Both paths decoding through them is what makes a
@@ -798,8 +798,8 @@ impl<'a> JpegRows<'a> {
 /// output rows cover it. What is left of the source afterwards is the raster,
 /// which is what the texture takes — so the native-size buffer this path used
 /// to build, and the resample of it that followed, are both gone.
-pub struct PngRows<'a> {
-    reader: png::Reader<Cursor<&'a [u8]>>,
+pub struct PngRows {
+    reader: png::Reader<Cursor<EncodedBytes>>,
     format: RowFormat,
     native: ImageNativeExtent,
     /// Rows one band carries, before the target's own floor of one raster row
@@ -818,7 +818,7 @@ pub struct PngRows<'a> {
     failed: bool,
 }
 
-impl<'a> PngRows<'a> {
+impl PngRows {
     /// Open `data` for row-wise reading, or decline.
     ///
     /// `None` hands the source back to the whole-image path, and means one of:
@@ -826,7 +826,7 @@ impl<'a> PngRows<'a> {
     /// types below, the source is interlaced, it is too small for banding to pay
     /// ([`BANDING_MIN_PIXELS`]), or the realization asks for it *larger* than it
     /// is, which is the one shape a filter that only ever reduces cannot take.
-    fn open(data: &'a [u8], plan: BandPlan, min_pixels: u64) -> Option<Self> {
+    fn open(data: EncodedBytes, plan: BandPlan, min_pixels: u64) -> Option<Self> {
         let mut decoder = png::Decoder::new(Cursor::new(data));
         // The transform `image`'s own PNG decoder sets before reading
         // (`image-0.25.10` `src/codecs/png.rs:60`). Both paths decoding through

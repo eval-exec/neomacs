@@ -14,15 +14,22 @@ use neomacs_display_protocol::{
 };
 
 /// A source banded regardless of size, so these tests can use small images.
-fn open_banded(data: &[u8]) -> BandSource<'_> {
-    BandSource::open_forced(data, ImageSizeSpec::default(), ImageRealization::default())
+///
+/// The fixture is a slice, so the handle it is opened with copies it
+/// ([`EncodedBytes::copy_of`]); the paths that own their bytes do not.
+fn open_banded(data: &[u8]) -> BandSource {
+    BandSource::open_forced(
+        EncodedBytes::copy_of(data),
+        ImageSizeSpec::default(),
+        ImageRealization::default(),
+    )
 }
 
 /// The same, realized at an exact size, which is how a source is asked for a
 /// raster smaller than itself.
-fn open_banded_at(data: &[u8], width: u32, height: u32) -> BandSource<'_> {
+fn open_banded_at(data: &[u8], width: u32, height: u32) -> BandSource {
     BandSource::open_forced(
-        data,
+        EncodedBytes::copy_of(data),
         ImageSizeSpec::new(AxisSize::Exact(width), AxisSize::Exact(height)),
         ImageRealization::default(),
     )
@@ -32,7 +39,7 @@ fn open_banded_at(data: &[u8], width: u32, height: u32) -> BandSource<'_> {
 ///
 /// Returns the bands and the raster, and panics on a failure — the tests that
 /// expect one drive the source themselves.
-fn drain(mut source: BandedSource<'_>) -> (Vec<DecodedBand>, Option<RasterPixels>) {
+fn drain(mut source: BandedSource) -> (Vec<DecodedBand>, Option<RasterPixels>) {
     let mut bands = Vec::new();
     loop {
         match source.next_band() {
