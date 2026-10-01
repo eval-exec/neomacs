@@ -941,6 +941,12 @@ impl WindowEndRecord {
         self.matrix_row
     }
 
+    /// Reindex a complete measured suffix while preserving its exact source end.
+    /// This creates query geometry; it does not publish a retained window end.
+    pub const fn with_matrix_row(self, matrix_row: MatrixRow0) -> Self {
+        Self { matrix_row, ..self }
+    }
+
     /// Recover GNU's Lisp-visible end position from the current buffer Z.
     pub fn charpos_from_z(self, buffer_z: LispCharPos1) -> LispCharPos1 {
         let buffer_z = buffer_z.to_one_based_usize();

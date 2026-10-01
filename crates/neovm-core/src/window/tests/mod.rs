@@ -18,6 +18,30 @@ fn layout_variable_enum_covers_the_display_dirty_registry() {
 }
 
 #[test]
+fn measured_suffix_reindexes_end_record_without_changing_source_offsets() {
+    let original = WindowEndRecord::from_positions(
+        LispCharPos1::new(200),
+        EmacsBytePos::new(340),
+        LispCharPos1::new(150),
+        EmacsBytePos::new(225),
+        MatrixRow0::new(8),
+    );
+    let suffix_end = original.with_matrix_row(MatrixRow0::new(3));
+    assert_eq!(suffix_end.char_offset_from_z(), CharLen::new(50));
+    assert_eq!(suffix_end.byte_offset_from_z(), EmacsByteLen::new(115));
+    assert_eq!(
+        suffix_end.charpos_from_z(LispCharPos1::new(200)),
+        LispCharPos1::new(150)
+    );
+    assert_eq!(
+        suffix_end.bytepos_from_z(EmacsBytePos::new(340)),
+        EmacsBytePos::new(225)
+    );
+    assert_eq!(suffix_end.matrix_row(), MatrixRow0::new(3));
+    assert_eq!(original.matrix_row(), MatrixRow0::new(8));
+}
+
+#[test]
 fn window_end_state_preserves_one_atomic_record_across_invalidation() {
     let mut window = Window::new_leaf(WindowId(11), BufferId(1), Rect::new(0.0, 0.0, 800.0, 600.0));
 
