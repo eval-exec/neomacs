@@ -11,8 +11,12 @@
   (list (window-start) (window-vscroll nil t)))
 (defun neomacs-native-scroll-run (step)
   (condition-case err
-      (funcall step)
+      ;; Timer callbacks retain their caller's buffer, which can be *scratch*.
+      ;; Canonical scroll commands must operate on the displayed buffer.
+      (with-current-buffer (window-buffer (selected-window))
+        (funcall step))
     (error (message "Native scroll contract: %S" err) (kill-emacs 1))))
+
 (defun neomacs-native-scroll-next (step)
   (run-at-time 0.15 nil #'neomacs-native-scroll-run step))
 
@@ -39,11 +43,14 @@
 (defun neomacs-native-scroll-finish ()
   (unless (< (window-start) neomacs-native-scroll-page)
     (error "PageUp did not return towards the initial viewport"))
-  (with-temp-file (getenv "NEOMACS_GUI_STATE_JSON")
-    (insert (json-encode
-             `((contract . "native-scroll")
-               (content . ,neomacs-scroll-content-summary)
-               (pixel-returned . t) (page-advanced . t) (page-returned . t))) "\n"))
+  ;; Capture buffer-local metadata before with-temp-file selects its buffer.
+  (let ((content neomacs-scroll-content-summary)
+        (start (window-start)))
+    (with-temp-file (getenv "NEOMACS_GUI_STATE_JSON")
+      (insert (json-encode
+               `((contract . "native-scroll")
+                 (content . ,content) (final-start . ,start)
+                 (pixel-returned . t) (page-advanced . t) (page-returned . t))) "\n")))
   (neomacs--write-frame-snapshot
    (getenv "NEOMACS_GUI_FRAME_SNAPSHOT_JSON") t 'json)
   (run-at-time 0.2 nil #'kill-emacs 0))
