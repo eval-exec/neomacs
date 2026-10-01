@@ -402,7 +402,6 @@ fn validate_image_area(area: Value) -> Result<(), Flow> {
     ))
 }
 
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 /// What GNU calls an image specification when it reports a failure on it.
 ///
 /// Both parsers of an image specification — this one, which builds the
@@ -442,6 +441,7 @@ pub fn image_load_identity(spec: &Value, items: &[Value]) -> ImageLoadIdentity {
     )
 }
 
+#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn infer_image_type_from_filename(path: &str) -> Option<&'static str> {
     ImageFilenameType::from_file_name(path).map(ImageFilenameType::name)
 }

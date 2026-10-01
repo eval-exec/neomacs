@@ -1617,6 +1617,12 @@ impl LayoutEngine {
         frame_id: neovm_core::window::FrameId,
         purpose: LayoutPurpose,
     ) -> Option<neovm_core::window::WindowLayoutQuery> {
+        // Anything recorded since the last pass that no pass has reported yet.
+        // The drain below covers what this pass observes; this one covers
+        // whatever a path outside layout observed -- a `:channel0` image spec
+        // resolved from Lisp, say -- so a failure cannot sit unlogged just
+        // because it happened between frames.
+        self.report_image_failures(evaluator);
         let query_window = purpose.query_window();
         // Layout Lisp can enter a nested command reader. Capture completion
         // before gathering pixels, never from commands that finish mid-layout.
