@@ -257,3 +257,138 @@ fn resolve_bitmaps_from_standard_indicator_alist() {
     assert_eq!(resolved.continuation_left, Some(idx("left-curly-arrow")));
     assert_eq!(resolved.continuation_right, Some(idx("right-curly-arrow")));
 }
+
+fn request_for_rows(display_text_row_base: usize) -> TruncationContinuationFringeRequest {
+    TruncationContinuationFringeRequest {
+        display_text_row_base,
+        has_left_fringe: true,
+        has_right_fringe: true,
+        bitmaps: bitmaps(),
+        face_id: FaceId::new(7),
+    }
+}
+
+#[test]
+fn installer_preserves_shared_rows_when_no_fringe_slot_changes() {
+    use neomacs_display_protocol::glyph_matrix::{Glyph, GlyphArea, MatrixRow};
+    use neomacs_display_protocol::types::Rect;
+
+    let explicit = FringeBitmapInfo {
+        bitmap_index: 99,
+        face_id: FaceId::new(3),
+    };
+    let mut cases = Vec::new();
+    cases.push(("plain", enabled_row(), Vec::new(), request_for_rows(1)));
+    let mut disabled = enabled_row();
+    disabled.enabled = false;
+    disabled.truncated_left = true;
+    cases.push((
+        "disabled",
+        disabled,
+        vec![DisplayRowFlagKind::Truncated],
+        request_for_rows(1),
+    ));
+    let mut occupied = enabled_row();
+    occupied.truncated_left = true;
+    occupied.left_fringe_bitmap = Some(explicit);
+    occupied.right_fringe_bitmap = Some(explicit);
+    cases.push((
+        "explicit slots",
+        occupied,
+        vec![DisplayRowFlagKind::Truncated],
+        request_for_rows(1),
+    ));
+    let mut no_width = request_for_rows(1);
+    no_width.has_left_fringe = false;
+    no_width.has_right_fringe = false;
+    cases.push((
+        "zero width",
+        enabled_row(),
+        vec![
+            DisplayRowFlagKind::Continued,
+            DisplayRowFlagKind::Continuation,
+        ],
+        no_width,
+    ));
+    let mut no_bitmap = request_for_rows(1);
+    no_bitmap.bitmaps = FringeArrowBitmaps::default();
+    cases.push((
+        "missing indicators",
+        enabled_row(),
+        vec![
+            DisplayRowFlagKind::Continued,
+            DisplayRowFlagKind::Continuation,
+        ],
+        no_bitmap,
+    ));
+
+    for (name, mut row, flags, request) in cases {
+        row.glyphs[GlyphArea::Text.index()].push(Glyph::char('x', FaceId::new(1), 10));
+        let retained = MatrixRow::new(row);
+        let mut output = DisplayOutputBuilder::new();
+        output.begin_window(1, 2, 80, Rect::new(0.0, 0.0, 800.0, 32.0), true);
+        output.install_finalized_output_row(1, retained.clone());
+        let mut row_flags = DisplayRowFlags::new(1);
+        for flag in flags {
+            row_flags.mark(0, flag);
+        }
+        request.install(&mut output, &row_flags);
+        assert!(
+            std::ptr::eq(output.current_window_row(1).unwrap(), retained.as_ref()),
+            "{name}: a no-op must retain the shared row allocation and glyph storage"
+        );
+    }
+}
+
+#[test]
+fn installer_copies_only_changed_rows_and_preserves_rtl_fringe_precedence() {
+    use neomacs_display_protocol::glyph_matrix::MatrixRow;
+    use neomacs_display_protocol::types::Rect;
+
+    let explicit = FringeBitmapInfo {
+        bitmap_index: 99,
+        face_id: FaceId::new(3),
+    };
+    let mut row = enabled_row();
+    row.reversed_p = true;
+    row.truncated_left = true;
+    row.left_fringe_bitmap = Some(explicit);
+    let retained = MatrixRow::new(row);
+    let mut output = DisplayOutputBuilder::new();
+    output.begin_window(1, 2, 80, Rect::new(0.0, 0.0, 800.0, 32.0), true);
+    output.install_finalized_output_row(1, retained.clone());
+    let mut flags = DisplayRowFlags::new(1);
+    flags.mark(0, DisplayRowFlagKind::Continued);
+    flags.mark(0, DisplayRowFlagKind::Continuation);
+    let request = request_for_rows(1);
+    request.clone().install(&mut output, &flags);
+    let changed = output.current_window_row(1).unwrap();
+    assert!(
+        !std::ptr::eq(changed, retained.as_ref()),
+        "a real addition must copy a shared row"
+    );
+    assert_eq!(
+        changed.left_fringe_bitmap,
+        Some(explicit),
+        "explicit left bitmap beats the RTL continued arrow"
+    );
+    assert_eq!(
+        changed.right_fringe_bitmap,
+        Some(FringeBitmapInfo {
+            bitmap_index: 11,
+            face_id: FaceId::new(7)
+        }),
+        "RTL left truncation beats the RTL continuation arrow on the right"
+    );
+    assert!(
+        retained.right_fringe_bitmap.is_none(),
+        "published source rows remain immutable"
+    );
+    let allocation = changed as *const GlyphRow;
+    request.install(&mut output, &flags);
+    assert_eq!(
+        output.current_window_row(1).unwrap() as *const GlyphRow,
+        allocation,
+        "installing the same decoration twice leaves the row allocation unchanged"
+    );
+}
