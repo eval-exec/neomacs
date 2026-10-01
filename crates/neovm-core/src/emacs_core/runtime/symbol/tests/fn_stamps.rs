@@ -134,6 +134,68 @@ fn internal_cell_writers_stamp_their_symbol() {
     assert!(ev.obarray.fn_unchanged_since(other, e0));
 }
 
+/// GNU `define-abbrev` (`lisp/abbrev.el`) fsets the hook of the symbol in
+/// TABLE, which can have a different id from the global symbol with that name.
+#[test]
+fn an_abbrev_hook_stamps_its_table_symbol() {
+    crate::test_utils::init_test_tracing();
+    let _on = StampsOn::new();
+    let mut ev = Context::new();
+    let other = bystander(&mut ev);
+    let table = crate::emacs_core::abbrev::builtin_make_abbrev_table(&mut ev, vec![])
+        .expect("abbrev table");
+    let before = ev.obarray.function_epoch();
+    crate::emacs_core::abbrev::builtin_define_abbrev(
+        &mut ev,
+        vec![
+            table,
+            Value::string("neovm--fs-abbrev"),
+            Value::string("expanded"),
+            Value::symbol("car"),
+        ],
+    )
+    .expect("abbrev hook");
+    let sym = crate::emacs_core::abbrev::builtin_abbrev_symbol(
+        &mut ev,
+        vec![Value::string("neovm--fs-abbrev"), table],
+    )
+    .expect("abbrev symbol")
+    .as_symbol_id()
+    .expect("symbol id");
+    let after = ev.obarray.function_epoch();
+    assert_eq!(after, before + 1);
+    assert!(!ev.obarray.fn_unchanged_since(sym, before));
+    assert!(ev.obarray.fn_unchanged_since(sym, after));
+    assert!(ev.obarray.fn_unchanged_since(other, before));
+}
+
+/// Naming a recorded macro installs it into the named function cell (GNU's
+/// `kmacro-name-last-macro`, `lisp/kmacro.el`, calls `fset`).
+#[test]
+fn naming_a_keyboard_macro_stamps_its_symbol() {
+    crate::test_utils::init_test_tracing();
+    let _on = StampsOn::new();
+    let mut ev = Context::new();
+    let other = bystander(&mut ev);
+    crate::emacs_core::kmacro::builtin_start_kbd_macro(&mut ev, vec![]).expect("start");
+    crate::emacs_core::kmacro::builtin_store_kbd_macro_event(
+        &mut ev,
+        vec![Value::symbol("forward-char")],
+    )
+    .expect("record");
+    ev.finalize_kbd_macro_runtime_chars();
+    crate::emacs_core::kmacro::builtin_end_kbd_macro(&mut ev, vec![]).expect("end");
+    let sym = intern("neovm--fs-kmacro");
+    let before = ev.obarray.function_epoch();
+    crate::emacs_core::kmacro::builtin_name_last_kbd_macro(&mut ev, vec![Value::from_sym_id(sym)])
+        .expect("name macro");
+    let after = ev.obarray.function_epoch();
+    assert_eq!(after, before + 1);
+    assert!(!ev.obarray.fn_unchanged_since(sym, before));
+    assert!(ev.obarray.fn_unchanged_since(sym, after));
+    assert!(ev.obarray.fn_unchanged_since(other, before));
+}
+
 /// Storing the value the cell already holds redefines nothing: no clock
 /// move, no stamp.
 #[test]
@@ -281,4 +343,111 @@ fn the_knob_off_makes_the_predicate_false() {
     force_fn_stamps_for_test(Some(true));
     assert!(ev.obarray.fn_unchanged_since(id, now));
     force_fn_stamps_for_test(None);
+}
+
+/// Exercise the real side-data publication protocol with several mutator
+/// readers. The pre-grown symbol spine is immutable throughout the scope;
+/// the writer touches only interior-mutable stamps, floor and clock. No
+/// aliased `&mut Obarray` or shared Lisp heap is needed to test publication.
+#[test]
+fn concurrent_readers_observe_stamps_and_floor_before_the_published_clock() {
+    crate::test_utils::init_test_tracing();
+    use std::sync::Barrier;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let mut ob = Obarray::new();
+    let sym = intern("neovm--fs-publication");
+    ob.ensure_symbol_id(sym);
+    let ob = &ob;
+    let side = &ob.symbols.sides[Obarray::slot_index(sym) >> 12];
+    let clock = &ob.function_epoch;
+    let start = Barrier::new(4);
+    let done = AtomicBool::new(false);
+    const LAST_EPOCH: u64 = 20_000;
+
+    std::thread::scope(|scope| {
+        let writer = scope.spawn(|| {
+            start.wait();
+            for epoch in 1..=LAST_EPOCH {
+                if epoch & 1 == 0 {
+                    side.set_floor(epoch);
+                } else {
+                    side.set_stamp(Obarray::slot_index(sym) & (super::OBARRAY_CHUNK - 1), epoch);
+                }
+                clock.store(epoch, Ordering::Release);
+            }
+            done.store(true, Ordering::Release);
+        });
+        let readers: Vec<_> = (0..3)
+            .map(|_| {
+                scope.spawn(|| {
+                    let _on = StampsOn::new();
+                    start.wait();
+                    let mut samples = 0;
+                    while samples < 128 || !done.load(Ordering::Acquire) {
+                        let now = ob.function_epoch();
+                        if now != 0 {
+                            assert!(
+                                !ob.fn_unchanged_since(sym, now - 1),
+                                "clock {now} must publish its stamp or floor first"
+                            );
+                        }
+                        samples += 1;
+                        std::hint::spin_loop();
+                    }
+                    assert_eq!(ob.function_epoch(), LAST_EPOCH);
+                    assert!(!ob.fn_unchanged_since(sym, LAST_EPOCH - 1));
+                })
+            })
+            .collect();
+        writer.join().expect("publication writer");
+        for reader in readers {
+            reader.join().expect("publication reader");
+        }
+    });
+}
+
+/// A redefinition can publish after a resync has proved the old binding.
+/// Recording the clock read BEFORE that proof leaves the refreshed cache
+/// stale, so its next gate/validation rejects it. Re-reading the clock when
+/// recording would instead falsely associate the old binding with epoch 3.
+#[test]
+fn a_resync_snapshot_stays_stale_when_a_redefinition_follows_its_proof() {
+    crate::test_utils::init_test_tracing();
+    use std::sync::Barrier;
+    use std::sync::atomic::Ordering;
+
+    let _on = StampsOn::new();
+    let mut ob = Obarray::new();
+    let sym = intern("neovm--fs-resync-race");
+    ob.set_symbol_function_id(sym, Value::fixnum(1));
+    let armed = ob.function_epoch();
+    ob.set_symbol_function_id(intern("neovm--fs-resync-unrelated"), Value::fixnum(1));
+    let ob = &ob;
+    let side = &ob.symbols.sides[Obarray::slot_index(sym) >> 12];
+    let proof_done = Barrier::new(2);
+    let change_published = Barrier::new(2);
+
+    std::thread::scope(|scope| {
+        let writer = scope.spawn(|| {
+            proof_done.wait();
+            // Simulate the atomic portion of a serialized redefinition. The
+            // test does not execute or modify any Lisp object concurrently.
+            side.set_stamp(
+                Obarray::slot_index(sym) & (super::OBARRAY_CHUNK - 1),
+                armed + 2,
+            );
+            ob.function_epoch.store(armed + 2, Ordering::Release);
+            change_published.wait();
+        });
+        let snapshot = ob.function_epoch();
+        assert_eq!(snapshot, armed + 1);
+        assert!(ob.fn_unchanged_since(sym, armed));
+        proof_done.wait();
+        change_published.wait();
+        let refreshed_epoch = snapshot;
+        assert_ne!(refreshed_epoch, ob.function_epoch());
+        assert!(!ob.fn_unchanged_since(sym, refreshed_epoch));
+        writer.join().expect("racing redefinition");
+    });
 }

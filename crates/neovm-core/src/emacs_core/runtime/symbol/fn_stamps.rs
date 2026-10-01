@@ -25,32 +25,39 @@
 //! unique, and "unchanged since `E`" means the cell has held the same object
 //! since `E`, which the cell itself keeps alive.
 //!
-//! **Threading.** One writer at a time: today `&mut Obarray`; with several
-//! mutators, the obarray's writer lock (the one that also grows the symbol
-//! chunks). The writer publishes in the order cell store -> stamp or floor
-//! (`Release`) -> clock. A reader loads the clock FIRST (I2), then the floor
-//! and the stamp (`Acquire`), and records the clock value it loaded -- never
-//! a re-read -- as its entry's new epoch. Then a reader that saw the clock at
-//! or past a change also sees that change's stamp, and a reader that loaded
-//! the clock before the change records an epoch below the stamp, so its
-//! next validation fails: a resync racing a redefinition on another thread
-//! can only make an entry invalid early, never keep a stale one. (Today the
-//! clock is a plain `u64` that only `&mut Obarray` writes, so program order
-//! is this order; an atomic clock with several mutators stores it with
-//! `Release` and loads it with `Acquire`.) A chunk's stamp array is
-//! allocated zeroed and published once with `Release`; it never moves and
-//! is freed only with its side box, when the obarray drops.
+//! **Threading.** Producers are serialized by exclusive obarray write
+//! access (`&mut Obarray` today; a shared obarray requires a writer lock that
+//! also covers chunk growth). Stamp readers hold the existing symbol spine
+//! stable for their read: atomics do not make growth of its `Vec` concurrent.
+//! The writer publishes cell store -> stamp or floor (`Release`) -> atomic
+//! clock (`Release`). Each mutator reader loads the clock FIRST (`Acquire`,
+//! I2), then the floor and stamp (`Acquire`), and records that clock snapshot
+//! -- never a re-read -- as its entry's new epoch. Observing a published
+//! clock therefore observes the preceding stamp/floor and initialized stamp
+//! array. A redefinition following a resync's proof leaves its saved epoch
+//! below the new clock, so the next gate rejects it; a redefinition already
+//! visible in the stamps makes the resync conservatively miss. A concurrent
+//! call may resolve the old binding before the redefinition, as a direct
+//! function-cell read would. A stamp array is allocated zeroed and published
+//! once with `Release`; it never moves and is freed only with its side box,
+//! after readers stop using the obarray. Floor raises retain arrays so no
+//! concurrent reader can follow a pointer freed by a floor reset.
 
-use std::sync::atomic::{AtomicPtr, AtomicU8, AtomicU32, AtomicU64, Ordering};
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64, Ordering};
 
 use super::OBARRAY_CHUNK;
 
 /// One chunk's stamps, index-aligned with its symbol slots.
+/// Readers Acquire-load individual words; serialized producers Release-store
+/// them. The owning side retains the array until all obarray readers finish.
 type StampChunk = [AtomicU64; OBARRAY_CHUNK];
 
 /// The side data of one symbol chunk: its GC seqlock and its function
 /// stamps. Boxed by [`SymbolChunks`](super::SymbolChunks), so its address is
 /// stable while the spine grows (the concurrent GC scan holds `&seq`).
+/// Stamp/floor reads are concurrent; producers have exclusive obarray write
+/// access. Published stamp storage lives until all obarray readers finish.
 #[repr(C)]
 pub(super) struct ChunkSide {
     /// The chunk's seqlock (see `SymbolChunks::sides`). FIRST, so its
@@ -188,18 +195,6 @@ pub(crate) fn fn_stamps_enabled() -> bool {
     if let Some(on) = FN_STAMPS_TEST_OVERRIDE.with(|c| c.get()) {
         return on;
     }
-    /// 0 = not read yet, 1 = off, 2 = on.
-    static STATE: AtomicU8 = AtomicU8::new(0);
-    #[cold]
-    #[inline(never)]
-    fn read_knob() -> bool {
-        let on = matches!(std::env::var("NEOVM_FN_STAMPS").as_deref(), Ok("1" | "on"));
-        STATE.store(if on { 2 } else { 1 }, Ordering::Relaxed);
-        on
-    }
-    match STATE.load(Ordering::Relaxed) {
-        1 => false,
-        2 => true,
-        _ => read_knob(),
-    }
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| matches!(std::env::var("NEOVM_FN_STAMPS").as_deref(), Ok("1" | "on")))
 }

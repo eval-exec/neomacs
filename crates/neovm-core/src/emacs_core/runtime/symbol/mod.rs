@@ -46,7 +46,7 @@ use crate::tagged::header::{load_value_atomic, store_value_atomic};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 #[cfg(test)]
 use std::cell::Cell;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 #[cfg(test)]
 thread_local! {
@@ -1061,7 +1061,13 @@ pub struct Obarray {
     #[cfg(test)]
     symbol_slot_read_count: std::sync::atomic::AtomicUsize,
     global_member_count: usize,
-    function_epoch: u64,
+    /// Publication clock for function-binding changes. Producers hold exclusive
+    /// obarray write access (including chunk growth), publish stamps/floors
+    /// first, then Release-store this clock. Mutator readers Acquire-load it
+    /// before reading stamps, retaining that snapshot if they refresh a cache.
+    /// Atomic storage also keeps those readers safe when a writer runs on
+    /// another mutator; it does not replace the producer's exclusive access.
+    function_epoch: AtomicU64,
     /// Bumped whenever global-obarray MEMBERSHIP changes (mark/clear);
     /// keys the completion bucket-order cache below.
     members_epoch: u64,
@@ -1215,6 +1221,12 @@ pub(crate) const OBARRAY_JIT_SPINE_OFFSET: usize =
 /// every function-cell write moves: an armed call site compares it inline.
 pub(crate) const OBARRAY_FUNCTION_EPOCH_OFFSET: usize =
     std::mem::offset_of!(Obarray, function_epoch);
+
+// The clock keeps the old field's layout, including baked JIT offsets.
+const _: () = {
+    assert!(std::mem::size_of::<AtomicU64>() == std::mem::size_of::<u64>());
+    assert!(std::mem::align_of::<AtomicU64>() == std::mem::align_of::<u64>());
+};
 /// Where compiled code reads the memoized `debug-on-next-call` descriptor
 /// pointer (never null: a stand-in until resolved; see
 /// `Obarray::debug_on_next_call_fwd`).
@@ -1666,7 +1678,7 @@ impl std::fmt::Debug for Obarray {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Obarray")
             .field("global_member_count", &self.global_member_count)
-            .field("function_epoch", &self.function_epoch)
+            .field("function_epoch", &self.function_epoch())
             .field("blvs", &self.blvs.len())
             .finish_non_exhaustive()
     }
@@ -1756,7 +1768,7 @@ impl Clone for Obarray {
             #[cfg(test)]
             symbol_slot_read_count: std::sync::atomic::AtomicUsize::new(0),
             global_member_count: self.global_member_count,
-            function_epoch: self.function_epoch,
+            function_epoch: AtomicU64::new(self.function_epoch()),
             members_epoch: self.members_epoch,
             completion_order_cache: std::sync::Mutex::new(None),
             blvs,
@@ -2045,7 +2057,7 @@ impl Obarray {
             #[cfg(test)]
             symbol_slot_read_count: std::sync::atomic::AtomicUsize::new(0),
             global_member_count: 0,
-            function_epoch: 0,
+            function_epoch: AtomicU64::new(0),
             members_epoch: 0,
             completion_order_cache: std::sync::Mutex::new(None),
             blvs: Vec::new(),
@@ -4063,7 +4075,7 @@ impl Obarray {
         let epoch = self.next_function_epoch();
         // Floor first, then the clock (the publication order, `fn_stamps`).
         self.symbols.raise_fn_floor(epoch);
-        self.function_epoch = epoch;
+        self.function_epoch.store(epoch, Ordering::Release);
         crate::emacs_core::eval::note_function_epoch_move(why, None);
         #[cfg(feature = "jit")]
         crate::emacs_core::jit::stats::note_function_epoch_bump(why, None);
@@ -4072,13 +4084,22 @@ impl Obarray {
     /// The value `function_epoch` moves to next: one more, skipping the
     /// reserved `u64::MAX`.
     fn next_function_epoch(&self) -> u64 {
-        let next = self.function_epoch.wrapping_add(1);
+        let current = self.function_epoch();
+        let next = current.wrapping_add(1);
         // u64::MAX is RESERVED as the JIT/AOT spec DISARMED sentinel
         // (jit::compile::SPEC_EPOCH_DISARMED); a live epoch must never equal it or
         // a legitimately-armed spec slot would read as disarmed. Skip it on the
         // (astronomically unreachable) wrap, which would also make the
         // per-symbol stamps non-monotone (design I3).
-        if next == u64::MAX { 0 } else { next }
+        let next = if next == u64::MAX { 0 } else { next };
+        // Wrap breaks stamp monotonicity. Preserve the existing, explicit
+        // test of sentinel skipping, while catching it in production debug
+        // builds rather than silently proving an old binding current.
+        debug_assert!(
+            next > current || (cfg!(test) && current == u64::MAX - 1),
+            "the function-binding clock wrapped"
+        );
+        next
     }
 
     /// Whether `id`'s function binding is provably the one it held when the
@@ -4120,7 +4141,7 @@ impl Obarray {
         // `fn_stamps`): every cache entry made before this change fails its
         // clock compare, and then its per-symbol test, for exactly `id`.
         self.symbols.stamp_function(Self::slot_index(id), epoch);
-        self.function_epoch = epoch;
+        self.function_epoch.store(epoch, Ordering::Release);
         crate::emacs_core::eval::note_function_epoch_move(why, Some(id));
         #[cfg(feature = "jit")]
         {
@@ -4902,14 +4923,18 @@ impl Obarray {
         self.generation
     }
 
+    /// Acquire the function-binding publication clock before reading a stamp
+    /// or binding. A refresh must retain this snapshot, so a redefinition
+    /// following its proof leaves the refreshed entry below the new clock.
+    #[inline]
     pub fn function_epoch(&self) -> u64 {
-        self.function_epoch
+        self.function_epoch.load(Ordering::Acquire)
     }
 
     /// Test-only: set `function_epoch` (the wrap-skip tests).
     #[cfg(test)]
     pub(crate) fn set_function_epoch_for_test(&mut self, epoch: u64) {
-        self.function_epoch = epoch;
+        self.function_epoch.store(epoch, Ordering::Release);
     }
 
     /// True when `fmakunbound` explicitly masked this symbol's fallback function definition.
@@ -5000,7 +5025,7 @@ impl Obarray {
             #[cfg(test)]
             symbol_slot_read_count: std::sync::atomic::AtomicUsize::new(0),
             global_member_count: 0,
-            function_epoch,
+            function_epoch: AtomicU64::new(function_epoch),
             members_epoch: 0,
             completion_order_cache: std::sync::Mutex::new(None),
             blvs: Vec::new(),
