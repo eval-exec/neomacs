@@ -22,6 +22,12 @@ const OVERFLOW: &str = "(error \"Bytecode stack overflow\")";
 /// Define, byte-compile and warm `neovm--sg-deep` past the tier-up
 /// threshold, so its self-call runs leaf to leaf.
 fn warm_deep(ev: &mut Context) {
+    crate::emacs_core::jit::stats::force_observe_for_test(
+        crate::emacs_core::jit::stats::ObserveOverride {
+            entry_count: true,
+            ..Default::default()
+        },
+    );
     ev.eval_str("(defun neovm--sg-deep (n) (if (= n 0) 0 (1+ (neovm--sg-deep (1- n)))))")
         .expect("defun");
     ev.eval_str("(byte-compile 'neovm--sg-deep)")
@@ -30,13 +36,38 @@ fn warm_deep(ev: &mut Context) {
         .expect("warm-up");
 }
 
+/// Count this recursive function's native entries through every call path,
+/// including direct calls that bypass `neovm_jit_call_spec`. Include retired
+/// leaves too, in case the warm-up or the observation replaces its tier.
+fn deep_native_entries(ev: &Context) -> u64 {
+    let sym = crate::emacs_core::intern::intern("neovm--sg-deep");
+    let f = ev.obarray.symbol_function_id(sym).expect("defined");
+    let id = f
+        .get_bytecode_data()
+        .expect("byte-code")
+        .jit_runtime()
+        .compiled_id()
+        .expect("compiled");
+    let (rows, _) = crate::emacs_core::jit::cache::leaf_report_rows();
+    let rows: Vec<_> = rows.into_iter().filter(|row| row.id == id).collect();
+    assert!(
+        !rows.is_empty(),
+        "the recursive function has a compiled leaf"
+    );
+    assert!(
+        rows.iter().all(|row| row.obs.entry_counted),
+        "the recursive leaf counts all native entries"
+    );
+    rows.iter().map(|row| row.obs.entries).sum()
+}
+
 /// Recurse far past any native stack under an unbounded depth limit and
 /// return the printed outcome, checking that the recursion ran natively and
 /// that the unwind restored the evaluator's depth and specpdl.
 fn recurse_without_depth_limit(ev: &mut Context) -> String {
     let depth0 = ev.depth;
     let spec0 = ev.specpdl.len();
-    let spec_calls = SPEC_CALL_COUNT.load(Ordering::Relaxed);
+    let native_entries = deep_native_entries(ev);
     let outcome = ev
         .eval_str(
             "(let ((max-lisp-eval-depth most-positive-fixnum))
@@ -44,7 +75,7 @@ fn recurse_without_depth_limit(ev: &mut Context) -> String {
         )
         .expect("evaluates");
     assert!(
-        SPEC_CALL_COUNT.load(Ordering::Relaxed) - spec_calls > 1000,
+        deep_native_entries(ev) - native_entries > 1000,
         "the recursion ran through the compiled self-call"
     );
     assert_eq!(ev.depth, depth0, "depth restored");
@@ -242,4 +273,30 @@ fn the_register_abi_entry_guard_signals_and_measures_like_the_memory_one() {
     assert_eq!(print_value(&v), "1000");
     ev.refresh_jit_stack_limit();
     force_register_abi_for_test(None);
+}
+
+/// The memory entry remains covered when an enclosing gate enables direct
+/// calls, which otherwise imply the register ABI for this recursive leaf.
+#[test]
+fn the_memory_abi_entry_guard_signals_with_direct_calls_enabled_in_the_environment() {
+    crate::test_utils::init_test_tracing();
+    force_direct_call_for_test(Some(false));
+    force_register_abi_for_test(Some(false));
+    let mut ev = crate::test_utils::runtime_startup_context();
+    warm_deep(&mut ev);
+    let sym = crate::emacs_core::intern::intern("neovm--sg-deep");
+    let f = ev.obarray.symbol_function_id(sym).expect("defined");
+    let id = f
+        .get_bytecode_data()
+        .expect("byte-code")
+        .jit_runtime()
+        .compiled_id()
+        .expect("compiled");
+    let leaf = crate::emacs_core::jit::cache::compiled_leaf_ptr_for_test(id).expect("compiled");
+    // SAFETY: a cached leaf, alive while the cache holds it.
+    assert_eq!(unsafe { (*leaf).abi }, LeafAbi::Memory);
+    assert_eq!(recurse_without_depth_limit(&mut ev), OVERFLOW);
+    still_runs(&mut ev);
+    force_register_abi_for_test(None);
+    force_direct_call_for_test(None);
 }
