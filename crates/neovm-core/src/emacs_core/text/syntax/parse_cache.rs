@@ -65,7 +65,7 @@
 //! `char-property-alias-alist` or `default-text-properties` (Lisp structure no
 //! note observes).
 //!
-//! `NEOVM_SYNTAX_PARSE_CACHE`: `0`/`off` (default), `1`/`on`, or `verify`
+//! `NEOVM_SYNTAX_PARSE_CACHE`: `1`/`on` (default), `0`/`off`, or `verify`
 //! (every cached answer is recomputed by a plain scan and compared; a mismatch
 //! is logged, counted, fails debug builds, and the plain answer is returned).
 
@@ -78,7 +78,7 @@ use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 /// `NEOVM_SYNTAX_PARSE_CACHE`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ParseCacheMode {
-    /// Every scan runs from FROM, as before (the default until measured).
+    /// Every scan runs from FROM.
     Off,
     /// Cached answers are served.
     On,
@@ -134,9 +134,9 @@ fn read_parse_cache_knob() -> ParseCacheMode {
 
 pub(crate) fn parse_parse_cache_knob(value: Option<&str>) -> ParseCacheMode {
     match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
-        Some("1" | "on" | "yes" | "true" | "t") => ParseCacheMode::On,
+        Some("0" | "off" | "no" | "false" | "nil") => ParseCacheMode::Off,
         Some("verify") => ParseCacheMode::Verify,
-        _ => ParseCacheMode::Off,
+        _ => ParseCacheMode::On,
     }
 }
 

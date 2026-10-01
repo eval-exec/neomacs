@@ -6,12 +6,15 @@
 use super::*;
 
 #[test]
-fn the_knob_is_off_unless_switched_on() {
+fn the_knob_is_on_unless_switched_off() {
     for (value, mode) in [
-        (None, ParseCacheMode::Off),
-        (Some(""), ParseCacheMode::Off),
+        (None, ParseCacheMode::On),
+        (Some(""), ParseCacheMode::On),
         (Some("0"), ParseCacheMode::Off),
         (Some("off"), ParseCacheMode::Off),
+        (Some("no"), ParseCacheMode::Off),
+        (Some("false"), ParseCacheMode::Off),
+        (Some("nil"), ParseCacheMode::Off),
         (Some("1"), ParseCacheMode::On),
         (Some(" ON "), ParseCacheMode::On),
         (Some("verify"), ParseCacheMode::Verify),
