@@ -3302,6 +3302,9 @@ fn runtime_project_root() -> PathBuf {
     }
 
     let compile_root = compile_time_project_root();
+    if is_runtime_root(&compile_root) {
+        return compile_root;
+    }
     let exe = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.canonicalize().ok());
