@@ -459,7 +459,7 @@ strip = "none"
 # GitHub and make changes on the fork's `patch` branch. Reference an exact Git
 # revision here and document the branch beside each dependency.
 # Fork branch: patch (includes Wayland/X11 fixes, continuous XI2 units, and Windows precision touchpad panning).
-winit = { git = "https://github.com/eval-exec/winit", rev = "d26f75ca251f05c340f12cd489c8903c89dc8f6f" }
+winit = { git = "https://github.com/eval-exec/winit", rev = "89c41c680a14ef8cc51b4dfb5c6bb5af849264e1" }
 # Fork branch: neomacs-present-timing.
 # Native presentation IDs/timestamps; see the Vulkan timing seam in this fork.
 wgpu-hal = { git = "https://github.com/eval-exec/wgpu", rev = "9717f9fe277beec2c98df550662a626f8fc0248c" }
