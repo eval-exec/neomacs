@@ -1838,3 +1838,149 @@ const O_MANY_STRINGS: [&str; 20] = [
     "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s",
     "t",
 ];
+
+fn slot_face_context<'a>(
+    fixture: &'a Fixture,
+) -> crate::buffer_source::face_resolution::BufferSourceFaceResolutionContext<
+    'a,
+    LayoutBufferSnapshot,
+> {
+    use crate::display_row::face_state::{DisplayRowMeasurementMode, DisplayRowMeasurementPolicy};
+    let metrics = DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0);
+    crate::buffer_source::face_resolution::BufferSourceFaceResolutionContext::new(
+        &fixture.snapshot,
+        &fixture.resolver,
+        DisplayRowMeasurementPolicy::for_mode(DisplayRowMeasurementMode::LogicalCells),
+        &fixture.base_face,
+        BASE_FACE,
+        metrics,
+        metrics,
+        Default::default(),
+    )
+}
+
+#[test]
+fn produced_dispatch_slot_matches_direct_consumption_for_faces_and_insertions() {
+    for case in [
+        StreamCase::new("slot multibyte/tab", "a漢字\tb\n"),
+        StreamCase::new("slot face seam", "abcdef\n")
+            .with(CaseProperty::face(1, 3, ":weight", "bold")),
+        StreamCase::new("slot insertion", "abc\n")
+            .with_overlay(CaseOverlay::before_string(1, 2, "before\n"))
+            .with_overlay(CaseOverlay::after_string(1, 2, "after")),
+    ] {
+        let fixture = Fixture::new(&case);
+        let expected = fixture.driver(SplitPolicy::None).drain(DRAIN_LIMIT);
+        let mut driver = fixture.driver(SplitPolicy::None);
+        let mut output = ProducedStep::empty(driver.position);
+        let mut actual = Vec::new();
+        let context = slot_face_context(&fixture);
+        for _ in 0..DRAIN_LIMIT {
+            let scan_before = driver.position;
+            driver.producer.produce_step_into(
+                driver.position,
+                context,
+                &mut driver.face_ids,
+                &mut output,
+            );
+            driver.position = output.source_position;
+            let Some(item) = output.source_item.as_ref() else {
+                break;
+            };
+            actual.extend(observe(item, scan_before));
+            if let BufferSourceConsumedItem::Renderable(step) = item {
+                driver.position = driver.position.with_charpos(step.end_charpos());
+            }
+            // Leave item/faces in the slot: another production must replace
+            // this output, including faces retained by the previous step.
+        }
+        assert_eq!(actual, expected, "{}", case.name);
+        assert!(
+            output.source_item.is_none(),
+            "slot must clear exhausted output"
+        );
+        assert!(output.pending_faces.is_empty());
+        assert!(output.pending_non_text_area.is_empty());
+    }
+}
+
+fn fixture_with_display(text: &'static str, display: impl FnOnce() -> Value) -> Fixture {
+    let mut fixture = Fixture::new(&StreamCase::new("slot display property", text));
+    let buffer = fixture
+        ._eval
+        .buffer_manager_mut()
+        .get_mut(fixture.buffer_id)
+        .unwrap();
+    let start = buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::ZERO);
+    let end = buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(1));
+    buffer.text_props_put_property_in_emacs_byte_range(
+        EmacsByteRange::new(start, end),
+        Value::symbol("display"),
+        display(),
+    );
+    fixture.snapshot = LayoutBufferSnapshot::from_buffer(buffer);
+    fixture
+}
+
+#[test]
+fn produced_dispatch_slot_preserves_unapplied_replacement_and_clears_stale_emission() {
+    // A refused replacement is produced again at the same source anchor;
+    // production itself must not publish the covered span as consumed.
+    let fixture = fixture_with_display("xyz", || Value::string("replacement"));
+    let mut driver = fixture.driver(SplitPolicy::None);
+    let context = slot_face_context(&fixture);
+    let mut output = ProducedStep::empty(driver.position);
+    driver
+        .producer
+        .produce_step_into(driver.position, context, &mut driver.face_ids, &mut output);
+    let first = output.source_item.clone().unwrap();
+    assert!(matches!(
+        first,
+        BufferSourceConsumedItem::DisplayPropertyReplacement(_)
+    ));
+    assert_eq!(output.source_position, driver.position);
+    driver
+        .producer
+        .produce_step_into(driver.position, context, &mut driver.face_ids, &mut output);
+    assert_eq!(output.source_item.as_ref(), Some(&first));
+    assert_eq!(output.source_position, driver.position);
+    drop(first);
+    drop(output);
+    drop(driver);
+    drop(fixture);
+
+    // The typed buffer cursor returns a margin property as a replacement;
+    // the renderer handles its structural placement later. A reused output
+    // slot must nevertheless discard an emission left from an earlier step.
+    let fixture = fixture_with_display("x", || {
+        Value::list(vec![
+            Value::list(vec![Value::symbol("margin"), Value::symbol("left-margin")]),
+            Value::string("marker"),
+        ])
+    });
+    let mut driver = fixture.driver(SplitPolicy::None);
+    let context = slot_face_context(&fixture);
+    let mut output = ProducedStep::empty(driver.position);
+    output
+        .pending_non_text_area
+        .push(crate::display_source::DisplayNonTextAreaEmission::Margin(
+            crate::display_source::DisplayMarginEmission::new(
+                crate::display_property::DisplayMarginSide::Left,
+                crate::display_source::DisplayMarginEmissionContent::String(Value::string("stale")),
+            ),
+        ));
+    driver
+        .producer
+        .produce_step_into(driver.position, context, &mut driver.face_ids, &mut output);
+    assert!(matches!(
+        output.source_item,
+        Some(BufferSourceConsumedItem::DisplayPropertyReplacement(_))
+    ));
+    assert!(output.pending_non_text_area.is_empty());
+    let end = DisplaySourceTextPosition::new(1, 1);
+    driver
+        .producer
+        .produce_step_into(end, context, &mut driver.face_ids, &mut output);
+    assert!(output.source_item.is_none());
+    assert!(output.pending_non_text_area.is_empty());
+}

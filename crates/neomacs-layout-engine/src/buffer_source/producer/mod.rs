@@ -58,6 +58,17 @@ pub(crate) struct ProducedStep {
     pub(crate) pending_non_text_area: Vec<DisplayNonTextAreaEmission>,
 }
 
+impl ProducedStep {
+    pub(crate) fn empty(source_position: DisplaySourceTextPosition) -> Self {
+        Self {
+            source_item: None,
+            source_position,
+            pending_faces: Vec::new(),
+            pending_non_text_area: Vec::new(),
+        }
+    }
+}
+
 pub(crate) struct BufferElementProducer<'request, B: LayoutBufferView> {
     source_cursor: BufferTextSourceCursor<'request, B>,
     source_resolve_state: DisplaySourceResolveState,
@@ -237,46 +248,58 @@ impl<'request, B: LayoutBufferView> BufferElementProducer<'request, B> {
         }
     }
 
-    /// Produce the next element at `source_position`, resolving faces and
-    /// fringe specs into the returned step.
+    /// Produce directly into storage owned by the dispatcher, keeping the
+    /// large consumed-item enum in that storage while side effects are applied.
+    pub(crate) fn produce_step_into(
+        &mut self,
+        source_position: DisplaySourceTextPosition,
+        face_resolution_context: BufferSourceFaceResolutionContext<'_, B>,
+        face_ids: &mut FrameFaceAttempt,
+        output: &mut ProducedStep,
+    ) {
+        output.source_item = None;
+        output.source_position = source_position;
+        output.pending_faces.clear();
+        output.pending_non_text_area.clear();
+        let params = face_resolution_context.source_resolve_params(None);
+        let mut resolver = DisplaySourcePropertyResolver::buffer_local(
+            face_resolution_context.buffer(),
+            params,
+            &mut self.source_resolve_state,
+            face_ids,
+            &mut output.pending_faces,
+        );
+        let mut source_context = DisplaySourceContext::with_face_resolver_and_non_text_area_sink(
+            &mut resolver,
+            &mut output.pending_non_text_area,
+            crate::display_property::DisplayPropertyTarget::for_window_system(
+                params.face_basis().face_resolver().is_window_system(),
+            ),
+        )
+        .with_automatic_composition(params.automatic_composition);
+        output.source_item = self.source_consumption.next_source_consumption_item(
+            &mut self.source_cursor,
+            &mut source_context,
+            &mut output.source_position,
+        );
+    }
+
+    /// Owned acquisition still consumes the complete produced step. The
+    /// interactive dispatcher uses [`Self::produce_step_into`] instead.
     pub(crate) fn produce_step(
         &mut self,
-        mut source_position: DisplaySourceTextPosition,
+        source_position: DisplaySourceTextPosition,
         face_resolution_context: BufferSourceFaceResolutionContext<'_, B>,
         face_ids: &mut FrameFaceAttempt,
     ) -> ProducedStep {
-        let mut pending_faces = Vec::new();
-        let mut pending_non_text_area = Vec::new();
-        let source_item = {
-            let params = face_resolution_context.source_resolve_params(None);
-            let mut resolver = DisplaySourcePropertyResolver::buffer_local(
-                face_resolution_context.buffer(),
-                params,
-                &mut self.source_resolve_state,
-                face_ids,
-                &mut pending_faces,
-            );
-            let mut source_context =
-                DisplaySourceContext::with_face_resolver_and_non_text_area_sink(
-                    &mut resolver,
-                    &mut pending_non_text_area,
-                    crate::display_property::DisplayPropertyTarget::for_window_system(
-                        params.face_basis().face_resolver().is_window_system(),
-                    ),
-                )
-                .with_automatic_composition(params.automatic_composition);
-            self.source_consumption.next_source_consumption_item(
-                &mut self.source_cursor,
-                &mut source_context,
-                &mut source_position,
-            )
-        };
-        ProducedStep {
-            source_item,
+        let mut output = ProducedStep::empty(source_position);
+        self.produce_step_into(
             source_position,
-            pending_faces,
-            pending_non_text_area,
-        }
+            face_resolution_context,
+            face_ids,
+            &mut output,
+        );
+        output
     }
 
     /// Produce the next element against a caller-supplied source context, with

@@ -4,7 +4,6 @@
 //! source cursor driving, pending face installation, and source-position
 //! updates used by row lifecycle renderers.
 
-use crate::buffer_source::consumption::BufferSourceConsumedItem;
 use crate::buffer_source::face_resolution::BufferSourceFaceResolutionContext;
 use crate::buffer_source::overflow::BufferSourceTruncationSkipAction;
 use crate::buffer_source::producer::{BufferElementProducer, ProducedStep};
@@ -51,32 +50,12 @@ pub(crate) enum BufferSourceRewind {
     CharacterWrap(DisplaySourceTextPosition),
 }
 
-/// Apply a produced step's side effects to the row being assembled: publish the
-/// walk position when no element was produced, install the faces the resolver
-/// collected, and record `(left-fringe …)` / `(right-fringe …)` specs.
-fn apply_produced_step_to_progress(
-    step: ProducedStep,
-    progress: &mut DisplaySourceProgressState<'_>,
-) -> (
-    Option<BufferSourceConsumedItem>,
-    Vec<crate::display_source_resolver::PendingDisplaySourceFace>,
-    Vec<crate::display_source::DisplayNonTextAreaEmission>,
-) {
-    let ProducedStep {
-        source_item,
-        source_position,
-        pending_faces,
-        pending_non_text_area,
-    } = step;
-    if source_item.is_none() {
-        progress.apply_source_position(source_position);
-    }
-    (source_item, pending_faces, pending_non_text_area)
-}
-
+/// Install side effects while the consumed item remains in its caller-owned
+/// step. Publishing a missing item's source position precedes face/emission
+/// installation; dispatch receives the item only after those side effects.
 #[allow(clippy::too_many_arguments)]
 fn apply_produced_step_to_render_progress<B: LayoutBufferView>(
-    step: ProducedStep,
+    step: &mut ProducedStep,
     progress: &mut DisplaySourceProgressState<'_>,
     face_resolution_context: BufferSourceFaceResolutionContext<'_, B>,
     source_render: &mut TextRowSourceRenderState<'_>,
@@ -84,10 +63,12 @@ fn apply_produced_step_to_render_progress<B: LayoutBufferView>(
     append_surface: &DisplayRowAppendSurface,
     active_face_state: &DisplayRowActiveFaceState,
     face_ids: &mut FrameFaceAttempt,
-) -> Option<BufferSourceConsumedItem> {
-    let (source_item, pending_faces, pending_non_text_area) =
-        apply_produced_step_to_progress(step, progress);
-    face_resolution_context.install_pending_source_faces(source_render, pending_faces);
+) {
+    if step.source_item.is_none() {
+        progress.apply_source_position(step.source_position);
+    }
+    face_resolution_context
+        .install_pending_source_faces(source_render, std::mem::take(&mut step.pending_faces));
     let fallback_metrics =
         DisplayRowFallbackMetrics::from_measured_face(active_face_state.metrics());
     let frame = DisplayRowActiveFaceAppendContext::new(
@@ -98,7 +79,7 @@ fn apply_produced_step_to_render_progress<B: LayoutBufferView>(
         fallback_metrics,
     )
     .active_face_frame();
-    for emission in pending_non_text_area {
+    for emission in std::mem::take(&mut step.pending_non_text_area) {
         let structural_order = if progress.row_position().col() == 0 {
             crate::display_row::source_render::DisplayStructuralAreaOrder::BeforeExisting
         } else {
@@ -115,7 +96,6 @@ fn apply_produced_step_to_render_progress<B: LayoutBufferView>(
             structural_order,
         );
     }
-    source_item
 }
 
 impl<'request, B: LayoutBufferView> BufferSourceWalk<'request, B> {
@@ -210,7 +190,7 @@ impl<'request, B: LayoutBufferView> BufferSourceWalk<'request, B> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn consume_source_item_for_render(
+    pub(crate) fn consume_source_item_for_render_into(
         &mut self,
         progress: &mut DisplaySourceProgressState<'_>,
         face_resolution_context: BufferSourceFaceResolutionContext<'_, B>,
@@ -219,14 +199,16 @@ impl<'request, B: LayoutBufferView> BufferSourceWalk<'request, B> {
         row_geometry: &mut DisplayRowGeometryState,
         append_surface: &DisplayRowAppendSurface,
         active_face_state: &DisplayRowActiveFaceState,
-    ) -> Option<BufferSourceConsumedItem> {
-        let step = self.producer.produce_step(
+        output: &mut ProducedStep,
+    ) {
+        self.producer.produce_step_into(
             progress.source_position(),
             face_resolution_context,
             face_ids,
+            output,
         );
         apply_produced_step_to_render_progress(
-            step,
+            output,
             progress,
             face_resolution_context,
             source_render,

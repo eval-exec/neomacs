@@ -12,6 +12,7 @@ use crate::buffer_source::item_render::BufferSourceItemRenderRequest;
 use crate::buffer_source::loop_context::BufferSourceLoopRequestContext;
 use crate::buffer_source::loop_state::BufferSourceLoopMutableState;
 use crate::buffer_source::overflow::BufferSourceWordWrapAction;
+use crate::buffer_source::producer::ProducedStep;
 use crate::buffer_source::row_prelude::BufferSourceRowPreludeRequestContext;
 use crate::buffer_source::text_source::BufferOverlayStringsItem;
 use crate::buffer_source::walk::{BufferSourceRewind, BufferSourceWalk};
@@ -283,7 +284,8 @@ impl<'rows, 'request, 'emit, 'surface, 'face>
     {
         let layout_resolution_context =
             face_resolution_context.source_item_layout_resolution_context();
-        let Some(consumed_item) = source_walk.consume_source_item_for_render(
+        let mut produced = ProducedStep::empty(self.state.progress.source_position());
+        source_walk.consume_source_item_for_render_into(
             &mut self.state.progress,
             face_resolution_context,
             self.state.face_ids,
@@ -291,7 +293,9 @@ impl<'rows, 'request, 'emit, 'surface, 'face>
             self.state.row_build.row_geometry,
             self.state.surface.append_surface,
             self.active_face_state,
-        ) else {
+            &mut produced,
+        );
+        let Some(consumed_item) = produced.source_item else {
             return false;
         };
 
