@@ -141,8 +141,8 @@ use neomacs_display_protocol::glyph_matrix::{
 use neomacs_display_protocol::types::{Color, DisplayFrameId, Px};
 
 #[test]
-fn damage_knob_parses_modes_and_defaults_off() {
-    assert_eq!(parse_tty_damage_knob(None), TtyDamageMode::Off);
+fn damage_knob_parses_modes_and_defaults_on() {
+    assert_eq!(parse_tty_damage_knob(None), TtyDamageMode::On);
     assert_eq!(parse_tty_damage_knob(Some("off")), TtyDamageMode::Off);
     assert_eq!(parse_tty_damage_knob(Some("on")), TtyDamageMode::On);
     assert_eq!(

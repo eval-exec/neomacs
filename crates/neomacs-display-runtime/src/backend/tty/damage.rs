@@ -47,8 +47,15 @@
 //!   `NEOMACS_TTY_DAMAGE_REPORT_FILE` set, every verified frame appends one
 //!   line there.
 //!
-//! Every knob is read once per process, when the first [`TtyRif`] is built,
-//! and defaults to the old behaviour until measured (same-binary A/B).
+//! Every knob is read once per process, when the first [`TtyRif`] is built.
+//!
+//! | Knob | Unset default | Explicit baseline |
+//! | --- | --- | --- |
+//! | `NEOMACS_TTY_SILENT` | `off` | `off` |
+//! | `NEOMACS_TTY_DAMAGE` | `on` | `off` |
+//! | `NEOMACS_TTY_ROW_IDENTITY` | `address` | `address` or `off` |
+//!
+//! Empty or unknown settings retain each knob's explicit baseline.
 
 use super::*;
 use std::sync::OnceLock;
@@ -82,7 +89,7 @@ pub enum TtyDamageMode {
     On,
 }
 
-/// The mode a value of `NEOMACS_TTY_DAMAGE` selects.
+/// The mode a value of `NEOMACS_TTY_DAMAGE` selects; unset defaults to `on`.
 pub fn parse_tty_damage_knob(value: Option<&str>) -> TtyDamageMode {
     match value
         .map(|value| value.trim().to_ascii_lowercase())
@@ -90,7 +97,8 @@ pub fn parse_tty_damage_knob(value: Option<&str>) -> TtyDamageMode {
     {
         Some("on" | "1" | "true" | "yes") => TtyDamageMode::On,
         Some("verify") => TtyDamageMode::Verify,
-        None | Some("" | "off" | "0" | "false" | "no") => TtyDamageMode::Off,
+        None => TtyDamageMode::On,
+        Some("" | "off" | "0" | "false" | "no") => TtyDamageMode::Off,
         Some(other) => {
             tracing::warn!(value = other, "NEOMACS_TTY_DAMAGE: unknown mode, using off");
             TtyDamageMode::Off
