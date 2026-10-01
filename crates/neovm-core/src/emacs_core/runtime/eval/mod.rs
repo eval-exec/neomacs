@@ -2226,8 +2226,26 @@ pub(crate) fn provide_value_in_state(
 /// Limit for stored recent input events to match GNU Emacs: 300 entries.
 pub(crate) const RECENT_INPUT_EVENT_LIMIT: usize = 300;
 
+#[derive(Clone, Copy)]
+struct ScratchGcRoot {
+    value: Value,
+    heap_identity: usize,
+}
+
+impl ScratchGcRoot {
+    fn new(value: Value, heap_identity: usize) -> Self {
+        Self {
+            value,
+            heap_identity,
+        }
+    }
+}
+
 thread_local! {
-    static SCRATCH_GC_ROOTS: RefCell<Vec<Value>> = const { RefCell::new(Vec::new()) };
+    // Scratch scopes can span switches between evaluators on one thread.
+    // Keep slot indices stable, but never seed a root into another heap or
+    // read its object after the heap that supplied it has been dropped.
+    static SCRATCH_GC_ROOTS: RefCell<Vec<ScratchGcRoot>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Collect GC roots from runtime-global side tables that hold Values.
@@ -2299,12 +2317,9 @@ fn collect_thread_local_gc_roots(
         stats,
         super::category::collect_category_gc_roots,
     );
-    collect_group(
-        roots,
-        "terminal-thread-local",
-        stats,
-        super::terminal::pure::collect_terminal_gc_roots,
-    );
+    collect_group(roots, "terminal-thread-local", stats, |group| {
+        super::terminal::pure::collect_terminal_gc_roots(group, heap_id)
+    });
     collect_group(
         roots,
         "font-thread-local",
@@ -2348,13 +2363,16 @@ fn collect_thread_local_gc_roots(
     let mut scratch_count = 0usize;
     SCRATCH_GC_ROOTS.with(|scratch| {
         let scratch = scratch.borrow();
-        scratch_count = scratch.len();
-        roots.extend(
-            scratch
-                .iter()
-                .copied()
-                .map(|root| (root, "scratch-thread-local")),
-        )
+        for root in scratch.iter() {
+            // Without an installed heap only immediate values can be
+            // shared. Never trace an unattributed object pointer.
+            if root.heap_identity == heap_id
+                || (root.heap_identity == 0 && !root.value.is_heap_object())
+            {
+                roots.push((root.value, "scratch-thread-local"));
+                scratch_count += 1;
+            }
+        }
     });
     stats.push((
         "scratch-thread-local",
@@ -2370,28 +2388,43 @@ pub fn save_scratch_gc_roots() -> usize {
 }
 
 pub fn push_scratch_gc_root(value: Value) {
-    SCRATCH_GC_ROOTS.with(|scratch| scratch.borrow_mut().push(value));
+    let heap_identity = crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0);
+    SCRATCH_GC_ROOTS.with(|scratch| {
+        scratch
+            .borrow_mut()
+            .push(ScratchGcRoot::new(value, heap_identity));
+    });
 }
 
 /// Root every value in `values` with ONE thread-local access (a list
 /// builder rooted its elements one push each: ~30 Ir per element).
 pub fn push_scratch_gc_roots(values: &[Value]) {
-    SCRATCH_GC_ROOTS.with(|scratch| scratch.borrow_mut().extend_from_slice(values));
+    let heap_identity = crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0);
+    SCRATCH_GC_ROOTS.with(|scratch| {
+        scratch.borrow_mut().extend(
+            values
+                .iter()
+                .map(|value| ScratchGcRoot::new(*value, heap_identity)),
+        );
+    });
 }
 
 /// Push one root slot and return its index; `set_scratch_gc_root` re-points
 /// it in place so an accumulator can stay rooted across a build loop without
 /// a push per step.
 pub fn push_scratch_gc_root_slot(value: Value) -> usize {
+    let heap_identity = crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0);
     SCRATCH_GC_ROOTS.with(|scratch| {
         let mut scratch = scratch.borrow_mut();
-        scratch.push(value);
+        scratch.push(ScratchGcRoot::new(value, heap_identity));
         scratch.len() - 1
     })
 }
 
 pub fn set_scratch_gc_root(slot: usize, value: Value) {
-    SCRATCH_GC_ROOTS.with(|scratch| scratch.borrow_mut()[slot] = value);
+    let heap_identity = crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0);
+    SCRATCH_GC_ROOTS
+        .with(|scratch| scratch.borrow_mut()[slot] = ScratchGcRoot::new(value, heap_identity));
 }
 
 pub fn restore_scratch_gc_roots(saved_len: usize) {
@@ -7591,6 +7624,10 @@ mod gc_sweep_cap_tests;
 #[cfg(test)]
 #[path = "tests/gc_forced_first_cycle.rs"]
 mod gc_forced_first_cycle_tests;
+
+#[cfg(test)]
+#[path = "tests/gc_root_ownership.rs"]
+mod gc_root_ownership_tests;
 
 // The attention word: every writer of its inputs keeps it derived.
 #[cfg(test)]

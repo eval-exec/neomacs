@@ -10,7 +10,7 @@ use crate::emacs_core::value::*;
 use crate::emacs_core::value::{ValueKind, VecLikeType};
 use crate::window::FrameId;
 use neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities;
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::num::NonZeroU32;
 
 // ---------------------------------------------------------------------------
@@ -18,7 +18,18 @@ use std::num::NonZeroU32;
 // ---------------------------------------------------------------------------
 
 thread_local! {
-    static TERMINAL_MANAGER: RefCell<TerminalManager> = RefCell::new(TerminalManager::new());
+    static TERMINAL_MANAGER: OnceCell<RefCell<TerminalManager>> = const { OnceCell::new() };
+}
+
+/// Terminal hosts belong to the thread, while their Lisp handles and
+/// parameters belong to the active heap. Refresh those words before any
+/// ordinary terminal API can return or inspect them after a heap switch.
+fn with_terminal_manager<R>(f: impl FnOnce(&RefCell<TerminalManager>) -> R) -> R {
+    TERMINAL_MANAGER.with(|state| {
+        let slot = state.get_or_init(|| RefCell::new(TerminalManager::new()));
+        slot.borrow_mut().ensure_current_heap();
+        f(slot)
+    })
 }
 
 pub(crate) const TERMINAL_NAME: &str = "initial_terminal";
@@ -289,15 +300,25 @@ impl TerminalRecord {
 
 struct TerminalManager {
     terminals: Vec<TerminalRecord>,
+    heap_identity: usize,
 }
 
 impl TerminalManager {
     fn new() -> Self {
         let mut this = Self {
             terminals: Vec::new(),
+            heap_identity: 0,
         };
         this.ensure_initial_terminal();
+        this.heap_identity = crate::tagged::gc::current_tagged_heap_identity()
+            .expect("terminal handles require an active heap");
         this
+    }
+
+    fn ensure_current_heap(&mut self) {
+        if crate::tagged::gc::current_tagged_heap_identity() != Some(self.heap_identity) {
+            self.reset_handles();
+        }
     }
 
     fn ensure_initial_terminal(&mut self) -> &mut TerminalRecord {
@@ -322,9 +343,16 @@ impl TerminalManager {
     }
 
     fn reset_handles(&mut self) {
+        let heap_changed =
+            crate::tagged::gc::current_tagged_heap_identity() != Some(self.heap_identity);
         for terminal in &mut self.terminals {
             terminal.handle = terminal_handle_for_id(terminal.id);
+            if heap_changed {
+                terminal.params.clear();
+            }
         }
+        self.heap_identity = crate::tagged::gc::current_tagged_heap_identity()
+            .expect("terminal handles require an active heap");
     }
 
     fn get(&self, id: u64) -> Option<&TerminalRecord> {
@@ -393,7 +421,7 @@ impl TerminalManager {
 /// replaces the bootstrap name along with the output method.
 pub fn configure_terminal_runtime(config: impl Into<TerminalRuntimeConfig>) {
     let (name, output_method, runtime) = terminal_configuration_parts(config.into());
-    TERMINAL_MANAGER.with(|slot| {
+    with_terminal_manager(|slot| {
         let mut manager = slot.borrow_mut();
         let terminal = manager.ensure_initial_terminal();
         terminal.name = name;
@@ -446,7 +474,7 @@ pub fn ensure_terminal_runtime_owner(
         TerminalOutputMethod::WindowSystem => configured_name,
         TerminalOutputMethod::Initial | TerminalOutputMethod::Termcap => name.into(),
     };
-    TERMINAL_MANAGER.with(|slot| {
+    with_terminal_manager(|slot| {
         slot.borrow_mut()
             .ensure_terminal(id, name, runtime, output_method)
             .handle
@@ -454,7 +482,7 @@ pub fn ensure_terminal_runtime_owner(
 }
 
 pub(crate) fn next_terminal_id() -> u64 {
-    TERMINAL_MANAGER.with(|slot| {
+    with_terminal_manager(|slot| {
         slot.borrow()
             .terminals
             .iter()
@@ -470,7 +498,7 @@ pub(crate) fn next_terminal_id() -> u64 {
 /// DEVICE so a second frame shares its renderer, input source, and kboard
 /// instead of opening the same tty twice.
 pub(crate) fn active_tty_terminal_id_by_name(device: &str) -> Option<u64> {
-    TERMINAL_MANAGER.with(|slot| {
+    with_terminal_manager(|slot| {
         slot.borrow()
             .terminals
             .iter()
@@ -488,7 +516,7 @@ pub(crate) fn install_opened_tty(
     opened: OpenedTtyFrameHost,
 ) -> TtyFrameSize {
     let size = opened.size;
-    TERMINAL_MANAGER.with(|slot| {
+    with_terminal_manager(|slot| {
         let mut manager = slot.borrow_mut();
         let runtime = TerminalRuntime {
             active: true,
@@ -510,7 +538,7 @@ pub(crate) fn install_opened_tty(
 }
 
 pub fn reset_terminal_runtime() {
-    TERMINAL_MANAGER.with(|slot| {
+    with_terminal_manager(|slot| {
         let mut manager = slot.borrow_mut();
         let terminal = manager.ensure_initial_terminal();
         terminal.name = TERMINAL_NAME.to_string();
@@ -520,21 +548,21 @@ pub fn reset_terminal_runtime() {
 }
 
 pub fn set_terminal_host(host: Box<dyn TerminalHost>) {
-    TERMINAL_MANAGER.with(|slot| {
+    with_terminal_manager(|slot| {
         let mut manager = slot.borrow_mut();
         manager.ensure_initial_terminal().host = Some(host);
     });
 }
 
 pub fn reset_terminal_host() {
-    TERMINAL_MANAGER.with(|slot| {
+    with_terminal_manager(|slot| {
         let mut manager = slot.borrow_mut();
         manager.ensure_initial_terminal().host = None;
     });
 }
 
 fn terminal_runtime() -> TerminalRuntime {
-    TERMINAL_MANAGER.with(|slot| {
+    with_terminal_manager(|slot| {
         slot.borrow()
             .get(TERMINAL_ID)
             .map(|terminal| terminal.runtime.clone())
@@ -558,19 +586,43 @@ pub(crate) fn terminal_runtime_attribute_capabilities() -> TtyAttributeCapabilit
 
 /// Clear cached terminal thread-locals (called from `reset_display_thread_locals`).
 pub(crate) fn reset_terminal_thread_locals() {
-    TERMINAL_MANAGER.with(|slot| *slot.borrow_mut() = TerminalManager::new());
+    TERMINAL_MANAGER.with(|state| {
+        let manager = TerminalManager::new();
+        if let Some(slot) = state.get() {
+            *slot.borrow_mut() = manager;
+        } else {
+            let _ = state.set(RefCell::new(manager));
+        }
+    });
 }
 
 /// Reset only the terminal handle (stale reference safety on heap reset).
-/// Does NOT reset terminal params or runtime config.
+/// Retain runtime configuration and hosts; parameters survive only when the
+/// handle is reset within the same heap.
 pub(crate) fn reset_terminal_handle() {
-    TERMINAL_MANAGER.with(|slot| slot.borrow_mut().reset_handles());
+    TERMINAL_MANAGER.with(|state| {
+        if let Some(slot) = state.get() {
+            slot.borrow_mut().reset_handles();
+        } else {
+            let _ = state.set(RefCell::new(TerminalManager::new()));
+        }
+    });
 }
 
 /// Collect GC roots from terminal thread-locals.
-pub(crate) fn collect_terminal_gc_roots(roots: &mut Vec<Value>) {
-    TERMINAL_MANAGER.with(|slot| {
-        for terminal in &slot.borrow().terminals {
+pub(crate) fn collect_terminal_gc_roots(roots: &mut Vec<Value>, heap_identity: usize) {
+    // A collector must neither allocate a handle nor inspect stale Lisp
+    // objects while discovering roots. A different heap's manager owns no
+    // roots of this heap; its ordinary accessors refresh it on first use.
+    TERMINAL_MANAGER.with(|state| {
+        let Some(slot) = state.get() else {
+            return;
+        };
+        let manager = slot.borrow();
+        if heap_identity != manager.heap_identity {
+            return;
+        }
+        for terminal in &manager.terminals {
             roots.push(terminal.handle);
             for (k, v) in &terminal.params {
                 roots.push(*k);
@@ -593,7 +645,7 @@ pub(crate) fn terminal_handle_value() -> Value {
 }
 
 pub(crate) fn terminal_handle_value_for_id(id: u64) -> Option<Value> {
-    TERMINAL_MANAGER.with(|slot| slot.borrow().get(id).map(|terminal| terminal.handle))
+    with_terminal_manager(|slot| slot.borrow().get(id).map(|terminal| terminal.handle))
 }
 
 pub(crate) fn is_terminal_handle(value: &Value) -> bool {
@@ -601,7 +653,7 @@ pub(crate) fn is_terminal_handle(value: &Value) -> bool {
 }
 
 pub(crate) fn terminal_handle_id(value: &Value) -> Option<u64> {
-    TERMINAL_MANAGER.with(|slot| {
+    with_terminal_manager(|slot| {
         slot.borrow()
             .find_by_handle(value)
             .map(|terminal| terminal.id)
@@ -609,7 +661,7 @@ pub(crate) fn terminal_handle_id(value: &Value) -> Option<u64> {
 }
 
 pub(crate) fn print_terminal_handle(value: &Value) -> Option<String> {
-    TERMINAL_MANAGER.with(|slot| {
+    with_terminal_manager(|slot| {
         slot.borrow()
             .find_by_handle(value)
             .map(|terminal| format!("#<terminal {} on {}>", terminal.id, terminal.name))
@@ -625,7 +677,7 @@ pub(crate) fn terminal_designator_p(value: &Value) -> bool {
 }
 
 fn live_terminal_id_by_handle(value: &Value) -> Option<u64> {
-    TERMINAL_MANAGER.with(|slot| {
+    with_terminal_manager(|slot| {
         slot.borrow()
             .find_by_handle(value)
             .filter(|terminal| terminal.is_live())
@@ -638,7 +690,7 @@ fn selected_terminal_id(eval: &crate::emacs_core::eval::Context) -> Option<u64> 
         .selected_frame()
         .map(|frame| frame.terminal_id)
         .or_else(|| {
-            TERMINAL_MANAGER.with(|slot| {
+            with_terminal_manager(|slot| {
                 slot.borrow()
                     .get(TERMINAL_ID)
                     .filter(|terminal| terminal.is_live())
@@ -659,7 +711,7 @@ fn decode_terminal_id_eval(eval: &crate::emacs_core::eval::Context, value: &Valu
             .frames
             .get(crate::window::FrameId(value.as_frame_id().unwrap()))
             .and_then(|frame| {
-                TERMINAL_MANAGER.with(|slot| {
+                with_terminal_manager(|slot| {
                     slot.borrow()
                         .get(frame.terminal_id)
                         .filter(|terminal| terminal.is_live())
@@ -819,11 +871,11 @@ fn expect_symbol_key(value: &Value) -> Result<Value, Flow> {
 }
 
 fn terminal_name_for_id(id: u64) -> Option<String> {
-    TERMINAL_MANAGER.with(|slot| slot.borrow().get(id).map(|terminal| terminal.name.clone()))
+    with_terminal_manager(|slot| slot.borrow().get(id).map(|terminal| terminal.name.clone()))
 }
 
 fn terminal_runtime_for_id(id: u64) -> TerminalRuntime {
-    TERMINAL_MANAGER.with(|slot| {
+    with_terminal_manager(|slot| {
         slot.borrow()
             .get(id)
             .map(|terminal| terminal.runtime.clone())
@@ -833,7 +885,7 @@ fn terminal_runtime_for_id(id: u64) -> TerminalRuntime {
 
 /// GNU `t->type` for a terminal that still exists.
 fn terminal_output_method_for_id(id: u64) -> Option<TerminalOutputMethod> {
-    TERMINAL_MANAGER.with(|slot| slot.borrow().get(id).map(|terminal| terminal.output_method))
+    with_terminal_manager(|slot| slot.borrow().get(id).map(|terminal| terminal.output_method))
 }
 
 /// Mark the selected terminal as having a controlling tty, so it can host a
@@ -844,7 +896,7 @@ fn terminal_output_method_for_id(id: u64) -> Option<TerminalOutputMethod> {
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn mark_selected_terminal_usable_for_test(eval: &crate::emacs_core::eval::Context) {
     if let Some(id) = decode_terminal_id_eval(eval, &Value::NIL) {
-        TERMINAL_MANAGER.with(|slot| {
+        with_terminal_manager(|slot| {
             if let Some(record) = slot.borrow_mut().get_mut(id) {
                 record.runtime.controlling_tty = true;
             }
@@ -866,7 +918,7 @@ pub(crate) fn selected_terminal_is_usable_tty(eval: &crate::emacs_core::eval::Co
 }
 
 fn terminal_params_for_id(id: u64) -> Vec<(Value, Value)> {
-    TERMINAL_MANAGER.with(|slot| {
+    with_terminal_manager(|slot| {
         slot.borrow()
             .get(id)
             .map(|terminal| terminal.params.clone())
@@ -875,7 +927,7 @@ fn terminal_params_for_id(id: u64) -> Vec<(Value, Value)> {
 }
 
 fn update_terminal_param(id: u64, key: Value, value: Value) -> Value {
-    TERMINAL_MANAGER.with(|slot| {
+    with_terminal_manager(|slot| {
         let mut manager = slot.borrow_mut();
         let Some(terminal) = manager.get_mut(id) else {
             return Value::NIL;
@@ -899,7 +951,7 @@ fn with_terminal_host_for_id<R>(
     id: u64,
     f: impl FnOnce(&mut dyn TerminalHost) -> Result<R, String>,
 ) -> Result<R, Flow> {
-    TERMINAL_MANAGER.with(|slot| {
+    with_terminal_manager(|slot| {
         let mut manager = slot.borrow_mut();
         let Some(host) = manager
             .get_mut(id)
@@ -915,7 +967,7 @@ fn with_terminal_host_for_id<R>(
 }
 
 fn delete_terminal_record(id: u64) {
-    TERMINAL_MANAGER.with(|slot| {
+    with_terminal_manager(|slot| {
         let mut manager = slot.borrow_mut();
         if let Some(terminal) = manager.get_mut(id) {
             terminal.deleted = true;
@@ -926,7 +978,7 @@ fn delete_terminal_record(id: u64) {
 }
 
 pub(crate) fn live_terminal_ids_in_keyboard_poll_order() -> Vec<u64> {
-    TERMINAL_MANAGER.with(|slot| slot.borrow().live_terminal_ids_in_keyboard_poll_order())
+    with_terminal_manager(|slot| slot.borrow().live_terminal_ids_in_keyboard_poll_order())
 }
 
 // ---------------------------------------------------------------------------
@@ -1006,7 +1058,7 @@ pub(crate) fn builtin_frame_initial_p(
 /// (terminal-list) -> list of live terminal handles.
 pub(crate) fn builtin_terminal_list(args: Vec<Value>) -> EvalResult {
     expect_max_args("terminal-list", &args, 0)?;
-    let terminals = TERMINAL_MANAGER.with(|slot| {
+    let terminals = with_terminal_manager(|slot| {
         slot.borrow()
             .live_terminals()
             .map(|terminal| terminal.handle)
@@ -1306,7 +1358,7 @@ pub(crate) fn builtin_suspend_tty(
         crate::emacs_core::hook_runtime::hook_symbol_by_name(eval, "suspend-tty-functions");
     let _ = crate::emacs_core::hook_runtime::run_named_hook(eval, hook_sym, &[terminal])?;
     with_terminal_host_for_id(terminal_id, |host| host.suspend_tty())?;
-    TERMINAL_MANAGER.with(|slot| {
+    with_terminal_manager(|slot| {
         let mut manager = slot.borrow_mut();
         if let Some(terminal) = manager.get_mut(terminal_id) {
             terminal.runtime.suspended = true;
@@ -1343,7 +1395,7 @@ pub(crate) fn builtin_resume_tty(
     }
 
     with_terminal_host_for_id(terminal_id, |host| host.resume_tty())?;
-    TERMINAL_MANAGER.with(|slot| {
+    with_terminal_manager(|slot| {
         let mut manager = slot.borrow_mut();
         if let Some(terminal) = manager.get_mut(terminal_id) {
             terminal.runtime.suspended = false;
@@ -1366,7 +1418,7 @@ pub(crate) fn delete_terminal_owned(
     mode: DeleteTerminalMode,
 ) -> EvalResult {
     let active_live_count =
-        TERMINAL_MANAGER.with(|slot| slot.borrow().active_live_terminal_count());
+        with_terminal_manager(|slot| slot.borrow().active_live_terminal_count());
     if !mode.bypasses_active_terminal_check() && active_live_count <= 1 {
         return Err(signal(
             "error",
@@ -1383,7 +1435,7 @@ pub(crate) fn delete_terminal_owned(
     } else {
         eval.queue_pending_safe_hook("delete-terminal-functions", &[terminal]);
     }
-    let host_delete = TERMINAL_MANAGER.with(|slot| {
+    let host_delete = with_terminal_manager(|slot| {
         let mut manager = slot.borrow_mut();
         let Some(host) = manager
             .get_mut(terminal_id)

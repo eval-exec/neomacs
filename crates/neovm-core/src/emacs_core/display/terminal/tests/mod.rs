@@ -1054,3 +1054,5 @@ fn frame_initial_p_still_answers_for_frames() {
 fn frame_initial_p(eval: &mut Context, designator: Value) -> Result<Value, String> {
     builtin_frame_initial_p(eval, vec![designator]).map_err(|flow| format!("{flow:?}"))
 }
+
+mod gc_heap_ownership;
