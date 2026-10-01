@@ -517,6 +517,95 @@ fn raw_overlays_in_matches_gnu_same_start_itree_order() {
 }
 
 #[test]
+fn materialized_region_matches_stream_order_and_boundaries_after_lazy_shifts() {
+    crate::test_utils::init_test_tracing();
+    let mut list = OverlayList::new();
+    let disjoint: Vec<_> = (0..257)
+        .map(|index| alloc_overlay(10 + index * 5, 13 + index * 5))
+        .collect();
+    let same_start: Vec<_> = (0..65).map(|_| alloc_overlay(200, 250)).collect();
+    let anchors = [
+        alloc_overlay(10, 10),
+        alloc_overlay(200, 200),
+        alloc_overlay(1_295, 1_295),
+    ];
+    for overlay in disjoint.iter().chain(&same_start).chain(&anchors) {
+        list.insert_overlay(*overlay);
+    }
+
+    // Edits before every interval leave a lazily shifted suffix, while the
+    // equal-start attachment order and empty-overlay boundary rules persist.
+    for offset in [0, 7, 4] {
+        if offset == 7 {
+            list.adjust_for_insert_at_emacs_byte_pos(emacs_byte_pos(3), emacs_byte_len(7), false);
+        } else if offset == 4 {
+            list.adjust_for_delete_emacs_byte_range(emacs_byte_range(1, 4));
+        }
+        list.index.assert_invariants();
+
+        for (start, end, accessible_end) in [
+            (0, 5, 1_300),
+            (10, 1_295, 1_300),
+            (10, 1_295, 1_295),
+            (200, 200, 1_300),
+            (201, 202, 1_300),
+            (250, 250, 1_300),
+            (1_295, 1_295, 1_295),
+        ] {
+            let bounds = emacs_byte_range(start + offset, end + offset);
+            let accessible_end = emacs_byte_pos(accessible_end + offset);
+            let expected: Vec<_> = list
+                .iter_overlays_in_accessible_emacs_byte_range(bounds, accessible_end)
+                .map(Value::bits)
+                .collect();
+            reset_overlay_iterator_frame_push_count();
+            let actual: Vec<_> = list
+                .overlays_in_accessible_emacs_byte_range(bounds, accessible_end)
+                .into_iter()
+                .map(Value::bits)
+                .collect();
+            assert_eq!(actual, expected, "region {bounds:?}, offset {offset}");
+            assert_eq!(
+                overlay_iterator_frame_push_count(),
+                0,
+                "materialized regions must not construct resumable iterator frames"
+            );
+        }
+
+        assert_eq!(
+            overlays_in_region(&list, 200 + offset, 200 + offset, 1_300 + offset),
+            vec![anchors[1]],
+            "an empty query excludes nonempty intervals beginning at its anchor"
+        );
+        let expected: Vec<_> = same_start
+            .iter()
+            .rev()
+            .chain(std::iter::once(&disjoint[38]))
+            .map(|overlay| overlay.bits())
+            .collect();
+        let actual: Vec<_> = overlays_in_region(&list, 201 + offset, 202 + offset, 1_300 + offset)
+            .into_iter()
+            .map(Value::bits)
+            .collect();
+        assert_eq!(actual, expected, "equal starts retain GNU attachment order");
+        for accessible_end in [1_295, 1_300] {
+            let result = overlays_in_region(
+                &list,
+                10 + offset,
+                1_295 + offset,
+                accessible_end + offset,
+            );
+            assert!(result.iter().any(|overlay| overlay.bits() == anchors[0].bits()));
+            assert_eq!(
+                result.iter().any(|overlay| overlay.bits() == anchors[2].bits()),
+                accessible_end == 1_295,
+                "a right-boundary empty overlay requires the accessible buffer end"
+            );
+        }
+    }
+}
+
+#[test]
 fn next_boundary_uses_one_logarithmic_endpoint_search() {
     crate::test_utils::init_test_tracing();
     let mut list = OverlayList::new();

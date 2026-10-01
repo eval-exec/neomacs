@@ -1139,8 +1139,7 @@ impl OverlayList {
         range: EmacsByteRange,
         accessible_end: EmacsBytePos,
     ) -> Vec<Value> {
-        self.iter_overlays_in_accessible_emacs_byte_range(range, accessible_end)
-            .collect()
+        self.index.overlays_in_region(range, accessible_end)
     }
 
     /// Borrow region matches without allocating an intermediate vector.
