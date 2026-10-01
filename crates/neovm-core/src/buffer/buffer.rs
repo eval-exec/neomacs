@@ -4353,14 +4353,12 @@ impl Buffer {
             return std::rc::Rc::clone(spans);
         }
         let text = self.buffer_string();
-        if std::env::var_os("NEOMACS_TRACE_COMPOSITION").is_some() {
-            eprintln!(
-                "i447trace: automatic_composition_spans scan chars={} table_nonnil={} buffer_chars={:?}",
-                text.chars().count(),
-                !composition_function_table.is_nil(),
-                text.chars().take(24).collect::<Vec<_>>()
-            );
-        }
+        tracing::debug!(
+            text_chars = text.chars().count(),
+            table_non_nil = !composition_function_table.is_nil(),
+            buffer_head = ?text.chars().take(24).collect::<Vec<_>>(),
+            "automatic composition spans: scan start"
+        );
         crate::emacs_core::composite::BYTES_SCANNED
             .fetch_add(text.len(), std::sync::atomic::Ordering::Relaxed);
         // Absolute char coordinates, like the visible-bounded scan next door.
@@ -4402,7 +4400,6 @@ impl Buffer {
         first_char: usize,
         budget: usize,
     ) -> std::rc::Rc<Vec<crate::emacs_core::composite::AutomaticCompositionSpan>> {
-
         use crate::emacs_core::composite::MAX_AUTO_COMPOSITION_LOOKBACK;
         let accessible_start = self.point_min_char_pos().get();
         let accessible_end = self.point_max_char_pos().get();

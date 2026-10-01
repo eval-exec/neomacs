@@ -1944,7 +1944,12 @@ fn font_shape_gstring_adjusts_zero_width_clusters() {
     let font = build_font_object(&RuntimeFace::new("default"));
     let gstring = crate::emacs_core::composite::composition_get_gstring(
         &mut eval,
-        vec![Value::fixnum(0), Value::fixnum(2), font, Value::string("fi")],
+        vec![
+            Value::fixnum(0),
+            Value::fixnum(2),
+            font,
+            Value::string("fi"),
+        ],
     )
     .expect("gstring");
 
@@ -2037,11 +2042,10 @@ fn font_shape_gstring_caches_by_header_and_returns_the_cached_gstring() {
     }));
 
     let fresh = build(&mut eval);
-    let first = font_shape_gstring(&mut eval, vec![fresh, Value::NIL])
-        .expect("first shaping");
+    let first = font_shape_gstring(&mut eval, vec![fresh, Value::NIL]).expect("first shaping");
     let fresh = build(&mut eval);
-    let second = font_shape_gstring(&mut eval, vec![fresh, Value::NIL])
-        .expect("second shaping (cache hit)");
+    let second =
+        font_shape_gstring(&mut eval, vec![fresh, Value::NIL]).expect("second shaping (cache hit)");
 
     assert!(
         second == first,

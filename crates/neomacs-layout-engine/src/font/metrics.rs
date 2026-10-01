@@ -731,7 +731,6 @@ impl Default for FontMetricsService {
 }
 
 impl FontMetricsService {
-
     /// Shape one gstring through the font named by its header (issue #447):
     /// fills the gstring's glyph slots from the font's shaped output — the
     /// same contract as GNU's `font->driver->shape` (src/font.c
@@ -759,8 +758,7 @@ impl FontMetricsService {
         let Some(header) = slots.first().and_then(|header| header.as_vector_data()) else {
             return GstringShapeOutcome::NotShapable;
         };
-        let Some((family, pixel_size)) =
-            header.first().and_then(font_object_family_and_pixel_size)
+        let Some((family, pixel_size)) = header.first().and_then(font_object_family_and_pixel_size)
         else {
             return GstringShapeOutcome::NotShapable;
         };

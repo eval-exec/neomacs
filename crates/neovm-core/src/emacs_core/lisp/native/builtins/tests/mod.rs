@@ -10706,18 +10706,15 @@ fn treesit_query_expand_preserves_nil_as_the_anonymous_node_marker() {
     // node pattern with no type name and matches nothing.
     crate::test_utils::init_test_tracing();
     assert_eq!(
-        crate::emacs_core::builtins::builtin_treesit_query_expand(vec![Value::list(
-            vec![
-                Value::list(vec![Value::NIL]),
-                Value::symbol("@f"),
-            ],
-        )])
+        crate::emacs_core::builtins::builtin_treesit_query_expand(vec![Value::list(vec![
+            Value::list(vec![Value::NIL]),
+            Value::symbol("@f"),
+        ],)])
         .unwrap(),
         Value::string("(nil) @f"),
     );
     assert_eq!(
-        crate::emacs_core::builtins::builtin_treesit_pattern_expand(vec![Value::NIL])
-            .unwrap(),
+        crate::emacs_core::builtins::builtin_treesit_pattern_expand(vec![Value::NIL]).unwrap(),
         Value::string("nil"),
     );
 }
