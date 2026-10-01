@@ -1616,6 +1616,16 @@ impl BufferText {
         out
     }
 
+    /// Whether a syntax-cache run could share this FROM. This reads numeric
+    /// keys only and leaves invalidation pending. Invalidation can remove
+    /// runs, never create a missing FROM; actual lookup must still drain it.
+    #[inline]
+    pub(crate) fn syntax_parse_cache_has_run_from(&self, from_char: usize) -> bool {
+        let storage = self.storage.borrow();
+        let cache = storage.syntax_parse_cache.borrow();
+        cache.has_run_from(from_char)
+    }
+
     /// The syntax parse cache, with what changed since its last use (P3.4).
     pub(crate) fn with_syntax_parse_cache<R>(
         &self,

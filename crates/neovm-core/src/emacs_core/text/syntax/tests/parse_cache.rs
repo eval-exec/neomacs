@@ -435,6 +435,144 @@ fn cached_answers_equal_plain_scans_under_every_change() {
     }
 }
 
+/// Short misses must not prevent a longer run from serving short queries.
+#[test]
+fn short_queries_keep_long_run_resumes_and_exact_answers() {
+    GEOMETRY_OVERRIDE.with(|cell| cell.set(Some((16, 128))));
+    let mut eval = crate::emacs_core::eval::Context::new();
+    install_table(&mut eval, 1);
+    eval.eval_str("(insert (apply #'concat (make-list 160 \"(é)\\n\")))")
+        .expect("text");
+    let short = Query {
+        from: 1,
+        to: 65,
+        target_depth: None,
+        stop_before: false,
+        commentstop: 0,
+        oldstate_from_parse: false,
+    };
+    reset_parse_cache_stats();
+    check(&mut eval, short, "fresh short scan");
+    let stats = parse_cache_stats();
+    assert_eq!(stats.short, 1);
+    assert_eq!((stats.recorded, stats.resumes, stats.exact), (0, 0, 0));
+
+    check(&mut eval, Query { to: 401, ..short }, "record long scan");
+    check(&mut eval, short, "resume long run for short query");
+    assert_eq!(parse_cache_stats().resumes, 1);
+    let plain = answer(&mut eval, short, Value::NIL, ParseCacheMode::Off);
+    let verified = answer(&mut eval, short, Value::NIL, ParseCacheMode::Verify);
+    assert_eq!(verified, plain);
+    let stats = parse_cache_stats();
+    assert_eq!(stats.exact, 1);
+    assert_eq!(stats.verified, 1);
+    assert_eq!(stats.mismatches, 0);
+    GEOMETRY_OVERRIDE.with(|cell| cell.set(None));
+}
+
+/// A short miss must leave edits pending until a real cache lookup drains them.
+#[test]
+fn short_misses_preserve_pending_text_and_property_invalidation() {
+    GEOMETRY_OVERRIDE.with(|cell| cell.set(Some((16, 128))));
+    let mut eval = crate::emacs_core::eval::Context::new();
+    install_table(&mut eval, 1);
+    eval.eval_str(
+        "(setq parse-sexp-lookup-properties t)
+         (insert (apply #'concat (make-list 160 \"(é)\\n\")))",
+    )
+    .expect("text");
+    let long = Query {
+        from: 1,
+        to: 401,
+        target_depth: None,
+        stop_before: false,
+        commentstop: 0,
+        oldstate_from_parse: false,
+    };
+    let miss = Query {
+        from: 257,
+        to: 289,
+        ..long
+    };
+    for (what, change, expected) in [
+        (
+            "text edit",
+            "(goto-char 1) (insert \"(\")",
+            Invalidation::From { byte: 0, char: 0 },
+        ),
+        (
+            "syntax property",
+            "(put-text-property 1 2 'syntax-table '(7))",
+            Invalidation::From {
+                byte: usize::MAX,
+                char: 0,
+            },
+        ),
+    ] {
+        check(&mut eval, long, "record before mutation");
+        eval.eval_str(change).expect(what);
+        reset_parse_cache_stats();
+        check(&mut eval, miss, what);
+        assert_eq!(parse_cache_stats().short, 1);
+        let invalidation = eval
+            .buffers
+            .current_buffer()
+            .expect("buffer")
+            .with_syntax_parse_cache(|_, invalidation| invalidation);
+        assert_eq!(invalidation, expected, "short miss consumed {what}");
+        check(&mut eval, Query { to: 65, ..long }, "mutated original FROM");
+        assert_eq!(parse_cache_stats().mismatches, 0);
+    }
+    GEOMETRY_OVERRIDE.with(|cell| cell.set(None));
+}
+
+/// The eligibility threshold uses characters and keeps OLDSTATE/options intact.
+#[test]
+fn short_query_gate_preserves_threshold_zero_span_and_oldstate_options() {
+    GEOMETRY_OVERRIDE.with(|cell| cell.set(Some((16, 128))));
+    let mut eval = crate::emacs_core::eval::Context::new();
+    install_table(&mut eval, 1);
+    eval.eval_str("(insert (apply #'concat (make-list 160 \"(é) ; note\\n\")))")
+        .expect("text");
+    let query = Query {
+        from: 1,
+        to: 1,
+        target_depth: None,
+        stop_before: false,
+        commentstop: 0,
+        oldstate_from_parse: false,
+    };
+    reset_parse_cache_stats();
+    check(&mut eval, query, "empty scan");
+    check(&mut eval, Query { to: 128, ..query }, "127 characters");
+    assert_eq!(parse_cache_stats().recorded, 0);
+    check(&mut eval, Query { to: 129, ..query }, "128 characters");
+    assert_eq!(parse_cache_stats().recorded, 1);
+
+    for (target_depth, stop_before, commentstop) in [
+        (None, false, 0),
+        (Some(0), true, 0),
+        (Some(1), false, 1),
+        (None, false, 2),
+    ] {
+        check(
+            &mut eval,
+            Query {
+                from: 51,
+                to: 80,
+                target_depth,
+                stop_before,
+                commentstop,
+                oldstate_from_parse: true,
+            },
+            "short scan with OLDSTATE and options",
+        );
+    }
+    assert_eq!(parse_cache_stats().recorded, 1);
+    assert_eq!(parse_cache_stats().mismatches, 0);
+    GEOMETRY_OVERRIDE.with(|cell| cell.set(None));
+}
+
 /// A buffer whose properties resolve through `category`, or through
 /// `char-property-alias-alist`, is never cached (and still answers right).
 #[test]

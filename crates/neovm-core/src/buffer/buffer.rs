@@ -3281,6 +3281,12 @@ impl Buffer {
         self.text.syntax_content_key()
     }
 
+    /// See [`crate::buffer::buffer_text::BufferText::syntax_parse_cache_has_run_from`].
+    #[inline]
+    pub(crate) fn syntax_parse_cache_has_run_from(&self, from_char: usize) -> bool {
+        self.text.syntax_parse_cache_has_run_from(from_char)
+    }
+
     /// See [`crate::buffer::buffer_text::BufferText::with_syntax_parse_cache`].
     pub(crate) fn with_syntax_parse_cache<R>(
         &self,

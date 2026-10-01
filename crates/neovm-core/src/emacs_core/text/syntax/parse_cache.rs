@@ -175,6 +175,14 @@ pub(crate) struct SyntaxParseCache {
 }
 
 impl SyntaxParseCache {
+    /// A coarse lookup using only numeric FROM positions. A matching run may
+    /// still be invalid or have different options; a real lookup must drain
+    /// mutation notes and validate the complete key before using any state.
+    #[inline]
+    pub(crate) fn has_run_from(&self, from_char: usize) -> bool {
+        self.runs.iter().any(|run| run.key.from_char == from_char)
+    }
+
     /// A text edit whose first changed byte is `at_byte` (every later byte may
     /// have moved). Called once per content-epoch bump.
     #[inline]
@@ -385,7 +393,7 @@ fn count(f: impl FnOnce(&mut ParseCacheStats)) {
 
 /// `NEOVM_SYNTAX_PARSE_CACHE_STATS=PATH`: the counters are rewritten to PATH
 /// every 256 queries (engagement checks for measurement runs).
-fn maybe_write_stats_file(stats: &ParseCacheStats) {
+fn maybe_write_stats_file() {
     static PATH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     let Some(path) = PATH
         .get_or_init(|| std::env::var("NEOVM_SYNTAX_PARSE_CACHE_STATS").ok())
@@ -393,7 +401,11 @@ fn maybe_write_stats_file(stats: &ParseCacheStats) {
     else {
         return;
     };
-    if path.is_empty() || !stats.queries.is_multiple_of(256) {
+    if path.is_empty() {
+        return;
+    }
+    let stats = parse_cache_stats();
+    if !stats.queries.is_multiple_of(256) {
         return;
     }
     let _ = std::fs::write(
@@ -890,6 +902,19 @@ pub(super) fn parse_partial_sexp_cached(
             &mut Plain,
         ))
     };
+    // Short scans never start a run. If no existing run shares FROM, avoid
+    // building a full key or draining invalidation just to discover a miss.
+    // Keep the normal lookup for matching FROM: a longer recorded scan can
+    // still answer a short query by resuming or returning an exact result.
+    if to_char - from_char < min_span_chars() && !buf.syntax_parse_cache_has_run_from(from_char) {
+        count(|stats| {
+            stats.queries += 1;
+            stats.short += 1;
+        });
+        let finish = plain(start);
+        maybe_write_stats_file();
+        return (finish.state, finish.stop);
+    }
     count(|stats| stats.queries += 1);
     if resolves_through_lisp(buf, props) {
         count(|stats| stats.bypassed += 1);
@@ -944,8 +969,7 @@ pub(super) fn parse_partial_sexp_cached(
             if !run_exists && to_char - from_char < min_span_chars() {
                 count(|stats| stats.short += 1);
                 let finish = plain(key.start);
-                let stats = parse_cache_stats();
-                maybe_write_stats_file(&stats);
+                maybe_write_stats_file();
                 return (finish.state, finish.stop);
             }
             count(|stats| stats.recorded += 1);
@@ -968,8 +992,7 @@ pub(super) fn parse_partial_sexp_cached(
             ));
             let result = ExactResult::of(&finish, to_char);
             buf.with_syntax_parse_cache(|cache, _| cache.store(key, record, Some(result)));
-            let stats = parse_cache_stats();
-            maybe_write_stats_file(&stats);
+            maybe_write_stats_file();
             return (finish.state, finish.stop);
         }
     };
@@ -1002,8 +1025,7 @@ pub(super) fn parse_partial_sexp_cached(
             (fresh.state, fresh.stop)
         }
     };
-    let stats = parse_cache_stats();
-    maybe_write_stats_file(&stats);
+    maybe_write_stats_file();
     answer
 }
 
