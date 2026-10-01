@@ -589,15 +589,17 @@ fn materialized_region_matches_stream_order_and_boundaries_after_lazy_shifts() {
             .collect();
         assert_eq!(actual, expected, "equal starts retain GNU attachment order");
         for accessible_end in [1_295, 1_300] {
-            let result = overlays_in_region(
-                &list,
-                10 + offset,
-                1_295 + offset,
-                accessible_end + offset,
+            let result =
+                overlays_in_region(&list, 10 + offset, 1_295 + offset, accessible_end + offset);
+            assert!(
+                result
+                    .iter()
+                    .any(|overlay| overlay.bits() == anchors[0].bits())
             );
-            assert!(result.iter().any(|overlay| overlay.bits() == anchors[0].bits()));
             assert_eq!(
-                result.iter().any(|overlay| overlay.bits() == anchors[2].bits()),
+                result
+                    .iter()
+                    .any(|overlay| overlay.bits() == anchors[2].bits()),
                 accessible_end == 1_295,
                 "a right-boundary empty overlay requires the accessible buffer end"
             );
