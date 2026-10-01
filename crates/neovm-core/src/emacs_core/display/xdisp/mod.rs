@@ -8706,6 +8706,8 @@ pub enum SnapshotFormat {
     TextFaces,
     /// Full-fidelity JSON: serde on the real protocol structs.
     Json,
+    /// Frame and window geometry without replay assets or glyph matrices.
+    JsonGeometry,
 }
 
 /// One `neomacs--frame-snapshot` request, handed to the frontend hook.
@@ -8719,7 +8721,7 @@ pub struct SnapshotRequest {
 /// FRAME argument). FRAME: nil = selected frame, t = all visible frames, or
 /// a live frame object (a fixnum frame id is also accepted, mirroring
 /// `frame_id_from_designator` in font.rs). FORMAT: nil/`text`,
-/// `text-faces`, or `json`.
+/// `text-faces`, `json`, or `json-geometry`.
 fn snapshot_request_from_args(
     eval: &super::eval::Context,
     rest: &[Value],
@@ -8756,11 +8758,12 @@ fn snapshot_request_from_args(
             Some("text") => SnapshotFormat::Text,
             Some("text-faces") => SnapshotFormat::TextFaces,
             Some("json") => SnapshotFormat::Json,
+            Some("json-geometry") => SnapshotFormat::JsonGeometry,
             _ => {
                 return Err(signal(
                     "error",
                     vec![Value::string(format!(
-                        "Invalid frame snapshot format: {value} (use text, text-faces or json)"
+                        "Invalid frame snapshot format: {value} (use text, text-faces, json or json-geometry)"
                     ))],
                 ));
             }

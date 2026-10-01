@@ -42,6 +42,13 @@ fn native_rich_scroll_commands_preserve_pixel_offset() {
     assert_eq!(state["pixel-returned"], true);
     assert_eq!(state["page-advanced"], true);
     assert_eq!(state["page-returned"], true);
+    assert!(
+        fs::metadata(&result.artifacts.frame_snapshot_json)
+            .unwrap()
+            .len()
+            < 64 * 1024,
+        "geometry snapshot unexpectedly contains bulky replay data"
+    );
     let snapshot: serde_json::Value =
         serde_json::from_slice(&fs::read(&result.artifacts.frame_snapshot_json).unwrap()).unwrap();
     assert!(

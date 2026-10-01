@@ -52,7 +52,7 @@
                  (content . ,content) (final-start . ,start)
                  (pixel-returned . t) (page-advanced . t) (page-returned . t))) "\n")))
   (neomacs--write-frame-snapshot
-   (getenv "NEOMACS_GUI_FRAME_SNAPSHOT_JSON") t 'json)
+   (getenv "NEOMACS_GUI_FRAME_SNAPSHOT_JSON") t 'json-geometry)
   (run-at-time 0.2 nil #'kill-emacs 0))
 
 (neomacs-native-scroll-next

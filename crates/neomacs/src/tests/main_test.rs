@@ -6615,6 +6615,28 @@ fn frame_snapshot_subr_end_to_end_json_and_text() {
         "window_infos carry buffer names: {window_infos:?}"
     );
 
+    let geometry_value = eval
+        .eval_str("(neomacs--frame-snapshot t 'json-geometry)")
+        .expect("all-frames geometry snapshot");
+    let geometry_json = geometry_value.as_str_owned().expect("string result");
+    let geometry: serde_json::Value = serde_json::from_str(&geometry_json).unwrap();
+    let geometry_frames = geometry["frames"].as_array().unwrap();
+    assert_eq!(geometry_frames.len(), frames.len());
+    for (geometry_frame, full_frame) in geometry_frames.iter().zip(frames) {
+        assert_eq!(geometry_frame["window_infos"], full_frame["window_infos"]);
+        assert_eq!(
+            geometry_frame["frame_pixel_width"],
+            full_frame["frame_pixel_width"]
+        );
+        assert_eq!(
+            geometry_frame["frame_pixel_height"],
+            full_frame["frame_pixel_height"]
+        );
+        assert!(geometry_frame.get("fonts").is_none());
+        assert!(geometry_frame.get("scroll_coverage").is_none());
+        assert!(geometry_frame.get("window_matrices").is_none());
+    }
+
     let text_value = eval
         .eval_str("(neomacs--frame-snapshot)")
         .expect("selected-frame text snapshot");
