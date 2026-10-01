@@ -15652,6 +15652,31 @@ fn runtime_root_candidates_cover_every_shipped_layout() {
     );
 }
 
+#[test]
+fn archived_tests_resolve_the_remapped_runtime_tree() {
+    let dir = tempdir().unwrap();
+    let missing_producer = dir.path().join("producer/workspace");
+    let consumer = dir.path().join("consumer/workspace");
+    fs::create_dir_all(consumer.join("lisp")).unwrap();
+    fs::create_dir_all(consumer.join("etc")).unwrap();
+    let exe = consumer.join("target/debug/deps/neovm_core-test");
+    assert_eq!(
+        runtime_project_root_from_paths(&missing_producer, Some(&exe), Some(&consumer)),
+        Some(consumer.clone()),
+        "an archived nextest binary must find the consumer's runtime files"
+    );
+
+    let installed = dir.path().join("installed/share/neomacs");
+    fs::create_dir_all(installed.join("lisp")).unwrap();
+    fs::create_dir_all(installed.join("etc")).unwrap();
+    let installed_exe = dir.path().join("installed/bin/neomacs");
+    assert_eq!(
+        runtime_project_root_from_paths(&missing_producer, Some(&installed_exe), Some(&consumer)),
+        Some(installed),
+        "the test runner's workspace must not override a packaged runtime tree"
+    );
+}
+
 /// GNU `load_pdump` (src/emacs.c:935-1120) searches four places in a fixed
 /// order.  Pin that order: the two beside-the-executable rungs first (GNU's
 /// rungs 2 and 3-in-the-uninstalled-case), then the two PATH_EXEC rungs.
