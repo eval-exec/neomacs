@@ -1995,7 +1995,7 @@ pub(crate) fn set_mini_window_still_for_test(enabled: Option<bool>) {
 
 /// `NEOMACS_LAYOUT_MINI_STILL=on` (P3.5 D): the mini-window is retained and
 /// may take the cursor-only replay when nothing it displays changed. Read
-/// once per process; default off.
+/// once per process; default on. Explicit off keeps the full mini-window walk.
 pub(crate) fn mini_window_still_enabled() -> bool {
     #[cfg(test)]
     if let Some(enabled) = MINI_STILL_OVERRIDE.with(|cell| cell.get()) {
@@ -2008,7 +2008,7 @@ pub(crate) fn mini_window_still_enabled() -> bool {
                 .ok()
                 .map(|value| value.trim().to_ascii_lowercase())
                 .as_deref(),
-            Some("on" | "1" | "true" | "yes")
+            None | Some("on" | "1" | "true" | "yes")
         )
     })
 }

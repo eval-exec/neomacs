@@ -36931,6 +36931,9 @@ fn ligature_rule_composes_through_the_font_shape_driver() {
 /// instead, which is what the catalog ledger does.
 #[test]
 fn unchanged_frame_layout_consults_the_image_catalog_once_per_pass() {
+    // This pins the historical full-walk cadence: the fixture shares its
+    // image buffer with the mini-window, whose retained replay avoids a lookup.
+    crate::incremental_layout::set_mini_window_still_for_test(Some(false));
     let mut eval = Context::new();
     let requests = Arc::new(Mutex::new(Vec::new()));
     eval.set_display_host(Box::new(RecordingImageDisplayHost {
