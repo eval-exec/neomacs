@@ -823,27 +823,38 @@ impl PngRows {
     /// Open `data` for row-wise reading, or decline.
     ///
     /// `None` hands the source back to the whole-image path, and means one of:
-    /// the header would not parse, the output is not one of the 8-bit colour
-    /// types below, the source is interlaced, it is too small for banding to pay
-    /// ([`BANDING_MIN_PIXELS`]), or the realization asks for it *larger* than it
-    /// is, which is the one shape a filter that only ever reduces cannot take.
+    /// the header would not parse, the output is not one of the colour types the
+    /// format table names, the source is interlaced, it is too small for banding
+    /// to pay ([`BANDING_MIN_PIXELS`]), or the realization asks for it *larger*
+    /// than it is, which is the one shape a filter that only ever reduces cannot
+    /// take.
     fn open(data: EncodedBytes, plan: BandPlan, min_pixels: u64) -> Option<Self> {
         let mut decoder = png::Decoder::new(Cursor::new(data));
         // The transform `image`'s own PNG decoder sets before reading
         // (`image-0.25.10` `src/codecs/png.rs:60`). Both paths decoding through
         // it is what makes a banded decode and a whole decode of the same file
-        // agree pixel for pixel.
+        // agree pixel for pixel. `EXPAND` is also what leaves a 16-bit row
+        // 16-bit: `STRIP_16` would truncate it to 8, which is a different
+        // picture from the one the whole-image path decodes.
         decoder.set_transformations(png::Transformations::EXPAND);
         let reader = decoder.read_info().ok()?;
         let (width, height) = (reader.info().width, reader.info().height);
-        // Adam7 rows are partial rows, and the crate keeps the pass and line
-        // geometry that would reassemble them private
-        // (`InterlaceInfo::line_number`), so an interlaced source is read
-        // whole rather than guessed at.
+        // Adam7 rows are partial rows, so an interlaced source is read whole
+        // rather than guessed at — see
+        // `an_interlaced_png_declines_banding` for why that is the ordering
+        // and not the privacy of the pass geometry.
         if reader.info().interlaced {
             return None;
         }
         let format = RowFormat::of_png(reader.output_color_type())?;
+        // What the header says a row is, against what the format says a row
+        // is. The two agreeing is what lets the row checks below be a length
+        // check rather than a parse, and asking here is what keeps a
+        // disagreement a decline rather than a mid-stream failure after bands
+        // have already been published.
+        if reader.output_line_size(width) != Some(format.row_bytes(width)) {
+            return None;
+        }
         if u64::from(width) * u64::from(height) < min_pixels {
             return None;
         }
@@ -956,86 +967,195 @@ impl PngRows {
     }
 }
 
-/// The 8-bit colour types a source row can arrive in.
+/// The colour types a source row can arrive in, as two orthogonal facts: which
+/// samples a pixel has, and how wide each sample is.
 ///
-/// Both row-wise decoders arrive at the same four, which is not a coincidence:
-/// each is the colour type `image`'s own decoder for that format hands to
-/// `to_rgba8`, and expanding to RGBA is where a banded decode and a whole one
-/// meet. For PNG, `Transformations::EXPAND` lifts grayscale below 8 bits and
-/// palettes (with or without `tRNS`) into these, leaving 16-bit output as the
-/// one thing to decline — its rows are big-endian and `image` reorders them
-/// only inside its own decoder, so a row-wise path would have to reimplement
-/// that to stay byte-exact. For JPEG these are the four colours `image` asks
-/// `zune-jpeg` for, one per input colour space it can map.
+/// Two tables rather than one variant per combination, because a variant per
+/// combination is a table a combination can fall off the end of without
+/// anything failing to build — which is how 16-bit PNG output went unbanded.
+/// The old table named only the `BitDepth::Eight` pairs and swallowed the rest
+/// with a wildcard, so the whole depth quietly took the whole-image path and no
+/// test said why. Both tables below are matched without a wildcard, so a colour
+/// type or a depth `png` grows is a build error here.
+///
+/// Both row-wise decoders arrive at these, which is not a coincidence: each is
+/// what `image`'s own decoder for that format hands to `to_rgba8`, and
+/// widening to RGBA is where a banded decode and a whole one meet. For PNG,
+/// `Transformations::EXPAND` lifts grayscale below 8 bits and palettes (with or
+/// without `tRNS`) into 8-bit rows and leaves 16-bit output 16-bit. For JPEG
+/// these are the colours `image` asks `zune-jpeg` for, one per input colour
+/// space it can map, and always one byte wide.
 #[derive(Clone, Copy, Debug)]
-enum RowFormat {
-    Gray8,
-    GrayAlpha8,
-    Rgb8,
-    Rgba8,
+struct RowFormat {
+    layout: Layout,
+    sample: SampleWidth,
+}
+
+/// Which samples a pixel has, in the order the row stores them.
+#[derive(Clone, Copy, Debug)]
+enum Layout {
+    Gray,
+    GrayAlpha,
+    Rgb,
+    Rgba,
+}
+
+/// How wide one sample of a row is.
+#[derive(Clone, Copy, Debug)]
+enum SampleWidth {
+    /// One byte, which is already the 8-bit value `image`'s `to_rgba8` wants.
+    One,
+    /// Two bytes, most significant first. PNG stores its samples big-endian
+    /// and `EXPAND` does not reorder them — `SWAP_ENDIAN` would, and
+    /// `png-0.18.1` never reads that flag, which is why a probe row of
+    /// `0x1234` comes back as `[0x12, 0x34]`. `image`'s own decoder reorders
+    /// each pair to native order as it reads the frame
+    /// (`image-0.25.10` `src/codecs/png.rs:251-263`), and this reads the pair
+    /// big-endian, which is that same reorder without the copy.
+    Two,
+}
+
+impl Layout {
+    /// How many samples one pixel of this layout has.
+    const fn channels(self) -> usize {
+        match self {
+            Self::Gray => 1,
+            Self::GrayAlpha => 2,
+            Self::Rgb => 3,
+            Self::Rgba => 4,
+        }
+    }
+
+    /// Whether this layout carries an alpha sample of its own.
+    const fn has_alpha(self) -> bool {
+        matches!(self, Self::GrayAlpha | Self::Rgba)
+    }
+}
+
+impl SampleWidth {
+    /// How many bytes one sample of this width occupies.
+    const fn bytes(self) -> usize {
+        match self {
+            Self::One => 1,
+            Self::Two => 2,
+        }
+    }
+
+    /// Sample `channel` of one pixel, as the byte `image`'s `to_rgba8` reduces
+    /// it to.
+    ///
+    /// A 16-bit sample is *not* its high byte. `image` scales it onto the
+    /// 8-bit range by rounding — `(v + 128) / 257`, which is what its
+    /// `FromPrimitive<u16> for u8` computes and what its `f32` path computes
+    /// to the same values — so `0x00ff` is 1 and `0xff00` is 254, where taking
+    /// the high byte would give 0 and 255. Every value of every channel of all
+    /// four 16-bit colour types was checked against the whole-image path when
+    /// this went in; `0x1234`, the value a probe row naturally reaches for, is
+    /// one of the values that cannot tell the two apart.
+    fn sample(self, pixel: &[u8], channel: usize) -> u8 {
+        match self {
+            Self::One => pixel[channel],
+            Self::Two => {
+                let bytes = [pixel[2 * channel], pixel[2 * channel + 1]];
+                ((u32::from(u16::from_be_bytes(bytes)) + 128) / 257) as u8
+            }
+        }
+    }
 }
 
 impl RowFormat {
     fn of_png((color, depth): (png::ColorType, png::BitDepth)) -> Option<Self> {
-        match (color, depth) {
-            (png::ColorType::Grayscale, png::BitDepth::Eight) => Some(Self::Gray8),
-            (png::ColorType::GrayscaleAlpha, png::BitDepth::Eight) => Some(Self::GrayAlpha8),
-            (png::ColorType::Rgb, png::BitDepth::Eight) => Some(Self::Rgb8),
-            (png::ColorType::Rgba, png::BitDepth::Eight) => Some(Self::Rgba8),
-            _ => None,
-        }
+        let layout = match color {
+            png::ColorType::Grayscale => Layout::Gray,
+            png::ColorType::GrayscaleAlpha => Layout::GrayAlpha,
+            png::ColorType::Rgb => Layout::Rgb,
+            png::ColorType::Rgba => Layout::Rgba,
+            // `EXPAND` resolves a palette — with or without `tRNS` — into one
+            // of the four above before `output_color_type` reports it, so an
+            // indexed row here is one this path has no row for.
+            png::ColorType::Indexed => return None,
+        };
+        let sample = match depth {
+            // `EXPAND` lifts every depth below eight to eight, so these are
+            // depths it did not lift rather than depths a row arrives in.
+            png::BitDepth::One | png::BitDepth::Two | png::BitDepth::Four => return None,
+            png::BitDepth::Eight => SampleWidth::One,
+            png::BitDepth::Sixteen => SampleWidth::Two,
+        };
+        Some(Self { layout, sample })
     }
 
     /// The colour a JPEG decoder was configured to output.
     ///
     /// The decoder's own answer and not the request: a colour space it cannot
     /// produce for this image is one this path declines rather than reads as
-    /// the wrong one.
+    /// the wrong one. Unlike the PNG table this one keeps a wildcard, and can:
+    /// what it matches is what this crate asked the decoder for, so anything
+    /// else is a decline rather than a case no one thought of.
     fn of_jpeg(space: ZuneColorSpace) -> Option<Self> {
-        match space {
-            ZuneColorSpace::Luma => Some(Self::Gray8),
-            ZuneColorSpace::LumaA => Some(Self::GrayAlpha8),
-            ZuneColorSpace::RGB => Some(Self::Rgb8),
-            ZuneColorSpace::RGBA => Some(Self::Rgba8),
-            _ => None,
-        }
+        let layout = match space {
+            ZuneColorSpace::Luma => Layout::Gray,
+            ZuneColorSpace::LumaA => Layout::GrayAlpha,
+            ZuneColorSpace::RGB => Layout::Rgb,
+            ZuneColorSpace::RGBA => Layout::Rgba,
+            _ => return None,
+        };
+        Some(Self {
+            layout,
+            sample: SampleWidth::One,
+        })
+    }
+
+    /// How long a row of this format is, in bytes, for `width` pixels.
+    fn row_bytes(self, width: u32) -> usize {
+        width as usize * self.layout.channels() * self.sample.bytes()
     }
 
     /// Whether this colour type carries an alpha channel at all.
     ///
-    /// The formats without one expand to alpha 255 by construction, so their
+    /// The layouts without one expand to alpha 255 by construction, so their
     /// rows cannot change the mask and are not scanned for it.
     fn may_be_transparent(self) -> bool {
-        matches!(self, Self::GrayAlpha8 | Self::Rgba8)
+        self.layout.has_alpha()
     }
 
     /// Widen one row to RGBA, the conversion `image`'s `to_rgba8` applies to
     /// the same colour type. `None` means the row was not the length the
     /// colour type promised.
     fn expand_row(self, source: &[u8], target: &mut [u8]) -> Option<()> {
-        let pixels = target.len() / 4;
-        let sized = |bytes: usize| (source.len() == pixels * bytes).then_some(());
-        match self {
-            Self::Rgba8 => {
-                sized(4)?;
-                target.copy_from_slice(source);
-            }
-            Self::Rgb8 => {
-                sized(3)?;
-                for (target, source) in target.chunks_exact_mut(4).zip(source.chunks_exact(3)) {
-                    target.copy_from_slice(&[source[0], source[1], source[2], 0xff]);
+        let channels = self.layout.channels();
+        let pixel_bytes = channels * self.sample.bytes();
+        if source.len() != target.len() / 4 * pixel_bytes {
+            return None;
+        }
+        // The one widening that is a copy rather than a widening, and the shape
+        // most sources arrive in.
+        if matches!((self.layout, self.sample), (Layout::Rgba, SampleWidth::One)) {
+            target.copy_from_slice(source);
+            return Some(());
+        }
+        // Otherwise one loop rather than one per colour type: the layout says
+        // which samples of a pixel land in which channels, and the sample width
+        // says only how wide each one is on the wire.
+        for (texel, pixel) in target
+            .chunks_exact_mut(4)
+            .zip(source.chunks_exact(pixel_bytes))
+        {
+            let sample = |channel: usize| self.sample.sample(pixel, channel);
+            match self.layout {
+                Layout::Rgba => {
+                    texel.copy_from_slice(&[sample(0), sample(1), sample(2), sample(3)])
                 }
-            }
-            Self::Gray8 => {
-                sized(1)?;
-                for (target, source) in target.chunks_exact_mut(4).zip(source) {
-                    target.copy_from_slice(&[*source, *source, *source, 0xff]);
+                Layout::Rgb => {
+                    texel.copy_from_slice(&[sample(0), sample(1), sample(2), 0xff]);
                 }
-            }
-            Self::GrayAlpha8 => {
-                sized(2)?;
-                for (target, source) in target.chunks_exact_mut(4).zip(source.chunks_exact(2)) {
-                    target.copy_from_slice(&[source[0], source[0], source[0], source[1]]);
+                Layout::GrayAlpha => {
+                    let luma = sample(0);
+                    texel.copy_from_slice(&[luma, luma, luma, sample(1)]);
+                }
+                Layout::Gray => {
+                    let luma = sample(0);
+                    texel.copy_from_slice(&[luma, luma, luma, 0xff]);
                 }
             }
         }

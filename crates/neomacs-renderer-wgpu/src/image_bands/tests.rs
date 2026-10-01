@@ -247,12 +247,26 @@ fn a_source_shown_larger_than_itself_declines_the_target() {
     }
 }
 
+/// The rows a 16-bit fixture is built from.
+///
+/// The first and last are the extremes, `0x00ff` and `0xff00` are the smallest
+/// and largest values whose scaling to eight bits carries into the next step,
+/// and the rest spread over the range. A row read as high bytes only would
+/// disagree with `image`'s own decode of this fixture at `0x00ff` — high byte
+/// 0, `image` 1 — and at `0xff00` — high byte 255, `image` 254 — which is why
+/// `0x1234` on its own is not a probe: it is one of the values the two rules
+/// agree on.
+const SIXTEEN_BIT_PROBES: [u16; 16] = [
+    0x0000, 0x00ff, 0x0100, 0x01ff, 0x02ff, 0x1234, 0x7f80, 0x8080, 0x80ff, 0xabcd, 0xfefe, 0xff00,
+    0xff01, 0xff7f, 0xfffe, 0xffff,
+];
+
 #[test]
 fn a_banded_decode_agrees_with_the_whole_image_path_for_every_row_format() {
-    // One fixture per colour type that reaches the decoder as 8-bit output:
-    // `Transformations::EXPAND` widens the sub-8-bit and paletted ones. Each is
-    // realized at its own size, so the filter is the identity and the
-    // raster must be `image`'s own decode of the same file, byte for byte.
+    // One fixture per colour type the decoder can output: `Transformations::
+    // EXPAND` widens the sub-8-bit and paletted ones and leaves the 16-bit ones
+    // alone. Each is realized at its own size, so the filter is the identity and
+    // the raster must be `image`'s own decode of the same file, byte for byte.
     let width = 23;
     let height = 61;
     let cases: Vec<(&str, Vec<u8>)> = vec![
@@ -322,11 +336,53 @@ fn a_banded_decode_agrees_with_the_whole_image_path_for_every_row_format() {
                 Some(vec![0x00, 0x80]),
             ),
         ),
+        // The four 16-bit colour types, whose rows stay 16-bit: EXPAND is not
+        // asked to strip them and `image`'s decoder does not. `image` reorders
+        // their big-endian samples and scales them onto eight bits; the banded
+        // path does the same, and this is what says so.
+        (
+            "gray16",
+            png_sixteen(width, height, png::ColorType::Grayscale, None),
+        ),
+        (
+            "gray-alpha16",
+            png_sixteen(width, height, png::ColorType::GrayscaleAlpha, None),
+        ),
+        (
+            "rgb16",
+            png_sixteen(width, height, png::ColorType::Rgb, None),
+        ),
+        (
+            "rgba16",
+            png_sixteen(width, height, png::ColorType::Rgba, None),
+        ),
+        // A 16-bit tRNS does not truncate anything: the crate appends its alpha
+        // samples as `0x0000`/`0xffff` pairs beside the samples it copied, so
+        // the row the banded path reads is still all big-endian pairs — the
+        // `0x1234` in the probe table is the transparent one here.
+        (
+            "gray16+trns",
+            png_sixteen(
+                width,
+                height,
+                png::ColorType::Grayscale,
+                Some(vec![0x12, 0x34]),
+            ),
+        ),
+        (
+            "rgb16+trns",
+            png_sixteen(
+                width,
+                height,
+                png::ColorType::Rgb,
+                Some(vec![0x12, 0x34, 0xab, 0xcd, 0x00, 0x01]),
+            ),
+        ),
     ];
 
     for (name, data) in cases {
         let BandSource::Banded(source) = open_banded(&data) else {
-            panic!("{name}: an 8-bit PNG has a row-wise decoder");
+            panic!("{name}: a PNG has a row-wise decoder");
         };
         let (bands, raster) = drain(source);
         assert!(!bands.is_empty(), "{name}: bands were produced");
@@ -394,26 +450,119 @@ fn the_mask_comes_from_the_source_pixels_not_from_the_raster() {
     );
 }
 
-#[test]
-fn a_sixteen_bit_png_declines_banding_rather_than_re_deriving_its_endianness() {
-    let width = 9;
-    let height = 4;
-    let raw: Vec<u16> = (0..width * height * 4).map(|i| (i * 997) as u16).collect();
-    let data = png_from(
-        image::ImageBuffer::<image::Rgba<u16>, _>::from_raw(width, height, raw)
-            .unwrap()
-            .into(),
-    );
+/// A 16-bit PNG of `width` x `height`, its samples taken from
+/// [`SIXTEEN_BIT_PROBES`] and written big-endian the way the format stores
+/// them, with an optional `tRNS` chunk.
+///
+/// Built through the `png` encoder rather than `image`'s so the file holds
+/// exactly the samples asked for: a fixture whose samples are unknown cannot
+/// say whether a banded decode read them correctly.
+fn png_sixteen(width: u32, height: u32, color: png::ColorType, trns: Option<Vec<u8>>) -> Vec<u8> {
+    let channels = match color {
+        png::ColorType::Grayscale => 1,
+        png::ColorType::GrayscaleAlpha => 2,
+        png::ColorType::Rgb => 3,
+        png::ColorType::Rgba => 4,
+        _ => panic!("a 16-bit fixture is not paletted"),
+    };
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut bytes, width, height);
+        encoder.set_color(color);
+        encoder.set_depth(png::BitDepth::Sixteen);
+        if let Some(trns) = trns {
+            encoder.set_trns(trns);
+        }
+        let mut writer = encoder.write_header().expect("header");
+        let pixels: Vec<u8> = (0..width as usize * height as usize * channels)
+            .flat_map(|i| SIXTEEN_BIT_PROBES[i % SIXTEEN_BIT_PROBES.len()].to_be_bytes())
+            .collect();
+        writer.write_image_data(&pixels).expect("image data");
+        writer.finish().expect("finish");
+    }
+    bytes
+}
 
-    assert!(
-        matches!(open_banded(&data), BandSource::Whole),
-        "16-bit output is read whole"
+/// A 16-bit PNG bands, and what it bands into is what `image`'s own decode of
+/// the same file becomes.
+///
+/// Sixteen-bit rows are the case a row-wise path can get subtly wrong in two
+/// separate places, so the fixture is built to catch both. The samples are
+/// big-endian pairs on the wire and `EXPAND` does not reorder them, so a row
+/// read without that reorder reads `0x1234` as `0x3412` — a different picture,
+/// not a different shade of one. And `image` scales a sample onto eight bits by
+/// rounding, not by dropping its low byte, which is what the probe table's
+/// `0x00ff` and `0xff00` are for. The equality is the whole decode's bytes, so
+/// it holds both to account at once.
+#[test]
+fn a_sixteen_bit_png_bands_the_image_the_whole_path_decodes() {
+    for color in [
+        png::ColorType::Grayscale,
+        png::ColorType::GrayscaleAlpha,
+        png::ColorType::Rgb,
+        png::ColorType::Rgba,
+    ] {
+        for (width, height) in [(9_u32, 4_u32), (23, 61)] {
+            let data = png_sixteen(width, height, color, None);
+            let (whole_width, whole_height, whole) = whole_image_pixels(&data);
+            assert_eq!((whole_width, whole_height), (width, height));
+
+            let BandSource::Banded(source) = open_banded(&data) else {
+                panic!("{color:?} has a row-wise decoder, 16-bit or not");
+            };
+            let (_, raster) = drain(source);
+            let raster = raster.expect("a completed source yields the raster");
+            assert_eq!(raster.raster().dimensions(), (width, height));
+            assert_eq!(
+                raster.into_rgba(),
+                whole,
+                "a {width}x{height} 16-bit {color:?} decoded in bands is not its whole decode"
+            );
+        }
+    }
+
+    // The same for a source whose pixels carry a tRNS, whose rows EXPAND
+    // widens to an alpha channel and whose samples are still big-endian pairs.
+    let data = png_sixteen(23, 61, png::ColorType::Grayscale, Some(vec![0x12, 0x34]));
+    let (_, _, whole) = whole_image_pixels(&data);
+    let BandSource::Banded(source) = open_banded(&data) else {
+        panic!("a 16-bit tRNS source bands");
+    };
+    let (_, raster) = drain(source);
+    assert_eq!(
+        raster.expect("a completed source").into_rgba(),
+        whole,
+        "a 16-bit source with tRNS decoded in bands is not its whole decode"
     );
-    // The control: the same source without the extra bit depth bands.
-    assert!(matches!(
-        open_banded(&varying_png(width, height)),
-        BandSource::Banded(_)
-    ));
+}
+
+/// The scaling that test rests on, stated where it can fail on its own: a
+/// 16-bit sample becomes the 8-bit value `image` makes of it, which for these
+/// two is *not* the sample's high byte.
+#[test]
+fn a_sixteen_bit_sample_is_scaled_to_eight_bits_by_rounding() {
+    let data = png_sixteen(16, 1, png::ColorType::Grayscale, None);
+    let (_, _, whole) = whole_image_pixels(&data);
+    let scaled: Vec<u8> = whole.chunks_exact(4).map(|texel| texel[0]).collect();
+
+    let expected: Vec<u8> = SIXTEEN_BIT_PROBES
+        .iter()
+        .map(|&value| ((u32::from(value) + 128) / 257) as u8)
+        .collect();
+    assert_eq!(
+        scaled, expected,
+        "the whole-image path rounds a sample onto the 8-bit range"
+    );
+    // What that costs a reader that takes the high byte instead, which is what
+    // the endianness of these rows invites and what the two values below catch.
+    let high_bytes: Vec<u8> = SIXTEEN_BIT_PROBES
+        .iter()
+        .map(|&value| (value >> 8) as u8)
+        .collect();
+    assert_ne!(
+        scaled, high_bytes,
+        "the fixture must contain a sample the two rules disagree on"
+    );
 }
 
 /// Adam7 rows are partial rows, so an interlaced source has no bands to take.
