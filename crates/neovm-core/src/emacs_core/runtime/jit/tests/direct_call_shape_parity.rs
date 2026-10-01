@@ -9,6 +9,10 @@
 //! every argument and complete error data.
 
 use super::*;
+
+#[cfg(test)]
+#[path = "direct_call_shape_edges.rs"]
+mod edges;
 use std::path::PathBuf;
 
 /// Frozen GNU output keeps the ordinary gate independent of an installed
