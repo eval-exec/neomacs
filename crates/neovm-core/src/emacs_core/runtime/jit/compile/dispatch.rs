@@ -1418,10 +1418,12 @@ fn call_spec_slow(
     // `NEOVM_FN_STAMPS`), keeping its cached leaf; when that leaf keys the
     // fast path, the call re-enters the gate, which takes it unless the
     // quit poll, the debugger or the depth needs the slow half. At most once
-    // per call: the slot now holds the clock, so a second slow entry finds
-    // nothing to resync. A resync whose leaf is gone falls through with the
+    // per call: the cold token stays held across re-entry, so a second
+    // slow entry uses the bits path even if another mutator moved the clock. A resync whose leaf is gone falls through with the
     // slot current, to the arming below.
-    if resync_spec_slot(ctx, sym, slot) && slot.direct_consts.load(Ordering::Relaxed) != 0 {
+    if let Some(_resync) = resync_spec_slot(ctx, sym, slot)
+        && slot.direct_consts.load(Ordering::Relaxed) != 0
+    {
         use crate::emacs_core::jit::stats::epoch::{SpecRevalidation, note_spec_revalidation};
         note_spec_revalidation(SpecRevalidation::StampReentered);
         return neovm_jit_call_spec(
@@ -1567,7 +1569,7 @@ fn call_spec_slow(
 /// function) -- unless the leaf was retired (re-tier, eviction, a deopt
 /// invalidation; design I5), which [`SpecSlot::clear_leaf`] then drops so
 /// the next call resolves the current one. Answers whether it moved the
-/// slot; `false` leaves everything to today's re-validation: a current or
+/// slot; `None` leaves everything to today's re-validation: a current or
 /// DISARMED slot (`u64::MAX` never validates), a redefined symbol, a raised
 /// floor, the force harness, the knob off.
 ///
@@ -1576,16 +1578,23 @@ fn call_spec_slow(
 /// poll). Threading: the clock is read BEFORE the stamps and that value is
 /// what the slot records (see `symbol::fn_stamps`); the slot words have the
 /// single-writer assumption of the rest of the slow half (a leaf's slots
-/// belong to one thread's cache).
+/// belong to one thread's cache). The token remains held across the
+/// re-entered gate, so another clock move cannot trigger a second resync
+/// for this call; its next slow entry uses the reference bits path.
 #[inline(never)]
-fn resync_spec_slot(ctx: *mut u8, sym: SymId, slot: &SpecSlot) -> bool {
+fn resync_spec_slot(
+    ctx: *mut u8,
+    sym: SymId,
+    slot: &SpecSlot,
+) -> Option<super::spec_slot::StampResyncGuard<'_>> {
     // SAFETY: the shim contract's dormant Context, only read here.
     let ctx = unsafe { &*(ctx as *const Context) };
     let armed = slot.epoch.load(Ordering::Relaxed);
     let now = ctx.obarray.function_epoch();
     if armed == now || jit_force_slow_spec() || !ctx.obarray.fn_unchanged_since(sym, armed) {
-        return false;
+        return None;
     }
+    let guard = slot.begin_stamp_resync()?;
     let leaf = slot.leaf_ptr();
     // SAFETY: a non-null slot leaf names a live or retired cache leaf, and a
     // retired leaf stays allocated (`resolve_compiled_leaf_ptr`).
@@ -1595,7 +1604,7 @@ fn resync_spec_slot(ctx: *mut u8, sym: SymId, slot: &SpecSlot) -> bool {
     slot.epoch.store(now, Ordering::Relaxed);
     use crate::emacs_core::jit::stats::epoch::{SpecRevalidation, note_spec_revalidation};
     note_spec_revalidation(SpecRevalidation::StampResynced);
-    true
+    Some(guard)
 }
 
 /// Predicate discriminator for [`neovm_jit_pred_spec`] (baked as an iconst by

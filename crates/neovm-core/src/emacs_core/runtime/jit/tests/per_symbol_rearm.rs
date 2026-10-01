@@ -10,6 +10,7 @@ use crate::emacs_core::intern::intern;
 use crate::emacs_core::jit::stats::epoch::{EpochCounters, SpecRevalidation};
 use crate::emacs_core::print::print_value;
 use crate::emacs_core::symbol::force_fn_stamps_for_test;
+use crate::emacs_core::value::LambdaParams;
 
 /// The compiled leaf the cache holds for the function SYM names.
 fn cached_leaf(ev: &Context, sym: &str) -> Option<&'static CompiledLeaf> {
@@ -238,5 +239,84 @@ fn a_pending_quit_at_a_resynced_site_signals_quit() {
     assert_eq!(ev.specpdl.len(), depth, "no frame left behind");
     assert_eq!(since(&base, SpecRevalidation::StampResynced), 1);
     assert_eq!(run(&mut ev, "(neovm--ps-quitter 5 nil)"), "4");
+    force_fn_stamps_for_test(None);
+}
+
+/// Model another mutator moving the clock between a resync proof and its
+/// re-entered gate. Holding the cold token bounds the operation regardless
+/// of how many unrelated definitions the other mutator publishes.
+#[test]
+fn another_clock_move_during_reentry_uses_bits_without_a_second_reentry() {
+    let mut ev = warm(true);
+    let (slot, _) = armed_slot(&ev, "neovm--ps-caller");
+    let guard = slot.begin_stamp_resync().expect("first resync owns token");
+    run(&mut ev, "(fset 'neovm--ps-unrelated #'car)");
+    let base = EpochCounters::snapshot();
+    assert_eq!(run(&mut ev, "(neovm--ps-caller 5)"), "4");
+    assert_eq!(since(&base, SpecRevalidation::StampResynced), 0);
+    assert_eq!(since(&base, SpecRevalidation::StampReentered), 0);
+    assert_eq!(since(&base, SpecRevalidation::Rearmed), 1);
+    drop(guard);
+    run(&mut ev, "(fset 'neovm--ps-unrelated #'cdr)");
+    let base = EpochCounters::snapshot();
+    assert_eq!(run(&mut ev, "(neovm--ps-caller 7)"), "6");
+    assert_eq!(since(&base, SpecRevalidation::StampResynced), 1);
+    assert_eq!(since(&base, SpecRevalidation::StampReentered), 1);
+    force_fn_stamps_for_test(None);
+}
+
+/// Real arena ABA: the old bytecode object is unbound and reclaimed, then
+/// an allocation with the same tagged bits contains different code. The
+/// stamp rejects identity across the change; bits revalidation resolves the
+/// replacement object's fresh compiled state.
+#[test]
+fn a_collected_binding_reused_at_the_same_address_runs_the_new_code() {
+    let mut ev = warm(true);
+    let target = intern("neovm--ps-callee");
+    let old = ev.obarray.symbol_function_id(target).expect("bound");
+    let old_bits = old.bits();
+    let old_ptr = old.as_veclike_ptr().expect("bytecode") as *const u8;
+    let (slot, _) = armed_slot(&ev, "neovm--ps-caller");
+    run(
+        &mut ev,
+        "(progn (fset 'neovm--ps-callee #'ignore)
+                        (put 'neovm--ps-callee 'function-history nil))",
+    );
+    ev.gc_collect_exact();
+    assert!(
+        !ev.tagged_heap.bytecode_arena_owns_for_test(old_ptr),
+        "the original object must actually be reclaimed"
+    );
+    let mut replacement = None;
+    for _ in 0..16_384 {
+        let mut bc = ByteCodeFunction::new(LambdaParams::simple(vec![intern("a"), intern("b")]));
+        bc.ops = vec![
+            Op::StackRef(1),
+            Op::StackRef(1),
+            Op::Mul,
+            Op::Constant(0),
+            Op::Mul,
+            Op::Return,
+        ];
+        bc.constants = vec![Value::fixnum(100)].into();
+        bc.max_stack = 4;
+        bc.lexical = true;
+        let candidate = Value::make_bytecode(bc);
+        if candidate.bits() == old_bits {
+            replacement = Some(candidate);
+            break;
+        }
+    }
+    let replacement = replacement.expect("the freed arena slot is reused");
+    assert_eq!(replacement.bits(), old_bits, "actual equal-address ABA");
+    ev.obarray.set_symbol_function_id(target, replacement);
+    let base = EpochCounters::snapshot();
+    assert_eq!(run(&mut ev, "(neovm--ps-caller 5)"), "500");
+    assert_eq!(since(&base, SpecRevalidation::StampResynced), 0);
+    assert_eq!(since(&base, SpecRevalidation::Rearmed), 1);
+    assert_eq!(
+        slot.epoch.load(Ordering::Relaxed),
+        ev.obarray.function_epoch()
+    );
     force_fn_stamps_for_test(None);
 }
