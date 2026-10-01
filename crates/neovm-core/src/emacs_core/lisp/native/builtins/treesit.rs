@@ -472,10 +472,7 @@ pub(crate) fn treesit_candidate_paths(eval: &super::eval::Context, language: Sym
         }
     }
 
-    candidates
-        .into_iter()
-        .map(|probe| probe.0)
-        .collect()
+    candidates.into_iter().map(|probe| probe.0).collect()
 }
 
 fn load_language_from_path(path: &str, c_symbol: &str) -> Result<runtime::LoadedLanguage, String> {

@@ -10721,7 +10721,9 @@ fn treesit_candidate_paths_expand_tilde_and_relative_directories_like_gnu() {
     let candidates = super::treesit::treesit_candidate_paths(&eval, language);
 
     assert!(
-        candidates.iter().any(|path| path.ends_with("tree-sitter/libtree-sitter-c.so")),
+        candidates
+            .iter()
+            .any(|path| path.ends_with("tree-sitter/libtree-sitter-c.so")),
         "the user-emacs-directory candidates must keep the tree-sitter/ layout: {candidates:?}"
     );
     // GNU keeps the bare-name group relative on purpose -- those go through
