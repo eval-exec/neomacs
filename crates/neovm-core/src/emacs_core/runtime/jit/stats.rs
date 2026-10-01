@@ -402,6 +402,9 @@ pub(crate) enum ReportTag {
     /// Exit report: the fuser census.
     #[strum(serialize = "neovm-jit-final-inline")]
     FinalInline,
+    /// Exit report: inner source/pc census for every chain-bearing leaf.
+    #[strum(serialize = "neovm-jit-final-inline-chain")]
+    FinalInlineChain,
     /// Exit report: native-run totals.
     #[strum(serialize = "neovm-jit-final-runs")]
     FinalRuns,
@@ -1044,6 +1047,8 @@ fn leaf_report_rows(
                 entry_counted: row.obs.entry_counted,
                 entries: row.obs.entries,
                 deopt_at: row.obs.deopt_at,
+                chain_deopts: row.obs.chain_deopts,
+                chain_pcs: row.obs.chain_pcs,
                 deopt_rerun: row.obs.deopt_rerun,
                 signals: row.obs.signals,
                 deopt_pcs,

@@ -392,6 +392,45 @@ pub(crate) fn note_deopt(
     origin: LeafOrigin<'_>,
     event: DeoptEvent<'_>,
 ) -> ReoptVerdict {
+    note_deopt_for_source(ctx, func, func, leaf, origin, event, None)
+}
+
+/// Attribute a virtual-frame exit to its innermost source while retiring the
+/// physical caller's leaf. Metadata and counters belong to that leaf; feedback
+/// belongs to the callee's original pc. This cold operation allocates no Lisp
+/// objects and observes only the current mutator's evaluator/cache state.
+#[cold]
+#[inline(never)]
+pub(crate) fn note_deopt_chain(
+    ctx: *const Context,
+    physical: &ByteCodeFunction,
+    inner: &ByteCodeFunction,
+    leaf: &CompiledLeaf,
+    physical_pc: usize,
+    event: DeoptEvent<'_>,
+) -> ReoptVerdict {
+    note_deopt_for_source(
+        ctx,
+        physical,
+        inner,
+        leaf,
+        LeafOrigin::Entry,
+        event,
+        Some(physical_pc),
+    )
+}
+
+#[cold]
+#[inline(never)]
+fn note_deopt_for_source(
+    ctx: *const Context,
+    physical: &ByteCodeFunction,
+    func: &ByteCodeFunction,
+    leaf: &CompiledLeaf,
+    origin: LeafOrigin<'_>,
+    event: DeoptEvent<'_>,
+    physical_pc: Option<usize>,
+) -> ReoptVerdict {
     let cause = match event {
         DeoptEvent::Rerun => DeoptCause::Rerun,
         // What the cold block named wins; the op classifies the rest.
@@ -421,24 +460,28 @@ pub(crate) fn note_deopt(
     if !reopt_enabled() {
         return ReoptVerdict::Kept;
     }
-    respond(func, leaf, origin, event, cause)
+    respond(physical, func, leaf, origin, event, cause, physical_pc)
 }
 
 /// The policy half of [`note_deopt`]: widen what the cause proved, then
 /// invalidate the leaf when the cause is conclusive or has repeated
 /// `site_limit` times at one pc.
 fn respond(
+    physical: &ByteCodeFunction,
     func: &ByteCodeFunction,
     leaf: &CompiledLeaf,
     origin: LeafOrigin<'_>,
     event: DeoptEvent<'_>,
     cause: DeoptCause,
+    physical_pc: Option<usize>,
 ) -> ReoptVerdict {
     let rt = func.jit_runtime();
     let ops_len = func.executable_ops().len();
     let k = knobs();
-    let at_limit =
-        |pc: usize| u32::try_from(pc).is_ok_and(|pc| leaf.obs.deopt_count_at(pc) >= k.site_limit);
+    let at_limit = |pc: usize| {
+        u32::try_from(physical_pc.unwrap_or(pc))
+            .is_ok_and(|pc| leaf.obs.deopt_count_at(pc) >= k.site_limit)
+    };
     let (floor, reprofile) = match (cause, event) {
         // Conclusive: the site met operands its lowering does not take.
         (DeoptCause::ArithOperands(seen), DeoptEvent::Precise { pc, .. }) => {
@@ -509,8 +552,8 @@ fn respond(
         // reached its limit.
         _ => return ReoptVerdict::Kept,
     };
-    if super::cache::leaf_is_current(func, leaf, origin) {
-        super::cache::invalidate_for_reopt(func, origin, floor, reprofile);
+    if super::cache::leaf_is_current(physical, leaf, origin) {
+        super::cache::invalidate_for_reopt(physical, origin, floor, reprofile);
         ReoptVerdict::Invalidated
     } else {
         // A stale leaf (retired by a re-tier, an inline eviction or an
@@ -662,3 +705,7 @@ mod end_to_end;
 #[cfg(test)]
 #[path = "reopt/tests/deopt_cells_test.rs"]
 mod deopt_cells_test;
+
+#[cfg(test)]
+#[path = "reopt/tests/chain_test.rs"]
+mod chain_test;

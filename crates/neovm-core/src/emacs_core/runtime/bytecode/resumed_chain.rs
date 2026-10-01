@@ -37,7 +37,8 @@
 use super::*;
 
 /// How an inlined frame was entered: the call shape whose frame push, depth
-/// accounting and pop a chain resume reproduces.
+/// accounting and pop a chain resume reproduces. Threading: immutable call
+/// protocol metadata, independent of any mutator's Lisp state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ChainLink {
     /// GNU `Bcall` (src/bytecode.c:781-831): the caller frame's
@@ -58,7 +59,8 @@ impl ChainLink {
 }
 
 /// An inlined frame's backtrace entry at the deopt point (design §4.1): the
-/// state is static per program point in the compiled code.
+/// state is static per program point in the compiled code. Threading: an index
+/// belongs to the resuming mutator's specpdl, never another context.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ChainBacktrace {
     /// The compiled code pushed the entry at this specpdl index, and
@@ -71,6 +73,8 @@ pub(crate) enum ChainBacktrace {
 }
 
 /// One bytecode activation of a chain, in the terms Tier-0 keeps it.
+/// Threading: borrowed, temporarily unrooted values belong to the resuming
+/// mutator and must be seeded into that Context before any Lisp safepoint.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ChainFrame<'s> {
     /// The exact byte-code object running in this frame.
@@ -90,7 +94,8 @@ pub(crate) struct ChainFrame<'s> {
 }
 
 /// An inlined level of a chain: its frame, how it was called, and where its
-/// backtrace entry is.
+/// backtrace entry is. Threading: the frame and specpdl index belong exclusively
+/// to the resuming mutator; callers must not transfer them across contexts.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct InlinedChainFrame<'s> {
     pub(crate) frame: ChainFrame<'s>,
@@ -98,7 +103,8 @@ pub(crate) struct InlinedChainFrame<'s> {
     pub(crate) backtrace: ChainBacktrace,
 }
 
-/// How [`Vm::run_chain_frame`] enters its frame.
+/// How [`Vm::run_chain_frame`] enters its frame. Threading: a nonlocal flow is
+/// owned by the resuming mutator; the callee does not publish it.
 enum ChainFrameEntry {
     /// Interpret from the frame's pc.
     Run,
@@ -108,6 +114,7 @@ enum ChainFrameEntry {
 }
 
 /// The backtrace entry of one inlined call, as the resume must pop it.
+/// Threading: each token/index names the resuming mutator's specpdl only.
 enum ChainCallFrame {
     /// Pushed by the resume itself, with Tier-0's `Bcall` token.
     Pushed(BytecodeBacktraceFrame),

@@ -330,6 +330,10 @@ pub(crate) struct LeafObs {
     /// Precise deopts (`STATUS_DEOPT_AT`) — every one runs
     /// [`CompiledLeaf::deopt_at_outcome`].
     pub(crate) deopt_at: Cell<u64>,
+    /// Chain deopts, written only by the owning mutator on cold readback.
+    pub(crate) chain_deopts: Cell<u64>,
+    /// `(innermost source id, pc, count)`; bounded, contains no Lisp values.
+    chain_pcs: RefCell<SmallVec<[(u64, u32, u64); 4]>>,
     /// Rerun-from-start deopts (`STATUS_DEOPT`).
     pub(crate) deopt_rerun: Cell<u64>,
     /// Native runs that exited with `STATUS_SIGNAL`.
@@ -360,6 +364,8 @@ impl LeafObs {
             entry_counted,
             entries: Cell::new(0),
             deopt_at: Cell::new(0),
+            chain_deopts: Cell::new(0),
+            chain_pcs: RefCell::new(SmallVec::new()),
             deopt_rerun: Cell::new(0),
             signals: Cell::new(0),
             deopt_pcs: RefCell::new(SmallVec::new()),
@@ -409,6 +415,18 @@ impl LeafObs {
         }
     }
 
+    /// Chain census uses the inner source's pc, while this leaf remains the
+    /// physical activation. No Lisp allocation or safepoint occurs here.
+    pub(crate) fn note_chain_deopt(&self, source: u64, pc: u32) {
+        self.chain_deopts.set(self.chain_deopts.get() + 1);
+        let mut pcs = self.chain_pcs.borrow_mut();
+        if let Some(slot) = pcs.iter_mut().find(|(s, p, _)| *s == source && *p == pc) {
+            slot.2 += 1;
+        } else if pcs.len() < Self::MAX_DEOPT_PCS {
+            pcs.push((source, pc, 1));
+        }
+    }
+
     /// Count a rerun-from-start deopt.
     #[cold]
     #[inline(never)]
@@ -433,6 +451,8 @@ impl LeafObs {
             entry_counted: self.entry_counted,
             entries: self.entries.get(),
             deopt_at: self.deopt_at.get(),
+            chain_deopts: self.chain_deopts.get(),
+            chain_pcs: self.chain_pcs.borrow().iter().copied().collect(),
             deopt_rerun: self.deopt_rerun.get(),
             signals: self.signals.get(),
             deopt_pcs,
@@ -451,6 +471,8 @@ pub(crate) struct LeafObsSnapshot {
     pub(crate) entry_counted: bool,
     pub(crate) entries: u64,
     pub(crate) deopt_at: u64,
+    pub(crate) chain_deopts: u64,
+    pub(crate) chain_pcs: Vec<(u64, u32, u64)>,
     pub(crate) deopt_rerun: u64,
     pub(crate) signals: u64,
     /// `(pc, count)`, most frequent first.
@@ -523,6 +545,11 @@ pub struct CompiledLeaf {
     pub(crate) deopt_spill: Box<[core::cell::Cell<i64>]>,
     /// Precise-deopt pc/depth/handler-count cells (see [`DeoptCells`]).
     pub(crate) deopt_meta: Box<DeoptCells>,
+    /// Immutable, pointer-free chain metadata. Callee indices refer into
+    /// `reloc_data`, which the existing cached/retired leaf root walk traces.
+    /// Threading: initialized before publication; readback and buffers remain
+    /// owned by the leaf's mutator. Empty until an opt-in producer is added.
+    pub(crate) chains: Box<[super::super::vframe::DeoptChain]>,
     /// Per-site direct-call speculation state ([`SpecSlot`]): armed epoch +
     /// lazily-cached callee leaf pointer. Generated code holds raw pointers
     /// into this Box (stable: boxed slice, owned here, code only runs under a
@@ -739,6 +766,8 @@ pub struct DeoptResume {
     /// The inlined-frame chain the cold block stored in
     /// [`DeoptCells::chain`]; `None` for a single-frame deopt.
     pub(crate) chain: Option<u32>,
+    /// Per-mutator owned readback; seed every frame before any Lisp safepoint.
+    pub(crate) inlined: Option<Box<super::super::vframe::InlinedResume>>,
 }
 
 const _: () = {
@@ -921,6 +950,7 @@ impl CompiledLeaf {
             spec_expected,
             deopt_spill,
             deopt_meta,
+            chains: Box::from([]),
             reloc_data,
             sidecar: Some(sidecar),
             dynamic_prefix: 0,
@@ -1517,6 +1547,66 @@ impl CompiledLeaf {
                 Some(base) => base,
                 None => unsafe { (*(vmctx as *const Context)).condition_stack_len() },
             };
+            if let Some(site) = chain {
+                let ctx = unsafe { &mut *(vmctx as *mut Context) };
+                let readback = if self.obs.osr_pc.is_some() {
+                    Err(super::super::vframe::ChainReadError::Osr)
+                } else if handlers != 0 {
+                    Err(super::super::vframe::ChainReadError::ActiveHandlers)
+                } else {
+                    self.chains
+                        .get(site as usize)
+                        .ok_or(super::super::vframe::ChainReadError::MissingSite)
+                        .and_then(|meta| {
+                            meta.readback(&stack, &binds, &self.reloc_data, ctx, spec_base, pc)
+                        })
+                };
+                return match readback {
+                    Ok(readback) => {
+                        let (source, inner_pc) = readback
+                            .inlined
+                            .frames
+                            .last()
+                            .map(|frame| {
+                                (
+                                    frame
+                                        .function
+                                        .get_bytecode_data()
+                                        .expect("validated")
+                                        .source_id,
+                                    frame.pc as u32,
+                                )
+                            })
+                            .unwrap_or((self.obs.id, readback.pc as u32));
+                        self.obs.note_chain_deopt(source, inner_pc);
+                        NativeRun::DeoptAt(Box::new(DeoptResume {
+                            pc: readback.pc,
+                            stack: readback.stack,
+                            handlers: 0,
+                            binds: readback.binds,
+                            spec_base,
+                            cond_base,
+                            cause,
+                            chain,
+                            inlined: Some(Box::new(readback.inlined)),
+                        }))
+                    }
+                    Err(error) => {
+                        tracing::error!(target: "neovm::jit::deopt", ?error,
+                            "invalid or unsupported deopt chain metadata");
+                        ctx.truncate_condition_stack(cond_base);
+                        let flow = ctx
+                            .unbind_to_with_result(
+                                spec_base,
+                                Err(signal("invalid-byte-code", Vec::new())),
+                            )
+                            .expect_err("invalid chain must signal");
+                        stash_pending_flow(flow);
+                        self.obs.note_signal();
+                        NativeRun::Signal
+                    }
+                };
+            }
             NativeRun::DeoptAt(Box::new(DeoptResume {
                 pc,
                 stack,
@@ -1526,6 +1616,7 @@ impl CompiledLeaf {
                 cond_base,
                 cause,
                 chain,
+                inlined: None,
             }))
         }
     }

@@ -2440,39 +2440,13 @@ fn deopt_resume_outcome(
     leaf: &CompiledLeaf,
     resume: crate::emacs_core::jit::compile::DeoptResume,
 ) -> NativeCallOutcome {
-    let crate::emacs_core::jit::compile::DeoptResume {
-        pc,
-        stack,
-        handlers,
-        binds,
-        spec_base,
-        cond_base,
-        cause,
-        chain: _,
-    } = resume;
-    // Before the resumed frame seeds `stack` into the traced bc_buf: the
-    // hook neither allocates on the Lisp heap nor reaches a safepoint.
-    super::reopt::note_deopt(
-        ctx,
-        func,
-        leaf,
-        LeafOrigin::Entry,
-        DeoptEvent::Precise {
-            pc,
-            stack: &stack,
-            cause,
-        },
-    );
     if ctx.is_null() {
         return NativeCallOutcome::Fallback;
     }
     // SAFETY: the seam-provided &mut Context is dormant during the
     // native call — the same contract every runtime shim uses.
     let ctx = unsafe { &mut *ctx };
-    let mut vm = crate::emacs_core::bytecode::Vm::from_context(ctx);
-    match vm.run_resumed_frame(
-        func, func_value, pc, &stack, handlers, &binds, spec_base, cond_base,
-    ) {
+    match super::compile::resumed_chain::resume_deopt(ctx, func, func_value, leaf, resume) {
         Ok(v) => NativeCallOutcome::Value(v),
         Err(flow) => {
             stash_pending_flow(flow);
@@ -2520,6 +2494,7 @@ pub(crate) fn direct_call_cold(
                 deopt_resume_outcome(ctx, func, func_value, leaf, *resume)
             }
             // deopt_at_outcome only degrades to plain Deopt with a null vmctx.
+            NativeRun::Signal => NativeCallOutcome::FlowStashed,
             _ => NativeCallOutcome::Fallback,
         };
     }
@@ -2648,28 +2623,6 @@ fn finish_native_run(
             Ok(None)
         }
         NativeRun::DeoptAt(resume) => {
-            let crate::emacs_core::jit::compile::DeoptResume {
-                pc,
-                stack,
-                handlers,
-                binds,
-                spec_base,
-                cond_base,
-                cause,
-                chain: _,
-            } = *resume;
-            // Before the resumed frame seeds `stack` into the traced bc_buf.
-            super::reopt::note_deopt(
-                ctx,
-                func,
-                leaf,
-                LeafOrigin::Entry,
-                DeoptEvent::Precise {
-                    pc,
-                    stack: &stack,
-                    cause,
-                },
-            );
             if ctx.is_null() {
                 // call() maps null-vmctx deopts to Deopt; defensive only.
                 return Ok(None);
@@ -2679,11 +2632,8 @@ fn finish_native_run(
             // SAFETY: the seam-provided &mut Context is dormant during the
             // native call — the same contract every runtime shim uses.
             let ctx = unsafe { &mut *ctx };
-            let mut vm = crate::emacs_core::bytecode::Vm::from_context(ctx);
-            vm.run_resumed_frame(
-                func, func_value, pc, &stack, handlers, &binds, spec_base, cond_base,
-            )
-            .map(|v| Some(v.bits()))
+            super::compile::resumed_chain::resume_deopt(ctx, func, func_value, leaf, *resume)
+                .map(|v| Some(v.bits()))
         }
         NativeRun::Signal => {
             Err(take_pending_flow()

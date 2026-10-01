@@ -26,9 +26,16 @@ use crate::emacs_core::value::Value;
 
 use super::ReportTag;
 
-// Unread/off/on. Only a scalar is published; there is no initialization
-// payload whose visibility would require acquire/release ordering.
-static ENABLED: AtomicU8 = AtomicU8::new(0);
+/// Scalar process configuration. Relaxed loads/stores publish no payload,
+/// so independent compiler/mutator readers need no acquire/release ordering.
+#[repr(u8)]
+enum CensusMode {
+    Unread,
+    Off,
+    On,
+}
+
+static ENABLED: AtomicU8 = AtomicU8::new(CensusMode::Unread as u8);
 
 /// One predictable flag read on the callback path, with the environment
 /// lookup outlined so the off path remains small.
@@ -39,8 +46,8 @@ fn enabled() -> bool {
         return on;
     }
     match ENABLED.load(Ordering::Relaxed) {
-        1 => false,
-        2 => true,
+        value if value == CensusMode::Off as u8 => false,
+        value if value == CensusMode::On as u8 => true,
         _ => read_enabled(),
     }
 }
@@ -49,7 +56,8 @@ fn enabled() -> bool {
 #[inline(never)]
 fn read_enabled() -> bool {
     let on = std::env::var("NEOVM_JIT_INLINE_CENSUS").as_deref() == Ok("1");
-    ENABLED.store(1 + u8::from(on), Ordering::Relaxed);
+    let mode = if on { CensusMode::On } else { CensusMode::Off };
+    ENABLED.store(mode as u8, Ordering::Relaxed);
     on
 }
 

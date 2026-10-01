@@ -113,7 +113,22 @@ fn deopt(leaf: &crate::emacs_core::jit::compile::CompiledLeaf, ev: &mut Context)
 fn a_chain_deopt_does_not_leak_into_the_next_single_frame_deopt() {
     force_deopt_for_test(false);
     let mut ev = Context::new();
-    let leaf = max_leaf();
+    let mut leaf = max_leaf();
+    // A real metadata table now backs the synthetic chain id. Its physical
+    // frame is the same precise Max snapshot; X12 still tests id 2/reset.
+    use crate::emacs_core::jit::vframe::{BtState, DeoptChain, SpillRange, VFrameKind, VFrameMeta};
+    let chain = DeoptChain {
+        frames: vec![VFrameMeta {
+            kind: VFrameKind::PhysicalBytecode,
+            pc: 2,
+            stack: SpillRange { start: 0, len: 2 },
+            binds: 0,
+            handlers: 0,
+            bt: BtState::Physical,
+        }]
+        .into_boxed_slice(),
+    };
+    leaf.chains = vec![chain.clone(), chain.clone(), chain].into_boxed_slice();
 
     leaf.deopt_meta.chain.set(2);
     leaf.deopt_meta

@@ -29,6 +29,10 @@ pub(crate) struct LeafReportRow {
     pub(crate) entry_counted: bool,
     pub(crate) entries: u64,
     pub(crate) deopt_at: u64,
+    /// Successful chain readbacks, counted by the physical leaf's mutator.
+    pub(crate) chain_deopts: u64,
+    /// `(innermost source id, original pc, count)` from the cold readback.
+    pub(crate) chain_pcs: Vec<(u64, u32, u64)>,
     pub(crate) deopt_rerun: u64,
     pub(crate) signals: u64,
     /// `(pc, count, op)`, most frequent first; `op` is the bytecode op at
@@ -86,6 +90,36 @@ impl LeafReportRow {
             self.regalloc,
             self.clif_insts,
             self.compile_us,
+        )
+    }
+
+    /// Separate census rows include every chain-bearing leaf, even when
+    /// ordinary leaf ranking omits it. No compiler or Lisp execution runs
+    /// while the owning mutator renders its exit snapshot.
+    fn render_chain(&self) -> String {
+        let mut pcs: Vec<String> = self
+            .chain_pcs
+            .iter()
+            .map(|(source, pc, count)| format!("{source}:{pc}:{count}"))
+            .collect();
+        let named = self
+            .chain_pcs
+            .iter()
+            .map(|(_, _, count)| count)
+            .sum::<u64>();
+        if self.chain_deopts > named {
+            pcs.push(format!("other:{}", self.chain_deopts - named));
+        }
+        format!(
+            "id={} name={} chain_deopts={} inner_pcs={}",
+            self.id,
+            self.name.as_deref().unwrap_or("-"),
+            self.chain_deopts,
+            if pcs.is_empty() {
+                "-".to_string()
+            } else {
+                pcs.join(",")
+            },
         )
     }
 }
@@ -202,6 +236,9 @@ impl FinalReport {
         }
         lines.push((ReportTag::FinalMirBails, or_dash(&self.mir_bails)));
         lines.push((ReportTag::FinalInline, or_dash(&self.inline)));
+        for row in self.leaves.iter().filter(|row| row.chain_deopts > 0) {
+            lines.push((ReportTag::FinalInlineChain, row.render_chain()));
+        }
         let (mut entries_all, mut deopt_at, mut deopt_rerun, mut signals) = (
             self.dropped.entries,
             self.dropped.deopt_at,

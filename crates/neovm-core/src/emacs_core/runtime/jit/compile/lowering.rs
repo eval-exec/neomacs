@@ -2754,6 +2754,7 @@ pub(super) fn lower_mir_with_plan(
         spec_expected: Box::from([]),
         deopt_spill,
         deopt_meta,
+        chains: Box::from([]),
         reloc_data,
         // JIT bakes its bases as iconst; the 4th entry arg is ignored.
         sidecar: None,

@@ -3413,6 +3413,7 @@ pub fn lower_leaf_full_osr(
         spec_expected: Box::from([]),
         deopt_spill,
         deopt_meta,
+        chains: Box::from([]),
         reloc_data,
         // JIT bakes its bases as iconst; the 4th entry arg is the executing
         // callee's constant base, read only when `dynamic_prefix > 0`.
@@ -4556,6 +4557,7 @@ pub(crate) mod direct_call;
 pub(crate) mod jit_layout;
 pub(crate) mod reg_abi;
 pub(crate) use reg_abi::LeafAbi;
+pub(crate) mod resumed_chain;
 pub(crate) mod snapshot;
 pub(crate) mod source_slots;
 pub(crate) use snapshot::{

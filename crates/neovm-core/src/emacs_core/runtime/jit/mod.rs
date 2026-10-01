@@ -131,6 +131,8 @@ pub mod backend;
 /// anything else. Only built with the `jit` feature. See `jit/compile.rs`.
 #[cfg(feature = "jit")]
 pub mod compile;
+#[cfg(feature = "jit")]
+pub(crate) mod vframe;
 
 /// Per-thread compiled-code cache + the tier-up entry point the dispatch seam
 /// calls ([`cache::try_run_compiled`]). Only built with the `jit` feature.

@@ -195,6 +195,8 @@ fn leaf_row(id: u64, deopt_at: u64, deopt_rerun: u64) -> LeafReportRow {
         entry_counted: true,
         entries: 0,
         deopt_at,
+        chain_deopts: 0,
+        chain_pcs: Vec::new(),
         deopt_rerun,
         signals: 0,
         deopt_pcs: if deopt_at > 0 {
@@ -206,6 +208,36 @@ fn leaf_row(id: u64, deopt_at: u64, deopt_rerun: u64) -> LeafReportRow {
         compile_us: 0,
         mir: Some("taken".into()),
     }
+}
+
+/// Cold chain rows preserve inner source/pc attribution even for a leaf
+/// outside the ranked top-deopt section, and expose the bounded overflow.
+#[test]
+fn jit_final_report_includes_every_chain_census_with_inner_source_pc() {
+    let mut leaves: Vec<_> = (1..=20).map(|id| leaf_row(id, 100, 0)).collect();
+    leaves.push(LeafReportRow {
+        chain_deopts: 4,
+        chain_pcs: vec![(91, 3, 2), (92, 7, 1)],
+        ..leaf_row(99, 4, 0)
+    });
+    let report = FinalReport {
+        leaves,
+        ..Default::default()
+    };
+    let lines = report.render();
+    assert_eq!(
+        body_of(&lines, ReportTag::FinalInlineChain),
+        "id=99 name=j4-add chain_deopts=4 inner_pcs=91:3:2,92:7:1,other:1"
+    );
+    assert_eq!(
+        <&'static str>::from(ReportTag::FinalInlineChain),
+        "neovm-jit-final-inline-chain"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|(tag, body)| *tag == ReportTag::FinalLeaf && body.starts_with("id=99 "))
+    );
 }
 
 /// Each leaf row names the MIR verdict of the compile that produced it, as
