@@ -6,6 +6,67 @@
 use super::{mutate::LispCollectionRevision, value::TaggedValue};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::cell::{Cell, RefCell};
+use std::sync::{
+    LazyLock,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+};
+
+/// Process knobs, read once before a heap or capture is created.
+///
+/// | Knob | Default | Effect |
+/// | --- | --- | --- |
+/// | `NEOVM_COLLECTION_READ_GLOBAL=on` | off | Skip TLS when no mutator has an active capture. |
+/// | `NEOVM_COLLECTION_READ_HOIST=on` | off | Select an unobserved list walk outside callback-free loops. |
+/// | `NEOVM_COLLECTION_WRITE_LAZY=on` | off | Skip revision/journal work until the first process capture. |
+///
+/// Scope state and journals remain local to each mutator. The process gates
+/// contain no Lisp identities and are safe with concurrent mutators. The low
+/// bit keeps the legacy TLS path enabled when the global knob is off; each
+/// admitted scope contributes two. Relaxed ordering suffices: a mutator's own
+/// begin is sequenced before its observation, so it cannot read a count from
+/// before that begin. Other mutators only make the gate more conservative.
+static CAPTURE_SCOPES: AtomicUsize = AtomicUsize::new(1);
+
+/// Once any mutator has started a capture, all subsequent writes keep their
+/// thread's history, including writes between scopes while certificates live.
+/// Never reset this gate on scope exit. No Lisp state is shared by this flag.
+static HISTORY_REQUIRED: AtomicBool = AtomicBool::new(true);
+
+/// A process configuration flag, immutable after initialization. This does not
+/// cache Lisp state and is safe to read from several mutators.
+static HOIST_READS: AtomicBool = AtomicBool::new(false);
+
+static CONFIG: LazyLock<()> = LazyLock::new(|| {
+    if std::env::var("NEOVM_COLLECTION_READ_GLOBAL").as_deref() == Ok("on") {
+        CAPTURE_SCOPES.fetch_and(!1, Ordering::Relaxed);
+    }
+    if std::env::var("NEOVM_COLLECTION_WRITE_LAZY").as_deref() == Ok("on") {
+        HISTORY_REQUIRED.store(false, Ordering::Relaxed);
+    }
+    HOIST_READS.store(
+        std::env::var("NEOVM_COLLECTION_READ_HOIST").as_deref() == Ok("on"),
+        Ordering::Relaxed,
+    );
+});
+
+pub(super) fn initialize() {
+    LazyLock::force(&CONFIG);
+}
+
+#[inline]
+pub(crate) fn hoist_reads() -> bool {
+    HOIST_READS.load(Ordering::Relaxed)
+}
+
+#[inline]
+pub(crate) fn is_active() -> bool {
+    CAPTURE_SCOPES.load(Ordering::Relaxed) != 0 && ACTIVE.with(Cell::get)
+}
+
+#[inline]
+pub(super) fn history_required() -> bool {
+    HISTORY_REQUIRED.load(Ordering::Relaxed)
+}
 
 const JOURNAL_SIZE: usize = 8192;
 const MAX_READS: usize = 16_384;
@@ -89,6 +150,8 @@ struct CollectionReadScope {
 
 impl CollectionReadScope {
     fn begin() -> Self {
+        initialize();
+        HISTORY_REQUIRED.store(true, Ordering::Relaxed);
         let admitted = STATE.with(|state| {
             let mut state = state.borrow_mut();
             let overflow = state.captures.len() >= MAX_DEPTH;
@@ -107,6 +170,9 @@ impl CollectionReadScope {
             true
         });
         ACTIVE.with(|active| active.set(true));
+        if admitted {
+            CAPTURE_SCOPES.fetch_add(2, Ordering::Relaxed);
+        }
         Self {
             active: admitted,
             _not_send: std::marker::PhantomData,
@@ -156,6 +222,7 @@ impl CollectionReadScope {
             let capture = state.captures.pop().expect("collection read scope");
             clear_recent_reads();
             ACTIVE.with(|active| active.set(!state.captures.is_empty()));
+            CAPTURE_SCOPES.fetch_sub(2, Ordering::Relaxed);
             capture
         })
     }
@@ -171,7 +238,7 @@ impl Drop for CollectionReadScope {
 
 #[inline]
 pub(crate) fn observe(value: TaggedValue) {
-    if !ACTIVE.with(Cell::get) {
+    if !is_active() {
         return;
     }
     observe_bits(value.bits());
@@ -200,6 +267,8 @@ fn observe_bits(bits: usize) {
     }
 }
 
+#[cold]
+#[inline(never)]
 fn observe_uncached(bits: usize) {
     #[cfg(test)]
     OBSERVATION_STATE_ACCESSES.with(|count| count.set(count.get() + 1));
@@ -260,167 +329,4 @@ pub fn capture_normalized<S, T>(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::emacs_core::Value;
-
-    #[test]
-    fn repeated_reads_skip_capture_state_but_preserve_nested_dependencies() {
-        let source = Value::cons(Value::NIL, Value::NIL);
-        let (_, outer) = capture(|| {
-            OBSERVATION_STATE_ACCESSES.with(|count| count.set(0));
-            for _ in 0..1024 {
-                source.cons_car();
-            }
-            assert_eq!(OBSERVATION_STATE_ACCESSES.with(Cell::get), 1);
-            let (_, inner) = capture(|| {
-                for _ in 0..1024 {
-                    source.cons_cdr();
-                }
-            });
-            assert_eq!(OBSERVATION_STATE_ACCESSES.with(Cell::get), 2);
-            source.set_car(Value::T);
-            assert!(!inner.unwrap().unchanged());
-            source.cons_car();
-            assert_eq!(OBSERVATION_STATE_ACCESSES.with(Cell::get), 3);
-        });
-        assert!(
-            outer.is_none(),
-            "the first read must still precede the mutation"
-        );
-    }
-
-    #[test]
-    fn observed_cons_survives_unrelated_mutation_but_not_its_own() {
-        let source = Value::list(vec![Value::fixnum(1), Value::fixnum(2)]);
-        let unrelated = Value::cons(Value::NIL, Value::NIL);
-        let (_, reads) = capture(|| source.cons_cdr().cons_car());
-        let reads = reads.unwrap();
-        unrelated.set_cdr(Value::T);
-        assert!(reads.unchanged());
-        source.cons_cdr().set_car(Value::fixnum(3));
-        assert!(!reads.unchanged());
-    }
-
-    #[test]
-    fn nested_capture_and_write_during_observation_are_conservative() {
-        let source = Value::cons(Value::NIL, Value::NIL);
-        let (_, outer) = capture(|| {
-            let (_, inner) = capture(|| source.cons_car());
-            assert!(inner.unwrap().unchanged());
-        });
-        let outer = outer.unwrap();
-        source.set_car(Value::T);
-        assert!(!outer.unchanged());
-        let (_, invalid) = capture(|| {
-            source.cons_car();
-            source.set_car(Value::NIL);
-        });
-        assert!(invalid.is_none());
-        let (_, fresh) = capture(|| {
-            source.set_car(Value::T);
-            source.cons_car()
-        });
-        assert!(fresh.unwrap().unchanged());
-    }
-
-    #[test]
-    fn nested_cache_hit_propagates_dependencies() {
-        let source = Value::cons(Value::NIL, Value::NIL);
-        let (_, inner) = capture(|| source.cons_car());
-        let inner = inner.unwrap();
-        let (_, outer) = capture(|| assert!(inner.unchanged_and_observe()));
-        source.set_car(Value::T);
-        assert!(!outer.unwrap().unchanged());
-    }
-
-    #[test]
-    fn normalization_retains_dependencies_without_rebasing_outer_reads() {
-        let mut source = Value::cons(Value::NIL, Value::NIL);
-        let (_, outer) = capture(|| {
-            source.cons_car();
-            let (result, inner) = capture_normalized(
-                &mut source,
-                |source| {
-                    source.cons_car();
-                    source.set_car(Value::T);
-                },
-                |source| source.cons_car(),
-            );
-            assert_eq!(result, Value::T);
-            assert!(inner.unwrap().unchanged());
-        });
-        assert!(outer.is_none());
-        let (_, reads) = capture_normalized(
-            &mut source,
-            |source| {
-                source.cons_car();
-                source.set_car(Value::NIL);
-            },
-            |_| (),
-        );
-        source.set_car(Value::T);
-        assert!(!reads.unwrap().unchanged());
-    }
-
-    #[test]
-    fn nested_scope_budget_is_bounded_and_recovers() {
-        fn nested(depth: usize) {
-            let (_, reads) = capture(|| {
-                assert!(STATE.with(|s| s.borrow().captures.len()) <= MAX_DEPTH);
-                if depth > 0 {
-                    nested(depth - 1);
-                }
-            });
-            assert!(reads.is_none());
-        }
-        nested(MAX_DEPTH + 5);
-        assert!(!ACTIVE.with(Cell::get));
-        assert!(capture(|| ()).1.unwrap().unchanged());
-    }
-
-    #[test]
-    fn vector_string_and_character_table_mutations_invalidate_reads() {
-        let vector = Value::vector(vec![Value::NIL]);
-        let string = Value::string("abc");
-        let table = Value::make_char_table(Value::NIL, Value::NIL, 0);
-        let (_, reads) = capture(|| vector.as_vector_data().unwrap().len());
-        vector.set_vector_slot(0, Value::T);
-        assert!(!reads.unwrap().unchanged());
-        let (_, reads) = capture(|| string.as_str_owned());
-        string.set_string_byte_same_char_count(0, b'z');
-        assert!(!reads.unwrap().unchanged());
-        let (_, reads) = capture(|| table.as_char_table_obj().unwrap().defalt);
-        table.with_char_table_mut(|table| table.defalt = Value::T);
-        assert!(!reads.unwrap().unchanged());
-    }
-
-    #[test]
-    fn lost_mutation_history_refuses_reuse() {
-        let source = Value::cons(Value::NIL, Value::NIL);
-        let unrelated = Value::cons(Value::NIL, Value::NIL);
-        let (_, reads) = capture(|| source.cons_car());
-        let reads = reads.unwrap();
-        for _ in 0..=JOURNAL_SIZE {
-            unrelated.set_car(Value::T);
-        }
-        assert!(!reads.unchanged());
-    }
-
-    #[test]
-    fn observation_budget_and_unwind_restore_the_outer_scope() {
-        let values: Vec<_> = (0..=MAX_READS)
-            .map(|_| Value::cons(Value::NIL, Value::NIL))
-            .collect();
-        let (_, reads) = capture(|| {
-            for value in &values {
-                value.cons_car();
-            }
-        });
-        assert!(reads.is_none());
-        let _ = std::panic::catch_unwind(|| capture(|| panic!("unwind")));
-        assert!(!ACTIVE.with(Cell::get));
-        let (_, reads) = capture(|| values[0].cons_car());
-        assert!(reads.unwrap().unchanged());
-    }
-}
+mod tests;

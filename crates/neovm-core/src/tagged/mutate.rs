@@ -40,6 +40,9 @@ impl LispCollectionRevision {
 
     #[inline]
     pub(crate) fn changed(value: TaggedValue) {
+        if !super::collection_reads::history_required() {
+            return;
+        }
         COLLECTION_REVISION.with(|revision| {
             let next = revision.get().wrapping_add(1);
             revision.set(next);

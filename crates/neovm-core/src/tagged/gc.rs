@@ -941,6 +941,7 @@ pub(crate) fn set_verify_marked_objects_for_test(on: bool) {
 
 impl TaggedHeap {
     pub fn new() -> Self {
+        super::collection_reads::initialize();
         let chunk_map = knobs::chunk_map_on().then(|| std::sync::Arc::new(ChunkMap::new()));
         let heap = Self {
             jit: JitHeapState::new(),

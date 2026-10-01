@@ -758,6 +758,23 @@ impl TaggedValue {
         unsafe { (*self.xcons_ptr()).cdr() }
     }
 
+    /// Read only after the caller has established that no capture is active
+    /// on this mutator. The caller must not invoke Lisp or a capture between
+    /// that check and this read. Other mutators' captures observe their own
+    /// reads and do not require this mutator to record dependencies.
+    #[inline(always)]
+    pub(crate) fn cons_car_unobserved(self) -> Self {
+        debug_assert!(self.is_cons());
+        unsafe { (*((self.0 & !TAG_MASK) as *const ConsCell)).car }
+    }
+
+    /// Same capture precondition as [`Self::cons_car_unobserved`].
+    #[inline(always)]
+    pub(crate) fn cons_cdr_unobserved(self) -> Self {
+        debug_assert!(self.is_cons());
+        unsafe { (*((self.0 & !TAG_MASK) as *const ConsCell)).cdr() }
+    }
+
     /// Set the car of a cons cell. Panics if not a cons.
     #[inline]
     pub fn set_car(self, val: Self) {
