@@ -1,4 +1,7 @@
 use super::*;
+
+#[cfg(test)]
+mod gc_generational;
 use crate::buffer::EmacsByteRange;
 fn test_ob() -> crate::emacs_core::symbol::Obarray {
     crate::emacs_core::symbol::Obarray::new()
@@ -21832,6 +21835,8 @@ fn gc_safe_point_runs_concurrent_cycles_without_a_dump() {
 fn gc_concurrent_handshake_stats_populate_per_group() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
+    // This gate exercises the existing concurrent backend and its handshakes.
+    ev.tagged_heap.disable_generations_for_test();
     ev.eval_str_each("(setq gc-handshake-root (cons 1 2))");
     ev.tagged_heap.set_gc_threshold(1024);
     // Bootstrap STW cycle first; then churn until a concurrent cycle
@@ -24788,6 +24793,8 @@ fn gc_concurrent_leaked_subr_drop_under_pdump_verifiers() {
         // (mirrors the drain profiler's cold-cache handling).
         ev = runtime_startup_context();
     }
+    // This gate exercises the existing concurrent backend and its handshakes.
+    ev.tagged_heap.disable_generations_for_test();
     ev.set_lexical_binding(true);
 
     // Churn until two concurrent terminations complete (bounded).
@@ -24868,6 +24875,8 @@ fn gc_concurrent_obarray_scan_vs_defalias_churn() {
         // Cold bootstrap cache: reload so the measured heap has the partition.
         ev = runtime_startup_context();
     }
+    // This gate exercises the existing concurrent backend and its handshakes.
+    ev.tagged_heap.disable_generations_for_test();
     ev.set_lexical_binding(true);
 
     // The scan needs >=2 chunks so the last chunk has EMPTY tail slots that are

@@ -961,11 +961,13 @@ impl<T: PagedObject> ObjectArena<T> {
     ///    would free a live tenured object on every alternate-parity cycle
     ///    (the float-v1 template's bare `is_marked_at` is exactly that bug
     ///    once page objects can tenure). Tenured slots are skipped (MIXED
-    ///    pages carry them forever — bounded by the one-time loadup survivor
-    ///    set) and, like tenured LIST objects — which the young-list sweep
-    ///    never counts — contribute nothing to the recomputed live bytes,
-    ///    keeping `live_bytes` (the adaptive pacer term) on the same
-    ///    definition it had before the migration.
+    ///    pages carry them forever in today's cycle). A permanent retains
+    ///    its frozen mark. A session-old survivor resets its mark to zero
+    ///    (GEN-3) before the generation skip, so either future major parity
+    ///    reads it white. Session-old objects exist only with generations
+    ///    enabled; the legacy permanent path retains its behavior. Old slots
+    ///    contribute nothing here: the collector accounts for their bytes
+    ///    through its old-generation total.
     /// 2. Marked-at-parity slots are survivors: their VARIABLE byte size
     ///    (`object_bytes_from_header` — fixed struct + payload storage) is
     ///    summed into the returned live bytes, which both recompute sites
@@ -985,7 +987,7 @@ impl<T: PagedObject> ObjectArena<T> {
     /// born-at-parity ⇒ reads as marked ⇒ survivor.
     ///
     /// Returns `(survivor bytes, slots freed)`.
-    pub(super) fn sweep_range(
+    pub(super) fn sweep_range<const GENERATIONAL: bool>(
         &mut self,
         start: usize,
         end: usize,
@@ -1019,6 +1021,14 @@ impl<T: PagedObject> ObjectArena<T> {
                     );
                     // (1) GENERATION-SKIP before any parity interpretation.
                     if header.black_by_generation(scope) {
+                        // Session-old objects were promoted eagerly at mark
+                        // termination. Reset their marks before completing
+                        // this sweep, without touching permanent marks.
+                        // The concurrent marker has exited and no mutator
+                        // changes this slot during the sweep slice.
+                        if GENERATIONAL && !header.generation.permanent() && header.is_marked() {
+                            header.marked.store(UNMARKED_AT_REST, Ordering::Relaxed);
+                        }
                         continue;
                     }
                     if header.is_marked_at(parity) {
@@ -1924,3 +1934,7 @@ impl HandshakeStats {
         )
     }
 }
+
+#[cfg(test)]
+#[path = "tests/arena_minor_tests.rs"]
+mod arena_minor_tests;

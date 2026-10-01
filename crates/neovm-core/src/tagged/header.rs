@@ -355,6 +355,20 @@ const _: () = assert!(std::mem::offset_of!(GcHeader, remembered) == GC_HEADER_TE
 const _: () = assert!(std::mem::size_of::<GcHeader>() == 16);
 
 impl GcHeader {
+    /// Collector list link. Read only under collector exclusion; the old
+    /// generation list uses this accessor so future list representation changes
+    /// do not leak through its users.
+    #[inline]
+    pub(crate) fn gc_link(&self) -> *mut GcHeader {
+        self.next
+    }
+
+    /// Set a collector list link with every mutator stopped and the collector
+    /// joined. Mutators never change links on the ordinary old list.
+    #[inline]
+    pub(crate) fn set_gc_link_world_stopped(&mut self, next: *mut GcHeader) {
+        self.next = next;
+    }
     pub fn new(kind: HeapObjectKind) -> Self {
         Self {
             // Unmarked at rest: white under both parities. Heap allocation

@@ -169,6 +169,42 @@ impl ConsBlock {
         self.trailer().count_marked(self.next_index as usize)
     }
 
+    /// The minor live count includes untraced old cells as well as marked
+    /// young cells. Use this for recounts and empty-block decisions.
+    pub(super) fn count_live_generational(&self) -> usize {
+        self.trailer()
+            .count_live_generational(self.next_index as usize)
+    }
+
+    /// Promote marked survivors with every mutator stopped, allocation
+    /// regions closed and the concurrent marker's exit handshake complete.
+    /// The result is the number of cells entering the old generation.
+    pub(super) fn promote_marked_world_stopped(&self) -> usize {
+        self.trailer()
+            .promote_marked_world_stopped(self.next_index as usize)
+    }
+
+    /// A minor may reclaim only an unmarked young cell. Runs on the mutator
+    /// with allocation regions closed and no concurrent marker; old cells
+    /// stay intact until generational major sweeping exists (C2.6).
+    pub(super) fn sweep_generational(&mut self, free_list: &mut *mut ConsCell) -> usize {
+        let mut live = 0usize;
+        for i in (0..self.next_index as usize).rev() {
+            let cell = unsafe { self.cells_ptr().add(i) };
+            if self.trailer().is_live_generational(i) {
+                live += 1;
+            } else {
+                debug_assert!(
+                    !self.trailer().is_unlogged(i),
+                    "a free cell cannot be unlogged"
+                );
+                unsafe { (*cell).set_free_next(*free_list) };
+                *free_list = cell;
+            }
+        }
+        live
+    }
+
     /// Sweep: thread reclaimed cells into the global intrusive free list and
     /// return the number of live cells in this block.
     pub(super) fn sweep(&mut self, free_list: &mut *mut ConsCell) -> usize {
@@ -197,3 +233,7 @@ impl Drop for ConsBlock {
         unsafe { alloc::dealloc(self.storage, Self::layout()) };
     }
 }
+
+#[cfg(test)]
+#[path = "tests/cons_minor_tests.rs"]
+mod cons_minor_tests;

@@ -1579,19 +1579,8 @@ impl TaggedHeap {
     pub(super) fn remember_owner(&mut self, owner: TaggedValue) {
         if self.generational.enabled {
             let mapped = self.owner_is_mapped(owner);
-            // Today's concurrent cycles still need the persistent partition
-            // fact. Session-old objects cannot exist in C2.4 yet; C2.5 runs
-            // them through STW minors, and C2.6 supplies major promotion.
-            if self.concurrent_mark_running {
-                let permanent = !owner.is_cons()
-                    && Self::value_heap_addr(owner).is_some_and(|addr| unsafe {
-                        (*(addr as *const GcHeader)).generation.permanent()
-                    });
-                if mapped || permanent {
-                    self.mapped_remembered.insert(owner.bits());
-                }
-                return;
-            }
+            // Until C2.6 P-all exists, even stores during today's full
+            // mark window retain their ordinary-old fact in per-mutator R.
             if mapped {
                 self.mapped_remembered.insert(owner.bits());
                 if self
@@ -2140,7 +2129,7 @@ impl TaggedHeap {
                 .saturating_add(Self::object_bytes_from_header(header));
             unsafe {
                 item.tenured_objects += usize::from((*header).tenured);
-                header = (*header).next;
+                header = (*header).gc_link();
             }
         }
     }
@@ -2271,6 +2260,7 @@ impl TaggedHeap {
         let mut boxed = Vec::new();
         Self::note_boxed_list_layout(self.all_objects, &mut boxed);
         Self::note_boxed_list_layout(self.tenured_objects, &mut boxed);
+        Self::note_boxed_list_layout(self.generational.old_objects, &mut boxed);
         boxed.sort_by_key(|layout| std::cmp::Reverse(layout.known_bytes));
 
         let page_backing_bytes = cons
@@ -2463,6 +2453,14 @@ impl Drop for TaggedHeap {
                     self.free_gc_object(current);
                     current = next;
                 }
+            }
+        }
+        let mut old = self.generational.old_objects;
+        while !old.is_null() {
+            unsafe {
+                let next = (*old).gc_link();
+                self.free_gc_object(old);
+                old = next;
             }
         }
         // ConsBlocks are dropped automatically (they implement Drop).

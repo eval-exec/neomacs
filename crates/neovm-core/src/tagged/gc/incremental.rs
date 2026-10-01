@@ -88,21 +88,28 @@ impl TaggedHeap {
             self.verify_dump_partition();
             self.verify_incremental_tricolor();
         }
-        // Unchain dead markers before the sweep frees them (mirrors GNU
-        // sweep_buffer -> unchain_dead_markers). Reads marks, which are intact.
-        let unchain_t0 = std::time::Instant::now();
-        self.unchain_dead_markers();
-        self.reset_generational_remembered_world_stopped();
-        self.handshake.last_term_unchain_us = unchain_t0.elapsed().as_micros() as u64;
-
         // The generation census reads the final marks before the sweep
         // detaches the young list (no-op unless `NEOVM_GC_CENSUS`).
         if self.census.is_some() {
-            let mark_window_alloc = self
-                .bytes_since_gc()
-                .saturating_sub(self.pace_mark_start_bytes);
-            self.census_at_termination(CensusCycleKind::Concurrent, mark_window_alloc);
+            let (kind, mark_window_alloc) = if self.is_minor_collection() {
+                (CensusCycleKind::StopTheWorld, 0)
+            } else {
+                (
+                    CensusCycleKind::Concurrent,
+                    self.bytes_since_gc()
+                        .saturating_sub(self.pace_mark_start_bytes),
+                )
+            };
+            self.census_at_termination(kind, mark_window_alloc);
         }
+
+        // Unchain dead markers before the sweep frees them (mirrors GNU
+        // sweep_buffer -> unchain_dead_markers). Reads marks, which are intact.
+        let unchain_t0 = std::time::Instant::now();
+        self.promote_minor_survivors_world_stopped();
+        self.unchain_dead_markers();
+        self.reset_generational_remembered_world_stopped();
+        self.handshake.last_term_unchain_us = unchain_t0.elapsed().as_micros() as u64;
 
         // Begin the deferred sweep. Detach the young non-cons list (new non-cons
         // allocations link onto a fresh `all_objects` and are not swept this
@@ -229,7 +236,11 @@ impl TaggedHeap {
         while swept_blocks < budget && self.sweep_cons_cursor < self.sweep_cons_end {
             let idx = self.sweep_cons_cursor;
             let free_list: *mut *mut ConsCell = &mut self.cons_free_list;
-            let live = self.cons_blocks[idx].sweep(unsafe { &mut *free_list });
+            let live = if self.generational.enabled {
+                self.cons_blocks[idx].sweep_generational(unsafe { &mut *free_list })
+            } else {
+                self.cons_blocks[idx].sweep(unsafe { &mut *free_list })
+            };
             self.sweep_cons_live_cells += live;
             self.sweep_cons_cursor += 1;
             swept_blocks += 1;
@@ -299,6 +310,11 @@ impl TaggedHeap {
             let current = self.sweep_noncons_pending;
             unsafe {
                 self.sweep_noncons_pending = (*current).next;
+                if (*current).tenured && !(*current).generation.permanent() {
+                    self.link_old_object_world_stopped(current);
+                    processed += 1;
+                    continue;
+                }
                 debug_assert!(
                     !(*current).tenured,
                     "tenured object on the young sweep list"
@@ -371,7 +387,14 @@ impl TaggedHeap {
     pub(super) fn finish_incremental_sweep(&mut self) {
         // I1 (`sweep_in_progress` clears below) and I2 (the recount).
         self.close_alloc_regions();
-        let recount: usize = self.cons_blocks.iter().map(ConsBlock::count_marked).sum();
+        let recount: usize = if self.generational.enabled {
+            self.cons_blocks
+                .iter()
+                .map(ConsBlock::count_live_generational)
+                .sum()
+        } else {
+            self.cons_blocks.iter().map(ConsBlock::count_marked).sum()
+        };
         // allocated_count carries the tracked cons live count; replace it with
         // the true recount (delta may be negative -> use checked sub).
         if recount >= self.cons_live_count {
@@ -414,6 +437,7 @@ impl TaggedHeap {
         self.live_bytes = cons_live_bytes
             .saturating_add(self.sweep_noncons_live_bytes)
             .saturating_add(mapped_object_live_bytes)
+            .saturating_add(self.old_noncons_bytes())
             .saturating_sub(self.sweep_mark_window_alloc_bytes)
             .max(mapped_object_live_bytes);
 
@@ -462,6 +486,10 @@ impl TaggedHeap {
         self.marked_symbols.insert(id);
     }
 
+    // This must stay inline in the cons-spine loop. Generational bookkeeping
+    // increased mark_value's size enough to outline every car visit, adding
+    // about twenty instructions per cell even with generations disabled.
+    #[inline(always)]
     pub(super) fn mark_or_push_child(&mut self, val: TaggedValue, origin: &str) {
         match val.kind() {
             crate::tagged::value::ValueKind::Symbol(id) => self.mark_symbol(id),
@@ -517,7 +545,7 @@ impl TaggedHeap {
     pub(super) fn debug_assert_heap_tag_matches_header(&self, _val: TaggedValue, _origin: &str) {}
 
     /// Mark a single tagged value and push its children onto the gray queue.
-    pub(super) fn mark_value(&mut self, val: TaggedValue) {
+    pub(super) fn mark_value<const MINOR: bool>(&mut self, val: TaggedValue) {
         if let crate::tagged::value::ValueKind::Symbol(id) = val.kind() {
             self.mark_symbol(id);
         } else if val.is_cons() {
@@ -526,7 +554,7 @@ impl TaggedHeap {
             // per cell — for a megacons list that round trip is a second
             // multi-megabyte buffer streamed through the cache.
             let mut ptr = val.xcons_ptr();
-            while self.mark_cons(ptr) {
+            while self.mark_cons::<MINOR>(ptr) {
                 let car = unsafe { (*ptr).load_car() };
                 let cdr = unsafe { (*ptr).load_cdr() };
                 self.mark_or_push_child(car, "cons-car");
@@ -573,6 +601,7 @@ impl TaggedHeap {
                     return;
                 }
                 (*ptr).header.set_marked(self.mark_parity);
+                self.note_minor_survivor(ptr.cast());
                 let intervals = (*ptr).data.intervals();
                 if !intervals.is_empty() {
                     intervals.for_each_root(|root| {
@@ -597,6 +626,7 @@ impl TaggedHeap {
                     return;
                 }
                 (*ptr).header.set_marked(self.mark_parity);
+                self.note_minor_survivor(ptr.cast());
             };
         } else if val.is_veclike() {
             let ptr = val.as_veclike_ptr().unwrap() as *mut VecLikeHeader;
@@ -628,6 +658,7 @@ impl TaggedHeap {
                     return;
                 }
                 (*ptr).gc.set_marked(self.mark_parity);
+                self.note_minor_survivor(ptr.cast());
                 self.trace_veclike(ptr);
             }
         }
@@ -643,7 +674,7 @@ impl TaggedHeap {
     /// dump image, malformed pointers -- takes [`Self::mark_cons_slow`], the
     /// full classification, unchanged.
     #[inline(always)]
-    pub(super) fn mark_cons(&mut self, ptr: *const ConsCell) -> bool {
+    pub(super) fn mark_cons<const MINOR: bool>(&mut self, ptr: *const ConsCell) -> bool {
         let addr = ptr as usize;
         let block_base = addr & !(CONS_BLOCK_ALIGN - 1);
         if let Some(cache) = self.mark_cons_block_cache
@@ -651,14 +682,18 @@ impl TaggedHeap {
         {
             let offset = addr - block_base;
             if offset < CONS_CELLS_BYTES && offset.is_multiple_of(size_of::<ConsCell>()) {
-                return self.cons_blocks[cache.block_index].mark_cell_offset(offset);
+                let block = &mut self.cons_blocks[cache.block_index];
+                if MINOR && block.trailer().is_old(ConsBlock::index_of_ptr(ptr)) {
+                    return false;
+                }
+                return block.mark_cell_offset(offset);
             }
         }
-        self.mark_cons_slow(ptr)
+        self.mark_cons_slow::<MINOR>(ptr)
     }
 
     #[inline(never)]
-    fn mark_cons_slow(&mut self, ptr: *const ConsCell) -> bool {
+    fn mark_cons_slow<const MINOR: bool>(&mut self, ptr: *const ConsCell) -> bool {
         // Mapped-world fast classification: in a fresh session MOST marked
         // conses are dump objects, and the old order made each of them miss
         // the block cache and probe `cons_block_index_by_base` before being
@@ -695,7 +730,11 @@ impl TaggedHeap {
                 block_index
             }
         };
-        self.cons_blocks[block_index].mark_cell_offset(offset)
+        let block = &mut self.cons_blocks[block_index];
+        if MINOR && block.trailer().is_old(ConsBlock::index_of_ptr(ptr)) {
+            return false;
+        }
+        block.mark_cell_offset(offset)
     }
 
     pub(super) fn mark_mapped_cons(&mut self, ptr: *const ConsCell) -> bool {
@@ -1008,6 +1047,16 @@ impl TaggedHeap {
 
     /// Sweep unmarked cons cells back to free lists.
     pub(super) fn sweep_cons(&mut self) -> usize {
+        if self.generational.enabled {
+            self.sweep_cons_in_generation::<true>()
+        } else {
+            self.sweep_cons_in_generation::<false>()
+        }
+    }
+
+    // Select once for the whole sweep, rather than checking the generation
+    // knob in each block's retain closure.
+    fn sweep_cons_in_generation<const GENERATIONAL: bool>(&mut self) -> usize {
         // Collector code never sees an open allocation region
         // (`alloc_region.rs`, invariant I2).
         self.close_alloc_regions();
@@ -1036,7 +1085,11 @@ impl TaggedHeap {
         } = self;
         cons_blocks.retain_mut(|block| {
             let saved = *cons_free_list;
-            let live = block.sweep(cons_free_list);
+            let live = if GENERATIONAL {
+                block.sweep_generational(cons_free_list)
+            } else {
+                block.sweep(cons_free_list)
+            };
             if live == 0 {
                 // Back this block's cells out of the free list: its storage is
                 // about to be deallocated, and a freed cell must not stay
@@ -1109,7 +1162,7 @@ impl TaggedHeap {
         if !self
             .cons_blocks
             .iter()
-            .any(|block| block.count_marked() == 0)
+            .any(|block| self.cons_block_live_count(block) == 0)
         {
             return 0;
         }
@@ -1120,7 +1173,7 @@ impl TaggedHeap {
             let released: Vec<usize> = self
                 .cons_blocks
                 .iter()
-                .filter(|block| block.count_marked() == 0)
+                .filter(|block| self.cons_block_live_count(block) == 0)
                 .map(ConsBlock::base_addr)
                 .collect();
             for base in released {
@@ -1130,7 +1183,14 @@ impl TaggedHeap {
                 }
             }
         }
-        self.cons_blocks.retain(|block| block.count_marked() != 0);
+        let gen_enabled = self.generational.enabled;
+        self.cons_blocks.retain(|block| {
+            if gen_enabled {
+                block.count_live_generational() != 0
+            } else {
+                block.count_marked() != 0
+            }
+        });
         self.cons_blocks.shrink_to_fit();
 
         self.cons_block_index_by_base =
@@ -1147,7 +1207,11 @@ impl TaggedHeap {
                     ChunkEntry::new(ChunkClass::Cons, block_index),
                 );
             }
-            rebuilt_live += block.sweep(&mut self.cons_free_list);
+            rebuilt_live += if gen_enabled {
+                block.sweep_generational(&mut self.cons_free_list)
+            } else {
+                block.sweep(&mut self.cons_free_list)
+            };
         }
         debug_assert_eq!(rebuilt_live, self.cons_live_count);
 
@@ -1190,6 +1254,12 @@ impl TaggedHeap {
         while !current.is_null() {
             unsafe {
                 let next = (*current).next;
+                if (*current).tenured && !(*current).generation.permanent() {
+                    *prev = next;
+                    self.link_old_object_world_stopped(current);
+                    current = next;
+                    continue;
+                }
                 debug_assert!(!(*current).tenured, "tenured object on the young list");
                 if (*current).is_marked_at(parity) {
                     // Keep it — advance prev
@@ -1227,6 +1297,19 @@ impl TaggedHeap {
     ///
     /// Returns `(survivor bytes, slots freed)` summed over the classes.
     pub(super) fn sweep_arena_pages_ranges(&mut self, ranges: ArenaSweepRanges) -> (usize, usize) {
+        if self.generational.enabled {
+            self.sweep_arena_pages_in_generation::<true>(ranges)
+        } else {
+            self.sweep_arena_pages_in_generation::<false>(ranges)
+        }
+    }
+
+    // Select once per sweep call so the legacy slot loop pays no cost for
+    // session-old mark resets when generations are disabled.
+    fn sweep_arena_pages_in_generation<const GENERATIONAL: bool>(
+        &mut self,
+        ranges: ArenaSweepRanges,
+    ) -> (usize, usize) {
         // Collector code never sees an open allocation region
         // (`alloc_region.rs`, invariant I2).
         self.close_alloc_regions();
@@ -1244,25 +1327,49 @@ impl TaggedHeap {
             marker,
             bignum,
         } = ranges;
-        let (fl, ff) = self
-            .float_arena
-            .sweep_range(float.start, float.end, parity, scope, |_| {});
-        let (sl, sf) =
-            self.string_arena
-                .sweep_range(string.start, string.end, parity, scope, |_| {});
-        let (bl, bf) =
-            self.bytecode_arena
-                .sweep_range(bytecode.start, bytecode.end, parity, scope, |_| {});
-        let (lal, laf) =
-            self.lambda_arena
-                .sweep_range(lambda.start, lambda.end, parity, scope, |_| {});
-        let (mal, maf) =
-            self.macro_arena
-                .sweep_range(macro_.start, macro_.end, parity, scope, |_| {});
-        let (rel, ref_) =
-            self.record_arena
-                .sweep_range(record.start, record.end, parity, scope, |_| {});
-        let (swl, swf) = self.symbol_with_pos_arena.sweep_range(
+        let (fl, ff) = self.float_arena.sweep_range::<GENERATIONAL>(
+            float.start,
+            float.end,
+            parity,
+            scope,
+            |_| {},
+        );
+        let (sl, sf) = self.string_arena.sweep_range::<GENERATIONAL>(
+            string.start,
+            string.end,
+            parity,
+            scope,
+            |_| {},
+        );
+        let (bl, bf) = self.bytecode_arena.sweep_range::<GENERATIONAL>(
+            bytecode.start,
+            bytecode.end,
+            parity,
+            scope,
+            |_| {},
+        );
+        let (lal, laf) = self.lambda_arena.sweep_range::<GENERATIONAL>(
+            lambda.start,
+            lambda.end,
+            parity,
+            scope,
+            |_| {},
+        );
+        let (mal, maf) = self.macro_arena.sweep_range::<GENERATIONAL>(
+            macro_.start,
+            macro_.end,
+            parity,
+            scope,
+            |_| {},
+        );
+        let (rel, ref_) = self.record_arena.sweep_range::<GENERATIONAL>(
+            record.start,
+            record.end,
+            parity,
+            scope,
+            |_| {},
+        );
+        let (swl, swf) = self.symbol_with_pos_arena.sweep_range::<GENERATIONAL>(
             symbol_with_pos.start,
             symbol_with_pos.end,
             parity,
@@ -1273,24 +1380,38 @@ impl TaggedHeap {
         // marker from its buffer chain (it runs before the first sweep slice
         // and before the eager sweep), so freeing the slot here cannot leave
         // a dangling chain link.
-        let (mkl, mkf) =
-            self.marker_arena
-                .sweep_range(marker.start, marker.end, parity, scope, |_| {});
+        let (mkl, mkf) = self.marker_arena.sweep_range::<GENERATIONAL>(
+            marker.start,
+            marker.end,
+            parity,
+            scope,
+            |_| {},
+        );
         // Bignums: childless and in no side registry; the in-place drop of a
         // dead slot's `Integer` frees its limb vector (GNU `cleanup_vector`
         // → `mpz_clear`).
-        let (bgl, bgf) =
-            self.bignum_arena
-                .sweep_range(bignum.start, bignum.end, parity, scope, |_| {});
+        let (bgl, bgf) = self.bignum_arena.sweep_range::<GENERATIONAL>(
+            bignum.start,
+            bignum.end,
+            parity,
+            scope,
+            |_| {},
+        );
         let TaggedHeap {
             vector_arena,
             vector_object_addrs,
             ..
         } = self;
-        let (vl, vf) = vector_arena.sweep_range(vector.start, vector.end, parity, scope, |addr| {
-            let removed = vector_object_addrs.remove(&addr);
-            debug_assert!(removed, "freed page vector was not in the registry");
-        });
+        let (vl, vf) = vector_arena.sweep_range::<GENERATIONAL>(
+            vector.start,
+            vector.end,
+            parity,
+            scope,
+            |addr| {
+                let removed = vector_object_addrs.remove(&addr);
+                debug_assert!(removed, "freed page vector was not in the registry");
+            },
+        );
         let freed = ff + sf + vf + bf + laf + maf + ref_ + swf + mkf + bgf;
         self.current_mutator_gc_mut().allocated_count = self
             .current_mutator_gc()
@@ -1667,12 +1788,16 @@ impl TaggedHeap {
         let mut problems = 0usize;
         // Build a set of all owned non-cons object addresses
         let mut owned_addrs: std::collections::HashSet<usize> = std::collections::HashSet::new();
-        for head in [self.all_objects, self.tenured_objects] {
+        for head in [
+            self.all_objects,
+            self.tenured_objects,
+            self.generational.old_objects,
+        ] {
             let mut obj = head;
             while !obj.is_null() {
                 owned_addrs.insert(obj as usize);
                 unsafe {
-                    obj = (*obj).next;
+                    obj = (*obj).gc_link();
                 }
             }
         }
@@ -1683,7 +1808,11 @@ impl TaggedHeap {
         let parity = self.mark_parity;
         let scope = self.collection_scope();
         let mut total_marked = 0usize;
-        for head in [self.all_objects, self.tenured_objects] {
+        for head in [
+            self.all_objects,
+            self.tenured_objects,
+            self.generational.old_objects,
+        ] {
             let mut current = head;
             while !current.is_null() {
                 unsafe {
@@ -1706,7 +1835,7 @@ impl TaggedHeap {
                             }
                         }
                     }
-                    current = (*current).next;
+                    current = (*current).gc_link();
                 }
             }
         }

@@ -5,6 +5,9 @@
 
 use super::*;
 
+#[path = "gc_generational.rs"]
+mod gc_generational;
+
 impl Context {
     /// Enter a recursive edit level.
     ///
@@ -2026,6 +2029,14 @@ impl Context {
                     return; // sweep deferred; cycle not done yet
                 }
                 return; // GC thread still marking; mutator continues
+            } else if (*heap_ptr).should_run_minor() {
+                // Minor marking stops every registered mutator and visits
+                // their roots. Promotion completes before mutating resumes;
+                // the existing sweep continuation records cycle completion.
+                (*heap_ptr).begin_minor_collection();
+                self.seed_registered_mutator_roots_world_stopped(heap_ptr);
+                (*heap_ptr).complete_minor_collection();
+                return;
             } else if (*heap_ptr).should_run_concurrent() {
                 // Concurrent start handshake: snapshot roots, hand the gray queue
                 // to the GC thread, and return — marking now overlaps the mutator.

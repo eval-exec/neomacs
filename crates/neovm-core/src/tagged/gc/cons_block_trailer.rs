@@ -143,6 +143,27 @@ impl ConsBlockTrailer {
             .sum()
     }
 
+    /// An old cell is live throughout a minor even when it was not traced;
+    /// newly allocated sweep-window cells survive through their mark bit.
+    #[inline]
+    pub(super) fn is_live_generational(&self, index: usize) -> bool {
+        let bit = Self::mark_bit(index);
+        let live = self.old_word(bit.word_index)
+            | self.mark_word(bit.word_index).load(Ordering::Relaxed) as u64;
+        live & bit.mask as u64 != 0
+    }
+
+    /// Count the union, rather than adding old and marked populations: a
+    /// just-promoted cell still has both bits until the next mark begins.
+    pub(super) fn count_live_generational(&self, cells: usize) -> usize {
+        (0..cons_mark_words(cells))
+            .map(|w| {
+                (self.old_word(w) | self.mark_word(w).load(Ordering::Relaxed) as u64).count_ones()
+                    as usize
+            })
+            .sum()
+    }
+
     #[inline]
     fn generation_bit(index: usize) -> (usize, u64) {
         debug_assert!(index < CONS_BLOCK_SIZE);
@@ -220,16 +241,27 @@ impl ConsBlockTrailer {
     /// Stop-all handshake required: the marker must be joined and every
     /// mutation extent and allocation region closed before promotion/reset.
     /// There are no concurrent bit updates to merge while these stores run.
-    pub(super) fn promote_marked_world_stopped(&self, cells: usize) {
+    /// Return only newly-old cells, so repeated promotions never charge the
+    /// old-generation accounting for a cell twice.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn promote_marked_world_stopped(&self, cells: usize) -> usize {
+        let mut promoted = 0usize;
         for w in 0..cons_mark_words(cells) {
-            let old = self.old_word(w) | self.mark_word(w).load(Ordering::Relaxed) as u64;
+            let previous_old = self.old_word(w);
+            let marked = self.mark_word(w).load(Ordering::Relaxed) as u64;
+            promoted += (marked & !previous_old).count_ones() as usize;
+            let old = previous_old | marked;
             self.old_atomic(w).store(old, Ordering::Relaxed);
             self.unlogged_atomic(w).store(old, Ordering::Relaxed);
         }
+        promoted
     }
 
     /// Stop-all handshake required, as for promotion: no mutator or marker
     /// may claim or set an unlogged bit while this reset runs.
+    #[cold]
+    #[inline(never)]
     pub(super) fn reset_unlogged_world_stopped(&self, cells: usize) {
         for w in 0..cons_mark_words(cells) {
             self.unlogged_atomic(w)

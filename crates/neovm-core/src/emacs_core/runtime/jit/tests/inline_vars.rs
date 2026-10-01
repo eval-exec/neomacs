@@ -325,10 +325,13 @@ fn cached_shapes_take_no_shim_and_answer_as_the_interpreter() {
         for (name, prog, args) in &progs {
             // Each engine in its own fixture: a `setq` changes the variable.
             let mut ev = fixture();
+            // This test measures the original emitter's shim counts.
+            ev.tagged_heap.disable_generations_for_test();
             warm(&mut ev, VARS);
             let want = interpret(&mut ev, prog, var, args);
             let want_after = observe(&mut ev, var);
             let mut ev = fixture();
+            ev.tagged_heap.disable_generations_for_test();
             warm(&mut ev, VARS);
             reset_inline_var_sites();
             let leaf = compile(&ev, ALL, prog, var);
@@ -345,6 +348,8 @@ fn cached_shapes_take_no_shim_and_answer_as_the_interpreter() {
 #[test]
 fn knob_off_inlines_nothing() {
     let mut ev = fixture();
+    // Isolate the inline-variable knob's legacy fast-path counts.
+    ev.tagged_heap.disable_generations_for_test();
     warm(&mut ev, &["ivt-plain", "ivt-loc"]);
     for (knob, inline) in [(OFF, false), (ALL, true)] {
         reset_inline_var_sites();
@@ -403,11 +408,14 @@ fn a_class_change_after_compile_takes_the_shim() {
     for &(what, change, refused) in changes {
         for ((name, prog, args), refused) in progs.iter().zip(refused) {
             let mut ev = fixture();
+            // This test identifies class guards through original shim counts.
+            ev.tagged_heap.disable_generations_for_test();
             eval_ok(&mut ev, change);
             let want = interpret(&mut ev, prog, "ivt-plain", args);
             let want_after = observe(&mut ev, "ivt-plain");
             let want_log = eval(&mut ev, "(prog1 (reverse ivt-log) (setq ivt-log nil))");
             let mut ev = fixture();
+            ev.tagged_heap.disable_generations_for_test();
             // Compiled while the variable was a plain special.
             let leaf = compile(&ev, ALL, prog, "ivt-plain");
             eval_ok(&mut ev, change);
@@ -434,6 +442,8 @@ fn a_class_change_after_compile_takes_the_shim() {
 #[test]
 fn a_cache_miss_takes_the_shim_and_the_next_run_hits() {
     let mut ev = fixture();
+    // A subsequent zero-shim store is a legacy emitter assertion.
+    ev.tagged_heap.disable_generations_for_test();
     warm(&mut ev, &["ivt-locd"]);
     let leaf = compile(&ev, ALL, &Prog::read(), "ivt-locd");
     assert_eq!(run(&mut ev, &leaf, &[]), ("20".into(), Shims::default()));
@@ -580,12 +590,17 @@ fn let_bodies_that_change_the_world_unbind_as_the_interpreter() {
 
 /// Warm SRC's functions into compiled leaves with the knob at KNOB and
 /// return the context.
-fn warmed_runtime(knob: InlineVarsKnob, src: &str) -> Context {
+fn warmed_runtime(knob: InlineVarsKnob, src: &str, legacy_gc: bool) -> Context {
     crate::test_utils::init_test_tracing();
     force_profit_gate_for_test(false);
     crate::emacs_core::jit::force_profit_defer_for_test(Some(1));
     force_inline_vars_for_test(Some(knob));
     let mut ev = crate::test_utils::runtime_startup_context();
+    if legacy_gc {
+        // Reapply to the heap returned by the startup cache reload, before
+        // compiling functions whose original store counts this test measures.
+        ev.tagged_heap.disable_generations_for_test();
+    }
     ev.eval_str(src).expect("warmed");
     ev
 }
@@ -607,7 +622,7 @@ fn a_dumped_runtime_reads_inline() {
     let answers: Vec<(String, Shims)> = [OFF, ALL]
         .into_iter()
         .map(|knob| {
-            let mut ev = warmed_runtime(knob, src);
+            let mut ev = warmed_runtime(knob, src, false);
             // A new buffer's first read loads its caches (the shim).
             eval_ok(
                 &mut ev,
@@ -663,7 +678,7 @@ fn a_dumped_runtime_answers_the_same_with_binds_inline() {
     let answers: Vec<(String, Shims)> = [OFF, ALL]
         .into_iter()
         .map(|knob| {
-            let mut ev = warmed_runtime(knob, RUNTIME_PROGRAM);
+            let mut ev = warmed_runtime(knob, RUNTIME_PROGRAM, true);
             eval_ok(&mut ev, setup);
             let before = shims();
             let answer = eval(&mut ev, probe);
@@ -750,6 +765,8 @@ fn osr_into_a_let_unbinds_inline_what_the_interpreter_bound() {
             force_inline_vars_for_test(Some(knob));
             crate::emacs_core::jit::force_osr_for_test(true);
             let mut ctx = Context::new();
+            // This test requires the original inline bind/unbind counts.
+            ctx.tagged_heap.disable_generations_for_test();
             crate::emacs_core::jit::cache::clear();
             ctx.eval_str("(setq osr-bound 17)").unwrap();
             let depth = ctx.specpdl.len();
@@ -825,6 +842,8 @@ fn unbind_sites_meet_across_paths() {
         ("ivt-plain", "ivt-loc", false),
     ] {
         let mut ev = fixture();
+        // The CFG test identifies inlined sites through original shim counts.
+        ev.tagged_heap.disable_generations_for_test();
         warm(&mut ev, &["ivt-loc"]);
         eval_ok(
             &mut ev,

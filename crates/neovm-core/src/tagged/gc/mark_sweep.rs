@@ -52,6 +52,7 @@ impl TaggedHeap {
     }
 
     pub(crate) fn begin_collection(&mut self) {
+        self.generational.cycle = generational::GenerationCycle::CurrentFull;
         self.begin_collection_with(false);
     }
 
@@ -61,6 +62,13 @@ impl TaggedHeap {
     pub(super) fn begin_collection_with(&mut self, stw_entry: bool) {
         #[cfg(debug_assertions)]
         crate::tagged::mutate::debug_assert_no_heap_mut_closure();
+        if stw_entry {
+            self.generational.cycle = generational::GenerationCycle::CurrentFull;
+        }
+        if self.generational.enabled && std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1") {
+            tracing::info!(target: "neovm::gc", kind = if self.is_minor_collection() { "minor" } else { "major" },
+                cycle = self.gc_collections + 1, "generation_cycle_begin");
+        }
         // (Pre-mark verification removed — unmarked objects may have stale data
         //  that will be swept. Only post-mark verification is meaningful.)
 
@@ -179,12 +187,13 @@ impl TaggedHeap {
         self.clear_dirty_writes();
         self.seed_internal_runtime_roots();
         self.seed_generational_remembered();
-        if partitioned {
+        self.seed_old_children_for_current_full();
+        if partitioned && !self.is_minor_collection() {
             // Re-scan dumped/tenured objects mutated to point at young heap
             // objects: those children must be kept live even though the dump and
             // the tenured old generation are black.
             self.seed_mapped_remembered();
-        } else if self.partition_dump {
+        } else if self.partition_dump && !partitioned {
             if self.first_cycle_concurrent {
                 // Concurrent first cycle: string intervals seed here
                 // (handshake); veclike headers and cons ranges are STAGED
@@ -433,6 +442,11 @@ impl TaggedHeap {
                     out.push(obj);
                     obj = (*obj).next;
                 }
+            }
+            let mut old = self.generational.old_objects;
+            while !old.is_null() {
+                out.push(old);
+                old = unsafe { (*old).gc_link() };
             }
             out
         };
@@ -790,7 +804,11 @@ impl TaggedHeap {
     /// the whole image: the same answer again.
     pub(super) fn is_value_marked(&self, value: TaggedValue) -> bool {
         if let crate::tagged::value::ValueKind::Symbol(id) = value.kind() {
-            return crate::emacs_core::intern::is_canonical_id(id)
+            // Skipping old owners removes their historical symbol-mark
+            // repair. Symbol ids have no generation byte, so retain them
+            // conservatively on minors; current full cycles still mark them.
+            return self.is_minor_collection()
+                || crate::emacs_core::intern::is_canonical_id(id)
                 || self.marked_symbols.contains(id);
         }
         let image_live = self.partition_dump && !self.dump_blackened && self.first_cycle_concurrent;
@@ -806,7 +824,10 @@ impl TaggedHeap {
                     None => self.cons_block_index_by_base.get(&base).copied(),
                 };
                 if let Some(idx) = found {
-                    return self.cons_blocks[idx].is_marked_ptr(ptr);
+                    let block = &self.cons_blocks[idx];
+                    return (self.generational.enabled
+                        && block.trailer().is_old(ConsBlock::index_of_ptr(ptr)))
+                        || block.is_marked_ptr(ptr);
                 }
             }
             return self
@@ -951,6 +972,11 @@ impl TaggedHeap {
                     obj = (*obj).next;
                 }
             }
+            let mut old = self.generational.old_objects;
+            while !old.is_null() {
+                out.push(old);
+                old = unsafe { (*old).gc_link() };
+            }
             out
         };
         for header in tenured {
@@ -974,6 +1000,25 @@ impl TaggedHeap {
             for child in self.heap_object_children(header) {
                 if child.is_heap_object() && !self.is_value_marked(child) {
                     record(&owner, child);
+                }
+            }
+        }
+
+        // Ordinary old conses are black during a minor even when their mark
+        // bit is clear. Include their children here so partition verification
+        // catches a missed old-to-young edge before the young child is freed.
+        if self.generational.enabled {
+            for block in &self.cons_blocks {
+                for i in 0..block.next_index as usize {
+                    if !block.trailer().is_old(i) {
+                        continue;
+                    }
+                    let cell = unsafe { block.cells_ptr().add(i) };
+                    for child in [unsafe { (*cell).load_car() }, unsafe { (*cell).load_cdr() }] {
+                        if child.is_heap_object() && !self.is_value_marked(child) {
+                            record("old:Cons", child);
+                        }
+                    }
                 }
             }
         }
@@ -1714,6 +1759,7 @@ impl TaggedHeap {
         // Mirrors GNU `sweep_buffer → unchain_dead_markers` (`alloc.c`).
         // Reading `header.gc.marked` is sound here because the
         // allocation is still live until `sweep_objects` runs below.
+        self.promote_minor_survivors_world_stopped();
         self.unchain_dead_markers();
         self.reset_generational_remembered_world_stopped();
 
@@ -1746,7 +1792,8 @@ impl TaggedHeap {
         self.live_bytes = cons_live_bytes
             .saturating_add(object_live_bytes)
             .saturating_add(page_live_bytes)
-            .saturating_add(mapped_object_live_bytes);
+            .saturating_add(mapped_object_live_bytes)
+            .saturating_add(self.old_noncons_bytes());
         self.reset_bytes_since_gc();
         self.trace_region_stats();
         // Pacer: a stop-the-world cycle has no concurrent mark window; drop
@@ -1847,8 +1894,18 @@ impl TaggedHeap {
 
     /// Drain the gray queue, marking and tracing all reachable objects.
     pub(super) fn mark_all(&mut self) {
+        if self.is_minor_collection() {
+            self.mark_all_in_generation::<true>();
+        } else {
+            self.mark_all_in_generation::<false>();
+        }
+    }
+
+    // The collection kind cannot change while a gray queue drains. Hoist its
+    // old-cons decision out of every object and every cons-spine iteration.
+    fn mark_all_in_generation<const MINOR: bool>(&mut self) {
         while let Some(val) = self.gray_queue.pop() {
-            self.mark_value(val);
+            self.mark_value::<MINOR>(val);
         }
     }
 
