@@ -48,7 +48,7 @@
    (getenv "NEOMACS_GUI_FRAME_SNAPSHOT_JSON") t 'json)
   (run-at-time 0.2 nil #'kill-emacs 0))
 
-(neomacs-native-scroll-run
+(neomacs-native-scroll-next
  (lambda ()
    (switch-to-buffer (get-buffer-create "*native-scroll-contract*"))
    (neomacs-scroll-content-insert 100000)
