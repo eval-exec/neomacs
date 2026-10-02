@@ -3611,6 +3611,7 @@ pub struct Context {
     pub(crate) font_registry: super::xfaces::FontRegistryHandle,
     pub(crate) hash_table_test_registry: super::builtins::HashTableTestRegistryHandle,
     pub(crate) file_notify_registry: super::builtins::FileNotifyRegistryHandle,
+    pub(crate) window_configuration_registry: super::builtins::WindowConfigurationRegistryHandle,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

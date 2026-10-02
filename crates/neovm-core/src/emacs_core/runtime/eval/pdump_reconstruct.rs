@@ -229,6 +229,8 @@ impl Context {
             hash_table_test_registry:
                 super::super::builtins::current_hash_table_test_registry_handle(),
             file_notify_registry: super::super::builtins::current_file_notify_registry_handle(),
+            window_configuration_registry:
+                super::super::builtins::current_window_configuration_registry_handle(),
         };
         ev.setup_thread_locals();
 

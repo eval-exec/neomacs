@@ -1,6 +1,7 @@
 use super::*;
 use crate::buffer::LispCharPos1;
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_max_args, expect_min_args};
+use crate::emacs_core::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
 use crate::emacs_core::hook_runtime;
 use crate::gc_trace::GcTrace;
 
@@ -628,7 +629,7 @@ impl WindowConfigurationRestoreOptions {
     }
 }
 
-struct WindowConfigurationSnapshot {
+pub(crate) struct WindowConfigurationSnapshot {
     frame_id: crate::window::FrameId,
     /// This configuration's window tree.
     ///
@@ -1240,12 +1241,25 @@ fn merge_snapshot_window_parameters(
 }
 
 thread_local! {
-    static WINDOW_CONFIGURATION_SNAPSHOTS: RefCell<HashMap<i64, WindowConfigurationSnapshot>> =
-        RefCell::new(HashMap::new());
+    static WINDOW_CONFIGURATION_SNAPSHOTS: HeapRegistrySlot<HashMap<i64, WindowConfigurationSnapshot>> =
+        HeapRegistrySlot::new(HashMap::new());
 }
 
 pub(super) fn reset_hooks_thread_locals() {
-    WINDOW_CONFIGURATION_SNAPSHOTS.with(|slot| slot.borrow_mut().clear());
+    WINDOW_CONFIGURATION_SNAPSHOTS.with(|slot| slot.reset(HashMap::new()));
+}
+
+pub(crate) type WindowConfigurationRegistryHandle =
+    HeapRegistryHandle<HashMap<i64, WindowConfigurationSnapshot>>;
+
+pub(crate) fn current_window_configuration_registry_handle() -> WindowConfigurationRegistryHandle {
+    WINDOW_CONFIGURATION_SNAPSHOTS.with(HeapRegistrySlot::current)
+}
+
+pub(crate) fn install_window_configuration_registry_handle(
+    handle: &WindowConfigurationRegistryHandle,
+) {
+    WINDOW_CONFIGURATION_SNAPSHOTS.with(|slot| slot.install(handle));
 }
 
 fn window_configuration_parts_from_value(value: &Value) -> Option<(Value, i64)> {
@@ -2030,3 +2044,7 @@ pub(crate) fn builtin_featurep(eval: &mut super::eval::Context, args: Vec<Value>
     })?;
     Ok(Value::bool_val(items.iter().any(|item| item == subfeature)))
 }
+
+#[cfg(test)]
+#[path = "tests/gc_tls_window_configuration.rs"]
+mod gc_tls_ownership_tests;

@@ -503,6 +503,9 @@ impl Context {
             &self.hash_table_test_registry,
         );
         super::super::builtins::install_file_notify_registry_handle(&self.file_notify_registry);
+        super::super::builtins::install_window_configuration_registry_handle(
+            &self.window_configuration_registry,
+        );
         super::super::syntax::restore_standard_syntax_table_object(self.standard_syntax_table);
         super::super::syntax::restore_syntax_code_objects(self.syntax_code_objects);
         super::super::category::restore_standard_category_table_object(
