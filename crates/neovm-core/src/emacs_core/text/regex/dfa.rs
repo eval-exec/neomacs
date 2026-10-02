@@ -40,7 +40,7 @@
 //! | `NEOVM_REGEX_DFA` | `on` (default), `off`, `verify` | Candidate existence filter ([`DfaMode`]). |
 //! | `NEOVM_REGEX_DFA_COLD` | `off` (default), `on` | Defer the slot lease until a cold candidate fails ([`cold_path_enabled`]). |
 //! | `NEOVM_REGEX_DFA_STATS` | unset (default), `1` | Print this thread's [`DfaStats`] on stderr at exit with the filter on. |
-//! | `NEOVM_REGEX_DFA_FIRST_STEP` | `off` (default), `on` | Reject cached first-step failures inline; verify also checks the predicate against the matcher ([`first_step_enabled`]). |
+//! | `NEOVM_REGEX_DFA_FIRST_STEP` | `off` (default), `on` | Reject cached prefixes of at most eight bytes inline; verify also checks the predicate against the matcher ([`first_step_enabled`]). |
 
 use super::{
     CompiledPattern, LookupClassKey, MatchRegisters, MatchScratch, RegexOp, SyntaxAssertion,
@@ -1148,6 +1148,8 @@ const MEMORY_CAP: usize = 64 * 1024;
 const MEMORY_HARD_CAP: usize = 4 * MEMORY_CAP;
 /// A quit is polled every this many bytes stepped.
 const QUIT_POLL_BYTES: usize = 64 * 1024;
+/// Bound the duplicated work for a cached prefix that eventually succeeds.
+const CACHED_PREFIX_BYTES: usize = 8;
 
 /// A DFA state: the NFA kernel (where threads resume, before the closure)
 /// and the facts about the character before the position.
@@ -1505,11 +1507,14 @@ impl ExistenceDfa {
                 return Exists::Unknown;
             }
         }
-        let verdict = if FIRST_STEP
-            && first_step_enabled()
-            && self.cached_first_step_dead(pattern, text, p, stop, point)
-        {
-            Exists::No { consumed: 0 }
+        let cached = if FIRST_STEP && first_step_enabled() {
+            self.cached_prefix_rejection(pattern, text, p, stop, point, usize::MAX)
+        } else {
+            None
+        };
+        let verdict = if let Some(consumed) = cached {
+            self.counters.bytes += consumed as u64;
+            Exists::No { consumed }
         } else {
             self.run(pattern, text, p, stop, point, syntax)
         };
@@ -1521,30 +1526,33 @@ impl ExistenceDfa {
         verdict
     }
 
-    /// A cached first-step rejection, without classifying, interning, or
-    /// reading syntax. Called only after the give-up and memory-cap guards.
+    /// A bounded cached rejection, without classifying, interning, or reading
+    /// syntax. Called only after the give-up and memory-cap guards. Returns
+    /// the same consumed span as `run`, strictly below `overflow_free_span`.
     ///
     /// Threading: this cache and its compiled pattern are mutator-owned, not
     /// shared concurrently. `DfaLease::acquire` synchronizes character maps
     /// with the search context before calling this helper. A context change
     /// clears those maps; the context-independent transitions remain valid.
     #[inline]
-    fn cached_first_step_dead(
+    #[allow(clippy::too_many_arguments)]
+    fn cached_prefix_rejection(
         &self,
         pattern: &CompiledPattern,
         text: &[u8],
         p: usize,
         stop: usize,
         point: usize,
-    ) -> bool {
+        overflow_free_span: usize,
+    ) -> Option<usize> {
         // Establish memory safety first. The remaining guards apply only
         // once an existing DEAD entry could actually reject this candidate.
         if p >= text.len() {
-            return false;
+            return None;
         }
         let class = self.classes.byte_class[text[p] as usize];
         if class == UNKNOWN_CLASS {
-            return false;
+            return None;
         }
         let prev_mask = self.prev_mask.0;
         let reads_prev_syntax = prev_mask & !(Facts::EDGE.0 | Facts::NEWLINE.0) != 0;
@@ -1564,7 +1572,7 @@ impl ExistenceDfa {
         } else {
             let byte = text[p - 1];
             if pattern.target_multibyte && byte >= 0x80 {
-                return false;
+                return None;
             }
             let prev_class = self.classes.byte_class[byte as usize];
             if prev_class != UNKNOWN_CLASS {
@@ -1572,34 +1580,77 @@ impl ExistenceDfa {
             } else {
                 let facts = self.classes.byte_facts[byte as usize];
                 if facts == NO_FACTS {
-                    return false;
+                    return None;
                 }
                 facts
             }
         };
         let start = self.start[(facts & prev_mask) as usize];
         if start == 0 {
-            return false;
+            return None;
         }
-        let row = start << self.stride_shift;
-        // Only DEAD is a rejection. UNKNOWN/SLOW/live/MATCH all use run().
-        if self.trans[row as usize + class as usize] != DEAD {
-            return false;
-        }
-        // Cached metadata reads above have no syntax or frontier side
-        // effects. Its rejection is valid only after these semantic guards.
-        if p >= stop || p >= self.search.read_limit || (self.has_at_dot && p == point) {
-            return false;
+        let mut row = start << self.stride_shift;
+        // Every consumed byte must be before the stop, frontier and point's
+        // special closure, and within already established plain syntax.
+        // Eight probes cover short literal failures without making a true
+        // candidate walk an unbounded prefix twice.
+        let mut limit = stop
+            .min(text.len())
+            .min(self.search.read_limit)
+            .min(p.saturating_add(CACHED_PREFIX_BYTES))
+            .min(p.saturating_add(overflow_free_span));
+        if self.has_at_dot && point >= p {
+            limit = limit.min(point);
         }
         if self.search.positional {
             // The current class is a base-table class. Previous word/symbol
             // facts require base syntax at p - 1 too, in the same known run.
             let from = if p > 0 && reads_prev_syntax { p - 1 } else { p };
             if from < self.plain.start || p >= self.plain.end {
-                return false;
+                return None;
             }
+            limit = limit.min(self.plain.end);
         }
-        true
+        let stride = 1u32 << self.stride_shift;
+        let mut d = p;
+        while d < limit {
+            let class = if d == p {
+                class
+            } else {
+                self.classes.byte_class[text[d] as usize]
+            };
+            if class == UNKNOWN_CLASS {
+                return None;
+            }
+            let at = row as usize + class as usize;
+            debug_assert!(at < self.trans.len());
+            // SAFETY: as in `run`, cached rows have a complete stride and
+            // known byte classes are below that stride. This path mutates
+            // neither rows nor classes.
+            let next = unsafe { *self.trans.get_unchecked(at) };
+            if next == DEAD {
+                return Some(d - p);
+            }
+            if next < stride {
+                return None;
+            }
+            row = next;
+            d += 1;
+        }
+        None
+    }
+
+    /// The one-step subset is kept explicit in the cache guard tests.
+    #[cfg(test)]
+    fn cached_first_step_dead(
+        &self,
+        pattern: &CompiledPattern,
+        text: &[u8],
+        p: usize,
+        stop: usize,
+        point: usize,
+    ) -> bool {
+        self.cached_prefix_rejection(pattern, text, p, stop, point, 1) == Some(0)
     }
 
     /// The end of the property-free stretch from `at` (see
@@ -2072,7 +2123,7 @@ pub(crate) fn with_first_step<R>(on: bool, f: impl FnOnce() -> R) -> R {
 }
 
 /// `NEOVM_REGEX_DFA_FIRST_STEP=on` (default off): consult an existing dead
-/// transition from a start state before the general candidate loop.
+/// transition within an eight-byte cached prefix before the general loop.
 #[inline]
 pub(crate) fn first_step_enabled() -> bool {
     #[cfg(any(test, feature = "fuzzing"))]
@@ -2461,7 +2512,7 @@ impl<'p> DfaLease<'p> {
         self.mode == DfaMode::On && first_step_enabled()
     }
 
-    /// Skip one cached first-step rejection without entering `candidate`.
+    /// Skip one bounded cached rejection without entering `candidate`.
     /// The caller selected this path with `inline_first_step_enabled`.
     ///
     /// Threading: this search holds its mutator-owned slot's checked borrow.
@@ -2485,14 +2536,22 @@ impl<'p> DfaLease<'p> {
         if live.dfa.gave_up.is_some()
             || live.dfa.memory > MEMORY_CAP
             || live.overflow_free_span == 0
-            || !live
-                .dfa
-                .cached_first_step_dead(pattern, text, pos, stop, point)
         {
             return false;
         }
+        let Some(consumed) = live.dfa.cached_prefix_rejection(
+            pattern,
+            text,
+            pos,
+            stop,
+            point,
+            live.overflow_free_span,
+        ) else {
+            return false;
+        };
         live.dfa.counters.no += 1;
-        live.note(Exists::No { consumed: 0 });
+        live.dfa.counters.bytes += consumed as u64;
+        live.note(Exists::No { consumed });
         self.skipped += 1;
         true
     }

@@ -2250,3 +2250,179 @@ fn cold_successful_passes_with_eof_failures_never_build() {
     assert_eq!(stats.searches, 0, "{stats:?}");
     assert_eq!(stats.builds, 0, "{stats:?}");
 }
+
+#[test]
+fn cached_prefix_rejections_respect_every_consumed_boundary() {
+    let syntax = DefaultSyntaxLookup;
+    let compiled = regex_compile("zz[0-9]", false, false).unwrap();
+    let text = b"zzz";
+    let mut dfa = first_step_dfa(&compiled, &syntax);
+    assert_eq!(
+        with_first_step(false, || {
+            dfa.anchored_exists(&compiled, text, 0, text.len(), 0, &syntax)
+        }),
+        Exists::No { consumed: 2 }
+    );
+    assert!(!dfa.cached_first_step_dead(&compiled, text, 0, text.len(), 0));
+    let probe = |dfa: &ExistenceDfa, stop, safe_span| {
+        dfa.cached_prefix_rejection(&compiled, text, 0, stop, 0, safe_span)
+    };
+    assert_eq!(probe(&dfa, text.len(), usize::MAX), Some(2));
+    assert_eq!(probe(&dfa, 2, usize::MAX), None);
+    assert_eq!(probe(&dfa, text.len(), 2), None);
+    assert_eq!(probe(&dfa, text.len(), 3), Some(2));
+    assert_eq!(
+        dfa.cached_prefix_rejection(&compiled, b"zzq", 0, 3, 0, usize::MAX),
+        None,
+        "an unknown byte must resume the classifier"
+    );
+    dfa.search.read_limit = 2;
+    assert_eq!(probe(&dfa, text.len(), usize::MAX), None);
+    dfa.search.read_limit = usize::MAX;
+    dfa.search.positional = true;
+    dfa.plain = 0..2;
+    assert_eq!(probe(&dfa, text.len(), usize::MAX), None);
+    dfa.plain = 0..3;
+    assert_eq!(probe(&dfa, text.len(), usize::MAX), Some(2));
+
+    // A later point assertion invalidates a cached failure after a live byte.
+    let at_point = regex_compile("zz\\=q", false, false).unwrap();
+    let mut dfa = first_step_dfa(&at_point, &syntax);
+    with_first_step(false, || {
+        assert_eq!(
+            dfa.anchored_exists(&at_point, b"zzq", 0, 3, 99, &syntax),
+            Exists::No { consumed: 2 }
+        );
+    });
+    assert_eq!(
+        dfa.cached_prefix_rejection(&at_point, b"zzq", 0, 3, 99, usize::MAX),
+        Some(2)
+    );
+    assert_eq!(
+        dfa.cached_prefix_rejection(&at_point, b"zzq", 0, 3, 2, usize::MAX),
+        None
+    );
+    assert_eq!(
+        with_first_step(true, || {
+            dfa.anchored_exists(&at_point, b"zzq", 0, 3, 2, &syntax)
+        }),
+        Exists::Yes
+    );
+    assert!(re_match(&at_point, b"zzq", 0, 3, &syntax, 2).is_some());
+
+    // A syntax property in the middle of a warmed prefix changes No to Yes.
+    let word = regex_compile("zz\\w", false, false).unwrap();
+    let mut dfa = first_step_dfa(&word, &syntax);
+    with_first_step(false, || {
+        assert_eq!(
+            dfa.anchored_exists(&word, b"zz-", 0, 3, 0, &syntax),
+            Exists::No { consumed: 2 }
+        );
+    });
+    assert_eq!(
+        dfa.cached_prefix_rejection(&word, b"zz-", 0, 3, 0, usize::MAX),
+        Some(2)
+    );
+    let property = PropertyRunLookup::new(
+        &DefaultSyntaxLookup,
+        vec![(2, 3, RunSyntax::Descriptor(SyntaxClass::Word))],
+    );
+    dfa.begin_search(&word, &property);
+    dfa.plain = 0..2;
+    assert_eq!(
+        dfa.cached_prefix_rejection(&word, b"zz-", 0, 3, 0, usize::MAX),
+        None
+    );
+    assert_eq!(
+        with_first_step(true, || {
+            dfa.anchored_exists(&word, b"zz-", 0, 3, 0, &property)
+        }),
+        Exists::Yes
+    );
+    assert!(re_match(&word, b"zz-", 0, 3, &property, 0).is_some());
+
+    // A frontier after live bytes must still leave its read to the matcher.
+    let mut dfa = first_step_dfa(&word, &syntax);
+    with_first_step(false, || {
+        assert_eq!(
+            dfa.anchored_exists(&word, b"zz-", 0, 3, 0, &syntax),
+            Exists::No { consumed: 2 }
+        );
+    });
+    let mut frontier = PropertyRunLookup::new(&DefaultSyntaxLookup, Vec::new());
+    frontier.frontier = 2;
+    dfa.begin_search(&word, &frontier);
+    dfa.plain = 0..usize::MAX;
+    assert_eq!(
+        dfa.cached_prefix_rejection(&word, b"zz-", 0, 3, 0, usize::MAX),
+        None
+    );
+    assert_eq!(
+        with_first_step(true, || {
+            dfa.anchored_exists(&word, b"zz-", 0, 3, 0, &frontier)
+        }),
+        Exists::Unknown
+    );
+    assert_eq!(frontier.crossed.get(), None);
+    assert!(re_match(&word, b"zz-", 0, 3, &frontier, 0).is_none());
+    assert_eq!(frontier.crossed.get(), Some(2));
+}
+
+#[test]
+fn inline_cached_prefix_keeps_consumed_accounting_and_captures() {
+    let syntax = DefaultSyntaxLookup;
+    let compiled = regex_compile("\\(zz\\)[0-9]", false, false).unwrap();
+    let text = b"zzz zz7";
+    let expected = with_dfa_mode(DfaMode::Off, || {
+        search(&compiled, text, 0, text.len() as isize, &syntax, 0)
+    });
+    assert!(expected.0.is_some());
+    prime(&compiled, &syntax).unwrap();
+    with_first_step(false, || {
+        with_dfa_mode(DfaMode::On, || {
+            assert_eq!(
+                search(&compiled, text, 0, text.len() as isize, &syntax, 0),
+                expected
+            );
+        });
+    });
+    with_first_step(true, || {
+        with_dfa_mode(DfaMode::On, || {
+            let mut lease = DfaLease::acquire(&compiled, &syntax, text.len()).unwrap();
+            let DfaSlot::Live(live) = &mut *lease.slot else {
+                panic!("primed slot should be live");
+            };
+            let safe_span = live.overflow_free_span;
+            live.overflow_free_span = 2;
+            assert!(!lease.try_inline_first_step_skip(&compiled, text, 0, text.len(), 0));
+            let DfaSlot::Live(live) = &mut *lease.slot else {
+                panic!("guarded rejection should stay live");
+            };
+            live.overflow_free_span = safe_span;
+            let before = live.dfa.counters;
+            let entries = matcher_entry_count();
+            assert!(lease.try_inline_first_step_skip(&compiled, text, 0, text.len(), 0));
+            assert_eq!(matcher_entry_count(), entries);
+            let DfaSlot::Live(live) = &*lease.slot else {
+                panic!("cached rejection should stay live");
+            };
+            assert_eq!(live.dfa.counters.no, before.no + 1);
+            assert_eq!(live.dfa.counters.bytes, before.bytes + 2);
+            assert_eq!(lease.skipped, 1);
+        });
+        let entries = matcher_entry_count();
+        let on = with_dfa_mode(DfaMode::On, || {
+            search(&compiled, text, 0, text.len() as isize, &syntax, 0)
+        });
+        assert_eq!(on, expected);
+        assert_eq!(matcher_entry_count() - entries, 1);
+        let entries = matcher_entry_count();
+        let verified = with_dfa_mode(DfaMode::Verify, || {
+            search(&compiled, text, 0, text.len() as isize, &syntax, 0)
+        });
+        assert_eq!(verified, expected);
+        assert_eq!(matcher_entry_count() - entries, 4);
+        let stats = dfa_stats();
+        assert_eq!(stats.verify_bad_no + stats.verify_bad_yes, 0, "{stats:?}");
+    });
+}
