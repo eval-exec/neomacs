@@ -2194,7 +2194,19 @@ impl Context {
         // Context's obarray is not that one (P1.4 §3.6).
         #[cfg(feature = "jit")]
         crate::emacs_core::jit::cache::sync_cache_to_obarray(self.obarray.generation());
-        collect_thread_local_gc_roots(&mut thread_local_roots, heap_identity, &mut groups);
+        // Exact GC can finish an older sweep after activation. Read the epoch
+        // here, before any TLS cache reconstructs Values from address keys.
+        let collection_epoch = unsafe { (*heap_ptr).gc_collections() };
+        // STW begin does not arm mark_in_progress. This call certifies actual
+        // seeding, independently of that flag; snapshots never certify it.
+        debug_assert!(!unsafe { (*heap_ptr).sweep_in_progress() });
+        collect_thread_local_gc_roots(
+            &mut thread_local_roots,
+            heap_identity,
+            collection_epoch,
+            crate::tagged::gc::CacheRootScan::Collection,
+            &mut groups,
+        );
         let tl_seed_t0 = std::time::Instant::now();
         let tl_seed_count = thread_local_roots.len();
         for (root, origin) in thread_local_roots {

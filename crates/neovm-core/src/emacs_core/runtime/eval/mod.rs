@@ -2257,6 +2257,8 @@ thread_local! {
 fn collect_thread_local_gc_roots(
     roots: &mut Vec<(Value, &'static str)>,
     heap_id: usize,
+    collection_epoch: usize,
+    scan: crate::tagged::gc::CacheRootScan,
     stats: &mut Vec<crate::tagged::gc::RootGroup>,
 ) {
     fn collect_group(
@@ -2299,7 +2301,7 @@ fn collect_thread_local_gc_roots(
         super::dynamic_module::collect_dynamic_module_gc_roots(group, heap_id)
     });
     collect_group(roots, "regex-thread-local", stats, |group| {
-        super::regex::collect_regex_gc_roots(group, heap_id)
+        super::regex::collect_regex_gc_roots(group, heap_id, collection_epoch, scan)
     });
     collect_group(roots, "symbol-name-thread-local", stats, |group| {
         super::intern::collect_symbol_name_gc_roots(group, heap_id)

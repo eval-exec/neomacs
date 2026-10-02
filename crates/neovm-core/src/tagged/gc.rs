@@ -43,6 +43,17 @@ use std::cell::Cell;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// Only a scan whose roots will be seeded can certify cache coverage of the
+/// running collection. Diagnostic snapshots must not advance that stamp.
+#[derive(Clone, Copy)]
+pub(crate) enum CacheRootScan {
+    Collection,
+    #[cfg(test)]
+    Snapshot {
+        collection_in_progress: bool,
+    },
+}
+
 /// Optional heap-write observation, used by tests/introspection to inspect which
 /// owners (and optionally which individual writes) were mutated since the last
 /// reset. This is NOT a GC marking barrier — the concurrent collector's barrier

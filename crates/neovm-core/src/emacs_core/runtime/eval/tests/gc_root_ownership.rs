@@ -2,7 +2,16 @@ use super::*;
 
 fn scratch_roots(ctx: &Context) -> Vec<Value> {
     let mut roots = Vec::new();
-    collect_thread_local_gc_roots(&mut roots, ctx.tagged_heap.identity(), &mut Vec::new());
+    collect_thread_local_gc_roots(
+        &mut roots,
+        ctx.tagged_heap.identity(),
+        ctx.tagged_heap.gc_collections(),
+        crate::tagged::gc::CacheRootScan::Snapshot {
+            collection_in_progress: ctx.tagged_heap.mark_in_progress()
+                || ctx.tagged_heap.sweep_in_progress(),
+        },
+        &mut Vec::new(),
+    );
     roots
         .into_iter()
         .filter_map(|(value, origin)| (origin == "scratch-thread-local").then_some(value))

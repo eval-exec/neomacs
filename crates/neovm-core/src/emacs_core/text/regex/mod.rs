@@ -556,28 +556,69 @@ thread_local! {
         const { RefCell::new(None) };
     // Activation establishes cache ownership once, outside every search lookup.
     static REGEX_CACHE_HEAP: Cell<usize> = const { Cell::new(0) };
+    // Last collection whose root enumeration included this thread's cache,
+    // or the completed count at which an empty cache was activated.
+    static REGEX_CACHE_COLLECTION_EPOCH: Cell<Option<usize>> = const { Cell::new(None) };
 }
 
-pub(crate) fn reset_regex_thread_locals() {
+fn clear_regex_caches() {
     SEARCH_PATTERN_CACHE.with(|cache| cache.borrow_mut().clear());
     LISP_REGEX_PATTERN_CACHE.with(|cache| cache.borrow_mut().clear());
     LITERAL_TRT_CACHE.with(|cache| *cache.borrow_mut() = None);
+}
+
+pub(crate) fn reset_regex_thread_locals() {
+    clear_regex_caches();
+    REGEX_CACHE_COLLECTION_EPOCH.with(|epoch| epoch.set(None));
     REGEX_CACHE_HEAP
         .with(|owner| owner.set(crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0)));
 }
 
-pub(crate) fn activate_regex_thread_locals(heap_identity: usize) {
-    if REGEX_CACHE_HEAP.with(Cell::get) != heap_identity {
-        reset_regex_thread_locals();
+pub(crate) fn activate_regex_thread_locals(
+    heap_identity: usize,
+    collection_epoch: usize,
+    collection_in_progress: bool,
+) {
+    let covered = REGEX_CACHE_COLLECTION_EPOCH.with(Cell::get);
+    let valid = covered == Some(collection_epoch + 1)
+        || (!collection_in_progress && covered == Some(collection_epoch));
+    if REGEX_CACHE_HEAP.with(Cell::get) != heap_identity || !valid {
+        clear_regex_caches();
         REGEX_CACHE_HEAP.with(|owner| owner.set(heap_identity));
+        REGEX_CACHE_COLLECTION_EPOCH.with(|epoch| epoch.set(Some(collection_epoch)));
     }
 }
 
 /// GNU roots both regexp-cache syntax identities and case translation tables.
 /// Filter the cache's owner before reconstructing a Lisp word from a syntax key.
-pub(crate) fn collect_regex_gc_roots(roots: &mut Vec<super::value::Value>, heap_identity: usize) {
+pub(crate) fn collect_regex_gc_roots(
+    roots: &mut Vec<super::value::Value>,
+    heap_identity: usize,
+    collection_epoch: usize,
+    scan: crate::tagged::gc::CacheRootScan,
+) {
     if REGEX_CACHE_HEAP.with(Cell::get) != heap_identity {
         return;
+    }
+    match scan {
+        crate::tagged::gc::CacheRootScan::Collection => {
+            // Every completed collection must have included us. A repeated
+            // seed in this same collection also preserves the warm entries.
+            REGEX_CACHE_COLLECTION_EPOCH.with(|epoch| {
+                if epoch.get() != Some(collection_epoch)
+                    && epoch.get() != Some(collection_epoch + 1)
+                {
+                    clear_regex_caches();
+                }
+                epoch.set(Some(collection_epoch + 1));
+            });
+        }
+        #[cfg(test)]
+        crate::tagged::gc::CacheRootScan::Snapshot {
+            collection_in_progress,
+        } => {
+            activate_regex_thread_locals(heap_identity, collection_epoch, collection_in_progress);
+        }
     }
     fn syntax_root(roots: &mut Vec<super::value::Value>, key: Option<SyntaxCacheKey>) {
         if let Some(SyntaxCacheKey::Table { id, .. }) = key {
@@ -4900,3 +4941,11 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/gc_tls_ownership.rs"]
 mod gc_tls_ownership_tests;
+
+#[cfg(test)]
+#[path = "tests/gc_collection_epoch.rs"]
+mod gc_collection_epoch_tests;
+
+#[cfg(test)]
+#[path = "tests/gc_literal_epoch.rs"]
+mod gc_literal_epoch_tests;
