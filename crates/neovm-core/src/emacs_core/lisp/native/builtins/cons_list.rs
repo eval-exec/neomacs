@@ -2,6 +2,16 @@ use super::*;
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_fixnum};
 use crate::emacs_core::value::{ValueKind, VecLikeType, eq_value};
 use malachite::integer::Integer;
+use std::sync::LazyLock;
+
+// Assoc callback knob, read once per process:
+// | Knob | Values | Default | Effect |
+// | NEOVM_ASSOC_RESOLVED | off, on | off | Resolve callable TESTFN once per walk with live function-epoch guards and direct known comparisons. |
+
+/// Process-constant configuration shared by all mutators; contains no Lisp
+/// state. LazyLock publishes the initialized immutable value to every thread.
+static ASSOC_RESOLVED: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("NEOVM_ASSOC_RESOLVED").is_ok_and(|value| value == "on"));
 
 /// A scan can keep this choice for its whole duration only when it runs no
 /// Lisp callbacks. Captures are thread scoped: another mutator's scope does
@@ -1472,6 +1482,14 @@ pub(crate) fn builtin_assoc_slice(eval: &mut super::eval::Context, args: &[Value
             eval.push_specpdl_root(*key);
             eval.push_specpdl_root(list);
             eval.push_specpdl_root(test_fn);
+            let predicate = if *ASSOC_RESOLVED {
+                eval.resolve_assoc_predicate(test_fn)
+            } else {
+                None
+            };
+            if let Some(predicate) = &predicate {
+                eval.push_specpdl_root(predicate.callable);
+            }
             // Root the moving tail across the predicate: TESTFN can setcdr
             // the alist, unlinking the current tail from the rooted head;
             // the slot keeps the remainder alive transitively.
@@ -1481,7 +1499,13 @@ pub(crate) fn builtin_assoc_slice(eval: &mut super::eval::Context, args: &[Value
                 let pair_car = tail.cons_car();
                 if let ValueKind::Cons = pair_car.kind() {
                     let entry_key = pair_car.cons_car();
-                    let matches = eval.apply2(test_fn, entry_key, *key)?.is_truthy();
+                    let matches = match &predicate {
+                        Some(predicate) => {
+                            eval.apply2_assoc_predicate(test_fn, predicate, entry_key, *key)?
+                        }
+                        None => eval.apply2(test_fn, entry_key, *key)?,
+                    }
+                    .is_truthy();
                     if matches {
                         return Ok(Some(pair_car));
                     }

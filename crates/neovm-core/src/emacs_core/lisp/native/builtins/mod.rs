@@ -674,6 +674,9 @@ mod obarray_growth_test;
 mod obarray_order_test;
 
 #[cfg(test)]
+#[path = "tests/assoc_callbacks.rs"]
+mod assoc_callbacks_test;
+#[cfg(test)]
 #[path = "tests/sort_capture.rs"]
 mod sort_capture_test;
 
