@@ -5584,7 +5584,7 @@ impl Context {
     /// Evaluate a Lisp expression string. Convenience for tests.
     /// Reads via the Value-native reader and evaluates via eval_sub.
     pub fn eval_str(&mut self, source: &str) -> Result<Value, EvalError> {
-        crate::tagged::gc::set_tagged_heap(&mut self.tagged_heap);
+        self.setup_thread_locals();
         let forms = super::value_reader::read_all(source, &self.obarray).map_err(|e| {
             EvalError::signal(
                 crate::emacs_core::intern::intern("error"),
@@ -5624,7 +5624,7 @@ impl Context {
     /// Evaluate a single Value form and return a public EvalError on failure.
     /// Evaluate a single Value form, mapping Flow errors to EvalError.
     pub fn eval_form(&mut self, form: Value) -> Result<Value, EvalError> {
-        crate::tagged::gc::set_tagged_heap(&mut self.tagged_heap);
+        self.setup_thread_locals();
         let eval_result = self.eval_sub(form);
         self.finalize_public_eval_result(eval_result)
     }
@@ -5642,13 +5642,16 @@ impl Context {
 
     /// Legacy eval_value: delegates to eval_sub.
     pub fn eval_value(&mut self, value: &Value) -> EvalResult {
+        if !crate::tagged::gc::tagged_heap_is_current(&self.tagged_heap) {
+            self.setup_thread_locals();
+        }
         self.eval_sub(*value)
     }
 
     /// Evaluate all forms in a source string and return per-form results.
     /// Uses the Value-native reader.
     pub fn eval_str_each(&mut self, source: &str) -> Vec<Result<Value, EvalError>> {
-        crate::tagged::gc::set_tagged_heap(&mut self.tagged_heap);
+        self.setup_thread_locals();
         let forms = match super::value_reader::read_all(source, &self.obarray) {
             Ok(f) => f,
             Err(e) => {
@@ -7586,6 +7589,10 @@ mod gc_forced_first_cycle_tests;
 #[cfg(test)]
 #[path = "tests/gc_root_ownership.rs"]
 mod gc_root_ownership_tests;
+
+#[cfg(test)]
+#[path = "tests/gc_tls_ownership.rs"]
+mod gc_tls_ownership_tests;
 
 // The attention word: every writer of its inputs keeps it derived.
 #[cfg(test)]

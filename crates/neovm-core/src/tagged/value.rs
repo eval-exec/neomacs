@@ -1200,3 +1200,7 @@ impl fmt::Debug for TaggedValue {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "value/tests/gc_tls_ownership.rs"]
+mod gc_tls_ownership_tests;

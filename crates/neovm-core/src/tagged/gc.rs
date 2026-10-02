@@ -158,6 +158,8 @@ impl HeapWriteRecord {
 
 thread_local! {
     static TAGGED_HEAP: Cell<*mut TaggedHeap> = const { Cell::new(std::ptr::null_mut()) };
+    // Read ownership metadata without dereferencing a displaced heap pointer.
+    static TAGGED_HEAP_ID: Cell<Option<usize>> = const { Cell::new(None) };
     static TAGGED_HEAP_WRITE_TRACKING_MODE: Cell<WriteTrackingMode> =
         const { Cell::new(WriteTrackingMode::Disabled) };
     /// Mirrors `TaggedHeap::partition_dump` so the write-barrier hot path can
@@ -2463,6 +2465,10 @@ mod pacer_tests;
 #[cfg(test)]
 #[path = "gc/tests/ownership_tests.rs"]
 mod ownership_tests;
+
+#[cfg(test)]
+#[path = "gc/tests/thread_local_ownership.rs"]
+mod thread_local_ownership_tests;
 
 /// FLOAT ARENA PAGES test suite. Every scenario runs twice: plain and with
 /// `NEOVM_GC_VERIFY_PARTITION=1` (which also arms the partition via a fake

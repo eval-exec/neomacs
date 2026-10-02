@@ -981,6 +981,7 @@ pub(super) fn run_concurrent_mark(mut job: ConcurrentMarkJob) {
 /// Set the thread-local tagged heap pointer.
 pub fn set_tagged_heap(heap: &mut TaggedHeap) {
     TAGGED_HEAP.with(|h| h.set(heap as *mut TaggedHeap));
+    TAGGED_HEAP_ID.with(|identity| identity.set(Some(heap.identity())));
     TAGGED_HEAP_WRITE_TRACKING_MODE.with(|mode| mode.set(heap.write_tracking_mode()));
     TAGGED_HEAP_PARTITION_ACTIVE.with(|p| p.set(heap.partition_dump));
     TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(heap.concurrent_mark_running));
@@ -1012,6 +1013,7 @@ pub fn clear_tagged_heap_if_installed(heap: &TaggedHeap) {
     TAGGED_HEAP.with(|h| {
         if h.get() == owned {
             h.set(std::ptr::null_mut());
+            TAGGED_HEAP_ID.with(|identity| identity.set(None));
             TAGGED_HEAP_WRITE_TRACKING_MODE.with(|mode| mode.set(WriteTrackingMode::Disabled));
             TAGGED_HEAP_PARTITION_ACTIVE.with(|p| p.set(false));
             TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(false));
@@ -1028,6 +1030,13 @@ pub fn tagged_heap_is_installed() -> bool {
     TAGGED_HEAP.with(|h| !h.get().is_null())
 }
 
+/// Check the allocation view without reading the installed heap. A Context
+/// moved to another thread may have left an inactive raw pointer here.
+pub(crate) fn tagged_heap_is_current(heap: &TaggedHeap) -> bool {
+    TAGGED_HEAP.with(|h| std::ptr::eq(h.get(), heap))
+        && TAGGED_HEAP_ID.with(|identity| identity.get() == Some(heap.identity()))
+}
+
 /// Return the current thread's tagged heap identity, if one is installed.
 ///
 /// This is used only for runtime side tables that must avoid retaining Lisp
@@ -1035,10 +1044,7 @@ pub fn tagged_heap_is_installed() -> bool {
 /// inside ordinary GC-managed structures; the heap identity preserves that
 /// ownership boundary for Neomacs side tables.
 pub(crate) fn current_tagged_heap_identity() -> Option<usize> {
-    TAGGED_HEAP.with(|h| {
-        let ptr = h.get();
-        (!ptr.is_null()).then(|| unsafe { (*ptr).identity() })
-    })
+    TAGGED_HEAP_ID.with(Cell::get)
 }
 
 /// Access the thread-local tagged heap.
@@ -1062,6 +1068,7 @@ pub fn with_tagged_heap<R>(f: impl FnOnce(&mut TaggedHeap) -> R) -> R {
                 let heap_ref: &mut TaggedHeap = borrow.as_mut().unwrap();
                 let ptr = heap_ref as *mut TaggedHeap;
                 h.set(ptr);
+                TAGGED_HEAP_ID.with(|identity| identity.set(Some(heap_ref.identity())));
                 f(unsafe { &mut *ptr })
             })
         }

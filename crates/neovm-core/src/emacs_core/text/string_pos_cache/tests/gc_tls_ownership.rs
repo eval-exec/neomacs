@@ -50,6 +50,13 @@ fn gc_tls_ownership_string_pos_cache_excludes_another_live_heap() {
     );
     first.gc_collect_exact();
     second.setup_thread_locals();
+    assert!(
+        roots(&second).is_empty(),
+        "activation retained an old cache entry"
+    );
     second.gc_collect_exact();
-    assert!(second.tagged_heap.owns_heap_value_for_test(value));
+    assert!(
+        !second.tagged_heap.owns_heap_value_for_test(value),
+        "an evicted cache entry kept its otherwise unreachable string alive"
+    );
 }

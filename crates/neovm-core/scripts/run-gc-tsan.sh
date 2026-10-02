@@ -43,7 +43,7 @@ cd "$(git rev-parse --show-toplevel)"
 
 TARGET="x86_64-unknown-linux-gnu"
 TOOLCHAIN="nightly"
-OUTDIR="${TMPDIR:-./tmp/codex}/gc-tsan-logs"
+OUTDIR="${NEOVM_GC_TSAN_LOG_DIR:-./tmp/codex/gc-tsan-logs}"
 FILTER="${1:-}"
 FEATURE_ARGS=(--no-default-features)
 if [ -n "${NEOVM_GC_TSAN_FEATURES:-}" ]; then
@@ -61,6 +61,7 @@ SURFACE_RE+='|^emacs_core::builtins::closure_slot_identity_test::'
 SURFACE_RE+='|^emacs_core::eval::cconv_memo_tests::'
 SURFACE_RE+='|^emacs_core::eval::gc_root_ownership_tests::'
 SURFACE_RE+='|^emacs_core::terminal::tests::gc_heap_ownership::'
+SURFACE_RE+='|::gc_tls_ownership_tests::|::thread_local_ownership_tests::|::heap_registry::ownership_tests::'
 
 # --- TSan needs an unlimited virtual address space -------------------------
 ulimit -v unlimited 2>/dev/null || true

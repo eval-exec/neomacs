@@ -1883,6 +1883,13 @@ impl Context {
     /// termination + sweep. The first cycle and non-incremental builds take the
     /// stop-the-world path.
     pub(super) fn gc_collect_from_current_roots_impl(&mut self, force_complete: bool) {
+        // Collection also compacts undo state, materializes thread buffer
+        // objects and publishes GC statistics. Those operations can allocate
+        // or consult semantic TLS, so activate the collecting Context before
+        // any of them runs. Keep the usual already-active safe point cheap.
+        if !crate::tagged::gc::tagged_heap_is_current(&self.tagged_heap) {
+            self.setup_thread_locals();
+        }
         // A6 publication discipline: collecting while run_loop's operand-stack
         // cursor holds an unpublished length would mark a stale bc_buf prefix.
         #[cfg(debug_assertions)]
