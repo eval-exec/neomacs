@@ -267,7 +267,13 @@ impl NameAtomStorage {
             .reserve(required_chunks.saturating_sub(self.chunks.len()));
     }
 
-    fn push(&mut self, value: LispString) -> &'static LispString {
+    fn push(&mut self, mut value: LispString) -> &'static LispString {
+        // Name atoms outlive every tagged heap. Exact Lisp name objects keep
+        // their rooted text properties separately; the atom stores spelling
+        // only, so it must never retain property Values from that heap.
+        if value.has_intervals() {
+            value.clear_intervals();
+        }
         let chunk_index = self.len / NAME_ATOM_CHUNK;
         let slot_index = self.len % NAME_ATOM_CHUNK;
         if slot_index == 0 {
@@ -1882,3 +1888,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/seed_prefix.rs"]
 mod seed_prefix_tests;
+
+#[cfg(test)]
+#[path = "tests/gc_tls_ownership.rs"]
+mod gc_tls_ownership_tests;
