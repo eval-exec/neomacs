@@ -4057,6 +4057,15 @@ pub(crate) fn dump_charset_registry(encoder: &mut DumpEncoder) -> DumpCharsetReg
                 .map(dump_sym_id)
                 .collect(),
         ),
+        priority_identity_syms: snapshot
+            .priority_identities
+            .map(|names| names.into_iter().map(dump_sym_id).collect()),
+        alias_syms: snapshot.aliases.map(|aliases| {
+            aliases
+                .into_iter()
+                .map(|(alias, target)| (dump_sym_id(alias), dump_sym_id(target)))
+                .collect()
+        }),
         next_id: snapshot.next_id,
     }
 }
@@ -6347,6 +6356,16 @@ pub(crate) fn load_charset_registry(decoder: &mut LoadDecoder, dcr: &DumpCharset
             .as_ref()
             .map(|names| names.iter().map(load_sym_id).collect())
             .unwrap_or_default(),
+        priority_identities: dcr
+            .priority_identity_syms
+            .as_ref()
+            .map(|names| names.iter().map(load_sym_id).collect()),
+        aliases: dcr.alias_syms.as_ref().map(|aliases| {
+            aliases
+                .iter()
+                .map(|(alias, target)| (load_sym_id(alias), load_sym_id(target)))
+                .collect()
+        }),
         next_id: dcr.next_id,
         // The binary dump does not carry GNU's `Vcharset_non_preferred_head`
         // boundary; a freshly loaded session reproduces GNU's dumped default

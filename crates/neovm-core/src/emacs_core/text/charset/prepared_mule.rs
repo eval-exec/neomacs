@@ -22,22 +22,46 @@ pub(crate) struct CharsetEncoder {
 
 enum CharsetEncoderKind {
     Map(Option<Arc<CharsetMapData>>),
+    #[cfg(test)]
     Registry(SymId),
+    Member(SymId),
+}
+
+enum CharsetLookup {
+    #[cfg(test)]
+    Name(SymId),
+    Member(SymId),
 }
 
 impl CharsetEncoder {
+    #[cfg(test)]
     pub(crate) fn new(name: SymId) -> Self {
+        Self::prepare(CharsetLookup::Name(name))
+    }
+
+    fn new_member(identity: SymId) -> Self {
+        Self::prepare(CharsetLookup::Member(identity))
+    }
+
+    fn prepare(lookup: CharsetLookup) -> Self {
         let kind = CHARSET_REGISTRY.with(|slot| {
             let registry = slot.borrow();
-            let name = registry.resolve_name(name);
+            let (name, fallback) = match lookup {
+                #[cfg(test)]
+                CharsetLookup::Name(name) => {
+                    let name = registry.resolve_name(name);
+                    (name, CharsetEncoderKind::Registry(name))
+                }
+                CharsetLookup::Member(identity) => (identity, CharsetEncoderKind::Member(identity)),
+            };
             let Some(info) = registry.charsets.get(&name) else {
-                return CharsetEncoderKind::Registry(name);
+                return fallback;
             };
             match &info.method {
                 CharsetMethod::Map(map_name) if !info.unified_p => {
                     CharsetEncoderKind::Map(load_charset_map(map_name, info))
                 }
-                _ => CharsetEncoderKind::Registry(name),
+                _ => fallback,
             }
         });
         Self { kind }
@@ -47,7 +71,11 @@ impl CharsetEncoder {
     pub(crate) fn encode_char(&self, ch: i64) -> Option<i64> {
         match &self.kind {
             CharsetEncoderKind::Map(map) => map.as_ref()?.char_to_code.get(&ch).copied(),
+            #[cfg(test)]
             CharsetEncoderKind::Registry(name) => charset_encode_char(*name, ch),
+            CharsetEncoderKind::Member(identity) => {
+                CHARSET_REGISTRY.with(|slot| slot.borrow().encode_member_char(*identity, ch))
+            }
         }
     }
 }
@@ -60,7 +88,9 @@ struct MuleCandidate {
 }
 
 /// The current Mule charset list, privately owned by one conversion's mutator.
-/// This view contains symbol ids and numeric metadata, never GC-managed Values.
+/// This view contains physical definition identities and numeric metadata,
+/// never GC-managed Values. A physical identity is a stable registry key, like
+/// GNU's charset ID; public aliases cannot replace or merge existing members.
 /// Candidate maps are resolved only when reached, preserving lazy map loading.
 /// No Lisp runs inside the conversion; the next call takes a new view and sees
 /// charset definitions, redefinitions, aliases and priority changes. No new
@@ -76,7 +106,6 @@ impl EmacsMuleEncoder {
             let mut seen = HashSet::new();
             let mut candidates = Vec::new();
             for &name in &registry.emacs_mule_order {
-                let name = registry.resolve_name(name);
                 if !seen.insert(name) {
                     continue;
                 }
@@ -98,24 +127,19 @@ impl EmacsMuleEncoder {
             // support only for entries that have not had a Lisp definition.
             // GNU does not add Mule-list membership when a previously defined
             // non-Mule charset is redefined with a Mule id. A loaded runtime
-            // has every real Mule charset ordered;
-            // materialized pdump aliases resolve to already-seen canonical
-            // entries and therefore cannot duplicate or reorder candidates.
-            let mut preseeded: Vec<_> = registry
-                .charsets
-                .values()
-                .filter(|info| {
-                    info.emacs_mule_id.is_some()
-                        && registry.resolve_name(info.name) == info.name
-                        && !seen.contains(&info.name)
-                        && !registry.priority.contains(&info.name)
-                })
-                .collect();
-            preseeded.sort_by_key(|info| info.id);
-            for info in preseeded {
+            // has every real Mule charset ordered. Restrict bootstrap support
+            // to the registry's actual preseeded Mule charset, so stale
+            // materialized aliases can never invent candidate membership.
+            if let Some(name) = lookup_interned("latin-iso8859-1")
+                && !seen.contains(&name)
+                && !registry.priority_identities.contains(&name)
+                && registry.resolve_name(name) == name
+                && let Some(info) = registry.charsets.get(&name)
+                && let Some(id) = info.emacs_mule_id
+            {
                 candidates.push(MuleCandidate {
                     name: info.name,
-                    id: info.emacs_mule_id.expect("filtered Mule charset"),
+                    id,
                     dimension: info.dimension,
                     encoder: None,
                 });
@@ -133,7 +157,7 @@ impl EmacsMuleEncoder {
         self.candidates.iter_mut().find_map(|candidate| {
             let encoder = candidate
                 .encoder
-                .get_or_insert_with(|| CharsetEncoder::new(candidate.name));
+                .get_or_insert_with(|| CharsetEncoder::new_member(candidate.name));
             encoder
                 .encode_char(ch)
                 .map(|code| (candidate.id, candidate.dimension, code))

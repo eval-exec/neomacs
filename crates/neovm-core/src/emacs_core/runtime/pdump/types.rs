@@ -1135,6 +1135,12 @@ pub struct DumpCharsetRegistry {
     /// None reconstructs their Mule membership from global priority order.
     #[serde(default)]
     pub emacs_mule_order_syms: Option<Vec<DumpSymId>>,
+    /// Stable physical-ID order and authoritative alias lookup metadata.
+    /// Missing fields preserve materialized-alias sections from versions 1/2.
+    #[serde(default)]
+    pub priority_identity_syms: Option<Vec<DumpSymId>>,
+    #[serde(default)]
+    pub alias_syms: Option<Vec<(DumpSymId, DumpSymId)>>,
     pub next_id: i64,
 }
 

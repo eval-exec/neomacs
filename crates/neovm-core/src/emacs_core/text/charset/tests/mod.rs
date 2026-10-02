@@ -1583,3 +1583,6 @@ fn a_resolved_charset_decoder_answers_exactly_like_the_registry() {
 
 #[cfg(test)]
 mod prepared_mule;
+
+#[cfg(test)]
+mod mule_identity;

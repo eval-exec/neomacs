@@ -42,6 +42,11 @@ fn install_overlapping_charsets() -> (
         info.plist = vec![(intern(":name"), Value::from_sym_id(info.name))];
         names.push(info.name);
         snapshot.priority.push(info.name);
+        snapshot
+            .priority_identities
+            .as_mut()
+            .expect("modern snapshot")
+            .push(info.name);
         snapshot.emacs_mule_order.push(info.name);
         snapshot.charsets.push(info);
     }
@@ -97,6 +102,11 @@ fn prepared_mule_encode_observes_redefinition_between_calls() {
         .retain(|info| info.name != intern("neovm-mule-second"));
     snapshot
         .priority
+        .retain(|&name| name != intern("neovm-mule-second"));
+    snapshot
+        .priority_identities
+        .as_mut()
+        .expect("modern snapshot")
         .retain(|&name| name != intern("neovm-mule-second"));
     snapshot
         .emacs_mule_order

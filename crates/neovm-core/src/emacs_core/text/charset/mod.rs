@@ -315,6 +315,10 @@ pub(crate) struct CharsetRegistrySnapshot {
     pub charsets: Vec<CharsetInfoSnapshot>,
     pub priority: Vec<SymId>,
     pub emacs_mule_order: Vec<SymId>,
+    /// Modern snapshots preserve physical definition identities and explicit
+    /// aliases. None reconstructs old materialized-alias snapshots.
+    pub priority_identities: Option<Vec<SymId>>,
+    pub aliases: Option<Vec<(SymId, SymId)>>,
     pub next_id: i64,
     /// Index into `priority` of the first non-preferred charset, mirroring GNU's
     /// `Vcharset_non_preferred_head` (charset.c:85). `char_charset` returns the
@@ -357,6 +361,13 @@ pub(crate) struct CharsetRegistry {
     aliases: rustc_hash::FxHashMap<SymId, SymId>,
     /// Priority-ordered list of charset names.
     priority: Vec<SymId>,
+    /// GNU's ordered charset-ID list, represented by stable physical
+    /// definition keys. Alias lookup may replace a public name's meaning but
+    /// never changes an existing identity in this list. This private mirror
+    /// serves only Mule ordering; the public priority-list behavior is kept
+    /// separate. Its existing per-mutator registry owns these plain symbol
+    /// IDs and snapshots/restores them with its own runtime state.
+    priority_identities: Vec<SymId>,
     /// GNU's `Vemacs_mule_charset_list`: new Mule definitions append, while
     /// `set-charset-priority` reorders its existing members. This can differ
     /// from `priority` after an ordinary definition follows a supplementary
@@ -383,6 +394,7 @@ impl CharsetRegistry {
             charsets: rustc_hash::FxHashMap::default(),
             aliases: rustc_hash::FxHashMap::default(),
             priority: Vec::new(),
+            priority_identities: Vec::new(),
             emacs_mule_order: Vec::new(),
             non_preferred_head: None,
             next_id: 256, // start above the Emacs built-in range
@@ -616,6 +628,9 @@ impl CharsetRegistry {
             let resolved = self.resolve_name(name);
             if !self.priority.contains(&resolved) {
                 self.add_to_ordered(resolved, supplementary_p);
+            }
+            if !self.priority_identities.contains(&resolved) {
+                self.add_to_identity_order(resolved, supplementary_p);
                 // GNU appends Mule members on first definition, even when
                 // the ordinary priority list inserts before supplementary
                 // charsets (charset.c:1181-1189). Preseeded Lisp charsets enter
@@ -652,6 +667,24 @@ impl CharsetRegistry {
         match first_supp {
             Some(idx) => self.priority.insert(idx, name),
             None => self.priority.push(name),
+        }
+    }
+
+    /// Keep the physical-ID ordering GNU uses, independently of alias names
+    /// that the existing public priority list may contain.
+    fn add_to_identity_order(&mut self, name: SymId, supplementary_p: bool) {
+        if supplementary_p {
+            self.priority_identities.push(name);
+            return;
+        }
+        let first_supp = self.priority_identities.iter().position(|id| {
+            self.charsets
+                .get(id)
+                .is_some_and(|info| info.supplementary_p)
+        });
+        match first_supp {
+            Some(index) => self.priority_identities.insert(index, name),
+            None => self.priority_identities.push(name),
         }
     }
 
@@ -736,6 +769,21 @@ impl CharsetRegistry {
     /// Move the requested charset names to the front of the priority list
     /// (deduplicated, preserving relative order for remaining entries).
     pub fn set_priority(&mut self, requested: &[SymId]) {
+        let mut identity_seen = HashSet::with_capacity(self.priority_identities.len());
+        let mut identity_order = Vec::with_capacity(self.priority_identities.len());
+        for &name in requested {
+            let identity = self.resolve_name(name);
+            if self.priority_identities.contains(&identity) && identity_seen.insert(identity) {
+                identity_order.push(identity);
+            }
+        }
+        for &identity in &self.priority_identities {
+            if identity_seen.insert(identity) {
+                identity_order.push(identity);
+            }
+        }
+        self.priority_identities = identity_order;
+
         let mut seen = HashSet::with_capacity(self.priority.len() + requested.len());
         let mut reordered = Vec::with_capacity(self.priority.len() + requested.len());
 
@@ -763,13 +811,11 @@ impl CharsetRegistry {
         // global order (charset.c:2201-2219); a priority change never adds a
         // charset that was absent from the Mule list.
         let mule_members: HashSet<_> = self.emacs_mule_order.iter().copied().collect();
-        let mut seen_mule_members = HashSet::with_capacity(mule_members.len());
         self.emacs_mule_order = self
-            .priority
+            .priority_identities
             .iter()
             .copied()
-            .map(|name| self.resolve_name(name))
-            .filter(|name| mule_members.contains(name) && seen_mule_members.insert(*name))
+            .filter(|identity| mule_members.contains(identity))
             .collect();
     }
 
@@ -802,11 +848,16 @@ impl CharsetRegistry {
 
     fn snapshot(&self) -> CharsetRegistrySnapshot {
         // Materialize aliases as concrete charset entries so they survive the
-        // pdump (which serializes only `charsets`).  Snapshots are taken after
+        // legacy dump mirror. A colliding alias must not overwrite a physical
+        // definition: modern snapshots preserve all alias mappings explicitly.
+        // Snapshots are taken after
         // loadup, so the resolved target's plist is already final (e.g. it
         // includes `preferred-coding-system`); a materialized clone therefore
         // carries the same data the dynamic alias would resolve to.
         let alias_clones = self.aliases.iter().filter_map(|(&alias, &target)| {
+            if self.charsets.contains_key(&alias) {
+                return None;
+            }
             let canonical = self.resolve_name(target);
             self.charsets.get(&canonical).map(|info| {
                 let mut clone = info.clone();
@@ -855,11 +906,19 @@ impl CharsetRegistry {
             })
             .collect::<Vec<_>>();
         charsets.sort_by(|left, right| resolve_sym(left.name).cmp(resolve_sym(right.name)));
+        let mut aliases: Vec<_> = self
+            .aliases
+            .iter()
+            .map(|(&alias, &target)| (alias, target))
+            .collect();
+        aliases.sort_by(|left, right| resolve_sym(left.0).cmp(resolve_sym(right.0)));
 
         CharsetRegistrySnapshot {
             charsets,
             priority: self.priority.clone(),
             emacs_mule_order: self.emacs_mule_order.clone(),
+            priority_identities: Some(self.priority_identities.clone()),
+            aliases: Some(aliases),
             next_id: self.next_id,
             non_preferred_head: self.non_preferred_head,
         }
@@ -920,26 +979,57 @@ impl CharsetRegistry {
         // off data the snapshot already holds, rather than per decoded
         // character. Every `resolve_name` caller is correct again afterwards.
         let name_key = crate::emacs_core::intern::intern(":name");
-        let aliases: rustc_hash::FxHashMap<SymId, SymId> = charsets
-            .values()
-            .filter_map(|info| {
-                let canonical = info
-                    .plist
-                    .iter()
-                    .find(|(key, _)| *key == name_key)
-                    .and_then(|(_, value)| value.as_symbol_id())?;
-                (canonical != info.name).then_some((info.name, canonical))
-            })
-            .collect();
+        let aliases: rustc_hash::FxHashMap<SymId, SymId> = match snapshot.aliases {
+            Some(aliases) => aliases.into_iter().collect(),
+            None => charsets
+                .values()
+                .filter_map(|info| {
+                    let canonical = info
+                        .plist
+                        .iter()
+                        .find(|(key, _)| *key == name_key)
+                        .and_then(|(_, value)| value.as_symbol_id())?;
+                    (canonical != info.name).then_some((info.name, canonical))
+                })
+                .collect(),
+        };
 
-        Self {
+        let legacy_identities = snapshot.priority_identities.is_none();
+        let mut registry = Self {
             charsets,
             aliases,
             priority: snapshot.priority,
+            priority_identities: snapshot.priority_identities.unwrap_or_default(),
             emacs_mule_order: snapshot.emacs_mule_order,
             non_preferred_head: snapshot.non_preferred_head,
             next_id: snapshot.next_id,
+        };
+        if legacy_identities {
+            // Old snapshots stored public names, including materialized
+            // aliases. Resolve those once into physical definition identities;
+            // modern snapshots already carry exact immutable membership.
+            let mut seen = HashSet::new();
+            registry.priority_identities = registry
+                .priority
+                .iter()
+                .copied()
+                .map(|name| registry.resolve_name(name))
+                .filter(|identity| {
+                    registry.charsets.contains_key(identity) && seen.insert(*identity)
+                })
+                .collect();
+            seen.clear();
+            registry.emacs_mule_order = registry
+                .emacs_mule_order
+                .iter()
+                .copied()
+                .map(|name| registry.resolve_name(name))
+                .filter(|identity| {
+                    registry.charsets.contains_key(identity) && seen.insert(*identity)
+                })
+                .collect();
         }
+        registry
     }
 
     /// Replace the plist for a charset.
@@ -1004,6 +1094,18 @@ impl CharsetRegistry {
     /// represented in the charset.
     pub fn encode_char(&self, name: SymId, ch: i64) -> Option<i64> {
         let info = self.charsets.get(&self.resolve_name(name))?;
+        self.encode_char_info(info, ch)
+    }
+
+    /// Encode through a stored physical charset identity, independent of a
+    /// later alias replacing the public name's lookup entry.
+    #[inline]
+    fn encode_member_char(&self, identity: SymId, ch: i64) -> Option<i64> {
+        self.encode_char_info(self.charsets.get(&identity)?, ch)
+    }
+
+    #[inline]
+    fn encode_char_info(&self, info: &CharsetInfo, ch: i64) -> Option<i64> {
         if info.unified_p
             && let Some(unify_map) = charset_value_text(&info.unify_map)
             && let Some(encoded) = load_charset_map(&unify_map, info)

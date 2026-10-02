@@ -154,3 +154,24 @@ fn mule_prepared_encode_follows_charset_alias_priority() {
         expect,
     );
 }
+
+#[test]
+fn mule_prepared_encode_preserves_identity_after_existing_name_alias_collision() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[
+        r#""OK ((129 233 129 181) (129 233 129 181) (130 233 129 181) (130 233 129 181))""#
+    ]];
+    assert_oracle_parity_with_env_expect(
+        r##"(let ((before (encode-coding-string "éµ" 'emacs-mule)))
+  (define-charset-alias 'latin-iso8859-1 'latin-iso8859-2)
+  (let ((after-alias (encode-coding-string "éµ" 'emacs-mule)))
+    (set-charset-priority 'latin-iso8859-1)
+    (let ((after-priority (encode-coding-string "éµ" 'emacs-mule)))
+      (set-charset-priority 'ascii)
+      (list (string-to-list before) (string-to-list after-alias)
+            (string-to-list after-priority)
+            (string-to-list (encode-coding-string "éµ" 'emacs-mule))))))"##,
+        &[("NEOVM_EMACS_MULE_PREPARED", "on")],
+        expect,
+    );
+}

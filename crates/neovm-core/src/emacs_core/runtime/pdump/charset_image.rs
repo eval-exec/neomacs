@@ -5,8 +5,10 @@
 //! tables with stable method tags.
 //!
 //! Section version 2 keeps the version-1 header and appends the optional Mule
-//! order as a count followed by symbol ids. The reader accepts version 1,
-//! whose missing order is reconstructed at registry load. No file-level
+//! order as a count followed by symbol ids. Version 3 adds the physical-ID
+//! order and authoritative alias pairs, preserving a definition even if an
+//! alias overwrites its public name. The reader accepts versions 1/2, whose
+//! missing metadata is reconstructed at registry load. No file-level
 //! pdump version or JIT ABI change is needed for this compatible section.
 
 use bytemuck::{Pod, Zeroable};
@@ -19,7 +21,7 @@ use super::types::{
 };
 
 const CHARSET_MAGIC: [u8; 16] = *b"NEOCHARSET\0\0\0\0\0\0";
-const CHARSET_FORMAT_VERSION: u32 = 2;
+const CHARSET_FORMAT_VERSION: u32 = 3;
 const ABSENT_EMACS_MULE_ORDER: u64 = u64::MAX;
 
 #[repr(C)]
@@ -50,11 +52,22 @@ pub(crate) fn charset_section_bytes(registry: &DumpCharsetRegistry) -> Result<Ve
     for name in &registry.priority {
         write_string(&mut bytes, name)?;
     }
-    match &registry.emacs_mule_order_syms {
-        Some(names) => {
-            write_len(&mut bytes, names.len(), "emacs-mule order symbols")?;
-            for name in names {
-                write_u32(&mut bytes, name.0);
+    write_optional_symbols(
+        &mut bytes,
+        &registry.emacs_mule_order_syms,
+        "emacs-mule order symbols",
+    )?;
+    write_optional_symbols(
+        &mut bytes,
+        &registry.priority_identity_syms,
+        "charset identity symbols",
+    )?;
+    match &registry.alias_syms {
+        Some(aliases) => {
+            write_len(&mut bytes, aliases.len(), "charset alias pairs")?;
+            for (alias, target) in aliases {
+                write_u32(&mut bytes, alias.0);
+                write_u32(&mut bytes, target.0);
             }
         }
         None => write_u64(&mut bytes, ABSENT_EMACS_MULE_ORDER),
@@ -113,24 +126,34 @@ pub(crate) fn load_charset_section(section: &[u8]) -> Result<DumpCharsetRegistry
         priority.push(read_string(&mut cursor)?);
     }
     let emacs_mule_order_syms = if header.version >= 2 {
-        let count = cursor.read_u64("emacs-mule order symbol count")?;
-        if count == ABSENT_EMACS_MULE_ORDER {
-            None
-        } else {
-            let count = to_usize(count, "emacs-mule order symbol count")?;
-            if count > cursor.remaining() / std::mem::size_of::<u32>() {
-                return Err(DumpError::ImageFormatError(
-                    "emacs-mule order symbols exceed charset payload".into(),
-                ));
-            }
-            let mut names = Vec::with_capacity(count);
-            for _ in 0..count {
-                names.push(DumpSymId(cursor.read_u32("emacs-mule order symbol")?));
-            }
-            Some(names)
-        }
+        read_optional_symbols(&mut cursor, "emacs-mule order symbols")?
     } else {
         None
+    };
+    let (priority_identity_syms, alias_syms) = if header.version >= 3 {
+        let identities = read_optional_symbols(&mut cursor, "charset identity symbols")?;
+        let count = cursor.read_u64("charset alias pair count")?;
+        let aliases = if count == ABSENT_EMACS_MULE_ORDER {
+            None
+        } else {
+            let count = to_usize(count, "charset alias pair count")?;
+            if count > cursor.remaining() / (2 * std::mem::size_of::<u32>()) {
+                return Err(DumpError::ImageFormatError(
+                    "charset alias pairs exceed payload".into(),
+                ));
+            }
+            let mut pairs = Vec::with_capacity(count);
+            for _ in 0..count {
+                pairs.push((
+                    DumpSymId(cursor.read_u32("charset alias")?),
+                    DumpSymId(cursor.read_u32("charset alias target")?),
+                ));
+            }
+            Some(pairs)
+        };
+        (identities, aliases)
+    } else {
+        (None, None)
     };
 
     if !cursor.is_empty() {
@@ -145,8 +168,48 @@ pub(crate) fn load_charset_section(section: &[u8]) -> Result<DumpCharsetRegistry
         priority_syms,
         priority,
         emacs_mule_order_syms,
+        priority_identity_syms,
+        alias_syms,
         next_id: header.next_id,
     })
+}
+
+fn write_optional_symbols(
+    out: &mut Vec<u8>,
+    names: &Option<Vec<DumpSymId>>,
+    what: &str,
+) -> Result<(), DumpError> {
+    match names {
+        Some(names) => {
+            write_len(out, names.len(), what)?;
+            for name in names {
+                write_u32(out, name.0);
+            }
+        }
+        None => write_u64(out, ABSENT_EMACS_MULE_ORDER),
+    }
+    Ok(())
+}
+
+fn read_optional_symbols(
+    cursor: &mut Cursor<'_>,
+    what: &str,
+) -> Result<Option<Vec<DumpSymId>>, DumpError> {
+    let count = cursor.read_u64(what)?;
+    if count == ABSENT_EMACS_MULE_ORDER {
+        return Ok(None);
+    }
+    let count = to_usize(count, what)?;
+    if count > cursor.remaining() / std::mem::size_of::<u32>() {
+        return Err(DumpError::ImageFormatError(format!(
+            "{what} exceed charset payload"
+        )));
+    }
+    let mut names = Vec::with_capacity(count);
+    for _ in 0..count {
+        names.push(DumpSymId(cursor.read_u32(what)?));
+    }
+    Ok(Some(names))
 }
 
 fn read_header(section: &[u8]) -> Result<CharsetHeader, DumpError> {
@@ -162,7 +225,7 @@ fn read_header(section: &[u8]) -> Result<CharsetHeader, DumpError> {
             "charset section has bad magic".into(),
         ));
     }
-    if !matches!(header.version, 1 | CHARSET_FORMAT_VERSION) {
+    if !matches!(header.version, 1 | 2 | CHARSET_FORMAT_VERSION) {
         return Err(DumpError::UnsupportedVersion(header.version));
     }
     if header.header_size != HEADER_SIZE as u32 {
@@ -481,6 +544,8 @@ pub(crate) fn empty_charset_registry() -> DumpCharsetRegistry {
         priority_syms: Vec::new(),
         priority: Vec::new(),
         emacs_mule_order_syms: None,
+        priority_identity_syms: None,
+        alias_syms: None,
         next_id: 0,
     }
 }
