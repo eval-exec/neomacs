@@ -300,6 +300,14 @@ impl Context {
         for root in registry_roots.drain(..) {
             visit(root);
         }
+        group("dynamic_module_registry");
+        super::super::dynamic_module::collect_dynamic_module_registry_gc_roots(
+            &self.dynamic_module_registry,
+            &mut registry_roots,
+        );
+        for root in registry_roots.drain(..) {
+            visit(root);
+        }
         // Full ~all-interned-symbols walk on STW collections; only the
         // BLV-pool residual under `ObarraySymbolCellSkipGuard` (both
         // concurrent handshakes).
@@ -505,6 +513,9 @@ impl Context {
         super::super::builtins::install_file_notify_registry_handle(&self.file_notify_registry);
         super::super::builtins::install_window_configuration_registry_handle(
             &self.window_configuration_registry,
+        );
+        super::super::dynamic_module::install_dynamic_module_registry_handle(
+            &self.dynamic_module_registry,
         );
         super::super::syntax::restore_standard_syntax_table_object(self.standard_syntax_table);
         super::super::syntax::restore_syntax_code_objects(self.syntax_code_objects);

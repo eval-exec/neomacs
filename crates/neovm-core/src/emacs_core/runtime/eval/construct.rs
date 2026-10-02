@@ -2329,6 +2329,8 @@ impl Context {
             file_notify_registry: super::super::builtins::current_file_notify_registry_handle(),
             window_configuration_registry:
                 super::super::builtins::current_window_configuration_registry_handle(),
+            dynamic_module_registry:
+                super::super::dynamic_module::current_dynamic_module_registry_handle(),
         };
         super::super::runtime_identity::install(&mut ev);
         ev.provide_value(

@@ -2320,12 +2320,9 @@ fn collect_thread_local_gc_roots(
     collect_group(roots, "terminal-thread-local", stats, |group| {
         super::terminal::pure::collect_terminal_gc_roots(group, heap_id)
     });
-    collect_group(
-        roots,
-        "dynamic-module-thread-local",
-        stats,
-        super::dynamic_module::collect_dynamic_module_gc_roots,
-    );
+    collect_group(roots, "dynamic-module-thread-local", stats, |group| {
+        super::dynamic_module::collect_dynamic_module_gc_roots(group, heap_id)
+    });
     collect_group(roots, "symbol-name-thread-local", stats, |group| {
         super::intern::collect_symbol_name_gc_roots(group, heap_id)
     });
@@ -3612,6 +3609,7 @@ pub struct Context {
     pub(crate) hash_table_test_registry: super::builtins::HashTableTestRegistryHandle,
     pub(crate) file_notify_registry: super::builtins::FileNotifyRegistryHandle,
     pub(crate) window_configuration_registry: super::builtins::WindowConfigurationRegistryHandle,
+    pub(crate) dynamic_module_registry: super::dynamic_module::DynamicModuleRegistryHandle,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4173,6 +4171,7 @@ fn lisp_frame_manager() -> FrameManager {
 /// panics loudly in production, rather than corrupting silently.
 impl Drop for Context {
     fn drop(&mut self) {
+        super::dynamic_module::retire_dynamic_module_registry(&self.dynamic_module_registry);
         crate::tagged::gc::clear_tagged_heap_if_installed(&self.tagged_heap);
     }
 }

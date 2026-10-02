@@ -143,7 +143,10 @@ fn active_module_environment_values_are_gc_roots() {
 
     let active = ActiveModuleEnv::push(priv_ptr);
     let mut roots = Vec::new();
-    collect_dynamic_module_gc_roots(&mut roots);
+    collect_dynamic_module_gc_roots(
+        &mut roots,
+        crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0),
+    );
     drop(active);
 
     assert!(roots.contains(&rooted));
