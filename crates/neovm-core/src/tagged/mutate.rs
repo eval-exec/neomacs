@@ -9,12 +9,14 @@ use crate::emacs_core::bytecode::ByteCodeFunction;
 use crate::emacs_core::value::LispHashTable;
 use crate::heap_types::{LispMarker, LispString, OverlayData};
 
+use super::collection_reads::{WriteProjection, record_projected_write};
 use super::gc::{HeapWriteKind, note_heap_slot_write, note_heap_write};
 use super::header::{
     ByteCodeObj, ByteCodeSlotObject, ConsCell, HashTableObj, LambdaObj, MacroObj, MarkerObj,
-    OverlayObj, RecordObj, StringObj, VecLikeType, VectorObj, XwidgetObj, XwidgetViewObj,
+    OverlayObj, RecordObj, StringObj, VecLikeHeader, VecLikeType, VectorObj, XwidgetObj,
+    XwidgetViewObj,
 };
-use super::value::TaggedValue;
+use super::value::{TAG_MASK, TaggedValue};
 
 thread_local! {
     static COLLECTION_REVISION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -39,6 +41,15 @@ impl LispCollectionRevision {
     }
 
     #[inline]
+    pub(super) fn advance() -> Self {
+        COLLECTION_REVISION.with(|revision| {
+            let next = revision.get().wrapping_add(1);
+            revision.set(next);
+            Self(next)
+        })
+    }
+
+    #[inline]
     pub(crate) fn changed(value: TaggedValue) {
         if !super::collection_reads::history_required() {
             return;
@@ -53,26 +64,29 @@ impl LispCollectionRevision {
 
 #[inline]
 pub fn set_cons_car(cell: TaggedValue, value: TaggedValue) -> bool {
-    LispCollectionRevision::changed(cell);
-    if !cell.is_cons() {
+    if !record_projected_write(cell, WriteProjection::Cons) {
         return false;
     }
     note_heap_slot_write(cell, HeapWriteKind::ConsCar, 0, value);
+    // The fused recorder proved the Cons tag and observed this pointer after
+    // journaling. Its STATE borrow ended before the barrier; no callback or
+    // collection revision change occurs between that observation and this store.
     unsafe {
-        (*(cell.xcons_ptr() as *mut ConsCell)).set_car(value);
+        (*((cell.bits() & !TAG_MASK) as *mut ConsCell)).set_car(value);
     }
     true
 }
 
 #[inline]
 pub fn set_cons_cdr(cell: TaggedValue, value: TaggedValue) -> bool {
-    LispCollectionRevision::changed(cell);
-    if !cell.is_cons() {
+    if !record_projected_write(cell, WriteProjection::Cons) {
         return false;
     }
     note_heap_slot_write(cell, HeapWriteKind::ConsCdr, 1, value);
+    // As for set_cons_car: projection is already observed, and the barrier
+    // has no Lisp callback or collection revision change.
     unsafe {
-        (*(cell.xcons_ptr() as *mut ConsCell)).set_cdr(value);
+        (*((cell.bits() & !TAG_MASK) as *mut ConsCell)).set_cdr(value);
     }
     true
 }
@@ -109,11 +123,16 @@ pub fn replace_vector_data(value: TaggedValue, items: Vec<TaggedValue>) -> bool 
 
 #[inline]
 pub fn set_vector_slot(value: TaggedValue, index: usize, item: TaggedValue) -> bool {
-    LispCollectionRevision::changed(value);
-    if value.veclike_type() != Some(VecLikeType::Vector) {
+    if !record_projected_write(value, WriteProjection::VecLike) {
         return false;
     }
-    let ptr = value.as_veclike_ptr().unwrap() as *mut VectorObj;
+    // The observed header is reused for subtype and payload. Wrong veclike
+    // subtypes still contributed a read, exactly as veclike_type did before.
+    let header = (value.bits() & !TAG_MASK) as *const VecLikeHeader;
+    if unsafe { (*header).type_tag } != VecLikeType::Vector {
+        return false;
+    }
+    let ptr = header as *mut VectorObj;
     let data = unsafe { (*ptr).data.ensure_owned() };
     if index >= data.len() {
         return false;
@@ -145,11 +164,14 @@ pub fn replace_record_data(value: TaggedValue, items: Vec<TaggedValue>) -> bool 
 
 #[inline]
 pub fn set_record_slot(value: TaggedValue, index: usize, item: TaggedValue) -> bool {
-    LispCollectionRevision::changed(value);
-    if value.veclike_type() != Some(VecLikeType::Record) {
+    if !record_projected_write(value, WriteProjection::VecLike) {
         return false;
     }
-    let ptr = value.as_veclike_ptr().unwrap() as *mut RecordObj;
+    let header = (value.bits() & !TAG_MASK) as *const VecLikeHeader;
+    if unsafe { (*header).type_tag } != VecLikeType::Record {
+        return false;
+    }
+    let ptr = header as *mut RecordObj;
     let data = unsafe { (*ptr).data.ensure_owned() };
     if index >= data.len() {
         return false;

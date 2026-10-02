@@ -2044,7 +2044,10 @@ fn rounding_driver(n: Value, d: Value, rounding: LispRounding) -> EvalResult {
             return Ok(Value::make_int(rounding.div_fixnum(a, d)));
         }
     }
-    if args[1].is_bignum() && *args[1].as_bignum().unwrap() == 0 {
+    // Retain the observed divisor projection at its existing zero check.
+    // No callback or GC separates this borrow from the integer division.
+    let divisor_big = args[1].as_bignum();
+    if divisor_big.is_some_and(|big| *big == 0) {
         return Err(signal(LispCondition::ArithError, vec![]));
     }
     // `round` is half to even (malachite's `Nearest`, GNU's `rounddiv_q`).
@@ -2067,7 +2070,7 @@ fn rounding_driver(n: Value, d: Value, rounding: LispRounding) -> EvalResult {
         }
     };
     let d_small;
-    let d: &Integer = match args[1].as_bignum() {
+    let d: &Integer = match divisor_big {
         Some(big) => big,
         None => {
             d_small = bignum_or_int_to_integer(&args[1])?;
@@ -2548,3 +2551,7 @@ mod arithmetic_limb_kernels_test;
 #[cfg(test)]
 #[path = "tests/arithmetic_integer_value.rs"]
 mod arithmetic_integer_value_test;
+
+#[cfg(test)]
+#[path = "tests/arithmetic_rounding_capture.rs"]
+mod arithmetic_rounding_capture_test;

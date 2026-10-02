@@ -324,10 +324,20 @@ const _: () = {
 #[inline(always)]
 fn aref_fast(array: Value, index: Value) -> Option<Value> {
     let idx = usize::try_from(index.as_fixnum()?).ok()?;
-    if array.is_veclike() {
-        let items = match array.veclike_type()? {
-            crate::tagged::header::VecLikeType::Vector => array.as_vector_data()?,
-            crate::tagged::header::VecLikeType::Record => array.as_record_data()?,
+    if let Some(header) = array.as_veclike_ptr() {
+        // SAFETY: the observed header selects the concrete payload type. This
+        // projection reaches no callback or GC safe point before reading it.
+        let items = match unsafe { (*header).type_tag } {
+            crate::tagged::header::VecLikeType::Vector => unsafe {
+                (*(header as *const crate::tagged::header::VectorObj))
+                    .data
+                    .as_slice()
+            },
+            crate::tagged::header::VecLikeType::Record => unsafe {
+                (*(header as *const crate::tagged::header::RecordObj))
+                    .data
+                    .as_slice()
+            },
             _ => return None,
         };
         return items.get(idx).copied();
@@ -346,6 +356,10 @@ fn aref_fast(array: Value, index: Value) -> Option<Value> {
     }
     None
 }
+
+#[cfg(test)]
+#[path = "tests/array_projection_capture.rs"]
+mod array_projection_capture;
 
 /// `Op::Aref` (GNU `Baref`) from compiled code: the element's bits, or
 /// [`VALUE_SHIM_SIGNAL`]. `builtin2`'s table dispatch, `Result` and result

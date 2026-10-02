@@ -1693,35 +1693,10 @@ pub(crate) fn copy_sequence_value(arg: Value) -> EvalResult {
     match arg.kind() {
         ValueKind::Nil => Ok(Value::NIL),
         ValueKind::Cons => {
-            let copy = Value::cons(arg.cons_car(), Value::NIL);
-            let mut prev = copy;
-            let mut tail = arg.cons_cdr();
-            let mut tortoise = tail;
-            let mut max = 2i64;
-            let mut n = 0i64;
-            let mut q = 2i64;
-
-            while tail.is_cons() {
-                let next = Value::cons(tail.cons_car(), Value::NIL);
-                prev.set_cdr(next);
-                prev = next;
-
-                tail = tail.cons_cdr();
-                if tail.is_cons()
-                    && let Some(cycle_tail) =
-                        for_each_tail_cycle_tail(tail, &mut tortoise, &mut max, &mut n, &mut q)
-                {
-                    return Err(signal(LispCondition::CircularList, vec![cycle_tail]));
-                }
-            }
-
-            if tail.is_nil() {
-                Ok(copy)
+            if unobserved_list_scan() {
+                copy_list_sequence_scan::<false>(arg)
             } else {
-                Err(signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("listp"), tail],
-                ))
+                copy_list_sequence_scan::<true>(arg)
             }
         }
         ValueKind::String => {
@@ -1774,6 +1749,47 @@ pub(crate) fn copy_sequence_value(arg: Value) -> EvalResult {
         )),
     }
 }
+
+/// This source walk runs no Lisp callback or collecting safe point. Each
+/// mutator selects its own capture policy once; fresh-result setters keep
+/// their normal journals and barriers in both traversal variants.
+#[inline]
+fn copy_list_sequence_scan<const OBSERVED: bool>(arg: Value) -> EvalResult {
+    let copy = Value::cons(scan_car::<OBSERVED>(arg), Value::NIL);
+    let mut prev = copy;
+    let mut tail = scan_cdr::<OBSERVED>(arg);
+    let mut tortoise = tail;
+    let mut max = 2i64;
+    let mut n = 0i64;
+    let mut q = 2i64;
+
+    while tail.is_cons() {
+        let next = Value::cons(scan_car::<OBSERVED>(tail), Value::NIL);
+        prev.set_cdr(next);
+        prev = next;
+
+        tail = scan_cdr::<OBSERVED>(tail);
+        if tail.is_cons()
+            && let Some(cycle_tail) =
+                for_each_tail_cycle_tail(tail, &mut tortoise, &mut max, &mut n, &mut q)
+        {
+            return Err(signal(LispCondition::CircularList, vec![cycle_tail]));
+        }
+    }
+
+    if tail.is_nil() {
+        Ok(copy)
+    } else {
+        Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("listp"), tail],
+        ))
+    }
+}
+
+#[cfg(test)]
+#[path = "tests/copy_sequence_capture.rs"]
+mod copy_sequence_capture;
 
 // ===========================================================================
 // Extended list operations

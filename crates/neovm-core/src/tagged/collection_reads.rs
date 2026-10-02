@@ -104,16 +104,36 @@ thread_local! {
     static OBSERVATION_STATE_ACCESSES: Cell<usize> = const { Cell::new(0) };
 }
 
+/// This mutator's journal policy mirrors its private capture stack. It caches
+/// no Lisp identity: only the process's monotonic history requirement is shared.
+/// Once this mutator has observed required history, it never skips later writes,
+/// including writes after its last capture while a certificate can remain live.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum JournalPolicy {
+    BeforeFirstCapture,
+    JournalOnly,
+    JournalAndObserve,
+}
+
 struct State {
     writes: Box<[usize; JOURNAL_SIZE]>,
     captures: Vec<Capture>,
+    journal_policy: JournalPolicy,
 }
 
 impl Default for State {
     fn default() -> Self {
+        // CONFIG cannot touch STATE or call Lisp. Force it before remembering
+        // history permanently: WRITE_LAZY may clear the conservative initial flag.
+        initialize();
         Self {
             writes: Box::new([0; JOURNAL_SIZE]),
             captures: Vec::new(),
+            journal_policy: if history_required() {
+                JournalPolicy::JournalOnly
+            } else {
+                JournalPolicy::BeforeFirstCapture
+            },
         }
     }
 }
@@ -178,6 +198,7 @@ impl CollectionReadScope {
         HISTORY_REQUIRED.store(true, Ordering::Relaxed);
         let admitted = STATE.with(|state| {
             let mut state = state.borrow_mut();
+            state.journal_policy = JournalPolicy::JournalAndObserve;
             let overflow = state.captures.len() >= MAX_DEPTH;
             if overflow {
                 for capture in &mut state.captures {
@@ -245,7 +266,13 @@ impl CollectionReadScope {
             let mut state = state.borrow_mut();
             let capture = state.captures.pop().expect("collection read scope");
             clear_recent_reads();
-            ACTIVE.with(|active| active.set(!state.captures.is_empty()));
+            let active = !state.captures.is_empty();
+            state.journal_policy = if active {
+                JournalPolicy::JournalAndObserve
+            } else {
+                JournalPolicy::JournalOnly
+            };
+            ACTIVE.with(|membership| membership.set(active));
             CAPTURE_SCOPES.fetch_sub(SCOPE_INCREMENT, Ordering::Relaxed);
             capture
         })
@@ -294,40 +321,96 @@ fn observe_bits(bits: usize) {
     // cons/vector access can inline this check without entering the slow
     // dependency recorder. Scope changes clear it so every active scope
     // still observes nested reads; collisions only cause another lookup.
-    let seen = RECENT_READS.with(|recent| {
-        let slot = &recent[((bits >> 3) ^ (bits >> 11)) & 255];
-        bits != 0 && slot.replace(bits) == bits
-    });
-    if !seen {
+    if !recently_observed(bits) {
         observe_uncached(bits);
     }
+}
+
+#[inline]
+fn recently_observed(bits: usize) -> bool {
+    RECENT_READS.with(|recent| {
+        let slot = &recent[((bits >> 3) ^ (bits >> 11)) & 255];
+        bits != 0 && slot.replace(bits) == bits
+    })
 }
 
 #[cold]
 #[inline(never)]
 fn observe_uncached(bits: usize) {
-    #[cfg(test)]
-    OBSERVATION_STATE_ACCESSES.with(|count| count.set(count.get() + 1));
     STATE.with(|state| {
         let mut state = state.borrow_mut();
-        for capture in &mut state.captures {
-            if capture.overflow {
-                continue;
-            }
-            if capture.reads.len() == MAX_READS && !capture.reads.contains_key(&bits) {
-                capture.overflow = true;
-            } else {
-                capture
-                    .reads
-                    .entry(bits)
-                    .or_insert_with(LispCollectionRevision::current);
-            }
-        }
+        record_observation(&mut state, bits, LispCollectionRevision::current());
     });
+}
+
+// Both ordinary reads and fused setter projections use this recorder. Its
+// caller owns STATE's borrow; no callback, heap barrier or recursive borrow is
+// permitted here. An existing entry retains its first-read revision.
+#[cold]
+#[inline(never)]
+fn record_observation(state: &mut State, bits: usize, revision: LispCollectionRevision) {
+    #[cfg(test)]
+    OBSERVATION_STATE_ACCESSES.with(|count| count.set(count.get() + 1));
+    for capture in &mut state.captures {
+        if capture.overflow {
+            continue;
+        }
+        if capture.reads.len() == MAX_READS && !capture.reads.contains_key(&bits) {
+            capture.overflow = true;
+        } else {
+            capture.reads.entry(bits).or_insert(revision);
+        }
+    }
 }
 
 pub(super) fn record_write(value: TaggedValue, revision: u64) {
     STATE.with(|state| state.borrow_mut().writes[revision as usize % JOURNAL_SIZE] = value.bits());
+}
+
+/// The exact pointer projection performed by the four fused setters. A failed
+/// Cons tag check observes nothing; veclike setters observe every veclike header
+/// before rejecting a subtype. This is deliberately narrower than heap objects.
+#[derive(Clone, Copy)]
+pub(super) enum WriteProjection {
+    Cons,
+    VecLike,
+}
+
+/// Journal this setter call, then observe its eligible pointer projection at
+/// the new revision. Returns whether the tag permits that projection; after
+/// return the caller may form its raw pointer without another observation.
+///
+/// This mutator alone owns STATE, ACTIVE, its revision and recent read probes.
+/// Other mutators only upgrade the process history requirement. A prefix mode
+/// checks that flag on every write until true, then permanently journals writes.
+/// No Lisp state is cached, and STATE's borrow ends before the caller handles
+/// a header, GC barrier, backing ownership, slot bounds, or the actual store.
+#[inline]
+pub(super) fn record_projected_write(value: TaggedValue, projection: WriteProjection) -> bool {
+    let projected = match projection {
+        WriteProjection::Cons => value.is_cons(),
+        WriteProjection::VecLike => value.is_veclike(),
+    };
+    STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        let observe = match state.journal_policy {
+            JournalPolicy::JournalOnly => false,
+            JournalPolicy::JournalAndObserve => true,
+            JournalPolicy::BeforeFirstCapture => {
+                if !history_required() {
+                    return;
+                }
+                state.journal_policy = JournalPolicy::JournalOnly;
+                false
+            }
+        };
+        let revision = LispCollectionRevision::advance();
+        state.writes[revision.sequence() as usize % JOURNAL_SIZE] = value.bits();
+        if observe && projected && !recently_observed(value.bits()) {
+            record_observation(&mut state, value.bits(), revision);
+        }
+    });
+    projected
 }
 
 /// Observe reads made by `read`, rejecting reuse if its dependency budget or
@@ -366,3 +449,7 @@ pub fn capture_normalized<S, T>(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/write_fusion.rs"]
+mod write_fusion_tests;
