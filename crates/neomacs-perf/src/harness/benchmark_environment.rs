@@ -91,7 +91,7 @@ pub(super) const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOMACS_MODE_LINE_PLAIN_FIELD",
     // A window whose start moved back reuses its old rows: `on`.
     "NEOMACS_LAYOUT_SCROLL_BACK",
-    // posn-at-point & co. read only the text the window shows: `on`.
+    // Approximate position fallbacks copy only visible text: `on` (default).
     "NEOMACS_POSN_BOUNDED_TEXT",
     // `(redisplay t)` skips the layout when nothing visible changed: `on`.
     "NEOMACS_REDISPLAY_IDLE_SKIP",

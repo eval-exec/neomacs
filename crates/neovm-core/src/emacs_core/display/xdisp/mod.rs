@@ -15,10 +15,11 @@
 //! - `line-number-display-width` — get line number display width
 //! - `long-line-optimizations-p` — check if long-line optimizations are enabled
 //!
-//! Redisplay formatting controls (read once per process):
+//! Redisplay and formatting controls (read once per process):
 //!
 //! | Knob | Unset default | Values | Effect |
 //! | --- | --- | --- | --- |
+//! | `NEOMACS_POSN_BOUNDED_TEXT` | `on` | `off`; `on`/`1`/`true`/`yes` | Bound text copied by approximate window-position fallbacks |
 //! | `NEOMACS_MODE_LINE_PROP_SLICE` | `off` | `off`; `on`/`1`/`true`/`yes` | Clip and graft literal source intervals with one plist copy |
 //! | `NEOMACS_MODE_LINE_PROP_BORROW` | `off` | `off`; `on`/`1`/`true`/`yes` | Borrow source string intervals during synchronous mode-line property reads |
 //! | `NEOMACS_MODE_LINE_PLAIN_FIELD` | `off` | `off`; `on`/`1`/`true`/`yes` | Append property-free percent text directly to the mode-line output |
@@ -7233,9 +7234,11 @@ pub(crate) fn set_bounded_window_text_for_test(enabled: Option<bool>) {
 }
 
 /// `NEOMACS_POSN_BOUNDED_TEXT=on` (P3.5 H): the approximate window geometry
-/// behind `posn-at-point`, `pos-visible-in-window-p` and `posn-at-x-y` reads
-/// only the text the window can show. Off, it reads to the end of the
-/// buffer, which is O(Z) per call. Read once; default off.
+/// behind `pos-visible-in-window-p` and `posn-at-x-y` when canonical
+/// geometry is unavailable reads only the text the window can show.
+/// `posn-at-point` and `window-text-pixel-size` use separate exact paths.
+/// Off, the fallback copies to the buffer end, O(Z) per call. Read once;
+/// unset defaults on; explicit empty/unknown settings retain the old path.
 fn bounded_window_text_enabled() -> bool {
     #[cfg(test)]
     if let Some(enabled) = BOUNDED_WINDOW_TEXT_OVERRIDE.with(std::cell::Cell::get) {
@@ -7243,14 +7246,29 @@ fn bounded_window_text_enabled() -> bool {
     }
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| {
-        matches!(
-            std::env::var("NEOMACS_POSN_BOUNDED_TEXT")
-                .ok()
-                .map(|value| value.trim().to_ascii_lowercase())
-                .as_deref(),
-            Some("on" | "1" | "true" | "yes")
-        )
+        parse_bounded_window_text_os_knob(std::env::var_os("NEOMACS_POSN_BOUNDED_TEXT").as_deref())
     })
+}
+
+fn parse_bounded_window_text_knob(value: Option<&str>) -> bool {
+    match value.map(str::trim) {
+        None => true,
+        Some(value) => matches!(
+            value.to_ascii_lowercase().as_str(),
+            "on" | "1" | "true" | "yes"
+        ),
+    }
+}
+
+/// Only an absent setting selects the default. A present non-Unicode value
+/// is unknown and keeps the baseline, like any other unrecognized setting.
+fn parse_bounded_window_text_os_knob(value: Option<&std::ffi::OsStr>) -> bool {
+    match value {
+        None => parse_bounded_window_text_knob(None),
+        Some(value) => value
+            .to_str()
+            .is_some_and(|value| parse_bounded_window_text_knob(Some(value))),
+    }
 }
 
 /// [`live_window_display_context_for`] holding the rest of the buffer from
