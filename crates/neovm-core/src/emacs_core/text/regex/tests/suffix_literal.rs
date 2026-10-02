@@ -170,6 +170,30 @@ fn suffix_literal_scan_does_not_rewind_long_or_ascii_prefixes() {
 }
 
 #[test]
+fn suffix_literal_scan_ascii_run_words_preserve_dense_bounds_and_raw_characters() {
+    crate::test_utils::init_test_tracing();
+    let table = canon_table();
+    let cp = compile_on(&LispString::from_utf8("жq"), false, table);
+    let raw = emacs_char::str_to_multibyte(&[0xff]);
+    for offset in 0..16 {
+        for separator in ["中".as_bytes(), "é".as_bytes(), raw.as_slice()] {
+            let mut text = "q".repeat(320 + offset).into_bytes();
+            text.extend_from_slice(separator);
+            text.extend_from_slice("Qq".repeat(160 + offset).as_bytes());
+            let match_start = text.len();
+            text.extend_from_slice("ЖQ".as_bytes());
+            let match_end = text.len();
+            text.extend_from_slice("q".repeat(16).as_bytes());
+            for start in [0, 1, offset + 7] {
+                for stop in [match_start, match_end - 1, match_end, text.len()] {
+                    assert_exhaustive(&cp, &text, start, stop);
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn suffix_literal_scan_raw_bytes_and_representation_fallbacks() {
     crate::test_utils::init_test_tracing();
     let table = canon_table();

@@ -41,6 +41,8 @@ struct SuffixMemo {
 }
 
 /// Distinguish an ineligible table from a completed unsuccessful search.
+/// Threading assumption: this transient result stays within the caller's
+/// search; it carries no shared cache or Lisp state between mutators.
 pub(super) enum SuffixSearch {
     Unavailable,
     Finished(Option<(usize, MatchRegisters)>),
@@ -159,6 +161,11 @@ impl SuffixLiteral {
             // its source must be non-ASCII too: suffix-dense ASCII stretches
             // can therefore reject each hit without decoding or translating.
             if suffix_at == 0 || text[suffix_at - 1] < 0x80 {
+                // Skip the whole ASCII run in word-sized steps. Repeated
+                // memchr calls for each q in q^N would cost more than the
+                // original first-character fastmap scan. The next possible
+                // non-ASCII prefix starts at the first high-bit byte.
+                next = next_non_ascii(text, next, stop);
                 continue;
             }
             let Some(candidate) = re_prev_char_start(text, suffix_at, true) else {
@@ -261,6 +268,27 @@ impl SuffixLiteral {
         }
         super::sparse_ascii_fastmap(&accepted)
     }
+}
+
+/// Find the first high-bit byte without reading beyond the match stop.
+/// `from` follows an ASCII suffix, so the next high-bit byte is a character
+/// boundary in multibyte text, including Emacs raw-byte C0/C1 forms.
+#[inline]
+fn next_non_ascii(text: &[u8], from: usize, stop: usize) -> usize {
+    const HIGH_BITS: u64 = 0x8080_8080_8080_8080;
+    let mut at = from;
+    while stop - at >= 8 {
+        let word = u64::from_le_bytes(text[at..at + 8].try_into().unwrap());
+        let high = word & HIGH_BITS;
+        if high != 0 {
+            return at + (high.trailing_zeros() as usize / 8);
+        }
+        at += 8;
+    }
+    while at < stop && text[at] < 0x80 {
+        at += 1;
+    }
+    at
 }
 
 /// Read the translation Exactn would use, preserving an unfilled byte slot.
