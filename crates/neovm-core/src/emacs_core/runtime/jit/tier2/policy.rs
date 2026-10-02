@@ -194,7 +194,15 @@ pub(crate) fn rearm_fallback(source: &RuntimeState, old: &CompiledLeaf) {
     t2.budget.set(i64::from(jit_tier2_policy().stable));
 }
 pub(crate) fn upgrade_deferred(source: &RuntimeState, old: &CompiledLeaf) {
-    rearm_fallback(source, old);
+    if old.tier() == LeafTier::Aot {
+        // AOT has no emitted profiling window to re-arm. Keep its native
+        // code without retrying a refused upgrade on every entry.
+        release(old);
+        old.obs.t2.state.set(T2State::Kept);
+        old.obs.t2.budget.set(DISARMED);
+    } else {
+        rearm_fallback(source, old);
+    }
     bump_stats(|s| s.deferred += 1);
 }
 pub(crate) fn upgrade_failed(old: &CompiledLeaf) {
@@ -217,6 +225,18 @@ fn admit_request(leaf: &CompiledLeaf, kind: T2Upgrade) -> Option<T2Decision> {
 
 /// Stability and admissibility, followed by budget; no Lisp and no GC.
 pub(crate) fn request_decision(leaf: &CompiledLeaf, source: &RuntimeState) -> Option<T2Decision> {
+    if leaf.tier() == LeafTier::Aot {
+        // AOT has no T1 feedback window. Check affordability without
+        // reserving until the compile seam, as every tier-spine job does.
+        return Some(match decide(leaf) {
+            T2Decision::Upgrade(kind) if budget_allows(leaf) => T2Decision::Upgrade(kind),
+            T2Decision::Upgrade(_) => {
+                bump_stats(|s| s.budget_denied += 1);
+                T2Decision::Keep
+            }
+            T2Decision::Keep => T2Decision::Keep,
+        });
+    }
     let k = jit_tier2_policy();
     let t2 = &leaf.obs.t2;
     let banned = source.t2_reopts.load(std::sync::atomic::Ordering::Relaxed) >= k.max_reopt

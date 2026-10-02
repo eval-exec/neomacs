@@ -322,6 +322,16 @@ pub(crate) enum T2Decision {
 /// re-tier off). Other leaves need the feedback policy's separate admission.
 pub(crate) fn decide(leaf: &CompiledLeaf) -> T2Decision {
     use super::compile::lowering::{RegallocChoice, forced_regalloc};
+    if leaf.tier() == super::compile::LeafTier::Aot {
+        return if super::compile::jit_aot_retier_on()
+            && super::aot::retier::heat().is_some()
+            && forced_regalloc().is_none()
+        {
+            T2Decision::Upgrade(T2Upgrade::Retier)
+        } else {
+            T2Decision::Keep
+        };
+    }
     if leaf.regalloc == RegallocChoice::Fast
         && !leaf.call_heavy
         && forced_regalloc().is_none()
@@ -432,6 +442,11 @@ pub(crate) fn request(obs: &LeafObs) {
         .and_then(|source| source.clone());
     let leaf = super::cache::current_leaf_of(obs);
     let decision = match (&leaf, &source) {
+        (Some(leaf), Some(_))
+            if leaf.tier() == super::compile::LeafTier::Aot && !jit_tier2().on =>
+        {
+            Some(decide(leaf))
+        }
         (Some(leaf), Some(source)) => policy::request_decision(leaf, source),
         _ => Some(T2Decision::Keep),
     };

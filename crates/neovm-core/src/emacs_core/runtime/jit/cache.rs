@@ -1229,6 +1229,11 @@ fn compile_cache_entry(
         rt.mark_native_rejected(rejection_epoch());
         return CacheEntry::NotCompilable;
     }
+    let request = CompileRequest {
+        bypass_profit_gate: request.bypass_profit_gate
+            || super::aot::retier::earned_native_admission(rt),
+        ..request
+    };
     numeric_feedback_trace(id, func);
     record_compiled_obarray(obarray);
     // Per-function entry names (perf map, CLIF/asm dumps), only when asked.
@@ -2224,9 +2229,17 @@ fn request_upgrade(
     // Recheck admission now that the compile will actually start. A Due
     // leaf holds no reservation, so intervening work may have filled the ledger.
     if !super::tier2::reserve_compile(&old) {
-        super::tier2::rearm_fallback(rt, &old);
+        if old.is_aot_backed() {
+            super::tier2::upgrade_deferred(rt, &old);
+        } else {
+            super::tier2::rearm_fallback(rt, &old);
+        }
         return old;
     }
+    // Legacy AOT requests originate at cache heat rather than a T2 shim.
+    // Unlink their cached entries so a pending worker is probed again.
+    rt.disarm_leaf_slot();
+    unlink_spec_slots_in(cache, Rc::as_ptr(&old));
     // SAFETY: the dormant Context provided by the native dispatch seam.
     let obarray = (!ctx.is_null()).then(|| unsafe { &(*ctx).obarray });
     let name_hint = stats::naming_enabled()
@@ -2242,7 +2255,8 @@ fn request_upgrade(
         obarray,
         CompileRequest {
             regalloc: RegallocPolicy::Full,
-            bypass_profit_gate: old.profit_gate_bypassed,
+            // A hot AOT member has already earned native call-glue admission.
+            bypass_profit_gate: old.profit_gate_bypassed || old.is_aot_backed(),
             origin: stats::CompileOrigin::Retier,
             tier: super::tier2::CompileTier::Upgrade(kind),
         },
@@ -2331,7 +2345,11 @@ fn probe_tier2_upgrade(
             Some(probe_upgrade(cache, id, live))
         }
         Some(CacheEntry::Compiled(old)) => {
-            let kind = old.obs.t2.due()?;
+            let kind = old
+                .obs
+                .t2
+                .due()
+                .or_else(|| super::aot::retier::legacy_request(old, func.jit_runtime()))?;
             let old = Rc::clone(old);
             Some(request_upgrade(cache, id, func, old, kind, ctx))
         }
@@ -2545,7 +2563,7 @@ pub fn try_run_compiled(
         let obarray = (!ctx.is_null()).then(|| unsafe { &(*ctx).obarray });
         // A countdown upgrade keeps its T1 live until the replacement
         // really installs. The legacy heat-driven re-tier below is unchanged.
-        if super::compile::jit_tier2_enabled()
+        if super::compile::jit_tier_upgrade_enabled()
             && let Some(leaf) = probe_tier2_upgrade(&mut cache, id, func, ctx)
         {
             return Some(leaf).filter(|leaf| leaf.accepts(args.len()));
@@ -2668,6 +2686,7 @@ pub fn try_run_compiled(
             // A source a deopt invalidated never reloads its AOT leaf: that
             // leaf speculates exactly as the one that deopted.
             if super::aot::aot_enabled()
+                && super::aot::retier::may_load(func.jit_runtime())
                 && func.params.optional.is_empty()
                 && func.params.rest.is_none()
                 && func.jit_runtime().patched_prefix() == 0
@@ -2679,6 +2698,7 @@ pub fn try_run_compiled(
                     // AOT leaves never inline → no inline deps to register. Their
                     // reloc consts are rooted via the COMPILED walk (R1c-8).
                     leaf.obs.id = id;
+                    super::aot::retier::prepare(&mut leaf, func.jit_runtime());
                     stats::record_aot_load(func.executable_ops().len());
                     return CacheEntry::Compiled(Rc::new(leaf));
                 }
@@ -2872,7 +2892,7 @@ pub(crate) fn resolve_compiled_leaf_ptr(
         // An unfinished upgrade deliberately does not re-arm raw/spec
         // slots with old: those paths would stop probing forever. The
         // strict call path still enters old through try_run_compiled.
-        if super::compile::jit_tier2_enabled() {
+        if super::compile::jit_tier_upgrade_enabled() {
             probe_tier2_upgrade(&mut cache, id, func, ctx);
         }
         match cache.get_or_insert_with(id, || {

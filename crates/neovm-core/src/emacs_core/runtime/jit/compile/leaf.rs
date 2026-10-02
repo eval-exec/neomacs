@@ -1450,7 +1450,10 @@ impl CompiledLeaf {
         // 4th entry param: the AOT sidecar, or — for a JIT leaf — the executing
         // callee's constant base (read only by a dynamic-prefix leaf).
         let sidecar = match &self.sidecar {
-            Some(b) => &**b as *const LeafSidecar,
+            Some(b) => {
+                super::super::aot::retier::entry(&self.obs);
+                &**b as *const LeafSidecar
+            }
             None => consts as *const LeafSidecar,
         };
         // Debug-only: mark this thread as inside native code for the whole

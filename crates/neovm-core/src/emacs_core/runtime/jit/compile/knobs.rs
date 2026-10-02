@@ -3,6 +3,37 @@
 //! Every emission a knob gates is decided at compile time, so both sides of
 //! an A/B run in one binary.
 
+/// P4.2 A5: replace a hot AOT leaf with a full-allocator JIT compile.
+/// Threading: immutable process configuration, read by each mutator; the
+/// test override contains only a scalar setting, never Lisp state.
+pub(crate) fn jit_aot_retier_on() -> bool {
+    #[cfg(test)]
+    if let Some(on) = AOT_RETIER_TEST_OVERRIDE.with(std::cell::Cell::get) {
+        return on;
+    }
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        let on = matches!(
+            std::env::var("NEOVM_AOT_RETIER").ok().as_deref(),
+            Some("1" | "on" | "true" | "yes")
+        );
+        if on {
+            TIER_UPGRADE_ENABLED.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        on
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    static AOT_RETIER_TEST_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn force_aot_retier_for_test(on: Option<bool>) {
+    AOT_RETIER_TEST_OVERRIDE.with(|setting| setting.set(on));
+}
+
 /// P2.3's staged inliner modes. The current stage changes the front's
 /// ordering and side tables for existing constant callees only; named,
 /// closure and HOF producers arrive in later stages. Threading: immutable
@@ -1089,21 +1120,27 @@ pub(crate) fn force_tier2_for_test(knob: Option<Tier2Knob>) {
     TIER2_TEST_OVERRIDE.with(|c| c.set(knob));
 }
 
-/// Immutable process flag for the entry seams. Knob initialization publishes
-/// this before returning, and every production profiling leaf/upgrade job is
-/// created only after `jit_tier2()` was read by the compiler. Until then there
-/// can be no T2 work to probe. The flag carries no payload: the OnceLock and
-/// each mutator's cache retain their own publication; a relaxed load suffices.
-static TIER2_ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Monotone process flag for the entry seams, enabled by either T2 or AOT
+/// re-tier knob initialization before an upgrade-capable leaf is published.
+/// This scalar carries no code pointer or Lisp state; OnceLock configuration
+/// and each mutator's cache retain their own publication, so Relaxed suffices.
+/// With both knobs off the existing entry seam retains its single gate load.
+static TIER_UPGRADE_ENABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Cheap entry-seam gate; test overrides retain their existing per-thread scope.
 #[inline]
-pub(crate) fn jit_tier2_enabled() -> bool {
+pub(crate) fn jit_tier_upgrade_enabled() -> bool {
     #[cfg(test)]
-    if let Some(knob) = TIER2_TEST_OVERRIDE.with(std::cell::Cell::get) {
-        return knob.on;
+    {
+        let t2 = TIER2_TEST_OVERRIDE.with(std::cell::Cell::get);
+        let aot = AOT_RETIER_TEST_OVERRIDE.with(std::cell::Cell::get);
+        if t2.is_some() || aot.is_some() {
+            return t2.map_or_else(|| jit_tier2().on, |knob| knob.on)
+                || aot.unwrap_or_else(jit_aot_retier_on);
+        }
     }
-    TIER2_ENABLED.load(std::sync::atomic::Ordering::Relaxed)
+    TIER_UPGRADE_ENABLED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// The tier-spine knobs this thread's compiles and requests use.
@@ -1124,7 +1161,9 @@ pub(crate) fn jit_tier2() -> Tier2Knob {
                 "NEOVM_JIT_TIER2=on is on in this process"
             );
         }
-        TIER2_ENABLED.store(knob.on, std::sync::atomic::Ordering::Relaxed);
+        if knob.on {
+            TIER_UPGRADE_ENABLED.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         knob
     })
 }

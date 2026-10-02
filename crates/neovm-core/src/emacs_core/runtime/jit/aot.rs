@@ -114,7 +114,8 @@ pub(crate) const ABI_TAG: u32 = compute_abi_tag();
 // v22: the gated census group adds the counted spec-entry shim.
 // v23: framed direct calls add a contained memory-call shim in their own gated group.
 // v24: static closure and list-HOF chains add six gated mapping shims and activation metadata.
-const ABI_TAG_VERSION: u32 = 24;
+// v25: AOT re-tier adds monotone shared-source exclusion and salts its runtime layout.
+const ABI_TAG_VERSION: u32 = 25;
 
 /// Format version of the AOT descriptor spec-section + the runtime spec ABI
 /// (`SpecSlot`/`spec_expected` sidecar bases, the loader re-classify+arm protocol).
@@ -191,6 +192,8 @@ const fn compute_abi_tag() -> u32 {
     mix_u64!(core::mem::size_of::<super::compile::LeafSidecar>() as u64);
     // DeoptCells layout: 5 i64 cells (pc, depth, handlers, reason, chain).
     mix_u64!(core::mem::size_of::<DeoptCells>() as u64);
+    mix_u64!(core::mem::size_of::<super::RuntimeState>() as u64);
+    mix_u64!(core::mem::offset_of!(super::RuntimeState, aot_retiered) as u64);
     // Shim name set (count + each byte) — a shim-ABI change re-tags artifacts.
     mix_u64!(MIR_SHIM_NAMES.len() as u64);
     let mut si = 0;
@@ -5520,3 +5523,5 @@ mod lazy_prewarm_tests;
 #[cfg(test)]
 #[path = "aot/tests/aot_test.rs"]
 mod tests;
+
+pub(crate) mod retier;

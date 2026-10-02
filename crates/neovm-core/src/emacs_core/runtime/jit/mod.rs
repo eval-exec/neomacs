@@ -123,6 +123,7 @@
 //! | Knob | Meaning |
 //! |---|---|
 //! | `NEOVM_AOT` | `1`/`on`/`force` enables the AOT preload; `force` additionally warns when no usable preload loaded. |
+//! | `NEOVM_AOT_RETIER` | Default off. `1`/`on` replaces AOT leaves with JIT code at `NEOVM_JIT_RETIER_FACTOR × NEOVM_JIT_THRESHOLD` heat, including cached native calls. T2 requests use the tier spine; otherwise the existing heat trigger applies. Pending upgrades keep serving native AOT; refused upgrades keep it without repeated requests. `RETIER_FACTOR=0` or a forced allocator disables this upgrade. |
 //! | `NEOVM_AOT_PGO` | `1`/`on`/`force` enables PGO collection for the AOT function set. |
 //! | `NEOVM_AOT_PREWARM` | `profitable` (default): of the preload's members only the manifest's `m` class (bodies the JIT's profit gate would compile) runs native from call 1; `c` call glue is served when the JIT would compile it, replacing that compile (P4.2 A4). `all`: every member from call 1, as before (single-build A/B). |
 
@@ -597,6 +598,12 @@ pub struct RuntimeState {
     /// observational ban without publishing leaf pointers or Lisp state.
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
     t2_reopts: std::sync::atomic::AtomicU8,
+    /// Permanent AOT exclusion after this source requested a JIT re-tier.
+    /// Shared by mutators: monotone Relaxed stores/loads publish no code
+    /// pointer or Lisp state; each mutator owns its upgrade/cache.
+    /// Independent of heat, whose observational updates can race.
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    aot_retiered: std::sync::atomic::AtomicBool,
     /// [`ReoptLevel`] as `u8`: the ceiling every later compile of this source
     /// respects. Monotone.
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
@@ -963,6 +970,7 @@ impl RuntimeState {
             patched_prefix: AtomicU32::new(0),
             reopt_count: std::sync::atomic::AtomicU8::new(0),
             t2_reopts: std::sync::atomic::AtomicU8::new(0),
+            aot_retiered: std::sync::atomic::AtomicBool::new(false),
             reopt_level: std::sync::atomic::AtomicU8::new(0),
             site_retreat: retreat::SiteRetreatTable::new(),
             #[cfg(test)]
