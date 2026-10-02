@@ -23,12 +23,22 @@ use crate::emacs_core::value::Value;
 /// outside that range or a non-fixnum count is `None`: the contained
 /// `bytecode_nth_values` signals or walks it. Must agree with that function
 /// wherever it answers.
+#[inline]
 pub(crate) fn nth_fast(_: &Context, args: &[Value; 4]) -> Option<Value> {
     if !crate::tagged::collection_reads::reads_need_observation() {
         nth_fast_walk::<false>(args)
     } else {
-        nth_fast_walk::<true>(args)
+        nth_fast_observed(args)
     }
+}
+
+// Select this mutator's current policy on every call; no scope state is cached.
+// The bounded walk runs no Lisp callbacks. Keeping the rare observed arm cold
+// prevents its recorder calls from imposing a frame on the inactive fast half.
+#[cold]
+#[inline(never)]
+fn nth_fast_observed(args: &[Value; 4]) -> Option<Value> {
+    nth_fast_walk::<true>(args)
 }
 
 #[inline]
