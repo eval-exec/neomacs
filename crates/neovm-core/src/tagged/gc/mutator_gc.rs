@@ -31,6 +31,8 @@ pub(super) struct MutatorGcState {
     pub(super) major_cons_writes: Vec<TaggedValue>,
     /// Direct-mapped repeat-owner reject, cleared at every cycle begin.
     pub(super) remembered_cache: [usize; BARRIER_CACHE_SLOTS],
+    /// Generation pacing obligations owned by this mutator, summed at poll.
+    pub(super) pacing: pacing::GenerationPacingCounters,
 }
 
 /// Unused region capacity, derived from the cursors shared with compiled code.
@@ -69,6 +71,7 @@ impl MutatorGcState {
             major_symbol_preimages: Vec::new(),
             major_cons_writes: Vec::new(),
             remembered_cache: [0; BARRIER_CACHE_SLOTS],
+            pacing: pacing::GenerationPacingCounters::default(),
         }
     }
 

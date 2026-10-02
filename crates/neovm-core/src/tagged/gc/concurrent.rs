@@ -65,6 +65,9 @@ impl TaggedHeap {
         self.promote_and_blacken();
         self.dump_blackened = true;
         self.recompute_old_bytes_world_stopped();
+        if self.generational.enabled {
+            self.refresh_generation_major_baseline_world_stopped();
+        }
         self.first_cycle_concurrent = false;
         let mapped_cons_bytes: usize = self
             .mapped_cons_ranges

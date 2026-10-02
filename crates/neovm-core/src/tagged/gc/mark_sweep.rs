@@ -1874,6 +1874,9 @@ impl TaggedHeap {
             self.dump_blackened = true;
             self.recompute_old_bytes_world_stopped();
         }
+        if self.generational.enabled {
+            self.finish_generation_pacing();
+        }
         self.generational.major_in_progress = false;
         self.first_cycle_concurrent = false;
         self.staged_mapped_cons_scan = None;

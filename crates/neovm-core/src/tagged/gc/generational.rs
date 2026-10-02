@@ -20,6 +20,9 @@ pub(super) struct GenState {
     /// Collector-owned residual Box old list; links use GcHeader accessors.
     pub(super) old_objects: *mut GcHeader,
     pub(super) old_bytes: usize,
+    /// Constructor-read limits and exact ordinary-old bytes after a major.
+    pub(super) pacing_knobs: knobs::GenerationalPacingKnobs,
+    pub(super) old_bytes_after_major: usize,
     pub(super) old_cons_count: usize,
     /// Working R: drained at the stop-all boundary, rooted until termination.
     pub(super) r_seed: Vec<TaggedValue>,
@@ -35,6 +38,8 @@ impl GenState {
             promo: Vec::new(),
             old_objects: std::ptr::null_mut(),
             old_bytes: 0,
+            pacing_knobs: knobs::generational_pacing_knobs(enabled),
+            old_bytes_after_major: 0,
             old_cons_count: 0,
             r_seed: Vec::new(),
         }
@@ -181,11 +186,6 @@ impl TaggedHeap {
 }
 
 impl TaggedHeap {
-    #[inline]
-    pub(crate) fn should_run_minor(&self) -> bool {
-        self.generational.enabled && self.should_run_concurrent()
-    }
-
     /// Future global stop-all-mutators handshake belongs before this entry:
     /// join the collector, park every mutator and wait for all barrier appends.
     #[cold]
@@ -248,6 +248,7 @@ impl TaggedHeap {
                 headers.extend(region.float_headers());
             }
         }
+        let mut newly_promoted_header_bytes = 0usize;
         // The first partition's existing permanent splice owns non-cons
         // promotion, including survivors of a late-loaded image.
         if !partition_first {
@@ -256,10 +257,9 @@ impl TaggedHeap {
                 if !header.tenured {
                     debug_assert!(header.is_marked_at(self.mark_parity));
                     header.tenured = true;
-                    self.generational.old_bytes = self
-                        .generational
-                        .old_bytes
-                        .saturating_add(Self::object_bytes_from_header(ptr));
+                    let bytes = Self::object_bytes_from_header(ptr);
+                    self.generational.old_bytes = self.generational.old_bytes.saturating_add(bytes);
+                    newly_promoted_header_bytes = newly_promoted_header_bytes.saturating_add(bytes);
                 }
             }
         }
@@ -275,10 +275,14 @@ impl TaggedHeap {
             old_count += block.count_old();
         }
         self.generational.old_cons_count = old_count;
+        let newly_promoted_cons_bytes = promoted.saturating_mul(size_of::<ConsCell>());
         self.generational.old_bytes = self
             .generational
             .old_bytes
-            .saturating_add(promoted * size_of::<ConsCell>());
+            .saturating_add(newly_promoted_cons_bytes);
+        self.record_generation_promoted_bytes(
+            newly_promoted_header_bytes.saturating_add(newly_promoted_cons_bytes),
+        );
         if !partition_first {
             self.clear_black_births_world_stopped();
         }

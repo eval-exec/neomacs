@@ -2628,6 +2628,7 @@ mod mark_sweep;
 mod birth_logs;
 mod generational;
 mod old_sweep;
+mod pacing;
 
 mod concurrent;
 
@@ -2762,6 +2763,10 @@ mod birth_logs_tests;
 #[cfg(test)]
 #[path = "gc/tests/generational_major_tests.rs"]
 mod generational_major_tests;
+
+#[cfg(test)]
+#[path = "gc/tests/generational_pacing_tests.rs"]
+mod generational_pacing_tests;
 
 #[cfg(test)]
 #[path = "gc/tests/major_symbol_preimage_tests.rs"]

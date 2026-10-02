@@ -31,6 +31,9 @@ fn context() -> Context {
     unsafe { std::env::set_var("NEOVM_GC_GENERATIONAL", "1") };
     crate::test_utils::init_test_tracing();
     let mut context = Context::new();
+    // This fixture observes manual deferred minors. Automatic synchronous
+    // stress routing is covered separately by gc_generational_pacing.
+    context.gc_stress = false;
     context.with_gc_inhibited(|context| {
         context
             .eval_str("(setq gc-cons-threshold most-positive-fixnum gc-cons-percentage 1000)")
@@ -38,7 +41,7 @@ fn context() -> Context {
     });
     context.gc_collect_exact();
     assert!(context.tagged_heap.generational_enabled());
-    assert!(context.tagged_heap.should_run_minor());
+    assert!(context.tagged_heap.should_run_minor(false, false));
     context
 }
 

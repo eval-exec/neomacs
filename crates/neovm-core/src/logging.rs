@@ -288,6 +288,22 @@ fn init_inner(target: LogTarget) -> Option<tracing_appender::non_blocking::Worke
     if let Some(layer) = file {
         layers.push(layer);
     }
+    // GC trace is an explicit stderr diagnostic even for silent batch/TUI
+    // logging. Keep this separate from RUST_LOG and the normal writers so
+    // TRACE=1 alone exposes the generation labels without changing Lisp output.
+    if std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1") {
+        let layer = tracing_subscriber::fmt::layer()
+            .with_writer(std::io::stderr)
+            .with_ansi(false)
+            .with_filter(tracing_subscriber::filter::filter_fn(|metadata| {
+                metadata.is_event()
+                    && metadata.target() == "neovm::gc"
+                    && metadata.fields().field("kind").is_some()
+                    && metadata.fields().field("cycle").is_some()
+            }))
+            .boxed();
+        layers.push(layer);
+    }
     let result = tracing_subscriber::registry().with(layers).try_init();
     if let Err(e) = result {
         eprintln!("warning: tracing subscriber init failed: {e}");

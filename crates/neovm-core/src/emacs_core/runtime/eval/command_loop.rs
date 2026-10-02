@@ -1883,7 +1883,8 @@ impl Context {
     /// would both defer and de-randomize.
     pub(super) fn gc_collect_from_current_roots(&mut self) {
         self.profiler_gc_start();
-        self.gc_collect_from_current_roots_impl(self.gc_stress);
+        let force_complete = self.gc_stress && !self.tagged_heap.generational_enabled();
+        self.gc_collect_from_current_roots_impl(force_complete);
         self.profiler_gc_finish();
     }
 
@@ -2029,7 +2030,28 @@ impl Context {
                     return; // sweep deferred; cycle not done yet
                 }
                 return; // GC thread still marking; mutator continues
-            } else if (*heap_ptr).should_run_minor() {
+            } else if self.gc_stress && (*heap_ptr).generational_enabled() {
+                // A fresh automatic stress cycle is synchronous. Choose its
+                // generation before advancing the next-cycle stride; an
+                // explicit full collection and every continuation took the
+                // earlier branches and never advance this counter here.
+                let minor =
+                    (*heap_ptr).should_run_minor(self.gc_runtime_settings_cache.memory_full, true);
+                (*heap_ptr).note_generation_stress_cycle_started();
+                if minor {
+                    (*heap_ptr).begin_minor_collection();
+                    self.seed_registered_mutator_roots_world_stopped(heap_ptr);
+                    (*heap_ptr).complete_minor_collection();
+                    (*heap_ptr).finish_incremental_sweep_now();
+                } else {
+                    (*heap_ptr).begin_stw_collection();
+                    self.seed_registered_mutator_roots_world_stopped(heap_ptr);
+                    (*heap_ptr).complete_collection();
+                }
+                cycle_completed = true;
+            } else if (*heap_ptr)
+                .should_run_minor(self.gc_runtime_settings_cache.memory_full, false)
+            {
                 // Minor marking stops every registered mutator and visits
                 // their roots. Promotion completes before mutating resumes;
                 // the existing sweep continuation records cycle completion.

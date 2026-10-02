@@ -5,6 +5,9 @@ mod gc_generational;
 
 #[cfg(test)]
 mod gc_generational_major;
+
+#[cfg(test)]
+mod gc_generational_pacing;
 use crate::buffer::EmacsByteRange;
 fn test_ob() -> crate::emacs_core::symbol::Obarray {
     crate::emacs_core::symbol::Obarray::new()

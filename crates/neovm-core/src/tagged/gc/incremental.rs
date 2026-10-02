@@ -483,6 +483,9 @@ impl TaggedHeap {
         // ABA-safe per-cycle discipline shared with the SATB sets; see the note
         // in `begin_collection` and `complete_collection`.
         self.trace_region_stats();
+        if self.generational.enabled {
+            self.finish_generation_pacing();
+        }
         self.sweep_in_progress = false;
         self.generational.major_in_progress = false;
     }

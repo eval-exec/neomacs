@@ -1,6 +1,6 @@
-//! Collector knobs: environment switches read once per process, each the
-//! same-binary A/B of one measured behaviour. All default off except the
-//! chunk map.
+//! Collector knobs: legacy measurement switches are cached per process.
+//! Generational pacing limits are read once per heap, only when enabled.
+//! Measured behaviours default off except the chunk map.
 //!
 //! | knob | default | effect |
 //! |---|---|---|
@@ -8,10 +8,13 @@
 //! | `NEOVM_GC_CENSUS_REMSET=1` | off | the census plus its remembered-set estimate: the barrier window covers every owner, so every store reaches the census |
 //! | `NEOVM_GC_CENSUS_FILE=<path>` | unset | also append each census record to this file (read once, by `census.rs`) |
 //! | `NEOVM_GC_CHUNK_MAP` | on (`=0` disables) | page and block ownership through the chunk map (`chunk_map.rs`), on the mutator and on the GC thread |
+//! | `NEOVM_GC_MAJOR_GROWTH_PERCENT` | `100` | major growth limit, with an 8 MiB floor; generational only |
+//! | `NEOVM_GC_MAJOR_MAX_MINORS` | `64` | maximum completed minors between majors; generational only |
+//! | `NEOVM_GC_STRESS_MAJOR_EVERY` | `8` | stressed cycle stride, normalized to at least one; generational only |
 //! | `NEOVM_GC_VEC_SCAN=defer` | `snapshot` | MEASUREMENT ONLY (falsifier F-G (c), P3.2 F1b): no Tier-B vector snapshot and no vector claims, so page vectors defer to the stop-the-world termination and are traced by reachability |
 //!
-//! A heap reads the knobs once, in `TaggedHeap::new`; tests override them
-//! per thread before creating the heap they run on.
+//! A heap reads the knobs once, in `TaggedHeap::new`. Legacy test overrides
+//! are per thread; generational pacing needs no new global or TLS override.
 
 use std::sync::OnceLock;
 
@@ -140,4 +143,61 @@ pub(crate) fn set_chunk_map_for_test(on: Option<bool>) {
 #[cfg(test)]
 pub(crate) fn set_vec_scan_mode_for_test(mode: Option<VecScanMode>) {
     VEC_SCAN_OVERRIDE.with(|c| c.set(mode));
+}
+
+/// Per-heap major limits. Unlike the legacy measurement switches above,
+/// these are read only by the heap constructor and add no global or TLS state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct GenerationalPacingKnobs {
+    pub(super) major_growth_percent: usize,
+    pub(super) major_max_minors: usize,
+    pub(super) stress_major_every: usize,
+}
+
+impl Default for GenerationalPacingKnobs {
+    fn default() -> Self {
+        Self {
+            major_growth_percent: 100,
+            major_max_minors: 64,
+            stress_major_every: 8,
+        }
+    }
+}
+
+impl GenerationalPacingKnobs {
+    fn parse_or(value: Option<&str>, default: usize) -> usize {
+        value
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(default)
+    }
+
+    pub(super) fn from_values(
+        growth_percent: Option<&str>,
+        max_minors: Option<&str>,
+        stress_every: Option<&str>,
+    ) -> Self {
+        let defaults = Self::default();
+        Self {
+            // Zero growth still has the 8 MiB floor. Zero minor cap requests
+            // a major at every due cycle; zero stress interval means every
+            // stressed cycle, without a division or underflow corner case.
+            major_growth_percent: Self::parse_or(growth_percent, defaults.major_growth_percent),
+            major_max_minors: Self::parse_or(max_minors, defaults.major_max_minors),
+            stress_major_every: Self::parse_or(stress_every, defaults.stress_major_every).max(1),
+        }
+    }
+}
+
+/// Call exactly once in GenState::new, reached by TaggedHeap::new. Disabled
+/// heaps do not inspect the new environment variables or log new behaviour.
+#[cold]
+#[inline(never)]
+pub(super) fn generational_pacing_knobs(enabled: bool) -> GenerationalPacingKnobs {
+    if !enabled {
+        return GenerationalPacingKnobs::default();
+    }
+    let growth = std::env::var("NEOVM_GC_MAJOR_GROWTH_PERCENT").ok();
+    let minors = std::env::var("NEOVM_GC_MAJOR_MAX_MINORS").ok();
+    let stress = std::env::var("NEOVM_GC_STRESS_MAJOR_EVERY").ok();
+    GenerationalPacingKnobs::from_values(growth.as_deref(), minors.as_deref(), stress.as_deref())
 }
