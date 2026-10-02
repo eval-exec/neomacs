@@ -9232,407 +9232,446 @@ pub(crate) fn re_search(
         }};
     }
 
-    if range >= 0 {
-        // Forward search
-        let end = (start + range as usize).min(text_len);
-        let mut pos = start;
-        if buf_anchored {
-            if start != 0 {
-                return None;
+    let result = 'scan: {
+        if range >= 0 {
+            // Forward search
+            let end = (start + range as usize).min(text_len);
+            let mut pos = start;
+            if buf_anchored {
+                if start != 0 {
+                    break 'scan None;
+                }
+                break 'scan try_candidate!(0, end).map(|result| (0, result.1));
             }
-            return try_candidate!(0, end).map(|result| (0, result.1));
-        }
-        if bol_anchored {
-            // `^`-anchored: candidates are position 0 and each byte after a
-            // newline — drive the scan with memchr('\n') (SIMD) instead of
-            // entering the matcher at every fastmap hit only to fail at
-            // `begline`. The fastmap still pre-rejects a line whose first
-            // byte can't start a match; BOL positions are always char
-            // boundaries, so no continuation-byte check is needed.
-            loop {
-                if pos > end {
-                    return None;
-                }
-                if pos == 0 || text[pos - 1] == b'\n' {
-                    let first_ok = !use_fastmap
-                        || pos >= text_len
-                        || match translate {
-                            Some(table) => {
-                                pattern.fastmap[table.translate_byte(text[pos]) as usize]
-                            }
-                            None => pattern.fastmap[text[pos] as usize],
-                        };
-                    if first_ok && let Some(result) = try_candidate!(pos, end) {
-                        return Some((pos, result.1));
+            if bol_anchored {
+                // `^`-anchored: candidates are position 0 and each byte after a
+                // newline — drive the scan with memchr('\n') (SIMD) instead of
+                // entering the matcher at every fastmap hit only to fail at
+                // `begline`. The fastmap still pre-rejects a line whose first
+                // byte can't start a match; BOL positions are always char
+                // boundaries, so no continuation-byte check is needed.
+                loop {
+                    if pos > end {
+                        break 'scan None;
                     }
-                }
-                let search_from = pos.min(text_len);
-                // Only newlines before `end` can yield a candidate at or
-                // before the bound. Include `end - 1`: a zero-width match
-                // may start at `end`. A short bounded failure must not scan
-                // the remaining buffer when it contains no nearby newline.
-                match memchr::memchr(b'\n', &text[search_from..end]) {
-                    Some(idx) => pos = search_from + idx + 1,
-                    None => return None,
-                }
-            }
-        }
-        if use_fastmap {
-            // Whether this search is long enough to build a lazily derived
-            // scanner it finds missing (it always uses one already built).
-            let long_span = text_len.saturating_sub(start) >= PREFILTER_MIN_BUILD_SPAN;
-            // The folded scans and the folded prefilter are exact only while
-            // no non-ASCII character translates into ASCII; a case-canon
-            // char-table can stop meeting that after they were built.
-            let folds_exactly = match translate {
-                None => true,
-                Some(table) => {
-                    table.ascii_preimage_for_span(end.saturating_sub(start))
-                        == AsciiPreimage::AsciiOnly
-                }
-            };
-            let prefilter = if !folds_exactly {
-                None
-            } else if long_span {
-                pattern.literal_prefilter()
-            } else {
-                pattern.prefilter.get().and_then(Option::as_ref)
-            };
-            if let Some(pref) = prefilter {
-                // SIMD multi-literal skip: jump straight to the next position
-                // whose text provably contains a required match literal, far
-                // more aggressively than the single-byte fastmap.  The
-                // backtracker still verifies every candidate, so correctness
-                // rests only on the literal set being SOUND — every match
-                // contains one of the needles at `off` bytes from its start
-                // (see `build_literal_prefilter`).  A case-folded pattern's
-                // needles are every ASCII spelling of its literals
-                // (`fold_prefix_literals`), so the scan itself needs no
-                // translation.
-                let off = pref.offset;
-                // The literal for a match starting at `m` sits at
-                // `text[m + off ..]`; the earliest candidate is `start`, whose
-                // literal begins at `start + off`.
-                let mut next_lit = start.saturating_add(off).min(text_len);
-                // GNU's fastmap skip loop is bounded by the remaining RANGE
-                // (`while (range > lim && !fastmap[*d])`, regex-emacs.c), so a
-                // bounded search never looks past its bound. Scanning to
-                // `text_len` instead made every bounded FAILING search cost the
-                // whole buffer -- 34.6ms on 800KB against GNU's flat 0.7ms --
-                // which is the shape font-lock runs constantly.
-                //
-                // `end` is the match STOP handed to `re_match_candidate_in`,
-                // so an acceptable match lies entirely within `[cand, end]`.
-                // The literal is a required prefix of that match, so it lies
-                // there too, and a scan span reaching one byte past `end`
-                // cannot hide one. Nothing about the needle lengths enters:
-                // it is the MATCH that is bounded, not the literal.
-                let scan_end = end.saturating_add(1).min(text_len);
-                while next_lit <= scan_end {
-                    let Some(span) = pref.pf.find(
-                        text,
-                        Span {
-                            start: next_lit,
-                            end: scan_end,
-                        },
-                    ) else {
-                        break;
-                    };
-                    let lit_at = span.start;
-                    let cand = lit_at.saturating_sub(off);
-                    if cand > end {
-                        break;
-                    }
-                    // Advance past this literal occurrence for the next probe,
-                    // regardless of whether this candidate matches — keeps the
-                    // scan strictly monotonic (no infinite loop).
-                    next_lit = lit_at + 1;
-                    if cand < start {
-                        // Literal too early to back up to an in-range start.
-                        continue;
-                    }
-                    // A match cannot start inside a multibyte character; the
-                    // needle bytes are exact, so a continuation-byte candidate
-                    // is never a real match — skip it.
-                    if pattern.target_multibyte && cand < text_len && (text[cand] & 0xC0) == 0x80 {
-                        continue;
-                    }
-                    if let Some(result) = try_candidate!(cand, end) {
-                        return Some((cand, result.1));
-                    }
-                }
-            } else {
-                // A case-folded search first folds `TRANSLATE` into the
-                // fastmap (`build_folded_scan`), which leaves one table load
-                // per byte, or memchr when 1-3 ASCII bytes can start a
-                // match.  No per-byte `CaseTranslation::translate` remains.
-                let folded = match translate {
-                    Some(table) if folds_exactly => pattern.folded_scan(table, long_span),
-                    _ => None,
-                };
-                let sparse = match (translate, folded) {
-                    (None, _) => pattern.sparse_ascii_fastmap(),
-                    (Some(_), Some(FoldedScan::Sparse(bytes))) => Some(*bytes),
-                    (Some(_), _) => None,
-                };
-                if let Some(bytes) = sparse {
-                    // The candidate first-byte set is tiny and pure ASCII
-                    // (e.g. `{'('}` for the font-lock defun matchers, or
-                    // `{'D', 'd'}` for a case-folded `defun`):
-                    // let memchr's SIMD scan find candidates instead of
-                    // testing the fastmap byte by byte.  ASCII hits are
-                    // never UTF-8 continuation bytes, so the char-boundary
-                    // skip is vacuous here.  GNU uses the plain
-                    // `while (range > lim && !fastmap[*d]) d++` loop; the
-                    // candidate set and attempt positions are identical.
-                    let hi = if end < text_len { end + 1 } else { text_len };
-                    while pos <= end {
-                        if pos < text_len {
-                            let found = match bytes {
-                                SparseAsciiFastmap::One(b0) => memchr::memchr(b0, &text[pos..hi]),
-                                SparseAsciiFastmap::Two(b0, b1) => {
-                                    memchr::memchr2(b0, b1, &text[pos..hi])
+                    if pos == 0 || text[pos - 1] == b'\n' {
+                        let first_ok = !use_fastmap
+                            || pos >= text_len
+                            || match translate {
+                                Some(table) => {
+                                    pattern.fastmap[table.translate_byte(text[pos]) as usize]
                                 }
-                                SparseAsciiFastmap::Three(b0, b1, b2) => {
-                                    memchr::memchr3(b0, b1, b2, &text[pos..hi])
-                                }
+                                None => pattern.fastmap[text[pos] as usize],
                             };
-                            match found {
-                                Some(idx) => pos += idx,
-                                None => {
-                                    // No candidate byte before `hi`; the only
-                                    // remaining attempt position is text_len
-                                    // itself (when the range allows it).
-                                    pos = text_len;
-                                    if pos > end {
-                                        break;
+                        if first_ok && let Some(result) = try_candidate!(pos, end) {
+                            break 'scan Some((pos, result.1));
+                        }
+                    }
+                    let search_from = pos.min(text_len);
+                    // Only newlines before `end` can yield a candidate at or
+                    // before the bound. Include `end - 1`: a zero-width match
+                    // may start at `end`. A short bounded failure must not scan
+                    // the remaining buffer when it contains no nearby newline.
+                    match memchr::memchr(b'\n', &text[search_from..end]) {
+                        Some(idx) => pos = search_from + idx + 1,
+                        None => break 'scan None,
+                    }
+                }
+            }
+            if use_fastmap {
+                // Whether this search is long enough to build a lazily derived
+                // scanner it finds missing (it always uses one already built).
+                let long_span = text_len.saturating_sub(start) >= PREFILTER_MIN_BUILD_SPAN;
+                // The folded scans and the folded prefilter are exact only while
+                // no non-ASCII character translates into ASCII; a case-canon
+                // char-table can stop meeting that after they were built.
+                let folds_exactly = match translate {
+                    None => true,
+                    Some(table) => {
+                        table.ascii_preimage_for_span(end.saturating_sub(start))
+                            == AsciiPreimage::AsciiOnly
+                    }
+                };
+                let prefilter = if !folds_exactly {
+                    None
+                } else if long_span {
+                    pattern.literal_prefilter()
+                } else {
+                    pattern.prefilter.get().and_then(Option::as_ref)
+                };
+                if let Some(pref) = prefilter {
+                    // SIMD multi-literal skip: jump straight to the next position
+                    // whose text provably contains a required match literal, far
+                    // more aggressively than the single-byte fastmap.  The
+                    // backtracker still verifies every candidate, so correctness
+                    // rests only on the literal set being SOUND — every match
+                    // contains one of the needles at `off` bytes from its start
+                    // (see `build_literal_prefilter`).  A case-folded pattern's
+                    // needles are every ASCII spelling of its literals
+                    // (`fold_prefix_literals`), so the scan itself needs no
+                    // translation.
+                    let off = pref.offset;
+                    // The literal for a match starting at `m` sits at
+                    // `text[m + off ..]`; the earliest candidate is `start`, whose
+                    // literal begins at `start + off`.
+                    let mut next_lit = start.saturating_add(off).min(text_len);
+                    // GNU's fastmap skip loop is bounded by the remaining RANGE
+                    // (`while (range > lim && !fastmap[*d])`, regex-emacs.c), so a
+                    // bounded search never looks past its bound. Scanning to
+                    // `text_len` instead made every bounded FAILING search cost the
+                    // whole buffer -- 34.6ms on 800KB against GNU's flat 0.7ms --
+                    // which is the shape font-lock runs constantly.
+                    //
+                    // `end` is the match STOP handed to `re_match_candidate_in`,
+                    // so an acceptable match lies entirely within `[cand, end]`.
+                    // The literal is a required prefix of that match, so it lies
+                    // there too, and a scan span reaching one byte past `end`
+                    // cannot hide one. Nothing about the needle lengths enters:
+                    // it is the MATCH that is bounded, not the literal.
+                    let scan_end = end.saturating_add(1).min(text_len);
+                    while next_lit <= scan_end {
+                        let Some(span) = pref.pf.find(
+                            text,
+                            Span {
+                                start: next_lit,
+                                end: scan_end,
+                            },
+                        ) else {
+                            break;
+                        };
+                        let lit_at = span.start;
+                        let cand = lit_at.saturating_sub(off);
+                        if cand > end {
+                            break;
+                        }
+                        // Advance past this literal occurrence for the next probe,
+                        // regardless of whether this candidate matches — keeps the
+                        // scan strictly monotonic (no infinite loop).
+                        next_lit = lit_at + 1;
+                        if cand < start {
+                            // Literal too early to back up to an in-range start.
+                            continue;
+                        }
+                        // A match cannot start inside a multibyte character; the
+                        // needle bytes are exact, so a continuation-byte candidate
+                        // is never a real match — skip it.
+                        if pattern.target_multibyte
+                            && cand < text_len
+                            && (text[cand] & 0xC0) == 0x80
+                        {
+                            continue;
+                        }
+                        if let Some(result) = try_candidate!(cand, end) {
+                            break 'scan Some((cand, result.1));
+                        }
+                    }
+                } else {
+                    // A case-folded search first folds `TRANSLATE` into the
+                    // fastmap (`build_folded_scan`), which leaves one table load
+                    // per byte, or memchr when 1-3 ASCII bytes can start a
+                    // match.  No per-byte `CaseTranslation::translate` remains.
+                    let folded = match translate {
+                        Some(table) if folds_exactly => pattern.folded_scan(table, long_span),
+                        _ => None,
+                    };
+                    let sparse = match (translate, folded) {
+                        (None, _) => pattern.sparse_ascii_fastmap(),
+                        (Some(_), Some(FoldedScan::Sparse(bytes))) => Some(*bytes),
+                        (Some(_), _) => None,
+                    };
+                    if let Some(bytes) = sparse {
+                        // The candidate first-byte set is tiny and pure ASCII
+                        // (e.g. `{'('}` for the font-lock defun matchers, or
+                        // `{'D', 'd'}` for a case-folded `defun`):
+                        // let memchr's SIMD scan find candidates instead of
+                        // testing the fastmap byte by byte.  ASCII hits are
+                        // never UTF-8 continuation bytes, so the char-boundary
+                        // skip is vacuous here.  GNU uses the plain
+                        // `while (range > lim && !fastmap[*d]) d++` loop; the
+                        // candidate set and attempt positions are identical.
+                        let hi = if end < text_len { end + 1 } else { text_len };
+                        while pos <= end {
+                            if pos < text_len {
+                                let found = match bytes {
+                                    SparseAsciiFastmap::One(b0) => {
+                                        memchr::memchr(b0, &text[pos..hi])
+                                    }
+                                    SparseAsciiFastmap::Two(b0, b1) => {
+                                        memchr::memchr2(b0, b1, &text[pos..hi])
+                                    }
+                                    SparseAsciiFastmap::Three(b0, b1, b2) => {
+                                        memchr::memchr3(b0, b1, b2, &text[pos..hi])
+                                    }
+                                };
+                                match found {
+                                    Some(idx) => pos += idx,
+                                    None => {
+                                        // No candidate byte before `hi`; the only
+                                        // remaining attempt position is text_len
+                                        // itself (when the range allows it).
+                                        pos = text_len;
+                                        if pos > end {
+                                            break;
+                                        }
                                     }
                                 }
                             }
-                        }
-                        if let Some(result) = try_candidate!(pos, end) {
-                            return Some((pos, result.1));
-                        }
-                        pos += 1;
-                    }
-                } else if let Some(FoldedScan::Table(accept)) = folded {
-                    let accept: &[bool; 256] = accept;
-                    // GNU `while (range > lim && !fastmap[*d]) d++`, with
-                    // TRANSLATE and the fastmap folded into one table.  The
-                    // table admits no byte >= 0x80 of multibyte text, so no
-                    // continuation byte is ever a candidate.
-                    let hi = if end < text_len { end + 1 } else { text_len };
-                    while pos <= end {
-                        if pos < hi {
-                            match text[pos..hi].iter().position(|&b| accept[b as usize]) {
-                                Some(idx) => pos += idx,
-                                // Only the end of the text remains, when in range.
-                                None => pos = hi,
+                            if let Some(result) = try_candidate!(pos, end) {
+                                break 'scan Some((pos, result.1));
                             }
+                            pos += 1;
                         }
-                        if pos > end {
-                            break;
+                    } else if let Some(FoldedScan::Table(accept)) = folded {
+                        let accept: &[bool; 256] = accept;
+                        // GNU `while (range > lim && !fastmap[*d]) d++`, with
+                        // TRANSLATE and the fastmap folded into one table.  The
+                        // table admits no byte >= 0x80 of multibyte text, so no
+                        // continuation byte is ever a candidate.
+                        let hi = if end < text_len { end + 1 } else { text_len };
+                        while pos <= end {
+                            if pos < hi {
+                                match text[pos..hi].iter().position(|&b| accept[b as usize]) {
+                                    Some(idx) => pos += idx,
+                                    // Only the end of the text remains, when in range.
+                                    None => pos = hi,
+                                }
+                            }
+                            if pos > end {
+                                break;
+                            }
+                            if let Some(result) = try_candidate!(pos, end) {
+                                break 'scan Some((pos, result.1));
+                            }
+                            pos += 1;
                         }
-                        if let Some(result) = try_candidate!(pos, end) {
-                            return Some((pos, result.1));
+                    } else if let Some(table) = translate
+                        && pattern.target_multibyte
+                    {
+                        // GNU `re_search_2` (regex-emacs.c) on multibyte text:
+                        // translate the WHOLE character and test the leading code of
+                        // the result, stepping a character at a time.
+                        while pos <= end {
+                            if pos > text_len {
+                                break;
+                            }
+                            if pos < text_len {
+                                let byte = text[pos];
+                                if byte < 0x80 {
+                                    if !pattern.fastmap_translated
+                                        [ascii_translated_leading_code(table, byte)]
+                                    {
+                                        pos += 1;
+                                        continue;
+                                    }
+                                } else if (byte & 0xC0) == 0x80 {
+                                    pos += 1;
+                                    continue;
+                                } else {
+                                    let (lead, len) =
+                                        multibyte_translated_leading_code(table, text, pos);
+                                    if !pattern.fastmap_translated[lead] {
+                                        pos += len;
+                                        continue;
+                                    }
+                                }
+                            }
+                            if let Some(result) = try_candidate!(pos, end) {
+                                break 'scan Some((pos, result.1));
+                            }
+                            pos += 1;
                         }
+                    } else if let Some(table) = translate {
+                        while pos <= end {
+                            if pos > text_len {
+                                break;
+                            }
+                            // GNU disables fastmap skipping for nullable patterns so zero-width
+                            // matches like `\\(?:...\\)\\=` are still considered at every point.
+                            //
+                            // GNU regex-emacs.c:3568 applies TRANSLATE to the input
+                            // byte before indexing the fastmap. Under case-fold that
+                            // is what lets a fastmap built for a bitmap of lowercase
+                            // characters still catch uppercase input (audit #9).
+                            if pos < text_len {
+                                let idx = table.translate_byte(text[pos]) as usize;
+                                if !pattern.fastmap[idx] {
+                                    pos += 1;
+                                    continue;
+                                }
+                            }
+                            if let Some(result) = try_candidate!(pos, end) {
+                                break 'scan Some((pos, result.1));
+                            }
+                            pos += 1;
+                        }
+                    } else {
+                        while pos <= end {
+                            if pos > text_len {
+                                break;
+                            }
+                            if pattern.target_multibyte
+                                && pos < text_len
+                                && (text[pos] & 0xC0) == 0x80
+                            {
+                                pos += 1;
+                                continue;
+                            }
+                            if pos < text_len && !pattern.fastmap[text[pos] as usize] {
+                                pos += 1;
+                                continue;
+                            }
+                            if let Some(result) = try_candidate!(pos, end) {
+                                break 'scan Some((pos, result.1));
+                            }
+                            pos += 1;
+                        }
+                    }
+                }
+            } else {
+                while pos <= end {
+                    if pos > text_len {
+                        break;
+                    }
+                    if pattern.target_multibyte && pos < text_len && (text[pos] & 0xC0) == 0x80 {
                         pos += 1;
+                        continue;
+                    }
+                    if let Some(result) = try_candidate!(pos, end) {
+                        break 'scan Some((pos, result.1));
+                    }
+                    pos += 1;
+                }
+            }
+        } else {
+            // Backward search
+            let end = start.saturating_sub((-range) as usize);
+            if use_fastmap {
+                // A case-folded search scans with its folded table, as forward,
+                // built by the first search long enough to repay it.
+                let folded = match translate {
+                    Some(table)
+                        if start <= text_len
+                            && table.ascii_preimage_for_span(start - end)
+                                == AsciiPreimage::AsciiOnly =>
+                    {
+                        pattern.folded_scan(table, start - end >= PREFILTER_MIN_BUILD_SPAN)
+                    }
+                    _ => None,
+                };
+                if let Some(scan @ (FoldedScan::Sparse(_) | FoldedScan::Table(_))) = folded {
+                    // Candidates descend from `start` to `end`: GNU's backward
+                    // `re_search_2` tests one position per step.  The end of the
+                    // text (no byte to test) is tried unconditionally, as the
+                    // per-character loops do.
+                    let mut upper = start;
+                    if upper == text_len {
+                        if let Some(result) = try_candidate!(text_len, start) {
+                            break 'scan Some((text_len, result.1));
+                        }
+                        if end == text_len {
+                            break 'scan None;
+                        }
+                        upper = text_len - 1;
+                    }
+                    // Invariant: `end <= upper < text_len`.
+                    loop {
+                        let window = &text[end..=upper];
+                        let found = match scan {
+                            FoldedScan::Sparse(SparseAsciiFastmap::One(b0)) => {
+                                memchr::memrchr(*b0, window)
+                            }
+                            FoldedScan::Sparse(SparseAsciiFastmap::Two(b0, b1)) => {
+                                memchr::memrchr2(*b0, *b1, window)
+                            }
+                            FoldedScan::Sparse(SparseAsciiFastmap::Three(b0, b1, b2)) => {
+                                memchr::memrchr3(*b0, *b1, *b2, window)
+                            }
+                            FoldedScan::Table(accept) => {
+                                window.iter().rposition(|&b| accept[b as usize])
+                            }
+                            FoldedScan::PerChar => unreachable!("excluded by the pattern above"),
+                        };
+                        let Some(idx) = found else {
+                            break 'scan None;
+                        };
+                        let cand = end + idx;
+                        // Backward candidates end at `start` (see below).
+                        if let Some(result) = try_candidate!(cand, start) {
+                            break 'scan Some((cand, result.1));
+                        }
+                        if cand == end {
+                            break 'scan None;
+                        }
+                        upper = cand - 1;
                     }
                 } else if let Some(table) = translate
                     && pattern.target_multibyte
                 {
-                    // GNU `re_search_2` (regex-emacs.c) on multibyte text:
-                    // translate the WHOLE character and test the leading code of
-                    // the result, stepping a character at a time.
-                    while pos <= end {
-                        if pos > text_len {
-                            break;
-                        }
+                    for pos in (end..=start).rev() {
                         if pos < text_len {
+                            // As forward: the leading code of the translated
+                            // character (GNU `re_search_2`).
                             let byte = text[pos];
-                            if byte < 0x80 {
-                                if !pattern.fastmap_translated
-                                    [ascii_translated_leading_code(table, byte)]
-                                {
-                                    pos += 1;
-                                    continue;
-                                }
+                            let lead = if byte < 0x80 {
+                                ascii_translated_leading_code(table, byte)
                             } else if (byte & 0xC0) == 0x80 {
-                                pos += 1;
                                 continue;
                             } else {
-                                let (lead, len) =
-                                    multibyte_translated_leading_code(table, text, pos);
-                                if !pattern.fastmap_translated[lead] {
-                                    pos += len;
-                                    continue;
-                                }
+                                multibyte_translated_leading_code(table, text, pos).0
+                            };
+                            if !pattern.fastmap_translated[lead] {
+                                continue;
                             }
                         }
-                        if let Some(result) = try_candidate!(pos, end) {
-                            return Some((pos, result.1));
+                        // Backward candidates end at `start` (see below).
+                        if let Some(result) = try_candidate!(pos, start) {
+                            break 'scan Some((pos, result.1));
                         }
-                        pos += 1;
                     }
                 } else if let Some(table) = translate {
-                    while pos <= end {
-                        if pos > text_len {
-                            break;
+                    for pos in (end..=start).rev() {
+                        // Skip UTF-8 continuation bytes — only try at character boundaries.
+                        if pattern.target_multibyte && pos < text_len && (text[pos] & 0xC0) == 0x80
+                        {
+                            continue;
                         }
                         // GNU disables fastmap skipping for nullable patterns so zero-width
                         // matches like `\\(?:...\\)\\=` are still considered at every point.
-                        //
-                        // GNU regex-emacs.c:3568 applies TRANSLATE to the input
-                        // byte before indexing the fastmap. Under case-fold that
-                        // is what lets a fastmap built for a bitmap of lowercase
-                        // characters still catch uppercase input (audit #9).
                         if pos < text_len {
                             let idx = table.translate_byte(text[pos]) as usize;
                             if !pattern.fastmap[idx] {
-                                pos += 1;
                                 continue;
                             }
                         }
-                        if let Some(result) = try_candidate!(pos, end) {
-                            return Some((pos, result.1));
+                        // GNU `search.c:1195-1201` calls `re_search_2` for backward
+                        // searches with STOP set to the point where the search began.
+                        // That means a candidate may start before `start`, but it may
+                        // not extend past it.  This prevents a repeated backward search
+                        // from re-matching the same non-empty match that begins at
+                        // point but ends after it.
+                        if let Some(result) = try_candidate!(pos, start) {
+                            break 'scan Some((pos, result.1));
                         }
-                        pos += 1;
                     }
                 } else {
-                    while pos <= end {
-                        if pos > text_len {
-                            break;
-                        }
+                    for pos in (end..=start).rev() {
                         if pattern.target_multibyte && pos < text_len && (text[pos] & 0xC0) == 0x80
                         {
-                            pos += 1;
                             continue;
                         }
                         if pos < text_len && !pattern.fastmap[text[pos] as usize] {
-                            pos += 1;
                             continue;
                         }
-                        if let Some(result) = try_candidate!(pos, end) {
-                            return Some((pos, result.1));
-                        }
-                        pos += 1;
-                    }
-                }
-            }
-        } else {
-            while pos <= end {
-                if pos > text_len {
-                    break;
-                }
-                if pattern.target_multibyte && pos < text_len && (text[pos] & 0xC0) == 0x80 {
-                    pos += 1;
-                    continue;
-                }
-                if let Some(result) = try_candidate!(pos, end) {
-                    return Some((pos, result.1));
-                }
-                pos += 1;
-            }
-        }
-    } else {
-        // Backward search
-        let end = start.saturating_sub((-range) as usize);
-        if use_fastmap {
-            // A case-folded search scans with its folded table, as forward,
-            // built by the first search long enough to repay it.
-            let folded = match translate {
-                Some(table)
-                    if start <= text_len
-                        && table.ascii_preimage_for_span(start - end)
-                            == AsciiPreimage::AsciiOnly =>
-                {
-                    pattern.folded_scan(table, start - end >= PREFILTER_MIN_BUILD_SPAN)
-                }
-                _ => None,
-            };
-            if let Some(scan @ (FoldedScan::Sparse(_) | FoldedScan::Table(_))) = folded {
-                // Candidates descend from `start` to `end`: GNU's backward
-                // `re_search_2` tests one position per step.  The end of the
-                // text (no byte to test) is tried unconditionally, as the
-                // per-character loops do.
-                let mut upper = start;
-                if upper == text_len {
-                    if let Some(result) = try_candidate!(text_len, start) {
-                        return Some((text_len, result.1));
-                    }
-                    if end == text_len {
-                        return None;
-                    }
-                    upper = text_len - 1;
-                }
-                // Invariant: `end <= upper < text_len`.
-                loop {
-                    let window = &text[end..=upper];
-                    let found = match scan {
-                        FoldedScan::Sparse(SparseAsciiFastmap::One(b0)) => {
-                            memchr::memrchr(*b0, window)
-                        }
-                        FoldedScan::Sparse(SparseAsciiFastmap::Two(b0, b1)) => {
-                            memchr::memrchr2(*b0, *b1, window)
-                        }
-                        FoldedScan::Sparse(SparseAsciiFastmap::Three(b0, b1, b2)) => {
-                            memchr::memrchr3(*b0, *b1, *b2, window)
-                        }
-                        FoldedScan::Table(accept) => {
-                            window.iter().rposition(|&b| accept[b as usize])
-                        }
-                        FoldedScan::PerChar => unreachable!("excluded by the pattern above"),
-                    };
-                    let Some(idx) = found else {
-                        return None;
-                    };
-                    let cand = end + idx;
-                    // Backward candidates end at `start` (see below).
-                    if let Some(result) = try_candidate!(cand, start) {
-                        return Some((cand, result.1));
-                    }
-                    if cand == end {
-                        return None;
-                    }
-                    upper = cand - 1;
-                }
-            } else if let Some(table) = translate
-                && pattern.target_multibyte
-            {
-                for pos in (end..=start).rev() {
-                    if pos < text_len {
-                        // As forward: the leading code of the translated
-                        // character (GNU `re_search_2`).
-                        let byte = text[pos];
-                        let lead = if byte < 0x80 {
-                            ascii_translated_leading_code(table, byte)
-                        } else if (byte & 0xC0) == 0x80 {
-                            continue;
-                        } else {
-                            multibyte_translated_leading_code(table, text, pos).0
-                        };
-                        if !pattern.fastmap_translated[lead] {
-                            continue;
+                        if let Some(result) = try_candidate!(pos, start) {
+                            break 'scan Some((pos, result.1));
                         }
                     }
-                    // Backward candidates end at `start` (see below).
-                    if let Some(result) = try_candidate!(pos, start) {
-                        return Some((pos, result.1));
-                    }
                 }
-            } else if let Some(table) = translate {
+            } else {
                 for pos in (end..=start).rev() {
                     // Skip UTF-8 continuation bytes — only try at character boundaries.
                     if pattern.target_multibyte && pos < text_len && (text[pos] & 0xC0) == 0x80 {
                         continue;
-                    }
-                    // GNU disables fastmap skipping for nullable patterns so zero-width
-                    // matches like `\\(?:...\\)\\=` are still considered at every point.
-                    if pos < text_len {
-                        let idx = table.translate_byte(text[pos]) as usize;
-                        if !pattern.fastmap[idx] {
-                            continue;
-                        }
                     }
                     // GNU `search.c:1195-1201` calls `re_search_2` for backward
                     // searches with STOP set to the point where the search began.
@@ -9641,42 +9680,30 @@ pub(crate) fn re_search(
                     // from re-matching the same non-empty match that begins at
                     // point but ends after it.
                     if let Some(result) = try_candidate!(pos, start) {
-                        return Some((pos, result.1));
+                        break 'scan Some((pos, result.1));
                     }
-                }
-            } else {
-                for pos in (end..=start).rev() {
-                    if pattern.target_multibyte && pos < text_len && (text[pos] & 0xC0) == 0x80 {
-                        continue;
-                    }
-                    if pos < text_len && !pattern.fastmap[text[pos] as usize] {
-                        continue;
-                    }
-                    if let Some(result) = try_candidate!(pos, start) {
-                        return Some((pos, result.1));
-                    }
-                }
-            }
-        } else {
-            for pos in (end..=start).rev() {
-                // Skip UTF-8 continuation bytes — only try at character boundaries.
-                if pattern.target_multibyte && pos < text_len && (text[pos] & 0xC0) == 0x80 {
-                    continue;
-                }
-                // GNU `search.c:1195-1201` calls `re_search_2` for backward
-                // searches with STOP set to the point where the search began.
-                // That means a candidate may start before `start`, but it may
-                // not extend past it.  This prevents a repeated backward search
-                // from re-matching the same non-empty match that begins at
-                // point but ends after it.
-                if let Some(result) = try_candidate!(pos, start) {
-                    return Some((pos, result.1));
                 }
             }
         }
-    }
 
-    None
+        None
+    };
+    // A successful scan keeps its first miss local. Whole failed searches
+    // admit that miss for future searches; overflow returned above before
+    // reaching this epilogue, quit aborts are excluded, and zero-span
+    // attempts never marked it.
+    if dfa_cold_heat.is_isolated()
+        && result.is_none()
+        && !crate::emacs_core::eval::tls_quit_pending()
+    {
+        drop(dfa::DfaLease::after_cold_failure(
+            pattern,
+            syntax,
+            dfa_max_stop,
+            1,
+        ));
+    }
+    result
 }
 
 // ---------------------------------------------------------------------------

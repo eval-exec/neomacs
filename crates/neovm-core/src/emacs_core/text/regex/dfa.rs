@@ -38,7 +38,7 @@
 //! | Knob | Values (default) | Effect |
 //! |------|------------------|--------|
 //! | `NEOVM_REGEX_DFA` | `on` (default), `off`, `verify` | Candidate existence filter ([`DfaMode`]). |
-//! | `NEOVM_REGEX_DFA_COLD` | `off` (default), `on` | Defer the lease and admit heat only after two nonempty failures in one search ([`cold_path_enabled`]). |
+//! | `NEOVM_REGEX_DFA_COLD` | `off` (default), `on` | Defer the lease; admit two nonempty failures during a scan, or one when the whole search fails ([`cold_path_enabled`]). |
 //! | `NEOVM_REGEX_DFA_STATS` | unset (default), `1` | Print this thread's [`DfaStats`] on stderr at exit with the filter on. |
 //! | `NEOVM_REGEX_DFA_FIRST_STEP` | `off` (default), `on` | Reject cached prefixes of at most eight bytes inline; verify also checks the predicate against the matcher ([`first_step_enabled`]). |
 
@@ -2060,10 +2060,12 @@ pub(crate) fn with_cold_path<R>(on: bool, f: impl FnOnce() -> R) -> R {
 }
 
 /// `NEOVM_REGEX_DFA_COLD=on` (default off): a never-built slot pays no lease
-/// or candidate wrapper until a search has two nonempty failed candidates.
-/// Isolated misses do not heat a mostly successful pattern. This also leaves
-/// single-candidate failing searches cold; dense scans still admit their first
-/// two failures together and build at the existing threshold. Read once per
+/// or candidate wrapper until enough failed candidates justify a filter.
+/// An isolated miss followed by a match does not heat the pattern. Two
+/// nonempty failures in one scan are admitted together; a lone nonempty
+/// failure is admitted when the whole search fails without overflow or quit. Dense
+/// scans still build at the existing threshold, and repeated whole failures
+/// build for later searches. Zero-span failures do not count. Read once per
 /// process.
 #[inline]
 pub(crate) fn cold_path_enabled() -> bool {
@@ -2353,7 +2355,8 @@ impl DfaCell {
 }
 
 /// Cold admission for one search. Its first nonempty failure stays local:
-/// only a second failure credits both to the pattern's build threshold.
+/// a second failure credits both during the scan; otherwise an isolated
+/// failure is credited only when the whole search fails without overflow or quit.
 ///
 /// Threading: this transient state belongs to one search's stack, and is
 /// independent of another mutator or a re-entrant search of the same pattern.
@@ -2366,6 +2369,11 @@ pub(super) enum ColdSearchHeat {
 }
 
 impl ColdSearchHeat {
+    #[inline]
+    pub(super) fn is_isolated(&self) -> bool {
+        matches!(self, Self::Second)
+    }
+
     #[inline]
     pub(super) fn failure_credit(&mut self) -> u32 {
         match self {
@@ -2513,6 +2521,8 @@ impl<'p> DfaLease<'p> {
     /// A search admitted one or two classic failures without overflow. Record
     /// them without holding the slot across successful candidates; at the
     /// threshold, build and lease the remaining candidates of this search.
+    /// Admission at whole-search failure drops the new lease immediately;
+    /// its published slot serves later searches.
     #[cold]
     #[inline(never)]
     pub(crate) fn after_cold_failure(

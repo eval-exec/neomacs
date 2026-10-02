@@ -1013,9 +1013,11 @@ fn cold_failure_threshold_filters_the_rest_of_the_same_search() {
     with_cold_path(true, || {
         with_dfa_mode(DfaMode::On, || {
             for _ in 0..COLD_THRESHOLD * 2 {
-                // An isolated failure and the terminal EOF attempt cannot
-                // justify filtering other searches of this pattern.
-                assert_eq!(search(&compiled, b"z", 0, 1, &syntax, 0), (None, false));
+                // An isolated failure followed by a match must not heat the
+                // slot. Whole failed searches are admitted on completion.
+                let found = search(&compiled, b"zz0", 0, 3, &syntax, 0);
+                assert!(!found.1);
+                assert_eq!(found.0.as_ref().map(|(at, _, _)| *at), Some(1));
             }
             assert!(!compiled.dfa.initialized());
             assert!(matches!(*compiled.dfa.slot(), DfaSlot::Cold { failed: 0 }));
@@ -2486,4 +2488,137 @@ fn inline_cached_prefix_keeps_consumed_accounting_and_captures() {
         let stats = dfa_stats();
         assert_eq!(stats.verify_bad_no + stats.verify_bad_yes, 0, "{stats:?}");
     });
+}
+
+/// A lone nonempty failure heats the slot when the complete search fails,
+/// including direct anchored exits and backward sparse-scan exhaustion.
+#[test]
+fn cold_isolated_whole_search_failures_admit_at_threshold() {
+    let syntax = DefaultSyntaxLookup;
+    for (source, start, range) in [
+        ("z\\([0-9]\\)", 0, 1),
+        ("z\\([0-9]\\)", 1, -1),
+        ("\\`z\\([0-9]\\)", 0, 1),
+        ("^z\\([0-9]\\)", 0, 1),
+    ] {
+        let compiled = regex_compile(source, false, false).unwrap();
+        let before = matcher_entry_count();
+        let expected = with_dfa_mode(DfaMode::Off, || {
+            search(&compiled, b"z", start, range, &syntax, start)
+        });
+        let classic_entries = matcher_entry_count() - before;
+        assert_eq!(expected, (None, false));
+        assert!(classic_entries > 0);
+        reset_dfa_stats();
+        with_cold_path(true, || {
+            with_dfa_mode(DfaMode::On, || {
+                for failed_searches in 1..COLD_THRESHOLD {
+                    let before = matcher_entry_count();
+                    assert_eq!(
+                        search(&compiled, b"z", start, range, &syntax, start),
+                        expected,
+                        "{source:?} from {start}"
+                    );
+                    assert_eq!(matcher_entry_count() - before, classic_entries);
+                    assert!(!compiled.dfa.initialized());
+                    assert!(matches!(
+                        *compiled.dfa.slot(),
+                        DfaSlot::Cold { failed } if failed == failed_searches
+                    ));
+                }
+                assert_eq!(dfa_stats().searches, 0);
+                let before = matcher_entry_count();
+                assert_eq!(
+                    search(&compiled, b"z", start, range, &syntax, start),
+                    expected
+                );
+                assert_eq!(matcher_entry_count() - before, classic_entries);
+                assert!(compiled.dfa.initialized());
+                assert!(matches!(*compiled.dfa.slot(), DfaSlot::Live(_)));
+                assert_eq!(dfa_stats().builds, 1);
+                assert_eq!(dfa_stats().searches, 1);
+
+                // The completed threshold search ran only classic; the next
+                // search uses its published DFA and skips the same failure.
+                let before = matcher_entry_count();
+                assert_eq!(
+                    search(&compiled, b"z", start, range, &syntax, start),
+                    expected
+                );
+                assert_eq!(matcher_entry_count() - before, 0);
+                assert!(dfa_stats().skipped > 0);
+            });
+            let match_start = if range < 0 { 2 } else { 0 };
+            let match_range = if range < 0 { -2 } else { 2 };
+            let expected_match = with_dfa_mode(DfaMode::Off, || {
+                search(
+                    &compiled,
+                    b"z7",
+                    match_start,
+                    match_range,
+                    &syntax,
+                    match_start,
+                )
+            });
+            assert!(expected_match.0.is_some());
+            assert_eq!(
+                with_dfa_mode(DfaMode::On, || {
+                    search(
+                        &compiled,
+                        b"z7",
+                        match_start,
+                        match_range,
+                        &syntax,
+                        match_start,
+                    )
+                }),
+                expected_match
+            );
+            let before = matcher_entry_count();
+            assert_eq!(
+                with_dfa_mode(DfaMode::Verify, || {
+                    search(&compiled, b"z", start, range, &syntax, start)
+                }),
+                expected
+            );
+            assert_eq!(matcher_entry_count() - before, classic_entries);
+            assert_eq!(dfa_stats().verify_bad_no + dfa_stats().verify_bad_yes, 0);
+        });
+    }
+
+    // A normal first miss followed by overflow must leave its heat local:
+    // the candidate macro's overflow return bypasses completion admission.
+    let compiled = regex_compile("x\\(?:a\\|b\\)*c", false, false).unwrap();
+    let text = [&b"xq x"[..], &b"ab".repeat(100_000)].concat();
+    let expected = with_dfa_mode(DfaMode::Off, || {
+        search(&compiled, &text, 0, text.len() as isize, &syntax, 0)
+    });
+    assert_eq!(expected, (None, true));
+    assert_eq!(
+        with_cold_path(true, || {
+            with_dfa_mode(DfaMode::On, || {
+                search(&compiled, &text, 0, text.len() as isize, &syntax, 0)
+            })
+        }),
+        expected
+    );
+    assert!(!compiled.dfa.initialized());
+    assert!(matches!(*compiled.dfa.slot(), DfaSlot::Cold { failed: 0 }));
+
+    // A matcher quit also returns None, but it does not complete the scan.
+    // It must not turn a pending isolated failure into admitted heat.
+    let compiled = regex_compile("z[0-9]", false, false).unwrap();
+    let flag = crate::emacs_core::eval::install_quit_requested_for_test(true);
+    let results = with_cold_path(true, || {
+        with_dfa_mode(DfaMode::On, || {
+            (0..COLD_THRESHOLD * 2)
+                .map(|_| search(&compiled, b"z", 0, 1, &syntax, 0))
+                .collect::<Vec<_>>()
+        })
+    });
+    crate::emacs_core::eval::clear_quit_requested_for_test();
+    drop(flag);
+    assert!(results.into_iter().all(|result| result == (None, false)));
+    assert!(!compiled.dfa.initialized());
+    assert!(matches!(*compiled.dfa.slot(), DfaSlot::Cold { failed: 0 }));
 }
