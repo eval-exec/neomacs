@@ -6,12 +6,12 @@ use std::sync::LazyLock;
 
 // Sort knobs, read once per process:
 // | Knob | Values | Default | Effect |
-// | NEOVM_SORT_CAPTURE | off, on | off | Capture GNU's resolved predicate before key callbacks, including builtin aliases. |
+// | NEOVM_SORT_CAPTURE | off, on | on | Capture GNU's resolved predicate before key callbacks, including builtin aliases. |
 
 /// Immutable process configuration contains no Lisp state and may be read by
 /// concurrent mutators; captured predicates themselves belong to each sort.
 static SORT_CAPTURE: LazyLock<bool> =
-    LazyLock::new(|| matches!(std::env::var("NEOVM_SORT_CAPTURE").as_deref(), Ok("on")));
+    LazyLock::new(|| std::env::var("NEOVM_SORT_CAPTURE").map_or(true, |value| value == "on"));
 
 #[inline]
 fn sort_capture_enabled() -> bool {
