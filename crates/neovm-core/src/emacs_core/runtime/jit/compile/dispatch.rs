@@ -1377,6 +1377,11 @@ unsafe fn call_spec_register_run(
     leaf: &CompiledLeaf,
     key: u64,
 ) -> super::reg_abi::NativeRet {
+    // Keep the leaf pointer in this outlined helper's argument list. ThinLTO
+    // otherwise promotes its entry and thunk loads into the spec shim, adding
+    // two loads there and changing the framed arm's argument register. The
+    // opacity stays inside this register-only helper, off the memory path.
+    let leaf = std::hint::black_box(leaf);
     let consts = (key & !SpecSlot::KEY_FLAGS) as usize as *const Value;
     // SAFETY: the caller's contract.
     unsafe { leaf.entry_call_raw_register(ctx, consts, args_ptr) }
