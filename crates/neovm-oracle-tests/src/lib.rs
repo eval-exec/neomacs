@@ -172,6 +172,9 @@ mod invisibility_spec_semantics;
 mod iso8601_semantics;
 mod jit_builtin_leaves;
 mod jit_call_frames;
+#[cfg(test)]
+#[path = "tests/jit_direct_observables.rs"]
+mod jit_direct_observables;
 mod jit_flonum_semantics;
 mod jit_source_slots;
 mod json_availability_semantics;
