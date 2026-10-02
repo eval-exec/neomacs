@@ -1527,6 +1527,91 @@ fn restart_reexecs_foreground_daemon_and_preserves_pid_and_name() {
 }
 
 #[test]
+fn inherited_readiness_descriptor_errors_identify_the_operation() {
+    use std::os::unix::process::CommandExt;
+    let fixture = Fixture::new();
+    let mut closed = fixture.editor();
+    closed
+        .args(["-Q", "--fg-daemon=invalid-fd"])
+        .env("NEOMACS_DAEMON_NOTIFY_FD", i32::MAX.to_string());
+    let output = bounded(closed, Duration::from_secs(5));
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("cannot duplicate daemon readiness descriptor 2147483647"),
+        "{output:?}"
+    );
+    let file = tempfile::NamedTempFile::new().unwrap();
+    let fd = file.as_file().as_raw_fd();
+    let mut nonsocket = fixture.editor();
+    nonsocket
+        .args(["-Q", "--fg-daemon=invalid-socket"])
+        .env("NEOMACS_DAEMON_NOTIFY_FD", "198");
+    // SAFETY: file remains open through spawn; dup2 is async-signal-safe and
+    // makes descriptor 198 an inherited regular file, not a readiness socket.
+    unsafe {
+        nonsocket.pre_exec(move || {
+            if libc::dup2(fd, 198) < 0 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+    let output = bounded(nonsocket, Duration::from_secs(5));
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("invalid daemon readiness socket descriptor 198"),
+        "{output:?}"
+    );
+    assert!(!fixture.socket("invalid-fd").exists());
+    assert!(!fixture.socket("invalid-socket").exists());
+}
+
+#[test]
+fn empty_alternates_connect_to_live_servers_without_creation_permissions() {
+    let mut fixture = Fixture::new();
+    fixture.foreground("live", &["-Q"]);
+    let pid = fixture.eval("live", "(emacs-pid)");
+    let directory = fixture.path("runtime/emacs");
+    let lock = fixture.path("runtime/emacs/live.startup-lock");
+    assert!(!lock.exists());
+    // A reachable endpoint needs neither a private creation directory nor
+    // write access. Also cover a persistent lock which is only readable.
+    for (mode, existing_lock) in [(0o755, false), (0o500, false), (0o500, true)] {
+        if existing_lock {
+            fs::write(&lock, "").unwrap();
+            fs::set_permissions(&lock, fs::Permissions::from_mode(0o400)).unwrap();
+        }
+        fs::set_permissions(&directory, fs::Permissions::from_mode(mode)).unwrap();
+        let mut outputs = Vec::new();
+        for environment in [false, true] {
+            let mut command = fixture.client("live", "(list (emacs-pid) (+ 1 2))");
+            if environment {
+                command.env("ALTERNATE_EDITOR", "");
+            } else {
+                command.args(["-a", ""]);
+            }
+            outputs.push(bounded(command, Duration::from_secs(10)));
+        }
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+        for output in outputs {
+            assert!(output.status.success(), "mode={mode:o}: {output:?}");
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout).trim(),
+                format!("({pid} 3)")
+            );
+        }
+        assert_eq!(
+            lock.exists(),
+            existing_lock,
+            "live connection created a lock"
+        );
+    }
+}
+
+#[test]
 fn client_startup_rejects_unsafe_directories_and_symlink_locks() {
     let fixture = Fixture::new();
     fs::create_dir(fixture.path("unsafe")).unwrap();
@@ -1802,13 +1887,22 @@ fn auto_start_waits_for_initialization_even_when_init_binds_server_early() {
         "init bound the wrong endpoint"
     );
     assert!(!fixture.path("init-done").exists());
-    assert!(
-        !fixture.path("request-ran").exists(),
-        "client submitted before initialization"
-    );
+    // This client starts only after the selected endpoint has been bound. Its
+    // startup deadline must expire on the active lock, not on a sent request.
+    let mut late = fixture.client("early", &request);
+    late.env("ALTERNATE_EDITOR", "").args(["-w", "1"]);
+    let late_output = bounded(late, Duration::from_secs(5));
+    let requested_early = fixture.path("request-ran").exists();
     // The selected socket really is bound while initialization is blocked.
     // Releasing init, not merely seeing that socket, permits the requests.
     fs::write(fixture.path("release-init"), "release").unwrap();
+    assert!(!late_output.status.success(), "{late_output:?}");
+    assert!(
+        String::from_utf8_lossy(&late_output.stderr)
+            .contains("timed out waiting for daemon startup"),
+        "{late_output:?}"
+    );
+    assert!(!requested_early, "client submitted before initialization");
     let outputs: Vec<_> = handles
         .into_iter()
         .map(|handle| handle.join().unwrap())
