@@ -15,8 +15,8 @@ use std::sync::{
 ///
 /// | Knob | Default | Effect |
 /// | --- | --- | --- |
-/// | `NEOVM_COLLECTION_READ_GLOBAL=on` | off | Skip TLS when no mutator has an active capture. |
-/// | `NEOVM_COLLECTION_READ_HOIST=on` | off | Select unobserved traversal reads when this mutator has no capture. |
+/// | `NEOVM_COLLECTION_READ_GLOBAL=off` | on | Use `off` to retain TLS checks when no mutator has an active capture. |
+/// | `NEOVM_COLLECTION_READ_HOIST=off` | on | Use `off` to retain observed traversal reads when this mutator has no capture. |
 /// | `NEOVM_COLLECTION_WRITE_LAZY=on` | off | Skip revision/journal work until the first process capture. |
 ///
 /// Scope state and journals remain local to each mutator. The process gates
@@ -37,14 +37,14 @@ static HISTORY_REQUIRED: AtomicBool = AtomicBool::new(true);
 static HOIST_READS: AtomicBool = AtomicBool::new(false);
 
 static CONFIG: LazyLock<()> = LazyLock::new(|| {
-    if std::env::var("NEOVM_COLLECTION_READ_GLOBAL").as_deref() == Ok("on") {
+    if std::env::var("NEOVM_COLLECTION_READ_GLOBAL").as_deref() != Ok("off") {
         CAPTURE_SCOPES.fetch_and(!1, Ordering::Relaxed);
     }
     if std::env::var("NEOVM_COLLECTION_WRITE_LAZY").as_deref() == Ok("on") {
         HISTORY_REQUIRED.store(false, Ordering::Relaxed);
     }
     HOIST_READS.store(
-        std::env::var("NEOVM_COLLECTION_READ_HOIST").as_deref() == Ok("on"),
+        std::env::var("NEOVM_COLLECTION_READ_HOIST").as_deref() != Ok("off"),
         Ordering::Relaxed,
     );
 });
