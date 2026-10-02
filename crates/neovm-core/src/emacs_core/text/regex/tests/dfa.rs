@@ -1013,9 +1013,9 @@ fn cold_failure_threshold_filters_the_rest_of_the_same_search() {
     with_cold_path(true, || {
         with_dfa_mode(DfaMode::On, || {
             for _ in 1..COLD_THRESHOLD {
-                // A zero range tries only position 0 (and cannot consume):
-                // an unbounded one-byte search also tries its end position.
-                assert_eq!(search(&compiled, b"z", 0, 0, &syntax, 0), (None, false));
+                // One real failed candidate has input to consume. The
+                // terminal EOF attempt does not count toward admission.
+                assert_eq!(search(&compiled, b"z", 0, 1, &syntax, 0), (None, false));
             }
             assert!(!compiled.dfa.initialized());
             assert!(matches!(
@@ -2211,4 +2211,42 @@ fn lisp_searches_over_syntax_table_properties_with_the_filter_on() {
         "{stats:?}"
     );
     assert_eq!(stats.verify_bad_no + stats.verify_bad_yes, 0, "{stats:?}");
+}
+
+/// The sparse scan still runs its classic EOF attempt, but repeated
+/// successful passes ending there cannot heat a never-useful cold DFA.
+#[test]
+fn cold_successful_passes_with_eof_failures_never_build() {
+    let syntax = DefaultSyntaxLookup;
+    let compiled = regex_compile("\\(z\\)[0-9]", false, false).unwrap();
+    let text = b"z1 z2";
+    let pass = || {
+        [
+            search(&compiled, text, 0, text.len() as isize, &syntax, 0),
+            search(&compiled, text, 2, (text.len() - 2) as isize, &syntax, 0),
+            search(&compiled, text, text.len(), 0, &syntax, 0),
+        ]
+    };
+    let expected = with_dfa_mode(DfaMode::Off, pass);
+    assert!(expected[0].0.is_some() && expected[1].0.is_some());
+    assert_eq!(expected[2], (None, false));
+    reset_dfa_stats();
+    with_cold_path(true, || {
+        with_dfa_mode(DfaMode::On, || {
+            for _ in 0..COLD_THRESHOLD * 4 {
+                let before = matcher_entry_count();
+                assert_eq!(pass(), expected);
+                assert_eq!(
+                    matcher_entry_count() - before,
+                    3,
+                    "two matches and the unchanged classic EOF attempt"
+                );
+            }
+        });
+    });
+    assert!(!compiled.dfa.initialized());
+    assert!(matches!(*compiled.dfa.slot(), DfaSlot::Cold { failed: 0 }));
+    let stats = dfa_stats();
+    assert_eq!(stats.searches, 0, "{stats:?}");
+    assert_eq!(stats.builds, 0, "{stats:?}");
 }

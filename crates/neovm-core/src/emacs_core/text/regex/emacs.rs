@@ -9200,7 +9200,11 @@ pub(crate) fn re_search(
                     if matcher_overflow_pending() {
                         return None;
                     }
-                    if dfa_cold_pending {
+                    // A classic zero-span attempt still decides assertions
+                    // and overflow, but cannot seed useful DFA scan work.
+                    // In particular, the sparse scan's EOF failure should
+                    // not heat a pattern whose real candidates all match.
+                    if dfa_cold_pending && $pos < $stop && $pos < text_len {
                         dfa_lease =
                             dfa::DfaLease::after_cold_failure(pattern, syntax, dfa_max_stop);
                         dfa_first_step = dfa_lease
