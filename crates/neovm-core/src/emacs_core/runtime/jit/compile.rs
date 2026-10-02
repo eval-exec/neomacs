@@ -3460,7 +3460,10 @@ pub fn lower_leaf_full_osr(
     // (`spec_slots`/`deopt_*`/`reloc_data`) are owned here, threaded in by
     // reference so their baked addresses stay stable, and moved into the
     // returned `CompiledLeaf` below.
-    let has_binds = leaf::body_has_binds(ops);
+    // A v2 producer can materialize an eager mapping activation even without
+    // binding ops. Own its entry floor and choose a framed memory ABI now.
+    let has_binds =
+        leaf::body_has_binds(ops) || inline::active_fused().is_some_and(|body| body.is_v2());
     let has_handlers = leaf::body_has_handlers(ops);
     let abi = LeafAbi::for_build(
         /*aot=*/ false,

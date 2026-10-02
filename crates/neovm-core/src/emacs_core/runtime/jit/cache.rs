@@ -824,7 +824,7 @@ pub(crate) fn try_run_osr_probe(
     // Chains also need the transfer's specpdl floor when no bindings exist:
     // a materialized map activation can push a backtrace before its deopt.
     // No Lisp or GC can run between this seed and the native entry.
-    let bind_frame = if leaf.has_binds || !leaf.chains.is_empty() {
+    let bind_frame = if leaf.has_binds {
         // SAFETY: dormant seam-provided Context; length reads and Vec writes only.
         let ctx = unsafe { &mut *ctx };
         let spec_base = ctx.specpdl.len();

@@ -610,10 +610,12 @@ pub struct CompiledLeaf {
     pub(crate) required: usize,
     /// Whether the last native slot is a `&rest` list.
     pub(crate) has_rest: bool,
-    /// Whether the body makes dynamic bindings (`varbind`/`unbind`). When set,
-    /// [`call`](Self::call) restores the entry specpdl depth on every exit —
-    /// the `cleanup_bytecode_frame` parity unwind — and requires a non-null
-    /// vmctx.
+    /// Whether the body needs its own specpdl and bind-stack entry floor:
+    /// dynamic bindings/saved state, or a v2 inline activation that can
+    /// materialize an eager mapping frame. Set before ABI/shape selection.
+    /// [`call`](Self::call) restores the floor on normal/signal exits and
+    /// transfers it on precise deopt, requiring a non-null vmctx.
+    /// Threading: an immutable compile-time fact of this mutator-owned leaf.
     pub(crate) has_binds: bool,
     /// Precise-deopt spill buffer: a failing guard writes the live operand
     /// stack here (raw tagged bits) before returning [`STATUS_DEOPT_AT`].
@@ -753,8 +755,8 @@ pub(crate) enum EntryShape {
     /// Frameless with the register ABI: the raw entry, called out of line
     /// ([`CompiledLeaf::entry_call_raw_register`]).
     RawRegister = 1,
-    /// Bindings, handler frames or an AOT sidecar: run under its own
-    /// `invoke_native` frame. Always the memory ABI (`LeafAbi::for_build`).
+    /// Binding/inline activation floors, handler frames or an AOT sidecar:
+    /// run under its own `invoke_native` frame. Always the memory ABI (`LeafAbi::for_build`).
     Framed = 2,
 }
 
@@ -1149,9 +1151,9 @@ impl CompiledLeaf {
     }
 
     /// Whether the body may run WITHOUT its own [`invoke_native`] frame,
-    /// called directly from the caller leaf's extent: it registers no dynamic
-    /// bindings and no handler frames (nothing for the wrapper's parity
-    /// unwinds to restore) and reads no sidecar (JIT leaf). Such a body
+    /// called directly from the caller leaf's extent: it needs no binding or
+    /// inline activation floor and no handler frames (nothing for the
+    /// wrapper's parity unwinds to restore) and reads no sidecar (JIT leaf). Such a body
     /// behaves exactly like any runtime shim the caller invokes: a contained
     /// panic in ITS shims heals against the caller's published leaf bases —
     /// the caller's extent — which is correct because with no handler frames
@@ -1384,7 +1386,7 @@ impl CompiledLeaf {
         // as the cleanup limit; the suspended VM owns final frame cleanup.
         let bind_frame = if OSR {
             osr_bind_frame
-        } else if self.has_binds || !self.chains.is_empty() {
+        } else if self.has_binds {
             debug_assert!(!vmctx.is_null(), "binding bodies require a Context");
             // SAFETY: the vmctx contract (dormant seam-provided Context); only
             // a length read here.

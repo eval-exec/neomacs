@@ -998,3 +998,134 @@ fn inline_hof_runtime_collection_capture_declines_native_loop_and_records_mappin
     }
     reopt::force_reopt_for_test(None);
 }
+
+#[test]
+fn inline_hof_runtime_native_cache_call_preserves_mid_map_deopt_floor_and_prefix() {
+    use crate::emacs_core::jit::cache::{self, NativeCallOutcome};
+
+    let _knobs = Knobs::enter();
+    let mut ctx = Context::new();
+    ctx.push_vm_root_frame();
+    let cell = Value::cons(Value::make_int(0), Value::NIL);
+    ctx.push_vm_frame_root(cell);
+    let prototype = Value::make_bytecode(function(
+        1,
+        vec![
+            Op::Constant(0),
+            Op::Dup,
+            Op::Car,
+            Op::Add1,
+            Op::Setcar,
+            Op::Pop,
+            Op::StackRef(0),
+            Op::Add1,
+            Op::Return,
+        ],
+        vec![Value::symbol("V0")],
+    ));
+    ctx.push_vm_frame_root(prototype);
+    let callback = ctx
+        .apply2(Value::symbol("make-closure"), prototype, cell)
+        .unwrap();
+    ctx.push_vm_frame_root(callback);
+    let sequence = Value::list(vec![
+        Value::make_int(1),
+        Value::make_float(1.5),
+        Value::make_int(3),
+    ]);
+    ctx.push_vm_frame_root(sequence);
+    let func_value = Value::make_bytecode(caller(HofKind::Mapcar, callback));
+    ctx.push_vm_frame_root(func_value);
+    let f = func_value.get_bytecode_data().unwrap();
+    // Exercise the memory entry regardless of the process's direct-call knob.
+    compile::force_register_abi_for_test(Some(false));
+    let leaf = compile::compile_bytecode_function_with(f, Some(&ctx.obarray)).unwrap();
+    compile::force_register_abi_for_test(None);
+    assert!(!leaf.chains.is_empty(), "the callback is admitted natively");
+    let _ = ctx.debug_on_next_call_is_armed();
+
+    // Model the enclosing native caller's extent and preserve its live frame.
+    let depth0 = ctx.depth;
+    let spec0 = ctx.specpdl.len();
+    let outer = Value::symbol("hof-native-cache-outer");
+    ctx.push_backtrace_frame(outer, &[sequence]);
+    ctx.depth += 1;
+    let floors = (
+        ctx.depth,
+        ctx.specpdl.len(),
+        ctx.jit_bind_stack.len(),
+        ctx.condition_stack_len(),
+        ctx.bc_frames.len(),
+        ctx.bc_buf.len(),
+        ctx.save_vm_frame_roots(),
+    );
+    let scratch0 = crate::emacs_core::eval::save_scratch_gc_roots();
+    let bases = compile::JitLeafBases {
+        snap: ctx.module_boundary_snapshot(),
+    };
+    let outer_bases = compile::CURRENT_LEAF_BASES
+        .with(|slot| slot.replace(Some(std::ptr::NonNull::from(&bases))));
+    let before = Value::memory_use_counts_snapshot();
+    let arguments = [sequence.bits() as i64];
+    let outcome = ctx.with_gc_inhibited(|ctx| {
+        cache::run_resolved_leaf_native(
+            ctx as *mut Context,
+            f,
+            func_value,
+            &leaf,
+            arguments.as_ptr(),
+        )
+    });
+    compile::CURRENT_LEAF_BASES.with(|slot| slot.set(outer_bases));
+    let result = match outcome {
+        NativeCallOutcome::Value(value) => value,
+        NativeCallOutcome::FlowStashed => panic!(
+            "mid-map callback guard must resume, not signal invalid metadata: {:?}",
+            compile::take_pending_flow()
+        ),
+        NativeCallOutcome::Fallback => panic!("the admitted callback must resume its native chain"),
+    };
+    assert_eq!(print_value(&result), "(2 2.5 4)");
+    assert_eq!(cell.cons_car().as_fixnum(), Some(3), "no callback replay");
+    let observations = leaf.obs.snapshot();
+    assert_eq!(
+        observations.chain_deopts, 1,
+        "the native callback guard ran"
+    );
+    assert_eq!(
+        observations.chain_pcs,
+        vec![(callback.get_bytecode_data().unwrap().source_id, 7, 1)],
+        "the first result was committed before the second callback's guard"
+    );
+    assert_eq!(
+        Value::memory_use_counts_snapshot()[0] - before[0],
+        3,
+        "one result list retains the completed native prefix"
+    );
+    assert!(leaf.has_binds, "the producer owns an activation floor");
+    assert_eq!(leaf.abi, compile::LeafAbi::Memory);
+    assert_eq!(leaf.entry_shape, compile::EntryShape::Framed);
+    assert!(!leaf.direct_call_eligible());
+    assert!(compile::take_pending_flow().is_none());
+    assert_eq!(
+        (
+            ctx.depth,
+            ctx.specpdl.len(),
+            ctx.jit_bind_stack.len(),
+            ctx.condition_stack_len(),
+            ctx.bc_frames.len(),
+            ctx.bc_buf.len(),
+            ctx.save_vm_frame_roots(),
+        ),
+        floors,
+        "the eager map activation and its root frame are balanced"
+    );
+    assert_eq!(crate::emacs_core::eval::save_scratch_gc_roots(), scratch0);
+    let (function, args, _, _) = ctx.backtrace_entry_values(&ctx.specpdl[spec0]).unwrap();
+    assert_eq!(function, outer);
+    assert_eq!(args.as_slice(), &[sequence]);
+    ctx.unbind_to(spec0);
+    ctx.depth = depth0;
+    ctx.pop_vm_root_frame();
+    assert!(ctx.vm_frame_root_slots_checked(0, 0).is_none());
+}
