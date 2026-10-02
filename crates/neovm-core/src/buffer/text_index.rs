@@ -24,6 +24,17 @@
 //!   the counts stay additive.
 //! - Neither `\n` (0x0A) nor `\r` (0x0D) ever occurs inside a multibyte
 //!   sequence, so counting those bytes counts those characters.
+//!
+//! Knobs (read once per process):
+//!
+//! | Knob | Values | Default |
+//! | --- | --- | --- |
+//! | `NEOVM_TEXT_LINE_INDEX` | `off`, `on`, `verify` (a mismatch always fails) | `off` |
+//! | `NEOVM_TEXT_LINE_INDEX_MIN_BYTES` | minimum buffer/build range bytes | `65536` |
+//! | `NEOVM_TEXT_LINE_INDEX_CHUNK` | target chunk bytes, at least 8 | `4096` |
+//! | `NEOVM_TEXT_LINE_INDEX_QUERY_BYTES` | minimum indexed count range bytes | `8192` |
+//! | `NEOVM_TEXT_LINE_INDEX_QUERY_LINES` | moves of at most this many lines scan | `64` |
+//! | `NEOVM_TEXT_LINE_INDEX_STATS` | `0`, `1` (event counters at exit) | `0` |
 
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -45,8 +56,7 @@ pub(crate) enum TextLineIndexMode {
     On,
     /// Like `On`, but every index answer is recomputed by scanning, every
     /// edit recounts the chunks it touched, and a disagreement is reported
-    /// (`tracing::error!`, a panic in debug builds). The scanned answer is
-    /// the one returned.
+    /// (`tracing::error!`) and panics in every build profile.
     Verify,
 }
 
@@ -255,12 +265,11 @@ pub fn text_line_index_mismatches() -> u64 {
     MISMATCHES.load(Ordering::Relaxed)
 }
 
-/// Report a verify-mode disagreement: an error log, the counter, and in a
-/// debug build a panic, so a test suite run in verify mode fails on the
-/// first one.
+/// Report a verify-mode disagreement and fail in every build profile, so
+/// neither a test suite nor a profiling-board soak can silently accept one.
 #[cold]
 #[inline(never)]
-pub(crate) fn report_mismatch(what: &str, detail: &str) {
+pub(crate) fn report_mismatch(what: &str, detail: &str) -> ! {
     MISMATCHES.fetch_add(1, Ordering::Relaxed);
     tracing::error!(
         target: "neovm::text_line_index",
@@ -268,9 +277,7 @@ pub(crate) fn report_mismatch(what: &str, detail: &str) {
         detail,
         "text line index disagrees with a scan"
     );
-    if cfg!(debug_assertions) {
-        panic!("text line index disagrees with a scan: {what}: {detail}");
-    }
+    panic!("text line index disagrees with a scan: {what}: {detail}");
 }
 
 fn register_stats_report() {
@@ -529,6 +536,11 @@ impl ChunkGeometry {
 }
 
 /// See the module documentation.
+///
+/// Threading: buffer storage gives its owning mutator exclusive access to
+/// maintenance. Immutable snapshots share the index on that storage's thread;
+/// independent mutators have independent indices. The process-wide relaxed
+/// event counters observe activity and never publish index contents.
 #[derive(Clone, Debug)]
 pub(crate) struct TextLineIndex {
     /// The chunks in text order. None is empty.

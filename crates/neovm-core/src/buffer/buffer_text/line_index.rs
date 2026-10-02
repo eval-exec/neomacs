@@ -12,7 +12,8 @@
 //!   the index slot, never the storage mutably, so it is safe under a read
 //!   borrow redisplay holds (the trap of the ASCII-prefix attempt). A
 //!   snapshot that would have used an index sets the shared demand flag
-//!   instead, and the live text builds at the next snapshot.
+//!   instead, and the live text builds at the next snapshot. Small-buffer
+//!   snapshots need neither an index nor a shared demand allocation.
 //! - **Edits.** The four measured mutators update the index: a deletion
 //!   before the backend loses the bytes (they are counted), an insertion
 //!   after. An edit larger than `max(256 KiB, text / 4)` and every wholesale
@@ -127,7 +128,7 @@ impl BufferTextStorage {
         &self,
     ) -> (RefCell<Option<Rc<TextLineIndex>>>, OnceCell<Rc<Cell<bool>>>) {
         let config = text_line_index_config();
-        if !config.enabled() {
+        if !config.enabled() || self.metrics.emacs_byte_len().get() < config.min_buffer_bytes {
             return (RefCell::new(None), OnceCell::new());
         }
         let demand = Rc::clone(
@@ -154,7 +155,7 @@ impl BufferTextStorage {
     }
 
     /// Verify mode: recount the chunks around AT after an edit; a
-    /// disagreement is reported and the index dropped.
+    /// disagreement drops the index and fails the run.
     fn check_line_index_edit(&mut self, at: EmacsBytePos) {
         let Self {
             backend,
@@ -259,7 +260,7 @@ impl BufferText {
         line_end: LineEnd,
     ) -> Option<usize> {
         let config = text_line_index_config();
-        if !config.enabled() || limit.get() - from.get() < config.min_query_bytes {
+        if limit.get() - from.get() < config.min_query_bytes || !config.enabled() {
             return None;
         }
         self.indexed_line_end_count(config, from, limit, line_end)
@@ -289,7 +290,6 @@ impl BufferText {
                     "line count",
                     &format!("[{from:?}, {limit:?}) {line_end:?}: index {count}, scan {scanned}"),
                 );
-                return Some(scanned);
             }
         }
         Some(count)
@@ -323,7 +323,7 @@ impl BufferText {
         n: usize,
     ) -> Option<(EmacsBytePos, usize)> {
         let config = text_line_index_config();
-        if !config.enabled() || n <= config.min_query_lines {
+        if n <= config.min_query_lines || !config.enabled() {
             return None;
         }
         self.indexed_nth_newline(config, from, limit, n)
@@ -366,7 +366,6 @@ impl BufferText {
                     "forward lines",
                     &format!("[{from:?}, {limit:?}) n={n}: index {found:?}, scan {scanned:?}"),
                 );
-                return Some(scanned);
             }
         }
         Some(found)
@@ -383,7 +382,7 @@ impl BufferText {
         n: usize,
     ) -> Option<(EmacsBytePos, usize)> {
         let config = text_line_index_config();
-        if !config.enabled() || n <= config.min_query_lines {
+        if n <= config.min_query_lines || !config.enabled() {
             return None;
         }
         self.indexed_lines_backward(config, from, floor, n)
@@ -423,7 +422,6 @@ impl BufferText {
                     "backward lines",
                     &format!("[{floor:?}, {from:?}] n={n}: index {found:?}, scan {scanned:?}"),
                 );
-                return Some(scanned);
             }
         }
         Some(found)

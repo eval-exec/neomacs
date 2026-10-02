@@ -272,6 +272,45 @@ fn small_texts_short_ranges_and_short_moves_scan() {
     });
 }
 
+/// Small buffers cannot satisfy snapshot demand, so their layouts need no
+/// shared demand allocation. Growing the live text makes later snapshots
+/// eligible without inheriting any bookkeeping from the small ones.
+#[test]
+fn small_snapshots_skip_demand_until_the_live_text_grows() {
+    crate::test_utils::init_test_tracing();
+    let config = TextLineIndexConfig {
+        min_buffer_bytes: 1000,
+        min_query_bytes: 100,
+        ..TextLineIndexConfig::eager(TextLineIndexMode::Verify, 64)
+    };
+    with_text_line_index_config(config, || {
+        let mut text = BufferText::from_str(&"ab\n".repeat(100));
+        let small = text.clone();
+        assert!(text.storage.borrow().text_index_demand.get().is_none());
+        assert!(small.storage.borrow().text_index_demand.get().is_none());
+        assert_eq!(
+            small.indexed_newline_count(EmacsBytePos::ZERO, small.emacs_byte_end_pos()),
+            None
+        );
+        insert_storage_string(&mut text, EmacsBytePos::ZERO, &"ab\n".repeat(300));
+        let first_large = text.clone();
+        assert_eq!(
+            first_large.indexed_newline_count(EmacsBytePos::ZERO, first_large.emacs_byte_end_pos()),
+            None
+        );
+        assert!(!text.has_line_index_for_test());
+        let second_large = text.clone();
+        assert!(text.has_line_index_for_test());
+        assert!(second_large.shares_line_index_with_for_test(&text));
+        assert_eq!(
+            second_large
+                .indexed_newline_count(EmacsBytePos::ZERO, second_large.emacs_byte_end_pos()),
+            Some(400)
+        );
+        assert!(!small.has_line_index_for_test());
+    });
+}
+
 #[test]
 fn wholesale_mutations_drop_the_index_and_queries_stay_exact() {
     crate::test_utils::init_test_tracing();
