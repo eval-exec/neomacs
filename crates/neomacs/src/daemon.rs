@@ -62,14 +62,21 @@ pub(super) fn prepare(options: Option<&Options>) -> Result<Option<DaemonNotifier
             .ok_or("invalid daemon readiness descriptor")?;
         // Duplicate rather than assuming ownership of a user-provided number;
         // the new descriptor is immediately close-on-exec for Lisp subprocesses.
+        // SAFETY: fcntl duplicates an inherited descriptor without taking
+        // ownership of it; an invalid descriptor reports EBADF.
         let duplicate = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
         if duplicate < 0 {
-            return Err(std::io::Error::last_os_error().to_string());
+            return Err(format!(
+                "cannot duplicate daemon readiness descriptor {fd}: {}",
+                std::io::Error::last_os_error()
+            ));
         }
         use std::os::fd::FromRawFd;
         // SAFETY: fcntl returned a fresh descriptor owned by this function.
         let mut notify = unsafe { UnixStream::from_raw_fd(duplicate) };
-        notify.peer_addr().map_err(|error| error.to_string())?;
+        notify
+            .peer_addr()
+            .map_err(|error| format!("invalid daemon readiness socket descriptor {fd}: {error}"))?;
         // SAFETY: fd is the dedicated inherited socket, validated above.
         unsafe { libc::close(fd) };
         return Ok(Some(Box::new(move || {
@@ -254,6 +261,37 @@ mod tests {
                 .unwrap();
         assert!(literal.daemon.is_none());
         assert_eq!(literal.forwarded_args, vec!["neomacs", "--", "--daemon"]);
+    }
+
+    #[test]
+    fn daemon_initialized_consumes_a_failing_notifier_and_rejects_retry() {
+        let mut eval = Context::new();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let notified = Arc::clone(&calls);
+        eval.configure_daemon(
+            None,
+            Some(Box::new(move || {
+                if notified.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Err("I/O error during daemon initialization: fail-once".into())
+                } else {
+                    Ok(())
+                }
+            })),
+        );
+        eval.set_variable("after-init-time", Value::T);
+        // GNU src/emacs.c marks initialization consumed before reporting I/O
+        // failure. A notifier that could succeed on retry must still run once.
+        let result = "(condition-case err (daemon-initialized) (error (car (cdr err))))";
+        assert_eq!(
+            eval.eval_str(result).unwrap().as_utf8_str(),
+            Some("I/O error during daemon initialization: fail-once")
+        );
+        assert_eq!(
+            eval.eval_str(result).unwrap().as_utf8_str(),
+            Some("The daemon has already been initialized")
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(eval.eval_str("(daemonp)").unwrap(), Value::T);
     }
 
     #[test]
