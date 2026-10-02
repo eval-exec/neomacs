@@ -19,6 +19,9 @@ use rustc_hash::FxHashMap as HashMap;
 use std::marker::PhantomData;
 use std::num::NonZeroU64;
 
+mod positions;
+use positions::{GeometryPositionsMode, PresentationPositions, geometry_positions_mode};
+
 /// Evaluator-owned identity of one immutable displayed geometry publication.
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -75,7 +78,7 @@ pub struct PresentationWindow {
     cell_origin: CellOrigin,
     outer: PixelRect<FrameLogicalSpace>,
     regions: Option<WindowRegions>,
-    positions: Vec<PresentationPosition>,
+    positions: PresentationPositions,
     cursor: Option<PresentationCursor>,
 }
 
@@ -233,7 +236,16 @@ impl PresentationGeometry {
 }
 
 impl PresentationWindow {
+    #[inline]
     fn from_snapshot(snapshot: &WindowDisplaySnapshot) -> Result<Self, GeometryError> {
+        Self::from_snapshot_with_mode(snapshot, geometry_positions_mode())
+    }
+
+    #[inline]
+    fn from_snapshot_with_mode(
+        snapshot: &WindowDisplaySnapshot,
+        mode: GeometryPositionsMode,
+    ) -> Result<Self, GeometryError> {
         let outer = PixelRect::from_transport(&snapshot.regions.outer)?;
         let regions = snapshot
             .regions_materialized
@@ -253,41 +265,14 @@ impl PresentationWindow {
             .iter()
             .map(|row| (row.row, row.height))
             .collect();
-        let positions = snapshot
-            .iter_points()
-            .map(|point| {
-                let body_row = body_rows
-                    .get(&point.row)
-                    .ok_or(GeometryError::MissingBodyRow {
-                        window: snapshot.window_id,
-                        output_row: point.row,
-                    })?;
-                Ok(PresentationPosition {
-                    buffer_pos: point.buffer_pos,
-                    x: point.x,
-                    body_y: body_row.body_y,
-                    width: point.width,
-                    height: point.height,
-                    // Compatibility snapshots can contain only points. Real
-                    // publications carry canonical row metrics, including
-                    // mixed-font extents, raised text and line spacing.
-                    row_height: row_heights.get(&point.row).copied().unwrap_or(point.height),
-                    body_row: body_row.body_row,
-                    col: point.col,
-                })
-            })
-            .collect::<Result<Vec<_>, GeometryError>>()?;
+        let positions =
+            PresentationPositions::from_snapshot(snapshot, body_rows, row_heights, mode)?;
         let cursor = snapshot.logical_cursor_pos().and_then(|cursor| {
-            let point = positions
-                .iter()
-                .find(|point| point.body_row == cursor.row && point.col == cursor.col);
-            let physical = snapshot.phys_cursor.as_ref();
-            let width = physical
-                .map(|cursor| cursor.width)
-                .or_else(|| point.map(|p| p.width))?;
-            let height = physical
-                .map(|cursor| cursor.height)
-                .or_else(|| point.map(|p| p.height))?;
+            let (width, height) = positions.cursor_dimensions(
+                cursor.row,
+                cursor.col,
+                snapshot.phys_cursor.as_ref(),
+            )?;
             Some(PresentationCursor {
                 x: cursor.x,
                 body_y: cursor.y,
@@ -1249,14 +1234,12 @@ impl<'a> SnapshotWindowGeometry<'a> {
         &self,
         buffer_pos: LispCharPos1,
     ) -> Result<Option<SnapshotPointGeometry>, GeometryError> {
-        let idx = self
-            .window_geometry
-            .positions
-            .partition_point(|point| point.buffer_pos < buffer_pos);
-        let next = self.window_geometry.positions.get(idx);
+        let positions = self.window_geometry.positions.as_slice();
+        let idx = positions.partition_point(|point| point.buffer_pos < buffer_pos);
+        let next = positions.get(idx);
         let previous = idx
             .checked_sub(1)
-            .and_then(|previous| self.window_geometry.positions.get(previous));
+            .and_then(|previous| positions.get(previous));
         let matched = match (previous, next) {
             (_, Some(point)) if point.buffer_pos == buffer_pos => {
                 PresentedBufferPositionMatch::Exact(point)
@@ -1289,6 +1272,7 @@ impl<'a> SnapshotWindowGeometry<'a> {
         let mut points: Vec<_> = self
             .window_geometry
             .positions
+            .as_slice()
             .iter()
             .filter(|point| {
                 body_y >= point.body_y
@@ -1334,3 +1318,7 @@ impl<'a> SnapshotWindowGeometry<'a> {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "tests/geometry_positions_test.rs"]
+mod geometry_positions_test;
