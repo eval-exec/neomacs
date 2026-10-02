@@ -297,12 +297,18 @@ pub(super) fn fuse_static(
             };
             if handlers == 0
                 && depth[pc] > nargs
-                && compile::call_site_inlinable_at(pc)
                 && let Some((template, kind)) = candidate
                 && let Some(callee) = constants
                     .get(template as usize)
                     .and_then(|v| v.get_bytecode_data())
             {
+                // Match the existing fuser's census for a proven bytecode
+                // target that reoptimization requires to remain a call.
+                if !compile::call_site_inlinable_at(pc) {
+                    crate::emacs_core::jit::stats::record_inline("reject:reopt");
+                    transfer(op, constants, &mut tags);
+                    continue;
+                }
                 let verdict = match kind {
                     RegionKind::Constant if callee.jit_runtime().patched_prefix() > 0 => {
                         Err("patched-prefix".into())
