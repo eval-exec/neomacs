@@ -1442,6 +1442,10 @@ struct InterpreterCallerStack {
 /// pairs per org font-lock op, together with the continuation stack that
 /// has since been folded into it) and grow the aux stack from empty (≈2,500
 /// reallocations); a pooled pair is taken on entry and handed back emptied.
+///
+/// Each pool belongs to one Context and is mutated only through its exclusive
+/// borrow. Backing stores never move between concurrent Lisp mutators; the
+/// process-wide return-order knob shares only an immutable scalar policy.
 #[derive(Default)]
 pub(crate) struct InterpreterStackPool {
     free: Vec<InterpreterStacks>,
@@ -1451,6 +1455,40 @@ pub(crate) struct InterpreterStackPool {
 struct InterpreterStacks {
     frames: Vec<InterpreterFrame>,
     suspended: Vec<SuspendedInterpreterFrameAux>,
+}
+
+fn parse_vm_stack_return_knob(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "on" | "true" | "yes"
+        )
+    })
+}
+
+/// An immutable process-wide policy, safely published to all mutators by
+/// OnceLock. No Lisp state or Context-owned storage is retained here.
+#[inline]
+fn vm_stack_return_after_push_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(enabled) = VM_STACK_RETURN_TEST_OVERRIDE.with(std::cell::Cell::get) {
+        return enabled;
+    }
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(read_vm_stack_return_knob)
+}
+
+#[cold]
+#[inline(never)]
+fn read_vm_stack_return_knob() -> bool {
+    parse_vm_stack_return_knob(std::env::var("NEOVM_VM_STACK_RETURN").ok().as_deref())
+}
+
+#[cfg(test)]
+thread_local! {
+    // Test-only scalar policy override; never contains mutator-owned state.
+    static VM_STACK_RETURN_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
 }
 
 impl InterpreterStackPool {
@@ -1466,11 +1504,34 @@ impl InterpreterStackPool {
         self.free.pop().unwrap_or_default()
     }
 
+    #[inline]
     fn give_back(&mut self, mut stacks: InterpreterStacks) {
+        if vm_stack_return_after_push_enabled() {
+            self.give_back_after_push(stacks);
+            return;
+        }
         stacks.frames.clear();
         stacks.suspended.clear();
         if self.free.len() < Self::MAX_FREE {
             self.free.push(stacks);
+        }
+    }
+
+    #[inline]
+    fn give_back_after_push(&mut self, mut stacks: InterpreterStacks) {
+        if self.free.len() < Self::MAX_FREE {
+            // Copy the untouched headers first. Clearing the source lengths
+            // before Vec::push makes its wide header reload depend on partial
+            // stores. Clearing the destination needs no subsequent header copy.
+            // Neither operation can invoke Lisp or reach a GC safe point.
+            self.free.push(stacks);
+            let returned = self.free.last_mut().expect("just returned stack storage");
+            returned.frames.clear();
+            returned.suspended.clear();
+        } else {
+            // Keep the original clear/drop order when retention is full.
+            stacks.frames.clear();
+            stacks.suspended.clear();
         }
     }
 }
@@ -9814,6 +9875,10 @@ mod arith_integer_fast_path_tests;
 #[cfg(test)]
 #[path = "tests/collection_capture.rs"]
 mod collection_capture_tests;
+
+#[cfg(test)]
+#[path = "tests/stack_pool.rs"]
+mod stack_pool_tests;
 
 impl ArithGenericKind {
     /// The builtin this kind's slow arm calls: the SAME cached symbol ids the
