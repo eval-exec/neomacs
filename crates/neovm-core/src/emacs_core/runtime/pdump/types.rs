@@ -1131,6 +1131,10 @@ pub struct DumpCharsetRegistry {
     pub priority_syms: Vec<DumpSymId>,
     #[serde(default)]
     pub priority: Vec<String>,
+    /// Exact GNU Mule-list chronology. Old charset sections lack this field;
+    /// None reconstructs their Mule membership from global priority order.
+    #[serde(default)]
+    pub emacs_mule_order_syms: Option<Vec<DumpSymId>>,
     pub next_id: i64,
 }
 

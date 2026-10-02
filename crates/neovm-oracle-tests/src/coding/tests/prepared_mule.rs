@@ -113,3 +113,44 @@ fn mule_prepared_encode_follows_jis1978_priority_changes() {
         expect,
     );
 }
+
+#[test]
+fn mule_prepared_encode_preserves_definition_order_before_priority_change() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect =
+        expect_test::expect![[r#""OK (223 (156 243 245 191) (156 243 245 191) (154 223 161))""#]];
+    assert_oracle_parity_with_env_expect(
+        r##"(let ((id 223) (ch #xffff))
+  (while (aref emacs-mule-charset-table id) (setq id (1- id)))
+  (let ((before (encode-coding-string (string ch) 'emacs-mule)))
+    (define-charset 'cl2-mule-overlap "overlapping ordinary charset"
+      :dimension 1 :code-space [33 126] :code-offset #xffff :emacs-mule-id id)
+    (let ((after-definition (encode-coding-string (string ch) 'emacs-mule)))
+      (set-charset-priority 'cl2-mule-overlap)
+      (let ((after-priority (encode-coding-string (string ch) 'emacs-mule)))
+        (list id (string-to-list before) (string-to-list after-definition)
+              (string-to-list after-priority))))))"##,
+        &[("NEOVM_EMACS_MULE_PREPARED", "on")],
+        expect,
+    );
+}
+
+#[test]
+fn mule_prepared_encode_follows_charset_alias_priority() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[r#""OK ((129 233) (130 233) (129 233))""#]];
+    assert_oracle_parity_with_env_expect(
+        r##"(progn
+  (define-charset-alias 'cl2-mule-latin1-alias 'latin-iso8859-1)
+  (define-charset-alias 'cl2-mule-latin2-alias 'latin-iso8859-2)
+  (set-charset-priority 'latin-iso8859-1)
+  (let ((before (encode-coding-string "é" 'emacs-mule)))
+    (set-charset-priority 'cl2-mule-latin2-alias)
+    (let ((second (encode-coding-string "é" 'emacs-mule)))
+      (set-charset-priority 'cl2-mule-latin1-alias 'latin-iso8859-1)
+      (list (string-to-list before) (string-to-list second)
+            (string-to-list (encode-coding-string "é" 'emacs-mule))))))"##,
+        &[("NEOVM_EMACS_MULE_PREPARED", "on")],
+        expect,
+    );
+}

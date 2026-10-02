@@ -3,6 +3,11 @@
 //! Charset data is runtime-global table state in GNU Emacs.  This section
 //! moves Neomacs' dump mirror out of RuntimeState bincode and into explicit
 //! tables with stable method tags.
+//!
+//! Section version 2 keeps the version-1 header and appends the optional Mule
+//! order as a count followed by symbol ids. The reader accepts version 1,
+//! whose missing order is reconstructed at registry load. No file-level
+//! pdump version or JIT ABI change is needed for this compatible section.
 
 use bytemuck::{Pod, Zeroable};
 
@@ -14,7 +19,8 @@ use super::types::{
 };
 
 const CHARSET_MAGIC: [u8; 16] = *b"NEOCHARSET\0\0\0\0\0\0";
-const CHARSET_FORMAT_VERSION: u32 = 1;
+const CHARSET_FORMAT_VERSION: u32 = 2;
+const ABSENT_EMACS_MULE_ORDER: u64 = u64::MAX;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -43,6 +49,15 @@ pub(crate) fn charset_section_bytes(registry: &DumpCharsetRegistry) -> Result<Ve
     }
     for name in &registry.priority {
         write_string(&mut bytes, name)?;
+    }
+    match &registry.emacs_mule_order_syms {
+        Some(names) => {
+            write_len(&mut bytes, names.len(), "emacs-mule order symbols")?;
+            for name in names {
+                write_u32(&mut bytes, name.0);
+            }
+        }
+        None => write_u64(&mut bytes, ABSENT_EMACS_MULE_ORDER),
     }
 
     let payload_len = bytes.len() - HEADER_SIZE;
@@ -97,6 +112,26 @@ pub(crate) fn load_charset_section(section: &[u8]) -> Result<DumpCharsetRegistry
     for _ in 0..header.priority_string_count {
         priority.push(read_string(&mut cursor)?);
     }
+    let emacs_mule_order_syms = if header.version >= 2 {
+        let count = cursor.read_u64("emacs-mule order symbol count")?;
+        if count == ABSENT_EMACS_MULE_ORDER {
+            None
+        } else {
+            let count = to_usize(count, "emacs-mule order symbol count")?;
+            if count > cursor.remaining() / std::mem::size_of::<u32>() {
+                return Err(DumpError::ImageFormatError(
+                    "emacs-mule order symbols exceed charset payload".into(),
+                ));
+            }
+            let mut names = Vec::with_capacity(count);
+            for _ in 0..count {
+                names.push(DumpSymId(cursor.read_u32("emacs-mule order symbol")?));
+            }
+            Some(names)
+        }
+    } else {
+        None
+    };
 
     if !cursor.is_empty() {
         return Err(DumpError::ImageFormatError(format!(
@@ -109,6 +144,7 @@ pub(crate) fn load_charset_section(section: &[u8]) -> Result<DumpCharsetRegistry
         charsets,
         priority_syms,
         priority,
+        emacs_mule_order_syms,
         next_id: header.next_id,
     })
 }
@@ -126,7 +162,7 @@ fn read_header(section: &[u8]) -> Result<CharsetHeader, DumpError> {
             "charset section has bad magic".into(),
         ));
     }
-    if header.version != CHARSET_FORMAT_VERSION {
+    if !matches!(header.version, 1 | CHARSET_FORMAT_VERSION) {
         return Err(DumpError::UnsupportedVersion(header.version));
     }
     if header.header_size != HEADER_SIZE as u32 {
@@ -444,6 +480,7 @@ pub(crate) fn empty_charset_registry() -> DumpCharsetRegistry {
         charsets: Vec::new(),
         priority_syms: Vec::new(),
         priority: Vec::new(),
+        emacs_mule_order_syms: None,
         next_id: 0,
     }
 }
@@ -451,3 +488,7 @@ pub(crate) fn empty_charset_registry() -> DumpCharsetRegistry {
 #[cfg(test)]
 #[path = "charset_image/tests/charset_image_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "charset_image/tests/mule_order.rs"]
+mod mule_order_tests;

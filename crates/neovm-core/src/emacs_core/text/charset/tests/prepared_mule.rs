@@ -107,3 +107,78 @@ fn prepared_mule_scalar_preserves_map_alias_and_unification() {
         }
     }
 }
+
+#[test]
+fn prepared_mule_order_preserves_definition_chronology_through_restore() {
+    crate::test_utils::init_test_tracing();
+    let _context = Context::new();
+    let older_name = intern("neovm-mule-older-supplementary");
+    let newer_name = intern("neovm-mule-newer-ordinary");
+    let ch = 0x1f300;
+    CHARSET_REGISTRY.with(|slot| {
+        let mut registry = slot.borrow_mut();
+        let mut older = CharsetRegistry::make_default(920, "neovm-mule-older-supplementary");
+        older.code_space = [33, 126, 0, 0, 0, 0, 0, 0];
+        older.min_code = 33;
+        older.max_code = 126;
+        older.method = CharsetMethod::Offset(ch);
+        older.emacs_mule_id = Some(150);
+        older.supplementary_p = true;
+        registry.register(older);
+    });
+    let expected = |name| {
+        CHARSET_REGISTRY.with(|slot| {
+            let registry = slot.borrow();
+            let info = registry.charsets.get(&name).expect("registered fixture");
+            (
+                info.emacs_mule_id.expect("Mule fixture"),
+                info.dimension,
+                registry.encode_char(name, ch).expect("overlapping fixture"),
+            )
+        })
+    };
+    let older_result = expected(older_name);
+    assert_eq!(EmacsMuleEncoder::new().encode_char(ch), Some(older_result));
+    CHARSET_REGISTRY.with(|slot| {
+        let mut registry = slot.borrow_mut();
+        let mut newer = CharsetRegistry::make_default(921, "neovm-mule-newer-ordinary");
+        newer.code_space = [34, 126, 0, 0, 0, 0, 0, 0];
+        newer.min_code = 34;
+        newer.max_code = 126;
+        newer.method = CharsetMethod::Offset(ch);
+        newer.emacs_mule_id = Some(151);
+        registry.register(newer);
+    });
+    let newer_result = expected(newer_name);
+    // GNU's Mule list appends the new member, even though the global priority
+    // list inserts this ordinary charset before supplementary charsets.
+    assert_eq!(EmacsMuleEncoder::new().encode_char(ch), Some(older_result));
+    let snapshot = snapshot_charset_registry();
+    reset_charset_registry();
+    restore_charset_registry(snapshot);
+    assert_eq!(EmacsMuleEncoder::new().encode_char(ch), Some(older_result));
+    builtin_set_charset_priority(vec![Value::from_sym_id(newer_name)])
+        .expect("explicitly prefer the newer fixture");
+    assert_eq!(EmacsMuleEncoder::new().encode_char(ch), Some(newer_result));
+    let reordered = snapshot_charset_registry();
+    reset_charset_registry();
+    restore_charset_registry(reordered);
+    assert_eq!(EmacsMuleEncoder::new().encode_char(ch), Some(newer_result));
+    let alias = intern("neovm-mule-older-alias");
+    CHARSET_REGISTRY.with(|slot| slot.borrow_mut().define_alias(alias, older_name));
+    builtin_set_charset_priority(vec![
+        Value::from_sym_id(alias),
+        Value::from_sym_id(older_name),
+    ])
+    .expect("prefer canonical older member through alias");
+    assert_eq!(EmacsMuleEncoder::new().encode_char(ch), Some(older_result));
+    let snapshot = snapshot_charset_registry();
+    assert_eq!(
+        snapshot
+            .emacs_mule_order
+            .iter()
+            .filter(|&&name| name == older_name)
+            .count(),
+        1
+    );
+}

@@ -4050,6 +4050,13 @@ pub(crate) fn dump_charset_registry(encoder: &mut DumpEncoder) -> DumpCharsetReg
             .collect(),
         priority_syms: snapshot.priority.into_iter().map(dump_sym_id).collect(),
         priority: Vec::new(),
+        emacs_mule_order_syms: Some(
+            snapshot
+                .emacs_mule_order
+                .into_iter()
+                .map(dump_sym_id)
+                .collect(),
+        ),
         next_id: snapshot.next_id,
     }
 }
@@ -6247,7 +6254,7 @@ pub(crate) fn load_coding_system_manager(
 }
 
 pub(crate) fn load_charset_registry(decoder: &mut LoadDecoder, dcr: &DumpCharsetRegistry) {
-    let snapshot = CharsetRegistrySnapshot {
+    let mut snapshot = CharsetRegistrySnapshot {
         charsets: dcr
             .charsets
             .iter()
@@ -6335,6 +6342,11 @@ pub(crate) fn load_charset_registry(decoder: &mut LoadDecoder, dcr: &DumpCharset
         } else {
             dcr.priority_syms.iter().map(load_sym_id).collect()
         },
+        emacs_mule_order: dcr
+            .emacs_mule_order_syms
+            .as_ref()
+            .map(|names| names.iter().map(load_sym_id).collect())
+            .unwrap_or_default(),
         next_id: dcr.next_id,
         // The binary dump does not carry GNU's `Vcharset_non_preferred_head`
         // boundary; a freshly loaded session reproduces GNU's dumped default
@@ -6344,6 +6356,23 @@ pub(crate) fn load_charset_registry(decoder: &mut LoadDecoder, dcr: &DumpCharset
         // non-preferred, matching `CharsetRegistry::new`.
         non_preferred_head: Some(1),
     };
+    // Version-1 charset sections recorded only global priority. Preserve
+    // their existing Mule order approximation once at load; newly written
+    // sections and live snapshots carry exact definition chronology instead.
+    if dcr.emacs_mule_order_syms.is_none() {
+        let mule_members: std::collections::HashSet<_> = snapshot
+            .charsets
+            .iter()
+            .filter(|info| info.emacs_mule_id.is_some())
+            .map(|info| info.name)
+            .collect();
+        snapshot.emacs_mule_order = snapshot
+            .priority
+            .iter()
+            .copied()
+            .filter(|name| mule_members.contains(name))
+            .collect();
+    }
     restore_charset_registry(snapshot);
 }
 

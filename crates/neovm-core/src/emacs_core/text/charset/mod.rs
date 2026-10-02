@@ -314,6 +314,7 @@ pub(crate) struct CharsetInfoSnapshot {
 pub(crate) struct CharsetRegistrySnapshot {
     pub charsets: Vec<CharsetInfoSnapshot>,
     pub priority: Vec<SymId>,
+    pub emacs_mule_order: Vec<SymId>,
     pub next_id: i64,
     /// Index into `priority` of the first non-preferred charset, mirroring GNU's
     /// `Vcharset_non_preferred_head` (charset.c:85). `char_charset` returns the
@@ -356,6 +357,13 @@ pub(crate) struct CharsetRegistry {
     aliases: rustc_hash::FxHashMap<SymId, SymId>,
     /// Priority-ordered list of charset names.
     priority: Vec<SymId>,
+    /// GNU's `Vemacs_mule_charset_list`: new Mule definitions append, while
+    /// `set-charset-priority` reorders its existing members. This can differ
+    /// from `priority` after an ordinary definition follows a supplementary
+    /// charset. The existing runtime registry owns this plain symbol-id list;
+    /// each mutator snapshots/restores its own registry and encoding views
+    /// borrow no shared mutable state or GC-managed Values.
+    emacs_mule_order: Vec<SymId>,
     /// Index into `priority` of the first *non-preferred* charset, mirroring
     /// GNU's `Vcharset_non_preferred_head` (charset.c:85). When `char_charset`
     /// walks `priority` for a Unicode character (`<= MAX_UNICODE_CHAR`) and
@@ -375,6 +383,7 @@ impl CharsetRegistry {
             charsets: rustc_hash::FxHashMap::default(),
             aliases: rustc_hash::FxHashMap::default(),
             priority: Vec::new(),
+            emacs_mule_order: Vec::new(),
             non_preferred_head: None,
             next_id: 256, // start above the Emacs built-in range
         };
@@ -607,6 +616,17 @@ impl CharsetRegistry {
             let resolved = self.resolve_name(name);
             if !self.priority.contains(&resolved) {
                 self.add_to_ordered(resolved, supplementary_p);
+                // GNU appends Mule members on first definition, even when
+                // the ordinary priority list inserts before supplementary
+                // charsets (charset.c:1181-1189). Preseeded Lisp charsets enter
+                // here at their actual definition, preserving loadup order.
+                if self
+                    .charsets
+                    .get(&resolved)
+                    .is_some_and(|info| info.emacs_mule_id.is_some())
+                {
+                    self.emacs_mule_order.push(resolved);
+                }
             }
         }
     }
@@ -739,6 +759,18 @@ impl CharsetRegistry {
         }
 
         self.priority = reordered;
+        // GNU sorts existing Mule-list membership into the newly chosen
+        // global order (charset.c:2201-2219); a priority change never adds a
+        // charset that was absent from the Mule list.
+        let mule_members: HashSet<_> = self.emacs_mule_order.iter().copied().collect();
+        let mut seen_mule_members = HashSet::with_capacity(mule_members.len());
+        self.emacs_mule_order = self
+            .priority
+            .iter()
+            .copied()
+            .map(|name| self.resolve_name(name))
+            .filter(|name| mule_members.contains(name) && seen_mule_members.insert(*name))
+            .collect();
     }
 
     /// Return the plist for a charset, or None if not found.
@@ -827,6 +859,7 @@ impl CharsetRegistry {
         CharsetRegistrySnapshot {
             charsets,
             priority: self.priority.clone(),
+            emacs_mule_order: self.emacs_mule_order.clone(),
             next_id: self.next_id,
             non_preferred_head: self.non_preferred_head,
         }
@@ -903,6 +936,7 @@ impl CharsetRegistry {
             charsets,
             aliases,
             priority: snapshot.priority,
+            emacs_mule_order: snapshot.emacs_mule_order,
             non_preferred_head: snapshot.non_preferred_head,
             next_id: snapshot.next_id,
         }

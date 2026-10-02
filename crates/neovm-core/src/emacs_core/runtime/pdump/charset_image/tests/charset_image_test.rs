@@ -54,6 +54,7 @@ fn charset_section_round_trips_registry_state() {
         ],
         priority_syms: vec![DumpSymId(10)],
         priority: vec!["charset-one".into()],
+        emacs_mule_order_syms: Some(vec![DumpSymId(2), DumpSymId(8)]),
         next_id: 11,
     };
 

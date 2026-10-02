@@ -75,7 +75,7 @@ impl EmacsMuleEncoder {
             let registry = slot.borrow();
             let mut seen = HashSet::new();
             let mut candidates = Vec::new();
-            for &name in registry.priority_list() {
+            for &name in &registry.emacs_mule_order {
                 let name = registry.resolve_name(name);
                 if !seen.insert(name) {
                     continue;
@@ -95,7 +95,10 @@ impl EmacsMuleEncoder {
 
             // Bare Contexts preseed latin-iso8859-1 before mule-conf.el defines
             // it and places it in the ordered list. Preserve that bootstrap
-            // support. A loaded runtime has every real Mule charset ordered;
+            // support only for entries that have not had a Lisp definition.
+            // GNU does not add Mule-list membership when a previously defined
+            // non-Mule charset is redefined with a Mule id. A loaded runtime
+            // has every real Mule charset ordered;
             // materialized pdump aliases resolve to already-seen canonical
             // entries and therefore cannot duplicate or reorder candidates.
             let mut preseeded: Vec<_> = registry
@@ -105,6 +108,7 @@ impl EmacsMuleEncoder {
                     info.emacs_mule_id.is_some()
                         && registry.resolve_name(info.name) == info.name
                         && !seen.contains(&info.name)
+                        && !registry.priority.contains(&info.name)
                 })
                 .collect();
             preseeded.sort_by_key(|info| info.id);
