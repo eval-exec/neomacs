@@ -7,7 +7,7 @@
 //!
 //! | Knob | Values | Default | Purpose |
 //! |---|---|---|---|
-//! | `NEOVM_COMPARE_STRINGS_POS_CACHE` | `on`, `off` (boolean aliases accepted) | off | Reuse GNU's rooted position cache when a validated compare-strings START is nonzero. |
+//! | `NEOVM_COMPARE_STRINGS_POS_CACHE` | `on`, `off` (boolean aliases accepted) | on | Reuse GNU's rooted position cache when a validated compare-strings START is nonzero. |
 
 use super::error::{EvalResult, Flow, signal};
 use super::eval::Context;
@@ -1330,7 +1330,7 @@ fn compare_strings_pos_cache_enabled() -> bool {
 fn read_compare_strings_pos_cache_knob() -> bool {
     std::env::var("NEOVM_COMPARE_STRINGS_POS_CACHE")
         .ok()
-        .is_some_and(|value| {
+        .map_or(true, |value| {
             matches!(
                 value.trim().to_ascii_lowercase().as_str(),
                 "on" | "1" | "true" | "yes"
