@@ -1089,6 +1089,23 @@ pub(crate) fn force_tier2_for_test(knob: Option<Tier2Knob>) {
     TIER2_TEST_OVERRIDE.with(|c| c.set(knob));
 }
 
+/// Immutable process flag for the entry seams. Knob initialization publishes
+/// this before returning, and every production profiling leaf/upgrade job is
+/// created only after `jit_tier2()` was read by the compiler. Until then there
+/// can be no T2 work to probe. The flag carries no payload: the OnceLock and
+/// each mutator's cache retain their own publication; a relaxed load suffices.
+static TIER2_ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Cheap entry-seam gate; test overrides retain their existing per-thread scope.
+#[inline]
+pub(crate) fn jit_tier2_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(knob) = TIER2_TEST_OVERRIDE.with(std::cell::Cell::get) {
+        return knob.on;
+    }
+    TIER2_ENABLED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The tier-spine knobs this thread's compiles and requests use.
 pub(crate) fn jit_tier2() -> Tier2Knob {
     #[cfg(test)]
@@ -1107,6 +1124,7 @@ pub(crate) fn jit_tier2() -> Tier2Knob {
                 "NEOVM_JIT_TIER2=on is on in this process"
             );
         }
+        TIER2_ENABLED.store(knob.on, std::sync::atomic::Ordering::Relaxed);
         knob
     })
 }
