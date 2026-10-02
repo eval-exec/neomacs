@@ -1554,7 +1554,7 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOMACS_PRESENT_HIT",
     // C6 compact row point storage and per-window row hits: off (default), on, verify.
     "NEOMACS_PRESENT_POINT_ROWS",
-    // Source newline counting: off (default), on, verify; indexed counts unchanged.
+    // Source newline counting: off, on (default), verify; indexed counts unchanged.
     "NEOMACS_LAYOUT_LINE_COUNT",
     // The mini-window stands still when what it shows is unchanged: `on`.
     "NEOMACS_LAYOUT_MINI_STILL",

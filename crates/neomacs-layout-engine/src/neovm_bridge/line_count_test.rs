@@ -127,10 +127,10 @@ fn line_count_preserves_empty_reversed_negative_and_clamped_ranges() {
 }
 
 #[test]
-fn line_count_knob_defaults_to_scalar_and_parses_validation_mode() {
+fn line_count_knob_defaults_to_memchr_and_preserves_scalar_override() {
     assert_eq!(
         LayoutLineCountMode::from_setting(None),
-        LayoutLineCountMode::Off
+        LayoutLineCountMode::On
     );
     for setting in ["off", "0", "unknown", ""] {
         assert_eq!(

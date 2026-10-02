@@ -5,7 +5,7 @@
 //!
 //! | Knob | Default | Values | Gate |
 //! | --- | --- | --- | --- |
-//! | `NEOMACS_LAYOUT_LINE_COUNT` | `off` | `off`, `on`, `verify` | Count source newlines with `memchr` over the same backend chunks; verify compares with the scalar scan. |
+//! | `NEOMACS_LAYOUT_LINE_COUNT` | `on` | `off`, `on`, `verify` | Count source newlines with `memchr` over the same backend chunks; verify compares with the scalar scan. |
 //! The numeric mode is read once per process. Indexed counts and byte-range
 //! clamping precede the fallback scan in every mode. Concurrent readers share
 //! only the initialized numeric mode; each scan borrows its own backend view
@@ -2042,6 +2042,7 @@ impl LayoutLineCountMode {
         {
             Some("on" | "1" | "true" | "yes") => Self::On,
             Some("verify") => Self::Verify,
+            None => Self::On,
             _ => Self::Off,
         }
     }
