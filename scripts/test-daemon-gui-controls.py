@@ -1,13 +1,42 @@
 #!/usr/bin/env python3
 """Cheap fail-closed controls for the opt-in GUI acceptance entry point."""
+import ast
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import Mock
 
 SCRIPT = Path(__file__).with_name("test-daemon-gui.py")
+
+
+class GuiReplyBudgetTests(unittest.TestCase):
+    def test_eval_reply_budget_tracks_bounded_subprocess_timeout(self):
+        # Exercise the nested helper without starting a compositor or daemon.
+        source = ast.parse(SCRIPT.read_text())
+        evaluate = next(node for node in ast.walk(source)
+                        if isinstance(node, ast.FunctionDef) and node.name == "evaluate")
+        runner = Mock(return_value=subprocess.CompletedProcess([], 0, "42\n", ""))
+        records = []
+        namespace = {"subprocess": Mock(run=runner), "bin_dir": Path("/native"),
+                     "ROOT": Path("/source"), "host_env": {}, "records": records}
+        exec(compile(ast.Module(body=[evaluate], type_ignores=[]), str(SCRIPT), "exec"),
+             namespace)
+        for timeout in [30, 60, 90, 15]:
+            with self.subTest(timeout=timeout):
+                self.assertEqual(namespace["evaluate"]("(+ 20 22)", timeout), "42")
+                argv = runner.call_args.args[0]
+                self.assertEqual(argv[argv.index("-w") + 1], str(timeout + 5))
+                self.assertEqual(runner.call_args.kwargs["timeout"], timeout)
+        self.assertEqual(len(records), 4)
+        runner.return_value = subprocess.CompletedProcess([], 1, "", "reply failed")
+        with self.assertRaisesRegex(RuntimeError, "reply failed"):
+            namespace["evaluate"]("(+ 20 22)")
+        runner.side_effect = subprocess.TimeoutExpired("neomacsclient", 30)
+        with self.assertRaises(subprocess.TimeoutExpired):
+            namespace["evaluate"]("(+ 20 22)")
 
 
 class GuiPreflightTests(unittest.TestCase):

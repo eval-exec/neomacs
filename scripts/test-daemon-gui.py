@@ -106,7 +106,7 @@ def acceptance(bin_dir, module, gnu, render_node):
             daemon = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT)
             def evaluate(expression, timeout=30):
                 result = subprocess.run([str(bin_dir / "neomacsclient"), "-s", "gui-acceptance",
-                                         "-w", "5", "-e", expression], cwd=ROOT, env=host_env,
+                                         "-w", str(timeout + 5), "-e", expression], cwd=ROOT, env=host_env,
                                         capture_output=True, text=True, timeout=timeout)
                 records.append({"expression": expression, "exit": result.returncode,
                                 "stdout": result.stdout, "stderr": result.stderr})
@@ -167,6 +167,28 @@ def acceptance(bin_dir, module, gnu, render_node):
                     if waiting.wait(timeout=30) != 0:
                         raise RuntimeError("waiting client did not complete on last owned frame deletion")
                     wait("(= (native-proof-mapped-count) 0)")
+                    for command in ["server-buffer-done", "server-edit"]:
+                        name = label + "-" + command
+                        completing = client(binary, name, False)
+                        wait(f'(and (native-proof-frame "{name}") t)')
+                        evaluate(f'(native-proof-check-client "{name}" nil)')
+                        if completing.poll() is not None:
+                            raise RuntimeError("waiting buffer client disconnected before completion")
+                        evaluate(f'(native-proof-complete-buffer "{name}" \'{command})')
+                        if completing.wait(timeout=30) != 0:
+                            raise RuntimeError("waiting client did not complete on last buffer completion")
+                        wait("(= (native-proof-mapped-count) 0)")
+                        # Exercise ordinary admission again after each completed
+                        # client, reusing the same daemon/display terminal.
+                        recreated_name = name + "-recreated"
+                        recreated = client(binary, recreated_name, True)
+                        if recreated.wait(timeout=30) != 0:
+                            raise RuntimeError("client frame recreation failed")
+                        evaluate(f'(native-proof-check-client "{recreated_name}" t)')
+                        if evaluate(f'(eq (frame-terminal (native-proof-frame "{recreated_name}")) native-proof-terminal)') != "t":
+                            raise RuntimeError("recreated client frame lost terminal ownership")
+                        evaluate(f'(delete-frame (native-proof-frame "{recreated_name}") t)')
+                        wait("(= (native-proof-mapped-count) 0)")
                 evaluate("(native-proof-final)")
                 if "module.so" not in evaluate('(with-temp-buffer (insert-file-contents "/proc/self/maps") (buffer-string))'):
                     raise RuntimeError("real module mapping absent")

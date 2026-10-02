@@ -13,8 +13,9 @@ neomacsclient -s development -e '(kill-emacs)'
 `--daemon[=NAME]` and `--bg-daemon[=NAME]` start in the background. The launching
 process succeeds only after initialization, command-line actions and the normal
 Lisp `server-start` have completed. Startup failure returns a nonzero status;
-background startup has a 60-second deadline. `--fg-daemon[=NAME]` stays in the
-foreground and retains its standard streams, which is useful under a supervisor
+background startup waits without a deadline, as in GNU Emacs.
+`--fg-daemon[=NAME]` stays in the foreground and retains its standard streams,
+which is useful under a supervisor
 or when debugging startup.
 
 Daemon mode is **not batch mode**: `noninteractive` is nil, normal init files and
@@ -67,8 +68,8 @@ pipeline, compiles the default-feature debug test target and matching editor/cli
 copies that editor to the native `neomacs-temacs` role, and creates and smoke-tests
 its bootstrap image. Using that matching native image, it also regenerates
 `lisp/term/neo-win.elc`: deferred GUI registration loads this layer even for a
-display-free daemon, and repeatedly expanding its source macros would consume
-the automatic-startup deadline before the user init file. The smoke loads this
+display-free daemon, and repeatedly expanding its source macros would delay
+startup before the user init file. The smoke loads this
 compiled terminal layer too. It then runs the entire `daemon_lifecycle` target serially,
 with the tests' existing deadlines and disposable HOME/XDG data. Failures are
 errors, not skipped tests. The existing test-suite CI runs this same Linux command.
@@ -129,7 +130,20 @@ silently add `-Q`.
 
 Concurrent clients serialize startup for the selected local endpoint and then
 submit their original requests over the ordinary Emacs server protocol. Startup
-waits at most 60 seconds by default; a positive `-w SECONDS` also bounds this wait.
+waits without a deadline by default. `-w SECONDS` / `--timeout SECONDS` bounds
+only server replies, after startup and request submission; zero means unlimited.
+
+The Neomacs-specific `--startup-timeout SECONDS` optionally bounds automatic
+startup waiting, including the endpoint lock and a full listener backlog. Zero
+(or omission) means unlimited. Expiry fails only that client, submits no request
+and never replays it later. It does not kill an initializing daemon or undo init
+side effects. A later client can wait for and use the same daemon.
+
+Automatic startup transfers the endpoint lock to the matching background
+launcher before abandoning its own copy. The launcher owns readiness and exact
+child failure/reaping until `daemon-initialized`, even if the initiating client
+times out or dies. An early-bound socket is not readiness. Neither the lock
+capability nor readiness descriptors are inherited by Lisp subprocesses.
 A mode-0600 `.startup-lock` file remains next to the socket to avoid lock
 unlink/recreation races. It is not a readiness marker and need not be removed
 when stopping or restarting a daemon. The socket directory must be owned by the
@@ -141,7 +155,11 @@ startup locks are rejected.
 - On Linux a display-free daemon can later attach native frames to one explicitly
   selected Wayland socket. Lisp `make-frame` and native/GNU client `-c -d SOCKET`
   use the original evaluator and an OS-main-owned native loop. Deleting the last
-  graphical frame retains that connection and evaluator for recreation. Explicit
+  graphical frame retains that connection and evaluator for recreation. Unlike
+  GNU Emacs, explicit `delete-terminal` on this retained graphical connection is
+  rejected, even with FORCE, before hooks or frame/terminal changes: independent
+  connection retirement/reconnection is not supported. Ordinary frame deletion,
+  TTY terminal deletion and daemon shutdown remain available. Explicit
   X11 and multiple independent display connections are rejected. Native attach
   and frame readiness have a 15-second budget. If cancellation interrupts a
   synchronous Wayland registry/configure wait, the exact owned connection is
@@ -154,9 +172,10 @@ startup locks are rejected.
 - Automatic startup is for local Unix sockets. TCP clients continue to use the
   existing server-file/authentication path, but do not automatically start a
   local daemon for a missing or unreachable TCP endpoint.
-- A startup deadline forcibly terminates the exact initializing daemon. It does
-  not run Lisp exit hooks or undo side effects and subprocesses created by user
-  init code before readiness. Normal `kill-emacs` performs orderly cleanup.
+- A client startup-wait budget does not constrain init execution or native GUI
+  attachment. An init which never finishes keeps its background launcher and
+  startup lock alive; explicitly stop the daemon when cancellation of init is
+  intended. Normal `kill-emacs` performs orderly cleanup.
 - Interrupted synchronous calls kill and reap their immediate child; shell
   descendants are not tracked independently. Integer/no-wait destinations
   deliberately detach their child and do not wait for its completion at exit.

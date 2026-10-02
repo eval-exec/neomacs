@@ -429,6 +429,8 @@ impl SpawnedChild {
     }
 
     fn revoke_lost_child<T>(&mut self, result: &io::Result<T>) {
+        #[cfg(not(unix))]
+        let _ = result;
         #[cfg(unix)]
         if result
             .as_ref()
