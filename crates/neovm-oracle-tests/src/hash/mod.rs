@@ -1,6 +1,9 @@
 //! Hash oracle parity tests.
 
 mod equal_lookup_bounded_semantics;
+#[cfg(test)]
+#[path = "tests/maphash_bytecode.rs"]
+mod maphash_bytecode;
 mod table;
 mod table_advanced;
 mod table_comprehensive_patterns;

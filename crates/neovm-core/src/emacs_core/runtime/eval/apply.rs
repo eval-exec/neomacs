@@ -2577,6 +2577,159 @@ impl Context {
         self.execute_bytecode_call_dispatched(bc_data, args, func_value)
     }
 
+    /// A direct bytecode callback with two arguments, using `apply_internal`'s
+    /// quit, depth, frame, collection, debugger and unwind protocol. The local
+    /// argument array is passed directly to an armed leaf; it is never moved
+    /// through the generic by-value `LispArgVec` dispatch chain.
+    #[cfg(feature = "jit")]
+    #[inline]
+    pub(crate) fn apply2_bytecode(
+        &mut self,
+        function: Value,
+        arg0: Value,
+        arg1: Value,
+    ) -> EvalResult {
+        self.apply2_bytecode_impl::<true>(function, arg0, arg1)
+    }
+
+    /// As the one-argument mapping entry, selected only while this mutator
+    /// has no capture. Synchronous hooks restore their own capture scopes
+    /// before returning; the selection carries no state between mutators.
+    #[cfg(feature = "jit")]
+    #[inline]
+    pub(crate) fn apply2_bytecode_unobserved(
+        &mut self,
+        function: Value,
+        arg0: Value,
+        arg1: Value,
+    ) -> EvalResult {
+        debug_assert!(!crate::tagged::collection_reads::is_active());
+        self.apply2_bytecode_impl::<false>(function, arg0, arg1)
+    }
+
+    #[cfg(feature = "jit")]
+    fn apply2_bytecode_impl<const OBSERVED: bool>(
+        &mut self,
+        function: Value,
+        arg0: Value,
+        arg1: Value,
+    ) -> EvalResult {
+        if !self.attention_clear(super::AttentionMask::CALLBACK_ENTRY) {
+            self.apply1_bytecode_entry_slow(function)?;
+        }
+        self.enter_interpreted_eval_depth()?;
+        let bt_count = self.specpdl.len();
+        let args = [arg0, arg1];
+        self.push_backtrace_frame(function, &args);
+        let result = {
+            if self.gc_safe_point_exact_should_collect() {
+                self.gc_collect_from_current_roots();
+            }
+            let entered = match self.take_debug_on_call_arm(DebugOnCallCode::Funcall) {
+                Some(arm) => self.do_debug_on_call(arm),
+                None => Ok(()),
+            };
+            match entered {
+                Err(flow) => Err(flow),
+                Ok(())
+                    if self.depth < STACK_GROWTH_PROBE_START_DEPTH
+                        || !self.depth.is_multiple_of(STACK_GROWTH_PROBE_INTERVAL) =>
+                {
+                    let bc_data = if OBSERVED {
+                        function.get_bytecode_data()
+                    } else {
+                        function.get_bytecode_data_unobserved()
+                    }
+                    .expect("a selected bytecode callback");
+                    self.execute_bytecode_call_2(bc_data, &args, function)
+                }
+                Ok(()) => self.apply2_bytecode_probing_stack::<OBSERVED>(function, &args),
+            }
+        };
+        self.depth -= 1;
+        self.finish_traced_call(bt_count, result)
+    }
+
+    #[cfg(feature = "jit")]
+    #[cold]
+    #[inline(never)]
+    fn apply2_bytecode_probing_stack<const OBSERVED: bool>(
+        &mut self,
+        function: Value,
+        args: &[Value; 2],
+    ) -> EvalResult {
+        self.maybe_grow_eval_stack(|ctx| {
+            let bc_data = if OBSERVED {
+                function.get_bytecode_data()
+            } else {
+                function.get_bytecode_data_unobserved()
+            }
+            .expect("a selected bytecode callback");
+            ctx.execute_bytecode_call_2(bc_data, args, function)
+        })
+    }
+
+    /// A two-word argument array owned by the calling callback activation.
+    /// The caller roots FUNCTION and both arguments for the entire call,
+    /// through its backtrace frame or an enclosing root scope. As with
+    /// `execute_bytecode_call_1`, normalize optional/rest slots only when the
+    /// armed leaf needs them, and retain the ordinary dispatcher for cold,
+    /// invalid-arity and non-compilable bodies.
+    #[cfg(feature = "jit")]
+    #[inline(always)]
+    pub(crate) fn execute_bytecode_call_2(
+        &mut self,
+        bc_data: &super::super::bytecode::ByteCodeFunction,
+        args: &[Value; 2],
+        function: Value,
+    ) -> EvalResult {
+        use crate::emacs_core::jit::cache;
+        if let Some((leaf, nonrest, has_rest)) = cache::armed_leaf_for_stack_call(bc_data, 2) {
+            crate::emacs_core::jit::stats::record_dispatch(true);
+            let ctx_ptr = self as *mut Context;
+            let saved_roots = save_scratch_gc_roots();
+            let native = if !has_rest && nonrest == 2 {
+                cache::run_armed_leaf(
+                    ctx_ptr,
+                    bc_data,
+                    function,
+                    leaf,
+                    args.as_ptr().cast::<i64>(),
+                )
+            } else {
+                let fixed = nonrest.min(2);
+                let nil = Value::NIL.bits() as i64;
+                let mut bits: smallvec::SmallVec<[i64; 8]> = args[..fixed]
+                    .iter()
+                    .map(|value| value.bits() as i64)
+                    .chain(std::iter::repeat_n(nil, nonrest - fixed))
+                    .collect();
+                if has_rest {
+                    let rest = if nonrest < 2 {
+                        self.tagged_heap.list_from_slice(&args[nonrest..])
+                    } else {
+                        Value::NIL
+                    };
+                    bits.push(rest.bits() as i64);
+                }
+                cache::run_armed_leaf(ctx_ptr, bc_data, function, leaf, bits.as_ptr())
+            };
+            return match native {
+                Ok(Some(bits)) => Ok(Value::from_bits(bits)),
+                Ok(None) => {
+                    crate::emacs_core::jit::note_seam_interp_fallback();
+                    let mut vm = super::super::bytecode::Vm::from_context(self);
+                    vm.execute_with_func_value(bc_data, LispArgVec::from_slice(args), function)
+                }
+                Err(flow) => {
+                    restore_failed_callback_roots(saved_roots);
+                    Err(flow)
+                }
+            };
+        }
+        self.execute_bytecode_call_dispatched(bc_data, LispArgVec::from_slice(args), function)
+    }
+
     /// [`Context::execute_bytecode_call`] for arguments that already live on
     /// the GC-traced `bc_buf` at `[args_start, args_start + nargs)` — the
     /// VM's hot bytecode→bytecode path. The interpreter tier runs directly

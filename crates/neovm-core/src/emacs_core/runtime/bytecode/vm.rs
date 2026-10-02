@@ -9539,6 +9539,7 @@ impl<'a> Vm<'a> {
 
     fn builtin_maphash_shared(&mut self, args: &[Value]) -> EvalResult {
         let (func, table) = crate::emacs_core::hashtab::validate_maphash_args(args)?;
+        let callee = crate::emacs_core::hashtab::MaphashCallee::resolve(func);
         self.with_dynamic_vm_roots(|vm| {
             vm.push_dynamic_vm_root(func);
             vm.push_dynamic_vm_root(table);
@@ -9555,11 +9556,50 @@ impl<'a> Vm<'a> {
                 };
                 vm.push_dynamic_vm_root(key);
                 vm.push_dynamic_vm_root(value);
-                vm.call_function2(func, key, value)?;
+                match callee {
+                    crate::emacs_core::hashtab::MaphashCallee::Generic(function) => {
+                        vm.call_function2(function, key, value)?;
+                    }
+                    #[cfg(feature = "jit")]
+                    crate::emacs_core::hashtab::MaphashCallee::ByteCode(function) => {
+                        vm.call_maphash_bytecode::<true>(function, key, value)?;
+                    }
+                    #[cfg(feature = "jit")]
+                    crate::emacs_core::hashtab::MaphashCallee::UnobservedByteCode(function) => {
+                        vm.call_maphash_bytecode::<false>(function, key, value)?;
+                    }
+                }
                 slot += 1;
             }
             Ok(Value::NIL)
         })
+    }
+
+    /// Keep the VM callback's existing backtrace and signal/pop protocol,
+    /// while handing an armed bytecode leaf two rooted local argument words.
+    /// Each activation is owned by this VM's mutator and publishes no cache.
+    #[cfg(feature = "jit")]
+    #[inline]
+    fn call_maphash_bytecode<const OBSERVED: bool>(
+        &mut self,
+        function: Value,
+        key: Value,
+        value: Value,
+    ) -> EvalResult {
+        let bt_count = self.ctx.specpdl.len();
+        let args = [key, value];
+        self.ctx.push_backtrace_frame(function, &args);
+        let bc_data = if OBSERVED {
+            function.get_bytecode_data()
+        } else {
+            debug_assert!(!crate::tagged::collection_reads::is_active());
+            function.get_bytecode_data_unobserved()
+        }
+        .expect("a selected bytecode callback");
+        let result = self.ctx.execute_bytecode_call_2(bc_data, &args, function);
+        let result = self.ctx.dispatch_signal_result_if_needed(result);
+        self.ctx
+            .pop_bytecode_backtrace_frame_with_result(bt_count, result)
     }
 }
 
