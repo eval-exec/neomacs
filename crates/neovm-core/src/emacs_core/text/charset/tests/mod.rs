@@ -1580,3 +1580,6 @@ fn a_resolved_charset_decoder_answers_exactly_like_the_registry() {
         "sweep was too small to mean anything: {swept}"
     );
 }
+
+#[cfg(test)]
+mod prepared_mule;

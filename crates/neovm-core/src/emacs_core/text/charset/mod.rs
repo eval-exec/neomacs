@@ -18,6 +18,11 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 
+mod prepared_mule;
+#[cfg(test)]
+use prepared_mule::CharsetEncoder;
+pub(crate) use prepared_mule::EmacsMuleEncoder;
+
 const RAW_BYTE_SENTINEL_MIN: u32 = 0xE080;
 const RAW_BYTE_SENTINEL_MAX: u32 = 0xE0FF;
 const UNIBYTE_BYTE_SENTINEL_MIN: u32 = 0xE300;

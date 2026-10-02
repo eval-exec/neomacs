@@ -2772,3 +2772,6 @@ fn iso_2022_honours_a_shift_only_when_its_flag_is_set_like_gnu() {
         "OK ((65 36 15 66) (65 15 66) (65 14 66) (65 15 66) (65 12354 66))"
     );
 }
+
+#[cfg(test)]
+mod prepared_mule;

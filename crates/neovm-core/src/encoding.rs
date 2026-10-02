@@ -3,6 +3,10 @@
 //! Neomacs uses UTF-8 internally.  This module provides Emacs-compatible
 //! character classification, width calculation, and encoding conversion
 //! APIs.
+//!
+//! | Knob | Default | Behavior |
+//! |---|---|---|
+//! | `NEOVM_EMACS_MULE_PREPARED` | off | Prepare emacs-mule encoder candidates once per conversion, honoring charset priority. |
 
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_min_args};
@@ -4098,6 +4102,23 @@ fn emacs_mule_leading(id: i64) -> Vec<u8> {
 
 /// Encode `s` as emacs-mule.
 fn encode_via_emacs_mule(s: &crate::heap_types::LispString) -> Vec<u8> {
+    if emacs_mule_prepared_enabled() {
+        return encode_via_emacs_mule_prepared(s);
+    }
+    encode_via_emacs_mule_legacy(s)
+}
+
+/// Process configuration only, shared by all mutators. OnceLock publishes the
+/// initialized boolean safely; it holds no Lisp values or runtime registry.
+fn emacs_mule_prepared_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("NEOVM_EMACS_MULE_PREPARED")
+            .is_ok_and(|value| matches!(value.as_str(), "1" | "on" | "true"))
+    })
+}
+
+fn encode_via_emacs_mule_legacy(s: &crate::heap_types::LispString) -> Vec<u8> {
     let mut out = Vec::with_capacity(s.sbytes());
     for code in coding_source_codepoints(s) {
         if code < 0x80 {
@@ -4114,6 +4135,41 @@ fn encode_via_emacs_mule(s: &crate::heap_types::LispString) -> Vec<u8> {
                 out.push((c & 0xFF) as u8);
             } else {
                 out.push((cs_code | 0x80) as u8);
+            }
+        } else {
+            out.push(b' ');
+        }
+    }
+    out
+}
+
+/// GNU keeps the ordered Mule charset list for the entire encode. This view
+/// belongs to this conversion's mutator and resolves candidate maps lazily;
+/// the loop runs no Lisp, so the registry cannot change beneath its fallback
+/// encoders. Other mutators own independent views and may share immutable maps.
+fn encode_via_emacs_mule_prepared(s: &crate::heap_types::LispString) -> Vec<u8> {
+    let mut encoder = crate::emacs_core::charset::EmacsMuleEncoder::new();
+    let mut out = Vec::with_capacity(s.sbytes());
+    for code in coding_source_codepoints(s) {
+        if code < 0x80 {
+            out.push(code as u8);
+        } else if crate::emacs_core::emacs_char::char_byte8_p(code) {
+            out.push(crate::emacs_core::emacs_char::char_to_byte8(code));
+        } else if let Some((id, dimension, charset_code)) = encoder.encode_char(i64::from(code)) {
+            let id = id as u8;
+            match id {
+                _ if id < 0xa0 => out.push(id),
+                0xa0..=0xdf => out.extend_from_slice(&[0x9a, id]),
+                0xe0..=0xef => out.extend_from_slice(&[0x9b, id]),
+                0xf0..=0xf4 => out.extend_from_slice(&[0x9c, id]),
+                _ => out.extend_from_slice(&[0x9d, id]),
+            }
+            if dimension >= 2 {
+                let charset_code = (charset_code | 0x8080) as u32;
+                out.push((charset_code >> 8) as u8);
+                out.push(charset_code as u8);
+            } else {
+                out.push((charset_code | 0x80) as u8);
             }
         } else {
             out.push(b' ');

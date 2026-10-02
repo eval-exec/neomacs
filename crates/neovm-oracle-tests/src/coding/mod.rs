@@ -9,3 +9,7 @@ mod system_comprehensive;
 mod system_put_advanced;
 mod textprop_strict_edge_semantics;
 mod utf8_test_availability_semantics;
+
+#[cfg(test)]
+#[path = "tests/prepared_mule.rs"]
+mod prepared_mule;
