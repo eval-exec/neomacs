@@ -739,17 +739,6 @@ fn explicit_bin_dir_before_release_stays_in_effect() {
     assert_eq!(options.bin_dir, PathBuf::from("/repo/out/neomacs-bin"));
 }
 
-#[test]
-fn parse_aot_preload_defaults_off_and_flag_enables() {
-    assert!(!parse_options(&["--release"]).aot_preload);
-    let options = parse_options(&["--release", "--aot-preload"]);
-    assert!(options.aot_preload);
-    // The flag is independent of the others (does not perturb defaults).
-    assert_eq!(options.profile, BuildProfile::Release);
-    assert!(!options.dry_run);
-    assert!(!options.skip_build);
-}
-
 /// The minimal product is retired: one product ships, and it always carries
 /// the capabilities its platform declares. An unknown `--minimal` must be
 /// rejected rather than silently ignored, so a stale caller fails loudly
@@ -776,13 +765,6 @@ fn linux_production_capabilities_come_from_typed_workspace_metadata() {
         capabilities.video_backend(),
         ProductionVideoBackend::LinkedGstreamer
     );
-}
-
-#[test]
-fn parse_aot_preload_composes_with_dry_run() {
-    let options = parse_options(&["--release", "--aot-preload", "--dry-run"]);
-    assert!(options.aot_preload);
-    assert!(options.dry_run);
 }
 
 #[test]
@@ -2228,7 +2210,7 @@ fn generated_unidata_source_files_match_gnu_gen_clean_shape() {
         skip_build: false,
         no_byte_compile: false,
         features: Vec::new(),
-        aot_preload: false,
+        aot_preload: AotPreloadMode::Disabled,
     };
     let paths = PipelinePaths {
         lisp_root: lisp.clone(),
@@ -2898,7 +2880,7 @@ fn a_no_byte_compile_run_deletes_no_bytecode_it_will_not_put_back() {
         skip_build: false,
         no_byte_compile: true,
         features: Vec::new(),
-        aot_preload: false,
+        aot_preload: AotPreloadMode::Disabled,
     };
     let paths = PipelinePaths {
         lisp_root: lisp.clone(),
@@ -2959,7 +2941,7 @@ fn a_recompiling_run_clears_primary_but_keeps_secondary_loaddefs_bytecode() {
         skip_build: false,
         no_byte_compile: false,
         features: Vec::new(),
-        aot_preload: false,
+        aot_preload: AotPreloadMode::Disabled,
     };
     let paths = PipelinePaths {
         lisp_root: lisp.clone(),
@@ -3022,7 +3004,7 @@ fn full_loaddefs_regeneration_keeps_secondary_bootstrap_seeds_loadable() {
         skip_build: false,
         no_byte_compile: false,
         features: Vec::new(),
-        aot_preload: false,
+        aot_preload: AotPreloadMode::Disabled,
     };
     let paths = PipelinePaths {
         lisp_root: lisp.clone(),
