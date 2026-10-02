@@ -32,10 +32,12 @@ impl FromStr for ExecutionOverride {
                 | "NEOVM_REGEX_DFA"
                 | "NEOVM_REGEX_DFA_COLD"
                 | "NEOVM_REGEX_DFA_FIRST_STEP"
+                | "NEOVM_REGEX_SUFFIX_LITERAL"
+                | "NEOVM_SORT_CAPTURE"
         );
         if !supported {
             return Err(format!(
-                "unsupported execution setting {name:?}; expected a supported NEOVM_JIT or NEOVM_REGEX_DFA setting"
+                "unsupported execution setting {name:?}; expected a supported NEOVM execution setting"
             ));
         }
         if let Some(value) = value {
@@ -43,13 +45,15 @@ impl FromStr for ExecutionOverride {
                 "NEOVM_JIT"
                 | "NEOVM_JIT_OSR"
                 | "NEOVM_REGEX_DFA_COLD"
-                | "NEOVM_REGEX_DFA_FIRST_STEP" => {
+                | "NEOVM_REGEX_DFA_FIRST_STEP"
+                | "NEOVM_REGEX_SUFFIX_LITERAL" => {
                     matches!(
                         value,
                         "0" | "off" | "false" | "no" | "1" | "on" | "true" | "yes"
                     )
                 }
                 "NEOVM_REGEX_DFA" => matches!(value, "off" | "on" | "verify"),
+                "NEOVM_SORT_CAPTURE" => matches!(value, "off" | "on"),
                 "NEOVM_JIT_THRESHOLD" => value.parse::<u32>().is_ok_and(|v| v > 0),
                 "NEOVM_JIT_LOOP_HEAT" => value.parse::<u32>().is_ok(),
                 _ => unreachable!("validated name"),
