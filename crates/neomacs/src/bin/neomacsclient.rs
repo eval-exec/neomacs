@@ -93,6 +93,7 @@ struct Options {
     server_file: Option<String>,
     alternate_editor: Option<String>,
     timeout: Option<Duration>,
+    startup_timeout: Option<Duration>,
     tramp_prefix: Option<String>,
     display: Option<String>,
     parent_id: Option<String>,
@@ -188,7 +189,14 @@ fn parse_options(prog: &str, args: impl IntoIterator<Item = OsString>) -> Result
                     let seconds = value
                         .parse::<u64>()
                         .map_err(|_| format!("Invalid timeout: \"{value}\""))?;
-                    options.timeout = Some(Duration::from_secs(seconds));
+                    options.timeout = (seconds != 0).then(|| Duration::from_secs(seconds));
+                } else if let Some(value) =
+                    option_value(arg, "--startup-timeout", "", &args, &mut i)?
+                {
+                    let seconds = value
+                        .parse::<u64>()
+                        .map_err(|_| format!("Invalid startup timeout: \"{value}\""))?;
+                    options.startup_timeout = (seconds != 0).then(|| Duration::from_secs(seconds));
                 } else if let Some(value) = option_value(arg, "--tramp", "-T", &args, &mut i)? {
                     options.tramp_prefix = Some(value);
                 } else if let Some(value) = option_value(arg, "--display", "-d", &args, &mut i)? {
@@ -267,7 +275,8 @@ Options:
   -s, --socket-name SOCKET   Use a local Unix server socket
 -f, --server-file FILE     Use a TCP authentication file
   -a, --alternate-editor CMD Run CMD if the server is not available
-  -w, --timeout SECONDS      Wait this many seconds for server replies
+  -w, --timeout SECONDS      Wait this many seconds for server replies (0: unlimited)
+      --startup-timeout SEC  Bound automatic startup waiting only (0: unlimited)
   -T, --tramp PREFIX         Prefix absolute file names for Tramp
 "
     );
@@ -303,7 +312,7 @@ fn run_unix_client(prog: &str, options: Options) -> Result<(), String> {
             .socket_name
             .clone()
             .or_else(|| env::var("EMACS_SOCKET_NAME").ok());
-        client_daemon::start_and_connect(prog, &socket, name.as_deref(), options.timeout)?
+        client_daemon::start_and_connect(prog, &socket, name.as_deref(), options.startup_timeout)?
     } else {
         match std::os::unix::net::UnixStream::connect(&socket) {
             Ok(stream) => stream,
@@ -853,6 +862,40 @@ fn alternate_editor_tokens(mut remaining: &str) -> Vec<&str> {
                 tokens.push(remaining);
                 return tokens;
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_startup_is_unlimited_and_reply_budget_is_independent() {
+        for args in [vec![], vec!["-w", "1"], vec!["--timeout=0"]] {
+            let options = parse_options("client", args.into_iter().map(OsString::from)).unwrap();
+            assert_eq!(options.startup_timeout, None);
+        }
+        let options = parse_options(
+            "client",
+            ["-w", "1", "--startup-timeout=3"].map(OsString::from),
+        )
+        .unwrap();
+        assert_eq!(options.timeout, Some(Duration::from_secs(1)));
+        assert_eq!(options.startup_timeout, Some(Duration::from_secs(3)));
+        let options = parse_options(
+            "client",
+            ["-w", "1", "-w", "0", "--startup-timeout", "0"].map(OsString::from),
+        )
+        .unwrap();
+        assert_eq!(options.timeout, None);
+        assert_eq!(options.startup_timeout, None);
+        for args in [
+            vec!["--startup-timeout"],
+            vec!["--startup-timeout=-1"],
+            vec!["--startup-timeout=bad"],
+        ] {
+            assert!(parse_options("client", args.into_iter().map(OsString::from)).is_err());
         }
     }
 }

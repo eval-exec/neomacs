@@ -1660,7 +1660,7 @@ fn startup_deadline_includes_lock_wait_and_does_not_start_a_second_daemon() {
     // SAFETY: lock's file descriptor remains live until the assertion finishes.
     assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) }, 0);
     let mut command = fixture.client("busy", "t");
-    command.args(["-a", "", "-w", "1"]);
+    command.args(["-a", "", "--startup-timeout", "1"]);
     let output = bounded(command, Duration::from_secs(5));
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("timed out"));
@@ -1843,7 +1843,7 @@ fn full_socket_backlog_has_a_bounded_client_wait_without_duplicate_startup() {
         }
     }
     let mut command = fixture.client("backlogged", "t");
-    command.args(["-a", "", "-w", "1"]);
+    command.args(["-a", "", "--startup-timeout", "1"]);
     let output = bounded(command, Duration::from_secs(5));
     assert!(!output.status.success());
     assert!(
@@ -1890,7 +1890,8 @@ fn auto_start_waits_for_initialization_even_when_init_binds_server_early() {
     // This client starts only after the selected endpoint has been bound. Its
     // startup deadline must expire on the active lock, not on a sent request.
     let mut late = fixture.client("early", &request);
-    late.env("ALTERNATE_EDITOR", "").args(["-w", "1"]);
+    late.env("ALTERNATE_EDITOR", "")
+        .args(["--startup-timeout", "1"]);
     let late_output = bounded(late, Duration::from_secs(5));
     let requested_early = fixture.path("request-ran").exists();
     // The selected socket really is bound while initialization is blocked.
@@ -1925,30 +1926,252 @@ fn auto_start_waits_for_initialization_even_when_init_binds_server_early() {
     fixture.eval("early", "(kill-emacs)");
 }
 
-#[test]
-fn automatic_startup_deadline_kills_and_reaps_the_exact_initializing_child() {
-    let fixture = Fixture::new();
-    fixture
-        .write_init("(require 'server) (setq server-name (daemonp)) (server-start) (sleep-for 30)");
-    let mut command = fixture.client("slow", "t");
-    command.args(["-a", "", "-w", "8"]);
-    // Capture the child while it is alive; a post-exit numeric PID test alone
-    // cannot prove the exact process died and silently skipping the marker
-    // would never exercise the startup cleanup contract.
-    let result = std::thread::spawn(move || bounded(command, Duration::from_secs(15)));
-    wait_for_path(&fixture.path("owned-pid"), Duration::from_secs(7));
-    let pid: i32 = fs::read_to_string(fixture.path("owned-pid"))
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
-    let child = PinnedProcess::new(pid);
-    let output = result.join().unwrap();
-    assert!(!output.status.success(), "{output:?}");
-    assert!(String::from_utf8_lossy(&output.stderr).contains("timed out"));
-    child.assert_exited();
-    assert!(
-        !std::path::Path::new(&format!("/proc/{pid}")).exists(),
-        "client did not reap its exact initializing child"
+// A gate reached by the real init file, before or after an early listener.
+fn gate_startup(fixture: &Fixture, early: bool) {
+    fixture.write_init(&format!(
+        "{} (with-temp-buffer \
+             (call-process \"/bin/sh\" nil t nil \"-c\" \
+               \"for fd in /proc/self/fd/*; do readlink \\\"$fd\\\"; done\") \
+             (write-region (point-min) (point-max) {:?})) \
+         (with-temp-file {:?} (prin1 (list (getenv \"NEOMACS_DAEMON_LOCK_FD\") (getenv \"NEOMACS_DAEMON_NOTIFY_FD\")) (current-buffer))) \
+         (with-temp-file {:?} (insert \"entered\")) \
+         (while (not (file-exists-p {:?})) (sleep-for 0.01)) \
+         (setq daemon-probe-ready t daemon-probe-counter 0)",
+        if early {
+            "(require 'server) (setq server-name (daemonp)) (server-start)"
+        } else {
+            ""
+        },
+        fixture.path("subprocess-fds"),
+        fixture.path("internal-environment"),
+        fixture.path("init-gate"),
+        fixture.path("release-init"),
+    ));
+}
+
+fn assert_startup_locked(fixture: &Fixture, name: &str) {
+    let lock = fs::File::open(fixture.socket(&format!("{name}.startup-lock"))).unwrap();
+    // SAFETY: lock is owned and live, separate from the starter's open description.
+    assert_eq!(
+        unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        -1
     );
+    assert_eq!(
+        std::io::Error::last_os_error().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+}
+
+#[test]
+fn reply_timeout_starts_after_gated_initialization_and_zero_is_unlimited() {
+    let fixture = Fixture::new();
+    gate_startup(&fixture, false);
+    let mut command = fixture.client("reply", "(list (emacs-pid) daemon-probe-ready)");
+    command.args(["-a", "", "-w", "1"]);
+    let mut client = OwnedChild(
+        command
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let marker_deadline = Instant::now() + Duration::from_secs(25);
+    while !fixture.path("init-gate").exists() {
+        assert!(
+            client.0.try_wait().unwrap().is_none(),
+            "reply budget ended client during startup"
+        );
+        assert!(Instant::now() < marker_deadline, "init did not enter gate");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    std::thread::sleep(Duration::from_millis(1300));
+    assert!(
+        client.0.try_wait().unwrap().is_none(),
+        "reply budget killed startup"
+    );
+    fs::write(fixture.path("release-init"), "release").unwrap();
+    assert!(wait_child(&mut client.0, Duration::from_secs(15)).success());
+    let mut zero = fixture.client("reply", "(progn (sleep-for 1.3) daemon-probe-ready)");
+    zero.args(["-w", "0"]);
+    let output = bounded(zero, Duration::from_secs(10));
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "t");
+    fixture.eval("reply", "(kill-emacs)");
+}
+
+#[test]
+fn initiating_client_death_preserves_startup_owner_before_and_after_bind() {
+    for early in [false, true] {
+        for signal in [libc::SIGTERM, libc::SIGKILL] {
+            let fixture = Fixture::new();
+            gate_startup(&fixture, early);
+            let request = format!(
+                "(progn (with-temp-file {:?} (insert \"bad\")) t)",
+                fixture.path("abandoned-request")
+            );
+            let mut command = fixture.client("abandon", &request);
+            command.args(["-a", "", "-w", "30"]);
+            let mut initiator = OwnedChild(
+                command
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .unwrap(),
+            );
+            wait_for_path(&fixture.path("init-gate"), Duration::from_secs(25));
+            let descriptors = fs::read_to_string(fixture.path("subprocess-fds")).unwrap();
+            assert!(
+                !descriptors.contains("socket:") && !descriptors.contains(".startup-lock"),
+                "{descriptors}"
+            );
+            assert_eq!(
+                fs::read_to_string(fixture.path("internal-environment")).unwrap(),
+                "(nil nil)"
+            );
+            assert_eq!(fixture.socket("abandon").exists(), early);
+            let pid: i32 = fs::read_to_string(fixture.path("owned-pid"))
+                .unwrap()
+                .parse()
+                .unwrap();
+            let daemon = PinnedProcess::new(pid);
+            let parent: i32 = fs::read_to_string(format!("/proc/{pid}/status"))
+                .unwrap()
+                .lines()
+                .find_map(|line| line.strip_prefix("PPid:"))
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            let launcher = PinnedProcess::new(parent);
+            let initiator_identity = PinnedProcess::new(initiator.0.id() as i32);
+            initiator_identity.signal(signal);
+            assert!(!wait_child(&mut initiator.0, Duration::from_secs(5)).success());
+            assert_startup_locked(&fixture, "abandon");
+            let request = format!(
+                "(progn (with-temp-file {:?} (insert \"ran\")) (list (emacs-pid) daemon-probe-ready (setq daemon-probe-counter (1+ daemon-probe-counter))))",
+                fixture.path("later-request")
+            );
+            let mut handles = Vec::new();
+            for _ in 0..3 {
+                let mut later = fixture.client("abandon", &request);
+                later.args(["-a", ""]);
+                handles.push(std::thread::spawn(move || {
+                    bounded(later, Duration::from_secs(30))
+                }));
+            }
+            std::thread::sleep(Duration::from_millis(300));
+            assert_startup_locked(&fixture, "abandon");
+            assert_eq!(
+                fs::read_to_string(fixture.path("owned-pid")).unwrap(),
+                pid.to_string()
+            );
+            assert!(!fixture.path("later-request").exists());
+            fs::write(fixture.path("release-init"), "release").unwrap();
+            let mut replies = Vec::new();
+            for handle in handles {
+                let output = handle.join().unwrap();
+                assert!(output.status.success(), "{output:?}");
+                replies.push(String::from_utf8(output.stdout).unwrap().trim().to_owned());
+            }
+            replies.sort();
+            assert_eq!(
+                replies,
+                (1..=3)
+                    .map(|n| format!("({pid} t {n})"))
+                    .collect::<Vec<_>>()
+            );
+            assert!(!fixture.path("abandoned-request").exists());
+            launcher.assert_exited();
+            fixture.eval("abandon", "(kill-emacs)");
+            daemon.assert_exited();
+        }
+    }
+}
+
+#[test]
+fn direct_background_startup_waits_for_gate_and_does_not_leak_capabilities() {
+    let fixture = Fixture::new();
+    fixture.write_init(&format!(
+        "(with-temp-buffer \
+           (call-process \"/bin/sh\" nil t nil \"-c\" \
+             \"for fd in /proc/self/fd/*; do readlink \\\"$fd\\\"; done\") \
+           (write-region (point-min) (point-max) {:?})) \
+         (with-temp-file {:?} (prin1 (list (getenv \"NEOMACS_DAEMON_LOCK_FD\") (getenv \"NEOMACS_DAEMON_NOTIFY_FD\")) (current-buffer))) \
+         (with-temp-file {:?} (insert \"entered\")) \
+         (while (not (file-exists-p {:?})) (sleep-for 0.01))",
+        fixture.path("subprocess-fds"), fixture.path("internal-environment"),
+        fixture.path("init-gate"), fixture.path("release-init"),
+    ));
+    let mut command = fixture.editor();
+    command.arg("--bg-daemon=direct");
+    let mut launcher = OwnedChild(
+        command
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    wait_for_path(&fixture.path("init-gate"), Duration::from_secs(25));
+    std::thread::sleep(Duration::from_millis(1300));
+    assert!(launcher.0.try_wait().unwrap().is_none());
+    let fds = fs::read_to_string(fixture.path("subprocess-fds")).unwrap();
+    assert!(
+        !fds.contains("socket:") && !fds.contains(".startup-lock"),
+        "{fds}"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.path("internal-environment")).unwrap(),
+        "(nil nil)"
+    );
+    fs::write(fixture.path("release-init"), "release").unwrap();
+    assert!(wait_child(&mut launcher.0, Duration::from_secs(15)).success());
+    fixture.eval("direct", "(kill-emacs)");
+}
+
+#[test]
+fn startup_wait_expiry_leaves_initializer_owned_and_never_replays_request() {
+    for early in [false, true] {
+        let fixture = Fixture::new();
+        gate_startup(&fixture, early);
+        // Expire the initiating client's explicitly separate startup budget
+        // while the surviving launcher still owns initialization.
+        let mut command = fixture.client(
+            "slow",
+            "(setq daemon-probe-counter (1+ daemon-probe-counter))",
+        );
+        command.args(["-a", "", "--startup-timeout", "8"]);
+        let mut client = OwnedChild(
+            command
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        // The startup budget can expire before Lisp reaches the gate (for
+        // example while loading server.el). The owner must still reach it;
+        // do not require fixture preparation to fit inside the client budget.
+        wait_for_path(&fixture.path("init-gate"), Duration::from_secs(25));
+        let pid: i32 = fs::read_to_string(fixture.path("owned-pid"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        let daemon = PinnedProcess::new(pid);
+        assert!(!wait_child(&mut client.0, Duration::from_secs(10)).success());
+        assert_startup_locked(&fixture, "slow");
+        assert_eq!(fixture.socket("slow").exists(), early);
+        fs::write(fixture.path("release-init"), "release").unwrap();
+        let mut later = fixture.client(
+            "slow",
+            "(list (emacs-pid) daemon-probe-ready daemon-probe-counter)",
+        );
+        later.args(["-a", ""]);
+        let output = bounded(later, Duration::from_secs(15));
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            format!("({pid} t 0)")
+        );
+        fixture.eval("slow", "(kill-emacs)");
+        daemon.assert_exited();
+    }
 }
