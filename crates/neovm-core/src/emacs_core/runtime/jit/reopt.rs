@@ -561,7 +561,12 @@ fn respond(
             DeoptEvent::Precise { pc, .. } => Some(pc),
             DeoptEvent::Rerun => None,
         });
-        if !origin.is_osr() && super::tier2::revert_if_t2(physical, leaf, pc, floor) {
+        // An epoch-only rebuild taught the source nothing. Invalidate it
+        // immediately rather than counting a T2 failure or rearming stale T1.
+        if cause != DeoptCause::InlineEpochMoved
+            && !origin.is_osr()
+            && super::tier2::revert_if_t2(physical, leaf, pc, floor)
+        {
             return ReoptVerdict::Invalidated;
         }
         super::cache::invalidate_for_reopt(physical, origin, floor, reprofile);
@@ -720,3 +725,7 @@ mod deopt_cells_test;
 #[cfg(test)]
 #[path = "reopt/tests/chain_test.rs"]
 mod chain_test;
+
+#[cfg(test)]
+#[path = "tier2/tests/epoch_test.rs"]
+mod tier2_epoch_test;
