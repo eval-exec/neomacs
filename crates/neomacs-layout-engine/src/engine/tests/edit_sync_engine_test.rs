@@ -489,3 +489,277 @@ fn random_edits_with_shift_skip_match_a_full_layout_after_every_step() {
     let _shift_skip = ShiftSkipGuard::on();
     random_edits_in_mode(EditSyncMode::Sync);
 }
+
+struct SourceBudgetGuard;
+
+impl SourceBudgetGuard {
+    fn set(enabled: bool) -> Self {
+        crate::buffer_source::window_source::set_sync_source_budget_for_test(Some(enabled));
+        Self
+    }
+}
+
+impl Drop for SourceBudgetGuard {
+    fn drop(&mut self) {
+        crate::buffer_source::window_source::set_sync_source_budget_for_test(None);
+    }
+}
+
+fn source_budget_window_end(frame: &SyncFrame) -> neovm_core::window::WindowEndState {
+    let live_frame = frame
+        .eval
+        .frame_manager()
+        .get(frame.frame_id)
+        .expect("frame");
+    match live_frame
+        .find_window(live_frame.selected_window)
+        .expect("selected window")
+    {
+        neovm_core::window::Window::Leaf { window_end, .. } => *window_end,
+        other => panic!("expected leaf window, got {other:?}"),
+    }
+}
+
+fn source_budget_step(frame: &mut SyncFrame, form: &str) {
+    frame
+        .eval
+        .eval_str(form)
+        .unwrap_or_else(|error| panic!("{form}: {error:?}"));
+    frame
+        .engine
+        .layout_frame_rust(&mut frame.eval, frame.frame_id);
+    let incremental = selected_window_layout_trace(&frame.eval, &frame.engine, frame.frame_id);
+    let incremental_indices = enabled_row_indices(&frame.eval, &frame.engine, frame.frame_id);
+    let incremental_end = source_budget_window_end(frame);
+    assert!(incremental_end.is_current(), "{form}: window end is stale");
+    let mut fresh = LayoutEngine::new();
+    fresh.layout_frame_rust(&mut frame.eval, frame.frame_id);
+    assert_eq!(
+        incremental,
+        selected_window_layout_trace(&frame.eval, &fresh, frame.frame_id),
+        "{form}"
+    );
+    assert_eq!(
+        incremental_indices,
+        enabled_row_indices(&frame.eval, &fresh, frame.frame_id),
+        "{form}"
+    );
+    assert_eq!(
+        incremental_end,
+        source_budget_window_end(frame),
+        "{form}: complete window-end metadata"
+    );
+}
+
+#[test]
+fn source_budget_sync_edits_and_eob_match_complete_full_layouts() {
+    let _sync = SyncGuard::set(EditSyncMode::Sync);
+    let _budget = SourceBudgetGuard::set(true);
+    let text = tabbed_source(80);
+    let mut frame = SyncFrame::new(&text, end_of_line(&text, 15));
+    for form in [
+        "(insert \"x\")",
+        "(insert \"中\")",
+        "(insert \"\\n\")",
+        "(delete-region (- (point) 2) (point))",
+        "(put-text-property (line-beginning-position) (line-beginning-position 2) 'fontified nil)",
+    ] {
+        source_budget_step(&mut frame, form);
+    }
+    let short = tabbed_source(12);
+    let mut frame = SyncFrame::new(&short, 3);
+    for form in [
+        "(insert \"x\")",
+        "(goto-char (point-max))",
+        "(insert \"中\\n\")",
+    ] {
+        source_budget_step(&mut frame, form);
+    }
+}
+
+#[test]
+fn random_edits_with_source_budget_match_a_full_layout_after_every_step() {
+    let _budget = SourceBudgetGuard::set(true);
+    random_edits_in_mode(EditSyncMode::Sync);
+}
+
+#[test]
+fn source_budget_retry_does_not_repeat_unmarking_fontification_callbacks() {
+    let _sync = SyncGuard::set(EditSyncMode::Sync);
+    fn run(enabled: bool) -> (i64, u64) {
+        let _budget = SourceBudgetGuard::set(enabled);
+        crate::buffer_source::window_source::reset_sync_source_budget_retries_for_test();
+        let text = tabbed_source(80);
+        let mut frame = SyncFrame::new(&text, end_of_line(&text, 15));
+        frame
+            .eval
+            .eval_str(
+                "(progn (setq sync-budget-fontify-count 0) \
+                    (setq fontification-functions \
+                          (list (lambda (_position) \
+                                  (setq sync-budget-fontify-count \
+                                        (1+ sync-budget-fontify-count))))) \
+                    (delete-region (point) (1+ (point))))",
+            )
+            .unwrap();
+        frame
+            .engine
+            .layout_frame_rust(&mut frame.eval, frame.frame_id);
+        let count = frame
+            .eval
+            .eval_str("sync-budget-fontify-count")
+            .unwrap()
+            .as_fixnum()
+            .unwrap();
+        let incremental = selected_window_layout_trace(&frame.eval, &frame.engine, frame.frame_id);
+        let incremental_indices = enabled_row_indices(&frame.eval, &frame.engine, frame.frame_id);
+        let incremental_end = source_budget_window_end(&frame);
+        let retries = crate::buffer_source::window_source::sync_source_budget_retries_for_test();
+        // Reference geometry must not add a second preparation's callback
+        // counts to the physical-attempt count captured above.
+        frame
+            .eval
+            .eval_str("(setq fontification-functions nil)")
+            .unwrap();
+        let mut fresh = LayoutEngine::new();
+        fresh.layout_frame_rust(&mut frame.eval, frame.frame_id);
+        assert_eq!(
+            incremental,
+            selected_window_layout_trace(&frame.eval, &fresh, frame.frame_id)
+        );
+        assert_eq!(
+            incremental_indices,
+            enabled_row_indices(&frame.eval, &fresh, frame.frame_id)
+        );
+        assert!(incremental_end.is_current());
+        assert_eq!(incremental_end, source_budget_window_end(&frame));
+        (count, retries)
+    }
+    let (without_budget, off_retries) = run(false);
+    let (with_budget, on_retries) = run(true);
+    assert!(
+        without_budget > 0,
+        "the unmarking callback must be exercised"
+    );
+    assert_eq!(off_retries, 0);
+    assert_eq!(
+        on_retries, 1,
+        "the artificial horizon must exercise its local retry"
+    );
+    assert_eq!(with_budget, without_budget);
+}
+
+#[test]
+fn source_budget_retry_restores_remapped_background_frame_artifacts() {
+    let _sync = SyncGuard::set(EditSyncMode::Sync);
+    let _budget = SourceBudgetGuard::set(true);
+    let text = tabbed_source(80);
+    let mut frame = SyncFrame::new(&text, end_of_line(&text, 15));
+    frame
+        .eval
+        .buffer_manager_mut()
+        .current_buffer_mut()
+        .expect("buffer")
+        .set_buffer_local(
+            "face-remapping-alist",
+            Value::list(vec![Value::list(vec![
+                Value::symbol("default"),
+                Value::list(vec![Value::keyword("background"), Value::string("#245678")]),
+                Value::symbol("default"),
+            ])]),
+        );
+    frame
+        .engine
+        .layout_frame_rust(&mut frame.eval, frame.frame_id);
+    crate::buffer_source::window_source::reset_sync_source_budget_retries_for_test();
+    // Joining the next physical line drives this sync candidate past its old
+    // stop. The capped attempt must fail and restore its unpublished face fill.
+    frame
+        .eval
+        .eval_str("(delete-region (point) (1+ (point)))")
+        .unwrap();
+    frame
+        .engine
+        .layout_frame_rust(&mut frame.eval, frame.frame_id);
+    assert_eq!(
+        crate::buffer_source::window_source::sync_source_budget_retries_for_test(),
+        1
+    );
+    let incremental = frame
+        .engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("incremental frame")
+        .clone();
+    let selected = frame
+        .eval
+        .frame_manager()
+        .get(frame.frame_id)
+        .unwrap()
+        .selected_window;
+    let fills = incremental
+        .face_fills
+        .iter()
+        .filter(|fill| fill.window_id.get() == selected.0 as i64)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        fills.len(),
+        1,
+        "one accepted body must publish exactly one window background fill"
+    );
+    let incremental_end = source_budget_window_end(&frame);
+    let incremental_trace =
+        selected_window_layout_trace(&frame.eval, &frame.engine, frame.frame_id);
+    let mut fresh = LayoutEngine::new();
+    fresh.layout_frame_rust(&mut frame.eval, frame.frame_id);
+    let full = fresh
+        .last_frame_display_state
+        .as_ref()
+        .expect("reference frame");
+    assert_eq!(
+        incremental_trace,
+        selected_window_layout_trace(&frame.eval, &fresh, frame.frame_id)
+    );
+    assert_eq!(incremental_end, source_budget_window_end(&frame));
+    // Compare paint semantics by resolved face rather than attempt-local IDs.
+    let fill_trace = |state: &neomacs_display_protocol::glyph_matrix::FrameDisplayState| {
+        state
+            .face_fills
+            .iter()
+            .map(|fill| {
+                (
+                    fill.window_id,
+                    fill.row_role,
+                    fill.clip_rect,
+                    fill.bounds,
+                    state.faces.get(&fill.face_id).cloned().map(|mut face| {
+                        face.id = FaceId::new(0);
+                        face.default_resolved_font_id = face
+                            .default_resolved_font_id
+                            .map(|_| neomacs_display_protocol::font::ResolvedFontId(0));
+                        face
+                    }),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(fill_trace(&incremental), fill_trace(full));
+    assert_eq!(incremental.backgrounds.len(), full.backgrounds.len());
+    assert_eq!(incremental.borders.len(), full.borders.len());
+    assert_eq!(incremental.cursors.len(), full.cursors.len());
+    assert_eq!(incremental.scroll_bars.len(), full.scroll_bars.len());
+    assert_eq!(incremental.window_infos.len(), full.window_infos.len());
+    assert_eq!(incremental.phys_cursor, full.phys_cursor);
+    assert_eq!(
+        incremental.cursor_effects_by_window,
+        full.cursor_effects_by_window
+    );
+}
+
+#[cfg(test)]
+#[path = "edit_sync_source_budget_consumers.rs"]
+mod source_budget_consumers;
+
+#[cfg(test)]
+#[path = "edit_sync_source_budget_replay_retry.rs"]
+mod source_budget_replay_retry;

@@ -23,6 +23,7 @@ pub(crate) struct BufferSourceLoopRequestContext {
     buffer_id: BufferId,
     text_start_byte: usize,
     accessible_end: i64,
+    read_boundary: crate::buffer_source::window_source::BufferWindowReadBoundary,
     point_charpos: i64,
     selective_display: i32,
     tab_width: i32,
@@ -64,6 +65,8 @@ impl BufferSourceLoopRequestContext {
             buffer_id,
             text_start_byte,
             accessible_end,
+            read_boundary:
+                crate::buffer_source::window_source::BufferWindowReadBoundary::WindowRows,
             point_charpos,
             selective_display: params.selective_display,
             tab_width: params.tab_width,
@@ -80,6 +83,25 @@ impl BufferSourceLoopRequestContext {
             fill_column_indicator: params.fill_column_indicator,
             fill_column_indicator_char: params.fill_column_indicator_char,
         }
+    }
+
+    pub(crate) fn with_read_boundary(
+        mut self,
+        boundary: crate::buffer_source::window_source::BufferWindowReadBoundary,
+    ) -> Self {
+        self.read_boundary = boundary;
+        self
+    }
+
+    #[inline]
+    pub(crate) fn exhausted_sync_horizon(
+        self,
+        byte_idx: usize,
+        bytes_read: usize,
+        charpos: i64,
+    ) -> bool {
+        self.read_boundary
+            .exhausts_sync_horizon(byte_idx, bytes_read, charpos, self.accessible_end)
     }
 
     pub(crate) fn invisible_text_request<'a>(

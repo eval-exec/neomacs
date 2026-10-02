@@ -14,6 +14,19 @@ use neomacs_display_protocol::glyph_matrix::MatrixRow;
 use neomacs_display_protocol::glyph_matrix::{GlyphMatrix, GlyphRow, WindowMatrixEntry};
 use neomacs_display_protocol::types::{DisplayWindowId, Rect};
 
+/// Owned by one exclusive frame-build attempt, never shared across mutators.
+/// Numeric publication boundary and inactive-window geometry saved before an
+/// attempt begins. An active grid belongs solely to the failed attempt.
+pub(crate) struct OutputSourceWindowCheckpoint {
+    windows_len: usize,
+    current_window_id: u64,
+    current_pixel_bounds: Rect,
+    current_text_pixel_bounds: Rect,
+    current_text_clip_bounds: Rect,
+    current_selected: bool,
+    current_row: usize,
+}
+
 pub(crate) struct OutputWindowBuildState {
     windows: Vec<OutputWindowGridEntry>,
     current_row_grid: Option<OutputWindowRowGrid>,
@@ -37,6 +50,43 @@ impl OutputWindowBuildState {
             current_selected: false,
             current_row: 0,
         }
+    }
+
+    #[inline]
+    pub(crate) fn capture_source_attempt_checkpoint(&self) -> OutputSourceWindowCheckpoint {
+        assert!(
+            self.current_row_grid.is_none(),
+            "a source attempt must begin between completed windows"
+        );
+        OutputSourceWindowCheckpoint {
+            windows_len: self.windows.len(),
+            current_window_id: self.current_window_id,
+            current_pixel_bounds: self.current_pixel_bounds,
+            current_text_pixel_bounds: self.current_text_pixel_bounds,
+            current_text_clip_bounds: self.current_text_clip_bounds,
+            current_selected: self.current_selected,
+            current_row: self.current_row,
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn restore_source_attempt_checkpoint(
+        &mut self,
+        checkpoint: OutputSourceWindowCheckpoint,
+    ) {
+        assert_eq!(
+            self.windows.len(),
+            checkpoint.windows_len,
+            "source horizon retry must precede completed window publication"
+        );
+        self.current_row_grid = None;
+        self.current_window_id = checkpoint.current_window_id;
+        self.current_pixel_bounds = checkpoint.current_pixel_bounds;
+        self.current_text_pixel_bounds = checkpoint.current_text_pixel_bounds;
+        self.current_text_clip_bounds = checkpoint.current_text_clip_bounds;
+        self.current_selected = checkpoint.current_selected;
+        self.current_row = checkpoint.current_row;
     }
 
     pub(crate) fn reset(&mut self) {

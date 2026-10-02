@@ -24,6 +24,15 @@ use crate::window_layout::WindowLayoutBox;
 use neovm_core::buffer::BufferId;
 use neovm_core::window::{FrameId, WindowId};
 
+/// Attempt-owned numeric read policy. An artificial horizon retry keeps
+/// the exact admitted replay and reads its original window-row budget; it
+/// does not repeat outer Lisp preparation or change process/TLS policy.
+#[derive(Clone, Copy)]
+enum SyncSourceRead {
+    AllowHorizon,
+    UncappedRetry,
+}
+
 pub(crate) struct BufferWindowRenderRequest<'a, B>
 where
     B: LayoutBufferView,
@@ -91,13 +100,103 @@ where
         self
     }
 
+    /// A capped source that fails to synchronize retries here, after the
+    /// leaf's fontification and display-when preparation. Re-entering the
+    /// outer leaf would repeat fontification callbacks that leave fontified
+    /// nil. No tail/chrome/end snapshot was published by the failed body.
     pub(crate) fn render_into(
+        self,
+        mut context: BufferSourceRenderAttemptContext<'_, '_>,
+        text_buf: &mut Vec<u8>,
+        remaining_visibility_retries: usize,
+        cursor_only: Option<crate::incremental_layout::CursorOnlyReplay>,
+        scroll: Option<crate::incremental_layout::ScrollReplay>,
+    ) -> BufferSourceRenderAttemptOutcome {
+        let uses_sync_budget = scroll
+            .as_ref()
+            .is_some_and(|replay| replay.edit && replay.sync.is_some())
+            && crate::buffer_source::window_source::sync_source_budget_enabled();
+        if !uses_sync_budget {
+            return self.render_once(
+                context,
+                text_buf,
+                remaining_visibility_retries,
+                cursor_only,
+                scroll,
+                SyncSourceRead::AllowHorizon,
+            );
+        }
+        let full_request = Self {
+            frame_id: self.frame_id,
+            window_id: self.window_id,
+            params: self.params,
+            frame_params: self.frame_params,
+            layout_box: self.layout_box,
+            buffer_id: self.buffer_id,
+            buffer: self.buffer,
+            buffer_name: self.buffer_name,
+            reserve_right_border_col: self.reserve_right_border_col,
+            position_publication: self.position_publication,
+            resolved_window_start: self.resolved_window_start,
+            forward_viewport_measurement: self.forward_viewport_measurement.clone(),
+        };
+        let checkpoint = context
+            .output_mut()
+            .output_target()
+            .builder()
+            .capture_source_attempt_checkpoint(
+                neomacs_display_protocol::types::DisplayWindowId::new(self.params.window_id),
+            );
+        let outcome = self.render_once(
+            context.reborrow(),
+            text_buf,
+            remaining_visibility_retries,
+            cursor_only,
+            scroll,
+            SyncSourceRead::AllowHorizon,
+        );
+        if let BufferSourceRenderAttemptOutcome::SyncSourceHorizonExhausted { replay } = outcome {
+            #[cfg(test)]
+            crate::buffer_source::window_source::record_sync_source_budget_retry_for_test();
+            context
+                .output_mut()
+                .output_target()
+                .builder()
+                .restore_source_attempt_checkpoint(checkpoint);
+            // RetainedWindowKey does not own the buffer-local remapping
+            // alist. A raw remap can leave admitted prefix glyphs resolved
+            // against an older default/named face even though the namespace
+            // generation is current. This rare retry must freshly resolve
+            // every body face when remapping is present; restoring numeric
+            // face IDs cannot establish those glyphs' semantic freshness.
+            // Ordinary joined-line retries retain their exact edit replay.
+            let replay = replay.filter(|_| {
+                full_request
+                    .buffer
+                    .layout_buffer_local_value(crate::neovm_bridge::LayoutVar::FaceRemappingAlist)
+                    .is_none_or(|alist| alist.is_nil())
+            });
+            full_request.render_once(
+                context,
+                text_buf,
+                remaining_visibility_retries,
+                None,
+                replay.map(|replay| *replay),
+                SyncSourceRead::UncappedRetry,
+            )
+        } else {
+            outcome
+        }
+    }
+
+    fn render_once(
         self,
         context: BufferSourceRenderAttemptContext<'_, '_>,
         text_buf: &mut Vec<u8>,
         remaining_visibility_retries: usize,
         cursor_only: Option<crate::incremental_layout::CursorOnlyReplay>,
         scroll: Option<crate::incremental_layout::ScrollReplay>,
+        sync_source_read: SyncSourceRead,
     ) -> BufferSourceRenderAttemptOutcome {
         let Self {
             frame_id,
@@ -214,11 +313,20 @@ where
             // Exact partial reads do not run the viewport scrolling heuristic,
             // so there is no need to counterfeit point.  The request keeps the
             // real semantic point for line numbers and other row decoration.
-            BufferWindowSourceRequest::for_partial_walk(
+            let request = BufferWindowSourceRequest::for_partial_walk(
                 params,
                 scroll.walk_start,
                 geometry.max_rows,
-            )
+            );
+            if scroll.edit
+                && matches!(sync_source_read, SyncSourceRead::AllowHorizon)
+                && let Some(plan) = &scroll.sync
+                && crate::buffer_source::window_source::sync_source_budget_enabled()
+            {
+                request.with_sync_stop(crate::types::LayoutCharPos0::new(plan.stop_charpos as i64))
+            } else {
+                request
+            }
         } else {
             BufferWindowSourceRequest::from_window_params(params, geometry.max_rows)
         };

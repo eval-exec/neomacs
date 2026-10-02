@@ -758,7 +758,8 @@ impl BufferSourceOutputSetup {
             // trailing `:extend` fill (GNU extend_face_to_end_of_line): a fill
             // whose bg equals the frame bg is a visual no-op and is skipped.
             Color::from_pixel(default_face.face().bg),
-        );
+        )
+        .with_read_boundary(source.read_boundary());
         let fallback_metrics = default_face.metrics();
         let tail_context = BufferSourceTailRequestContext::new(
             params,
@@ -1083,6 +1084,21 @@ impl BufferSourceOutputSetup {
                 buffer,
                 buf_access,
             );
+            let post_loop = match post_loop {
+                crate::buffer_source::body_render::BufferSourceBodyRenderOutcome::Complete(outcome) => outcome,
+                crate::buffer_source::body_render::BufferSourceBodyRenderOutcome::SyncHorizonExhausted => {
+                    output.output_target().builder().finish_edit_sync();
+                    output.restore_retry_checkpoint(retry_checkpoint);
+                    // The body failed before sync installation consumed its
+                    // rows. Preserve the exact admitted replay for an uncapped
+                    // local retry; restore the chrome taken before this walk.
+                    scroll.chrome = retained_chrome;
+                    scroll.chrome_memo = chrome_memo;
+                    return BufferSourceRenderAttemptOutcome::SyncSourceHorizonExhausted {
+                        replay: Some(Box::new(scroll)),
+                    };
+                }
+            };
             let (mut output, evaluator) = output.into_parts();
             // The rows below the edit move by what the walk produced; a walk
             // that never synchronized ran to the window bottom instead and
@@ -1474,6 +1490,17 @@ impl BufferSourceOutputSetup {
             buffer,
             buf_access,
         );
+
+        let post_loop = match post_loop {
+            crate::buffer_source::body_render::BufferSourceBodyRenderOutcome::Complete(outcome) => outcome,
+            crate::buffer_source::body_render::BufferSourceBodyRenderOutcome::SyncHorizonExhausted => {
+                // A replay-free source has no sync horizon. Retain a complete
+                // retry route if a future caller violates that admission rule.
+                output.output_target().builder().finish_edit_sync();
+                output.restore_retry_checkpoint(retry_checkpoint);
+                return BufferSourceRenderAttemptOutcome::SyncSourceHorizonExhausted { replay: None };
+            }
+        };
 
         let retry_plan = BufferSourceRetryPlan::from_post_loop(
             tail_context.params.window_id,

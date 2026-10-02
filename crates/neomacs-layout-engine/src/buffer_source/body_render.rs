@@ -48,6 +48,13 @@ use crate::window_output::{
 };
 use neovm_core::emacs_core::image_catalog::ImageScaleEnvironment;
 
+/// Owned by one exclusively borrowed window-render attempt. This result
+/// retains no live Lisp cache or state shared between independent mutators.
+pub(crate) enum BufferSourceBodyRenderOutcome {
+    Complete(BufferSourcePostLoopRenderOutcome),
+    SyncHorizonExhausted,
+}
+
 pub(crate) struct BufferSourceWalkSetupRequest<'a> {
     window_start: i64,
     content_x: f32,
@@ -338,7 +345,7 @@ impl BufferSourceWalkSetup {
         params: &WindowParams,
         overlay_text_row_context: BufferOverlayStringTextRowRenderContext<'request>,
         buffer: &B,
-    ) {
+    ) -> crate::buffer_source::loop_render::BufferSourceVisibleLoopOutcome {
         let mut source_walk = BufferSourceWalk::new_for_window(
             loop_context.buffer_id(),
             buffer,
@@ -387,7 +394,7 @@ impl BufferSourceWalkSetup {
             params,
             state.active_face_state,
             buffer,
-        );
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -456,8 +463,8 @@ impl BufferSourceWalkSetup {
         overlay_text_row_context: BufferOverlayStringTextRowRenderContext<'request>,
         buffer: &B,
         buf_access: &RustBufferAccess<'buf, B>,
-    ) -> BufferSourcePostLoopRenderOutcome {
-        self.render_visible_steps(
+    ) -> BufferSourceBodyRenderOutcome {
+        let loop_outcome = self.render_visible_steps(
             state,
             row_prelude_context,
             loop_context,
@@ -468,7 +475,11 @@ impl BufferSourceWalkSetup {
             buffer,
         );
 
-        self.render_tail_and_decide_retry(
+        if loop_outcome == crate::buffer_source::loop_render::BufferSourceVisibleLoopOutcome::SyncHorizonExhausted {
+            return BufferSourceBodyRenderOutcome::SyncHorizonExhausted;
+        }
+
+        BufferSourceBodyRenderOutcome::Complete(self.render_tail_and_decide_retry(
             state.source_render.reborrow(),
             state.face_ids,
             state.line_numbers,
@@ -480,7 +491,7 @@ impl BufferSourceWalkSetup {
             state.active_face_state,
             buffer,
             buf_access,
-        )
+        ))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -503,7 +514,7 @@ impl BufferSourceWalkSetup {
         overlay_text_row_context: BufferOverlayStringTextRowRenderContext<'request>,
         buffer: &B,
         buf_access: &RustBufferAccess<'buf, B>,
-    ) -> (WindowOutputEmitter, BufferSourcePostLoopRenderOutcome) {
+    ) -> (WindowOutputEmitter, BufferSourceBodyRenderOutcome) {
         let mut output_emitter = output.begin_text_window_output(begin_request);
         output_emitter.set_query_target(params.query_target);
         output_emitter.set_collect_query_restarts(

@@ -46,6 +46,14 @@ use neomacs_display_protocol::types::{Color, DisplayFrameId, DisplayWindowId, Re
 
 pub(crate) const FRAME_CHROME_WINDOW_ID: i64 = 0;
 
+/// Owned by one exclusive frame-build attempt, never shared across mutators.
+/// SourceBudget's unpublished attempt checkpoint. The face arena remains the
+/// same append-only attempt lineage; unused resolved faces change no geometry.
+pub(crate) struct OutputSourceAttemptCheckpoint {
+    frame: crate::output::frame_state::OutputSourceFrameCheckpoint,
+    window: crate::output::window_state::OutputSourceWindowCheckpoint,
+}
+
 pub(crate) struct DisplayOutputBuilder {
     window_state: OutputWindowBuildState,
     frame_state: OutputFrameBuildState,
@@ -77,6 +85,12 @@ impl DisplayOutputBuilder {
         self.edit_sync_reached = None;
     }
 
+    /// Numeric observation used only at an artificial sync source boundary.
+    #[inline]
+    pub(crate) fn has_edit_sync_reached(&self) -> bool {
+        self.edit_sync_reached.is_some()
+    }
+
     /// Disarm the synchronization and report where the walk reached it.
     pub(crate) fn finish_edit_sync(
         &mut self,
@@ -104,6 +118,33 @@ impl DisplayOutputBuilder {
         self.edit_sync = None;
         self.edit_sync_reached = Some(reached);
         true
+    }
+
+    #[inline]
+    pub(crate) fn capture_source_attempt_checkpoint(
+        &self,
+        window_id: DisplayWindowId,
+    ) -> OutputSourceAttemptCheckpoint {
+        OutputSourceAttemptCheckpoint {
+            frame: self
+                .frame_state
+                .capture_source_attempt_checkpoint(window_id),
+            window: self.window_state.capture_source_attempt_checkpoint(),
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn restore_source_attempt_checkpoint(
+        &mut self,
+        checkpoint: OutputSourceAttemptCheckpoint,
+    ) {
+        self.frame_state
+            .restore_source_attempt_checkpoint(checkpoint.frame);
+        self.window_state
+            .restore_source_attempt_checkpoint(checkpoint.window);
+        self.edit_sync = None;
+        self.edit_sync_reached = None;
     }
 
     pub(crate) fn set_face_attempt(&mut self, face_attempt: FrameFaceAttempt) {

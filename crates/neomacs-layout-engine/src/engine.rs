@@ -4464,7 +4464,8 @@ impl LayoutEngine {
                     window_end_attempt,
                 };
             }
-            BufferSourceRenderAttemptOutcome::ReplayMispredicted => {
+            BufferSourceRenderAttemptOutcome::ReplayMispredicted
+            | BufferSourceRenderAttemptOutcome::SyncSourceHorizonExhausted { .. } => {
                 if let Some(attempt) = window_end_attempt.take() {
                     evaluator.reject_redisplay_window_end_attempt(attempt);
                 }

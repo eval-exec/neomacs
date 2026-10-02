@@ -133,7 +133,7 @@ pub(crate) struct BufferSourceRedisplayPublishRequest {
 // Built and consumed once per layout attempt on the frame hot path; boxing
 // the large variant would add a heap allocation per attempt.
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub(crate) enum BufferSourceRenderAttemptOutcome {
     Skipped,
     /// Lisp evaluated by a buffer-owned display source changed the window's
@@ -162,6 +162,14 @@ pub(crate) enum BufferSourceRenderAttemptOutcome {
     /// up with the reused rows. The caller must re-lay this window with no
     /// replay plan; the checkpoint was already restored.
     ReplayMispredicted,
+    /// The copied sync horizon ended before exact synchronization. The window
+    /// render request consumes this before tail/chrome/end publication and
+    /// retries using the same prepared buffer, without repeating Lisp hooks.
+    SyncSourceHorizonExhausted {
+        /// Still-unconsumed replay; boxed only on rare artificial exhaustion.
+        /// No eager per-frame clone or new Lisp owner/cache is introduced.
+        replay: Option<Box<crate::incremental_layout::ScrollReplay>>,
+    },
     Finished {
         redisplay_positions: TextWindowRedisplayPositions,
         query_restart_rows: Vec<(neovm_core::buffer::LispCharPos1, i64)>,
@@ -205,6 +213,10 @@ impl<'emit> BufferSourceOutputState<'emit> {
         evaluator: &'emit mut Context,
     ) -> Self {
         Self { output, evaluator }
+    }
+
+    fn reborrow(&mut self) -> BufferSourceOutputState<'_> {
+        BufferSourceOutputState::from_parts(self.output.reborrow(), self.evaluator)
     }
 
     pub(crate) fn capture_retry_checkpoint(&mut self) -> TextWindowOutputRetryCheckpoint {
@@ -293,6 +305,19 @@ impl<'a, 'face> BufferSourceRenderAttemptContext<'a, 'face> {
             face_attempt,
             window_snapshots,
         )
+    }
+
+    /// Borrow the same prepared leaf for one unpublished physical retry. The
+    /// face attempt is the existing attempt-owned lineage; no Lisp cache or
+    /// cross-mutator state is created by this borrow.
+    pub(crate) fn reborrow(&mut self) -> BufferSourceRenderAttemptContext<'_, 'face> {
+        BufferSourceRenderAttemptContext {
+            output: self.output.reborrow(),
+            font_metrics: self.font_metrics,
+            face_resolver: self.face_resolver,
+            face_attempt: self.face_attempt.clone(),
+            window_snapshots: self.window_snapshots,
+        }
     }
 
     pub(crate) fn output_mut(&mut self) -> &mut BufferSourceOutputState<'a> {

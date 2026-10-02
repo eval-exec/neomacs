@@ -85,6 +85,8 @@ pub(super) const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOMACS_EDIT_SYNC_STILL",
     // Omit zero-dy synchronized-row shift ledgers (`off` default, `on`).
     "NEOMACS_EDIT_SYNC_SHIFT_SKIP",
+    // Sync source-copy horizon with one local full retry (`off` default, `on`).
+    "NEOMACS_EDIT_SYNC_SOURCE_BUDGET",
     // Mode-line source interval reads (`off` default, `on`).
     "NEOMACS_MODE_LINE_PROP_BORROW",
     // Single-copy mode-line source slices (`off` default, `on`).

@@ -12,6 +12,25 @@ use neomacs_display_protocol::glyph_matrix::{
 use neomacs_display_protocol::types::{Color, DisplayFrameId, DisplayWindowId};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
+/// Owned by one exclusive frame-build attempt, never shared across mutators.
+/// Only source-attempt-owned paint/cursor state may change before the tail.
+/// Lengths retain already published siblings without cloning their matrices or
+/// artifact vectors; the saved cursor/effect values carry no Lisp references.
+pub(crate) struct OutputSourceFrameCheckpoint {
+    backgrounds_len: usize,
+    face_fills_len: usize,
+    borders_len: usize,
+    cursors_len: usize,
+    scroll_bars_len: usize,
+    window_infos_len: usize,
+    transition_hints_len: usize,
+    phys_cursor: Option<PhysCursor>,
+    cursor_window_id: DisplayWindowId,
+    // Usually absent: this window has not emitted into this frame yet. Box the
+    // rare saved profile so its large numeric config is not copied on-stack.
+    cursor_effects: Option<Box<EffectsConfig>>,
+}
+
 pub(crate) struct OutputFrameBuildState {
     backgrounds: Vec<BackgroundItem>,
     face_fills: Vec<FaceFillItem>,
@@ -82,6 +101,64 @@ impl OutputFrameBuildState {
             background_alpha: 1.0,
             no_accept_focus: false,
         }
+    }
+
+    #[inline]
+    pub(crate) fn capture_source_attempt_checkpoint(
+        &self,
+        cursor_window_id: DisplayWindowId,
+    ) -> OutputSourceFrameCheckpoint {
+        OutputSourceFrameCheckpoint {
+            backgrounds_len: self.backgrounds.len(),
+            face_fills_len: self.face_fills.len(),
+            borders_len: self.borders.len(),
+            cursors_len: self.cursors.len(),
+            scroll_bars_len: self.scroll_bars.len(),
+            window_infos_len: self.window_infos.len(),
+            transition_hints_len: self.transition_hints.len(),
+            phys_cursor: self.phys_cursor.clone(),
+            cursor_window_id,
+            cursor_effects: self
+                .cursor_effects_by_window
+                .get(&cursor_window_id)
+                .map(|effects| Box::new(effects.clone())),
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn restore_source_attempt_checkpoint(
+        &mut self,
+        checkpoint: OutputSourceFrameCheckpoint,
+    ) {
+        // Horizon failure returns before install_body/tail/chrome publication.
+        // Do not extend this guard past that boundary: published window info or
+        // geometry must use the existing outer continuation instead.
+        assert_eq!(
+            self.window_infos.len(),
+            checkpoint.window_infos_len,
+            "source horizon retry must precede window metadata publication"
+        );
+        self.backgrounds.truncate(checkpoint.backgrounds_len);
+        self.face_fills.truncate(checkpoint.face_fills_len);
+        self.borders.truncate(checkpoint.borders_len);
+        self.cursors.truncate(checkpoint.cursors_len);
+        self.scroll_bars.truncate(checkpoint.scroll_bars_len);
+        self.transition_hints
+            .truncate(checkpoint.transition_hints_len);
+        self.phys_cursor = checkpoint.phys_cursor;
+        match checkpoint.cursor_effects {
+            Some(effects) => {
+                self.cursor_effects_by_window
+                    .insert(checkpoint.cursor_window_id, *effects);
+            }
+            None => {
+                self.cursor_effects_by_window
+                    .remove(&checkpoint.cursor_window_id);
+            }
+        }
+        // Other windows' profiles, metadata, pending geometry and all frame
+        // identity/metric fields are untouched by the pre-tail body attempt.
     }
 
     pub(crate) fn reset(&mut self) {

@@ -2499,3 +2499,136 @@ fn one_logical_mouse_face_keeps_multiple_face_paint_batches() {
         Some(PointerDrawMode::Face(FaceId::new(10)))
     );
 }
+
+#[test]
+fn source_attempt_checkpoint_preserves_prior_frame_artifacts_and_discards_failed_grid() {
+    use neomacs_display_protocol::effect_config::EffectsConfig;
+    use neomacs_display_protocol::types::{Color, DisplayWindowId};
+    let bounds = Rect::new(0.0, 0.0, 640.0, 48.0);
+    let original_cursor = PhysCursor {
+        window_id: DisplayWindowId::new(1),
+        charpos: 0,
+        row: 0,
+        col: 0,
+        slot_id: DisplaySlotId {
+            window_id: DisplayWindowId::new(1),
+            row: 0,
+            col: 0,
+        },
+        x: 0.0,
+        y: 0.0,
+        width: 8.0,
+        height: 16.0,
+        ascent: 12.0,
+        style: CursorStyle::FilledBox,
+        color: Color::WHITE,
+        cursor_fg: Color::BLACK,
+    };
+    fn add_artifacts(builder: &mut DisplayOutputBuilder, window_id: i64, bounds: Rect) {
+        builder.add_output_background(bounds, Color::BLACK);
+        builder.add_output_face_fill(FaceFillItem {
+            window_id: DisplayWindowId::new(window_id),
+            row_role: GlyphRowRole::Text,
+            clip_rect: Some(bounds),
+            bounds,
+            face_id: FaceId::new(0),
+        });
+        builder.add_output_border(window_id, 0.0, 0.0, 1.0, 48.0, Color::WHITE);
+        builder.add_output_cursor(
+            window_id,
+            DisplaySlotId {
+                window_id: DisplayWindowId::new(window_id),
+                row: 0,
+                col: 0,
+            },
+            0.0,
+            0.0,
+            8.0,
+            16.0,
+            CursorStyle::Hollow,
+            Color::WHITE,
+        );
+        builder.add_output_scroll_bar(ScrollBarItem {
+            window_id: DisplayWindowId::new(window_id),
+            row_role: GlyphRowRole::Text,
+            clip_rect: Some(bounds),
+            horizontal: false,
+            x: 632.0,
+            y: 0.0,
+            width: 8.0,
+            height: 48.0,
+            position: 0,
+            portion: 10,
+            whole: 100,
+            thumb_start: 0.0,
+            thumb_size: 4.8,
+            track_color: Color::BLACK,
+            thumb_color: Color::WHITE,
+        });
+    }
+    let mut builder = DisplayOutputBuilder::new();
+    add_artifacts(&mut builder, 1, bounds);
+    builder.install_output_frame_artifact(OutputFrameArtifactInstallRequest::PhysCursor(
+        original_cursor.clone(),
+    ));
+    builder.install_output_frame_state(OutputFrameStateInstallRequest::cursor_effects(
+        DisplayWindowId::new(1),
+        EffectsConfig::default(),
+    ));
+    builder.install_output_frame_state(OutputFrameStateInstallRequest::cursor_effects(
+        DisplayWindowId::new(2),
+        EffectsConfig::default(),
+    ));
+    let checkpoint = builder.capture_source_attempt_checkpoint(DisplayWindowId::new(2));
+    builder.begin_window(2, 3, 80, bounds, false);
+    builder.begin_row(0, GlyphRowRole::Text);
+    write_char_to_current_row(&mut builder, 'x', FaceId::new(0), 0);
+    add_artifacts(&mut builder, 2, bounds);
+    let mut failed_cursor = original_cursor.clone();
+    failed_cursor.window_id = DisplayWindowId::new(2);
+    failed_cursor.slot_id.window_id = DisplayWindowId::new(2);
+    builder.install_output_frame_artifact(OutputFrameArtifactInstallRequest::PhysCursor(
+        failed_cursor,
+    ));
+    let mut changed = EffectsConfig::default();
+    changed.cursor_glow.enabled = true;
+    builder.install_output_frame_state(OutputFrameStateInstallRequest::cursor_effects(
+        DisplayWindowId::new(2),
+        changed,
+    ));
+    builder.restore_source_attempt_checkpoint(checkpoint);
+    // The common absent-profile case must remove the attempted insertion.
+    let absent = builder.capture_source_attempt_checkpoint(DisplayWindowId::new(3));
+    builder.install_output_frame_state(OutputFrameStateInstallRequest::cursor_effects(
+        DisplayWindowId::new(3),
+        EffectsConfig::default(),
+    ));
+    builder.restore_source_attempt_checkpoint(absent);
+    builder.begin_window(2, 3, 80, bounds, false);
+    builder.begin_row(0, GlyphRowRole::Text);
+    write_char_to_current_row(&mut builder, 'y', FaceId::new(0), 0);
+    builder.end_row();
+    builder.end_window();
+    let state = builder.finish(80, 3, 8.0, 16.0);
+    assert_eq!(state.backgrounds.len(), 1);
+    assert_eq!(state.face_fills.len(), 1);
+    assert_eq!(state.borders.len(), 1);
+    assert_eq!(state.cursors.len(), 1);
+    assert_eq!(state.scroll_bars.len(), 1);
+    assert_eq!(state.phys_cursor, Some(original_cursor));
+    assert_eq!(state.cursor_effects_by_window.len(), 2);
+    assert_eq!(
+        state.cursor_effects_by_window[&DisplayWindowId::new(1)],
+        EffectsConfig::default()
+    );
+    assert_eq!(
+        state.cursor_effects_by_window[&DisplayWindowId::new(2)],
+        EffectsConfig::default()
+    );
+    assert_eq!(state.window_matrices.len(), 1);
+    assert_eq!(state.window_matrices[0].window_id, DisplayWindowId::new(2));
+    assert_eq!(
+        state.window_matrices[0].matrix.rows[0].glyphs[GlyphArea::Text.index()][0].glyph_type,
+        GlyphType::Char { ch: 'y' }
+    );
+}

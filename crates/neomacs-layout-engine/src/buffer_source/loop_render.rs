@@ -15,6 +15,14 @@ use crate::display_row::transition::DisplayRowTransitionContinuation;
 use crate::neovm_bridge::LayoutBufferView;
 use crate::types::WindowParams;
 
+/// Numeric result owned by one exclusive source walk; it carries no buffer or
+/// Lisp references and introduces no shared mutable state between mutators.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BufferSourceVisibleLoopOutcome {
+    Complete,
+    SyncHorizonExhausted,
+}
+
 impl<'rows, 'emit, 'surface> BufferSourceLoopMutableState<'rows, 'emit, 'surface> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn render_visible_steps<'request, B: LayoutBufferView>(
@@ -27,7 +35,8 @@ impl<'rows, 'emit, 'surface> BufferSourceLoopMutableState<'rows, 'emit, 'surface
         params: &'request WindowParams,
         active_face_state: &mut DisplayRowActiveFaceState,
         buffer: &B,
-    ) where
+    ) -> BufferSourceVisibleLoopOutcome
+    where
         'surface: 'request,
     {
         // P4.8(b): walk-scoped, because a refusal window is a claim about
@@ -129,6 +138,27 @@ impl<'rows, 'emit, 'surface> BufferSourceLoopMutableState<'rows, 'emit, 'surface
             }
         }
 
+        if loop_context.exhausted_sync_horizon(
+            self.progress.byte_idx(),
+            text.len(),
+            self.progress.charpos(),
+        ) {
+            // An artificial byte boundary is never a semantic EOB. Accept it
+            // only if the genuine row transition recorded exact sync first;
+            // otherwise retry before the EOB prelude or tail runs.
+            let synchronized =
+                self.source_render
+                    .output_render()
+                    .with_output_target_parts(|mut output, _, _| {
+                        output.builder().has_edit_sync_reached()
+                    });
+            return if synchronized {
+                BufferSourceVisibleLoopOutcome::Complete
+            } else {
+                BufferSourceVisibleLoopOutcome::SyncHorizonExhausted
+            };
+        }
+
         // A trailing newline begins the next visual row at the same moment it
         // consumes the final source byte.  That row is still a real, visible
         // EOB row, but the byte-driven loop above cannot enter once more to
@@ -145,6 +175,7 @@ impl<'rows, 'emit, 'surface> BufferSourceLoopMutableState<'rows, 'emit, 'surface
             self.row_carryover.line_numbers.mark_beyond_accessible_end();
             self.render_row_prelude(row_prelude_context, params, active_face_state, buffer);
         }
+        BufferSourceVisibleLoopOutcome::Complete
     }
 
     pub(crate) fn render_row_prelude<B: LayoutBufferView>(
