@@ -38,7 +38,7 @@
 //! | Knob | Values (default) | Effect |
 //! |------|------------------|--------|
 //! | `NEOVM_REGEX_DFA` | `on` (default), `off`, `verify` | Candidate existence filter ([`DfaMode`]). |
-//! | `NEOVM_REGEX_DFA_COLD` | `off` (default), `on` | Defer the lease; admit two nonempty failures during a scan, or one when the whole search fails ([`cold_path_enabled`]). |
+//! | `NEOVM_REGEX_DFA_COLD` | `on` (default), `off` | Defer the lease; admit two nonempty failures during a scan, or one when the whole search fails ([`cold_path_enabled`]). |
 //! | `NEOVM_REGEX_DFA_STATS` | unset (default), `1` | Print this thread's [`DfaStats`] on stderr at exit with the filter on. |
 //! | `NEOVM_REGEX_DFA_FIRST_STEP` | `off` (default), `on` | Reject cached prefixes of at most eight bytes inline; verify also checks the predicate against the matcher ([`first_step_enabled`]). |
 
@@ -2059,7 +2059,8 @@ pub(crate) fn with_cold_path<R>(on: bool, f: impl FnOnce() -> R) -> R {
     f()
 }
 
-/// `NEOVM_REGEX_DFA_COLD=on` (default off): a never-built slot pays no lease
+/// `NEOVM_REGEX_DFA_COLD` (default on; `off` restores the eager lease): a
+/// never-built slot pays no lease
 /// or candidate wrapper until enough failed candidates justify a filter.
 /// An isolated miss followed by a match does not heat the pattern. Two
 /// nonempty failures in one scan are admitted together; a lone nonempty
@@ -2075,7 +2076,7 @@ pub(crate) fn cold_path_enabled() -> bool {
     }
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| {
-        let on = super::regex_knob_on(std::env::var("NEOVM_REGEX_DFA_COLD").ok().as_deref());
+        let on = !super::regex_knob_off(std::env::var("NEOVM_REGEX_DFA_COLD").ok().as_deref());
         tracing::debug!(target: "neovm::regex", on, "NEOVM_REGEX_DFA_COLD");
         on
     })
