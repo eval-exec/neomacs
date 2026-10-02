@@ -64,3 +64,117 @@ fn oracle_aot_battery_signals() {
     ]];
     crate::common::assert_oracle_parity_under_aot_expect(form, expect);
 }
+/// GNU Bcall reads the symbol's current function cell (src/bytecode.c:806);
+/// Ffset replaces it (src/data.c:897). An old preload object remains callable
+/// through an explicit saved reference after the name is redefined and GC runs.
+#[test]
+fn oracle_aot_battery_preloaded_function_redefinition() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"
+(let ((original (symbol-function 'flatten-tree)))
+  (unwind-protect
+      (progn
+        (dotimes (_ 64) (flatten-tree '(1 (2 3))))
+        (let ((before (flatten-tree '(1 (2 . 3) nil 4))))
+          (fset 'flatten-tree (lambda (tree) (list 'redefined tree)))
+          (garbage-collect)
+          (let ((after (flatten-tree '(1 (2 . 3) nil 4)))
+                (saved (funcall original '(1 (2 . 3) nil 4))))
+            (fset 'flatten-tree original)
+            (list before after saved (flatten-tree '(1 (2 . 3) nil 4))))))
+    (fset 'flatten-tree original)))
+"#;
+    let expect = expect_test::expect![[
+        r#""OK ((1 2 3 4) (redefined (1 (2 . 3) nil 4)) (1 2 3 4) (1 2 3 4))""#
+    ]];
+    crate::common::assert_oracle_parity_under_aot_expect(form, expect);
+}
+
+/// GNU advice-add replaces the function cell with its wrapper (nadvice.el:509);
+/// AOT must follow that definition and the restored preload object after remove.
+#[test]
+fn oracle_aot_battery_preloaded_function_advice() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"
+(let ((original (symbol-function 'flatten-tree)) (calls 0))
+  (let ((wrapper (lambda (function tree)
+                   (setq calls (1+ calls))
+                   (cons 'advised (funcall function tree)))))
+    (unwind-protect
+        (progn
+          (dotimes (_ 64) (flatten-tree '(1 (2 3))))
+          (let ((before (flatten-tree '(1 (2 3)))))
+            (advice-add 'flatten-tree :around wrapper)
+            (let ((during (flatten-tree '(1 (2 3))))
+                  (installed (not (null (advice-member-p wrapper 'flatten-tree)))))
+              (advice-remove 'flatten-tree wrapper)
+              (list before during (flatten-tree '(1 (2 3))) calls installed
+                    (not (null (advice-member-p wrapper 'flatten-tree)))
+                    (eq (symbol-function 'flatten-tree) original)))))
+      (advice-remove 'flatten-tree wrapper)
+      (fset 'flatten-tree original))))
+"#;
+    let expect = expect_test::expect![[r#""OK ((1 2 3) (advised 1 2 3) (1 2 3) 1 t nil t)""#]];
+    crate::common::assert_oracle_parity_under_aot_expect(form, expect);
+}
+
+/// GNU debug-on-entry is before advice at depth -100 (debug.el:689), which
+/// calls the dynamically bound debugger with debug and a backtrace-base pair.
+#[test]
+fn oracle_aot_battery_preloaded_function_debug_on_entry() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"
+(progn
+  (require 'debug)
+  (let ((original (symbol-function 'flatten-tree)) (log nil))
+    (let ((debugger (lambda (&rest arguments) (push arguments log) nil)))
+      (unwind-protect
+          (progn
+            (dotimes (_ 64) (flatten-tree '(1 (2 3))))
+            (let ((before (flatten-tree '(1 (2 3)))))
+              (debug-on-entry 'flatten-tree)
+              (let ((during (flatten-tree '(1 (2 3))))
+                    (inhibited (let ((inhibit-debug-on-entry t))
+                                 (flatten-tree '(1 (2 3))))))
+                (cancel-debug-on-entry 'flatten-tree)
+                (list before during inhibited (flatten-tree '(1 (2 3)))
+                      (nreverse log)))))
+        (cancel-debug-on-entry 'flatten-tree)
+        (fset 'flatten-tree original)))))
+"#;
+    let expect = expect_test::expect![[
+        r#""OK ((1 2 3) (1 2 3) (1 2 3) (1 2 3) ((debug :backtrace-base (1 . debug--implement-debug-on-entry))))""#
+    ]];
+    crate::common::assert_oracle_parity_under_aot_expect(form, expect);
+}
+
+/// GNU records Bcall's called symbol and the call's original arguments before
+/// executing it (src/bytecode.c:795). Inspect both the preload function's live
+/// frame and its compiled caller while an error handler is running.
+#[test]
+fn oracle_aot_battery_preloaded_function_backtrace() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"
+(progn
+  (defalias 'neovm--aot-frame-caller (byte-compile (lambda (x) (delete-dups x))))
+  (dotimes (_ 64) (neovm--aot-frame-caller (list 1 2 1)))
+  (let ((frames nil) (base nil))
+    (list
+     (condition-case err
+         (handler-bind
+             ((wrong-type-argument
+               (lambda (_err)
+                 (mapbacktrace
+                  (lambda (_evaluated function arguments _flags)
+                    (when (memq function '(delete-dups neovm--aot-frame-caller))
+                      (push (list function arguments) frames))))
+                 (setq base (backtrace-frame 0 'delete-dups)))))
+           (neovm--aot-frame-caller 5))
+       (error err))
+     (nreverse frames) base)))
+"#;
+    let expect = expect_test::expect![[
+        r#""OK ((wrong-type-argument sequencep 5) ((delete-dups (5)) (neovm--aot-frame-caller (5))) (t delete-dups 5))""#
+    ]];
+    crate::common::assert_oracle_parity_under_aot_expect(form, expect);
+}

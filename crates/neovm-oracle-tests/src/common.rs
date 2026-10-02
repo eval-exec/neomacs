@@ -1138,13 +1138,57 @@ pub(crate) fn aot_battery_enabled() -> bool {
     )
 }
 
-/// The knob matrix the AOT battery runs Neomacs under (P4.2 A7): AOT alone,
-/// AOT with every compilable function tiered at once, and AOT with every JIT
-/// speculation guard failing (the forced-deopt soak).
+/// The knob matrix the AOT battery runs Neomacs under (P4.2 A5/A7): AOT
+/// alone, immediate tier-up, forced deopt, and the low-threshold cross
+/// product of AOT re-tier and the T2 spine. These arms pin both switches
+/// so an outer test environment cannot silently remove a matrix case.
+/// The T2 window is shorter than the battery's warm-up; synchronous
+/// compilation keeps the served tier independent of worker scheduling.
 const AOT_BATTERY_ENVS: &[&[(&str, &str)]] = &[
-    &[("NEOVM_AOT", "1")],
-    &[("NEOVM_AOT", "1"), ("NEOVM_JIT_THRESHOLD", "1")],
-    &[("NEOVM_AOT", "1"), ("NEOVM_JIT_FORCE_DEOPT", "1")],
+    &[
+        ("NEOVM_AOT", "1"),
+        ("NEOVM_AOT_RETIER", "off"),
+        ("NEOVM_JIT_TIER2", "off"),
+    ],
+    &[
+        ("NEOVM_AOT", "1"),
+        ("NEOVM_AOT_RETIER", "off"),
+        ("NEOVM_JIT_TIER2", "off"),
+        ("NEOVM_JIT_THRESHOLD", "1"),
+    ],
+    &[
+        ("NEOVM_AOT", "1"),
+        ("NEOVM_AOT_RETIER", "off"),
+        ("NEOVM_JIT_TIER2", "off"),
+        ("NEOVM_JIT_FORCE_DEOPT", "1"),
+    ],
+    &[
+        ("NEOVM_AOT", "1"),
+        ("NEOVM_AOT_RETIER", "off"),
+        ("NEOVM_JIT_TIER2", "on"),
+        ("NEOVM_JIT_THRESHOLD", "1"),
+        ("NEOVM_JIT_T2_WINDOW", "16"),
+        ("NEOVM_JIT_T2_STABLE", "1"),
+        ("NEOVM_JIT_T2_BUDGET", "0"),
+        ("NEOVM_JIT_BG", "sync"),
+    ],
+    &[
+        ("NEOVM_AOT", "1"),
+        ("NEOVM_AOT_RETIER", "on"),
+        ("NEOVM_JIT_TIER2", "off"),
+        ("NEOVM_JIT_THRESHOLD", "1"),
+        ("NEOVM_JIT_BG", "sync"),
+    ],
+    &[
+        ("NEOVM_AOT", "1"),
+        ("NEOVM_AOT_RETIER", "on"),
+        ("NEOVM_JIT_TIER2", "on"),
+        ("NEOVM_JIT_THRESHOLD", "1"),
+        ("NEOVM_JIT_T2_WINDOW", "16"),
+        ("NEOVM_JIT_T2_STABLE", "1"),
+        ("NEOVM_JIT_T2_BUDGET", "0"),
+        ("NEOVM_JIT_BG", "sync"),
+    ],
 ];
 
 /// `aot_loads=N` from the last `[neovm-jit-final]` line of a JIT stats file.
