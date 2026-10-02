@@ -3021,8 +3021,9 @@ pub(crate) fn parse_regalloc_choice(value: Option<&str>) -> Option<RegallocChoic
     }
 }
 
-/// The allocator policy: a forced choice wins; otherwise the full allocator
-/// for a `Full` policy or a body that can run unboundedly per entry -- a back
+/// The allocator policy: a forced choice wins, then a nonzero bytecode-op cap
+/// selects full allocation for every body at or below it. Larger bodies retain
+/// the original policy: full for a `Full` request or unbounded work -- a back
 /// edge, or a self-recursive call (see `regalloc_for_shape`) -- so its code
 /// quality is worth the compile, and the fast one for
 /// a straight-line or branchy body (bounded work per entry — and it re-tiers
@@ -3032,12 +3033,19 @@ pub(crate) fn choose_regalloc(
     policy: RegallocPolicy,
     has_back_edge: bool,
     call_heavy: bool,
+    op_count: usize,
+    small_max: usize,
 ) -> RegallocChoice {
     if let Some(forced) = forced {
         return forced;
     }
-    // A call-heavy body's runtime is its shim calls, whatever it does around
-    // them; the full allocator would spend ~90% of a ~38M-instruction compile
+    // The ISA is selected before lowering, so this is source bytecode size,
+    // never the CLIF size (and covers baseline, MIR and OSR compiles alike).
+    if small_max != 0 && op_count <= small_max {
+        return RegallocChoice::Full;
+    }
+    // Above the cap, retain the fast allocator for call-heavy bodies: the
+    // full allocator would spend ~90% of a ~38M-instruction compile
     // (regalloc2 ion, org editing probe 2026-09-05) improving code that is
     // not where the time goes. Fast even when it loops, and never re-tiered.
     if call_heavy {

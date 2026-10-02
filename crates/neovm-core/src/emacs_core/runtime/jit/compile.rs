@@ -942,6 +942,8 @@ fn regalloc_for_shape(
         policy,
         has_back_edge(ops) || self_recursive,
         call_heavy && !callheavy_uses_full_allocator(),
+        ops.len(),
+        jit_regalloc_small_max(),
     )
 }
 
@@ -4942,6 +4944,9 @@ mod osr_poll_tests;
 #[cfg(test)]
 #[path = "tests/predicate_branches.rs"]
 mod predicate_branch_tests;
+#[cfg(test)]
+#[path = "compile/tests/regalloc_small.rs"]
+mod regalloc_small_tests;
 #[cfg(test)]
 #[path = "tests/source_slots.rs"]
 mod source_slot_tests;

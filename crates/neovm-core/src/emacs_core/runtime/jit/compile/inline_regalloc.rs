@@ -35,7 +35,14 @@ fn select_hof_allocator(
     }
     // An admitted map loop runs unboundedly per entry, even when the source
     // bytecode has no backedge. Keep the existing forced-choice precedence.
-    Some(choose_regalloc(forced, RegallocPolicy::Auto, true, false))
+    Some(choose_regalloc(
+        forced,
+        RegallocPolicy::Auto,
+        true,
+        false,
+        0,
+        0,
+    ))
 }
 
 #[cfg(test)]

@@ -3,6 +3,24 @@
 //! Every emission a knob gates is decided at compile time, so both sides of
 //! an A/B run in one binary.
 
+/// Full allocation for bodies with at most this many bytecode ops; zero
+/// preserves the original policy. Threading: immutable process configuration,
+/// safely initialized once and shared by every mutator's compiler.
+pub(crate) fn jit_regalloc_small_max() -> usize {
+    static MAX: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *MAX.get_or_init(|| {
+        parse_regalloc_small_max(
+            std::env::var("NEOVM_JIT_REGALLOC_SMALL_MAX")
+                .ok()
+                .as_deref(),
+        )
+    })
+}
+
+pub(super) fn parse_regalloc_small_max(value: Option<&str>) -> usize {
+    value.and_then(|s| s.trim().parse().ok()).unwrap_or(0)
+}
+
 /// P4.2 A5: replace a hot AOT leaf with a full-allocator JIT compile.
 /// Threading: immutable process configuration, read by each mutator; the
 /// test override contains only a scalar setting, never Lisp state.

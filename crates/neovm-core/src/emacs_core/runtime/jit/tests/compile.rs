@@ -7968,22 +7968,37 @@ fn a_body_that_calls_itself_is_classified_by_identity() {
 fn regalloc_policy_is_forced_then_shape_then_request() {
     use super::lowering::{RegallocChoice, RegallocPolicy, choose_regalloc};
     let (a, f) = (RegallocPolicy::Auto, RegallocPolicy::Full);
-    assert_eq!(choose_regalloc(None, a, false, false), RegallocChoice::Fast);
-    assert_eq!(choose_regalloc(None, a, true, false), RegallocChoice::Full);
-    assert_eq!(choose_regalloc(None, f, false, false), RegallocChoice::Full);
     assert_eq!(
-        choose_regalloc(Some(RegallocChoice::Fast), f, true, false),
+        choose_regalloc(None, a, false, false, 0, 0),
         RegallocChoice::Fast
     );
     assert_eq!(
-        choose_regalloc(Some(RegallocChoice::Full), a, false, false),
+        choose_regalloc(None, a, true, false, 0, 0),
+        RegallocChoice::Full
+    );
+    assert_eq!(
+        choose_regalloc(None, f, false, false, 0, 0),
+        RegallocChoice::Full
+    );
+    assert_eq!(
+        choose_regalloc(Some(RegallocChoice::Fast), f, true, false, 0, 0),
+        RegallocChoice::Fast
+    );
+    assert_eq!(
+        choose_regalloc(Some(RegallocChoice::Full), a, false, false, 0, 0),
         RegallocChoice::Full
     );
     // Call-heavy: fast even with a loop, even for a Full (OSR/re-tier) request.
-    assert_eq!(choose_regalloc(None, a, true, true), RegallocChoice::Fast);
-    assert_eq!(choose_regalloc(None, f, true, true), RegallocChoice::Fast);
     assert_eq!(
-        choose_regalloc(Some(RegallocChoice::Full), a, false, true),
+        choose_regalloc(None, a, true, true, 0, 0),
+        RegallocChoice::Fast
+    );
+    assert_eq!(
+        choose_regalloc(None, f, true, true, 0, 0),
+        RegallocChoice::Fast
+    );
+    assert_eq!(
+        choose_regalloc(Some(RegallocChoice::Full), a, false, true, 0, 0),
         RegallocChoice::Full
     );
     // The classifier behind it: more (non-intrinsified) calls than arithmetic.

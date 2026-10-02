@@ -103,6 +103,7 @@
 //! | `NEOVM_JIT_SIZE_UNIT` | Override [`RuntimeState::SIZE_UNIT`] (512): the ops-per-unit divisor scaling the tier-up threshold by body size. |
 //! | `NEOVM_JIT_MAX_OPS` | Override [`RuntimeState::MAX_TIER_OPS`] (4096): largest body that tiers at all; `0` = uncapped (the mid-end campaign's acceptance configuration). |
 //! | `NEOVM_JIT_REGALLOC` | Force one Cranelift register allocator for every JIT compile: `backtracking` (regalloc2 ion) or `single_pass` (fastalloc). Unset = the policy in `lowering::choose_regalloc` (fast for straight-line bodies, full for loops/OSR, re-tier when hot). |
+//! | `NEOVM_JIT_REGALLOC_SMALL_MAX` | Bytecode-op cap for using the full (backtracking) allocator regardless of body shape; default `0` preserves today's allocator policy and CLIF. The forced `NEOVM_JIT_REGALLOC` choice takes precedence; larger bodies keep the original rule. Read once per process, before lowering and ISA selection, including the MIR tier. |
 //! | `NEOVM_JIT_PROFIT_DEFER` | Override [`RuntimeState::PROFIT_DEFER_FACTOR`] (4): a body the profitability gate refuses tiers up anyway at `factor × hot_threshold()` calls (`0` = never, the former veto). |
 //! | `NEOVM_JIT_RETIER_FACTOR` | Override [`RuntimeState::RETIER_FACTOR`] (16): a fast-allocator leaf is rebuilt with the full allocator at `factor × hot_threshold()` heat; `0` = never. |
 //! | `NEOVM_JIT_REGALLOC_CHECKER=1` | Run regalloc2's checker after every allocation (verification harness for the allocator choice). |
