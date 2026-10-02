@@ -51,7 +51,7 @@
 //!
 //! | Knob | Unset default | Explicit baseline |
 //! | --- | --- | --- |
-//! | `NEOMACS_TTY_SILENT` | `off` | `off` |
+//! | `NEOMACS_TTY_SILENT` | `on` | `off` |
 //! | `NEOMACS_TTY_DAMAGE` | `on` | `off` |
 //! | `NEOMACS_TTY_ROW_IDENTITY` | `appearance` | `address` or `off` |
 //!
@@ -62,18 +62,31 @@ use std::sync::OnceLock;
 
 /// The value `NEOMACS_TTY_SILENT` selects.
 pub fn parse_tty_silent_knob(value: Option<&str>) -> bool {
-    matches!(
-        value
-            .map(|value| value.trim().to_ascii_lowercase())
-            .as_deref(),
-        Some("on" | "1" | "true" | "yes")
-    )
+    match value
+        .map(|value| value.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        None => true,
+        Some("on" | "1" | "true" | "yes") => true,
+        _ => false,
+    }
+}
+
+/// Keep a present non-Unicode setting on the explicit baseline; only a
+/// missing environment value selects the default.
+fn parse_tty_silent_os_knob(value: Option<&std::ffi::OsStr>) -> bool {
+    match value {
+        None => parse_tty_silent_knob(None),
+        Some(value) => value
+            .to_str()
+            .is_some_and(|value| parse_tty_silent_knob(Some(value))),
+    }
 }
 
 pub(super) fn knob_silent_frames() -> bool {
     static SILENT: OnceLock<bool> = OnceLock::new();
     *SILENT
-        .get_or_init(|| parse_tty_silent_knob(std::env::var("NEOMACS_TTY_SILENT").ok().as_deref()))
+        .get_or_init(|| parse_tty_silent_os_knob(std::env::var_os("NEOMACS_TTY_SILENT").as_deref()))
 }
 
 /// How the renderer decides which rows to repaint (`NEOMACS_TTY_DAMAGE`).
