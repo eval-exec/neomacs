@@ -89,6 +89,8 @@ mod registers_bookmarks;
 mod replace_sort;
 #[path = "saving_insert.rs"]
 mod saving_insert;
+#[path = "scroll_bar_tty.rs"]
+mod scroll_bar_tty;
 #[path = "search.rs"]
 mod search;
 #[path = "shell_compile.rs"]
