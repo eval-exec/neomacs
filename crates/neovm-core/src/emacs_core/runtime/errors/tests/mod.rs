@@ -1,5 +1,6 @@
 use super::super::intern::intern;
 use super::*;
+use crate::emacs_core::error::{FlowKind, FlowResultExt};
 use crate::test_utils::{runtime_startup_context, runtime_startup_eval_all};
 
 fn bootstrap_context() -> crate::emacs_core::Context {
@@ -599,8 +600,8 @@ fn builtin_signal_basic() {
     let args = vec![Value::symbol("void-variable"), Value::NIL];
     let result = builtin_signal(&mut eval, args);
     assert!(result.is_err());
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "void-variable");
             assert!(sig.data.is_empty());
         }
@@ -615,8 +616,8 @@ fn builtin_signal_with_data() {
     let data_list = Value::list(vec![Value::symbol("x")]);
     let args = vec![Value::symbol("void-variable"), data_list];
     let result = builtin_signal(&mut eval, args);
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "void-variable");
             assert_eq!(sig.data.len(), 1);
         }
@@ -629,8 +630,8 @@ fn builtin_signal_atom_preserves_raw_payload() {
     crate::test_utils::init_test_tracing();
     let mut eval = super::super::eval::Context::new();
     let result = builtin_signal(&mut eval, vec![Value::symbol("error"), Value::fixnum(1)]);
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(sig.data, vec![Value::fixnum(1)]);
             assert_eq!(sig.raw_data, Some(Value::fixnum(1)));
@@ -1316,8 +1317,8 @@ fn builtin_error_message_string_not_cons() {
     // Non-list input signals wrong-type-argument (listp VALUE).
     let result = builtin_error_message_string(&mut evaluator, vec![Value::fixnum(42)]);
     assert!(result.is_err());
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("listp"), Value::fixnum(42)]);
         }
@@ -1332,8 +1333,8 @@ fn builtin_error_message_string_symbol_input_is_wrong_type() {
 
     let result = builtin_error_message_string(&mut evaluator, vec![Value::symbol("foo")]);
     assert!(result.is_err());
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("listp"), Value::symbol("foo")]);
         }
@@ -1342,8 +1343,8 @@ fn builtin_error_message_string_symbol_input_is_wrong_type() {
 
     let result_true = builtin_error_message_string(&mut evaluator, vec![Value::T]);
     assert!(result_true.is_err());
-    match result_true {
-        Err(Flow::Signal(sig)) => {
+    match result_true.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("listp"), Value::T]);
         }

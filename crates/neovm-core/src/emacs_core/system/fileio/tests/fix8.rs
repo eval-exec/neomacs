@@ -8,6 +8,7 @@
 //! GNU Emacs `--batch` output exactly (re-verified against the system Emacs).
 
 use super::*;
+use crate::emacs_core::error::FlowKind;
 use crate::emacs_core::eval::Context;
 
 /// A scratch directory unique to this process.
@@ -18,8 +19,8 @@ fn scratch_dir() -> std::path::PathBuf {
 }
 
 fn signal_strings(flow: Flow) -> (String, Vec<String>) {
-    match flow {
-        Flow::Signal(sig) => {
+    match flow.into_kind() {
+        FlowKind::Signal(sig) => {
             let symbol = sig.symbol_name().to_string();
             let data = sig
                 .data

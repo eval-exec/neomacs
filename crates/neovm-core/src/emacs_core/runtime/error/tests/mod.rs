@@ -1,5 +1,6 @@
 use super::{EvalError, Flow, PrintShorthandSymbol, format_flow_with_eval, quote_payload, signal};
 use crate::emacs_core::error::LispCondition;
+use crate::emacs_core::error::{FlowRef, FlowResultExt};
 use crate::emacs_core::{Context, Value, print_value_bytes_with_eval, print_value_with_eval};
 
 #[test]
@@ -247,7 +248,7 @@ fn minibuffer_quit_does_not_take_down_a_noninteractive_session() {
     let plain_quit = Value::list(vec![Value::symbol("quit")]);
     let reported = eval.command_error_default_report(plain_quit, Value::string(""));
     assert!(
-        matches!(reported, Err(Flow::Shutdown(_))),
+        matches!(reported.kinded_ref(), Err(FlowRef::Shutdown(_))),
         "a plain quit keeps GNU's stderr-then-exit behavior: {reported:?}"
     );
 }
@@ -312,7 +313,7 @@ fn in_flight_signal_payload_survives_a_collection() {
     // in-flight signal, which is what the root set has to cover.
     eval.gc_collect();
 
-    let Flow::Signal(sig) = &flow else {
+    let FlowRef::Signal(sig) = flow.kind() else {
         panic!("signal_with_data builds a signal flow");
     };
     let raw = sig.raw_data.expect("signal_with_data records raw data");
@@ -344,7 +345,7 @@ fn condition_case_binding_value_survives_a_collection() {
     );
     eval.gc_collect();
 
-    let Flow::Signal(sig) = &flow else {
+    let FlowRef::Signal(sig) = flow.kind() else {
         panic!("signal flow");
     };
     let bound = super::make_signal_binding_value(sig);
@@ -385,7 +386,7 @@ fn in_flight_throw_payload_survives_a_collection() {
     // the in-flight throw, which is what the root set has to cover.
     eval.gc_collect();
 
-    let Flow::Throw(thrown) = &flow else {
+    let FlowRef::Throw(thrown) = flow.kind() else {
         panic!("Flow::throw builds a throw flow");
     };
     assert!(
@@ -420,7 +421,7 @@ fn in_flight_thread_blocked_payload_survives_a_collection() {
 
     eval.gc_collect();
 
-    let Flow::ThreadBlocked(blocked) = &flow else {
+    let FlowRef::ThreadBlocked(blocked) = flow.kind() else {
         panic!("Flow::thread_blocked builds a thread-blocked flow");
     };
     assert!(

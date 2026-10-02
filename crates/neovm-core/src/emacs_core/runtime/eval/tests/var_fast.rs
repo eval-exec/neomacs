@@ -13,7 +13,7 @@
 
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Vm};
-use crate::emacs_core::error::Flow;
+use crate::emacs_core::error::{Flow, FlowKind};
 use crate::emacs_core::eval::{
     Context, VarCacheEvent, VarCacheTier, parse_var_cache_knob, reset_var_cache_events,
     set_var_cache_tiers_for_test, var_cache_census_report, var_cache_event_count,
@@ -151,8 +151,8 @@ impl Prog {
 }
 
 fn flow_text(flow: Flow) -> String {
-    match flow {
-        Flow::Signal(sig) => format!(
+    match flow.into_kind() {
+        FlowKind::Signal(sig) => format!(
             "ERR {} {}",
             sig.symbol_name(),
             sig.data

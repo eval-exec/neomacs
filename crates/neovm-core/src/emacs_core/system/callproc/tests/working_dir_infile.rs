@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::emacs_core::Context;
-use crate::emacs_core::error::Flow;
+use crate::emacs_core::error::{FlowKind, FlowResultExt};
 use crate::emacs_core::intern::resolve_sym;
 use crate::heap_types::LispString;
 use std::path::{Path, PathBuf};
@@ -54,9 +54,9 @@ fn set_default_directory(eval: &mut Context, dir: &str) {
 
 /// Extract the (symbol-name, data-vec) of a signal, or panic with the Ok value.
 fn expect_signal(r: EvalResult) -> (String, Vec<Value>) {
-    match r {
+    match r.kinded() {
         Ok(v) => panic!("expected a signal, got Ok({v:?})"),
-        Err(Flow::Signal(sd)) => (resolve_sym(sd.symbol).to_string(), sd.data.clone()),
+        Err(FlowKind::Signal(sd)) => (resolve_sym(sd.symbol).to_string(), sd.data.clone()),
         Err(other) => panic!("expected a signal, got {other:?}"),
     }
 }

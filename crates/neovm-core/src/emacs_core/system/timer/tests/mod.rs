@@ -2,6 +2,7 @@ fn test_ob() -> crate::emacs_core::symbol::Obarray {
     crate::emacs_core::symbol::Obarray::new()
 }
 use super::*;
+use crate::emacs_core::error::{FlowRef, FlowResultExt};
 use crate::emacs_core::eval::Context;
 use std::cell::RefCell;
 use std::fs;
@@ -282,35 +283,55 @@ fn test_builtin_sleep_for() {
     assert!(result.unwrap().is_nil());
 
     let result = builtin_sleep_for(&mut eval, vec![]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 
     let result = builtin_sleep_for(
         &mut eval,
         vec![Value::fixnum(0), Value::fixnum(0), Value::fixnum(0)],
     );
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 
     let result = builtin_sleep_for(&mut eval, vec![Value::string("1")]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "wrong-type-argument"
                 && sig.data == vec![Value::symbol("numberp"), Value::string("1")]
-    ));
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 
     let result = builtin_sleep_for(&mut eval, vec![Value::fixnum(0), Value::make_float(0.5)]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "wrong-type-argument"
                 && sig.data == vec![Value::symbol("fixnump"), Value::make_float(0.5)]
-    ));
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -369,8 +390,8 @@ fn sleep_for_window_close_honors_throw_on_input_before_handler() {
     let flow = builtin_sleep_for(&mut ev, vec![Value::make_float(0.01)])
         .expect_err("throw-on-input should interrupt sleep-for");
     assert!(matches!(
-        flow,
-        Flow::Throw(ref thrown)
+        flow.kind(),
+        FlowRef::Throw(ref thrown)
             if thrown.tag == Value::symbol("tag") && thrown.value == Value::T
     ));
 

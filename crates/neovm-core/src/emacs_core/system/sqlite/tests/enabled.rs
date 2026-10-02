@@ -1,5 +1,5 @@
 use super::*;
-use crate::emacs_core::error::Flow;
+use crate::emacs_core::error::FlowKind;
 use crate::emacs_core::value::Value;
 
 #[test]
@@ -78,8 +78,8 @@ fn execute_rejects_non_handle() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new();
     let err = execute(&mut eval, vec![Value::NIL, Value::string("select 1")]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -95,8 +95,8 @@ fn execute_values_validation_signals_sqlite_error() {
         vec![db, Value::string("select ?"), Value::fixnum(9)],
     )
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "sqlite-error"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "sqlite-error"),
         other => panic!("expected signal, got {other:?}"),
     }
 
@@ -109,8 +109,8 @@ fn execute_values_validation_signals_sqlite_error() {
         ],
     )
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "sqlite-error"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "sqlite-error"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -125,8 +125,8 @@ fn select_values_validation_signals_sqlite_error() {
         vec![db, Value::string("select ?"), Value::fixnum(9)],
     )
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "sqlite-error"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "sqlite-error"),
         other => panic!("expected signal, got {other:?}"),
     }
 }

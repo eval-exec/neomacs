@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::error::{FlowKind, FlowRef, FlowResultExt};
 use crate::emacs_core::wait::{CommandInputWaitOutcome, ProcessOutputWaitOutcome};
 use crate::emacs_core::{Context, builtins, format_eval_result};
 use crate::heap_types::LispString;
@@ -1010,8 +1011,8 @@ fn process_controls_accept_get_process_designators_like_gnu() {
     let signal_err =
         builtin_signal_process_impl(&mut pm, &buffers, vec![buffer_value, Value::symbol("TERM")])
             .expect_err("signal-process buffer should reject connection process");
-    match signal_err {
-        Flow::Signal(signal) => {
+    match signal_err.into_kind() {
+        FlowKind::Signal(signal) => {
             assert_eq!(signal.symbol_name(), "error");
             assert_eq!(
                 signal.data,
@@ -1027,8 +1028,8 @@ fn process_controls_accept_get_process_designators_like_gnu() {
         vec![Value::string("*control-target*")],
     )
     .expect_err("process-running-child-p buffer name should reject connection process");
-    match running_child_err {
-        Flow::Signal(signal) => {
+    match running_child_err.into_kind() {
+        FlowKind::Signal(signal) => {
             assert_eq!(signal.symbol_name(), "error");
             assert_eq!(
                 signal.data,
@@ -5477,7 +5478,7 @@ fn kill_emacs_from_a_timer_callback_unwinds_the_service_pass() {
         .service_pending_timers_with_wait_policy(false)
         .expect_err("kill-emacs must unwind out of the timer service pass");
     assert!(
-        matches!(flow, Flow::Shutdown(request) if request.exit_code == 3 && !request.restart),
+        matches!(flow.kind(), FlowRef::Shutdown(request) if request.exit_code == 3 && !request.restart),
         "expected a shutdown flow carrying the exit code, got {flow:?}"
     );
     assert_eq!(
@@ -5523,7 +5524,7 @@ fn kill_emacs_from_a_timer_callback_is_not_catchable_as_an_error() {
     let flow = ev
         .service_pending_timers_with_wait_policy(false)
         .expect_err("condition-case must not absorb the shutdown");
-    assert!(matches!(flow, Flow::Shutdown(_)), "got {flow:?}");
+    assert!(matches!(flow.kind(), FlowRef::Shutdown(_)), "got {flow:?}");
     assert_eq!(
         ev.eval_symbol("neo-kill-catch-log").expect("catch log"),
         Value::NIL,
@@ -7325,7 +7326,7 @@ fn accept_process_output_window_close_quits_without_special_handler() {
         .expect_err("unhandled window close should still quit");
     drop(tx);
 
-    assert!(matches!(flow, Flow::Signal(ref sig) if sig.symbol_name() == "quit"));
+    assert!(matches!(flow.kind(), FlowRef::Signal(ref sig) if sig.symbol_name() == "quit"));
 }
 
 #[test]
@@ -7342,8 +7343,8 @@ fn accept_process_output_window_close_honors_throw_on_input_before_quit() {
     let flow = builtin_accept_process_output(&mut ev, vec![Value::NIL, Value::make_float(0.0)])
         .expect_err("throw-on-input should interrupt accept-process-output");
     assert!(matches!(
-        flow,
-        Flow::Throw(ref thrown)
+        flow.kind(),
+        FlowRef::Throw(ref thrown)
             if thrown.tag == Value::symbol("tag") && thrown.value == Value::T
     ));
 
@@ -7352,7 +7353,7 @@ fn accept_process_output_window_close_honors_throw_on_input_before_quit() {
         .expect_err("window close should still quit afterwards");
     drop(tx);
 
-    assert!(matches!(flow, Flow::Signal(ref sig) if sig.symbol_name() == "quit"));
+    assert!(matches!(flow.kind(), FlowRef::Signal(ref sig) if sig.symbol_name() == "quit"));
 }
 
 /// GNU `wait_reading_process_output` runs `maybe_quit` at the top of every
@@ -7379,7 +7380,7 @@ fn wait_until_honors_pending_quit_request_promptly() {
     let elapsed = start.elapsed();
 
     assert!(
-        matches!(flow, Flow::Signal(ref sig) if sig.symbol_name() == "quit"),
+        matches!(flow.kind(), FlowRef::Signal(ref sig) if sig.symbol_name() == "quit"),
         "expected a `quit' signal, got {flow:?}"
     );
     // Must return WELL under the 5s deadline — within one wait iteration.
@@ -8672,8 +8673,10 @@ fn process_send_string_rejects_network_server_like_gnu() {
         &mut pm,
         &buffers,
         vec![Value::make_process(id), Value::string("x")],
-    ) {
-        Err(Flow::Signal(sig)) => {
+    )
+    .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data.first().and_then(|value| value.as_utf8_str()),
@@ -10046,8 +10049,8 @@ fn a_process_filter_error_is_reported_and_kills_batch_like_gnu() {
         AsyncCallbackKind::ProcessFilter,
     );
 
-    match flow {
-        Err(Flow::Shutdown(request)) => {
+    match flow.kinded() {
+        Err(FlowKind::Shutdown(request)) => {
             assert_eq!(
                 request.exit_code, -1,
                 "GNU's Fkill_emacs (-1) is exit status 255"
@@ -10075,7 +10078,7 @@ fn a_process_sentinel_error_is_reported_and_kills_batch_like_gnu() {
     );
 
     assert!(
-        matches!(flow, Err(Flow::Shutdown(request)) if request.exit_code == -1),
+        matches!(flow.kinded_ref(), Err(FlowRef::Shutdown(request)) if request.exit_code == -1),
         "a sentinel error must not be swallowed, got {flow:?}"
     );
 }

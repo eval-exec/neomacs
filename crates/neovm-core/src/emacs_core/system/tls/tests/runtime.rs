@@ -346,8 +346,8 @@ fn gnutls_boot_parameters_reject_non_string_trust_file_entries() {
     )
     .unwrap_err();
 
-    match error {
-        crate::emacs_core::error::Flow::Signal(signal) => {
+    match error.into_kind() {
+        crate::emacs_core::error::FlowKind::Signal(signal) => {
             assert_eq!(signal.symbol_name(), "error");
             assert_eq!(signal.data, vec![Value::string("Invalid trustfile")]);
         }
@@ -369,8 +369,8 @@ fn rustls_root_store_adds_certificates_from_explicit_trust_files() {
 #[test]
 fn gnutls_boot_parameters_validate_gnu_argument_shape() {
     let type_error = parse_gnutls_boot_parameters(Value::fixnum(1), Value::NIL).unwrap_err();
-    match type_error {
-        crate::emacs_core::error::Flow::Signal(sig) => {
+    match type_error.into_kind() {
+        crate::emacs_core::error::FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("symbolp"), Value::fixnum(1)]);
         }
@@ -380,8 +380,8 @@ fn gnutls_boot_parameters_validate_gnu_argument_shape() {
     let list_error =
         parse_gnutls_boot_parameters(Value::symbol("gnutls-x509pki"), Value::fixnum(1))
             .unwrap_err();
-    match list_error {
-        crate::emacs_core::error::Flow::Signal(sig) => {
+    match list_error.into_kind() {
+        crate::emacs_core::error::FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("listp"), Value::fixnum(1)]);
         }
@@ -390,8 +390,8 @@ fn gnutls_boot_parameters_validate_gnu_argument_shape() {
 
     let hostname_error =
         parse_gnutls_boot_parameters(Value::symbol("gnutls-x509pki"), Value::NIL).unwrap_err();
-    match hostname_error {
-        crate::emacs_core::error::Flow::Signal(sig) => {
+    match hostname_error.into_kind() {
+        crate::emacs_core::error::FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -556,8 +556,8 @@ fn gnutls_error_helpers_match_gnu_type_and_known_code_rules() {
     );
 
     let invalid_object = builtin_gnutls_error_fatalp(vec![Value::string("x")]).unwrap_err();
-    match invalid_object {
-        crate::emacs_core::error::Flow::Signal(sig) => {
+    match invalid_object.into_kind() {
+        crate::emacs_core::error::FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(sig.data, vec![Value::string("Not an error symbol or code")]);
         }

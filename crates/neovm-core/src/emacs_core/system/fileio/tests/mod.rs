@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::error::{FlowKind, FlowResultExt};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::format_eval_result;
 use crate::emacs_core::value::list_to_vec;
@@ -718,8 +719,8 @@ fn test_signal_file_io_error_uses_specific_condition() {
         std::io::Error::from(ErrorKind::PermissionDenied),
         "Writing to /tmp/neovm-probe".to_string(),
     );
-    match flow {
-        Flow::Signal(sig) => {
+    match flow.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "permission-denied");
             assert_eq!(sig.data.len(), 1);
             let Some(message) = sig.data[0].as_utf8_str() else {
@@ -761,8 +762,8 @@ fn test_builtin_delete_file_accepts_optional_trash_arg() {
         vec![Value::string(&path_str), Value::NIL, Value::NIL]
     )
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(
                 sig.data,
@@ -810,8 +811,8 @@ fn test_builtin_delete_directory_basic_and_recursive() {
     fs::write(&nested, b"x").unwrap();
     let err =
         call_fileio_builtin!(builtin_delete_directory, vec![Value::string(&root_str)]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "file-error");
         }
         other => panic!("expected signal, got {:?}", other),
@@ -910,8 +911,8 @@ fn test_builtin_make_symbolic_link_core_semantics() {
         vec![Value::string(&target_str), Value::string(&link_str)]
     )
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "file-already-exists"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "file-already-exists"),
         other => panic!("expected signal, got {:?}", other),
     }
 
@@ -1148,8 +1149,8 @@ fn test_builtin_rename_file_overwrite_semantics() {
         vec![Value::string(&src_s), Value::string(&dst_s)]
     )
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "file-already-exists"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "file-already-exists"),
         other => panic!("expected signal, got {:?}", other),
     }
 
@@ -1174,8 +1175,8 @@ fn test_builtin_rename_file_overwrite_semantics() {
         ]
     )
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments, got {:?}", other),
     }
 
@@ -1229,8 +1230,8 @@ fn test_builtin_copy_file_optional_arg_semantics() {
         vec![Value::string(&src_s), Value::string(&dst_s)]
     )
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "file-already-exists"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "file-already-exists"),
         other => panic!("expected signal, got {:?}", other),
     }
 
@@ -1272,8 +1273,8 @@ fn test_builtin_copy_file_optional_arg_semantics() {
         ]
     )
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments, got {:?}", other),
     }
 
@@ -1408,8 +1409,8 @@ fn test_builtin_add_name_to_file_semantics() {
         vec![Value::string(&src_str), Value::string(&dst_str)]
     )
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "file-already-exists"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "file-already-exists"),
         other => panic!("expected signal, got {:?}", other),
     }
 
@@ -1430,8 +1431,8 @@ fn test_builtin_add_name_to_file_semantics() {
         vec![Value::string(&missing), Value::string(&dst2)]
     )
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "file-missing"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "file-missing"),
         other => panic!("expected signal, got {:?}", other),
     }
 
@@ -1800,8 +1801,8 @@ fn test_builtin_file_truename_counter_validation() {
         vec![Value::string("/tmp"), Value::fixnum(1)]
     )
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("listp"), Value::fixnum(1)]);
         }
@@ -1816,8 +1817,8 @@ fn test_builtin_file_truename_counter_validation() {
         ]
     )
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -1944,8 +1945,8 @@ fn test_builtin_make_temp_file_private_unix_mode_bits() {
 fn test_builtin_make_temp_file_validation() {
     crate::test_utils::init_test_tracing();
     let err = call_fileio_builtin!(builtin_make_temp_file, vec![Value::fixnum(1)]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("sequencep"), Value::fixnum(1)]);
         }
@@ -1957,8 +1958,8 @@ fn test_builtin_make_temp_file_validation() {
         vec![Value::string("neo"), Value::NIL, Value::fixnum(1)]
     )
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::fixnum(1)]);
         }
@@ -2093,8 +2094,8 @@ fn test_builtin_make_nearby_temp_file_eval_relative_prefix_uses_temp_dir() {
 
     let err =
         builtin_make_nearby_temp_file(&mut eval, vec![Value::string("sub/child-")]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "file-missing"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "file-missing"),
         other => panic!("expected signal, got {:?}", other),
     }
     let _ = fs::remove_dir_all(base);
@@ -2139,8 +2140,8 @@ fn test_builtin_access_file_semantics() {
         ]
     )
     .expect_err("missing file should signal");
-    match missing {
-        Flow::Signal(sig) => {
+    match missing.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "file-missing");
             assert_eq!(sig.data.first(), Some(&Value::string("read")));
             assert_eq!(
@@ -2156,8 +2157,8 @@ fn test_builtin_access_file_semantics() {
         vec![Value::fixnum(1), Value::string("read")]
     )
     .expect_err("FILE should require string");
-    match file_type {
-        Flow::Signal(sig) => {
+    match file_type.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::fixnum(1)]);
         }
@@ -2169,8 +2170,8 @@ fn test_builtin_access_file_semantics() {
         vec![Value::string("/tmp"), Value::fixnum(1)]
     )
     .expect_err("OPERATION should require string");
-    match op_type {
-        Flow::Signal(sig) => {
+    match op_type.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::fixnum(1)]);
         }
@@ -2190,8 +2191,8 @@ fn builtin_access_file_preserves_raw_unibyte_filename_in_errors() {
 
     let err = call_fileio_builtin!(builtin_access_file, vec![raw_value, Value::string("read")])
         .expect_err("missing raw-byte file should signal");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "file-missing");
             assert_eq!(sig.data.first(), Some(&Value::string("read")));
             let path = sig.data.last().expect("raw filename in signal data");
@@ -2430,8 +2431,8 @@ fn builtin_set_file_modes_preserves_raw_unibyte_filename_in_errors() {
 
     let err = call_fileio_builtin!(builtin_set_file_modes, vec![value, Value::fixnum(0o600)])
         .expect_err("missing raw-byte file should signal");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             let path = sig.data.last().expect("raw filename in chmod signal");
             let string = path.as_lisp_string().expect("raw filename string");
             assert!(!string.is_multibyte(), "expected unibyte filename");
@@ -2789,8 +2790,8 @@ fn test_builtin_directory_files_nonexistent_signals_file_missing() {
         builtin_directory_files,
         vec![Value::string("/nonexistent_dir_xyz_12345")]
     );
-    match result {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "file-missing"),
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "file-missing"),
         other => panic!("expected file-missing signal, got {:?}", other),
     }
 }
@@ -2811,8 +2812,8 @@ fn test_builtin_directory_files_invalid_regexp_signals_invalid_regexp() {
             Value::string("[invalid"),
         ]
     );
-    match result {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "invalid-regexp"),
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "invalid-regexp"),
         other => panic!("expected invalid-regexp signal, got {:?}", other),
     }
 
@@ -2882,8 +2883,8 @@ fn test_builtin_rename_file_eval_overwrite_semantics() {
         vec![Value::string("src.txt"), Value::string("dst.txt")],
     )
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "file-already-exists"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "file-already-exists"),
         other => panic!("expected signal, got {:?}", other),
     }
 
@@ -2919,8 +2920,8 @@ fn test_builtin_copy_file_eval_optional_arg_semantics() {
         vec![Value::string("src.txt"), Value::string("dst.txt")],
     )
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "file-already-exists"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "file-already-exists"),
         other => panic!("expected signal, got {:?}", other),
     }
 
@@ -3588,8 +3589,8 @@ fn test_visited_file_modtime_state_builtins_use_current_buffer_file_name() {
 
     let missing = builtin_set_visited_file_modtime(&mut eval, vec![Value::NIL])
         .expect_err("missing visited file should signal");
-    match missing {
-        Flow::Signal(sig) => {
+    match missing.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::NIL]);
         }
@@ -3972,8 +3973,8 @@ fn insert_file_contents_visit_missing_file_completes_visit_before_error() {
 
     let err = builtin_insert_file_contents(&mut eval, vec![Value::string(&path_str), Value::T])
         .expect_err("missing visited file should signal file-missing");
-    match err {
-        crate::emacs_core::error::Flow::Signal(sig) => {
+    match err.into_kind() {
+        crate::emacs_core::error::FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "file-missing");
         }
         other => panic!("expected file-missing signal, got {other:?}"),
@@ -4886,8 +4887,8 @@ fn test_insert_file_contents_visit_rejects_partial_and_nonempty_visits() {
         vec![Value::string(&path_str), Value::T, Value::fixnum(0)],
     )
     .expect_err("visit with BEG should reject");
-    match partial {
-        Flow::Signal(sig) => {
+    match partial.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -4906,8 +4907,8 @@ fn test_insert_file_contents_visit_rejects_partial_and_nonempty_visits() {
     let nonempty =
         builtin_insert_file_contents(&mut eval_nonempty, vec![Value::string(&path_str), Value::T])
             .expect_err("visit in non-empty buffer without replace should reject");
-    match nonempty {
-        Flow::Signal(sig) => {
+    match nonempty.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -5056,8 +5057,8 @@ fn test_insert_file_contents_beg_end_semantics() {
         ],
     )
     .expect_err("negative BEG should reject with file-offset predicate");
-    match bad_offset {
-        Flow::Signal(sig) => {
+    match bad_offset.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -5110,8 +5111,8 @@ fn test_insert_file_contents_and_write_region_arity_bounds() {
         ],
     )
     .expect_err("6-arg insert-file-contents should fail");
-    match insert_bad {
-        Flow::Signal(sig) => {
+    match insert_bad.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(
                 sig.data,
@@ -5164,8 +5165,8 @@ fn test_insert_file_contents_and_write_region_arity_bounds() {
         ],
     )
     .expect_err("8-arg write-region should fail");
-    match write_bad {
-        Flow::Signal(sig) => {
+    match write_bad.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(
                 sig.data,
@@ -5211,8 +5212,8 @@ fn test_find_file_noselect_arity_bounds() {
         ],
     )
     .expect_err("5-arg find-file-noselect should fail");
-    match bad {
-        Flow::Signal(sig) => {
+    match bad.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(
                 sig.data,
@@ -5333,8 +5334,8 @@ fn test_write_region_bounds_and_order_semantics() {
             ],
         )
         .expect_err("out-of-range bounds should signal");
-        match err {
-            Flow::Signal(sig) => {
+        match err.into_kind() {
+            FlowKind::Signal(sig) => {
                 assert_eq!(sig.symbol_name(), "args-out-of-range");
                 assert_eq!(
                     sig.data,
@@ -5397,8 +5398,8 @@ fn test_write_region_mustbenew_excl_semantics() {
         ],
     )
     .expect_err("excl write-region to an existing file should signal");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "file-already-exists");
             // GNU data: (file-already-exists "File exists" FILENAME)
             assert_eq!(
@@ -6329,8 +6330,8 @@ fn set_visited_file_modtime_refuses_an_indirect_buffer() {
         .expect("indirect buffer");
     eval.buffers.set_current(indirect);
 
-    match builtin_set_visited_file_modtime(&mut eval, vec![]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_set_visited_file_modtime(&mut eval, vec![]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -6368,8 +6369,8 @@ fn set_visited_file_modtime_flags_are_the_two_values_visited_file_modtime_return
         );
     }
 
-    match builtin_set_visited_file_modtime(&mut eval, vec![Value::fixnum(5)]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_set_visited_file_modtime(&mut eval, vec![Value::fixnum(5)]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(
                 sig.data,

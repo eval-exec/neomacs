@@ -9,7 +9,7 @@
 //! checks what Lisp observes afterwards.
 
 use crate::emacs_core::bytecode::{ByteCodeFunction, Vm};
-use crate::emacs_core::error::Flow;
+use crate::emacs_core::error::{FlowKind, FlowResultExt};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::print::print_value;
@@ -52,9 +52,9 @@ fn run_setq(ev: &mut Context, engine: Engine, sym: Value, value: Value) -> Resul
             f.constants = constants.into();
             f.max_stack = 8;
             let mut vm = Vm::from_context(ev);
-            match vm.execute(&f, vec![value]) {
+            match vm.execute(&f, vec![value]).kinded() {
                 Ok(_) => Ok(()),
-                Err(Flow::Signal(sig)) => Err(sig.symbol_name().to_string()),
+                Err(FlowKind::Signal(sig)) => Err(sig.symbol_name().to_string()),
                 Err(other) => Err(format!("{other:?}")),
             }
         }
@@ -65,10 +65,12 @@ fn run_setq(ev: &mut Context, engine: Engine, sym: Value, value: Value) -> Resul
             let ctx = ev as *mut Context as *mut u8;
             match leaf.call(ctx, &[value]) {
                 NativeRun::Ok(_) => Ok(()),
-                NativeRun::Signal => match take_pending_flow() {
-                    Some(Flow::Signal(sig)) => Err(sig.symbol_name().to_string()),
-                    other => Err(format!("{other:?}")),
-                },
+                NativeRun::Signal => {
+                    match take_pending_flow().map(crate::emacs_core::error::Flow::into_kind) {
+                        Some(FlowKind::Signal(sig)) => Err(sig.symbol_name().to_string()),
+                        other => Err(format!("{other:?}")),
+                    }
+                }
                 other => Err(format!("unexpected {other:?}")),
             }
         }

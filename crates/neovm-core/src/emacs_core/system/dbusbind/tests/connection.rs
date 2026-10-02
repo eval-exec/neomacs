@@ -1,6 +1,6 @@
 //! Live session-bus checks. Skipped when the bus is not available.
 
-use crate::emacs_core::error::Flow;
+use crate::emacs_core::error::{FlowKind, FlowResultExt};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::value::Value;
 
@@ -11,9 +11,9 @@ fn session_bus_unique_name_has_gnu_shape() {
     let refs = match super::super::connection::init_bus(
         &mut ctx,
         vec![Value::keyword_by_name(":session")],
-    ) {
+    ).kinded() {
         Ok(value) => value,
-        Err(Flow::Signal(signal)) if signal.symbol_name() == "dbus-error" => return,
+        Err(FlowKind::Signal(signal)) if signal.symbol_name() == "dbus-error" => return,
         Err(err) => panic!("unexpected init-bus failure: {err:?}"),
     };
     assert_eq!(refs, Value::fixnum(1));

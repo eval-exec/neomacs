@@ -3,7 +3,7 @@ use crate::buffer::EmacsByteRange;
 fn test_ob() -> crate::emacs_core::symbol::Obarray {
     crate::emacs_core::symbol::Obarray::new()
 }
-use crate::emacs_core::error::Flow;
+use crate::emacs_core::error::{Flow, FlowKind, FlowRef, FlowResultExt};
 use crate::emacs_core::eval::{ConditionFrame, ResumeTarget, SpecBinding};
 use crate::emacs_core::format_eval_result;
 use crate::emacs_core::subr::{FixedMin1, NativeFn, SubrArity, SubrSpec};
@@ -403,8 +403,8 @@ fn skip_debugger_matches_raw_unibyte_ignored_error_regex() {
     let raw = Value::heap_string(crate::heap_types::LispString::from_unibyte(vec![0xFF]));
     ev.obarray
         .set_symbol_value("debug-ignored-errors", Value::list(vec![raw]));
-    let sig = match crate::emacs_core::error::signal("error", vec![raw]) {
-        Flow::Signal(sig) => sig,
+    let sig = match crate::emacs_core::error::signal("error", vec![raw]).into_kind() {
+        FlowKind::Signal(sig) => sig,
         other => panic!("expected signal flow, got {other:?}"),
     };
     let conditions = ev.signal_conditions_value(&sig);
@@ -427,8 +427,10 @@ fn command_error_severity_follows_gnus_debug_ignored_errors() {
     let mut ev = Context::new();
     crate::emacs_core::errors::init_standard_errors(&mut ev.obarray);
     let signal_of =
-        |name: &str, data: Vec<Value>| match crate::emacs_core::error::signal(name, data) {
-            Flow::Signal(sig) => sig,
+        |name: &str, data: Vec<Value>| match crate::emacs_core::error::signal(name, data)
+            .into_kind()
+        {
+            FlowKind::Signal(sig) => sig,
             other => panic!("expected signal flow, got {other:?}"),
         };
     ev.eval_str(
@@ -508,8 +510,8 @@ fn command_error_severity_never_signals_on_a_bad_ignore_list() {
     crate::emacs_core::errors::init_standard_errors(&mut ev.obarray);
     ev.eval_str(r#"(setq debug-ignored-errors '("[" end-of-buffer))"#)
         .expect("install a broken regexp entry");
-    let sig = match crate::emacs_core::error::signal("end-of-buffer", vec![]) {
-        Flow::Signal(sig) => sig,
+    let sig = match crate::emacs_core::error::signal("end-of-buffer", vec![]).into_kind() {
+        FlowKind::Signal(sig) => sig,
         other => panic!("expected signal flow, got {other:?}"),
     };
     assert!(
@@ -2602,8 +2604,8 @@ fn read_char_requeues_keypress_and_throws_on_input() {
         .read_char()
         .expect_err("throw-on-input should interrupt read_char");
     assert!(matches!(
-        flow,
-        Flow::Throw(ref thrown)
+        flow.kind(),
+        FlowRef::Throw(ref thrown)
             if thrown.tag == Value::symbol("tag") && thrown.value == Value::T
     ));
 
@@ -2627,8 +2629,8 @@ fn read_char_window_close_honors_throw_on_input_before_quit() {
         .read_char()
         .expect_err("throw-on-input should interrupt read_char");
     assert!(matches!(
-        flow,
-        Flow::Throw(ref thrown)
+        flow.kind(),
+        FlowRef::Throw(ref thrown)
             if thrown.tag == Value::symbol("tag") && thrown.value == Value::T
     ));
 
@@ -2636,7 +2638,7 @@ fn read_char_window_close_honors_throw_on_input_before_quit() {
     let flow = ev
         .read_char()
         .expect_err("window close should still quit afterwards");
-    assert!(matches!(flow, Flow::Signal(ref sig) if sig.symbol_name() == "quit"));
+    assert!(matches!(flow.kind(), FlowRef::Signal(ref sig) if sig.symbol_name() == "quit"));
 }
 
 #[test]
@@ -2717,7 +2719,7 @@ fn read_char_disconnected_input_uses_noelisp_terminal_teardown() {
     let flow = ev
         .read_char()
         .expect_err("disconnected input should unwind read_char");
-    assert!(matches!(flow, Flow::Signal(ref sig) if sig.symbol_name() == "quit"));
+    assert!(matches!(flow.kind(), FlowRef::Signal(ref sig) if sig.symbol_name() == "quit"));
     assert_eq!(
         ev.shutdown_request().map(|request| request.exit_code),
         Some(0)
@@ -8746,8 +8748,8 @@ fn funcall_throw_uses_shared_condition_stack_without_catch_tag_mirror() {
 
     let result = ev.funcall_general(Value::symbol("throw"), vec![tag, Value::fixnum(42)]);
     assert!(matches!(
-        result,
-        Err(Flow::Throw(ref thrown)) if thrown.tag == tag && thrown.value == Value::fixnum(42)
+        result.kinded_ref(),
+        Err(FlowRef::Throw(ref thrown)) if thrown.tag == tag && thrown.value == Value::fixnum(42)
     ));
     assert_eq!(ev.condition_stack_depth_for_test(), 1);
 
@@ -8827,7 +8829,7 @@ fn native_unwind_scope_runs_lower_cleanups_after_a_cleanup_error() {
         Ok(Value::NIL)
     });
 
-    assert!(matches!(result, Err(Flow::Signal(_))));
+    assert!(matches!(result.kinded_ref(), Err(FlowRef::Signal(_))));
     assert_eq!(
         eval.eval_symbol("native-lower-cleanup-ran")
             .expect("lower cleanup should have run"),
@@ -9588,7 +9590,10 @@ fn fallible_cleanup_restores_a_pending_quit_flag() {
     });
     ctx.set_quit_flag_value(Value::T);
 
-    assert!(matches!(ctx.unbind_to_result(0), Err(Flow::Signal(_))));
+    assert!(matches!(
+        ctx.unbind_to_result(0).kinded_ref(),
+        Err(FlowRef::Signal(_))
+    ));
     assert_eq!(ctx.quit_flag_value(), Value::T);
     assert!(ctx.specpdl.is_empty());
 }
@@ -9701,8 +9706,9 @@ fn thread_switch_propagates_rejected_saved_default_without_losing_it() {
         .expect("updating the saved toplevel binding does not store it yet");
 
     assert!(matches!(
-        ctx.suspend_dynamic_bindings_for_thread_switch(),
-        Err(Flow::Signal(_))
+        ctx.suspend_dynamic_bindings_for_thread_switch()
+            .kinded_ref(),
+        Err(FlowRef::Signal(_))
     ));
     assert_eq!(
         super::super::data::default_value_by_id(&ctx, symbol),
@@ -9744,8 +9750,9 @@ fn failed_thread_switch_rolls_back_inner_binding_exchanges() {
         .expect("bind valid inner forwarder");
 
     assert!(matches!(
-        ctx.suspend_dynamic_bindings_for_thread_switch(),
-        Err(Flow::Signal(_))
+        ctx.suspend_dynamic_bindings_for_thread_switch()
+            .kinded_ref(),
+        Err(FlowRef::Signal(_))
     ));
     assert_eq!(
         super::super::data::default_value_by_id(&ctx, inner),
@@ -9919,7 +9926,8 @@ fn active_condition_handler_detection_matches_condition_case_error_clause() {
         },
     });
 
-    let Flow::Signal(sig) = signal("error", vec![Value::string("handled later")]) else {
+    let FlowKind::Signal(sig) = signal("error", vec![Value::string("handled later")]).into_kind()
+    else {
         panic!("signal should create Flow::Signal");
     };
 
@@ -15360,17 +15368,20 @@ fn direct_closure_call_uses_specpdl_for_rooting() {
 
     let specpdl_before = ev.specpdl.len();
 
-    let result = match ev.funcall_general_untraced(
-        callable,
-        vec![
-            Value::fixnum(1),
-            Value::fixnum(2),
-            Value::fixnum(3),
-            Value::fixnum(4),
-        ],
-    ) {
+    let result = match ev
+        .funcall_general_untraced(
+            callable,
+            vec![
+                Value::fixnum(1),
+                Value::fixnum(2),
+                Value::fixnum(3),
+                Value::fixnum(4),
+            ],
+        )
+        .kinded()
+    {
         Ok(value) => value,
-        Err(Flow::Signal(sig)) => panic!(
+        Err(FlowKind::Signal(sig)) => panic!(
             "direct closure call should succeed: {} {:?}",
             sig.symbol_name(),
             sig.data
@@ -16864,7 +16875,7 @@ fn jit_subr_spec_string_queries_match_interpreter() {
                 if let Some(expected) = expected[index] {
                     assert_eq!(result.expect("query result"), expected, "{name}: {form}");
                 } else {
-                    let Err(Flow::Signal(sig)) = result else {
+                    let Err(FlowKind::Signal(sig)) = result.kinded() else {
                         panic!("{name}: {form} must signal wrong-type-argument");
                     };
                     assert_eq!(sig.symbol_name(), "wrong-type-argument");
@@ -16888,7 +16899,7 @@ fn jit_subr_spec_string_queries_match_interpreter() {
                 let flow = ev
                     .funcall_general_untraced(caller, vec![Value::NIL; nargs])
                     .expect_err("query rejects the wrong arity");
-                let Flow::Signal(sig) = &flow else {
+                let FlowRef::Signal(sig) = flow.kind() else {
                     panic!("arity must signal");
                 };
                 assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
@@ -16981,7 +16992,7 @@ fn jit_subr_spec_position_queries_match_interpreter() {
                         assert_eq!(result.as_ref().unwrap(), &Value::fixnum(4))
                     }
                     ("position-bytes", "(make-marker)") => {
-                        let Err(Flow::Signal(sig)) = &result else {
+                        let Err(FlowRef::Signal(sig)) = result.kinded_ref() else {
                             panic!("unset marker must signal");
                         };
                         assert_eq!(sig.symbol_name(), "error");
@@ -16991,7 +17002,7 @@ fn jit_subr_spec_position_queries_match_interpreter() {
                         );
                     }
                     _ => {
-                        let Err(Flow::Signal(sig)) = &result else {
+                        let Err(FlowRef::Signal(sig)) = result.kinded_ref() else {
                             panic!("invalid position must signal");
                         };
                         assert_eq!(sig.symbol_name(), "wrong-type-argument");
@@ -17022,7 +17033,7 @@ fn jit_subr_spec_position_queries_match_interpreter() {
                 let flow = ev
                     .funcall_general_untraced(caller, vec![Value::NIL; nargs])
                     .expect_err("wrong arity");
-                let Flow::Signal(sig) = &flow else {
+                let FlowRef::Signal(sig) = flow.kind() else {
                     panic!("arity must signal");
                 };
                 assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
@@ -18795,9 +18806,9 @@ fn spec_call_fast_path_keeps_the_reference_protocol_on_its_exits() {
     // path under test was taken.
     let fast = || crate::emacs_core::jit::compile::SPEC_SHIM_FAST_COUNT.load(Ordering::Relaxed);
     let signal_name = |r: Result<Value, crate::emacs_core::error::Flow>| -> String {
-        match r {
+        match r.kinded() {
             Ok(v) => format!("value {}", crate::emacs_core::print::print_value(&v)),
-            Err(crate::emacs_core::error::Flow::Signal(sig)) => sig.symbol_name().to_string(),
+            Err(crate::emacs_core::error::FlowKind::Signal(sig)) => sig.symbol_name().to_string(),
             Err(other) => format!("{other:?}"),
         }
     };
@@ -27162,8 +27173,11 @@ fn a_speculated_call_caches_a_bit_op_inlining_callee_and_sees_its_redefinition()
     // A non-fixnum reaching the inlined bit-op leaves native code and signals
     // as the builtin does.
     let not_a_number = ev.eval_str("'(1)").expect("list");
-    match ev.funcall_general_untraced(caller, vec![not_a_number]) {
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+    match ev
+        .funcall_general_untraced(caller, vec![not_a_number])
+        .kinded()
+    {
+        Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument")
         }
         other => panic!("(logand '(1) 255) must signal: {other:?}"),
@@ -27237,9 +27251,9 @@ fn native_calls_marshal_optional_and_rest_arguments() {
         let list = ev
             .eval_str(&format!("(list {})", elements.join(" ")))
             .expect("list");
-        match ev.funcall_general_untraced(caller, vec![f, list]) {
+        match ev.funcall_general_untraced(caller, vec![f, list]).kinded() {
             Ok(v) => print_value(&v),
-            Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+            Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
                 format!("signal {}", sig.symbol_name())
             }
             Err(other) => format!("{other:?}"),
@@ -27362,9 +27376,9 @@ fn jit_apply_enters_a_compiled_callee_natively() {
     crate::emacs_core::eval::push_scratch_gc_root(caller);
     let run = |ev: &mut Context, f: Value, list: &str| {
         let list = ev.eval_str(list).expect("list");
-        match ev.funcall_general_untraced(caller, vec![f, list]) {
+        match ev.funcall_general_untraced(caller, vec![f, list]).kinded() {
             Ok(v) => print_value(&v),
-            Err(crate::emacs_core::error::Flow::Signal(sig)) => format!(
+            Err(crate::emacs_core::error::FlowKind::Signal(sig)) => format!(
                 "signal {} {:?}",
                 sig.symbol_name(),
                 sig.data.iter().map(print_value).collect::<Vec<_>>()

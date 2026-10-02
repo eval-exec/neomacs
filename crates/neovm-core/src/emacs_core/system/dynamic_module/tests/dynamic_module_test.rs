@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::error::{FlowKind, FlowResultExt};
 use crate::emacs_core::value::list_to_vec;
 
 unsafe extern "C" fn dummy_module_function(
@@ -352,7 +353,7 @@ fn contain_lisp_panics_restores_boundary_state() {
         panic!("boundary-dirt-probe");
     });
 
-    let Err(Flow::Signal(sig)) = result else {
+    let Err(FlowKind::Signal(sig)) = result.kinded() else {
         panic!("expected a Signal flow");
     };
     assert_eq!(sig.symbol, intern("error"));

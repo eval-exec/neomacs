@@ -1,5 +1,6 @@
 use super::*;
 use crate::emacs_core::Context;
+use crate::emacs_core::error::{FlowKind, FlowResultExt};
 use crate::emacs_core::value::ValueKind;
 use crate::heap_types::LispString;
 use crate::test_utils::runtime_startup_eval_all;
@@ -26,9 +27,9 @@ fn bootstrap_eval(src: &str) -> Vec<String> {
 /// tests assert against GNU Emacs `--batch` output byte-for-byte without
 /// depending on the (pdump-gated) bootstrap evaluator.
 fn condition_case_print(result: Result<Value, Flow>) -> String {
-    match result {
+    match result.kinded() {
         Ok(value) => crate::emacs_core::print::print_value(&value),
-        Err(Flow::Signal(sig)) => {
+        Err(FlowKind::Signal(sig)) => {
             let symbol = Value::symbol(sig.symbol_name());
             let err_obj = if let Some(raw) = sig.raw_data {
                 Value::cons(symbol, raw)
@@ -42,8 +43,8 @@ fn condition_case_print(result: Result<Value, Flow>) -> String {
 }
 
 fn assert_invalid_time_frequency(flow: Flow) {
-    match flow {
-        Flow::Signal(sig) => {
+    match flow.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data.first().and_then(|value| value.as_utf8_str()),
@@ -229,8 +230,8 @@ fn parse_time_bad_type() {
     // non-number/non-cons TIME value (e.g. a string), NOT `wrong-type-argument
     // numberp`.
     let err = parse_time(&Value::string("not a time")).expect_err("string is not a time");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data.first().and_then(|value| value.as_utf8_str()),
@@ -1062,8 +1063,8 @@ fn builtin_set_time_zone_rule_invalid_spec() {
     let _guard = tz_test_lock();
     reset_tz_rule();
 
-    match builtin_set_time_zone_rule(vec![Value::keyword(":x")]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_set_time_zone_rule(vec![Value::keyword(":x")]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data.first().and_then(|v| v.as_utf8_str()),
@@ -1195,8 +1196,8 @@ fn builtin_current_time_zone_with_zone_arg() {
         Value::list(vec![Value::fixnum(3600), Value::string("+01")])
     );
 
-    match builtin_current_time_zone(vec![Value::NIL, Value::keyword(":x")]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_current_time_zone(vec![Value::NIL, Value::keyword(":x")]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data.first().and_then(|v| v.as_utf8_str()),

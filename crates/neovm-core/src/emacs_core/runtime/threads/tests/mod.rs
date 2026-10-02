@@ -1,5 +1,6 @@
 use super::super::eval::Context;
 use super::*;
+use crate::emacs_core::error::{FlowKind, FlowRef, FlowResultExt};
 use crate::heap_types::LispString;
 
 // -- ThreadManager unit tests -------------------------------------------
@@ -297,10 +298,15 @@ fn test_builtin_make_thread_rejects_more_than_three_args() {
             Value::NIL,
         ],
     );
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -489,8 +495,8 @@ fn failed_thread_entry_discards_unreturned_thread() {
     let before = eval.threads.all_thread_ids();
 
     assert!(matches!(
-        builtin_make_thread(&mut eval, vec![Value::NIL]),
-        Err(Flow::Signal(_))
+        builtin_make_thread(&mut eval, vec![Value::NIL]).kinded_ref(),
+        Err(FlowRef::Signal(_))
     ));
     assert_eq!(
         eval.threads.all_thread_ids(),
@@ -530,8 +536,8 @@ fn failed_blocked_thread_entry_preserves_continuation() {
     .expect("install rejected saved value");
 
     assert!(matches!(
-        resume_blocked_thread(&mut eval, thread_id),
-        Err(Flow::Signal(_))
+        resume_blocked_thread(&mut eval, thread_id).kinded_ref(),
+        Err(FlowRef::Signal(_))
     ));
     let thread = eval
         .threads
@@ -660,8 +666,8 @@ fn test_builtin_thread_join_current_thread_errors() {
     let mut eval = Context::new();
     let current = builtin_current_thread(&mut eval, vec![]).unwrap();
     let result = builtin_thread_join(&mut eval, vec![current]);
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(sig.data.len(), 1);
             assert_eq!(
@@ -711,8 +717,8 @@ fn test_builtin_thread_signal_current_thread_raises() {
         &mut eval,
         vec![current, Value::symbol("foo"), Value::fixnum(1)],
     );
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "foo");
             assert_eq!(sig.raw_data, Some(Value::fixnum(1)));
         }
@@ -749,8 +755,8 @@ fn test_builtin_thread_signal_preserves_raw_symbol_identity_through_join() {
         Value::NIL
     );
 
-    match builtin_thread_join(&mut eval, vec![thread]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_thread_join(&mut eval, vec![thread]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol, raw_symbol);
             assert_eq!(sig.raw_data, Some(data));
         }
@@ -831,8 +837,8 @@ fn test_builtin_thread_set_buffer_disposition_rejects_non_nil_main_thread_value(
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
     let main_thread = builtin_current_thread(&mut eval, vec![]).unwrap();
-    match builtin_thread_set_buffer_disposition(&mut eval, vec![main_thread, Value::T]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_thread_set_buffer_disposition(&mut eval, vec![main_thread, Value::T]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("null"), Value::T]);
         }
@@ -1044,8 +1050,8 @@ fn test_builtin_condition_name_wrong_type_argument() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
     let result = builtin_condition_name(&mut eval, vec![Value::NIL]);
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -1061,8 +1067,8 @@ fn test_builtin_condition_mutex_wrong_type_argument() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
     let result = builtin_condition_mutex(&mut eval, vec![Value::fixnum(1)]);
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -1159,8 +1165,8 @@ fn test_sf_with_mutex_wrong_args() {
     let mut eval = Context::new();
     // No arguments at all
     let result = sf_with_mutex(&mut eval, &[]);
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(
                 sig.data,
@@ -1274,8 +1280,8 @@ fn test_thread_signal_noncurrent_thread_changes_join_outcome_without_publishing_
     );
 
     let join_result = builtin_thread_join(&mut eval, vec![thread]);
-    match join_result {
-        Err(Flow::Signal(sig)) => {
+    match join_result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(sig.data, vec![Value::string("oops")]);
         }
