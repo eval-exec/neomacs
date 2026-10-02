@@ -1119,6 +1119,73 @@ impl RetainedWindowMatrix {
             && !region_contains_newline(start, replay.new_point)
     }
 
+    /// A certified prove producer may replace general sync only when both
+    /// regenerate the same old rows. Restrict its first row to an interior
+    /// edit: then GNU sync removes no predecessor that prove would widen.
+    /// The bounded end must equal the earliest unchanged-tail matrix anchor
+    /// (GNU find_first_unchanged_at_end_row, xdisp.c:22325-22380).
+    /// Numeric metadata only; no new vector, glyph copy, Lisp or publication.
+    #[inline]
+    pub(crate) fn prove_span_matches_sync(
+        &self,
+        damage: EditDamage,
+        proved: &ScrollReplay,
+    ) -> bool {
+        let Some(expected) = proved.expected_walk else {
+            return false;
+        };
+        if !proved.bound_walk || expected.row_count != proved.exposed_row_count {
+            return false;
+        }
+        let Some(first) = self.matrix.rows.get(proved.exposed_row_base) else {
+            return false;
+        };
+        if !first.enabled
+            || Self::is_chrome_role(first.role)
+            || damage.start() <= first.start_charpos as i64
+        {
+            return false;
+        }
+        // Prove may have widened to a plain predecessor at the next line's
+        // start. General sync drops that row. Require the first row's actual
+        // old extent to reach the damage, using the producer's display-string
+        // extent rule rather than the final glyph's source position alone.
+        let next = self
+            .matrix
+            .rows
+            .iter()
+            .skip(proved.exposed_row_base + 1)
+            .find(|row| row.enabled && !Self::is_chrome_role(row.role));
+        let extent_end = next
+            .filter(|next| next.start_charpos > first.start_charpos)
+            .map_or(first.end_charpos as i64, |next| {
+                (first.end_charpos as i64).max(next.start_charpos as i64 - 1)
+            });
+        if extent_end < damage.start() {
+            return false;
+        }
+        let Some(min_start) = damage.end_old().checked_add(1) else {
+            return false;
+        };
+        let Some(proved_end) = proved.exposed_row_base.checked_add(expected.row_count) else {
+            return false;
+        };
+        // A successful original prove admission has already rejected every
+        // continued body row, so sync's continuation skip cannot extend this
+        // anchor. Gaps/disabled rows fail the exact matrix-index equality.
+        self.matrix
+            .rows
+            .iter()
+            .enumerate()
+            .skip(proved.exposed_row_base + 1)
+            .find(|(_, row)| {
+                row.enabled
+                    && !Self::is_chrome_role(row.role)
+                    && row.start_charpos as i64 >= min_start
+            })
+            .is_some_and(|(index, _)| index == proved_end)
+    }
+
     /// Build a [`CursorOnlyReplay`] for this window if it can be reused this
     /// frame with only the cursor re-decorated, else `None` (→ full rebuild).
     ///

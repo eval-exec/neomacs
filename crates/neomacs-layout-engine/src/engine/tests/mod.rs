@@ -41,6 +41,8 @@ mod edit_line_numbers_test;
 mod edit_replay_point_visibility_test;
 mod edit_replay_row_extent_test;
 mod edit_sync_engine_test;
+#[cfg(test)]
+mod edit_sync_prove_first_engine_test;
 #[path = "../../tests/engine_layout_validity_test.rs"]
 mod layout_validity;
 mod lazy_text_hit_test;

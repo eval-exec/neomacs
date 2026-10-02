@@ -36,6 +36,7 @@
 //! | --- | --- | --- | --- |
 //! | `NEOMACS_LAYOUT_EDIT_SYNC` | `prove` | `prove`, `sync` | Synchronize the edit walk with unchanged rows below it. |
 //! | `NEOMACS_EDIT_SYNC_STILL` | `off` | `off`, `on` | Transfer synchronized geometry without remapping when its placement and visibility are unchanged. |
+//! | `NEOMACS_EDIT_SYNC_PROVE_FIRST` | `off` | `off`, `on` | Prefer a completely admitted bounded prove producer inside GNU sync; rejected proofs still use general sync. |
 //! | `NEOMACS_EDIT_SYNC_SHIFT_SKIP` | `off` | `off`, `on` | Avoid synchronized-row shift provenance allocations when no row moved vertically. |
 //! | `NEOMACS_LAYOUT_SCROLL_BACK` | `on` | `off`, `on` | Synchronize backward scrolls with the retained body. |
 
@@ -113,6 +114,72 @@ fn edit_sync_still_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| {
         std::env::var("NEOMACS_EDIT_SYNC_STILL")
+            .ok()
+            .is_some_and(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "on" | "1" | "true" | "yes"
+                )
+            })
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    static PROVE_FIRST_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+    static PROVE_FIRST_COUNTS: std::cell::Cell<ProveFirstCounts> =
+        const { std::cell::Cell::new(ProveFirstCounts { preferred_prove: 0, sync_fallback: 0 }) };
+}
+
+/// Numeric test-only path witnesses; no Lisp state or cross-mutator cache.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ProveFirstCounts {
+    pub(crate) preferred_prove: u64,
+    pub(crate) sync_fallback: u64,
+}
+
+#[cfg(test)]
+pub(crate) fn set_prove_first_for_test(enabled: Option<bool>) {
+    PROVE_FIRST_OVERRIDE.with(|cell| cell.set(enabled));
+}
+
+#[cfg(test)]
+pub(crate) fn reset_prove_first_counts_for_test() {
+    PROVE_FIRST_COUNTS.with(|cell| cell.set(ProveFirstCounts::default()));
+}
+
+#[cfg(test)]
+pub(crate) fn prove_first_counts_for_test() -> ProveFirstCounts {
+    PROVE_FIRST_COUNTS.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+pub(crate) fn note_prove_first_for_test(preferred: bool) {
+    PROVE_FIRST_COUNTS.with(|cell| {
+        let mut counts = cell.get();
+        if preferred {
+            counts.preferred_prove += 1;
+        } else {
+            counts.sync_fallback += 1;
+        }
+        cell.set(counts);
+    });
+}
+
+/// Process-only numeric producer policy, default OFF. OnceLock publishes the
+/// flag for concurrent readers; replay rows and probes remain attempt-owned.
+/// No Lisp evaluation, TLS Lisp cache or published frame state lives here.
+#[inline]
+pub(crate) fn prove_first_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(enabled) = PROVE_FIRST_OVERRIDE.with(std::cell::Cell::get) {
+        return enabled;
+    }
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("NEOMACS_EDIT_SYNC_PROVE_FIRST")
             .ok()
             .is_some_and(|value| {
                 matches!(

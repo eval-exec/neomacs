@@ -3952,7 +3952,37 @@ impl LayoutEngine {
         } else {
             BelowReuse::Off
         };
-        let Some(mut replay) = prev.edit_replay_with(&curr_key, damage, below) else {
+        // GNU sync remains the semantic policy. Its general producer need
+        // not replace the already certified single-row producer: both are
+        // sealed by the existing post-walk contracts. A prove call may also
+        // return an ABOVE-ONLY replay; that is a rejected proof, never a win.
+        let replay = if matches!(
+            below,
+            BelowReuse::Sync {
+                prove_fallback: true
+            }
+        ) && edit_sync::prove_first_enabled()
+        {
+            match prev.edit_replay_with(&curr_key, damage, BelowReuse::Prove) {
+                Some(proved)
+                    if proved.bound_walk
+                        && proved.expected_walk.is_some()
+                        && prev.prove_span_matches_sync(damage, &proved) =>
+                {
+                    #[cfg(test)]
+                    edit_sync::note_prove_first_for_test(true);
+                    Some(proved)
+                }
+                _ => {
+                    #[cfg(test)]
+                    edit_sync::note_prove_first_for_test(false);
+                    prev.edit_replay_with(&curr_key, damage, below)
+                }
+            }
+        } else {
+            prev.edit_replay_with(&curr_key, damage, below)
+        };
+        let Some(mut replay) = replay else {
             if tracing::enabled!(tracing::Level::DEBUG) {
                 let body: Vec<&neomacs_display_protocol::glyph_matrix::GlyphRow> = prev
                     .matrix

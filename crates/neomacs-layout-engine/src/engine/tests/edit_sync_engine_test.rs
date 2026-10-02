@@ -8,7 +8,7 @@
 
 use super::*;
 use crate::incremental_layout::edit_sync::{
-    EditSyncMode, set_edit_sync_mode_for_test, set_shift_skip_for_test,
+    EditSyncMode, set_edit_sync_mode_for_test, set_prove_first_for_test, set_shift_skip_for_test,
 };
 
 struct SyncGuard;
@@ -16,6 +16,7 @@ struct SyncGuard;
 impl SyncGuard {
     fn set(mode: EditSyncMode) -> Self {
         set_edit_sync_mode_for_test(Some(mode));
+        set_prove_first_for_test(Some(false));
         SyncGuard
     }
 }
@@ -23,6 +24,7 @@ impl SyncGuard {
 impl Drop for SyncGuard {
     fn drop(&mut self) {
         set_edit_sync_mode_for_test(None);
+        set_prove_first_for_test(None);
     }
 }
 
