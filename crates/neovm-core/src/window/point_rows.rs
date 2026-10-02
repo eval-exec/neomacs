@@ -10,8 +10,12 @@
 //! | Knob | Default | Values | Gate |
 //! | --- | --- | --- | --- |
 //! | `NEOMACS_PRESENT_POINT_ROWS` | `off` | `off`, `on`, `verify` | Compact immutable row cells and direct row hit queries; verify checks decoded cells. |
+//! | `NEOMACS_POINT_ROW_ITER` | `off` | `off`, `on` | Concatenate row point streams when placed source bounds prove the existing heap order. |
 //! Descriptors move rows without rewriting cells. Compact encoding is checked
 //! field by field; an unencodable row retains every original i64 in wide form.
+//! Iterator mode is read once per process. Its numeric range certificate is
+//! recomputed for each borrow because producers can replace the public row
+//! vector between publications; concurrent readers own independent iterators.
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap};
@@ -47,6 +51,35 @@ pub fn display_point_rows_mode() -> DisplayPointRowsMode {
             Some("verify") => DisplayPointRowsMode::Verify,
             _ => DisplayPointRowsMode::Off,
         }
+    })
+}
+
+/// Process-wide numeric policy published by OnceLock; readers share no cursor or Lisp state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PointRowIterMode {
+    Off,
+    On,
+}
+
+impl PointRowIterMode {
+    #[inline]
+    fn from_setting(setting: Option<&str>) -> Self {
+        match setting
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("on" | "1" | "true" | "yes") => Self::On,
+            _ => Self::Off,
+        }
+    }
+}
+
+#[inline]
+fn point_row_iter_mode() -> PointRowIterMode {
+    static MODE: OnceLock<PointRowIterMode> = OnceLock::new();
+    *MODE.get_or_init(|| {
+        PointRowIterMode::from_setting(std::env::var("NEOMACS_POINT_ROW_ITER").ok().as_deref())
     })
 }
 
@@ -546,7 +579,25 @@ impl DisplayPointRows {
             .map(|index| &self.rows[index])
     }
 
+    #[inline]
     pub fn iter_points(&self) -> DisplayPointRowsIter<'_> {
+        self.iter_points_with_mode(point_row_iter_mode())
+    }
+
+    #[inline]
+    fn iter_points_with_mode(&self, mode: PointRowIterMode) -> DisplayPointRowsIter<'_> {
+        if mode == PointRowIterMode::On
+            && let Some(remaining) = self.disjoint_point_count()
+        {
+            return DisplayPointRowsIter {
+                rows: self,
+                order: PointRowsIterOrder::Concat {
+                    row_index: 0,
+                    source_index: 0,
+                },
+                remaining,
+            };
+        }
         let mut heap = BinaryHeap::new();
         for (row_index, row) in self.rows.iter().enumerate() {
             if let Some(point) = row.points().next() {
@@ -555,9 +606,33 @@ impl DisplayPointRows {
         }
         DisplayPointRowsIter {
             rows: self,
-            heap,
+            order: PointRowsIterOrder::Merge { heap },
             remaining: self.point_count(),
         }
+    }
+
+    /// Certify the current vector order without decoding or sorting points.
+    /// Equal source endpoints retain the heap's lower-vector-index precedence.
+    /// Empty rows have no interval. Do not cache this proof on a public vector
+    /// that a producer can reorder or replace before the next immutable borrow.
+    #[inline]
+    fn disjoint_point_count(&self) -> Option<usize> {
+        let mut previous_max = None;
+        let mut count = 0;
+        for row in &self.rows {
+            let row_count = row.point_count();
+            count += row_count;
+            if row_count == 0 {
+                continue;
+            }
+            let min = row.min_buffer_position()?.as_i64();
+            let max = row.max_buffer_position()?.as_i64();
+            if previous_max.is_some_and(|previous| previous > min) {
+                return None;
+            }
+            previous_max = Some(max);
+        }
+        Some(count)
     }
 
     pub fn point_for_buffer_pos(&self, pos: LispCharPos1) -> Option<DisplayPointSnapshot> {
@@ -591,9 +666,23 @@ impl PartialEq for DisplayPointRows {
 }
 impl Eq for DisplayPointRows {}
 
+/// Owned numeric traversal state over immutable shared cell arrays. A live
+/// borrow prevents producer mutation; concurrent readers share no cursor state.
+enum PointRowsIterOrder {
+    Merge {
+        heap: BinaryHeap<Reverse<(i64, usize, usize)>>,
+    },
+    Concat {
+        row_index: usize,
+        source_index: usize,
+    },
+}
+
+/// One immutable row-vector borrow with independent numeric traversal state.
+/// This iterator owns neither Lisp values nor mutator-local caches.
 pub struct DisplayPointRowsIter<'a> {
     rows: &'a DisplayPointRows,
-    heap: BinaryHeap<Reverse<(i64, usize, usize)>>,
+    order: PointRowsIterOrder,
     remaining: usize,
 }
 
@@ -601,15 +690,33 @@ impl Iterator for DisplayPointRowsIter<'_> {
     type Item = DisplayPointSnapshot;
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        let Reverse((_, row_index, source_index)) = self.heap.pop()?;
-        let row = &self.rows.rows[row_index];
-        let point = row.point(row.data.source_order.get(source_index));
-        let next = source_index + 1;
-        if next < row.point_count() {
-            let next_point = row.point(row.data.source_order.get(next));
-            self.heap
-                .push(Reverse((next_point.buffer_pos.as_i64(), row_index, next)));
-        }
+        let point = match &mut self.order {
+            PointRowsIterOrder::Merge { heap } => {
+                let Reverse((_, row_index, source_index)) = heap.pop()?;
+                let row = &self.rows.rows[row_index];
+                let point = row.point(row.data.source_order.get(source_index));
+                let next = source_index + 1;
+                if next < row.point_count() {
+                    let next_point = row.point(row.data.source_order.get(next));
+                    heap.push(Reverse((next_point.buffer_pos.as_i64(), row_index, next)));
+                }
+                point
+            }
+            PointRowsIterOrder::Concat {
+                row_index,
+                source_index,
+            } => loop {
+                let row = self.rows.rows.get(*row_index)?;
+                if *source_index == row.point_count() {
+                    *row_index += 1;
+                    *source_index = 0;
+                    continue;
+                }
+                let point = row.point(row.data.source_order.get(*source_index));
+                *source_index += 1;
+                break point;
+            },
+        };
         self.remaining -= 1;
         Some(point)
     }
@@ -619,6 +726,7 @@ impl Iterator for DisplayPointRowsIter<'_> {
     }
 }
 impl ExactSizeIterator for DisplayPointRowsIter<'_> {}
+impl std::iter::FusedIterator for DisplayPointRowsIter<'_> {}
 
 pub(super) enum WindowDisplayPointIter<'a> {
     Flat(std::iter::Cloned<std::slice::Iter<'a, DisplayPointSnapshot>>),
@@ -656,7 +764,12 @@ impl Iterator for WindowDisplayPointIter<'_> {
     }
 }
 impl ExactSizeIterator for WindowDisplayPointIter<'_> {}
+impl std::iter::FusedIterator for WindowDisplayPointIter<'_> {}
 
 #[cfg(test)]
 #[path = "tests/point_rows_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/point_rows_iterator_test.rs"]
+mod iterator_tests;
