@@ -345,6 +345,8 @@ pub mod composite;
 pub mod emacs_char;
 #[path = "text/format/mod.rs"]
 pub mod format;
+#[path = "runtime/heap_registry/mod.rs"]
+pub(crate) mod heap_registry;
 #[path = "text/json/mod.rs"]
 pub mod json;
 #[path = "text/regex/mod.rs"]
