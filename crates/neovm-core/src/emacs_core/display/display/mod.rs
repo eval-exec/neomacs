@@ -1871,6 +1871,10 @@ impl NativePopupSession<'_> {
             .as_mut()
             .map(|host| host.hide_popup_menu(token));
         let result = ctx.unbind_to_with_result(specpdl_count, result);
+        // TTY popups paint outside the redisplay screen model. GNU's
+        // tty_menu_activate restores screen_behind on exit; invalidate here
+        // so unchanged visible state cannot skip the host's deferred redraw.
+        ctx.invalidate_redisplay();
         ctx.redisplay_with_force(true);
         ctx.restore_vm_roots(result_root_scope);
         result

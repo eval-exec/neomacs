@@ -2,6 +2,8 @@ mod menu_buttons_test;
 mod menu_semantics_test;
 mod menu_submenu_test;
 mod menu_test_support;
+#[cfg(test)]
+mod popup_idle_redisplay;
 mod resources_test;
 
 use super::*;

@@ -5,6 +5,9 @@ use crate::emacs_core::value::Value;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+#[cfg(test)]
+mod idle_redisplay;
+
 struct RecordingTerminalHost {
     log: Rc<RefCell<Vec<&'static str>>>,
 }

@@ -7771,10 +7771,9 @@ pub(crate) fn builtin_window_resize_apply_total(
 /// - a live WINDOW: mark that window, return t.
 /// - a buffer/string: return t iff that buffer is shown in some window.
 ///
-/// neomacs has no incremental redisplay state to mark, but the *return value*
-/// is observable (oracle test cx409): a live window must yield t, not nil.
-/// The previous stub returned nil for *every* non-nil OBJECT, which is wrong
-/// for the common `(force-window-update (selected-window))` call.
+/// Explicit force requests invalidate the redisplay signature even when the
+/// visible window state is unchanged. A live window also yields t (oracle
+/// test cx409), as GNU does.
 pub(crate) fn builtin_force_window_update(
     eval: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
@@ -7782,6 +7781,7 @@ pub(crate) fn builtin_force_window_update(
     expect_max_args("force-window-update", &args, 1)?;
     let Some(object) = args.first().filter(|v| !v.is_nil()) else {
         // nil OBJECT: force all windows.
+        eval.invalidate_redisplay();
         return Ok(Value::T);
     };
 
@@ -7789,6 +7789,7 @@ pub(crate) fn builtin_force_window_update(
     if let Some(id) = object.as_window_id()
         && eval.frames.is_live_window_id(WindowId(id))
     {
+        eval.invalidate_redisplay();
         return Ok(Value::T);
     }
 

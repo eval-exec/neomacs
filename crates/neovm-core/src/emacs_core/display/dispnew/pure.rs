@@ -96,12 +96,19 @@ pub(crate) fn builtin_redraw_frame(
             vec![Value::symbol("frame-live-p"), *frame],
         ));
     }
+    // GNU `redraw_frame` clears the current matrices and marks every window
+    // inaccurate, even when the Lisp-visible display state did not change.
+    eval.request_menu_bar_rebuild(crate::emacs_core::eval::MenuBarRebuildReason::FullFrameRedraw);
     Ok(Value::NIL)
 }
 
 /// (redraw-display) -> nil
-pub(crate) fn builtin_redraw_display(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_redraw_display(
+    eval: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args("redraw-display", &args, 0)?;
+    eval.request_menu_bar_rebuild(crate::emacs_core::eval::MenuBarRebuildReason::FullFrameRedraw);
     Ok(Value::NIL)
 }
 

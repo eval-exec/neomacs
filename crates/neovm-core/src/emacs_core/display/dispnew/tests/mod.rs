@@ -2,6 +2,9 @@ use super::pure::*;
 use crate::emacs_core::error::Flow;
 use crate::emacs_core::value::Value;
 
+#[cfg(test)]
+mod idle_redraw;
+
 #[test]
 fn redraw_frame_nil_returns_nil() {
     crate::test_utils::init_test_tracing();
@@ -21,7 +24,8 @@ fn redraw_frame_rejects_non_frame_designator() {
 #[test]
 fn redraw_display_returns_nil() {
     crate::test_utils::init_test_tracing();
-    let result = builtin_redraw_display(vec![]).unwrap();
+    let mut ctx = crate::emacs_core::eval::Context::new();
+    let result = builtin_redraw_display(&mut ctx, vec![]).unwrap();
     assert!(result.is_nil());
 }
 

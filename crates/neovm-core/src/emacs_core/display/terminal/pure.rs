@@ -1401,6 +1401,10 @@ pub(crate) fn builtin_resume_tty(
             terminal.runtime.suspended = false;
         }
     });
+    // GNU `resume-tty` reinitializes the terminal modes and marks its frames
+    // garbaged. The host's pending full repaint must reach the redisplay
+    // closure even when suspension changed no Lisp-visible display state.
+    eval.invalidate_redisplay();
     let terminal = terminal_handle_value_for_id(terminal_id).unwrap_or_else(terminal_handle_value);
     let hook_sym =
         crate::emacs_core::hook_runtime::hook_symbol_by_name(eval, "resume-tty-functions");
