@@ -38,7 +38,6 @@ pub(super) fn prepare(options: Option<&Options>) -> Result<Option<DaemonNotifier
     use std::io::{Read, Write};
     use std::os::fd::AsRawFd;
     use std::os::unix::net::UnixStream;
-    use std::time::Duration;
 
     let Some(options) = options else {
         return Ok(None);
@@ -47,9 +46,9 @@ pub(super) fn prepare(options: Option<&Options>) -> Result<Option<DaemonNotifier
     neovm_core::emacs_core::callproc::retain_child_exit_status()
         .map_err(|error| error.to_string())?;
     if !options.background {
-        // The matching client may own a foreground child's initialization
-        // handshake. This is an internal inherited descriptor, not a new
-        // client protocol: ordinary server requests remain unchanged.
+        // Explicit inherited foreground handshakes remain supported. Ordinary
+        // automatic clients use the background launcher instead; server
+        // requests and the one-shot notification error contract are unchanged.
         let Some(raw) = std::env::var_os("NEOMACS_DAEMON_NOTIFY_FD") else {
             return Ok(None);
         };
@@ -85,10 +84,11 @@ pub(super) fn prepare(options: Option<&Options>) -> Result<Option<DaemonNotifier
                 .map_err(|error| format!("I/O error during daemon initialization: {error}"))
         })));
     }
+    // Automatic startup transfers the endpoint lock to this launcher before
+    // the requester can abandon its wait. Only the launcher retains it: the
+    // evaluator and all Lisp subprocesses must not own this capability.
+    let startup_lock = inherited_startup_lock()?;
     let (mut parent, mut child) = UnixStream::pair().map_err(|error| error.to_string())?;
-    parent
-        .set_read_timeout(Some(Duration::from_secs(60)))
-        .map_err(|error| error.to_string())?;
     // SAFETY: this is the early, single-threaded startup boundary, before
     // logging, evaluator workers, native displays or signal-reader threads.
     let pid = unsafe { libc::fork() };
@@ -98,22 +98,18 @@ pub(super) fn prepare(options: Option<&Options>) -> Result<Option<DaemonNotifier
     if pid > 0 {
         drop(child);
         let mut ready = [0];
-        if parent.read_exact(&mut ready).is_ok() && ready == [b'\n'] {
+        // read_exact retries EINTR. Ordinary GNU startup has no deadline.
+        let result = parent.read_exact(&mut ready);
+        if result.is_ok() && ready == [b'\n'] {
+            drop(startup_lock);
             std::process::exit(0);
         }
-        // SAFETY: pid is the exact child created above and is not reaped
-        // until after signaling. Never signal a socket owner or name lookup.
-        unsafe {
-            libc::kill(pid, libc::SIGKILL);
-            let mut status = 0;
-            while libc::waitpid(pid, &mut status, 0) < 0 {
-                if std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
-                    break;
-                }
-            }
-        }
-        return Err("daemon failed to initialize (startup deadline: 60 seconds)".into());
+        let status = settle_failed_child(pid);
+        return Err(format!(
+            "daemon failed to initialize: {result:?}, notification {ready:?}; {status}"
+        ));
     }
+    drop(startup_lock);
     drop(parent);
     // SAFETY: a newly forked child is not a process group leader.
     if unsafe { libc::setsid() } < 0 {
@@ -135,6 +131,73 @@ pub(super) fn prepare(options: Option<&Options>) -> Result<Option<DaemonNotifier
             .write_all(b"\n")
             .map_err(|error| format!("I/O error during daemon initialization: {error}"))
     })))
+}
+
+#[cfg(unix)]
+fn inherited_startup_lock() -> Result<Option<std::fs::File>, String> {
+    use std::os::fd::FromRawFd;
+    use std::os::unix::fs::MetadataExt;
+    let Some(raw) = std::env::var_os("NEOMACS_DAEMON_LOCK_FD") else {
+        return Ok(None);
+    };
+    // SAFETY: prepare runs before runtime threads or Lisp subprocesses.
+    unsafe { std::env::remove_var("NEOMACS_DAEMON_LOCK_FD") };
+    let fd = raw
+        .to_str()
+        .and_then(|raw| raw.parse::<i32>().ok())
+        .filter(|fd| *fd > libc::STDERR_FILENO)
+        .ok_or("invalid daemon startup lock descriptor")?;
+    // SAFETY: duplicate the inherited capability without taking ownership of
+    // an unvalidated descriptor number. Only the duplicate is RAII-owned.
+    let duplicate = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
+    if duplicate < 0 {
+        return Err(format!(
+            "cannot duplicate daemon startup lock descriptor {fd}: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let lock = unsafe { std::fs::File::from_raw_fd(duplicate) };
+    let metadata = lock.metadata().map_err(|error| error.to_string())?;
+    if !metadata.is_file()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.nlink() != 1
+        || metadata.mode() & 0o077 != 0
+    {
+        return Err("unsafe inherited daemon startup lock".into());
+    }
+    // SAFETY: the validated dedicated inherited capability is now duplicated.
+    unsafe { libc::close(fd) };
+    Ok(Some(lock))
+}
+
+#[cfg(unix)]
+fn settle_failed_child(pid: libc::pid_t) -> String {
+    let mut status = 0;
+    // Retained child status prevents PID reuse between this ownership probe,
+    // signalling and reaping. ECHILD denies signalling rather than guessing.
+    loop {
+        let result = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        if result == pid {
+            return format!("child wait status {status}");
+        }
+        if result == 0 {
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+            break;
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return format!("cannot retain failed child: {error}");
+        }
+    }
+    loop {
+        if unsafe { libc::waitpid(pid, &mut status, 0) } == pid {
+            return format!("child wait status {status}");
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return format!("cannot reap failed child: {error}");
+        }
+    }
 }
 
 #[cfg(not(unix))]

@@ -1,6 +1,6 @@
-//! Bounded automatic startup for the ordinary local Emacs server protocol.
+//! Automatic startup for the ordinary local Emacs server protocol.
 use std::fs;
-use std::io::{self, Read};
+use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::os::unix::net::UnixStream;
@@ -27,13 +27,14 @@ pub(super) fn start_and_connect(
     name: Option<&str>,
     timeout: Option<Duration>,
 ) -> Result<UnixStream, String> {
-    let deadline = Instant::now()
-        .checked_add(
-            timeout
-                .filter(|timeout| !timeout.is_zero())
-                .unwrap_or(Duration::from_secs(60)),
-        )
-        .ok_or_else(|| format!("{prog}: startup timeout is too large"))?;
+    let deadline = timeout
+        .filter(|timeout| !timeout.is_zero())
+        .map(|timeout| {
+            Instant::now()
+                .checked_add(timeout)
+                .ok_or_else(|| format!("{prog}: startup timeout is too large"))
+        })
+        .transpose()?;
     let mut lock_name = socket.as_os_str().to_os_string();
     lock_name.push(".startup-lock");
     let lock_path = PathBuf::from(lock_name);
@@ -86,32 +87,32 @@ pub(super) fn start_and_connect(
             return Ok(stream);
         }
     }
-    if Instant::now() >= deadline {
+    if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
         return Err(format!("{prog}: timed out waiting for daemon startup"));
     }
     let executable = std::env::current_exe()
         .map_err(|error| error.to_string())?
         .with_file_name("neomacs");
-    let (mut readiness, notify) = UnixStream::pair().map_err(|error| error.to_string())?;
-    readiness
-        .set_nonblocking(true)
-        .map_err(|error| error.to_string())?;
-    let notify_fd = notify.as_raw_fd();
+    let lock_fd = lock
+        .as_ref()
+        .ok_or_else(|| format!("{prog}: missing startup lock"))?
+        .as_raw_fd();
     let mut command = Command::new(executable);
     command
-        .env("NEOMACS_DAEMON_NOTIFY_FD", notify_fd.to_string())
+        .env("NEOMACS_DAEMON_LOCK_FD", lock_fd.to_string())
+        .env_remove("NEOMACS_DAEMON_NOTIFY_FD")
         .arg(name.map_or_else(
-            || "--fg-daemon".to_owned(),
-            |name| format!("--fg-daemon={name}"),
+            || "--bg-daemon".to_owned(),
+            |name| format!("--bg-daemon={name}"),
         ))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     // SAFETY: setsid and fcntl are async-signal-safe and allocate nothing in
-    // the post-fork child. notify remains owned and live through spawn.
+    // the post-fork child. lock remains owned and live through spawn.
     unsafe {
         command.pre_exec(move || {
-            if libc::setsid() < 0 || libc::fcntl(notify_fd, libc::F_SETFD, 0) < 0 {
+            if libc::setsid() < 0 || libc::fcntl(lock_fd, libc::F_SETFD, 0) < 0 {
                 Err(io::Error::last_os_error())
             } else {
                 Ok(())
@@ -123,44 +124,26 @@ pub(super) fn start_and_connect(
     let mut child = command
         .spawn()
         .map_err(|error| format!("{prog}: cannot start Neomacs daemon: {error}"))?;
-    drop(notify);
-    let mut initialized = false;
+    // Successful exec is the handoff: the background launcher has the same
+    // locked open description. It waits for daemon-initialized and settles
+    // genuine child failure even when this requester times out or disappears.
+    drop(lock);
     loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return Err(format!("{prog}: daemon startup failed: {status}")),
-            Err(error) => {
-                // ECHILD means ownership was lost, not that this PID is safe.
-                if error.raw_os_error() != Some(libc::ECHILD) {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                }
-                return Err(format!("{prog}: cannot wait for daemon: {error}"));
-            }
-            Ok(None) => {}
-        }
-        if !initialized {
-            let mut byte = [0];
-            match readiness.read(&mut byte) {
-                Ok(1) if byte == [b'\n'] => initialized = true,
-                Err(error)
-                    if error.kind() == io::ErrorKind::WouldBlock
-                        || error.kind() == io::ErrorKind::Interrupted => {}
-                result => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(format!(
-                        "{prog}: daemon startup failed before initialization: {result:?}"
-                    ));
-                }
-            }
-        }
-        if initialized && let Ok(stream) = try_connect(socket) {
-            return Ok(stream);
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
+        // Check the budget before accepting readiness: an expired requester
+        // never submits, and must not kill/drop the surviving startup owner.
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             return Err(format!("{prog}: timed out waiting for daemon startup"));
+        }
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => {
+                return connect_existing(prog, socket, deadline)?
+                    .ok_or_else(|| format!("{prog}: initialized daemon has no server socket"));
+            }
+            Ok(Some(status)) => return Err(format!("{prog}: daemon startup failed: {status}")),
+            // Losing launcher wait ownership does not authorize signalling it:
+            // it may still be responsible for a live initializing daemon.
+            Err(error) => return Err(format!("{prog}: cannot wait for daemon: {error}")),
+            Ok(None) => {}
         }
         std::thread::sleep(Duration::from_millis(25));
     }
@@ -192,8 +175,15 @@ fn open_startup_lock(prog: &str, path: &Path, create: bool) -> Result<Option<fs:
     Ok(Some(lock))
 }
 
-fn wait_for_startup_lock(prog: &str, lock: &fs::File, deadline: Instant) -> Result<(), String> {
+fn wait_for_startup_lock(
+    prog: &str,
+    lock: &fs::File,
+    deadline: Option<Instant>,
+) -> Result<(), String> {
     loop {
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return Err(format!("{prog}: timed out waiting for daemon startup"));
+        }
         // SAFETY: the owned File remains open for this entire operation.
         if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
             return Ok(());
@@ -204,9 +194,6 @@ fn wait_for_startup_lock(prog: &str, lock: &fs::File, deadline: Instant) -> Resu
         }
         // A bound socket is not readiness: the competing starter retains its
         // lock until the exact daemon-initialized handshake has completed.
-        if Instant::now() >= deadline {
-            return Err(format!("{prog}: timed out waiting for daemon startup"));
-        }
         std::thread::sleep(Duration::from_millis(25));
     }
 }
@@ -214,18 +201,18 @@ fn wait_for_startup_lock(prog: &str, lock: &fs::File, deadline: Instant) -> Resu
 fn connect_existing(
     prog: &str,
     socket: &Path,
-    deadline: Instant,
+    deadline: Option<Instant>,
 ) -> Result<Option<UnixStream>, String> {
     loop {
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return Err(format!("{prog}: timed out connecting to existing daemon"));
+        }
         match try_connect(socket) {
             Ok(stream) => return Ok(Some(stream)),
             Err(error)
                 if error.kind() == io::ErrorKind::WouldBlock
                     || error.raw_os_error() == Some(libc::EINPROGRESS) => {}
             Err(_) => return Ok(None),
-        }
-        if Instant::now() >= deadline {
-            return Err(format!("{prog}: timed out connecting to existing daemon"));
         }
         std::thread::sleep(Duration::from_millis(25));
     }
