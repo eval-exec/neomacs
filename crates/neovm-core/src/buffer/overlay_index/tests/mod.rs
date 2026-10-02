@@ -2,6 +2,9 @@ use super::*;
 use crate::buffer::BufferId;
 use crate::heap_types::OverlayData;
 
+#[cfg(test)]
+mod local_move;
+
 fn overlay(start: usize, end: usize) -> Value {
     Value::make_overlay(OverlayData {
         serial: 0,

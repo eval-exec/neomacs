@@ -129,6 +129,70 @@ where
         true
     }
 
+    /// Insert immediately before the authoritative ordered successor.
+    ///
+    /// GNU's `new_start <= existing_start` descent reaches this same vacant
+    /// leaf position when the interval index supplies the new node's successor.
+    /// The existing red-black fixup therefore preserves GNU's exact topology,
+    /// including the pre-order later used by front-advancing insertion.
+    /// Mutations require the owning buffer's exclusive access to this mirror;
+    /// the successor is call-local state and is not shared across mutators.
+    pub(super) fn insert_before(&mut self, identity: I, successor: Option<I>) -> bool {
+        if self.by_identity.contains_key(&identity) {
+            return false;
+        }
+
+        let (parent, descent) = match successor {
+            Some(successor) => {
+                let successor = *self
+                    .by_identity
+                    .get(&successor)
+                    .expect("GNU order successor is missing from the mirror");
+                match self.node(successor).left {
+                    None => (Some(successor), Descent::Left),
+                    Some(mut predecessor) => {
+                        while let Some(right) = self.node(predecessor).right {
+                            predecessor = right;
+                        }
+                        (Some(predecessor), Descent::Right)
+                    }
+                }
+            }
+            None => match self.root {
+                None => (None, Descent::Left),
+                Some(mut last) => {
+                    while let Some(right) = self.node(last).right {
+                        last = right;
+                    }
+                    (Some(last), Descent::Right)
+                }
+            },
+        };
+        let id = self.allocate(OrderNode {
+            identity,
+            color: if parent.is_some() {
+                Color::Red
+            } else {
+                Color::Black
+            },
+            parent,
+            left: None,
+            right: None,
+        });
+        self.by_identity.insert(identity, id);
+        match parent {
+            None => self.root = Some(id),
+            Some(parent) => match descent {
+                Descent::Left => self.node_mut(parent).left = Some(id),
+                Descent::Right => self.node_mut(parent).right = Some(id),
+            },
+        }
+        if parent.is_some() {
+            self.insert_fix(id);
+        }
+        true
+    }
+
     /// Remove one identity using the same successor-splice algorithm and
     /// fix-up cases as GNU's `itree_remove`.
     pub(super) fn remove(&mut self, identity: I) -> bool {

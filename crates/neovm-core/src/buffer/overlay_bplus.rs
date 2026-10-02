@@ -199,6 +199,11 @@ pub(super) struct OrderedShiftTree<R: OrderedShiftRecord> {
     next_slot: usize,
     free: Vec<OrderedNodeId>,
     by_identity: FxHashMap<R::Identity, OrderedNodeId>,
+    /// Test-only per-index accounting; clones share the counter so resolutions
+    /// through an existing position handle are counted too. Atomic increments
+    /// are independent across mutator-owned indexes and publish no Lisp state.
+    #[cfg(test)]
+    identity_position_resolutions: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
@@ -216,6 +221,10 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
             next_slot: 0,
             free: Vec::new(),
             by_identity: FxHashMap::default(),
+            #[cfg(test)]
+            identity_position_resolutions: std::sync::Arc::new(
+                std::sync::atomic::AtomicUsize::new(0),
+            ),
         }
     }
 
@@ -482,6 +491,9 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
 
     pub(super) fn record(&self, identity: R::Identity) -> Option<R> {
         let leaf = *self.by_identity.get(&identity)?;
+        #[cfg(test)]
+        self.identity_position_resolutions
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let record = self
             .leaf_records(leaf)
             .iter()
@@ -495,6 +507,59 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
             current = node.parent;
         }
         Some(record.shifted(delta))
+    }
+
+    /// The identity immediately after `identity` in authoritative key order.
+    ///
+    /// This pure read needs no coordinate materialization: lazy shifts preserve
+    /// record order. Callers hold the buffer owner's existing index read or
+    /// write guard; no identity or position is cached across mutators.
+    pub(super) fn successor_identity(&self, identity: R::Identity) -> Option<R::Identity> {
+        let leaf = *self.by_identity.get(&identity)?;
+        let records = self.leaf_records(leaf);
+        let index = records
+            .iter()
+            .position(|record| record.identity() == identity)
+            .expect("overlay B+ identity map pointed to the wrong leaf");
+        if let Some(next) = records.get(index + 1) {
+            return Some(next.identity());
+        }
+
+        let mut child = leaf;
+        while let Some(parent) = self.node(child).parent {
+            let children = self.branch_children(parent);
+            let index = children
+                .iter()
+                .position(|candidate| *candidate == child)
+                .expect("B+ parent lost its child");
+            if let Some(next) = children.get(index + 1) {
+                let mut next = *next;
+                loop {
+                    match &self.node(next).kind {
+                        OrderedNodeKind::Leaf(records) => {
+                            return records.first().map(|record| record.identity());
+                        }
+                        OrderedNodeKind::Branch(children) => {
+                            next = *children.first().expect("live B+ branch is nonempty");
+                        }
+                    }
+                }
+            }
+            child = parent;
+        }
+        None
+    }
+
+    #[cfg(test)]
+    pub(super) fn reset_identity_position_resolution_count(&self) {
+        self.identity_position_resolutions
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    pub(super) fn identity_position_resolution_count(&self) -> usize {
+        self.identity_position_resolutions
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub(super) fn shift_at_or_after(

@@ -4,6 +4,10 @@
 //! endpoint lookup, and interval queries.  Lisp object state remains owned by
 //! `OverlayList`; this module owns the structural invariants needed to find
 //! those objects efficiently.
+//!
+//! | Knob | Default | Effect |
+//! | --- | --- | --- |
+//! | `NEOVM_OVERLAY_LOCAL_MOVE` | off | Reinsert a start-changing move in the GNU topology mirror using its authoritative B+ successor, avoiding coordinate resolution at each binary-tree descent. |
 
 use std::cmp::Ordering;
 use std::sync::{Arc, OnceLock, Weak};
@@ -20,6 +24,14 @@ use crate::emacs_core::value::Value;
 use crate::heap_types::OverlayData;
 
 use super::position::{EmacsByteDelta, EmacsByteLen, EmacsBytePos, EmacsByteRange};
+
+/// Process configuration only, published by `OnceLock`; it contains no Lisp
+/// state and is safe for independent buffer-owning mutators to read.
+#[inline]
+fn local_overlay_moves_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("NEOVM_OVERLAY_LOCAL_MOVE").as_deref() == Ok("on"))
+}
 
 /// A text mutation expressed in the coordinate space owned by the overlay
 /// index.  Keeping insertion and deletion distinct makes their endpoint
@@ -701,7 +713,18 @@ impl OverlayIndex {
                 }
                 let inserted = intervals.insert(overlay, new_range);
                 debug_assert!(inserted, "removed overlay retained an interval node");
-                let order_inserted =
+                let order_inserted = if local_overlay_moves_enabled() {
+                    // GNU removes/reinserts on every real start change. The
+                    // authoritative record order identifies that insertion
+                    // gap without resolving one lazily shifted position per
+                    // mirror comparison. Both indexes remain under this
+                    // buffer owner's exclusive mutation and write guard.
+                    let successor = intervals
+                        .records
+                        .successor_identity(OverlayIdentity::of(overlay));
+                    self.gnu_order
+                        .insert_before(OverlayIdentity::of(overlay), successor)
+                } else {
                     self.gnu_order
                         .insert_by(OverlayIdentity::of(overlay), |existing| {
                             new_range.start().cmp(
@@ -710,7 +733,8 @@ impl OverlayIndex {
                                     .expect("GNU order mirror contains an unindexed overlay")
                                     .start(),
                             )
-                        });
+                        })
+                };
                 assert!(
                     order_inserted,
                     "relocated overlay retained a GNU order node"

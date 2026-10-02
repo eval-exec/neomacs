@@ -49,6 +49,9 @@ mod char;
 mod charset;
 mod charset_advanced;
 mod cl;
+#[cfg(test)]
+#[path = "tests/cl2_overlay_move.rs"]
+mod cl2_overlay_move;
 mod clear_string_semantics;
 mod closure;
 mod coding;
