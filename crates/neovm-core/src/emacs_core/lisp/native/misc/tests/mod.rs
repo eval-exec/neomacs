@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 use crate::emacs_core::subr::SubrSpec;
 use crate::emacs_core::{Context, format_eval_result};
 use crate::test_utils::load_minimal_gnu_backquote_runtime;
@@ -51,8 +52,8 @@ fn copy_alist_circular_top_level_signals_like_gnu() {
     let alist = Value::list(vec![Value::cons(Value::symbol("a"), Value::fixnum(1))]);
     alist.set_cdr(alist);
 
-    match builtin_copy_alist(vec![alist]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "circular-list"),
+    match builtin_copy_alist(vec![alist]).kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "circular-list"),
         other => panic!("expected circular-list signal, got {other:?}"),
     }
 }
@@ -118,8 +119,8 @@ fn rassq_improper_alist_signals_listp() {
         Value::cons(Value::symbol("a"), Value::fixnum(1)),
         Value::fixnum(4),
     );
-    match builtin_rassq(vec![Value::fixnum(99), alist]) {
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+    match builtin_rassq(vec![Value::fixnum(99), alist]).kinded() {
+        Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
         }
         other => panic!("expected wrong-type-argument, got {other:?}"),
@@ -131,8 +132,8 @@ fn rassq_circular_alist_signals_circular_list() {
     crate::test_utils::init_test_tracing();
     let alist = Value::list(vec![Value::cons(Value::symbol("a"), Value::fixnum(1))]);
     alist.set_cdr(alist);
-    match builtin_rassq(vec![Value::fixnum(99), alist]) {
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+    match builtin_rassq(vec![Value::fixnum(99), alist]).kinded() {
+        Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "circular-list");
         }
         other => panic!("expected circular-list, got {other:?}"),
@@ -202,8 +203,8 @@ fn make_list_validates_wholenump_length() {
     crate::test_utils::init_test_tracing();
     let negative = builtin_make_list(vec![Value::fixnum(-1), Value::fixnum(1)]).unwrap_err();
     let float = builtin_make_list(vec![Value::make_float(3.2), Value::fixnum(1)]).unwrap_err();
-    match negative {
-        Flow::Signal(sig) => {
+    match negative.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -212,8 +213,8 @@ fn make_list_validates_wholenump_length() {
         }
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
-    match float {
-        Flow::Signal(sig) => {
+    match float.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -387,8 +388,8 @@ fn string_to_unibyte_ascii_storage() {
 fn string_to_unibyte_rejects_unicode_scalar() {
     crate::test_utils::init_test_tracing();
     let result = builtin_string_to_unibyte(vec![Value::string("é")]);
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -486,8 +487,8 @@ fn unibyte_char_to_multibyte_high_byte_maps_to_raw_range() {
 fn unibyte_char_to_multibyte_rejects_non_unibyte_code() {
     crate::test_utils::init_test_tracing();
     let result = builtin_unibyte_char_to_multibyte(vec![Value::fixnum(256)]);
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -958,27 +959,27 @@ fn backtrace_helper_stubs_shape_and_errors() {
     let frames = builtin_backtrace_frames_from_thread(&mut eval, vec![thread]).unwrap();
     assert!(frames.is_list());
     assert!(matches!(
-        builtin_backtrace_frames_from_thread(&mut eval, vec![Value::NIL]),
-        Err(Flow::Signal(sig))
+        builtin_backtrace_frames_from_thread(&mut eval, vec![Value::NIL]).kinded(),
+        Err(FlowKind::Signal(sig))
             if sig.symbol_name() == "wrong-type-argument"
                 && sig.data == vec![Value::symbol("threadp"), Value::NIL]
     ));
 
     assert!(matches!(
-        builtin_backtrace_locals(&mut eval, vec![Value::NIL]),
-        Err(Flow::Signal(sig))
+        builtin_backtrace_locals(&mut eval, vec![Value::NIL]).kinded(),
+        Err(FlowKind::Signal(sig))
             if sig.symbol_name() == "wrong-type-argument"
                 && sig.data == vec![Value::symbol("wholenump"), Value::NIL]
     ));
     assert!(matches!(
-        builtin_backtrace_locals(&mut eval, vec![Value::fixnum(0)]),
-        Err(Flow::Signal(sig))
+        builtin_backtrace_locals(&mut eval, vec![Value::fixnum(0)]).kinded(),
+        Err(FlowKind::Signal(sig))
             if sig.symbol_name() == "wrong-type-argument"
                 && sig.data == vec![Value::symbol("wholenump"), Value::fixnum(-1)]
     ));
     assert!(matches!(
-        builtin_backtrace_eval(&mut eval, vec![Value::fixnum(0), Value::NIL]),
-        Err(Flow::Signal(sig))
+        builtin_backtrace_eval(&mut eval, vec![Value::fixnum(0), Value::NIL]).kinded(),
+        Err(FlowKind::Signal(sig))
             if sig.symbol_name() == "wrong-type-argument"
                 && sig.data == vec![Value::symbol("wholenump"), Value::NIL]
     ));
@@ -1020,20 +1021,20 @@ fn backtrace_helper_stubs_arity_checks() {
     crate::test_utils::init_test_tracing();
     let mut eval = super::super::eval::Context::new();
     assert!(matches!(
-        builtin_backtrace_debug(&mut eval, vec![]),
-        Err(Flow::Signal(sig))
+        builtin_backtrace_debug(&mut eval, vec![]).kinded(),
+        Err(FlowKind::Signal(sig))
             if sig.symbol_name() == "wrong-number-of-arguments"
                 && sig.data == vec![Value::symbol("backtrace-debug"), Value::fixnum(0)]
     ));
     assert!(matches!(
-        builtin_backtrace_debug(&mut eval, vec![Value::fixnum(0)]),
-        Err(Flow::Signal(sig))
+        builtin_backtrace_debug(&mut eval, vec![Value::fixnum(0)]).kinded(),
+        Err(FlowKind::Signal(sig))
             if sig.symbol_name() == "wrong-number-of-arguments"
                 && sig.data == vec![Value::symbol("backtrace-debug"), Value::fixnum(1)]
     ));
     assert!(matches!(
-        builtin_backtrace_frame_internal(&mut eval, vec![]),
-        Err(Flow::Signal(sig))
+        builtin_backtrace_frame_internal(&mut eval, vec![]).kinded(),
+        Err(FlowKind::Signal(sig))
             if sig.symbol_name() == "wrong-number-of-arguments"
                 && sig.data == vec![Value::symbol("backtrace-frame--internal"), Value::fixnum(0)]
     ));

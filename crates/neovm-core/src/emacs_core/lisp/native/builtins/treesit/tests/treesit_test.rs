@@ -1,6 +1,6 @@
 use super::freshness_tests::eval_with_json_parser;
 use super::*;
-use crate::emacs_core::error::Flow;
+use crate::emacs_core::error::FlowKind;
 
 fn json_opening_bracket_node(eval: &mut super::super::eval::Context, parser: Value) -> Value {
     let root =
@@ -10,8 +10,8 @@ fn json_opening_bracket_node(eval: &mut super::super::eval::Context, parser: Val
 }
 
 fn expect_signal(result: EvalResult, symbol: &str) -> Box<crate::emacs_core::error::SignalData> {
-    match result.expect_err("expected signal") {
-        Flow::Signal(sig) => {
+    match result.expect_err("expected signal").into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), symbol);
             sig
         }

@@ -1,5 +1,6 @@
 use super::*;
 use crate::buffer::{CharRange, EmacsByteRange, LispCharPos1};
+use crate::emacs_core::error::{FlowKind, FlowRef, FlowResultExt as _};
 fn test_ob() -> crate::emacs_core::symbol::Obarray {
     crate::emacs_core::symbol::Obarray::new()
 }
@@ -357,8 +358,8 @@ fn pure_dispatch_typed_percent_rejects_float_args() {
     let err = dispatch_builtin_pure("%", vec![Value::make_float(1.5), Value::fixnum(2)])
         .expect("builtin % should resolve")
         .expect_err("builtin % should reject non-integer args");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -376,8 +377,8 @@ fn pure_dispatch_typed_log_bitops_reject_with_integer_or_marker_p() {
         let err = dispatch_builtin_pure(name, vec![Value::fixnum(1), Value::make_float(2.0)])
             .expect("builtin should resolve")
             .expect_err("bit operation should reject non-integer args");
-        match err {
-            Flow::Signal(sig) => {
+        match err.into_kind() {
+            FlowKind::Signal(sig) => {
                 assert_eq!(sig.symbol_name(), "wrong-type-argument");
                 assert_eq!(
                     sig.data,
@@ -404,8 +405,8 @@ fn pure_dispatch_typed_numeric_symbol_rejections_use_number_or_marker_p() {
         let err = dispatch_builtin_pure(name, args)
             .expect("builtin should resolve")
             .expect_err("numeric builtin should reject non-numeric symbols");
-        match err {
-            Flow::Signal(sig) => {
+        match err.into_kind() {
+            FlowKind::Signal(sig) => {
                 assert_eq!(sig.symbol_name(), "wrong-type-argument", "name={name}");
                 let actual_name = sig.data[0].as_symbol_name().map(String::from);
                 assert_eq!(
@@ -579,8 +580,8 @@ fn pure_dispatch_typed_append_reports_final_improper_tail_like_gnu() {
     let result = dispatch_builtin_pure("append", vec![improper, Value::NIL])
         .expect("builtin append should resolve");
 
-    match result {
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -637,8 +638,8 @@ fn pure_dispatch_typed_append_rejects_char_table_like_gnu_concat_to_list() {
         .expect("builtin append should resolve")
         .expect_err("GNU append rejects char-tables");
 
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("sequencep"), char_table]);
         }
@@ -824,8 +825,8 @@ fn make_interpreted_closure_matches_gnu_arglist_construction_checks() {
         None,
     )
     .expect_err("GNU rejects non-listp arglist object");
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
 }
@@ -957,8 +958,8 @@ fn pure_dispatch_typed_string_comparisons_accept_symbol_designators() {
     let err = dispatch_builtin_pure("string-lessp", vec![Value::string("a"), Value::fixnum(7)])
         .expect("builtin string-lessp should resolve")
         .expect_err("string-lessp should reject non string/symbol designators");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::fixnum(7)],);
         }
@@ -1031,8 +1032,8 @@ fn pure_dispatch_typed_downcase_unicode_edge_payloads_match_oracle() {
     let negative = dispatch_builtin_pure("downcase", vec![Value::fixnum(-1)])
         .expect("builtin downcase should resolve")
         .expect_err("builtin downcase should reject negative integer designators");
-    match negative {
-        Flow::Signal(sig) => {
+    match negative.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -1111,8 +1112,8 @@ fn pure_dispatch_typed_upcase_unicode_edge_payloads_match_oracle() {
     let negative = dispatch_builtin_pure("upcase", vec![Value::fixnum(-1)])
         .expect("builtin upcase should resolve")
         .expect_err("builtin upcase should reject negative integer designators");
-    match negative {
-        Flow::Signal(sig) => {
+    match negative.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -1510,8 +1511,8 @@ fn accessible_keymaps_prefix_type_errors_match_oracle_shape() {
     let map = builtin_make_sparse_keymap(&mut eval, vec![]).unwrap();
 
     let sequence_err = builtin_accessible_keymaps(&mut eval, vec![map, Value::T]).unwrap_err();
-    match sequence_err {
-        Flow::Signal(sig) => {
+    match sequence_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("sequencep"), Value::T]);
         }
@@ -1521,8 +1522,8 @@ fn accessible_keymaps_prefix_type_errors_match_oracle_shape() {
     let array_err =
         builtin_accessible_keymaps(&mut eval, vec![map, Value::list(vec![Value::symbol("a")])])
             .unwrap_err();
-    match array_err {
-        Flow::Signal(sig) => {
+    match array_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -1716,8 +1717,8 @@ fn eval_builtin_rejects_too_many_args() {
         vec![Value::fixnum(1), Value::NIL, Value::symbol("ignored")],
     )
     .expect_err("eval should reject more than two arguments");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(sig.data, vec![Value::symbol("eval"), Value::fixnum(3)]);
         }
@@ -1762,8 +1763,8 @@ fn kill_buffer_optional_arg_and_error_semantics() {
     // Missing buffer name signals `(error "No buffer named ...")`.
     let missing = builtin_kill_buffer(&mut eval, vec![Value::string("*kb-opt-missing*")])
         .expect_err("kill-buffer should signal on missing name");
-    match missing {
-        Flow::Signal(sig) => {
+    match missing.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -1787,8 +1788,8 @@ fn kill_buffer_optional_arg_and_error_semantics() {
     // Non-buffer/non-string designators signal `wrong-type-argument`.
     let type_err = builtin_kill_buffer(&mut eval, vec![Value::fixnum(1)])
         .expect_err("kill-buffer should reject non-string designator");
-    match type_err {
-        Flow::Signal(sig) => {
+    match type_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::fixnum(1)]);
         }
@@ -1807,8 +1808,8 @@ fn set_buffer_rejects_deleted_buffer_object() {
 
     let err = builtin_set_buffer(&mut eval, vec![dead])
         .expect_err("set-buffer should reject deleted buffer objects");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(sig.data, vec![Value::string("Selecting deleted buffer")]);
         }
@@ -1869,8 +1870,8 @@ fn get_buffer_create_accepts_optional_second_arg() {
         vec![Value::string("*gbc-opt*"), Value::NIL, Value::NIL],
     )
     .expect_err("get-buffer-create should reject more than two args");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(
                 sig.data,
@@ -1903,8 +1904,8 @@ fn buffer_creation_helpers_reject_missing_required_name_arg() {
 
     let err = builtin_get_buffer_create(&mut eval, vec![])
         .expect_err("get-buffer-create should reject missing required arg");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(
                 sig.data,
@@ -1916,8 +1917,8 @@ fn buffer_creation_helpers_reject_missing_required_name_arg() {
 
     let err = builtin_generate_new_buffer_name(&mut eval, vec![])
         .expect_err("generate-new-buffer-name should reject missing required arg");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(
                 sig.data,
@@ -1935,8 +1936,8 @@ fn get_buffer_rejects_non_string_non_buffer_designators() {
     for bad in [Value::fixnum(1), Value::NIL, Value::symbol("foo")] {
         let err = builtin_get_buffer(&mut eval, vec![bad])
             .expect_err("get-buffer should reject non-string/non-buffer args");
-        match err {
-            Flow::Signal(sig) => {
+        match err.into_kind() {
+            FlowKind::Signal(sig) => {
                 assert_eq!(sig.symbol_name(), "wrong-type-argument");
                 assert_eq!(sig.data, vec![Value::symbol("stringp"), bad]);
             }
@@ -1992,8 +1993,8 @@ fn generate_new_buffer_name_optional_arg_matches_expected_types() {
         ],
     )
     .expect_err("generate-new-buffer-name should reject non string/symbol optional arg");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -2083,8 +2084,8 @@ fn buffer_base_buffer_and_last_name_semantics() {
 
     let base_type = builtin_buffer_base_buffer(&mut eval, vec![Value::symbol("x")])
         .expect_err("buffer-base-buffer should reject non-buffer, non-nil optional arg");
-    match base_type {
-        Flow::Signal(sig) => {
+    match base_type.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("bufferp"), Value::symbol("x")]);
         }
@@ -2093,8 +2094,8 @@ fn buffer_base_buffer_and_last_name_semantics() {
 
     let last_type = builtin_buffer_last_name(&mut eval, vec![Value::symbol("x")])
         .expect_err("buffer-last-name should reject non-buffer, non-nil optional arg");
-    match last_type {
-        Flow::Signal(sig) => {
+    match last_type.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("bufferp"), Value::symbol("x")]);
         }
@@ -2103,8 +2104,8 @@ fn buffer_base_buffer_and_last_name_semantics() {
 
     let base_arity = builtin_buffer_base_buffer(&mut eval, vec![Value::NIL, Value::NIL])
         .expect_err("buffer-base-buffer should reject >1 args");
-    match base_arity {
-        Flow::Signal(sig) => {
+    match base_arity.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(
                 sig.data,
@@ -2116,8 +2117,8 @@ fn buffer_base_buffer_and_last_name_semantics() {
 
     let last_arity = builtin_buffer_last_name(&mut eval, vec![Value::NIL, Value::NIL])
         .expect_err("buffer-last-name should reject >1 args");
-    match last_arity {
-        Flow::Signal(sig) => {
+    match last_arity.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(
                 sig.data,
@@ -2199,15 +2200,15 @@ fn make_indirect_buffer_rejects_duplicate_and_empty_names() {
 
     let duplicate = builtin_make_indirect_buffer(&mut eval, vec![base, Value::string("*scratch*")])
         .expect_err("duplicate indirect name should error");
-    match duplicate {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
+    match duplicate.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
         other => panic!("unexpected flow: {other:?}"),
     }
 
     let empty = builtin_make_indirect_buffer(&mut eval, vec![base, Value::string("")])
         .expect_err("empty indirect name should error");
-    match empty {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
+    match empty.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
         other => panic!("unexpected flow: {other:?}"),
     }
 }
@@ -2467,8 +2468,8 @@ fn buffer_modified_tick_semantics() {
 
     let type_error = builtin_buffer_modified_tick(&mut eval, vec![Value::symbol("x")])
         .expect_err("buffer-modified-tick should reject non-buffer optional arg");
-    match type_error {
-        Flow::Signal(sig) => {
+    match type_error.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("bufferp"), Value::symbol("x")]);
         }
@@ -2477,8 +2478,8 @@ fn buffer_modified_tick_semantics() {
 
     let arity_error = builtin_buffer_chars_modified_tick(&mut eval, vec![Value::NIL, Value::NIL])
         .expect_err("buffer-chars-modified-tick should reject >1 args");
-    match arity_error {
-        Flow::Signal(sig) => {
+    match arity_error.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(
                 sig.data,
@@ -2781,8 +2782,8 @@ fn subst_char_in_region_rejects_different_utf8_lengths() {
     )
     .unwrap_err();
 
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -2840,8 +2841,8 @@ fn insert_inherit_variants_reuse_insert_semantics() {
     let type_error =
         builtin_insert_and_inherit(&mut eval, vec![Value::list(vec![Value::fixnum(1)])])
             .expect_err("insert-and-inherit should reject non char/string values");
-    match type_error {
-        Flow::Signal(sig) => {
+    match type_error.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -3192,8 +3193,8 @@ fn insert_buffer_substring_inserts_source_region() {
 
     let bad_designator = builtin_insert_buffer_substring(&mut eval, vec![Value::fixnum(9)])
         .expect_err("insert-buffer-substring should reject non-buffer designators");
-    match bad_designator {
-        Flow::Signal(sig) => {
+    match bad_designator.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::fixnum(9)]);
         }
@@ -3205,8 +3206,8 @@ fn insert_buffer_substring_inserts_source_region() {
         vec![Value::make_buffer(source_id), Value::string("x")],
     )
     .expect_err("insert-buffer-substring should reject non integer-or-marker START");
-    match bad_start {
-        Flow::Signal(sig) => {
+    match bad_start.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -3260,8 +3261,8 @@ fn insert_buffer_substring_signals_when_bounds_escape_source_narrowing() {
         vec![Value::make_buffer(source_id), Value::fixnum(1)],
     )
     .expect_err("insert-buffer-substring should reject out-of-range narrowed START");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(sig.data, vec![Value::fixnum(1), Value::fixnum(5)]);
         }
@@ -3278,8 +3279,8 @@ fn insert_buffer_substring_rejects_deleted_buffer_object() {
 
     let err = builtin_insert_buffer_substring(&mut eval, vec![dead])
         .expect_err("insert-buffer-substring should reject deleted buffer objects");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(sig.data, vec![Value::string("Selecting deleted buffer")]);
         }
@@ -3373,8 +3374,8 @@ fn ntake_destructively_truncates_lists() {
 
     let type_error = builtin_ntake(vec![Value::fixnum(1), Value::fixnum(3)])
         .expect_err("ntake should reject non-list arguments");
-    match type_error {
-        Flow::Signal(sig) => {
+    match type_error.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("listp"), Value::fixnum(3)]);
         }
@@ -3781,8 +3782,8 @@ fn buffer_swap_text_preserves_unibyte_raw_bytes() {
 }
 
 fn buffer_swap_text_signal_message(result: EvalResult) -> String {
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             sig.data[0]
                 .as_runtime_string_owned()
@@ -4061,8 +4062,8 @@ fn compare_buffer_substrings_signals_when_bounds_escape_narrowing() {
         ],
     )
     .expect_err("compare-buffer-substrings should reject out-of-range narrowed START");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(sig.data, vec![Value::fixnum(1), Value::NIL]);
         }
@@ -4087,8 +4088,8 @@ fn compare_buffer_substrings_rejects_deleted_buffer_object() {
         vec![dead, Value::NIL, Value::NIL, live, Value::NIL, Value::NIL],
     )
     .expect_err("compare-buffer-substrings should reject deleted buffer objects");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(sig.data, vec![Value::string("Selecting deleted buffer")]);
         }
@@ -4210,8 +4211,8 @@ fn split_window_internal_validates_core_argument_types() {
         vec![Value::NIL, Value::NIL, Value::symbol("below"), Value::NIL],
     )
     .expect_err("split-window-internal must require a fixnum PIXEL-SIZE");
-    match nil_size {
-        Flow::Signal(sig) => {
+    match nil_size.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("fixnump"), Value::NIL]);
         }
@@ -4228,8 +4229,8 @@ fn split_window_internal_validates_core_argument_types() {
         ],
     )
     .expect_err("split-window-internal should reject non-window objects");
-    match window_type {
-        Flow::Signal(sig) => {
+    match window_type.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             // GNU decodes OLD with `decode_valid_window' (`src/window.c'),
             // whose CHECK_VALID_WINDOW names `window-valid-p' -- NOT `windowp'.
@@ -4257,8 +4258,8 @@ fn split_window_internal_validates_core_argument_types() {
         ],
     )
     .expect_err("split-window-internal should reject non-fixnum sizes");
-    match size_type {
-        Flow::Signal(sig) => {
+    match size_type.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -4310,8 +4311,8 @@ fn barf_bury_char_equal_cl_type_and_cancel_semantics() {
 
     let char_type = builtin_char_equal(&mut eval, vec![Value::fixnum(1), Value::string("a")])
         .expect_err("char-equal should reject non-character args");
-    match char_type {
-        Flow::Signal(sig) => {
+    match char_type.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -4381,8 +4382,8 @@ fn barf_bury_char_equal_cl_type_and_cancel_semantics() {
     );
     let cancel_arity = builtin_cancel_kbd_macro_events(&mut cancel_eval, vec![Value::NIL])
         .expect_err("cancel-kbd-macro-events should reject args");
-    match cancel_arity {
-        Flow::Signal(sig) => {
+    match cancel_arity.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(
                 sig.data,
@@ -4406,8 +4407,8 @@ fn barf_bury_char_equal_cl_type_and_cancel_semantics() {
     }
     let barf_read_only = builtin_barf_if_buffer_read_only(&mut eval, vec![])
         .expect_err("barf-if-buffer-read-only should signal on read-only buffers");
-    match barf_read_only {
-        Flow::Signal(sig) => {
+    match barf_read_only.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "buffer-read-only");
             assert_eq!(sig.data, vec![barf_buffer]);
         }
@@ -4428,8 +4429,8 @@ fn barf_bury_char_equal_cl_type_and_cancel_semantics() {
 
     let barf_range = builtin_barf_if_buffer_read_only(&mut eval, vec![Value::fixnum(0)])
         .expect_err("barf-if-buffer-read-only should check lower-bound positions");
-    match barf_range {
-        Flow::Signal(sig) => {
+    match barf_range.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(sig.data, vec![Value::fixnum(0), Value::fixnum(0)]);
         }
@@ -4438,8 +4439,8 @@ fn barf_bury_char_equal_cl_type_and_cancel_semantics() {
 
     let barf_type = builtin_barf_if_buffer_read_only(&mut eval, vec![Value::string("x")])
         .expect_err("barf-if-buffer-read-only should reject non-fixnum positions");
-    match barf_type {
-        Flow::Signal(sig) => {
+    match barf_type.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("fixnump"), Value::string("x")]);
         }
@@ -4448,8 +4449,8 @@ fn barf_bury_char_equal_cl_type_and_cancel_semantics() {
 
     let barf_arity = builtin_barf_if_buffer_read_only(&mut eval, vec![Value::NIL, Value::NIL])
         .expect_err("barf-if-buffer-read-only should reject >1 args");
-    match barf_arity {
-        Flow::Signal(sig) => {
+    match barf_arity.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(
                 sig.data,
@@ -4469,8 +4470,8 @@ fn barf_bury_char_equal_cl_type_and_cancel_semantics() {
     );
     let bury_type = builtin_bury_buffer_internal(&mut eval, vec![Value::symbol("x")])
         .expect_err("bury-buffer-internal should reject non-buffer values");
-    match bury_type {
-        Flow::Signal(sig) => {
+    match bury_type.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("bufferp"), Value::symbol("x")]);
         }
@@ -4478,8 +4479,8 @@ fn barf_bury_char_equal_cl_type_and_cancel_semantics() {
     }
     let bury_arity = builtin_bury_buffer_internal(&mut eval, vec![])
         .expect_err("bury-buffer-internal should reject wrong arity");
-    match bury_arity {
-        Flow::Signal(sig) => {
+    match bury_arity.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(
                 sig.data,
@@ -4561,8 +4562,8 @@ fn byte_position_and_clear_bitmap_semantics() {
 
     let byte_to_position_type = builtin_byte_to_position(&mut eval, vec![Value::string("x")])
         .expect_err("byte-to-position should enforce fixnum input");
-    match byte_to_position_type {
-        Flow::Signal(sig) => {
+    match byte_to_position_type.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("fixnump"), Value::string("x")]);
         }
@@ -4572,8 +4573,8 @@ fn byte_position_and_clear_bitmap_semantics() {
     let byte_to_position_arity =
         builtin_byte_to_position(&mut eval, vec![Value::fixnum(1), Value::fixnum(2)])
             .expect_err("byte-to-position should reject wrong arity");
-    match byte_to_position_arity {
-        Flow::Signal(sig) => {
+    match byte_to_position_arity.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(
                 sig.data,
@@ -4591,8 +4592,8 @@ fn byte_position_and_clear_bitmap_semantics() {
 
     let byte_to_string_type = builtin_byte_to_string(vec![Value::symbol("x")])
         .expect_err("byte-to-string should enforce fixnum input");
-    match byte_to_string_type {
-        Flow::Signal(sig) => {
+    match byte_to_string_type.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("fixnump"), Value::symbol("x")]);
         }
@@ -4601,8 +4602,8 @@ fn byte_position_and_clear_bitmap_semantics() {
 
     let byte_to_string_range = builtin_byte_to_string(vec![Value::fixnum(256)])
         .expect_err("byte-to-string should reject bytes above 255");
-    match byte_to_string_range {
-        Flow::Signal(sig) => {
+    match byte_to_string_range.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(sig.data, vec![Value::string("Invalid byte")]);
         }
@@ -4612,8 +4613,8 @@ fn byte_position_and_clear_bitmap_semantics() {
     assert_eq!(builtin_bitmap_spec_p(vec![Value::NIL]).unwrap(), Value::NIL);
     let bitmap_arity =
         builtin_bitmap_spec_p(vec![]).expect_err("bitmap-spec-p should reject wrong arity");
-    match bitmap_arity {
-        Flow::Signal(sig) => {
+    match bitmap_arity.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(
                 sig.data,
@@ -4643,8 +4644,8 @@ fn byte_position_and_clear_bitmap_semantics() {
     let clear_face_arity =
         builtin_clear_face_cache(&mut face_cache_ctx, vec![Value::NIL, Value::NIL])
             .expect_err("clear-face-cache should reject >1 args");
-    match clear_face_arity {
-        Flow::Signal(sig) => {
+    match clear_face_arity.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(
                 sig.data,
@@ -4660,8 +4661,8 @@ fn byte_position_and_clear_bitmap_semantics() {
     );
     let clear_auto_save_arity = builtin_clear_buffer_auto_save_failure(vec![Value::NIL])
         .expect_err("clear-buffer-auto-save-failure should reject args");
-    match clear_auto_save_arity {
-        Flow::Signal(sig) => {
+    match clear_auto_save_arity.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(
                 sig.data,
@@ -4721,8 +4722,8 @@ fn buffer_undo_designators_match_deleted_and_missing_buffer_semantics() {
     let enable_missing_name =
         builtin_buffer_enable_undo(&mut eval, vec![Value::string("*undo-enable-missing*")])
             .expect_err("buffer-enable-undo missing string should signal");
-    match enable_missing_name {
-        Flow::Signal(sig) => {
+    match enable_missing_name.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -4792,8 +4793,8 @@ fn other_buffer_prefers_live_alternative_and_enforces_arity() {
         vec![Value::NIL, Value::NIL, Value::NIL, Value::NIL],
     )
     .expect_err("other-buffer should reject more than three args");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(
                 sig.data,
@@ -5071,8 +5072,8 @@ fn featurep_subfeatures_property_must_be_list() {
         ],
     )
     .expect_err("featurep should signal listp when subfeatures is not a list");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("listp"), Value::fixnum(1)]);
         }
@@ -5093,8 +5094,8 @@ fn featurep_rejects_more_than_two_args() {
         ],
     )
     .expect_err("featurep should reject more than two arguments");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(sig.data, vec![Value::symbol("featurep"), Value::fixnum(3)]);
         }
@@ -5121,8 +5122,8 @@ fn pure_dispatch_typed_string_constructor_rejects_modified_events() {
     let err = dispatch_builtin_pure("string", vec![Value::fixnum(modified_a)])
         .expect("builtin string should resolve")
         .expect_err("GNU string rejects modified event codes");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -5155,8 +5156,8 @@ fn pure_dispatch_typed_propertize_non_string_signals_stringp() {
     let result = dispatch_builtin_pure("propertize", vec![Value::fixnum(1)])
         .expect("builtin propertize should resolve")
         .expect_err("propertize should reject non-string first arg");
-    match result {
-        Flow::Signal(sig) => {
+    match result.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::fixnum(1)]);
         }
@@ -5173,8 +5174,8 @@ fn pure_dispatch_typed_propertize_odd_property_list_signals_arity() {
     )
     .expect("builtin propertize should resolve")
     .expect_err("propertize should reject odd property argument count");
-    match result {
-        Flow::Signal(sig) => {
+    match result.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(
                 sig.data,
@@ -5251,8 +5252,8 @@ fn pure_dispatch_typed_unibyte_string_validates_range_and_type() {
     let out_of_range = dispatch_builtin_pure("unibyte-string", vec![Value::fixnum(256)])
         .expect("builtin unibyte-string should resolve")
         .expect_err("expected args-out-of-range");
-    match out_of_range {
-        Flow::Signal(sig) => {
+    match out_of_range.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(
                 sig.data,
@@ -5265,8 +5266,8 @@ fn pure_dispatch_typed_unibyte_string_validates_range_and_type() {
     let wrong_type = dispatch_builtin_pure("unibyte-string", vec![Value::string("x")])
         .expect("builtin unibyte-string should resolve")
         .expect_err("expected wrong-type-argument");
-    match wrong_type {
-        Flow::Signal(sig) => {
+    match wrong_type.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -5312,8 +5313,8 @@ fn pure_dispatch_typed_make_vector_validates_wholenump_length() {
         let err = dispatch_builtin_pure("make-vector", vec![bad_len, Value::NIL])
             .expect("builtin make-vector should resolve")
             .expect_err("invalid lengths should signal");
-        match err {
-            Flow::Signal(sig) => {
+        match err.into_kind() {
+            FlowKind::Signal(sig) => {
                 assert_eq!(sig.symbol_name(), "wrong-type-argument");
                 assert_eq!(sig.data, vec![Value::symbol("wholenump"), bad_len]);
             }
@@ -5372,8 +5373,8 @@ fn pure_dispatch_typed_aref_aset_char_table_uses_character_index_semantics() {
     let negative = dispatch_builtin_pure("aref", vec![ct, Value::fixnum(-1)])
         .expect("builtin aref should resolve")
         .expect_err("negative char-table index should fail");
-    match negative {
-        Flow::Signal(sig) => {
+    match negative.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -5387,8 +5388,8 @@ fn pure_dispatch_typed_aref_aset_char_table_uses_character_index_semantics() {
         dispatch_builtin_pure("aset", vec![ct, Value::fixnum(0x40_0000), Value::fixnum(1)])
             .expect("builtin aset should resolve")
             .expect_err("out-of-range char-table index should fail");
-    match too_large {
-        Flow::Signal(sig) => {
+    match too_large.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -5540,8 +5541,8 @@ fn pure_dispatch_typed_aset_string_errors_match_oracle() {
     )
     .expect("builtin aset should resolve")
     .expect_err("aset should reject negative index");
-    match out_of_range {
-        Flow::Signal(sig) => {
+    match out_of_range.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(sig.data, vec![Value::string("abc"), Value::fixnum(-1)]);
         }
@@ -5554,8 +5555,8 @@ fn pure_dispatch_typed_aset_string_errors_match_oracle() {
     )
     .expect("builtin aset should resolve")
     .expect_err("aset should validate replacement character");
-    match wrong_type {
-        Flow::Signal(sig) => {
+    match wrong_type.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("characterp"), Value::NIL]);
         }
@@ -6067,8 +6068,8 @@ fn pure_dispatch_typed_expt_and_isnan_type_errors_match_oracle() {
     let expt_base = dispatch_builtin_pure("expt", vec![Value::symbol("a"), Value::fixnum(2)])
         .expect("builtin expt should resolve")
         .expect_err("expt should reject non-numeric base");
-    match expt_base {
-        Flow::Signal(sig) => {
+    match expt_base.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("numberp"), Value::symbol("a")]);
         }
@@ -6078,8 +6079,8 @@ fn pure_dispatch_typed_expt_and_isnan_type_errors_match_oracle() {
     let expt_exp = dispatch_builtin_pure("expt", vec![Value::fixnum(2), Value::symbol("a")])
         .expect("builtin expt should resolve")
         .expect_err("expt should reject non-numeric exponent");
-    match expt_exp {
-        Flow::Signal(sig) => {
+    match expt_exp.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("numberp"), Value::symbol("a")]);
         }
@@ -6089,8 +6090,8 @@ fn pure_dispatch_typed_expt_and_isnan_type_errors_match_oracle() {
     let isnan_non_float = dispatch_builtin_pure("isnan", vec![Value::fixnum(1)])
         .expect("builtin isnan should resolve")
         .expect_err("isnan should reject non-floats");
-    match isnan_non_float {
-        Flow::Signal(sig) => {
+    match isnan_non_float.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("floatp"), Value::fixnum(1)]);
         }
@@ -6198,8 +6199,8 @@ fn pure_dispatch_obarray_make_returns_gnu_obarray_and_clear_keeps_vector_compat(
     let wrong_type = dispatch_builtin_pure("obarray-clear", vec![Value::fixnum(1)])
         .expect("builtin obarray-clear should resolve")
         .expect_err("obarray-clear should reject non-obarray arguments");
-    match wrong_type {
-        Flow::Signal(sig) => {
+    match wrong_type.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("obarrayp"), Value::fixnum(1)]);
         }
@@ -6522,8 +6523,8 @@ fn pure_dispatch_unicode_and_re_placeholders_match_compat_contracts() {
     )
     .expect("builtin put-unicode-property-internal should resolve")
     .expect_err("nil char-table should signal wrong-type-argument");
-    match unicode_err {
-        Flow::Signal(sig) => {
+    match unicode_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("char-table-p"), Value::NIL]);
         }
@@ -6552,8 +6553,8 @@ fn pure_dispatch_map_placeholders_match_compat_contracts() {
         vec![Value::NIL, Value::symbol("unicode"), Value::NIL],
     )
     .expect("builtin map-charset-chars should resolve");
-    match map_charset_chars {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "void-function"),
+    match map_charset_chars.kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "void-function"),
         other => {
             panic!("map-charset-chars with nil callback should signal void-function: {other:?}")
         }
@@ -6861,8 +6862,8 @@ fn pure_dispatch_position_placeholders_match_compat_contracts() {
     let play_sound_err = dispatch_builtin_pure("play-sound-internal", vec![Value::NIL])
         .expect("builtin play-sound-internal should resolve")
         .expect_err("play-sound-internal should reject nil as invalid spec");
-    match play_sound_err {
-        Flow::Signal(sig) => {
+    match play_sound_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
         }
         other => panic!("unexpected flow: {other:?}"),
@@ -6880,8 +6881,8 @@ fn pure_dispatch_record_placeholders_match_compat_contracts() {
     let record_arity = dispatch_builtin_pure("record", vec![])
         .expect("builtin record should resolve")
         .expect_err("record should reject empty slot lists");
-    match record_arity {
-        Flow::Signal(sig) => {
+    match record_arity.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(sig.data, vec![Value::symbol("record"), Value::fixnum(0)]);
         }
@@ -6944,8 +6945,8 @@ fn pure_dispatch_reconsider_redirect_placeholders_match_compat_contracts() {
     let reconsider = dispatch_builtin_pure("reconsider-frame-fonts", vec![Value::NIL])
         .expect("builtin reconsider-frame-fonts should resolve")
         .expect_err("reconsider-frame-fonts should require a window system frame");
-    match reconsider {
-        Flow::Signal(sig) => {
+    match reconsider.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -6970,8 +6971,8 @@ fn pure_dispatch_reconsider_redirect_placeholders_match_compat_contracts() {
         dispatch_builtin_pure("resize-mini-window-internal", vec![Value::fixnum(42)])
             .expect("builtin resize-mini-window-internal should resolve")
             .expect_err("resize-mini-window-internal should reject non-window args");
-    match resize_mini_bad_type {
-        Flow::Signal(sig) => {
+    match resize_mini_bad_type.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
         }
         other => panic!("expected signal, got: {other:?}"),
@@ -6989,8 +6990,8 @@ fn pure_dispatch_reconsider_redirect_placeholders_match_compat_contracts() {
     )
     .expect("builtin resize-mini-window-internal should resolve")
     .expect_err("resize-mini-window-internal should signal when window has no frame");
-    match resize_mini_no_frame {
-        Flow::Signal(sig) => {
+    match resize_mini_no_frame.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -7091,8 +7092,8 @@ fn pure_dispatch_set_window_placeholder_cluster_matches_compat_contracts() {
     let set_mini = dispatch_builtin_pure("set-minibuffer-window", vec![Value::make_window(1)])
         .expect("builtin set-minibuffer-window should resolve")
         .expect_err("set-minibuffer-window should reject a non-minibuffer window");
-    match set_mini {
-        Flow::Signal(sig) => {
+    match set_mini.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -7108,8 +7109,8 @@ fn pure_dispatch_set_window_placeholder_cluster_matches_compat_contracts() {
     )
     .expect("builtin set-window-combination-limit should resolve")
     .expect_err("set-window-combination-limit should reject leaf windows");
-    match set_combination {
-        Flow::Signal(sig) => {
+    match set_combination.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -7721,8 +7722,8 @@ fn interactive_form_eval_signals_listp_for_improper_lambda_shapes() {
 
     let dotted_interactive_err =
         builtin_interactive_form(&mut eval, vec![dotted_interactive]).unwrap_err();
-    match dotted_interactive_err {
-        Flow::Signal(sig) => {
+    match dotted_interactive_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("listp"), Value::string("p")]);
         }
@@ -7730,8 +7731,8 @@ fn interactive_form_eval_signals_listp_for_improper_lambda_shapes() {
     }
 
     let dotted_body_err = builtin_interactive_form(&mut eval, vec![dotted_body]).unwrap_err();
-    match dotted_body_err {
-        Flow::Signal(sig) => {
+    match dotted_body_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -7746,8 +7747,8 @@ fn interactive_form_eval_signals_listp_for_improper_lambda_shapes() {
 
     let doc_dotted_body_err =
         builtin_interactive_form(&mut eval, vec![doc_dotted_body]).unwrap_err();
-    match doc_dotted_body_err {
-        Flow::Signal(sig) => {
+    match doc_dotted_body_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -7779,8 +7780,8 @@ fn pure_dispatch_internal_placeholder_cluster_matches_compat_contracts() {
     let char_font_oob = dispatch_builtin_pure("internal-char-font", vec![Value::fixnum(65)])
         .expect("builtin internal-char-font should resolve")
         .expect_err("out-of-range POSITION should signal args-out-of-range");
-    match char_font_oob {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "args-out-of-range"),
+    match char_font_oob.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "args-out-of-range"),
         other => panic!("unexpected flow: {other:?}"),
     }
 
@@ -7810,8 +7811,8 @@ fn pure_dispatch_internal_placeholder_cluster_matches_compat_contracts() {
     let handle_focus_in = dispatch_builtin_pure("internal-handle-focus-in", vec![Value::NIL])
         .expect("builtin internal-handle-focus-in should resolve")
         .expect_err("builtin internal-handle-focus-in should signal on invalid events");
-    match handle_focus_in {
-        Flow::Signal(sig) => {
+    match handle_focus_in.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(sig.data, vec![Value::string("invalid focus-in event")]);
         }
@@ -7991,8 +7992,8 @@ fn pure_dispatch_memory_module_placeholder_cluster_matches_compat_contracts() {
         let err = dispatch_builtin_pure("malloc-trim", vec![bad])
             .expect("builtin malloc-trim should resolve for bad pad")
             .expect_err("malloc-trim should reject non-wholenump pad");
-        match err {
-            Flow::Signal(sig) => {
+        match err.into_kind() {
+            FlowKind::Signal(sig) => {
                 assert_eq!(sig.symbol_name(), "wrong-type-argument");
                 assert_eq!(sig.data, vec![Value::symbol("wholenump"), bad]);
             }
@@ -8011,8 +8012,8 @@ fn pure_dispatch_memory_module_placeholder_cluster_matches_compat_contracts() {
     let module_load_err = dispatch_builtin_pure("module-load", vec![Value::string(module_path)])
         .expect("builtin module-load should resolve")
         .expect_err("builtin module-load should signal on missing path");
-    match module_load_err {
-        Flow::Signal(sig) => {
+    match module_load_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "module-open-failed");
             assert_eq!(sig.data.first(), Some(&Value::string(module_path)));
             assert!(
@@ -8026,8 +8027,8 @@ fn pure_dispatch_memory_module_placeholder_cluster_matches_compat_contracts() {
     let module_load_type_err = dispatch_builtin_pure("module-load", vec![Value::NIL])
         .expect("builtin module-load should resolve")
         .expect_err("module-load should reject non-string path");
-    match module_load_type_err {
-        Flow::Signal(sig) => {
+    match module_load_type_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::NIL]);
         }
@@ -8270,8 +8271,8 @@ fn kill_emacs_eval_requests_shutdown_and_stops_command_loop() {
     eval.command_loop.running = true;
 
     let result = super::symbols::builtin_kill_emacs(&mut eval, vec![Value::fixnum(7)]);
-    match result {
-        Err(crate::emacs_core::error::Flow::Shutdown(request)) => {
+    match result.kinded() {
+        Err(crate::emacs_core::error::FlowKind::Shutdown(request)) => {
             assert_eq!(request.exit_code, 7);
         }
         other => panic!("kill-emacs should unwind as a shutdown, got {other:?}"),
@@ -8453,8 +8454,8 @@ fn make_byte_code_rejects_multibyte_bytecode_string_like_gnu() {
     .expect("builtin make-byte-code should resolve")
     .expect_err("multibyte bytecode string should fail");
 
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(sig.data, vec![Value::string("Invalid byte-code object")]);
         }
@@ -8811,8 +8812,8 @@ fn pure_dispatch_treesit_node_placeholder_cluster_matches_compat_contracts() {
     let err = dispatch_builtin_pure("treesit-node-parser", vec![Value::NIL])
         .expect("builtin treesit-node-parser should resolve")
         .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
     }
 
@@ -9002,8 +9003,8 @@ fn negative_match_group_signals_args_out_of_range() {
 
     let match_string_err = builtin_match_string(&mut eval, vec![Value::fixnum(-1)])
         .expect_err("negative subgroup should signal");
-    match match_string_err {
-        Flow::Signal(sig) => {
+    match match_string_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(sig.data, vec![Value::fixnum(-1), Value::fixnum(0)]);
         }
@@ -9012,8 +9013,8 @@ fn negative_match_group_signals_args_out_of_range() {
 
     let match_beginning_err = builtin_match_beginning(&mut eval, vec![Value::fixnum(-1)])
         .expect_err("negative subgroup should signal");
-    match match_beginning_err {
-        Flow::Signal(sig) => {
+    match match_beginning_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(sig.data, vec![Value::fixnum(-1), Value::fixnum(0)]);
         }
@@ -9022,8 +9023,8 @@ fn negative_match_group_signals_args_out_of_range() {
 
     let match_end_err = builtin_match_end(&mut eval, vec![Value::fixnum(-1)])
         .expect_err("negative subgroup should signal");
-    match match_end_err {
-        Flow::Signal(sig) => {
+    match match_end_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(sig.data, vec![Value::fixnum(-1), Value::fixnum(0)]);
         }
@@ -9041,8 +9042,8 @@ fn buffer_region_negative_bounds_signal_without_panicking() {
     let substring_err =
         builtin_buffer_substring(&mut eval, vec![Value::fixnum(-1), Value::fixnum(2)])
             .expect_err("negative start should signal");
-    match substring_err {
-        Flow::Signal(sig) => {
+    match substring_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(sig.data, vec![current, Value::fixnum(-1), Value::fixnum(2)]);
         }
@@ -9051,8 +9052,8 @@ fn buffer_region_negative_bounds_signal_without_panicking() {
 
     let delete_err = builtin_delete_region(&mut eval, vec![Value::fixnum(-1), Value::fixnum(2)])
         .expect_err("negative start should signal");
-    match delete_err {
-        Flow::Signal(sig) => {
+    match delete_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(sig.data, vec![current, Value::fixnum(-1), Value::fixnum(2)]);
         }
@@ -9061,8 +9062,8 @@ fn buffer_region_negative_bounds_signal_without_panicking() {
 
     let narrow_err = builtin_narrow_to_region(&mut eval, vec![Value::fixnum(-1), Value::fixnum(2)])
         .expect_err("negative start should signal");
-    match narrow_err {
-        Flow::Signal(sig) => {
+    match narrow_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(sig.data, vec![Value::fixnum(-1), Value::fixnum(2)]);
         }
@@ -9090,8 +9091,8 @@ fn goto_char_rejects_bignum_but_fix_position_builtins_clamp_it() {
 
     let goto_err = builtin_goto_char(&mut eval, vec![positive_big])
         .expect_err("GNU goto-char rejects bignum even though fix_position accepts it");
-    match goto_err {
-        Flow::Signal(sig) => {
+    match goto_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -9143,8 +9144,8 @@ fn compute_motion_validates_positions_and_offsets_like_gnu() {
         ],
     )
     .expect_err("FROM outside narrowing should signal");
-    match from_err {
-        Flow::Signal(sig) => {
+    match from_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(
                 sig.data,
@@ -9167,8 +9168,8 @@ fn compute_motion_validates_positions_and_offsets_like_gnu() {
         ],
     )
     .expect_err("TO outside narrowing should signal");
-    match to_err {
-        Flow::Signal(sig) => {
+    match to_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(
                 sig.data,
@@ -9192,8 +9193,8 @@ fn compute_motion_validates_positions_and_offsets_like_gnu() {
         ],
     )
     .expect_err("GNU compute-motion coerces bignum with fix_position before range check");
-    match bignum_err {
-        Flow::Signal(sig) => {
+    match bignum_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(
                 sig.data,
@@ -9220,8 +9221,8 @@ fn compute_motion_validates_positions_and_offsets_like_gnu() {
         ],
     )
     .expect_err("FROMPOS fields are CHECK_FIXNUM, not fix_position");
-    match cons_bignum_err {
-        Flow::Signal(sig) => {
+    match cons_bignum_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("fixnump"), positive_big]);
         }
@@ -9241,8 +9242,8 @@ fn compute_motion_validates_positions_and_offsets_like_gnu() {
         ],
     )
     .expect_err("negative OFFSETS should signal args-out-of-range");
-    match offsets_err {
-        Flow::Signal(sig) => {
+    match offsets_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(sig.data, vec![Value::fixnum(-1), Value::fixnum(0)]);
         }
@@ -9439,10 +9440,15 @@ fn search_match_runtime_arity_edges_match_oracle_contracts() {
             Value::NIL,
         ],
     );
-    assert!(matches!(
-        search_over_arity,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
-    ));
+    assert!(if matches!(
+        search_over_arity.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(search_over_arity);
+        true
+    } else {
+        false
+    });
 
     let regex_over_arity = builtin_re_search_forward(
         &mut eval,
@@ -9454,10 +9460,15 @@ fn search_match_runtime_arity_edges_match_oracle_contracts() {
             Value::NIL,
         ],
     );
-    assert!(matches!(
-        regex_over_arity,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
-    ));
+    assert!(if matches!(
+        regex_over_arity.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(regex_over_arity);
+        true
+    } else {
+        false
+    });
 
     let looking_at_optional_second =
         builtin_looking_at(&mut eval, vec![Value::string("a"), Value::T]);
@@ -9465,32 +9476,52 @@ fn search_match_runtime_arity_edges_match_oracle_contracts() {
 
     let looking_at_over_arity =
         builtin_looking_at(&mut eval, vec![Value::string("a"), Value::NIL, Value::NIL]);
-    assert!(matches!(
-        looking_at_over_arity,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
-    ));
+    assert!(if matches!(
+        looking_at_over_arity.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(looking_at_over_arity);
+        true
+    } else {
+        false
+    });
 
     let looking_at_p_over_arity =
         builtin_looking_at_p(&mut eval, vec![Value::string("a"), Value::NIL]);
-    assert!(matches!(
-        looking_at_p_over_arity,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
-    ));
+    assert!(if matches!(
+        looking_at_p_over_arity.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(looking_at_p_over_arity);
+        true
+    } else {
+        false
+    });
 
     let looking_at_p_bad_type = builtin_looking_at_p(&mut eval, vec![Value::fixnum(1)]);
-    assert!(matches!(
-        looking_at_p_bad_type,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-type-argument"
-    ));
+    assert!(if matches!(
+        looking_at_p_bad_type.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-type-argument"
+    ) {
+        drop(looking_at_p_bad_type);
+        true
+    } else {
+        false
+    });
 
     let match_string_over_arity = builtin_match_string(
         &mut eval,
         vec![Value::fixnum(0), Value::string("a"), Value::NIL],
     );
-    assert!(matches!(
-        match_string_over_arity,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
-    ));
+    assert!(if matches!(
+        match_string_over_arity.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(match_string_over_arity);
+        true
+    } else {
+        false
+    });
 
     let replace_match_over_arity = builtin_replace_match(
         &mut eval,
@@ -9503,10 +9534,15 @@ fn search_match_runtime_arity_edges_match_oracle_contracts() {
             Value::NIL,
         ],
     );
-    assert!(matches!(
-        replace_match_over_arity,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
-    ));
+    assert!(if matches!(
+        replace_match_over_arity.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(replace_match_over_arity);
+        true
+    } else {
+        false
+    });
 
     let string_match_over_arity = builtin_string_match(
         &mut eval,
@@ -9518,10 +9554,15 @@ fn search_match_runtime_arity_edges_match_oracle_contracts() {
             Value::NIL,
         ],
     );
-    assert!(matches!(
-        string_match_over_arity,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
-    ));
+    assert!(if matches!(
+        string_match_over_arity.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(string_match_over_arity);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -9709,8 +9750,8 @@ fn list_copy_length_and_delq_signal_circular_list_like_gnu() {
     crate::test_utils::init_test_tracing();
 
     fn assert_circular(result: EvalResult) {
-        match result {
-            Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+        match result.kinded() {
+            Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
                 assert_eq!(sig.symbol_name(), "circular-list");
             }
             other => panic!("expected circular-list signal, got {other:?}"),
@@ -9739,8 +9780,8 @@ fn large_length_predicates_signal_circular_list_like_gnu() {
     crate::test_utils::init_test_tracing();
 
     fn assert_circular(result: EvalResult) {
-        match result {
-            Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+        match result.kinded() {
+            Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
                 assert_eq!(sig.symbol_name(), "circular-list");
             }
             other => panic!("expected circular-list signal, got {other:?}"),
@@ -9765,8 +9806,8 @@ fn vconcat_signals_circular_list_like_gnu() {
     let input = Value::list(vec![Value::fixnum(1), Value::fixnum(2)]);
     input.cons_cdr().set_cdr(input);
 
-    match builtin_vconcat(vec![input]) {
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+    match builtin_vconcat(vec![input]).kinded() {
+        Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "circular-list");
         }
         other => panic!("expected circular-list signal, got {other:?}"),
@@ -9779,8 +9820,8 @@ fn nconc_nonfinal_circular_list_and_dotted_tail_match_gnu() {
 
     let cyclic = Value::list(vec![Value::fixnum(1), Value::fixnum(2)]);
     cyclic.cons_cdr().set_cdr(cyclic);
-    match builtin_nconc(vec![cyclic, Value::list(vec![Value::fixnum(3)])]) {
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+    match builtin_nconc(vec![cyclic, Value::list(vec![Value::fixnum(3)])]).kinded() {
+        Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "circular-list");
         }
         other => panic!("expected circular-list signal, got {other:?}"),
@@ -9933,16 +9974,21 @@ fn replace_match_missing_subexp_signals_error() {
             Value::fixnum(2),
         ],
     );
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "error"
                 && sig.data
                     == vec![
                         Value::string("replace-match subexpression does not exist"),
                         Value::fixnum(2),
                     ]
-    ));
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 // Regex audit #11 / #12: `replace-match` must reject `\0` and unknown
@@ -10051,8 +10097,8 @@ fn replace_match_rejects_backslash_zero_and_unknown_escape_like_gnu() {
     );
     assert!(
         matches!(
-            &result,
-            Err(Flow::Signal(sig))
+            result.kinded_ref(),
+            Err(FlowRef::Signal(sig))
                 if sig.symbol_name() == "error"
                     && sig.data
                         == vec![Value::string("Invalid use of \u{2018}\\\u{2019} in replacement text")]
@@ -10073,8 +10119,8 @@ fn replace_match_rejects_backslash_zero_and_unknown_escape_like_gnu() {
     );
     assert!(
         matches!(
-            &result,
-            Err(Flow::Signal(sig))
+            result.kinded_ref(),
+            Err(FlowRef::Signal(sig))
                 if sig.symbol_name() == "error"
                     && sig.data
                         == vec![Value::string("Invalid use of \u{2018}\\\u{2019} in replacement text")]
@@ -10167,16 +10213,21 @@ fn replace_match_without_active_match_data_signals_missing_subexp_like_gnu() {
     builtin_set_match_data(&mut eval, vec![Value::NIL]).expect("clear match data");
 
     let result = builtin_replace_match(&mut eval, vec![Value::string("bar")]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "error"
                 && sig.data
                     == vec![
                         Value::string("replace-match subexpression does not exist"),
                         Value::NIL,
                     ]
-    ));
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -10527,16 +10578,16 @@ fn dispatch_builtin_pure_handles_treesit_parser_and_query_entrypoints() {
     let err = dispatch_builtin_pure("treesit-parser-buffer", vec![Value::NIL])
         .expect("treesit-parser-buffer should resolve")
         .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
     }
 
     let err = dispatch_builtin_pure("treesit-query-compile", vec![Value::NIL])
         .expect("treesit-query-compile should resolve")
         .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -10774,8 +10825,8 @@ fn treesit_query_compile_eager_missing_language_signals_treesit_query_error() {
         ],
     )
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "treesit-query-error"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "treesit-query-error"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -11205,8 +11256,8 @@ fn dispatch_builtin_pure_fillarray_multibyte_matches_gnu_byte_length_rule() {
     )
     .expect("fillarray should resolve")
     .expect_err("GNU fillarray rejects multibyte byte-length changes");
-    match ascii_fill {
-        Flow::Signal(sig) => {
+    match ascii_fill.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -11272,8 +11323,8 @@ fn dispatch_builtin_pure_handles_fringe_display_and_debug_output_placeholders() 
     let err = dispatch_builtin_pure("external-debugging-output", vec![Value::fixnum(-1)])
         .expect("external-debugging-output should resolve")
         .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -11311,8 +11362,8 @@ fn defined_fringe_bitmap_can_receive_face_until_destroyed() {
     )
     .expect("set-fringe-bitmap-face should resolve")
     .expect_err("destroyed fringe bitmap should no longer accept a face");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 crate::emacs_core::print::print_value(&sig.data[0]),
@@ -11335,8 +11386,8 @@ fn set_fringe_bitmap_face_rejects_non_symbol_bitmap_like_gnu() {
     .expect("set-fringe-bitmap-face should resolve")
     .expect_err("non-symbol bitmap should signal");
 
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("symbolp"), Value::fixnum(1)]);
         }
@@ -11620,8 +11671,8 @@ fn dispatch_builtin_pure_handles_window_placeholder_accessors() {
     let err = dispatch_builtin_pure("window-right-divider-width", vec![Value::fixnum(1)])
         .expect("window-right-divider-width should resolve")
         .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -11707,8 +11758,8 @@ fn dispatch_builtin_pure_handles_frame_placeholder_accessors() {
     let err = dispatch_builtin_pure("frame-or-buffer-changed-p", vec![Value::fixnum(1)])
         .expect("frame-or-buffer-changed-p should resolve")
         .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -11735,8 +11786,8 @@ fn dispatch_builtin_pure_handles_describe_and_delete_terminal_placeholders() {
     let delete_err = dispatch_builtin_pure("delete-terminal", vec![])
         .expect("delete-terminal should resolve")
         .unwrap_err();
-    match delete_err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
+    match delete_err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
         other => panic!("expected signal, got {other:?}"),
     }
 
@@ -11764,8 +11815,8 @@ fn dispatch_builtin_pure_handles_fringe_and_garbage_placeholders() {
     )
     .expect("get-unicode-property-internal should resolve")
     .unwrap_err();
-    match prop_err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match prop_err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -11917,8 +11968,8 @@ fn dispatch_builtin_pure_handles_gnutls_query_and_error_placeholders() {
     let fatal_err = dispatch_builtin_pure("gnutls-error-fatalp", vec![Value::NIL])
         .expect("gnutls-error-fatalp should resolve")
         .unwrap_err();
-    match fatal_err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
+    match fatal_err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -11968,40 +12019,40 @@ fn dispatch_builtin_pure_handles_gnutls_runtime_placeholders() {
     )
     .expect("gnutls-asynchronous-parameters should resolve")
     .unwrap_err();
-    match async_err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match async_err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
     }
 
     let bye_err = dispatch_builtin_pure("gnutls-bye", vec![Value::NIL, Value::NIL])
         .expect("gnutls-bye should resolve")
         .unwrap_err();
-    match bye_err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match bye_err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
     }
 
     let deinit_err = dispatch_builtin_pure("gnutls-deinit", vec![Value::fixnum(1)])
         .expect("gnutls-deinit should resolve")
         .unwrap_err();
-    match deinit_err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match deinit_err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
     }
 
     let initstage_err = dispatch_builtin_pure("gnutls-get-initstage", vec![Value::fixnum(1)])
         .expect("gnutls-get-initstage should resolve")
         .unwrap_err();
-    match initstage_err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match initstage_err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
     }
 
     let cert_err = dispatch_builtin_pure("gnutls-format-certificate", vec![Value::NIL])
         .expect("gnutls-format-certificate should resolve")
         .unwrap_err();
-    match cert_err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match cert_err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
     }
 
@@ -12017,8 +12068,8 @@ fn dispatch_builtin_pure_handles_gnutls_runtime_placeholders() {
     )
     .expect("gnutls-symmetric-encrypt should resolve")
     .unwrap_err();
-    match enc_err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
+    match enc_err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
         other => panic!("expected signal, got {other:?}"),
     }
 
@@ -12034,8 +12085,8 @@ fn dispatch_builtin_pure_handles_gnutls_runtime_placeholders() {
     )
     .expect("gnutls-symmetric-decrypt should resolve")
     .unwrap_err();
-    match dec_err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
+    match dec_err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -12249,8 +12300,8 @@ fn dispatch_builtin_pure_handles_fontset_placeholders() {
     let info_err = dispatch_builtin_pure("fontset-info", vec![Value::symbol("fontset-default")])
         .expect("fontset-info should resolve")
         .unwrap_err();
-    match info_err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
+    match info_err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
         other => panic!("expected signal, got {other:?}"),
     }
 
@@ -12281,8 +12332,8 @@ fn dispatch_builtin_pure_handles_fontset_placeholders() {
     )
     .expect("fontset-font should resolve")
     .unwrap_err();
-    match fontset_err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match fontset_err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -13487,8 +13538,8 @@ fn error_message_string_preserves_percent_s_handle_semantics() {
             .expect("format-message should resolve")
             .expect("format-message should evaluate");
         let signaled = crate::emacs_core::error::signal("error", vec![formatted]);
-        let (symbol, data) = match signaled {
-            Flow::Signal(sig) => (sig.symbol, sig.data),
+        let (symbol, data) = match signaled.into_kind() {
+            FlowKind::Signal(sig) => (sig.symbol, sig.data),
             other => panic!("expected signal flow, got: {other:?}"),
         };
         let mut err_data = Vec::with_capacity(data.len() + 1);
@@ -13543,8 +13594,8 @@ fn message_box_wrappers_render_opaque_handles_in_eval_dispatch() {
         let err = dispatch_builtin(&mut eval, builtin, vec![])
             .expect("wrapper should resolve")
             .expect_err("wrapper should signal on missing format argument");
-        match err {
-            Flow::Signal(sig) => {
+        match err.into_kind() {
+            FlowKind::Signal(sig) => {
                 assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
                 assert_eq!(sig.data, vec![Value::symbol(symbol), Value::fixnum(0)]);
             }
@@ -13565,8 +13616,8 @@ fn message_box_wrappers_render_opaque_handles_in_eval_dispatch() {
         let wrong_type = dispatch_builtin(&mut eval, builtin, vec![Value::fixnum(1)])
             .expect("wrapper should resolve")
             .expect_err("wrapper should signal for non-string format");
-        match wrong_type {
-            Flow::Signal(sig) => {
+        match wrong_type.into_kind() {
+            FlowKind::Signal(sig) => {
                 assert_eq!(sig.symbol_name(), "wrong-type-argument");
                 assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::fixnum(1)]);
             }
@@ -13580,8 +13631,8 @@ fn message_box_wrappers_render_opaque_handles_in_eval_dispatch() {
         )
         .expect("wrapper should resolve")
         .expect_err("wrapper should signal when format args are missing");
-        match missing {
-            Flow::Signal(sig) => {
+        match missing.into_kind() {
+            FlowKind::Signal(sig) => {
                 assert_eq!(sig.symbol_name(), "error");
                 assert_eq!(
                     sig.data,
@@ -13598,8 +13649,8 @@ fn message_box_wrappers_render_opaque_handles_in_eval_dispatch() {
         )
         .expect("wrapper should resolve")
         .expect_err("wrapper should reject negative character code");
-        match negative_char {
-            Flow::Signal(sig) => {
+        match negative_char.into_kind() {
+            FlowKind::Signal(sig) => {
                 assert_eq!(sig.symbol_name(), "wrong-type-argument");
                 assert_eq!(
                     sig.data,
@@ -13616,8 +13667,8 @@ fn message_box_wrappers_render_opaque_handles_in_eval_dispatch() {
         )
         .expect("wrapper should resolve")
         .expect_err("wrapper should reject out-of-range character code");
-        match overflow_char {
-            Flow::Signal(sig) => {
+        match overflow_char.into_kind() {
+            FlowKind::Signal(sig) => {
                 assert_eq!(sig.symbol_name(), "wrong-type-argument");
                 assert_eq!(
                     sig.data,
@@ -14481,8 +14532,8 @@ fn make_string_nonunicode_char_code_bounds_match_oracle() {
     )
     .expect("make-string should resolve")
     .expect_err("make-string should reject out-of-range character code");
-    match overflow {
-        Flow::Signal(sig) => {
+    match overflow.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -14581,8 +14632,8 @@ fn text_char_description_nonunicode_char_code_bounds_match_oracle() {
     let overflow = dispatch_builtin_pure("text-char-description", vec![Value::fixnum(0x40_0000)])
         .expect("text-char-description should resolve")
         .expect_err("text-char-description should reject out-of-range character code");
-    match overflow {
-        Flow::Signal(sig) => {
+    match overflow.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -14635,8 +14686,8 @@ fn insert_char_nonunicode_char_code_bounds_match_oracle() {
 
     let overflow = builtin_insert_char(&mut eval, vec![Value::fixnum(0x40_0000), Value::fixnum(1)])
         .expect_err("insert-char should reject out-of-range character code");
-    match overflow {
-        Flow::Signal(sig) => {
+    match overflow.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -14669,8 +14720,8 @@ fn insert_nonunicode_integer_arguments_match_oracle() {
 
     let overflow = builtin_insert(&mut eval, vec![Value::fixnum(0x40_0000)])
         .expect_err("insert should reject out-of-range integer char code");
-    match overflow {
-        Flow::Signal(sig) => {
+    match overflow.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -14889,8 +14940,8 @@ fn set_buffer_multibyte_rejects_narrowed_and_indirect_buffers() {
     builtin_insert(&mut eval, vec![Value::string("abcdef")]).unwrap();
     builtin_narrow_to_region(&mut eval, vec![Value::fixnum(2), Value::fixnum(5)]).unwrap();
     let narrowed = builtin_set_buffer_multibyte(&mut eval, vec![Value::NIL]).unwrap_err();
-    match narrowed {
-        Flow::Signal(sig) => {
+    match narrowed.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -14915,8 +14966,8 @@ fn set_buffer_multibyte_rejects_narrowed_and_indirect_buffers() {
     eval.buffers.set_current(indirect);
 
     let indirect_err = builtin_set_buffer_multibyte(&mut eval, vec![Value::NIL]).unwrap_err();
-    match indirect_err {
-        Flow::Signal(sig) => {
+    match indirect_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -15214,8 +15265,8 @@ fn format_message_and_message_signal_strict_format_errors() {
             let err = dispatch_builtin(&mut eval, builtin, vec![bad])
                 .expect("builtin should resolve")
                 .expect_err("builtin should signal for non-string format");
-            match err {
-                Flow::Signal(sig) => {
+            match err.into_kind() {
+                FlowKind::Signal(sig) => {
                     assert_eq!(sig.symbol_name(), "wrong-type-argument");
                     assert_eq!(sig.data, vec![Value::symbol("stringp"), bad]);
                 }
@@ -15228,8 +15279,8 @@ fn format_message_and_message_signal_strict_format_errors() {
         let err = dispatch_builtin(&mut eval, "message", vec![bad])
             .expect("message should resolve")
             .expect_err("message should signal for non-string/non-nil format");
-        match err {
-            Flow::Signal(sig) => {
+        match err.into_kind() {
+            FlowKind::Signal(sig) => {
                 assert_eq!(sig.symbol_name(), "wrong-type-argument");
                 assert_eq!(sig.data, vec![Value::symbol("stringp"), bad]);
             }
@@ -15245,8 +15296,8 @@ fn format_message_and_message_signal_strict_format_errors() {
         )
         .expect("builtin should resolve")
         .expect_err("builtin should signal when format args are missing");
-        match err {
-            Flow::Signal(sig) => {
+        match err.into_kind() {
+            FlowKind::Signal(sig) => {
                 assert_eq!(sig.symbol_name(), "error");
                 assert_eq!(
                     sig.data,
@@ -15266,8 +15317,8 @@ fn format_message_and_message_signal_strict_format_errors() {
             )
             .expect("builtin should resolve")
             .expect_err("builtin should signal on spec/type mismatch");
-            match err {
-                Flow::Signal(sig) => {
+            match err.into_kind() {
+                FlowKind::Signal(sig) => {
                     assert_eq!(sig.symbol_name(), "error");
                     assert_eq!(
                         sig.data,
@@ -15289,8 +15340,8 @@ fn format_message_and_message_signal_strict_format_errors() {
         )
         .expect("builtin should resolve")
         .expect_err("builtin should reject negative character code");
-        match err {
-            Flow::Signal(sig) => {
+        match err.into_kind() {
+            FlowKind::Signal(sig) => {
                 assert_eq!(sig.symbol_name(), "wrong-type-argument");
                 assert_eq!(
                     sig.data,
@@ -15309,8 +15360,8 @@ fn format_message_and_message_signal_strict_format_errors() {
         )
         .expect("builtin should resolve")
         .expect_err("builtin should reject out-of-range character code");
-        match err {
-            Flow::Signal(sig) => {
+        match err.into_kind() {
+            FlowKind::Signal(sig) => {
                 assert_eq!(sig.symbol_name(), "wrong-type-argument");
                 assert_eq!(
                     sig.data,
@@ -15777,8 +15828,8 @@ fn fset_nil_nil_is_allowed_and_fmakunbound_rejects_constants() {
     for constant in [Value::NIL, Value::T] {
         let err = builtin_fmakunbound(&mut eval, vec![constant])
             .expect_err("fmakunbound should reject constants");
-        match err {
-            Flow::Signal(sig) => {
+        match err.into_kind() {
+            FlowKind::Signal(sig) => {
                 assert_eq!(sig.symbol_name(), "setting-constant");
                 assert_eq!(sig.data, vec![constant]);
             }
@@ -15834,8 +15885,8 @@ fn func_arity_eval_resolves_symbol_designators_and_nil_cells() {
 
     let nil_cell_err = builtin_func_arity(&mut eval, vec![vm_nil])
         .expect_err("func-arity should signal void-function for nil function cell");
-    match nil_cell_err {
-        Flow::Signal(sig) => {
+    match nil_cell_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "void-function");
             assert_eq!(sig.data, vec![vm_nil]);
         }
@@ -15988,8 +16039,8 @@ fn macroexpand_runtime_environment_type_and_payload_edges_match_oracle() {
         ],
     )
     .expect_err("symbol-headed forms should validate environment list-ness");
-    match env_type_err {
-        Flow::Signal(sig) => {
+    match env_type_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("listp"), Value::fixnum(1)]);
         }
@@ -16004,8 +16055,8 @@ fn macroexpand_runtime_environment_type_and_payload_edges_match_oracle() {
         ],
     )
     .expect_err("environment entries with non-callables should surface invalid-function");
-    match invalid_env_function {
-        Flow::Signal(sig) => {
+    match invalid_env_function.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "invalid-function");
             assert_eq!(sig.data, vec![Value::fixnum(42)]);
         }
@@ -16042,8 +16093,8 @@ fn macroexpand_runtime_improper_lists_match_oracle_error_behavior() {
         )],
     )
     .expect_err("macro expansion should reject improper argument lists");
-    match improper_macro {
-        Flow::Signal(sig) => {
+    match improper_macro.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("listp"), Value::fixnum(1)]);
         }
@@ -16200,8 +16251,8 @@ fn indirect_function_rejects_overflow_arity() {
         vec![Value::symbol("ignore"), Value::NIL, Value::NIL],
     )
     .expect_err("indirect-function should reject more than two arguments");
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("unexpected flow: {other:?}"),
     }
 }
@@ -16241,8 +16292,8 @@ fn fset_rejects_self_alias_cycle() {
         ],
     )
     .expect_err("fset should reject self-referential alias cycles");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "cyclic-function-indirection");
             assert_eq!(sig.data, vec![Value::symbol("vm-test-fset-cycle-self")]);
         }
@@ -16278,8 +16329,8 @@ fn fset_rejects_two_node_alias_cycle() {
         ],
     )
     .expect_err("fset should reject second edge that closes alias cycle");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "cyclic-function-indirection");
             assert_eq!(sig.data, vec![Value::symbol("vm-test-fset-cycle-b")]);
         }
@@ -16304,8 +16355,8 @@ fn fset_rejects_keyword_and_t_alias_cycles() {
         vec![Value::keyword(":vmk3"), Value::keyword(":vmk2")],
     )
     .expect_err("second keyword edge should close cycle");
-    match keyword_cycle {
-        Flow::Signal(sig) => {
+    match keyword_cycle.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "cyclic-function-indirection");
             assert_eq!(sig.data, vec![Value::symbol(":vmk3")]);
         }
@@ -16317,8 +16368,8 @@ fn fset_rejects_keyword_and_t_alias_cycles() {
 
     let t_cycle = builtin_fset(&mut eval, vec![Value::keyword(":vmk"), Value::T])
         .expect_err("keyword->t edge should be rejected when t->keyword exists");
-    match t_cycle {
-        Flow::Signal(sig) => {
+    match t_cycle.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "cyclic-function-indirection");
             assert_eq!(sig.data, vec![Value::symbol(":vmk")]);
         }
@@ -16333,8 +16384,8 @@ fn fset_nil_signals_setting_constant() {
 
     let err = builtin_fset(&mut eval, vec![Value::NIL, Value::symbol("car")])
         .expect_err("fset should reject writing nil's function cell");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "setting-constant");
             assert_eq!(sig.data, vec![Value::symbol("nil")]);
         }
@@ -16656,8 +16707,8 @@ fn defvaralias_raw_plist_error_preserves_gnu_watcher_order() {
         ],
     )
     .expect_err("defvaralias should preserve plistp error");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("plistp"), Value::fixnum(1)]);
         }
@@ -16731,8 +16782,8 @@ fn defvaralias_rejects_invalid_inputs_and_cycles() {
         vec![Value::symbol("nil"), Value::symbol("vm-defvaralias-x")],
     )
     .expect_err("defvaralias should reject constant aliases");
-    match constant_err {
-        Flow::Signal(sig) => {
+    match constant_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -16747,8 +16798,8 @@ fn defvaralias_rejects_invalid_inputs_and_cycles() {
         vec![Value::symbol("vm-defvaralias-bad"), Value::fixnum(1)],
     )
     .expect_err("defvaralias should validate OLD-BASE");
-    match type_err {
-        Flow::Signal(sig) => {
+    match type_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("symbolp"), Value::fixnum(1)]);
         }
@@ -16771,8 +16822,8 @@ fn defvaralias_rejects_invalid_inputs_and_cycles() {
         ],
     )
     .expect_err("second alias edge should be rejected as a cycle");
-    match cycle_err {
-        Flow::Signal(sig) => {
+    match cycle_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "cyclic-variable-indirection");
             assert_eq!(sig.data, vec![Value::symbol("vm-defvaralias-a")]);
         }
@@ -16861,8 +16912,8 @@ fn setplist_runtime_controls_get_put_and_symbol_plist_edges() {
         ],
     )
     .expect_err("put should fail on non-plist raw values");
-    match put_err {
-        Flow::Signal(sig) => {
+    match put_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("plistp"), Value::fixnum(1)]);
         }
@@ -16963,8 +17014,8 @@ fn register_code_conversion_map_publishes_symbol_properties() {
 
     let sym_value = builtin_symbol_value(&mut eval, vec![Value::symbol("vm-ccl-map-prop")])
         .expect_err("register-code-conversion-map should not bind symbol value");
-    match sym_value {
-        Flow::Signal(sig) => {
+    match sym_value.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "void-variable");
             assert_eq!(sig.data, vec![Value::symbol("vm-ccl-map-prop")]);
         }
@@ -17015,8 +17066,8 @@ fn register_ccl_program_publishes_symbol_properties() {
 
     let sym_value = builtin_symbol_value(&mut eval, vec![Value::symbol("vm-ccl-program-prop")])
         .expect_err("register-ccl-program should not bind symbol value");
-    match sym_value {
-        Flow::Signal(sig) => {
+    match sym_value.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "void-variable");
             assert_eq!(sig.data, vec![Value::symbol("vm-ccl-program-prop")]);
         }
@@ -17118,8 +17169,8 @@ fn ccl_symbol_designators_follow_plist_idx_gates() {
     )
     .expect("ccl-execute should dispatch")
     .expect_err("ccl-execute should treat gated symbol as invalid program");
-    match execute_err {
-        Flow::Signal(sig) => {
+    match execute_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(sig.data, vec![Value::string("Invalid CCL program")]);
         }
@@ -17147,8 +17198,8 @@ fn ccl_symbol_designators_follow_plist_idx_gates() {
     )
     .expect("ccl-execute-on-string should dispatch")
     .expect_err("ccl-execute-on-string should treat gated symbol as invalid program");
-    match execute_on_string_err {
-        Flow::Signal(sig) => {
+    match execute_on_string_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(sig.data, vec![Value::string("Invalid CCL program")]);
         }
@@ -17250,8 +17301,8 @@ fn register_code_conversion_map_existing_symbol_plist_edges() {
     )
     .expect("register-code-conversion-map malformed path should dispatch")
     .expect_err("malformed plist should preserve plistp error");
-    match malformed {
-        Flow::Signal(sig) => {
+    match malformed.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("plistp"), Value::fixnum(1)]);
         }
@@ -17314,8 +17365,8 @@ fn ccl_registration_plist_errors_preserve_oracle_id_side_effects() {
     )
     .expect("register-ccl-program error path should dispatch")
     .expect_err("register-ccl-program should fail on malformed plist");
-    match program_err {
-        Flow::Signal(sig) => {
+    match program_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("plistp"), Value::fixnum(1)]);
         }
@@ -17372,8 +17423,8 @@ fn ccl_registration_plist_errors_preserve_oracle_id_side_effects() {
     )
     .expect("register-code-conversion-map error path should dispatch")
     .expect_err("register-code-conversion-map should fail on malformed plist");
-    match map_err {
-        Flow::Signal(sig) => {
+    match map_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("plistp"), Value::fixnum(1)]);
         }
@@ -17414,8 +17465,8 @@ fn variable_alias_to_constant_reports_alias_in_setting_constant_errors() {
         vec![Value::symbol("vm-alias-constant"), Value::fixnum(1)],
     )
     .expect_err("set should reject writes through nil aliases");
-    match set_err {
-        Flow::Signal(sig) => {
+    match set_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "setting-constant");
             assert_eq!(sig.data, vec![Value::symbol("vm-alias-constant")]);
         }
@@ -17427,8 +17478,8 @@ fn variable_alias_to_constant_reports_alias_in_setting_constant_errors() {
         vec![Value::symbol("vm-alias-constant"), Value::fixnum(1)],
     )
     .expect_err("set-default-toplevel-value should reject nil aliases");
-    match default_err {
-        Flow::Signal(sig) => {
+    match default_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "setting-constant");
             assert_eq!(sig.data, vec![Value::symbol("vm-alias-constant")]);
         }
@@ -17437,8 +17488,8 @@ fn variable_alias_to_constant_reports_alias_in_setting_constant_errors() {
 
     let unbind_err = builtin_makunbound(&mut eval, vec![Value::symbol("vm-alias-constant")])
         .expect_err("makunbound should reject nil aliases");
-    match unbind_err {
-        Flow::Signal(sig) => {
+    match unbind_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "setting-constant");
             assert_eq!(sig.data, vec![Value::symbol("vm-alias-constant")]);
         }
@@ -17481,8 +17532,8 @@ fn set_allows_keyword_self_assignment_like_gnu_emacs() {
     let changed_default =
         crate::emacs_core::data::set_default(&mut eval, vec![keyword, Value::symbol("changed")])
             .expect_err("set-default should reject non-self keyword assignment");
-    match changed_default {
-        Flow::Signal(sig) => {
+    match changed_default.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "setting-constant");
             assert_eq!(sig.data, vec![keyword]);
         }
@@ -17494,8 +17545,8 @@ fn set_allows_keyword_self_assignment_like_gnu_emacs() {
         vec![keyword, Value::symbol("changed")],
     )
     .expect_err("set-default-toplevel-value should reject non-self keyword assignment");
-    match changed_toplevel {
-        Flow::Signal(sig) => {
+    match changed_toplevel.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "setting-constant");
             assert_eq!(sig.data, vec![keyword]);
         }
@@ -17522,8 +17573,8 @@ fn defvaralias_raises_plistp_errors_when_symbol_plist_is_non_list() {
         ],
     )
     .expect_err("defvaralias should preserve put-style plistp failures");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("plistp"), Value::fixnum(1)]);
         }
@@ -17560,8 +17611,8 @@ fn get_byte_string_semantics_match_oracle_edges() {
 
     let out_of_range =
         builtin_get_byte(&mut eval, vec![Value::fixnum(3), Value::string("abc")]).unwrap_err();
-    match out_of_range {
-        Flow::Signal(sig) => {
+    match out_of_range.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(sig.data, vec![Value::string("abc"), Value::fixnum(3)]);
         }
@@ -17570,8 +17621,8 @@ fn get_byte_string_semantics_match_oracle_edges() {
 
     let empty_explicit_position =
         builtin_get_byte(&mut eval, vec![Value::fixnum(0), Value::string("")]).unwrap_err();
-    match empty_explicit_position {
-        Flow::Signal(sig) => {
+    match empty_explicit_position.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(sig.data, vec![Value::string(""), Value::fixnum(0)]);
         }
@@ -17580,8 +17631,8 @@ fn get_byte_string_semantics_match_oracle_edges() {
 
     let negative =
         builtin_get_byte(&mut eval, vec![Value::fixnum(-1), Value::string("abc")]).unwrap_err();
-    match negative {
-        Flow::Signal(sig) => {
+    match negative.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -17593,8 +17644,8 @@ fn get_byte_string_semantics_match_oracle_edges() {
 
     let non_ascii = builtin_get_byte(&mut eval, vec![Value::fixnum(0), Value::string("é")])
         .expect_err("multibyte non-byte8 should signal");
-    match non_ascii {
-        Flow::Signal(sig) => {
+    match non_ascii.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -17647,8 +17698,8 @@ fn get_byte_buffer_semantics_match_oracle_edges() {
     );
 
     let zero = builtin_get_byte(&mut eval, vec![Value::fixnum(0)]).unwrap_err();
-    match zero {
-        Flow::Signal(sig) => {
+    match zero.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(
                 sig.data,
@@ -17659,8 +17710,8 @@ fn get_byte_buffer_semantics_match_oracle_edges() {
     }
 
     let end = builtin_get_byte(&mut eval, vec![Value::fixnum(4)]).unwrap_err();
-    match end {
-        Flow::Signal(sig) => {
+    match end.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(
                 sig.data,

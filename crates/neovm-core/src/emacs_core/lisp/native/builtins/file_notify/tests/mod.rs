@@ -177,8 +177,11 @@ fn watch_registry_roots_every_lisp_object_needed_for_delivery() {
 /// error assertions compare interned symbols structurally.
 #[cfg(target_os = "macos")]
 fn expect_signal(err: crate::emacs_core::error::Flow) -> Box<crate::emacs_core::error::SignalData> {
-    let crate::emacs_core::error::Flow::Signal(signal) = err else {
-        panic!("expected a signal, got {err:?}");
+    let signal = match err.into_kind() {
+        crate::emacs_core::error::FlowKind::Signal(signal) => signal,
+        err => {
+            panic!("expected a signal, got {err:?}");
+        }
     };
     signal
 }

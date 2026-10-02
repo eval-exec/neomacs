@@ -1,5 +1,6 @@
 use super::*;
 use crate::buffer::LispCharPos1;
+use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::print;
 
@@ -118,8 +119,8 @@ fn base64_decode_string_rejects_malformed_padding_like_gnu() {
 fn base64_encode_string_rejects_multibyte_non_ascii_like_gnu() {
     crate::test_utils::init_test_tracing();
     let encoded = builtin_base64_encode_string(vec![Value::string("é"), Value::T]);
-    match encoded {
-        Err(Flow::Signal(sig)) => {
+    match encoded.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -204,8 +205,8 @@ fn base64url_uses_dash_underscore() {
 fn base64url_encode_string_rejects_multibyte_non_ascii_like_gnu() {
     crate::test_utils::init_test_tracing();
     let encoded = builtin_base64url_encode_string(vec![Value::string("é"), Value::T]);
-    match encoded {
-        Err(Flow::Signal(sig)) => {
+    match encoded.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -382,8 +383,8 @@ fn base64_decode_region_noerror_semantics() {
         buf.insert("%%");
     }
     let strict = builtin_base64_decode_region(&mut eval, vec![Value::fixnum(1), Value::fixnum(3)]);
-    match strict {
-        Err(Flow::Signal(sig)) => {
+    match strict.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(sig.data, vec![Value::string("Invalid base64 data")]);
         }
@@ -414,8 +415,8 @@ fn base64_region_eval_error_shapes() {
         &mut eval,
         vec![Value::symbol("x"), Value::fixnum(2), Value::T],
     );
-    match type_error {
-        Err(Flow::Signal(sig)) => {
+    match type_error.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -427,8 +428,8 @@ fn base64_region_eval_error_shapes() {
 
     let range_error =
         builtin_base64_encode_region(&mut eval, vec![Value::fixnum(0), Value::fixnum(2)]);
-    match range_error {
-        Err(Flow::Signal(sig)) => {
+    match range_error.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(sig.data.len(), 3);
             assert!(sig.data[0].is_buffer());
@@ -511,8 +512,8 @@ fn base64_encode_region_rejects_multibyte_like_gnu() {
     }
 
     let result = builtin_base64_encode_region(&mut eval, vec![Value::fixnum(1), Value::fixnum(6)]);
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data.first().and_then(|v| v.as_utf8_str()),
@@ -606,11 +607,13 @@ fn md5_fox() {
 #[test]
 fn md5_string_range_errors() {
     crate::test_utils::init_test_tracing();
-    match call_fns_builtin!(
+    match (call_fns_builtin!(
         builtin_md5,
         vec![Value::string("abc"), Value::fixnum(2), Value::fixnum(1)]
-    ) {
-        Err(Flow::Signal(sig)) => {
+    ))
+    .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(
                 sig.data,
@@ -624,11 +627,13 @@ fn md5_string_range_errors() {
 #[test]
 fn md5_string_index_type_error() {
     crate::test_utils::init_test_tracing();
-    match call_fns_builtin!(
+    match (call_fns_builtin!(
         builtin_md5,
         vec![Value::string("abc"), Value::T, Value::fixnum(1)]
-    ) {
-        Err(Flow::Signal(sig)) => {
+    ))
+    .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data.first(), Some(&Value::symbol("integerp")));
         }
@@ -639,8 +644,8 @@ fn md5_string_index_type_error() {
 #[test]
 fn md5_invalid_object_errors() {
     crate::test_utils::init_test_tracing();
-    match call_fns_builtin!(builtin_md5, vec![Value::NIL]) {
-        Err(Flow::Signal(sig)) => {
+    match (call_fns_builtin!(builtin_md5, vec![Value::NIL])).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data.first().and_then(|v| v.as_utf8_str()),
@@ -655,7 +660,7 @@ fn md5_invalid_object_errors() {
 #[test]
 fn md5_unknown_coding_system_errors() {
     crate::test_utils::init_test_tracing();
-    match call_fns_builtin!(
+    match (call_fns_builtin!(
         builtin_md5,
         vec![
             Value::string("abc"),
@@ -663,8 +668,10 @@ fn md5_unknown_coding_system_errors() {
             Value::NIL,
             Value::symbol("no-such"),
         ]
-    ) {
-        Err(Flow::Signal(sig)) => {
+    ))
+    .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "coding-system-error");
             assert_eq!(sig.data, vec![Value::symbol("no-such")]);
         }
@@ -740,7 +747,7 @@ fn md5_accepts_iso_8859_9_alias() {
 #[test]
 fn md5_non_symbol_coding_system_errors() {
     crate::test_utils::init_test_tracing();
-    match call_fns_builtin!(
+    match (call_fns_builtin!(
         builtin_md5,
         vec![
             Value::string("abc"),
@@ -748,8 +755,10 @@ fn md5_non_symbol_coding_system_errors() {
             Value::NIL,
             Value::fixnum(1),
         ]
-    ) {
-        Err(Flow::Signal(sig)) => {
+    ))
+    .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "coding-system-error");
             assert_eq!(sig.data, vec![Value::fixnum(1)]);
         }
@@ -799,8 +808,8 @@ fn md5_eval_buffer_range_errors() {
     }
     let id = eval.buffers.current_buffer().expect("current buffer").id;
 
-    match builtin_md5(&mut eval, vec![Value::make_buffer(id), Value::fixnum(5)]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_md5(&mut eval, vec![Value::make_buffer(id), Value::fixnum(5)]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(sig.data, vec![Value::fixnum(5), Value::NIL]);
         }
@@ -817,8 +826,10 @@ fn md5_eval_buffer_index_type_error() {
     match builtin_md5(
         &mut eval,
         vec![Value::make_buffer(id), Value::T, Value::fixnum(3)],
-    ) {
-        Err(Flow::Signal(sig)) => {
+    )
+    .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data.first(),
@@ -836,8 +847,8 @@ fn md5_eval_deleted_buffer_errors() {
     let id = eval.buffers.create_buffer("*md5-doomed*");
     assert!(eval.buffers.kill_buffer(id));
 
-    match builtin_md5(&mut eval, vec![Value::make_buffer(id)]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_md5(&mut eval, vec![Value::make_buffer(id)]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data.first().and_then(|v| v.as_utf8_str()),
@@ -988,11 +999,13 @@ fn secure_hash_subrange_semantics() {
 #[test]
 fn secure_hash_invalid_algorithm_errors() {
     crate::test_utils::init_test_tracing();
-    match call_fns_builtin!(
+    match (call_fns_builtin!(
         builtin_secure_hash,
         vec![Value::symbol("no-such"), Value::string("abc")]
-    ) {
-        Err(Flow::Signal(sig)) => {
+    ))
+    .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data.first().and_then(|v| v.as_utf8_str()),
@@ -1006,11 +1019,13 @@ fn secure_hash_invalid_algorithm_errors() {
 #[test]
 fn secure_hash_invalid_algorithm_type_errors() {
     crate::test_utils::init_test_tracing();
-    match call_fns_builtin!(
+    match (call_fns_builtin!(
         builtin_secure_hash,
         vec![Value::fixnum(1), Value::string("abc")]
-    ) {
-        Err(Flow::Signal(sig)) => {
+    ))
+    .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data.first(), Some(&Value::symbol("symbolp")));
         }
@@ -1021,11 +1036,13 @@ fn secure_hash_invalid_algorithm_type_errors() {
 #[test]
 fn secure_hash_invalid_object_errors() {
     crate::test_utils::init_test_tracing();
-    match call_fns_builtin!(
+    match (call_fns_builtin!(
         builtin_secure_hash,
         vec![Value::symbol("sha256"), Value::fixnum(123)]
-    ) {
-        Err(Flow::Signal(sig)) => {
+    ))
+    .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data.first().and_then(|v| v.as_utf8_str()),
@@ -1107,8 +1124,10 @@ fn secure_hash_eval_buffer_range_errors() {
             Value::make_buffer(id),
             Value::fixnum(5),
         ],
-    ) {
-        Err(Flow::Signal(sig)) => {
+    )
+    .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(sig.data, vec![Value::fixnum(5), Value::NIL]);
         }
@@ -1130,8 +1149,10 @@ fn secure_hash_eval_buffer_index_type_error() {
             Value::T,
             Value::fixnum(3),
         ],
-    ) {
-        Err(Flow::Signal(sig)) => {
+    )
+    .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data.first(),
@@ -1187,8 +1208,10 @@ fn secure_hash_eval_deleted_buffer_errors() {
     match builtin_secure_hash(
         &mut eval,
         vec![Value::symbol("sha1"), Value::make_buffer(id)],
-    ) {
-        Err(Flow::Signal(sig)) => {
+    )
+    .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data.first().and_then(|v| v.as_utf8_str()),
@@ -1290,8 +1313,8 @@ fn buffer_hash_ignores_narrowing_like_gnu() {
 fn buffer_hash_eval_missing_name_errors() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new();
-    match builtin_buffer_hash(&mut eval, vec![Value::string("*missing*")]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_buffer_hash(&mut eval, vec![Value::string("*missing*")]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data.first().and_then(|v| v.as_utf8_str()),
@@ -1813,8 +1836,8 @@ fn compare_strings_reversed_and_out_of_range_bounds_signal_like_gnu() {
             Value::NIL,
         ],
     ] {
-        match builtin_compare_strings(args) {
-            Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "args-out-of-range"),
+        match builtin_compare_strings(args).kinded() {
+            Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "args-out-of-range"),
             other => panic!("expected args-out-of-range signal, got {other:?}"),
         }
     }
@@ -1954,8 +1977,8 @@ fn collate_lessp_rejects_non_string_locale() {
         Value::fixnum(42),
     ])
     .expect_err("non-nil locale must be a string");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(
                 sig.symbol,
                 Value::symbol("wrong-type-argument").as_symbol_id().unwrap()
@@ -1975,8 +1998,8 @@ fn collate_lessp_invalid_locale_signals_error() {
         Value::string("neomacs-invalid-locale"),
     ])
     .expect_err("invalid explicit locale should signal error");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol, Value::symbol("error").as_symbol_id().unwrap());
         }
         other => panic!("expected signal, got {other:?}"),
@@ -2021,8 +2044,8 @@ fn collate_equalp_rejects_non_string_locale() {
         Value::symbol("not-a-locale"),
     ])
     .expect_err("non-nil locale must be a string");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(
                 sig.symbol,
                 Value::symbol("wrong-type-argument").as_symbol_id().unwrap()
@@ -2097,8 +2120,8 @@ fn widget_apply_missing_property_signals_void_function_nil() {
     let mut ctx = test_eval_ctx();
     let err = builtin_widget_apply(&mut ctx, vec![widget, Value::keyword("action")])
         .expect_err("widget-apply should signal void-function for missing property");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "void-function");
             assert_eq!(sig.data, vec![Value::NIL]);
         }
@@ -2155,8 +2178,8 @@ fn widget_apply_non_callable_property_signals_invalid_function() {
     let mut ctx = test_eval_ctx();
     let err = builtin_widget_apply(&mut ctx, vec![widget, Value::keyword("action")])
         .expect_err("widget-apply should reject non-callable property values");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "invalid-function");
             assert_eq!(sig.data, vec![Value::fixnum(7)]);
         }

@@ -1,5 +1,6 @@
 use super::*;
 use crate::buffer::LispCharPos1;
+use crate::emacs_core::error::FlowKind;
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::value::{LambdaData, LambdaParams};
 use crate::test_utils::runtime_startup_eval_all;
@@ -105,8 +106,8 @@ fn string_search_gnu_start_pos_errors() {
         Value::fixnum(-1),
     ])
     .unwrap_err();
-    match err {
-        crate::emacs_core::error::Flow::Signal(sig) => {
+    match err.into_kind() {
+        crate::emacs_core::error::FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol, intern("args-out-of-range"));
             assert_eq!(sig.data, vec![Value::fixnum(-1)]);
         }
@@ -119,8 +120,8 @@ fn string_search_gnu_start_pos_errors() {
         Value::bignum(Integer::from(1u64) << 100u32),
     ])
     .unwrap_err();
-    match err {
-        crate::emacs_core::error::Flow::Signal(sig) => {
+    match err.into_kind() {
+        crate::emacs_core::error::FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol, intern("wrong-type-argument"));
             assert_eq!(sig.data[0], Value::symbol("fixnump"));
         }
@@ -211,8 +212,8 @@ fn bare_symbol_and_predicate_semantics() {
     );
 
     let err = builtin_bare_symbol(vec![Value::fixnum(1)]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data[1], Value::fixnum(1));
         }
@@ -227,8 +228,8 @@ fn byteorder_shape_and_arity() {
     assert!(byteorder.is_fixnum() || byteorder.is_fixnum());
 
     let err = builtin_byteorder(vec![Value::NIL]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -360,8 +361,8 @@ fn assoc_string_and_car_less_than_car_semantics() {
         Value::cons(Value::fixnum(2), Value::NIL),
     ])
     .unwrap_err();
-    match list_err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match list_err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
     }
 
@@ -370,8 +371,8 @@ fn assoc_string_and_car_less_than_car_semantics() {
         Value::cons(Value::fixnum(1), Value::NIL),
     ])
     .unwrap_err();
-    match number_err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match number_err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -429,8 +430,8 @@ fn assoc_string_matches_gnu_atom_entries_and_deferred_key_errors() {
         )]),
     ])
     .unwrap_err();
-    match deferred_key_err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match deferred_key_err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -625,22 +626,22 @@ fn user_identity_arity_contracts() {
     let mut ctx = super::super::eval::Context::new();
     let login_name_err =
         builtin_user_login_name(&mut ctx, vec![Value::fixnum(1), Value::fixnum(2)]).unwrap_err();
-    match login_name_err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match login_name_err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected signal, got {other:?}"),
     }
 
     let real_login_err =
         builtin_user_real_login_name(&mut ctx, vec![Value::fixnum(1)]).unwrap_err();
-    match real_login_err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match real_login_err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected signal, got {other:?}"),
     }
 
     let full_name_err =
         builtin_user_full_name(&mut ctx, vec![Value::fixnum(1), Value::fixnum(2)]).unwrap_err();
-    match full_name_err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match full_name_err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -651,29 +652,29 @@ fn user_identity_type_contracts() {
     let mut ctx = super::super::eval::Context::new();
     let login_name_err =
         builtin_user_login_name(&mut ctx, vec![Value::string("root")]).unwrap_err();
-    match login_name_err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
+    match login_name_err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
         other => panic!("expected signal, got {other:?}"),
     }
 
     let full_name_err =
         builtin_user_full_name(&mut ctx, vec![Value::list(vec![Value::fixnum(1)])]).unwrap_err();
-    match full_name_err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
+    match full_name_err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
         other => panic!("expected signal, got {other:?}"),
     }
 
     let negative_uid_login =
         builtin_user_login_name(&mut ctx, vec![Value::fixnum(-1)]).unwrap_err();
-    match negative_uid_login {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
+    match negative_uid_login.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
         other => panic!("expected signal, got {other:?}"),
     }
 
     let negative_uid_full_name =
         builtin_user_full_name(&mut ctx, vec![Value::fixnum(-1)]).unwrap_err();
-    match negative_uid_full_name {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
+    match negative_uid_full_name.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -690,8 +691,8 @@ fn runtime_identity_arity_contracts() {
     crate::test_utils::init_test_tracing();
     let mut eval = super::super::eval::Context::new();
     let system_name_err = builtin_system_name(&mut eval, vec![Value::NIL]).unwrap_err();
-    match system_name_err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match system_name_err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected signal, got {other:?}"),
     }
 
@@ -702,14 +703,14 @@ fn runtime_identity_arity_contracts() {
     assert!(version_with_non_nil.is_nil());
 
     let version_err = builtin_emacs_version(vec![Value::NIL, Value::NIL]).unwrap_err();
-    match version_err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match version_err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected signal, got {other:?}"),
     }
 
     let pid_err = builtin_emacs_pid(vec![Value::NIL]).unwrap_err();
-    match pid_err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match pid_err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -763,8 +764,8 @@ fn memory_use_counts_shape_and_arity() {
     assert!(items.iter().all(|item| item.is_fixnum()));
 
     let err = builtin_memory_use_counts(vec![Value::fixnum(1)]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected signal, got {other:?}"),
     }
 }

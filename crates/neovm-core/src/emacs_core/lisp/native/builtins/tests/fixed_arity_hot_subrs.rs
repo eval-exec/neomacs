@@ -2,6 +2,7 @@
 //! their Rust implementation straight off the bytecode stack, the way GNU
 //! `funcall_subr` dispatches `a0`..`a5` subrs and `exec_byte_code` runs
 //! `Bpoint`..`Bwiden` inline — with no owned argument `Vec` per call.
+use crate::emacs_core::error::FlowResultExt as _;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::intern;
 use crate::tagged::header::SubrFn;
@@ -304,9 +305,9 @@ fn memq_scan_answers_as_the_exact_algorithm() {
     use crate::emacs_core::value::Value;
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
-    let describe = |result: &crate::emacs_core::error::EvalResult| match result {
+    let describe = |result: &crate::emacs_core::error::EvalResult| match result.kinded_ref() {
         Ok(v) => format!("ok {:#x}", v.bits()),
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => format!(
+        Err(crate::emacs_core::error::FlowRef::Signal(sig)) => format!(
             "signal {} {:?}",
             sig.symbol_name(),
             sig.data.iter().map(|v| v.bits()).collect::<Vec<_>>()

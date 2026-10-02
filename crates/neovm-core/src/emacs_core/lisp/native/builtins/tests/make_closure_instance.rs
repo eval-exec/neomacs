@@ -5,6 +5,7 @@
 //! vector and without a whole-function temporary; these tests pin the
 //! observable result.
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op};
+use crate::emacs_core::error::FlowResultExt as _;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::value::{LambdaParams, Value};
@@ -397,8 +398,10 @@ fn make_closure_by_clone_and_in_place_build_the_same_instance() {
             Value::NIL,
             Value::NIL,
             Value::NIL,
-        ]) {
-            Err(crate::emacs_core::error::Flow::Signal(sig)) => format!(
+        ])
+        .kinded()
+        {
+            Err(crate::emacs_core::error::FlowKind::Signal(sig)) => format!(
                 "{} {}",
                 sig.symbol_name(),
                 sig.data

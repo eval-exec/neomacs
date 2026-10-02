@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::error::FlowKind;
 use crate::emacs_core::value::ValueKind;
 
 // Helper to make float comparison with epsilon
@@ -206,8 +207,8 @@ fn test_ldexp_type_check_order_matches_oracle() {
     crate::test_utils::init_test_tracing();
     let err = builtin_ldexp(vec![Value::symbol("sym"), Value::make_float(2.0)])
         .expect_err("ldexp should reject non-fixnum exponent first");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -219,8 +220,8 @@ fn test_ldexp_type_check_order_matches_oracle() {
 
     let err = builtin_ldexp(vec![Value::symbol("sym"), Value::fixnum(2)])
         .expect_err("ldexp should reject significand after exponent passes");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,

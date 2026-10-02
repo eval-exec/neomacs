@@ -671,8 +671,8 @@ fn format_rejects_uppercase_float_conversions() {
             &[Value::string(fmt), Value::make_float(1.5e-20)],
         )
         .expect_err("uppercase float conversion must signal an error");
-        match err {
-            crate::emacs_core::error::Flow::Signal(sig) => {
+        match err.into_kind() {
+            crate::emacs_core::error::FlowKind::Signal(sig) => {
                 assert_eq!(sig.symbol_name(), "error", "fmt: {fmt}");
                 sig.data
                     .first()

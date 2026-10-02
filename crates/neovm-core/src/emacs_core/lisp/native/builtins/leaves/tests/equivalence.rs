@@ -123,9 +123,9 @@ enum Outcome {
 }
 
 fn outcome_of_flow(flow: Flow) -> Outcome {
-    match flow {
-        Flow::Signal(sig) => Outcome::Signal(sig.symbol, sig.data.clone()),
-        other => panic!("a leaf reference exited with {other:?}"),
+    match flow.as_signal() {
+        Some(sig) => Outcome::Signal(sig.symbol, sig.data.clone()),
+        None => panic!("a leaf reference exited with {flow:?}"),
     }
 }
 

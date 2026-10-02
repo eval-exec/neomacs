@@ -1,5 +1,5 @@
 use super::*;
-use crate::emacs_core::error::Flow;
+use crate::emacs_core::error::FlowKind;
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::value::{LambdaData, LambdaParams};
 
@@ -2060,8 +2060,8 @@ fn commandp_rejects_overflow_arity() {
     crate::test_utils::init_test_tracing();
     let err = builtin_commandp(vec![Value::symbol("car"), Value::NIL, Value::NIL])
         .expect_err("commandp should reject more than two arguments");
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("unexpected flow: {other:?}"),
     }
 }
@@ -2231,8 +2231,8 @@ fn func_arity_autoload_object_signals_wrong_type_argument_symbolp() {
         Value::NIL,
     ]);
     let result = func_arity(autoload_fn).expect_err("autoload forms should not satisfy func-arity");
-    match result {
-        Flow::Signal(sig) => {
+    match result.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("symbolp"), autoload_fn]);
         }

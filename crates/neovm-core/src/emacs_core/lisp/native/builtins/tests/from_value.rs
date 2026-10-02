@@ -1,10 +1,11 @@
 use super::*;
 use crate::buffer::LispCharPos1;
+use crate::emacs_core::error::FlowKind;
 use crate::emacs_core::eval::Context;
 
 fn assert_wrong_type(flow: Flow, predicate: &str, offender: Value) {
-    match flow {
-        Flow::Signal(data) => {
+    match flow.into_kind() {
+        FlowKind::Signal(data) => {
             assert_eq!(data.symbol_name(), "wrong-type-argument");
             assert_eq!(data.data[0].as_symbol_name(), Some(predicate));
             assert_eq!(data.data[1], offender);
