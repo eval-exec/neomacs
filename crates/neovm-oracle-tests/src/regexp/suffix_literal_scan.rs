@@ -11,6 +11,29 @@ const SUFFIX_MODES: &[&[(&str, &str)]] = &[
 ];
 
 #[test]
+fn oracle_suffix_literal_actual_raw_byte_character_prefixes() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    // GNU character.h: BYTE8_TO_CHAR adds 0x3fff00. These construct actual
+    // multibyte raw-byte characters, rather than Unicode Latin-1 characters.
+    let form = r#"(let ((case-fold-search t) out)
+  (dolist (raw '(#x3fff80 #x3fffff))
+    (let* ((re (concat (string raw) "q"))
+           (text (concat (make-string 300 ?q) (string raw) "Q" (make-string 300 ?q)))
+           results)
+      (dolist (start '(0 300 301))
+        (let ((found (string-match re text start)))
+          (push (list start found
+                      (and found (list (match-beginning 0) (match-end 0)))) results)))
+      (push (list raw (multibyte-string-p re) (nreverse results)
+                  (string-match re (substring text 0 301))) out)))
+  (nreverse out))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((4194176 t ((0 300 (300 302)) (300 300 (300 302)) (301 nil nil)) nil) (4194303 t ((0 300 (300 302)) (300 300 (300 302)) (301 nil nil)) nil))""#
+    ]];
+    assert_oracle_parity_under_envs_expect(form, SUFFIX_MODES, expect);
+}
+
+#[test]
 fn oracle_suffix_literal_standard_case_corners() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let form = r#"(let ((case-fold-search t) out)
