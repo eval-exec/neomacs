@@ -53,6 +53,16 @@ impl FontDefaultsObserver {
     }
 }
 
+/// Deferred Linux discovery bounds the wait and retains foreign-worker exit
+/// disposition when a native backend cannot acknowledge cancellation.
+#[cfg(target_os = "linux")]
+pub fn observe_font_defaults_controlled(
+    cancelled: &dyn Fn() -> bool,
+    bypass: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> std::io::Result<FontDefaultsObserver> {
+    linux::observe_controlled(cancelled, bypass)
+}
+
 /// Capture preferences before opening fonts. AppKit discovery stays on the
 /// calling main thread; Linux owns discovery and monitoring on one GIO thread.
 pub fn observe_font_defaults(backend: GraphicalBackend) -> std::io::Result<FontDefaultsObserver> {

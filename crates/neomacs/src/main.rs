@@ -109,6 +109,8 @@ cfg_select! {
 
 mod args;
 mod build_info;
+mod daemon;
+mod deferred_gui;
 pub(crate) mod frame_layout;
 mod image_catalog;
 mod input_bridge;
@@ -302,6 +304,7 @@ pub(crate) struct StartupOptions {
     forwarded_args: Vec<String>,
     terminal_device: Option<String>,
     noninteractive: bool,
+    daemon: Option<daemon::Options>,
     temacs_mode: Option<LoadupDumpMode>,
     dump_file_override: Option<PathBuf>,
     /// Set by `-Q` (peek) and `-x` (consumed). Mirrors GNU
@@ -572,6 +575,7 @@ fn parse_startup_options(args: impl IntoIterator<Item = String>) -> Result<Start
     let mut frontend = FrontendKind::Gui;
     let mut terminal_device = None;
     let mut noninteractive = false;
+    let mut daemon = None;
     let mut temacs_mode = None;
     let mut dump_file_override = None;
     let mut no_site_lisp = false;
@@ -594,6 +598,13 @@ fn parse_startup_options(args: impl IntoIterator<Item = String>) -> Result<Start
         if next == "--" {
             forwarded_args.extend(parsed[idx + 1..].iter().cloned());
             break;
+        }
+
+        if let Some(options) = daemon::parse_option(next) {
+            daemon = Some(options);
+            frontend = FrontendKind::Tty;
+            idx += 1;
+            continue;
         }
 
         // -chdir / --chdir DIR (GNU emacs.c:1538-1561). Must run before
@@ -845,6 +856,9 @@ fn parse_startup_options(args: impl IntoIterator<Item = String>) -> Result<Start
         idx += 1;
     }
 
+    if daemon.is_some() {
+        frontend = FrontendKind::Tty;
+    }
     if frontend == FrontendKind::Tty {
         // A TTY/batch session never opens the X display: GNU -batch/-nw do
         // not, and native display observation belongs to the GUI runtime.
@@ -896,6 +910,7 @@ fn parse_startup_options(args: impl IntoIterator<Item = String>) -> Result<Start
         forwarded_args,
         terminal_device,
         noninteractive,
+        daemon,
         temacs_mode,
         dump_file_override,
         no_site_lisp,
@@ -1153,6 +1168,7 @@ impl ResolvedSurfaceMemo {
 }
 
 struct PrimaryWindowDisplayHost {
+    deferred_frame: Option<deferred_gui::FrameDefaults>,
     resources: neomacs_display_runtime::gui_resources::GuiResources,
     system_fonts: neovm_core::emacs_core::display_host::SystemFonts,
     tooltip_client: neomacs_display_protocol::tooltip::TooltipClient,
@@ -1435,9 +1451,27 @@ impl PrimaryWindowDisplayHost {
         command: RenderCommand,
         error_context: &str,
     ) -> Result<(), String> {
-        self.cmd_tx
-            .send(command)
-            .map_err(|err| format!("{error_context}: {err}"))?;
+        if let Some(defaults) = &self.deferred_frame
+            && matches!(
+                &*defaults.initial.borrow(),
+                Some(deferred_gui::InitialWindow::Pending(_))
+            )
+            && let RenderCommand::Config(ConfigCommand::SetVisualConfig(config)) = &command
+        {
+            // Effect updates are complete snapshots. Keep the latest requested
+            // state at connection-only admission instead of consuming queue64.
+            *defaults.visual.borrow_mut() = Some(config.clone());
+            return Ok(());
+        }
+        if self.deferred_frame.is_some() {
+            self.cmd_tx
+                .try_send(command)
+                .map_err(|err| format!("{error_context}: {err}"))?;
+        } else {
+            self.cmd_tx
+                .send(command)
+                .map_err(|err| format!("{error_context}: {err}"))?;
+        }
         if let Some(waker) = &self.render_waker {
             waker.wake();
         }
@@ -1468,7 +1502,121 @@ fn render_fullscreen_mode(fullscreen: FrameFullscreen) -> WindowFullscreenMode {
     }
 }
 
+impl Drop for PrimaryWindowDisplayHost {
+    fn drop(&mut self) {
+        if let Some(defaults) = &self.deferred_frame {
+            for live in defaults.leases.values() {
+                live.store(false, Ordering::Release);
+            }
+            if let Some(waker) = &self.render_waker {
+                waker.wake();
+            }
+        }
+    }
+}
+
+impl PrimaryWindowDisplayHost {
+    fn realize_deferred_gui_frame(
+        &mut self,
+        request: GuiFrameHostRequest,
+        title: String,
+    ) -> Result<(), String> {
+        let (reply, receive) = crossbeam_channel::bounded(1);
+        let live = Arc::new(AtomicBool::new(true));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let defaults = self.deferred_frame.as_ref().unwrap();
+        let adopt_primary = !self.primary_window_adopted;
+        let visual = defaults.visual.borrow().clone();
+        #[cfg(feature = "gui-test-hooks")]
+        if neomacs_display_runtime::gui_test_controls::take("saturate") {
+            assert!(self.cmd_tx.len() <= 63);
+            for _ in self.cmd_tx.len()..63 {
+                self.cmd_tx
+                    .try_send(RenderCommand::Config(ConfigCommand::SetVisualConfig(
+                        VisualConfig::default(),
+                    )))
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        // Nothing capable of creating a native frame is sent separately.
+        self.send_render_command(
+            RenderCommand::Window(WindowCommand::RealizeFrame {
+                frame: FrameRef::Frame(request.frame_id.0),
+                width: request.width,
+                height: request.height,
+                title,
+                geometry_hints: request.geometry_hints,
+                fullscreen: request.fullscreen.map(render_fullscreen_mode),
+                visual,
+                adopt_primary,
+                reply,
+                live: live.clone(),
+                deadline,
+            }),
+            "failed to admit native frame transaction",
+        )?;
+        let defaults = self.deferred_frame.as_mut().unwrap();
+        #[cfg(feature = "gui-test-hooks")]
+        if self.cmd_tx.len() == 64 {
+            neomacs_display_runtime::gui_test_controls::mark("queue-64");
+        }
+        defaults.ready.insert(request.frame_id, receive);
+        defaults.leases.insert(request.frame_id, live);
+        #[cfg(feature = "gui-test-hooks")]
+        if neomacs_display_runtime::gui_test_controls::take("admit-fail") {
+            neomacs_display_runtime::gui_test_controls::mark("admitted");
+            return Err("Injected failure after atomic frame admission".into());
+        }
+        defaults.visual.borrow_mut().take();
+        if adopt_primary {
+            self.primary_window_adopted = true;
+            self.primary_frame_id = Some(request.frame_id);
+        }
+        let mut initial = defaults.initial.borrow_mut();
+        if matches!(&*initial, Some(deferred_gui::InitialWindow::Pending(_))) {
+            let Some(deferred_gui::InitialWindow::Pending(reply)) = initial.take() else {
+                unreachable!()
+            };
+            defaults
+                .frame_id
+                .store(request.frame_id.0, Ordering::Release);
+            let lifetime = reply
+                .ready(neomacs_display_runtime::render_thread::InitialWindowSize {
+                    width: request.width,
+                    height: request.height,
+                })
+                .ok_or("Native display closed before creating its first frame")?;
+            *initial = Some(deferred_gui::InitialWindow::Ready {
+                _lifetime: lifetime,
+            });
+        }
+        Ok(())
+    }
+}
+
 impl DisplayHost for PrimaryWindowDisplayHost {
+    fn gui_terminal(&self) -> Option<(u64, neomacs_display_protocol::GraphicalDisplayIdentity)> {
+        self.deferred_frame
+            .as_ref()
+            .map(|defaults| (defaults.terminal_id, defaults.identity.clone()))
+    }
+
+    fn gui_frame_metrics(&self) -> Option<(f32, f32, f32, f64)> {
+        self.deferred_frame.as_ref().map(|defaults| {
+            (
+                defaults.metrics.char_width,
+                defaults.metrics.char_height,
+                defaults.metrics.font_pixel_size,
+                1.0,
+            )
+        })
+    }
+
+    fn default_gui_font(&self) -> Option<&str> {
+        self.deferred_frame
+            .as_ref()
+            .map(|defaults| defaults.font.as_str())
+    }
     #[cfg(target_os = "macos")]
     fn ns_resource(&self, name: &str) -> Option<String> {
         self.resources.ns_resource(name)
@@ -1515,6 +1663,9 @@ impl DisplayHost for PrimaryWindowDisplayHost {
             request.height,
             title_string
         );
+        if self.deferred_frame.is_some() {
+            return self.realize_deferred_gui_frame(request, title_string);
+        }
         if !self.primary_window_adopted {
             let fullscreen_frame = FrameRef::Primary;
             self.send_render_command(
@@ -1578,6 +1729,26 @@ impl DisplayHost for PrimaryWindowDisplayHost {
             .map_err(|err| format!("failed to cache GUI frame title: {err}"))?
             .insert(request.frame_id, request.title);
         Ok(())
+    }
+
+    fn poll_gui_frame_ready(&mut self, frame: FrameId) -> Option<Result<(), String>> {
+        let Some(defaults) = self.deferred_frame.as_mut() else {
+            return Some(Ok(()));
+        };
+        let Some(receive) = defaults.ready.get(&frame) else {
+            // Child frames belong to their parent's native window, so their
+            // realization does not enqueue a top-level window admission.
+            return Some(Ok(()));
+        };
+        let result = match receive.try_recv() {
+            Ok(result) => result,
+            Err(crossbeam_channel::TryRecvError::Empty) => return None,
+            Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                Err("Native display closed during frame realization".into())
+            }
+        };
+        defaults.ready.remove(&frame);
+        Some(result)
     }
 
     fn list_font_families(
@@ -1660,7 +1831,7 @@ impl DisplayHost for PrimaryWindowDisplayHost {
     }
 
     fn opening_gui_frame_pending(&self) -> bool {
-        !self.primary_window_adopted
+        self.deferred_frame.is_none() && !self.primary_window_adopted
     }
 
     fn remove_gui_child_frame(
@@ -1696,6 +1867,24 @@ impl DisplayHost for PrimaryWindowDisplayHost {
     }
 
     fn destroy_gui_frame(&mut self, frame_id: neovm_core::window::FrameId) -> Result<(), String> {
+        if let Some(defaults) = self.deferred_frame.as_mut() {
+            defaults.ready.remove(&frame_id);
+            if let Some(live) = defaults.leases.remove(&frame_id) {
+                live.store(false, Ordering::Release);
+                if let Some(waker) = &self.render_waker {
+                    waker.wake();
+                }
+            }
+            // Rollback is independent of the bounded command queue.
+            if self.primary_frame_id == Some(frame_id) {
+                self.primary_frame_id = None;
+            }
+            self.last_window_titles
+                .lock()
+                .map_err(|err| err.to_string())?
+                .remove(&frame_id);
+            return Ok(());
+        }
         let frame = if self.primary_frame_id == Some(frame_id) {
             self.primary_frame_id = None;
             FrameRef::Primary
@@ -3702,6 +3891,7 @@ fn run_gui_evaluator_worker(
     let (input_tx, input_rx) = crossbeam_channel::unbounded();
     let image_redisplay_waker = RedisplayWaker::new(input_tx.clone(), evaluator.wait_notifier());
     evaluator.set_display_host(Box::new(PrimaryWindowDisplayHost {
+        deferred_frame: None,
         resources,
         system_fonts: bootstrap_display.font_defaults.system_fonts(),
         tooltip_client: neomacs_display_protocol::tooltip::TooltipClient::new(
@@ -4204,6 +4394,13 @@ pub fn run(mode: RuntimeMode) {
         std::process::exit(1);
     });
 
+    // Fork before tracing, display, evaluator, or worker threads exist. The
+    // original invocation exits only when Lisp calls daemon-initialized.
+    let daemon_notifier = daemon::prepare(startup.daemon.as_ref()).unwrap_or_else(|error| {
+        eprintln!("neomacs: {error}");
+        std::process::exit(1);
+    });
+
     // GNU parses `--no-site-lisp` (and `-Q` / `-x`) into a C global that
     // `init_lread` reads while it builds `load-path` (src/emacs.c:2126,
     // src/lread.c:5514).  neovm-core never sees argv, so hand it the
@@ -4241,6 +4438,7 @@ pub fn run(mode: RuntimeMode) {
         },
     };
     let _logging_guard = neovm_core::logging::init(log_target);
+    Context::initialize_termination_signals(startup.noninteractive);
 
     if mode == RuntimeMode::Raw
         && let Some(temacs_mode) = startup.temacs_mode
@@ -4279,7 +4477,8 @@ pub fn run(mode: RuntimeMode) {
     } else {
         None
     };
-    let interactivity = Interactivity::from_noninteractive(startup.noninteractive);
+    let interactivity =
+        Interactivity::from_noninteractive(startup.noninteractive || startup.daemon.is_some());
     let mut gui_font_observer = None;
     let bootstrap_display = if let Some(event_loop) = gui_event_loop.as_ref() {
         let observation = observe_event_loop_display(event_loop);
@@ -4332,6 +4531,43 @@ pub fn run(mode: RuntimeMode) {
         return;
     }
 
+    if startup.daemon.is_some() {
+        deferred_gui::run_daemon(
+            mode,
+            startup,
+            bootstrap_display,
+            daemon_notifier,
+            process_started_at,
+            process_args,
+        );
+    } else {
+        let exit = run_tty_evaluator(
+            mode,
+            startup,
+            bootstrap_display,
+            daemon_notifier,
+            process_started_at,
+            process_args,
+            None,
+        );
+        if exit.restart {
+            tracing::warn!("restart requested via kill-emacs, but restart is not implemented yet");
+        }
+        if exit.exit_code != 0 {
+            std::process::exit(exit.exit_code);
+        }
+    }
+}
+
+fn run_tty_evaluator(
+    mode: RuntimeMode,
+    startup: StartupOptions,
+    bootstrap_display: BootstrapDisplayConfig,
+    daemon_notifier: Option<neovm_core::emacs_core::eval::DaemonNotifier>,
+    process_started_at: Instant,
+    process_args: Vec<OsString>,
+    deferred_gui: Option<deferred_gui::DisplaySender>,
+) -> EvaluatorExit {
     // TTY geometry is in character cells and performs no native font lookup.
     // GUI geometry is prepared once on the evaluator thread instead.
     let frame_metrics = BootstrapFrameMetrics::TTY;
@@ -4343,6 +4579,9 @@ pub fn run(mode: RuntimeMode) {
     //    command loop evaluate `top-level`/`normal-top-level`.
     let mut evaluator = create_startup_evaluator_for_mode(mode, &startup);
     evaluator.setup_thread_locals();
+    if let Some(options) = &startup.daemon {
+        evaluator.configure_daemon(options.name.clone(), daemon_notifier);
+    }
     if tty_init::should_enable_live_tty_io(&startup) {
         reset_terminal_host();
         configure_terminal_runtime(tty_init::detect_tty_runtime(&startup));
@@ -4398,6 +4637,7 @@ pub fn run(mode: RuntimeMode) {
         Arc::new(Mutex::new(PrimaryWindowSize { width, height }));
     let tty_popup_force_full_redraw = Arc::new(AtomicBool::new(false));
     let secondary_ttys = secondary_tty::SecondaryTtyRegistry::default();
+    let mut gui_lifetime = None;
     if tty_init::should_enable_live_tty_io(&startup) {
         set_terminal_host(Box::new(tty_frontend::TtyTerminalHost {
             cmd_tx: emacs_comms.cmd_tx.clone(),
@@ -4408,7 +4648,7 @@ pub fn run(mode: RuntimeMode) {
     }
 
     // 5. Spawn the frontend loop matching the requested startup mode.
-    let frontend = if startup.noninteractive {
+    let frontend = if startup.noninteractive || startup.daemon.is_some() {
         // Batch mode: no terminal I/O, matching GNU which skips
         // init_display() for --batch (emacs.c:1835).
         tracing::info!("TTY batch mode — skipping terminal init");
@@ -4447,7 +4687,11 @@ pub fn run(mode: RuntimeMode) {
         // their tab / header lines) render below the chrome.  Batch sessions
         // skip this block, leaving `displays_chrome` false so their
         // `window-edges` stay GNU-batch-compatible (root at line 0).
-        for frame in evaluator.frame_manager_mut().frames_mut() {
+        for frame in evaluator
+            .frame_manager_mut()
+            .frames_mut()
+            .filter(|_| startup.daemon.is_none())
+        {
             frame.displays_chrome = true;
             frame.sync_window_area_bounds();
         }
@@ -4468,7 +4712,8 @@ pub fn run(mode: RuntimeMode) {
         let secondary_input_tx = input_tx.clone();
         let secondary_input_notifier = input_notifier.clone();
         let secondary_quit_requested = quit_requested.clone();
-        std::thread::Builder::new()
+        if startup.daemon.is_none() {
+            std::thread::Builder::new()
             .name("input-bridge".to_string())
             .spawn(move || {
                 while let Ok(event) = display_input_rx.recv() {
@@ -4508,6 +4753,17 @@ pub fn run(mode: RuntimeMode) {
                 }
             })
             .expect("Failed to spawn input bridge thread");
+        }
+
+        if let Some(sender) = deferred_gui {
+            gui_lifetime = Some(deferred_gui::install(
+                &mut evaluator,
+                sender,
+                secondary_input_tx.clone(),
+                secondary_ttys.clone(),
+                &startup,
+            ));
+        }
 
         // 7. Connect evaluator to input system
         evaluator.init_input_system(input_rx);
@@ -4521,6 +4777,7 @@ pub fn run(mode: RuntimeMode) {
     }
 
     // 8. Set up redisplay callback (layout engine + TTY RIF render).
+    let daemon_tty_cleanup = secondary_ttys.clone();
     frame_layout::install_tty_redisplay_callback_with_popup_redraw(
         &mut evaluator,
         &startup,
@@ -4557,6 +4814,7 @@ pub fn run(mode: RuntimeMode) {
         neomacs_display_runtime::thread_comm::RenderCommand::Lifecycle(LifecycleCommand::Shutdown),
     );
     frontend.join();
+    drop(gui_lifetime);
     if tty_init::should_enable_live_tty_io(&startup) {
         tty_init::tty_shutdown_terminal();
     }
@@ -4569,18 +4827,26 @@ pub fn run(mode: RuntimeMode) {
     // R2 increment C: persist this session's proven-hot JIT leaves before exit
     // (Context still alive on this eval thread; runs BEFORE the shutdown-request
     // early return so it fires on kill-emacs too). No-op unless NEOVM_AOT_PGO set.
-    maybe_drain_aot_pgo(mode, &evaluator);
-
-    if let Some(request) = evaluator.shutdown_request() {
-        if request.restart {
-            tracing::warn!("restart requested via kill-emacs, but restart is not implemented yet");
-        }
-        if request.exit_code != 0 {
-            std::process::exit(request.exit_code);
-        }
+    // Optional persistence invokes an unbounded external compiler. Daemon
+    // shutdown must reach required TTY/process cleanup without waiting for it.
+    if startup.daemon.is_none() {
+        maybe_drain_aot_pgo(mode, &evaluator);
     }
 
+    let exit = if let Some(request) = evaluator.shutdown_request() {
+        if startup.daemon.is_some() {
+            daemon_tty_cleanup.close_all();
+            evaluator.close_processes_for_exit();
+        }
+        EvaluatorExit {
+            exit_code: request.exit_code,
+            restart: request.restart,
+        }
+    } else {
+        EvaluatorExit::OK
+    };
     leak_evaluator_for_process_exit(evaluator);
+    exit
 }
 
 fn leak_evaluator_for_process_exit(evaluator: Context) {
@@ -5319,6 +5585,16 @@ fn configure_gnu_startup_state(eval: &mut Context, frame_id: FrameId, startup: &
         tracing::warn!(?error, "failed to record initially displayed buffer");
     }
     eval.set_variable("terminal-frame", terminal_frame);
+    if startup.daemon.is_some()
+        && let Some(frame) = eval.frame_manager_mut().get_mut(frame_id)
+    {
+        frame.initial = true;
+        // GNU's initial daemon frame is logically visible even though
+        // its initial terminal has no real display. This also allows
+        // deleting the last attached client frame without FORCE.
+        frame.visibility = FrameVisibility::Visible;
+        frame.displays_chrome = false;
+    }
     eval.set_variable("frame-initial-frame", frame_initial_frame);
     eval.set_variable("default-minibuffer-frame", default_minibuffer_frame);
     // COMPUTE the initial frame's display-derived parameters, and realize its

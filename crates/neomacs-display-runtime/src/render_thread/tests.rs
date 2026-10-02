@@ -33,6 +33,93 @@ pub(super) fn make_test_app() -> RenderApp {
 }
 
 #[test]
+fn deferred_gui_connection_only_services_saturation_and_later_frame() {
+    use crate::thread_comm::{ConfigCommand, LifecycleCommand};
+    let mut app = make_test_app();
+    app.comms.keep_alive_without_frames = true;
+    // Repeatedly saturate the real capacity-64 transport before any GPU/window.
+    // Each pass reduces configuration into CPU state, not an unbounded backlog.
+    // The test owns the sender via a fresh matching channel.
+    let (emacs, render) = ThreadComms::new().split();
+    app.comms = render;
+    app.comms.keep_alive_without_frames = true;
+    for pass in 0..8 {
+        for index in 0..64 {
+            emacs
+                .cmd_tx
+                .try_send(RenderCommand::Config(ConfigCommand::SetExtraSpacing {
+                    line_spacing: (pass * 64 + index) as f32,
+                    letter_spacing: 2.0,
+                }))
+                .unwrap();
+        }
+        assert!(
+            emacs
+                .cmd_tx
+                .try_send(RenderCommand::Config(ConfigCommand::SetShowFps {
+                    enabled: true
+                }))
+                .is_err()
+        );
+        assert!(!app.process_startup_commands());
+        assert!(app.startup_commands.is_empty());
+        assert_eq!(app.extra_line_spacing, (pass * 64 + 63) as f32);
+    }
+    emacs
+        .cmd_tx
+        .try_send(RenderCommand::Window(WindowCommand::AdoptPrimaryFrame {
+            frame: FrameRef::Frame(0x42),
+        }))
+        .unwrap();
+    assert!(!app.process_startup_commands());
+    assert_eq!(app.frame_windows.primary_event_frame_id(), 0x42);
+    emacs
+        .cmd_tx
+        .try_send(RenderCommand::Lifecycle(LifecycleCommand::Shutdown))
+        .unwrap();
+    assert!(app.process_startup_commands());
+    assert!(app.lifecycle_flags.is_shutting_down());
+}
+
+#[test]
+fn deferred_gui_pending_primary_close_rejects_exact_frame_and_recreates() {
+    let mut app = make_test_app();
+    app.comms.keep_alive_without_frames = true;
+    app.frame_windows.adopt_primary_frame_id(0x42);
+    let (reply, rx) = crossbeam_channel::bounded(1);
+    app.frame_windows.await_ready(0x42, reply);
+    assert!(matches!(
+        rx.try_recv(),
+        Err(crossbeam_channel::TryRecvError::Empty)
+    ));
+    app.retire_pending_primary();
+    assert!(rx.try_recv().unwrap().is_err());
+    assert!(app.frame_windows.primary_window().is_none());
+    assert!(!app.lifecycle_flags.is_shutting_down());
+    app.handle_window(WindowCommand::CreateWindow {
+        frame: FrameRef::Frame(0x43),
+        width: 901,
+        height: 603,
+        title: "replacement".into(),
+        geometry_hints: GuiFrameGeometryHints {
+            base_width: 0,
+            base_height: 0,
+            min_width: 1,
+            min_height: 1,
+            width_inc: 1,
+            height_inc: 1,
+        },
+    });
+    assert_eq!(app.frame_windows.primary_event_frame_id(), 0x43);
+    assert_eq!(app.pending_content_size.width, 901);
+    // A stale destroyed frame cannot remove the replacement.
+    app.handle_window(WindowCommand::DestroyWindow {
+        frame: FrameRef::Frame(0x42),
+    });
+    assert_eq!(app.frame_windows.primary_event_frame_id(), 0x43);
+}
+
+#[test]
 fn pending_native_recreation_retains_last_usable_editor_size() {
     let mut content = super::startup::InitialWindowSize {
         width: 664,

@@ -578,6 +578,10 @@ pub(super) struct LiveProcessIo {
     /// PTY writer for sending input to the master side.
     pub(super) pty_writer: Option<Box<dyn std::io::Write + Send>>,
     pub(super) network_socket: Option<NetworkSocket>,
+    /// Filesystem identity captured when binding a Unix listener. Exit cleanup
+    /// must not unlink a different endpoint installed by an exit hook.
+    #[cfg(unix)]
+    pub(super) unix_listener_path: Option<(PathBuf, u64, u64)>,
     pub(super) pending_network_connect: Option<PendingNetworkConnect>,
     /// TLS-wrapped stream for encrypted network connections.
     pub(super) tls_stream: Option<TlsStream>,
@@ -1004,6 +1008,8 @@ impl WaitNotifier {
 }
 
 pub(super) struct ProcessWaitBackend {
+    #[cfg(unix)]
+    signal_fd: Option<std::os::fd::RawFd>,
     /// I/O multiplexer for process descriptors and cross-thread notifications.
     ///
     /// Shared (`Arc`) so any cross-thread producer can wake a blocked
@@ -1039,8 +1045,21 @@ impl ProcessWaitBackendInterest {
 
 impl ProcessWaitBackend {
     pub(super) fn new() -> Self {
+        let poller = polling::Poller::new().ok().map(Arc::new);
+        #[cfg(unix)]
+        let signal_fd = poller.as_ref().and_then(|poller| {
+            let fd = crate::emacs_core::os_signal::install().self_pipe_read_fd()?;
+            // SAFETY: the install report owns the descriptor for the process
+            // lifetime, longer than every registration. The reserved event key
+            // cannot collide with a real process identifier.
+            unsafe { poller.add(fd, polling::Event::readable(usize::MAX - 1)) }
+                .expect("cannot register evaluator signal wake pipe");
+            Some(fd)
+        });
         Self {
-            poller: polling::Poller::new().ok().map(Arc::new),
+            poller,
+            #[cfg(unix)]
+            signal_fd,
             notification_pending: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -1069,6 +1088,19 @@ impl ProcessWaitBackend {
         interest: ProcessWaitBackendInterest,
     ) -> Option<ProcessWaitEvents> {
         if let Some(ref poller) = self.poller {
+            if crate::emacs_core::os_signal::pending() {
+                return Some(ProcessWaitEvents::notification_wakeup());
+            }
+            #[cfg(unix)]
+            if let Some(fd) = self.signal_fd {
+                // Rearm one-shot interest. A signal between the pending check
+                // and wait leaves a readable byte, so no wake is lost.
+                // SAFETY: install owns fd for the process lifetime.
+                let source = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) };
+                poller
+                    .modify(source, polling::Event::readable(usize::MAX - 1))
+                    .ok()?;
+            }
             if interest.wants_notifications()
                 && self.notification_pending.swap(false, Ordering::AcqRel)
             {
@@ -1086,11 +1118,19 @@ impl ProcessWaitBackend {
                 let mut events = polling::Events::new();
                 match poller.wait(&mut events, Some(wait_time)) {
                     Ok(_) => {
-                        let notification_wakeup = interest.wants_notifications()
+                        let mut notification_wakeup = interest.wants_notifications()
                             && self.notification_pending.swap(false, Ordering::AcqRel);
                         let mut ready_processes = Vec::new();
                         let mut writable_processes = Vec::new();
                         for event in events.iter() {
+                            #[cfg(unix)]
+                            if event.key == usize::MAX - 1 {
+                                if let Some(fd) = self.signal_fd {
+                                    crate::emacs_core::os_signal::drain_wake_pipe(fd);
+                                }
+                                notification_wakeup = true;
+                                continue;
+                            }
                             if interest.wants_processes() {
                                 let id = event.key as ProcessId;
                                 let Some(process) = processes.get(&id) else {
@@ -5976,7 +6016,9 @@ impl ProcessManager {
             // terminal on fds 0/1, leaving fd 2 (stderr) on the pipe set up
             // above — exactly GNU's forkin/forkout=pty_tty, forkerr=stderr-pipe
             // arrangement.
-            let mut cmd = cmd.into_forking_command();
+            let mut cmd = cmd
+                .into_forking_command()
+                .map_err(|error| error.to_string())?;
             let tty_cstr = match std::ffi::CString::new(tty_path.as_os_str().as_bytes()) {
                 Ok(path) => path,
                 Err(_) => return Err("PTY tty name contains an interior NUL".to_string()),
@@ -6026,6 +6068,9 @@ impl ProcessManager {
                 }
             }
 
+            #[cfg(unix)]
+            crate::emacs_core::callproc::retain_child_exit_status()
+                .map_err(|error| error.to_string())?;
             match pty_pair.slave.spawn_command(cmd) {
                 Ok(pty_child) => {
                     // GNU records the child's real OS pid; portable_pty exposes
@@ -6446,6 +6491,30 @@ impl ProcessManager {
     ) -> Option<ProcessWaitEvents> {
         self.wait_backend
             .wait_for_events(&self.processes, timeout, interest)
+    }
+
+    /// Remove only the filesystem node captured at bind, not a replacement
+    /// left by hooks. Ordinary delete-process semantics remain unchanged.
+    #[cfg(unix)]
+    pub(crate) fn unlink_owned_unix_listener_for_exit(&mut self, id: ProcessId) {
+        use std::os::unix::fs::{FileTypeExt, MetadataExt};
+        let Some(proc) = self.processes.get_mut(&id) else {
+            return;
+        };
+        if !matches!(
+            proc.live_io.network_socket,
+            Some(NetworkSocket::UnixListener(_))
+        ) {
+            return;
+        }
+        if let Some((path, device, inode)) = proc.live_io.unix_listener_path.take()
+            && let Ok(metadata) = std::fs::symlink_metadata(&path)
+            && metadata.file_type().is_socket()
+            && metadata.dev() == device
+            && metadata.ino() == inode
+        {
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     pub(super) fn deactivate_network_process_io(&mut self, id: ProcessId) {

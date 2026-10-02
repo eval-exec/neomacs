@@ -516,19 +516,43 @@ pub(crate) fn builtin_current_message(
     Ok(ctx.current_message_value().unwrap_or(Value::NIL))
 }
 
-pub(crate) fn builtin_daemonp(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_daemonp(ctx: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args("daemonp", &args, 0)?;
-    Ok(Value::NIL)
+    Ok(ctx.daemon.as_ref().map_or(Value::NIL, |daemon| {
+        daemon
+            .name
+            .as_ref()
+            .map_or(Value::T, |name| Value::string(name.clone()))
+    }))
 }
 
-pub(crate) fn builtin_daemon_initialized(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_daemon_initialized(
+    ctx: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args("daemon-initialized", &args, 0)?;
-    Err(signal(
-        "error",
-        vec![Value::string(
-            "This function can only be called if emacs is run as a daemon",
-        )],
-    ))
+    let error = |message: &str| signal("error", vec![Value::string(message)]);
+    let after_init = ctx
+        .obarray
+        .symbol_value("after-init-time")
+        .is_some_and(|value| value.is_truthy());
+    let daemon = ctx
+        .daemon
+        .as_mut()
+        .ok_or_else(|| error("This function can only be called if emacs is run as a daemon"))?;
+    if daemon.initialized {
+        return Err(error("The daemon has already been initialized"));
+    }
+    if !after_init {
+        return Err(error(
+            "This function can only be called after loading the init files",
+        ));
+    }
+    daemon.initialized = true;
+    if let Some(mut notify) = daemon.notify.take() {
+        notify().map_err(|message| error(&message))?;
+    }
+    Ok(Value::T)
 }
 
 pub(crate) fn builtin_documentation_stringp(args: Vec<Value>) -> EvalResult {

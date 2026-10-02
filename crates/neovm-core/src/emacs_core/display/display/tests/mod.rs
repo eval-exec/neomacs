@@ -1,3 +1,4 @@
+mod deferred_gui_test;
 mod menu_buttons_test;
 mod menu_semantics_test;
 mod menu_submenu_test;

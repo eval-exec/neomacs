@@ -17,6 +17,7 @@ pub(super) struct Subscription {
     context: gio::glib::MainContext,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
+    bypass: Option<Arc<AtomicBool>>,
 }
 
 impl Drop for Subscription {
@@ -25,10 +26,20 @@ impl Drop for Subscription {
         // GLib guarantees that an early wakeup makes the next iteration
         // return without blocking, including the check-before-wait race.
         self.context.wakeup();
-        if let Some(worker) = self.worker.take()
-            && worker.join().is_err()
-        {
-            tracing::error!("desktop font subscription worker panicked");
+        if let Some(worker) = self.worker.take() {
+            if let Some(bypass) = &self.bypass {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
+                while !worker.is_finished() && std::time::Instant::now() < deadline {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                if !worker.is_finished() {
+                    bypass.store(true, Ordering::Release);
+                    return; // Native worker owns its context; never free it here.
+                }
+            }
+            if worker.join().is_err() {
+                tracing::error!("desktop font subscription worker panicked");
+            }
         }
     }
 }
@@ -59,6 +70,19 @@ fn read_fonts(schema: &SettingsSchema, settings: &Settings) -> SystemFonts {
 }
 
 pub(super) fn observe() -> io::Result<super::FontDefaultsObserver> {
+    observe_inner(None)
+}
+
+pub(super) fn observe_controlled(
+    cancelled: &dyn Fn() -> bool,
+    bypass: Arc<AtomicBool>,
+) -> io::Result<super::FontDefaultsObserver> {
+    observe_inner(Some((cancelled, bypass)))
+}
+
+fn observe_inner(
+    control: Option<(&dyn Fn() -> bool, Arc<AtomicBool>)>,
+) -> io::Result<super::FontDefaultsObserver> {
     let context = gio::glib::MainContext::new();
     let stop = Arc::new(AtomicBool::new(false));
     let worker_context = context.clone();
@@ -68,6 +92,18 @@ pub(super) fn observe() -> io::Result<super::FontDefaultsObserver> {
     let worker = std::thread::Builder::new()
         .name("desktop-font-settings".into())
         .spawn(move || {
+            #[cfg(feature = "gui-test-hooks")]
+            {
+                crate::gui_test_controls::gate("font-worker", || {
+                    worker_stop.load(Ordering::Acquire)
+                });
+                // A foreign initializer may ignore the stop flag. Its exact
+                // context stays worker-owned; only publication is abandoned.
+                crate::gui_test_controls::gate("foreign-font-worker", || false);
+            }
+            if worker_stop.load(Ordering::Acquire) {
+                return;
+            }
             worker_context
                 .with_thread_default(|| {
                     let Some(schema) = SettingsSchemaSource::default()
@@ -111,8 +147,26 @@ pub(super) fn observe() -> io::Result<super::FontDefaultsObserver> {
         context,
         stop,
         worker: Some(worker),
+        bypass: control.as_ref().map(|(_, bypass)| bypass.clone()),
     };
-    match initial_rx.recv().map_err(io::Error::other)? {
+    let initial = if let Some((cancelled, _)) = control {
+        loop {
+            if cancelled() {
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "Native font observation cancelled",
+                ));
+            }
+            match initial_rx.recv_timeout(std::time::Duration::from_millis(20)) {
+                Ok(initial) => break initial,
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+                Err(error) => return Err(io::Error::other(error)),
+            }
+        }
+    } else {
+        initial_rx.recv().map_err(io::Error::other)?
+    };
+    match initial {
         Some(initial) => Ok(super::FontDefaultsObserver {
             initial: super::GuiFontDefaults::Desktop(initial),
             changes,

@@ -394,8 +394,27 @@ pub enum WindowCommand {
         title: String,
         geometry_hints: GuiFrameGeometryHints,
     },
+    /// One bounded admission owns creation, readiness and independent rollback.
+    RealizeFrame {
+        frame: FrameRef,
+        width: u32,
+        height: u32,
+        title: String,
+        geometry_hints: GuiFrameGeometryHints,
+        fullscreen: Option<WindowFullscreenMode>,
+        visual: Option<VisualConfig>,
+        adopt_primary: bool,
+        reply: Sender<Result<(), String>>,
+        live: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        deadline: std::time::Instant,
+    },
     /// Associate the already-created primary OS window with its real Emacs frame ID.
     AdoptPrimaryFrame { frame: FrameRef },
+    /// Acknowledge actual native window/surface realization, not queue admission.
+    AwaitFrameReady {
+        frame: FrameRef,
+        reply: Sender<Result<(), String>>,
+    },
     /// Destroy an OS window for a top-level Emacs frame
     DestroyWindow { frame: FrameRef },
     /// Mark a child frame visible again.
@@ -1011,6 +1030,8 @@ impl ThreadComms {
         };
 
         let render = RenderComms {
+            keep_alive_without_frames: false,
+            native_window_waits: None,
             input_stream: Default::default(),
             tooltip_context: self.tooltip_context,
             frame_rx: self.frame_rx,
@@ -1040,6 +1061,9 @@ pub struct EmacsComms {
 
 /// Render thread communication handle
 pub struct RenderComms {
+    /// Daemon root, rather than the primary native frame, owns display lifetime.
+    pub keep_alive_without_frames: bool,
+    pub native_window_waits: Option<Arc<crate::native_window_wait::NativeWindowWaits>>,
     input_stream: neomacs_display_protocol::input_progress::InputStream,
     pub frame_rx: FrameReceiver,
     pub cmd_rx: Receiver<RenderCommand>,
@@ -1049,6 +1073,22 @@ pub struct RenderComms {
 }
 
 impl RenderComms {
+    pub(crate) fn create_window(
+        &self,
+        event_loop: &dyn winit::event_loop::ActiveEventLoop,
+        attrs: winit::window::WindowAttributes,
+        frame: u64,
+    ) -> Result<Box<dyn winit::window::Window>, String> {
+        let create = || {
+            event_loop
+                .create_window(attrs)
+                .map_err(|error| error.to_string())
+        };
+        match &self.native_window_waits {
+            Some(waits) => waits.run(frame, create),
+            None => create(),
+        }
+    }
     fn observe_scroll_input(event: InputEvent) -> InputEvent {
         #[cfg(target_os = "linux")]
         if neomacs_display_protocol::input_latency::enabled() {

@@ -494,6 +494,20 @@ pub(crate) fn next_terminal_id() -> u64 {
     })
 }
 
+/// Register a native graphical connection without changing the daemon's
+/// initial terminal or any existing TTY frame.
+pub fn register_graphical_terminal(
+    identity: neomacs_display_protocol::GraphicalDisplayIdentity,
+) -> u64 {
+    let id = next_terminal_id();
+    ensure_terminal_runtime_owner(
+        id,
+        identity.terminal_name().to_owned(),
+        TerminalRuntimeConfig::window_system(identity),
+    );
+    id
+}
+
 /// GNU `get_named_terminal`: find an active termcap terminal already owning
 /// DEVICE so a second frame shares its renderer, input source, and kboard
 /// instead of opening the same tty twice.
