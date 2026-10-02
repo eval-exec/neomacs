@@ -5,9 +5,7 @@
 //! single `(lo, len)` range over owner addresses:
 //!
 //! - **ALL** while a concurrent mark runs (the SATB log) or owner tracking is
-//!   on (the dirty-owner tables): every heap write is recorded. Stage A also
-//!   uses ALL with generations enabled so unchanged compiled cons stores
-//!   reach the outlined unlogged-bit gate; C2.8 adds their inline bitmap test. Also ALL for
+//!   on (the dirty-owner tables): every heap write is recorded. Also ALL for
 //!   the whole life of a heap under the census's remembered-set probe
 //!   (`census.rs`), which must see every store.
 //! - **The dump span** when only the dump partition is active (the steady
@@ -18,7 +16,10 @@
 //! An owner at address `a` needs the out-of-line barrier iff
 //! `a.wrapping_sub(lo) < len`, or it is a non-cons owner that is tenured and
 //! not yet remembered (see `barrier_gate`). With generations disabled,
-//! a cons outside the window is stored inline.
+//! a cons outside the window is stored inline. Rust cons stores use a
+//! separate protocol mirror, equal to this window with generations disabled
+//! and ALL otherwise; the outlined filter then checks generation eligibility.
+//! Compiled stores keep the real window and test the cons bitmap inline.
 //!
 //! The window is PROTOCOL STATE, like `TAGGED_HEAP_CONCURRENT_ACTIVE`: it is
 //! recomputed and republished by [`TaggedHeap::publish_barrier_window`] at
@@ -79,8 +80,7 @@ impl BarrierWindow {
 impl TaggedHeap {
     /// The window this heap's current state implies (see the module doc).
     pub(crate) fn barrier_window(&self) -> BarrierWindow {
-        if self.generational_enabled()
-            || self.concurrent_mark_running
+        if self.concurrent_mark_running
             || self.write_tracking_mode != WriteTrackingMode::Disabled
             || self.census.as_deref().is_some_and(GenCensus::remset_probe)
         {
@@ -95,6 +95,17 @@ impl TaggedHeap {
         }
     }
 
+    /// Derive the Rust cons protocol mirror once per publication. This carries
+    /// no mutator log or cache; future parallel mutators need the same window
+    /// publication handshake as the existing ordinary mirror.
+    pub(super) fn cons_barrier_window(&self, ordinary: BarrierWindow) -> BarrierWindow {
+        if self.generational.enabled {
+            BarrierWindow::ALL
+        } else {
+            ordinary
+        }
+    }
+
     /// THE publisher of the barrier window: recompute it from this heap's
     /// state and store it where the barriers read it — the thread-local
     /// mirror the Rust stores test and the heap field compiled code tests
@@ -103,6 +114,7 @@ impl TaggedHeap {
         let window = self.barrier_window();
         self.jit.set_barrier_window(window);
         TAGGED_HEAP_BARRIER_WINDOW.with(|w| w.set(window));
+        TAGGED_HEAP_CONS_BARRIER_WINDOW.with(|w| w.set(self.cons_barrier_window(window)));
     }
 
     /// Test hook: arm or disarm the concurrent SATB barrier exactly as
@@ -159,4 +171,10 @@ impl TaggedHeap {
 #[cfg(test)]
 pub(crate) fn published_barrier_window() -> BarrierWindow {
     TAGGED_HEAP_BARRIER_WINDOW.with(|w| w.get())
+}
+
+/// The protocol window Rust cons stores currently test.
+#[cfg(test)]
+pub(crate) fn published_cons_barrier_window() -> BarrierWindow {
+    TAGGED_HEAP_CONS_BARRIER_WINDOW.with(|w| w.get())
 }

@@ -938,13 +938,19 @@ fn emit_varset_fast(
             let to_default = fb.ins().band(neither, default_loaded);
             let own_cell = fb.ins().bor(found, to_default);
             let window = barrier_window(fb, rt);
-            let plain_store = cons_store_ok(fb, window, valcell, remembered_defcell);
+            let plain_store = (!rt.generational_enabled())
+                .then(|| cons_store_ok(fb, window, valcell, remembered_defcell));
             let (rule_ok, stored) = blv_rule(fb, rule, val);
             let mut conds: SmallVec<[ClifValue; 8]> =
-                smallvec::smallvec![writable, same, hit, fwd_same, own_cell, plain_store];
+                smallvec::smallvec![writable, same, hit, fwd_same, own_cell];
+            conds.extend(plain_store);
             conds.extend(rule_ok);
             let ok = all(fb, &conds);
             guard(fb, ok, slow);
+            if rt.generational_enabled() {
+                let owner = iadd_imm_p(fb, valcell, -(TAG_CONS as i64));
+                super::heap_inline::emit_cons_store_barrier(fb, rt, owner, stored, slow);
+            }
             store_word(fb, stored, valcell, TAGGED_CONS_CDR);
         }
         VarShape::Forwarded { desc, kind } => {
@@ -1182,13 +1188,18 @@ fn emit_varbind_fast(
             let old = load_word(fb, valcell, TAGGED_CONS_CDR);
             let bound = ne_imm(fb, old, Value::UNBOUND.bits() as i64);
             let window = barrier_window(fb, rt);
-            let plain_store = cons_store_ok(fb, window, valcell, remembered_defcell);
+            let plain_store = (!rt.generational_enabled())
+                .then(|| cons_store_ok(fb, window, valcell, remembered_defcell));
             let (rule_ok, stored) = blv_rule(fb, rule, val);
-            let mut conds: SmallVec<[ClifValue; 5]> =
-                smallvec::smallvec![own_cell, bound, plain_store];
+            let mut conds: SmallVec<[ClifValue; 5]> = smallvec::smallvec![own_cell, bound];
+            conds.extend(plain_store);
             conds.extend(rule_ok);
             let ok = all(fb, &conds);
             guard(fb, ok, slow);
+            if rt.generational_enabled() {
+                let owner = iadd_imm_p(fb, valcell, -(TAG_CONS as i64));
+                super::heap_inline::emit_cons_store_barrier(fb, rt, owner, stored, slow);
+            }
             let local = imm64(fb, lets.let_local.header_with(sym) as i64);
             let default = imm64(fb, lets.let_default.header_with(sym) as i64);
             let header = fb.ins().select(found, local, default);
@@ -1282,6 +1293,7 @@ fn unbind_entry(
     cur: Option<ClifValue>,
     window: Window,
     conds: &mut SmallVec<[ClifValue; 16]>,
+    generational: bool,
 ) -> Restore {
     let cell = baked(fb, site.cell);
     let sym = site.sym;
@@ -1337,8 +1349,11 @@ fn unbind_entry(
                 .ins()
                 .uload8(types::I64, trusted(), blv, BLV_FOUND_OFFSET as i32);
             let found = ne_imm(fb, found, 0);
-            let local_store = cons_store_ok(fb, window, valcell, None);
-            let local_ok = all(fb, &[is_local, here, hit, found, local_store]);
+            let local_store = (!generational).then(|| cons_store_ok(fb, window, valcell, None));
+            let mut local_conds: SmallVec<[ClifValue; 5]> =
+                smallvec::smallvec![is_local, here, hit, found];
+            local_conds.extend(local_store);
+            let local_ok = all(fb, &local_conds);
             if site.projected {
                 // The default's restore republishes a projected symbol.
                 conds.push(local_ok);
@@ -1353,9 +1368,11 @@ fn unbind_entry(
             let fwd_word = load_word(fb, blv, BLV_FWD_OFFSET);
             let fwd_same = eq_imm(fb, fwd_word, fwd as i64);
             let (rule_ok, ruled) = blv_rule(fb, rule, old);
-            let default_store = cons_store_ok(fb, window, defcell, remembered_defcell);
+            let default_store =
+                (!generational).then(|| cons_store_ok(fb, window, defcell, remembered_defcell));
             let mut default_conds: SmallVec<[ClifValue; 4]> =
-                smallvec::smallvec![is_default, fwd_same, default_store];
+                smallvec::smallvec![is_default, fwd_same];
+            default_conds.extend(default_store);
             default_conds.extend(rule_ok);
             let default_ok = all(fb, &default_conds);
             conds.push(fb.ins().bor(local_ok, default_ok));
@@ -1410,6 +1427,9 @@ fn emit_unbind_fast(
         .iter()
         .any(|site| matches!(site.shape, VarShape::Localized { .. }))
         .then(|| current_buffer(fb, rt));
+    // Only localized restores write heap conses. Plain/forwarded restores
+    // must not consult a possibly inactive allocation view during lowering.
+    let generational = cur.is_some() && rt.generational_enabled();
     let mut conds: SmallVec<[ClifValue; 16]> = SmallVec::new();
     if sites
         .iter()
@@ -1428,10 +1448,22 @@ fn emit_unbind_fast(
             cur,
             window,
             &mut conds,
+            generational,
         ));
     }
     let ok = all(fb, &conds);
     guard(fb, ok, slow);
+    if generational {
+        // All shapes are valid before touching a trailer, and every selected
+        // restore is checked before any write. A later refusal cannot leave
+        // partial unbinding effects for the unchanged fallback shim.
+        for restore in &restores {
+            if let Restore::Cons { cons, value } = restore {
+                let owner = iadd_imm_p(fb, *cons, -(TAG_CONS as i64));
+                super::heap_inline::emit_cons_store_barrier(fb, rt, owner, *value, slow);
+            }
+        }
+    }
     for restore in restores {
         match restore {
             Restore::Cell { cell, value } => store_word(fb, value, cell, LISP_SYMBOL_VAL_OFFSET),

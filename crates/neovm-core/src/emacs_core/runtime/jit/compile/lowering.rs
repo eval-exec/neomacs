@@ -3232,6 +3232,7 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
                 rootwin: None,
                 heap: None,
                 inline_alloc: !aot && super::jit_inline_alloc_on(),
+                generational: std::cell::Cell::new(aot.then_some(false)),
                 direct_sites: std::cell::Cell::new(0),
                 self_direct_source: super::direct_call::source_for_abi(abi),
                 poll: emit.poll(),
@@ -4099,6 +4100,11 @@ pub(crate) struct RtCtx {
     /// Allocate conses and box floats inline (`heap_inline`): JIT code with
     /// `NEOVM_JIT_INLINE_ALLOC` on; never AOT, whose leaves keep the shims.
     pub(crate) inline_alloc: bool,
+    /// Constructor-read setting of the heap whose identity pins this leaf.
+    /// Captured lazily at the first heap-store gate, never from the environment.
+    /// Pure runtime leaves must not inspect an inactive allocation TLS pointer
+    /// left behind when a Context moves to another thread. AOT starts disabled.
+    pub(crate) generational: std::cell::Cell<Option<bool>>,
     /// Direct call sites emitted so far in this function
     /// (`direct_call::DIRECT_SITE_CAP` bounds them).
     pub(crate) direct_sites: std::cell::Cell<u32>,
@@ -4112,6 +4118,21 @@ pub(crate) struct RtCtx {
     /// Compile-local protocol flags; generated state belongs to this native
     /// activation and is invalidated on successful service polls.
     pub(crate) inline_entry_cache: Option<super::inline_entry_cache::EntryCache>,
+}
+
+impl RtCtx {
+    /// The compiling heap's frozen mode, first queried by a heap-store gate.
+    /// Such leaves require their intended live heap to be installed while
+    /// lowering. A pure runtime leaf never needs this query or a live heap.
+    #[inline]
+    pub(crate) fn generational_enabled(&self) -> bool {
+        if let Some(enabled) = self.generational.get() {
+            return enabled;
+        }
+        let enabled = crate::tagged::gc::current_heap_generational_enabled();
+        self.generational.set(Some(enabled));
+        enabled
+    }
 }
 
 /// The residual root window's frame base, loaded once at entry, with its

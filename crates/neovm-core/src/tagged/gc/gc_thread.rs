@@ -1140,7 +1140,9 @@ pub fn set_tagged_heap(heap: &mut TaggedHeap) {
     TAGGED_HEAP_DUMP_SPAN.with(|s| s.set((heap.dump_addr_lo, heap.dump_addr_hi)));
     // The barrier window is re-derived, not restored: this is its
     // panic-recovery point, as for the concurrent flag above.
-    TAGGED_HEAP_BARRIER_WINDOW.with(|w| w.set(heap.barrier_window()));
+    let window = heap.barrier_window();
+    TAGGED_HEAP_BARRIER_WINDOW.with(|w| w.set(window));
+    TAGGED_HEAP_CONS_BARRIER_WINDOW.with(|w| w.set(heap.cons_barrier_window(window)));
     // The remembered cache belongs to this heap's mutator. Reinstallation
     // invalidates repeat-owner rejects, just as the former TLS cache did.
     heap.current_mutator_gc_mut().remembered_cache.fill(0);
@@ -1172,6 +1174,7 @@ pub fn clear_tagged_heap_if_installed(heap: &TaggedHeap) {
             TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(false));
             TAGGED_HEAP_DUMP_SPAN.with(|s| s.set((usize::MAX, 0)));
             TAGGED_HEAP_BARRIER_WINDOW.with(|w| w.set(BarrierWindow::NONE));
+            TAGGED_HEAP_CONS_BARRIER_WINDOW.with(|w| w.set(BarrierWindow::NONE));
             clear_barrier_cache(&TAGGED_HEAP_SATB_CACHE);
         }
     });
@@ -1199,6 +1202,46 @@ pub(crate) fn current_tagged_heap_identity() -> Option<usize> {
     TAGGED_HEAP_ID.with(Cell::get)
 }
 
+/// Compile-time mode of the active mutator's heap, without installing one.
+/// Heapless lowering preserves the legacy shape. Heap-store leaves must be
+/// compiled on their intended heap; cached runtime leaves already obey this
+/// identity contract, as do BLV leaves with baked cell addresses.
+pub(crate) fn current_heap_generational_enabled() -> bool {
+    #[cfg(all(test, debug_assertions, feature = "jit"))]
+    HEAP_GENERATIONAL_MODE_READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    TAGGED_HEAP.with(|slot| {
+        // SAFETY: an installed heap is live while its mutator lowers code.
+        unsafe { installed_heap_generational_enabled(slot.get()) }
+    })
+}
+
+/// Compiler-only regression instrumentation, absent from production. This
+/// counts mode captures, not mutator GC events or cached heap state.
+#[cfg(all(test, debug_assertions, feature = "jit"))]
+static HEAP_GENERATIONAL_MODE_READS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(all(test, debug_assertions, feature = "jit"))]
+pub(crate) fn heap_generational_mode_reads_for_test() -> usize {
+    HEAP_GENERATIONAL_MODE_READS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Read the frozen compile-time mode without creating a fallback heap. The
+/// false target is an immutable promoted literal, not a mutator cache.
+/// Rust stores select their protocol window without reading this flag.
+///
+/// SAFETY: `heap` is null or the current mutator's live, initialized heap.
+#[inline(always)]
+unsafe fn installed_heap_generational_enabled(heap: *const TaggedHeap) -> bool {
+    let flag = if heap.is_null() {
+        &false as *const bool
+    } else {
+        unsafe { std::ptr::addr_of!((*heap).generational.enabled) }
+    };
+    // Both selected targets are initialized and readable; the knob is immutable.
+    unsafe { *flag }
+}
+
 /// Access the thread-local tagged heap.
 ///
 /// In test mode, auto-creates a fallback heap if none is set.
@@ -1219,8 +1262,7 @@ pub fn with_tagged_heap<R>(f: impl FnOnce(&mut TaggedHeap) -> R) -> R {
                 }
                 let heap_ref: &mut TaggedHeap = borrow.as_mut().unwrap();
                 let ptr = heap_ref as *mut TaggedHeap;
-                h.set(ptr);
-                TAGGED_HEAP_ID.with(|identity| identity.set(Some(heap_ref.identity())));
+                set_tagged_heap(heap_ref);
                 f(unsafe { &mut *ptr })
             })
         }
@@ -1242,7 +1284,11 @@ pub fn with_tagged_heap<R>(f: impl FnOnce(&mut TaggedHeap) -> R) -> R {
 #[inline(always)]
 pub fn note_heap_write(owner: TaggedValue, kind: HeapWriteKind) {
     if barrier_gate(owner) {
-        note_heap_write_slow(owner, kind, None, None);
+        if owner.is_cons() {
+            note_cons_write_slow(owner, kind, None, None);
+        } else {
+            note_heap_write_slow(owner, kind, None, None);
+        }
     }
 }
 
@@ -1255,31 +1301,68 @@ pub fn note_heap_slot_write(
     value: TaggedValue,
 ) {
     if barrier_gate(owner) {
-        note_heap_write_slow(owner, kind, Some(slot), Some(value));
+        if owner.is_cons() {
+            note_cons_write_slow(owner, kind, Some(slot), Some(value));
+        } else {
+            note_heap_write_slow(owner, kind, Some(slot), Some(value));
+        }
     }
 }
 
-/// The owner window handles marking, tracking and mapped owners. Outside
-/// it, a non-cons tests its logged header, exactly as in the legacy gate.
-/// Stage A widens the enabled window to ALL until C2.8 adds the cons test
-/// to generated stores; all stores then use the same outlined gate. Only
-/// that enabled outlined arm filters edge-free values: bare symbols need
-/// side-table marking even though they are not heap pointers.
+/// The protocol window handles marking, tracking and mapped owners. Rust
+/// cons stores select their precomputed mirror; with generations disabled it
+/// is identical to the ordinary window. Thus a missed cons window is the
+/// legacy plain store, without a heap or mode read. Non-cons stores retain
+/// the legacy logged-header test. Concurrent preimage capture precedes any
+/// immediate rejection in the outlined filter; symbols remain eligible.
 #[inline(always)]
 fn barrier_gate(owner: TaggedValue) -> bool {
     if !owner.is_heap_object() {
         return false;
     }
     let addr = owner.bits() & !crate::tagged::value::TAG_MASK;
-    if TAGGED_HEAP_BARRIER_WINDOW.with(|w| w.get()).covers(addr) {
+    let window = if owner.is_cons() {
+        TAGGED_HEAP_CONS_BARRIER_WINDOW.with(|w| w.get())
+    } else {
+        TAGGED_HEAP_BARRIER_WINDOW.with(|w| w.get())
+    };
+    if window.covers(addr) {
         return true;
     }
-    // SAFETY: a non-cons heap value points at a live `GcHeader`-prefixed
-    // object (arena, boxed, leaked static or mapped); only its `tenured`
-    // byte (written only by the stop-the-world promotion) and its
-    // `remembered` byte (written only by `remember_owner`, on this thread)
-    // are read.
+    // SAFETY: a non-cons heap value points at a live GcHeader-prefixed
+    // object. Promotion is stop-the-world; remember_owner claims the logged
+    // byte atomically. Cons owners never read a header.
     !owner.is_cons() && unsafe { GcHeader::needs_remembering(addr as *const GcHeader) }
+}
+
+/// Dispatch cons writes admitted by the protocol mirror. A real-window hit
+/// retains the full barrier, including immediate-overwrite preimage capture.
+/// Otherwise admission proves GEN1: its mirror is ALL, whereas GEN0's mirror
+/// equals the real window. Reject generation-only stores before constructing
+/// a record or reading census, tracking or concurrent state.
+#[cold]
+#[inline(never)]
+fn note_cons_write_slow(
+    owner: TaggedValue,
+    kind: HeapWriteKind,
+    slot: Option<usize>,
+    value: Option<TaggedValue>,
+) {
+    let addr = owner.bits() & !crate::tagged::value::TAG_MASK;
+    if !TAGGED_HEAP_BARRIER_WINDOW.with(|w| w.get().covers(addr)) {
+        // Characters share fixnum encoding; symbols must continue through.
+        if value.is_some_and(TaggedValue::is_fixnum) {
+            return;
+        }
+        let needs_log = with_tagged_heap(|heap| {
+            heap.old_cons_trailer(owner)
+                .is_some_and(|(trailer, index)| trailer.is_unlogged(index))
+        });
+        if !needs_log {
+            return;
+        }
+    }
+    note_heap_write_slow(owner, kind, slot, value);
 }
 
 /// The barrier's outlined part: build the record and ask the heap.
@@ -1319,8 +1402,9 @@ pub(super) fn barrier_needs_heap(
 ) -> bool {
     let bits = record.owner.bits();
     if disabled && !concurrent {
-        // The generational Stage A ALL window also covers inline cons stores
-        // whose C2.8 bitmap gate has not landed. Reject irrelevant writes here.
+        // The Rust cons mirror is ALL under generations; compiled cons
+        // stores arrive through the real window or their inline bitmap.
+        // Reject irrelevant generation-only writes before claiming the owner.
         // Tracking and concurrent marking use the legacy barrier below and
         // must not pay for a generational heap lookup.
         let gen_decision = with_tagged_heap(|heap| {

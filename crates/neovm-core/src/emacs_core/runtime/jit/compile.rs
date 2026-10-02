@@ -3230,6 +3230,9 @@ pub(crate) fn baseline_needs_rt(ops: &[Op], has_backedge: bool) -> bool {
 /// operand stack flows across edges through per-slot SSA variables (Cranelift
 /// inserts the phis). The `arity` arguments are loaded and seed the bottom of the
 /// stack (arg0 deepest), exactly as the interpreter's `run_frame` pushes them.
+/// Heap-store leaves must be lowered with their intended executing heap
+/// installed; they are not portable across heaps or generational modes.
+/// Heapless lowering retains the legacy generation-disabled shape.
 pub fn lower_leaf(
     ops: &[Op],
     constants: &[Value],
@@ -3844,6 +3847,7 @@ fn build_leaf_fn<S: LeafSink>(
                 rootwin: None,
                 heap: None,
                 inline_alloc: !aot && jit_inline_alloc_on(),
+                generational: std::cell::Cell::new(aot.then_some(false)),
                 direct_sites: std::cell::Cell::new(0),
                 self_direct_source: direct_call::source_for_abi(abi),
                 poll: emit.poll(),
@@ -4874,6 +4878,10 @@ pub(crate) mod heap_inline;
 #[cfg(test)]
 #[path = "tests/inline_heap_ops.rs"]
 mod inline_heap_ops_tests;
+
+#[cfg(test)]
+#[path = "tests/inline_heap_generational.rs"]
+mod inline_heap_generational_tests;
 #[cfg(test)]
 #[path = "tests/inline.rs"]
 mod inline_tests;

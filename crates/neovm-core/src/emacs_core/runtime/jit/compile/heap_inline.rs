@@ -4,22 +4,23 @@
 //! and conses and float boxes bumped out of the heap's open allocation
 //! regions instead of `neovm_jit_cons`/`neovm_jit_make_float`.
 //!
-//! The write barrier's whole inline decision is one owner-address window
+//! The write barrier starts with one owner-address window
 //! (`tagged::gc::BarrierWindow`), which the heap publishes into its
 //! `JitHeapState` at every change of collector state. Compiled code reads it
 //! through `vmctx -> Context.tagged_heap -> jit` and stores inline only when
-//! the owner lies outside it; everything else — a non-cons, an owner in the
-//! window (a concurrent mark or owner tracking makes the window ALL, the
-//! dump partition makes it the image span) — takes the unchanged shim, which
-//! signals, records and stores exactly as before.
+//! the owner lies outside it and its remaining gate accepts the store.
+//! Concurrent marking or owner tracking makes the window ALL; a dump
+//! partition uses the image span. Non-conses test their logged header.
+//! Generational conses additionally test their unlogged bitmap. A refusal
+//! takes the unchanged shim, which signals, records and stores.
 //!
 //! Why a plain store is sound outside the window: the window is ALL for the
 //! whole life of a concurrent mark (`launch_concurrent_mark` publishes it
 //! before the GC thread can read anything and `join_concurrent_mark` only
 //! clears it after the thread has exited), so an inline store never races a
 //! collector read; the next mark's start handshake (a channel send) orders
-//! it before any. A cons is never tenured, so outside the window it has
-//! nothing to remember.
+//! it before any. With generations enabled, an owned cons outside the window
+//! additionally tests its unlogged bit; only the outlined barrier claims it.
 //!
 //! Allocation: `JitHeapState` also holds each class's region cursor and
 //! limit (`tagged::gc::alloc_region`), which the Rust allocator bumps too.
@@ -63,6 +64,11 @@ pub(crate) fn inline_heap_sites() -> u32 {
 /// answered" from "the emitter declined and the shim answered".
 #[cfg(debug_assertions)]
 pub(crate) static INLINE_HEAP_STORES_EMITTED: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Compile-time instrumentation only: no mutator data or runtime cache.
+#[cfg(debug_assertions)]
+pub(crate) static GENERATIONAL_CONS_TESTS_EMITTED: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
 fn note_inline_site() {
@@ -120,6 +126,109 @@ fn emit_barrier_window_check(
     fb.seal_block(outside);
 }
 
+/// The single cons-store gate, shared by setcar/setcdr, HOF stores and BLVs.
+/// OWNER is an untagged, shape-guarded live cons. Window refusal comes first:
+/// mapped cells have no owned-block trailer, and marks/tracking need the shim
+/// even when VALUE is a fixnum. Symbols must reach the unlogged test because
+/// their liveness is tracked in a side table.
+pub(crate) fn emit_cons_store_barrier(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    owner: ClifValue,
+    value: ClifValue,
+    slow: Block,
+) {
+    // BLV stores also dereference vmctx here; give them the same heap-identity
+    // entry check as ordinary inline cons stores. This is compiler metadata.
+    note_inline_site();
+    let heap = heap_ptr(fb, rt);
+    emit_barrier_window_check(fb, heap, owner, slow);
+    if !rt.generational_enabled() || super::lowering::is_known_fixnum(fb, value) {
+        return;
+    }
+    let store = fb.create_block();
+    if super::lowering::iconst_bits(fb, value).is_none() {
+        let bitmap = fb.create_block();
+        let immediate = super::lowering::fixnum_tag_test(fb, value);
+        fb.ins().brif(immediate, store, &[], bitmap, &[]);
+        fb.switch_to_block(bitmap);
+        fb.seal_block(bitmap);
+    }
+    use super::jit_layout::heap::{CONS_BLOCK_BYTES, CONS_UNLOGGED_OFFSET};
+    let base = band_imm_p(fb, owner, !((CONS_BLOCK_BYTES - 1) as i64));
+    let offset = fb.ins().isub(owner, base);
+    let index = fb.ins().ushr_imm(
+        offset,
+        std::mem::size_of::<ConsCell>().trailing_zeros() as i64,
+    );
+    let word = fb.ins().ushr_imm(index, u64::BITS.trailing_zeros() as i64);
+    let word_bytes = ishl_imm_p(fb, word, std::mem::size_of::<u64>().trailing_zeros() as i64);
+    let address = fb.ins().iadd(base, word_bytes);
+    let address = iadd_imm_p(fb, address, CONS_UNLOGGED_OFFSET as i64);
+    // Cranelift exposes SeqCst atomic loads, not Relaxed. On our x86-64 JIT
+    // target this is one aligned MOV, exactly the Relaxed fast-path load.
+    // Atomic IR prevents compiler coalescing across concurrent bitmap RMWs;
+    // no publication ordering beyond the existing stop-all handshake is used.
+    let bits = fb
+        .ins()
+        .atomic_load(types::I64, MemFlagsData::trusted(), address);
+    // Cranelift 0.134.3 defines ushr's shift amount modulo the operand width,
+    // so the I64 shift already selects index modulo 64 within this word.
+    let shifted = fb.ins().ushr(bits, index);
+    let unlogged = band_imm_p(fb, shifted, 1);
+    fb.ins().brif(unlogged, slow, &[], store, &[]);
+    fb.switch_to_block(store);
+    fb.seal_block(store);
+    #[cfg(debug_assertions)]
+    GENERATIONAL_CONS_TESTS_EMITTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The non-cons half of the same store sequence. The OFF arm emits the
+/// original window and adjacent tenured/remembered-byte test verbatim.
+fn emit_slot_store_barrier(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    heap: ClifValue,
+    owner: ClifValue,
+    value: ClifValue,
+    slow: Block,
+) {
+    use super::jit_layout::heap::GC_HEADER_TENURED_OFFSET;
+    use crate::tagged::header::GcHeader;
+    emit_barrier_window_check(fb, heap, owner, slow);
+    if rt.generational_enabled() && super::lowering::is_known_fixnum(fb, value) {
+        return;
+    }
+    let immediate_store =
+        if rt.generational_enabled() && super::lowering::iconst_bits(fb, value).is_none() {
+            let store = fb.create_block();
+            let check = fb.create_block();
+            let immediate = super::lowering::fixnum_tag_test(fb, value);
+            fb.ins().brif(immediate, store, &[], check, &[]);
+            fb.switch_to_block(check);
+            fb.seal_block(check);
+            Some(store)
+        } else {
+            None
+        };
+    let pair = fb.ins().uload16(
+        types::I64,
+        MemFlagsData::trusted(),
+        owner,
+        GC_HEADER_TENURED_OFFSET as i32,
+    );
+    let needs_remembering = icmp_imm_p(
+        fb,
+        IntCC::Equal,
+        pair,
+        GcHeader::NEEDS_REMEMBERING_U16 as i64,
+    );
+    let store = immediate_store.unwrap_or_else(|| fb.create_block());
+    fb.ins().brif(needs_remembering, slow, &[], store, &[]);
+    fb.switch_to_block(store);
+    fb.seal_block(store);
+}
+
 /// `setcar` (`is_cdr == false`) or `setcdr` of `cell` to `value`, inline —
 /// GNU `Bsetcar`/`Bsetcdr`'s `XSETCAR`/`XSETCDR`: a cons outside the barrier
 /// window is stored in place, `res` is defined as `value` and control jumps
@@ -163,8 +272,7 @@ pub(crate) fn emit_inline_cons_store_known_cons(
     // The tag is known, so untagging is a subtract (folds into the store's
     // addressing).
     let ptr = iadd_imm_p(fb, cell, -(TAG_CONS as i64));
-    let heap = heap_ptr(fb, rt);
-    emit_barrier_window_check(fb, heap, ptr, slow);
+    emit_cons_store_barrier(fb, rt, ptr, value, slow);
     let field = if is_cdr {
         core::mem::offset_of!(ConsCell, cdr_or_next)
     } else {
@@ -174,7 +282,6 @@ pub(crate) fn emit_inline_cons_store_known_cons(
         .store(MemFlagsData::trusted(), value, ptr, field as i32);
     fb.def_var(res, value);
     fb.ins().jump(merge, &[]);
-    note_inline_site();
     #[cfg(debug_assertions)]
     INLINE_HEAP_STORES_EMITTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
@@ -205,11 +312,8 @@ pub(crate) fn emit_inline_aset(
     res: Variable,
     cont: Block,
 ) -> bool {
-    use super::jit_layout::heap::{
-        GC_HEADER_TENURED_OFFSET, value_vec_owned_probe, value_vec_slice_offsets,
-    };
+    use super::jit_layout::heap::{value_vec_owned_probe, value_vec_slice_offsets};
     use super::jit_layout::{CONTEXT_ASET_EPOCH_OFFSET, OBARRAY_FUNCTION_EPOCH_OFFSET};
-    use crate::tagged::header::GcHeader;
     if value_vec_slice_offsets().is_none() {
         return false;
     }
@@ -240,26 +344,7 @@ pub(crate) fn emit_inline_aset(
         unreachable!("the slice offsets were probed above");
     };
     let heap = heap_ptr(fb, rt);
-    emit_barrier_window_check(fb, heap, object, slow);
-    // Outside the window only a tenured owner the remembered set lacks
-    // needs the barrier: `tenured` and `remembered` are adjacent header
-    // bytes, tested as one `u16`.
-    let pair = fb.ins().uload16(
-        types::I64,
-        MemFlagsData::trusted(),
-        object,
-        GC_HEADER_TENURED_OFFSET as i32,
-    );
-    let needs_remembering = icmp_imm_p(
-        fb,
-        IntCC::Equal,
-        pair,
-        GcHeader::NEEDS_REMEMBERING_U16 as i64,
-    );
-    let store = fb.create_block();
-    fb.ins().brif(needs_remembering, slow, &[], store, &[]);
-    fb.switch_to_block(store);
-    fb.seal_block(store);
+    emit_slot_store_barrier(fb, rt, heap, object, value, slow);
     fb.ins().store(MemFlagsData::trusted(), value, slot, 0);
     fb.def_var(res, value);
     fb.ins().jump(cont, &[]);

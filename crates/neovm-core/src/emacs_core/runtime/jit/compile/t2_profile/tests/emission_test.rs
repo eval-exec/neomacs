@@ -47,6 +47,7 @@ fn countdown_clif(site: Site) -> String {
                     rootwin: None,
                     heap: None,
                     inline_alloc: false,
+                    generational: std::cell::Cell::new(Some(false)),
                     direct_sites: std::cell::Cell::new(0),
                     inline_entry_cache: None,
                     self_direct_source: None,

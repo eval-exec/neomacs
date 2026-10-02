@@ -413,7 +413,8 @@ fn major_symbol_join_merges_worker_and_mutator_results_after_publication_stops()
 #[test]
 fn major_symbol_first_partition_join_keeps_symbols_and_discards_worker_promo() {
     let mut heap = heap(true);
-    heap.partition_dump = true;
+    // Registering the image below activates the partition and its real span;
+    // do not publish a partition window before a mapped object exists.
     set_tagged_heap(&mut heap);
     let roots = ScratchRoots::new();
     let image = fake_image::FakeImage::leak(false);

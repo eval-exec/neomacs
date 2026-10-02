@@ -199,10 +199,15 @@ thread_local! {
     /// The write barrier's owner window (`barrier_window.rs`): every owner
     /// it covers takes the out-of-line barrier, every other store is plain
     /// unless its owner is a tenured non-cons the remembered set has not
-    /// recorded. The one gate the Rust stores test; published by
+    /// recorded. Rust non-cons stores and compiled stores test it; published by
     /// `TaggedHeap::publish_barrier_window` at every writer of its inputs
     /// and re-derived whenever a heap is (re)installed.
     static TAGGED_HEAP_BARRIER_WINDOW: Cell<BarrierWindow> =
+        const { Cell::new(BarrierWindow::NONE) };
+    /// Rust cons stores use the same window when generations are disabled,
+    /// or ALL when enabled. This protocol mirror folds mode selection into
+    /// publication, so a disabled cons store never reads the heap or its mode.
+    static TAGGED_HEAP_CONS_BARRIER_WINDOW: Cell<BarrierWindow> =
         const { Cell::new(BarrierWindow::NONE) };
     /// Non-cons owners already in this cycle's `satb_snapshotted_owners`,
     /// direct-mapped like the remembered cache. During a concurrent mark a
@@ -2652,6 +2657,7 @@ mod cons_blocks;
 #[cfg_attr(not(feature = "jit"), allow(unused_imports))]
 pub(crate) use cons_block_trailer::{
     CONS_BLOCK_BYTES, CONS_BLOCK_SIZE as CONS_BLOCK_CELLS, CONS_MARK_WORDS, CONS_MARKS_OFFSET,
+    CONS_UNLOGGED_OFFSET,
 };
 use cons_blocks::*;
 
@@ -2695,6 +2701,9 @@ pub(crate) use jit_state::{
 #[cfg(test)]
 #[path = "gc/tests/alloc_region_tests.rs"]
 mod alloc_region_tests;
+#[cfg(test)]
+#[path = "gc/tests/barrier_window_generational_tests.rs"]
+mod barrier_window_generational_tests;
 /// The write barrier's owner window against the gate it replaced, state by
 /// state and owner by owner, and its republication at every input writer.
 #[cfg(test)]
