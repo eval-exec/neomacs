@@ -158,6 +158,8 @@ mod image_feature_availability_semantics;
 mod increment_compare_pred_strict_edge_semantics;
 mod indent_to;
 mod indirect_function;
+#[cfg(test)]
+mod inlined_call_semantics;
 mod inotify_debug_availability_semantics;
 mod inotify_public_semantics;
 mod insert;

@@ -237,3 +237,64 @@ fn oracle_backtrace_debug_checks_level_with_two_different_predicates() {
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
+
+/// P2.3 O3: backtrace-debug's level-one target is its compiled caller.
+/// Its exit debugger return replaces that activation's
+/// value, and the enclosing compiled activation uses the replacement.
+#[test]
+fn oracle_inline_o3_debug_on_exit_replaces_middle_frame_value() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    crate::inlined_call_semantics::check(
+        r#"(progn
+  (defvar inline-o3-armed nil)
+  (defvar inline-o3-log nil)
+  (defalias 'inline-o3-inner
+    (byte-compile (lambda (x)
+      (when inline-o3-armed (backtrace-debug 1 t))
+      (+ x 1))))
+  (defalias 'inline-o3-middle (byte-compile (lambda (x) (+ 10 (inline-o3-inner x)))))
+  (defalias 'inline-o3-top (byte-compile (lambda (x) (+ 100 (inline-o3-middle x)))))
+  (dotimes (_ 8) (inline-o3-top 3))
+  (let ((inline-o3-armed t)
+        (debugger (lambda (&rest args)
+                    (push args inline-o3-log)
+                    (if (eq (car args) 'exit) 40 nil))))
+    (list (inline-o3-top 3) (nreverse inline-o3-log))))"#,
+        expect_test::expect![[r#""OK (150 ((exit 4)))""#]],
+    );
+}
+
+/// P2.3 O4: an out-call arms debug-on-next-call after warmup. The next
+/// compiled call enters with its own frame already present and flagged;
+/// entering clears the arm and leaving invokes the replacement debugger.
+#[test]
+fn oracle_inline_o4_outcall_arms_next_inline_frame() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    crate::inlined_call_semantics::check(
+        r#"(progn
+  (defvar inline-o4-armed nil)
+  (defvar inline-o4-log nil)
+  (defalias 'inline-o4-arm (lambda () (when inline-o4-armed (setq debug-on-next-call t))))
+  (defalias 'inline-o4-next (byte-compile (lambda (x) (+ x 1))))
+  (defalias 'inline-o4-middle
+    (byte-compile (lambda (x) (inline-o4-arm) (inline-o4-next x))))
+  (defalias 'inline-o4-top (byte-compile (lambda (x) (+ 100 (inline-o4-middle x)))))
+  (dotimes (_ 8) (inline-o4-top 3))
+  (unwind-protect
+      (let ((inline-o4-armed t)
+            (debugger
+             (lambda (&rest args)
+               (let (frames)
+                 (mapbacktrace
+                  (lambda (evald f values flags)
+                    (when (memq f '(inline-o4-next inline-o4-middle inline-o4-top))
+                      (push (list evald f values flags) frames))))
+                 (push (list args debug-on-next-call (nreverse frames)) inline-o4-log))
+               (if (eq (car args) 'exit) 40 nil))))
+        (list (inline-o4-top 3) (nreverse inline-o4-log) debug-on-next-call))
+    (setq debug-on-next-call nil)))"#,
+        expect_test::expect![[
+            r#""OK (140 (((lambda) nil ((t inline-o4-next (3) (:debug-on-exit t)) (t inline-o4-middle (3) nil) (t inline-o4-top (3) nil))) ((exit 4) nil ((t inline-o4-next (3) (:debug-on-exit t)) (t inline-o4-middle (3) nil) (t inline-o4-top (3) nil)))) nil)""#
+        ]],
+    );
+}
