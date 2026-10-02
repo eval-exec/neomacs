@@ -2160,6 +2160,9 @@ impl Context {
         };
         #[cfg(debug_assertions)]
         let mut root_index = 0usize;
+        // Share the count with the group recorder, but capture the stable heap
+        // pointer by value so each root does not reload it through a reference.
+        let root_count = &cur_count;
         self.trace_roots(
             &mut |name| {
                 close_group();
@@ -2167,8 +2170,8 @@ impl Context {
                 cur_count.set(0);
                 cur_t0.set(std::time::Instant::now());
             },
-            &mut |root| {
-                cur_count.set(cur_count.get() + 1);
+            &mut move |root| {
+                root_count.set(root_count.get() + 1);
                 #[cfg(debug_assertions)]
                 {
                     let origin = format!("context-root#{root_index}");

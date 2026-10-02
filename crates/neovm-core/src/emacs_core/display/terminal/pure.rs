@@ -6,11 +6,13 @@
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{EvalResult, Flow, signal};
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_max_args};
+use crate::emacs_core::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
 use crate::emacs_core::value::*;
 use crate::emacs_core::value::{ValueKind, VecLikeType};
 use crate::window::FrameId;
 use neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities;
 use std::cell::{OnceCell, RefCell};
+use std::collections::HashMap;
 use std::num::NonZeroU32;
 
 // ---------------------------------------------------------------------------
@@ -19,15 +21,78 @@ use std::num::NonZeroU32;
 
 thread_local! {
     static TERMINAL_MANAGER: OnceCell<RefCell<TerminalManager>> = const { OnceCell::new() };
+    static TERMINAL_LISP_STATE: HeapRegistrySlot<TerminalLispRegistry> =
+        HeapRegistrySlot::new(TerminalLispRegistry::default());
 }
 
-/// Terminal hosts belong to the thread, while their Lisp handles and
-/// parameters belong to the active heap. Refresh those words before any
-/// ordinary terminal API can return or inspect them after a heap switch.
-fn with_terminal_manager<R>(f: impl FnOnce(&RefCell<TerminalManager>) -> R) -> R {
+struct TerminalLispState {
+    handle: Value,
+    params: Vec<(Value, Value)>,
+}
+
+/// Only Lisp state travels with Context; native hosts and runtime state stay TLS.
+#[derive(Default)]
+pub(crate) struct TerminalLispRegistry {
+    terminals: HashMap<u64, TerminalLispState>,
+}
+
+pub(crate) type TerminalRegistryHandle = HeapRegistryHandle<TerminalLispRegistry>;
+
+fn ensure_current_terminal_registry() {
+    let heap_identity = crate::tagged::gc::current_tagged_heap_identity()
+        .unwrap_or_else(|| crate::tagged::gc::with_tagged_heap(|heap| heap.identity()));
+    TERMINAL_LISP_STATE.with(|slot| {
+        if slot.current().heap_identity() != heap_identity {
+            slot.reset(TerminalLispRegistry::default());
+        }
+    });
+}
+
+pub(crate) fn current_terminal_registry_handle() -> TerminalRegistryHandle {
+    ensure_current_terminal_registry();
+    // Context construction captures the initial terminal along with its registry.
+    terminal_handle_for_id(TERMINAL_ID);
+    TERMINAL_LISP_STATE.with(HeapRegistrySlot::current)
+}
+
+pub(crate) fn install_terminal_registry_handle(handle: &TerminalRegistryHandle) {
+    TERMINAL_LISP_STATE.with(|slot| slot.install(handle));
+    let ids = handle
+        .borrow()
+        .terminals
+        .keys()
+        .copied()
+        .collect::<Vec<_>>();
+    // A destination thread may not have seen these terminal ids before. Create
+    // inactive native records without moving a host or duplicating Lisp Values.
     TERMINAL_MANAGER.with(|state| {
         let slot = state.get_or_init(|| RefCell::new(TerminalManager::new()));
-        slot.borrow_mut().ensure_current_heap();
+        let mut manager = slot.borrow_mut();
+        for id in ids {
+            manager.ensure_lisp_terminal_record(id);
+        }
+    });
+}
+
+pub(crate) fn collect_terminal_registry_gc_roots(
+    handle: &TerminalRegistryHandle,
+    roots: &mut Vec<Value>,
+) {
+    for terminal in handle.borrow().terminals.values() {
+        roots.push(terminal.handle);
+        for (key, value) in &terminal.params {
+            roots.push(*key);
+            roots.push(*value);
+        }
+    }
+}
+
+/// The physical terminal records contain no Lisp Values. Only the installed
+/// Context-owned registry supplies handles and parameters to terminal APIs.
+fn with_terminal_manager<R>(f: impl FnOnce(&RefCell<TerminalManager>) -> R) -> R {
+    ensure_current_terminal_registry();
+    TERMINAL_MANAGER.with(|state| {
+        let slot = state.get_or_init(|| RefCell::new(TerminalManager::new()));
         f(slot)
     })
 }
@@ -257,8 +322,6 @@ impl TerminalOutputMethod {
 struct TerminalRecord {
     id: u64,
     name: String,
-    handle: Value,
-    params: Vec<(Value, Value)>,
     runtime: TerminalRuntime,
     /// GNU `struct terminal.type`.  See [`TerminalOutputMethod`].
     output_method: TerminalOutputMethod,
@@ -271,8 +334,6 @@ impl TerminalRecord {
         Self {
             id,
             name,
-            handle: terminal_handle_for_id(id),
-            params: Vec::new(),
             runtime: TerminalRuntime::inactive(),
             // GNU's first terminal is `init_initial_terminal`'s, and every
             // record starts as that one until a display init re-describes it.
@@ -300,24 +361,27 @@ impl TerminalRecord {
 
 struct TerminalManager {
     terminals: Vec<TerminalRecord>,
-    heap_identity: usize,
 }
 
 impl TerminalManager {
     fn new() -> Self {
         let mut this = Self {
             terminals: Vec::new(),
-            heap_identity: 0,
         };
         this.ensure_initial_terminal();
-        this.heap_identity = crate::tagged::gc::current_tagged_heap_identity()
-            .expect("terminal handles require an active heap");
         this
     }
 
-    fn ensure_current_heap(&mut self) {
-        if crate::tagged::gc::current_tagged_heap_identity() != Some(self.heap_identity) {
-            self.reset_handles();
+    fn ensure_lisp_terminal_record(&mut self, id: u64) {
+        if self.get(id).is_none() {
+            self.terminals.push(TerminalRecord::new(
+                id,
+                if id == TERMINAL_ID {
+                    TERMINAL_NAME.to_owned()
+                } else {
+                    format!("terminal-{id}")
+                },
+            ));
         }
     }
 
@@ -342,31 +406,12 @@ impl TerminalManager {
         self.terminals.last_mut().expect("initial terminal present")
     }
 
-    fn reset_handles(&mut self) {
-        let heap_changed =
-            crate::tagged::gc::current_tagged_heap_identity() != Some(self.heap_identity);
-        for terminal in &mut self.terminals {
-            terminal.handle = terminal_handle_for_id(terminal.id);
-            if heap_changed {
-                terminal.params.clear();
-            }
-        }
-        self.heap_identity = crate::tagged::gc::current_tagged_heap_identity()
-            .expect("terminal handles require an active heap");
-    }
-
     fn get(&self, id: u64) -> Option<&TerminalRecord> {
         self.terminals.iter().find(|terminal| terminal.id == id)
     }
 
     fn get_mut(&mut self, id: u64) -> Option<&mut TerminalRecord> {
         self.terminals.iter_mut().find(|terminal| terminal.id == id)
-    }
-
-    fn find_by_handle(&self, value: &Value) -> Option<&TerminalRecord> {
-        self.terminals
-            .iter()
-            .find(|terminal| eq_value(&terminal.handle, value))
     }
 
     fn live_terminals(&self) -> impl Iterator<Item = &TerminalRecord> {
@@ -406,8 +451,6 @@ impl TerminalManager {
         self.terminals.push(TerminalRecord {
             id,
             name,
-            handle: terminal_handle_for_id(id),
-            params: Vec::new(),
             runtime,
             output_method,
             deleted: false,
@@ -476,9 +519,9 @@ pub fn ensure_terminal_runtime_owner(
     };
     with_terminal_manager(|slot| {
         slot.borrow_mut()
-            .ensure_terminal(id, name, runtime, output_method)
-            .handle
-    })
+            .ensure_terminal(id, name, runtime, output_method);
+    });
+    terminal_handle_for_id(id)
 }
 
 pub(crate) fn next_terminal_id() -> u64 {
@@ -586,6 +629,8 @@ pub(crate) fn terminal_runtime_attribute_capabilities() -> TtyAttributeCapabilit
 
 /// Clear cached terminal thread-locals (called from `reset_display_thread_locals`).
 pub(crate) fn reset_terminal_thread_locals() {
+    ensure_current_terminal_registry();
+    TERMINAL_LISP_STATE.with(|slot| slot.reset(TerminalLispRegistry::default()));
     TERMINAL_MANAGER.with(|state| {
         let manager = TerminalManager::new();
         if let Some(slot) = state.get() {
@@ -594,40 +639,45 @@ pub(crate) fn reset_terminal_thread_locals() {
             let _ = state.set(RefCell::new(manager));
         }
     });
+    terminal_handle_for_id(TERMINAL_ID);
 }
 
 /// Reset only the terminal handle (stale reference safety on heap reset).
 /// Retain runtime configuration and hosts; parameters survive only when the
 /// handle is reset within the same heap.
 pub(crate) fn reset_terminal_handle() {
-    TERMINAL_MANAGER.with(|state| {
-        if let Some(slot) = state.get() {
-            slot.borrow_mut().reset_handles();
-        } else {
-            let _ = state.set(RefCell::new(TerminalManager::new()));
+    ensure_current_terminal_registry();
+    let ids = TERMINAL_MANAGER.with(|state| {
+        let slot = state.get_or_init(|| RefCell::new(TerminalManager::new()));
+        slot.borrow()
+            .terminals
+            .iter()
+            .map(|terminal| terminal.id)
+            .collect::<Vec<_>>()
+    });
+    TERMINAL_LISP_STATE.with(|slot| {
+        let mut registry = slot.borrow_mut();
+        for id in ids {
+            let terminal = registry
+                .terminals
+                .entry(id)
+                .or_insert_with(|| TerminalLispState {
+                    handle: Value::NIL,
+                    params: Vec::new(),
+                });
+            terminal.handle = Value::make_terminal(id);
         }
     });
 }
 
 /// Collect GC roots from terminal thread-locals.
+#[cfg(test)]
 pub(crate) fn collect_terminal_gc_roots(roots: &mut Vec<Value>, heap_identity: usize) {
-    // A collector must neither allocate a handle nor inspect stale Lisp
-    // objects while discovering roots. A different heap's manager owns no
-    // roots of this heap; its ordinary accessors refresh it on first use.
-    TERMINAL_MANAGER.with(|state| {
-        let Some(slot) = state.get() else {
-            return;
-        };
-        let manager = slot.borrow();
-        if heap_identity != manager.heap_identity {
-            return;
-        }
-        for terminal in &manager.terminals {
-            roots.push(terminal.handle);
-            for (k, v) in &terminal.params {
-                roots.push(*k);
-                roots.push(*v);
-            }
+    // Root enumeration never allocates or walks another thread's native records.
+    TERMINAL_LISP_STATE.with(|slot| {
+        let handle = slot.current();
+        if handle.heap_identity() == heap_identity {
+            collect_terminal_registry_gc_roots(&handle, roots);
         }
     });
 }
@@ -637,7 +687,17 @@ pub(crate) fn collect_terminal_gc_roots(roots: &mut Vec<Value>, heap_identity: u
 // ---------------------------------------------------------------------------
 
 fn terminal_handle_for_id(id: u64) -> Value {
-    Value::make_terminal(id)
+    ensure_current_terminal_registry();
+    TERMINAL_LISP_STATE.with(|slot| {
+        slot.borrow_mut()
+            .terminals
+            .entry(id)
+            .or_insert_with(|| TerminalLispState {
+                handle: Value::make_terminal(id),
+                params: Vec::new(),
+            })
+            .handle
+    })
 }
 
 pub(crate) fn terminal_handle_value() -> Value {
@@ -645,7 +705,11 @@ pub(crate) fn terminal_handle_value() -> Value {
 }
 
 pub(crate) fn terminal_handle_value_for_id(id: u64) -> Option<Value> {
-    with_terminal_manager(|slot| slot.borrow().get(id).map(|terminal| terminal.handle))
+    with_terminal_manager(|slot| {
+        slot.borrow()
+            .get(id)
+            .map(|terminal| terminal_handle_for_id(terminal.id))
+    })
 }
 
 pub(crate) fn is_terminal_handle(value: &Value) -> bool {
@@ -653,17 +717,20 @@ pub(crate) fn is_terminal_handle(value: &Value) -> bool {
 }
 
 pub(crate) fn terminal_handle_id(value: &Value) -> Option<u64> {
-    with_terminal_manager(|slot| {
+    ensure_current_terminal_registry();
+    TERMINAL_LISP_STATE.with(|slot| {
         slot.borrow()
-            .find_by_handle(value)
-            .map(|terminal| terminal.id)
+            .terminals
+            .iter()
+            .find_map(|(id, terminal)| eq_value(&terminal.handle, value).then_some(*id))
     })
 }
 
 pub(crate) fn print_terminal_handle(value: &Value) -> Option<String> {
+    let id = terminal_handle_id(value)?;
     with_terminal_manager(|slot| {
         slot.borrow()
-            .find_by_handle(value)
+            .get(id)
             .map(|terminal| format!("#<terminal {} on {}>", terminal.id, terminal.name))
     })
 }
@@ -677,9 +744,10 @@ pub(crate) fn terminal_designator_p(value: &Value) -> bool {
 }
 
 fn live_terminal_id_by_handle(value: &Value) -> Option<u64> {
+    let id = terminal_handle_id(value)?;
     with_terminal_manager(|slot| {
         slot.borrow()
-            .find_by_handle(value)
+            .get(id)
             .filter(|terminal| terminal.is_live())
             .map(|terminal| terminal.id)
     })
@@ -918,20 +986,24 @@ pub(crate) fn selected_terminal_is_usable_tty(eval: &crate::emacs_core::eval::Co
 }
 
 fn terminal_params_for_id(id: u64) -> Vec<(Value, Value)> {
-    with_terminal_manager(|slot| {
+    ensure_current_terminal_registry();
+    TERMINAL_LISP_STATE.with(|slot| {
         slot.borrow()
-            .get(id)
+            .terminals
+            .get(&id)
             .map(|terminal| terminal.params.clone())
             .unwrap_or_default()
     })
 }
 
 fn update_terminal_param(id: u64, key: Value, value: Value) -> Value {
-    with_terminal_manager(|slot| {
-        let mut manager = slot.borrow_mut();
-        let Some(terminal) = manager.get_mut(id) else {
-            return Value::NIL;
-        };
+    terminal_handle_for_id(id);
+    TERMINAL_LISP_STATE.with(|slot| {
+        let mut registry = slot.borrow_mut();
+        let terminal = registry
+            .terminals
+            .get_mut(&id)
+            .expect("terminal Lisp state");
         if let Some((_, stored_value)) = terminal
             .params
             .iter_mut()
@@ -1061,7 +1133,7 @@ pub(crate) fn builtin_terminal_list(args: Vec<Value>) -> EvalResult {
     let terminals = with_terminal_manager(|slot| {
         slot.borrow()
             .live_terminals()
-            .map(|terminal| terminal.handle)
+            .map(|terminal| terminal_handle_for_id(terminal.id))
             .collect::<Vec<_>>()
     });
     Ok(Value::list(terminals))
@@ -1514,3 +1586,7 @@ pub(crate) fn builtin_delete_terminal(
         DeleteTerminalMode::Public { force_non_nil },
     )
 }
+
+#[cfg(test)]
+#[path = "tests/gc_context_migration.rs"]
+mod gc_context_migration_tests;

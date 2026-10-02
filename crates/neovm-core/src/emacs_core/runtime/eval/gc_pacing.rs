@@ -289,6 +289,14 @@ impl Context {
         for root in registry_roots.drain(..) {
             visit(root);
         }
+        group("terminal_registry");
+        super::super::terminal::pure::collect_terminal_registry_gc_roots(
+            &self.terminal_registry,
+            &mut registry_roots,
+        );
+        for root in registry_roots.drain(..) {
+            visit(root);
+        }
         group("font_registry");
         super::super::xfaces::collect_font_registry_gc_roots(
             &self.font_registry,
@@ -321,6 +329,9 @@ impl Context {
         for root in registry_roots.drain(..) {
             visit(root);
         }
+        // Registry values are already seeded. Release their scratch storage
+        // before the larger root walks so it does not stay live across them.
+        drop(registry_roots);
         // Full ~all-interned-symbols walk on STW collections; only the
         // BLV-pool residual under `ObarraySymbolCellSkipGuard` (both
         // concurrent handshakes).
@@ -520,6 +531,7 @@ impl Context {
         super::super::ccl::install_ccl_registry_handle(&self.ccl_registry);
         super::super::charset::install_charset_registry_handle(&self.charset_registry);
         super::super::xfaces::install_font_registry_handle(&self.font_registry);
+        super::super::terminal::pure::install_terminal_registry_handle(&self.terminal_registry);
         super::super::builtins::install_hash_table_test_registry_handle(
             &self.hash_table_test_registry,
         );

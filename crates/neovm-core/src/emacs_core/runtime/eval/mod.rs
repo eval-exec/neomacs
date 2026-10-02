@@ -2299,9 +2299,7 @@ fn collect_thread_local_gc_roots(
     collect_group(roots, "category-thread-local", stats, |group| {
         super::category::collect_category_gc_roots(group, heap_id)
     });
-    collect_group(roots, "terminal-thread-local", stats, |group| {
-        super::terminal::pure::collect_terminal_gc_roots(group, heap_id)
-    });
+    // Terminal Lisp state is traced from Context, including after migration.
     collect_group(roots, "dynamic-module-thread-local", stats, |group| {
         super::dynamic_module::collect_dynamic_module_gc_roots(group, heap_id)
     });
@@ -3593,6 +3591,7 @@ pub struct Context {
     pub(crate) ccl_registry: super::ccl::CclRegistryHandle,
     pub(crate) charset_registry: super::charset::CharsetRegistryHandle,
     pub(crate) font_registry: super::xfaces::FontRegistryHandle,
+    pub(crate) terminal_registry: super::terminal::pure::TerminalRegistryHandle,
     pub(crate) hash_table_test_registry: super::builtins::HashTableTestRegistryHandle,
     pub(crate) file_notify_registry: super::builtins::FileNotifyRegistryHandle,
     pub(crate) window_configuration_registry: super::builtins::WindowConfigurationRegistryHandle,
@@ -7606,6 +7605,10 @@ mod gc_root_ownership_tests;
 #[cfg(test)]
 #[path = "tests/gc_tls_ownership.rs"]
 mod gc_tls_ownership_tests;
+
+#[cfg(test)]
+#[path = "tests/gc_tls_migration_proofs.rs"]
+mod gc_tls_migration_proof_tests;
 
 // The attention word: every writer of its inputs keeps it derived.
 #[cfg(test)]
