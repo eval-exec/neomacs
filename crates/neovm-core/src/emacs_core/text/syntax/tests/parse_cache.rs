@@ -165,7 +165,7 @@ fn answer(
     oldstate: Value,
     mode: ParseCacheMode,
 ) -> (String, usize) {
-    MODE_OVERRIDE.with(|cell| cell.set(Some(mode)));
+    let _guard = ParseCacheTestGuard::modes(mode, canon::CanonMode::Off);
     let commentstop = match query.commentstop {
         0 => Value::NIL,
         1 => Value::T,
@@ -181,7 +181,6 @@ fn answer(
         commentstop,
     )
     .expect("parse-partial-sexp");
-    MODE_OVERRIDE.with(|cell| cell.set(None));
     let point = eval
         .buffers
         .current_buffer()
@@ -197,7 +196,7 @@ fn check(eval: &mut crate::emacs_core::eval::Context, query: Query, what: &str) 
     let roots = eval.save_specpdl_roots();
     let oldstate = if query.oldstate_from_parse && query.from > point_min(eval) {
         let begv = point_min(eval) as i64;
-        MODE_OVERRIDE.with(|cell| cell.set(Some(ParseCacheMode::Off)));
+        let _guard = ParseCacheTestGuard::modes(ParseCacheMode::Off, canon::CanonMode::Off);
         let state = builtin_parse_partial_sexp_6(
             eval,
             Value::fixnum(begv),
@@ -208,7 +207,6 @@ fn check(eval: &mut crate::emacs_core::eval::Context, query: Query, what: &str) 
             Value::NIL,
         )
         .expect("oldstate");
-        MODE_OVERRIDE.with(|cell| cell.set(None));
         state
     } else {
         Value::NIL
@@ -342,6 +340,7 @@ fn mutate(eval: &mut crate::emacs_core::eval::Context, rng: &mut Rng) -> &'stati
 
 #[test]
 fn cached_answers_equal_plain_scans_under_every_change() {
+    let _guard = ParseCacheTestGuard::isolated(GEOMETRY_OVERRIDE.with(|cell| cell.get()));
     crate::test_utils::init_test_tracing();
     reset_parse_cache_stats();
     let mut rng = Rng(0x5851_f42d_4c95_7f2d);
@@ -438,6 +437,7 @@ fn cached_answers_equal_plain_scans_under_every_change() {
 /// Short misses must not prevent a longer run from serving short queries.
 #[test]
 fn short_queries_keep_long_run_resumes_and_exact_answers() {
+    let _guard = ParseCacheTestGuard::isolated(GEOMETRY_OVERRIDE.with(|cell| cell.get()));
     GEOMETRY_OVERRIDE.with(|cell| cell.set(Some((16, 128))));
     let mut eval = crate::emacs_core::eval::Context::new();
     install_table(&mut eval, 1);
@@ -475,6 +475,7 @@ fn short_queries_keep_long_run_resumes_and_exact_answers() {
 /// Colliding membership bits must survive removal of another run in the bucket.
 #[test]
 fn from_membership_survives_collisions_eviction_and_invalidation() {
+    let _guard = ParseCacheTestGuard::isolated(GEOMETRY_OVERRIDE.with(|cell| cell.get()));
     GEOMETRY_OVERRIDE.with(|cell| cell.set(Some((16, 128))));
     let mut eval = crate::emacs_core::eval::Context::new();
     install_table(&mut eval, 1);
@@ -551,6 +552,7 @@ fn from_membership_survives_collisions_eviction_and_invalidation() {
 /// A short miss must leave edits pending until a real cache lookup drains them.
 #[test]
 fn short_misses_preserve_pending_text_and_property_invalidation() {
+    let _guard = ParseCacheTestGuard::isolated(GEOMETRY_OVERRIDE.with(|cell| cell.get()));
     GEOMETRY_OVERRIDE.with(|cell| cell.set(Some((16, 128))));
     let mut eval = crate::emacs_core::eval::Context::new();
     install_table(&mut eval, 1);
@@ -607,6 +609,7 @@ fn short_misses_preserve_pending_text_and_property_invalidation() {
 /// The eligibility threshold uses characters and keeps OLDSTATE/options intact.
 #[test]
 fn short_query_gate_preserves_threshold_zero_span_and_oldstate_options() {
+    let _guard = ParseCacheTestGuard::isolated(GEOMETRY_OVERRIDE.with(|cell| cell.get()));
     GEOMETRY_OVERRIDE.with(|cell| cell.set(Some((16, 128))));
     let mut eval = crate::emacs_core::eval::Context::new();
     install_table(&mut eval, 1);
@@ -655,6 +658,7 @@ fn short_query_gate_preserves_threshold_zero_span_and_oldstate_options() {
 /// `char-property-alias-alist`, is never cached (and still answers right).
 #[test]
 fn category_and_alias_properties_bypass_the_cache() {
+    let _guard = ParseCacheTestGuard::isolated(GEOMETRY_OVERRIDE.with(|cell| cell.get()));
     crate::test_utils::init_test_tracing();
     GEOMETRY_OVERRIDE.with(|cell| cell.set(Some((16, 0))));
     let mut eval = crate::emacs_core::eval::Context::new();
@@ -707,6 +711,7 @@ fn category_and_alias_properties_bypass_the_cache() {
 /// different.
 #[test]
 fn verify_mode_recomputes_cached_answers() {
+    let _guard = ParseCacheTestGuard::isolated(GEOMETRY_OVERRIDE.with(|cell| cell.get()));
     crate::test_utils::init_test_tracing();
     GEOMETRY_OVERRIDE.with(|cell| cell.set(Some((16, 0))));
     let mut eval = crate::emacs_core::eval::Context::new();
@@ -747,6 +752,7 @@ fn verify_mode_recomputes_cached_answers() {
 /// it for syntax-table entries (P3.0 §3.10).
 #[test]
 fn every_char_table_mutation_moves_the_write_tick() {
+    let _guard = ParseCacheTestGuard::isolated(GEOMETRY_OVERRIDE.with(|cell| cell.get()));
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::runtime_startup_context();
     eval.eval_str(
@@ -812,7 +818,7 @@ fn after_env_change(
 ) {
     let roots = eval.save_specpdl_roots();
     let oldstate = if query.oldstate_from_parse {
-        MODE_OVERRIDE.with(|cell| cell.set(Some(ParseCacheMode::Off)));
+        let _guard = ParseCacheTestGuard::modes(ParseCacheMode::Off, canon::CanonMode::Off);
         let state = builtin_parse_partial_sexp_6(
             eval,
             Value::fixnum(1),
@@ -823,7 +829,6 @@ fn after_env_change(
             Value::NIL,
         )
         .expect("oldstate");
-        MODE_OVERRIDE.with(|cell| cell.set(None));
         state
     } else {
         Value::NIL
@@ -843,6 +848,7 @@ fn after_env_change(
 /// Each environment field of the run key, changed with nothing else.
 #[test]
 fn every_key_field_separates_runs() {
+    let _guard = ParseCacheTestGuard::isolated(GEOMETRY_OVERRIDE.with(|cell| cell.get()));
     crate::test_utils::init_test_tracing();
     GEOMETRY_OVERRIDE.with(|cell| cell.set(Some((16, 0))));
     let query = |from, to, oldstate_from_parse| Query {
@@ -919,4 +925,1095 @@ fn every_key_field_separates_runs() {
         "syntax table",
     );
     GEOMETRY_OVERRIDE.with(|cell| cell.set(None));
+}
+
+// Append to syntax/tests/parse_cache.rs. Uses that module's existing Query,
+// Rng, install_table, mutate, point_min/point_max, and print_value helpers.
+
+/// Scalar test overrides owned by this test invocation, restored on unwind.
+/// They contain no Lisp state and never serve as runtime thread-local caches.
+struct ParseCacheTestGuard {
+    mode: Option<ParseCacheMode>,
+    canon: Option<canon::CanonMode>,
+    geometry: Option<(usize, usize)>,
+}
+
+impl ParseCacheTestGuard {
+    fn new(
+        mode: Option<ParseCacheMode>,
+        canonical: Option<canon::CanonMode>,
+        geometry: Option<(usize, usize)>,
+    ) -> Self {
+        Self {
+            mode: MODE_OVERRIDE.with(|cell| cell.replace(mode)),
+            canon: canon::CANON_MODE_OVERRIDE.with(|cell| cell.replace(canonical)),
+            geometry: GEOMETRY_OVERRIDE.with(|cell| cell.replace(geometry)),
+        }
+    }
+
+    fn modes(mode: ParseCacheMode, canonical: canon::CanonMode) -> Self {
+        let geometry = GEOMETRY_OVERRIDE.with(|cell| cell.get());
+        Self::new(Some(mode), Some(canonical), geometry)
+    }
+
+    /// Cache setup scans stay plain; answer_value enables each path explicitly.
+    fn isolated(geometry: Option<(usize, usize)>) -> Self {
+        Self::new(
+            Some(ParseCacheMode::Off),
+            Some(canon::CanonMode::Off),
+            geometry,
+        )
+    }
+}
+
+impl Drop for ParseCacheTestGuard {
+    fn drop(&mut self) {
+        MODE_OVERRIDE.with(|cell| cell.set(self.mode));
+        canon::CANON_MODE_OVERRIDE.with(|cell| cell.set(self.canon));
+        GEOMETRY_OVERRIDE.with(|cell| cell.set(self.geometry));
+    }
+}
+
+fn plain_query(from: usize, to: usize) -> Query {
+    Query {
+        from,
+        to,
+        target_depth: None,
+        stop_before: false,
+        commentstop: 0,
+        oldstate_from_parse: false,
+    }
+}
+// ---------------------------------------------------------------------------
+// L2: the canonical run
+// ---------------------------------------------------------------------------
+
+/// Lisp-like text: nested lists, strings, comments, escapes and quotes,
+/// with top-level forms (so that `syntax-ppss`-style chains cross them).
+fn random_lisp_text(rng: &mut Rng, forms: usize) -> String {
+    const PIECES: &[&str] = &[
+        "(",
+        "(",
+        "(",
+        ")",
+        ")",
+        ")",
+        " ",
+        " ",
+        "\n",
+        "foo",
+        "bar-baz",
+        "'x",
+        "`(a ,b)",
+        "\"str\"",
+        "\"a\\\"b\"",
+        "; c\n",
+        "?\\(",
+        "?\\)",
+        "#|x|#",
+        "/* y */",
+        "// z\n",
+        "é",
+        "[",
+        "]",
+        "\\",
+        "{- w -}",
+        "(* v *)",
+        "!q!",
+        "|p|",
+        "# h\n",
+    ];
+    let mut out = String::new();
+    for _ in 0..forms {
+        out.push('(');
+        for _ in 0..rng.below(40) + 1 {
+            out.push_str(PIECES[rng.below(PIECES.len())]);
+        }
+        out.push_str(")\n");
+    }
+    out
+}
+
+/// `parse-partial-sexp` under MODE with L2 as given: the value and point.
+fn answer_value(
+    eval: &mut crate::emacs_core::eval::Context,
+    query: Query,
+    oldstate: Value,
+    mode: ParseCacheMode,
+    l2: canon::CanonMode,
+) -> (Value, usize) {
+    let _guard = ParseCacheTestGuard::modes(mode, l2);
+    let result = builtin_parse_partial_sexp_6(
+        eval,
+        Value::fixnum(query.from as i64),
+        Value::fixnum(query.to as i64),
+        query.target_depth.map_or(Value::NIL, Value::fixnum),
+        Value::bool_val(query.stop_before),
+        oldstate,
+        match query.commentstop {
+            0 => Value::NIL,
+            1 => Value::T,
+            _ => Value::symbol("syntax-table"),
+        },
+    )
+    .expect("parse-partial-sexp");
+    let point = eval
+        .buffers
+        .current_buffer()
+        .expect("buffer")
+        .point_char_pos()
+        .get()
+        + 1;
+    (result, point)
+}
+
+/// One query with an explicit OLDSTATE, through L1 + L2 and plainly: the two
+/// must agree. Returns the plain answer, rooted by the caller's frame.
+fn check_l2(
+    eval: &mut crate::emacs_core::eval::Context,
+    query: Query,
+    oldstate: Value,
+    what: &str,
+) -> Value {
+    let (cached, cached_point) = answer_value(
+        eval,
+        query,
+        oldstate,
+        ParseCacheMode::On,
+        canon::CanonMode::On,
+    );
+    eval.push_specpdl_root(cached);
+    let (plain, plain_point) = answer_value(
+        eval,
+        query,
+        oldstate,
+        ParseCacheMode::Off,
+        canon::CanonMode::Off,
+    );
+    eval.push_specpdl_root(plain);
+    assert_eq!(
+        (print_value(&cached), cached_point),
+        (print_value(&plain), plain_point),
+        "{what}: {query:?} oldstate {}",
+        print_value(&oldstate)
+    );
+    plain
+}
+
+/// The canonical state at FROM, as `syntax-ppss` would pass it: a plain
+/// parse from BEGV (rooted by the caller's frame).
+fn canonical_oldstate(eval: &mut crate::emacs_core::eval::Context, from: usize) -> Value {
+    let begv = point_min(eval);
+    let (state, _) = answer_value(
+        eval,
+        plain_query(begv, from),
+        Value::NIL,
+        ParseCacheMode::Off,
+        canon::CanonMode::Off,
+    );
+    eval.push_specpdl_root(state);
+    state
+}
+
+/// L2 answers exactly as a plain scan: `syntax-ppss`-shaped streams --
+/// absolute queries, chains that start each query where the last one
+/// stopped with its answer as OLDSTATE, queries from canonical states below,
+/// inside and past the run's end, and OLDSTATEs that do not agree with the
+/// run -- interleaved with every change a scan reads.
+#[test]
+fn canonical_answers_equal_plain_scans_under_every_change() {
+    crate::test_utils::init_test_tracing();
+    let _guard = ParseCacheTestGuard::isolated(None);
+    reset_parse_cache_stats();
+    let mut rng = Rng(0x2545_f491_4f6c_dd1d);
+    let mut queries = 0usize;
+    let mut changes = std::collections::BTreeMap::<&'static str, usize>::new();
+    for kind in 0..5 {
+        for (round, geometry) in [(16, 0), (64, 0), (16, 64), (512, 0)]
+            .into_iter()
+            .enumerate()
+        {
+            GEOMETRY_OVERRIDE.with(|cell| cell.set(Some(geometry)));
+            let mut eval = crate::emacs_core::eval::Context::new();
+            install_table(&mut eval, kind);
+            // modify-syntax-entry's class descriptor may be shared with ASCII
+            // entries. Keep this fuzz's non-ASCII setcar mutation independent
+            // of the inherited flat-ASCII descriptor mutation divergence.
+            eval.eval_str(
+                "(let ((table (syntax-table)) (chars '(?é ?ü)))
+                   (while chars
+                     (let* ((ch (car chars)) (descriptor (aref table ch)))
+                       (set-char-table-range table ch
+                         (cons (car descriptor) (cdr descriptor))))
+                     (setq chars (cdr chars))))",
+            )
+            .expect("private non-ASCII descriptors");
+            eval.eval_str("(make-local-variable 'comment-end-can-be-escaped)")
+                .expect("local");
+            eval.eval_str(&format!(
+                "(setq parse-sexp-lookup-properties {})",
+                if round % 2 == 0 { "t" } else { "nil" }
+            ))
+            .expect("lookup");
+            let text = random_lisp_text(&mut rng, 20 + 10 * round);
+            eval.eval_str(&format!("(insert {text:?})")).expect("text");
+            for session in 0..24 {
+                let roots = eval.save_specpdl_roots();
+                let begv = point_min(&eval);
+                let zv = point_max(&eval);
+                match session % 4 {
+                    // Absolute queries, rising and falling.
+                    0 => {
+                        for _ in 0..6 {
+                            let to = begv + rng.below(zv + 1 - begv);
+                            check_l2(&mut eval, plain_query(begv, to), Value::NIL, "absolute");
+                            queries += 1;
+                        }
+                    }
+                    // A chain: each query from the last one's TO and answer.
+                    1 | 2 => {
+                        let mut from = begv + rng.below(zv + 1 - begv);
+                        let mut state = if from == begv {
+                            Value::NIL
+                        } else {
+                            canonical_oldstate(&mut eval, from)
+                        };
+                        for _ in 0..8 {
+                            let zv = point_max(&eval);
+                            if from >= zv {
+                                break;
+                            }
+                            let to = from + 1 + rng.below((zv - from).min(300));
+                            state = check_l2(&mut eval, plain_query(from, to), state, "chain");
+                            queries += 1;
+                            from = to;
+                        }
+                    }
+                    // Repeated FROMs with canonical OLDSTATEs and random TOs,
+                    // and a random well-formed OLDSTATE that need not agree.
+                    _ => {
+                        let from = begv + rng.below(zv + 1 - begv);
+                        let state = canonical_oldstate(&mut eval, from);
+                        for _ in 0..4 {
+                            let to = from + rng.below(zv + 1 - from);
+                            check_l2(&mut eval, plain_query(from, to), state, "relative");
+                            queries += 1;
+                        }
+                        let odd = eval
+                            .eval_str(&format!(
+                                "(list {} nil nil nil nil nil 0 nil nil nil nil)",
+                                rng.below(3) as i64 - 1
+                            ))
+                            .expect("odd state");
+                        eval.push_specpdl_root(odd);
+                        let to = from + rng.below(zv + 1 - from);
+                        check_l2(&mut eval, plain_query(from, to), odd, "odd oldstate");
+                        queries += 1;
+                    }
+                }
+                eval.restore_specpdl_roots(roots);
+                if session % 3 == 2 {
+                    let what = mutate(&mut eval, &mut rng);
+                    *changes.entry(what).or_default() += 1;
+                }
+            }
+        }
+    }
+    GEOMETRY_OVERRIDE.with(|cell| cell.set(None));
+    let stats = parse_cache_stats();
+    tracing::info!(queries, ?stats, ?changes, "canonical run fuzz coverage");
+    assert_eq!(stats.mismatches, 0);
+    assert!(queries > 2_000, "queries {queries}");
+    assert!(stats.canon_absolute > 300, "absolute: {stats:?}");
+    assert!(stats.canon_adopted > 500, "adopted: {stats:?}");
+    assert!(stats.canon_declined > 20, "declined: {stats:?}");
+    assert!(
+        stats.canon_skipped_chars > 20_000,
+        "skipped too little: {stats:?}"
+    );
+    for what in [
+        "insert",
+        "delete",
+        "put syntax-table",
+        "remove syntax-table",
+        "setcar property descriptor",
+        "modify-syntax-entry",
+        "narrow",
+    ] {
+        assert!(
+            changes.get(what).copied().unwrap_or(0) > 1,
+            "{what}: {changes:?}"
+        );
+    }
+    assert!(stats.canon_resets > 5, "environment changes: {stats:?}");
+}
+
+/// Deeply nested text, long spans and a small chunk: adopted queries jump
+/// over many canonical states, and their minimum depth and per-level
+/// positions come from the correction, not from a scan.
+#[test]
+fn adopted_answers_correct_depth_and_levels_across_jumps() {
+    crate::test_utils::init_test_tracing();
+    let _guard = ParseCacheTestGuard::isolated(Some((16, 0)));
+    let mut eval = crate::emacs_core::eval::Context::new();
+    install_table(&mut eval, 1);
+    // Rising and falling depth, unbalanced closes (negative depth), and
+    // atoms and strings at every level.
+    let text = "(a (b (c d) \"s\" e) (f (g (h i) j) k) l)\n)) (m (n) o\n\
+                ((((p)))) q (r \"t\" (s)) u) v (w (x (y (z))))\n(1 (2 (3 (4 (5)))))";
+    let text = text.repeat(6);
+    eval.eval_str(&format!("(insert {text:?})")).expect("text");
+    let zv = point_max(&eval);
+    reset_parse_cache_stats();
+    // Warm the run over the whole buffer.
+    let roots = eval.save_specpdl_roots();
+    check_l2(&mut eval, plain_query(1, zv), Value::NIL, "warm");
+    for from in (2..zv).step_by(5) {
+        let state = canonical_oldstate(&mut eval, from);
+        for to in [from + 1, from + 7, from + 40, from + 150, zv] {
+            if to <= zv {
+                check_l2(&mut eval, plain_query(from, to), state, "jump");
+            }
+        }
+    }
+    eval.restore_specpdl_roots(roots);
+    let stats = parse_cache_stats();
+    assert_eq!(stats.mismatches, 0);
+    assert!(stats.canon_adopted > 200, "{stats:?}");
+    assert!(stats.canon_skipped_chars > 20_000, "{stats:?}");
+}
+
+/// A property-supplied syntax table is deliberately unvalidatable: setcar on
+/// one of its entries changes syntax without the char-table write tick moving.
+/// An L2 answer crossing it must never become an unchecked L1 exact result.
+#[test]
+fn canonical_exact_memo_rejects_property_syntax_tables() {
+    crate::test_utils::init_test_tracing();
+    let _guard = ParseCacheTestGuard::isolated(Some((16, 0)));
+    for adopted in [false, true] {
+        let mut eval = crate::emacs_core::eval::Context::new();
+        install_table(&mut eval, 1);
+        let prefix = if adopted {
+            "(a) ".repeat(20)
+        } else {
+            String::new()
+        };
+        let property_at = prefix.chars().count() + 1;
+        let from = if adopted { property_at - 16 } else { 1 };
+        let text = format!("{prefix}é{}", " ".repeat(16));
+        eval.eval_str(&format!("(insert {text:?})")).expect("text");
+        eval.eval_str(&format!(
+            r#"(progn
+                 (setq parse-sexp-lookup-properties t)
+                 (setq l2-property-table (copy-syntax-table)
+                       l2-property-descriptor (cons 4 ?\)))
+                 (set-char-table-range l2-property-table ?é l2-property-descriptor)
+                 (put-text-property {property_at} {} 'syntax-table l2-property-table))"#,
+            property_at + 1,
+        ))
+        .expect("property syntax table");
+        let roots = eval.save_specpdl_roots();
+        reset_parse_cache_stats();
+        if adopted {
+            // The canonical run ends just before the unvalidatable table;
+            // the adopted answer jumps through it and scans that table in its tail.
+            check_l2(
+                &mut eval,
+                plain_query(1, property_at),
+                Value::NIL,
+                "warm prefix",
+            );
+        }
+        let oldstate = if adopted {
+            canonical_oldstate(&mut eval, from)
+        } else {
+            Value::NIL
+        };
+        let query = plain_query(from, point_max(&eval));
+        let before = check_l2(&mut eval, query, oldstate, "warm property table");
+        eval.eval_str("(setcar l2-property-descriptor 0)")
+            .expect("mutate property table entry in place");
+        let after = check_l2(&mut eval, query, oldstate, "changed property table");
+        assert_ne!(
+            print_value(&before),
+            print_value(&after),
+            "mutation must matter; adopted={adopted}"
+        );
+        let stats = parse_cache_stats();
+        assert_eq!(
+            stats.exact, 0,
+            "unvalidatable syntax must not be memoized; adopted={adopted}: {stats:?}"
+        );
+        if adopted {
+            assert_eq!(stats.canon_adopted, 2, "{stats:?}");
+        } else {
+            assert_eq!(stats.canon_absolute, 2, "{stats:?}");
+        }
+        eval.restore_specpdl_roots(roots);
+    }
+}
+
+/// The descriptor after the dictionary's capacity remains mutable too. Its
+/// absence from the validation dictionary must disable the full exact memo.
+#[test]
+fn canonical_exact_memo_rejects_descriptor_log_overflow() {
+    crate::test_utils::init_test_tracing();
+    let _guard = ParseCacheTestGuard::isolated(Some((16, 0)));
+    for existing_capacity in [false, true] {
+        let mut eval = crate::emacs_core::eval::Context::new();
+        let count = DESCRIPTOR_LOG_CAP + 1;
+        eval.eval_str(&format!(
+            "(progn
+               (setq parse-sexp-lookup-properties t)
+               (insert (make-string {count} ?x))
+               (let ((i 0))
+                 (while (< i {count})
+                   (put-text-property (1+ i) (+ i 2) 'syntax-table (cons 0 nil))
+                   (setq i (1+ i)))))"
+        ))
+        .expect("distinct property descriptors");
+        let roots = eval.save_specpdl_roots();
+        reset_parse_cache_stats();
+        if existing_capacity {
+            // Fill the canonical dictionary first. The extending scan logs only
+            // the last known descriptor and the new one, below its local cap.
+            check_l2(
+                &mut eval,
+                plain_query(1, count),
+                Value::NIL,
+                "fill dictionary",
+            );
+        }
+        let query = plain_query(1, point_max(&eval));
+        let before = check_l2(&mut eval, query, Value::NIL, "warm descriptor overflow");
+        let absolutes_before = parse_cache_stats().canon_absolute;
+        eval.eval_str(&format!(
+            "(setcar (get-text-property {count} 'syntax-table) 4)"
+        ))
+        .expect("mutate first unlogged descriptor");
+        let after = check_l2(&mut eval, query, Value::NIL, "changed unlogged descriptor");
+        assert_ne!(
+            print_value(&before),
+            print_value(&after),
+            "mutation must matter; existing_capacity={existing_capacity}"
+        );
+        let stats = parse_cache_stats();
+        assert_eq!(
+            stats.exact, 0,
+            "overflow must not create an exact memo; existing_capacity={existing_capacity}: {stats:?}"
+        );
+        assert_eq!(stats.canon_absolute, absolutes_before + 1, "{stats:?}");
+        eval.restore_specpdl_roots(roots);
+    }
+}
+
+/// More than GNU's 100-level stack ceiling: this pins cache equivalence with
+/// the current plain scanner, without claiming to fix its inherited GNU cap
+/// divergence. All level positions and minima are compared across long jumps.
+#[test]
+fn canonical_adoption_matches_plain_above_one_hundred_levels() {
+    crate::test_utils::init_test_tracing();
+    let _guard = ParseCacheTestGuard::isolated(Some((16, 0)));
+    let mut eval = crate::emacs_core::eval::Context::new();
+    install_table(&mut eval, 1);
+    let text = format!(
+        "{}{}{}",
+        "(".repeat(128),
+        "x ".repeat(160),
+        ") ".repeat(140)
+    );
+    eval.eval_str(&format!("(insert {text:?})"))
+        .expect("deep text");
+    let zv = point_max(&eval);
+    let roots = eval.save_specpdl_roots();
+    reset_parse_cache_stats();
+    check_l2(&mut eval, plain_query(1, zv), Value::NIL, "warm deep run");
+    for from in [2, 64, 100, 101, 120, 129, 131, 201, 401] {
+        let oldstate = canonical_oldstate(&mut eval, from);
+        for to in [from + 1, from + 17, from + 80, zv - 1, zv] {
+            if from < to && to <= zv {
+                check_l2(&mut eval, plain_query(from, to), oldstate, "deep adoption");
+            }
+        }
+    }
+    let stats = parse_cache_stats();
+    assert!(stats.canon_adopted > 0, "{stats:?}");
+    assert!(stats.canon_skipped_chars > 100, "{stats:?}");
+    assert_eq!(stats.mismatches, 0, "{stats:?}");
+    eval.restore_specpdl_roots(roots);
+}
+
+/// Prefix closes establish a lower global minimum than the relative query
+/// encounters. Extending an existing run must keep those prefix closes out of
+/// the query's element 6 while preserving surviving level positions.
+#[test]
+fn canonical_extension_ignores_negative_minima_before_from() {
+    crate::test_utils::init_test_tracing();
+    let _guard = ParseCacheTestGuard::isolated(Some((16, 0)));
+    let mut eval = crate::emacs_core::eval::Context::new();
+    install_table(&mut eval, 1);
+    let prefix = format!("{}{}", ") ".repeat(20), "(".repeat(25));
+    let from = prefix.chars().count() + 1;
+    let text = format!("{prefix}{}{}", "x ".repeat(160), ") ".repeat(10));
+    eval.eval_str(&format!("(insert {text:?})"))
+        .expect("negative prefix");
+    let zv = point_max(&eval);
+    let roots = eval.save_specpdl_roots();
+    reset_parse_cache_stats();
+    check_l2(
+        &mut eval,
+        plain_query(1, from + 128),
+        Value::NIL,
+        "warm run below end",
+    );
+    let oldstate = canonical_oldstate(&mut eval, from);
+    check_l2(
+        &mut eval,
+        plain_query(from, zv),
+        oldstate,
+        "extend past frontier",
+    );
+    for to in [from + 129, zv - 1, zv] {
+        check_l2(
+            &mut eval,
+            plain_query(from, to),
+            oldstate,
+            "reuse extended minima",
+        );
+    }
+    let stats = parse_cache_stats();
+    assert!(stats.canon_adopted > 0, "{stats:?}");
+    assert!(stats.canon_skipped_chars > 100, "{stats:?}");
+    assert_eq!(stats.mismatches, 0, "{stats:?}");
+    eval.restore_specpdl_roots(roots);
+}
+
+/// Current L1 records optioned queries too. L2 must leave their stop positions
+/// and every state element to that path, even with a warm canonical run.
+#[test]
+fn canonical_run_leaves_optioned_queries_to_l1() {
+    crate::test_utils::init_test_tracing();
+    let _guard = ParseCacheTestGuard::isolated(Some((16, 0)));
+    let mut eval = crate::emacs_core::eval::Context::new();
+    install_table(&mut eval, 1);
+    eval.eval_str("(insert \"(a (b c) \\\"d\\\" ; e\\n f) (g)\")")
+        .expect("option text");
+    let zv = point_max(&eval);
+    let roots = eval.save_specpdl_roots();
+    reset_parse_cache_stats();
+    check_l2(
+        &mut eval,
+        plain_query(1, zv),
+        Value::NIL,
+        "warm for options",
+    );
+    let before = parse_cache_stats();
+    for from in [1, 4] {
+        let oldstate = if from == 1 {
+            Value::NIL
+        } else {
+            canonical_oldstate(&mut eval, from)
+        };
+        for (target_depth, stop_before, commentstop) in [
+            (Some(0), false, 0),
+            (Some(1), false, 0),
+            (Some(2), false, 0),
+            (None, true, 0),
+            (None, false, 1),
+            (None, false, 2),
+        ] {
+            let query = Query {
+                target_depth,
+                stop_before,
+                commentstop,
+                ..plain_query(from, zv)
+            };
+            check_l2(&mut eval, query, oldstate, "options first query");
+            check_l2(&mut eval, query, oldstate, "options exact query");
+        }
+    }
+    let after = parse_cache_stats();
+    assert_eq!(after.canon_absolute, before.canon_absolute, "{after:?}");
+    assert_eq!(after.canon_adopted, before.canon_adopted, "{after:?}");
+    assert_eq!(after.canon_declined, before.canon_declined, "{after:?}");
+    eval.restore_specpdl_roots(roots);
+}
+
+/// The L2 verify knob must recompute both absolute and adopted answers even
+/// when L1 is merely On. The caller supplies a fresh rooted OLDSTATE each time.
+#[test]
+fn canonical_verify_mode_recomputes_absolute_and_adopted_answers() {
+    crate::test_utils::init_test_tracing();
+    let _guard = ParseCacheTestGuard::isolated(Some((16, 0)));
+    let mut eval = crate::emacs_core::eval::Context::new();
+    install_table(&mut eval, 1);
+    let text = "(a) ".repeat(180);
+    eval.eval_str(&format!("(insert {text:?})"))
+        .expect("verify text");
+    let zv = point_max(&eval);
+    let roots = eval.save_specpdl_roots();
+    reset_parse_cache_stats();
+    for from in [1, 17, 33] {
+        let oldstate = if from == 1 {
+            Value::NIL
+        } else {
+            canonical_oldstate(&mut eval, from)
+        };
+        let query = plain_query(from, zv);
+        let (verified, verified_point) = answer_value(
+            &mut eval,
+            query,
+            oldstate,
+            ParseCacheMode::On,
+            canon::CanonMode::Verify,
+        );
+        eval.push_specpdl_root(verified);
+        let (plain, plain_point) = answer_value(
+            &mut eval,
+            query,
+            oldstate,
+            ParseCacheMode::Off,
+            canon::CanonMode::Off,
+        );
+        eval.push_specpdl_root(plain);
+        assert_eq!(
+            (print_value(&verified), verified_point),
+            (print_value(&plain), plain_point),
+            "verify: {query:?}",
+        );
+    }
+    let stats = parse_cache_stats();
+    assert!(stats.canon_absolute > 0, "{stats:?}");
+    assert!(stats.canon_adopted > 0, "{stats:?}");
+    assert!(stats.verified >= 3, "{stats:?}");
+    assert_eq!(stats.mismatches, 0, "{stats:?}");
+    eval.restore_specpdl_roots(roots);
+}
+
+/// Compare every returned list field and point with both verification knobs
+/// enabled. The existing caller-owned root frame owns the returned value.
+fn check_live_verified(
+    eval: &mut crate::emacs_core::eval::Context,
+    query: Query,
+    oldstate: Value,
+    what: &str,
+) -> Value {
+    let (cached, cached_point) = answer_value(
+        eval,
+        query,
+        oldstate,
+        ParseCacheMode::Verify,
+        canon::CanonMode::Verify,
+    );
+    eval.push_specpdl_root(cached);
+    let (plain, plain_point) = answer_value(
+        eval,
+        query,
+        oldstate,
+        ParseCacheMode::Off,
+        canon::CanonMode::Off,
+    );
+    eval.push_specpdl_root(plain);
+    assert_eq!(
+        (print_value(&cached), cached_point),
+        (print_value(&plain), plain_point),
+        "{what}: {query:?}, OLDSTATE {}",
+        print_value(&oldstate),
+    );
+    plain
+}
+
+fn live_canonical_frontier(eval: &crate::emacs_core::eval::Context) -> usize {
+    eval.buffers
+        .current_buffer()
+        .expect("buffer")
+        .with_syntax_parse_cache(|cache, _| {
+            cache.canonical.as_ref().expect("canonical run").frontier()
+        })
+}
+
+/// The negative prefix gives the absolute scan a different minimum. Nested
+/// opens preserve reported levels without creating completed parent atoms.
+fn live_negative_prefix() -> String {
+    format!("{}{}", ")".repeat(10), "(".repeat(10))
+}
+
+#[derive(Clone, Copy, Debug)]
+enum LiveBoundary {
+    String,
+    Quoted,
+    PendingAtom,
+    ElementTen,
+    ReportingLevels,
+}
+
+impl LiveBoundary {
+    fn outer(self) -> &'static str {
+        match self {
+            Self::String => "(head \"quoted text\" tail)",
+            Self::Quoted => "(head a\\(b after)",
+            Self::PendingAtom | Self::ReportingLevels => "(head longatomname after)",
+            Self::ElementTen => "(head /* comment */ after)",
+        }
+    }
+
+    fn from(self, text: &str) -> usize {
+        let (needle, offset) = match self {
+            Self::String => ("quoted", 2),
+            Self::Quoted => ("\\(", 1),
+            Self::PendingAtom | Self::ReportingLevels => ("longatomname", 4),
+            Self::ElementTen => ("/*", 1),
+        };
+        text[..text.find(needle).expect("FROM marker")]
+            .chars()
+            .count()
+            + offset
+            + 1
+    }
+}
+
+/// String/escape/atom/pending two-character syntax cannot be adopted at FROM.
+/// Actual parsing must consume that prefix and wait for all level metadata to
+/// converge, while the relative query retains its own minimum depth.
+#[test]
+fn live_sync_waits_for_full_state_then_skips_with_verify() {
+    crate::test_utils::init_test_tracing();
+    for chunk in [1, 3, 16, 64, 2048] {
+        let _guard = ParseCacheTestGuard::isolated(Some((chunk, 0)));
+        for boundary in [
+            LiveBoundary::String,
+            LiveBoundary::Quoted,
+            LiveBoundary::PendingAtom,
+            LiveBoundary::ElementTen,
+            LiveBoundary::ReportingLevels,
+        ] {
+            let mut eval = crate::emacs_core::eval::Context::new();
+            install_table(
+                &mut eval,
+                if matches!(boundary, LiveBoundary::ElementTen) {
+                    0
+                } else {
+                    1
+                },
+            );
+            let text = format!(
+                "{}{} (reset gate) {}",
+                live_negative_prefix(),
+                boundary.outer(),
+                "(tail x) ".repeat(1400),
+            );
+            let from = boundary.from(&text);
+            eval.eval_str(&format!("(insert {text:?})")).expect("text");
+            let roots = eval.save_specpdl_roots();
+            let zv = point_max(&eval);
+            check_live_verified(&mut eval, plain_query(1, zv), Value::NIL, "warm");
+            let mut oldstate = canonical_oldstate(&mut eval, from);
+            if matches!(boundary, LiveBoundary::ReportingLevels) {
+                // Same depth and number of reported levels, different inner
+                // containing-position metadata. Child/outer completion can
+                // eventually overwrite it, but it is not an agreement now.
+                let mut fields = list_to_vec(&oldstate).expect("OLDSTATE list");
+                let mut levels = list_to_vec(&fields[9]).expect("levels list");
+                let last = levels.last_mut().expect("nested level");
+                *last = Value::fixnum(last.as_fixnum().expect("level position") + 1);
+                fields[9] = Value::list(levels);
+                oldstate = Value::list(fields);
+                eval.push_specpdl_root(oldstate);
+                reset_parse_cache_stats();
+                check_live_verified(
+                    &mut eval,
+                    plain_query(from, from + 1),
+                    oldstate,
+                    "different reporting levels before completion",
+                );
+                assert_eq!(parse_cache_stats().canon_synced, 0);
+            }
+            reset_parse_cache_stats();
+            let query = plain_query(from, zv);
+            let first = check_live_verified(&mut eval, query, oldstate, "live boundary");
+            let stats = parse_cache_stats();
+            assert!(
+                stats.canon_synced > 0,
+                "chunk={chunk}, {boundary:?}: {stats:?}"
+            );
+            assert!(
+                stats.canon_skipped_chars > 0,
+                "chunk={chunk}, {boundary:?}: {stats:?}"
+            );
+            assert!(stats.verified > 0, "{stats:?}");
+            assert_eq!(stats.mismatches, 0, "{stats:?}");
+            let again = check_live_verified(&mut eval, query, oldstate, "live exact repeat");
+            assert_eq!(print_value(&first), print_value(&again));
+            assert!(parse_cache_stats().exact > 0, "chunk={chunk}, {boundary:?}");
+            eval.restore_specpdl_roots(roots);
+        }
+    }
+}
+
+/// Start with a tiny canonical prefix ending inside a string. Each subsequent
+/// query carries the prior answer as OLDSTATE, extends the canonical frontier,
+/// and requires live agreement without a new absolute warm-up.
+#[test]
+fn live_sync_grows_partial_frontier_for_oldstate_string_chains() {
+    crate::test_utils::init_test_tracing();
+    for chunk in [1, 3, 16, 64, 2048] {
+        let _guard = ParseCacheTestGuard::isolated(Some((chunk, 0)));
+        let mut eval = crate::emacs_core::eval::Context::new();
+        install_table(&mut eval, 1);
+        let prefix = live_negative_prefix();
+        let prefix_len = prefix.chars().count();
+        let text = format!("{prefix}{}", "(\"a\") ".repeat(3000));
+        eval.eval_str(&format!("(insert {text:?})"))
+            .expect("chain text");
+        let roots = eval.save_specpdl_roots();
+        // In each six-character form, TO is the closing quote position, so
+        // the returned state is still inside the string.
+        let from = prefix_len + 4;
+        let middle = prefix_len + 6 * 1000 + 4;
+        let zv = point_max(&eval);
+        let state = check_live_verified(
+            &mut eval,
+            plain_query(1, from),
+            Value::NIL,
+            "tiny partial warm",
+        );
+        assert!(!list_to_vec(&state).expect("state")[3].is_nil());
+        let first_frontier = live_canonical_frontier(&eval);
+        assert!(first_frontier < from, "only a partial warm");
+        reset_parse_cache_stats();
+        let next = check_live_verified(
+            &mut eval,
+            plain_query(from, middle),
+            state,
+            "first string chain",
+        );
+        let second_frontier = live_canonical_frontier(&eval);
+        let stats = parse_cache_stats();
+        assert!(
+            stats.canon_synced > 0,
+            "first chain, chunk={chunk}: {stats:?}"
+        );
+        assert!(
+            second_frontier > first_frontier,
+            "first chain, chunk={chunk}"
+        );
+        assert_eq!(stats.canon_absolute, 0, "chain must not reseed: {stats:?}");
+        assert!(!list_to_vec(&next).expect("state")[3].is_nil());
+        reset_parse_cache_stats();
+        check_live_verified(
+            &mut eval,
+            plain_query(middle, zv),
+            next,
+            "second string chain",
+        );
+        let stats = parse_cache_stats();
+        assert!(
+            stats.canon_synced > 0,
+            "second chain, chunk={chunk}: {stats:?}"
+        );
+        assert!(live_canonical_frontier(&eval) > second_frontier);
+        assert_eq!(stats.canon_absolute, 0, "chain must not reseed: {stats:?}");
+        assert_eq!(stats.mismatches, 0, "{stats:?}");
+        eval.restore_specpdl_roots(roots);
+    }
+}
+
+/// Canonical escapes do not classify their quoted bodies. A supplied comment
+/// OLDSTATE with escaping disabled does classify them, so these descriptors
+/// exist exclusively in the actual prefix's dependency log.
+fn live_descriptor_fixture(
+    eval: &mut crate::emacs_core::eval::Context,
+    prefix_descriptors: usize,
+    skipped_descriptors: usize,
+) -> (usize, Vec<usize>, Vec<usize>) {
+    install_table(eval, 1);
+    let head = format!("{}(head ", live_negative_prefix());
+    let from = head.chars().count() + 1;
+    let actual = "\\é".repeat(prefix_descriptors);
+    let first_tail = "(tail x) ".repeat(700);
+    let skipped = "é ".repeat(skipped_descriptors);
+    let second_tail = "(tail x) ".repeat(700);
+    let text = format!("{head}{actual}\n(reset gate)) {first_tail}{skipped}{second_tail}");
+    let prefix_positions: Vec<_> = (0..prefix_descriptors).map(|i| from + 2 * i + 1).collect();
+    let skipped_from = text[..text
+        .find(&format!("{skipped}{second_tail}"))
+        .expect("tail marker")]
+        .chars()
+        .count()
+        + 1;
+    // An empty skipped block would find the identical first tail early; its
+    // start is unused in that case, so only nonempty blocks need the marker.
+    let skipped_positions: Vec<_> = (0..skipped_descriptors)
+        .map(|i| skipped_from + 2 * i)
+        .collect();
+    eval.eval_str(&format!("(insert {text:?})"))
+        .expect("dependency text");
+    eval.eval_str("(setq parse-sexp-lookup-properties t comment-end-can-be-escaped nil)")
+        .expect("property and comment policy");
+    for &at in prefix_positions.iter().chain(&skipped_positions) {
+        eval.eval_str(&format!(
+            "(put-text-property {at} {} 'syntax-table (cons 0 nil))",
+            at + 1,
+        ))
+        .expect("fresh property descriptor");
+    }
+    (from, prefix_positions, skipped_positions)
+}
+
+fn live_comment_oldstate(eval: &mut crate::emacs_core::eval::Context, from: usize) -> Value {
+    let canonical = canonical_oldstate(eval, from);
+    let mut fields = list_to_vec(&canonical).expect("OLDSTATE list");
+    fields[4] = Value::T;
+    fields[7] = Value::NIL;
+    fields[8] = Value::fixnum(from as i64);
+    let state = Value::list(fields);
+    eval.push_specpdl_root(state);
+    state
+}
+
+/// The result's dependency union can exceed capacity even when the actual
+/// prefix and canonical dictionary are each individually below capacity.
+/// Neither that case nor actual-prefix overflow may produce an exact memo.
+#[test]
+fn live_sync_rejects_exact_memos_for_prefix_and_union_descriptor_overflow() {
+    crate::test_utils::init_test_tracing();
+    for chunk in [1, 3, 16, 64, 2048] {
+        let _guard = ParseCacheTestGuard::isolated(Some((chunk, 0)));
+        for (prefix_count, skipped_count) in [(DESCRIPTOR_LOG_CAP + 1, 0), (20, 13)] {
+            let mut eval = crate::emacs_core::eval::Context::new();
+            let (from, prefix_positions, skipped_positions) =
+                live_descriptor_fixture(&mut eval, prefix_count, skipped_count);
+            let roots = eval.save_specpdl_roots();
+            let zv = point_max(&eval);
+            check_live_verified(
+                &mut eval,
+                plain_query(1, zv),
+                Value::NIL,
+                "warm descriptors",
+            );
+            let oldstate = live_comment_oldstate(&mut eval, from);
+            let query = plain_query(from, zv);
+            reset_parse_cache_stats();
+            let first = check_live_verified(&mut eval, query, oldstate, "overflow live prefix");
+            assert!(
+                parse_cache_stats().canon_synced > 0,
+                "chunk={chunk}, prefix={prefix_count}, skipped={skipped_count}: {:?}",
+                parse_cache_stats(),
+            );
+            check_live_verified(&mut eval, query, oldstate, "overflow repeat");
+            assert_eq!(
+                parse_cache_stats().exact,
+                0,
+                "overflow must not yield exact memo"
+            );
+            if let Some(&at) = skipped_positions.last() {
+                // This descriptor is skipped by the actual query after the
+                // sync point. Making it an unmatched opening delimiter must
+                // change the full answer and invalidate the canonical suffix.
+                eval.eval_str(&format!(
+                    "(setcar (get-text-property {at} 'syntax-table) 4)",
+                ))
+                .expect("mutate skipped canonical dependency");
+                let changed = check_live_verified(
+                    &mut eval,
+                    query,
+                    oldstate,
+                    "mutated skipped descriptor after union overflow",
+                );
+                assert_ne!(print_value(&first), print_value(&changed));
+                assert_eq!(parse_cache_stats().exact, 0);
+                assert!(parse_cache_stats().descriptor_changes > 0);
+            } else {
+                // Mutate the first descriptor that did not fit the actual
+                // prefix's dictionary. A shorter query exposes the resulting
+                // comment exit before later forms overwrite the report state.
+                let at = *prefix_positions.last().expect("overflow descriptor");
+                let short = plain_query(from, at + 1);
+                let before =
+                    check_live_verified(&mut eval, short, oldstate, "prefix before mutation");
+                eval.eval_str(&format!(
+                    "(setcar (get-text-property {at} 'syntax-table) 12)",
+                ))
+                .expect("mutate unlogged actual dependency");
+                let after =
+                    check_live_verified(&mut eval, short, oldstate, "prefix after mutation");
+                assert_ne!(print_value(&before), print_value(&after));
+                check_live_verified(
+                    &mut eval,
+                    query,
+                    oldstate,
+                    "full answer after prefix mutation",
+                );
+                assert_eq!(parse_cache_stats().exact, 0);
+            }
+            assert_eq!(parse_cache_stats().mismatches, 0);
+            eval.restore_specpdl_roots(roots);
+        }
+    }
+}
+
+/// Below capacity, both kinds of dependencies must remain validated when the
+/// first synced result becomes an L1 exact memo. In-place cons mutation moves
+/// no syntax tick, so the descriptor dictionary must detect it explicitly.
+#[test]
+fn live_sync_exact_memo_validates_actual_and_skipped_dependencies() {
+    crate::test_utils::init_test_tracing();
+    for chunk in [1, 3, 16, 64, 2048] {
+        let _guard = ParseCacheTestGuard::isolated(Some((chunk, 0)));
+        for mutate_prefix in [true, false] {
+            let mut eval = crate::emacs_core::eval::Context::new();
+            let (from, prefix_positions, skipped_positions) =
+                live_descriptor_fixture(&mut eval, 1, 1);
+            let roots = eval.save_specpdl_roots();
+            let zv = point_max(&eval);
+            check_live_verified(
+                &mut eval,
+                plain_query(1, zv),
+                Value::NIL,
+                "warm small dictionaries",
+            );
+            let oldstate = live_comment_oldstate(&mut eval, from);
+            let query = plain_query(from, zv);
+            reset_parse_cache_stats();
+            let before = check_live_verified(&mut eval, query, oldstate, "record dependency union");
+            assert!(
+                parse_cache_stats().canon_synced > 0,
+                "chunk={chunk}: {:?}",
+                parse_cache_stats()
+            );
+            check_live_verified(&mut eval, query, oldstate, "exact dependency union");
+            assert!(parse_cache_stats().exact > 0);
+            let at = if mutate_prefix {
+                prefix_positions[0]
+            } else {
+                skipped_positions[0]
+            };
+            let class = if mutate_prefix { 12 } else { 4 };
+            eval.eval_str(&format!(
+                "(setcar (get-text-property {at} 'syntax-table) {class})",
+            ))
+            .expect("mutate descriptor without a tick");
+            let exact_before = parse_cache_stats().exact;
+            let after =
+                check_live_verified(&mut eval, query, oldstate, "changed exact dependency union");
+            assert_eq!(
+                parse_cache_stats().exact,
+                exact_before,
+                "old exact result rejected"
+            );
+            assert!(parse_cache_stats().descriptor_changes > 0);
+            if !mutate_prefix {
+                assert_ne!(print_value(&before), print_value(&after));
+            } else {
+                // A full answer can converge again; this shorter answer pins
+                // the actual-only descriptor's observable effect explicitly.
+                let short = plain_query(from, at + 1);
+                let changed =
+                    check_live_verified(&mut eval, short, oldstate, "changed short prefix");
+                assert!(list_to_vec(&changed).expect("short state")[4].is_nil());
+            }
+            assert_eq!(parse_cache_stats().mismatches, 0);
+            eval.restore_specpdl_roots(roots);
+        }
+    }
 }

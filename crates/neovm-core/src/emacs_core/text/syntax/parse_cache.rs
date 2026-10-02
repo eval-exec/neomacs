@@ -68,12 +68,34 @@
 //! `NEOVM_SYNTAX_PARSE_CACHE`: `1`/`on` (default), `0`/`off`, or `verify`
 //! (every cached answer is recomputed by a plain scan and compared; a mismatch
 //! is logged, counted, fails debug builds, and the plain answer is returned).
+//!
+//! # L2: canonical run
+//!
+//! `NEOVM_SYNTAX_PARSE_CACHE_L2`: `0`/`off` (default), `1`/`on`, or `verify`.
+//! With L1 enabled, option-free queries can use the BEGV canonical run
+//! (`canon`) after an L1 exact miss. Either layer's verify mode compares a
+//! cached answer with the same original query, including all its options.
+//!
+//! # Mutator ownership
+//!
+//! Runs belong to the buffer text's existing mutator-confined storage, with
+//! cache access serialized by that storage's borrow. Cache borrows end before
+//! a scan. Future mutators sharing one text storage must additionally serialize
+//! text/property, syntax-table and descriptor access across validation, scanning
+//! and publication; the
+//! RefCell cache borrow does not itself synchronize other threads. Process-wide
+//! knobs contain only scalar policy, and relaxed publication carries no Lisp
+//! state. Existing thread-local counters are diagnostics, not cached answers.
 
 use super::parse_loop::{
     Entry, LoopState, LoopTop, Plain, ScanEnd, ScanFinish, ScanMode, TopAction, run_parse_loop,
 };
 use super::*;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+
+#[path = "parse_canon.rs"]
+mod canon;
+pub(crate) use canon::{CanonMode, canon_mode};
 
 /// `NEOVM_SYNTAX_PARSE_CACHE`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -157,6 +179,9 @@ pub(crate) enum Invalidation {
 #[derive(Debug, Default)]
 pub(crate) struct SyntaxParseCache {
     runs: Vec<ParseRun>,
+    /// The BEGV canonical run, under the same storage-owned exclusive cache
+    /// access as L1 runs; it is never stored in a mutator thread-local cache.
+    canonical: Option<canon::CanonicalRun>,
     /// A conservative membership filter for numeric FROM positions. A clear
     /// bit proves a miss; collisions still require an exact run search.
     from_filter: u64,
@@ -224,11 +249,15 @@ impl SyntaxParseCache {
             Invalidation::Nothing => {}
             Invalidation::All => {
                 self.runs.clear();
+                self.canonical = None;
                 self.from_filter = 0;
             }
             Invalidation::From { byte, char } => {
                 for run in &mut self.runs {
                     run.truncate(byte, char);
+                }
+                if let Some(canonical) = &mut self.canonical {
+                    canonical.truncate(byte, char);
                 }
                 let before = self.runs.len();
                 self.runs.retain(|run| !run.is_empty());
@@ -369,6 +398,19 @@ pub(crate) struct ParseCacheStats {
     pub(crate) mismatches: u64,
     /// Reuses refused because a descriptor cons had changed.
     pub(crate) descriptor_changes: u64,
+    /// Queries answered by the canonical run, absolute or by state agreement.
+    pub(crate) canon_absolute: u64,
+    pub(crate) canon_adopted: u64,
+    /// Failed FROM agreement or completed attempts without live synchronization.
+    pub(crate) canon_declined: u64,
+    /// Characters skipped through canonical snapshots.
+    pub(crate) canon_skipped_chars: u64,
+    /// Existing canonical runs replaced because the environment changed.
+    pub(crate) canon_resets: u64,
+    /// Queries that matched a later complete canonical loop state.
+    pub(crate) canon_synced: u64,
+    /// Back-comment lossage queries resumed from a warm canonical state.
+    pub(crate) canon_back_comments: u64,
 }
 
 thread_local! {
@@ -384,6 +426,13 @@ thread_local! {
             verified: 0,
             mismatches: 0,
             descriptor_changes: 0,
+            canon_absolute: 0,
+            canon_adopted: 0,
+            canon_declined: 0,
+            canon_skipped_chars: 0,
+            canon_resets: 0,
+            canon_synced: 0,
+            canon_back_comments: 0,
         })
     };
 }
@@ -445,7 +494,9 @@ fn write_stats_file(path: &str) {
         path,
         format!(
             "queries={} exact={} resumes={} skipped_chars={} recorded={} short={} \
-             bypassed={} verified={} mismatches={} descriptor_changes={}\n",
+             bypassed={} verified={} mismatches={} descriptor_changes={} \
+             canon_absolute={} canon_adopted={} canon_declined={} \
+             canon_skipped_chars={} canon_resets={} canon_synced={} canon_back_comments={}\n",
             stats.queries,
             stats.exact,
             stats.resumes,
@@ -455,7 +506,14 @@ fn write_stats_file(path: &str) {
             stats.bypassed,
             stats.verified,
             stats.mismatches,
-            stats.descriptor_changes
+            stats.descriptor_changes,
+            stats.canon_absolute,
+            stats.canon_adopted,
+            stats.canon_declined,
+            stats.canon_skipped_chars,
+            stats.canon_resets,
+            stats.canon_synced,
+            stats.canon_back_comments
         ),
     );
 }
@@ -706,7 +764,9 @@ impl SyntaxParseCache {
         }
     }
 
-    fn store(&mut self, key: RunKey, record: Record, result: Option<ExactResult>) {
+    /// Find or create one L1 run, preserving the current selective FROM-filter
+    /// updates and least-recently-used eviction policy.
+    fn run_for(&mut self, key: RunKey) -> usize {
         self.clock += 1;
         let clock = self.clock;
         let index = match self.runs.iter().position(|run| run.key == key) {
@@ -728,8 +788,13 @@ impl SyntaxParseCache {
                 self.runs.len() - 1
             }
         };
+        self.runs[index].last_used = clock;
+        index
+    }
+
+    fn store(&mut self, key: RunKey, record: Record, result: Option<ExactResult>) {
+        let index = self.run_for(key);
         let run = &mut self.runs[index];
-        run.last_used = clock;
 
         // The descriptors this scan read. One already known but no longer
         // holding what was recorded invalidates the states that read it --
@@ -804,6 +869,72 @@ impl SyntaxParseCache {
             self.runs.swap_remove(index);
             self.rebuild_from_filter();
         }
+    }
+
+    /// Memoize an L2 answer under the query's own L1 key. The canonical scan's
+    /// dependency limit must cover the whole exact answer, and every supplied
+    /// descriptor must fit alongside the receiving run's surviving descriptors.
+    /// This executes only under the buffer storage's exclusive cache access;
+    /// the incoming result and descriptor vector belong to the querying mutator.
+    fn store_result(
+        &mut self,
+        key: RunKey,
+        result: ExactResult,
+        descriptors: Vec<Descriptor>,
+        dep_limit: usize,
+    ) {
+        // A dependency-rejected answer must not create an empty run, advance
+        // its LRU clock or evict another run. Snapshot truncation in the canonical
+        // cache alone does not establish that this exact answer is reusable.
+        if result.dep_end_char > dep_limit || descriptors.len() > DESCRIPTOR_LOG_CAP {
+            return;
+        }
+        let index = self.run_for(key);
+        let run = &mut self.runs[index];
+        let stale = descriptors
+            .iter()
+            .filter_map(|descriptor| {
+                run.descriptors
+                    .iter()
+                    .find(|known| known.bits == descriptor.bits && !known.unchanged())
+                    .map(|known| known.first_char)
+            })
+            .min();
+        if let Some(at) = stale {
+            count(|stats| stats.descriptor_changes += 1);
+            run.truncate(usize::MAX, at);
+        }
+        let additional = descriptors
+            .iter()
+            .filter(|descriptor| {
+                !run.descriptors
+                    .iter()
+                    .any(|known| known.bits == descriptor.bits)
+            })
+            .count();
+        if run.descriptors.len() + additional > DESCRIPTOR_LOG_CAP {
+            if run.is_empty() {
+                self.runs.swap_remove(index);
+                self.rebuild_from_filter();
+            }
+            return;
+        }
+        for descriptor in descriptors {
+            if let Some(known) = run
+                .descriptors
+                .iter_mut()
+                .find(|known| known.bits == descriptor.bits)
+            {
+                known.first_char = known.first_char.min(descriptor.first_char);
+            } else {
+                run.descriptors.push(descriptor);
+            }
+        }
+        run.results.retain(|known| known.to_char != result.to_char);
+        if run.results.len() >= MAX_RESULTS {
+            run.results.remove(0);
+        }
+        run.results.push(result);
     }
 }
 
@@ -972,7 +1103,9 @@ pub(super) fn parse_partial_sexp_cached(
         let finish = plain(start);
         return (finish.state, finish.stop);
     }
-    let verify_start = (mode == ParseCacheMode::Verify).then(|| start.clone());
+    let l2_mode = canon_mode();
+    let verify_start =
+        (mode == ParseCacheMode::Verify || l2_mode == CanonMode::Verify).then(|| start.clone());
     let key = RunKey {
         from_char,
         start,
@@ -983,6 +1116,133 @@ pub(super) fn parse_partial_sexp_cached(
         env: EnvKey::of(buf, table, props, escape_policy),
     };
     let found = buf.with_syntax_parse_cache(|cache, _| cache.lookup(&key, to_char));
+    // Exact L1 answers are already the least-work path. Other option-free
+    // queries may use the canonical run; optioned queries retain their current
+    // L1 recording/resume paths, with their complete keys and original options.
+    let l2 = match &found {
+        Found::Exact(..) => None,
+        _ if l2_mode != CanonMode::Off && canon::has_no_options(&key) && to_char > from_char => {
+            if canon::is_absolute(&key) {
+                Some(canon::absolute_answer(
+                    buf,
+                    table,
+                    key.env,
+                    to_char,
+                    props,
+                    escape_policy,
+                ))
+            } else {
+                let l1_from = match &found {
+                    Found::Resume { at, .. } => at.char_pos,
+                    _ => from_char,
+                };
+                canon::adopted_answer(buf, table, &key, to_char, props, escape_policy, l1_from)
+            }
+        }
+        _ => None,
+    };
+    if let Some(canon::CanonAnswer {
+        finish,
+        descriptors,
+        dep_limit,
+    }) = l2
+    {
+        let result = ExactResult::of(&finish, to_char);
+        buf.with_syntax_parse_cache(|cache, _| {
+            cache.store_result(key, result, descriptors, dep_limit)
+        });
+        return verified(
+            finish.state,
+            finish.stop,
+            verify_start,
+            &plain,
+            from,
+            to,
+            target_depth,
+            stop_before,
+            commentstop,
+        );
+    }
+    // A query may agree with the canonical scan only after the form or
+    // string containing FROM ends. Scan the actual query once, retaining
+    // its L1 recorder, and reuse only on complete live-state agreement.
+    if l2_mode != CanonMode::Off
+        && canon::has_no_options(&key)
+        && to_char > from_char
+        && !matches!(found, Found::Exact(..))
+    {
+        let (entry, grid_frontier) = match found {
+            Found::Resume { at, grid_frontier } => {
+                count(|stats| {
+                    stats.resumes += 1;
+                    stats.skipped_chars += (at.char_pos - from_char) as u64;
+                });
+                (
+                    Entry::Resume {
+                        at,
+                        first_syntax: None,
+                    },
+                    grid_frontier,
+                )
+            }
+            Found::Miss {
+                run_exists,
+                grid_frontier,
+            } => {
+                if !run_exists && to_char - from_char < min_span_chars() {
+                    count(|stats| stats.short += 1);
+                    let finish = plain(key.start);
+                    maybe_write_stats_file();
+                    return (finish.state, finish.stop);
+                }
+                count(|stats| stats.recorded += 1);
+                (
+                    Entry::Fresh {
+                        from_char,
+                        state: key.start.clone(),
+                        from_oldstate,
+                    },
+                    grid_frontier,
+                )
+            }
+            Found::Exact(..) => unreachable!("exact L1 results retain priority"),
+        };
+        let finish = match canon::live_sync_answer(
+            buf,
+            table,
+            &key,
+            entry,
+            grid_frontier,
+            to_char,
+            props,
+            escape_policy,
+        ) {
+            canon::LiveAnswer::Finished { finish, record } => {
+                let result = ExactResult::of(&finish, to_char);
+                buf.with_syntax_parse_cache(|cache, _| cache.store(key, record, Some(result)));
+                finish
+            }
+            canon::LiveAnswer::Synced { answer, record } => {
+                let result = ExactResult::of(&answer.finish, to_char);
+                buf.with_syntax_parse_cache(|cache, _| {
+                    cache.store(key.clone(), record, None);
+                    cache.store_result(key, result, answer.descriptors, answer.dep_limit);
+                });
+                answer.finish
+            }
+        };
+        return verified(
+            finish.state,
+            finish.stop,
+            verify_start,
+            &plain,
+            from,
+            to,
+            target_depth,
+            stop_before,
+            commentstop,
+        );
+    }
     let answer = match found {
         Found::Exact(state, stop) => {
             count(|stats| stats.exact += 1);
@@ -1048,6 +1308,111 @@ pub(super) fn parse_partial_sexp_cached(
         }
     };
     let (state, stop) = answer.expect("a cached answer");
+    verified(
+        state,
+        stop,
+        verify_start,
+        &plain,
+        from,
+        to,
+        target_depth,
+        stop_before,
+        commentstop,
+    )
+}
+
+/// Canonical BEGV state for a back-comment lossage query. `None` preserves
+/// the legacy index when either cache layer is off or no warm matching state
+/// survives validation. Unsupported Lisp property resolvers instead return
+/// a plain BEGV state: the legacy index has no stamp for those dependencies.
+///
+/// State is owned by this query; no cache borrow spans the scan and no Lisp
+/// runs. Shared-text mutators require the outer text-access synchronization
+/// described by `canon::back_comment_finish`.
+pub(super) fn back_comment_canonical_state(
+    buf: &Buffer,
+    table: &SyntaxTable,
+    to: i64,
+    props: SyntaxProperties<'_>,
+    escape_policy: CommentEndEscapePolicy,
+) -> Option<PartialParseState> {
+    let l1 = parse_cache_mode();
+    if l1 == ParseCacheMode::Off {
+        return None;
+    }
+    let l2 = canon_mode();
+    if l2 == CanonMode::Off {
+        return None;
+    }
+    let from = char_pos_to_lisp_i64(buf.accessible_char_region().start().get());
+    let (from_char, to_char) = clamped_parse_range(buf, from, to);
+    let plain = |state| {
+        finished(run_parse_loop(
+            buf,
+            table,
+            Entry::Fresh {
+                from_char,
+                state,
+                from_oldstate: false,
+            },
+            to_char,
+            None,
+            false,
+            CommentStopMode::None,
+            props,
+            escape_policy,
+            &mut Plain,
+        ))
+    };
+    if resolves_through_lisp(buf, props) {
+        count(|stats| stats.bypassed += 1);
+        let state = plain(PartialParseState::new()).state;
+        maybe_write_stats_file();
+        return Some(state);
+    }
+    let cached = canon::back_comment_finish(
+        buf,
+        table,
+        EnvKey::of(buf, table, props, escape_policy),
+        to_char,
+        props,
+        escape_policy,
+    )?;
+    let verify_start =
+        (l1 == ParseCacheMode::Verify || l2 == CanonMode::Verify).then(PartialParseState::new);
+    let (state, _) = verified(
+        cached.state,
+        cached.stop,
+        verify_start,
+        &plain,
+        from,
+        to,
+        None,
+        false,
+        CommentStopMode::None,
+    );
+    Some(state)
+}
+
+/// Verify either layer's cached answer by running the identical original
+/// query. Temporary states are owned by this mutator, and no cache borrow is
+/// held while the plain verification scan runs.
+#[allow(clippy::too_many_arguments)] // preserve every original query option in diagnostics
+#[inline]
+fn verified<P>(
+    state: PartialParseState,
+    stop: i64,
+    verify_start: Option<PartialParseState>,
+    plain: &P,
+    from: i64,
+    to: i64,
+    target_depth: Option<i64>,
+    stop_before: bool,
+    commentstop: CommentStopMode,
+) -> (PartialParseState, i64)
+where
+    P: Fn(PartialParseState) -> ScanFinish,
+{
     let answer = match verify_start {
         None => (state, stop),
         Some(start) => {
@@ -1087,3 +1452,7 @@ mod invalidation_tests;
 #[cfg(test)]
 #[path = "tests/parse_cache.rs"]
 mod memo_tests;
+
+#[cfg(test)]
+#[path = "tests/back_comment_canonical.rs"]
+mod back_comment_canonical_tests;

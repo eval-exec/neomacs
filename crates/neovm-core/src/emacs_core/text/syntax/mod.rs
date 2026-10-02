@@ -5298,12 +5298,15 @@ thread_local! {
 /// Returns the comment's start position, or `None` when the forward parse says
 /// `comment_end` does not end a comment of this style after all.
 ///
-/// Cost: one forward parse of everything before `comment_end`, with no cache
-/// across calls.  GNU pays the same parse but gets it from `syntax-ppss`, whose
-/// cache is incremental and shared with the rest of the editor.  Reaching that
-/// cache from here needs the evaluator, which the byte-addressed comment
-/// scanners do not carry; until they do, this is the slow-but-correct half of
-/// the trade, and it only runs on the rare buffers that reach lossage at all.
+/// With both native syntax-cache layers enabled, an already warm canonical
+/// run supplies its complete validated BEGV state strictly before `comment_end`.
+/// Queries beyond its frontier record only the necessary tail; cold queries
+/// keep the existing safe-position index. That index is also retained when
+/// either cache layer is off, so enabling canonical reuse adds no first cold
+/// recording scan. Category/alias/default resolvers instead use a plain BEGV
+/// scan while canonical reuse is enabled, because their Lisp dependencies have
+/// no stamp the legacy index can validate. Reaching GNU's Lisp `syntax-ppss`
+/// here remains separate work: the byte-addressed scanners carry no evaluator.
 fn back_comment_reparse(
     buf: &ForwardCommentCursor<'_>,
     comment_end: EmacsBytePos,
@@ -5320,59 +5323,93 @@ fn back_comment_reparse(
 
     let table = SyntaxTable::for_buffer(buf);
     let props = prop_cache.props();
-    let state = match back_comment_safe_key(buf, &table, props, escape_policy) {
-        Some(key) => {
-            let mut index = buf.take_syntax_safe_positions();
-            #[cfg(test)]
-            BACK_COMMENT_SAFE_REPARSES.with(|c| c.set(c.get() + 1));
-            if index.key != Some(key) {
-                index.points.clear();
-                index.key = Some(key);
+    let state = if let Some(state) =
+        parse_cache::back_comment_canonical_state(buf, &table, to, props, escape_policy)
+    {
+        state
+    } else {
+        match back_comment_safe_key(buf, &table, props, escape_policy) {
+            Some(key) => {
+                let mut index = buf.take_syntax_safe_positions();
+                #[cfg(test)]
+                BACK_COMMENT_SAFE_REPARSES.with(|c| c.set(c.get() + 1));
+                if index.key != Some(key) {
+                    index.points.clear();
+                    index.key = Some(key);
+                }
+                // Restart from the last safe position before `to` (BEGV if none),
+                // and extend the index only when parsing past its end.
+                let to0 = (to - 1) as usize;
+                let i = index.points.partition_point(|&p| p < to0);
+                let start0 = if i == 0 {
+                    begv.get()
+                } else {
+                    index.points[i - 1]
+                };
+                let chunk = back_comment_safe_chunk();
+                let next_target = if i == index.points.len() {
+                    start0.saturating_add(chunk)
+                } else {
+                    usize::MAX
+                };
+                let (_, to_char) = clamped_parse_range(buf, from, to);
+                let ScanEnd::Finished(ScanFinish { state, .. }) = run_parse_loop(
+                    buf,
+                    &table,
+                    Entry::Fresh {
+                        from_char: start0,
+                        state: PartialParseState::new(),
+                        from_oldstate: false,
+                    },
+                    to_char,
+                    None,
+                    false,
+                    CommentStopMode::None,
+                    props,
+                    escape_policy,
+                    &mut SafePositionRecorder {
+                        next_target,
+                        chunk,
+                        points: &mut index.points,
+                    },
+                ) else {
+                    unreachable!("the safe-position recorder never pauses")
+                };
+                buf.put_syntax_safe_positions(index);
+                #[cfg(test)]
+                BACK_COMMENT_SAFE_STARTS
+                    .with(|c| c.set(c.get() + usize::from(start0 > begv.get())));
+                #[cfg(debug_assertions)]
+                {
+                    let (full, _) = parse_state_from_range_core(
+                        buf,
+                        &table,
+                        from,
+                        to,
+                        None,
+                        false,
+                        None,
+                        CommentStopMode::None,
+                        props,
+                        escape_policy,
+                    );
+                    debug_assert_eq!(
+                        (
+                            &state.in_comment,
+                            state.in_comment.map(|_| state.comment_or_string_start)
+                        ),
+                        (
+                            &full.in_comment,
+                            full.in_comment.map(|_| full.comment_or_string_start)
+                        ),
+                        "a parse from safe position {start0} must reach the comment state \
+                         the parse from BEGV reaches at {to}"
+                    );
+                }
+                state
             }
-            // Restart from the last safe position before `to` (BEGV if none),
-            // and extend the index only when parsing past its end.
-            let to0 = (to - 1) as usize;
-            let i = index.points.partition_point(|&p| p < to0);
-            let start0 = if i == 0 {
-                begv.get()
-            } else {
-                index.points[i - 1]
-            };
-            let chunk = back_comment_safe_chunk();
-            let next_target = if i == index.points.len() {
-                start0.saturating_add(chunk)
-            } else {
-                usize::MAX
-            };
-            let (_, to_char) = clamped_parse_range(buf, from, to);
-            let ScanEnd::Finished(ScanFinish { state, .. }) = run_parse_loop(
-                buf,
-                &table,
-                Entry::Fresh {
-                    from_char: start0,
-                    state: PartialParseState::new(),
-                    from_oldstate: false,
-                },
-                to_char,
-                None,
-                false,
-                CommentStopMode::None,
-                props,
-                escape_policy,
-                &mut SafePositionRecorder {
-                    next_target,
-                    chunk,
-                    points: &mut index.points,
-                },
-            ) else {
-                unreachable!("the safe-position recorder never pauses")
-            };
-            buf.put_syntax_safe_positions(index);
-            #[cfg(test)]
-            BACK_COMMENT_SAFE_STARTS.with(|c| c.set(c.get() + usize::from(start0 > begv.get())));
-            #[cfg(debug_assertions)]
-            {
-                let (full, _) = parse_state_from_range_core(
+            None => {
+                parse_state_from_range_core(
                     buf,
                     &table,
                     from,
@@ -5383,36 +5420,9 @@ fn back_comment_reparse(
                     CommentStopMode::None,
                     props,
                     escape_policy,
-                );
-                debug_assert_eq!(
-                    (
-                        &state.in_comment,
-                        state.in_comment.map(|_| state.comment_or_string_start)
-                    ),
-                    (
-                        &full.in_comment,
-                        full.in_comment.map(|_| full.comment_or_string_start)
-                    ),
-                    "a parse from safe position {start0} must reach the comment state \
-                     the parse from BEGV reaches at {to}"
-                );
+                )
+                .0
             }
-            state
-        }
-        None => {
-            parse_state_from_range_core(
-                buf,
-                &table,
-                from,
-                to,
-                None,
-                false,
-                None,
-                CommentStopMode::None,
-                props,
-                escape_policy,
-            )
-            .0
         }
     };
 

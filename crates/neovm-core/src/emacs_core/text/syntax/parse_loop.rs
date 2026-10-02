@@ -134,6 +134,8 @@ pub(super) trait ScanMode {
     /// Whether the scan logs the `syntax-table` property values it reads
     /// ([`DescriptorLog`]), handed to [`Self::descriptors_read`] at the end.
     const RECORD_DESCRIPTORS: bool = false;
+    /// Whether close-level minima are reported to the mode (canonical scans).
+    const TRACK_CLOSES: bool = false;
     /// The first absolute position at which to call [`Self::at_loop_top`].
     fn first_target(&self) -> usize {
         usize::MAX
@@ -142,6 +144,8 @@ pub(super) trait ScanMode {
     fn at_loop_top(&mut self, top: LoopTop<'_>) -> TopAction;
     /// The property values the scan read, when [`Self::RECORD_DESCRIPTORS`].
     fn descriptors_read(&mut self, _log: DescriptorLog) {}
+    /// The depth immediately after a close paren; absent from plain/L1 loops.
+    fn closed(&mut self, _depth: i64) {}
 }
 
 /// No hook: every Lisp `parse-partial-sexp` that needs nothing else.
@@ -700,6 +704,9 @@ pub(super) fn run_parse_loop<M: ScanMode>(
             }
             SyntaxClass::Close => {
                 state.close_level();
+                if M::TRACK_CLOSES {
+                    mode.closed(state.depth);
+                }
                 idx += 1;
                 if target_depth == Some(state.depth) {
                     break;
