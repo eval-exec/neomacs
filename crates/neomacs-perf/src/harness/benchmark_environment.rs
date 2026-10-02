@@ -31,6 +31,8 @@ pub(super) const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     // the experiment then compares a binary against itself and reads as "no
     // effect" rather than as a mistake.
     "NEOMACS_PERF_RELEASE_STARTUP_GC_CEILING",
+    // Optional displayed-buffer sustained fixture; exact `on`, default off.
+    "NEOMACS_PERF_SUSTAINED_VISIBLE",
     // Per-frame layout telemetry (relaid rows, fast-path classification), for
     // attributing an input-latency tail to relayout rather than guessing.
     "NEOMACS_LAYOUT_STATS_FILE",

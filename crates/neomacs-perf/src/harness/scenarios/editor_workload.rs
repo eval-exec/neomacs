@@ -1,6 +1,12 @@
 //! The shared editor-workload scenario family: one elisp fixture
 //! (`fixtures/editor-workloads.el`) driving the nine catalogued workloads
 //! over deterministic sources, with per-scenario phase invariants.
+//!
+//! Fixture-only measurement controls (read once before the selected workload):
+//!
+//! | Knob | Default | Values | Effect |
+//! | --- | --- | --- | --- |
+//! | `NEOMACS_PERF_SUSTAINED_VISIBLE` | `off` | `off`, `on` | Display sustained-editing's temporary buffer; warm EOB before the counter gate, restore windows before killing it, and emit an ON-only visibility proof sidecar. |
 
 use std::collections::BTreeMap;
 use std::fs;
