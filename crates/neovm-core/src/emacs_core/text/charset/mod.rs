@@ -1048,15 +1048,15 @@ impl CharsetRegistry {
 // Singleton registry
 // ---------------------------------------------------------------------------
 
-use std::cell::RefCell;
+use crate::emacs_core::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
 
 thread_local! {
-    static CHARSET_REGISTRY: RefCell<CharsetRegistry> = RefCell::new(CharsetRegistry::new());
+    static CHARSET_REGISTRY: HeapRegistrySlot<CharsetRegistry> = HeapRegistrySlot::new(CharsetRegistry::new());
 }
 
 /// Reset charset registry to default state (called from Context::new).
 pub(crate) fn reset_charset_registry() {
-    CHARSET_REGISTRY.with(|slot| *slot.borrow_mut() = CharsetRegistry::new());
+    CHARSET_REGISTRY.with(|slot| slot.reset(CharsetRegistry::new()));
     if let Ok(mut cache) = charset_map_cache().write() {
         cache.clear();
     }
@@ -1068,18 +1068,35 @@ pub(crate) fn reset_charset_registry() {
 /// and also marks `charset_table[i].attributes` in `mark_charset`.  Neomacs's
 /// Rust-side charset registry stores the plist values directly, so those Lisp
 /// values must be surfaced explicitly as GC roots.
-pub(crate) fn collect_charset_gc_roots(roots: &mut Vec<Value>) {
-    CHARSET_REGISTRY.with(|slot| {
-        let reg = slot.borrow();
-        for info in reg.charsets.values() {
-            if !info.unify_map.is_nil() {
-                roots.push(info.unify_map);
-            }
-            for (_, value) in &info.plist {
-                roots.push(*value);
-            }
+pub(crate) fn collect_charset_gc_roots(roots: &mut Vec<Value>, heap_identity: usize) {
+    let handle = current_charset_registry_handle();
+    if handle.heap_identity() == heap_identity {
+        collect_charset_registry_gc_roots(&handle, roots);
+    }
+}
+
+pub(crate) type CharsetRegistryHandle = HeapRegistryHandle<CharsetRegistry>;
+
+pub(crate) fn current_charset_registry_handle() -> CharsetRegistryHandle {
+    CHARSET_REGISTRY.with(HeapRegistrySlot::current)
+}
+
+pub(crate) fn install_charset_registry_handle(handle: &CharsetRegistryHandle) {
+    CHARSET_REGISTRY.with(|slot| slot.install(handle));
+}
+
+/// Context-owned registries remain roots while another heap is active.
+pub(crate) fn collect_charset_registry_gc_roots(
+    handle: &CharsetRegistryHandle,
+    roots: &mut Vec<Value>,
+) {
+    let registry = handle.borrow();
+    for info in registry.charsets.values() {
+        if !info.unify_map.is_nil() {
+            roots.push(info.unify_map);
         }
-    });
+        roots.extend(info.plist.iter().map(|(_, value)| *value));
+    }
 }
 
 pub(crate) fn snapshot_charset_registry() -> CharsetRegistrySnapshot {
@@ -2707,3 +2724,7 @@ fn classify_string_charsets(ls: &crate::heap_types::LispString) -> Vec<&'static 
 #[cfg(test)]
 #[path = "tests/mod.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/gc_tls_ownership.rs"]
+mod gc_tls_ownership_tests;

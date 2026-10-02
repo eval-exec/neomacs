@@ -2321,6 +2321,8 @@ impl Context {
             cconv_memo: cconv_memo::CconvMemo::from_env(),
             tier_i: tier_i::TierI::from_env(),
             fringe_bitmaps: super::super::builtins::fringe_bitmap::FringeBitmapRegistry::new(),
+            ccl_registry: super::super::ccl::current_ccl_registry_handle(),
+            charset_registry: super::super::charset::current_charset_registry_handle(),
         };
         super::super::runtime_identity::install(&mut ev);
         ev.provide_value(

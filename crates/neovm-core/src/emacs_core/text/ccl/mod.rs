@@ -25,8 +25,8 @@ use super::value::*;
 use crate::emacs_core::SymId;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
+use crate::emacs_core::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
 use std::cell::Cell;
-use std::cell::RefCell;
 use std::collections::HashMap;
 
 fn is_integer(value: &Value) -> bool {
@@ -53,7 +53,7 @@ fn is_valid_ccl_program(program: &Value) -> bool {
 }
 
 #[derive(Default)]
-struct CclRegistry {
+pub(crate) struct CclRegistry {
     programs: HashMap<SymId, (i64, Value)>,
     code_conversion_maps: HashMap<SymId, (i64, Value)>,
     /// Integer-to-integer tables for `lookup-integer` / `lookup-character`
@@ -138,16 +138,25 @@ thread_local! {
 /// the translation vectors `define-translation-hash-table` fills.
 pub(crate) fn with_ccl_obarray<R>(obarray: &super::symbol::Obarray, body: impl FnOnce() -> R) -> R {
     CCL_OBARRAY.with(|cell| {
-        let previous = cell.get();
-        cell.set(obarray as *const super::symbol::Obarray);
-        let result = body();
-        cell.set(previous);
-        result
+        struct RestoreObarray<'a> {
+            cell: &'a Cell<*const super::symbol::Obarray>,
+            previous: *const super::symbol::Obarray,
+        }
+        impl Drop for RestoreObarray<'_> {
+            fn drop(&mut self) {
+                self.cell.set(self.previous);
+            }
+        }
+        let _restore = RestoreObarray {
+            cell,
+            previous: cell.replace(obarray as *const super::symbol::Obarray),
+        };
+        body()
     })
 }
 
 thread_local! {
-    static CCL_REGISTRY: RefCell<CclRegistry> = RefCell::new(CclRegistry::with_defaults());
+    static CCL_REGISTRY: HeapRegistrySlot<CclRegistry> = HeapRegistrySlot::new(CclRegistry::with_defaults());
 }
 
 fn with_ccl_registry<R>(f: impl FnOnce(&CclRegistry) -> R) -> R {
@@ -158,22 +167,39 @@ fn with_ccl_registry_mut<R>(f: impl FnOnce(&mut CclRegistry) -> R) -> R {
     CCL_REGISTRY.with(|r| f(&mut r.borrow_mut()))
 }
 
-/// Reset the CCL registry to its initial state.
-pub(crate) fn reset_ccl_registry() {
-    CCL_REGISTRY.with(|r| *r.borrow_mut() = CclRegistry::with_defaults());
+pub(crate) type CclRegistryHandle = HeapRegistryHandle<CclRegistry>;
+
+pub(crate) fn current_ccl_registry_handle() -> CclRegistryHandle {
+    CCL_REGISTRY.with(HeapRegistrySlot::current)
 }
 
-/// Collect GC roots from the CCL registry.
-pub(crate) fn collect_ccl_gc_roots(roots: &mut Vec<Value>) {
-    CCL_REGISTRY.with(|r| {
-        let reg = r.borrow();
-        for (_, v) in reg.programs.values() {
-            roots.push(*v);
-        }
-        for (_, v) in reg.code_conversion_maps.values() {
-            roots.push(*v);
-        }
-    });
+pub(crate) fn install_ccl_registry_handle(handle: &CclRegistryHandle) {
+    CCL_REGISTRY.with(|slot| slot.install(handle));
+}
+
+/// Reset the active heap's registry without losing another Context's state.
+pub(crate) fn reset_ccl_registry() {
+    CCL_REGISTRY.with(|slot| slot.reset(CclRegistry::with_defaults()));
+}
+
+/// Trace a Context's registry even when another heap is installed on this thread.
+pub(crate) fn collect_ccl_registry_gc_roots(handle: &CclRegistryHandle, roots: &mut Vec<Value>) {
+    let registry = handle.borrow();
+    roots.extend(registry.programs.values().map(|(_, value)| *value));
+    roots.extend(
+        registry
+            .code_conversion_maps
+            .values()
+            .map(|(_, value)| *value),
+    );
+}
+
+/// Collect roots only when the installed registry belongs to the collecting heap.
+pub(crate) fn collect_ccl_gc_roots(roots: &mut Vec<Value>, heap_identity: usize) {
+    let handle = current_ccl_registry_handle();
+    if handle.heap_identity() == heap_identity {
+        collect_ccl_registry_gc_roots(&handle, roots);
+    }
 }
 
 pub(crate) fn unregister_registered_ccl_program(name: SymId) {
@@ -1488,3 +1514,7 @@ pub(crate) fn builtin_register_code_conversion_map_impl(args: Vec<Value>) -> Eva
 #[cfg(test)]
 #[path = "tests/mod.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/gc_tls_ownership.rs"]
+mod gc_tls_ownership_tests;

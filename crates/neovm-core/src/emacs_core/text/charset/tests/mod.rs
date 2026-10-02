@@ -425,7 +425,10 @@ fn define_charset_internal_keeps_symbol_plist_keys_and_roots_unify_map_value() {
     });
 
     let mut roots = Vec::new();
-    collect_charset_gc_roots(&mut roots);
+    collect_charset_gc_roots(
+        &mut roots,
+        current_charset_registry_handle().heap_identity(),
+    );
     assert!(roots.contains(&unify_map));
 }
 

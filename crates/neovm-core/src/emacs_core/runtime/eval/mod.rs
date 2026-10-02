@@ -2328,18 +2328,6 @@ fn collect_thread_local_gc_roots(
     );
     collect_group(
         roots,
-        "charset-thread-local",
-        stats,
-        super::charset::collect_charset_gc_roots,
-    );
-    collect_group(
-        roots,
-        "ccl-thread-local",
-        stats,
-        super::ccl::collect_ccl_gc_roots,
-    );
-    collect_group(
-        roots,
         "dynamic-module-thread-local",
         stats,
         super::dynamic_module::collect_dynamic_module_gc_roots,
@@ -3635,6 +3623,9 @@ pub struct Context {
     /// User-defined fringe bitmaps registered via `define-fringe-bitmap`.
     /// GC-safe: holds no raw `Value`s (bits are `Vec<u16>`, faces are names).
     pub(crate) fringe_bitmaps: super::builtins::fringe_bitmap::FringeBitmapRegistry,
+    // Semantic registries belong to this heap; TLS only selects an active view.
+    pub(crate) ccl_registry: super::ccl::CclRegistryHandle,
+    pub(crate) charset_registry: super::charset::CharsetRegistryHandle,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
