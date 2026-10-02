@@ -11,6 +11,8 @@ pub(super) enum GenerationCycle {
 
 pub(super) struct GenState {
     pub(super) enabled: bool,
+    /// Constructor-frozen verification; inactive even if requested with GEN0.
+    pub(super) verify: bool,
     pub(super) cycle: GenerationCycle,
     /// Full scope lasts until every deferred sweep cursor completes.
     pub(super) major_in_progress: bool,
@@ -32,6 +34,7 @@ impl GenState {
     pub(super) fn new(enabled: bool) -> Self {
         Self {
             enabled,
+            verify: enabled && std::env::var("NEOVM_GC_VERIFY_GENERATIONAL").as_deref() == Ok("1"),
             cycle: GenerationCycle::Major,
             major_in_progress: false,
             old_sweep_pending: std::ptr::null_mut(),
@@ -239,6 +242,12 @@ impl TaggedHeap {
     pub(super) fn promote_survivors_world_stopped(&mut self) {
         if !self.generational.enabled {
             return;
+        }
+        if self.is_minor_collection() && self.generational.verify {
+            // Every mutator is stopped and the weak/finalizer fixpoints are
+            // complete. Check before promotion could hide a missing mark and
+            // before any sweep can reclaim the missed young child.
+            self.verify_dump_partition();
         }
         let partition_first = self.partition_dump && !self.dump_blackened;
         let mut headers = std::mem::take(&mut self.generational.promo);

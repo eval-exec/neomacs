@@ -89,7 +89,12 @@ impl TaggedHeap {
             && self.dump_blackened
             && std::env::var("NEOVM_GC_VERIFY_PARTITION").as_deref() == Ok("1")
         {
-            self.verify_dump_partition();
+            // Verified minors run this same old-owner walk at the promotion
+            // boundary below. No mutator or Lisp allocation intervenes, so
+            // retain one complete walk, plus the distinct tricolor check.
+            if !self.generational.verify || !self.is_minor_collection() {
+                self.verify_dump_partition();
+            }
             self.verify_incremental_tricolor();
         }
         // The generation census reads the final marks before the sweep

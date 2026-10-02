@@ -930,12 +930,15 @@ impl TaggedHeap {
         true
     }
 
-    /// Verification gate for the dump partition (env `NEOVM_GC_VERIFY_PARTITION`).
-    /// After the partitioned mark, every direct heap child of every dumped
-    /// object MUST already be marked — otherwise the write barrier missed a
-    /// dumped→heap mutation and the partition is about to free a live object.
-    /// Panics on the first violation. Expensive (full dump scan); verification
-    /// runs only.
+    /// Verify mapped/permanent owners and ordinary-old cons, Box and arena
+    /// owners. Used by VERIFY_PARTITION and independently at each verified
+    /// minor's termination, before promotion or sweep. Every direct child
+    /// must be live according to this cycle's mark/generation predicate.
+    /// All mutators are stopped: these temporary Rust Value containers cannot
+    /// reach a Lisp allocation or safepoint while enumerating their children.
+    /// Bare-symbol side-table liveness and runtime roots need separate tests.
+    #[cold]
+    #[inline(never)]
     pub(super) fn verify_dump_partition(&mut self) {
         debug_assert!(!self.alloc_regions_open(), "verifier with an open region");
         let mut violations: std::collections::BTreeMap<String, usize> =
@@ -1031,7 +1034,13 @@ impl TaggedHeap {
                 continue;
             }
             let kind = unsafe { (*header).kind };
-            let owner = format!("tenured:{kind:?}");
+            let owner = if kind == HeapObjectKind::VecLike {
+                format!("tenured:{:?}@{header:p}", unsafe {
+                    (*(header as *const VecLikeHeader)).type_tag
+                })
+            } else {
+                format!("tenured:{kind:?}@{header:p}")
+            };
             let children: Vec<TaggedValue> = self.heap_object_children(header);
             for child in children {
                 if child.is_heap_object() && !self.is_value_marked(child) {
@@ -1052,7 +1061,13 @@ impl TaggedHeap {
                 continue;
             }
             let kind = unsafe { (*header).kind };
-            let owner = format!("tenured-page:{kind:?}");
+            let owner = if kind == HeapObjectKind::VecLike {
+                format!("tenured-page:{:?}@{header:p}", unsafe {
+                    (*(header as *const VecLikeHeader)).type_tag
+                })
+            } else {
+                format!("tenured-page:{kind:?}@{header:p}")
+            };
             for child in self.heap_object_children(header) {
                 if child.is_heap_object() && !self.is_value_marked(child) {
                     record(&owner, child);
@@ -1083,13 +1098,13 @@ impl TaggedHeap {
 
         if !violations.is_empty() {
             let total: usize = violations.values().sum();
-            eprintln!("DUMP_PARTITION_VIOLATIONS total={total}");
+            tracing::error!(total, "DUMP_PARTITION_VIOLATIONS");
             for (k, n) in &violations {
-                eprintln!("  {n:>6}  {k}");
+                tracing::error!(count = n, edge = %k, "DUMP_PARTITION_VIOLATION");
             }
             panic!(
-                "dump-partition verification: {total} unmarked heap children of mapped objects \
-                 (sample value={:#x}) — write barrier missed dumped->heap mutations (UAF risk). \
+                "dump-partition verification: {total} unmarked heap children of mapped, permanent or old objects \
+                 (sample value={:#x}, edges={violations:?}) — write barrier missed an owner mutation (UAF risk). \
                  See DUMP_PARTITION_VIOLATIONS above.",
                 sample.unwrap_or(0)
             );
@@ -1804,7 +1819,12 @@ impl TaggedHeap {
             && self.dump_blackened
             && std::env::var("NEOVM_GC_VERIFY_PARTITION").as_deref() == Ok("1")
         {
-            self.verify_dump_partition();
+            // The generational minor's promotion boundary below performs
+            // this complete walk. Nothing can publish a new edge between
+            // here and that boundary; avoid walking the same graph twice.
+            if !self.generational.verify || !self.is_minor_collection() {
+                self.verify_dump_partition();
+            }
             // Incremental marking adds young-black->young-white as a possible
             // failure mode (a missed write-barrier owner). Check it too.
             self.verify_incremental_tricolor();

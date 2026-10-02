@@ -126,29 +126,34 @@ fn a_float_crossing_a_block_edge_into_a_cold_add1_is_not_treated_as_a_fixnum() {
 /// GNU 31.1 byte-compile; constants [1.0 0.0 0 nil 1.0000001].
 #[test]
 fn an_osr_entered_float_loop_is_compiled_with_its_numeric_feedback() {
+    // The arglist factory allocates conses as well as these float constants.
+    // Construct them in the collecting Context's heap, not a fallback heap.
+    let mut ev = Context::new();
+    let roots = ev.save_specpdl_roots();
+    let one = Value::make_float(1.0);
+    ev.push_specpdl_root(one);
+    let zero = Value::make_float(0.0);
+    ev.push_specpdl_root(zero);
+    let multiplier = Value::make_float(1.0000001);
+    ev.push_specpdl_root(multiplier);
     let bytes: [u8; 27] = [
         192, 193, 194, 137, 4, 87, 131, 25, 0, 195, 3, 196, 95, 178, 4, 2, 4, 92, 178, 3, 136, 84,
         130, 3, 0, 136, 135,
     ];
-    let mut constants = vec![
-        Value::make_float(1.0),
-        Value::make_float(0.0),
-        Value::make_int(0),
-        Value::NIL,
-        Value::make_float(1.0000001),
-    ];
+    let mut constants = vec![one, zero, Value::make_int(0), Value::NIL, multiplier];
     let ops = decode_gnu_bytecode(&bytes, &mut constants).expect("GNU bytecode decodes");
     let mut f = ByteCodeFunction::new(parse_arglist_descriptor(257));
+    ev.push_specpdl_root(f.arglist);
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
     f.max_stack = 7;
-    let mut ev = Context::new();
     let f = Value::make_bytecode(f);
     let ValueKind::Symbol(id) = Value::symbol("osr-float-loop-probe").kind() else {
         panic!("symbol")
     };
     ev.obarray.set_symbol_function_id(id, f);
+    ev.restore_specpdl_roots(roots);
     let bc = f.get_bytecode_data().expect("bytecode");
     assert!(
         bc.jit_runtime().wants_numeric_feedback(),

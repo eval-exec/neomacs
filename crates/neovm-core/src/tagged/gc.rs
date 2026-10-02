@@ -2745,6 +2745,9 @@ pub(crate) mod fake_image;
 #[path = "gc/tests/generation_tests.rs"]
 mod generation_tests;
 #[cfg(test)]
+#[path = "gc/tests/generational_verifier_tests.rs"]
+mod generational_verifier_tests;
+#[cfg(test)]
 #[path = "gc/tests/marker_arena_tests.rs"]
 mod marker_arena_tests;
 /// Record and closure slot stores are atomic: race-free against an atomic
