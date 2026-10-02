@@ -6775,7 +6775,7 @@ fn fuzz_varset_bodies_match_interpreter_state() {
 #[test]
 fn disarmed_spec_slot_never_arms_and_does_not_rearm() {
     use crate::emacs_core::eval::Context;
-    let ev = Context::new();
+    let mut ev = Context::new();
     // Control precondition: no compiler function overrides active (else the
     // helper returns false regardless — the assumption the control relies on).
     assert!(
@@ -6797,7 +6797,7 @@ fn disarmed_spec_slot_never_arms_and_does_not_rearm() {
     // Even though (sym, expected) MATCHES the live binding, the DISARMED
     // sentinel forces `false` and leaves the epoch untouched (no re-arm).
     assert!(
-        !subr_spec_armed(&ev, car.0 as i64, expected, &disarmed),
+        !subr_spec_armed(&mut ev, car.0 as i64, expected, &disarmed),
         "a DISARMED slot must report not-armed"
     );
     assert_eq!(
@@ -6811,7 +6811,7 @@ fn disarmed_spec_slot_never_arms_and_does_not_rearm() {
     // the live epoch and returns true because `expected` matches the cell.)
     let fresh = SpecSlot::at_epoch(0);
     assert!(
-        subr_spec_armed(&ev, car.0 as i64, expected, &fresh),
+        subr_spec_armed(&mut ev, car.0 as i64, expected, &fresh),
         "control: a matching live binding arms a non-disarmed slot"
     );
 }

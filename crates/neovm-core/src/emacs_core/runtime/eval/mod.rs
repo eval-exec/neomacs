@@ -3127,8 +3127,9 @@ pub struct Context {
     /// The attention word (`attention.rs`): one bit per input a safe point
     /// or a speculated call site must look at.  Derived from `quit_flag`,
     /// `throw_on_input`, `compiler_function_overrides_active` and the
-    /// force-slow-spec harness, and written ONLY by `refresh_attention` and
-    /// the constructors; compiled code reads it at `CONTEXT_ATTENTION_OFFSET`.
+    /// force-slow-spec harness and callback census, and written ONLY by
+    /// `refresh_attention` and the constructors; compiled code reads it at
+    /// `CONTEXT_ATTENTION_OFFSET`.
     attention: u32,
     /// Nonzero while `unbind_to` is running unwind cleanup forms.
     ///

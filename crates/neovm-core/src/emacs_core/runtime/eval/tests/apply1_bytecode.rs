@@ -9,7 +9,9 @@
 use crate::emacs_core::bytecode::ByteCodeFunction;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::error::Flow;
-use crate::emacs_core::eval::{Context, LispArgVec};
+use crate::emacs_core::eval::{
+    Context, LispArgVec, push_scratch_gc_roots, restore_scratch_gc_roots, save_scratch_gc_roots,
+};
 use crate::emacs_core::intern::SymId;
 use crate::emacs_core::jit::cache;
 use crate::emacs_core::print::print_value;
@@ -124,11 +126,16 @@ fn apply1_unwinds_its_frame_on_a_signal() {
     assert_eq!(outcome(ev.apply1(func, cons)), "7", "armed");
     let depth = ev.depth;
     let specpdl = ev.specpdl.len();
+    let scratch_base = save_scratch_gc_roots();
+    push_scratch_gc_roots(&[cons, func]);
+    let caller_roots = save_scratch_gc_roots();
     assert_eq!(
         outcome(ev.apply1(func, Value::make_int(5))),
         "signal wrong-type-argument [\"listp\", \"5\"]"
     );
     assert_eq!((ev.depth, ev.specpdl.len()), (depth, specpdl));
+    assert_eq!(save_scratch_gc_roots(), caller_roots);
+    restore_scratch_gc_roots(scratch_base);
 }
 
 /// End to end through the map builtins.

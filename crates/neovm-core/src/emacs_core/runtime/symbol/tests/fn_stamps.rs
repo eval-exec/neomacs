@@ -317,6 +317,46 @@ fn a_clone_keeps_stamps_and_floor() {
     assert!(copy.fn_unchanged_since(a, raised));
 }
 
+/// Exclusive guards and shared publication readers agree, while independently
+/// owned mutators advance a deep clone's clock and bindings separately.
+#[cfg(feature = "jit")]
+#[test]
+fn exclusive_clock_reads_preserve_publication_and_owned_clone_independence() {
+    crate::test_utils::init_test_tracing();
+    let _on = StampsOn::new();
+    let mut ob = Obarray::new();
+    let sym = intern("neovm--fs-exclusive-clock");
+    ob.set_symbol_function_id(sym, Value::fixnum(1));
+    let before_floor = ob.function_epoch_exclusive();
+    assert_eq!(before_floor, ob.function_epoch());
+    ob.invalidate_all_function_bindings(FunctionEpochBump::SubrRewrite);
+    let published = ob.function_epoch_exclusive();
+    assert_eq!(published, ob.function_epoch());
+    assert!(!ob.fn_unchanged_since(sym, before_floor));
+    assert!(ob.fn_unchanged_since(sym, published));
+    let mut copy = ob.clone();
+    let start = std::sync::Barrier::new(2);
+    std::thread::scope(|scope| {
+        let original = scope.spawn(|| {
+            start.wait();
+            ob.set_symbol_function_id(sym, Value::fixnum(2));
+            ob.set_symbol_function_id(sym, Value::fixnum(3));
+            assert_eq!(ob.function_epoch_exclusive(), ob.function_epoch());
+        });
+        let cloned = scope.spawn(|| {
+            start.wait();
+            copy.set_symbol_function_id(sym, Value::fixnum(4));
+            assert_eq!(copy.function_epoch_exclusive(), copy.function_epoch());
+        });
+        original.join().expect("original mutator");
+        cloned.join().expect("clone mutator");
+    });
+    assert_eq!(ob.function_epoch_exclusive(), published + 2);
+    assert_eq!(copy.function_epoch_exclusive(), published + 1);
+    assert_eq!(ob.symbol_function_id(sym), Some(Value::fixnum(3)));
+    assert_eq!(copy.symbol_function_id(sym), Some(Value::fixnum(4)));
+}
+
 /// A restored image's cells were written without stamps: nothing validated
 /// before the restored clock is proven through them.
 #[test]

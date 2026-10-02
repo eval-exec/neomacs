@@ -37,10 +37,11 @@ enum CensusMode {
 
 static ENABLED: AtomicU8 = AtomicU8::new(CensusMode::Unread as u8);
 
-/// One predictable flag read on the callback path, with the environment
-/// lookup outlined so the off path remains small.
+/// Process configuration used when deriving each mutator's attention word.
+/// Callback entry shares the existing quit guard; it reads this flag again
+/// only on the cold path. The environment lookup stays out of line.
 #[inline(always)]
-fn enabled() -> bool {
+pub(crate) fn enabled() -> bool {
     #[cfg(test)]
     if let Some(on) = FORCE_ENABLED.with(std::cell::Cell::get) {
         return on;
@@ -170,8 +171,9 @@ pub(crate) fn note_compile_outcome(
 
 /// Count every entry to the bytecode callback protocol, before quit,
 /// depth, GC and debugger checks. This is an entry census, including
-/// callbacks those checks prevent from executing. With the knob off the
-/// inline wrapper is one flag test; all counting stays out of line.
+/// callbacks those checks prevent from executing. Callback entry reaches
+/// this wrapper only through its cold attention path; all counting stays
+/// out of line.
 #[inline(always)]
 pub(crate) fn note_callback(function: Value) {
     if enabled() {

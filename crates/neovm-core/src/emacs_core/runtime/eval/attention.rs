@@ -49,6 +49,10 @@ pub(crate) enum AttentionBit {
     /// speculated call site re-validates its binding on every call
     /// (process-constant; never set in a production run).
     ForceSlowSpec = 1 << 3,
+    /// The process-constant callback census. Only bytecode callback entry
+    /// includes this bit; ordinary quit polls and compiled guards ignore it.
+    #[cfg(feature = "jit")]
+    InlineCensus = 1 << 4,
 }
 
 /// Which [`AttentionBit`]s a particular safe point or call gate must see
@@ -61,6 +65,11 @@ impl AttentionMask {
     /// poll `throw-on-input` needs here.
     pub(crate) const QUIT: Self =
         Self(AttentionBit::QuitFlag as u32 | AttentionBit::ThrowOnInput as u32);
+
+    /// Bytecode callback entry: census recording precedes the quit poll.
+    /// Sharing its guard avoids an extra flag load on every mapped element.
+    #[cfg(feature = "jit")]
+    pub(crate) const CALLBACK_ENTRY: Self = Self(Self::QUIT.0 | AttentionBit::InlineCensus as u32);
 
     /// `neovm_jit_call_spec`'s gate: the quit poll it makes first, plus the
     /// force harness, which sends every call to the re-validating slow half.
@@ -111,6 +120,10 @@ pub(super) fn attention_of(quit_flag: Value, throw_on_input: Value, overrides: b
     if crate::emacs_core::jit::compile::jit_force_slow_spec() {
         word |= AttentionBit::ForceSlowSpec as u32;
     }
+    #[cfg(feature = "jit")]
+    if crate::emacs_core::jit::stats::inline_census::enabled() {
+        word |= AttentionBit::InlineCensus as u32;
+    }
     word
 }
 
@@ -119,7 +132,8 @@ impl Context {
     /// Every writer of `quit_flag`, `throw_on_input` and
     /// `compiler_function_overrides_active` calls this
     /// (`sync_cached_runtime_binding_by_id`, `set_quit_flag_value`); the
-    /// constructors initialize the word from the same inputs.
+    /// constructors initialize the word from the same inputs. Process knobs
+    /// (force-slow-spec and the callback census) are derived here as well.
     #[inline]
     pub(super) fn refresh_attention(&mut self) {
         self.attention = attention_of(
@@ -181,7 +195,8 @@ impl Context {
     }
 
     /// Re-derive the word after a test flipped the force harness's
-    /// thread-local override (`jit::compile::force_slow_spec_for_test`).
+    /// thread-local override (`jit::compile::force_slow_spec_for_test`), or
+    /// the callback census's scalar test override.
     #[cfg(test)]
     pub(crate) fn refresh_attention_for_test(&mut self) {
         self.refresh_attention();

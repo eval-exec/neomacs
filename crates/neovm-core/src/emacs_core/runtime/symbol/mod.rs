@@ -4931,6 +4931,18 @@ impl Obarray {
         self.function_epoch.load(Ordering::Acquire)
     }
 
+    /// Read the publication clock while this obarray is exclusively owned.
+    /// The mutable borrow excludes concurrent clock readers as well as writers;
+    /// independent mutators may own separate obarrays (clones have fresh clocks).
+    /// Shared readers must use `function_epoch` and its Acquire ordering instead.
+    /// Return a copy so no clock borrow survives native re-entry. Keeping this
+    /// load ordinary lets the warmed JIT guard fold it into its comparison.
+    #[cfg(feature = "jit")]
+    #[inline]
+    pub(crate) fn function_epoch_exclusive(&mut self) -> u64 {
+        *self.function_epoch.get_mut()
+    }
+
     /// Test-only: set `function_epoch` (the wrap-skip tests).
     #[cfg(test)]
     pub(crate) fn set_function_epoch_for_test(&mut self, epoch: u64) {

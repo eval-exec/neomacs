@@ -1068,7 +1068,7 @@ pub extern "C" fn neovm_jit_call_spec(
     let direct_consts = slot_ref.direct_consts.load(Ordering::Relaxed);
     if direct_consts != 0
         && ctx_ref.attention_clear(AttentionMask::SPEC_CALL)
-        && slot_ref.epoch.load(Ordering::Relaxed) == ctx_ref.obarray.function_epoch()
+        && slot_ref.epoch.load(Ordering::Relaxed) == ctx_ref.obarray.function_epoch_exclusive()
         && !ctx_ref.debug_on_next_call_is_armed()
         && ctx_ref.depth < ctx_ref.max_depth
     {
@@ -1615,9 +1615,9 @@ pub(crate) fn arith_intrinsic_op_by_name(name: &str, nargs: usize) -> Option<u8>
 /// no force, and an equal epoch. Every other state runs the reference body
 /// unchanged.
 #[inline(always)]
-pub(crate) fn subr_spec_armed(ctx: &Context, sym: i64, expected: i64, slot: &SpecSlot) -> bool {
+pub(crate) fn subr_spec_armed(ctx: &mut Context, sym: i64, expected: i64, slot: &SpecSlot) -> bool {
     if ctx.attention_word_clear(AttentionMask::SUBR_ARMING)
-        && slot.epoch.load(Ordering::Relaxed) == ctx.obarray.function_epoch()
+        && slot.epoch.load(Ordering::Relaxed) == ctx.obarray.function_epoch_exclusive()
     {
         return true;
     }
@@ -1912,7 +1912,7 @@ pub extern "C" fn neovm_jit_call_subr_spec(
         // answer), and take the direct fixed-arity call -- so this does.
         // Every other state runs that sequence verbatim.
         if ctx.attention_clear(AttentionMask::SPEC_SUBR)
-            && slot.epoch.load(Ordering::Relaxed) == ctx.obarray.function_epoch()
+            && slot.epoch.load(Ordering::Relaxed) == ctx.obarray.function_epoch_exclusive()
             && !ctx.debug_on_next_call_is_armed()
         {
             #[cfg(debug_assertions)]

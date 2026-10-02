@@ -8,6 +8,17 @@ use super::*;
 cached_symbol_id!(optional_arg_symbol, "&optional");
 cached_symbol_id!(rest_arg_symbol, "&rest");
 
+/// Restore only this synchronous callback's failed native activation. Its
+/// saved prefix belongs to the current mutator thread's existing scratch roots;
+/// no root snapshot crosses threads. Keep the TLS address and borrow machinery
+/// out of the successful callback's live state across the native entry.
+#[cfg(feature = "jit")]
+#[cold]
+#[inline(never)]
+fn restore_failed_callback_roots(saved_len: usize) {
+    restore_scratch_gc_roots(saved_len);
+}
+
 impl Context {
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     pub(super) fn make_interpreted_closure_with_expr_runtime_hook(
@@ -2391,8 +2402,9 @@ impl Context {
 
     #[cfg(feature = "jit")]
     fn apply1_bytecode(&mut self, function: Value, arg0: Value) -> EvalResult {
-        crate::emacs_core::jit::stats::inline_census::note_callback(function);
-        self.maybe_quit_before_gc()?;
+        if !self.attention_clear(super::AttentionMask::CALLBACK_ENTRY) {
+            self.apply1_bytecode_entry_slow(function)?;
+        }
         self.enter_interpreted_eval_depth()?;
         let bt_count = self.specpdl.len();
         self.push_backtrace_frame(function, std::slice::from_ref(&arg0));
@@ -2424,6 +2436,17 @@ impl Context {
         };
         self.depth -= 1;
         self.finish_traced_call(bt_count, result)
+    }
+
+    /// Census and quit share the callback's existing attention test. Keep
+    /// the diagnostic call edge out of the hot body: even a disabled census
+    /// used to add ten instructions per mapped callback through spills.
+    #[cfg(feature = "jit")]
+    #[cold]
+    #[inline(never)]
+    fn apply1_bytecode_entry_slow(&mut self, function: Value) -> Result<(), Flow> {
+        crate::emacs_core::jit::stats::inline_census::note_callback(function);
+        self.maybe_quit_before_gc()
     }
 
     /// [`Self::apply1_bytecode`]'s call at a depth that probes the native
@@ -2498,7 +2521,7 @@ impl Context {
                     // A shim panic contained in a direct-call leaf that
                     // published no leaf bases arms no root sweep; its dead
                     // scratch-root pushes end here, as the scope did.
-                    restore_scratch_gc_roots(saved_roots);
+                    restore_failed_callback_roots(saved_roots);
                     Err(flow)
                 }
             };

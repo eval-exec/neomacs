@@ -132,6 +132,50 @@ fn inline_census_callbacks_are_opt_in_and_share_source_identity() {
     FORCE_ENABLED.with(|on| on.set(None));
 }
 
+/// Entry counting precedes quit and depth checks, and survives refreshes of
+/// the calling mutator's attention word. Ordinary quit polls stay clear.
+#[test]
+fn inline_census_callback_entries_include_quit_and_depth_refusals() {
+    use crate::emacs_core::error::Flow;
+
+    FORCE_ENABLED.with(|on| on.set(Some(true)));
+    let mut ev = Context::new();
+    let _roots = ev.save_vm_roots();
+    let f = function(1, vec![Op::StackRef(0), Op::Return], vec![]);
+    let source = f.source_id;
+    let target = Value::make_bytecode(f);
+    ev.push_vm_frame_root(target);
+    assert!(ev.maybe_quit_hot_ok());
+    assert_eq!(ev.apply1(target, Value::T).unwrap(), Value::T);
+    assert_eq!(snapshot().callbacks[&source].count, 1);
+
+    ev.set_quit_flag_value(Value::T);
+    assert!(matches!(
+        ev.apply1(target, Value::NIL),
+        Err(Flow::Signal(signal)) if signal.symbol_name() == "quit"
+    ));
+    assert_eq!(snapshot().callbacks[&source].count, 2);
+    ev.set_quit_flag_value(Value::NIL);
+    assert!(ev.maybe_quit_hot_ok());
+    assert_eq!(ev.apply1(target, Value::T).unwrap(), Value::T);
+    assert_eq!(snapshot().callbacks[&source].count, 3);
+
+    ev.depth = ev.max_depth;
+    assert!(matches!(
+        ev.apply1(target, Value::NIL),
+        Err(Flow::Signal(signal)) if signal.symbol_name() == "excessive-lisp-nesting"
+    ));
+    assert_eq!(snapshot().callbacks[&source].count, 4);
+    ev.depth = 0;
+
+    FORCE_ENABLED.with(|on| on.set(Some(false)));
+    ev.refresh_attention_for_test();
+    assert_eq!(ev.apply1(target, Value::T).unwrap(), Value::T);
+    assert_eq!(snapshot().callbacks[&source].count, 4);
+    FORCE_ENABLED.with(|on| on.set(None));
+    ev.refresh_attention_for_test();
+}
+
 /// A recompile refreshes cold-target feedback, while a profitability
 /// refusal keeps the source out of the compiled-leaf candidate totals.
 #[test]
