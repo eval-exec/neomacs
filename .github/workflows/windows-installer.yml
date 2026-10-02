@@ -82,17 +82,33 @@ jobs:
         shell: powershell
         run: Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files (x86)\NSIS"
 
+      - name: Build Windows launcher tests
+        shell: bash
+        env:
+          NEOMACS_BUILD_PROFILE: release
+        run: |
+          cargo nextest list -p neomacs --cargo-profile release --features windows-tools --test windows_launcher \
+            --list-type binaries-only --message-format json > "$RUNNER_TEMP/launcher-binaries.json"
+          cargo metadata --format-version 1 --features windows-tools > "$RUNNER_TEMP/launcher-cargo.json"
+
       - name: Run fresh build
         shell: bash
         timeout-minutes: 150
         run: |
           cargo xtask fresh-build --release
+          sha256sum target/release/neomacs.exe target/release/neomacs.pdump \
+            target/release/runneomacs.exe target/release/cmdproxy.exe > "$RUNNER_TEMP/launcher-runtime.sha256"
 
       - name: Test Windows launcher
         shell: bash
         env:
           NEOMACS_BUILD_PROFILE: release
-        run: cargo nextest run -p neomacs --cargo-profile release --features windows-tools --test windows_launcher
+        run: |
+          # fresh-build patches the editor and generates its matching dump.
+          # Reuse the compiled tests: another Cargo build can undo that patch.
+          cargo nextest run --binaries-metadata "$RUNNER_TEMP/launcher-binaries.json" \
+            --cargo-metadata "$RUNNER_TEMP/launcher-cargo.json"
+          sha256sum --check "$RUNNER_TEMP/launcher-runtime.sha256"
 
       - name: GUI smoke (launch, frame snapshot, PNG readback)
         shell: bash
