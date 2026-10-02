@@ -1384,7 +1384,7 @@ impl CompiledLeaf {
         // as the cleanup limit; the suspended VM owns final frame cleanup.
         let bind_frame = if OSR {
             osr_bind_frame
-        } else if self.has_binds {
+        } else if self.has_binds || !self.chains.is_empty() {
             debug_assert!(!vmctx.is_null(), "binding bodies require a Context");
             // SAFETY: the vmctx contract (dormant seam-provided Context); only
             // a length read here.
@@ -1491,7 +1491,19 @@ impl CompiledLeaf {
             PENDING_ROOT_SWEEP_FLOOR.with(|f| f.set(None));
         }
         if status == STATUS_DEOPT_AT {
-            return self.deopt_at_outcome(vmctx, bind_frame, cond_base);
+            let outcome = self.deopt_at_outcome(vmctx, bind_frame, cond_base);
+            if matches!(outcome, NativeRun::Signal)
+                && let Some(bases) = &bases
+            {
+                // Invalid metadata has already unwound physical bindings.
+                // A HOF producer also owns an eager map depth and root frame;
+                // restore those against this activation's entry snapshot.
+                unsafe {
+                    (*(vmctx as *mut Context))
+                        .restore_jit_shim_boundary(&bases.snap, bases.snap.condition_len());
+                }
+            }
+            return outcome;
         }
         // A body that made dynamic bindings has normally unbound every one
         // of them itself (`Op::Unbind` before its return), so its frame exit
@@ -1620,9 +1632,7 @@ impl CompiledLeaf {
             };
             if let Some(site) = chain {
                 let ctx = unsafe { &mut *(vmctx as *mut Context) };
-                let readback = if self.obs.osr_pc.is_some() {
-                    Err(super::super::vframe::ChainReadError::Osr)
-                } else if handlers != 0 {
+                let readback = if handlers != 0 {
                     Err(super::super::vframe::ChainReadError::ActiveHandlers)
                 } else {
                     self.chains

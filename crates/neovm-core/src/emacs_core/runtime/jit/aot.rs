@@ -113,7 +113,8 @@ pub(crate) const ABI_TAG: u32 = compute_abi_tag();
 // v21: shaped direct-call fallback and call census extend the gated, ABI-salted shim set.
 // v22: the gated census group adds the counted spec-entry shim.
 // v23: framed direct calls add a contained memory-call shim in their own gated group.
-const ABI_TAG_VERSION: u32 = 23;
+// v24: static closure and list-HOF chains add six gated mapping shims and activation metadata.
+const ABI_TAG_VERSION: u32 = 24;
 
 /// Format version of the AOT descriptor spec-section + the runtime spec ABI
 /// (`SpecSlot`/`spec_expected` sidecar bases, the loader re-classify+arm protocol).

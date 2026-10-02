@@ -7,8 +7,8 @@ use crate::emacs_core::bytecode::vm::{ChainFrame, InlinedChainFrame};
 use crate::emacs_core::jit::reopt::{DeoptEvent, LeafOrigin};
 
 /// Classify a chain guard against its innermost source while retiring the
-/// physical leaf, then transfer every frame's state into Tier-0. No producer
-/// exists yet; an ordinary deopt keeps the existing single-frame behavior.
+/// physical leaf, then transfer every frame's state into Tier-0. Mapping
+/// chains complete their eager builtin activation before the caller resumes.
 #[cold]
 #[inline(never)]
 pub(crate) fn resume_deopt(
@@ -52,6 +52,7 @@ pub(crate) fn resume_deopt(
             func,
             source,
             leaf,
+            LeafOrigin::Entry,
             inlined.guard_site_pc,
             event,
         );
@@ -64,12 +65,45 @@ pub(crate) fn resume_deopt(
             event,
         );
     }
-    let mut vm = Vm::from_context(ctx);
     let Some(inlined) = inlined else {
-        return vm.run_resumed_frame(
+        return Vm::from_context(ctx).run_resumed_frame(
             func, func_value, pc, &stack, handlers, &binds, spec_base, cond_base,
         );
     };
+    if let Some(mapping) = inlined.hof.as_ref() {
+        // Cold reconstruction can box or rebuild physical values; keep that
+        // exact readback alive, in addition to Start's original parent roots,
+        // before a callback's entry protocol can poll or enter the debugger.
+        for &value in &stack {
+            ctx.push_vm_frame_root(value);
+        }
+        let callback = &inlined.frames[0];
+        return match super::hof_runtime::resume_mapping(ctx, mapping, callback, cond_base) {
+            Ok(value) => {
+                let mut stack = stack;
+                stack.truncate(stack.len() - 3);
+                stack.push(value);
+                Vm::from_context(ctx).run_resumed_frame(
+                    func,
+                    func_value,
+                    pc + 1,
+                    &stack,
+                    handlers,
+                    &binds,
+                    spec_base,
+                    cond_base,
+                )
+            }
+            Err(flow) => {
+                // Metadata rejects physical handlers, so no local handler can
+                // intercept this flow. Match the ordinary bytecode teardown:
+                // drop condition entries before unwinding native bindings.
+                ctx.truncate_condition_stack(cond_base);
+                ctx.unbind_to_with_result(spec_base, Err(flow))
+            }
+        };
+    }
+    let mut vm = Vm::from_context(ctx);
     let frames: Vec<InlinedChainFrame<'_>> = inlined
         .frames
         .iter()

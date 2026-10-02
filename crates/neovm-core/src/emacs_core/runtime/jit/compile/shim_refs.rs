@@ -19,11 +19,10 @@
 //! Either way the machine code is the same: an import that is never called
 //! emits nothing.
 //!
-//! Existing shim IDs and signatures keep their order. New JIT-only shape
-//! and census shims are appended in optional groups; with their knobs off
-//! they are never imported, including under eager imports. Their exported
-//! names extend the ABI-salted name set (ABI v23), while AOT emission keeps
-//! these optional groups off.
+//! Existing shim IDs and signatures keep their order. New JIT-only shape,
+//! census and list-HOF shims are appended in optional groups; with their knobs
+//! off they are never imported, including under eager imports. Their exported
+//! names extend the ABI-salted name set, while AOT emission keeps these groups off.
 
 use std::cell::Cell;
 
@@ -55,6 +54,7 @@ pub(crate) enum ShimGroup {
     CallCensus,
     /// The contained framed direct call (JIT only, independent shape bit).
     DirectFramed,
+    Hof,
 }
 
 /// Every runtime shim generated code calls, in declaration order.
@@ -144,6 +144,12 @@ pub(crate) enum Shim {
     CallSpecCensus,
     /// The contained framed direct-entry trampoline (JIT only).
     DirectFramed,
+    HofLength,
+    HofStart,
+    HofStore,
+    HofCursor,
+    HofFinish,
+    HofAbort,
 }
 
 /// The parameter shapes of the shim signatures.
@@ -218,6 +224,12 @@ impl Shim {
             Shim::CallCensus => "neovm_jit_call_census",
             Shim::CallSpecCensus => "neovm_jit_call_spec_census",
             Shim::DirectFramed => "neovm_jit_direct_framed",
+            Shim::HofLength => "neovm_jit_hof_length",
+            Shim::HofStart => "neovm_jit_hof_start",
+            Shim::HofStore => "neovm_jit_hof_store",
+            Shim::HofCursor => "neovm_jit_hof_cursor",
+            Shim::HofFinish => "neovm_jit_hof_finish",
+            Shim::HofAbort => "neovm_jit_hof_abort",
         }
     }
 
@@ -281,6 +293,12 @@ impl Shim {
             | Shim::SaveWindowExcursion
             | Shim::CallSpec
             | Shim::StackCheck => ShimGroup::Base,
+            Shim::HofLength
+            | Shim::HofStart
+            | Shim::HofStore
+            | Shim::HofCursor
+            | Shim::HofFinish
+            | Shim::HofAbort => ShimGroup::Hof,
         }
     }
 
@@ -304,6 +322,11 @@ impl Shim {
             Shim::T2ApplyUseProf => (&[Ptr, I64, Ptr, I64, Ptr, Ptr, Ptr], true),
             // Use T1: (site, callback, obs) -> ().
             Shim::T2RecordCallUseTarget => (&[Ptr, I64, Ptr], false),
+            Shim::HofLength => (&[I64], true),
+            Shim::HofStart => (&[Ptr, I64, Ptr, I64, I64, I64], true),
+            Shim::HofStore | Shim::HofCursor => (&[Ptr, I64, I64], true),
+            Shim::HofFinish => (&[Ptr, I64, I64, I64, I64, I64], true),
+            Shim::HofAbort => (&[Ptr, I64], true),
             // (vmctx, need) -> ()
             Shim::RootwinGrow => (&[Ptr, I64], false),
             // (car, cdr) -> cons bits
@@ -414,6 +437,7 @@ pub(crate) struct ShimGroups {
     pub(crate) direct_shapes: bool,
     pub(crate) call_census: bool,
     pub(crate) direct_framed: bool,
+    pub(crate) hof: bool,
 }
 
 impl ShimGroups {
@@ -426,6 +450,7 @@ impl ShimGroups {
             ShimGroup::DirectShapes => self.direct_shapes,
             ShimGroup::CallCensus => self.call_census,
             ShimGroup::DirectFramed => self.direct_framed,
+            ShimGroup::Hof => self.hof,
         }
     }
 }
@@ -515,7 +540,10 @@ impl RtRefs {
 
     /// The callable ref of a base shim (always declared).
     pub(crate) fn get(&self, func: &mut Function, shim: Shim) -> FuncRef {
-        debug_assert_eq!(shim.group(), ShimGroup::Base, "{shim:?}: use try_get");
+        debug_assert!(
+            matches!(shim.group(), ShimGroup::Base | ShimGroup::Hof),
+            "{shim:?}: use try_get"
+        );
         let shim = if shim == Shim::CallSpec && self.groups.call_census {
             Shim::CallSpecCensus
         } else {

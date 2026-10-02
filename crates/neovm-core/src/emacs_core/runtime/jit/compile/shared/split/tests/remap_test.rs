@@ -16,6 +16,7 @@ const ALL_GROUPS: ShimGroups = ShimGroups {
     direct_shapes: true,
     call_census: true,
     direct_framed: true,
+    hof: true,
 };
 
 /// A JIT module whose first `padding` declarations are unrelated functions,

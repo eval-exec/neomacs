@@ -16,6 +16,12 @@
 // bare `const` keeps this usable both as a crate item (aot.rs) and as a local
 // const inside each build.rs `main` (no module/use context required).
 const NEOVM_JIT_SHIM_NAMES: &[&str] = &[
+    "neovm_jit_hof_length",
+    "neovm_jit_hof_start",
+    "neovm_jit_hof_store",
+    "neovm_jit_hof_cursor",
+    "neovm_jit_hof_finish",
+    "neovm_jit_hof_abort",
     "neovm_jit_apply",
     // `Op::Aref` / `Op::Aset` / `Op::Memq` / `Op::Assq`: value-returning shims
     // (baseline lowering, so AOT leaves import them too).

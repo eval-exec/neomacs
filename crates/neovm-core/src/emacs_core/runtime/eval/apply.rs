@@ -1289,6 +1289,20 @@ impl Context {
             .roots[base..base + count]
     }
 
+    /// Inspect a root span during cold metadata validation. The borrowed
+    /// frame belongs only to this mutator; a missing frame or invalid range
+    /// is rejected without panicking or introducing a Lisp safepoint.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn vm_frame_root_slots_checked(
+        &self,
+        base: usize,
+        count: usize,
+    ) -> Option<&[Value]> {
+        let end = base.checked_add(count)?;
+        self.vm_root_frames.last()?.roots.get(base..end)
+    }
+
     pub(crate) fn set_vm_frame_root_slot(&mut self, slot: usize, value: Value) {
         self.vm_root_frames
             .last_mut()

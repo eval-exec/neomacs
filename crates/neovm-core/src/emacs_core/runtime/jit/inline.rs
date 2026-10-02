@@ -52,7 +52,7 @@ pub(crate) use census::{CensusSite, census_callee_verdict, census_sites};
 
 #[path = "compile/inline_v2.rs"]
 mod v2;
-pub(crate) use v2::{FusedV2, fuse_calls_v2};
+pub(crate) use v2::{FusedV2, HofKind, HofSite, RegionKind, fuse_calls_v2, hof_profit_credit_at};
 
 /// Ops of a callee body, at most, for one splice.
 pub(crate) const MAX_INLINE_BODY: usize = 40;
@@ -110,6 +110,10 @@ pub(crate) struct FusedBody {
 impl FusedBody {
     pub(crate) fn is_v2(&self) -> bool {
         self.v2.is_some()
+    }
+    /// The opt-in list intrinsic admitted at this fused call pc.
+    pub(crate) fn admitted_hof_at(&self, pc: usize) -> Option<&HofSite> {
+        self.v2.as_ref()?.hof_at.get(&pc)
     }
     /// The region a fused pc belongs to.
     pub(crate) fn region_at(&self, pc: usize) -> Option<&InlineRegion> {
@@ -714,3 +718,19 @@ pub(crate) fn force_inline_for_test(on: Option<bool>) {
 #[cfg(test)]
 #[path = "tests/inline_v2.rs"]
 mod v2_tests;
+
+#[cfg(test)]
+#[path = "tests/inline_v2_closure.rs"]
+mod v2_closure_tests;
+
+#[cfg(test)]
+#[path = "tests/inline_v2_hof.rs"]
+mod v2_hof_tests;
+
+#[cfg(test)]
+#[path = "tests/inline_closure.rs"]
+mod closure_tests;
+
+#[cfg(test)]
+#[path = "tests/inline_entry_cache.rs"]
+mod entry_cache_tests;

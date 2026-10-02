@@ -3194,6 +3194,7 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
                 direct_shapes: !aot && (shapes.optional || shapes.rest),
                 call_census: !aot && jit_call_census_on(),
                 direct_framed: !aot && shapes.framed,
+                hof: false,
             };
             let refs = super::RtRefs::new(
                 sink.shim_ids(call_conv, ptr_ty, groups)?,
@@ -3221,6 +3222,7 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
                 inline_alloc: !aot && super::jit_inline_alloc_on(),
                 direct_sites: std::cell::Cell::new(0),
                 poll: emit.poll(),
+                inline_entry_cache: None,
             })
         } else {
             None
@@ -3907,6 +3909,7 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
                             &a,
                             &[],
                             &mut Vec::new(),
+                            None,
                         );
                     } else {
                         fb.ins().jump(clif_blocks[target.0 as usize], &a);
@@ -3993,6 +3996,7 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
                             &args,
                             &[],
                             &mut Vec::new(),
+                            None,
                         );
                     }
                 }
@@ -4088,6 +4092,9 @@ pub(crate) struct RtCtx {
     /// What the back-edge poll block writes besides the poll: the leaf's
     /// tick counter and its tier-spine loop credit (`t2_profile`).
     pub(crate) poll: super::t2_profile::PollEmit,
+    /// Compile-local protocol flags; generated state belongs to this native
+    /// activation and is invalidated on successful service polls.
+    pub(crate) inline_entry_cache: Option<super::inline_entry_cache::EntryCache>,
 }
 
 /// The residual root window's frame base, loaded once at entry, with its
@@ -4845,6 +4852,8 @@ pub(crate) struct PendingDeopt {
     /// framestate spill, since `run_resumed_frame` reads them back as tagged
     /// `Value`s.
     pub(crate) reps: Vec<SlotRep>,
+    /// Compile-local chain/cause stores, absent on the legacy emission path.
+    pub(crate) inline: Option<super::inline_frames::InlineDeoptWrite>,
 }
 
 impl PendingDeopt {
@@ -4866,6 +4875,8 @@ pub(crate) struct RegionDeopt {
     pub(crate) call_site_pc: usize,
     pub(crate) stack: Vec<ClifValue>,
     pub(crate) reps: Vec<SlotRep>,
+    /// Immutable compiler snapshot; it caches no running mutator state.
+    pub(crate) chain: Option<super::inline_frames::ChainRegion>,
 }
 
 thread_local! {
@@ -4962,7 +4973,9 @@ pub(crate) fn deopt_site(
         region,
         stack: stack.to_vec(),
         reps: reps.to_vec(),
+        inline: None,
     });
+    super::inline_frames::plan_deopt(pc, pending.last_mut().expect("just pushed"));
     block
 }
 
@@ -5046,6 +5059,9 @@ pub(crate) fn emit_pending_deopts(
         fb.switch_to_block(pd.block);
         fb.seal_block(pd.block);
         super::cold_exits::mark_exit_cold(fb, pd.block, super::cold_exits::ColdExit::Deopt);
+        if let Some(write) = &pd.inline {
+            write.emit(fb);
+        }
         // Materialize the four bases. For Baked, the iconsts live in THIS cold
         // block (the original JIT placement); for Sidecar they are entry values.
         // A site that jumps to the shared tail needs only the spill base.
@@ -5076,6 +5092,9 @@ pub(crate) fn emit_pending_deopts(
         // with the stack the caller had before it — the region's own operand
         // stack means nothing to it.
         let (pc, stack, reps) = match &pd.region {
+            Some(region) if region.chain.is_some() => {
+                (pd.pc, pd.stack.as_slice(), pd.reps.as_slice())
+            }
             Some(region) => (
                 region.call_site_pc,
                 region.stack.as_slice(),

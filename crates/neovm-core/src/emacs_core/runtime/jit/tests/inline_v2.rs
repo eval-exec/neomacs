@@ -44,6 +44,7 @@ impl Knobs {
         force_inline_for_test(Some(true));
         force_inline2_for_test(Some(mode));
         compile::force_profit_gate_for_test(false);
+        compile::force_deopt_for_test(false);
         crate::emacs_core::jit::stats::force_observe_for_test(Default::default());
         Self
     }
@@ -119,10 +120,10 @@ fn inline_v2_side_tables_preserve_the_legacy_splice() {
     assert!(!side.entry_at.contains(new.ops.len() + 100));
 }
 
-/// An enabled v2 body goes through the baseline and still deopts to the
-/// original call with its original args. No chain producer exists yet.
+/// An enabled v2 body goes through the baseline and resumes at the failing
+/// inner instruction, retaining the original physical call snapshot.
 #[test]
-fn inline_v2_refuses_legacy_mir_and_keeps_replay_deopts() {
+fn inline_v2_refuses_legacy_mir_and_resumes_inner_chain() {
     let _knobs = Knobs::enter(Inline2Mode::All);
     crate::emacs_core::jit::stats::force_observe_for_test(
         crate::emacs_core::jit::stats::ObserveOverride {
@@ -148,13 +149,19 @@ fn inline_v2_refuses_legacy_mir_and_keeps_replay_deopts() {
         leaf.obs.mir_verdict
     );
     let arg = Value::symbol("inline-v2-not-a-number");
+    let _ = ev.debug_on_next_call_is_armed();
     let run = leaf.call(&mut ev as *mut Context as *mut u8, &[arg]);
     let NativeRun::DeoptAt(resume) = run else {
-        panic!("expected replay deopt: {run:?}")
+        panic!("expected inner chain deopt: {run:?}")
     };
     assert_eq!(resume.pc, 2);
     assert_eq!(resume.stack, vec![arg, f.constants[0], arg]);
-    assert_eq!(resume.chain, None);
+    assert!(resume.chain.is_some());
+    let frames = &resume.inlined.as_ref().expect("chain readback").frames;
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0].function, f.constants[0]);
+    assert_eq!(frames[0].pc, 1);
+    assert_eq!(frames[0].stack, vec![arg, arg]);
 }
 
 fn mask_addresses(input: &str) -> String {

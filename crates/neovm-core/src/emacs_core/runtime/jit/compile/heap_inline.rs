@@ -142,6 +142,24 @@ pub(crate) fn emit_inline_cons_store(
     fb.ins().brif(is_cons, typed, &[], slow, &[]);
     fb.switch_to_block(typed);
     fb.seal_block(typed);
+    emit_inline_cons_store_known_cons(fb, rt, cell, value, is_cdr, slow, res, merge);
+}
+
+/// Store through an SSA value whose cons identity was already guarded.
+/// The caller must keep that identity rooted and immutable until this site;
+/// the mutable write-barrier window is still reloaded here. This introduces
+/// no runtime state or cross-mutator cache, and shares the ordinary store's
+/// barrier, effect, output and instrumentation exactly.
+pub(crate) fn emit_inline_cons_store_known_cons(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    cell: ClifValue,
+    value: ClifValue,
+    is_cdr: bool,
+    slow: Block,
+    res: Variable,
+    merge: Block,
+) {
     // The tag is known, so untagging is a subtract (folds into the store's
     // addressing).
     let ptr = iadd_imm_p(fb, cell, -(TAG_CONS as i64));

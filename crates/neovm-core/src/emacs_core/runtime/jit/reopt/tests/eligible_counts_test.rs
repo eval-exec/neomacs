@@ -126,6 +126,7 @@ fn semantic_chain_deopts_do_not_accelerate_inline_guard_retirement() {
             &physical,
             &inner,
             leaf,
+            LeafOrigin::Entry,
             0,
             DeoptEvent::Precise {
                 pc: 2,

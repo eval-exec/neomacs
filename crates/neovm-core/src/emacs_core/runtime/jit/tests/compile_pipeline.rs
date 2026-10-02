@@ -426,6 +426,7 @@ fn jit_pipeline_optional_shim_groups_follow_the_leaf_not_the_module() {
         direct_shapes: true,
         call_census: true,
         direct_framed: true,
+        hof: true,
     };
     let ids = ShimIds::declare(&mut module, CallConv::SystemV, types::I64, every).expect("ids");
     let again = ShimIds::declare(&mut module, CallConv::SystemV, types::I64, every).expect("ids");
@@ -444,6 +445,7 @@ fn jit_pipeline_optional_shim_groups_follow_the_leaf_not_the_module() {
         direct_shapes: false,
         call_census: false,
         direct_framed: false,
+        hof: false,
     };
     let refs = RtRefs::new(ids, base_only, &mut func, CallConv::SystemV, types::I64);
     assert_eq!(

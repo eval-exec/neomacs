@@ -48,6 +48,7 @@ fn countdown_clif(site: Site) -> String {
                     heap: None,
                     inline_alloc: false,
                     direct_sites: std::cell::Cell::new(0),
+                    inline_entry_cache: None,
                     poll: PollEmit {
                         count: None,
                         t2: Some(t2),
@@ -97,6 +98,7 @@ fn tier2_profile_shims_are_optional_for_a_leaf() {
         direct_shapes: false,
         call_census: false,
         direct_framed: false,
+        hof: false,
     };
     assert!(!groups.contains(super::super::shim_refs::ShimGroup::Tier2Profile));
 }

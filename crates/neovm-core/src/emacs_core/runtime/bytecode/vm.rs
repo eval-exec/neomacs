@@ -3667,6 +3667,7 @@ impl<'a> Vm<'a> {
             binds,
             spec_base,
             cond_base,
+            inlined,
             ..
         } = *resume;
         if handlers == 0
@@ -3674,10 +3675,72 @@ impl<'a> Vm<'a> {
             && cond_base == self.ctx.condition_stack_len()
             && stack.len() <= func.max_stack as usize
         {
-            self.ctx.bc_buf.truncate(frame_base);
-            self.ctx.bc_buf.extend_from_slice(&stack);
             bind_stack.clear();
             bind_stack.extend_from_slice(&binds);
+            if let Some(inlined) = inlined {
+                let result = self.ctx.grow_eval_stack(|ctx| {
+                    if let Some(hof) = &inlined.hof {
+                        // Mapping owns its active root frame and backtrace.
+                        // The physical interpreter retains its own frame;
+                        // root its evolved pre-call stack before Tier-0 runs
+                        // the current callback and completes the mapping.
+                        ctx.bc_buf.truncate(frame_base);
+                        ctx.bc_buf.extend_from_slice(&stack);
+                        let callback = inlined.frames.first().expect("validated HOF callback");
+                        let value = crate::emacs_core::jit::compile::hof_runtime::resume_mapping(
+                            ctx, hof, callback, cond_base,
+                        )?;
+                        ctx.bc_buf.truncate(frame_base + stack.len() - 3);
+                        ctx.bc_buf.push(value);
+                        return Ok(pc + 1);
+                    }
+                    let frames: Vec<_> = inlined
+                        .frames
+                        .iter()
+                        .map(|frame| InlinedChainFrame {
+                            frame: ChainFrame {
+                                function: frame.function,
+                                pc: frame.pc,
+                                stack: &frame.stack,
+                                handlers: 0,
+                                binds: &frame.binds,
+                            },
+                            link: frame.link,
+                            backtrace: frame.backtrace,
+                        })
+                        .collect();
+                    Vm::from_context(ctx).run_resumed_chain_in_place(
+                        func,
+                        ChainFrame {
+                            function: Value::NIL,
+                            pc,
+                            stack: &stack,
+                            handlers,
+                            binds: &binds,
+                        },
+                        &frames,
+                        frame_base,
+                        spec_base,
+                        cond_base,
+                    )
+                });
+                return match result {
+                    Ok(pc) => OsrOutcome::Interpret {
+                        pc,
+                        retry: if crate::emacs_core::jit::cache::osr_entry_cached(func, target) {
+                            OsrRetry::Latch
+                        } else {
+                            OsrRetry::Allowed
+                        },
+                    },
+                    Err(flow) => {
+                        stash_pending_flow(flow);
+                        OsrOutcome::Exited
+                    }
+                };
+            }
+            self.ctx.bc_buf.truncate(frame_base);
+            self.ctx.bc_buf.extend_from_slice(&stack);
             // The frame owns its evolved state again, so a later transfer is
             // the same operation as a first one; allowed only when the deopt
             // retired the OSR leaf it ran.
@@ -3689,6 +3752,56 @@ impl<'a> Vm<'a> {
             return OsrOutcome::Interpret { pc, retry };
         }
         match self.ctx.grow_eval_stack(|ctx| {
+            if let Some(inlined) = inlined {
+                if let Some(hof) = &inlined.hof {
+                    let callback = inlined.frames.first().expect("validated HOF callback");
+                    let value = crate::emacs_core::jit::compile::hof_runtime::resume_mapping(
+                        ctx, hof, callback, cond_base,
+                    )?;
+                    let mut physical_stack = stack;
+                    physical_stack.truncate(physical_stack.len() - 3);
+                    physical_stack.push(value);
+                    return Vm::from_context(ctx).run_resumed_frame_latched(
+                        func,
+                        Value::NIL,
+                        pc + 1,
+                        &physical_stack,
+                        handlers,
+                        &binds,
+                        spec_base,
+                        cond_base,
+                        true,
+                    );
+                }
+                let frames: Vec<_> = inlined
+                    .frames
+                    .iter()
+                    .map(|frame| InlinedChainFrame {
+                        frame: ChainFrame {
+                            function: frame.function,
+                            pc: frame.pc,
+                            stack: &frame.stack,
+                            handlers: 0,
+                            binds: &frame.binds,
+                        },
+                        link: frame.link,
+                        backtrace: frame.backtrace,
+                    })
+                    .collect();
+                return Vm::from_context(ctx).run_resumed_chain(
+                    func,
+                    ChainFrame {
+                        function: Value::NIL,
+                        pc,
+                        stack: &stack,
+                        handlers,
+                        binds: &binds,
+                    },
+                    &frames,
+                    spec_base,
+                    cond_base,
+                );
+            }
             Vm::from_context(ctx).run_resumed_frame_latched(
                 func,
                 Value::NIL,

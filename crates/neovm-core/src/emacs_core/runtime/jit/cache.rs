@@ -417,7 +417,9 @@ thread_local! {
     /// when a function is redefined, to evict exactly the affected callers. It is
     /// the only invalidation of inlined callees: every function-cell write reaches
     /// `evict_inline_dependents`.
-    /// Same thread/scope as COMPILED (its values are only meaningful as COMPILED keys).
+    /// Same mutator-thread scope as COMPILED, OSR_CACHE and their pending jobs.
+    /// With static closure inlining enabled, a caller id is the union of
+    /// dependencies of all its live variants; off keeps the entry-only policy.
     static INLINE_DEPS: RefCell<HashMap<SymId, HashSet<u64>>> = RefCell::new(HashMap::default());
 
     /// How many times redefining a symbol evicted callers that had inlined it.
@@ -643,17 +645,75 @@ fn compile_osr_leaf_timed(
     // Same feedback the tier-up compile sees: without it every Float site
     // read FixnumOnly and an OSR'd float loop deopted straight back.
     let _numeric = super::compile::publish_numeric_feedback(func);
+    // Static inlining also applies to a running loop. The transfer keeps
+    // the original header as its cache key and observation pc, while native
+    // lowering enters its corresponding instruction in the fused body.
+    // Off retains the original analyses, feedback and lowering inputs.
+    let fused = if super::compile::jit_inline2_mode().enabled() && super::inline::jit_inline_on() {
+        let _phase = stats::enter_phase(stats::CompilePhase::Fuse);
+        let prefix = func.jit_runtime().patched_prefix();
+        let masked;
+        let constants: &[Value] = if prefix > 0 {
+            masked = func
+                .constants
+                .iter()
+                .enumerate()
+                .map(|(i, &value)| if i < prefix { Value::NIL } else { value })
+                .collect::<Vec<_>>();
+            &masked
+        } else {
+            func.constants.as_ref()
+        };
+        let feedback = (0..ops.len())
+            .map(super::compile::active_numeric_feedback)
+            .collect::<Vec<_>>();
+        super::inline::fuse_calls_v2(ops, constants, offset_map, native_arity, &feedback)
+            .map(Rc::new)
+    } else {
+        None
+    };
+    let fused_osr_pc = match &fused {
+        Some(body) => body
+            .caller_of_fused
+            .iter()
+            .enumerate()
+            .find_map(|(pc, &caller)| {
+                (caller == osr_pc
+                    && body
+                        .region_at(pc)
+                        .is_none_or(|region| region.parent.is_none() && region.start == pc))
+                .then_some(pc)
+            })?,
+        None => osr_pc,
+    };
+    let (ops, constants, offset_map) =
+        fused
+            .as_ref()
+            .map_or((ops, func.constants.as_ref(), offset_map), |body| {
+                (
+                    body.ops.as_slice(),
+                    body.constants.as_slice(),
+                    body.offset_map.as_deref(),
+                )
+            });
+    let _fused_scope = fused.clone().map(super::inline::FusedScope::enter);
+    let _hof_regalloc =
+        super::compile::inline_regalloc::for_admitted_hof(fused.as_deref(), ops, constants)
+            .map(RegallocScope::enter);
+    let _fused_feedback = fused
+        .as_ref()
+        .map(|body| super::compile::publish_numeric_feedback_vec(body.feedback.clone()));
     let _label = stats::naming_enabled()
         .then(|| stats::perf_map::LeafLabelScope::enter(id, name_hint, func));
     drop(gate_phase);
     let lower_phase = stats::enter_phase(stats::CompilePhase::Lower);
     let mut leaf = match super::compile::lower_leaf_full_osr(
         ops,
-        &func.constants,
+        constants,
         native_arity,
         offset_map,
         Some(obarray),
-        Some(osr_pc),
+        Some(fused_osr_pc),
         func.jit_runtime().patched_prefix(),
     ) {
         Ok(leaf) => leaf,
@@ -671,6 +731,22 @@ fn compile_osr_leaf_timed(
     leaf.obs.id = id;
     leaf.obs.osr_pc = u32::try_from(osr_pc).ok();
     leaf.compiled_level = func.jit_runtime().reopt_level();
+    if let Some(body) = &fused
+        && let Some(side) = &body.v2
+    {
+        let mut deps = leaf.inline_deps.to_vec();
+        for site in side.hof_at.values() {
+            let name = match site.kind {
+                super::inline::HofKind::Mapc => "mapc",
+                super::inline::HofKind::Mapcar => "mapcar",
+            };
+            let sym = crate::emacs_core::intern::intern(name);
+            if !deps.contains(&sym) {
+                deps.push(sym);
+            }
+        }
+        leaf.inline_deps = deps.into_boxed_slice();
+    }
     Some(OsrEntry {
         leaf: Rc::new(leaf),
         stack_depth: entry_depth,
@@ -745,8 +821,10 @@ pub(crate) fn try_run_osr_probe(
     let arg_bits: Vec<i64> = stack.iter().map(|v| v.bits() as i64).collect();
     // Lend a COPY of the live interpreter binding stack. Its outer JIT prefix
     // belongs to suspended native callers and must survive this entire transfer.
+    // Chains also need the transfer's specpdl floor when no bindings exist:
+    // a materialized map activation can push a backtrace before its deopt.
     // No Lisp or GC can run between this seed and the native entry.
-    let bind_frame = if leaf.has_binds {
+    let bind_frame = if leaf.has_binds || !leaf.chains.is_empty() {
         // SAFETY: dormant seam-provided Context; length reads and Vec writes only.
         let ctx = unsafe { &mut *ctx };
         let spec_base = ctx.specpdl.len();
@@ -786,20 +864,49 @@ pub(crate) fn try_run_osr_probe(
             },
             DeoptEvent::Rerun,
         ),
-        NativeRun::DeoptAt(resume) => super::reopt::note_deopt(
-            ctx,
-            func,
-            &leaf,
-            LeafOrigin::Osr {
+        NativeRun::DeoptAt(resume) => {
+            let origin = LeafOrigin::Osr {
                 header_pc: osr_pc,
                 snapshot: stack,
-            },
-            DeoptEvent::Precise {
-                pc: resume.pc,
-                stack: &resume.stack,
-                cause: resume.cause,
-            },
-        ),
+            };
+            if let Some(inlined) = resume.inlined.as_ref() {
+                let (inner, inner_pc, inner_stack) = inlined.frames.last().map_or(
+                    (func, resume.pc, resume.stack.as_slice()),
+                    |frame| {
+                        (
+                            frame.function.get_bytecode_data().expect("validated chain"),
+                            frame.pc,
+                            frame.stack.as_slice(),
+                        )
+                    },
+                );
+                super::reopt::note_deopt_chain(
+                    ctx,
+                    func,
+                    inner,
+                    &leaf,
+                    origin,
+                    inlined.guard_site_pc,
+                    DeoptEvent::Precise {
+                        pc: inner_pc,
+                        stack: inner_stack,
+                        cause: resume.cause,
+                    },
+                )
+            } else {
+                super::reopt::note_deopt(
+                    ctx,
+                    func,
+                    &leaf,
+                    origin,
+                    DeoptEvent::Precise {
+                        pc: resume.pc,
+                        stack: &resume.stack,
+                        cause: resume.cause,
+                    },
+                )
+            }
+        }
         NativeRun::Ok(_) | NativeRun::Signal => super::reopt::ReoptVerdict::Kept,
     };
     if std::env::var_os("NEOMACS_OSR_DEBUG").is_some() {
@@ -844,6 +951,9 @@ fn osr_lookup(ctx: *mut Context, func: &ByteCodeFunction, osr_pc: usize, id: u64
     let _vars = super::compile::inline_vars::CompileEnvScope::enter(ctx);
     let compiled = compile_osr_leaf(&live.obarray, func, osr_pc, id, name_hint);
     drop(defer);
+    if let Some(entry) = &compiled {
+        register_osr_inline_deps(id, osr_pc, &entry.leaf);
+    }
     match (compiled, super::bg::take_deferred()) {
         (Some(entry), Some(code)) => {
             let OsrEntry {
@@ -898,9 +1008,18 @@ fn probe_osr_pending(key: (u64, usize), ctx: Option<&Context>) -> Option<OsrLook
             stack_depth,
             bind_depth,
         }),
-        Err(super::bg::Discard::Rejected) => None,
-        Err(super::bg::Discard::Stale(_)) => return None,
+        Err(super::bg::Discard::Rejected) => {
+            refresh_cached_inline_deps(key.0);
+            None
+        }
+        Err(super::bg::Discard::Stale(_)) => {
+            refresh_cached_inline_deps(key.0);
+            return None;
+        }
     };
+    if let Some(entry) = &entry {
+        register_osr_inline_deps(key.0, key.1, &entry.leaf);
+    }
     OSR_CACHE.with(|c| c.borrow_mut().insert(key, entry.clone()));
     Some(OsrLookup::Entry(entry))
 }
@@ -951,10 +1070,82 @@ fn register_inline_deps(id: u64, leaf: &CompiledLeaf) {
     // gate-off census run).
     forget_inline_deps(id);
     add_inline_deps(id, leaf);
+    add_osr_inline_deps(id, None);
 }
 
-/// During an upgrade either body can become stale: keep both dependency
-/// sets until install/discard chooses the leaf that remains reachable.
+/// Replace one OSR variant's memberships while preserving the source's entry
+/// leaf and other loop variants. This is cold compile/installation work on
+/// the owning mutator thread, outside any cache borrow.
+fn register_osr_inline_deps(id: u64, osr_pc: usize, leaf: &CompiledLeaf) {
+    if !super::compile::jit_inline2_mode().enabled() {
+        return;
+    }
+    forget_inline_deps(id);
+    add_entry_inline_deps(id);
+    add_osr_inline_deps(id, Some(osr_pc));
+    add_inline_deps(id, leaf);
+}
+
+/// Rebuild current memberships after an OSR job was discarded. The removed
+/// job's values are never published; the remaining variants are owned by this
+/// mutator's caches, outside any borrow of the entry cache.
+fn refresh_cached_inline_deps(id: u64) {
+    if !super::compile::jit_inline2_mode().enabled() {
+        return;
+    }
+    // Invalidation can keep a borrowed entry or OSR cache. If it cannot be
+    // inspected, retain its conservative memberships until the next rebuild.
+    // All checks and reads run on this mutator without a Lisp reentry.
+    if !COMPILED.with(|cache| cache.try_borrow().is_ok())
+        || !OSR_CACHE.with(|cache| cache.try_borrow().is_ok())
+        || !OSR_PENDING.with(|pending| pending.try_borrow().is_ok())
+    {
+        return;
+    }
+    forget_inline_deps(id);
+    add_entry_inline_deps(id);
+    add_osr_inline_deps(id, None);
+}
+
+fn add_entry_inline_deps(id: u64) {
+    COMPILED.with(|cache| match cache.borrow().get(id) {
+        Some(entry) => {
+            if let Some(leaf) = entry.live_leaf() {
+                add_inline_deps(id, leaf);
+            }
+            if let Some(job) = entry.pending_job() {
+                add_inline_deps(id, job.leaf());
+            }
+        }
+        _ => {}
+    });
+}
+
+/// Add dependencies of every current OSR variant except one being replaced.
+/// All cache reads and reverse-map writes belong to the current mutator.
+fn add_osr_inline_deps(id: u64, skip: Option<usize>) {
+    if !super::compile::jit_inline2_mode().enabled() {
+        return;
+    }
+    OSR_CACHE.with(|cache| {
+        for ((fid, pc), entry) in cache.borrow().iter() {
+            if *fid == id
+                && skip != Some(*pc)
+                && let Some(entry) = entry
+            {
+                add_inline_deps(id, &entry.leaf);
+            }
+        }
+    });
+    OSR_PENDING.with(|pending| {
+        for ((fid, pc), pending) in pending.borrow().iter() {
+            if *fid == id && skip != Some(*pc) {
+                add_inline_deps(id, pending.job.leaf());
+            }
+        }
+    });
+}
+
 fn add_inline_deps(id: u64, leaf: &CompiledLeaf) {
     visit_leaf_family(leaf, &mut |leaf| {
         for &sym in leaf.inline_deps() {
@@ -1188,6 +1379,9 @@ pub(crate) fn evict_compiled(id: u64) {
             keep
         })
     });
+    if super::compile::jit_inline2_mode().enabled() {
+        forget_inline_deps(id);
+    }
 }
 
 /// Point every caller on this thread that caches `dead` in a spec slot back
@@ -1463,10 +1657,14 @@ pub(crate) fn invalidate_for_reopt(
         }
     }
     let mut unlinked = 0;
+    if super::compile::jit_inline2_mode().enabled() {
+        refresh_cached_inline_deps(id);
+    } else if retired_entry.is_some() {
+        forget_inline_deps(id);
+    }
     if let Some(old) = &retired_entry {
         // Its entry no longer names a compiled leaf that inlined anything,
         // so a redefinition of an inlined callee has nothing to evict.
-        forget_inline_deps(id);
         unlinked = unlink_spec_slots(Rc::as_ptr(old));
         if reprofile == Reprofile::Window && level != ReoptLevel::Interpreter {
             rt.defer_tier_up(rt.heat().saturating_add(knobs.heat).max(1));
@@ -1509,28 +1707,37 @@ pub(crate) fn evict_inline_dependents(sym: SymId) {
     };
     stats::epoch::note_inline_evictions(dependents.len());
     INLINE_EVICTIONS.with(|m| *m.borrow_mut().entry(sym).or_default() += 1);
-    COMPILED.with(|cache| {
-        let mut cache = cache.borrow_mut();
+    if super::compile::jit_inline2_mode().enabled() {
+        // A dependency can belong only to an OSR variant while the entry leaf
+        // inlines nothing. Retire the source's entry and remove all loop variants
+        // and pending jobs together, with their union memberships.
         for id in dependents {
-            // Only leaves that RECORDED inline deps are ever in a dep set. A
-            // baseline bit-op leaf among them may sit in a spec or leaf slot
-            // (see resolve_compiled_leaf_ptr): `remove` retires it, so the
-            // pointer stays valid, and disarms the leaf slots. The predicate is
-            // the dep list, NOT `inline_epoch`: a baseline leaf with an inlined
-            // bit-op (LEVEL-B, `inline_arith_callee_syms`) records deps and
-            // deliberately no epoch, and the 2026-09-05 gate-off census tripped
-            // the epoch-based version of this assertion on exactly that.
-            debug_assert!(
-                !matches!(cache.get(id), Some(CacheEntry::Compiled(leaf)) if {
-                    let mut has_deps = false;
-                    visit_leaf_family(leaf, &mut |leaf| has_deps |= !leaf.inline_deps().is_empty());
-                    !has_deps
-                }),
-                "precise eviction must only touch leaves that recorded inline deps"
-            );
-            cache.remove(id);
+            evict_compiled(id);
         }
-    });
+    } else {
+        COMPILED.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            for id in dependents {
+                // Only leaves that RECORDED inline deps are ever in a dep set. A
+                // baseline bit-op leaf among them may sit in a spec or leaf slot
+                // (see resolve_compiled_leaf_ptr): `remove` retires it, so the
+                // pointer stays valid, and disarms the leaf slots. The predicate is
+                // the dep list, NOT `inline_epoch`: a baseline leaf with an inlined
+                // bit-op (LEVEL-B, `inline_arith_callee_syms`) records deps and
+                // deliberately no epoch, and the 2026-09-05 gate-off census tripped
+                // the epoch-based version of this assertion on exactly that.
+                debug_assert!(
+                    !matches!(cache.get(id), Some(CacheEntry::Compiled(leaf)) if {
+                        let mut has_deps = false;
+                        visit_leaf_family(leaf, &mut |leaf| has_deps |= !leaf.inline_deps().is_empty());
+                        !has_deps
+                    }),
+                    "precise eviction must only touch leaves that recorded inline deps"
+                );
+                cache.remove(id);
+            }
+        });
+    }
 }
 
 /// Test-only: what the cache holds for `id`.
@@ -2196,6 +2403,7 @@ fn install_pending(
         }
         Err(super::bg::Discard::Rejected) => {
             forget_inline_deps(id);
+            add_osr_inline_deps(id, None);
             if let Some(rt) = rt {
                 rt.mark_native_rejected(rejection_epoch());
             }
@@ -2204,6 +2412,7 @@ fn install_pending(
         }
         Err(super::bg::Discard::Stale(_)) => {
             forget_inline_deps(id);
+            add_osr_inline_deps(id, None);
             None
         }
     }
@@ -3091,3 +3300,11 @@ mod tier2_off_test;
 #[cfg(test)]
 #[path = "cache/tests/gc_tls_ownership.rs"]
 mod gc_tls_ownership_tests;
+
+#[cfg(test)]
+#[path = "cache/tests/osr_inline.rs"]
+mod osr_inline_tests;
+
+#[cfg(test)]
+#[path = "cache/tests/hof_regalloc.rs"]
+mod hof_regalloc_tests;

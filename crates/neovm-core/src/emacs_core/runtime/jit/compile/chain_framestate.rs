@@ -43,31 +43,13 @@ pub(crate) struct RegionFrameState {
 /// Threading: this compiler-local result contains SSA handles and immutable,
 /// pointer-free metadata; it is never a shared cache of mutator Lisp values.
 pub(crate) struct PlannedChain {
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "later P2.3 producers consume the planned metadata"
-        )
-    )]
     pub(crate) chain: DeoptChain,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "later P2.3 producers emit the planned spill")
-    )]
     pub(crate) spill: Vec<(ClifValue, SlotRep)>,
 }
 
 /// Compose physical-to-innermost frame states at one fused pc. The
 /// baseline and future opt lowering use this same representation. V1
 /// refuses active handlers; it never silently drops an outer handler.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "P2.3 commit 5 defines the shared format; later producers emit it"
-    )
-)]
 pub(crate) fn chain_framestate(
     fused: &FusedBody,
     pc: usize,

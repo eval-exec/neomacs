@@ -37,6 +37,7 @@ fn chain_feedback_widens_inner_source_and_retires_physical_leaf() {
             &physical,
             &inner,
             leaf,
+            LeafOrigin::Entry,
             0,
             DeoptEvent::Precise {
                 pc: 1,
@@ -83,6 +84,7 @@ fn chain_repeated_deopt_uses_physical_guard_pc_for_site_limit() {
             &physical,
             &inner,
             leaf,
+            LeafOrigin::Entry,
             0,
             DeoptEvent::Precise {
                 pc: 1,
@@ -105,6 +107,49 @@ fn chain_repeated_deopt_uses_physical_guard_pc_for_site_limit() {
     );
     assert_eq!(
         physical.jit_runtime().numeric_feedback(1),
+        NumericFeedback::FixnumOnly
+    );
+    assert!(leaf.retired.get());
+    force_reopt_for_test(None);
+}
+
+#[test]
+fn inline_identity_deopt_retires_the_physical_leaf_without_a_profile_window() {
+    compile::force_profit_gate_for_test(false);
+    compile::force_deopt_for_test(false);
+    force_reopt_for_test(Some(ReoptKnobs {
+        site_limit: 3,
+        ..ReoptKnobs::stress()
+    }));
+    let physical = function(vec![Op::Constant(0), Op::Return]);
+    let inner = function(vec![Op::Constant(0), Op::Add1, Op::Return]);
+    let id = cache::compile_and_cache_jit_leaf(&physical, None).unwrap();
+    let ptr = cache::compiled_leaf_ptr_for_test(id).unwrap();
+    // The invalidation retains the old allocation and reaches no safepoint.
+    let leaf = unsafe { &*ptr };
+    leaf.obs.note_deopt_at(0);
+    assert_eq!(
+        note_deopt_chain(
+            std::ptr::null(),
+            &physical,
+            &inner,
+            leaf,
+            LeafOrigin::Entry,
+            0,
+            DeoptEvent::Precise {
+                pc: 1,
+                stack: &[],
+                cause: Some(DeoptCause::InlineIdentity),
+            },
+        ),
+        ReoptVerdict::Invalidated,
+        "an identity mismatch is conclusive on its first exit"
+    );
+    assert_eq!(cache::cache_entry_kind_for_test(id), "none");
+    assert_eq!(physical.jit_runtime().reopt_count(), 1);
+    assert_eq!(inner.jit_runtime().reopt_count(), 0);
+    assert_eq!(
+        inner.jit_runtime().numeric_feedback(1),
         NumericFeedback::FixnumOnly
     );
     assert!(leaf.retired.get());

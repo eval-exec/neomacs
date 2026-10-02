@@ -16,9 +16,10 @@
 //! resume pc and the spilled pre-op operand stack — so the generated code,
 //! the ABI and the hot paths are untouched. A cold block that knows more can
 //! name the cause itself (`DeoptCells::reason`, [`DeoptCause::reason_code`]);
-//! the hook then takes that instead of classifying. The per-pc counts come from the
-//! leaf's release counters ([`super::compile::LeafObs`]), which every deopt
-//! has already bumped by the time it reaches the hook.
+//! the hook then takes that instead of classifying. Every precise readback bumps
+//! the leaf's census counters ([`super::compile::LeafObs`]); the hook separately
+//! counts causes eligible for reoptimization after classifying them. Semantic
+//! exits must not bring a later speculation failure closer to its site limit.
 //!
 //! # The policy
 //!
@@ -244,10 +245,6 @@ impl DeoptCause {
     /// The word a cold block stores in `DeoptCells::reason`: the
     /// [`ReasonKind`] in the low byte and the payload (the argument index,
     /// the operands' [`NumericFeedback`]) in the next. Never zero.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the cold-block store of a cause is P2.1 C2")
-    )]
     pub(crate) const fn reason_code(self) -> i64 {
         let (kind, payload) = match self {
             DeoptCause::ArithOperands(seen) => {
@@ -359,6 +356,16 @@ pub(crate) fn classify(
     let Some(op) = ops.get(pc) else {
         return DeoptCause::Unattributed;
     };
+    // V2's audited store has only two slow reasons: a wrong owner tag
+    // and a collector barrier. Both preserve the optimized body's
+    // speculation, including when the store is an OSR header.
+    if matches!(op, Op::Setcar | Op::Setcdr) {
+        return match stack.len().checked_sub(2).and_then(|base| stack.get(base)) {
+            Some(cell) if cell.is_cons() => DeoptCause::ColdFlagged,
+            Some(_) => DeoptCause::TypeError,
+            None => DeoptCause::Unattributed,
+        };
+    }
     let arith = ArithGenericKind::from_op(op);
     if let Some(nargs) = arith.map(ArithGenericKind::arity)
         && let Some(base) = stack.len().checked_sub(nargs)
@@ -428,18 +435,11 @@ pub(crate) fn note_deopt_chain(
     physical: &ByteCodeFunction,
     inner: &ByteCodeFunction,
     leaf: &CompiledLeaf,
+    origin: LeafOrigin<'_>,
     physical_pc: usize,
     event: DeoptEvent<'_>,
 ) -> ReoptVerdict {
-    note_deopt_for_source(
-        ctx,
-        physical,
-        inner,
-        leaf,
-        LeafOrigin::Entry,
-        event,
-        Some(physical_pc),
-    )
+    note_deopt_for_source(ctx, physical, inner, leaf, origin, event, Some(physical_pc))
 }
 
 #[cold]
@@ -463,7 +463,17 @@ fn note_deopt_for_source(
             pc,
             stack,
             cause: None,
-        } => classify(ctx, func.executable_ops(), leaf, origin, pc, stack),
+        } => {
+            // An OSR header and its entry snapshot belong to the physical
+            // source, never an inner callee whose pc happens to equal that
+            // header. Keep the OSR origin for retirement and statistics.
+            let classify_origin = if physical_pc.is_some() && !std::ptr::eq(physical, func) {
+                LeafOrigin::Entry
+            } else {
+                origin
+            };
+            classify(ctx, func.executable_ops(), leaf, classify_origin, pc, stack)
+        }
     };
     super::stats::record_deopt(cause, origin.is_osr());
     // The persistent per-pc history (P2.1 C2): every precise deopt counts,
@@ -528,9 +538,11 @@ fn respond(
             rt.mark_call_site_no_inline(pc, ops_len);
             (ReoptLevel::Speculative, Reprofile::Window)
         }
-        // The inlined callee is unchanged; only the global epoch moved.
-        // Rebuilding against the current epoch is all it needs.
-        (DeoptCause::InlineEpochMoved, DeoptEvent::Precise { .. }) => {
+        // Rebuilding against the current function cell/closure identity needs
+        // no new operand feedback. The existing INLINE_EVICTIONS policy
+        // declines repeatedly replaced named callees when the front runs
+        // again; a stable replacement can still be admitted.
+        (DeoptCause::InlineIdentity | DeoptCause::InlineEpochMoved, DeoptEvent::Precise { .. }) => {
             (ReoptLevel::Speculative, Reprofile::Immediate)
         }
         // An OSR entry guard refused the live stack: a slot the leaf's
@@ -538,7 +550,8 @@ fn respond(
         // reopens recording, so the loop the interpreter now runs records
         // what feeds that slot; at the limit the leaf goes.
         (DeoptCause::OsrEntry, DeoptEvent::Precise { pc, .. }) => {
-            let n = u32::try_from(pc).map_or(0, |pc| leaf.obs.reopt_deopt_count_at(pc));
+            let n = u32::try_from(physical_pc.unwrap_or(pc))
+                .map_or(0, |pc| leaf.obs.reopt_deopt_count_at(pc));
             if n == 1 {
                 rt.reopen_numeric_feedback();
             }
@@ -760,3 +773,7 @@ mod tier2_epoch_test;
 #[cfg(test)]
 #[path = "reopt/tests/eligible_counts_test.rs"]
 mod eligible_counts_test;
+
+#[cfg(test)]
+#[path = "reopt/tests/store_cause_test.rs"]
+mod store_cause_test;

@@ -122,6 +122,14 @@ enum ChainCallFrame {
     Materialized(usize),
 }
 
+/// Physical state after the inner calls have finished. Its operand stack
+/// remains in this mutator's traced `bc_buf`, so handing it back to an OSR
+/// frame does not create an unrooted Lisp-value transition.
+struct SeededChainResume {
+    pc: usize,
+    entry: ChainFrameEntry,
+}
+
 impl<'a> Vm<'a> {
     /// Resume a deopt that stopped inside inlined calls (module doc).
     ///
@@ -146,9 +154,89 @@ impl<'a> Vm<'a> {
         specpdl_base: usize,
         condition_stack_base: usize,
     ) -> EvalResult {
-        let Some(codes) = Self::validate_chain(physical_code, &physical, inlined) else {
+        let frame_base = self.ctx.bc_buf.len();
+        let Some(resume) = self.resume_inner_chain(
+            physical_code,
+            &physical,
+            inlined,
+            frame_base,
+            specpdl_base,
+            condition_stack_base,
+        ) else {
             return self.abandon_chain(specpdl_base, condition_stack_base);
         };
+        self.run_chain_frame(
+            physical_code,
+            &physical,
+            frame_base,
+            resume.pc,
+            specpdl_base,
+            condition_stack_base,
+            resume.entry,
+        )
+    }
+
+    /// Complete only an OSR deopt's inlined calls, leaving the physical
+    /// frame in place. The existing interpreter frame keeps ownership of
+    /// its bindings, handlers, backtrace entry and final cleanup. On success
+    /// its evolved operand stack is at `bc_buf[frame_base..]` and the return
+    /// is the next physical pc. A nonlocal exit leaves that stack rooted and
+    /// returns the flow for the existing driver's handler dispatch.
+    ///
+    /// Threading: all values and frame indices belong to this mutator's
+    /// Context; the method creates no shared state or thread-local cache.
+    #[allow(clippy::too_many_arguments)]
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn run_resumed_chain_in_place(
+        &mut self,
+        physical_code: &ByteCodeFunction,
+        physical: ChainFrame<'_>,
+        inlined: &[InlinedChainFrame<'_>],
+        frame_base: usize,
+        specpdl_base: usize,
+        condition_stack_base: usize,
+    ) -> Result<usize, Flow> {
+        let Some(resume) = self.resume_inner_chain(
+            physical_code,
+            &physical,
+            inlined,
+            frame_base,
+            specpdl_base,
+            condition_stack_base,
+        ) else {
+            tracing::error!(
+                target: "neovm::jit::deopt",
+                "OSR inlined-frame chain does not match its code"
+            );
+            return Err(invalid_bytecode_flow());
+        };
+        match resume.entry {
+            ChainFrameEntry::Run => Ok(resume.pc),
+            ChainFrameEntry::Raise(flow) => Err(flow),
+        }
+    }
+
+    /// Seed the complete chain, then execute and finish its inner calls.
+    /// Return the physical frame's rooted state without running or cleaning
+    /// it. Ordinary native entries append a physical frame; OSR replaces
+    /// the stale segment of the suspended physical frame at `frame_base`.
+    #[allow(clippy::too_many_arguments)]
+    #[cold]
+    #[inline(never)]
+    fn resume_inner_chain(
+        &mut self,
+        physical_code: &ByteCodeFunction,
+        physical: &ChainFrame<'_>,
+        inlined: &[InlinedChainFrame<'_>],
+        frame_base: usize,
+        specpdl_base: usize,
+        condition_stack_base: usize,
+    ) -> Option<SeededChainResume> {
+        if frame_base > self.ctx.bc_buf.len() {
+            return None;
+        }
+        let codes = Self::validate_chain(physical_code, physical, inlined)?;
         let mut previous = None;
         let mut materialized = 0;
         for level in inlined {
@@ -157,18 +245,18 @@ impl<'a> Vm<'a> {
                     || previous.is_some_and(|outer| index <= outer)
                     || !self.ctx.specpdl_entry_is_backtrace(index)
                 {
-                    return self.abandon_chain(specpdl_base, condition_stack_base);
+                    return None;
                 }
                 previous = Some(index);
                 materialized += 1;
             }
         }
         if self.ctx.depth < materialized {
-            return self.abandon_chain(specpdl_base, condition_stack_base);
+            return None;
         }
         let frame = |i: usize| -> &ChainFrame<'_> {
             if i == 0 {
-                &physical
+                physical
             } else {
                 &inlined[i - 1].frame
             }
@@ -178,6 +266,7 @@ impl<'a> Vm<'a> {
         // Seed every operand stack before anything can collect: the values
         // arrive in untraced Rust storage, and `bc_buf` is traced.
         let total: usize = (0..=k).map(|i| frame(i).stack.len()).sum();
+        self.ctx.bc_buf.truncate(frame_base);
         self.ctx.bc_buf.reserve(total);
         let mut bases: SmallVec<[usize; 5]> = SmallVec::new();
         let mut function_slots: SmallVec<[usize; 4]> = SmallVec::new();
@@ -244,7 +333,15 @@ impl<'a> Vm<'a> {
             }
         }
 
-        // Run the innermost frame, then complete each call outward.
+        if k == 0 {
+            return Some(SeededChainResume {
+                pc: physical.pc,
+                entry: ChainFrameEntry::Run,
+            });
+        }
+
+        // Run the innermost frame, then complete each call outward. The
+        // physical frame is handed back to its owner instead of run here.
         let innermost = frame(k);
         let mut result = self.run_chain_frame(
             codes[k],
@@ -278,6 +375,12 @@ impl<'a> Vm<'a> {
                 }
                 Err(flow) => ChainFrameEntry::Raise(flow),
             };
+            if i == 1 {
+                return Some(SeededChainResume {
+                    pc: caller.pc + 1,
+                    entry,
+                });
+            }
             result = self.run_chain_frame(
                 codes[i - 1],
                 caller,
@@ -288,7 +391,7 @@ impl<'a> Vm<'a> {
                 entry,
             );
         }
-        result
+        unreachable!("a nonempty chain returns its physical frame")
     }
 
     /// Check a chain's shape against its code before touching any state:
@@ -427,3 +530,7 @@ impl<'a> Vm<'a> {
 #[cfg(test)]
 #[path = "tests/resumed_chain.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/osr_chain.rs"]
+mod osr_tests;

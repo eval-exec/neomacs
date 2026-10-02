@@ -807,7 +807,31 @@ pub(crate) struct ShimAddr(*const ());
 unsafe impl Sync for ShimAddr {}
 
 #[used]
-pub(crate) static JIT_SHIM_TABLE: [(&str, ShimAddr); 64] = [
+pub(crate) static JIT_SHIM_TABLE: [(&str, ShimAddr); 70] = [
+    (
+        "neovm_jit_hof_length",
+        ShimAddr(super::hof_runtime::neovm_jit_hof_length as *const ()),
+    ),
+    (
+        "neovm_jit_hof_start",
+        ShimAddr(super::hof_runtime::neovm_jit_hof_start as *const ()),
+    ),
+    (
+        "neovm_jit_hof_store",
+        ShimAddr(super::hof_runtime::neovm_jit_hof_store as *const ()),
+    ),
+    (
+        "neovm_jit_hof_cursor",
+        ShimAddr(super::hof_runtime::neovm_jit_hof_cursor as *const ()),
+    ),
+    (
+        "neovm_jit_hof_finish",
+        ShimAddr(super::hof_runtime::neovm_jit_hof_finish as *const ()),
+    ),
+    (
+        "neovm_jit_hof_abort",
+        ShimAddr(super::hof_runtime::neovm_jit_hof_abort as *const ()),
+    ),
     ("neovm_jit_apply", ShimAddr(neovm_jit_apply as *const ())),
     ("neovm_jit_aref", ShimAddr(neovm_jit_aref as *const ())),
     ("neovm_jit_aset", ShimAddr(neovm_jit_aset as *const ())),

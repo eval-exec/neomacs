@@ -460,6 +460,7 @@ impl SwitchLandings for BaselineSwitchLandings<'_> {
                 self.block_for[&target],
                 self.handlers,
                 self.pending,
+                None,
             );
         }
     }

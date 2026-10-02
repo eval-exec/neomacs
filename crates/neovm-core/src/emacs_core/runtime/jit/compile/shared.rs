@@ -364,6 +364,7 @@ impl SharedJit {
                         direct_shapes: true,
                         call_census: true,
                         direct_framed: true,
+                        hof: true,
                     },
                 )?;
             }
@@ -386,6 +387,7 @@ impl SharedJit {
                 direct_shapes: true,
                 call_census: true,
                 direct_framed: true,
+                hof: true,
             },
         )?;
         *slot = Some(SharedModule {

@@ -247,6 +247,28 @@ pub(crate) fn emit_source_guard(
     miss
 }
 
+/// A source-compatible closure may have widened its patched prefix since
+/// this caller was compiled. Its old baked tail is safe only below this bound.
+/// Call after the source-identity hit, with the template rooted in relocs.
+/// Threading: Cranelift's sequentially consistent atomic load is stronger than
+/// Acquire; it reads the existing monotone shared AtomicU32, with no new cache.
+pub(crate) fn emit_closure_prefix_guard(
+    fb: &mut FunctionBuilder,
+    runtime: &crate::emacs_core::jit::Runtime,
+    max: usize,
+    deopt: Block,
+) {
+    let ptr = fb.ins().iconst(
+        types::I64,
+        super::jit_layout::runtime_patched_prefix_address(runtime) as i64,
+    );
+    let width = fb
+        .ins()
+        .atomic_load(types::I32, MemFlagsData::trusted(), ptr);
+    let within = icmp_imm_p(fb, IntCC::UnsignedLessThanOrEqual, width, max as i64);
+    super::lowering::emit_guard(fb, deopt, within);
+}
+
 /// Emit a source site's speculated call (after its guard hit): the shim
 /// with the slot, the call buffers and the callee.
 #[allow(clippy::too_many_arguments)]

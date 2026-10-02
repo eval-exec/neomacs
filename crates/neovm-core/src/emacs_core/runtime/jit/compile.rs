@@ -726,6 +726,7 @@ pub(crate) fn body_is_call_heavy(ops: &[Op], constants: &[Value]) -> bool {
             // `(logand (logxor ...))` loop is `calls > arith` → NotProfitable →
             // the intrinsic could never engage). A generic call still vetoes.
             Op::Call(_) if intrinsic.binary_search(&i).is_ok() => {}
+            Op::Call(2) if inline::hof_profit_credit_at(i) => arith += 1,
             Op::Call(_) | Op::Apply(_) | Op::CallBuiltin(..) => calls += 1,
             // R2: a CallBuiltinSym that WILL be intrinsified (Tier-A GC-free read
             // or Tier-B dispatch-skip) costs ~an arith op, not a full
@@ -1285,12 +1286,15 @@ fn compile_bytecode_function_inner(
     // worthwhile. What's left goes to the baseline, whose per-op call shims aren't
     // worth it for a call-dominated body — keep those on the interpreter.
     let gate_phase = enter_phase(CompilePhase::Gate);
+    let _profit_fused = fused.clone().map(inline::FusedScope::enter);
     if !body_is_jit_profitable(ops, constants) {
         return Err(CompileError::NotProfitable);
     }
     drop(gate_phase);
     let _lower_phase = enter_phase(CompilePhase::Lower);
     let _fused_scope = fused.clone().map(inline::FusedScope::enter);
+    let _hof_regalloc = inline_regalloc::for_admitted_hof(fused.as_deref(), ops, constants)
+        .map(lowering::RegallocScope::enter);
     let _fused_feedback = fused
         .as_ref()
         .map(|fused| publish_numeric_feedback_vec(fused.feedback.clone()));
@@ -1307,6 +1311,7 @@ fn compile_bytecode_function_inner(
     )?;
     leaf.required = required;
     leaf.has_rest = has_rest;
+    inline_frames::retain_hof_dependencies(&mut leaf, fused.as_deref());
     // LEVEL-B redefinition guard: an inlined bit-op (logand/logior/logxor/lognot)
     // bakes the native op with NO per-call arming, so the leaf must be evicted if
     // its callee is ever redefined. Use PRECISE inline_deps only (NOT the coarse
@@ -1318,8 +1323,13 @@ fn compile_bytecode_function_inner(
     // byte-compile/loadup (measured +13.7%); a bare epoch bump without a cell write
     // means the bit-op is unchanged, so precise eviction loses no correctness.
     if jit_inline_arith_on() && obarray.is_some() {
-        let inline_syms = inline_arith_callee_syms(ops, constants);
+        let mut inline_syms = inline_arith_callee_syms(ops, constants);
         if !inline_syms.is_empty() {
+            for sym in leaf.inline_deps.iter() {
+                if !inline_syms.contains(sym) {
+                    inline_syms.push(*sym);
+                }
+            }
             leaf.inline_deps = inline_syms.into();
         }
     }
@@ -2989,6 +2999,7 @@ fn emit_backedge_jump(
     target_block: Block,
     handlers: &[HandlerStatic],
     pending: &mut Vec<PendingDispatch>,
+    physical: Option<inline_physical::PollAdmission<'_>>,
 ) {
     let vals: Vec<ClifValue> = (0..target_depth).map(|k| fb.use_var(vars[k])).collect();
     emit_backedge_jump_with_args(
@@ -3002,6 +3013,7 @@ fn emit_backedge_jump(
         &[],
         handlers,
         pending,
+        physical,
     );
 }
 
@@ -3020,6 +3032,7 @@ fn emit_backedge_jump_with_args(
     target_args: &[BlockArg],
     handlers: &[HandlerStatic],
     pending: &mut Vec<PendingDispatch>,
+    physical: Option<inline_physical::PollAdmission<'_>>,
 ) {
     let c = fb.ins().stack_load(rt.ptr_ty, types::I64, counter_slot, 0);
     let c1 = lowering::iadd_imm_p(fb, c, 1);
@@ -3076,7 +3089,26 @@ fn emit_backedge_jump_with_args(
     let tagged_reps = vec![SlotRep::Tagged; vals.len()];
     let se = signal_target_for_site(fb, signal_exit, handlers, pending, vals, &tagged_reps);
     let ok = lowering::icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
-    fb.ins().brif(ok, target_block, target_args, se, &[]);
+    if let Some(cache) = &rt.inline_entry_cache {
+        let refreshed = fb.create_block();
+        fb.ins().brif(ok, refreshed, &[], se, &[]);
+        fb.switch_to_block(refreshed);
+        fb.seal_block(refreshed);
+        cache.invalidate(fb);
+        if let Some(admission) = physical {
+            inline_physical::emit(
+                fb,
+                rt,
+                admission.frames,
+                admission.pc,
+                vals,
+                admission.pending,
+            );
+        }
+        fb.ins().jump(target_block, target_args);
+    } else {
+        fb.ins().brif(ok, target_block, target_args, se, &[]);
+    }
     cold.end(fb, Some(cold_exits::ColdExit::Poll));
 }
 
@@ -3334,9 +3366,13 @@ pub fn lower_leaf_full_osr(
     // Precise-deopt buffers: live operand-stack spill (max depth) + the
     // pc/depth/handler-count cells. Address-stable Boxes owned by the leaf;
     // generated code writes through baked raw addresses.
-    let deopt_spill: Box<[core::cell::Cell<i64>]> = (0..cfg.max_depth)
-        .map(|_| core::cell::Cell::new(0))
-        .collect();
+    let spill_depth = if inline::active_fused().is_some_and(|f| f.is_v2()) {
+        cfg.max_depth.saturating_mul(2).saturating_add(80)
+    } else {
+        cfg.max_depth
+    };
+    let deopt_spill: Box<[core::cell::Cell<i64>]> =
+        (0..spill_depth).map(|_| core::cell::Cell::new(0)).collect();
     let deopt_meta: Box<DeoptCells> = Box::new(DeoptCells::new());
 
     // R1a: per-leaf heap-constant reloc vector (see lower_mir_pure). The baseline's
@@ -3355,12 +3391,42 @@ pub fn lower_leaf_full_osr(
             reloc_vals.push(*v);
         }
     }
+    if let Some(fused) = inline::active_fused().filter(|f| f.is_v2()) {
+        for region in &fused.regions {
+            let v = Value::from_bits(region.callee_bits as usize);
+            if !reloc_index.contains_key(&v.bits()) {
+                reloc_index.insert(v.bits(), reloc_vals.len() as u32);
+                reloc_vals.push(v);
+            }
+        }
+    }
+    if let Some(fused) = inline::active_fused().filter(|f| f.is_v2()) {
+        for site in fused.v2.as_ref().expect("v2").hof_at.values() {
+            let code = site
+                .callback
+                .get_bytecode_data()
+                .expect("admitted callback");
+            for v in code
+                .constants
+                .iter()
+                .skip(site.prefix)
+                .copied()
+                .chain(std::iter::once(site.callback))
+            {
+                if v.is_heap_object() && !reloc_index.contains_key(&v.bits()) {
+                    reloc_index.insert(v.bits(), reloc_vals.len() as u32);
+                    reloc_vals.push(v);
+                }
+            }
+        }
+    }
     let reloc_data: Box<[Value]> = reloc_vals.into_boxed_slice();
 
     // has_backedge + needs_rt via the shared single-source helpers (R2-E) — same
     // logic as before, just factored so the baseline-AOT emit can reuse it.
     let has_backedge = baseline_has_backedge(ops, &cfg);
-    let needs_rt = baseline_needs_rt(ops, has_backedge);
+    let needs_rt =
+        baseline_needs_rt(ops, has_backedge) || inline::active_fused().is_some_and(|f| f.is_v2());
 
     // The entry's declared name: `lisp:<fn>#<id>:<tier>` when a naming
     // compile is in progress (perf map, dumps), else the legacy static name.
@@ -3403,6 +3469,7 @@ pub fn lower_leaf_full_osr(
         /*frameless=*/ !has_binds && !has_handlers,
         dynamic_prefix,
     );
+    let mut chains = Vec::new();
     let defined = shared::define_jit_leaf(/*per_leaf_shims=*/ true, |sink| {
         build_leaf_fn(
             sink,
@@ -3427,6 +3494,7 @@ pub fn lower_leaf_full_osr(
             dynamic_prefix,
             obs.emit(),
             abi,
+            &mut chains,
         )
     })?;
     let entry = defined.entry;
@@ -3475,13 +3543,14 @@ pub fn lower_leaf_full_osr(
         inline_deps: Box::from([]),
         has_binds,
         has_handlers,
-        needs_vmctx: heap_inline::inline_heap_sites() > 0,
+        needs_vmctx: heap_inline::inline_heap_sites() > 0
+            || inline::active_fused().is_some_and(|body| body.is_v2()),
         spec_slots,
         // JIT bakes each site's `expected` as an iconst; no sidecar array needed.
         spec_expected: Box::from([]),
         deopt_spill,
         deopt_meta,
-        chains: Box::from([]),
+        chains: chains.into_boxed_slice(),
         reloc_data,
         // JIT bakes its bases as iconst; the 4th entry arg is the executing
         // callee's constant base, read only when `dynamic_prefix > 0`.
@@ -3601,6 +3670,7 @@ pub(crate) fn build_baseline_leaf_object<S: LeafSink>(
         /*dynamic_prefix=*/ 0,               // AOT never targets a patched source
         LeafEmit::NONE,  // AOT code never counts or profiles
         LeafAbi::Memory, // AOT keeps the memory ABI
+        &mut Vec::new(),
     )?;
     Ok(BaselineAotMeta {
         arity,
@@ -3675,6 +3745,7 @@ fn build_leaf_fn<S: LeafSink>(
     // The entry's shape (`reg_abi`): the memory ABI for AOT and OSR, the
     // register ABI for an eligible JIT body when the knob is on.
     abi: LeafAbi,
+    chains: &mut Vec<super::vframe::DeoptChain>,
 ) -> Result<cranelift_module::FuncId, CompileError> {
     debug_assert!(
         abi == LeafAbi::Memory || (!aot && osr_pc.is_none()),
@@ -3706,6 +3777,7 @@ fn build_leaf_fn<S: LeafSink>(
 
     let mut func = Function::with_name_signature(UserFuncName::user(0, 0), sig.clone());
     let mut fbctx = sink.take_builder_context();
+    let frames = inline_frames::Frames::new(deopt_meta);
     {
         let mut fb = FunctionBuilder::new(&mut func, &mut fbctx);
 
@@ -3735,6 +3807,9 @@ fn build_leaf_fn<S: LeafSink>(
                 direct_shapes: !aot && (shapes.optional || shapes.rest),
                 call_census: !aot && jit_call_census_on(),
                 direct_framed: !aot && shapes.framed,
+                hof: inline::active_fused().is_some_and(|body| {
+                    body.v2.as_ref().is_some_and(|side| !side.hof_at.is_empty())
+                }),
             };
             let refs = RtRefs::new(
                 sink.shim_ids(call_conv, ptr_ty, groups)?,
@@ -3773,6 +3848,7 @@ fn build_leaf_fn<S: LeafSink>(
                 inline_alloc: !aot && jit_inline_alloc_on(),
                 direct_sites: std::cell::Cell::new(0),
                 poll: emit.poll(),
+                inline_entry_cache: None,
             })
         } else {
             None
@@ -3945,12 +4021,18 @@ fn build_leaf_fn<S: LeafSink>(
             // site loads its own. Only a body with inline sites loads it, and
             // such a body dereferences its vmctx anyway.
             if !aot
-                && heap_inline::hoist_heap_ptr(ops, has_back_edge(ops), rt.inline_alloc, |pc| {
-                    matches!(
-                        active_numeric_feedback(pc),
-                        crate::emacs_core::jit::NumericFeedback::Float
-                    )
-                })
+                && (inline_hof::hoist_callback_heap_ptr()
+                    || heap_inline::hoist_heap_ptr(
+                        ops,
+                        has_back_edge(ops),
+                        rt.inline_alloc,
+                        |pc| {
+                            matches!(
+                                active_numeric_feedback(pc),
+                                crate::emacs_core::jit::NumericFeedback::Float
+                            )
+                        },
+                    ))
             {
                 rt.heap = Some(heap_inline::load_heap_ptr(&mut fb, vmctx_param));
             }
@@ -3971,6 +4053,21 @@ fn build_leaf_fn<S: LeafSink>(
                     cfg.max_depth,
                 );
             }
+        }
+        if !aot && let Some(rt) = rt.as_mut() {
+            rt.inline_entry_cache =
+                inline::active_fused()
+                    .filter(|body| body.is_v2())
+                    .and_then(|body| {
+                        inline_entry_cache::EntryCache::build(
+                            &mut fb,
+                            &body,
+                            cfg,
+                            arity,
+                            osr_pc,
+                            dynamic_prefix,
+                        )
+                    });
         }
         if let Some(out_ptr) = out_ptr {
             fb.def_var(out_var, out_ptr);
@@ -4006,6 +4103,25 @@ fn build_leaf_fn<S: LeafSink>(
         // using them to elide guards in the body. Rejection captures the whole
         // unchanged tagged snapshot at the header, before any bytecode effect.
         let mut entry_deopts = Vec::new();
+        if let Some(rt) = rt.as_ref()
+            && rt
+                .inline_entry_cache
+                .as_ref()
+                .is_some_and(|cache| cache.physical_protocol_admitted())
+        {
+            let values = vars[..seed_count]
+                .iter()
+                .map(|&var| fb.use_var(var))
+                .collect::<Vec<_>>();
+            inline_physical::emit(
+                &mut fb,
+                rt,
+                &frames,
+                osr_pc.unwrap_or(0),
+                &values,
+                &mut entry_deopts,
+            );
+        }
         if let Some(pc) = osr_pc
             && let Some(slots) = known_fixnum_slots.get(&pc)
             && slots.iter().any(|&known| known)
@@ -4085,6 +4201,7 @@ fn build_leaf_fn<S: LeafSink>(
             // Active handler frames at block entry (static), kept in sync as
             // PopHandler ops run; signal sites inside a protected extent queue
             // a dispatch block here, filled after the block's terminator.
+            let mut physical_binds = cfg.entry_binds.get(&l).copied().unwrap_or(0);
             let mut handlers: Vec<HandlerStatic> =
                 cfg.entry_handlers.get(&l).cloned().unwrap_or_default();
             let mut pending: Vec<PendingDispatch> = Vec::new();
@@ -4098,7 +4215,7 @@ fn build_leaf_fn<S: LeafSink>(
                 // with the caller's pre-call stack — captured here, at the
                 // region's first op, where the stack still holds
                 // `[...residual, callee, args]`.
-                if let Some(fused) = inline::active_fused() {
+                if let Some(fused) = inline::active_fused().filter(|f| !f.is_v2()) {
                     match fused.region_at(i) {
                         Some(region) if i == region.start => {
                             let region = region.clone();
@@ -4112,6 +4229,7 @@ fn build_leaf_fn<S: LeafSink>(
                                 call_site_pc: region.call_site_pc,
                                 stack: stack.clone(),
                                 reps: reps.clone(),
+                                chain: None,
                             }));
                             // ...and the splice is a speculation, so check the
                             // slot still holds the callee whose body is next.
@@ -4136,6 +4254,48 @@ fn build_leaf_fn<S: LeafSink>(
                             }
                         }
                     }
+                }
+                if let Some(site) =
+                    inline::active_fused().and_then(|f| f.admitted_hof_at(i).copied())
+                {
+                    inline_hof::emit(
+                        &frames,
+                        &mut fb,
+                        i,
+                        site,
+                        rt.as_ref().expect("HOF runtime"),
+                        physical_binds,
+                        &mut stack,
+                        &mut reps,
+                        &mut pending_deopt,
+                        &mut signal_exit,
+                        reloc_base,
+                        reloc_index,
+                    )?;
+                    continue;
+                }
+                if frames.before_op(
+                    &mut fb,
+                    i,
+                    op,
+                    rt.as_ref(),
+                    physical_binds,
+                    handlers.len(),
+                    &mut stack,
+                    &mut reps,
+                    &mut pending_deopt,
+                    reloc_index,
+                )? {
+                    continue;
+                }
+                match op {
+                    Op::VarBind(_)
+                    | Op::SaveCurrentBuffer
+                    | Op::SaveExcursion
+                    | Op::SaveRestriction
+                    | Op::UnwindProtectPop => physical_binds += 1,
+                    Op::Unbind(n) => physical_binds -= *n as usize,
+                    _ => {}
                 }
                 // Terminators consume / snapshot / spill the operand stack as tagged
                 // Values; force-tag any raw slots and box any flonums first (the
@@ -4220,6 +4380,12 @@ fn build_leaf_fn<S: LeafSink>(
                                 block_for[&tu],
                                 &handlers,
                                 &mut pending,
+                                inline_physical::poll_admission(
+                                    rt,
+                                    &frames,
+                                    tu,
+                                    &mut pending_deopt,
+                                ),
                             );
                         } else {
                             fb.ins().jump(block_for[&tu], &[]);
@@ -4278,6 +4444,12 @@ fn build_leaf_fn<S: LeafSink>(
                                 block_for[&tu],
                                 &handlers,
                                 &mut pending,
+                                inline_physical::poll_admission(
+                                    rt,
+                                    &frames,
+                                    tu,
+                                    &mut pending_deopt,
+                                ),
                             );
                         }
                         terminated = true;
@@ -4336,6 +4508,12 @@ fn build_leaf_fn<S: LeafSink>(
                                 block_for[&tu],
                                 &handlers,
                                 &mut pending,
+                                inline_physical::poll_admission(
+                                    rt,
+                                    &frames,
+                                    tu,
+                                    &mut pending_deopt,
+                                ),
                             );
                         }
                         terminated = true;
@@ -4587,6 +4765,7 @@ fn build_leaf_fn<S: LeafSink>(
         fb.seal_all_blocks();
         fb.finalize(frontend_config);
     }
+    chains.extend(frames.finish());
     sink.return_builder_context(fbctx);
     LAST_IR_STATS.with(|c| {
         let (_, _, sites, slots) = c.get();
@@ -4656,6 +4835,12 @@ pub(crate) mod jit_layout;
 pub(crate) mod reg_abi;
 pub(crate) use reg_abi::LeafAbi;
 pub(crate) mod chain_framestate;
+pub(crate) mod hof_runtime;
+pub(crate) mod inline_entry_cache;
+mod inline_frames;
+mod inline_hof;
+mod inline_physical;
+pub(crate) mod inline_regalloc;
 pub(crate) mod resumed_chain;
 pub(crate) mod snapshot;
 pub(crate) mod source_slots;

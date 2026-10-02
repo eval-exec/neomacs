@@ -216,6 +216,7 @@ pub(crate) const CONTEXT_CURRENT_BUFFER_RAW_OFFSET: usize =
     CONTEXT_BUFFERS_OFFSET + buffer_walk::BUFFER_MANAGER_CURRENT_RAW_OFFSET;
 
 /// From the untagged address of a cons, its cdr.
+pub(crate) const CONS_CAR_OFFSET: usize = offset_of!(crate::tagged::header::ConsCell, car);
 pub(crate) const CONS_CDR_OFFSET: usize = offset_of!(crate::tagged::header::ConsCell, cdr_or_next);
 
 const _: () = {
@@ -269,6 +270,14 @@ pub(crate) fn runtime_identity_word(runtime: &crate::emacs_core::jit::Runtime) -
     let word = unsafe { std::ptr::from_ref(&*held).cast::<usize>().read() };
     drop(ManuallyDrop::into_inner(held));
     word
+}
+
+/// Stable address of the source's monotone `AtomicU32` capture width. Taking
+/// the actual field's address avoids assuming `Arc` header or Rust field order.
+/// Threading: the owning relocated template keeps its Runtime Arc alive; an
+/// emitted atomic load reads the shared counter, never mutator Lisp state.
+pub(crate) fn runtime_patched_prefix_address(runtime: &crate::emacs_core::jit::Runtime) -> usize {
+    std::ptr::from_ref(&runtime.patched_prefix) as usize
 }
 
 /// From the untagged address of a byte-code object, the `(data pointer,
@@ -834,3 +843,7 @@ fn probe_let_layout() -> Option<LetLayout> {
 #[cfg(test)]
 #[path = "jit_layout/tests/golden.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "jit_layout/tests/runtime_prefix.rs"]
+mod runtime_prefix_tests;
