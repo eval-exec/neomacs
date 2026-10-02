@@ -2021,7 +2021,11 @@ fn redisplay_skips_callback_when_visible_state_is_unchanged() {
     ev.redisplay();
     assert_eq!(*redisplay_count.borrow(), 3);
 
+    // Preserve this fixture's legacy forced-callback assertion. Explicit
+    // OFF/ON idle behavior is covered by tests::idle_redisplay.
+    crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(Some(false));
     ev.redisplay_with_force(true);
+    crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(None);
     assert_eq!(*redisplay_count.borrow(), 4);
 }
 

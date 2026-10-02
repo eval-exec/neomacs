@@ -6631,8 +6631,8 @@ pub(crate) fn set_redisplay_idle_skip_for_test(enabled: Option<bool>) {
 }
 
 /// `NEOMACS_REDISPLAY_IDLE_SKIP=on` (P3.5 J): `(redisplay t)` also skips the
-/// layout when the visible state is unchanged. GNU's FORCE only means "do not
-/// stop for pending input"; a redisplay with nothing to do writes nothing.
+/// layout when the visible state is unchanged. GNU 31.1 ignores the historical
+/// FORCE argument (dispnew.c:Fredisplay); unchanged windows still skip layout.
 /// Read once; default on. Explicit off retains forced layout.
 pub(crate) fn redisplay_idle_skip_enabled() -> bool {
     #[cfg(test)]
