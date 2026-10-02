@@ -110,8 +110,8 @@ thread_local! {
 /// including writes after its last capture while a certificate can remain live.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum JournalPolicy {
-    BeforeFirstCapture,
     JournalOnly,
+    BeforeFirstCapture,
     JournalAndObserve,
 }
 
@@ -385,7 +385,7 @@ pub(super) enum WriteProjection {
 /// checks that flag on every write until true, then permanently journals writes.
 /// No Lisp state is cached, and STATE's borrow ends before the caller handles
 /// a header, GC barrier, backing ownership, slot bounds, or the actual store.
-#[inline]
+#[inline(always)]
 pub(super) fn record_projected_write(value: TaggedValue, projection: WriteProjection) -> bool {
     let projected = match projection {
         WriteProjection::Cons => value.is_cons(),
