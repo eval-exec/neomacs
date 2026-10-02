@@ -34,6 +34,7 @@ struct Entry {
 thread_local! {
     static CACHE: Cell<Option<Entry>> = const { Cell::new(None) };
     static EPOCH: Cell<u64> = const { Cell::new(0) };
+    static CACHE_HEAP: Cell<usize> = const { Cell::new(0) };
 }
 
 /// Some string's bytes changed: every cached pair is suspect.
@@ -45,10 +46,25 @@ pub(crate) fn note_string_bytes_changed() {
 /// Forget the entry (heap reset, pdump load).
 pub(crate) fn reset_string_pos_cache() {
     CACHE.with(|cache| cache.set(None));
+    CACHE_HEAP
+        .with(|owner| owner.set(crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0)));
+}
+
+/// Heap identity is established once on activation, never during conversion.
+pub(crate) fn activate_string_pos_cache(heap_identity: usize) {
+    CACHE_HEAP.with(|owner| {
+        if owner.get() != heap_identity {
+            CACHE.with(|cache| cache.set(None));
+            owner.set(heap_identity);
+        }
+    });
 }
 
 /// The cached string is a GC root, like GNU's staticpro'd cache variable.
-pub(crate) fn collect_string_pos_cache_gc_roots(roots: &mut Vec<Value>) {
+pub(crate) fn collect_string_pos_cache_gc_roots(roots: &mut Vec<Value>, heap_identity: usize) {
+    if CACHE_HEAP.with(Cell::get) != heap_identity {
+        return;
+    }
     CACHE.with(|cache| {
         if let Some(entry) = cache.get() {
             roots.push(entry.string);
@@ -139,3 +155,7 @@ pub(crate) fn string_byte_to_char(string: Value, s: &LispString, byte_index: usi
 #[cfg(test)]
 #[path = "tests/mod.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/gc_tls_ownership.rs"]
+mod gc_tls_ownership_tests;

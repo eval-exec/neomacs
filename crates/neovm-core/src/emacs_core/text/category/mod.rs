@@ -10,7 +10,7 @@
 
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use super::boolvec::{self, BoolVectorView};
 use super::error::{EvalResult, Flow, signal};
@@ -18,6 +18,7 @@ use super::value::{HashTableTest, Value, ValueKind, VecLikeType};
 
 thread_local! {
     static STANDARD_CATEGORY_TABLE_OBJECT: RefCell<Option<Value>> = const { RefCell::new(None) };
+    static STANDARD_CATEGORY_TABLE_HEAP: Cell<usize> = const { Cell::new(0) };
 }
 
 /// GNU `syms_of_category` (src/category.c:442-500): the two word-boundary
@@ -33,13 +34,20 @@ pub fn register_bootstrap_vars(obarray: &mut super::symbol::Obarray) {
 
 pub fn reset_category_thread_locals() {
     STANDARD_CATEGORY_TABLE_OBJECT.with(|slot| *slot.borrow_mut() = None);
+    STANDARD_CATEGORY_TABLE_HEAP
+        .with(|owner| owner.set(crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0)));
 }
 
 pub(crate) fn restore_standard_category_table_object(table: Value) {
     STANDARD_CATEGORY_TABLE_OBJECT.with(|slot| *slot.borrow_mut() = Some(table));
+    STANDARD_CATEGORY_TABLE_HEAP
+        .with(|owner| owner.set(crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0)));
 }
 
-pub fn collect_category_gc_roots(roots: &mut Vec<Value>) {
+pub fn collect_category_gc_roots(roots: &mut Vec<Value>, heap_identity: usize) {
+    if STANDARD_CATEGORY_TABLE_HEAP.with(Cell::get) != heap_identity {
+        return;
+    }
     STANDARD_CATEGORY_TABLE_OBJECT.with(|slot| {
         if let Some(v) = *slot.borrow() {
             roots.push(v);
@@ -260,6 +268,9 @@ pub(crate) fn ensure_standard_category_table_object() -> EvalResult {
 
         let table = make_category_table_object()?;
         *slot.borrow_mut() = Some(table);
+        STANDARD_CATEGORY_TABLE_HEAP.with(|owner| {
+            owner.set(crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0))
+        });
         Ok(table)
     })
 }
@@ -751,3 +762,7 @@ pub(crate) fn builtin_set_category_table_in_buffers(
 #[cfg(test)]
 #[path = "tests/mod.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/gc_tls_ownership.rs"]
+mod gc_tls_ownership_tests;

@@ -10,25 +10,38 @@ use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::expect_args;
 use crate::emacs_core::intern::{SymId, intern};
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 thread_local! {
     static STANDARD_CASE_TABLE_OBJECT: RefCell<Option<Value>> = const { RefCell::new(None) };
+    static STANDARD_CASE_TABLE_HEAP: Cell<usize> = const { Cell::new(0) };
 }
 
 /// Clear cached thread-local case table (must be called when heap changes).
 pub fn reset_casetab_thread_locals() {
     STANDARD_CASE_TABLE_OBJECT.with(|slot| *slot.borrow_mut() = None);
+    STANDARD_CASE_TABLE_HEAP
+        .with(|owner| owner.set(crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0)));
 }
 
 /// Collect GC roots from the cached case table.
-pub fn collect_casetab_gc_roots(roots: &mut Vec<Value>) {
+pub fn collect_casetab_gc_roots(roots: &mut Vec<Value>, heap_identity: usize) {
+    if STANDARD_CASE_TABLE_HEAP.with(Cell::get) != heap_identity {
+        return;
+    }
     STANDARD_CASE_TABLE_OBJECT.with(|slot| {
         if let Some(v) = *slot.borrow() {
             roots.push(v);
         }
     });
+}
+
+/// Restore the explicit standard-table cache without changing hot case lookups.
+pub(crate) fn activate_casetab_thread_locals(table: Option<Value>) {
+    STANDARD_CASE_TABLE_OBJECT.with(|slot| *slot.borrow_mut() = table);
+    STANDARD_CASE_TABLE_HEAP
+        .with(|owner| owner.set(crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0)));
 }
 
 // ---------------------------------------------------------------------------
@@ -386,6 +399,8 @@ pub(crate) fn builtin_set_standard_case_table(
     STANDARD_CASE_TABLE_OBJECT.with(|slot| {
         *slot.borrow_mut() = Some(args[0]);
     });
+    ctx.cached_standard_case_table = Some(args[0]);
+    STANDARD_CASE_TABLE_HEAP.with(|owner| owner.set(ctx.tagged_heap.identity()));
     let table = args[0];
     ensure_case_table_derived_slots(table)?;
     ctx.obarray
@@ -812,3 +827,7 @@ pub fn is_case_table(v: &Value) -> bool {
 #[cfg(test)]
 #[path = "tests/mod.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/gc_tls_ownership.rs"]
+mod gc_tls_ownership_tests;

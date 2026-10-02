@@ -262,6 +262,9 @@ impl Context {
         if self.standard_category_table.is_heap_object() {
             visit(self.standard_category_table);
         }
+        if let Some(table) = self.cached_standard_case_table {
+            visit(table);
+        }
         let mut registry_roots = Vec::new();
         // Rust-held signals, throws and yields stay rooted when this Context moves.
         group("in_flight_registry");
@@ -528,6 +531,8 @@ impl Context {
             &self.dynamic_module_registry,
         );
         super::super::error::install_in_flight_registry_handle(&self.in_flight_registry);
+        super::super::casetab::activate_casetab_thread_locals(self.cached_standard_case_table);
+        super::super::string_pos_cache::activate_string_pos_cache(self.tagged_heap.identity());
         super::super::syntax::restore_standard_syntax_table_object(self.standard_syntax_table);
         super::super::syntax::restore_syntax_code_objects(self.syntax_code_objects);
         super::super::category::restore_standard_category_table_object(

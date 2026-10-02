@@ -2283,30 +2283,18 @@ fn collect_thread_local_gc_roots(
         stats,
         super::jit::cache::collect_jit_reloc_gc_roots,
     );
-    collect_group(
-        roots,
-        "syntax-thread-local",
-        stats,
-        super::syntax::collect_syntax_gc_roots,
-    );
-    collect_group(
-        roots,
-        "casetab-thread-local",
-        stats,
-        super::casetab::collect_casetab_gc_roots,
-    );
-    collect_group(
-        roots,
-        "string-pos-cache-thread-local",
-        stats,
-        super::string_pos_cache::collect_string_pos_cache_gc_roots,
-    );
-    collect_group(
-        roots,
-        "category-thread-local",
-        stats,
-        super::category::collect_category_gc_roots,
-    );
+    collect_group(roots, "syntax-thread-local", stats, |group| {
+        super::syntax::collect_syntax_gc_roots(group, heap_id)
+    });
+    collect_group(roots, "casetab-thread-local", stats, |group| {
+        super::casetab::collect_casetab_gc_roots(group, heap_id)
+    });
+    collect_group(roots, "string-pos-cache-thread-local", stats, |group| {
+        super::string_pos_cache::collect_string_pos_cache_gc_roots(group, heap_id)
+    });
+    collect_group(roots, "category-thread-local", stats, |group| {
+        super::category::collect_category_gc_roots(group, heap_id)
+    });
     collect_group(roots, "terminal-thread-local", stats, |group| {
         super::terminal::pure::collect_terminal_gc_roots(group, heap_id)
     });
@@ -3601,6 +3589,7 @@ pub struct Context {
     pub(crate) window_configuration_registry: super::builtins::WindowConfigurationRegistryHandle,
     pub(crate) dynamic_module_registry: super::dynamic_module::DynamicModuleRegistryHandle,
     pub(crate) in_flight_registry: super::error::InFlightRegistryHandle,
+    pub(crate) cached_standard_case_table: Option<Value>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

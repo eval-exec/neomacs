@@ -139,12 +139,17 @@ fn buffer_byte_char_delta(buf: &Buffer, from: usize, to: usize) -> i64 {
 thread_local! {
     static STANDARD_SYNTAX_TABLE_OBJECT: RefCell<Option<Value>> = const { RefCell::new(None) };
     static SYNTAX_CODE_OBJECTS: RefCell<Option<Value>> = const { RefCell::new(None) };
+    static STANDARD_SYNTAX_TABLE_HEAP: Cell<usize> = const { Cell::new(0) };
+    static SYNTAX_CODE_OBJECTS_HEAP: Cell<usize> = const { Cell::new(0) };
 }
 
 /// Clear cached thread-local syntax table (must be called when heap changes).
 pub fn reset_syntax_thread_locals() {
     STANDARD_SYNTAX_TABLE_OBJECT.with(|slot| *slot.borrow_mut() = None);
     SYNTAX_CODE_OBJECTS.with(|slot| *slot.borrow_mut() = None);
+    let heap_identity = crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0);
+    STANDARD_SYNTAX_TABLE_HEAP.with(|owner| owner.set(heap_identity));
+    SYNTAX_CODE_OBJECTS_HEAP.with(|owner| owner.set(heap_identity));
 }
 
 /// Restore the canonical standard syntax-table object for the current thread.
@@ -155,11 +160,15 @@ pub fn reset_syntax_thread_locals() {
 /// `Context` between threads must restore that identity explicitly.
 pub(crate) fn restore_standard_syntax_table_object(table: Value) {
     STANDARD_SYNTAX_TABLE_OBJECT.with(|slot| *slot.borrow_mut() = Some(table));
+    STANDARD_SYNTAX_TABLE_HEAP
+        .with(|owner| owner.set(crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0)));
 }
 
 /// Restore GNU's canonical vector of bare syntax descriptor objects.
 pub(crate) fn restore_syntax_code_objects(objects: Value) {
     SYNTAX_CODE_OBJECTS.with(|slot| *slot.borrow_mut() = Some(objects));
+    SYNTAX_CODE_OBJECTS_HEAP
+        .with(|owner| owner.set(crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0)));
 }
 
 /// Snapshot GNU's canonical vector of bare syntax descriptor objects.
@@ -168,17 +177,21 @@ pub(crate) fn snapshot_syntax_code_objects() -> Option<Value> {
 }
 
 /// Collect GC roots from the cached syntax table.
-pub fn collect_syntax_gc_roots(roots: &mut Vec<Value>) {
-    STANDARD_SYNTAX_TABLE_OBJECT.with(|slot| {
-        if let Some(v) = *slot.borrow() {
-            roots.push(v);
-        }
-    });
-    SYNTAX_CODE_OBJECTS.with(|slot| {
-        if let Some(v) = *slot.borrow() {
-            roots.push(v);
-        }
-    });
+pub fn collect_syntax_gc_roots(roots: &mut Vec<Value>, heap_identity: usize) {
+    if STANDARD_SYNTAX_TABLE_HEAP.with(Cell::get) == heap_identity {
+        STANDARD_SYNTAX_TABLE_OBJECT.with(|slot| {
+            if let Some(value) = *slot.borrow() {
+                roots.push(value);
+            }
+        });
+    }
+    if SYNTAX_CODE_OBJECTS_HEAP.with(Cell::get) == heap_identity {
+        SYNTAX_CODE_OBJECTS.with(|slot| {
+            if let Some(value) = *slot.borrow() {
+                roots.push(value);
+            }
+        });
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, EnumString, IntoStaticStr)]
@@ -699,6 +712,8 @@ pub fn syntax_entry_to_value(entry: &SyntaxEntry) -> Value {
 }
 
 fn make_syntax_code_objects() -> Value {
+    SYNTAX_CODE_OBJECTS_HEAP
+        .with(|owner| owner.set(crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0)));
     Value::vector(
         (0..SYNTAX_CLASS_COUNT)
             .map(|code| Value::cons(Value::fixnum(code as i64), Value::NIL))
@@ -886,6 +901,7 @@ impl SyntaxTable {
     /// Return the syntax entry for `ch`, matching GNU
     /// `SYNTAX_ENTRY(c)`. Falls back to the standard chartable when
     /// the wrapper is nil-backed (handled by `syntax_entry_at_char`).
+    #[inline(always)]
     pub fn get_entry(&self, ch: char) -> Option<SyntaxEntry> {
         self.get_entry_code(ch as u32)
     }
@@ -894,6 +910,7 @@ impl SyntaxTable {
     /// syntax tables are indexed by `CHAR_VALID_P` integer codes
     /// (`0..=MAX_CHAR`), not by Unicode scalar values; keep this path
     /// available for callers such as `char-syntax`.
+    #[inline(always)]
     pub fn get_entry_code(&self, code: u32) -> Option<SyntaxEntry> {
         syntax_entry_at_char_code(&self.chartable, code)
     }
@@ -2906,6 +2923,9 @@ fn ensure_standard_syntax_table_object() -> EvalResult {
             None,
         )?;
         *slot.borrow_mut() = Some(table);
+        STANDARD_SYNTAX_TABLE_HEAP.with(|owner| {
+            owner.set(crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0))
+        });
         Ok(table)
     })
 }
@@ -3076,13 +3096,24 @@ fn flat_ascii_syntax_entry(table: &SyntaxTable, cp: u8) -> SyntaxEntry {
         crate::emacs_core::chartable::char_table_write_tick(),
     );
     if SYNTAX_FLAT_ASCII_ENTRY_CACHE.with(|c| c.get()) != Some(key) {
-        let entries: [SyntaxEntry; 128] =
-            std::array::from_fn(|i| syntax_entry_from_table(table, i as u8 as char));
-        SYNTAX_FLAT_ASCII_ENTRY_ENTRIES.with(|e| *e.borrow_mut() = entries);
-        SYNTAX_FLAT_ASCII_ENTRY_CACHE.with(|c| c.set(Some(key)));
+        refill_flat_ascii_syntax_entry_cache(table, key);
     }
     SYNTAX_FLAT_ASCII_ENTRY_ENTRIES.with(|e| e.borrow()[cp as usize])
 }
+
+// Keep a cache fill's array construction and error cleanup off cached reads.
+#[cold]
+#[inline(never)]
+fn refill_flat_ascii_syntax_entry_cache(table: &SyntaxTable, key: (usize, u64)) {
+    let entries: [SyntaxEntry; 128] =
+        std::array::from_fn(|i| syntax_entry_from_table(table, i as u8 as char));
+    SYNTAX_FLAT_ASCII_ENTRY_ENTRIES.with(|e| *e.borrow_mut() = entries);
+    SYNTAX_FLAT_ASCII_ENTRY_CACHE.with(|c| c.set(Some(key)));
+}
+
+// Keep cold standard-table initialization from outlining this scalar lookup
+// in regexp and ASCII classification loops.
+#[inline(always)]
 pub(crate) fn syntax_entry_at_char_code(table: &Value, code: u32) -> Option<SyntaxEntry> {
     let effective = if table.is_nil() {
         ensure_standard_syntax_table_object().unwrap_or(Value::NIL)
@@ -3092,8 +3123,22 @@ pub(crate) fn syntax_entry_at_char_code(table: &Value, code: u32) -> Option<Synt
     if effective.is_nil() {
         return None;
     }
-    let entry = super::chartable::ct_lookup(&effective, code as i64).ok()?;
+    let entry = match super::chartable::ct_lookup(&effective, code as i64) {
+        Ok(entry) => entry,
+        result @ Err(_) => {
+            discard_syntax_lookup_error(result);
+            return None;
+        }
+    };
     syntax_entry_from_chartable_entry(&entry)
+}
+
+// Discarded errors still release their root pins immediately. Keep their
+// destruction out of the per-character successful lookup path.
+#[cold]
+#[inline(never)]
+fn discard_syntax_lookup_error(result: EvalResult) {
+    drop(result);
 }
 
 /// Return the `SyntaxClass` for `c` under `table`, mirroring GNU
@@ -3907,7 +3952,7 @@ fn coalesced_syntax_run_end(
     }
 }
 
-#[inline]
+#[inline(always)]
 fn syntax_entry_from_table(table: &SyntaxTable, ch: char) -> SyntaxEntry {
     record_syntax_table_decode();
     table
@@ -7476,3 +7521,7 @@ mod parse_state_divergence_gnu_tests;
 #[cfg(test)]
 #[path = "tests/skip_syntax_classes.rs"]
 mod skip_syntax_classes_tests;
+
+#[cfg(test)]
+#[path = "tests/gc_tls_ownership.rs"]
+mod gc_tls_ownership_tests;
