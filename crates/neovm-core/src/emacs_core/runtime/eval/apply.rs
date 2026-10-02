@@ -2608,6 +2608,7 @@ impl Context {
     }
 
     #[cfg(feature = "jit")]
+    #[inline]
     fn apply2_bytecode_impl<const OBSERVED: bool>(
         &mut self,
         function: Value,
