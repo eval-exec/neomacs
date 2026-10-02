@@ -40,7 +40,7 @@
 //! | `NEOVM_REGEX_DFA` | `on` (default), `off`, `verify` | Candidate existence filter ([`DfaMode`]). |
 //! | `NEOVM_REGEX_DFA_COLD` | `on` (default), `off` | Defer the lease; admit two nonempty failures during a scan, or one when the whole search fails ([`cold_path_enabled`]). |
 //! | `NEOVM_REGEX_DFA_STATS` | unset (default), `1` | Print this thread's [`DfaStats`] on stderr at exit with the filter on. |
-//! | `NEOVM_REGEX_DFA_FIRST_STEP` | `off` (default), `on` | Reject cached prefixes of at most eight bytes inline; verify also checks the predicate against the matcher ([`first_step_enabled`]). |
+//! | `NEOVM_REGEX_DFA_FIRST_STEP` | `on` (default), `off` | Reject cached prefixes of at most eight bytes inline; verify also checks the predicate against the matcher ([`first_step_enabled`]). |
 
 use super::{
     CompiledPattern, LookupClassKey, MatchRegisters, MatchScratch, RegexOp, SyntaxAssertion,
@@ -2129,7 +2129,7 @@ pub(crate) fn with_first_step<R>(on: bool, f: impl FnOnce() -> R) -> R {
     f()
 }
 
-/// `NEOVM_REGEX_DFA_FIRST_STEP=on` (default off): consult an existing dead
+/// `NEOVM_REGEX_DFA_FIRST_STEP` (default on; `off` disables): consult an existing dead
 /// transition within an eight-byte cached prefix before the general loop.
 #[inline]
 pub(crate) fn first_step_enabled() -> bool {
@@ -2139,7 +2139,8 @@ pub(crate) fn first_step_enabled() -> bool {
     }
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| {
-        let on = super::regex_knob_on(std::env::var("NEOVM_REGEX_DFA_FIRST_STEP").ok().as_deref());
+        let on =
+            !super::regex_knob_off(std::env::var("NEOVM_REGEX_DFA_FIRST_STEP").ok().as_deref());
         tracing::debug!(target: "neovm::regex", on, "NEOVM_REGEX_DFA_FIRST_STEP");
         on
     })
