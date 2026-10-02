@@ -40,6 +40,8 @@ jemalloc-profiling = [
 # dispatch cut ~60%), so it ships on by default. Build `--no-default-features`
 # (plus the features you want) to get the interpreter-only binary.
 jit = ["neovm-core/jit"]
+# Forward the default-off P0.12 Flow carrier feature to the evaluator.
+flow-word = ["neovm-core/flow-word"]
 # GNU-compatible native SQLite support. Default-on for distributed Neomacs
 # builds, while remaining a compile-time capability for minimal builds.
 sqlite = ["neovm-core/sqlite"]
