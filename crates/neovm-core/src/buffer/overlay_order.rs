@@ -129,12 +129,40 @@ where
         true
     }
 
-    /// Insert immediately before the authoritative ordered successor.
+    /// Return a member's predecessor in GNU's structural in-order traversal.
     ///
-    /// GNU's `new_start <= existing_start` descent reaches this same vacant
-    /// leaf position when the interval index supplies the new node's successor.
-    /// The existing red-black fixup therefore preserves GNU's exact topology,
-    /// including the pre-order later used by front-advancing insertion.
+    /// Coordinate contraction can make this order differ from attachment
+    /// serials at equal starts. This pure query needs only buffer-owned tree
+    /// links under the owner's existing borrow, with no shared Lisp state or
+    /// cached positions. It walks at most one tree-height path.
+    #[inline]
+    pub(super) fn predecessor_identity(&self, identity: I) -> Option<I> {
+        let mut current = *self
+            .by_identity
+            .get(&identity)
+            .expect("GNU order predecessor target is missing from the mirror");
+        if let Some(mut previous) = self.node(current).left {
+            while let Some(right) = self.node(previous).right {
+                previous = right;
+            }
+            return Some(self.node(previous).identity);
+        }
+        while let Some(parent) = self.node(current).parent {
+            if self.node(parent).right == Some(current) {
+                return Some(self.node(parent).identity);
+            }
+            current = parent;
+        }
+        None
+    }
+
+    /// Insert immediately before a validated structural successor.
+    ///
+    /// The caller proves the gap matches GNU's `new_start <= existing_start`
+    /// descent: its predecessor has a strictly smaller start and its successor
+    /// has a greater or equal start. Attachment order alone does not prove
+    /// this after a deletion collapses starts. The existing red-black fixup
+    /// then preserves GNU's exact topology and front-advancing pre-order.
     /// Mutations require the owning buffer's exclusive access to this mirror;
     /// the successor is call-local state and is not shared across mutators.
     pub(super) fn insert_before(&mut self, identity: I, successor: Option<I>) -> bool {

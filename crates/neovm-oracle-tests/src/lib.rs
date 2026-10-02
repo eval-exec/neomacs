@@ -52,6 +52,9 @@ mod cl;
 #[cfg(test)]
 #[path = "tests/cl2_overlay_move.rs"]
 mod cl2_overlay_move;
+#[cfg(test)]
+#[path = "tests/cl2_overlay_move_collapse.rs"]
+mod cl2_overlay_move_collapse;
 mod clear_string_semantics;
 mod closure;
 mod coding;

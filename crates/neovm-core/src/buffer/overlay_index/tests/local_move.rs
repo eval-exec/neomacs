@@ -47,9 +47,10 @@ fn cl2_local_start_moves_do_not_materialize_positions_during_mirror_descent() {
         .records
         .identity_position_resolution_count();
     assert!(
-        resolutions <= moves * 4,
-        "real local moves should resolve coordinates a bounded number of times, \
-         rather than once per GNU mirror descent: {resolutions} resolutions for {moves} moves"
+        resolutions <= moves * 2,
+        "real interior local moves need their old range and at most one \
+         structural predecessor guard, rather than a coordinate lookup per \
+         GNU mirror descent: {resolutions} resolutions for {moves} moves"
     );
     assert_eq!(index.range(moving), Some(original));
     index.assert_invariants();
@@ -356,4 +357,60 @@ fn cl2_local_moves_keep_leaf_edges_and_reject_crossing_neighbors() {
         2
     );
     index.assert_invariants();
+}
+
+#[test]
+fn cl2_local_moves_preserve_gnu_topology_after_deletion_collapses_distinct_starts() {
+    force_local_move_knob_before_runtime_initialization();
+    crate::test_utils::init_test_tracing();
+    let mut index = OverlayIndex::new();
+    let a = overlay(10, 30);
+    let b = overlay(20, 30);
+    let moving = overlay(40, 45);
+    for (value, bounds) in [
+        (a, range(10, 30)),
+        (b, range(20, 30)),
+        (moving, range(40, 45)),
+    ] {
+        assert!(index.attach(value, bounds));
+    }
+    index.adjust_for_text_edit(OverlayTextEdit::Delete {
+        range: range(5, 25),
+    });
+    assert_eq!(index.range(a), Some(range(5, 10)));
+    assert_eq!(index.range(b), Some(range(5, 10)));
+    // GNU contracts begin coordinates in place. The topology still keeps A
+    // before B even though B has a later attachment serial in the B+ keys.
+    let identities = [a, b, moving].map(OverlayIdentity::of);
+    for next in [
+        range(3, 10),
+        range(5, 10),
+        range(4, 10),
+        range(5, 10),
+        range(8, 12),
+    ] {
+        let previous = index.range(moving).unwrap();
+        let mut reference = index.gnu_order.clone();
+        assert!(reference.remove(OverlayIdentity::of(moving)));
+        assert!(
+            reference.insert_by(OverlayIdentity::of(moving), |existing| {
+                next.start().cmp(
+                    &index
+                        .intervals
+                        .read()
+                        .range_by_identity(existing)
+                        .unwrap()
+                        .start(),
+                )
+            })
+        );
+        assert_eq!(index.move_to(moving, next), Some(previous));
+        assert_eq!(
+            index.gnu_order.subset_in_preorder(&identities),
+            reference.subset_in_preorder(&identities),
+            "a B+ successor must not substitute attachment order for GNU's \
+             preserved equal-start topology after deletion, new range {next:?}"
+        );
+        index.assert_invariants();
+    }
 }

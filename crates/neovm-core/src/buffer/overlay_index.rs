@@ -726,15 +726,34 @@ impl OverlayIndex {
                     let inserted = intervals.insert(overlay, new_range);
                     debug_assert!(inserted, "removed overlay retained an interval node");
                 }
-                let order_inserted = if local_moves {
-                    // GNU removes/reinserts on every real start change. The
-                    // authoritative record order identifies that insertion
-                    // gap without resolving one lazily shifted position per
-                    // mirror comparison. Both indexes remain under this
-                    // buffer owner's exclusive mutation and write guard.
-                    let successor = intervals
+                // Fresh full-key order guarantees this successor's start is
+                // at least the new start; None means a strictly greatest
+                // start. GNU deletion can preserve another order within an
+                // equal-start cluster, so check the structural predecessor
+                // once before accepting the B+ insertion gap. A mismatched
+                // gap retains GNU's ordinary coordinate descent, without a
+                // linear scan of the collapsed cluster.
+                let successor = if local_moves {
+                    intervals
                         .records
-                        .successor_identity(OverlayIdentity::of(overlay));
+                        .successor_identity(OverlayIdentity::of(overlay))
+                } else {
+                    None
+                };
+                let valid_local_gap = local_moves
+                    && successor
+                        .and_then(|successor| self.gnu_order.predecessor_identity(successor))
+                        .is_none_or(|predecessor| {
+                            intervals
+                                .range_by_identity(predecessor)
+                                .expect("GNU order predecessor is not indexed")
+                                .start()
+                                < new_range.start()
+                        });
+                let order_inserted = if valid_local_gap {
+                    // Both indexes remain under this buffer owner's exclusive
+                    // mutation and write guard. The validated gap preserves
+                    // GNU topology without per-descent position resolution.
                     self.gnu_order
                         .insert_before(OverlayIdentity::of(overlay), successor)
                 } else {
