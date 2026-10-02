@@ -7560,6 +7560,7 @@ pub(crate) use var_fast::{reset_var_cache_events, var_cache_census_report};
 mod special_forms;
 
 mod apply;
+mod sort_predicate;
 
 mod command_loop;
 

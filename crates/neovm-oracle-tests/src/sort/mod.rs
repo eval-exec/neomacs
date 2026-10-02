@@ -2,6 +2,7 @@
 
 mod algorithms;
 mod basic;
+mod captured_predicate;
 mod command_semantics;
 mod compare_strict_edge_semantics;
 mod extended;

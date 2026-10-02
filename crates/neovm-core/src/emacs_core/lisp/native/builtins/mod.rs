@@ -674,6 +674,10 @@ mod obarray_growth_test;
 mod obarray_order_test;
 
 #[cfg(test)]
+#[path = "tests/sort_capture.rs"]
+mod sort_capture_test;
+
+#[cfg(test)]
 #[path = "tests/lisp_only_predicates_and_aliases.rs"]
 mod lisp_only_predicates_and_aliases_test;
 
