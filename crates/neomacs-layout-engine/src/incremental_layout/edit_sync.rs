@@ -36,6 +36,7 @@
 //! | --- | --- | --- | --- |
 //! | `NEOMACS_LAYOUT_EDIT_SYNC` | `prove` | `prove`, `sync` | Synchronize the edit walk with unchanged rows below it. |
 //! | `NEOMACS_EDIT_SYNC_STILL` | `off` | `off`, `on` | Transfer synchronized geometry without remapping when its placement and visibility are unchanged. |
+//! | `NEOMACS_EDIT_SYNC_SHIFT_SKIP` | `off` | `off`, `on` | Avoid synchronized-row shift provenance allocations when no row moved vertically. |
 //! | `NEOMACS_LAYOUT_SCROLL_BACK` | `on` | `off`, `on` | Synchronize backward scrolls with the retained body. |
 
 use super::{EditDamage, RetainedWindowMatrix};
@@ -112,6 +113,40 @@ fn edit_sync_still_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| {
         std::env::var("NEOMACS_EDIT_SYNC_STILL")
+            .ok()
+            .is_some_and(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "on" | "1" | "true" | "yes"
+                )
+            })
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    static SHIFT_SKIP_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Force zero-dy shift-ledger elision on this thread (tests only).
+#[cfg(test)]
+pub(crate) fn set_shift_skip_for_test(enabled: Option<bool>) {
+    SHIFT_SKIP_OVERRIDE.with(|cell| cell.set(enabled));
+}
+
+/// Process-wide numeric policy; concurrent readers share no Lisp or layout
+/// state. OnceLock publishes the flag; each placement and ledger is owned by
+/// its individual layout attempt.
+#[inline]
+fn shift_skip_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(enabled) = SHIFT_SKIP_OVERRIDE.with(std::cell::Cell::get) {
+        return enabled;
+    }
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("NEOMACS_EDIT_SYNC_SHIFT_SKIP")
             .ok()
             .is_some_and(|value| {
                 matches!(
@@ -303,6 +338,19 @@ pub(crate) struct EditSyncInstall {
     pub(crate) point_rows: Option<neovm_core::window::DisplayPointRows>,
     /// Vertical shift in pixels (GNU `dy`); 0 when the rows kept their place.
     pub(crate) dy: f32,
+}
+
+impl EditSyncInstall {
+    /// Numeric provenance for rows that moved vertically. GNU adjusts row y
+    /// only when dy is nonzero (xdisp.c:23218-23222). Successful synchronization
+    /// is recorded independently by the caller when this ledger is absent.
+    #[inline]
+    pub(crate) fn shift_ledger(&self) -> Option<(Vec<usize>, f32)> {
+        if shift_skip_enabled() && self.dy == 0.0 {
+            return None;
+        }
+        Some((self.rows.iter().map(|(index, _)| *index).collect(), self.dy))
+    }
 }
 
 impl EditSyncPlan {

@@ -7,7 +7,9 @@
 //! walked (gate F3: at most 2 for a tab, CJK, `display` or newline edit).
 
 use super::*;
-use crate::incremental_layout::edit_sync::{EditSyncMode, set_edit_sync_mode_for_test};
+use crate::incremental_layout::edit_sync::{
+    EditSyncMode, set_edit_sync_mode_for_test, set_shift_skip_for_test,
+};
 
 struct SyncGuard;
 
@@ -21,6 +23,37 @@ impl SyncGuard {
 impl Drop for SyncGuard {
     fn drop(&mut self) {
         set_edit_sync_mode_for_test(None);
+    }
+}
+
+struct ShiftSkipGuard;
+
+impl ShiftSkipGuard {
+    fn on() -> Self {
+        set_shift_skip_for_test(Some(true));
+        Self
+    }
+}
+
+impl Drop for ShiftSkipGuard {
+    fn drop(&mut self) {
+        set_shift_skip_for_test(None);
+    }
+}
+
+/// Include currentness and the matrix row, not just the two Z offsets in
+/// BackendLayoutTrace, when comparing incremental and full window ends.
+fn selected_window_end(
+    eval: &Context,
+    frame_id: neovm_core::window::FrameId,
+) -> neovm_core::window::WindowEndState {
+    let frame = eval.frame_manager().get(frame_id).expect("frame");
+    match frame
+        .find_window(frame.selected_window)
+        .expect("selected window")
+    {
+        neovm_core::window::Window::Leaf { window_end, .. } => *window_end,
+        other => panic!("expected leaf window, got {other:?}"),
     }
 }
 
@@ -89,9 +122,19 @@ impl SyncFrame {
         let stats = self.engine.last_layout_stats().clone();
         let incremental = selected_window_layout_trace(&self.eval, &self.engine, self.frame_id);
         let incremental_indices = enabled_row_indices(&self.eval, &self.engine, self.frame_id);
+        let incremental_end = selected_window_end(&self.eval, self.frame_id);
         let mut fresh = LayoutEngine::new();
         fresh.layout_frame_rust(&mut self.eval, self.frame_id);
         let reference = selected_window_layout_trace(&self.eval, &fresh, self.frame_id);
+        assert!(
+            incremental_end.is_current(),
+            "{form}: incremental end is stale"
+        );
+        assert_eq!(
+            incremental_end,
+            selected_window_end(&self.eval, self.frame_id),
+            "{form}: complete window-end metadata differs ({stats:?})"
+        );
         // The trace lists enabled rows in order but not WHERE they sit in the
         // matrix; a replay that leaves a gap would pass it.
         assert_eq!(
@@ -380,4 +423,69 @@ fn random_edits_in_mode(mode: EditSyncMode) {
             );
         }
     }
+}
+
+#[test]
+fn zero_dy_shift_skip_preserves_the_complete_incremental_frame() {
+    let _sync = SyncGuard::set(EditSyncMode::Sync);
+    let _shift_skip = ShiftSkipGuard::on();
+    let text = tabbed_source(80);
+    let mut frame = SyncFrame::new(&text, end_of_line(&text, 15));
+    for form in ["(insert \"x\")", "(delete-region (1- (point)) (point))"] {
+        let stats = frame.step(form);
+        assert_eq!(stats.edit_windows, 1, "{form}: {stats:?}");
+        assert!(frame.main_relaid() <= 2, "{form}: {stats:?}");
+        assert_eq!(stats.reused_shifted_rows, 0, "{form}: {stats:?}");
+    }
+}
+
+#[test]
+fn nonzero_dy_shift_skip_preserves_shifted_row_provenance() {
+    let _sync = SyncGuard::set(EditSyncMode::Sync);
+    let _shift_skip = ShiftSkipGuard::on();
+    let text = tabbed_source(80);
+    let mut frame = SyncFrame::new(&text, end_of_line(&text, 15) - 3);
+    let stats = frame.step("(insert \"\\n\")");
+    assert_eq!(stats.edit_windows, 1, "{stats:?}");
+    assert!(frame.main_relaid() <= 2, "{stats:?}");
+    assert!(stats.reused_shifted_rows > 0, "{stats:?}");
+    let win = frame
+        .eval
+        .frame_manager()
+        .get(frame.frame_id)
+        .expect("frame")
+        .selected_window;
+    let damage = enabled_body_row_damage(&frame.engine, win);
+    assert!(
+        damage.iter().any(|(_, damage)| matches!(
+            damage,
+            RowDamage::ReusedShifted { dvpos } if dvpos.get() > 0.0
+        )),
+        "the rows below moved down: {damage:?}"
+    );
+}
+
+#[test]
+fn shift_skip_preserves_eob_and_window_end_metadata() {
+    let _sync = SyncGuard::set(EditSyncMode::Sync);
+    let _shift_skip = ShiftSkipGuard::on();
+    // The suffix reaches the actual accessible end, so a synchronized frame
+    // must retain the EOB row and publish the full-layout char/byte/index end.
+    let text = tabbed_source(12);
+    let mut frame = SyncFrame::new(&text, 3);
+    frame.step("(insert \"x\")");
+    frame.step("(goto-char (point-max))");
+    for form in [
+        "(insert \"中\")",
+        "(insert \"\\n\")",
+        "(delete-region (- (point) 2) (point))",
+    ] {
+        frame.step(form);
+    }
+}
+
+#[test]
+fn random_edits_with_shift_skip_match_a_full_layout_after_every_step() {
+    let _shift_skip = ShiftSkipGuard::on();
+    random_edits_in_mode(EditSyncMode::Sync);
 }

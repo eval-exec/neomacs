@@ -278,3 +278,117 @@ fn still_installation_remaps_row_indices_even_when_y_stays_fixed() {
         vec![6, 7, 8]
     );
 }
+
+struct ShiftSkipGuard;
+
+impl ShiftSkipGuard {
+    fn set(enabled: bool) -> Self {
+        set_shift_skip_for_test(Some(enabled));
+        Self
+    }
+}
+
+impl Drop for ShiftSkipGuard {
+    fn drop(&mut self) {
+        set_shift_skip_for_test(None);
+    }
+}
+
+#[test]
+fn zero_dy_shift_ledger_is_absent_only_with_the_new_gate() {
+    // Matrix indices may still change independently of y. The installer must
+    // keep remapping every position snapshot even when the ledger is absent.
+    for new_index in [5, 6] {
+        let original = populated_plan();
+        let placed = original.clone().install(
+            EditSyncReached {
+                display_row_index: new_index,
+                y: 50.0,
+            },
+            80.0,
+            usize::MAX,
+        );
+        let indices: Vec<usize> = (new_index..new_index + 3).collect();
+        {
+            let _off = ShiftSkipGuard::set(false);
+            assert_eq!(placed.shift_ledger(), Some((indices.clone(), 0.0)));
+        }
+        let _on = ShiftSkipGuard::set(true);
+        assert!(placed.shift_ledger().is_none());
+        assert_eq!(
+            placed
+                .rows
+                .iter()
+                .map(|(index, _)| *index)
+                .collect::<Vec<_>>(),
+            indices
+        );
+        let delta = new_index as i64 - 5;
+        let mut expected_snapshots = original.row_snapshots;
+        let mut expected_points = original.points;
+        for row in &mut expected_snapshots {
+            row.row += delta;
+        }
+        for point in &mut expected_points {
+            point.row += delta;
+        }
+        assert_eq!(placed.row_snapshots, expected_snapshots);
+        assert_eq!(placed.points, expected_points);
+        assert_eq!(placed.rows[2].1.pixel_y, 70.0);
+        let point_rows = placed.point_rows.unwrap();
+        assert_eq!(point_rows.iter_points().collect::<Vec<_>>(), placed.points);
+        assert_eq!(
+            point_rows
+                .rows
+                .iter()
+                .map(|row| row.row())
+                .collect::<Vec<_>>(),
+            (new_index as i64..new_index as i64 + 3).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn nonzero_dy_shift_ledger_retains_every_kept_row_index() {
+    let _on = ShiftSkipGuard::set(true);
+    let original = populated_plan();
+    let placed = original.clone().install(
+        EditSyncReached {
+            display_row_index: 6,
+            y: 60.0,
+        },
+        80.0,
+        usize::MAX,
+    );
+    assert_eq!(placed.shift_ledger(), Some((vec![6, 7], 10.0)));
+    assert_eq!(
+        placed
+            .rows
+            .iter()
+            .map(|(index, row)| (*index, row.pixel_y))
+            .collect::<Vec<_>>(),
+        vec![(6, 60.0), (7, 70.0)]
+    );
+    let mut expected_snapshots = original.row_snapshots[..2].to_vec();
+    let mut expected_points = original.points[..4].to_vec();
+    for row in &mut expected_snapshots {
+        row.row += 1;
+        row.y += 10;
+    }
+    for point in &mut expected_points {
+        point.row += 1;
+        point.y += 10;
+    }
+    assert_eq!(placed.row_snapshots, expected_snapshots);
+    assert_eq!(placed.points, expected_points);
+    let point_rows = placed.point_rows.unwrap();
+    assert_eq!(point_rows.iter_points().collect::<Vec<_>>(), placed.points);
+    assert_eq!(
+        point_rows
+            .rows
+            .iter()
+            .map(|row| row.row())
+            .collect::<Vec<_>>(),
+        vec![6, 7]
+    );
+}

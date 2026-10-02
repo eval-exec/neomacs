@@ -1108,14 +1108,7 @@ impl BufferSourceOutputSetup {
             {
                 synced_stop = Some(plan.stop_charpos as i64);
                 let placed = plan.install(reached, visible_bottom, geometry.mode_line_display_row);
-                edit_sync_shift = Some((
-                    placed
-                        .rows
-                        .iter()
-                        .map(|(index, _)| *index)
-                        .collect::<Vec<_>>(),
-                    placed.dy,
-                ));
+                edit_sync_shift = placed.shift_ledger();
                 scroll.reused_rows.extend(placed.rows);
                 scroll.reused_row_snapshots.extend(placed.row_snapshots);
                 scroll.reused_points.extend(placed.points);
@@ -1126,7 +1119,9 @@ impl BufferSourceOutputSetup {
                 }
             }
             // Whether reused rows sit BELOW the walked span.
-            let below_reused = scroll.bound_walk || edit_sync_shift.is_some();
+            // Sync still reuses rows below the walk when dy is zero; the
+            // optional vertical-shift ledger does not name this fact.
+            let below_reused = scroll.bound_walk || synced_stop.is_some();
 
             // Post-walk validation (GNU try_window_id: the regenerated region
             // must sync back up with the reused rows). The bounded walk just
