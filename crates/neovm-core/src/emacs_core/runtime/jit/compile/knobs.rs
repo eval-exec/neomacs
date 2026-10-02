@@ -1230,3 +1230,120 @@ pub(crate) fn jit_direct_sites() -> DirectSitesMode {
         },
     )
 }
+
+/// The call shapes beyond a named exact-arity call that direct sites take
+/// (`NEOVM_JIT_DIRECT_SHAPES`, design `p1-1-direct-native-calls` Stage 2,
+/// P1.0 S2.5), with direct calls on. Each part also gives the bodies such a
+/// site enters the register ABI (`LeafAbi::for_build`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(crate) struct DirectShapesKnob {
+    /// `optional` (2a): a named call of an `&optional` callee with fewer
+    /// arguments than its slots; the site passes nil for each missing one.
+    pub(crate) optional: bool,
+    /// `rest` (2d): a named call of a `&rest` callee; the site conses the
+    /// rest list.
+    pub(crate) rest: bool,
+    /// `constant` (2b): a call whose callee is a constant byte-code object
+    /// (a `cl-flet` local, a `lambda` literal) the fuser left a call.
+    pub(crate) constant: bool,
+}
+
+impl DirectShapesKnob {
+    pub(crate) const OFF: Self = Self {
+        optional: false,
+        rest: false,
+        constant: false,
+    };
+    pub(crate) const ALL: Self = Self {
+        optional: true,
+        rest: true,
+        constant: true,
+    };
+
+    /// Unset/`off`/`0`/`none`: nothing (the default); `all`/`on`/`1`:
+    /// every shape; otherwise a comma list of `optional`, `rest`,
+    /// `constant`.
+    pub(crate) fn parse(value: Option<&str>) -> Self {
+        let Some(value) = value.map(str::trim) else {
+            return Self::OFF;
+        };
+        match value.to_ascii_lowercase().as_str() {
+            "" | "0" | "off" | "false" | "no" | "none" => return Self::OFF,
+            "1" | "on" | "all" | "true" | "yes" => return Self::ALL,
+            _ => {}
+        }
+        let mut knob = Self::OFF;
+        for part in value.split(',').map(str::trim) {
+            match part {
+                "optional" => knob.optional = true,
+                "rest" => knob.rest = true,
+                "constant" => knob.constant = true,
+                "" => {}
+                other => tracing::warn!(
+                    target: "neovm_jit",
+                    part = other,
+                    "NEOVM_JIT_DIRECT_SHAPES: unknown part ignored (expected optional, rest, constant)"
+                ),
+            }
+        }
+        knob
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static DIRECT_SHAPES_TEST_OVERRIDE: std::cell::Cell<Option<DirectShapesKnob>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Force the direct-shapes knob for compiles on the current thread (tests
+/// only); `None` returns to the environment's.
+#[cfg(test)]
+pub(crate) fn force_direct_shapes_for_test(knob: Option<DirectShapesKnob>) {
+    DIRECT_SHAPES_TEST_OVERRIDE.with(|c| c.set(knob));
+}
+
+/// The `NEOVM_JIT_DIRECT_SHAPES` setting (read once), and nothing while
+/// direct calls are off ([`jit_direct_call_on`]). Read at compile time, and
+/// when a slot or a body's ABI is decided.
+pub(crate) fn jit_direct_shapes() -> DirectShapesKnob {
+    if !jit_direct_call_on() {
+        return DirectShapesKnob::OFF;
+    }
+    #[cfg(test)]
+    if let Some(knob) = DIRECT_SHAPES_TEST_OVERRIDE.with(|c| c.get()) {
+        return knob;
+    }
+    use std::sync::OnceLock;
+    static KNOB: OnceLock<DirectShapesKnob> = OnceLock::new();
+    *KNOB.get_or_init(|| {
+        DirectShapesKnob::parse(std::env::var("NEOVM_JIT_DIRECT_SHAPES").ok().as_deref())
+    })
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static CALL_CENSUS_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Force the call census on/off for compiles on the current thread (tests
+/// only); `None` returns to the environment's.
+#[cfg(test)]
+pub(crate) fn force_call_census_for_test(on: Option<bool>) {
+    CALL_CENSUS_TEST_OVERRIDE.with(|c| c.set(on));
+}
+
+/// `NEOVM_JIT_CALL_CENSUS=on` (a measurement mode, `call_census`): every JIT
+/// `Op::Call`/`Op::Apply` site first reports its callee's shape to a counter
+/// shim. Default off; off, the lowering is CLIF-identical. Read at compile
+/// time only.
+pub(crate) fn jit_call_census_on() -> bool {
+    #[cfg(test)]
+    if let Some(on) = CALL_CENSUS_TEST_OVERRIDE.with(|c| c.get()) {
+        return on;
+    }
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| knob_on("NEOVM_JIT_CALL_CENSUS"))
+}

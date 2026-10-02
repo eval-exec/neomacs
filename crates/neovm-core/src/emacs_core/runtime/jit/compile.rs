@@ -1053,9 +1053,10 @@ fn compile_bytecode_function_inner(
         // find them.
         return Err(CompileError::TakesArguments);
     }
-    // Only a required-only lambda list can be a direct call's callee, so only
-    // such a body may take the register ABI (`LeafAbi::for_build`).
-    let _lambda_list = reg_abi::LambdaListScope::enter(nonrest == required && !has_rest);
+    // A direct call's callee takes the register ABI (`LeafAbi::for_build`),
+    // which depends on the lambda list the call meets.
+    let _lambda_list =
+        reg_abi::LambdaListScope::enter(reg_abi::LambdaList::of(required, nonrest, has_rest));
     // Typed-MIR Tier-2: for pure required-only functions, build the SSA MIR and
     // lower it with fixnum UNBOXING (raw arithmetic, retag only at boundaries) —
     // faster than the baseline's per-op untag/retag. Fall back to the baseline on
@@ -1455,6 +1456,12 @@ pub(crate) enum SpecCalleeKind {
     /// `expected_bits` is the source's identity word, which the site's guard
     /// compares. JIT-only (never an AOT site).
     Source,
+    /// A CONSTANT byte-code callee (`NEOVM_JIT_DIRECT_SHAPES=constant`,
+    /// `compile::source_slots::add_constant_sites`): a `cl-flet` local or a
+    /// `lambda` literal the fuser left a call, called as laid out.
+    /// `expected_bits` is the object itself; its slot is a source slot of
+    /// the object's own source. JIT-only (never an AOT site).
+    Constant,
 }
 
 /// Tier-A `which` discriminants (baked into generated code as an `iconst` and
@@ -1555,7 +1562,7 @@ impl SpecCalleeKind {
             SpecCalleeKind::PredAutoloadDoLoad => Some(14),
             SpecCalleeKind::CbsymTierA { .. } | SpecCalleeKind::CbsymTierB => None,
             // JIT-only: never baked into an AOT object.
-            SpecCalleeKind::Source => None,
+            SpecCalleeKind::Source | SpecCalleeKind::Constant => None,
         }
     }
 
@@ -3317,6 +3324,8 @@ pub fn lower_leaf_full_osr(
             if jit_spec_sources_on() {
                 source_slots::add_source_sites(ops, &mut sites, &mut slots);
             }
+            // `NEOVM_JIT_DIRECT_SHAPES=constant`: constant callees too.
+            source_slots::add_constant_sites(ops, constants, &cfg.leaders, &mut sites, &mut slots);
             (sites, slots.into_boxed_slice())
         }
         None => (HashMap::new(), Box::from([])),
@@ -4608,6 +4617,7 @@ fn build_leaf_fn<S: LeafSink>(
 mod knobs;
 pub(crate) use knobs::*;
 
+pub(crate) mod call_census;
 pub(crate) mod call_feedback;
 pub(crate) mod calls;
 use calls::{cbsym_spec_kind, named_builtin_call};

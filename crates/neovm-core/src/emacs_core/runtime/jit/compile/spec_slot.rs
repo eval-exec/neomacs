@@ -59,7 +59,7 @@ impl SpecCalleeKind {
             // slot, and would be a builtin's if it did.
             | SpecCalleeKind::CbsymTierA { .. }
             | SpecCalleeKind::CbsymTierB => SpecSlotKind::Subr,
-            SpecCalleeKind::Source => SpecSlotKind::Source,
+            SpecCalleeKind::Source | SpecCalleeKind::Constant => SpecSlotKind::Source,
         }
     }
 }
@@ -214,9 +214,9 @@ impl SpecSlot {
         );
         debug_assert!(!self.leaf_ptr().is_null(), "a direct entry needs its leaf");
         debug_assert_eq!(
-            self.direct_consts.load(Ordering::Relaxed) & Self::KEY_FLAGS,
+            self.direct_consts.load(Ordering::Relaxed) & !Self::KEY_SHORT_CALL & Self::KEY_FLAGS,
             Self::KEY_REGISTER,
-            "a direct call is exact-arity, frameless, and enters the register ABI"
+            "a direct call is frameless and enters the register ABI"
         );
         self.direct_entry
             .store(entry as usize as u64, Ordering::Relaxed);
@@ -317,6 +317,51 @@ pub(crate) fn arm_direct_entry_if_eligible(slot: &SpecSlot, leaf: &CompiledLeaf,
         && leaf.direct_call_eligible()
         && key != 0
         && key & SpecSlot::KEY_FLAGS == SpecSlot::KEY_REGISTER
+        && super::jit_layout::backtrace_layout().is_some();
+    if eligible {
+        slot.arm_direct_entry(leaf.entry);
+        DIRECT_ENTRIES_ARMED.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Arm `slot`'s direct entry for the leaf the spec shim cached in it, for a
+/// direct site whose call of `nargs` arguments is not the leaf's frame as
+/// laid out (`NEOVM_JIT_DIRECT_SHAPES`): the site passes its arguments as
+/// the register words of `shape` -- nil for each `&optional` slot it lacks,
+/// a fresh list for a `&rest` one -- so the leaf must take exactly those:
+/// the register ABI for `shape`'s words, that lambda list, a call of
+/// `nargs` it accepts, frameless, and the key the shim armed for it (the
+/// site masks the flags off for `aux`). The site's shape, not the shim's,
+/// is what makes this check possible: an object at the expected bits may
+/// not be the one the site was compiled against (a collected definition's
+/// slot reused), so the leaf is matched against the shape the site's code
+/// passes. Once per arming, so cold.
+#[cold]
+#[inline(never)]
+pub(crate) fn arm_shaped_direct_entry(
+    slot: &SpecSlot,
+    shape: super::direct_call::CalleeShape,
+    nargs: usize,
+) {
+    let ptr = slot.leaf_ptr();
+    if ptr.is_null() {
+        return;
+    }
+    // SAFETY: a slot's leaf names a live or retired cache leaf, which stays
+    // allocated (`resolve_compiled_leaf_ptr`).
+    let leaf = unsafe { &*ptr };
+    let key = slot.direct_consts.load(Ordering::Relaxed);
+    let eligible = leaf.abi
+        == (LeafAbi::Register {
+            arity: shape.arity().min(u8::MAX as usize) as u8,
+        })
+        && leaf.arity == shape.arity()
+        && leaf.has_rest == shape.rest
+        && leaf.accepts(nargs)
+        && leaf.direct_call_eligible()
+        && key != 0
+        && key & SpecSlot::KEY_FRAMED == 0
+        && key & SpecSlot::KEY_REGISTER != 0
         && super::jit_layout::backtrace_layout().is_some();
     if eligible {
         slot.arm_direct_entry(leaf.entry);

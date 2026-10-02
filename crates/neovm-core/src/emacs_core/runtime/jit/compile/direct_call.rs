@@ -87,12 +87,68 @@ impl Drop for UnboundedBodyScope {
     }
 }
 
+/// The lambda list a direct site calls into, decided at compile time from
+/// its expected callee: how the call's arguments become the callee's
+/// register words (`nonrest` slots, nil for each one the call lacks, then
+/// the `&rest` list when `rest`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CalleeShape {
+    pub(crate) required: usize,
+    pub(crate) nonrest: usize,
+    pub(crate) rest: bool,
+}
+
+impl CalleeShape {
+    /// The shape of a lambda list of exactly `n` required parameters.
+    pub(crate) const fn exact(n: usize) -> Self {
+        Self {
+            required: n,
+            nonrest: n,
+            rest: false,
+        }
+    }
+
+    /// The register words the callee takes (its leaf's `arity`).
+    pub(crate) fn arity(self) -> usize {
+        self.nonrest + usize::from(self.rest)
+    }
+
+    /// Whether a call of `nargs` arguments is the callee's frame as laid
+    /// out (no nil, no list): what the spec shim's exact path arms
+    /// (`arm_direct_entry_if_eligible`). Any other call's entry is armed by
+    /// the site's own slow path, which knows its shape
+    /// ([`neovm_jit_direct_slow`]).
+    pub(crate) fn passes_through(self, nargs: usize) -> bool {
+        !self.rest && self.nonrest == nargs
+    }
+
+    /// The shape as one word, for the slow path.
+    fn word(self) -> i64 {
+        self.nonrest as i64 | (self.required as i64) << 8 | i64::from(self.rest) << 16
+    }
+
+    fn from_word(word: i64) -> Self {
+        Self {
+            nonrest: (word & 0xff) as usize,
+            required: ((word >> 8) & 0xff) as usize,
+            rest: (word >> 16) & 1 != 0,
+        }
+    }
+}
+
+/// The most arguments a direct call of a `&rest` callee passes: the site
+/// conses the words past the callee's `nonrest` slots inline.
+pub(crate) const MAX_REST_CALL_ARGS: usize = 8;
+
 /// A site the lowering will emit as a direct call: its constants and the
 /// probed layouts its push and pop use.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct DirectSite {
     expected: u64,
+    /// The call's own argument count: what its frame records.
     nargs: usize,
+    /// How the call enters the callee's register words.
+    callee: CalleeShape,
     frame: EntryTemplate,
     small: u32,
     specpdl: VecOffsets,
@@ -123,8 +179,12 @@ impl DirectSite {
     /// The site of an `Op::Call` of `nargs` arguments speculated on the
     /// byte-code object `expected`, when a direct call is possible: the knob
     /// is on, the force harness off, the build JIT, the callee takes exactly
-    /// `nargs` required arguments in registers, both layout probes
-    /// succeeded, and the leaf's budget of direct sites is not spent.
+    /// `nargs` required arguments in registers -- or, under
+    /// `NEOVM_JIT_DIRECT_SHAPES`, has `&optional` slots the call fills or
+    /// lacks (`optional`) or a `&rest` list (`rest`, at most
+    /// [`MAX_REST_CALL_ARGS`] arguments) -- in at most [`MAX_REG_ARGS`]
+    /// register words, both layout probes succeeded, and the leaf's budget
+    /// of direct sites is not spent.
     ///
     /// The callee must also be a body `LeafAbi::for_build` gives the
     /// register ABI: not `make-closure`-patched, and frameless (no dynamic
@@ -134,17 +194,31 @@ impl DirectSite {
     /// whose calls run often enough to pay the site's compile back
     /// ([`DirectSitesMode`], [`UnboundedBodyScope`]).
     pub(crate) fn plan(rt: &RtCtx, aot: bool, expected: u64, nargs: usize) -> Option<Self> {
-        if aot || !jit_direct_call_on() || jit_force_slow_spec() || nargs > MAX_REG_ARGS {
+        if aot || !jit_direct_call_on() || jit_force_slow_spec() || nargs > MAX_REST_CALL_ARGS {
             return None;
         }
         if jit_direct_sites() == DirectSitesMode::Unbounded && !unbounded_body() {
             return None;
         }
         let bc = Value::from_bits(expected as usize).bytecode_data_if_materialized()?;
-        let exact = bc.params.required.len() == nargs
-            && bc.params.optional.is_empty()
-            && bc.params.rest.is_none();
-        if !exact || rt.direct_sites.get() >= DIRECT_SITE_CAP {
+        let callee = CalleeShape {
+            required: bc.params.required.len(),
+            nonrest: bc.params.required.len() + bc.params.optional.len(),
+            rest: bc.params.rest.is_some(),
+        };
+        let shapes = jit_direct_shapes();
+        let callable = if callee.rest {
+            shapes.rest && nargs >= callee.required
+        } else if callee.nonrest > callee.required {
+            shapes.optional && (callee.required..=callee.nonrest).contains(&nargs)
+        } else {
+            callee.required == nargs
+        };
+        if !callable
+            || callee.arity() > MAX_REG_ARGS
+            || (!callee.rest && nargs > MAX_REG_ARGS)
+            || rt.direct_sites.get() >= DIRECT_SITE_CAP
+        {
             return None;
         }
         if bc.jit_runtime().patched_prefix() > 0 {
@@ -161,6 +235,7 @@ impl DirectSite {
         Some(DirectSite {
             expected,
             nargs,
+            callee,
             frame,
             small,
             specpdl,
@@ -188,6 +263,7 @@ impl DirectSite {
         Some(DirectSite {
             expected: 0,
             nargs,
+            callee: CalleeShape::exact(nargs),
             frame,
             small,
             specpdl,
@@ -327,7 +403,58 @@ pub(crate) fn emit_direct_bytecode_call(
     let cap = fb.ins().load(types::I64, flags, vmctx, spec_cap_off);
     let full = fb.ins().icmp(IntCC::Equal, len, cap);
     next(fb, full);
+    // 7. A `&rest` callee: the slot's key says the leaf it holds takes this
+    // call through a list (armed by this site's slow path, which knows the
+    // shape), not as laid out -- an entry the spec shim's exact path armed
+    // for a different object at the expected bits would read the list as
+    // an argument. The key is the `aux` word too.
+    let rest_key = match callee {
+        DirectCallee::Symbol { .. } if site.callee.rest => {
+            let key = fb
+                .ins()
+                .load(types::I64, flags, slot_v, SPEC_SLOT_KEY_OFFSET as i32);
+            let key_flags = super::lowering::band_imm_p(fb, key, SpecSlot::KEY_FLAGS as i64);
+            let other = icmp_imm_p(
+                fb,
+                IntCC::NotEqual,
+                key_flags,
+                (SpecSlot::KEY_SHORT_CALL | SpecSlot::KEY_REGISTER) as i64,
+            );
+            next(fb, other);
+            Some(key)
+        }
+        _ => None,
+    };
     fb.seal_block(slow);
+    // The callee's register words: the given arguments in its `nonrest`
+    // slots, nil for each slot the call lacks, then the `&rest` list of the
+    // arguments past them -- GNU `funcall_lambda`'s frame (`Flist` of the
+    // tail). Consing never collects, and nothing between here and the
+    // callee's entry reaches a safe point; the elements are the call's own
+    // arguments, which the frame pushed below records.
+    let regs: SmallVec<[ClifValue; MAX_REG_ARGS]> = if site.callee.passes_through(site.nargs) {
+        args.iter().copied().collect()
+    } else {
+        let fixed = site.nargs.min(site.callee.nonrest);
+        let nil = fb.ins().iconst(types::I64, Value::NIL.bits() as i64);
+        let mut regs: SmallVec<[ClifValue; MAX_REG_ARGS]> = args[..fixed].iter().copied().collect();
+        regs.extend(core::iter::repeat_n(nil, site.callee.nonrest - fixed));
+        if site.callee.rest {
+            let mut list = nil;
+            for &a in args[fixed..].iter().rev() {
+                list = if rt.inline_alloc {
+                    super::heap_inline::emit_inline_cons(fb, rt, a, list)
+                } else {
+                    let cons = rt.refs.get(fb.func, Shim::Cons);
+                    let call = fb.ins().call(cons, &[a, list]);
+                    fb.inst_results(call)[0]
+                };
+            }
+            regs.push(list);
+        }
+        regs
+    };
+    debug_assert_eq!(regs.len(), site.callee.arity());
 
     // The push: the frame the shim writes, recording the symbol.
     const _: () = assert!(core::mem::size_of::<crate::emacs_core::eval::SpecBinding>() == 32);
@@ -378,12 +505,13 @@ pub(crate) fn emit_direct_bytecode_call(
     let leaf = fb
         .ins()
         .load(types::I64, flags, slot_v, SPEC_SLOT_LEAF_OFFSET as i32);
-    let aux = match (callee, site.consts_ptr) {
-        (DirectCallee::Source { callee }, Some(consts_ptr)) => {
+    let aux = match (callee, site.consts_ptr, rest_key) {
+        (DirectCallee::Source { callee }, Some(consts_ptr), _) => {
             // The executing instance's own constant base.
             let object = super::lowering::band_imm_p(fb, callee, !(TAG_MASK as i64));
             fb.ins().load(types::I64, flags, object, consts_ptr as i32)
         }
+        (_, _, Some(key)) => super::lowering::band_imm_p(fb, key, !(SpecSlot::KEY_FLAGS as i64)),
         _ => {
             // The key is the constant base with the register flag set.
             let key = fb
@@ -394,13 +522,13 @@ pub(crate) fn emit_direct_bytecode_call(
     };
     let sig = fb.import_signature(
         LeafAbi::Register {
-            arity: site.nargs as u8,
+            arity: site.callee.arity() as u8,
         }
         .signature(rt.refs.call_conv, ptr_ty),
     );
     let mut call_args: SmallVec<[ClifValue; 8]> = SmallVec::new();
     call_args.extend([vmctx, aux]);
-    call_args.extend(args.iter().copied());
+    call_args.extend(regs.iter().copied());
     let call = fb.ins().call_indirect(sig, entry, &call_args);
     let (value, status) = {
         let r = fb.inst_results(call);
@@ -540,11 +668,27 @@ pub(crate) fn emit_direct_bytecode_call(
     let out_addr = fb.ins().stack_addr(ptr_ty, rt.call_result_slot, 0);
     let n_val = fb.ins().iconst(types::I64, site.nargs as i64);
     let shim = match callee {
-        DirectCallee::Symbol { sym_v, exp_v } => {
+        DirectCallee::Symbol { sym_v, exp_v } if site.callee.passes_through(site.nargs) => {
             let call_spec = rt.refs.get(fb.func, Shim::CallSpec);
             fb.ins().call(
                 call_spec,
                 &[vmctx_s, sym_v, exp_v, slot_v, args_addr, n_val, out_addr],
+            )
+        }
+        DirectCallee::Symbol { sym_v, exp_v } => {
+            // A call the shim's exact path does not arm: the shim, then
+            // this site's own arming of its shape.
+            let slow_sig = fb.import_signature(slow_signature(rt.refs.call_conv, ptr_ty));
+            let slow_addr = fb
+                .ins()
+                .iconst(ptr_ty, neovm_jit_direct_slow as *const () as usize as i64);
+            let shape = fb.ins().iconst(types::I64, site.callee.word());
+            fb.ins().call_indirect(
+                slow_sig,
+                slow_addr,
+                &[
+                    vmctx_s, sym_v, exp_v, slot_v, args_addr, n_val, out_addr, shape,
+                ],
             )
         }
         DirectCallee::Source { callee } => super::source_slots::emit_source_call(
@@ -567,6 +711,62 @@ pub(crate) fn emit_direct_bytecode_call(
         result,
         hot_done,
     }
+}
+
+/// [`neovm_jit_direct_slow`]'s Cranelift signature: `neovm_jit_call_spec`'s
+/// and the site's shape word.
+fn slow_signature(call_conv: cranelift_codegen::isa::CallConv, ptr_ty: types::Type) -> Signature {
+    let mut sig = Signature::new(call_conv);
+    for ty in [
+        ptr_ty,     // vmctx
+        types::I64, // the called symbol
+        types::I64, // expected
+        types::I64, // slot
+        ptr_ty,     // args
+        types::I64, // nargs
+        ptr_ty,     // out
+        types::I64, // the callee's shape (`CalleeShape::word`)
+    ] {
+        sig.params.push(AbiParam::new(ty));
+    }
+    sig.returns.push(AbiParam::new(types::I64));
+    sig
+}
+
+/// The slow path of a direct site whose call is not its callee's frame as
+/// laid out (a short call of an `&optional` callee, a call of a `&rest`
+/// one): `neovm_jit_call_spec`, the reference protocol, and then -- the
+/// slot holding a leaf and no direct entry -- the arming of the leaf's
+/// register entry when the leaf takes the call in the site's `shape`
+/// ([`super::spec_slot::arm_shaped_direct_entry`]). The spec shim's own
+/// arming covers only a call as laid out, the only shape it can check
+/// without the site's.
+///
+/// SAFETY: `neovm_jit_call_spec`'s contract; `slot` is the executing
+/// leaf's spec slot of this site.
+#[allow(clippy::too_many_arguments, clippy::not_unsafe_ptr_arg_deref)]
+#[inline(never)]
+pub(crate) extern "C" fn neovm_jit_direct_slow(
+    ctx: *mut u8,
+    sym_bits: i64,
+    expected: i64,
+    slot: i64,
+    args: *const i64,
+    nargs: i64,
+    out: *mut i64,
+    shape: i64,
+) -> i64 {
+    let status = super::dispatch::neovm_jit_call_spec(ctx, sym_bits, expected, slot, args, nargs, out);
+    // SAFETY: the executing leaf's slot (the contract above).
+    let slot = unsafe { &*(slot as *const SpecSlot) };
+    if slot.direct_entry.load(Ordering::Relaxed) == 0 && !slot.leaf_ptr().is_null() {
+        super::spec_slot::arm_shaped_direct_entry(
+            slot,
+            CalleeShape::from_word(shape),
+            nargs as usize,
+        );
+    }
+    status
 }
 
 /// `neovm_jit_direct_finish`'s Cranelift signature.

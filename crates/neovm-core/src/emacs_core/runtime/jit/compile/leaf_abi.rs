@@ -126,6 +126,7 @@ pub(crate) fn render_leaf_stats() -> String {
     // Direct calls between compiled leaves (`direct_call`) and the CLIF
     // intrinsics' sites (`intrinsics`) share the line.
     out.extend(super::direct_call::render_direct_call_stats());
+    out.extend(super::call_census::render_call_census());
     out.extend(super::intrinsics::render_intrinsic_stats());
     // The interpreter's leaf calls (`NEOVM_VM_LEAF`) too.
     out.extend(crate::emacs_core::bytecode::vm::render_vm_leaf_stats());

@@ -122,7 +122,7 @@ fn only_bodies_a_direct_call_can_enter_take_the_register_abi() {
     assert_eq!(build(false, false, 1, false, 0), LeafAbi::Memory, "framed");
     assert_eq!(build(false, false, 1, true, 1), LeafAbi::Memory, "patched");
     {
-        let _optional = LambdaListScope::enter(false);
+        let _optional = LambdaListScope::enter(LambdaList::Optional);
         assert_eq!(
             build(false, false, 1, true, 0),
             LeafAbi::Memory,

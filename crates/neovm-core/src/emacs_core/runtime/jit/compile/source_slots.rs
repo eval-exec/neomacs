@@ -85,6 +85,81 @@ pub(crate) fn add_source_sites(
     }
 }
 
+/// `NEOVM_JIT_DIRECT_SHAPES=constant` (P1.1 2b): add a site for every
+/// `Op::Call` of `ops` that has none whose callee slot provably holds a
+/// constant byte-code object -- a `cl-flet` local, a `lambda` literal the
+/// fuser left a call -- that a direct call can enter: a call as laid out
+/// (exactly its required parameters, at most `MAX_REG_ARGS`) of a frameless
+/// body that may take the register ABI, in a caller that pays a direct
+/// site back ([`super::DirectSitesMode`]). The site is a source site of the
+/// object's own source ([`SpecCalleeKind::Constant`]): the object cannot be
+/// redefined, so the slot's only validation is its leaf's epoch, and the
+/// source shim is its slow path. Numbers the new slots after `slots'`.
+pub(crate) fn add_constant_sites(
+    ops: &[Op],
+    constants: &[Value],
+    leaders: &[usize],
+    sites: &mut HashMap<usize, SpecSite>,
+    slots: &mut Vec<SpecSlot>,
+) {
+    if !jit_direct_shapes().constant
+        || jit_force_slow_spec()
+        || (jit_direct_sites() == DirectSitesMode::Unbounded
+            && !super::direct_call::unbounded_body())
+    {
+        return;
+    }
+    let entry = super::spec_tag_entry_states(ops, constants, leaders);
+    let mut tags: Vec<Option<u16>> = Vec::new();
+    for (pc, op) in ops.iter().enumerate() {
+        if leaders.binary_search(&pc).is_ok() {
+            tags.clear();
+            if let Some(agreed) = entry.get(&pc) {
+                tags.extend_from_slice(agreed);
+            }
+        }
+        if let Op::Call(n) = op
+            && !sites.contains_key(&pc)
+        {
+            let nargs = *n as usize;
+            if tags.len() > nargs
+                && let Some(cidx) = tags[tags.len() - 1 - nargs]
+                && let Some(&callee) = constants.get(cidx as usize)
+                && let Some(bc) = callee.get_bytecode_data()
+                && constant_callee_takes_direct_calls(bc, nargs)
+                && let Some(identity) = callee.bytecode_runtime_word().filter(|&w| w != 0)
+            {
+                sites.insert(
+                    pc,
+                    SpecSite {
+                        sym: 0,
+                        expected_bits: callee.bits() as u64,
+                        slot: slots.len(),
+                        kind: SpecCalleeKind::Constant,
+                    },
+                );
+                slots.push(SpecSlot::source(identity as u64));
+            }
+        }
+        super::spec_tag_transfer(op, constants, &mut tags);
+    }
+}
+
+/// Whether a direct site can enter the constant byte-code callee `bc` with
+/// a call of `nargs` arguments as laid out: exactly its required
+/// parameters, in registers, of a frameless body a direct call may enter
+/// (`LeafAbi::for_build`'s conditions on the body).
+fn constant_callee_takes_direct_calls(bc: &ByteCodeFunction, nargs: usize) -> bool {
+    let ops = bc.executable_ops();
+    bc.params.required.len() == nargs
+        && bc.params.optional.is_empty()
+        && bc.params.rest.is_none()
+        && nargs <= super::reg_abi::MAX_REG_ARGS
+        && (bc.jit_runtime().patched_prefix() == 0 || jit_spec_sources_on())
+        && !super::leaf::body_has_binds(ops)
+        && !super::leaf::body_has_handlers(ops)
+}
+
 impl SpecSlot {
     /// A source site's slot (see the module docs): the source's identity
     /// word (immutable), no leaf yet.

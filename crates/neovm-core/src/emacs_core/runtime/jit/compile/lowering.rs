@@ -184,6 +184,40 @@ pub(crate) fn callee_is_symbol_const(
     }
 }
 
+/// The constant `v` provably is -- an `iconst`, or a load of a slot of the
+/// heap-constant reloc vector -- as its tagged bits; `None` when `v` is
+/// computed. The proof [`callee_is_symbol_const`] makes, for any constant.
+pub(crate) fn const_value_bits(
+    fb: &FunctionBuilder,
+    v: ClifValue,
+    reloc_base: Option<ClifValue>,
+    reloc_index: &std::collections::HashMap<usize, u32>,
+) -> Option<u64> {
+    use cranelift_codegen::ir::{InstructionData, Opcode, ValueDef};
+    let ValueDef::Result(inst, _) = fb.func.dfg.value_def(v) else {
+        return None;
+    };
+    match fb.func.dfg.insts[inst] {
+        InstructionData::UnaryImm {
+            opcode: Opcode::Iconst,
+            imm,
+        } => Some(imm.bits() as u64),
+        InstructionData::Load {
+            opcode: Opcode::Load,
+            arg,
+            offset,
+            ..
+        } if Some(arg) == reloc_base => {
+            let offset = i64::from(offset);
+            reloc_index
+                .iter()
+                .find(|&(_, &idx)| i64::from(idx) * 8 == offset)
+                .map(|(&bits, _)| bits as u64)
+        }
+        _ => None,
+    }
+}
+
 /// True if `v` is provably a fixnum at this point — a fixnum constant
 /// ([`is_fixnum_const`]) OR the output of [`retag_fixnum`], i.e.
 /// `bor_imm(ishl_imm(_, k>=FIXNUM_SHIFT), FIXNUM_CHECK_VALUE)`, whose low tag
@@ -6943,8 +6977,9 @@ fn lower_simple_op_arms(
             // bits are relocated there) or inline arithmetic (which deopts).
             let mut guarded_sym: Option<u32> = None;
             let spec = spec.filter(|&(sym, _, _, _, kind)| {
-                // A closure source site guards the callee itself (below).
-                if kind == SpecCalleeKind::Source {
+                // A closure source site guards the callee itself, a constant
+                // site proves or guards it (below).
+                if matches!(kind, SpecCalleeKind::Source | SpecCalleeKind::Constant) {
                     return true;
                 }
                 if callee_is_symbol_const(fb, stack[args_at - 1], sym, reloc_base, reloc_index) {
@@ -6961,6 +6996,19 @@ fn lower_simple_op_arms(
                 );
                 false
             });
+            // `NEOVM_JIT_CALL_CENSUS` (JIT only): count the callee's shape
+            // first (`call_census`).
+            if !aot && jit_call_census_on() {
+                super::call_census::emit_site_census(
+                    fb,
+                    rt,
+                    op,
+                    spec,
+                    &stack[args_at - 1..],
+                    reloc_base,
+                    reloc_index,
+                );
+            }
             // LEVEL-B (JIT only): inline logand/logior/logxor/lognot as native ops
             // on the TAGGED fixnum bits, guarded by a fixnum check that DEOPTS —
             // instead of the armed shim's 8-arg call. The fixnum tag is 2
@@ -7114,8 +7162,21 @@ fn lower_simple_op_arms(
                 Some((_, identity, _, _, SpecCalleeKind::Source)) => Some(identity),
                 _ => None,
             };
-            let source_direct = source_identity
-                .and_then(|_| super::direct_call::DirectSite::plan_source(rt, aot, n));
+            // `NEOVM_JIT_DIRECT_SHAPES=constant` (JIT only): a constant
+            // callee's site is a source site of the object's own source; it
+            // needs a guard only where the lowering cannot prove the callee
+            // slot holds the constant (it crossed a block boundary).
+            let constant_guard: Option<Option<u64>> = match spec {
+                Some((_, expected, _, _, SpecCalleeKind::Constant)) => Some(
+                    (const_value_bits(fb, stack[args_at - 1], reloc_base, reloc_index)
+                        != Some(expected))
+                    .then_some(expected),
+                ),
+                _ => None,
+            };
+            let source_direct = (source_identity.is_some() || constant_guard.is_some())
+                .then(|| super::direct_call::DirectSite::plan_source(rt, aot, n))
+                .flatten();
             let source_args: SmallVec<[ClifValue; 6]> = if source_direct.is_some() {
                 stack[args_at..].iter().copied().collect()
             } else {
@@ -7125,7 +7186,10 @@ fn lower_simple_op_arms(
             stack.truncate(args_at - 1);
             // What the generic call uses must dominate the guard's edge into
             // it, so a guarded site defines the call buffers first.
-            let guarded_buffers = (guarded_sym.is_some() || source_identity.is_some()).then(|| {
+            let guarded_buffers = (guarded_sym.is_some()
+                || source_identity.is_some()
+                || constant_guard.is_some_and(|g| g.is_some()))
+            .then(|| {
                 (
                     fb.ins().stack_addr(rt.ptr_ty, rt.call_args_slot, 0),
                     fb.ins().stack_addr(rt.ptr_ty, rt.call_result_slot, 0),
@@ -7155,7 +7219,21 @@ fn lower_simple_op_arms(
                     source_identity.map(|identity| {
                         super::source_slots::emit_source_guard(fb, func_val, identity)
                     })
-                });
+                })
+                .or_else(|| {
+                    constant_guard.flatten().map(|expected| {
+                        let is_constant = icmp_imm_p(fb, IntCC::Equal, func_val, expected as i64);
+                        let speculated = fb.create_block();
+                        let generic = fb.create_block();
+                        fb.ins().brif(is_constant, speculated, &[], generic, &[]);
+                        fb.switch_to_block(speculated);
+                        fb.seal_block(speculated);
+                        generic
+                    })
+                })
+                // A proven constant site's generic call is its source
+                // shim's decline.
+                .or_else(|| constant_guard.map(|_| fb.create_block()));
             // Root every value that stays live across the call (the callee +
             // args are rooted by the shim; the constants are rooted by the
             // dispatch seam via the executing function). Pred/EqIncl direct
@@ -7206,7 +7284,16 @@ fn lower_simple_op_arms(
             // calls its source's leaf from the site, the source shim being
             // its slow path (`direct_call::DirectCallee::Source`).
             let direct_source_status = match (spec, source_direct) {
-                (Some((_, _, slot_ptr, _, SpecCalleeKind::Source)), Some(site)) => {
+                (
+                    Some((
+                        _,
+                        _,
+                        slot_ptr,
+                        _,
+                        SpecCalleeKind::Source | SpecCalleeKind::Constant,
+                    )),
+                    Some(site),
+                ) => {
                     let slot_v = fb.ins().iconst(types::I64, slot_ptr);
                     let call = super::direct_call::emit_direct_bytecode_call(
                         fb,
@@ -7224,9 +7311,10 @@ fn lower_simple_op_arms(
                 status
             } else {
                 let call = match spec {
-                    // A closure source site's hit: the source shim, which answers
-                    // STATUS_NEED_GENERIC for what its fast path declines.
-                    Some((_, _, slot_ptr, _, SpecCalleeKind::Source)) => {
+                    // A closure source site's hit, and a constant site: the
+                    // source shim, which answers STATUS_NEED_GENERIC for what
+                    // its fast path declines.
+                    Some((_, _, slot_ptr, _, SpecCalleeKind::Source | SpecCalleeKind::Constant)) => {
                         let slot_v = fb.ins().iconst(types::I64, slot_ptr);
                         super::source_slots::emit_source_call(
                             fb, rt, slot_v, vmctx, func_val, args_addr, n_val, out_addr,

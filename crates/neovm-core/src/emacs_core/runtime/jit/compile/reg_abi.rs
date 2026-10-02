@@ -57,8 +57,11 @@ impl LeafAbi {
     ///   more often than a symbol's function cell does -- unless
     ///   `NEOVM_JIT_SPEC_SOURCES` is on, whose closure source sites
     ///   (`source_slots`) enter exactly those bodies directly;
-    /// * a lambda list of required parameters only ([`exact_lambda_list`]):
-    ///   a direct site calls with exactly that many arguments.
+    /// * a lambda list a direct site can call ([`lambda_list`]): required
+    ///   parameters only (the site calls with exactly that many arguments),
+    ///   or, under `NEOVM_JIT_DIRECT_SHAPES`, `&optional` slots (`optional`:
+    ///   the site passes nil for each one its call lacks) or a `&rest` list
+    ///   (`rest`: the site conses it), `arity` counting the list's slot.
     ///
     /// Every other body keeps the memory ABI, and with it every Rust caller's
     /// entry as before the register ABI existed.
@@ -74,7 +77,7 @@ impl LeafAbi {
             && arity <= MAX_REG_ARGS
             && frameless
             && (dynamic_prefix == 0 || super::knobs::jit_spec_sources_on())
-            && exact_lambda_list()
+            && lambda_list().takes_register_abi()
             && jit_register_abi_on()
         {
             LeafAbi::Register { arity: arity as u8 }
@@ -112,33 +115,69 @@ impl LeafAbi {
     }
 }
 
-std::thread_local! {
-    /// Whether the function being compiled on this thread takes required
-    /// parameters only (see [`LambdaListScope`]); true outside any scope.
-    static EXACT_LAMBDA_LIST: core::cell::Cell<bool> = const { core::cell::Cell::new(true) };
+/// The shape of the lambda list of the function being compiled, as far as
+/// its entry ABI cares.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LambdaList {
+    /// Required parameters only.
+    Exact,
+    /// `&optional` slots, no `&rest`.
+    Optional,
+    /// A `&rest` list (with or without `&optional` slots).
+    Rest,
 }
 
-/// Whether the function being compiled takes required parameters only (no
-/// `&optional`, no `&rest`): `compile_bytecode_function` says so for its
-/// lowering ([`LambdaListScope`]); a lowering outside one (the tests'
-/// direct builds) counts as exact.
-pub(crate) fn exact_lambda_list() -> bool {
-    EXACT_LAMBDA_LIST.with(core::cell::Cell::get)
+impl LambdaList {
+    /// The shape of a lambda list with these parameter counts.
+    pub(crate) fn of(required: usize, nonrest: usize, rest: bool) -> Self {
+        if rest {
+            LambdaList::Rest
+        } else if nonrest > required {
+            LambdaList::Optional
+        } else {
+            LambdaList::Exact
+        }
+    }
+
+    /// Whether a direct site can call a body of this shape, so the body may
+    /// take the register ABI: always for required parameters only, and for
+    /// the others when `NEOVM_JIT_DIRECT_SHAPES` takes their calls.
+    fn takes_register_abi(self) -> bool {
+        match self {
+            LambdaList::Exact => true,
+            LambdaList::Optional => super::knobs::jit_direct_shapes().optional,
+            LambdaList::Rest => super::knobs::jit_direct_shapes().rest,
+        }
+    }
+}
+
+std::thread_local! {
+    /// The lambda-list shape of the function being compiled on this thread
+    /// (see [`LambdaListScope`]); exact outside any scope.
+    static LAMBDA_LIST: core::cell::Cell<LambdaList> = const { core::cell::Cell::new(LambdaList::Exact) };
+}
+
+/// The lambda-list shape of the function being compiled:
+/// `compile_bytecode_function` says so for its lowering
+/// ([`LambdaListScope`]); a lowering outside one (the tests' direct builds)
+/// counts as exact.
+pub(crate) fn lambda_list() -> LambdaList {
+    LAMBDA_LIST.with(core::cell::Cell::get)
 }
 
 /// For its lifetime, the lambda-list fact [`LeafAbi::for_build`] reads
-/// ([`exact_lambda_list`]); the previous one is restored on drop.
-pub(crate) struct LambdaListScope(bool);
+/// ([`lambda_list`]); the previous one is restored on drop.
+pub(crate) struct LambdaListScope(LambdaList);
 
 impl LambdaListScope {
-    pub(crate) fn enter(exact: bool) -> Self {
-        Self(EXACT_LAMBDA_LIST.with(|c| c.replace(exact)))
+    pub(crate) fn enter(shape: LambdaList) -> Self {
+        Self(LAMBDA_LIST.with(|c| c.replace(shape)))
     }
 }
 
 impl Drop for LambdaListScope {
     fn drop(&mut self) {
-        EXACT_LAMBDA_LIST.with(|c| c.set(self.0));
+        LAMBDA_LIST.with(|c| c.set(self.0));
     }
 }
 

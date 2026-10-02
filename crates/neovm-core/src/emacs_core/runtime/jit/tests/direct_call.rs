@@ -245,6 +245,17 @@ struct Run {
 /// the run's own. Asserts the observation leaves `depth` and the specpdl as
 /// it found them.
 fn run_in(mode: Mode, program: &'static str, observe: &'static str) -> Run {
+    run_in_with(mode, DirectShapesKnob::OFF, program, observe)
+}
+
+/// [`run_in`] with the call shapes direct sites take
+/// (`NEOVM_JIT_DIRECT_SHAPES`) in the modes that call directly.
+fn run_in_with(
+    mode: Mode,
+    shapes: DirectShapesKnob,
+    program: &'static str,
+    observe: &'static str,
+) -> Run {
     std::thread::Builder::new()
         .name(format!("direct-call-{mode:?}"))
         .stack_size(128 * 1024 * 1024)
@@ -257,6 +268,7 @@ fn run_in(mode: Mode, program: &'static str, observe: &'static str) -> Run {
             // for every body, not only the unbounded ones (`DirectSitesMode`).
             force_direct_sites_for_test(Some(DirectSitesMode::All));
             force_slow_spec_for_test(Some(mode == Mode::DirectForcedSlow));
+            force_direct_shapes_for_test(Some(shapes));
             // Tier up at the hot threshold, callers included, so the
             // warm-ups stay short (they run under GC stress too).
             crate::emacs_core::jit::force_profit_defer_for_test(Some(1));
@@ -278,6 +290,7 @@ fn run_in(mode: Mode, program: &'static str, observe: &'static str) -> Run {
             assert_eq!(ev.specpdl.len(), spec0, "{mode:?}: specpdl restored");
             let direct_sites = super::direct_call::direct_sites_emitted_for_test();
             force_slow_spec_for_test(None);
+            force_direct_shapes_for_test(None);
             force_direct_call_for_test(None);
             force_direct_sites_for_test(None);
             crate::emacs_core::jit::inline::force_inline_for_test(None);
@@ -691,3 +704,8 @@ fn a_deep_direct_recursion_signals_bytecode_stack_overflow() {
         "the recursion ran direct: {direct:?}"
     );
 }
+
+// P1.1 Stage 2 (`NEOVM_JIT_DIRECT_SHAPES`): the call shapes beyond the exact
+// named call, on this file's harness.
+#[path = "direct_call_shapes.rs"]
+mod shapes;
