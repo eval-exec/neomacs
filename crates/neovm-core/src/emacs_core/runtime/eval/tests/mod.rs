@@ -2,6 +2,9 @@ use super::*;
 
 #[cfg(test)]
 mod gc_generational;
+
+#[cfg(test)]
+mod gc_generational_major;
 use crate::buffer::EmacsByteRange;
 fn test_ob() -> crate::emacs_core::symbol::Obarray {
     crate::emacs_core::symbol::Obarray::new()
@@ -21834,9 +21837,7 @@ fn gc_safe_point_runs_concurrent_cycles_without_a_dump() {
 #[test]
 fn gc_concurrent_handshake_stats_populate_per_group() {
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
-    // This gate exercises the existing concurrent backend and its handshakes.
-    ev.tagged_heap.disable_generations_for_test();
+    let mut ev = crate::test_utils::with_legacy_gc(Context::new);
     ev.eval_str_each("(setq gc-handshake-root (cons 1 2))");
     ev.tagged_heap.set_gc_threshold(1024);
     // Bootstrap STW cycle first; then churn until a concurrent cycle
@@ -21933,6 +21934,7 @@ fn gc_safe_point_exact_frees_stack_only_values() {
 
     ev.gc_collect_exact();
     let baseline = ev.tagged_heap.allocated_count();
+    let baseline_cons = ev.tagged_heap.cons_live_count_exact();
     let gc_count_before = ev.gc_count;
     let stack_only = Value::cons(Value::fixnum(41), Value::fixnum(42));
     let keep_visible = [stack_only];
@@ -21948,10 +21950,13 @@ fn gc_safe_point_exact_frees_stack_only_values() {
         ev.gc_safe_point_exact();
     }
 
-    let after_gc = ev.tagged_heap.allocated_count();
+    // Completion allocates a new gc-elapsed float. A minor can retain the
+    // previous old float, so all-class population need not return to baseline.
+    // Only the stack-only cons is the subject of this precise-rooting test.
+    let after_gc_cons = ev.tagged_heap.cons_live_count_exact();
     assert_eq!(
-        after_gc, baseline,
-        "exact GC safe points must ignore the configured conservative stack scan and free stack-only objects: baseline={baseline}, after_alloc={after_alloc}, after_gc={after_gc}"
+        after_gc_cons, baseline_cons,
+        "exact GC safe points must ignore the configured conservative stack scan and free the stack-only cons: baseline_cons={baseline_cons}, after_gc_cons={after_gc_cons}"
     );
 }
 
@@ -24786,15 +24791,13 @@ fn gc_drain_kinds_profile(pdump: bool, chunks: usize) {
 fn gc_concurrent_leaked_subr_drop_under_pdump_verifiers() {
     crate::test_utils::init_test_tracing();
     unsafe { std::env::set_var("NEOVM_GC_VERIFY_PARTITION", "1") };
-    let mut ev = runtime_startup_context();
+    let mut ev = crate::test_utils::with_legacy_gc(runtime_startup_context);
     if !ev.tagged_heap.dump_partition_active() {
         // Cold bootstrap cache: the first call ran the live bootstrap and
         // wrote it; reload so the measured heap has the mapped partition
         // (mirrors the drain profiler's cold-cache handling).
-        ev = runtime_startup_context();
+        ev = crate::test_utils::with_legacy_gc(runtime_startup_context);
     }
-    // This gate exercises the existing concurrent backend and its handshakes.
-    ev.tagged_heap.disable_generations_for_test();
     ev.set_lexical_binding(true);
 
     // Churn until two concurrent terminations complete (bounded).
@@ -24870,13 +24873,11 @@ fn gc_concurrent_obarray_scan_vs_defalias_churn() {
     // Real pdump-partitioned config, same guard as the leaked-subr repro: the
     // concurrent mark engages and its obarray scan runs on the GC thread.
     unsafe { std::env::set_var("NEOVM_GC_VERIFY_PARTITION", "1") };
-    let mut ev = runtime_startup_context();
+    let mut ev = crate::test_utils::with_legacy_gc(runtime_startup_context);
     if !ev.tagged_heap.dump_partition_active() {
         // Cold bootstrap cache: reload so the measured heap has the partition.
-        ev = runtime_startup_context();
+        ev = crate::test_utils::with_legacy_gc(runtime_startup_context);
     }
-    // This gate exercises the existing concurrent backend and its handshakes.
-    ev.tagged_heap.disable_generations_for_test();
     ev.set_lexical_binding(true);
 
     // The scan needs >=2 chunks so the last chunk has EMPTY tail slots that are

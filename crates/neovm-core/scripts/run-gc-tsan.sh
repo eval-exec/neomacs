@@ -55,7 +55,7 @@ fi
 # The concurrent-GC + seqlock surface. Module-scoped (auto-picks up new
 # concurrent_* / parity_* / finalizer_* tests) plus the eval/symbol concurrent
 # tests. Single-threaded unit tests in these modules also run (they just pass).
-SURFACE_RE='^tagged::gc::(ownership|float_arena|bytecode_arena|arena_promotion|alloc_region|barrier_window|chunk_map|census|slot_store|generation|generational|cons_minor|arena_minor|vec_scan)_tests::'
+SURFACE_RE='^tagged::gc::gc_thread::concurrent_major_worker_tests::|^tagged::gc::(ownership|float_arena|bytecode_arena|arena_promotion|alloc_region|barrier_window|chunk_map|census|slot_store|generation|birth_logs|generational|cons_minor|arena_minor|vec_scan)_tests::'
 SURFACE_RE+='|^tagged::gc::cons_block_trailer::cons_trailer_tests::'
 SURFACE_RE+='|^tagged::mutate::gc_heap_mut_closure_tests::'
 SURFACE_RE+='|^emacs_core::eval::command_loop::gc_heap_mut_closure_tests::'
@@ -65,6 +65,9 @@ SURFACE_RE+='|^emacs_core::symbol::tests::seqlock'
 SURFACE_RE+='|^emacs_core::eval::tests::gc_concurrent'
 SURFACE_RE+='|^emacs_core::eval::tests::gc_safe_point_runs_concurrent'
 SURFACE_RE+='|^emacs_core::eval::tests::gc_generational::'
+SURFACE_RE+='|^tagged::gc::generational_major_tests::'
+SURFACE_RE+='|^tagged::gc::major_symbol_preimage_tests::'
+SURFACE_RE+='|^emacs_core::eval::tests::gc_generational_major::'
 SURFACE_RE+='|^emacs_core::builtins::closure_slot_identity_test::'
 SURFACE_RE+='|^emacs_core::eval::cconv_memo_tests::'
 SURFACE_RE+='|^emacs_core::eval::gc_root_ownership_tests::'

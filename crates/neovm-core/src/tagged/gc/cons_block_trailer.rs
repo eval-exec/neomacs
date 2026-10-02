@@ -258,6 +258,38 @@ impl ConsBlockTrailer {
         promoted
     }
 
+    /// Stop-all and joined-marker boundary: major liveness replaces age.
+    /// Unused region tails have already been unmarked. Whole-word stores
+    /// are safe because no mutator can claim or update adjacent bits here.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn promote_major_world_stopped(&self) -> usize {
+        let mut promoted = 0;
+        for w in 0..CONS_MARK_WORDS {
+            let marked = self.mark_word(w).load(Ordering::Relaxed) as u64;
+            promoted += (marked & !self.old_word(w)).count_ones() as usize;
+            self.old_atomic(w).store(marked, Ordering::Relaxed);
+            self.unlogged_atomic(w).store(marked, Ordering::Relaxed);
+        }
+        promoted
+    }
+
+    pub(super) fn count_old(&self, cells: usize) -> usize {
+        (0..cons_mark_words(cells))
+            .map(|w| self.old_word(w).count_ones() as usize)
+            .sum()
+    }
+
+    /// Diagnostic live-word view; all generation arithmetic stays here.
+    pub(super) fn live_word(&self, word: usize, minor: bool) -> usize {
+        let marked = self.mark_word(word).load(Ordering::Relaxed);
+        if minor {
+            marked | self.old_word(word) as usize
+        } else {
+            marked
+        }
+    }
+
     /// Stop-all handshake required, as for promotion: no mutator or marker
     /// may claim or set an unlogged bit while this reset runs.
     #[cold]

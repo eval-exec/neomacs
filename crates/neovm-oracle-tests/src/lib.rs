@@ -146,6 +146,8 @@ mod func_arity_semantics;
 mod funcall;
 mod funcall_apply_comprehensive;
 mod function;
+#[cfg(test)]
+mod gc_generational;
 mod gc_scan_strict_edge_semantics;
 mod generator_semantics;
 mod generic_function_comprehensive;

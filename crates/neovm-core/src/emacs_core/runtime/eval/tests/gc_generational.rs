@@ -143,8 +143,8 @@ fn explicit_collection_keeps_the_full_synchronous_entry() {
     assert!(context.tagged_heap.allocated_count() < allocated);
     assert_eq!(reachable.cons_car(), Value::fixnum(53));
     assert!(
-        !context.tagged_heap.value_is_old_for_test(reachable),
-        "the Stage A full entry does not perform minor promotion"
+        context.tagged_heap.value_is_old_for_test(reachable),
+        "the explicit major promotes surviving conses"
     );
 }
 

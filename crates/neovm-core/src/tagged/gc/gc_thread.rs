@@ -43,7 +43,7 @@ pub(super) struct ConcurrentMarkJob {
     /// wait below wakes immediately instead of finishing a fixed sleep.
     pub(super) wake: std::sync::Arc<(std::sync::Mutex<()>, std::sync::Condvar)>,
     /// Signalled when the loop exits, so the mutator can take over the gray queue.
-    pub(super) exited: std::sync::mpsc::Sender<()>,
+    pub(super) exited: std::sync::mpsc::Sender<ConcurrentMarkResult>,
     /// Stage 1b CONCURRENT OBARRAY SCAN: a start-captured snapshot of the obarray's
     /// chunked symbol store. When `Some`, the GC thread scans these symbol cells
     /// ONCE per cycle, feeding each symbol's heap children into `gray` (conses) /
@@ -92,6 +92,10 @@ pub(super) struct ConcurrentClaimJob {
     /// only flip point and the next one cannot run before this mark joins),
     /// so the captured value is valid for the job's whole lifetime.
     pub(super) parity: MarkParity,
+    /// Enabled major, captured once at the stop-all start handshake.
+    /// First-partition jobs also carry true; their non-cons promo addresses
+    /// are discarded by the coordinator before legacy permanent promotion.
+    pub(super) major: bool,
     /// OWNERSHIP SNAPSHOT (`chunk_map::PageSnapshot`): the cons blocks and
     /// the STRING, FLOAT, VECTOR and BYTECODE arena pages that existed at the
     /// world-stopped start handshake (retired pages included — their tenured
@@ -152,12 +156,64 @@ pub(super) struct ConcurrentClaimJob {
 }
 
 impl ConcurrentClaimJob {
-    /// The scope of the collection this job marks for (see
-    /// `TaggedHeap::collection_scope`): `Young` until generational majors
-    /// carry theirs in the job (P3.1 C2.6).
+    /// The captured collection scope. Generation is tested before mark
+    /// parity in every header claim arm.
     #[inline(always)]
     pub(super) const fn scope(&self) -> CollectionScope {
-        CollectionScope::Young
+        if self.major {
+            CollectionScope::Full
+        } else {
+            CollectionScope::Young
+        }
+    }
+}
+
+/// Owned worker result, sent only after the last heap/snapshot read.
+/// Headers remain live and non-moving until the coordinator joins the worker;
+/// addresses are never dereferenced after the old/young sweep starts.
+#[derive(Default)]
+pub(super) struct ConcurrentMarkResult {
+    pub(super) promo: Vec<usize>,
+    pub(super) symbols: Vec<SymId>,
+}
+
+/// Job-local logs. No worker writes to collector or mutator symbol state.
+#[derive(Default)]
+struct WorkerMarkLogs {
+    result: ConcurrentMarkResult,
+    seen_symbols: FxHashSet<SymId>,
+}
+
+impl WorkerMarkLogs {
+    #[inline]
+    fn note_symbol(&mut self, value: TaggedValue) -> bool {
+        let crate::tagged::value::ValueKind::Symbol(id) = value.kind() else {
+            return false;
+        };
+        if self.seen_symbols.insert(id) {
+            self.result.symbols.push(id);
+        }
+        true
+    }
+
+    /// The caller has successfully claimed this snapshot-owned header.
+    /// Generation bytes do not change until the worker has exited.
+    #[inline]
+    fn note_promotion<const MAJOR: bool>(&mut self, header: *const GcHeader) {
+        if MAJOR && !unsafe { (*header).tenured } {
+            self.result.promo.push(header as usize);
+        }
+    }
+
+    /// Cons and bytecode children stay queued rather than recursively claimed.
+    #[inline(always)]
+    fn queue_child<const MAJOR: bool>(&mut self, value: TaggedValue, gray: &mut Vec<TaggedValue>) {
+        if MAJOR && self.note_symbol(value) {
+            return;
+        }
+        if value.is_heap_object() {
+            gray.push(value);
+        }
     }
 }
 
@@ -310,6 +366,35 @@ pub(super) fn concurrent_try_mark_string(
     true
 }
 
+/// Enabled-major string claim: permanent generation first, interval refusal
+/// before the claim, and P-all logging only after a successful young claim.
+#[inline]
+fn concurrent_try_mark_string_major(
+    val: TaggedValue,
+    job: &ConcurrentClaimJob,
+    logs: &mut WorkerMarkLogs,
+) -> bool {
+    debug_assert!(val.is_string());
+    let Some(ptr) = val.as_string_ptr() else {
+        return false;
+    };
+    if !job.pages.contains(ChunkClass::String, ptr as usize) {
+        return false;
+    }
+    if unsafe { (*ptr).header.black_by_generation(job.scope()) } {
+        return true;
+    }
+    // Read only the atomic pointer word, never the interval table.
+    if !unsafe { (*ptr).data.intervals_ptr() }.is_null() {
+        return false;
+    }
+    if unsafe { (*ptr).header.mark_claim_at(job.parity) } {
+        job.str_claimed.fetch_add(1, Ordering::Relaxed);
+        logs.note_promotion::<true>(ptr.cast());
+    }
+    true
+}
+
 /// CONCURRENT CLAIM DISPATCHER (task 01): try to fully handle one discovered
 /// non-cons heap value on the GC thread. Returns `true` when handled here
 /// (claimed now, or already marked — nothing further owed this cycle);
@@ -353,11 +438,24 @@ pub(super) fn ewma_half(prev: u64, sample: u64) -> u64 {
     }
 }
 
+// Existing direct claim tests keep their legacy three-argument surface.
+#[cfg(test)]
 #[inline]
 pub(super) fn concurrent_try_mark_owned(
     val: TaggedValue,
     job: &ConcurrentClaimJob,
     gray: &mut Vec<TaggedValue>,
+) -> bool {
+    debug_assert!(!job.major);
+    concurrent_try_mark_owned_logged::<false>(val, job, gray, &mut WorkerMarkLogs::default())
+}
+
+#[inline]
+fn concurrent_try_mark_owned_logged<const MAJOR: bool>(
+    val: TaggedValue,
+    job: &ConcurrentClaimJob,
+    gray: &mut Vec<TaggedValue>,
+    logs: &mut WorkerMarkLogs,
 ) -> bool {
     // FIRST PARTITION CYCLE: a child inside the dump span is fully handled
     // (see `ConcurrentClaimJob::drop_dump_children`) — nothing owed.
@@ -369,6 +467,9 @@ pub(super) fn concurrent_try_mark_owned(
         return true;
     }
     if val.is_string() {
+        if MAJOR {
+            return concurrent_try_mark_string_major(val, job, logs);
+        }
         return concurrent_try_mark_string(val, &job.pages, job.parity, &job.str_claimed);
     }
     if val.is_float() {
@@ -389,7 +490,13 @@ pub(super) fn concurrent_try_mark_owned(
         // TENURED short-circuit BEFORE the claim (H5): tenured ≡ permanently
         // black, never re-traced/re-swept — "handled, nothing owed" without
         // touching the frozen mark bit.
-        if unsafe { (*ptr).header.black_by_generation(job.scope()) } {
+        if unsafe {
+            (*ptr).header.black_by_generation(if MAJOR {
+                CollectionScope::Full
+            } else {
+                CollectionScope::Young
+            })
+        } {
             return true;
         }
         // Young owned page float: claim at THIS cycle's parity. A failed
@@ -397,6 +504,7 @@ pub(super) fn concurrent_try_mark_owned(
         // this cycle) — equally done.
         if unsafe { (*ptr).header.mark_claim_at(job.parity) } {
             job.float_claimed.fetch_add(1, Ordering::Relaxed);
+            logs.note_promotion::<MAJOR>(ptr.cast());
         }
         return true;
     }
@@ -464,11 +572,18 @@ pub(super) fn concurrent_try_mark_owned(
             );
             // TENURED short-circuit BEFORE the claim (H5): permanently
             // black, never re-traced; frozen at the world-stopped promotion.
-            if unsafe { (*ptr).gc.black_by_generation(job.scope()) } {
+            if unsafe {
+                (*ptr).gc.black_by_generation(if MAJOR {
+                    CollectionScope::Full
+                } else {
+                    CollectionScope::Young
+                })
+            } {
                 return true;
             }
             if unsafe { (*ptr).gc.mark_claim_at(job.parity) } {
                 job.vec_claimed.fetch_add(1, Ordering::Relaxed);
+                logs.note_promotion::<MAJOR>(ptr.cast());
             }
             return true;
         }
@@ -538,11 +653,18 @@ pub(super) fn concurrent_try_mark_owned(
             // black, never re-traced/re-swept; frozen bit untouched. Its
             // young children are the promotion-time page-tenured
             // remembered-set scan's job, exactly as on the defer path.
-            if unsafe { (*ptr).gc.black_by_generation(job.scope()) } {
+            if unsafe {
+                (*ptr).gc.black_by_generation(if MAJOR {
+                    CollectionScope::Full
+                } else {
+                    CollectionScope::Young
+                })
+            } {
                 return true;
             }
             if unsafe { (*ptr).gc.mark_claim_at(job.parity) } {
                 job.bc_claimed.fetch_add(1, Ordering::Relaxed);
+                logs.note_promotion::<MAJOR>(ptr.cast());
                 // Fresh claim: gray-push the children (coverage leg (a)).
                 // Field reads are race-free per the immutability argument
                 // above (a fresh claim proves the object pre-dates the
@@ -555,9 +677,7 @@ pub(super) fn concurrent_try_mark_owned(
                 // prototype's code string reachable through the prototype;
                 // pushing it is harmless either way.
                 for child in unsafe { (*(ptr as *const ByteCodeObj)).slot_objects.children() } {
-                    if child.is_heap_object() {
-                        gray.push(child);
-                    }
+                    logs.queue_child::<MAJOR>(child, gray);
                 }
                 let data = unsafe { &(*(ptr as *const ByteCodeObj)).data };
                 // Lazy pdump stubs are confined to the MAPPED image (the
@@ -568,33 +688,21 @@ pub(super) fn concurrent_try_mark_owned(
                     !data.is_pdump_stub(),
                     "arena bytecode must never be a lazy pdump stub"
                 );
-                if data.arglist.is_heap_object() {
-                    gray.push(data.arglist);
-                }
+                logs.queue_child::<MAJOR>(data.arglist, gray);
                 for &c in &data.constants {
-                    if c.is_heap_object() {
-                        gray.push(c);
-                    }
+                    logs.queue_child::<MAJOR>(c, gray);
                 }
-                if let Some(env) = data.env
-                    && env.is_heap_object()
-                {
-                    gray.push(env);
+                if let Some(env) = data.env {
+                    logs.queue_child::<MAJOR>(env, gray);
                 }
-                if let Some(doc_form) = data.doc_form
-                    && doc_form.is_heap_object()
-                {
-                    gray.push(doc_form);
+                if let Some(doc_form) = data.doc_form {
+                    logs.queue_child::<MAJOR>(doc_form, gray);
                 }
-                if let Some(interactive) = data.interactive
-                    && interactive.is_heap_object()
-                {
-                    gray.push(interactive);
+                if let Some(interactive) = data.interactive {
+                    logs.queue_child::<MAJOR>(interactive, gray);
                 }
                 for &s in &data.extra_slots {
-                    if s.is_heap_object() {
-                        gray.push(s);
-                    }
+                    logs.queue_child::<MAJOR>(s, gray);
                 }
             }
             // Already marked (lost race, earlier edge, or born-at-parity —
@@ -654,45 +762,50 @@ pub(super) fn concurrent_try_mark_owned(
 /// mapped object), symbols dedup into `deferred`, young heap values go
 /// through the claim dispatcher. Kinds with mutator-only side effects
 /// (hash tables) defer the whole OBJECT to the termination.
-pub(super) fn concurrent_trace_mapped_veclike(
+fn concurrent_trace_mapped_veclike<const MAJOR: bool>(
     ptr: *mut VecLikeHeader,
     job: &mut ConcurrentMarkJob,
     seen_symbols: &mut FxHashSet<usize>,
+    logs: &mut WorkerMarkLogs,
 ) {
-    let route =
-        |child: TaggedValue, job: &mut ConcurrentMarkJob, seen_symbols: &mut FxHashSet<usize>| {
-            if child.is_cons() {
-                let addr = child.xcons_ptr() as usize;
-                if addr < job.claims.dump_lo || addr >= job.claims.dump_hi {
-                    job.gray.push(child);
-                }
-            } else if child.is_symbol() {
-                if seen_symbols.insert(child.bits()) {
-                    job.deferred.lock().unwrap().push(child);
-                }
-            } else if child.is_heap_object()
-                && !concurrent_try_mark_owned(child, &job.claims, &mut job.gray)
-            {
+    let route = |child: TaggedValue,
+                 job: &mut ConcurrentMarkJob,
+                 seen_symbols: &mut FxHashSet<usize>,
+                 logs: &mut WorkerMarkLogs| {
+        if child.is_cons() {
+            let addr = child.xcons_ptr() as usize;
+            if addr < job.claims.dump_lo || addr >= job.claims.dump_hi {
+                job.gray.push(child);
+            }
+        } else if child.is_symbol() {
+            if MAJOR {
+                logs.note_symbol(child);
+            } else if seen_symbols.insert(child.bits()) {
                 job.deferred.lock().unwrap().push(child);
             }
-        };
+        } else if child.is_heap_object()
+            && !concurrent_try_mark_owned_logged::<MAJOR>(child, &job.claims, &mut job.gray, logs)
+        {
+            job.deferred.lock().unwrap().push(child);
+        }
+    };
     match unsafe { (*ptr).type_tag } {
         VecLikeType::Vector => {
             let obj = ptr as *const VectorObj;
             for val in unsafe { (*obj).data.iter_atomic() } {
-                route(val, job, seen_symbols);
+                route(val, job, seen_symbols, logs);
             }
         }
         VecLikeType::Record | VecLikeType::WindowConfiguration => {
             let obj = ptr as *const RecordObj;
             for val in unsafe { (*obj).data.iter_atomic() } {
-                route(val, job, seen_symbols);
+                route(val, job, seen_symbols, logs);
             }
         }
         VecLikeType::SubCharTable => {
             let obj = unsafe { &*(ptr as *const SubCharTableObj) };
             for val in obj.contents.iter_atomic() {
-                route(val, job, seen_symbols);
+                route(val, job, seen_symbols, logs);
             }
         }
         VecLikeType::CharTable => {
@@ -703,13 +816,13 @@ pub(super) fn concurrent_trace_mapped_veclike(
                 load_value_atomic(&obj.purpose),
                 load_value_atomic(&obj.ascii),
             ] {
-                route(value, job, seen_symbols);
+                route(value, job, seen_symbols, logs);
             }
             for slot in &obj.contents {
-                route(load_value_atomic(slot), job, seen_symbols);
+                route(load_value_atomic(slot), job, seen_symbols, logs);
             }
             for val in obj.extras.iter_atomic() {
-                route(val, job, seen_symbols);
+                route(val, job, seen_symbols, logs);
             }
         }
         _ => {
@@ -731,7 +844,35 @@ pub(super) fn concurrent_trace_mapped_veclike(
     }
 }
 
-pub(super) fn run_concurrent_mark(mut job: ConcurrentMarkJob) {
+pub(super) fn run_concurrent_mark(job: ConcurrentMarkJob) {
+    // Select once: no new mode branch in the legacy cons/child claim loops.
+    if job.claims.major {
+        run_concurrent_mark_impl::<true>(job);
+    } else {
+        run_concurrent_mark_impl::<false>(job);
+    }
+}
+
+#[inline(always)]
+fn route_snapshot_child<const MAJOR: bool>(
+    child: TaggedValue,
+    job: &mut ConcurrentMarkJob,
+    logs: &mut WorkerMarkLogs,
+) {
+    // Symbols have side-table liveness and no dereferenceable header. Handle
+    // them before dump-span dropping or the heap claim dispatcher.
+    if MAJOR && logs.note_symbol(child) {
+        return;
+    }
+    if child.is_cons() {
+        job.gray.push(child);
+    } else if !concurrent_try_mark_owned_logged::<MAJOR>(child, &job.claims, &mut job.gray, logs) {
+        job.deferred.lock().unwrap().push(child);
+    }
+}
+
+fn run_concurrent_mark_impl<const MAJOR: bool>(mut job: ConcurrentMarkJob) {
+    let mut logs = WorkerMarkLogs::default();
     use std::sync::atomic::Ordering;
     // LOAD-BEARING ORDER (task 01, vector-header claims): both start-snapshot
     // scans run TO COMPLETION *before* the stop-interruptible gray drain.
@@ -761,13 +902,13 @@ pub(super) fn run_concurrent_mark(mut job: ConcurrentMarkJob) {
         // handshake; its chunk + seq pointers address the live, non-moving
         // obarray storage, and we are on the GC thread.
         unsafe {
-            snap.scan(|child| {
-                if child.is_cons() {
-                    job.gray.push(child);
-                } else if !concurrent_try_mark_owned(child, &job.claims, &mut job.gray) {
-                    job.deferred.lock().unwrap().push(child);
-                }
-            });
+            if MAJOR {
+                snap.scan_for_major(|child| {
+                    route_snapshot_child::<MAJOR>(child, &mut job, &mut logs)
+                });
+            } else {
+                snap.scan(|child| route_snapshot_child::<MAJOR>(child, &mut job, &mut logs));
+            }
         }
     }
     // Stage 2 Tier B CONCURRENT VECTOR SCAN: trace the snapshotted vector
@@ -778,13 +919,13 @@ pub(super) fn run_concurrent_mark(mut job: ConcurrentMarkJob) {
         // (Mapped dump or retired-on-write Owned buffer), and we are on the GC
         // thread.
         unsafe {
-            snap.scan(|child| {
-                if child.is_cons() {
-                    job.gray.push(child);
-                } else if !concurrent_try_mark_owned(child, &job.claims, &mut job.gray) {
-                    job.deferred.lock().unwrap().push(child);
-                }
-            });
+            if MAJOR {
+                snap.scan_for_major(|child| {
+                    route_snapshot_child::<MAJOR>(child, &mut job, &mut logs)
+                });
+            } else {
+                snap.scan(|child| route_snapshot_child::<MAJOR>(child, &mut job, &mut logs));
+            }
         }
     }
     // FIRST PARTITION CYCLE: flat scan of the mapped veclike headers (see
@@ -792,10 +933,11 @@ pub(super) fn run_concurrent_mark(mut job: ConcurrentMarkJob) {
     if let Some(addrs) = job.mapped_veclikes.take() {
         let mut seen_symbols: FxHashSet<usize> = FxHashSet::default();
         for addr in addrs {
-            concurrent_trace_mapped_veclike(
+            concurrent_trace_mapped_veclike::<MAJOR>(
                 addr as *mut VecLikeHeader,
                 &mut job,
                 &mut seen_symbols,
+                &mut logs,
             );
         }
     }
@@ -832,7 +974,9 @@ pub(super) fn run_concurrent_mark(mut job: ConcurrentMarkJob) {
                         // mutator-only, and an uninterned dumped symbol is
                         // reachable only through image data, so each UNIQUE
                         // symbol must reach the termination exactly once.
-                        if seen_symbols.insert(child.bits()) {
+                        if MAJOR {
+                            logs.note_symbol(child);
+                        } else if seen_symbols.insert(child.bits()) {
                             job.deferred.lock().unwrap().push(child);
                         }
                     } else if child.is_heap_object() {
@@ -840,7 +984,12 @@ pub(super) fn run_concurrent_mark(mut job: ConcurrentMarkJob) {
                         // (fixnums, chars) carry nothing to mark — routing
                         // them into `deferred` flooded the first termination
                         // with ~118K no-op entries.
-                        if !concurrent_try_mark_owned(child, &job.claims, &mut job.gray) {
+                        if !concurrent_try_mark_owned_logged::<MAJOR>(
+                            child,
+                            &job.claims,
+                            &mut job.gray,
+                            &mut logs,
+                        ) {
                             job.deferred.lock().unwrap().push(child);
                         }
                     }
@@ -872,6 +1021,9 @@ pub(super) fn run_concurrent_mark(mut job: ConcurrentMarkJob) {
                     break 'mark;
                 }
             }
+            if MAJOR && logs.note_symbol(val) {
+                continue;
+            }
             if val.is_cons() {
                 let ptr = val.xcons_ptr();
                 let addr = ptr as usize;
@@ -894,13 +1046,9 @@ pub(super) fn run_concurrent_mark(mut job: ConcurrentMarkJob) {
                     loop {
                         let car = unsafe { (*ptr).load_car() };
                         let cdr = unsafe { (*ptr).load_cdr() };
-                        if car.is_heap_object() {
-                            job.gray.push(car);
-                        }
+                        logs.queue_child::<MAJOR>(car, &mut job.gray);
                         if !cdr.is_cons() {
-                            if cdr.is_heap_object() {
-                                job.gray.push(cdr);
-                            }
+                            logs.queue_child::<MAJOR>(cdr, &mut job.gray);
                             break;
                         }
                         since_stop_check += 1;
@@ -932,7 +1080,12 @@ pub(super) fn run_concurrent_mark(mut job: ConcurrentMarkJob) {
                 // mutator may reallocate, and interval-bearing or mapped
                 // strings, which need the mutator's `mark_value` — is
                 // deferred to the STW termination.
-                if concurrent_try_mark_owned(val, &job.claims, &mut job.gray) {
+                if concurrent_try_mark_owned_logged::<MAJOR>(
+                    val,
+                    &job.claims,
+                    &mut job.gray,
+                    &mut logs,
+                ) {
                     continue;
                 }
                 job.deferred.lock().unwrap().push(val);
@@ -972,7 +1125,9 @@ pub(super) fn run_concurrent_mark(mut job: ConcurrentMarkJob) {
     if !job.gray.is_empty() {
         job.deferred.lock().unwrap().extend(job.gray.drain(..));
     }
-    let _ = job.exited.send(());
+    // Every exit, including either stop quantum, retains the owned logs.
+    // No heap/snapshot access follows this handoff.
+    let _ = job.exited.send(logs.result);
 }
 
 /// Set the thread-local tagged heap pointer.
@@ -1261,7 +1416,9 @@ pub(crate) fn feed_concurrent_roots(values: &[TaggedValue]) {
 
 #[inline]
 pub(crate) fn note_root_overwrite(pre_image: TaggedValue) {
-    if !pre_image.is_heap_object() {
+    if !pre_image.is_heap_object()
+        && !matches!(pre_image.kind(), crate::tagged::value::ValueKind::Symbol(_))
+    {
         return;
     }
     if !TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.get()) {
@@ -1275,7 +1432,9 @@ pub(crate) fn note_root_overwrite(pre_image: TaggedValue) {
 /// not read a second time.
 #[inline]
 pub(crate) fn note_root_overwrite_while_marking(pre_image: TaggedValue) {
-    if !pre_image.is_heap_object() {
+    if !pre_image.is_heap_object()
+        && !matches!(pre_image.kind(), crate::tagged::value::ValueKind::Symbol(_))
+    {
         return;
     }
     with_tagged_heap(|heap| heap.note_root_overwrite_value(pre_image));
@@ -1309,11 +1468,18 @@ pub(crate) fn note_string_interval_preimage(
         if !heap.satb_string_preimage_addrs.insert(string_addr) {
             return; // this string's full pre-image was already logged this cycle
         }
+        let major = heap.generational.major_in_progress;
         let mut shared = heap.satb_shared.lock().unwrap();
         table.for_each_root(|value| {
-            if value.is_heap_object() {
+            if value.is_heap_object()
+                || (major && matches!(value.kind(), crate::tagged::value::ValueKind::Symbol(_)))
+            {
                 shared.push(value);
             }
         });
     });
 }
+
+#[cfg(test)]
+#[path = "tests/concurrent_major_worker_tests.rs"]
+mod concurrent_major_worker_tests;

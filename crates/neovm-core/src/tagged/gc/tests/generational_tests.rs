@@ -242,7 +242,7 @@ fn minor_old_vector_and_cons_keep_new_children_and_drop_overwritten_young() {
     assert_eq!(header(vector).raw_mark(), UNMARKED_AT_REST);
     assert_eq!(heap.remembered_log_len_for_test(), 0);
     // Eager promotion makes this child old; it is intentionally retained
-    // after overwriting until C2.6's old-generation sweep exists.
+    // after overwriting until the next major.
     crate::tagged::mutate::set_vector_slot(vector, 0, TaggedValue::NIL);
     minor(&mut heap, &[]);
     assert!(heap.value_is_old_for_test(child));
@@ -323,7 +323,7 @@ fn minor_eager_box_promotion_precedes_sweep_window_stores() {
 }
 
 #[test]
-fn current_full_cycle_keeps_r_facts_until_next_minor() {
+fn concurrent_major_promotes_mark_window_children_without_r() {
     let mut heap = heap_with_generations(true);
     set_tagged_heap(&mut heap);
     let roots = ScratchRoots::new();
@@ -335,15 +335,15 @@ fn current_full_cycle_keeps_r_facts_until_next_minor() {
     heap.launch_concurrent_mark();
     let child = heap.alloc_cons(TaggedValue::fixnum(83), TaggedValue::NIL);
     crate::tagged::mutate::set_vector_slot(owner, 0, child);
-    assert_eq!(heap.current_mutator_gc().remset, [owner]);
+    assert!(heap.current_mutator_gc().remset.is_empty());
     heap.join_concurrent_mark();
     heap.reseed_runtime_and_remembered_roots();
     heap.seed_root(owner);
     heap.incremental_drain_all();
     heap.incremental_finish(heap.live_bytes(), std::time::Instant::now());
     heap.finish_incremental_sweep_now();
-    assert!(!heap.value_is_old_for_test(child));
-    assert_eq!(heap.current_mutator_gc().remset, [owner]);
+    assert!(heap.value_is_old_for_test(child));
+    assert!(heap.current_mutator_gc().remset.is_empty());
     minor(&mut heap, &[]);
     assert_eq!(child.cons_car(), TaggedValue::fixnum(83));
     assert!(heap.value_is_old_for_test(child));
@@ -424,7 +424,7 @@ fn allocation_counts_are_identical_with_generations_off_and_on() {
 }
 
 #[test]
-fn current_full_before_first_minor_preserves_permanent_edge() {
+fn major_before_first_minor_preserves_permanent_edge() {
     let mut heap = heap_with_generations(true);
     set_tagged_heap(&mut heap);
     let roots = ScratchRoots::new();
@@ -437,8 +437,8 @@ fn current_full_before_first_minor_preserves_permanent_edge() {
     let child = heap.alloc_cons(TaggedValue::fixnum(97), TaggedValue::NIL);
     crate::tagged::mutate::set_vector_slot(owner, 0, child);
     heap.collect_exact(std::iter::once(owner));
-    assert_eq!(heap.generational.old_bytes, 0);
-    assert_eq!(heap.current_mutator_gc().remset, [owner]);
+    assert_eq!(heap.generational.old_bytes, size_of::<ConsCell>());
+    assert!(heap.current_mutator_gc().remset.is_empty());
     minor(&mut heap, &[owner]);
     assert!(heap.value_is_old_for_test(child));
     assert_eq!(child.cons_car(), TaggedValue::fixnum(97));

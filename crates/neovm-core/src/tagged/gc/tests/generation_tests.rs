@@ -129,33 +129,51 @@ fn the_mark_byte_is_tri_state() {
     assert_eq!(MarkParity::Two.flip(), MarkParity::One);
 }
 
-/// The heap's parity starts at `Two` so the bootstrap cycle runs at `One`,
-/// alternates every collection, and objects born between collections are
-/// white at the next one; a mark byte reset to rest reads white across two
-/// consecutive collections of different parities (the property P3.1's
-/// old objects rest on, GEN-3).
+/// The heap's parity starts at `Two` so the bootstrap cycle runs at `One`
+/// and alternates every collection. Tracing sets the cycle parity; the
+/// generational sweep resets ordinary old survivors to rest (GEN-3), while
+/// the legacy sweep leaves their cycle marks. Rest is white at both parities.
 #[test]
 fn parity_alternates_and_rest_is_white_under_both() {
     let mut heap = TaggedHeap::new();
     set_tagged_heap(&mut heap);
     assert_eq!(heap.mark_parity, MarkParity::Two);
     let v = heap.alloc_vector(vec![TaggedValue::NIL]);
-    let header = unsafe { &*header_of(v) };
-    assert_eq!(header.raw_mark(), MarkParity::Two.byte(), "born at parity");
-    heap.collect_exact(std::iter::once(v));
-    assert_eq!(heap.mark_parity, MarkParity::One);
-    assert!(
-        header.is_marked_at(MarkParity::One),
-        "traced at the new parity"
+    let header = header_of(v);
+    assert_eq!(
+        unsafe { (*header).raw_mark() },
+        MarkParity::Two.byte(),
+        "born at parity"
     );
-    heap.collect_exact(std::iter::once(v));
-    assert_eq!(heap.mark_parity, MarkParity::Two);
-    assert!(header.is_marked_at(MarkParity::Two));
-    // At rest, the object reads white under the next two parities in turn.
-    header.marked.store(UNMARKED_AT_REST, Ordering::Relaxed);
+    for parity in [MarkParity::One, MarkParity::Two] {
+        heap.begin_stw_collection();
+        heap.seed_root(v);
+        heap.mark_all();
+        assert_eq!(heap.mark_parity, parity);
+        assert!(heap.owns_heap_value_for_test(v));
+        assert!(
+            unsafe { (*header).is_marked_at(parity) },
+            "traced at the new parity before sweep",
+        );
+        heap.complete_collection();
+        assert!(heap.owns_heap_value_for_test(v));
+        if heap.generational_enabled() {
+            assert!(heap.value_is_old_for_test(v));
+            assert_eq!(
+                unsafe { (*header).raw_mark() },
+                UNMARKED_AT_REST,
+                "ordinary old survivor rests only after sweep",
+            );
+        } else {
+            assert!(unsafe { (*header).is_marked_at(parity) });
+        }
+    }
+    // Fresh raw-pointer accesses only: no header borrow spans collection.
+    unsafe { (*header).marked.store(UNMARKED_AT_REST, Ordering::Relaxed) };
     for parity in [heap.mark_parity.flip(), heap.mark_parity] {
-        assert!(!header.is_marked_at(parity));
+        assert!(!unsafe { (*header).is_marked_at(parity) });
     }
     heap.collect_exact(std::iter::once(v));
-    assert!(heap.is_value_marked(v), "traced again from rest");
+    assert!(heap.owns_heap_value_for_test(v), "traced again from rest");
+    assert!(heap.is_value_marked(v));
 }

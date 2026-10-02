@@ -1553,7 +1553,19 @@ impl ObarrayScanSnapshot {
     /// handshake of the CURRENTLY-RUNNING concurrent mark; the chunk + seq pointers
     /// must still address the live, non-moving obarray storage (guaranteed because
     /// chunk arrays + seq boxes never move, and the obarray outlives the cycle).
-    pub(crate) unsafe fn scan(&self, mut push: impl FnMut(Value)) {
+    pub(crate) unsafe fn scan(&self, push: impl FnMut(Value)) {
+        unsafe { self.scan_children::<false>(push) };
+    }
+
+    /// Major variant of `scan`, also visiting bare symbol children.
+    ///
+    /// # Safety
+    /// Same start-snapshot, presence and seqlock lifetime as `scan`.
+    pub(crate) unsafe fn scan_for_major(&self, push: impl FnMut(Value)) {
+        unsafe { self.scan_children::<true>(push) };
+    }
+
+    unsafe fn scan_children<const MAJOR: bool>(&self, mut push: impl FnMut(Value)) {
         let mut global_idx = 0usize;
         for &(slots_ptr, seq_ptr) in &self.chunks {
             if global_idx >= self.n_slots {
@@ -1584,7 +1596,7 @@ impl ObarrayScanSnapshot {
                 // not yet published — skip it; a symbol interned mid-cycle is
                 // allocate-black / SATB-retained and need not be scanned now.
                 if slot.name.load(Ordering::Acquire) != SYMBOL_NAME_SENTINEL.0 {
-                    read_symbol_children_consistent(seq, slot, &mut push);
+                    read_symbol_children::<MAJOR>(seq, slot, &mut push);
                 }
                 global_idx += 1;
             }
@@ -1639,6 +1651,14 @@ impl Drop for SeqlockWriteGuard {
 pub(crate) fn read_symbol_children_consistent(
     seq: &std::sync::atomic::AtomicU32,
     sym: &LispSymbol,
+    push: impl FnMut(Value),
+) {
+    read_symbol_children::<false>(seq, sym, push);
+}
+
+fn read_symbol_children<const MAJOR: bool>(
+    seq: &std::sync::atomic::AtomicU32,
+    sym: &LispSymbol,
     mut push: impl FnMut(Value),
 ) {
     use std::sync::atomic::Ordering;
@@ -1661,13 +1681,20 @@ pub(crate) fn read_symbol_children_consistent(
         }
         // Consistent snapshot. `is_heap_object()` excludes fixnums, nil, symbol
         // ids and UNBOUND, so the Plainval gate never traces a non-heap word.
-        if redirect == SymbolRedirect::Plainval && plain.is_heap_object() {
+        if redirect == SymbolRedirect::Plainval
+            && (plain.is_heap_object()
+                || (MAJOR && matches!(plain.kind(), crate::tagged::value::ValueKind::Symbol(_))))
+        {
             push(plain);
         }
-        if function.is_heap_object() {
+        if function.is_heap_object()
+            || (MAJOR && matches!(function.kind(), crate::tagged::value::ValueKind::Symbol(_)))
+        {
             push(function);
         }
-        if plist.is_heap_object() {
+        if plist.is_heap_object()
+            || (MAJOR && matches!(plist.kind(), crate::tagged::value::ValueKind::Symbol(_)))
+        {
             push(plist);
         }
         return;

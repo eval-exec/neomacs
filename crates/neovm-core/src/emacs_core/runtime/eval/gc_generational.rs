@@ -23,9 +23,17 @@ impl Context {
     pub(super) unsafe fn seed_registered_mutator_roots_world_stopped(
         &mut self,
         heap_ptr: *mut crate::tagged::gc::TaggedHeap,
-    ) {
-        for mutator in self.stopped_mutators_world_stopped() {
-            unsafe { mutator.seed_all_context_roots(heap_ptr) };
+    ) -> crate::tagged::gc::RootSeedBreakdown {
+        let mut registered = self.stopped_mutators_world_stopped();
+        let Some(first) = registered.next() else {
+            return Default::default();
+        };
+        let mut roots = unsafe { first.seed_all_context_roots(heap_ptr) };
+        for mutator in registered {
+            let next = unsafe { mutator.seed_all_context_roots(heap_ptr) };
+            roots.total_us = roots.total_us.saturating_add(next.total_us);
+            roots.groups.extend(next.groups);
         }
+        roots
     }
 }

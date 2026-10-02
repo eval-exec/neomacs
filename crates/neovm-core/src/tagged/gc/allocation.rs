@@ -106,6 +106,7 @@ impl TaggedHeap {
             // white for the next `begin_collection` flip otherwise.
             (*ptr).header.set_marked(self.mark_parity);
         }
+        self.note_black_born(ptr.cast());
         #[cfg(test)]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
         self.current_mutator_gc_mut().allocated_count += 1;
@@ -192,6 +193,7 @@ impl TaggedHeap {
             registered,
             "page vector allocated twice (bitmap/registry out of sync)"
         );
+        self.note_black_born(ptr.cast());
         #[cfg(test)]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
         self.current_mutator_gc_mut().allocated_count += 1;
@@ -322,6 +324,7 @@ impl TaggedHeap {
             // BORN-AT-PARITY, unconditionally — the link seam's store.
             (*ptr).header.gc.set_marked(self.mark_parity);
         }
+        self.note_black_born(ptr.cast());
         #[cfg(test)]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
         self.current_mutator_gc_mut().allocated_count += 1;
@@ -357,6 +360,7 @@ impl TaggedHeap {
             // BORN-AT-PARITY, unconditionally.
             (*ptr).header.gc.set_marked(self.mark_parity);
         }
+        self.note_black_born(ptr.cast());
         #[cfg(test)]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
         self.current_mutator_gc_mut().allocated_count += 1;
@@ -640,6 +644,7 @@ impl TaggedHeap {
             // `link_veclike`).
             (*ptr).header.gc.set_marked(self.mark_parity);
         }
+        self.note_black_born(ptr.cast());
         #[cfg(test)]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
         self.current_mutator_gc_mut().allocated_count += 1;
@@ -749,6 +754,7 @@ impl TaggedHeap {
             // `link_veclike`).
             (*ptr).header.gc.set_marked(self.mark_parity);
         }
+        self.note_black_born(ptr.cast());
         #[cfg(test)]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
         self.current_mutator_gc_mut().allocated_count += 1;
@@ -820,6 +826,7 @@ impl TaggedHeap {
             // BORN-AT-PARITY, unconditionally.
             (*ptr).header.gc.set_marked(self.mark_parity);
         }
+        self.note_black_born(ptr.cast());
         #[cfg(test)]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
         self.current_mutator_gc_mut().allocated_count += 1;
@@ -859,6 +866,7 @@ impl TaggedHeap {
             // BORN-AT-PARITY, unconditionally.
             (*ptr).header.gc.set_marked(self.mark_parity);
         }
+        self.note_black_born(ptr.cast());
         #[cfg(test)]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
         self.current_mutator_gc_mut().allocated_count += 1;
@@ -910,6 +918,7 @@ impl TaggedHeap {
                 },
             );
         }
+        self.note_black_born(ptr.cast());
         #[cfg(test)]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
         self.current_mutator_gc_mut().allocated_count += 1;
@@ -944,6 +953,7 @@ impl TaggedHeap {
             // BORN-AT-PARITY, unconditionally.
             (*ptr).header.gc.set_marked(self.mark_parity);
         }
+        self.note_black_born(ptr.cast());
         #[cfg(test)]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
         self.current_mutator_gc_mut().allocated_count += 1;

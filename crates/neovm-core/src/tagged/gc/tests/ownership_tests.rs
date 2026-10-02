@@ -2105,10 +2105,10 @@ fn parity_tenured_objects_stay_frozen_across_cycles_under_verifier() {
 
 /// PARITY MARK BITS (d): the concurrent string claim works at BOTH
 /// parities. The same rooted interval-free string is claimed by the GC
-/// thread on two consecutive cycles: on the second one its bit holds the
-/// previous cycle's parity, which a parity-blind `swap(true)` claim would
-/// misread as "already marked" — the string would never be marked that
-/// cycle and the sweep would free it while rooted.
+/// thread on two consecutive cycles. Legacy marks keep the previous parity;
+/// ordinary old generational survivors instead rest at zero after sweep.
+/// In both modes the worker must claim this cycle's parity before sweep,
+/// otherwise the string can be freed while rooted.
 #[test]
 fn parity_string_claim_works_across_two_cycles() {
     crate::test_utils::init_test_tracing();
@@ -2124,7 +2124,17 @@ fn parity_string_claim_works_across_two_cycles() {
     heap.collect_exact(std::iter::once(spine)); // bootstrap
 
     for cycle in 0..2 {
-        run_concurrent_cycle(&mut heap, &[spine]);
+        heap.concurrent_begin();
+        heap.seed_root(spine);
+        heap.launch_concurrent_mark();
+        while !heap.concurrent_mark_done() {
+            std::thread::yield_now();
+        }
+        heap.join_concurrent_mark();
+        heap.reseed_runtime_and_remembered_roots();
+        heap.seed_root(spine);
+        let bytes_before = heap.live_bytes();
+        heap.incremental_drain_all();
         assert!(
             heap.sweep_stats().last_concurrent_str_claimed >= 1,
             "cycle {cycle}: the interval-free string must be claimed on \
@@ -2140,8 +2150,26 @@ fn parity_string_claim_works_across_two_cycles() {
                     .header
                     .is_marked_at(heap.mark_parity)
             },
-            "cycle {cycle}: claimed string must be black at the cycle parity",
+            "cycle {cycle}: claimed string must be black at the cycle parity before sweep",
         );
+        heap.incremental_finish(bytes_before, std::time::Instant::now());
+        heap.finish_incremental_sweep_now();
+        assert!(!heap.sweep_in_progress());
+        assert!(heap.owns_non_cons_object(s_ptr));
+        if heap.generational_enabled() {
+            assert!(heap.value_is_old_for_test(s));
+            assert_eq!(
+                unsafe { (*(s_ptr as *const StringObj)).header.raw_mark() },
+                UNMARKED_AT_REST,
+                "cycle {cycle}: ordinary old claimed string rests after sweep",
+            );
+        } else {
+            assert!(unsafe {
+                (*(s_ptr as *const StringObj))
+                    .header
+                    .is_marked_at(heap.mark_parity)
+            });
+        }
     }
     assert_eq!(
         unsafe { (*(s_ptr as *const StringObj)).data.as_bytes() },
@@ -3081,8 +3109,21 @@ fn write_barrier_caches_skip_only_writes_with_nothing_to_record() {
         }
     }
     assert_eq!(calls() - before, owners.len());
+    // GEN1 publishes permanent additions from each mutator at the stop-all
+    // boundary; OFF inserts directly into the persistent mapped set.
     for &owner in &owners {
-        assert!(heap.mapped_remembered.contains(&owner.bits()));
+        assert!(heap.is_remembered_for_test(owner));
+        if heap.generational_enabled() {
+            assert!(heap.mutators().any(|mutator| {
+                mutator.r_mapped_seen.contains(&owner.bits())
+                    && mutator
+                        .remset
+                        .iter()
+                        .any(|value| value.bits() == owner.bits())
+            }));
+        } else {
+            assert!(heap.mapped_remembered.contains(&owner.bits()));
+        }
     }
     // A young owner has nothing to record at all.
     let young = heap.alloc_vector(vec![TaggedValue::NIL; 2]);
@@ -3093,7 +3134,7 @@ fn write_barrier_caches_skip_only_writes_with_nothing_to_record() {
         assert!(crate::tagged::mutate::set_vector_slot(young, 0, child));
     }
     assert_eq!(calls(), before);
-    assert!(!heap.mapped_remembered.contains(&young.bits()));
+    assert!(!heap.is_remembered_for_test(young));
 
     // Concurrent mark: an owner's first write logs its pre-image, the rest
     // of the cycle's writes by it have nothing to add.

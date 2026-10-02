@@ -19,8 +19,16 @@ pub(super) struct MutatorGcState {
     /// Mapped owners whose children must be scanned in the next cycle.
     pub(super) r_mapped_seen: FxHashSet<usize>,
     /// Non-cons objects born black during a concurrent major (C2.6).
-    #[allow(dead_code)]
     pub(super) black_born: Vec<*mut GcHeader>,
+    pub(super) black_born_regions: Vec<birth_logs::BlackBornRegion>,
+    pub(super) black_cons_region_start: Option<usize>,
+    pub(super) black_float_region_start: Option<usize>,
+    /// Symbol side-table preimages and inserted symbols belong to this mutator.
+    pub(super) major_symbol_preimages: Vec<SymId>,
+    /// Cons owners written during a concurrent major. Their current children
+    /// are traced once per owner after the stopped-world join; old insertions
+    /// are not necessarily allocate-black births. No free precedes this drain.
+    pub(super) major_cons_writes: Vec<TaggedValue>,
     /// Direct-mapped repeat-owner reject, cleared at every cycle begin.
     pub(super) remembered_cache: [usize; BARRIER_CACHE_SLOTS],
 }
@@ -55,6 +63,11 @@ impl MutatorGcState {
             remset: Vec::new(),
             r_mapped_seen: FxHashSet::default(),
             black_born: Vec::new(),
+            black_born_regions: Vec::new(),
+            black_cons_region_start: None,
+            black_float_region_start: None,
+            major_symbol_preimages: Vec::new(),
+            major_cons_writes: Vec::new(),
             remembered_cache: [0; BARRIER_CACHE_SLOTS],
         }
     }

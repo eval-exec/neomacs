@@ -385,6 +385,7 @@ fn concurrent_claim_arm_defers_mid_cycle_float_pages() {
     // launching, so claim at the flipped value exactly like the job
     // a launch would carry.
     let job = ConcurrentClaimJob {
+        major: false,
         parity: heap.mark_parity.flip(),
         pages: PageSnapshot::BaseSets {
             cons: rustc_hash::FxHashSet::default(),

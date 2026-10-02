@@ -186,7 +186,7 @@ impl ConsBlock {
 
     /// A minor may reclaim only an unmarked young cell. Runs on the mutator
     /// with allocation regions closed and no concurrent marker; old cells
-    /// stay intact until generational major sweeping exists (C2.6).
+    /// stay intact in a minor; major promotion first replaces old with mark.
     pub(super) fn sweep_generational(&mut self, free_list: &mut *mut ConsCell) -> usize {
         let mut live = 0usize;
         for i in (0..self.next_index as usize).rev() {
@@ -203,6 +203,17 @@ impl ConsBlock {
             }
         }
         live
+    }
+
+    /// Replace old age with current major liveness at the stop-all boundary.
+    #[inline]
+    pub(super) fn promote_major_world_stopped(&self) -> usize {
+        self.trailer().promote_major_world_stopped()
+    }
+
+    #[inline]
+    pub(super) fn count_old(&self) -> usize {
+        self.trailer().count_old(self.next_index as usize)
     }
 
     /// Sweep: thread reclaimed cells into the global intrusive free list and

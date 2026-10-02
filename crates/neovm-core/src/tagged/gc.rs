@@ -765,7 +765,7 @@ pub struct TaggedHeap {
     gc_wake: std::sync::Arc<(std::sync::Mutex<()>, std::sync::Condvar)>,
     /// Receives when the GC thread has exited its mark loop (so the mutator's
     /// termination can safely take over the gray queue). Set at start.
-    gc_exited: Option<std::sync::mpsc::Receiver<()>>,
+    gc_exited: Option<std::sync::mpsc::Receiver<ConcurrentMarkResult>>,
     /// Stage 1b CONCURRENT OBARRAY SCAN: a start-captured obarray chunk snapshot
     /// staged by the start handshake (`start_concurrent_mark`) just before
     /// `launch_concurrent_mark`, which moves it into the `ConcurrentMarkJob`. The
@@ -1106,11 +1106,14 @@ impl TaggedHeap {
 
     /// The scope of the collection now running or next to run: which
     /// generations it treats as black (`GcHeader::black_by_generation`).
-    /// Every collection is `Young` until generational majors exist (P3.1
-    /// C2.6), which will make this read the cycle's kind.
+    /// Majors retain Full scope until their last sweep cursor completes.
     #[inline(always)]
     pub(crate) const fn collection_scope(&self) -> CollectionScope {
-        CollectionScope::Young
+        if self.generational.major_in_progress {
+            CollectionScope::Full
+        } else {
+            CollectionScope::Young
+        }
     }
 
     pub fn set_write_tracking_mode(&mut self, mode: WriteTrackingMode) {
@@ -1537,8 +1540,28 @@ impl TaggedHeap {
         #[cfg(debug_assertions)]
         self.debug_assert_remembered_membership(record.owner);
         if self.generational.enabled {
-            // There are no mutator stores during a minor. Major-window SATB
-            // remains today's barrier; C2.6 will add P-all promotion.
+            if self.concurrent_mark_running && self.generational.major_in_progress {
+                if record.owner.is_cons() {
+                    // A claimed cons can gain an existing white old object;
+                    // SATB preimages and allocate-black births do not cover it.
+                    // Deduplicate owners at the stopped-world join, then trace
+                    // their current children before any weak decision or free.
+                    self.current_mutator_gc_mut()
+                        .major_cons_writes
+                        .push(record.owner);
+                }
+                if let Some(value) = record.value
+                    && let crate::tagged::value::ValueKind::Symbol(id) = value.kind()
+                {
+                    // Bare symbols have no born-black heap header. Keep the
+                    // inserted-symbol fact for roots and non-cons owners too.
+                    self.current_mutator_gc_mut()
+                        .major_symbol_preimages
+                        .push(id);
+                }
+            }
+            // Concurrent majors use SATB plus P-all. Persistent image-owner
+            // additions still log locally; ordinary R resumes after termination.
             if self.concurrent_mark_running || record.value.is_none_or(|value| !value.is_fixnum()) {
                 self.remember_owner(record.owner);
             }
@@ -1579,19 +1602,19 @@ impl TaggedHeap {
     pub(super) fn remember_owner(&mut self, owner: TaggedValue) {
         if self.generational.enabled {
             let mapped = self.owner_is_mapped(owner);
-            // Until C2.6 P-all exists, even stores during today's full
-            // mark window retain their ordinary-old fact in per-mutator R.
+            let major_mark = self.is_generational_major_marking();
             if mapped {
-                self.mapped_remembered.insert(owner.bits());
                 if self
                     .current_mutator_gc_mut()
                     .r_mapped_seen
                     .insert(owner.bits())
+                    && !major_mark
                 {
                     self.current_mutator_gc_mut().remset.push(owner);
                 }
             } else if owner.is_cons() {
-                if let Some((trailer, index)) = self.old_cons_trailer(owner)
+                if !major_mark
+                    && let Some((trailer, index)) = self.old_cons_trailer(owner)
                     && trailer.try_claim_unlogged(index)
                 {
                     self.current_mutator_gc_mut().remset.push(owner);
@@ -1601,10 +1624,13 @@ impl TaggedHeap {
                 if !header.tenured {
                     return;
                 }
-                if header.generation.permanent() {
-                    self.mapped_remembered.insert(owner.bits());
+                let permanent = header.generation.permanent();
+                if permanent {
+                    self.current_mutator_gc_mut()
+                        .r_mapped_seen
+                        .insert(owner.bits());
                 }
-                if header.claim_remembered() {
+                if !major_mark && unsafe { &*(addr as *const GcHeader) }.claim_remembered() {
                     self.current_mutator_gc_mut().remset.push(owner);
                 }
             }
@@ -2261,6 +2287,7 @@ impl TaggedHeap {
         Self::note_boxed_list_layout(self.all_objects, &mut boxed);
         Self::note_boxed_list_layout(self.tenured_objects, &mut boxed);
         Self::note_boxed_list_layout(self.generational.old_objects, &mut boxed);
+        Self::note_boxed_list_layout(self.generational.old_sweep_pending, &mut boxed);
         boxed.sort_by_key(|layout| std::cmp::Reverse(layout.known_bytes));
 
         let page_backing_bytes = cons
@@ -2414,6 +2441,7 @@ impl TaggedHeap {
                 debug_assert!(registered, "vector linked twice into the registry");
             }
             self.all_objects = gc_header;
+            self.note_black_born(gc_header);
             #[cfg(test)]
             alloc_probe::record(gc_header, self.non_cons_object_addrs.len());
         }
@@ -2455,12 +2483,16 @@ impl Drop for TaggedHeap {
                 }
             }
         }
-        let mut old = self.generational.old_objects;
-        while !old.is_null() {
-            unsafe {
-                let next = (*old).gc_link();
-                self.free_gc_object(old);
-                old = next;
+        for mut old in [
+            self.generational.old_objects,
+            self.generational.old_sweep_pending,
+        ] {
+            while !old.is_null() {
+                unsafe {
+                    let next = (*old).gc_link();
+                    self.free_gc_object(old);
+                    old = next;
+                }
             }
         }
         // ConsBlocks are dropped automatically (they implement Drop).
@@ -2593,7 +2625,9 @@ mod allocation;
 
 mod mark_sweep;
 
+mod birth_logs;
 mod generational;
+mod old_sweep;
 
 mod concurrent;
 
@@ -2721,6 +2755,17 @@ fn maybe_resize_for_test(ht: &mut crate::emacs_core::value::LispHashTable) {
 #[path = "gc/tests/generational_tests.rs"]
 mod generational_tests;
 
+#[cfg(test)]
+#[path = "gc/tests/birth_logs_tests.rs"]
+mod birth_logs_tests;
+
+#[cfg(test)]
+#[path = "gc/tests/generational_major_tests.rs"]
+mod generational_major_tests;
+
+#[cfg(test)]
+#[path = "gc/tests/major_symbol_preimage_tests.rs"]
+mod major_symbol_preimage_tests;
 #[cfg(test)]
 #[path = "gc/tests/symbol_barrier_tests.rs"]
 mod symbol_barrier_tests;

@@ -1980,7 +1980,7 @@ impl Context {
                 // cycle traces the whole image before it promotes (see
                 // `begin_stw_collection`).
                 (*heap_ptr).begin_stw_collection();
-                self.seed_all_context_roots(heap_ptr);
+                self.seed_registered_mutator_roots_world_stopped(heap_ptr);
                 (*heap_ptr).complete_collection();
                 cycle_completed = true;
             } else if (*heap_ptr).sweep_in_progress() {
@@ -2059,7 +2059,7 @@ impl Context {
                 // only remaining non-concurrent threshold path, sized by the
                 // young heap alone.
                 (*heap_ptr).begin_stw_collection();
-                self.seed_all_context_roots(heap_ptr);
+                self.seed_registered_mutator_roots_world_stopped(heap_ptr);
                 (*heap_ptr).complete_collection();
                 cycle_completed = true;
             }
@@ -2244,7 +2244,7 @@ impl Context {
             (*heap_ptr).set_pending_obarray_scan(snap);
             {
                 let _skip = crate::emacs_core::symbol::ObarraySymbolCellSkipGuard::new();
-                roots_breakdown = self.seed_all_context_roots(heap_ptr);
+                roots_breakdown = self.seed_registered_mutator_roots_world_stopped(heap_ptr);
             }
             (*heap_ptr).launch_concurrent_mark();
         }
@@ -2338,7 +2338,7 @@ impl Context {
                 // + every non-obarray Context root, and restores full-scan on drop
                 // so the start seed + STW full-collection seeds are unaffected.
                 let _skip = crate::emacs_core::symbol::ObarraySymbolCellSkipGuard::new();
-                ctxroots_breakdown = self.seed_all_context_roots(heap_ptr);
+                ctxroots_breakdown = self.seed_registered_mutator_roots_world_stopped(heap_ptr);
             }
             // Stage 1b CONCURRENT OBARRAY SCAN termination residual: the GC thread's
             // scan covered only the symbol cells present at the start snapshot (slots

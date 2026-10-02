@@ -64,6 +64,7 @@ impl TaggedHeap {
         }
         self.promote_and_blacken();
         self.dump_blackened = true;
+        self.recompute_old_bytes_world_stopped();
         self.first_cycle_concurrent = false;
         let mapped_cons_bytes: usize = self
             .mapped_cons_ranges
@@ -102,6 +103,10 @@ impl TaggedHeap {
                 !self.concurrent_mark_running && !self.sweep_in_progress,
                 "a stop-the-world cycle may only follow a finished concurrent cycle"
             );
+            // The drained first cycle kept its births for the permanent
+            // splice. This explicit entry cancels that splice; its fresh
+            // full trace must decide liveness without the previous logs.
+            self.clear_black_births_world_stopped();
             self.first_cycle_concurrent = false;
             self.staged_mapped_cons_scan = None;
             self.staged_mapped_veclikes = None;
@@ -301,6 +306,7 @@ impl TaggedHeap {
             claims: ConcurrentClaimJob {
                 // Mandated carry: the GC thread claims at THIS cycle's parity.
                 parity: self.mark_parity,
+                major: self.generational.major_in_progress,
                 pages,
                 dump_lo: self.dump_addr_lo,
                 dump_hi: self.dump_addr_hi,
@@ -415,15 +421,58 @@ impl TaggedHeap {
             let _guard = lock.lock().unwrap();
             cvar.notify_all();
         }
-        if let Some(rx) = self.gc_exited.take() {
-            let _ = rx.recv(); // block until the GC thread leaves its mark loop
-        }
+        assert!(
+            !self.generational.enabled || !self.concurrent_mark_running || self.gc_exited.is_some(),
+            "active generational marker lost its result receiver"
+        );
+        let result = if let Some(rx) = self.gc_exited.take() {
+            match rx.recv() {
+                Ok(result) => result,
+                Err(error) if self.generational.enabled => {
+                    panic!("GC worker lost promotion handoff: {error}")
+                }
+                Err(_) => ConcurrentMarkResult::default(),
+            }
+        } else {
+            ConcurrentMarkResult::default()
+        };
         // The GC thread has exited, so nothing reads the bitmaps while the
         // black regions granted during the mark give their tails back (I1).
         self.close_alloc_regions();
         self.concurrent_mark_running = false;
         TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(false));
         self.publish_barrier_window();
+        if self.generational.enabled {
+            for id in result.symbols {
+                self.mark_symbol(id);
+            }
+            let mut symbols = Vec::new();
+            for mutator in self.mutators_mut() {
+                symbols.append(&mut mutator.major_symbol_preimages);
+            }
+            for id in symbols {
+                self.mark_symbol(id);
+            }
+            let mut cons_owners = Vec::new();
+            for mutator in self.mutators_mut() {
+                cons_owners.append(&mut mutator.major_cons_writes);
+            }
+            // Every owner is still live storage: the worker has joined, no
+            // mutator can append and no sweep/free has begun. Enumeration
+            // performs no Lisp allocation or safepoint before this is consumed.
+            let mut seen_cons_owners = FxHashSet::default();
+            for owner in cons_owners {
+                if seen_cons_owners.insert(owner.bits()) {
+                    self.push_value_children_to_gray(owner, "major-cons-written-retrace");
+                }
+            }
+            if !self.is_partition_first_cycle() {
+                self.generational
+                    .promo
+                    .extend(result.promo.into_iter().map(|addr| addr as *mut GcHeader));
+            }
+            self.publish_persistent_remembered_world_stopped();
+        }
         // Residual SATB (children overwritten after the GC's last drain) +
         // deferred (every non-cons + non-owned cons the GC parked) become gray;
         // the caller reseeds roots, then drains to a fixpoint stop-the-world.
@@ -527,7 +576,11 @@ impl TaggedHeap {
     /// cycle ends floats one cycle, the standard SATB trade.
     pub(crate) fn feed_satb_roots(&self, values: &[TaggedValue]) {
         let mut shared = self.satb_shared.lock().unwrap();
-        shared.extend(values.iter().copied().filter(|v| v.is_heap_object()));
+        shared.extend(values.iter().copied().filter(|v| {
+            v.is_heap_object()
+                || (self.generational.major_in_progress
+                    && matches!(v.kind(), crate::tagged::value::ValueKind::Symbol(_)))
+        }));
     }
 
     pub(super) fn push_value_children_to_satb_shared(&mut self, owner: TaggedValue) {
@@ -558,7 +611,17 @@ impl TaggedHeap {
     /// on the `TAGGED_HEAP_CONCURRENT_ACTIVE` thread-local (the source of truth),
     /// and an extra entry is at worst one cycle of floating garbage.
     pub(super) fn note_root_overwrite_value(&mut self, pre_image: TaggedValue) {
-        self.satb_shared.lock().unwrap().push(pre_image);
+        if let crate::tagged::value::ValueKind::Symbol(id) = pre_image.kind() {
+            if self.generational.major_in_progress && self.concurrent_mark_running {
+                self.current_mutator_gc_mut()
+                    .major_symbol_preimages
+                    .push(id);
+            }
+            return;
+        }
+        if pre_image.is_heap_object() {
+            self.satb_shared.lock().unwrap().push(pre_image);
+        }
     }
 
     /// Stage 2 Tier B CONCURRENT VECTOR SCAN clone-on-write hook. Called from

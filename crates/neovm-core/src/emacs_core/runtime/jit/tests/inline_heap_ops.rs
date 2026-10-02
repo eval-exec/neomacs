@@ -71,9 +71,7 @@ fn keep(eval: &mut Context, srcs: &[&str]) -> Vec<Value> {
 // Stage A deliberately widens the generational window until C2.8; its stores
 // and survival behavior are tested in gc_generational through real entry points.
 fn legacy_context() -> Context {
-    let mut context = Context::new();
-    context.tagged_heap.disable_generations_for_test();
-    context
+    crate::test_utils::with_legacy_gc(Context::new)
 }
 
 fn shim_calls() -> usize {

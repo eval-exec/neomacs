@@ -144,6 +144,7 @@ impl TaggedHeap {
         let color = if self.allocates_black() {
             let base = ConsBlock::block_base_for_ptr(first);
             ConsBlock::mark_run_at(base, ConsBlock::index_of_ptr(first), n, true);
+            self.note_black_cons_region_start(first);
             RegionColor::Black
         } else {
             RegionColor::White
@@ -320,6 +321,9 @@ impl TaggedHeap {
             }
         }
         let first = page.slot_ptr(run.first);
+        if self.generational.enabled {
+            self.note_black_float_region_start(first);
+        }
         self.charge_floats(run.count);
         self.region_book.float = FloatRegionSource::Run {
             page: run.page,
@@ -358,6 +362,9 @@ impl TaggedHeap {
         let book = self.region_book.float;
         let cur = self.jit.float_cur.get();
         let lim = self.jit.float_lim.get();
+        if self.generational.enabled {
+            self.close_black_float_region(cur);
+        }
         self.jit.float_cur.set(0);
         self.jit.float_lim.set(0);
         self.region_book.float = FloatRegionSource::Closed;
@@ -388,6 +395,7 @@ impl TaggedHeap {
         let source = self.region_book.cons;
         let cur = self.jit.cons_cur.get();
         let lim = self.jit.cons_lim.get();
+        self.close_black_cons_region(cur);
         self.jit.cons_cur.set(0);
         self.jit.cons_lim.set(0);
         self.region_book.cons = ConsRegionSource::Closed;

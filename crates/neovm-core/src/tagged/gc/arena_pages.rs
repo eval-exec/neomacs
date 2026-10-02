@@ -1033,9 +1033,15 @@ impl<T: PagedObject> ObjectArena<T> {
                     }
                     if header.is_marked_at(parity) {
                         // (2) Survivor: variable-size byte accounting.
-                        live_bytes = live_bytes.saturating_add(
-                            TaggedHeap::object_bytes_from_header(slot as *const GcHeader),
-                        );
+                        if GENERATIONAL && header.tenured && !header.generation.permanent() {
+                            // Joined marker, stopped mutators: restore GEN-3
+                            // only after every mark reader has finished.
+                            header.marked.store(UNMARKED_AT_REST, Ordering::Relaxed);
+                        } else {
+                            live_bytes = live_bytes.saturating_add(
+                                TaggedHeap::object_bytes_from_header(slot as *const GcHeader),
+                            );
+                        }
                     } else {
                         // (3) Dead: evict from any class registry, drop the
                         // payload IN PLACE, then clear the bit (the oracle

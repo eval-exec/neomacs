@@ -5,14 +5,17 @@ use super::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum GenerationCycle {
-    CurrentFull,
+    Major,
     Minor,
 }
 
 pub(super) struct GenState {
     pub(super) enabled: bool,
     pub(super) cycle: GenerationCycle,
-    /// Headers traced by the stopped-world minor, including weak/finalizer fixpoints.
+    /// Full scope lasts until every deferred sweep cursor completes.
+    pub(super) major_in_progress: bool,
+    pub(super) old_sweep_pending: *mut GcHeader,
+    /// Newly traced young headers, including weak/finalizer fixpoints.
     pub(super) promo: Vec<*mut GcHeader>,
     /// Collector-owned residual Box old list; links use GcHeader accessors.
     pub(super) old_objects: *mut GcHeader,
@@ -26,7 +29,9 @@ impl GenState {
     pub(super) fn new(enabled: bool) -> Self {
         Self {
             enabled,
-            cycle: GenerationCycle::CurrentFull,
+            cycle: GenerationCycle::Major,
+            major_in_progress: false,
+            old_sweep_pending: std::ptr::null_mut(),
             promo: Vec::new(),
             old_objects: std::ptr::null_mut(),
             old_bytes: 0,
@@ -37,12 +42,6 @@ impl GenState {
 }
 
 impl TaggedHeap {
-    #[cfg(test)]
-    pub(crate) fn disable_generations_for_test(&mut self) {
-        self.generational.enabled = false;
-        self.publish_barrier_window();
-    }
-
     #[inline]
     pub(crate) fn generational_enabled(&self) -> bool {
         self.generational.enabled
@@ -85,6 +84,7 @@ impl TaggedHeap {
         if !self.generational.enabled {
             return;
         }
+        self.publish_persistent_remembered_world_stopped();
         debug_assert!(self.generational.r_seed.is_empty());
         let mut owners = Vec::new();
         let mut seen = FxHashSet::default();
@@ -107,41 +107,52 @@ impl TaggedHeap {
         }
     }
 
-    /// Reset logging facts with all mutators stopped, after eager minor
-    /// promotion. Current full cycles preserve ordinary-old facts until
-    /// C2.6 provides their P-all promotion rule.
+    /// Merge current-mutator persistent additions only under collector
+    /// exclusion. A future stop-all handshake must precede this drain.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn publish_persistent_remembered_world_stopped(&mut self) {
+        if !self.generational.enabled {
+            return;
+        }
+        let mut additions = Vec::new();
+        for mutator in self.mutators_mut() {
+            additions.extend(mutator.r_mapped_seen.drain());
+        }
+        self.mapped_remembered.extend(additions);
+    }
+
+    /// Reset claims before a major traces old objects, and at termination
+    /// after P-all. No owner is freed until this drain is complete. Facts
+    /// appended during the later cooperative sweep belong to the next cycle.
     #[cold]
     #[inline(never)]
     pub(super) fn reset_generational_remembered_world_stopped(&mut self) {
         if !self.generational.enabled {
             return;
         }
-        let owners = std::mem::take(&mut self.generational.r_seed);
-        if self.generational.cycle == GenerationCycle::CurrentFull {
-            // C2.6 has not supplied P-all yet: current full cycles do not
-            // promote their young survivors. Keep each old->young fact for
-            // the next minor rather than dropping a still-needed repair.
-            self.current_mutator_gc_mut().remset.extend(owners);
-            return;
+        self.publish_persistent_remembered_world_stopped();
+        let mut owners = std::mem::take(&mut self.generational.r_seed);
+        for mutator in self.mutators_mut() {
+            owners.append(&mut mutator.remset);
+            mutator.remembered_cache.fill(0);
         }
         for owner in owners {
             if self.owner_is_mapped(owner) {
                 continue;
             }
             if owner.is_cons() {
-                if let Some((trailer, index)) = self.old_cons_trailer(owner) {
+                if let Some((trailer, index)) = self.old_cons_trailer(owner)
+                    && trailer.is_old(index)
+                {
                     trailer.set_unlogged(index);
                 }
             } else if let Some(addr) = Self::value_heap_addr(owner) {
-                // No concurrent claims at this stop-all boundary.
+                // All appenders are stopped, and no header has been freed.
                 unsafe { &*(addr as *const GcHeader) }
                     .remembered
                     .store(RememberedState::Unlogged as u8, Ordering::Relaxed);
             }
-        }
-        for mutator in self.mutators_mut() {
-            mutator.r_mapped_seen.clear();
-            mutator.remembered_cache.fill(0);
         }
     }
 
@@ -155,8 +166,14 @@ impl TaggedHeap {
             debug_assert!(
                 !header.is_remembered()
                     || self.mapped_remembered.contains(&owner.bits())
-                    || self.generational.r_seed.contains(&owner)
-                    || self.mutators().any(|m| m.remset.contains(&owner)),
+                    || self
+                        .generational
+                        .r_seed
+                        .iter()
+                        .any(|value| value.bits() == owner.bits())
+                    || self
+                        .mutators()
+                        .any(|m| m.remset.iter().any(|value| value.bits() == owner.bits())),
                 "remembered owner absent from R, R_seed and mapped_remembered: {owner:?}"
             );
         }
@@ -205,39 +222,79 @@ impl TaggedHeap {
 
     #[inline]
     pub(super) fn note_minor_survivor(&mut self, header: *mut GcHeader) {
-        if self.is_minor_collection() {
+        if self.generational.enabled && !unsafe { (*header).tenured } {
             self.generational.promo.push(header);
         }
     }
 
-    /// With all mutators stopped and the GC thread joined, promote the complete
-    /// traced set before dropping R. Deferred sweep only resets marks/moves Box
-    /// nodes; it never decides generation membership.
+    #[inline]
+    pub(super) fn is_generational_major_marking(&self) -> bool {
+        self.generational.major_in_progress && self.mark_in_progress
+    }
+
+    /// P-all: traced headers plus every mutator's black births. The marker
+    /// has joined; no mutator can publish a store until this finishes.
     #[cold]
     #[inline(never)]
-    pub(super) fn promote_minor_survivors_world_stopped(&mut self) {
-        if !self.is_minor_collection() {
+    pub(super) fn promote_survivors_world_stopped(&mut self) {
+        if !self.generational.enabled {
             return;
         }
-        for ptr in self.generational.promo.drain(..) {
-            let header = unsafe { &mut *ptr };
-            debug_assert!(!header.tenured);
-            header.tenured = true;
-            self.generational.old_bytes = self
-                .generational
-                .old_bytes
-                .saturating_add(Self::object_bytes_from_header(ptr));
+        let partition_first = self.partition_dump && !self.dump_blackened;
+        let mut headers = std::mem::take(&mut self.generational.promo);
+        for mutator in self.mutators() {
+            headers.extend(mutator.black_born.iter().copied());
+            for region in &mutator.black_born_regions {
+                headers.extend(region.float_headers());
+            }
         }
-        let promoted: usize = self
-            .cons_blocks
-            .iter_mut()
-            .map(|block| block.promote_marked_world_stopped())
-            .sum();
-        self.generational.old_cons_count += promoted;
+        // The first partition's existing permanent splice owns non-cons
+        // promotion, including survivors of a late-loaded image.
+        if !partition_first {
+            for ptr in headers {
+                let header = unsafe { &mut *ptr };
+                if !header.tenured {
+                    debug_assert!(header.is_marked_at(self.mark_parity));
+                    header.tenured = true;
+                    self.generational.old_bytes = self
+                        .generational
+                        .old_bytes
+                        .saturating_add(Self::object_bytes_from_header(ptr));
+                }
+            }
+        }
+        let major = self.generational.major_in_progress;
+        let mut promoted = 0;
+        let mut old_count = 0;
+        for block in &self.cons_blocks {
+            promoted += if major {
+                block.promote_major_world_stopped()
+            } else {
+                block.promote_marked_world_stopped()
+            };
+            old_count += block.count_old();
+        }
+        self.generational.old_cons_count = old_count;
         self.generational.old_bytes = self
             .generational
             .old_bytes
             .saturating_add(promoted * size_of::<ConsCell>());
+        if !partition_first {
+            self.clear_black_births_world_stopped();
+        }
+    }
+
+    /// Clear only after ordinary P-all or the first permanent splice. GEN-4
+    /// prevents a new collection until deferred first-partition promotion ends.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn clear_black_births_world_stopped(&mut self) {
+        for mutator in self.mutators_mut() {
+            debug_assert!(mutator.black_cons_region_start.is_none());
+            debug_assert!(mutator.black_float_region_start.is_none());
+            mutator.black_born.clear();
+            mutator.black_born_regions.clear();
+        }
     }
 
     #[inline]
@@ -264,51 +321,6 @@ impl TaggedHeap {
         header.marked.store(UNMARKED_AT_REST, Ordering::Relaxed);
         header.set_gc_link_world_stopped(self.generational.old_objects);
         self.generational.old_objects = ptr;
-    }
-
-    /// Today's full cycle skips non-cons tenured objects. Until C2.6 can trace
-    /// and reclaim ordinary old objects, enumerate their children conservatively
-    /// on full cycles. This also preserves the symbol-mark repair that skipping
-    /// old owners would otherwise remove. No Lisp allocation occurs in this walk.
-    #[cold]
-    #[inline(never)]
-    pub(super) fn seed_old_children_for_current_full(&mut self) {
-        if !self.generational.enabled || self.is_minor_collection() {
-            return;
-        }
-        let mut headers = Vec::new();
-        let mut visit = |ptr: *mut GcHeader| {
-            let header = unsafe { &*ptr };
-            if header.tenured && !header.generation.permanent() {
-                headers.push(ptr);
-            }
-        };
-        self.float_arena.for_each_allocated_slot(&mut visit);
-        self.string_arena.for_each_allocated_slot(&mut visit);
-        self.vector_arena.for_each_allocated_slot(&mut visit);
-        self.bytecode_arena.for_each_allocated_slot(&mut visit);
-        self.lambda_arena.for_each_allocated_slot(&mut visit);
-        self.macro_arena.for_each_allocated_slot(&mut visit);
-        self.record_arena.for_each_allocated_slot(&mut visit);
-        self.symbol_with_pos_arena
-            .for_each_allocated_slot(&mut visit);
-        self.marker_arena.for_each_allocated_slot(&mut visit);
-        self.bignum_arena.for_each_allocated_slot(&mut visit);
-        let mut ptr = self.generational.old_objects;
-        while !ptr.is_null() {
-            headers.push(ptr);
-            ptr = unsafe { (*ptr).gc_link() };
-        }
-        for ptr in headers {
-            let owner = unsafe {
-                match (*ptr).kind {
-                    HeapObjectKind::String => TaggedValue::from_string_ptr(ptr.cast()),
-                    HeapObjectKind::Float => TaggedValue::from_float_ptr(ptr.cast()),
-                    HeapObjectKind::VecLike => TaggedValue::from_veclike_ptr(ptr.cast()),
-                }
-            };
-            self.push_value_children_to_gray(owner, "current-full-old-children");
-        }
     }
 
     #[cfg(test)]

@@ -488,6 +488,28 @@ pub fn eval_with_ldefs_boot_autoloads(names: &[&str]) -> Context {
     eval
 }
 
+/// Construct a legacy-GC fixture with the knob selected before heap creation.
+/// Nextest gives each test its own process. Restore the caller's environment
+/// on return or unwind; an existing heap's generation mode is never changed.
+pub(crate) fn with_legacy_gc<T>(create: impl FnOnce() -> T) -> T {
+    struct RestoreGenerationalKnob(Option<std::ffi::OsString>);
+
+    impl Drop for RestoreGenerationalKnob {
+        fn drop(&mut self) {
+            unsafe {
+                match self.0.take() {
+                    Some(previous) => std::env::set_var("NEOVM_GC_GENERATIONAL", previous),
+                    None => std::env::remove_var("NEOVM_GC_GENERATIONAL"),
+                }
+            }
+        }
+    }
+
+    let _restore = RestoreGenerationalKnob(std::env::var_os("NEOVM_GC_GENERATIONAL"));
+    unsafe { std::env::set_var("NEOVM_GC_GENERATIONAL", "0") };
+    create()
+}
+
 /// Create a cached runtime-startup evaluator for tests that need the full
 /// GNU bootstrap surface.
 pub fn runtime_startup_context() -> Context {

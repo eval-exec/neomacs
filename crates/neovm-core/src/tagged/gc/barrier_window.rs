@@ -126,9 +126,22 @@ impl TaggedHeap {
         std::mem::take(&mut *self.satb_shared.lock().unwrap())
     }
 
-    /// Test hook: is `owner` in the dump remembered set?
+    /// Test hook: is this owner queued for remembered-child tracing?
     pub(crate) fn is_remembered_for_test(&self, owner: TaggedValue) -> bool {
         self.mapped_remembered.contains(&owner.bits())
+            || (self.generational.enabled
+                && (self
+                    .generational
+                    .r_seed
+                    .iter()
+                    .any(|value| value.bits() == owner.bits())
+                    || self.mutators().any(|mutator| {
+                        mutator
+                            .remset
+                            .iter()
+                            .any(|value| value.bits() == owner.bits())
+                            || mutator.r_mapped_seen.contains(&owner.bits())
+                    })))
     }
 
     /// Test hook: is `value` a tenured (old-generation) heap object?

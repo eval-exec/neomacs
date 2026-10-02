@@ -52,7 +52,7 @@ impl TaggedHeap {
     }
 
     pub(crate) fn begin_collection(&mut self) {
-        self.generational.cycle = generational::GenerationCycle::CurrentFull;
+        self.generational.cycle = generational::GenerationCycle::Major;
         self.begin_collection_with(false);
     }
 
@@ -63,7 +63,23 @@ impl TaggedHeap {
         #[cfg(debug_assertions)]
         crate::tagged::mutate::debug_assert_no_heap_mut_closure();
         if stw_entry {
-            self.generational.cycle = generational::GenerationCycle::CurrentFull;
+            self.generational.cycle = generational::GenerationCycle::Major;
+        }
+        self.generational.major_in_progress =
+            self.generational.enabled && !self.is_minor_collection();
+        if self.generational.enabled {
+            self.generational.promo.clear();
+            if self.generational.major_in_progress {
+                self.reset_generational_remembered_world_stopped();
+            }
+            for mutator in self.mutators_mut() {
+                debug_assert!(mutator.black_cons_region_start.is_none());
+                debug_assert!(mutator.black_float_region_start.is_none());
+                debug_assert!(mutator.black_born.is_empty());
+                debug_assert!(mutator.black_born_regions.is_empty());
+                debug_assert!(mutator.major_symbol_preimages.is_empty());
+                debug_assert!(mutator.major_cons_writes.is_empty());
+            }
         }
         if self.generational.enabled && std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1") {
             tracing::info!(target: "neovm::gc", kind = if self.is_minor_collection() { "minor" } else { "major" },
@@ -186,8 +202,9 @@ impl TaggedHeap {
         self.clear_dirty_owners();
         self.clear_dirty_writes();
         self.seed_internal_runtime_roots();
-        self.seed_generational_remembered();
-        self.seed_old_children_for_current_full();
+        if self.is_minor_collection() {
+            self.seed_generational_remembered();
+        }
         if partitioned && !self.is_minor_collection() {
             // Re-scan dumped/tenured objects mutated to point at young heap
             // objects: those children must be kept live even though the dump and
@@ -233,6 +250,7 @@ impl TaggedHeap {
         // An open region's reserved slots would be tenured (and its full
         // pages retired) as survivors.
         self.close_alloc_regions();
+        self.join_old_boxes_for_partition_world_stopped();
         // 1. Promote every surviving heap object to tenured (old generation).
         //    The first partition cycle ran a full trace+sweep, so everything
         //    still in `all_objects` is alive = a permanent (the preloaded world
@@ -338,6 +356,7 @@ impl TaggedHeap {
         //    the permanent→cons edges. It covers page-tenured owners too —
         //    see the page walk inside `scan_permanents_for_young_children`.
         self.scan_permanents_for_young_children();
+        self.clear_black_births_world_stopped();
     }
 
     /// Stage-3 promotion page walk + retirement (see the call site in
@@ -413,7 +432,7 @@ impl TaggedHeap {
                 let cell = unsafe { start.add(i) };
                 let car = unsafe { (*cell).load_car() };
                 let cdr = unsafe { (*cell).load_cdr() };
-                if self.is_heap_young(car) || self.is_heap_young(cdr) {
+                if self.permanent_child_needs_trace(car) || self.permanent_child_needs_trace(cdr) {
                     let value = unsafe { TaggedValue::from_cons_ptr(cell) };
                     self.remember_owner(value);
                 }
@@ -428,7 +447,7 @@ impl TaggedHeap {
             if !intervals.is_empty() {
                 intervals.for_each_root(|root| roots.push(root));
             }
-            if roots.iter().any(|r| self.is_heap_young(*r)) {
+            if roots.iter().any(|r| self.permanent_child_needs_trace(*r)) {
                 let value = unsafe { TaggedValue::from_string_ptr(ptr) };
                 self.remember_owner(value);
             }
@@ -476,13 +495,16 @@ impl TaggedHeap {
     /// Insert a tenured (list or page) owner into the dump remembered set if
     /// any of its direct heap children is YOUNG. Floats have no children.
     pub(super) fn remember_tenured_owner_if_young_children(&mut self, header: *mut GcHeader) {
+        if self.generational.enabled && !unsafe { (*header).generation.permanent() } {
+            return;
+        }
         let kind = unsafe { (*header).kind };
         let has_young = match kind {
             HeapObjectKind::VecLike => self.veclike_has_young_child(header as *mut VecLikeHeader),
             HeapObjectKind::String => self
                 .heap_object_children(header)
                 .iter()
-                .any(|c| self.is_heap_young(*c)),
+                .any(|c| self.permanent_child_needs_trace(*c)),
             HeapObjectKind::Float => false,
         };
         if has_young {
@@ -508,12 +530,34 @@ impl TaggedHeap {
         Self::for_each_veclike_child(
             ptr,
             &mut VisitChild(|child| {
-                if !young && self.is_heap_young(child) {
+                if !young && self.permanent_child_needs_trace(child) {
                     young = true;
                 }
             }),
         );
         young
+    }
+
+    /// Cold first-partition scan: permanent owners never trace again, so
+    /// preserve their edges to all collectible generations and symbol ids.
+    fn permanent_child_needs_trace(&self, value: TaggedValue) -> bool {
+        if !self.generational.enabled {
+            return self.is_heap_young(value);
+        }
+        if let crate::tagged::value::ValueKind::Symbol(id) = value.kind() {
+            return !crate::emacs_core::intern::is_canonical_id(id);
+        }
+        if self.owner_is_mapped(value) {
+            return false;
+        }
+        if value.is_cons() {
+            return self.old_cons_trailer(value).is_some();
+        }
+        if let Some(addr) = Self::value_heap_addr(value) {
+            return self.owns_heap_value_object(value, addr)
+                && !unsafe { (*(addr as *const GcHeader)).generation.permanent() };
+        }
+        false
     }
 
     /// True if `value` is a YOUNG heap object: a real heap allocation that is
@@ -825,7 +869,7 @@ impl TaggedHeap {
                 };
                 if let Some(idx) = found {
                     let block = &self.cons_blocks[idx];
-                    return (self.generational.enabled
+                    return (self.is_minor_collection()
                         && block.trailer().is_old(ConsBlock::index_of_ptr(ptr)))
                         || block.is_marked_ptr(ptr);
                 }
@@ -980,6 +1024,12 @@ impl TaggedHeap {
             out
         };
         for header in tenured {
+            if !unsafe {
+                (*header).black_by_generation(self.collection_scope())
+                    || (*header).is_marked_at(self.mark_parity)
+            } {
+                continue;
+            }
             let kind = unsafe { (*header).kind };
             let owner = format!("tenured:{kind:?}");
             let children: Vec<TaggedValue> = self.heap_object_children(header);
@@ -995,6 +1045,12 @@ impl TaggedHeap {
         // would pass verification straight into a UAF. Allocated-bit-first;
         // clear-bit slot bytes are garbage.
         for header in self.collect_tenured_page_slot_headers() {
+            if !unsafe {
+                (*header).black_by_generation(self.collection_scope())
+                    || (*header).is_marked_at(self.mark_parity)
+            } {
+                continue;
+            }
             let kind = unsafe { (*header).kind };
             let owner = format!("tenured-page:{kind:?}");
             for child in self.heap_object_children(header) {
@@ -1010,7 +1066,9 @@ impl TaggedHeap {
         if self.generational.enabled {
             for block in &self.cons_blocks {
                 for i in 0..block.next_index as usize {
-                    if !block.trailer().is_old(i) {
+                    if !block.trailer().is_old(i)
+                        || (!self.is_minor_collection() && !block.trailer().is_marked(i))
+                    {
                         continue;
                     }
                     let cell = unsafe { block.cells_ptr().add(i) };
@@ -1759,12 +1817,16 @@ impl TaggedHeap {
         // Mirrors GNU `sweep_buffer → unchain_dead_markers` (`alloc.c`).
         // Reading `header.gc.marked` is sound here because the
         // allocation is still live until `sweep_objects` runs below.
-        self.promote_minor_survivors_world_stopped();
+        self.promote_survivors_world_stopped();
         self.unchain_dead_markers();
         self.reset_generational_remembered_world_stopped();
 
         // -- Sweep phase --
         let cons_live_bytes = self.sweep_cons();
+        if self.generational.major_in_progress {
+            self.begin_old_sweep_world_stopped();
+            self.sweep_old_objects_slice(usize::MAX);
+        }
         let object_live_bytes = self.sweep_objects();
         // Object arena pages: the intrusive-list sweep above never sees page
         // floats/strings/vectors; their page sweeps are the second half of
@@ -1788,6 +1850,9 @@ impl TaggedHeap {
         // `sweep_cons` above already released the blocks with no survivors,
         // in its own pass, the way GNU's `sweep_conses` does.
         let _released_object_pages = self.release_empty_object_pages();
+        if self.generational.major_in_progress {
+            self.recompute_old_bytes_world_stopped();
+        }
         let mapped_object_live_bytes = self.mapped_non_cons_live_bytes();
         self.live_bytes = cons_live_bytes
             .saturating_add(object_live_bytes)
@@ -1807,7 +1872,9 @@ impl TaggedHeap {
         if self.partition_dump && !self.dump_blackened {
             self.promote_and_blacken();
             self.dump_blackened = true;
+            self.recompute_old_bytes_world_stopped();
         }
+        self.generational.major_in_progress = false;
         self.first_cycle_concurrent = false;
         self.staged_mapped_cons_scan = None;
         self.staged_mapped_veclikes = None;

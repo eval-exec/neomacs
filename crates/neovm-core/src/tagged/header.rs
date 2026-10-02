@@ -314,16 +314,14 @@ impl GenBits {
 /// Which generations a collection traces and sweeps (P3.1 §3.1, §3.5): the
 /// argument of THE generation predicate, [`GcHeader::black_by_generation`].
 ///
-/// Every collection today is [`CollectionScope::Young`]: tenured objects are
-/// black, never traced or swept. [`CollectionScope::Full`] is a
-/// generational major's (P3.1 C2.6), which traces and frees old objects and
-/// leaves only permanents black; nothing constructs it yet except tests.
+/// Legacy cycles and generational minors use [`CollectionScope::Young`]:
+/// tenured objects are black. Generational majors use [`CollectionScope::Full`]
+/// to trace and reclaim ordinary old objects while permanents stay black.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CollectionScope {
-    /// Old and permanent objects are black: today's cycles, and minors.
+    /// Old and permanent objects are black: legacy cycles and minors.
     Young,
     /// Only permanent objects are black: a major.
-    #[cfg_attr(not(test), allow(dead_code))]
     Full,
 }
 
@@ -736,6 +734,14 @@ unsafe impl Send for LispByteVecStorage {}
 unsafe impl Sync for LispByteVecStorage {}
 
 impl LispByteVec {
+    #[cfg(test)]
+    pub(crate) fn owned_storage_ref_count_for_test(&self) -> Option<usize> {
+        match &self.storage {
+            LispByteVecStorage::Owned(bytes) => Some(std::sync::Arc::strong_count(bytes)),
+            LispByteVecStorage::Mapped { .. } => None,
+        }
+    }
+
     pub fn owned(bytes: Vec<u8>) -> Self {
         Self {
             storage: LispByteVecStorage::Owned(bytes.into()),
@@ -1211,7 +1217,20 @@ impl VectorScanSnapshot {
     /// handshake of the CURRENTLY-RUNNING concurrent mark; each entry's `base`/`len`
     /// must still address a live, immutable backing (guaranteed: Mapped = immutable
     /// dump; Owned = retired-before-replace by `with_vector_data_mut`).
-    pub(crate) unsafe fn scan(&self, mut push: impl FnMut(TaggedValue)) {
+    pub(crate) unsafe fn scan(&self, push: impl FnMut(TaggedValue)) {
+        unsafe { self.scan_children::<false>(push) };
+    }
+
+    /// Same immutable-backing contract as `scan`; major scans also report
+    /// symbol ids whose liveness is tracked outside the heap header.
+    ///
+    /// # Safety
+    /// The start snapshot and its retired backings remain live until join.
+    pub(crate) unsafe fn scan_for_major(&self, push: impl FnMut(TaggedValue)) {
+        unsafe { self.scan_children::<true>(push) };
+    }
+
+    unsafe fn scan_children<const MAJOR: bool>(&self, mut push: impl FnMut(TaggedValue)) {
         for entry in &self.entries {
             for i in 0..entry.len {
                 // Safety: `base` addresses a contiguous `[TaggedValue; len]` backing
@@ -1220,7 +1239,9 @@ impl VectorScanSnapshot {
                 // stores on the live, non-retired backing — never this retired one).
                 let slot = unsafe { &*entry.base.add(i) };
                 let child = load_value_atomic(slot);
-                if child.is_heap_object() {
+                if child.is_heap_object()
+                    || (MAJOR && matches!(child.kind(), crate::tagged::value::ValueKind::Symbol(_)))
+                {
                     push(child);
                 }
             }

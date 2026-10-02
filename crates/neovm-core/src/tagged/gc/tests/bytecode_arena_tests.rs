@@ -446,6 +446,7 @@ fn concurrent_claim_arm_defers_mid_cycle_bytecode_pages() {
     // heap parity; a real cycle flips parity at `begin_collection`
     // before launching, so claim at the flipped value).
     let job = ConcurrentClaimJob {
+        major: false,
         parity: heap.mark_parity.flip(),
         pages: PageSnapshot::BaseSets {
             cons: rustc_hash::FxHashSet::default(),

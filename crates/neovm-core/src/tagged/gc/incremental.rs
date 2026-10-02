@@ -62,6 +62,10 @@ impl TaggedHeap {
         // list the sweep rebuilds, then the sweep would push them again (a
         // double hand-out). Also I1: `sweep_in_progress` flips below.
         self.close_alloc_regions();
+        self.trace_black_born_children_world_stopped();
+        if self.generational.major_in_progress {
+            self.incremental_drain_all();
+        }
         // Queue doomed finalizers first (mirrors `complete_collection`; a miss
         // here would mean finalizers silently never run under the concurrent
         // collector). The main mark has drained — the termination handshake
@@ -106,7 +110,7 @@ impl TaggedHeap {
         // Unchain dead markers before the sweep frees them (mirrors GNU
         // sweep_buffer -> unchain_dead_markers). Reads marks, which are intact.
         let unchain_t0 = std::time::Instant::now();
-        self.promote_minor_survivors_world_stopped();
+        self.promote_survivors_world_stopped();
         self.unchain_dead_markers();
         self.reset_generational_remembered_world_stopped();
         self.handshake.last_term_unchain_us = unchain_t0.elapsed().as_micros() as u64;
@@ -114,6 +118,7 @@ impl TaggedHeap {
         // Begin the deferred sweep. Detach the young non-cons list (new non-cons
         // allocations link onto a fresh `all_objects` and are not swept this
         // cycle) and reset the cons free list (rebuilt as blocks are swept).
+        self.begin_old_sweep_world_stopped();
         self.sweep_noncons_pending = self.all_objects;
         self.all_objects = std::ptr::null_mut();
         self.cons_free_list = std::ptr::null_mut();
@@ -300,7 +305,11 @@ impl TaggedHeap {
         //    object (with a heavier per-object free). --
         let noncons_budget = budget.saturating_mul(256);
         let mut processed = 0usize;
-        let mut noncons_freed = 0usize;
+        let mut noncons_freed = if self.generational.major_in_progress {
+            self.sweep_old_objects_slice(noncons_budget)
+        } else {
+            0
+        };
         // The detached sweep list is young-only (`all_objects` never holds
         // tenured objects), and `begin_collection` hard-asserts no flip can
         // happen while this sweep drains, so the bits are interpreted at the
@@ -340,6 +349,7 @@ impl TaggedHeap {
 
         let done = self.sweep_cons_cursor >= self.sweep_cons_end
             && self.sweep_noncons_pending.is_null()
+            && self.generational.old_sweep_pending.is_null()
             && self.sweep_float_page_cursor >= self.sweep_float_page_end
             && self.sweep_string_page_cursor >= self.sweep_string_page_end
             && self.sweep_vector_page_cursor >= self.sweep_vector_page_end
@@ -413,6 +423,10 @@ impl TaggedHeap {
         let _released_cons_blocks = self.release_empty_cons_blocks();
         let _released_object_pages = self.release_empty_object_pages();
 
+        if self.generational.major_in_progress {
+            self.recompute_old_bytes_world_stopped();
+        }
+
         let mapped_cons_live: usize = self
             .mapped_cons_ranges
             .iter()
@@ -470,6 +484,7 @@ impl TaggedHeap {
         // in `begin_collection` and `complete_collection`.
         self.trace_region_stats();
         self.sweep_in_progress = false;
+        self.generational.major_in_progress = false;
     }
 
     pub(super) fn push_gray(&mut self, val: TaggedValue, origin: &str) {
@@ -483,7 +498,13 @@ impl TaggedHeap {
         // the symbol is interned is a sweep-time question (`is_value_marked`),
         // not a mark-time one: asking `is_canonical_id` here cost an
         // epoch-checked thread-local lookup per symbol reference visited.
-        self.marked_symbols.insert(id);
+        if self.concurrent_mark_running && self.generational.major_in_progress {
+            self.current_mutator_gc_mut()
+                .major_symbol_preimages
+                .push(id);
+        } else {
+            self.marked_symbols.insert(id);
+        }
     }
 
     // This must stay inline in the cons-spine loop. Generational bookkeeping
@@ -1314,7 +1335,11 @@ impl TaggedHeap {
         // (`alloc_region.rs`, invariant I2).
         self.close_alloc_regions();
         let parity = self.mark_parity;
-        let scope = self.collection_scope();
+        let scope = if GENERATIONAL {
+            self.collection_scope()
+        } else {
+            CollectionScope::Young
+        };
         let ArenaSweepRanges {
             float,
             string,
@@ -1989,10 +2014,42 @@ impl TaggedHeap {
         self.bytecode_arena.owns(ptr)
     }
 
-    /// TEST-ONLY ownership probe for a non-cons heap value: true when this
-    /// heap allocated the value's object (arena page or boxed object).
+    /// Test-only allocated ownership, including conses in a surviving block.
+    /// A freed cons in such a block still passes the geometric oracle, so
+    /// exclude nodes in the intrusive free list without reading their payload.
     #[cfg(test)]
     pub(crate) fn owns_heap_value_for_test(&self, value: TaggedValue) -> bool {
+        if value.is_cons() {
+            if self.old_cons_trailer(value).is_none() {
+                return false;
+            }
+            let ptr = value.xcons_ptr();
+            let base = ConsBlock::block_base_for_ptr(ptr);
+            let Some(block) = self
+                .cons_blocks
+                .iter()
+                .find(|block| block.base_addr() == base)
+            else {
+                return false;
+            };
+            // The geometric oracle covers the whole block, including cells
+            // never reserved from its bump tail and the open region's unused
+            // tail. Neither is an initialized, handed-out cons.
+            if ConsBlock::index_of_ptr(ptr) >= block.next_index as usize
+                || (self.jit.cons_cur.get()..self.jit.cons_lim.get()).contains(&(ptr as usize))
+            {
+                return false;
+            }
+            let mut free = self.cons_free_list;
+            while !free.is_null() {
+                if std::ptr::eq(free, ptr) {
+                    return false;
+                }
+                // Only free-list nodes expose the next_free union field.
+                free = unsafe { (*free).free_next() };
+            }
+            return true;
+        }
         Self::value_heap_addr(value).is_some_and(|addr| self.owns_heap_value_object(value, addr))
     }
 

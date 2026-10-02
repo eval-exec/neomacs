@@ -211,7 +211,11 @@ impl TaggedHeap {
                 })
             });
             for w in 0..CONS_MARK_WORDS {
-                let marks = block.mark_word(w).load(Ordering::Relaxed);
+                let marks = if self.generational.enabled {
+                    block.trailer().live_word(w, self.is_minor_collection())
+                } else {
+                    block.mark_word(w).load(Ordering::Relaxed)
+                };
                 let prev = entry.prev[w];
                 let young_last = entry.young_last[w];
                 record
@@ -243,7 +247,13 @@ impl TaggedHeap {
                 // SAFETY: an allocated arena slot or a node of the young
                 // list, so a live, fully written header.
                 let h = unsafe { &*header };
-                if h.tenured || !h.is_marked_at(parity) {
+                if if self.generational.enabled {
+                    h.generation.permanent()
+                        || !(h.black_by_generation(self.collection_scope())
+                            || h.is_marked_at(parity))
+                } else {
+                    h.tenured || !h.is_marked_at(parity)
+                } {
                     return;
                 }
                 let bytes = Self::object_bytes_from_header(header);
@@ -273,12 +283,24 @@ impl TaggedHeap {
                 // SAFETY: a young-list node.
                 obj = unsafe { (*obj).next };
             }
+            if self.generational.enabled {
+                let mut old = self.generational.old_objects;
+                while !old.is_null() {
+                    visit(old);
+                    old = unsafe { (*old).gc_link() };
+                }
+            }
         }
         for &addr in &census.young_last_objects {
             // SAFETY: marked at the previous termination, so not swept since
             // (see the module doc): a live header.
             let header = addr as *const GcHeader;
-            if unsafe { (*header).tenured } || now.contains(&addr) {
+            if (if self.generational.enabled {
+                unsafe { (*header).generation.permanent() }
+            } else {
+                unsafe { (*header).tenured }
+            }) || now.contains(&addr)
+            {
                 continue;
             }
             record
