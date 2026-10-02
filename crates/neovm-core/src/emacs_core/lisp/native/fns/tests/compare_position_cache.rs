@@ -68,6 +68,28 @@ fn compare_position_cache_keeps_same_string_operand_identity() {
 }
 
 #[test]
+fn compare_position_cache_zero_starts_preserve_warmed_far_offset() {
+    init_cache_test();
+    let source = Value::string(format!("{}xy{}", "ж".repeat(1000), "あ".repeat(1000)));
+    let needle = Value::string("xy");
+    let prefix1 = Value::string("Жq");
+    let prefix2 = Value::string("Жq");
+    assert_eq!(compare_token(needle, source, 1000, 2), Value::T);
+
+    // A zero-offset comparison has no position scan to avoid. It should
+    // leave the useful far-offset entry in place rather than replace it
+    // with the beginnings of two unrelated short multibyte strings.
+    assert_eq!(compare_token(prefix1, prefix2, 0, 2), Value::T);
+    emacs_char::reset_position_conversion_scan_steps_for_test();
+    assert_eq!(compare_token(needle, source, 1000, 2), Value::T);
+    assert_eq!(
+        emacs_char::position_conversion_scan_steps_for_test(),
+        0,
+        "zero-offset comparisons must preserve useful cached work"
+    );
+}
+
+#[test]
 fn compare_position_cache_invalidates_changed_character_boundaries() {
     init_cache_test();
     let source = Value::heap_string(LispString::from_emacs_bytes(

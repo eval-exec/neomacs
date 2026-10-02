@@ -7,7 +7,7 @@
 //!
 //! | Knob | Values | Default | Purpose |
 //! |---|---|---|---|
-//! | `NEOVM_COMPARE_STRINGS_POS_CACHE` | `on`, `off` (boolean aliases accepted) | off | Reuse GNU's rooted position cache for compare-strings START conversions. |
+//! | `NEOVM_COMPARE_STRINGS_POS_CACHE` | `on`, `off` (boolean aliases accepted) | off | Reuse GNU's rooted position cache when a validated compare-strings START is nonzero. |
 
 use super::error::{EvalResult, Flow, signal};
 use super::eval::Context;
@@ -1363,7 +1363,11 @@ pub(crate) fn builtin_compare_strings(args: Vec<Value>) -> EvalResult {
 
     let len1 = range1.end().get() - range1.start().get();
     let len2 = range2.end().get() - range2.start().get();
-    let (mut chars1, mut chars2) = if compare_strings_pos_cache_enabled() {
+    // With both STARTs at zero there is no offset scan to avoid. Keep that
+    // common prefix-comparison path stateless, without even reading the knob,
+    // and preserve a useful cached offset belonging to another string.
+    let has_nonzero_start = range1.start().get() != 0 || range2.start().get() != 0;
+    let (mut chars1, mut chars2) = if has_nonzero_start && compare_strings_pos_cache_enabled() {
         // GNU resolves operand 1 then operand 2 through its one-entry cache.
         // ASCII operands leave the cached multibyte string undisturbed; two
         // distinct multibyte operands replace it in this same order.
