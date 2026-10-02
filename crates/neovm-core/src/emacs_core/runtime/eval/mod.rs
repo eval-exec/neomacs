@@ -2328,12 +2328,6 @@ fn collect_thread_local_gc_roots(
     );
     collect_group(
         roots,
-        "hash-table-test-thread-local",
-        stats,
-        super::builtins::collections::collect_hash_table_test_alias_gc_roots,
-    );
-    collect_group(
-        roots,
         "file-notify-thread-local",
         stats,
         super::builtins::collect_file_notify_gc_roots,
@@ -3621,6 +3615,7 @@ pub struct Context {
     pub(crate) ccl_registry: super::ccl::CclRegistryHandle,
     pub(crate) charset_registry: super::charset::CharsetRegistryHandle,
     pub(crate) font_registry: super::xfaces::FontRegistryHandle,
+    pub(crate) hash_table_test_registry: super::builtins::HashTableTestRegistryHandle,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

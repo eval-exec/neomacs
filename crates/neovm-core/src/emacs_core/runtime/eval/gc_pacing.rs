@@ -284,6 +284,14 @@ impl Context {
         for root in registry_roots.drain(..) {
             visit(root);
         }
+        group("hash_table_test_registry");
+        super::super::builtins::collect_hash_table_test_registry_gc_roots(
+            &self.hash_table_test_registry,
+            &mut registry_roots,
+        );
+        for root in registry_roots.drain(..) {
+            visit(root);
+        }
         // Full ~all-interned-symbols walk on STW collections; only the
         // BLV-pool residual under `ObarraySymbolCellSkipGuard` (both
         // concurrent handshakes).
@@ -483,6 +491,9 @@ impl Context {
         super::super::ccl::install_ccl_registry_handle(&self.ccl_registry);
         super::super::charset::install_charset_registry_handle(&self.charset_registry);
         super::super::xfaces::install_font_registry_handle(&self.font_registry);
+        super::super::builtins::install_hash_table_test_registry_handle(
+            &self.hash_table_test_registry,
+        );
         super::super::syntax::restore_standard_syntax_table_object(self.standard_syntax_table);
         super::super::syntax::restore_syntax_code_objects(self.syntax_code_objects);
         super::super::category::restore_standard_category_table_object(

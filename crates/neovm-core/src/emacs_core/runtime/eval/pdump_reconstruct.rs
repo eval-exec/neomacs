@@ -226,6 +226,8 @@ impl Context {
             ccl_registry: super::super::ccl::current_ccl_registry_handle(),
             charset_registry: super::super::charset::current_charset_registry_handle(),
             font_registry: super::super::xfaces::current_font_registry_handle(),
+            hash_table_test_registry:
+                super::super::builtins::current_hash_table_test_registry_handle(),
         };
         ev.setup_thread_locals();
 

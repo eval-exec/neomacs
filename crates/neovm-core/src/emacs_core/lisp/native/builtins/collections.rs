@@ -4,6 +4,7 @@ use crate::emacs_core::error::{
 };
 use crate::emacs_core::eval::LispArgVec;
 use crate::emacs_core::hashtab::hash_key_to_visible_value;
+use crate::emacs_core::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
 use crate::emacs_core::value::{HashProbe, HashTableMakeKeyword, ValueKind, VecLikeType};
 
 // ===========================================================================
@@ -276,8 +277,8 @@ pub(crate) fn builtin_vconcat_slice(args: &[Value]) -> EvalResult {
 // ===========================================================================
 
 thread_local! {
-    static HASH_TABLE_TEST_ALIASES: RefCell<HashMap<String, HashTableTestAlias>> =
-        RefCell::new(HashMap::new());
+    static HASH_TABLE_TEST_ALIASES: HeapRegistrySlot<HashMap<String, HashTableTestAlias>> =
+        HeapRegistrySlot::new(HashMap::new());
 }
 
 #[derive(Clone)]
@@ -288,24 +289,41 @@ pub(crate) struct HashTableTestAlias {
 }
 
 pub(super) fn reset_collections_thread_locals() {
-    HASH_TABLE_TEST_ALIASES.with(|slot| slot.borrow_mut().clear());
+    HASH_TABLE_TEST_ALIASES.with(|slot| slot.reset(HashMap::new()));
 }
 
 /// Root the custom comparison/hash closures registered via
-/// `define-hash-table-test`. They live only in this thread-local registry, so
+/// `define-hash-table-test`. They live in the Context-owned registry selected by this thread, so
 /// without rooting them the GC sweeps a still-referenced closure and the next
 /// custom-test `gethash`/`puthash` calls a freed function (use-after-free).
-pub(crate) fn collect_hash_table_test_alias_gc_roots(group: &mut Vec<Value>) {
-    HASH_TABLE_TEST_ALIASES.with(|slot| {
-        for alias in slot.borrow().values() {
-            if let Some(f) = alias.user_cmp_function {
-                group.push(f);
-            }
-            if let Some(f) = alias.user_hash_function {
-                group.push(f);
-            }
+pub(crate) fn collect_hash_table_test_registry_gc_roots(
+    registry: &HashTableTestRegistryHandle,
+    group: &mut Vec<Value>,
+) {
+    for alias in registry.borrow().values() {
+        if let Some(f) = alias.user_cmp_function {
+            group.push(f);
         }
-    });
+        if let Some(f) = alias.user_hash_function {
+            group.push(f);
+        }
+    }
+}
+
+pub(crate) type HashTableTestRegistryHandle =
+    HeapRegistryHandle<HashMap<String, HashTableTestAlias>>;
+
+pub(crate) fn current_hash_table_test_registry_handle() -> HashTableTestRegistryHandle {
+    HASH_TABLE_TEST_ALIASES.with(HeapRegistrySlot::current)
+}
+
+pub(crate) fn install_hash_table_test_registry_handle(handle: &HashTableTestRegistryHandle) {
+    HASH_TABLE_TEST_ALIASES.with(|slot| slot.install(handle));
+}
+
+#[cfg(test)]
+pub(crate) fn collect_hash_table_test_alias_gc_roots(group: &mut Vec<Value>) {
+    collect_hash_table_test_registry_gc_roots(&current_hash_table_test_registry_handle(), group);
 }
 
 fn invalid_hash_table_keyword_argument(arg: Value) -> Flow {
@@ -1523,3 +1541,7 @@ pub(crate) fn plist_member_eq_swp(args: Vec<Value>, symbols_with_pos_enabled: bo
 #[cfg(test)]
 #[path = "tests/aset_string_in_place.rs"]
 mod aset_string_in_place_test;
+
+#[cfg(test)]
+#[path = "tests/gc_tls_collections.rs"]
+mod gc_tls_ownership_tests;
