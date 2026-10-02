@@ -97,6 +97,10 @@ fn rust_and_cranelift_agree_on_the_register_abi_for_every_arity() {
 
 #[test]
 fn only_bodies_a_direct_call_can_enter_take_the_register_abi() {
+    // This pin covers the original global implication. The self policy
+    // requires an actual selected self site, covered by direct_self_tests.
+    force_direct_sites_for_test(Some(DirectSitesMode::All));
+    force_direct_memory_for_test(Some(false));
     // Direct calls imply the register ABI: pin them off, so the ABI knob
     // alone decides (the suite also runs with `NEOVM_JIT_DIRECT_CALL=on`).
     force_direct_call_for_test(Some(false));
@@ -145,6 +149,8 @@ fn only_bodies_a_direct_call_can_enter_take_the_register_abi() {
     );
     force_register_abi_for_test(None);
     force_direct_call_for_test(None);
+    force_direct_sites_for_test(None);
+    force_direct_memory_for_test(None);
 }
 
 /// The functions of the differential: every arity up to one past the

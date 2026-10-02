@@ -110,6 +110,10 @@ fn run(ev: &mut Context, leaf: &CompiledLeaf, args: &[Value]) -> Result<Value, S
 fn on(spec: bool) {
     force_feedback_mode_for_test(Some(FeedbackMode::Use));
     force_spec_sources_for_test(Some(spec));
+    // The explicit direct cases below exercise broad source reach, which
+    // the self-only policy intentionally declines.
+    force_direct_sites_for_test(Some(DirectSitesMode::All));
+    force_direct_memory_for_test(Some(false));
     // These scenarios count source-shim calls. The direct-path scenarios
     // opt back in explicitly, so the ambient knob cannot bypass a shim
     // whose counter this test expects to observe on every instance.
@@ -119,6 +123,8 @@ fn on(spec: bool) {
 fn off() {
     force_feedback_mode_for_test(None);
     force_spec_sources_for_test(None);
+    force_direct_sites_for_test(None);
+    force_direct_memory_for_test(None);
     force_slow_spec_for_test(None);
     force_direct_call_for_test(None);
 }
