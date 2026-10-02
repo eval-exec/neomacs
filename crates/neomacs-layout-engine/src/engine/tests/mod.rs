@@ -18473,7 +18473,6 @@ fn layout_frame_rust_keeps_mixed_width_advances_correct_after_mid_line_face_chan
         .redisplay_snapshot(selected_window)
         .expect("display snapshot");
     let all_points = snapshot.points.clone();
-    eprintln!("i446dbg all_points = {all_points:?}");
     let a = snapshot
         .point_for_buffer_pos(LispCharPos1::from_one_based_usize(sample_pos))
         .expect("a");
@@ -18600,7 +18599,6 @@ fn layout_frame_rust_keeps_face_positions_after_truncated_multibyte_line() {
         .redisplay_snapshot(selected_window)
         .expect("display snapshot");
     let all_points = snapshot.points.clone();
-    eprintln!("i446dbg all_points = {all_points:?}");
     let a = snapshot
         .point_for_buffer_pos(LispCharPos1::from_one_based_usize(sample_pos))
         .expect("a");
@@ -36810,12 +36808,6 @@ fn wide_char_cut_at_truncation_edge_leaves_both_cells_to_the_marker() {
         .collect();
     assert!(rows.len() >= 2, "both lines must lay out");
     let text_glyphs = &rows[0].glyphs[GlyphArea::Text.index()];
-    for (i, g) in text_glyphs.iter().enumerate() {
-        eprintln!(
-            "i446dbg wide-cut glyph[{i}]: type={:?} wide={} width={} pos={:?}",
-            g.glyph_type, g.wide, g.pixel_width, g.provenance
-        );
-    }
     // GNU's contract: the text, then the truncation glyph in BOTH the cut
     // glyph's cells.
     assert_eq!(
