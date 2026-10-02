@@ -169,8 +169,8 @@ fn oracle_cl2_short_literal_raw_bytes_multibyte_pattern_and_buffer() {
     (let (hits)
       (while (re-search-forward pat nil t)
         (push (list (match-beginning 0) (match-end 0)) hits))
-      (list (nreverse hits) (point))))"####;
-    let expected = expect_test::expect![[r#""OK nil""#]];
+      (list (nreverse hits) (point)))))"####;
+    let expected = expect_test::expect![[r#""OK (((1 3) (4 6)) 6)""#]];
     crate::common::assert_oracle_parity_under_envs_expect(form, MODES, expected);
 }
 
@@ -264,6 +264,29 @@ fn oracle_cl2_short_literal_custom_case_table_cross_width_equivalence() {
                     (nreverse hits))) '("kq" "Kq" "aq" "жq"))))))"####;
     let expected = expect_test::expect![[
         r#""OK (((1 3) (4 6)) ((1 3) (4 6)) ((7 9) (10 12) (13 15)) ((7 9) (10 12) (13 15)))""#
+    ]];
+    crate::common::assert_oracle_parity_under_envs_expect(form, MODES, expected);
+}
+
+#[test]
+fn oracle_cl2_short_literal_custom_case_table_non_ascii_canonical_literal() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    // Both custom equivalents occupy two bytes and canonicalize to Cyrillic
+    // ж, so the sealed whole literal qualifies for the short-search path.
+    let form = r####"(let ((table (copy-case-table (standard-case-table))))
+  (set-case-syntax-pair ?Γ ?ж table)
+  (with-temp-buffer
+    (insert "Γq жQ Γr жr")
+    (with-case-table table
+      (let ((case-fold-search t))
+        (mapcar (lambda (pat)
+                  (goto-char 1)
+                  (let (hits)
+                    (while (re-search-forward pat nil t)
+                      (push (list (match-beginning 0) (match-end 0)) hits))
+                    (nreverse hits))) '("жq" "Γq" "жr" "Γr"))))))"####;
+    let expected = expect_test::expect![[
+        r#""OK (((1 3) (4 6)) ((1 3) (4 6)) ((7 9) (10 12)) ((7 9) (10 12)))""#
     ]];
     crate::common::assert_oracle_parity_under_envs_expect(form, MODES, expected);
 }
