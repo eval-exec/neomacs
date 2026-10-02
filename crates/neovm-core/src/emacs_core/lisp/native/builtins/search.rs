@@ -660,6 +660,14 @@ fn prepare_current_buffer_regexp_syntax_to_reporting(
     .map(|(props, lazy_relevant, _)| (props, lazy_relevant))
 }
 
+struct RegexpPreparationRootScope(usize);
+
+impl Drop for RegexpPreparationRootScope {
+    fn drop(&mut self) {
+        super::eval::restore_scratch_gc_roots(self.0);
+    }
+}
+
 /// `prepare_current_buffer_regexp_syntax_to_reporting` that also returns the
 /// compiled pattern, for callers that match right after (one cache probe,
 /// not two).
@@ -707,7 +715,25 @@ fn prepare_current_buffer_regexp_syntax_to_reporting_compiled(
             Some(explicit) => explicit.clamp(1, accessible_target as i64) as usize,
             None => accessible_target,
         };
-        crate::emacs_core::syntax::maybe_syntax_propertize_for_scan(eval, target)?;
+        // Lisp may replace the case table, evict this compiled pattern from
+        // the cache and collect. Keep its translator alive until that callback
+        // returns; the caller matches without another Lisp safepoint. Syntax
+        // cache identities are not retained by the compiled artifact itself.
+        crate::emacs_core::syntax::maybe_syntax_propertize_for_scan_with_scope(
+            eval,
+            target,
+            || {
+                compiled
+                    .translate
+                    .as_ref()
+                    .and_then(crate::emacs_core::regex_emacs::CaseTranslation::gc_root)
+                    .map(|table| {
+                        let saved_roots = super::eval::save_scratch_gc_roots();
+                        super::eval::push_scratch_gc_root(table);
+                        RegexpPreparationRootScope(saved_roots)
+                    })
+            },
+        )?;
     }
 
     Ok((syntax_properties, lazy_relevant, compiled))
@@ -3498,6 +3524,10 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/search_frontend.rs"]
 mod search_frontend_tests;
+
+#[cfg(test)]
+#[path = "search/tests/gc_tls_ownership.rs"]
+mod gc_tls_ownership;
 
 #[cfg(test)]
 thread_local! {

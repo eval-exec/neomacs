@@ -2301,6 +2301,9 @@ fn collect_thread_local_gc_roots(
     collect_group(roots, "dynamic-module-thread-local", stats, |group| {
         super::dynamic_module::collect_dynamic_module_gc_roots(group, heap_id)
     });
+    collect_group(roots, "regex-thread-local", stats, |group| {
+        super::regex::collect_regex_gc_roots(group, heap_id)
+    });
     collect_group(roots, "symbol-name-thread-local", stats, |group| {
         super::intern::collect_symbol_name_gc_roots(group, heap_id)
     });

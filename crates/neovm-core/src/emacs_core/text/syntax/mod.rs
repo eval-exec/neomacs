@@ -4091,6 +4091,16 @@ pub(crate) fn maybe_syntax_propertize_for_scan(
     eval: &mut super::eval::Context,
     target_char_pos: usize,
 ) -> EvalResult {
+    maybe_syntax_propertize_for_scan_with_scope(eval, target_char_pos, || ())
+}
+
+/// Enter a caller's root scope only when propertization actually calls Lisp.
+/// Warm scans retain the usual single function/frontier check.
+pub(crate) fn maybe_syntax_propertize_for_scan_with_scope<G>(
+    eval: &mut super::eval::Context,
+    target_char_pos: usize,
+    enter_scope: impl FnOnce() -> G,
+) -> EvalResult {
     if !parse_sexp_lookup_properties_enabled(eval)
         || eval
             .obarray
@@ -4114,6 +4124,7 @@ pub(crate) fn maybe_syntax_propertize_for_scan(
         .current_buffer()
         .map(|buf| buf.chars_modified_tick())
         .unwrap_or_default();
+    let _scope = enter_scope();
     eval.apply(
         Value::from_sym_id(internal_syntax_propertize_sym()),
         vec![Value::fixnum(target_char_pos as i64)],

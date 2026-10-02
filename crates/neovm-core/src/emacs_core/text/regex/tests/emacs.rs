@@ -1257,7 +1257,7 @@ impl SyntaxLookup for LispModeSyntaxLookup {
         // Test-only lookup, never routed through the pattern caches;
         // use a sentinel identity distinct from `Standard` so a cache
         // ever probed with it cannot hit standard-baked entries.
-        super::SyntaxCacheKey::Table {
+        super::SyntaxCacheKey::External {
             id: usize::MAX,
             epoch: 0,
         }

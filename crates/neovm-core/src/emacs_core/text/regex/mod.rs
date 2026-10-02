@@ -41,7 +41,7 @@
 //!   already implemented in elisp via the `wordify` function
 //!   defined in `subr.el`.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use crate::buffer::{
@@ -552,6 +552,68 @@ thread_local! {
     #[allow(clippy::vec_box)] // boxed for the cheap MRU rotation above, not for heap placement
     static LISP_REGEX_PATTERN_CACHE: RefCell<Vec<Box<LispRegexPatternCacheEntry>>> =
         const { RefCell::new(Vec::new()) };
+    static LITERAL_TRT_CACHE: RefCell<Option<(usize, Rc<CaseTranslation>)>> =
+        const { RefCell::new(None) };
+    // Activation establishes cache ownership once, outside every search lookup.
+    static REGEX_CACHE_HEAP: Cell<usize> = const { Cell::new(0) };
+}
+
+pub(crate) fn reset_regex_thread_locals() {
+    SEARCH_PATTERN_CACHE.with(|cache| cache.borrow_mut().clear());
+    LISP_REGEX_PATTERN_CACHE.with(|cache| cache.borrow_mut().clear());
+    LITERAL_TRT_CACHE.with(|cache| *cache.borrow_mut() = None);
+    REGEX_CACHE_HEAP
+        .with(|owner| owner.set(crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0)));
+}
+
+pub(crate) fn activate_regex_thread_locals(heap_identity: usize) {
+    if REGEX_CACHE_HEAP.with(Cell::get) != heap_identity {
+        reset_regex_thread_locals();
+        REGEX_CACHE_HEAP.with(|owner| owner.set(heap_identity));
+    }
+}
+
+/// GNU roots both regexp-cache syntax identities and case translation tables.
+/// Filter the cache's owner before reconstructing a Lisp word from a syntax key.
+pub(crate) fn collect_regex_gc_roots(roots: &mut Vec<super::value::Value>, heap_identity: usize) {
+    if REGEX_CACHE_HEAP.with(Cell::get) != heap_identity {
+        return;
+    }
+    fn syntax_root(roots: &mut Vec<super::value::Value>, key: Option<SyntaxCacheKey>) {
+        if let Some(SyntaxCacheKey::Table { id, .. }) = key {
+            roots.push(super::value::Value::from_bits(id));
+        }
+    }
+    SEARCH_PATTERN_CACHE.with(|cache| {
+        for entry in cache.borrow().iter() {
+            syntax_root(roots, entry.4);
+            if let CompiledSearchPattern::Emacs(pattern) = &entry.5 {
+                roots.extend(
+                    pattern
+                        .translate
+                        .as_ref()
+                        .and_then(CaseTranslation::gc_root),
+                );
+            }
+        }
+    });
+    LISP_REGEX_PATTERN_CACHE.with(|cache| {
+        for entry in cache.borrow().iter() {
+            syntax_root(roots, entry.syntax_key);
+            roots.extend(
+                entry
+                    .compiled
+                    .translate
+                    .as_ref()
+                    .and_then(CaseTranslation::gc_root),
+            );
+        }
+    });
+    LITERAL_TRT_CACHE.with(|cache| {
+        if let Some((_, translation)) = cache.borrow().as_ref() {
+            roots.extend(translation.gc_root());
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -3471,10 +3533,6 @@ fn buffer_search_translation(
     // established policy — the compiled-pattern cache and GNU's own
     // `compile_pattern` (search.c, `EQ (cp->buf.translate, translate)`)
     // both key cached translations the same way.
-    thread_local! {
-        static LITERAL_TRT_CACHE: std::cell::RefCell<Option<(usize, std::rc::Rc<CaseTranslation>)>> =
-            const { std::cell::RefCell::new(None) };
-    }
     Some(LITERAL_TRT_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         if let Some((bits, trt)) = cache.as_ref()
@@ -4838,3 +4896,7 @@ pub(crate) mod match_stats {
 #[cfg(test)]
 #[path = "tests/mod.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/gc_tls_ownership.rs"]
+mod gc_tls_ownership_tests;

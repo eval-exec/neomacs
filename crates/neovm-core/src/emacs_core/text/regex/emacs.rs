@@ -565,6 +565,11 @@ pub(crate) enum AsciiPreimage {
 }
 
 impl CaseTranslation {
+    /// Cached translators retain their Lisp table through the regexp root group.
+    pub(crate) fn gc_root(&self) -> Option<Value> {
+        self.table
+    }
+
     /// Which characters this translation maps into ASCII, as the matcher
     /// and the per-character scans read it NOW.
     ///
@@ -3931,9 +3936,12 @@ fn compile_interval(
 pub(crate) enum SyntaxCacheKey {
     /// The immutable built-in standard mapping (`DefaultSyntaxLookup`).
     Standard,
-    /// A live syntax chartable: object identity bits + the global
-    /// syntax-table mutation epoch at key time.
+    /// A live Lisp syntax char-table: actual Value bits + the global
+    /// syntax-table mutation epoch. Pattern caches root this identity.
     Table { id: usize, epoch: u64 },
+    /// Identity supplied by a Rust-owned synthetic lookup, with no Lisp object.
+    #[cfg(test)]
+    External { id: usize, epoch: u64 },
 }
 
 /// GNU's category-aware policy for boundaries between two word constituents.

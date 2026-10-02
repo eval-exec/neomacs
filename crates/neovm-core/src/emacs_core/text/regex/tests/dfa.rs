@@ -301,7 +301,7 @@ impl SyntaxLookup for CustomTableLookup {
     }
 
     fn cache_key(&self) -> SyntaxCacheKey {
-        SyntaxCacheKey::Table {
+        SyntaxCacheKey::External {
             id: usize::MAX,
             epoch: 0,
         }

@@ -3683,7 +3683,7 @@ impl regex_emacs::SyntaxLookup for DashWordSyntaxLookup {
     fn cache_key(&self) -> regex_emacs::SyntaxCacheKey {
         // Test-only: distinct from `Standard` so it can never satisfy a
         // standard-baked cache entry.
-        regex_emacs::SyntaxCacheKey::Table {
+        regex_emacs::SyntaxCacheKey::External {
             id: usize::MAX - 1,
             epoch: 0,
         }
