@@ -57,6 +57,8 @@ fn armed_entries(direct: bool) -> Vec<(&'static str, *const u8, *const u8)> {
     crate::emacs_core::jit::inline::force_inline_for_test(Some(false));
     crate::emacs_core::jit::force_profit_defer_for_test(Some(1));
     force_direct_call_for_test(Some(direct));
+    // This helper checks the original exact-only arming contract.
+    force_direct_shapes_for_test(Some(DirectShapesKnob::OFF));
     // Every caller here is a small straight-line body: pin direct sites on
     // for every body, not only the unbounded ones (`DirectSitesMode`).
     force_direct_sites_for_test(Some(DirectSitesMode::All));
@@ -80,6 +82,7 @@ fn armed_entries(direct: bool) -> Vec<(&'static str, *const u8, *const u8)> {
     .collect();
     force_direct_call_for_test(None);
     force_direct_sites_for_test(None);
+    force_direct_shapes_for_test(None);
     out
 }
 

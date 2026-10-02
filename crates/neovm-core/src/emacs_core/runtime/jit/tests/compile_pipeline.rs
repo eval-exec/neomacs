@@ -384,7 +384,9 @@ fn jit_pipeline_lazy_shim_import_keeps_only_used_imports() {
     let eager = captured_clif(cons_body);
     assert_eq!(lazy.len(), 1, "{lazy:?}");
     assert_eq!(eager.len(), 1, "{eager:?}");
-    assert_eq!(imported_functions(&lazy[0]), 1, "{}", lazy[0]);
+    // The T2 prologue also calls TierRequest when its countdown expires.
+    let used_imports = 1 + usize::from(jit_tier2().on);
+    assert_eq!(imported_functions(&lazy[0]), used_imports, "{}", lazy[0]);
     assert!(
         imported_functions(&eager[0]) >= 41,
         "eager imports the whole base set: {}",
