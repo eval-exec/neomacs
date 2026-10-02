@@ -89,6 +89,8 @@ pub(super) const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOMACS_MODE_LINE_PROP_SLICE",
     // Direct property-free percent fields (`off` default, `on`).
     "NEOMACS_MODE_LINE_PLAIN_FIELD",
+    // Bounded watched-property demand loop (`off` default, `on`).
+    "NEOMACS_WATCHED_PROP_DEMAND",
     // A window whose start moved back reuses its old rows: `on`.
     "NEOMACS_LAYOUT_SCROLL_BACK",
     // Approximate position fallbacks copy only visible text: `on` (default).

@@ -3,6 +3,12 @@ use super::*;
 #[cfg(test)]
 mod source_slice_graft;
 
+#[cfg(test)]
+mod watched_prop_demand;
+
+#[cfg(test)]
+mod watched_prop_demand_knob;
+
 fn char_pos(pos: usize) -> CharPos0 {
     CharPos0::new(pos)
 }
