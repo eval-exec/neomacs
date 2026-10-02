@@ -262,6 +262,10 @@ pub(crate) struct CompiledPattern {
     /// [`CompiledPattern::folded_scan`]).  Rebuilt with the fastmap.
     folded_scans: FoldedScans,
 
+    /// A two-character folded literal scanned by its ASCII suffix. Derived
+    /// only when `NEOVM_REGEX_SUFFIX_LITERAL` is on at compile time.
+    suffix_literal: Option<suffix_literal::SuffixLiteral>,
+
     /// True if the pattern was compiled for POSIX backtracking.
     pub posix: bool,
 
@@ -820,6 +824,7 @@ impl CompiledPattern {
             fastmap_accurate: false,
             sparse_ascii_fastmap: std::cell::OnceCell::new(),
             folded_scans: FoldedScans::default(),
+            suffix_literal: None,
             posix: false,
             multibyte: true,
             target_multibyte: true,
@@ -2148,6 +2153,10 @@ pub(crate) fn regex_compile_lisp_with_translation(
     // line-start scan; opt-in until measured.
     if anchor_alt_enabled() {
         buf.start_anchor = start_anchor(&buf.buffer);
+    }
+
+    if suffix_literal::enabled() {
+        buf.suffix_literal = suffix_literal::derive(&buf, true);
     }
 
     Ok(buf)
@@ -9135,6 +9144,19 @@ pub(crate) fn re_search(
     // that hits the fail-stack limit sets it, aborting the whole scan
     // (GNU re_search_2 propagates re_match_2_internal's -2 immediately).
     clear_matcher_overflow();
+    if use_fastmap
+        && range >= 0
+        && pattern.target_multibyte
+        && let Some(literal) = &pattern.suffix_literal
+    {
+        let stop = start.saturating_add(range as usize).min(text_len);
+        if stop.saturating_sub(start) >= PREFILTER_MIN_BUILD_SPAN {
+            match literal.search(pattern, text, start, stop) {
+                suffix_literal::SuffixSearch::Unavailable => {}
+                suffix_literal::SuffixSearch::Finished(found) => return found,
+            }
+        }
+    }
     // One scratch for the whole search (see re_match_candidate_in): lease
     // the per-thread one out of its cell for the duration (its Vec capacity
     // moves with it, nothing allocates) and hand it back on every exit; a
@@ -9755,6 +9777,9 @@ pub(crate) fn match_pattern(
 #[path = "dfa.rs"]
 pub(crate) mod dfa;
 
+#[path = "suffix_literal.rs"]
+mod suffix_literal;
+
 #[cfg(test)]
 #[path = "tests/emacs.rs"]
 mod tests;
@@ -9770,3 +9795,7 @@ mod fail_stack_parity_tests;
 #[cfg(test)]
 #[path = "tests/start_anchor.rs"]
 mod start_anchor_tests;
+
+#[cfg(test)]
+#[path = "tests/suffix_literal.rs"]
+mod suffix_literal_tests;

@@ -18,3 +18,6 @@ mod quote_patterns;
 mod replace_advanced;
 mod replace_comprehensive;
 mod replace_match_strict_edge_semantics;
+
+#[cfg(test)]
+mod suffix_literal_scan;
