@@ -34,6 +34,7 @@
 //! | `NEOVM_TEXT_LINE_INDEX_CHUNK` | target chunk bytes, at least 8 | `4096` |
 //! | `NEOVM_TEXT_LINE_INDEX_QUERY_BYTES` | minimum indexed count range bytes | `8192` |
 //! | `NEOVM_TEXT_LINE_INDEX_QUERY_LINES` | moves of at most this many lines scan | `64` |
+//! | `NEOVM_TEXT_LINE_INDEX_BUILD_LINES` | moves of at most this many lines never build | `512` |
 //! | `NEOVM_TEXT_LINE_INDEX_STATS` | `0`, `1` (event counters at exit) | `0` |
 
 use std::sync::OnceLock;
@@ -90,6 +91,10 @@ pub(crate) struct TextLineIndexConfig {
     /// A `forward-line` of at most this many lines scans
     /// (`NEOVM_TEXT_LINE_INDEX_QUERY_LINES`).
     pub(crate) min_query_lines: usize,
+    /// A line move of at most this many lines may use an existing index,
+    /// but never builds one (`NEOVM_TEXT_LINE_INDEX_BUILD_LINES`). Medium
+    /// moves should not create maintenance work for later edits.
+    pub(crate) min_build_lines: usize,
     /// Count builds, drops, copies and served queries, and print them at
     /// exit (`NEOVM_TEXT_LINE_INDEX_STATS=1`).
     pub(crate) stats: bool,
@@ -100,6 +105,7 @@ impl TextLineIndexConfig {
     pub(crate) const DEFAULT_CHUNK_BYTES: usize = 4 * 1024;
     pub(crate) const DEFAULT_MIN_QUERY_BYTES: usize = 8 * 1024;
     pub(crate) const DEFAULT_MIN_QUERY_LINES: usize = 64;
+    pub(crate) const DEFAULT_MIN_BUILD_LINES: usize = 512;
     /// The smallest chunk target accepted: a quarter of it is the merge
     /// floor, which must stay at least one byte.
     pub(crate) const MIN_CHUNK_BYTES: usize = 8;
@@ -113,6 +119,7 @@ impl TextLineIndexConfig {
             chunk_bytes: Self::DEFAULT_CHUNK_BYTES,
             min_query_bytes: Self::DEFAULT_MIN_QUERY_BYTES,
             min_query_lines: Self::DEFAULT_MIN_QUERY_LINES,
+            min_build_lines: Self::DEFAULT_MIN_BUILD_LINES,
             stats: false,
         }
     }
@@ -127,6 +134,7 @@ impl TextLineIndexConfig {
             chunk_bytes,
             min_query_bytes: 0,
             min_query_lines: 0,
+            min_build_lines: 0,
             stats: false,
         }
     }
@@ -153,6 +161,10 @@ impl TextLineIndexConfig {
             min_query_lines: size(
                 "NEOVM_TEXT_LINE_INDEX_QUERY_LINES",
                 Self::DEFAULT_MIN_QUERY_LINES,
+            ),
+            min_build_lines: size(
+                "NEOVM_TEXT_LINE_INDEX_BUILD_LINES",
+                Self::DEFAULT_MIN_BUILD_LINES,
             ),
             stats: matches!(
                 env("NEOVM_TEXT_LINE_INDEX_STATS").as_deref().map(str::trim),

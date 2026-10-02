@@ -1074,6 +1074,7 @@ fn benchmark_environment_forwards_the_allowlist_and_jit_knobs_only() {
         (os("NEOVM_GC_CENSUS_FILE"), os("/tmp/census.log")),
         (os("NEOVM_BUILTIN_FRONTEND"), os("off")),
         (os("NEOVM_TEXT_LINE_INDEX"), os("verify")),
+        (os("NEOVM_TEXT_LINE_INDEX_BUILD_LINES"), os("512")),
         (os("NEOVM_TEXT_LINE_INDEX_STATS"), os("1")),
         (os("NEOVM_TEXT_LINE_INDEXING"), os("unrelated")),
         (os("NEOVM_PPS_PROPERTIZE"), os("0")),
@@ -1101,6 +1102,7 @@ fn benchmark_environment_forwards_the_allowlist_and_jit_knobs_only() {
             "NEOVM_SYNTAX_PARSE_CACHE",
             "NEOVM_SYNTAX_PARSE_CACHE_STATS",
             "NEOVM_TEXT_LINE_INDEX",
+            "NEOVM_TEXT_LINE_INDEX_BUILD_LINES",
             "NEOVM_TEXT_LINE_INDEX_STATS",
             "PATH"
         ]

@@ -1602,6 +1602,7 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOVM_TEXT_LINE_INDEX_CHUNK",
     "NEOVM_TEXT_LINE_INDEX_QUERY_BYTES",
     "NEOVM_TEXT_LINE_INDEX_QUERY_LINES",
+    "NEOVM_TEXT_LINE_INDEX_BUILD_LINES",
     "NEOVM_TEXT_LINE_INDEX_STATS",
     // U0.7: `parse-partial-sexp` runs `syntax-propertize` like GNU (on);
     // `=0` never propertizes, to attribute the parity fix's cost.

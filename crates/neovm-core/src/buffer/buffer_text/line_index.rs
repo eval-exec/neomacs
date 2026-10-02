@@ -14,6 +14,8 @@
 //!   snapshot that would have used an index sets the shared demand flag
 //!   instead, and the live text builds at the next snapshot. Small-buffer
 //!   snapshots need neither an index nor a shared demand allocation.
+//!   A medium line move uses an existing index but does not build one;
+//!   building requires more than `min_build_lines` lines.
 //! - **Edits.** The four measured mutators update the index: a deletion
 //!   before the backend loses the bytes (they are counted), an insertion
 //!   after. An edit larger than `max(256 KiB, text / 4)` and every wholesale
@@ -41,7 +43,8 @@ pub(super) enum LineIndexRole {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum IndexBuild {
     /// Use an index only if one exists: the query is too short to pay for
-    /// a build (a count over less than `min_buffer_bytes`).
+    /// a build (a count over less than `min_buffer_bytes`, or a move of at
+    /// most `min_build_lines` lines).
     Never,
     /// Build one if the text is large enough.
     IfLarge,
@@ -53,6 +56,17 @@ impl IndexBuild {
     /// multiple of the scan it replaces (P3.4 §6.4).
     fn for_count(range_bytes: usize, config: TextLineIndexConfig) -> Self {
         if range_bytes >= config.min_buffer_bytes {
+            Self::IfLarge
+        } else {
+            Self::Never
+        }
+    }
+
+    /// A medium move can use an index without creating edit-maintenance
+    /// work. Only a move longer than the build threshold builds one.
+    #[inline]
+    fn for_line_move(lines: usize, config: TextLineIndexConfig) -> Self {
+        if lines > config.min_build_lines {
             Self::IfLarge
         } else {
             Self::Never
@@ -339,7 +353,7 @@ impl BufferText {
     ) -> Option<(EmacsBytePos, usize)> {
         let found = {
             let storage = self.storage.borrow();
-            let index = storage.line_index(config, IndexBuild::IfLarge)?;
+            let index = storage.line_index(config, IndexBuild::for_line_move(n, config))?;
             let text = &*storage.backend;
             let base = index.line_ends_before(text, from.get(), LineEnd::Newline);
             match index.newline_position(text, base + n as u64) {
@@ -401,7 +415,7 @@ impl BufferText {
         let floor = floor.min(from);
         let found = {
             let storage = self.storage.borrow();
-            let index = storage.line_index(config, IndexBuild::IfLarge)?;
+            let index = storage.line_index(config, IndexBuild::for_line_move(n, config))?;
             let text = &*storage.backend;
             let base = index.line_ends_before(text, floor.get(), LineEnd::Newline);
             // The newlines in [floor, from): the lines above FROM's line.

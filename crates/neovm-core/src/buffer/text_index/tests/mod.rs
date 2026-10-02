@@ -292,6 +292,7 @@ fn config_parses_modes_sizes_and_defaults_to_off() {
             "NEOVM_TEXT_LINE_INDEX_CHUNK" => Some("2"),
             "NEOVM_TEXT_LINE_INDEX_QUERY_BYTES" => Some("17"),
             "NEOVM_TEXT_LINE_INDEX_QUERY_LINES" => Some("junk"),
+            "NEOVM_TEXT_LINE_INDEX_BUILD_LINES" => Some("257"),
             "NEOVM_TEXT_LINE_INDEX_STATS" => Some("1"),
             _ => None,
         }
@@ -306,7 +307,17 @@ fn config_parses_modes_sizes_and_defaults_to_off() {
             chunk_bytes: TextLineIndexConfig::MIN_CHUNK_BYTES,
             min_query_bytes: 17,
             min_query_lines: TextLineIndexConfig::DEFAULT_MIN_QUERY_LINES,
+            min_build_lines: 257,
             stats: true,
         }
     );
+    for (value, expected) in [
+        ("junk", TextLineIndexConfig::DEFAULT_MIN_BUILD_LINES),
+        ("0", 0),
+    ] {
+        let config = TextLineIndexConfig::parse(|name| {
+            (name == "NEOVM_TEXT_LINE_INDEX_BUILD_LINES").then(|| value.to_owned())
+        });
+        assert_eq!(config.min_build_lines, expected);
+    }
 }

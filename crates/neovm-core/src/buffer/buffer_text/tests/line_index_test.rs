@@ -272,6 +272,69 @@ fn small_texts_short_ranges_and_short_moves_scan() {
     });
 }
 
+/// Medium line moves use an existing index but do not create maintenance
+/// work for a buffer that has never needed one. The build threshold applies
+/// to both directions, and its upper boundary is exclusive.
+#[test]
+fn medium_line_moves_scan_until_a_long_move_builds_the_index() {
+    crate::test_utils::init_test_tracing();
+    let config = TextLineIndexConfig {
+        min_buffer_bytes: 0,
+        chunk_bytes: 64,
+        ..TextLineIndexConfig::with_mode(TextLineIndexMode::Verify)
+    };
+    with_text_line_index_config(config, || {
+        for kind in every_backend() {
+            let text = "line\n".repeat(1024);
+            let forward = BufferText::from_str_with_backend_kind(&text, kind);
+            let backward = BufferText::from_str_with_backend_kind(&text, kind);
+            let end = forward.emacs_byte_end_pos();
+            let scan_backward = |n| {
+                let (pos, moved) = model_backward(text.as_bytes(), end.get(), 0, n);
+                (emacs_byte_pos(pos), moved)
+            };
+            for n in [65, 200, 400, 512] {
+                assert_eq!(
+                    forward.line_index_nth_newline(EmacsBytePos::ZERO, end, n),
+                    None,
+                    "{kind:?}: a {n}-line forward move must not build"
+                );
+                assert_eq!(
+                    forward.nth_newline_emacs_byte(EmacsBytePos::ZERO, end, n),
+                    forward.scan_nth_newline_emacs_byte(EmacsBytePos::ZERO, end, n)
+                );
+                assert_eq!(
+                    backward.lines_backward_emacs_byte(end, EmacsBytePos::ZERO, n),
+                    None,
+                    "{kind:?}: a {n}-line backward move must not build"
+                );
+                assert!(!forward.has_line_index_for_test());
+                assert!(!backward.has_line_index_for_test());
+            }
+            assert_eq!(
+                forward.line_index_nth_newline(EmacsBytePos::ZERO, end, 513),
+                Some(forward.scan_nth_newline_emacs_byte(EmacsBytePos::ZERO, end, 513))
+            );
+            assert_eq!(
+                backward.lines_backward_emacs_byte(end, EmacsBytePos::ZERO, 513),
+                Some(scan_backward(513))
+            );
+            assert!(forward.has_line_index_for_test());
+            assert!(backward.has_line_index_for_test());
+            for n in [65, 200, 400, 512] {
+                assert_eq!(
+                    forward.line_index_nth_newline(EmacsBytePos::ZERO, end, n),
+                    Some(forward.scan_nth_newline_emacs_byte(EmacsBytePos::ZERO, end, n))
+                );
+                assert_eq!(
+                    backward.lines_backward_emacs_byte(end, EmacsBytePos::ZERO, n),
+                    Some(scan_backward(n))
+                );
+            }
+        }
+    });
+}
+
 /// Small buffers cannot satisfy snapshot demand, so their layouts need no
 /// shared demand allocation. Growing the live text makes later snapshots
 /// eligible without inheriting any bookkeeping from the small ones.
