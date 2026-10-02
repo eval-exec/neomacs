@@ -199,6 +199,30 @@ fn every_edit_path_keeps_the_index_equal_to_a_recount() {
     });
 }
 
+/// Deliberately bypass index maintenance to prove that verify mode fails
+/// a run when an indexed query disagrees with the current backend bytes.
+#[test]
+#[should_panic(expected = "text line index disagrees with a scan: line count")]
+fn a_mismatched_index_query_panics_in_verify_mode() {
+    crate::test_utils::init_test_tracing();
+    with_text_line_index_config(eager_verify(), || {
+        let text = BufferText::from_str("alpha\nbeta\n");
+        let end = text.emacs_byte_end_pos();
+        text.count_newlines_emacs_byte(EmacsBytePos::ZERO, end);
+        assert!(text.has_line_index_for_test());
+        let old = text.edit_range_for_emacs_byte_range(emacs_byte_range(5, 6));
+        let replacement = TextReplacement::new(old, TextExtent::from_emacs_bytes(b"x", true));
+        {
+            let mut storage = text.storage.borrow_mut();
+            // Test-only corruption: changing the backend directly leaves
+            // the previously built index's newline total stale.
+            std::rc::Rc::make_mut(&mut storage.backend)
+                .replace_same_len_measured_range(replacement, b"x");
+        }
+        text.count_newlines_emacs_byte(EmacsBytePos::ZERO, end);
+    });
+}
+
 #[test]
 fn the_index_is_off_by_default_and_never_built() {
     crate::test_utils::init_test_tracing();
