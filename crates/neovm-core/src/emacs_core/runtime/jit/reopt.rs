@@ -219,6 +219,28 @@ fn numeric_feedback_of_byte(byte: u8) -> Option<NumericFeedback> {
 }
 
 impl DeoptCause {
+    /// Whether this precise exit can contribute to invalidating speculation.
+    /// Semantic events and signals leave speculation unchanged even when a
+    /// later eligible cause deopts at the same physical guard pc.
+    fn counts_for_reopt(self) -> bool {
+        match self {
+            DeoptCause::TypeError
+            | DeoptCause::InlineAttention
+            | DeoptCause::DepthLimit
+            | DeoptCause::ColdFlagged => false,
+            DeoptCause::ArithOperands(_)
+            | DeoptCause::ArithOverflow
+            | DeoptCause::InlinedCall
+            | DeoptCause::InlineEpochMoved
+            | DeoptCause::OsrEntry
+            | DeoptCause::Rerun
+            | DeoptCause::Unattributed
+            | DeoptCause::EntryGuard(_)
+            | DeoptCause::Unreached
+            | DeoptCause::InlineIdentity => true,
+        }
+    }
+
     /// The word a cold block stores in `DeoptCells::reason`: the
     /// [`ReasonKind`] in the low byte and the payload (the argument index,
     /// the operands' [`NumericFeedback`]) in the next. Never zero.
@@ -449,6 +471,11 @@ fn note_deopt_for_source(
     if let DeoptEvent::Precise { pc, .. } = event {
         func.jit_runtime()
             .note_deopt_history(pc, func.executable_ops().len());
+        if cause.counts_for_reopt()
+            && let Ok(pc) = u32::try_from(physical_pc.unwrap_or(pc))
+        {
+            leaf.obs.note_reopt_deopt_at(pc);
+        }
     }
     tracing::trace!(
         target: "neovm_jit::deopt",
@@ -480,7 +507,7 @@ fn respond(
     let k = knobs();
     let at_limit = |pc: usize| {
         u32::try_from(physical_pc.unwrap_or(pc))
-            .is_ok_and(|pc| leaf.obs.deopt_count_at(pc) >= k.site_limit)
+            .is_ok_and(|pc| leaf.obs.reopt_deopt_count_at(pc) >= k.site_limit)
     };
     let (floor, reprofile) = match (cause, event) {
         // Conclusive: the site met operands its lowering does not take.
@@ -511,7 +538,7 @@ fn respond(
         // reopens recording, so the loop the interpreter now runs records
         // what feeds that slot; at the limit the leaf goes.
         (DeoptCause::OsrEntry, DeoptEvent::Precise { pc, .. }) => {
-            let n = u32::try_from(pc).map_or(0, |pc| leaf.obs.deopt_count_at(pc));
+            let n = u32::try_from(pc).map_or(0, |pc| leaf.obs.reopt_deopt_count_at(pc));
             if n == 1 {
                 rt.reopen_numeric_feedback();
             }
@@ -729,3 +756,7 @@ mod chain_test;
 #[cfg(test)]
 #[path = "tier2/tests/epoch_test.rs"]
 mod tier2_epoch_test;
+
+#[cfg(test)]
+#[path = "reopt/tests/eligible_counts_test.rs"]
+mod eligible_counts_test;

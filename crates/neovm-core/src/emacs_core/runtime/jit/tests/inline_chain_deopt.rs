@@ -297,7 +297,11 @@ fn inline_chain_deopt_consumer_uses_native_guard_pc_for_repeat_threshold() {
         chain,
         &[inner],
     );
-    leaf.obs.note_deopt_at(17); // An earlier exit at this native guard.
+    // An earlier overflow at this native guard counted in both the census
+    // and the eligible policy history; semantic exits count only in the former.
+    leaf.obs.note_deopt_at(17);
+    leaf.obs.note_reopt_deopt_at(17);
+    assert_eq!(leaf.obs.reopt_deopt_count_at(17), 1);
     leaf.deopt_meta.pc.set(17);
     leaf.deopt_meta
         .reason
@@ -309,6 +313,11 @@ fn inline_chain_deopt_consumer_uses_native_guard_pc_for_repeat_threshold() {
     };
     assert_eq!(leaf.obs.deopt_count_at(17), 2);
     assert_eq!(
+        leaf.obs.reopt_deopt_count_at(17),
+        1,
+        "readback records the census before the consumer classifies the exit"
+    );
+    assert_eq!(
         leaf.obs.deopt_count_at(2),
         0,
         "caller resume pc has no guard count"
@@ -318,6 +327,17 @@ fn inline_chain_deopt_consumer_uses_native_guard_pc_for_repeat_threshold() {
         compile::resumed_chain::resume_deopt(&mut ctx, &caller, Value::NIL, &leaf, *resume)
             .unwrap();
     assert_eq!(result.as_fixnum(), Some(13));
+    assert_eq!(leaf.obs.reopt_deopt_count_at(17), 2);
+    assert_eq!(
+        leaf.obs.reopt_deopt_count_at(2),
+        0,
+        "caller resume pc has no eligible guard count"
+    );
+    assert_eq!(
+        leaf.obs.reopt_deopt_count_at(1),
+        0,
+        "inner source pc has no eligible native guard count"
+    );
     assert_eq!(
         inner
             .get_bytecode_data()
@@ -325,7 +345,7 @@ fn inline_chain_deopt_consumer_uses_native_guard_pc_for_repeat_threshold() {
             .jit_runtime()
             .numeric_feedback(1),
         crate::emacs_core::jit::NumericFeedback::Other,
-        "the second guard exit widens the inner Add1, using the leaf's native pc count"
+        "the second eligible overflow widens the inner Add1, using the leaf's native pc count"
     );
     reopt::force_reopt_for_test(None);
 }

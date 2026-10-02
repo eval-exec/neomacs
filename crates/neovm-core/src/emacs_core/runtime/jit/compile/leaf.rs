@@ -341,6 +341,14 @@ pub(crate) struct LeafObs {
     /// Precise-deopt resume pcs with counts, at most [`Self::MAX_DEOPT_PCS`]
     /// distinct ones.
     deopt_pcs: RefCell<SmallVec<[(u32, u64); 4]>>,
+    /// Deopts eligible for reoptimization, keyed by the physical guard pc.
+    /// Kept apart from the census so semantic exits neither count toward a
+    /// site's limit nor consume its bounded PC slots. Like the other counters,
+    /// these belong to one mutator's `!Send`/`!Sync` leaf; different mutators
+    /// keep separate leaves, so these Rust-only counters are never shared.
+    reopt_pcs: RefCell<SmallVec<[(u32, u64); 4]>>,
+    /// Eligible deopts beyond the first [`Self::MAX_DEOPT_PCS`] policy PCs.
+    reopt_pc_overflow: Cell<u64>,
     /// The compile stall that produced this leaf, in µs (0 = built outside
     /// the cache seams). With `entries`, it says which compiles never paid
     /// back.
@@ -375,6 +383,8 @@ impl LeafObs {
             signals: Cell::new(0),
             deopt_pcs: RefCell::new(SmallVec::new()),
             deopt_pc_overflow: Cell::new(0),
+            reopt_pcs: RefCell::new(SmallVec::new()),
+            reopt_pc_overflow: Cell::new(0),
             compile_us: Cell::new(0),
             mir_verdict: None,
             t2: crate::emacs_core::jit::tier2::T2Cells::unprofiled(),
@@ -420,14 +430,35 @@ impl LeafObs {
     }
 
     /// Precise deopts counted at resume `pc` so far, the one being handled
-    /// included (the reoptimizer's per-site limit reads this; see
-    /// `jit::reopt`). A pc past the first [`Self::MAX_DEOPT_PCS`] shares the
-    /// overflow count: an over-estimate, which can only hasten the response
-    /// at a site that did deopt.
+    /// included. Census only: reoptimization counts eligible causes separately.
+    /// A pc past the first [`Self::MAX_DEOPT_PCS`] shares the overflow count.
+    #[cfg(test)]
     pub(crate) fn deopt_count_at(&self, pc: u32) -> u64 {
         match self.deopt_pcs.borrow().iter().find(|(p, _)| *p == pc) {
             Some(&(_, n)) => n,
             None => self.deopt_pc_overflow.get(),
+        }
+    }
+
+    /// Count a cause eligible for reoptimization at its physical guard pc.
+    /// Called after classification by the cold hook, never by emitted code.
+    pub(crate) fn note_reopt_deopt_at(&self, pc: u32) {
+        let mut pcs = self.reopt_pcs.borrow_mut();
+        if let Some(slot) = pcs.iter_mut().find(|(p, _)| *p == pc) {
+            slot.1 += 1;
+        } else if pcs.len() < Self::MAX_DEOPT_PCS {
+            pcs.push((pc, 1));
+        } else {
+            self.reopt_pc_overflow.set(self.reopt_pc_overflow.get() + 1);
+        }
+    }
+
+    /// Eligible deopts at this physical guard pc, including the current one.
+    /// PCs beyond the bounded policy table share only eligible overflow counts.
+    pub(crate) fn reopt_deopt_count_at(&self, pc: u32) -> u64 {
+        match self.reopt_pcs.borrow().iter().find(|(p, _)| *p == pc) {
+            Some(&(_, n)) => n,
+            None => self.reopt_pc_overflow.get(),
         }
     }
 
