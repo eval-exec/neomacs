@@ -1515,6 +1515,11 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     // The master JIT switch has no trailing underscore, so it is not covered
     // by the diagnostic prefix below. Record and forward interpreter controls.
     "NEOVM_JIT",
+    // Same-binary AOT admission and re-tier experiments need these exact
+    // runtime knobs. Producer and alternate-store controls remain isolated.
+    "NEOVM_AOT",
+    "NEOVM_AOT_RETIER",
+    "NEOVM_AOT_PREWARM",
     // Measurement knobs the fixtures read. The environment is cleared before
     // the editor runs, so a knob absent from this list is silently ignored --
     // the experiment then compares a binary against itself and reads as "no

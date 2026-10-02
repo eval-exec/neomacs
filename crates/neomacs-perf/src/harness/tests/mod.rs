@@ -1053,7 +1053,7 @@ fn benchmark_environment_preserves_vulkan_driver_discovery() {
 }
 
 /// The editor child gets the allowlisted host variables plus any operator-set
-/// JIT master switch, `NEOVM_JIT_*` diagnostic knob, explicit OSR trace or
+/// JIT master switch, `NEOVM_JIT_*` diagnostic knob, AOT runtime knob, OSR trace or
 /// allowlisted collector knob (not the GC trace, not the logging filter).
 #[test]
 fn benchmark_environment_forwards_the_allowlist_and_jit_knobs_only() {
@@ -1066,6 +1066,12 @@ fn benchmark_environment_forwards_the_allowlist_and_jit_knobs_only() {
         (os("NEOVM_JITTER"), os("unrelated")),
         (os("NEOVM_JIT_PROFILE"), os("./tmp/census.csv")),
         (os("NEOVM_JIT_THRESHOLD"), os("1")),
+        (os("NEOVM_AOT"), os("1")),
+        (os("NEOVM_AOT_RETIER"), os("1")),
+        (os("NEOVM_AOT_PREWARM"), os("profitable")),
+        (os("NEOVM_AOT_PRELOAD"), os("1")),
+        (os("NEOVM_AOT_DIR"), os("./tmp/untrusted-aot")),
+        (os("NEOVM_AOT_UNRELATED"), os("1")),
         (os("NEOMACS_OSR_DEBUG"), os("1")),
         (os("NEOMACS_OSR_UNRELATED"), os("1")),
         (os("NEOVM_GC_TRACE"), os("1")),
@@ -1092,6 +1098,9 @@ fn benchmark_environment_forwards_the_allowlist_and_jit_knobs_only() {
         forwarded,
         [
             "NEOMACS_OSR_DEBUG",
+            "NEOVM_AOT",
+            "NEOVM_AOT_PREWARM",
+            "NEOVM_AOT_RETIER",
             "NEOVM_BUILTIN_FRONTEND",
             "NEOVM_GC_CENSUS",
             "NEOVM_GC_CENSUS_FILE",
