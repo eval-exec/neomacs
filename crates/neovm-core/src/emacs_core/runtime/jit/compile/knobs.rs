@@ -897,9 +897,9 @@ pub(crate) fn jit_direct_call_on() -> bool {
 }
 
 /// Which variable ops `NEOVM_JIT_INLINE_VARS` inlines in JIT code (design
-/// `p1-4-inline-binding-blv` Stage B, `inline_vars`; default OFF until its
-/// gate passes). Read at compile time only, so both sides of an A/B run in
-/// one binary and the off side emits exactly the former code.
+/// `p1-4-inline-binding-blv` Stage B, `inline_vars`; default `read`).
+/// Read at compile time only, so both sides of an A/B run in one binary
+/// and the off side emits exactly the former code.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) struct InlineVarsKnob {
     /// `varref`: a plain cell read from its baked address, a buffer-local
@@ -913,6 +913,11 @@ pub(crate) struct InlineVarsKnob {
 }
 
 impl InlineVarsKnob {
+    /// The measured parts selected when the environment knob is unset.
+    pub(crate) const DEFAULT: Self = Self {
+        read: true,
+        ..Self::OFF
+    };
     pub(crate) const OFF: Self = Self {
         read: false,
         set: false,
@@ -929,11 +934,11 @@ impl InlineVarsKnob {
         self.read || self.set || self.bind
     }
 
-    /// Unset/`off`/`0`/`none`: nothing (the default); `all`/`on`/`1`:
+    /// Unset: `read`; `off`/`0`/`none`: nothing; `all`/`on`/`1`:
     /// everything; otherwise a comma list of `read`, `set`, `bind`.
     pub(crate) fn parse(value: Option<&str>) -> Self {
         let Some(value) = value.map(str::trim) else {
-            return Self::OFF;
+            return Self::DEFAULT;
         };
         match value.to_ascii_lowercase().as_str() {
             "" | "0" | "off" | "false" | "no" | "none" => return Self::OFF,

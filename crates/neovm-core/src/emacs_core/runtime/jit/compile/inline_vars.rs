@@ -4,7 +4,7 @@
 //! variable whose cache is loaded for the current buffer (GNU
 //! `swap_in_symval_forwarding`'s early-out), and of a forwarder that holds its
 //! own value, done in place instead of in `neovm_jit_varref`, `_varset`,
-//! `_varbind` and `_unbind`. Knob `NEOVM_JIT_INLINE_VARS` (default off).
+//! `_varbind` and `_unbind`. Knob `NEOVM_JIT_INLINE_VARS` (default `read`).
 //!
 //! # Contract
 //!

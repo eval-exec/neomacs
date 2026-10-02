@@ -265,7 +265,12 @@ fn warm(ev: &mut Context, vars: &[&str]) {
 
 #[test]
 fn inline_vars_knob_parses_every_spelling() {
-    assert_eq!(InlineVarsKnob::parse(None), OFF, "default off");
+    assert_eq!(
+        InlineVarsKnob::parse(None),
+        InlineVarsKnob { read: true, ..OFF },
+        "default read only"
+    );
+    assert_eq!(InlineVarsKnob::parse(Some("bogus")), OFF);
     for off in ["", "0", "off", "no", "none", "false"] {
         assert_eq!(InlineVarsKnob::parse(Some(off)), OFF, "{off:?}");
     }
