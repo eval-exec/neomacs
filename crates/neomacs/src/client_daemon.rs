@@ -34,6 +34,30 @@ pub(super) fn start_and_connect(
                 .unwrap_or(Duration::from_secs(60)),
         )
         .ok_or_else(|| format!("{prog}: startup timeout is too large"))?;
+    let mut lock_name = socket.as_os_str().to_os_string();
+    lock_name.push(".startup-lock");
+    let lock_path = PathBuf::from(lock_name);
+    // A live server does not need directory creation rights. Nevertheless,
+    // honor an existing starter's lock before submitting to an early listener.
+    let mut lock = open_startup_lock(prog, &lock_path, false)?;
+    loop {
+        if let Some(lock) = &lock {
+            wait_for_startup_lock(prog, lock, deadline)?;
+        }
+        let Some(stream) = connect_existing(prog, socket, deadline)? else {
+            break;
+        };
+        if lock.is_none() {
+            // A cold starter may have created its persistent lock between
+            // our first lookup and connect. Do not bypass its readiness wait.
+            lock = open_startup_lock(prog, &lock_path, false)?;
+            if lock.is_some() {
+                drop(stream);
+                continue;
+            }
+        }
+        return Ok(stream);
+    }
     let parent = socket
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -52,52 +76,15 @@ pub(super) fn start_and_connect(
             parent.display()
         ));
     }
-    let mut lock_name = socket.as_os_str().to_os_string();
-    lock_name.push(".startup-lock");
-    let lock = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
-        .open(PathBuf::from(lock_name))
-        .map_err(|error| format!("{prog}: cannot lock daemon startup: {error}"))?;
-    let metadata = lock.metadata().map_err(|error| error.to_string())?;
-    if !metadata.is_file()
-        || metadata.uid() != uid
-        || metadata.nlink() != 1
-        || metadata.mode() & 0o077 != 0
-    {
-        return Err(format!("{prog}: unsafe daemon startup lock"));
-    }
-    loop {
-        // SAFETY: the owned File remains open for this entire operation.
-        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-            break;
+    if lock.is_none() {
+        lock = open_startup_lock(prog, &lock_path, true)?;
+        if let Some(lock) = &lock {
+            wait_for_startup_lock(prog, lock, deadline)?;
         }
-        let error = io::Error::last_os_error();
-        if error.kind() != io::ErrorKind::WouldBlock && error.kind() != io::ErrorKind::Interrupted {
-            return Err(format!("{prog}: cannot lock daemon startup: {error}"));
+        // Another client may have completed startup while we waited.
+        if let Some(stream) = connect_existing(prog, socket, deadline)? {
+            return Ok(stream);
         }
-        // A bound socket is not readiness: the competing starter retains its
-        // lock until the exact daemon-initialized handshake has completed.
-        if Instant::now() >= deadline {
-            return Err(format!("{prog}: timed out waiting for daemon startup"));
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-    loop {
-        match try_connect(socket) {
-            Ok(stream) => return Ok(stream),
-            Err(error)
-                if error.kind() == io::ErrorKind::WouldBlock
-                    || error.raw_os_error() == Some(libc::EINPROGRESS) => {}
-            Err(_) => break,
-        }
-        if Instant::now() >= deadline {
-            return Err(format!("{prog}: timed out connecting to existing daemon"));
-        }
-        std::thread::sleep(Duration::from_millis(25));
     }
     if Instant::now() >= deadline {
         return Err(format!("{prog}: timed out waiting for daemon startup"));
@@ -174,6 +161,71 @@ pub(super) fn start_and_connect(
             let _ = child.kill();
             let _ = child.wait();
             return Err(format!("{prog}: timed out waiting for daemon startup"));
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn open_startup_lock(prog: &str, path: &Path, create: bool) -> Result<Option<fs::File>, String> {
+    let lock = match fs::OpenOptions::new()
+        .read(true)
+        .write(create)
+        .create(create)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .open(path)
+    {
+        Ok(lock) => lock,
+        Err(error) if !create && error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("{prog}: cannot lock daemon startup: {error}")),
+    };
+    let metadata = lock.metadata().map_err(|error| error.to_string())?;
+    // SAFETY: geteuid has no pointer arguments and no preconditions.
+    let uid = unsafe { libc::geteuid() };
+    if !metadata.is_file()
+        || metadata.uid() != uid
+        || metadata.nlink() != 1
+        || metadata.mode() & 0o077 != 0
+    {
+        return Err(format!("{prog}: unsafe daemon startup lock"));
+    }
+    Ok(Some(lock))
+}
+
+fn wait_for_startup_lock(prog: &str, lock: &fs::File, deadline: Instant) -> Result<(), String> {
+    loop {
+        // SAFETY: the owned File remains open for this entire operation.
+        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::WouldBlock && error.kind() != io::ErrorKind::Interrupted {
+            return Err(format!("{prog}: cannot lock daemon startup: {error}"));
+        }
+        // A bound socket is not readiness: the competing starter retains its
+        // lock until the exact daemon-initialized handshake has completed.
+        if Instant::now() >= deadline {
+            return Err(format!("{prog}: timed out waiting for daemon startup"));
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn connect_existing(
+    prog: &str,
+    socket: &Path,
+    deadline: Instant,
+) -> Result<Option<UnixStream>, String> {
+    loop {
+        match try_connect(socket) {
+            Ok(stream) => return Ok(Some(stream)),
+            Err(error)
+                if error.kind() == io::ErrorKind::WouldBlock
+                    || error.raw_os_error() == Some(libc::EINPROGRESS) => {}
+            Err(_) => return Ok(None),
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("{prog}: timed out connecting to existing daemon"));
         }
         std::thread::sleep(Duration::from_millis(25));
     }

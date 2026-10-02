@@ -1396,7 +1396,6 @@ fn builtin_call_process_region_impl(
         .map_err(|e| super::process::signal_process_io("Creating process input file", None, e))?;
     region_file
         .write_all(&region_text)
-        .and_then(|()| region_file.as_file_mut().sync_data())
         .map_err(|e| super::process::signal_process_io("Writing process input file", None, e))?;
     let region_stdin = region_file
         .reopen()
