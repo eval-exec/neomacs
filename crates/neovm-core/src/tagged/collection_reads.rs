@@ -3,6 +3,9 @@
 //! Object identities are words, never GC roots or dereferenced pointers. A
 //! fixed mutation journal allows an observation to survive unrelated writes.
 //! Losing journal history or exceeding the read budget always rejects reuse.
+//! Pointer reads first check this mutator's existing private scope membership;
+//! an inactive mutator skips the shared gate. Active reads retain the process
+//! policy gate and cold recorder, while traversal selection keeps its own gate.
 use super::{mutate::LispCollectionRevision, value::TaggedValue};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::cell::{Cell, RefCell};
@@ -15,7 +18,7 @@ use std::sync::{
 ///
 /// | Knob | Default | Effect |
 /// | --- | --- | --- |
-/// | `NEOVM_COLLECTION_READ_GLOBAL=off` | on | Use `off` to retain TLS checks when no mutator has an active capture. |
+/// | `NEOVM_COLLECTION_READ_GLOBAL=off` | on | Use `off` to retain the inactive traversal selector's TLS membership check. |
 /// | `NEOVM_COLLECTION_READ_HOIST=off` | on | Use `off` to retain observed traversal reads when this mutator has no capture. |
 /// | `NEOVM_COLLECTION_WRITE_LAZY=on` | off | Skip revision/journal work until the first process capture. |
 ///
@@ -289,15 +292,21 @@ impl Drop for CollectionReadScope {
 
 #[inline]
 pub(crate) fn observe(value: TaggedValue) {
+    // This private membership is read afresh for each pointer projection. A
+    // different mutator cannot change it, and no state is cached across reads
+    // or callbacks. begin/take restore it before running any user code.
+    if !ACTIVE.with(Cell::get) {
+        return;
+    }
     if CAPTURE_SCOPES.load(Ordering::Relaxed) & !(ReadPolicyBit::ObservedTraversal as usize) == 0 {
         return;
     }
     observe_active(value.bits());
 }
 
-// Keep TLS membership and the active recorder behind the same cold boundary.
-// Inlining the short-circuit TLS predicate also leaves redundant boolean
-// branches in ordinary metadata getters, even when the process count is zero.
+// Inactive pointer reads return at the inline membership check. Keep active
+// dependency recording cold and retain its existing private membership guard;
+// neither gate runs a callback or can change this mutator's capture stack.
 #[cold]
 #[inline(never)]
 fn observe_active(bits: usize) {
