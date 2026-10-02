@@ -1,5 +1,5 @@
 use super::*;
-use std::cell::RefCell;
+use crate::emacs_core::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
 
 mod delivery;
 mod lisp;
@@ -54,11 +54,11 @@ mod linux_test;
 mod native_runtime_test;
 
 thread_local! {
-    static FILE_NOTIFY_STATE: RefCell<FileNotifyState> = RefCell::new(FileNotifyState::default());
+    static FILE_NOTIFY_STATE: HeapRegistrySlot<FileNotifyState> = HeapRegistrySlot::new(FileNotifyState::default());
 }
 
 #[derive(Default)]
-struct FileNotifyState {
+pub(crate) struct FileNotifyState {
     backend: PlatformBackend,
     registry: WatchRegistry,
 }
@@ -66,13 +66,24 @@ struct FileNotifyState {
 type PlatformBackend = platform::Backend;
 
 pub(crate) fn reset_file_notify_thread_locals() {
-    FILE_NOTIFY_STATE.with(|slot| *slot.borrow_mut() = FileNotifyState::default());
+    FILE_NOTIFY_STATE.with(|slot| slot.reset(FileNotifyState::default()));
 }
 
-pub(crate) fn collect_file_notify_gc_roots(group: &mut Vec<Value>) {
-    FILE_NOTIFY_STATE.with(|slot| {
-        slot.borrow().registry.collect_gc_roots(group);
-    });
+pub(crate) type FileNotifyRegistryHandle = HeapRegistryHandle<FileNotifyState>;
+
+pub(crate) fn current_file_notify_registry_handle() -> FileNotifyRegistryHandle {
+    FILE_NOTIFY_STATE.with(HeapRegistrySlot::current)
+}
+
+pub(crate) fn install_file_notify_registry_handle(handle: &FileNotifyRegistryHandle) {
+    FILE_NOTIFY_STATE.with(|slot| slot.install(handle));
+}
+
+pub(crate) fn collect_file_notify_registry_gc_roots(
+    registry: &FileNotifyRegistryHandle,
+    group: &mut Vec<Value>,
+) {
+    registry.borrow().registry.collect_gc_roots(group);
 }
 
 pub(crate) fn has_active_file_notify_watches() -> bool {
@@ -135,3 +146,7 @@ pub(crate) fn drain_file_notify_events(
 #[cfg(test)]
 #[path = "tests/mod.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/gc_tls_ownership.rs"]
+mod gc_tls_ownership_tests;

@@ -292,6 +292,14 @@ impl Context {
         for root in registry_roots.drain(..) {
             visit(root);
         }
+        group("file_notify_registry");
+        super::super::builtins::collect_file_notify_registry_gc_roots(
+            &self.file_notify_registry,
+            &mut registry_roots,
+        );
+        for root in registry_roots.drain(..) {
+            visit(root);
+        }
         // Full ~all-interned-symbols walk on STW collections; only the
         // BLV-pool residual under `ObarraySymbolCellSkipGuard` (both
         // concurrent handshakes).
@@ -494,6 +502,7 @@ impl Context {
         super::super::builtins::install_hash_table_test_registry_handle(
             &self.hash_table_test_registry,
         );
+        super::super::builtins::install_file_notify_registry_handle(&self.file_notify_registry);
         super::super::syntax::restore_standard_syntax_table_object(self.standard_syntax_table);
         super::super::syntax::restore_syntax_code_objects(self.syntax_code_objects);
         super::super::category::restore_standard_category_table_object(

@@ -2326,12 +2326,6 @@ fn collect_thread_local_gc_roots(
         stats,
         super::dynamic_module::collect_dynamic_module_gc_roots,
     );
-    collect_group(
-        roots,
-        "file-notify-thread-local",
-        stats,
-        super::builtins::collect_file_notify_gc_roots,
-    );
     collect_group(roots, "symbol-name-thread-local", stats, |group| {
         super::intern::collect_symbol_name_gc_roots(group, heap_id)
     });
@@ -3616,6 +3610,7 @@ pub struct Context {
     pub(crate) charset_registry: super::charset::CharsetRegistryHandle,
     pub(crate) font_registry: super::xfaces::FontRegistryHandle,
     pub(crate) hash_table_test_registry: super::builtins::HashTableTestRegistryHandle,
+    pub(crate) file_notify_registry: super::builtins::FileNotifyRegistryHandle,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

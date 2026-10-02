@@ -228,6 +228,7 @@ impl Context {
             font_registry: super::super::xfaces::current_font_registry_handle(),
             hash_table_test_registry:
                 super::super::builtins::current_hash_table_test_registry_handle(),
+            file_notify_registry: super::super::builtins::current_file_notify_registry_handle(),
         };
         ev.setup_thread_locals();
 
