@@ -14,16 +14,19 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
 /// Each subprocess owns its Lisp mutator state. This matrix is local test
 /// configuration and neither stores Lisp values nor assumes a shared mutator.
-/// Static INLINE2 runs at T1 without a first-compile override. Function stamps
-/// are always active and have no environment knob, so only the three actual
-/// binary Phase-1 knobs contribute matrix axes.
+/// The first-compile diagnostic makes eligible named regions execute even
+/// when a pin's warmup is too short to earn re-tiering. Function stamps are
+/// always active and have no environment knob, so only the three actual
+/// binary Phase-1 knobs contribute matrix axes. The combined stress row
+/// exercises a chain deopt while the collector can run during resumption.
 pub(crate) fn check(form: &str, expect: expect_test::Expect) {
     let mut matrix = Vec::new();
-    for inline2 in ["off", "all"] {
+    for inline2 in ["off", "named", "all"] {
         for mask in 0..8 {
             matrix.push(vec![
                 ("NEOVM_JIT_THRESHOLD", "1"),
                 ("NEOVM_JIT_INLINE2", inline2),
+                ("NEOVM_JIT_INLINE2_AT_FIRST_COMPILE", "1"),
                 (
                     "NEOVM_JIT_DIRECT_CALL",
                     if mask & 1 == 0 { "off" } else { "on" },
@@ -44,9 +47,17 @@ pub(crate) fn check(form: &str, expect: expect_test::Expect) {
             matrix.push(vec![
                 ("NEOVM_JIT_THRESHOLD", "1"),
                 ("NEOVM_JIT_INLINE2", inline2),
+                ("NEOVM_JIT_INLINE2_AT_FIRST_COMPILE", "1"),
                 stress,
             ]);
         }
+        matrix.push(vec![
+            ("NEOVM_JIT_THRESHOLD", "1"),
+            ("NEOVM_JIT_INLINE2", inline2),
+            ("NEOVM_JIT_INLINE2_AT_FIRST_COMPILE", "1"),
+            ("NEOVM_JIT_FORCE_DEOPT", "1"),
+            ("NEOVM_GC_STRESS", "1"),
+        ]);
     }
     let envs: Vec<_> = matrix.iter().map(Vec::as_slice).collect();
     crate::common::assert_oracle_parity_under_envs_expect(form, &envs, expect);
@@ -367,5 +378,38 @@ fn oracle_inline_o14_float_and_cons_identity_through_calls() {
   (dotimes (_ 8) (inline-o14-outer 1.5 '(a . b)))
   (inline-o14-outer 1.5 '(a . b)))"#,
         expect_test::expect![[r#""OK (t t nil t t t nil nil t t)""#]],
+    );
+}
+
+/// GNU implements debug-on-entry by installing before advice in the
+/// function cell (`lisp/emacs-lisp/debug.el`). A previously inlined pure
+/// callee must consult the replacement cell and expose its named frame.
+#[test]
+fn oracle_inline_named_debug_on_entry_after_native_warmup() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    check(
+        r#"(progn
+  (require 'debug)
+  (defvar inline-named-debug-log nil)
+  (defalias 'inline-named-debug-callee (byte-compile (lambda (x) (1+ x))))
+  (defalias 'inline-named-debug-caller
+    (byte-compile (lambda (x) (+ 10 (inline-named-debug-callee x)))))
+  (dotimes (_ 64) (inline-named-debug-caller 3))
+  (unwind-protect
+      (let ((debugger
+             (lambda (&rest args)
+               (let (frames)
+                 (mapbacktrace
+                  (lambda (evald f values flags)
+                    (when (memq f '(inline-named-debug-callee inline-named-debug-caller))
+                      (push (list evald f values flags) frames))))
+                 (push (list (car args) (nreverse frames)) inline-named-debug-log))
+               nil)))
+        (debug-on-entry 'inline-named-debug-callee)
+        (list (inline-named-debug-caller 3) (nreverse inline-named-debug-log)))
+    (cancel-debug-on-entry 'inline-named-debug-callee)))"#,
+        expect_test::expect![[
+            r#""OK (14 ((debug ((t inline-named-debug-callee (3) nil) (t inline-named-debug-caller (3) nil)))))""#
+        ]],
     );
 }
