@@ -133,3 +133,36 @@ fn regex_dfa_actions_preserve_values_and_validate_provenance() {
         assert!(invalid.parse::<ExecutionOverride>().is_err(), "{invalid}");
     }
 }
+
+#[test]
+fn editing_cliff_actions_preserve_values_and_validate_provenance() {
+    for name in [
+        "NEOVM_COMPARE_STRINGS_POS_CACHE",
+        "NEOVM_REGEX_SHORT_LITERAL",
+        "NEOVM_EMACS_MULE_PREPARED",
+        "NEOVM_OVERLAY_LOCAL_MOVE",
+    ] {
+        let mut environment = BTreeMap::new();
+        let input = format!("{name}=on");
+        let overrides = policy(&[&input]);
+        overrides.apply_to(&mut environment);
+        assert_eq!(environment[name], "on");
+        let mut recorded = BTreeMap::from([(name.to_owned(), "on".to_owned())]);
+        assert!(overrides.validate_recorded(&recorded).is_ok());
+        recorded.insert(name.to_owned(), "off".to_owned());
+        assert!(overrides.validate_recorded(&recorded).is_err());
+        policy(&[name]).apply_to(&mut environment);
+        assert!(!environment.contains_key(name));
+        for value in ["off", "on"] {
+            let action: ExecutionOverride = format!("{name}={value}").parse().unwrap();
+            assert_eq!(String::from(action), format!("{name}={value}"));
+        }
+        for value in ["maybe", "verify", ""] {
+            assert!(
+                format!("{name}={value}")
+                    .parse::<ExecutionOverride>()
+                    .is_err()
+            );
+        }
+    }
+}
