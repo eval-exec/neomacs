@@ -78,6 +78,40 @@ fn native(ctx: &mut Context, f: &ByteCodeFunction, name: &str) -> CompiledLeaf {
     leaf
 }
 
+#[test]
+fn inline_named_runtime_inherited_full_before_retier_keeps_real_call() {
+    let _knobs = Knobs::enter();
+    let mut ctx = Context::new();
+    let name = "named-runtime-inherited-full";
+    ctx.obarray.set_symbol_function_id(
+        intern(name),
+        Value::make_bytecode(function(
+            1,
+            vec![Op::StackRef(0), Op::Add1, Op::Return],
+            vec![],
+        )),
+    );
+    let f = caller(name, 1);
+    f.jit_runtime().set_heat_for_test(0);
+    let leaf = compile::compile_bytecode_function_requested(
+        &f,
+        Some(&ctx.obarray),
+        CompileRequest {
+            regalloc: RegallocPolicy::Full,
+            bypass_profit_gate: true,
+            origin: CompileOrigin::DeferralExpired,
+            tier: crate::emacs_core::jit::tier2::CompileTier::Plain,
+        },
+    )
+    .unwrap();
+    assert!(leaf.chains.is_empty(), "inherited Full is not re-tier heat");
+    let retier = native(&mut ctx, &f, name);
+    assert!(
+        !retier.chains.is_empty(),
+        "explicit re-tier admits named frames"
+    );
+}
+
 fn finish(
     ctx: &mut Context,
     f: &ByteCodeFunction,

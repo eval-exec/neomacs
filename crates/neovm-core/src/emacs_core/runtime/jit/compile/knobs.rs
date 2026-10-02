@@ -86,13 +86,13 @@ pub(crate) fn force_inline2_for_test(mode: Option<Inline2Mode>) {
     INLINE2_TEST_OVERRIDE.with(|current| current.set(mode));
 }
 
-/// Temporary T2 hook until the campaign's tier spine lands. Only a compile
-/// that earned Full or reached re-tier heat pays for named planning. The
+/// Named planning on the existing re-tier path. Only a compile
+/// with re-tier origin or heat pays for named planning. The
 /// oracle diagnostic admits the first compile at THRESHOLD=1. Threading:
 /// configuration is immutable; heat belongs to this source's atomic state.
 pub(crate) fn named_inline_tier_eligible(
     source: &crate::emacs_core::bytecode::ByteCodeFunction,
-    policy: super::lowering::RegallocPolicy,
+    origin: crate::emacs_core::jit::stats::CompileOrigin,
 ) -> bool {
     if !matches!(jit_inline2_mode(), Inline2Mode::Named | Inline2Mode::All) {
         return false;
@@ -101,7 +101,7 @@ pub(crate) fn named_inline_tier_eligible(
     let first = *FIRST
         .get_or_init(|| std::env::var("NEOVM_JIT_INLINE2_AT_FIRST_COMPILE").as_deref() == Ok("1"));
     first
-        || policy == super::lowering::RegallocPolicy::Full
+        || origin == crate::emacs_core::jit::stats::CompileOrigin::Retier
         || crate::emacs_core::jit::retier_heat().is_some_and(|at| source.jit_runtime().heat() >= at)
 }
 

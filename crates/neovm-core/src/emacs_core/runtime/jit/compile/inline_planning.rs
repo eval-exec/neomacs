@@ -21,7 +21,7 @@ pub(super) fn named_tier_eligible(
     request: CompileRequest,
     self_recursive: bool,
 ) -> bool {
-    super::knobs::named_inline_tier_eligible(source, request.regalloc)
+    super::knobs::named_inline_tier_eligible(source, request.origin)
         || (matches!(jit_inline2_mode(), Inline2Mode::Named | Inline2Mode::All)
             && super::lowering::active_regalloc_choice() == super::lowering::RegallocChoice::Full
             && self_recursive)
