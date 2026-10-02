@@ -385,6 +385,9 @@ pub(crate) struct CompiledPattern {
     /// searched a buffer.
     pub prefilter: std::cell::OnceCell<Option<LiteralPrefilter>>,
 
+    /// Immutable whole-literal codes for bounded folded searches (CL2 knob).
+    short_literal: Option<short_literal::Literal>,
+
     /// The zero-width anchor every path from the start meets before it
     /// consumes anything ([`start_anchor`]), when that is more than the first
     /// opcode shows (`\(?:^a\|^b\)`).  Computed only under
@@ -844,6 +847,7 @@ impl CompiledPattern {
             buffer_sealed: false,
             rewind: RewindView::Buffer,
             prefilter: std::cell::OnceCell::new(),
+            short_literal: None,
             start_anchor: StartAnchor::None,
             dfa: dfa::DfaCell::default(),
         }
@@ -2153,6 +2157,8 @@ pub(crate) fn regex_compile_lisp_with_translation(
         buf.buffer_sealed,
         "regex compiler produced an unsealable buffer for this pattern"
     );
+
+    buf.short_literal = short_literal::Literal::compile(&buf);
 
     // Anchors behind alternations (P3.3 Stage 0), for the search's
     // line-start scan; opt-in until measured.
@@ -9165,6 +9171,12 @@ pub(crate) fn re_search(
             }
         }
     }
+    if !fastmap_force_disabled()
+        && let Some(literal) = &pattern.short_literal
+        && let Some(result) = literal.search(pattern, text, start, range)
+    {
+        return result;
+    }
     // One scratch for the whole search (see re_match_candidate_in): lease
     // the per-thread one out of its cell for the duration (its Vec capacity
     // moves with it, nothing allocates) and hand it back on every exit; a
@@ -9787,6 +9799,13 @@ pub(crate) mod dfa;
 
 #[path = "suffix_literal.rs"]
 mod suffix_literal;
+
+#[path = "short_literal.rs"]
+mod short_literal;
+
+#[cfg(test)]
+#[path = "tests/short_literal.rs"]
+mod short_literal_tests;
 
 #[cfg(test)]
 #[path = "tests/emacs.rs"]

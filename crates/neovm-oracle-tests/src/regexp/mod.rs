@@ -21,3 +21,7 @@ mod replace_match_strict_edge_semantics;
 
 #[cfg(test)]
 mod suffix_literal_scan;
+
+#[cfg(test)]
+#[path = "tests/short_literal.rs"]
+mod short_literal;
