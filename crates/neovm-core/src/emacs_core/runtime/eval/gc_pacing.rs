@@ -532,11 +532,19 @@ impl Context {
         );
         super::super::error::install_in_flight_registry_handle(&self.in_flight_registry);
         super::super::casetab::activate_casetab_thread_locals(self.cached_standard_case_table);
+        let thread = std::thread::current().id();
+        let thread_changed = self.last_activation_thread != Some(thread);
+        self.last_activation_thread = Some(thread);
         let heap_identity = self.tagged_heap.identity();
         let collection_epoch = self.tagged_heap.gc_collections();
         let sweeping = self.tagged_heap.sweep_in_progress();
         let collection_in_progress = self.tagged_heap.mark_in_progress() || sweeping;
-        super::super::string_pos_cache::activate_string_pos_cache(heap_identity);
+        super::super::string_pos_cache::activate_string_pos_cache(
+            heap_identity,
+            collection_epoch,
+            collection_in_progress,
+            thread_changed,
+        );
         super::super::regex::activate_regex_thread_locals(
             heap_identity,
             collection_epoch,

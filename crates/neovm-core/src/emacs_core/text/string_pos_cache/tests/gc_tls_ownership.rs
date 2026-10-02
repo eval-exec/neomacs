@@ -9,7 +9,15 @@ fn populate(_ctx: &mut Context) -> Value {
 
 fn roots(ctx: &Context) -> Vec<Value> {
     let mut roots = Vec::new();
-    collect_string_pos_cache_gc_roots(&mut roots, ctx.tagged_heap.identity());
+    collect_string_pos_cache_gc_roots(
+        &mut roots,
+        ctx.tagged_heap.identity(),
+        ctx.tagged_heap.gc_collections(),
+        crate::tagged::gc::CacheRootScan::Snapshot {
+            collection_in_progress: ctx.tagged_heap.mark_in_progress()
+                || ctx.tagged_heap.sweep_in_progress(),
+        },
+    );
     roots
 }
 

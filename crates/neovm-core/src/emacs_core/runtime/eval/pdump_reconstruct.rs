@@ -176,6 +176,7 @@ impl Context {
             max_depth: 1600,
             gc_pending: false,
             gc_count: 0,
+            last_activation_thread: None,
             gc_inhibit_depth: 0,
             gc_driver_active: false,
             gc_stress: gc_stress_from_env(),

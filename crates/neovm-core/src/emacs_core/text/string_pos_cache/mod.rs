@@ -13,7 +13,9 @@
 //! freed and its address reused while it is cached.  Any change to a
 //! string's bytes moves [`EPOCH`] (see `LispString::recompute_size`, which
 //! every byte mutation ends in), so a cached pair never outlives the layout
-//! it describes.
+//! it describes. Activation also invalidates an entry after an uncovered
+//! collection or thread migration: another thread cannot root this entry and
+//! has its own byte-mutation epoch.
 
 use std::cell::Cell;
 
@@ -35,6 +37,9 @@ thread_local! {
     static CACHE: Cell<Option<Entry>> = const { Cell::new(None) };
     static EPOCH: Cell<u64> = const { Cell::new(0) };
     static CACHE_HEAP: Cell<usize> = const { Cell::new(0) };
+    // Last collection whose root enumeration included the entry, or the
+    // completed count at which an empty cache was activated.
+    static CACHE_COLLECTION_EPOCH: Cell<Option<usize>> = const { Cell::new(None) };
 }
 
 /// Some string's bytes changed: every cached pair is suspect.
@@ -48,22 +53,63 @@ pub(crate) fn reset_string_pos_cache() {
     CACHE.with(|cache| cache.set(None));
     CACHE_HEAP
         .with(|owner| owner.set(crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0)));
+    CACHE_COLLECTION_EPOCH.with(|epoch| epoch.set(None));
 }
 
-/// Heap identity is established once on activation, never during conversion.
-pub(crate) fn activate_string_pos_cache(heap_identity: usize) {
+/// Validate ownership at activation, never during character/byte conversion.
+/// A collection on another thread cannot see this entry. Reject an uncovered
+/// running collection before it sweeps, and retain covered same-thread cycles.
+pub(crate) fn activate_string_pos_cache(
+    heap_identity: usize,
+    collection_epoch: usize,
+    collection_in_progress: bool,
+    thread_changed: bool,
+) {
     CACHE_HEAP.with(|owner| {
-        if owner.get() != heap_identity {
-            CACHE.with(|cache| cache.set(None));
-            owner.set(heap_identity);
-        }
+        CACHE_COLLECTION_EPOCH.with(|epoch| {
+            let valid = epoch.get() == Some(collection_epoch + 1)
+                || (!collection_in_progress && epoch.get() == Some(collection_epoch));
+            if owner.get() != heap_identity || !valid || thread_changed {
+                CACHE.with(|cache| cache.set(None));
+                owner.set(heap_identity);
+                epoch.set(Some(collection_epoch));
+            }
+        });
     });
 }
 
 /// The cached string is a GC root, like GNU's staticpro'd cache variable.
-pub(crate) fn collect_string_pos_cache_gc_roots(roots: &mut Vec<Value>, heap_identity: usize) {
+pub(crate) fn collect_string_pos_cache_gc_roots(
+    roots: &mut Vec<Value>,
+    heap_identity: usize,
+    collection_epoch: usize,
+    scan: crate::tagged::gc::CacheRootScan,
+) {
     if CACHE_HEAP.with(Cell::get) != heap_identity {
         return;
+    }
+    match scan {
+        crate::tagged::gc::CacheRootScan::Collection => {
+            CACHE_COLLECTION_EPOCH.with(|epoch| {
+                if epoch.get() != Some(collection_epoch)
+                    && epoch.get() != Some(collection_epoch + 1)
+                {
+                    CACHE.with(|cache| cache.set(None));
+                }
+                epoch.set(Some(collection_epoch + 1));
+            });
+        }
+        #[cfg(test)]
+        crate::tagged::gc::CacheRootScan::Snapshot {
+            collection_in_progress,
+        } => {
+            activate_string_pos_cache(
+                heap_identity,
+                collection_epoch,
+                collection_in_progress,
+                false,
+            );
+        }
     }
     CACHE.with(|cache| {
         if let Some(entry) = cache.get() {
@@ -159,3 +205,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/gc_tls_ownership.rs"]
 mod gc_tls_ownership_tests;
+
+#[cfg(test)]
+#[path = "tests/gc_collection_epoch.rs"]
+mod gc_collection_epoch_tests;

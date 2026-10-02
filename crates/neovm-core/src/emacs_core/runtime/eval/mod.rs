@@ -2289,7 +2289,12 @@ fn collect_thread_local_gc_roots(
         super::casetab::collect_casetab_gc_roots(group, heap_id)
     });
     collect_group(roots, "string-pos-cache-thread-local", stats, |group| {
-        super::string_pos_cache::collect_string_pos_cache_gc_roots(group, heap_id)
+        super::string_pos_cache::collect_string_pos_cache_gc_roots(
+            group,
+            heap_id,
+            collection_epoch,
+            scan,
+        )
     });
     collect_group(roots, "category-thread-local", stats, |group| {
         super::category::collect_category_gc_roots(group, heap_id)
@@ -3433,6 +3438,8 @@ pub struct Context {
     pub(crate) gc_pending: bool,
     /// Total number of GC collections performed.
     pub(crate) gc_count: u64,
+    /// Last thread that activated this Context, for cold cache invalidation.
+    last_activation_thread: Option<std::thread::ThreadId>,
     /// Nested depth of explicit GC inhibition scopes.
     pub(crate) gc_inhibit_depth: usize,
     /// True while the mutator-side collection driver
