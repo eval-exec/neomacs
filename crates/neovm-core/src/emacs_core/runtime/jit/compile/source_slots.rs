@@ -175,10 +175,11 @@ impl SpecSlot {
         self.direct_consts.load(Ordering::Relaxed)
     }
 
-    /// Arm a source slot with its source's leaf and its register entry or
+    /// Arm a source slot with its source's leaf and its raw entry or
     /// framed tag, valid under `epoch` (the `leaf_slot_epoch` the leaf was
     /// armed under): epoch/leaf first, entry published with Release last.
-    /// Framed generated readers use an atomic Acquire-or-stronger load;
+    /// Framed or direct-memory generated readers use an atomic
+    /// Acquire-or-stronger load;
     /// the slot and leaf retain the existing mutator-owned cache lifetime.
     pub(crate) fn arm_source(&self, leaf: *const CompiledLeaf, entry: *const u8, epoch: u64) {
         // A direct entry never outlives the leaf it was armed for.
@@ -441,7 +442,7 @@ pub(crate) extern "C" fn neovm_jit_call_source_spec(
 
 /// Remember `leaf`, the source's current armed leaf, in a source site's
 /// slot, with its direct entry under `NEOVM_JIT_DIRECT_CALL` when the site
-/// may enter it (its register ABI takes exactly `nargs` words, it is
+/// may enter it (its selected raw ABI takes exactly `nargs` words, it is
 /// frameless, and the lean frame layout was probed). Under the framed shape
 /// knob an exact required-only framed JIT memory leaf publishes the framed
 /// tag instead; no AOT sidecar is admitted. Out of line: once per leaf the
@@ -451,15 +452,21 @@ pub(crate) extern "C" fn neovm_jit_call_source_spec(
 fn arm_source_direct_entry(slot: &SpecSlot, leaf: &CompiledLeaf, nargs: usize, epoch: u64) {
     #[cfg(any(test, debug_assertions))]
     SOURCE_SLOT_ARMINGS.fetch_add(1, Ordering::Relaxed);
-    let eligible = jit_direct_call_on()
-        && leaf.abi
-            == (LeafAbi::Register {
-                arity: nargs.min(u8::MAX as usize) as u8,
-            })
-        && leaf.arity == nargs
-        && !leaf.has_rest
-        && leaf.direct_call_eligible()
-        && super::jit_layout::backtrace_layout().is_some();
+    let eligible = if jit_direct_memory_on() && !jit_register_abi_on() {
+        jit_direct_call_on()
+            && super::spec_slot::raw_memory_direct_eligible(leaf, nargs)
+            && super::jit_layout::backtrace_layout().is_some()
+    } else {
+        jit_direct_call_on()
+            && leaf.abi
+                == (LeafAbi::Register {
+                    arity: nargs.min(u8::MAX as usize) as u8,
+                })
+            && leaf.arity == nargs
+            && !leaf.has_rest
+            && leaf.direct_call_eligible()
+            && super::jit_layout::backtrace_layout().is_some()
+    };
     let framed = jit_direct_shapes().framed
         && super::spec_slot::framed_direct_eligible(leaf, nargs)
         && super::jit_layout::backtrace_layout().is_some();

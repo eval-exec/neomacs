@@ -5,7 +5,7 @@
 //! A speculated `Op::Call` site of a byte-code callee runs GNU's `Bcall`
 //! protocol inline instead of calling `neovm_jit_call_spec`, when the site's
 //! spec slot holds a direct entry (armed by `arm_direct_entry_if_eligible`:
-//! an exact-arity, frameless, register-ABI leaf). The hit path makes the
+//! an exact-arity, frameless leaf). The hit path makes the
 //! shim fast path's checks, in its order, each its own branch to the shim:
 //!
 //! 1. the slot's `direct_entry` is armed;
@@ -21,7 +21,9 @@
 //! It then pushes the frame the shim pushes -- `Backtrace1`/`Backtrace2`
 //! with the arguments inline, or `BacktraceNative` pointing at the caller's
 //! argument slot, recording the called SYMBOL (GNU `Bcall`'s `call_fun`) --
-//! bumps `depth`, and calls the entry with the arguments in registers. On a
+//! bumps `depth`, and calls the entry with the arguments in registers (or
+//! through the existing argument/result slots under
+//! `NEOVM_JIT_DIRECT_MEMORY=on`, unless `NEOVM_JIT_REG_ABI=on`). On a
 //! `STATUS_OK` return whose frame is still the one it pushed, it pops the
 //! frame and `depth` inline; anything else (a non-OK status, a frame the
 //! debugger flagged or promoted, an unbalanced specpdl) goes to
@@ -65,6 +67,8 @@ pub(crate) static DIRECT_COLD_EXITS: AtomicU64 = AtomicU64::new(0);
 
 #[path = "direct_call/framed.rs"]
 mod framed;
+#[path = "direct_call/memory.rs"]
+mod memory;
 #[cfg(test)]
 pub(crate) use framed::DIRECT_FRAMED_CALLS;
 pub(crate) use framed::neovm_jit_direct_framed;
@@ -160,8 +164,12 @@ pub(crate) const MAX_REST_CALL_ARGS: usize = 8;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DirectSiteEntry {
     RawRegister,
+    /// Exact pass-through call of the existing four-parameter memory ABI.
+    RawMemory,
     Framed,
     DynamicSource,
+    /// Source slots may publish a framed tag or a raw memory entry.
+    DynamicSourceMemory,
 }
 
 /// A site the lowering will emit as a direct call: its constants and the
@@ -173,7 +181,7 @@ pub(crate) struct DirectSite {
     expected: u64,
     /// The call's own argument count: what its frame records.
     nargs: usize,
-    /// How the call enters the callee's register words.
+    /// How the call enters the callee's argument words.
     callee: CalleeShape,
     entry: DirectSiteEntry,
     frame: EntryTemplate,
@@ -214,8 +222,10 @@ impl DirectSite {
     /// register words, both layout probes succeeded, and the leaf's budget
     /// of direct sites is not spent.
     ///
-    /// Frameless callees must be bodies `LeafAbi::for_build` gives the
-    /// register ABI. Under `framed`, exact required-only callees with
+    /// Frameless callees use the register ABI, or the existing memory ABI
+    /// under `NEOVM_JIT_DIRECT_MEMORY` when the register ABI is off. Memory
+    /// calls must pass through their arguments exactly: no optional nil
+    /// padding or rest-list marshaling. Under `framed`, exact required-only callees with
     /// bindings or handlers keep the memory ABI and use the contained
     /// trampoline (at most eight arguments). Neither may be
     /// `make-closure`-patched here. Any other callee's leaf never arms a
@@ -245,6 +255,10 @@ impl DirectSite {
             callee.required == nargs
         };
         if !callable || rt.direct_sites.get() >= DIRECT_SITE_CAP {
+            return None;
+        }
+        let memory_entry = jit_direct_memory_on() && !jit_register_abi_on();
+        if memory_entry && !callee.passes_through(nargs) {
             return None;
         }
         let exceeds_register_arity =
@@ -281,6 +295,8 @@ impl DirectSite {
             callee,
             entry: if framed {
                 DirectSiteEntry::Framed
+            } else if memory_entry {
+                DirectSiteEntry::RawMemory
             } else {
                 DirectSiteEntry::RawRegister
             },
@@ -312,7 +328,13 @@ impl DirectSite {
             expected: 0,
             nargs,
             callee: CalleeShape::exact(nargs),
-            entry: if jit_direct_shapes().framed {
+            entry: if jit_direct_memory_on() && !jit_register_abi_on() {
+                if jit_direct_shapes().framed {
+                    DirectSiteEntry::DynamicSourceMemory
+                } else {
+                    DirectSiteEntry::RawMemory
+                }
+            } else if jit_direct_shapes().framed {
                 DirectSiteEntry::DynamicSource
             } else {
                 DirectSiteEntry::RawRegister
@@ -374,9 +396,9 @@ pub(crate) fn emit_direct_bytecode_call(
     };
     // 1. Armed.
     let framed_enabled = jit_direct_shapes().framed;
-    let entry = if framed_enabled {
+    let entry = if framed_enabled || jit_direct_memory_on() {
         // Atomic publication: leaf/key/epoch are initialized before the
-        // Release store of the framed tag. CLIF atomic loads provide at
+        // Release store of the entry or framed tag. CLIF atomic loads provide at
         // least Acquire ordering. The off arm is the original load verbatim.
         let at = iadd_imm_p(fb, slot_v, SPEC_SLOT_DIRECT_ENTRY_OFFSET as i64);
         fb.ins().atomic_load(types::I64, flags, at)
@@ -394,7 +416,7 @@ pub(crate) fn emit_direct_bytecode_call(
         let wrong_entry = icmp_imm_p(fb, IntCC::NotEqual, entry, DirectEntryTag::Framed as i64);
         next(fb, wrong_entry);
     } else if framed_enabled && matches!(callee, DirectCallee::Symbol { .. }) {
-        // The immutable named plan admits only the register ABI. Fail
+        // The immutable named plan admits only its selected raw ABI. Fail
         // closed if a future body transformation changes that classification.
         let framed_entry = icmp_imm_p(fb, IntCC::Equal, entry, DirectEntryTag::Framed as i64);
         next(fb, framed_entry);
@@ -602,8 +624,17 @@ pub(crate) fn emit_direct_bytecode_call(
             super::lowering::band_imm_p(fb, key, !(SpecSlot::KEY_FLAGS as i64))
         }
     };
-    if site.entry != DirectSiteEntry::RawRegister {
-        let raw = (site.entry == DirectSiteEntry::DynamicSource).then(|| fb.create_block());
+    if matches!(
+        site.entry,
+        DirectSiteEntry::Framed
+            | DirectSiteEntry::DynamicSource
+            | DirectSiteEntry::DynamicSourceMemory
+    ) {
+        let raw = matches!(
+            site.entry,
+            DirectSiteEntry::DynamicSource | DirectSiteEntry::DynamicSourceMemory
+        )
+        .then(|| fb.create_block());
         if let Some(raw) = raw {
             let framed = fb.create_block();
             let is_framed = icmp_imm_p(fb, IntCC::Equal, entry, DirectEntryTag::Framed as i64);
@@ -657,17 +688,23 @@ pub(crate) fn emit_direct_bytecode_call(
         }
     }
     if site.entry != DirectSiteEntry::Framed {
-        let sig = fb.import_signature(
-            LeafAbi::Register {
-                arity: site.callee.arity() as u8,
-            }
-            .signature(rt.refs.call_conv, ptr_ty),
-        );
-        let mut call_args: SmallVec<[ClifValue; 8]> = SmallVec::new();
-        call_args.extend([vmctx, aux]);
-        call_args.extend(regs.iter().copied());
-        let call = fb.ins().call_indirect(sig, entry, &call_args);
-        let (value, status) = {
+        let (value, status) = if matches!(
+            site.entry,
+            DirectSiteEntry::RawMemory | DirectSiteEntry::DynamicSourceMemory
+        ) {
+            debug_assert!(site.callee.passes_through(site.nargs));
+            memory::emit_raw_call(fb, rt, entry, vmctx, aux, args)
+        } else {
+            let sig = fb.import_signature(
+                LeafAbi::Register {
+                    arity: site.callee.arity() as u8,
+                }
+                .signature(rt.refs.call_conv, ptr_ty),
+            );
+            let mut call_args: SmallVec<[ClifValue; 8]> = SmallVec::new();
+            call_args.extend([vmctx, aux]);
+            call_args.extend(regs.iter().copied());
+            let call = fb.ins().call_indirect(sig, entry, &call_args);
             let r = fb.inst_results(call);
             (r[0], r[1])
         };

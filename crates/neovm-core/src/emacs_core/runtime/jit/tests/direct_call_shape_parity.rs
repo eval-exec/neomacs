@@ -59,8 +59,11 @@ fn gnu_expect(name: &str, program: &str, observe: &str, fixture: &str) -> String
 }
 
 /// Each bit is tested independently, alongside the ordinary shim, the
-/// exact-only direct path and the forced-shim fallback. The harness also
-/// checks that evaluator depth and specpdl are restored after observation.
+/// exact-only direct path, memory direct calls and the forced-shim
+/// fallbacks. Memory calls may decline optional short/rest normalization;
+/// register runs retain their engagement assertions and return positions.
+/// The harness also checks that evaluator depth and specpdl are restored
+/// after observation.
 fn assert_gnu_shape(
     name: &str,
     shape: &str,
@@ -90,6 +93,10 @@ fn assert_gnu_shape(
             runs[2].shim_calls < runs[1].shim_calls,
             "{shape} independently bypasses the named-call shim: {runs:?}"
         );
+    }
+    for mode in [Mode::DirectMemory, Mode::DirectMemoryForcedSlow] {
+        let run = run_in_with(mode, knob, program, observe);
+        assert_eq!(run.out, expected, "GNU {name}: {mode:?}, {knob:?}");
     }
     runs
 }

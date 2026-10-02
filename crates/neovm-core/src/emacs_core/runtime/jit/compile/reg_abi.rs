@@ -8,7 +8,8 @@
 //!   The arguments are read from the caller's words and the result written
 //!   through `out`.
 //! * **register** (`NEOVM_JIT_REG_ABI=on`, implied by
-//!   `NEOVM_JIT_DIRECT_CALL=on`; a JIT, non-OSR, frameless, unpatched leaf
+//!   `NEOVM_JIT_DIRECT_CALL=on` unless `NEOVM_JIT_DIRECT_MEMORY=on`; a
+//!   JIT, non-OSR, frameless, unpatched leaf
 //!   of at most [`MAX_REG_ARGS`] required parameters, the bodies a direct
 //!   call can enter: [`LeafAbi::for_build`]): `fn(vmctx, aux, a0, .., a{k-1}) ->
 //!   (value, status)`. `aux` is the executing callee's constant base (read

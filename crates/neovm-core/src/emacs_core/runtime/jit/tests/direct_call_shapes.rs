@@ -8,7 +8,10 @@
 //! arguments, never the nil padding or the consed list), the debugger,
 //! `max-lisp-eval-depth`, redefinition, deopts -- between the shim, exact
 //! direct calls, every shape direct, and every shape under the force
-//! harness; and the shaped run must bypass the shim.
+//! harness; and the shaped register run must bypass the shim. The same
+//! observations also cover memory direct calls and their forced fallback:
+//! exact calls may enter memory leaves, while optional short/rest calls
+//! retain their reference marshaling.
 
 use super::*;
 
@@ -22,7 +25,10 @@ const SHAPED_MODES: [(Mode, DirectShapesKnob); 4] = [
 
 /// Run a scenario in every [`SHAPED_MODES`] mode: the observations must be
 /// equal, and the shaped run must emit more direct sites than the
-/// exact-only direct run (its shaped sites). Returns the runs in that order.
+/// exact-only direct run (its shaped sites). Also compare memory direct
+/// calls and their forced fallback with every shape enabled; these may
+/// decline normalized calls, so only the register run asserts engagement.
+/// Returns the original runs in their unchanged order.
 fn shaped_differential(program: &'static str, observe: &'static str) -> [Run; 4] {
     let runs = SHAPED_MODES.map(|(mode, shapes)| run_in_with(mode, shapes, program, observe));
     for (run, (mode, shapes)) in runs.iter().zip(SHAPED_MODES) {
@@ -37,6 +43,13 @@ fn shaped_differential(program: &'static str, observe: &'static str) -> [Run; 4]
         runs[2].direct_sites,
         runs[1].direct_sites
     );
+    for mode in [Mode::DirectMemory, Mode::DirectMemoryForcedSlow] {
+        let run = run_in_with(mode, DirectShapesKnob::ALL, program, observe);
+        assert_eq!(
+            run.out, runs[0].out,
+            "{mode:?} with every shape observes what the shim does"
+        );
+    }
     runs
 }
 

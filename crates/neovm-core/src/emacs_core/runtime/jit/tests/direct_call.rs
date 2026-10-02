@@ -220,6 +220,10 @@ enum Mode {
     Shim,
     /// Direct calls on.
     Direct,
+    /// Direct calls enter the existing memory-ABI leaf bodies.
+    DirectMemory,
+    /// Memory direct calls with every site forced through the reference shim.
+    DirectMemoryForcedSlow,
     /// Direct calls on under `NEOVM_JIT_FORCE_SLOW_SPEC`: no direct site is
     /// emitted and every call re-validates in the shim.
     DirectForcedSlow,
@@ -269,10 +273,18 @@ fn run_in_with(
             force_profit_gate_for_test(false);
             crate::emacs_core::jit::inline::force_inline_for_test(Some(false));
             force_direct_call_for_test(Some(mode != Mode::Shim));
+            force_direct_memory_for_test(Some(matches!(
+                mode,
+                Mode::DirectMemory | Mode::DirectMemoryForcedSlow
+            )));
+            force_register_abi_for_test(Some(false));
             // Every caller here is a small straight-line body: pin direct sites on
             // for every body, not only the unbounded ones (`DirectSitesMode`).
             force_direct_sites_for_test(Some(DirectSitesMode::All));
-            force_slow_spec_for_test(Some(mode == Mode::DirectForcedSlow));
+            force_slow_spec_for_test(Some(matches!(
+                mode,
+                Mode::DirectForcedSlow | Mode::DirectMemoryForcedSlow
+            )));
             force_direct_shapes_for_test(Some(shapes));
             // Tier up at the hot threshold, callers included, so the
             // warm-ups stay short (they run under GC stress too).
@@ -300,6 +312,8 @@ fn run_in_with(
             force_slow_spec_for_test(None);
             force_direct_shapes_for_test(None);
             force_direct_call_for_test(None);
+            force_direct_memory_for_test(None);
+            force_register_abi_for_test(None);
             force_direct_sites_for_test(None);
             crate::emacs_core::jit::inline::force_inline_for_test(None);
             crate::emacs_core::jit::force_profit_defer_for_test(None);
@@ -334,6 +348,21 @@ fn differential(program: &'static str, observe: &'static str) -> [Run; 3] {
         "the direct run emitted direct sites"
     );
     assert_eq!(forced.direct_sites, 0, "the force harness emits none");
+    let memory = run_in(Mode::DirectMemory, program, observe);
+    let memory_forced = run_in(Mode::DirectMemoryForcedSlow, program, observe);
+    assert_eq!(
+        memory.out, shim.out,
+        "memory entries preserve every observable"
+    );
+    assert_eq!(
+        memory_forced.out, shim.out,
+        "memory force harness preserves every observable"
+    );
+    assert!(memory.direct_sites > 0, "memory run emitted direct sites");
+    assert_eq!(
+        memory_forced.direct_sites, 0,
+        "memory force harness emits none"
+    );
     [shim, direct, forced]
 }
 
@@ -521,14 +550,16 @@ fn a_quit_raised_during_a_direct_recursion_is_signalled() {
 /// recursion runs reaches the recursion through the asynchronous word.
 #[test]
 fn a_cross_thread_quit_request_stops_a_direct_recursion() {
-    for mode in [Mode::Shim, Mode::Direct] {
+    for mode in [Mode::Shim, Mode::Direct, Mode::DirectMemory] {
         let out = std::thread::Builder::new()
             .stack_size(128 * 1024 * 1024)
             .spawn(move || {
                 crate::test_utils::init_test_tracing();
                 force_profit_gate_for_test(false);
                 crate::emacs_core::jit::inline::force_inline_for_test(Some(false));
-                force_direct_call_for_test(Some(mode == Mode::Direct));
+                force_direct_call_for_test(Some(mode != Mode::Shim));
+                force_direct_memory_for_test(Some(mode == Mode::DirectMemory));
+                force_register_abi_for_test(Some(false));
                 // Every caller here is a small straight-line body: pin direct sites on
                 // for every body, not only the unbounded ones (`DirectSitesMode`).
                 force_direct_sites_for_test(Some(DirectSitesMode::All));
@@ -558,6 +589,8 @@ fn a_cross_thread_quit_request_stops_a_direct_recursion() {
                 raiser.join().expect("raiser");
                 assert_eq!(ev.depth, depth0);
                 force_direct_call_for_test(None);
+                force_direct_memory_for_test(None);
+                force_register_abi_for_test(None);
                 force_direct_sites_for_test(None);
                 out
             })
@@ -727,3 +760,7 @@ mod shape_parity;
 #[cfg(test)]
 #[path = "direct_call_framed.rs"]
 mod framed;
+
+#[cfg(test)]
+#[path = "direct_call_memory.rs"]
+mod memory;

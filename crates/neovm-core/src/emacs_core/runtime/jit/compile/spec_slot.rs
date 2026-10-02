@@ -11,7 +11,7 @@
 //! | `epoch` | 0 | clock at the last validation ([`SPEC_EPOCH_DISARMED`] never matches) | same |
 //! | `leaf` | 8 | `*const CompiledLeaf`, or 0 | the expected subr's bits (immutable) |
 //! | `direct_consts` | 16 | the shim's key: constant base with `KEY_*` flags, or 0 | the site's `SymId` (immutable) |
-//! | `direct_entry` | 24 | the register-ABI entry, [`DirectEntryTag::Framed`], or 0 | 0 |
+//! | `direct_entry` | 24 | the raw entry (register, or memory under `NEOVM_JIT_DIRECT_MEMORY`), [`DirectEntryTag::Framed`], or 0 | 0 |
 //!
 //! Only a [`SpecSlotKind::Bytecode`] slot's `leaf`, `direct_consts` and
 //! `direct_entry` ever change after the slot is built, so only those are
@@ -100,14 +100,17 @@ impl SpecCalleeKind {
 /// call; it is armed together with `leaf` and cleared with it.
 ///
 /// `direct_entry` is the key of a site that calls the leaf itself (a direct
-/// call, `NEOVM_JIT_DIRECT_CALL`): the leaf's register-ABI entry when the
-/// site may enter it with its arguments in registers and `direct_consts`'s
-/// constant base as its `aux` word, or [`DirectEntryTag::Framed`] for an
+/// call, `NEOVM_JIT_DIRECT_CALL`): the leaf's raw entry when the site may
+/// enter it with its compile-time ABI and `direct_consts`'s constant base
+/// as its `aux` word (register by default; exact pass-through memory under
+/// `NEOVM_JIT_DIRECT_MEMORY` when the register ABI is off), or [`DirectEntryTag::Framed`] for an
 /// exact-arity framed JIT leaf under `NEOVM_JIT_DIRECT_SHAPES=framed`, else
 /// 0. The framed trampoline retains the leaf's memory ABI. Armed LAST and cleared FIRST, so
 /// a site that sees it set sees the leaf and key it goes with. Publication
 /// uses Release, paired with an atomic Acquire-or-stronger generated load
-/// when framed sites are enabled; existing off-mode loads are unchanged.
+/// when framed sites or `NEOVM_JIT_DIRECT_MEMORY` are enabled; existing
+/// off-mode loads are unchanged. Configuration is process-wide and
+/// immutable: every site and its slot arming choose the same raw ABI.
 #[repr(C)]
 pub(crate) struct SpecSlot {
     pub(super) epoch: AtomicU64,
@@ -223,7 +226,7 @@ impl SpecSlot {
         self.direct_consts.store(key, Ordering::Relaxed);
     }
 
-    /// Arm the register entry or framed tag of the leaf [`Self::arm_leaf`]
+    /// Arm the raw entry or framed tag of the leaf [`Self::arm_leaf`]
     /// just cached: published with Release last, after the leaf/key/epoch.
     #[inline]
     pub(crate) fn arm_direct_entry(&self, entry: *const u8) {
@@ -236,6 +239,8 @@ impl SpecSlot {
         debug_assert!(
             if entry as usize as u64 == DirectEntryTag::Framed as u64 {
                 flags == Self::KEY_FRAMED
+            } else if jit_direct_memory_on() && !jit_register_abi_on() {
+                flags == 0
             } else {
                 flags & !Self::KEY_SHORT_CALL == Self::KEY_REGISTER
             },
@@ -320,10 +325,10 @@ pub(crate) static DIRECT_ENTRIES_ARMED: AtomicU64 = AtomicU64::new(0);
 /// Arm `slot`'s direct entry for `leaf`, which [`SpecSlot::arm_leaf`] just
 /// cached for a call of `nargs` arguments, when a compiled site may enter
 /// the leaf itself (S2.1b, `NEOVM_JIT_DIRECT_CALL`): the leaf has the
-/// register ABI for exactly `nargs` words (no `&optional` padding, no
+/// selected raw ABI for exactly `nargs` words (no `&optional` padding, no
 /// `&rest` list to build), runs frameless (no bindings, no handler frames,
 /// no AOT sidecar: what the shim enters raw), the key the shim uses is the
-/// constant base with no flag but [`SpecSlot::KEY_REGISTER`] (the site
+/// constant base with no flag but the selected ABI's (the site
 /// passes the base as `aux`), and the lean backtrace frame the site pushes
 /// has a probed layout. Anything else leaves the entry 0 and the site on
 /// the shim. Under the framed shape knob, an exact required-only JIT memory
@@ -333,16 +338,23 @@ pub(crate) static DIRECT_ENTRIES_ARMED: AtomicU64 = AtomicU64::new(0);
 #[inline(never)]
 pub(crate) fn arm_direct_entry_if_eligible(slot: &SpecSlot, leaf: &CompiledLeaf, nargs: usize) {
     let key = slot.direct_consts.load(Ordering::Relaxed);
-    let eligible = leaf.abi
-        == (LeafAbi::Register {
-            arity: nargs.min(u8::MAX as usize) as u8,
-        })
-        && leaf.arity == nargs
-        && !leaf.has_rest
-        && leaf.direct_call_eligible()
-        && key != 0
-        && key & SpecSlot::KEY_FLAGS == SpecSlot::KEY_REGISTER
-        && super::jit_layout::backtrace_layout().is_some();
+    let eligible = if jit_direct_memory_on() && !jit_register_abi_on() {
+        raw_memory_direct_eligible(leaf, nargs)
+            && key != 0
+            && key & SpecSlot::KEY_FLAGS == 0
+            && super::jit_layout::backtrace_layout().is_some()
+    } else {
+        leaf.abi
+            == (LeafAbi::Register {
+                arity: nargs.min(u8::MAX as usize) as u8,
+            })
+            && leaf.arity == nargs
+            && !leaf.has_rest
+            && leaf.direct_call_eligible()
+            && key != 0
+            && key & SpecSlot::KEY_FLAGS == SpecSlot::KEY_REGISTER
+            && super::jit_layout::backtrace_layout().is_some()
+    };
     if eligible {
         slot.arm_direct_entry(leaf.entry);
         DIRECT_ENTRIES_ARMED.fetch_add(1, Ordering::Relaxed);
@@ -355,6 +367,21 @@ pub(crate) fn arm_direct_entry_if_eligible(slot: &SpecSlot, leaf: &CompiledLeaf,
         slot.arm_direct_entry(DirectEntryTag::Framed as u64 as usize as *const u8);
         DIRECT_ENTRIES_ARMED.fetch_add(1, Ordering::Relaxed);
     }
+}
+
+/// A direct memory site passes the original arguments through untouched,
+/// so it may enter only an exact frameless non-OSR JIT memory leaf. Keep
+/// the current direct-site width bound: no new argument storage is needed.
+/// Threading: reads immutable facts of a live cache leaf; the live or
+/// retired cache retains it throughout the call. No mutator state is added.
+#[inline]
+pub(crate) fn raw_memory_direct_eligible(leaf: &CompiledLeaf, nargs: usize) -> bool {
+    leaf.abi == LeafAbi::Memory
+        && leaf.entry_shape == super::leaf::EntryShape::RawMemory
+        && leaf.obs.osr_pc.is_none()
+        && leaf.is_pure_passthrough(nargs)
+        && leaf.direct_call_eligible()
+        && nargs <= super::reg_abi::MAX_REG_ARGS
 }
 
 /// Initial framed reach is exact required-only calls of JIT memory leaves;
