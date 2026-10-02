@@ -165,4 +165,11 @@ fn editing_cliff_actions_preserve_values_and_validate_provenance() {
             );
         }
     }
+    // This encoder recognizes on/1/true. A boolean alias that it treats as
+    // disabled must not be accepted as an enabling performance override.
+    assert!(
+        "NEOVM_EMACS_MULE_PREPARED=yes"
+            .parse::<ExecutionOverride>()
+            .is_err()
+    );
 }

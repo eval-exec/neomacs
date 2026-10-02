@@ -52,8 +52,7 @@ impl FromStr for ExecutionOverride {
                 | "NEOVM_REGEX_DFA_FIRST_STEP"
                 | "NEOVM_REGEX_SUFFIX_LITERAL"
                 | "NEOVM_COMPARE_STRINGS_POS_CACHE"
-                | "NEOVM_REGEX_SHORT_LITERAL"
-                | "NEOVM_EMACS_MULE_PREPARED" => {
+                | "NEOVM_REGEX_SHORT_LITERAL" => {
                     matches!(
                         value,
                         "0" | "off" | "false" | "no" | "1" | "on" | "true" | "yes"
@@ -61,6 +60,9 @@ impl FromStr for ExecutionOverride {
                 }
                 "NEOVM_REGEX_DFA" => matches!(value, "off" | "on" | "verify"),
                 "NEOVM_SORT_CAPTURE" => matches!(value, "off" | "on"),
+                "NEOVM_EMACS_MULE_PREPARED" => {
+                    matches!(value, "0" | "off" | "false" | "no" | "1" | "on" | "true")
+                }
                 "NEOVM_OVERLAY_LOCAL_MOVE" => matches!(value, "off" | "on"),
                 "NEOVM_JIT_THRESHOLD" => value.parse::<u32>().is_ok_and(|v| v > 0),
                 "NEOVM_JIT_LOOP_HEAT" => value.parse::<u32>().is_ok(),
