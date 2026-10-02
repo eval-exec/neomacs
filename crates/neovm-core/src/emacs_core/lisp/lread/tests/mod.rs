@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::error::{FlowKind, FlowRef, FlowResultExt as _};
 use crate::emacs_core::eval::Context;
 use malachite::integer::Integer;
 
@@ -64,12 +65,17 @@ fn eval_buffer_incomplete_form_signals_source_buffer_like_gnu_emacs() {
         .insert("(defun incomplete (");
 
     let result = builtin_eval_buffer(&mut ev, vec![]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "end-of-file"
                 && sig.data == vec![Value::make_buffer(buffer_id)]
-    ));
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -124,10 +130,15 @@ fn eval_buffer_single_line_shebang_signals_end_of_file() {
         buf.insert("#!/usr/bin/env emacs --script");
     }
     let result = builtin_eval_buffer(&mut ev, vec![]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "end-of-file" && sig.data.is_empty()
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "end-of-file" && sig.data.is_empty()
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -139,10 +150,15 @@ fn eval_buffer_preserves_utf8_bom_reader_error_shape() {
         buf.insert("\u{feff}(setq lread-eb-bom 'ok)\n");
     }
     let result = builtin_eval_buffer(&mut ev, vec![]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "void-variable" && sig.data.len() == 1
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "void-variable" && sig.data.len() == 1
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -292,19 +308,29 @@ fn eval_buffer_reports_designator_and_arity_errors() {
     let mut ev = Context::new();
 
     let missing = builtin_eval_buffer(&mut ev, vec![Value::string("*no-such-buffer*")]);
-    assert!(matches!(
-        missing,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        missing.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "error" && sig.data == vec![Value::string("No such buffer")]
-    ));
+    ) {
+        drop(missing);
+        true
+    } else {
+        false
+    });
 
     let bad_type = builtin_eval_buffer(&mut ev, vec![Value::fixnum(1)]);
-    assert!(matches!(
-        bad_type,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        bad_type.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "wrong-type-argument"
                 && sig.data == vec![Value::symbol("stringp"), Value::fixnum(1)]
-    ));
+    ) {
+        drop(bad_type);
+        true
+    } else {
+        false
+    });
 
     let arity = builtin_eval_buffer(
         &mut ev,
@@ -317,12 +343,17 @@ fn eval_buffer_reports_designator_and_arity_errors() {
             Value::NIL,
         ],
     );
-    assert!(matches!(
-        arity,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        arity.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "wrong-number-of-arguments"
                 && sig.data == vec![Value::symbol("eval-buffer"), Value::fixnum(6)]
-    ));
+    ) {
+        drop(arity);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -444,8 +475,8 @@ fn eval_region_advances_from_reader_point_before_evaluating_returned_form() {
         ],
     );
     if let Err(flow) = eval_result {
-        match flow {
-            Flow::Signal(signal) => panic!(
+        match flow.into_kind() {
+            FlowKind::Signal(signal) => panic!(
                 "eval-region must keep the reader's stream point across evaluation: {} {:?}",
                 signal.symbol_name(),
                 signal.data
@@ -595,47 +626,72 @@ fn eval_region_reports_type_range_and_arity_errors() {
 
     let bad_start =
         builtin_eval_region(&mut ev, vec![Value::string("1"), Value::fixnum(point_max)]);
-    assert!(matches!(
-        bad_start,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        bad_start.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "wrong-type-argument"
                 && sig.data
                     == vec![Value::symbol("integer-or-marker-p"), Value::string("1")]
-    ));
+    ) {
+        drop(bad_start);
+        true
+    } else {
+        false
+    });
 
     let bad_end = builtin_eval_region(&mut ev, vec![Value::fixnum(1), Value::string("2")]);
-    assert!(matches!(
-        bad_end,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        bad_end.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "wrong-type-argument"
                 && sig.data
                     == vec![Value::symbol("integer-or-marker-p"), Value::string("2")]
-    ));
+    ) {
+        drop(bad_end);
+        true
+    } else {
+        false
+    });
 
     let big = Value::make_integer(Integer::from(1u64) << 100u32);
     let bad_big = builtin_eval_region(&mut ev, vec![big, Value::fixnum(point_max)]);
-    assert!(matches!(
-        bad_big,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        bad_big.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "wrong-type-argument"
                 && sig.data.first() == Some(&Value::symbol("integer-or-marker-p"))
-    ));
+    ) {
+        drop(bad_big);
+        true
+    } else {
+        false
+    });
 
     let range = builtin_eval_region(&mut ev, vec![Value::fixnum(1), Value::fixnum(999)]);
-    assert!(matches!(
-        range,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        range.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "args-out-of-range"
                 && sig.data == vec![Value::fixnum(1), Value::fixnum(999)]
-    ));
+    ) {
+        drop(range);
+        true
+    } else {
+        false
+    });
 
     let arity_low = builtin_eval_region(&mut ev, vec![]);
-    assert!(matches!(
-        arity_low,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        arity_low.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "wrong-number-of-arguments"
                 && sig.data == vec![Value::symbol("eval-region"), Value::fixnum(0)]
-    ));
+    ) {
+        drop(arity_low);
+        true
+    } else {
+        false
+    });
 
     let arity_high = builtin_eval_region(
         &mut ev,
@@ -647,12 +703,17 @@ fn eval_region_reports_type_range_and_arity_errors() {
             Value::NIL,
         ],
     );
-    assert!(matches!(
-        arity_high,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        arity_high.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "wrong-number-of-arguments"
                 && sig.data == vec![Value::symbol("eval-region"), Value::fixnum(5)]
-    ));
+    ) {
+        drop(arity_high);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -713,10 +774,15 @@ fn eval_region_single_line_shebang_signals_end_of_file() {
         Value::fixnum(buf.z_lisp_char_pos().as_i64())
     };
     let result = builtin_eval_region(&mut ev, vec![Value::fixnum(1), end]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "end-of-file" && sig.data.is_empty()
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "end-of-file" && sig.data.is_empty()
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -732,10 +798,15 @@ fn eval_region_preserves_utf8_bom_reader_error_shape() {
         Value::fixnum(buf.z_lisp_char_pos().as_i64())
     };
     let result = builtin_eval_region(&mut ev, vec![Value::fixnum(1), end]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "void-variable" && sig.data.len() == 1
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "void-variable" && sig.data.len() == 1
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -803,10 +874,15 @@ fn read_event_rejects_non_string_prompt() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
     let result = builtin_read_event(&mut ev, vec![Value::fixnum(123)]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-type-argument"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-type-argument"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -1047,10 +1123,15 @@ fn read_event_rejects_more_than_three_args() {
             Value::NIL,
         ],
     );
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -1078,10 +1159,15 @@ fn read_char_exclusive_rejects_non_string_prompt() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
     let result = builtin_read_char_exclusive(&mut ev, vec![Value::fixnum(123)]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-type-argument"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-type-argument"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -1172,10 +1258,15 @@ fn read_char_exclusive_rejects_more_than_three_args() {
             Value::NIL,
         ],
     );
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -1319,10 +1410,15 @@ fn get_load_suffixes_rejects_over_arity() {
     crate::test_utils::init_test_tracing();
     let ev = Context::new();
     let result = builtin_get_load_suffixes(&ev.obarray, vec![Value::NIL]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -1677,10 +1773,15 @@ fn locate_file_rejects_over_arity() {
             Value::NIL,
         ],
     );
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -1697,10 +1798,15 @@ fn locate_file_internal_rejects_over_arity() {
             Value::NIL,
         ],
     );
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -1711,12 +1817,17 @@ fn read_coding_system_signals_batch_eof() {
     // (the harness redirects stdin from /dev/null under test).
     let mut eval = crate::emacs_core::eval::Context::new();
     let result = builtin_read_coding_system(&mut eval, vec![Value::string("")]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "end-of-file"
                 && sig.data == vec![Value::string("Error reading from stdin")]
-    ));
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -1724,21 +1835,31 @@ fn read_coding_system_validates_prompt_type_and_arity() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new();
     let bad_prompt = builtin_read_coding_system(&mut eval, vec![Value::fixnum(1)]);
-    assert!(matches!(
-        bad_prompt,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        bad_prompt.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "wrong-type-argument"
                 && sig.data == vec![Value::symbol("stringp"), Value::fixnum(1)]
-    ));
+    ) {
+        drop(bad_prompt);
+        true
+    } else {
+        false
+    });
 
     let arity =
         builtin_read_coding_system(&mut eval, vec![Value::string(""), Value::NIL, Value::NIL]);
-    assert!(matches!(
-        arity,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        arity.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "wrong-number-of-arguments"
                 && sig.data == vec![Value::symbol("read-coding-system"), Value::fixnum(3)]
-    ));
+    ) {
+        drop(arity);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -1746,12 +1867,17 @@ fn read_non_nil_coding_system_signals_batch_eof() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new();
     let result = builtin_read_non_nil_coding_system(&mut eval, vec![Value::string("")]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "end-of-file"
                 && sig.data == vec![Value::string("Error reading from stdin")]
-    ));
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -1759,21 +1885,31 @@ fn read_non_nil_coding_system_validates_prompt_type_and_arity() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new();
     let bad_prompt = builtin_read_non_nil_coding_system(&mut eval, vec![Value::fixnum(1)]);
-    assert!(matches!(
-        bad_prompt,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        bad_prompt.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "wrong-type-argument"
                 && sig.data == vec![Value::symbol("stringp"), Value::fixnum(1)]
-    ));
+    ) {
+        drop(bad_prompt);
+        true
+    } else {
+        false
+    });
 
     let arity = builtin_read_non_nil_coding_system(&mut eval, vec![Value::string(""), Value::NIL]);
-    assert!(matches!(
-        arity,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        arity.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "wrong-number-of-arguments"
                 && sig.data
                     == vec![Value::symbol("read-non-nil-coding-system"), Value::fixnum(2)]
-    ));
+    ) {
+        drop(arity);
+        true
+    } else {
+        false
+    });
 }
 
 // ---------------------------------------------------------------------------

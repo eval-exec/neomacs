@@ -1,9 +1,10 @@
 use super::*;
+use crate::emacs_core::error::FlowKind;
 use crate::heap_types::LispString;
 
 fn signal_payload(flow: Flow) -> Vec<Value> {
-    match flow {
-        Flow::Signal(signal) => signal.data,
+    match flow.into_kind() {
+        FlowKind::Signal(signal) => signal.data,
         other => panic!("expected signal flow, got {other:?}"),
     }
 }
