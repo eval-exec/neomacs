@@ -96,6 +96,13 @@ pub(super) trait OrderedShiftRecord: Copy + Debug {
     fn shifted_key(key: Self::Key, delta: EmacsByteDelta) -> Self::Key;
 }
 
+/// Whether a changed record can retain its occupied position in key order.
+pub(super) enum OrderedRecordRelocation<R> {
+    Replaced { previous: R },
+    OutsideNeighbors,
+    Missing,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) struct OrderedNodeId(u32);
 
@@ -204,6 +211,12 @@ pub(super) struct OrderedShiftTree<R: OrderedShiftRecord> {
     /// are independent across mutator-owned indexes and publish no Lisp state.
     #[cfg(test)]
     identity_position_resolutions: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Test-only successful membership changes, independent of record updates.
+    /// Clones share accounting; separate indexes own independent counters.
+    /// Relaxed atomics count exclusive mutator operations and publish no Lisp
+    /// state or synchronization contract to the production tree.
+    #[cfg(test)]
+    membership_mutations: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
@@ -225,6 +238,8 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
             identity_position_resolutions: std::sync::Arc::new(
                 std::sync::atomic::AtomicUsize::new(0),
             ),
+            #[cfg(test)]
+            membership_mutations: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 
@@ -304,6 +319,9 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
         if self.by_identity.contains_key(&record.identity()) {
             return false;
         }
+        #[cfg(test)]
+        self.membership_mutations
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let Some(root) = self.root else {
             let mut records = SmallVec::new();
             records.push(record);
@@ -449,6 +467,9 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
 
     pub(super) fn remove(&mut self, identity: R::Identity) -> Option<R> {
         let leaf = *self.by_identity.get(&identity)?;
+        #[cfg(test)]
+        self.membership_mutations
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.normalize_path(leaf);
         let index = self
             .leaf_records(leaf)
@@ -487,6 +508,72 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
         self.refresh(leaf);
         self.refresh_ancestors(self.node(leaf).parent);
         Some(previous)
+    }
+
+    /// Replace a record whose complete new key remains between its neighbors.
+    ///
+    /// The owning buffer's exclusive index write guard covers normalization
+    /// and replacement. Normalizing the root-to-leaf path makes its records
+    /// and adjacent subtree summaries comparable in current coordinates;
+    /// sibling summaries already include their own pending shifts. Successful
+    /// updates retain the identity's leaf and refresh augmentation once per
+    /// level. A rejected attempt changes only lazy-tag representation and
+    /// leaves record membership and key order intact. All neighbor state is
+    /// call-local; independent mutators share no new cache or Lisp state.
+    #[inline]
+    pub(super) fn replace_between_neighbors(
+        &mut self,
+        replacement: R,
+    ) -> OrderedRecordRelocation<R> {
+        let identity = replacement.identity();
+        let Some(&leaf) = self.by_identity.get(&identity) else {
+            return OrderedRecordRelocation::Missing;
+        };
+        self.normalize_path(leaf);
+        let records = self.leaf_records(leaf);
+        let index = records
+            .iter()
+            .position(|record| record.identity() == identity)
+            .expect("overlay B+ identity map pointed to the wrong leaf");
+        let previous = records[index];
+        let mut lower = index.checked_sub(1).map(|index| records[index].key());
+        let mut upper = records.get(index + 1).map(|record| record.key());
+
+        // Leaf-edge neighbors need only a sibling subtree's extremal key;
+        // their record positions and identities need not be materialized.
+        if lower.is_none() || upper.is_none() {
+            let mut child = leaf;
+            while let Some(parent) = self.node(child).parent {
+                let children = self.branch_children(parent);
+                let index = children
+                    .iter()
+                    .position(|candidate| *candidate == child)
+                    .expect("B+ parent lost its child");
+                if lower.is_none() {
+                    lower = index
+                        .checked_sub(1)
+                        .map(|index| self.summary(children[index]).last_key);
+                }
+                if upper.is_none() {
+                    upper = children
+                        .get(index + 1)
+                        .map(|child| self.summary(*child).first_key);
+                }
+                if lower.is_some() && upper.is_some() {
+                    break;
+                }
+                child = parent;
+            }
+        }
+        let key = replacement.key();
+        if lower.is_some_and(|lower| key <= lower) || upper.is_some_and(|upper| key >= upper) {
+            return OrderedRecordRelocation::OutsideNeighbors;
+        }
+
+        self.leaf_records_mut(leaf)[index] = replacement;
+        self.refresh(leaf);
+        self.refresh_ancestors(self.node(leaf).parent);
+        OrderedRecordRelocation::Replaced { previous }
     }
 
     pub(super) fn record(&self, identity: R::Identity) -> Option<R> {
@@ -559,6 +646,18 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
     #[cfg(test)]
     pub(super) fn identity_position_resolution_count(&self) -> usize {
         self.identity_position_resolutions
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    pub(super) fn reset_membership_mutation_count(&self) {
+        self.membership_mutations
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    pub(super) fn membership_mutation_count(&self) -> usize {
+        self.membership_mutations
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 

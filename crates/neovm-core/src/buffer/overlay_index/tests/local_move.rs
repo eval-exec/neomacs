@@ -150,3 +150,210 @@ fn cl2_local_move_keeps_published_endpoints_after_lazy_shifts() {
         index.assert_invariants();
     }
 }
+
+#[test]
+fn cl2_local_moves_update_ordered_record_without_membership_mutations() {
+    force_local_move_knob_before_runtime_initialization();
+    crate::test_utils::init_test_tracing();
+    let mut index = OverlayIndex::new();
+    let entries: Vec<_> = (0..5_000)
+        .map(|entry| {
+            let start = 10 + entry * 4;
+            (overlay(start, start + 2), range(start, start + 2))
+        })
+        .collect();
+    assert!(index.attach_batch(&entries, OverlayBatchOrder::AttachmentSequence));
+    // Exercise both a root lazy tag and tags limited to a suffix. The local
+    // replacement must normalize the owner's path before comparing keys.
+    for (position, length) in [(0, 7), (5_000, 3)] {
+        index.adjust_for_text_edit(OverlayTextEdit::Insert {
+            position: EmacsBytePos::new(position),
+            length: EmacsByteLen::new(length),
+            before_markers: false,
+        });
+    }
+    let moving = entries[2_500].0;
+    let original = index.range(moving).unwrap();
+    let initial_attachment = index.intervals.read().next_attachment_order;
+    index
+        .intervals
+        .read()
+        .records
+        .reset_membership_mutation_count();
+
+    let moves = 64;
+    let mut previous = original;
+    for step in 0..moves {
+        let displacement = usize::from(step % 2 == 0);
+        // Expanding across later intervals also exercises max-end and
+        // non-overlap augmentation; this changes real endpoints every time.
+        let extension = if displacement == 1 { 8 } else { 0 };
+        let next = range(
+            original.start().get() + displacement,
+            original.end().get() + displacement + extension,
+        );
+        assert_eq!(index.move_to(moving, next), Some(previous));
+        assert_eq!(index.range(moving), Some(next));
+        assert!(
+            index
+                .overlays_at(EmacsBytePos::new(next.end().get() - 1))
+                .iter()
+                .any(|candidate| candidate.bits() == moving.bits())
+        );
+        index.assert_invariants();
+        previous = next;
+    }
+    let intervals = index.intervals.read();
+    assert_eq!(intervals.next_attachment_order, initial_attachment + moves);
+    assert_eq!(
+        intervals.records.membership_mutation_count(),
+        0,
+        "genuine neighbor-preserving moves should update the occupied record \
+         rather than remove/reinsert B+ membership"
+    );
+}
+
+#[test]
+fn cl2_local_move_attempts_consume_one_attachment_order_and_keep_equal_start_order() {
+    force_local_move_knob_before_runtime_initialization();
+    crate::test_utils::init_test_tracing();
+    let mut index = OverlayIndex::new();
+    let entries: Vec<_> = (0..97)
+        .map(|entry| {
+            let start = 10 + entry * 4;
+            (overlay(start, start + 2), range(start, start + 2))
+        })
+        .collect();
+    assert!(index.attach_batch(&entries, OverlayBatchOrder::AttachmentSequence));
+    let (moving, original) = entries[48];
+    let identities: Vec<_> = entries
+        .iter()
+        .map(|(value, _)| OverlayIdentity::of(*value))
+        .collect();
+    for next in [
+        range(original.start().get() + 1, original.end().get() + 1),
+        range(16, 19),
+        range(original.start().get() + 1, original.end().get() + 1),
+        entries[47].1,
+        range(original.start().get() + 5, original.end().get() + 5),
+        original,
+        range(original.start().get(), original.end().get() + 9),
+        range(original.start().get(), original.end().get() + 9),
+    ] {
+        let previous = index.range(moving).unwrap();
+        let previous_record = index
+            .intervals
+            .read()
+            .records
+            .record(OverlayIdentity::of(moving))
+            .unwrap();
+        let next_attachment = index.intervals.read().next_attachment_order;
+        let mut reference = index.gnu_order.clone();
+        assert_eq!(index.move_to(moving, next), Some(previous));
+        let record = index
+            .intervals
+            .read()
+            .records
+            .record(OverlayIdentity::of(moving))
+            .unwrap();
+        if previous.start() != next.start() {
+            assert_eq!(record.key.attachment_order, next_attachment);
+            assert_eq!(
+                index.intervals.read().next_attachment_order,
+                next_attachment + 1,
+                "a rejected local attempt must not consume a second attachment"
+            );
+            let identity = OverlayIdentity::of(moving);
+            assert!(reference.remove(identity));
+            assert!(reference.insert_by(identity, |existing| {
+                next.start().cmp(
+                    &index
+                        .intervals
+                        .read()
+                        .range_by_identity(existing)
+                        .unwrap()
+                        .start(),
+                )
+            }));
+        } else {
+            assert_eq!(record.key, previous_record.key);
+            assert_eq!(
+                index.intervals.read().next_attachment_order,
+                next_attachment
+            );
+        }
+        assert_eq!(
+            index.gnu_order.subset_in_preorder(&identities),
+            reference.subset_in_preorder(&identities)
+        );
+        if next.start() == entries[47].1.start() {
+            assert_eq!(index.overlays_at(next.start())[0].bits(), moving.bits());
+        }
+        index.assert_invariants();
+    }
+}
+
+#[test]
+fn cl2_local_moves_keep_leaf_edges_and_reject_crossing_neighbors() {
+    force_local_move_knob_before_runtime_initialization();
+    crate::test_utils::init_test_tracing();
+    let mut index = OverlayIndex::new();
+    let entries: Vec<_> = (0..97)
+        .map(|entry| {
+            let start = 10 + entry * 4;
+            (overlay(start, start + 2), range(start, start + 2))
+        })
+        .collect();
+    assert!(index.attach_batch(&entries, OverlayBatchOrder::AttachmentSequence));
+    for (position, length) in [(0, 7), (100, 3)] {
+        index.adjust_for_text_edit(OverlayTextEdit::Insert {
+            position: EmacsBytePos::new(position),
+            length: EmacsByteLen::new(length),
+            before_markers: false,
+        });
+    }
+    index
+        .intervals
+        .read()
+        .records
+        .reset_membership_mutation_count();
+
+    // Balanced construction puts 25 records in the first leaf and 24 in
+    // each remaining leaf. Include both sides of every leaf boundary and
+    // the ends of the whole tree, after unequal lazy shifts.
+    for entry in [0, 24, 25, 48, 49, 72, 73, 96] {
+        let moving = entries[entry].0;
+        let original = index.range(moving).unwrap();
+        let next = range(original.start().get() + 1, original.end().get() + 1);
+        assert_eq!(index.move_to(moving, next), Some(original));
+        assert_eq!(index.move_to(moving, original), Some(next));
+        index.assert_invariants();
+    }
+    assert_eq!(
+        index.intervals.read().records.membership_mutation_count(),
+        0
+    );
+
+    // A fresh attachment may become the newest equal-start record without
+    // crossing a full key. Its GNU mirror still must be removed/reinserted.
+    let moving = entries[24].0;
+    let previous = index.range(moving).unwrap();
+    let equal = index.range(entries[25].0).unwrap();
+    assert_eq!(index.move_to(moving, equal), Some(previous));
+    assert_eq!(index.overlays_at(equal.start())[0].bits(), moving.bits());
+    assert_eq!(
+        index.intervals.read().records.membership_mutation_count(),
+        0
+    );
+    index.assert_invariants();
+
+    // Crossing the next full key must use the generic membership path.
+    let next = index.range(entries[26].0).unwrap();
+    let crossing = range(next.start().get() + 1, next.end().get() + 1);
+    assert_eq!(index.move_to(moving, crossing), Some(equal));
+    assert_eq!(
+        index.intervals.read().records.membership_mutation_count(),
+        2
+    );
+    index.assert_invariants();
+}

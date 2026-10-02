@@ -7,7 +7,7 @@
 //!
 //! | Knob | Default | Effect |
 //! | --- | --- | --- |
-//! | `NEOVM_OVERLAY_LOCAL_MOVE` | off | Reinsert a start-changing move in the GNU topology mirror using its authoritative B+ successor, avoiding coordinate resolution at each binary-tree descent. |
+//! | `NEOVM_OVERLAY_LOCAL_MOVE` | off | Update neighbor-preserving B+ records in place and reinsert every start-changing move in the GNU topology mirror using its authoritative successor. |
 
 use std::cmp::Ordering;
 use std::sync::{Arc, OnceLock, Weak};
@@ -16,7 +16,8 @@ use parking_lot::{RwLock, RwLockReadGuard};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::overlay_bplus::{
-    OrderedFilterMask, OrderedShiftRecord, OrderedShiftTree, OrderedTreeMatches, OrderedTreeQuery,
+    OrderedFilterMask, OrderedRecordRelocation, OrderedShiftRecord, OrderedShiftTree,
+    OrderedTreeMatches, OrderedTreeQuery,
 };
 use super::overlay_order::GnuOverlayOrder;
 use crate::emacs_core::plist;
@@ -691,10 +692,20 @@ impl OverlayIndex {
                 debug_assert_eq!(previous, old_range);
             }
             IndexedRegionChange::StartChanged => {
-                let taken = intervals
-                    .take(overlay)
-                    .expect("indexed overlay disappeared during relocation");
-                debug_assert_eq!(taken.0, old_range);
+                let local_moves = local_overlay_moves_enabled();
+                let replaced_locally = local_moves
+                    && intervals
+                        .try_move_preserving_neighbors(overlay, new_range)
+                        .is_some_and(|previous| {
+                            debug_assert_eq!(previous, old_range);
+                            true
+                        });
+                if !replaced_locally {
+                    let taken = intervals
+                        .take(overlay)
+                        .expect("indexed overlay disappeared during relocation");
+                    debug_assert_eq!(taken.0, old_range);
+                }
                 assert!(
                     self.gnu_order.remove(OverlayIdentity::of(overlay)),
                     "relocated overlay missing from GNU order mirror"
@@ -711,9 +722,11 @@ impl OverlayIndex {
                     assert!(endpoints.insert(new_range.start(), EndpointKind::Start, overlay));
                     assert!(endpoints.insert(new_range.end(), EndpointKind::End, overlay));
                 }
-                let inserted = intervals.insert(overlay, new_range);
-                debug_assert!(inserted, "removed overlay retained an interval node");
-                let order_inserted = if local_overlay_moves_enabled() {
+                if !replaced_locally {
+                    let inserted = intervals.insert(overlay, new_range);
+                    debug_assert!(inserted, "removed overlay retained an interval node");
+                }
+                let order_inserted = if local_moves {
                     // GNU removes/reinserts on every real start change. The
                     // authoritative record order identifies that insertion
                     // gap without resolving one lazily shifted position per
@@ -1519,6 +1532,43 @@ impl IntervalBPlusTree {
     fn take(&mut self, overlay: Value) -> Option<(EmacsByteRange, u64)> {
         let record = self.records.remove(OverlayIdentity::of(overlay))?;
         Some((record.range, record.key.attachment_order))
+    }
+
+    /// Change real endpoints while retaining a neighbor-preserving leaf slot.
+    ///
+    /// Every accepted start change receives GNU's fresh equal-start order;
+    /// an outside-neighbor attempt consumes no order so generic reinsertion
+    /// assigns the same next serial exactly once. The caller retains the
+    /// buffer owner's exclusive write guard and still mutates GNU topology.
+    #[inline]
+    fn try_move_preserving_neighbors(
+        &mut self,
+        overlay: Value,
+        range: EmacsByteRange,
+    ) -> Option<EmacsByteRange> {
+        let attachment_order = self.next_attachment_order;
+        let next_attachment_order = attachment_order
+            .checked_add(1)
+            .expect("overlay attachment order exhausted");
+        let replacement = IntervalRecord {
+            key: IntervalKey {
+                start: range.start(),
+                attachment_order,
+            },
+            identity: OverlayIdentity::of(overlay),
+            range,
+            overlay,
+        };
+        match self.records.replace_between_neighbors(replacement) {
+            OrderedRecordRelocation::Replaced { previous } => {
+                self.next_attachment_order = next_attachment_order;
+                Some(previous.range)
+            }
+            OrderedRecordRelocation::OutsideNeighbors => None,
+            OrderedRecordRelocation::Missing => {
+                panic!("indexed overlay disappeared during local relocation")
+            }
+        }
     }
 
     fn update_end_preserving_order(
