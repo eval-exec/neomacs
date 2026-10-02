@@ -20,13 +20,13 @@ use std::hash::{Hash, Hasher};
 
 // Callback knobs, read once per process:
 // | Knob | Values | Default | Effect |
-// | NEOVM_MAPHASH_BYTECODE | off, on | off | Call a bytecode maphash callback through the rooted two-argument entry without a LispArgVec on the armed path. |
+// | NEOVM_MAPHASH_BYTECODE | on, off | on | Call a bytecode maphash callback through the rooted two-argument entry without a LispArgVec on the armed path. |
 
 /// Immutable process configuration holds no Lisp state. Concurrent mutators
 /// may read it; each maphash activation owns its callback and roots.
 #[cfg(feature = "jit")]
 static MAPHASH_BYTECODE: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
-    std::env::var("NEOVM_MAPHASH_BYTECODE").is_ok_and(|value| value == "on")
+    !std::env::var("NEOVM_MAPHASH_BYTECODE").is_ok_and(|value| value == "off")
 });
 
 /// A callback selected for one synchronous maphash activation. GNU resolves
