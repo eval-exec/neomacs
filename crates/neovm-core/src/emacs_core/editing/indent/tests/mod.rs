@@ -1,4 +1,5 @@
 use super::super::eval::Context;
+use crate::emacs_core::error::FlowKind;
 fn test_ob() -> crate::emacs_core::symbol::Obarray {
     crate::emacs_core::symbol::Obarray::new()
 }
@@ -374,8 +375,8 @@ fn eval_move_to_column_wholenump_validation() {
     crate::test_utils::init_test_tracing();
     let mut ev = super::super::eval::Context::new();
     let err = move_to_column(&mut ev, vec![Value::string("x")]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,

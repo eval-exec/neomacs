@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 use crate::emacs_core::value::{ValueKind, VecLikeType};
 use crate::heap_types::LispString;
 
@@ -85,8 +86,8 @@ fn serialize_false_keyword() {
 fn serialize_json_false_keyword() {
     crate::test_utils::init_test_tracing();
     let result = builtin_json_serialize(vec![Value::keyword(":json-false")]);
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -188,8 +189,8 @@ fn serialize_string_with_escapes() {
 fn serialize_raw_unibyte_string_rejects_non_json_bytes() {
     crate::test_utils::init_test_tracing();
     let raw = Value::heap_string(LispString::from_unibyte(vec![0xFF]));
-    match builtin_json_serialize(vec![raw]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_json_serialize(vec![raw]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("json-value-p"), raw]);
         }
@@ -214,8 +215,8 @@ fn serialize_multibyte_raw_byte_char_rejects_non_json_value() {
         &mut bytes,
     );
     let raw = Value::heap_string(LispString::from_emacs_bytes(bytes[..len].to_vec()));
-    match builtin_json_serialize(vec![raw]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_json_serialize(vec![raw]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("json-value-p"), raw]);
         }
@@ -333,8 +334,8 @@ fn serialize_nested() {
 fn serialize_alist_string_key_type_error() {
     crate::test_utils::init_test_tracing();
     let alist = Value::list(vec![Value::cons(Value::string("a"), Value::fixnum(1))]);
-    match builtin_json_serialize(vec![alist]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_json_serialize(vec![alist]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data.first(), Some(&Value::symbol("symbolp")));
         }
@@ -391,8 +392,8 @@ fn json_parse_buffer_advances_point_after_value() {
 fn json_parse_string_rejects_invalid_unibyte_utf8() {
     crate::test_utils::init_test_tracing();
     let raw = Value::heap_string(LispString::from_unibyte(vec![b'"', 0xFF, b'"']));
-    match builtin_json_parse_string(vec![raw]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_json_parse_string(vec![raw]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "json-utf8-decode-error");
             assert_eq!(
                 sig.data,
@@ -420,8 +421,8 @@ fn json_parse_buffer_invalid_utf8_does_not_advance_point() {
         buf.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new(0));
     }
 
-    match builtin_json_parse_buffer(&mut eval, vec![]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_json_parse_buffer(&mut eval, vec![]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "json-utf8-decode-error");
             assert_eq!(
                 sig.data,
@@ -454,8 +455,8 @@ fn json_parse_buffer_end_of_file_uses_gnu_signal_shape() {
         buf.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new(0));
     }
 
-    match builtin_json_parse_buffer(&mut eval, vec![]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_json_parse_buffer(&mut eval, vec![]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "json-end-of-file");
             assert_eq!(
                 sig.data,
@@ -509,8 +510,8 @@ fn parse_rejects_excessive_nesting_without_stack_overflow() {
     // Far beyond MAX_PARSE_DEPTH: a naive recursive-descent parser would
     // overflow the stack here. We must instead signal a catchable error.
     let s: String = "[".repeat(MAX_PARSE_DEPTH + 50);
-    match builtin_json_parse_string(vec![Value::string(s)]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_json_parse_string(vec![Value::string(s)]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "json-object-too-deep");
         }
         other => panic!("expected json-object-too-deep signal, got {:?}", other),
@@ -522,8 +523,8 @@ fn parse_rejects_unescaped_control_char_in_string() {
     crate::test_utils::init_test_tracing();
     // A literal newline (0x0A) inside the quotes is not valid JSON; it must
     // be written as the escape \n. GNU signals json-parse-error here.
-    match builtin_json_parse_string(vec![Value::string("\"a\nb\"")]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_json_parse_string(vec![Value::string("\"a\nb\"")]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "json-parse-error");
         }
         other => panic!("expected json-parse-error signal, got {:?}", other),
@@ -537,8 +538,8 @@ fn parse_rejects_malformed_surrogates() {
     // followed by a non-low escape, and a lone low surrogate are all
     // json-invalid-surrogate-error in GNU (not silent U+FFFD).
     for input in [r#""\uD800""#, r#""\uD800A""#, r#""\uDC00""#] {
-        match builtin_json_parse_string(vec![Value::string(input)]) {
-            Err(Flow::Signal(sig)) => {
+        match builtin_json_parse_string(vec![Value::string(input)]).kinded() {
+            Err(FlowKind::Signal(sig)) => {
                 assert_eq!(
                     sig.symbol_name(),
                     "json-invalid-surrogate-error",
@@ -556,8 +557,8 @@ fn parse_rejects_malformed_escape_sequences() {
     // An unknown escape (\x) and a \u with non-hex digits are both
     // json-escape-sequence-error in GNU, not the generic json-parse-error.
     for input in [r#""\x""#, r#""\uZZZZ""#] {
-        match builtin_json_parse_string(vec![Value::string(input)]) {
-            Err(Flow::Signal(sig)) => {
+        match builtin_json_parse_string(vec![Value::string(input)]).kinded() {
+            Err(FlowKind::Signal(sig)) => {
                 assert_eq!(
                     sig.symbol_name(),
                     "json-escape-sequence-error",
@@ -591,8 +592,8 @@ fn parse_out_of_range_float_signals_number_out_of_range() {
     crate::test_utils::init_test_tracing();
     // 1e999 overflows the double range; GNU signals
     // json-number-out-of-range-error instead of returning an infinite float.
-    match builtin_json_parse_string(vec![Value::string("1e999")]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_json_parse_string(vec![Value::string("1e999")]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "json-number-out-of-range-error");
         }
         other => panic!("expected json-number-out-of-range-error, got {other:?}"),
@@ -872,8 +873,8 @@ fn parse_trailing_content_error() {
 #[test]
 fn parse_trailing_content_reports_character_position_like_gnu() {
     crate::test_utils::init_test_tracing();
-    match builtin_json_parse_string(vec![Value::string("\"é\"x")]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_json_parse_string(vec![Value::string("\"é\"x")]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "json-trailing-content");
             assert_eq!(
                 sig.data,
@@ -887,8 +888,8 @@ fn parse_trailing_content_reports_character_position_like_gnu() {
 #[test]
 fn parse_empty_string_error() {
     crate::test_utils::init_test_tracing();
-    match builtin_json_parse_string(vec![Value::string("")]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_json_parse_string(vec![Value::string("")]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "json-end-of-file");
             assert_eq!(
                 sig.data,
@@ -902,8 +903,8 @@ fn parse_empty_string_error() {
 #[test]
 fn parse_end_of_file_reports_character_position_like_gnu() {
     crate::test_utils::init_test_tracing();
-    match builtin_json_parse_string(vec![Value::string("\"é")]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_json_parse_string(vec![Value::string("\"é")]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "json-end-of-file");
             assert_eq!(
                 sig.data,
@@ -1079,8 +1080,8 @@ fn parse_deeply_nested() {
 /// Assert that parsing `input` signals condition `cond` with the GNU
 /// `(LINE nil POS)` integer triple, never a string message.
 fn assert_parse_signal(input: &str, cond: &str, line: i64, pos: i64) {
-    match builtin_json_parse_string(vec![Value::string(input)]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_json_parse_string(vec![Value::string(input)]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), cond, "condition for {input:?}");
             assert_eq!(
                 sig.data,
@@ -1167,8 +1168,8 @@ fn serialize_inf_and_nan_signal_plain_error_with_offending_float() {
     //   (error "JSON does not allow Inf or NaN" 1.0e+INF)
     for f in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
         let float = Value::make_float(f);
-        match builtin_json_serialize(vec![float]) {
-            Err(Flow::Signal(sig)) => {
+        match builtin_json_serialize(vec![float]).kinded() {
+            Err(FlowKind::Signal(sig)) => {
                 assert_eq!(sig.symbol_name(), "error", "condition for {f}");
                 assert_eq!(
                     sig.data,

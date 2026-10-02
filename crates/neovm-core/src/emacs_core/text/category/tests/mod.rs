@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::error::FlowKind;
 use crate::heap_types::LispString;
 
 fn fresh_eval() -> super::super::eval::Context {
@@ -104,8 +105,8 @@ fn define_category_redefinition_matches_gnu_error() {
         vec![Value::char('a'), Value::string("two"), table],
     )
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -286,8 +287,8 @@ fn make_category_set_rejects_control_char() {
     // `(wrong-type-argument categoryp 1)`.
     let set = Value::heap_string(LispString::from_unibyte(vec![0x01]));
     let err = builtin_make_category_set(vec![set]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("categoryp"), Value::fixnum(1)]);
         }
@@ -302,8 +303,8 @@ fn make_category_set_rejects_multibyte_string() {
     let multibyte = Value::heap_string(LispString::from_utf8("中"));
     assert!(multibyte.as_lisp_string().unwrap().is_multibyte());
     let err = builtin_make_category_set(vec![multibyte]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -318,8 +319,8 @@ fn make_category_set_rejects_multibyte_string() {
 fn make_category_set_rejects_non_string() {
     crate::test_utils::init_test_tracing();
     let err = builtin_make_category_set(vec![Value::fixnum(0x20)]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data.first().and_then(|v| v.as_symbol_name()),
@@ -342,8 +343,8 @@ fn define_category_symbol_signals_categoryp() {
         vec![Value::symbol("x"), Value::string("doc"), table],
     )
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -364,8 +365,8 @@ fn define_category_control_char_signals_categoryp() {
         vec![Value::fixnum(1), Value::string("doc"), table],
     )
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("categoryp"), Value::fixnum(1)]);
         }

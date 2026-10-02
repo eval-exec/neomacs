@@ -2,7 +2,7 @@ use super::super::intern::intern;
 use super::super::value::Value;
 use super::super::value::{LambdaData, LambdaParams};
 use super::*;
-use crate::emacs_core::error::Flow;
+use crate::emacs_core::error::FlowKind;
 
 // -----------------------------------------------------------------------
 // VariableWatcherList tests
@@ -219,8 +219,8 @@ fn builtin_get_variable_watchers_tracks_runtime_registry() {
     );
 
     let wrong_type = builtin_get_variable_watchers(&mut eval, vec![Value::fixnum(1)]).unwrap_err();
-    match wrong_type {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match wrong_type.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
     }
 }

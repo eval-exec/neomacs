@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::value::ValueKind;
 
@@ -67,8 +68,8 @@ fn ccl_execute_requires_registers_vector_length_eight() {
         Value::vector(vec![Value::fixnum(0), Value::fixnum(0), Value::fixnum(0)]),
     ])
     .expect_err("registers length should be checked");
-    match err {
-        Flow::Signal(sig) => assert_eq!(
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(
             sig.data[0],
             Value::string("Length of vector REGISTERS is not 8")
         ),
@@ -93,8 +94,8 @@ fn ccl_execute_reports_invalid_program_before_success() {
         ]),
     ])
     .expect_err("non-vector program must be rejected");
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.data[0], Value::string("Invalid CCL program")),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.data[0], Value::string("Invalid CCL program")),
         other => panic!("expected error signal, got {other:?}"),
     }
 }
@@ -113,8 +114,8 @@ fn ccl_execute_on_string_requires_status_vector_length_nine() {
         Value::string("abc"),
     ])
     .expect_err("status length should be checked");
-    match err {
-        Flow::Signal(sig) => assert_eq!(
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(
             sig.data[0],
             Value::string("Length of vector STATUS is not 9")
         ),
@@ -131,8 +132,8 @@ fn ccl_execute_on_string_rejects_non_vector_status() {
         Value::string("abc"),
     ])
     .expect_err("status must be a vector");
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
 }
@@ -156,8 +157,8 @@ fn ccl_execute_on_string_rejects_non_string_payload() {
         Value::fixnum(1),
     ])
     .expect_err("non-string payload must be rejected");
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
 }
@@ -184,8 +185,8 @@ fn ccl_execute_on_string_rejects_over_arity() {
         Value::NIL,
     ])
     .expect_err("over-arity should signal");
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 }
@@ -198,8 +199,8 @@ fn register_ccl_program_requires_symbol_name() {
         Value::vector(vec![Value::fixnum(10)]),
     ])
     .expect_err("register-ccl-program name must be symbol");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
         }
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
@@ -211,8 +212,8 @@ fn register_ccl_program_requires_vector_when_program_non_nil() {
     crate::test_utils::init_test_tracing();
     let err = builtin_register_ccl_program_impl(vec![Value::symbol("foo"), Value::fixnum(1)])
         .expect_err("register-ccl-program program must be vector when non-nil");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data[0], Value::symbol("vectorp"));
             assert_eq!(sig.data[1], Value::fixnum(1));
@@ -243,8 +244,8 @@ fn register_ccl_program_rejects_invalid_program_shape() {
         Value::vector(vec![Value::fixnum(1)]),
     ])
     .expect_err("invalid program must be rejected");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.data[0], Value::string("Error in CCL program"));
         }
         other => panic!("expected error signal, got {other:?}"),
@@ -308,8 +309,8 @@ fn register_code_conversion_map_requires_symbol_name() {
         Value::vector(vec![Value::fixnum(0)]),
     ])
     .expect_err("register-code-conversion-map name must be symbol");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
         }
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
@@ -322,8 +323,8 @@ fn register_code_conversion_map_requires_vector_map() {
     let err =
         builtin_register_code_conversion_map_impl(vec![Value::symbol("foo"), Value::fixnum(1)])
             .expect_err("register-code-conversion-map map must be vector");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data[0], Value::symbol("vectorp"));
             assert_eq!(sig.data[1], Value::fixnum(1));
@@ -429,8 +430,8 @@ fn ccl_execute_accepts_registered_symbol_program_designator() {
         ]),
     ])
     .expect_err("symbol designator should resolve to registered program");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(
                 sig.data[0],
                 Value::string("Error in CCL program at 5th code")
@@ -1116,8 +1117,8 @@ fn ccl_execute_on_string_rejects_io_when_magnification_is_zero() {
         Value::heap_string(crate::heap_types::LispString::from_unibyte(Vec::new())),
     ])
     .expect_err("magnification 0 cannot write");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(
                 sig.data[0],
                 Value::string("Error in CCL program at 3th code")
@@ -1361,8 +1362,8 @@ fn ccl_execute_quit_signals_quit() {
     ]);
     crate::emacs_core::eval::clear_quit_requested_for_test();
     let err = err.expect_err("ccl-execute promotes a pending quit");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol, Value::symbol("quit").as_symbol_id().unwrap());
         }
         other => panic!("expected quit signal, got {other:?}"),
@@ -1384,8 +1385,8 @@ fn ccl_execute_on_string_quit_interrupts_before_the_first_instruction() {
     ]);
     crate::emacs_core::eval::clear_quit_requested_for_test();
     let err = err.expect_err("a pending quit interrupts CCL");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(
                 sig.data[0],
                 Value::string("CCL program interrupted at 2th code")
@@ -1430,8 +1431,8 @@ fn ccl_execute_lookup_integer_rejects_a_non_character_value() {
     ]);
     let err = builtin_ccl_execute_impl(vec![program, registers])
         .expect_err("a non-character hash value is an invalid CCL command");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(
                 sig.data[0],
                 Value::string("Error in CCL program at 4th code")
@@ -1657,8 +1658,8 @@ fn ccl_execute_lookup_character_rejects_an_integer_past_int_max() {
     ]);
     let err = builtin_ccl_execute_impl(vec![program, registers])
         .expect_err("an integer past INT_MAX is an invalid CCL command");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(
                 sig.data[0],
                 Value::string("Error in CCL program at 4th code")
@@ -1764,8 +1765,8 @@ fn register_ccl_program_rejects_over_arity() {
         Value::NIL,
     ])
     .expect_err("over-arity should signal");
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 }
@@ -1779,8 +1780,8 @@ fn register_code_conversion_map_rejects_over_arity() {
         Value::NIL,
     ])
     .expect_err("over-arity should signal");
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 }
@@ -1805,8 +1806,8 @@ fn ccl_execute_runs_a_tight_loop_way_past_any_step_budget() {
     match builtin_ccl_execute_impl(vec![program, registers]) {
         Ok(value) => drop(value),
         Err(e) => {
-            let signal = match &e {
-                super::Flow::Signal(sig) => sig,
+            let signal = match e.kind() {
+                crate::emacs_core::error::FlowRef::Signal(sig) => sig,
                 other => panic!("unexpected flow: {other:?}"),
             };
             let message = match signal.data[0].as_lisp_string() {
@@ -1869,8 +1870,8 @@ fn ccl_execute_rejects_a_word_outside_the_28bit_code_range_at_fetch() {
 }
 
 pub(crate) fn assert_error_at(err: super::Flow, nth: usize) {
-    match err {
-        super::Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(
                 sig.data[0],
                 Value::string(format!("Error in CCL program at {nth}th code"))
@@ -1881,8 +1882,8 @@ pub(crate) fn assert_error_at(err: super::Flow, nth: usize) {
 }
 
 pub(crate) fn assert_invalid_program(err: super::Flow) {
-    match err {
-        super::Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.data[0], Value::string("Invalid CCL program"));
         }
         other => panic!("expected error signal, got {other:?}"),
@@ -1977,9 +1978,9 @@ fn ccl_execute_runs_shift_jis_decoding_via_set_expr_reg() {
             .map(|number| Value::fixnum(i64::from(number)))
             .collect(),
     );
-    match builtin_ccl_execute_impl(vec![program, registers]) {
+    match builtin_ccl_execute_impl(vec![program, registers]).kinded() {
         Ok(_) => {}
-        Err(super::Flow::Signal(signal)) => {
+        Err(FlowKind::Signal(signal)) => {
             let message = signal
                 .data
                 .first()

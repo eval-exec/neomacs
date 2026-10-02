@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::error::{FlowKind, FlowRef};
 fn test_ob() -> crate::emacs_core::symbol::Obarray {
     crate::emacs_core::symbol::Obarray::new()
 }
@@ -1508,8 +1509,8 @@ fn commandp_rejects_overflow_arity() {
     let result =
         builtin_commandp_interactive(&mut ev, &[Value::symbol("ignore"), Value::NIL, Value::NIL])
             .expect_err("commandp should reject more than two arguments");
-    match result {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match result.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("unexpected flow: {other:?}"),
     }
 }
@@ -2090,13 +2091,18 @@ fn clear_this_command_keys_rejects_more_than_one_arg() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
     let result = builtin_clear_this_command_keys(&mut ev, vec![Value::fixnum(1), Value::fixnum(2)]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "wrong-number-of-arguments"
                 && sig.data
                     == vec![Value::symbol("clear-this-command-keys"), Value::fixnum(2)]
-    ));
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 // -------------------------------------------------------------------
@@ -2874,8 +2880,8 @@ fn command_execute_rejects_non_vector_keys_argument() {
             vec![Value::symbol("ignore"), Value::NIL, Value::string("a")],
         )
         .expect_err("command-execute should reject non-vector keys argument");
-    match result {
-        Flow::Signal(sig) => {
+    match result.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("vectorp"), Value::string("a")]);
         }
@@ -2956,8 +2962,8 @@ fn command_execute_rejects_list_keys_argument_without_recording_recent_history()
             vec![Value::symbol("ignore"), Value::NIL, keys],
         )
         .expect_err("command-execute should reject list keys argument");
-    match result {
-        Flow::Signal(sig) => {
+    match result.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("vectorp"), keys]);
         }
@@ -2982,8 +2988,8 @@ fn command_execute_rejects_too_many_arguments() {
             ],
         )
         .expect_err("command-execute should reject too many arguments");
-    match result {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match result.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("unexpected flow: {other:?}"),
     }
 }
@@ -2998,8 +3004,8 @@ fn command_execute_builtin_eval_expression_reads_stdin_in_batch() {
             vec![Value::symbol("eval-expression")],
         )
         .expect_err("command-execute eval-expression should signal end-of-file in batch");
-    match result {
-        Flow::Signal(sig) => {
+    match result.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "end-of-file");
             assert_eq!(sig.data, vec![Value::string("Error reading from stdin")]);
         }
@@ -3057,8 +3063,8 @@ fn call_interactively_rejects_non_vector_keys_argument() {
         vec![Value::symbol("ignore"), Value::NIL, Value::string("b")],
     )
     .expect_err("call-interactively should reject non-vector keys argument");
-    match result {
-        Flow::Signal(sig) => {
+    match result.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("vectorp"), Value::string("b")]);
         }
@@ -3131,8 +3137,8 @@ fn call_interactively_rejects_list_keys_argument_without_recording_recent_histor
     let result =
         builtin_call_interactively(&mut ev, vec![Value::symbol("ignore"), Value::NIL, keys])
             .expect_err("call-interactively should reject list keys argument");
-    match result {
-        Flow::Signal(sig) => {
+    match result.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("vectorp"), keys]);
         }
@@ -3150,8 +3156,8 @@ fn call_interactively_rejects_too_many_arguments() {
         vec![Value::symbol("ignore"), Value::NIL, Value::NIL, Value::NIL],
     )
     .expect_err("call-interactively should reject too many arguments");
-    match result {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match result.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("unexpected flow: {other:?}"),
     }
 }
@@ -3911,8 +3917,8 @@ fn command_execute_non_command_signals_commandp_error() {
     let result = ev
         .apply(Value::symbol("command-execute"), vec![Value::symbol("car")])
         .expect_err("command-execute should reject non-command symbols");
-    match result {
-        Flow::Signal(sig) => {
+    match result.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -4691,8 +4697,8 @@ fn call_interactively_non_command_signals_commandp_error() {
     let mut ev = Context::new();
     let result = builtin_call_interactively(&mut ev, vec![Value::symbol("car")])
         .expect_err("call-interactively should reject non-command symbols");
-    match result {
-        Flow::Signal(sig) => {
+    match result.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -4716,8 +4722,8 @@ fn call_interactively_propagates_noninteractive_autoload_failure_before_commandp
 
     let result = builtin_call_interactively(&mut ev, vec![Value::symbol("neovm-ci-missing-plain")])
         .expect_err("call-interactively should propagate the autoload failure");
-    match result {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "file-missing"),
+    match result.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "file-missing"),
         other => panic!("unexpected flow: {other:?}"),
     }
 }
@@ -4728,8 +4734,8 @@ fn call_interactively_eval_expression_reads_stdin_in_batch() {
     let mut ev = gnu_simple_eval_expression_eval();
     let result = builtin_call_interactively(&mut ev, vec![Value::symbol("eval-expression")])
         .expect_err("call-interactively eval-expression should signal end-of-file in batch");
-    match result {
-        Flow::Signal(sig) => {
+    match result.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "end-of-file");
             assert_eq!(sig.data, vec![Value::string("Error reading from stdin")]);
         }
@@ -4770,8 +4776,8 @@ fn eval_expression_rejects_too_many_args() {
             ],
         )
         .expect_err("eval-expression should reject more than four args");
-    match result {
-        Flow::Signal(sig) => {
+    match result.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(sig.data.len(), 2);
             assert_eq!(sig.data[1], Value::fixnum(5));
@@ -4842,8 +4848,8 @@ fn self_insert_command_argument_validation() {
 
     let missing = builtin_self_insert_command(&mut ev, vec![])
         .expect_err("self-insert-command should require one arg");
-    match missing {
-        Flow::Signal(sig) => {
+    match missing.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(
                 sig.data,
@@ -4856,8 +4862,8 @@ fn self_insert_command_argument_validation() {
     let too_many =
         builtin_self_insert_command(&mut ev, vec![Value::fixnum(1), Value::NIL, Value::NIL])
             .expect_err("self-insert-command should reject too many args");
-    match too_many {
-        Flow::Signal(sig) => {
+    match too_many.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(
                 sig.data,
@@ -4869,8 +4875,8 @@ fn self_insert_command_argument_validation() {
 
     let wrong_type = builtin_self_insert_command(&mut ev, vec![Value::symbol("x")])
         .expect_err("self-insert-command should type check arg");
-    match wrong_type {
-        Flow::Signal(sig) => {
+    match wrong_type.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("fixnump"), Value::symbol("x")]);
         }
@@ -4879,8 +4885,8 @@ fn self_insert_command_argument_validation() {
 
     let negative = builtin_self_insert_command(&mut ev, vec![Value::fixnum(-1)])
         .expect_err("self-insert-command should reject negative repetition");
-    match negative {
-        Flow::Signal(sig) => {
+    match negative.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -5059,8 +5065,8 @@ fn execute_extended_command_no_name_signals_end_of_file() {
     let result = ev
         .apply(Value::symbol("execute-extended-command"), vec![Value::NIL])
         .expect_err("execute-extended-command should signal end-of-file in batch");
-    match result {
-        Flow::Signal(sig) => {
+    match result.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "end-of-file");
             assert_eq!(sig.data, vec![Value::string("Error reading from stdin")]);
         }
@@ -5078,8 +5084,8 @@ fn execute_extended_command_rejects_symbol_name_payload() {
             vec![Value::NIL, Value::symbol("ignore")],
         )
         .expect_err("symbol payload should not be accepted as a command name");
-    match result {
-        Flow::Signal(sig) => {
+    match result.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -5102,8 +5108,8 @@ fn execute_extended_command_rejects_non_command_name() {
             vec![Value::NIL, Value::string("car")],
         )
         .expect_err("non-command names should be rejected");
-    match result {
-        Flow::Signal(sig) => {
+    match result.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -5126,8 +5132,8 @@ fn execute_extended_command_rejects_non_string_name_payload() {
             vec![Value::NIL, Value::fixnum(1)],
         )
         .expect_err("non-string command names should be rejected");
-    match result {
-        Flow::Signal(sig) => {
+    match result.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -5150,8 +5156,8 @@ fn execute_extended_command_rejects_overflow_arity() {
             vec![Value::NIL, Value::NIL, Value::NIL, Value::NIL],
         )
         .expect_err("execute-extended-command should reject more than three arguments");
-    match result {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match result.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("unexpected flow: {other:?}"),
     }
 }

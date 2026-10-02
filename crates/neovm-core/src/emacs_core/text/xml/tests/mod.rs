@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::error::FlowKind;
 
 fn make_ctx() -> super::super::eval::Context {
     super::super::eval::Context::new()
@@ -31,8 +32,8 @@ fn libxml_parse_xml_region_arity_and_nil_returns() {
         ],
     )
     .unwrap_err();
-    match wrong_arity {
-        Flow::Signal(sig) => {
+    match wrong_arity.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(
                 sig.data,
@@ -46,8 +47,8 @@ fn libxml_parse_xml_region_arity_and_nil_returns() {
     let wrong_type =
         builtin_libxml_parse_xml_region(&mut ctx, vec![Value::string("x"), Value::fixnum(1)])
             .unwrap_err();
-    match wrong_type {
-        Flow::Signal(sig) => {
+    match wrong_type.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -61,8 +62,8 @@ fn libxml_parse_xml_region_arity_and_nil_returns() {
     let wrong_base =
         builtin_libxml_parse_xml_region(&mut ctx, vec![Value::NIL, Value::NIL, Value::fixnum(42)])
             .unwrap_err();
-    match wrong_base {
-        Flow::Signal(sig) => {
+    match wrong_base.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::fixnum(42)]);
         }
@@ -97,8 +98,8 @@ fn libxml_parse_html_region_arity_and_nil_returns() {
         ],
     )
     .unwrap_err();
-    match wrong_arity {
-        Flow::Signal(sig) => {
+    match wrong_arity.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(
                 sig.data,
@@ -112,8 +113,8 @@ fn libxml_parse_html_region_arity_and_nil_returns() {
     let wrong_type =
         builtin_libxml_parse_html_region(&mut ctx, vec![Value::string("x"), Value::fixnum(1)])
             .unwrap_err();
-    match wrong_type {
-        Flow::Signal(sig) => {
+    match wrong_type.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -127,8 +128,8 @@ fn libxml_parse_html_region_arity_and_nil_returns() {
     let wrong_base =
         builtin_libxml_parse_html_region(&mut ctx, vec![Value::NIL, Value::NIL, Value::fixnum(42)])
             .unwrap_err();
-    match wrong_base {
-        Flow::Signal(sig) => {
+    match wrong_base.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::fixnum(42)]);
         }
@@ -142,8 +143,8 @@ fn libxml_available_p_returns_true_and_validates_arity() {
     assert_eq!(builtin_libxml_available_p(vec![]).unwrap(), Value::T);
 
     let libxml_arity = builtin_libxml_available_p(vec![Value::fixnum(1)]).unwrap_err();
-    match libxml_arity {
-        Flow::Signal(sig) => {
+    match libxml_arity.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(
                 sig.data,
@@ -459,8 +460,8 @@ fn zlib_available_p_returns_true() {
     );
     let zlib_arity =
         crate::emacs_core::zlib::builtin_zlib_available_p(vec![Value::fixnum(1)]).unwrap_err();
-    match zlib_arity {
-        Flow::Signal(sig) => {
+    match zlib_arity.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(
                 sig.data,

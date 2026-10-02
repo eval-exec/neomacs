@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::error::{FlowKind, FlowRef, FlowResultExt as _};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::{intern, resolve_sym};
 use crate::emacs_core::pdump::dump_to_file;
@@ -195,8 +196,8 @@ fn set_charset_priority_requires_at_least_one_arg() {
 fn set_charset_priority_rejects_unknown_charset() {
     crate::test_utils::init_test_tracing();
     let r = builtin_set_charset_priority(vec![Value::symbol("vm-no-such-charset")]);
-    match r {
-        Err(Flow::Signal(sig)) => {
+    match r.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -278,8 +279,8 @@ fn charset_plist_known() {
 fn charset_plist_unknown() {
     crate::test_utils::init_test_tracing();
     let r = builtin_charset_plist(vec![Value::symbol("nonexistent")]);
-    match r {
-        Err(Flow::Signal(sig)) => {
+    match r.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -304,8 +305,8 @@ fn charset_plist_wrong_arg_count() {
 fn charset_id_internal_requires_charset() {
     crate::test_utils::init_test_tracing();
     let r = builtin_charset_id_internal(vec![]);
-    match r {
-        Err(Flow::Signal(sig)) => {
+    match r.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("charsetp"), Value::NIL]);
         }
@@ -331,8 +332,8 @@ fn charset_id_internal_with_unicode() {
 fn charset_id_internal_unknown_is_type_error() {
     crate::test_utils::init_test_tracing();
     let r = builtin_charset_id_internal(vec![Value::symbol("vm-no-such")]);
-    match r {
-        Err(Flow::Signal(sig)) => {
+    match r.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -366,8 +367,8 @@ fn define_charset_internal_validates_name_arg() {
     crate::test_utils::init_test_tracing();
     // arg[0] must be a symbol
     let err = builtin_define_charset_internal(vec![Value::NIL; 17]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("symbolp"), Value::NIL]);
         }
@@ -440,8 +441,8 @@ fn define_charset_internal_short_code_space_signals_error() {
     args[1] = Value::fixnum(1); // dimension
     args[2] = Value::vector(vec![Value::fixnum(0)]); // too short
     let err = builtin_define_charset_internal(args).unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
         }
         other => panic!("expected args-out-of-range signal, got {other:?}"),
@@ -618,8 +619,8 @@ fn offset_charset_decode_encode_and_make_char_match_gnu_code_index_mapping() {
     let out_of_range =
         builtin_make_char(vec![Value::symbol("thai-tis620-test"), Value::fixnum(256)])
             .expect_err("position codes above one byte should signal");
-    match out_of_range {
-        Flow::Signal(sig) => {
+    match out_of_range.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(sig.data, vec![Value::fixnum(0xff), Value::fixnum(256)]);
         }
@@ -818,8 +819,10 @@ fn find_charset_region_eval_out_of_range_errors() {
     }
     let current = Value::make_buffer(eval.buffers.current_buffer().expect("current buffer").id);
     for (beg, end) in [(0, 2), (1, 5)] {
-        match builtin_find_charset_region(&mut eval, vec![Value::fixnum(beg), Value::fixnum(end)]) {
-            Err(Flow::Signal(sig)) => {
+        match builtin_find_charset_region(&mut eval, vec![Value::fixnum(beg), Value::fixnum(end)])
+            .kinded()
+        {
+            Err(FlowKind::Signal(sig)) => {
                 assert_eq!(sig.symbol_name(), "args-out-of-range");
                 assert_eq!(
                     sig.data,
@@ -931,8 +934,8 @@ fn find_charset_string_with_table() {
 fn find_charset_string_wrong_type() {
     crate::test_utils::init_test_tracing();
     let r = builtin_find_charset_string(vec![Value::fixnum(1)]);
-    match r {
-        Err(Flow::Signal(sig)) => {
+    match r.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::fixnum(1)]);
         }
@@ -985,8 +988,8 @@ fn decode_char_invalid_code_point() {
 fn decode_char_negative() {
     crate::test_utils::init_test_tracing();
     let r = builtin_decode_char(vec![Value::symbol("unicode"), Value::fixnum(-1)]);
-    match r {
-        Err(Flow::Signal(sig)) => {
+    match r.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -1010,8 +1013,8 @@ fn decode_char_out_of_range() {
 fn decode_char_unknown_charset() {
     crate::test_utils::init_test_tracing();
     let r = builtin_decode_char(vec![Value::symbol("nonexistent"), Value::fixnum(65)]);
-    match r {
-        Err(Flow::Signal(sig)) => {
+    match r.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -1026,8 +1029,8 @@ fn decode_char_unknown_charset() {
 fn decode_char_wrong_type() {
     crate::test_utils::init_test_tracing();
     let r = builtin_decode_char(vec![Value::symbol("ascii"), Value::string("not an int")]);
-    match r {
-        Err(Flow::Signal(sig)) => {
+    match r.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -1085,8 +1088,8 @@ fn encode_char_with_char_value() {
 fn encode_char_unknown_charset() {
     crate::test_utils::init_test_tracing();
     let r = builtin_encode_char(vec![Value::fixnum(65), Value::symbol("nonexistent")]);
-    match r {
-        Err(Flow::Signal(sig)) => {
+    match r.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -1163,11 +1166,11 @@ fn get_unused_iso_final_char_validates_dimension_and_chars() {
     let bad_dimension =
         builtin_get_unused_iso_final_char(vec![Value::fixnum(0), Value::fixnum(94)])
             .expect_err("dimension 0 should error");
-    assert!(matches!(bad_dimension, Flow::Signal(_)));
+    assert!(matches!(bad_dimension.kind(), FlowRef::Signal(_)));
 
     let bad_chars = builtin_get_unused_iso_final_char(vec![Value::fixnum(1), Value::fixnum(0)])
         .expect_err("chars 0 should error");
-    assert!(matches!(bad_chars, Flow::Signal(_)));
+    assert!(matches!(bad_chars.kind(), FlowRef::Signal(_)));
 }
 
 #[test]
@@ -1517,7 +1520,7 @@ fn char_charset_restriction_unknown_charset_errors() {
         Value::list(vec![Value::symbol("not-a-charset")]),
     ]);
     assert!(
-        matches!(r, Err(Flow::Signal(_))),
+        matches!(r.kinded_ref(), Err(FlowRef::Signal(_))),
         "expected signal, got {r:?}"
     );
 }

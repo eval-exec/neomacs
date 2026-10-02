@@ -1,6 +1,7 @@
 use super::*;
 use crate::buffer::buffer::{Buffer, BufferId};
 use crate::buffer::{CharPos0, LispCharPos1};
+use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 use crate::emacs_core::value::eq_value;
 
 /// Helper: create a buffer with given text, point at start, full accessible range.
@@ -464,8 +465,8 @@ fn char_syntax_accepts_full_emacs_character_codes() {
 
     let err = builtin_char_syntax(&mut eval, vec![Value::fixnum(0x40_0000)])
         .expect_err("out-of-range character code should signal");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -958,8 +959,8 @@ fn sexp_motion_ignores_unmatched_open_paren_inside_line_comment() {
 
     eval.obarray
         .set_symbol_value("parse-sexp-ignore-comments", Value::NIL);
-    match builtin_scan_sexps(&mut eval, vec![Value::fixnum(1), Value::fixnum(1)]) {
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+    match builtin_scan_sexps(&mut eval, vec![Value::fixnum(1), Value::fixnum(1)]).kinded() {
+        Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "scan-error");
             assert_eq!(sig.data[0], Value::string("Unbalanced parentheses"));
         }
@@ -1041,8 +1042,8 @@ fn backward_sexp_motion_respects_parse_sexp_ignore_comments() {
 
     eval.obarray
         .set_symbol_value("parse-sexp-ignore-comments", Value::NIL);
-    match builtin_scan_sexps(&mut eval, vec![Value::fixnum(24), Value::fixnum(-1)]) {
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+    match builtin_scan_sexps(&mut eval, vec![Value::fixnum(24), Value::fixnum(-1)]).kinded() {
+        Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "scan-error");
             assert_eq!(sig.data[0], Value::string("Unbalanced parentheses"));
         }
@@ -1051,8 +1052,10 @@ fn backward_sexp_motion_respects_parse_sexp_ignore_comments() {
     match builtin_scan_lists(
         &mut eval,
         vec![Value::fixnum(24), Value::fixnum(-1), Value::fixnum(0)],
-    ) {
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+    )
+    .kinded()
+    {
+        Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "scan-error");
             assert_eq!(sig.data[0], Value::string("Unbalanced parentheses"));
         }
@@ -1197,8 +1200,8 @@ fn sexp_motion_respects_parse_sexp_ignore_comments_for_block_comments() {
     );
 
     replace_current_buffer_text(&mut eval, "(a /* comment with ) b)");
-    match builtin_scan_sexps(&mut eval, vec![Value::fixnum(1), Value::fixnum(1)]) {
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+    match builtin_scan_sexps(&mut eval, vec![Value::fixnum(1), Value::fixnum(1)]).kinded() {
+        Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "scan-error");
             assert_eq!(sig.data[0], Value::string("Unbalanced parentheses"));
         }
@@ -1288,8 +1291,8 @@ fn make_syntax_table_returns_syntax_char_table() {
 #[test]
 fn make_syntax_table_parent_must_be_char_table() {
     crate::test_utils::init_test_tracing();
-    match builtin_make_syntax_table(vec![Value::fixnum(1)]) {
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+    match builtin_make_syntax_table(vec![Value::fixnum(1)]).kinded() {
+        Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data.first(), Some(&Value::symbol("char-table-p")));
         }
@@ -1353,16 +1356,16 @@ fn copy_syntax_table_returns_fresh_syntax_table() {
 #[test]
 fn copy_syntax_table_validates_arity_and_type() {
     crate::test_utils::init_test_tracing();
-    match builtin_copy_syntax_table(vec![Value::fixnum(1)]) {
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+    match builtin_copy_syntax_table(vec![Value::fixnum(1)]).kinded() {
+        Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data.first(), Some(&Value::symbol("syntax-table-p")));
         }
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
 
-    match builtin_copy_syntax_table(vec![Value::NIL, Value::NIL]) {
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+    match builtin_copy_syntax_table(vec![Value::NIL, Value::NIL]).kinded() {
+        Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(sig.data.first(), Some(&Value::symbol("copy-syntax-table")));
         }
@@ -1382,24 +1385,24 @@ fn syntax_class_to_char_basics_and_errors() {
         Value::char('|')
     );
 
-    match builtin_syntax_class_to_char(vec![Value::fixnum(-1)]) {
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+    match builtin_syntax_class_to_char(vec![Value::fixnum(-1)]).kinded() {
+        Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(sig.data, vec![Value::fixnum(15), Value::fixnum(-1)]);
         }
         other => panic!("expected args-out-of-range signal, got {other:?}"),
     }
 
-    match builtin_syntax_class_to_char(vec![Value::fixnum(0x1_0002)]) {
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+    match builtin_syntax_class_to_char(vec![Value::fixnum(0x1_0002)]).kinded() {
+        Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(sig.data, vec![Value::fixnum(15), Value::fixnum(0x1_0002)]);
         }
         other => panic!("expected args-out-of-range signal, got {other:?}"),
     }
 
-    match builtin_syntax_class_to_char(vec![Value::string("x")]) {
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+    match builtin_syntax_class_to_char(vec![Value::string("x")]).kinded() {
+        Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data.first(), Some(&Value::symbol("fixnump")));
         }
@@ -1445,16 +1448,16 @@ fn matching_paren_basics_and_errors() {
         Value::NIL
     );
 
-    match builtin_matching_paren(&mut eval, vec![Value::string("(")]) {
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+    match builtin_matching_paren(&mut eval, vec![Value::string("(")]).kinded() {
+        Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data.first(), Some(&Value::symbol("characterp")));
         }
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
 
-    match builtin_matching_paren(&mut eval, vec![]) {
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+    match builtin_matching_paren(&mut eval, vec![]).kinded() {
+        Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(sig.data.first(), Some(&Value::symbol("matching-paren")));
         }
@@ -1533,8 +1536,8 @@ fn set_syntax_table_validates_and_returns_table() {
     let out = builtin_set_syntax_table(&mut eval, vec![table]).unwrap();
     assert_eq!(out, table);
 
-    match builtin_set_syntax_table(&mut eval, vec![Value::fixnum(1)]) {
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+    match builtin_set_syntax_table(&mut eval, vec![Value::fixnum(1)]).kinded() {
+        Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data.first(), Some(&Value::symbol("syntax-table-p")));
         }
@@ -2346,16 +2349,16 @@ fn forward_comment_validates_arity_and_type() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new();
 
-    match builtin_forward_comment(&mut eval, vec![]) {
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+    match builtin_forward_comment(&mut eval, vec![]).kinded() {
+        Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(sig.data.first(), Some(&Value::symbol("forward-comment")));
         }
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 
-    match builtin_forward_comment(&mut eval, vec![Value::symbol("x")]) {
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+    match builtin_forward_comment(&mut eval, vec![Value::symbol("x")]).kinded() {
+        Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data.first(), Some(&Value::symbol("integerp")));
         }
@@ -2626,8 +2629,8 @@ fn backward_prefix_chars_moves_over_prefix_flag_chars() {
 fn backward_prefix_chars_validates_arity() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new();
-    match builtin_backward_prefix_chars(&mut eval, vec![Value::fixnum(1)]) {
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+    match builtin_backward_prefix_chars(&mut eval, vec![Value::fixnum(1)]).kinded() {
+        Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(
                 sig.data.first(),
@@ -2724,8 +2727,10 @@ fn scan_lists_unbalanced_signal_carries_gnu_positions() {
     match builtin_scan_lists(
         &mut eval,
         vec![Value::fixnum(1), Value::fixnum(1), Value::fixnum(1)],
-    ) {
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+    )
+    .kinded()
+    {
+        Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "scan-error");
             assert_eq!(
                 sig.data,
@@ -2824,8 +2829,8 @@ fn scan_sexps_unbalanced_signal_carries_gnu_positions() {
         buf.insert("(foo (bar baz)");
     }
 
-    match builtin_scan_sexps(&mut eval, vec![Value::fixnum(1), Value::fixnum(1)]) {
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+    match builtin_scan_sexps(&mut eval, vec![Value::fixnum(1), Value::fixnum(1)]).kinded() {
+        Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "scan-error");
             assert_eq!(
                 sig.data,
@@ -2856,8 +2861,8 @@ fn forward_sexp_unexpected_close_signal_carries_gnu_positions() {
         ));
     }
 
-    match builtin_forward_sexp(&mut eval, vec![Value::fixnum(1)]) {
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+    match builtin_forward_sexp(&mut eval, vec![Value::fixnum(1)]).kinded() {
+        Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "scan-error");
             assert_eq!(
                 sig.data,
@@ -3012,8 +3017,8 @@ fn parse_partial_sexp_rejects_non_integer_positions_like_gnu() {
     let mut eval = crate::emacs_core::eval::Context::new();
     let err = builtin_parse_partial_sexp(&mut eval, vec![Value::make_float(1.2), Value::fixnum(1)])
         .unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(
                 sig.symbol,
                 crate::emacs_core::intern::intern("wrong-type-argument")

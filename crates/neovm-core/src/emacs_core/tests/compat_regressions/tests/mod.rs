@@ -1,4 +1,4 @@
-use crate::emacs_core::error::Flow;
+use crate::emacs_core::error::FlowKind;
 use crate::emacs_core::value::{HashTableTest, Value, eq_value};
 use malachite::integer::Integer;
 use std::str::FromStr;
@@ -151,8 +151,8 @@ fn reverse_char_table_signals_sequencep() {
         Value::fixnum(0),
     );
     let err = crate::emacs_core::builtins::builtin_reverse(vec![table]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data[0], Value::symbol("sequencep"));
             assert_eq!(sig.data[1], table);
@@ -184,8 +184,8 @@ fn nreverse_char_table_signals_arrayp() {
         Value::fixnum(0),
     );
     let err = crate::emacs_core::builtins::builtin_nreverse(vec![table]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data[0], Value::symbol("arrayp"));
             assert_eq!(sig.data[1], table);
@@ -201,8 +201,8 @@ fn nreverse_dotted_list_mutates_before_listp_signal_like_gnu() {
     let list = Value::cons(Value::fixnum(1), tail);
 
     let err = crate::emacs_core::builtins::builtin_nreverse(vec![list]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data[0], Value::symbol("listp"));
             assert!(eq_value(&sig.data[1], &list));
@@ -221,8 +221,8 @@ fn nreverse_circular_list_signals_circular_list_like_gnu() {
     list.set_cdr(tail);
 
     let err = crate::emacs_core::builtins::builtin_nreverse(vec![list]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "circular-list");
             assert!(eq_value(&sig.data[0], &list));
             assert_eq!(list.cons_car(), Value::fixnum(1));
@@ -242,8 +242,8 @@ fn reverse_circular_list_reports_gnu_for_each_tail_cycle_cell() {
     second.set_cdr(third);
 
     let err = crate::emacs_core::builtins::builtin_reverse(vec![list]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "circular-list");
             assert!(eq_value(&sig.data[0], &third));
         }
@@ -262,8 +262,8 @@ fn length_predicate_circular_list_reports_gnu_for_each_tail_cycle_cell() {
 
     let err = crate::emacs_core::builtins::builtin_length_lt(vec![list, Value::fixnum(65535)])
         .unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "circular-list");
             assert!(eq_value(&sig.data[0], &third));
         }
@@ -297,8 +297,8 @@ fn rassoc_improper_tail_reports_original_alist_like_gnu() {
 
     let err =
         crate::emacs_core::misc::builtin_rassoc(vec![Value::string("missing"), list]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data[0], Value::symbol("listp"));
             assert!(eq_value(&sig.data[1], &list));
@@ -316,8 +316,8 @@ fn external_debugging_rejects_negative_fixnum() {
         vec![Value::fixnum(-1)],
     )
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -402,8 +402,8 @@ fn define_hash_table_test_requires_symbol_name() {
         Value::symbol("sxhash-eq"),
     ])
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -748,8 +748,8 @@ fn frame_bottom_divider_width_rejects_non_frame_designator() {
     let err =
         crate::emacs_core::builtins::builtin_frame_bottom_divider_width(vec![Value::fixnum(0)])
             .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -768,8 +768,8 @@ fn garbage_collect_maybe_requires_whole_number() {
     let mut eval = crate::emacs_core::Context::new();
     let err = crate::emacs_core::builtins::builtin_garbage_collect_maybe(&mut eval, vec![Value::T])
         .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
     }
     // A negative FACTOR is likewise not a wholenump (GNU `CHECK_FIXNAT`).
@@ -778,8 +778,8 @@ fn garbage_collect_maybe_requires_whole_number() {
         vec![Value::fixnum(-1)],
     )
     .unwrap_err();
-    match neg {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match neg.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -855,8 +855,8 @@ fn gnutls_peer_status_warning_describe_rejects_non_symbol() {
             Value::fixnum(0),
         ])
         .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -906,8 +906,8 @@ fn inotify_watch_lifecycle() {
 fn inotify_rm_watch_invalid_descriptor_signals() {
     crate::test_utils::init_test_tracing();
     let err = crate::emacs_core::builtins::inotify_rm_watch(vec![Value::fixnum(1)]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "file-notify-error"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "file-notify-error"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -919,8 +919,8 @@ fn gnutls_bye_requires_process() {
     let err =
         crate::emacs_core::process::builtin_gnutls_bye(&mut eval, vec![Value::NIL, Value::NIL])
             .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -931,8 +931,8 @@ fn gnutls_format_certificate_requires_string() {
     let err =
         crate::emacs_core::builtins::gnutls::builtin_gnutls_format_certificate(vec![Value::NIL])
             .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -945,8 +945,8 @@ fn gnutls_hash_digest_nil_method_signals_error() {
         Value::string("a"),
     ])
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -983,8 +983,8 @@ fn gnutls_symmetric_encrypt_requires_gnutls_support() {
         Value::string("aad"),
     ])
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -1029,8 +1029,8 @@ fn interactive_form_for_a_c_subr_returns_interactive_list() {
 fn lock_file_requires_string_argument() {
     crate::test_utils::init_test_tracing();
     let err = crate::emacs_core::builtins::builtin_lock_file(vec![Value::NIL]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -1039,8 +1039,8 @@ fn lock_file_requires_string_argument() {
 fn unlock_file_requires_string_argument() {
     crate::test_utils::init_test_tracing();
     let err = crate::emacs_core::builtins::builtin_unlock_file(vec![Value::NIL]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -1055,8 +1055,8 @@ fn inotify_add_watch_requires_string_path_argument() {
         vec![Value::NIL, Value::NIL, Value::NIL],
     )
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -1067,8 +1067,8 @@ fn window_bottom_divider_width_rejects_non_window_designator() {
     let err =
         crate::emacs_core::builtins::builtin_window_bottom_divider_width(vec![Value::fixnum(1)])
             .unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data.first(), Some(&Value::symbol("window-live-p")));
         }
@@ -1090,8 +1090,8 @@ fn treesit_query_compile_validates_arity() {
     let err =
         crate::emacs_core::builtins::builtin_treesit_query_compile(&mut eval, vec![Value::NIL])
             .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected signal, got {other:?}"),
     }
 }
@@ -1112,8 +1112,8 @@ fn internal_labeled_narrow_to_region_validates_arity() {
         vec![Value::NIL, Value::NIL],
     )
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected signal, got {other:?}"),
     }
 }

@@ -1,5 +1,5 @@
-use super::super::error::Flow;
 use super::super::eval::Context;
+use crate::emacs_core::error::FlowKind;
 fn test_ob() -> crate::emacs_core::symbol::Obarray {
     crate::emacs_core::symbol::Obarray::new()
 }
@@ -408,8 +408,8 @@ fn count_lines_reports_narrow_to_region_range_errors_like_gnu() {
 
     let err = super::builtin_count_lines(&mut ev, vec![Value::fixnum(0), Value::fixnum(2)])
         .expect_err("out-of-range start should signal");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(sig.data, vec![Value::fixnum(0), Value::fixnum(2)]);
         }
@@ -419,8 +419,8 @@ fn count_lines_reports_narrow_to_region_range_errors_like_gnu() {
     let big = Value::make_integer(Integer::from(1u64) << 100u32);
     let err = super::builtin_count_lines(&mut ev, vec![Value::fixnum(1), big])
         .expect_err("out-of-range bignum end should signal");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(sig.data[0], Value::fixnum(1));
             assert!(matches!(sig.data[1].kind(), ValueKind::Veclike(_)));

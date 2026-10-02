@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::error::{FlowRef, FlowResultExt as _};
 fn test_ob() -> crate::emacs_core::symbol::Obarray {
     crate::emacs_core::symbol::Obarray::new()
 }
@@ -750,8 +751,8 @@ fn dump_emacs_portable_requires_batch_mode() {
     )
     .expect_err("interactive dump-emacs-portable should fail");
 
-    match err {
-        crate::emacs_core::error::Flow::Signal(sig) => {
+    match err.into_kind() {
+        crate::emacs_core::error::FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(sig.data.len(), 1);
             assert!(
@@ -783,8 +784,8 @@ fn dump_emacs_portable_rejects_other_live_lisp_threads() {
     )
     .expect_err("dump-emacs-portable should reject other live threads");
 
-    match err {
-        crate::emacs_core::error::Flow::Signal(sig) => {
+    match err.into_kind() {
+        crate::emacs_core::error::FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(sig.data.len(), 1);
             assert!(
@@ -816,8 +817,8 @@ fn dump_emacs_portable_signals_error_for_live_finalizer() {
     )
     .expect_err("dump-emacs-portable must refuse a live finalizer with an error, not a panic");
 
-    match err {
-        crate::emacs_core::error::Flow::Signal(sig) => {
+    match err.into_kind() {
+        crate::emacs_core::error::FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(sig.data.len(), 1);
             assert_eq!(
@@ -4006,9 +4007,9 @@ fn command_loop_end_value(
     result: Result<Value, crate::emacs_core::error::Flow>,
     context: &str,
 ) -> Value {
-    match result {
+    match result.kinded() {
         Ok(value) => value,
-        Err(crate::emacs_core::error::Flow::Shutdown(request)) => {
+        Err(crate::emacs_core::error::FlowKind::Shutdown(request)) => {
             assert_eq!(request.exit_code, 0, "{context}: unclean shutdown");
             Value::NIL
         }
@@ -8860,8 +8861,8 @@ fn plan_load_missing_uses_gnu_file_missing_condition_data() {
         Err(err) => err,
     };
 
-    match err {
-        crate::emacs_core::error::Flow::Signal(sig) => {
+    match err.into_kind() {
+        crate::emacs_core::error::FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "file-missing");
             assert_eq!(
                 sig.data,
@@ -8895,8 +8896,8 @@ fn resolve_autoload_load_path_requires_load_suffix_like_gnu() {
     let file = crate::heap_types::LispString::from_utf8("probe");
     let err = resolve_autoload_load_path_in_state(&ob, None, &file)
         .expect_err("autoload should not load a bare suffixless file");
-    match err {
-        crate::emacs_core::error::Flow::Signal(sig) => {
+    match err.into_kind() {
+        crate::emacs_core::error::FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "file-missing");
             assert_eq!(
                 sig.data.first().copied(),
@@ -9170,10 +9171,15 @@ fn builtin_load_rejects_non_string_live_suffix_entries() {
         vec![Value::string("invalid-suffix-probe")],
     );
 
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-type-argument"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-type-argument"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
     assert_eq!(
         eval.obarray().symbol_value("vm-invalid-suffix-probe-ran"),
         None

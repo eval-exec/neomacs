@@ -4,6 +4,7 @@ use crate::emacs_core::builtins::search::{
     builtin_looking_at, builtin_match_data, builtin_match_data_translate, builtin_match_string,
     builtin_re_search_forward, builtin_replace_match, builtin_set_match_data, builtin_string_match,
 };
+use crate::emacs_core::error::FlowResultExt as _;
 use crate::emacs_core::marker;
 use crate::emacs_core::search::builtin_replace_regexp_in_string;
 use crate::emacs_core::value::{ValueKind, list_to_vec};
@@ -925,12 +926,17 @@ fn replace_regexp_subexp_past_gnu_search_regs_errors_out_of_range() {
         Value::fixnum(10),
     ]);
 
-    assert!(matches!(
-        result,
-        Err(crate::emacs_core::error::Flow::Signal(sig))
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(crate::emacs_core::error::FlowRef::Signal(sig))
             if sig.symbol_name() == "args-out-of-range"
                 && sig.data == vec![Value::fixnum(10), Value::fixnum(0), Value::fixnum(6)]
-    ));
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]

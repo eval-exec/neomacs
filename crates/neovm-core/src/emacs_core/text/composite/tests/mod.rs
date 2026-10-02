@@ -1,5 +1,6 @@
 use super::*;
 use crate::buffer::CharPos0;
+use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 use crate::emacs_core::value::{equal_value, get_string_text_properties_table_for_value};
 
 #[test]
@@ -809,8 +810,8 @@ fn composition_get_gstring_rejects_non_ascii_unibyte_like_gnu() {
         &mut eval,
         vec![Value::fixnum(0), Value::fixnum(1), Value::NIL, raw],
     );
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data.first().and_then(|value| value.as_utf8_str()),
@@ -962,8 +963,8 @@ fn composition_get_gstring_nil_string_rejects_unibyte_buffer() {
         &mut eval,
         vec![Value::fixnum(1), Value::fixnum(2), Value::NIL, Value::NIL],
     );
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data.first().and_then(|value| value.as_utf8_str()),

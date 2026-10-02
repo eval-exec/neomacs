@@ -1,6 +1,6 @@
 use super::*;
 use crate::emacs_core::coding::EolConversion;
-use crate::emacs_core::error::Flow;
+use crate::emacs_core::error::FlowKind;
 use crate::emacs_core::value::{Value, get_string_text_properties_for_value};
 
 // The three coding entry points, with end-of-line conversion ENABLED.
@@ -94,8 +94,8 @@ fn builtin_char_displayable_p_matches_oracle_bounds_and_types() {
 
     let overflow = builtin_char_displayable_p(vec![Value::fixnum(0x40_0000)])
         .expect_err("overflow char code should signal wrong-type-argument characterp");
-    match overflow {
-        Flow::Signal(sig) => {
+    match overflow.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -107,8 +107,8 @@ fn builtin_char_displayable_p_matches_oracle_bounds_and_types() {
 
     let non_number = builtin_char_displayable_p(vec![Value::symbol("x")])
         .expect_err("non-number should signal number-or-marker-p");
-    match non_number {
-        Flow::Signal(sig) => {
+    match non_number.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -145,8 +145,8 @@ fn builtin_char_width_matches_oracle_control_and_bounds() {
 
     let negative = builtin_char_width(vec![Value::fixnum(-1)])
         .expect_err("negative character code should signal");
-    match negative {
-        Flow::Signal(sig) => {
+    match negative.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -158,8 +158,8 @@ fn builtin_char_width_matches_oracle_control_and_bounds() {
 
     let overflow = builtin_char_width(vec![Value::fixnum(0x40_0000)])
         .expect_err("overflow character code should signal");
-    match overflow {
-        Flow::Signal(sig) => {
+    match overflow.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -215,8 +215,8 @@ fn builtin_max_char_optional_unicode_matches_oracle() {
 
     let wrong_arity = builtin_max_char(vec![Value::fixnum(1), Value::fixnum(2)])
         .expect_err("max-char should reject more than one argument");
-    match wrong_arity {
-        Flow::Signal(sig) => {
+    match wrong_arity.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(sig.data, vec![Value::symbol("max-char"), Value::fixnum(2)]);
         }
@@ -235,8 +235,8 @@ fn builtin_coding_string_helpers_enforce_max_arity() {
         Value::NIL,
     ])
     .expect_err("encode-coding-string should reject more than four arguments");
-    match encode_over {
-        Flow::Signal(sig) => {
+    match encode_over.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(
                 sig.data,
@@ -254,8 +254,8 @@ fn builtin_coding_string_helpers_enforce_max_arity() {
         Value::NIL,
     ])
     .expect_err("decode-coding-string should reject more than four arguments");
-    match decode_over {
-        Flow::Signal(sig) => {
+    match decode_over.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(
                 sig.data,
@@ -292,8 +292,8 @@ fn builtin_coding_string_helpers_runtime_match_oracle_core_cases() {
     let coding_string =
         builtin_encode_coding_string(vec![Value::string("a"), Value::string("utf-8")])
             .expect_err("string coding-system should signal symbolp");
-    match coding_string {
-        Flow::Signal(sig) => {
+    match coding_string.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -306,8 +306,8 @@ fn builtin_coding_string_helpers_runtime_match_oracle_core_cases() {
     let unknown_encode =
         builtin_encode_coding_string(vec![Value::string("a"), Value::symbol("vm-no-such-coding")])
             .expect_err("unknown coding-system should signal coding-system-error");
-    match unknown_encode {
-        Flow::Signal(sig) => {
+    match unknown_encode.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "coding-system-error");
             assert_eq!(sig.data, vec![Value::symbol("vm-no-such-coding")]);
         }
@@ -317,8 +317,8 @@ fn builtin_coding_string_helpers_runtime_match_oracle_core_cases() {
     let unknown_decode =
         builtin_decode_coding_string(vec![Value::string("a"), Value::symbol("vm-no-such-coding")])
             .expect_err("unknown coding-system should signal coding-system-error");
-    match unknown_decode {
-        Flow::Signal(sig) => {
+    match unknown_decode.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "coding-system-error");
             assert_eq!(sig.data, vec![Value::symbol("vm-no-such-coding")]);
         }

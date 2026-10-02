@@ -2,6 +2,7 @@ use super::super::intern::intern;
 use super::*;
 use crate::emacs_core::autoload::is_autoload_value;
 use crate::emacs_core::builtins::plain_str_to_lisp_string;
+use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::format_eval_result;
 use crate::test_utils::{eval_with_ldefs_boot_autoloads, runtime_startup_eval_all};
@@ -1195,7 +1196,7 @@ fn test_resolve_macro_events_list_errors_like_gnu() {
     let eval = Context::new();
     let list = Value::list(vec![Value::char('x'), Value::char('y')]);
     let result = resolve_macro_events(&eval, &list);
-    let Err(Flow::Signal(sig)) = result else {
+    let Err(FlowKind::Signal(sig)) = result.kinded() else {
         panic!("expected signal for list macro");
     };
     assert_eq!(sig.symbol_name(), "error");
@@ -1210,7 +1211,7 @@ fn test_resolve_macro_events_wrong_type() {
     crate::test_utils::init_test_tracing();
     let eval = Context::new();
     let result = resolve_macro_events(&eval, &Value::fixnum(42));
-    let Err(Flow::Signal(sig)) = result else {
+    let Err(FlowKind::Signal(sig)) = result.kinded() else {
         panic!("expected signal for non-macro value");
     };
     assert_eq!(sig.symbol_name(), "error");

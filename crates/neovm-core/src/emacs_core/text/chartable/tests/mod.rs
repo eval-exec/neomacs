@@ -1,6 +1,6 @@
 use super::*;
 use crate::emacs_core::boolvec::{bool_vector_from_bits, bool_vector_ref_value};
-use crate::emacs_core::error::Flow;
+use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::{intern, intern_uninterned};
 use crate::emacs_core::value::ValueKind;
@@ -10,8 +10,8 @@ use crate::emacs_core::value::ValueKind;
 // -----------------------------------------------------------------------
 
 fn assert_signal_symbol_and_predicate(result: EvalResult, symbol: &str, predicate: &str) {
-    match result {
-        Err(Flow::Signal(signal)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(signal)) => {
             assert_eq!(signal.symbol_name(), symbol);
             assert_eq!(
                 signal.data.first().and_then(|v| v.as_symbol_name()),
@@ -1585,8 +1585,11 @@ fn bool_vector_empty() {
 fn bool_vector_negative_length() {
     crate::test_utils::init_test_tracing();
     let result = builtin_make_bool_vector(vec![Value::fixnum(-1), Value::NIL]);
-    match result.expect_err("negative make-bool-vector length should signal") {
-        Flow::Signal(sig) => {
+    match result
+        .expect_err("negative make-bool-vector length should signal")
+        .into_kind()
+    {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -1708,8 +1711,8 @@ fn char_table_range_invalid_range_type() {
     let ct = make_char_table_value(Value::symbol("test"), Value::NIL);
     let result =
         builtin_set_char_table_range(vec![ct, Value::string("invalid"), Value::fixnum(1)], None);
-    match result {
-        Err(Flow::Signal(signal)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(signal)) => {
             assert_eq!(signal.symbol_name(), "error");
             assert!(
                 signal
@@ -1756,8 +1759,8 @@ fn char_table_range_rejects_non_character_fixnum_atoms_like_gnu() {
         builtin_char_table_range(vec![ct, Value::fixnum(-1)], None),
         builtin_set_char_table_range(vec![ct, Value::fixnum(-1), Value::symbol("x")], None),
     ] {
-        match result {
-            Err(Flow::Signal(signal)) => {
+        match result.kinded() {
+            Err(FlowKind::Signal(signal)) => {
                 assert_eq!(signal.symbol_name(), "error");
                 assert!(
                     signal
@@ -1939,8 +1942,8 @@ fn put_unicode_property_internal_run_length_rejects_unknown_value() {
         Value::symbol("ZZ"),
     ])
     .expect_err("unknown run-length value should signal");
-    match err {
-        Flow::Signal(signal) => {
+    match err.into_kind() {
+        FlowKind::Signal(signal) => {
             assert_eq!(signal.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 signal
@@ -1995,8 +1998,8 @@ fn put_unicode_property_internal_numeric_round_trips_and_rejects_non_fixnum() {
         Value::symbol("X"),
     ])
     .expect_err("non-fixnum numeric value should signal");
-    match err {
-        Flow::Signal(signal) => {
+    match err.into_kind() {
+        FlowKind::Signal(signal) => {
             assert_eq!(signal.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 signal.data.first().and_then(|v| v.as_symbol_name()),

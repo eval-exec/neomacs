@@ -139,8 +139,8 @@ fn char_resolve_modifiers_clears_shift_on_uppercase() {
 fn char_resolve_modifiers_wrong_type_predicate() {
     crate::test_utils::init_test_tracing();
     let result = builtin_char_resolve_modifiers(vec![Value::string("a")]).unwrap_err();
-    match result {
-        super::super::error::Flow::Signal(sig) => {
+    match result.into_kind() {
+        super::super::error::FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("fixnump"), Value::string("a")]);
         }

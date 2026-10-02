@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 use crate::emacs_core::intern::{intern, resolve_sym};
 
 fn mgr() -> CodingSystemManager {
@@ -812,8 +813,8 @@ fn find_coding_systems_region_internal_rejects_non_list_exclude_for_non_ascii_st
         &mut eval,
         vec![Value::string("汉"), Value::NIL, Value::symbol("utf-8")],
     );
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -833,8 +834,8 @@ fn find_coding_systems_region_internal_rejects_non_list_exclude_for_non_ascii_bu
         &mut eval,
         vec![Value::fixnum(1), Value::fixnum(2), Value::symbol("utf-8")],
     );
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -971,8 +972,10 @@ fn change_eol_nonmatching_float_uses_gnu_aref_error() {
     match builtin_coding_system_change_eol_conversion(
         &m,
         vec![Value::symbol("utf-8-unix"), Value::make_float(1.0)],
-    ) {
-        Err(Flow::Signal(sig)) => {
+    )
+    .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -990,8 +993,10 @@ fn change_eol_out_of_range_uses_gnu_aref_error() {
     match builtin_coding_system_change_eol_conversion(
         &m,
         vec![Value::symbol("utf-8"), Value::fixnum(3)],
-    ) {
-        Err(Flow::Signal(sig)) => {
+    )
+    .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(sig.data.len(), 2);
             assert_eq!(sig.data[1], Value::fixnum(3));
@@ -1157,8 +1162,8 @@ fn detect_coding_region_validates_accessible_region_like_gnu() {
         vec![Value::fixnum(0), Value::fixnum(2)],
     )
     .expect_err("GNU validate_region rejects positions before point-min");
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             let items = sig.data;
             assert_eq!(items.len(), 3);
@@ -1403,12 +1408,12 @@ fn coding_system_setters_treat_keywords_as_symbol_designators() {
     let kb = builtin_set_keyboard_coding_system(&mut m, vec![keyword]);
     let term = builtin_set_terminal_coding_system(&mut m, vec![keyword]);
 
-    match kb {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "coding-system-error"),
+    match kb.kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "coding-system-error"),
         other => panic!("expected coding-system-error for keyword keyboard set, got {other:?}"),
     }
-    match term {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "coding-system-error"),
+    match term.kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "coding-system-error"),
         other => panic!("expected coding-system-error for keyword terminal set, got {other:?}"),
     }
 }
@@ -1567,8 +1572,8 @@ fn check_coding_system_signals_unknown_symbols() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
     let result = builtin_check_coding_system(&m, vec![Value::symbol("vm-no-such")]);
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "coding-system-error");
             assert_eq!(sig.data, vec![Value::symbol("vm-no-such")]);
         }
@@ -1648,8 +1653,8 @@ fn check_coding_systems_region_semantics() {
         vec![Value::symbol("x"), Value::fixnum(1), Value::symbol("utf-8")],
     )
     .unwrap_err();
-    match start_type_err {
-        Flow::Signal(sig) => {
+    match start_type_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -1664,8 +1669,8 @@ fn check_coding_systems_region_semantics() {
         vec![Value::fixnum(1), Value::string("x"), Value::symbol("utf-8")],
     )
     .unwrap_err();
-    match type_err {
-        Flow::Signal(sig) => {
+    match type_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -1697,8 +1702,8 @@ fn check_coding_systems_region_matches_gnu_validation_order() {
         ],
     )
     .expect_err("GNU validates bad buffer ranges before coding systems");
-    match range_err {
-        Flow::Signal(sig) => {
+    match range_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(sig.data, vec![Value::fixnum(9), Value::fixnum(10)]);
         }
@@ -1714,8 +1719,8 @@ fn check_coding_systems_region_matches_gnu_validation_order() {
         ],
     )
     .expect_err("GNU does not swap check-coding-systems-region endpoints");
-    match reversed_err {
-        Flow::Signal(sig) => {
+    match reversed_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(sig.data, vec![Value::fixnum(3), Value::fixnum(2)]);
         }
@@ -1744,8 +1749,8 @@ fn check_coding_systems_region_matches_gnu_validation_order() {
         ],
     )
     .expect_err("GNU validates coding list for non-ASCII string text");
-    match coding_err {
-        Flow::Signal(sig) => {
+    match coding_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "coding-system-error");
             assert_eq!(sig.data, vec![Value::symbol("no-such-coding")]);
         }
@@ -1832,8 +1837,8 @@ fn set_coding_system_priority_rejects_nil_payload() {
     crate::test_utils::init_test_tracing();
     let mut m = mgr();
     let result = builtin_set_coding_system_priority(&mut m, vec![Value::NIL]);
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("coding-system-p"), Value::NIL]);
         }
@@ -1846,8 +1851,8 @@ fn set_coding_system_priority_keyword_signals_coding_system_error() {
     crate::test_utils::init_test_tracing();
     let mut m = mgr();
     let result = builtin_set_coding_system_priority(&mut m, vec![Value::keyword(":utf-8")]);
-    match result {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "coding-system-error"),
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "coding-system-error"),
         other => panic!("expected coding-system-error signal, got {other:?}"),
     }
 }
@@ -1857,8 +1862,8 @@ fn set_coding_system_priority_string_is_type_error() {
     crate::test_utils::init_test_tracing();
     let mut m = mgr();
     let result = builtin_set_coding_system_priority(&mut m, vec![Value::string("utf-8")]);
-    match result {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
 }

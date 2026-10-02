@@ -2,7 +2,7 @@
 //! and destination semantics (`data.c:3709-4016`).
 
 use super::*;
-use crate::emacs_core::error::Flow;
+use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 
 const LENGTHS: [usize; 10] = [0, 1, 7, 8, 63, 64, 65, 127, 128, 1000];
 
@@ -48,8 +48,8 @@ fn assert_trailing_zero(value: &Value) {
 }
 
 fn signal_parts(result: EvalResult) -> (String, Vec<Value>) {
-    match result {
-        Err(Flow::Signal(signal)) => (signal.symbol_name().to_string(), signal.data.clone()),
+    match result.kinded() {
+        Err(FlowKind::Signal(signal)) => (signal.symbol_name().to_string(), signal.data.clone()),
         other => panic!("expected a signal, got {other:?}"),
     }
 }

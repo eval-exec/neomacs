@@ -1,5 +1,6 @@
 use super::*;
 use crate::emacs_core::builtins::builtin_documentation_stringp;
+use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 use crate::emacs_core::{Context, EvalError};
 use crate::test_utils::{
     load_minimal_gnu_help_runtime, runtime_startup_context, runtime_startup_eval_all,
@@ -222,8 +223,8 @@ fn snarf_documentation_empty_path_errors() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = super::super::eval::Context::new();
     let result = builtin_snarf_documentation(&mut evaluator, vec![Value::string("")]);
-    match result {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "error"),
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "error"),
         other => panic!("expected error signal, got {other:?}"),
     }
 }
@@ -233,8 +234,8 @@ fn snarf_documentation_parent_dir_path_errors() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = super::super::eval::Context::new();
     let result = builtin_snarf_documentation(&mut evaluator, vec![Value::string("../")]);
-    match result {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "error"),
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "error"),
         other => panic!("expected error signal, got {other:?}"),
     }
 }
@@ -244,8 +245,8 @@ fn snarf_documentation_single_dot_path_errors() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = super::super::eval::Context::new();
     let result = builtin_snarf_documentation(&mut evaluator, vec![Value::string(".")]);
-    match result {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "error"),
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "error"),
         other => panic!("expected error signal, got {other:?}"),
     }
 }
@@ -255,8 +256,8 @@ fn snarf_documentation_root_path_errors() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = super::super::eval::Context::new();
     let result = builtin_snarf_documentation(&mut evaluator, vec![Value::string("/")]);
-    match result {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "error"),
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "error"),
         other => panic!("expected error signal, got {other:?}"),
     }
 }
@@ -266,8 +267,8 @@ fn snarf_documentation_doc_dir_path_file_error() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = super::super::eval::Context::new();
     let result = builtin_snarf_documentation(&mut evaluator, vec![Value::string("DOC/")]);
-    match result {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "file-error"),
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "file-error"),
         other => panic!("expected file-error signal, got {other:?}"),
     }
 }
@@ -277,8 +278,8 @@ fn snarf_documentation_doc_subpath_file_error() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = super::super::eval::Context::new();
     let result = builtin_snarf_documentation(&mut evaluator, vec![Value::string("DOC/a")]);
-    match result {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "file-error"),
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "file-error"),
         other => panic!("expected file-error signal, got {other:?}"),
     }
 }
@@ -289,8 +290,8 @@ fn snarf_documentation_missing_path_errors() {
     let mut evaluator = super::super::eval::Context::new();
     let result =
         builtin_snarf_documentation(&mut evaluator, vec![Value::string("NO_SUCH_DOC_FILE")]);
-    match result {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "file-missing"),
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "file-missing"),
         other => panic!("expected file-missing signal, got {other:?}"),
     }
 }
@@ -301,8 +302,8 @@ fn snarf_documentation_missing_dir_path_errors() {
     let mut evaluator = super::super::eval::Context::new();
     let result =
         builtin_snarf_documentation(&mut evaluator, vec![Value::string("NO_SUCH_DOC_DIR/")]);
-    match result {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "file-missing"),
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "file-missing"),
         other => panic!("expected file-missing signal, got {other:?}"),
     }
 }
@@ -727,8 +728,8 @@ fn documentation_unbound_symbol_function_documentation_property_errors() {
         .unwrap();
 
     let result = builtin_documentation(&mut evaluator, vec![Value::symbol("doc-prop")]);
-    match result {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "void-variable"),
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "void-variable"),
         other => panic!("expected void-variable signal, got {other:?}"),
     }
 }
@@ -750,8 +751,8 @@ fn documentation_invalid_form_function_documentation_property_errors() {
         .unwrap();
 
     let result = builtin_documentation(&mut evaluator, vec![Value::symbol("doc-prop")]);
-    match result {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "invalid-function"),
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "invalid-function"),
         other => panic!("expected invalid-function signal, got {other:?}"),
     }
 }
@@ -814,8 +815,8 @@ fn documentation_quoted_macro_payload_matches_oracle_shape() {
     ]);
 
     let result = builtin_documentation(&mut evaluator, vec![quoted]);
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "invalid-function");
             assert_eq!(
                 sig.data.first(),
@@ -837,8 +838,8 @@ fn documentation_empty_quoted_macro_errors_void_function_nil() {
     let quoted = Value::list(vec![Value::symbol("macro")]);
 
     let result = builtin_documentation(&mut evaluator, vec![quoted]);
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "void-function");
             assert!(sig.data.first().is_some_and(|v| v.is_nil()));
         }
@@ -1645,8 +1646,8 @@ fn documentation_property_eval_unbound_symbol_property_errors() {
             Value::symbol("variable-documentation"),
         ],
     );
-    match result {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "void-variable"),
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "void-variable"),
         other => panic!("expected void-variable signal, got {other:?}"),
     }
 }
@@ -1671,8 +1672,8 @@ fn documentation_property_eval_invalid_form_property_errors() {
             Value::symbol("variable-documentation"),
         ],
     );
-    match result {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "invalid-function"),
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "invalid-function"),
         other => panic!("expected invalid-function signal, got {other:?}"),
     }
 }

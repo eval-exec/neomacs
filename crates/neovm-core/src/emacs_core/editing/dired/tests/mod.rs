@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::error::FlowKind;
 use crate::emacs_core::value::ValueKind;
 use std::io::Write;
 
@@ -999,8 +1000,8 @@ fn test_file_attributes_lessp_bad_args_match_gnu_order() {
         vec![Value::string("alpha"), Value::string("beta")],
     )
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data[0].as_symbol_name(), Some("listp"));
             assert_eq!(sig.data[1].as_str_owned().as_deref(), Some("beta"));
@@ -1044,8 +1045,8 @@ fn test_file_attributes_lessp_coerces_nil_car_like_gnu() {
     let h1 = Value::cons(Value::fixnum(1), Value::NIL);
     let h2 = Value::cons(Value::fixnum(2), Value::NIL);
     let err = builtin_file_attributes_lessp(&mut eval, vec![h1, h2]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected signal, got {other:?}"),
     }
 }

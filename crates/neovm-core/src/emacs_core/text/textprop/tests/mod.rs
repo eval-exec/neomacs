@@ -12,7 +12,7 @@ use crate::emacs_core::builtins::{
     builtin_make_indirect_buffer, builtin_next_char_property_change,
     builtin_previous_char_property_change, builtin_previous_property_change,
 };
-use crate::emacs_core::error::Flow;
+use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 use malachite::Integer;
 
 /// Helper: create an evaluator with a buffer containing the given text.
@@ -94,8 +94,8 @@ fn get_text_property_out_of_range_signal_uses_gnu_point_range_payload() {
     let mut eval = eval_with_text("hello");
     let result =
         builtin_get_text_property(&mut eval, vec![Value::fixnum(0), Value::symbol("face")]);
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(sig.data, vec![Value::fixnum(0), Value::fixnum(0)]);
         }
@@ -1104,8 +1104,8 @@ fn add_face_text_property_argument_contracts() {
         vec![Value::string("1"), Value::fixnum(2), Value::symbol("bold")],
     )
     .unwrap_err();
-    match begin_err {
-        Flow::Signal(sig) => {
+    match begin_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -1126,8 +1126,8 @@ fn add_face_text_property_argument_contracts() {
         ],
     )
     .unwrap_err();
-    match object_err {
-        Flow::Signal(sig) => {
+    match object_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,

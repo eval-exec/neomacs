@@ -1,5 +1,6 @@
 use super::*;
 use crate::buffer::BufferId;
+use crate::emacs_core::error::{FlowRef, FlowResultExt as _};
 use crate::emacs_core::intern::intern;
 use crate::heap_types::LispString;
 
@@ -458,11 +459,16 @@ fn exit_recursive_edit_rejects_top_level_command_loop_like_gnu() {
     eval.command_loop.recursive_depth = 1;
 
     let result = builtin_exit_recursive_edit(&mut eval, vec![]);
-    assert!(matches!(
-        result,
-        Err(crate::emacs_core::error::Flow::Signal(sig))
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(crate::emacs_core::error::FlowRef::Signal(sig))
             if sig.symbol_name() == "user-error"
-    ));
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -472,11 +478,16 @@ fn abort_recursive_edit_rejects_top_level_command_loop_like_gnu() {
     eval.command_loop.recursive_depth = 1;
 
     let result = builtin_abort_recursive_edit(&mut eval, vec![]);
-    assert!(matches!(
-        result,
-        Err(crate::emacs_core::error::Flow::Signal(sig))
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(crate::emacs_core::error::FlowRef::Signal(sig))
             if sig.symbol_name() == "user-error"
-    ));
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -795,10 +806,15 @@ fn builtin_try_completion_rejects_more_than_three_args() {
         &mut eval,
         vec![Value::string(""), coll, Value::NIL, Value::NIL],
     );
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -824,10 +840,15 @@ fn builtin_all_completions_rejects_more_than_three_args() {
         &mut eval,
         vec![Value::string(""), coll, Value::NIL, Value::NIL],
     );
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -857,10 +878,15 @@ fn builtin_test_completion_rejects_more_than_three_args() {
         &mut eval,
         vec![Value::string(""), coll, Value::NIL, Value::NIL],
     );
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -970,7 +996,8 @@ fn builtin_all_completions_signals_invalid_completion_regexp() {
 
     let err = builtin_all_completions(&mut eval, vec![Value::string(""), coll])
         .expect_err("invalid completion regexp should signal");
-    let crate::emacs_core::error::Flow::Signal(signal) = err else {
+    let err = err.into_kind();
+    let crate::emacs_core::error::FlowKind::Signal(signal) = err else {
         panic!("expected invalid-regexp signal, got {err:?}");
     };
     assert_eq!(
@@ -1230,20 +1257,30 @@ fn builtin_minibufferp_accepts_string_and_second_arg() {
 fn builtin_minibufferp_rejects_non_buffer_like_values() {
     crate::test_utils::init_test_tracing();
     let result = builtin_minibufferp(vec![Value::fixnum(1)]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-type-argument"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-type-argument"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
 fn builtin_minibufferp_rejects_more_than_two_args() {
     crate::test_utils::init_test_tracing();
     let result = builtin_minibufferp(vec![Value::NIL, Value::NIL, Value::NIL]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -1259,10 +1296,15 @@ fn builtin_recursive_edit_rejects_args() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new();
     let result = builtin_recursive_edit(&mut eval, vec![Value::NIL]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -1272,8 +1314,8 @@ fn builtin_top_level_throws_top_level_tag() {
     // top-level now throws 'top-level to exit all recursive edits
     // (mirrors GNU Emacs keyboard.c:1187 Ftop_level).
     assert!(matches!(
-        result,
-        Err(Flow::Throw(ref thrown))
+        result.kinded_ref(),
+        Err(FlowRef::Throw(ref thrown))
             if thrown.tag.is_symbol_named("top-level") && thrown.value.is_nil()
     ));
 }
@@ -1282,10 +1324,15 @@ fn builtin_top_level_throws_top_level_tag() {
 fn builtin_top_level_rejects_args() {
     crate::test_utils::init_test_tracing();
     let result = builtin_top_level(vec![Value::NIL]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -1294,10 +1341,15 @@ fn builtin_exit_recursive_edit_signals_user_error() {
     let mut eval = super::super::eval::Context::new();
     let result = builtin_exit_recursive_edit(&mut eval, vec![]);
     // Not in a recursive edit → user-error
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "user-error"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "user-error"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -1305,10 +1357,15 @@ fn builtin_exit_recursive_edit_rejects_args() {
     crate::test_utils::init_test_tracing();
     let mut eval = super::super::eval::Context::new();
     let result = builtin_exit_recursive_edit(&mut eval, vec![Value::NIL]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -1375,10 +1432,15 @@ fn builtin_minibuffer_contents_no_properties_rejects_args() {
     crate::test_utils::init_test_tracing();
     let mut eval = super::super::eval::Context::new();
     let result = builtin_minibuffer_contents_no_properties_ctx(&mut eval, vec![Value::NIL]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -1386,8 +1448,8 @@ fn builtin_exit_minibuffer_throws_exit_tag() {
     crate::test_utils::init_test_tracing();
     let result = builtin_exit_minibuffer(vec![]);
     assert!(matches!(
-        result,
-        Err(Flow::Throw(ref thrown))
+        result.kinded_ref(),
+        Err(FlowRef::Throw(ref thrown))
             if thrown.tag.is_symbol_named("exit") && thrown.value.is_nil()
     ));
 }
@@ -1396,22 +1458,32 @@ fn builtin_exit_minibuffer_throws_exit_tag() {
 fn builtin_abort_minibuffers_signals_not_in_minibuffer_error() {
     crate::test_utils::init_test_tracing();
     let result = builtin_abort_minibuffers(vec![]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "error"
                 && matches!(sig.data.as_slice(), [val] if val.as_utf8_str().map(|s| s == "Not in a minibuffer").unwrap_or(false))
-    ));
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
 fn builtin_abort_minibuffers_rejects_args() {
     crate::test_utils::init_test_tracing();
     let result = builtin_abort_minibuffers(vec![Value::NIL]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -1420,10 +1492,15 @@ fn builtin_abort_recursive_edit_signals_user_error() {
     let mut eval = super::super::eval::Context::new();
     let result = builtin_abort_recursive_edit(&mut eval, vec![]);
     // Not in a recursive edit → user-error
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "user-error"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "user-error"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -1431,10 +1508,15 @@ fn builtin_abort_recursive_edit_rejects_args() {
     crate::test_utils::init_test_tracing();
     let mut eval = super::super::eval::Context::new();
     let result = builtin_abort_recursive_edit(&mut eval, vec![Value::NIL]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -1445,10 +1527,15 @@ fn builtin_read_buffer_signals_end_of_file() {
         &mut eval,
         vec![Value::string("Buffer: "), Value::string("*scratch*")],
     );
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "end-of-file"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "end-of-file"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -1465,10 +1552,15 @@ fn builtin_read_buffer_rejects_more_than_four_args() {
             Value::NIL,
         ],
     );
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -1479,10 +1571,15 @@ fn builtin_read_command_rejects_more_than_two_args() {
         &mut eval,
         vec![Value::string("Command: "), Value::NIL, Value::NIL],
     );
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -1493,10 +1590,15 @@ fn builtin_read_variable_rejects_more_than_two_args() {
         &mut eval,
         vec![Value::string("Variable: "), Value::NIL, Value::NIL],
     );
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 // -- value_to_string_list -------------------------------------------------
