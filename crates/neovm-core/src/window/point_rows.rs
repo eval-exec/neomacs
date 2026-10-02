@@ -10,7 +10,7 @@
 //! | Knob | Default | Values | Gate |
 //! | --- | --- | --- | --- |
 //! | `NEOMACS_PRESENT_POINT_ROWS` | `off` | `off`, `on`, `verify` | Compact immutable row cells and direct row hit queries; verify checks decoded cells. |
-//! | `NEOMACS_POINT_ROW_ITER` | `off` | `off`, `on` | Concatenate row point streams when placed source bounds prove the existing heap order. |
+//! | `NEOMACS_POINT_ROW_ITER` | `on` | `off`, `on` | Concatenate row point streams when placed source bounds prove the existing heap order. |
 //! Descriptors move rows without rewriting cells. Compact encoding is checked
 //! field by field; an unencodable row retains every original i64 in wide form.
 //! Iterator mode is read once per process. Its numeric range certificate is
@@ -69,7 +69,7 @@ impl PointRowIterMode {
             .map(str::to_ascii_lowercase)
             .as_deref()
         {
-            Some("on" | "1" | "true" | "yes") => Self::On,
+            None | Some("on" | "1" | "true" | "yes") => Self::On,
             _ => Self::Off,
         }
     }

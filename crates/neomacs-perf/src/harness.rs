@@ -1554,7 +1554,7 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOMACS_PRESENT_HIT",
     // C6 compact row point storage and per-window row hits: off (default), on, verify.
     "NEOMACS_PRESENT_POINT_ROWS",
-    // Certified row-stream concatenation: off (default), on; overlaps keep heap merge.
+    // Certified row-stream concatenation: off, on (default); overlaps keep heap merge.
     "NEOMACS_POINT_ROW_ITER",
     // Default-OFF deferred numeric presentation positions; paired same-binary arms.
     "NEOMACS_PRESENT_GEOMETRY_LAZY",

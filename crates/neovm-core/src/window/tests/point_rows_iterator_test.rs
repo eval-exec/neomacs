@@ -68,9 +68,10 @@ fn assert_modes(rows: &DisplayPointRows, expected: &[DisplayPointSnapshot]) {
 }
 
 #[test]
-fn mode_defaults_off_and_accepts_boolean_aliases_without_process_state() {
+fn mode_defaults_on_and_accepts_boolean_aliases_without_process_state() {
+    assert_eq!(PointRowIterMode::from_setting(None), PointRowIterMode::On);
     for setting in [
-        None,
+        Some(""),
         Some("off"),
         Some("0"),
         Some("false"),
