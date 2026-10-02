@@ -8090,11 +8090,10 @@ impl super::super::eval::Context {
     ) -> Result<(), Flow> {
         match result {
             Ok(_) => Ok(()),
-            Err(err @ (Flow::Throw(_) | Flow::ThreadBlocked(_) | Flow::Shutdown(_))) => Err(err),
-            Err(err @ Flow::Signal(_)) => {
+            Err(err) if err.is_signal() => {
                 let rendered = super::super::error::format_flow_with_eval(self, &err);
                 tracing::warn!("{} callback error: {}", kind.label(), rendered);
-                let Flow::Signal(sig) = &err else {
+                let Some(sig) = err.as_signal() else {
                     unreachable!("matched Flow::Signal above")
                 };
                 match kind.command_error_context() {
@@ -8111,6 +8110,7 @@ impl super::super::eval::Context {
                     None => Ok(()),
                 }
             }
+            Err(err) => Err(err),
         }
     }
 

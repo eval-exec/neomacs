@@ -116,9 +116,9 @@ pub(crate) fn flow_from_eval_error(err: EvalError) -> Flow {
             data,
             raw_data,
             ..
-        } => Flow::Signal(Box::new(SignalData::new(symbol, data, raw_data, false))),
+        } => Flow::signal_boxed(Box::new(SignalData::new(symbol, data, raw_data, false))),
         EvalError::UncaughtThrow { tag, value, .. } => Flow::throw(tag, value),
-        EvalError::Shutdown(request) => Flow::Shutdown(request),
+        EvalError::Shutdown(request) => Flow::shutdown(request),
     }
 }
 
@@ -342,7 +342,9 @@ impl Flow {
     pub(crate) fn thread_blocked(blocker: Value, remaining_forms: Value) -> Self {
         Self::ThreadBlocked(Box::new(ThreadBlockedData::new(blocker, remaining_forms)))
     }
+}
 
+impl FlowKind {
     /// Exhaustive proof that every variant's Lisp payload is pinned.
     ///
     /// This function exists to FAIL TO COMPILE. A new `Flow` variant must add
@@ -853,7 +855,7 @@ pub(crate) fn signal_internal_id(
     raw_data: Option<Value>,
     suppress_signal_hook: bool,
 ) -> Flow {
-    Flow::Signal(Box::new(SignalData::new(
+    Flow::signal_boxed(Box::new(SignalData::new(
         symbol,
         data,
         raw_data,
@@ -890,15 +892,15 @@ pub(crate) fn signal_with_data_id(symbol: SymId, data: Value) -> Flow {
 
 /// Convert internal flow to public EvalError.
 pub fn map_flow(flow: Flow) -> EvalError {
-    match flow {
-        Flow::Signal(sig) => {
+    match flow.into_kind() {
+        FlowKind::Signal(sig) => {
             // `sig` (and with it the SignalData pin) stays alive until the new
             // pin is taken, so the payload is never momentarily unrooted.
             EvalError::signal(sig.symbol, sig.data.clone(), sig.raw_data)
         }
-        Flow::Throw(thrown) => EvalError::uncaught_throw(thrown.tag, thrown.value),
-        Flow::Shutdown(request) => EvalError::Shutdown(request),
-        Flow::ThreadBlocked(blocked) => EvalError::signal(
+        FlowKind::Throw(thrown) => EvalError::uncaught_throw(thrown.tag, thrown.value),
+        FlowKind::Shutdown(request) => EvalError::Shutdown(request),
+        FlowKind::ThreadBlocked(blocked) => EvalError::signal(
             intern("error"),
             vec![Value::string(format!(
                 "Thread blocked on {}",
@@ -1928,20 +1930,20 @@ pub(crate) fn format_signal_data_with_eval(
 
 /// Render non-local control flow in Lisp-readable form for diagnostics.
 pub(crate) fn format_flow_with_eval(eval: &super::eval::Context, flow: &Flow) -> String {
-    match flow {
-        Flow::Signal(sig) => format_signal_data_with_eval(eval, sig),
-        Flow::Throw(thrown) => format!(
+    match flow.kind() {
+        FlowRef::Signal(sig) => format_signal_data_with_eval(eval, sig),
+        FlowRef::Throw(thrown) => format!(
             "(no-catch ({} {}))",
             print_value_with_eval(eval, &thrown.tag),
             print_value_with_eval(eval, &thrown.value)
         ),
-        Flow::ThreadBlocked(blocked) => {
+        FlowRef::ThreadBlocked(blocked) => {
             format!(
                 "(thread-blocked {})",
                 print_value_with_eval(eval, &blocked.blocker)
             )
         }
-        Flow::Shutdown(request) => format!("(kill-emacs {})", request.exit_code),
+        FlowRef::Shutdown(request) => format!("(kill-emacs {})", request.exit_code),
     }
 }
 
@@ -2221,7 +2223,7 @@ impl super::eval::Context {
             // the exit code is recorded before the flow unwinds.
             let _ = self.run_hook_if_bound("kill-emacs-hook");
             self.request_shutdown(-1, false);
-            return Err(Flow::Shutdown(super::eval::ShutdownRequest {
+            return Err(Flow::shutdown(super::eval::ShutdownRequest {
                 exit_code: -1,
                 restart: false,
             }));

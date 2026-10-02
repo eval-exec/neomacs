@@ -17,7 +17,7 @@
 //! symbol.
 
 use super::error::{
-    EvalResult, Flow, signal, signal_suppressed, signal_with_data, signal_with_data_id,
+    EvalResult, Flow, FlowKind, signal, signal_suppressed, signal_with_data, signal_with_data_id,
 };
 use super::intern::{SymId, T_SYM_ID, intern, resolve_sym};
 use super::symbol::Obarray;
@@ -751,12 +751,12 @@ fn build_resignal_flow(eval: &super::eval::Context, error_object: Value) -> Flow
 }
 
 fn dispatch_signal_flow(eval: &mut super::eval::Context, flow: Flow) -> EvalResult {
-    match flow {
-        Flow::Signal(sig) => match eval.dispatch_signal_if_needed(sig) {
-            Ok(dispatched) => Err(Flow::Signal(dispatched)),
+    match flow.into_kind() {
+        FlowKind::Signal(sig) => match eval.dispatch_signal_if_needed(sig) {
+            Ok(dispatched) => Err(Flow::signal_boxed(dispatched)),
             Err(flow) => Err(flow),
         },
-        other => Err(other),
+        other => Err(Flow::from_kind(other)),
     }
 }
 

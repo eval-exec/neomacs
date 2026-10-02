@@ -1,7 +1,8 @@
 use super::*;
 use crate::buffer::{CharLen, CharPos0, CharRange, LispCharPos1};
 use crate::emacs_core::error::{
-    expect_args, expect_args_range, expect_fixnum, expect_max_args, expect_min_args,
+    FlowKind, FlowResultExt, expect_args, expect_args_range, expect_fixnum, expect_max_args,
+    expect_min_args,
 };
 use crate::emacs_core::eval::{
     push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
@@ -5594,13 +5595,13 @@ pub(crate) fn builtin_handler_bind_1(
         });
     }
 
-    let body_result = match eval.apply(bodyfun, vec![]) {
+    let body_result = match eval.apply(bodyfun, vec![]).kinded() {
         Ok(value) => Ok(value),
-        Err(Flow::Signal(sig)) => match eval.dispatch_signal_if_needed(sig) {
-            Ok(dispatched) => Err(Flow::Signal(dispatched)),
+        Err(FlowKind::Signal(sig)) => match eval.dispatch_signal_if_needed(sig) {
+            Ok(dispatched) => Err(Flow::signal_boxed(dispatched)),
             Err(flow) => Err(flow),
         },
-        Err(flow) => Err(flow),
+        Err(flow) => Err(Flow::from_kind(flow)),
     };
     eval.truncate_condition_stack(condition_stack_base);
     eval.restore_specpdl_roots(scope);
@@ -5683,7 +5684,7 @@ pub(crate) fn builtin_kill_emacs(eval: &mut super::eval::Context, args: Vec<Valu
     eval.log_cconv_memo_report();
     eval.log_tier_i_report();
     eval.request_shutdown(request.exit_code, request.restart);
-    Err(Flow::Shutdown(request))
+    Err(Flow::shutdown(request))
 }
 
 /// `(lower-frame &optional FRAME)`

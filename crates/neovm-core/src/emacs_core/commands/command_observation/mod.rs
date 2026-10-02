@@ -15,7 +15,7 @@ use strum::IntoStaticStr;
 use crate::buffer::BufferId;
 use crate::window::FrameId;
 
-use super::error::Flow;
+use super::error::{Flow, FlowRef};
 
 static NEXT_COMMAND_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -84,11 +84,11 @@ pub(crate) enum UserCommandOutcome {
 
 impl UserCommandOutcome {
     pub(crate) fn from_flow(flow: &Flow) -> Self {
-        match flow {
-            Flow::Signal(_) => Self::Signaled,
-            Flow::Throw(_) => Self::Threw,
-            Flow::ThreadBlocked(_) => Self::ThreadBlocked,
-            Flow::Shutdown(_) => Self::Shutdown,
+        match flow.kind() {
+            FlowRef::Signal(_) => Self::Signaled,
+            FlowRef::Throw(_) => Self::Threw,
+            FlowRef::ThreadBlocked(_) => Self::ThreadBlocked,
+            FlowRef::Shutdown(_) => Self::Shutdown,
         }
     }
 }

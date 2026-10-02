@@ -1725,8 +1725,8 @@ impl<'a> Reader<'a> {
                 }
                 let result = crate::emacs_core::builtins::closure_from_reader_literal_slots(&items)
                     .map_err(|e| {
-                        let msg = match &e {
-                            crate::emacs_core::error::Flow::Signal(sig) => sig
+                        let msg = match e.kind() {
+                            crate::emacs_core::error::FlowRef::Signal(sig) => sig
                                 .data
                                 .first()
                                 .and_then(|v| {

@@ -1,5 +1,7 @@
 use super::*;
-use crate::emacs_core::error::{expect_args, expect_args_range, expect_fixnum};
+use crate::emacs_core::error::{
+    FlowKind, FlowResultExt, expect_args, expect_args_range, expect_fixnum,
+};
 use libloading::Library;
 use std::path::PathBuf;
 use strum::{EnumString, IntoStaticStr};
@@ -1653,13 +1655,15 @@ pub(crate) fn builtin_treesit_induce_sparse_tree(
         args[1],
         args.get(2).copied().unwrap_or(Value::NIL),
         depth,
-    ) {
+    )
+    .kinded()
+    {
         Ok(Some(tree)) => Ok(tree),
         Ok(None) => Ok(Value::NIL),
-        Err(Flow::Signal(sig)) if sig.symbol == intern("treesit-predicate-not-found") => {
+        Err(FlowKind::Signal(sig)) if sig.symbol == intern("treesit-predicate-not-found") => {
             Ok(Value::NIL)
         }
-        Err(err) => Err(err),
+        Err(err) => Err(Flow::from_kind(err)),
     }
 }
 
@@ -3046,13 +3050,15 @@ pub(crate) fn builtin_treesit_search_forward(
         args[1],
         forward,
         named_only,
-    ) {
+    )
+    .kinded()
+    {
         Ok(Some(node)) => Ok(make_node_value_for_parser(eval, handle.parser_id, node)),
         Ok(None) => Ok(Value::NIL),
-        Err(Flow::Signal(sig)) if sig.symbol == intern("treesit-predicate-not-found") => {
+        Err(FlowKind::Signal(sig)) if sig.symbol == intern("treesit-predicate-not-found") => {
             Ok(Value::NIL)
         }
-        Err(err) => Err(err),
+        Err(err) => Err(Flow::from_kind(err)),
     }
 }
 
@@ -3083,13 +3089,15 @@ pub(crate) fn builtin_treesit_search_subtree(
         named_only,
         depth,
         false,
-    ) {
+    )
+    .kinded()
+    {
         Ok(Some(node)) => Ok(make_node_value_for_parser(eval, handle.parser_id, node)),
         Ok(None) => Ok(Value::NIL),
-        Err(Flow::Signal(sig)) if sig.symbol == intern("treesit-predicate-not-found") => {
+        Err(FlowKind::Signal(sig)) if sig.symbol == intern("treesit-predicate-not-found") => {
             Ok(Value::NIL)
         }
-        Err(err) => Err(err),
+        Err(err) => Err(Flow::from_kind(err)),
     }
 }
 

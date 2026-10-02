@@ -1,7 +1,7 @@
 //! Reader/printer builtins: read-from-string, read, prin1-to-string (enhanced),
 //! format-spec, and various interactive-input stubs.
 
-use super::error::{EvalResult, Flow, signal};
+use super::error::{EvalResult, Flow, FlowKind, FlowResultExt, signal};
 #[cfg(test)]
 use super::intern::resolve_sym;
 use super::intern::{SymId, intern};
@@ -517,14 +517,15 @@ enum MinibufferCommandOutcome {
 
 impl MinibufferCommandOutcome {
     fn from_recursive_edit(result: EvalResult) -> Self {
+        let result = result.kinded();
         match result {
             Ok(_) => Self::Accepted,
-            Err(Flow::Throw(ref thrown))
+            Err(FlowKind::Throw(ref thrown))
                 if thrown.tag.is_symbol_named("exit") && !thrown.value.is_truthy() =>
             {
                 Self::Accepted
             }
-            Err(flow) => Self::Aborted(flow),
+            Err(flow) => Self::Aborted(Flow::from_kind(flow)),
         }
     }
 
@@ -845,10 +846,10 @@ pub(crate) fn unwind_minibuffer_session(
     state: MinibufferSessionUnwind,
 ) -> EvalResult {
     let restored_calling_selection = state.active_window_state;
-    let exit_hook_result = match shared.run_hook_if_bound("minibuffer-exit-hook") {
+    let exit_hook_result = match shared.run_hook_if_bound("minibuffer-exit-hook").kinded() {
         Ok(value) => Ok(value),
-        Err(Flow::Signal(_)) => Ok(Value::NIL),
-        Err(flow) => Err(flow),
+        Err(FlowKind::Signal(_)) => Ok(Value::NIL),
+        Err(flow) => Err(Flow::from_kind(flow)),
     };
 
     if shared.minibuffers.depth() > state.depth_before_entry {

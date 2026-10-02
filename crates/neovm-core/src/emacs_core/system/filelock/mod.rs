@@ -10,7 +10,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use super::error::{EvalResult, Flow, signal};
+use super::error::{EvalResult, Flow, FlowKind, FlowResultExt, signal};
 use super::fileio::{
     find_file_name_handler_lisp_for_eval, lisp_file_name_to_path_buf,
     resolve_filename_lisp_for_eval,
@@ -606,8 +606,8 @@ pub(crate) fn unlock_file(
         return Ok(Value::NIL);
     }
 
-    match unlock_file_resolved(eval, filename) {
-        Err(Flow::Signal(sig))
+    match unlock_file_resolved(eval, filename).kinded() {
+        Err(FlowKind::Signal(sig))
             if super::errors::signal_matches_condition_value_sym(
                 &eval.obarray,
                 sig.symbol,
@@ -621,7 +621,7 @@ pub(crate) fn unlock_file(
             )?;
             Ok(Value::NIL)
         }
-        other => other,
+        other => other.map_err(Flow::from_kind),
     }
 }
 

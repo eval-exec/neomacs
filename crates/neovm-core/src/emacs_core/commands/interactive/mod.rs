@@ -15,7 +15,7 @@ use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
 use std::collections::HashMap;
 
-use super::error::{EvalResult, Flow, signal};
+use super::error::{EvalResult, Flow, FlowKind, FlowResultExt, signal};
 use super::eval::Context;
 use super::intern::{intern, resolve_sym};
 use super::keyboard::pure::{
@@ -2058,10 +2058,11 @@ fn interactive_read_coding_system_optional_arg(
     eval: &mut super::eval::Context,
     prompt: crate::heap_types::LispString,
 ) -> Result<Value, Flow> {
-    match super::lread::builtin_read_coding_system(eval, vec![Value::heap_string(prompt)]) {
+    match super::lread::builtin_read_coding_system(eval, vec![Value::heap_string(prompt)]).kinded()
+    {
         Ok(value) => Ok(value),
-        Err(Flow::Signal(sig)) if sig.symbol == intern("end-of-file") => Ok(Value::NIL),
-        Err(flow) => Err(flow),
+        Err(FlowKind::Signal(sig)) if sig.symbol == intern("end-of-file") => Ok(Value::NIL),
+        Err(flow) => Err(Flow::from_kind(flow)),
     }
 }
 

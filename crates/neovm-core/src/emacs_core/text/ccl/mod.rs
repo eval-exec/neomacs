@@ -245,7 +245,7 @@ fn ccl_quit(instruction: usize) -> Flow {
 }
 
 fn surface_ccl_quit(flow: Flow, on_string: bool) -> Flow {
-    let Flow::Signal(sig) = &flow else {
+    let Some(sig) = flow.as_signal() else {
         return flow;
     };
     let Some(marker) = Value::symbol("ccl-quit").as_symbol_id() else {

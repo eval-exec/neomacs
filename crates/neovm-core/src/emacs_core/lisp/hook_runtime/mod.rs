@@ -1,5 +1,5 @@
 use super::builtins;
-use super::error::{EvalResult, Flow};
+use super::error::{EvalResult, Flow, FlowKind, FlowResultExt};
 use super::eval::Context;
 use super::intern::{SymId, intern};
 use super::value::*;
@@ -263,13 +263,13 @@ pub(crate) fn safe_run_hook_value<R: HookRuntime>(
             runtime.push_hook_root(arg);
         }
         for func in funcs {
-            match runtime.call_hook_callable(func, hook_args) {
+            match runtime.call_hook_callable(func, hook_args).kinded() {
                 Ok(_) => {}
-                Err(Flow::Signal(ref sig)) => {
+                Err(FlowKind::Signal(ref sig)) => {
                     let _ = runtime.report_safe_hook_error(hook_sym, func, sig)?;
                     runtime.remove_hook_function_after_error(hook_sym, func);
                 }
-                Err(flow) => return Err(flow),
+                Err(flow) => return Err(Flow::from_kind(flow)),
             }
         }
         Ok(Value::NIL)

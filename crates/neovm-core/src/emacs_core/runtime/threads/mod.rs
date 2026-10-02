@@ -20,8 +20,8 @@ use crate::emacs_core::error::{expect_args, expect_args_range, expect_min_args};
 use std::{collections::HashMap, time::Duration};
 
 use super::error::{
-    EvalResult, Flow, make_signal_binding_value, signal, signal_from_binding_value,
-    signal_with_data_id,
+    EvalResult, Flow, FlowKind, FlowResultExt, make_signal_binding_value, signal,
+    signal_from_binding_value, signal_with_data_id,
 };
 use super::value::{Value, ValueKind, eq_value, list_to_vec};
 use crate::gc_trace::GcTrace;
@@ -933,11 +933,12 @@ pub(crate) fn finish_make_thread_result(
     thread_id: u64,
     result: EvalResult,
 ) -> EvalResult {
+    let result = result.kinded();
     match result {
         Ok(val) => {
             threads.finish_thread(thread_id, val);
         }
-        Err(Flow::Signal(ref sig)) => {
+        Err(FlowKind::Signal(ref sig)) => {
             let error_val = make_signal_binding_value(sig);
             // Internal error: recorded for thread-last-error and marks the
             // thread dead, but NOT re-raised by a later thread-join (GNU
@@ -947,18 +948,18 @@ pub(crate) fn finish_make_thread_result(
             // another thread joins it later.
             threads.record_last_error(error_val);
         }
-        Err(Flow::Throw(ref thrown)) => {
+        Err(FlowKind::Throw(ref thrown)) => {
             let error_val = Value::list(vec![Value::symbol("no-catch"), thrown.tag, thrown.value]);
             threads.record_thread_internal_error(thread_id, error_val);
             threads.record_last_error(error_val);
         }
-        Err(Flow::ThreadBlocked(blocked)) => {
+        Err(FlowKind::ThreadBlocked(blocked)) => {
             threads.block_thread(thread_id, blocked.blocker, blocked.remaining_forms);
         }
         // kill-emacs is process-wide in GNU (Fkill_emacs exits, whichever
         // thread runs it), so it is not recorded as this thread's error — it
         // unwinds to the caller and ends the process.
-        Err(flow @ Flow::Shutdown(_)) => return Err(flow),
+        Err(flow @ FlowKind::Shutdown(_)) => return Err(Flow::from_kind(flow)),
     }
 
     Ok(threads

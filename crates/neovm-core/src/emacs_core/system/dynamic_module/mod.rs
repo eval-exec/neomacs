@@ -15,7 +15,7 @@ use std::sync::{Mutex, PoisonError};
 
 use libloading::Library;
 
-use super::error::{EvalResult, Flow, signal};
+use super::error::{EvalResult, Flow, FlowKind, signal};
 use super::eval::Context;
 use super::intern::{intern, intern_lisp_string, resolve_sym};
 use super::timefns::{LispTimeOutput, make_lisp_time};
@@ -582,22 +582,23 @@ impl Drop for ActiveModuleEnv {
 }
 
 unsafe fn module_handle_nonlocal_exit(env: *mut emacs_env, flow: Flow) {
+    let flow = flow.into_kind();
     unsafe {
         let priv_ = &mut *(*env).private_members;
         match flow {
-            Flow::Signal(sig) => {
+            FlowKind::Signal(sig) => {
                 priv_.pending_non_local_exit = emacs_funcall_exit::Signal;
                 priv_.non_local_exit_symbol = Value::from_sym_id(sig.symbol);
                 priv_.non_local_exit_data = sig
                     .raw_data
                     .unwrap_or_else(|| Value::list(sig.data.clone()));
             }
-            Flow::Throw(thrown) => {
+            FlowKind::Throw(thrown) => {
                 priv_.pending_non_local_exit = emacs_funcall_exit::Throw;
                 priv_.non_local_exit_symbol = thrown.tag;
                 priv_.non_local_exit_data = thrown.value;
             }
-            Flow::ThreadBlocked(_) => {
+            FlowKind::ThreadBlocked(_) => {
                 priv_.pending_non_local_exit = emacs_funcall_exit::Signal;
                 priv_.non_local_exit_symbol = Value::symbol("error");
                 priv_.non_local_exit_data =
@@ -607,7 +608,7 @@ unsafe fn module_handle_nonlocal_exit(env: *mut emacs_env, flow: Flow) {
             // so the module's own error path runs; the shutdown request is
             // already recorded, so the exit still happens once control returns
             // to the evaluator.
-            Flow::Shutdown(request) => {
+            FlowKind::Shutdown(request) => {
                 priv_.pending_non_local_exit = emacs_funcall_exit::Signal;
                 priv_.non_local_exit_symbol = Value::symbol("kill-emacs");
                 priv_.non_local_exit_data =
@@ -627,7 +628,7 @@ fn module_signal_or_throw(priv_: &emacs_env_private) -> Result<(), Flow> {
                 .unwrap_or_else(|| intern("error"));
             let sym_name = resolve_sym(sym_id);
             let raw_data = priv_.non_local_exit_data;
-            Err(Flow::Signal(Box::new(super::error::SignalData::new(
+            Err(Flow::signal_boxed(Box::new(super::error::SignalData::new(
                 intern(sym_name),
                 super::value::list_to_vec(&raw_data).unwrap_or_else(|| vec![raw_data]),
                 Some(raw_data),

@@ -1,7 +1,7 @@
 //! File loading and module system (require/provide/load).
 
 use super::builtins::collections::builtin_make_hash_table;
-use super::error::{EvalError, Flow, map_flow, signal};
+use super::error::{EvalError, Flow, FlowRef, map_flow, signal};
 use super::intern::{format_symbol_name_for_diagnostic, intern, resolve_sym};
 use super::keymap::is_list_keymap;
 use super::value::{Value, ValueKind, VecLikeType, list_to_vec};
@@ -3075,8 +3075,8 @@ fn run_after_load_evaluation(eval: &mut super::eval::Context, path_lisp: &LispSt
         let abs_path = Value::heap_string(path_lisp.clone());
         eval.push_specpdl_root(abs_path);
         if let Err(e) = eval.apply1(Value::symbol(dale_id), abs_path) {
-            let err_msg = match &e {
-                super::error::Flow::Signal(sig) => {
+            let err_msg = match e.kind() {
+                FlowRef::Signal(sig) => {
                     let sym = format_symbol_name_for_diagnostic(sig.symbol);
                     let data: Vec<String> = sig.data.iter().map(format_value_for_error).collect();
                     format!("({} {})", sym, data.join(" "))
