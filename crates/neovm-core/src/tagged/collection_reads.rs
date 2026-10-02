@@ -21,46 +21,70 @@ use std::sync::{
 ///
 /// Scope state and journals remain local to each mutator. The process gates
 /// contain no Lisp identities and are safe with concurrent mutators. The low
-/// bit keeps the legacy TLS path enabled when the global knob is off; each
-/// admitted scope contributes two. Relaxed ordering suffices: a mutator's own
-/// begin is sequenced before its observation, so it cannot read a count from
+/// two bits retain legacy observation and observed traversal independently.
+/// Every admitted scope contributes four, preserving both immutable flags.
+/// Relaxed ordering suffices: a mutator's own begin is sequenced before its observation, so it cannot read a count from
 /// before that begin. Other mutators only make the gate more conservative.
-static CAPTURE_SCOPES: AtomicUsize = AtomicUsize::new(1);
+#[repr(usize)]
+enum ReadPolicyBit {
+    LegacyObserve = 1,
+    ObservedTraversal = 2,
+}
+
+const POLICY_MASK: usize =
+    ReadPolicyBit::LegacyObserve as usize | ReadPolicyBit::ObservedTraversal as usize;
+const SCOPE_INCREMENT: usize = POLICY_MASK + 1;
+
+// The count can represent usize::MAX / SCOPE_INCREMENT simultaneous scopes;
+// a process cannot approach that bound. Policy bits never enter the count.
+static CAPTURE_SCOPES: AtomicUsize = AtomicUsize::new(POLICY_MASK);
 
 /// Once any mutator has started a capture, all subsequent writes keep their
 /// thread's history, including writes between scopes while certificates live.
 /// Never reset this gate on scope exit. No Lisp state is shared by this flag.
 static HISTORY_REQUIRED: AtomicBool = AtomicBool::new(true);
 
-/// A process configuration flag, immutable after initialization. This does not
-/// cache Lisp state and is safe to read from several mutators.
-static HOIST_READS: AtomicBool = AtomicBool::new(false);
-
 static CONFIG: LazyLock<()> = LazyLock::new(|| {
     if std::env::var("NEOVM_COLLECTION_READ_GLOBAL").as_deref() != Ok("off") {
-        CAPTURE_SCOPES.fetch_and(!1, Ordering::Relaxed);
+        CAPTURE_SCOPES.fetch_and(!(ReadPolicyBit::LegacyObserve as usize), Ordering::Relaxed);
     }
     if std::env::var("NEOVM_COLLECTION_WRITE_LAZY").as_deref() == Ok("on") {
         HISTORY_REQUIRED.store(false, Ordering::Relaxed);
     }
-    HOIST_READS.store(
-        std::env::var("NEOVM_COLLECTION_READ_HOIST").as_deref() != Ok("off"),
-        Ordering::Relaxed,
-    );
+    if std::env::var("NEOVM_COLLECTION_READ_HOIST").as_deref() != Ok("off") {
+        CAPTURE_SCOPES.fetch_and(
+            !(ReadPolicyBit::ObservedTraversal as usize),
+            Ordering::Relaxed,
+        );
+    }
 });
 
 pub(super) fn initialize() {
     LazyLock::force(&CONFIG);
 }
 
+#[cfg(test)]
 #[inline]
 pub(crate) fn hoist_reads() -> bool {
-    HOIST_READS.load(Ordering::Relaxed)
+    CAPTURE_SCOPES.load(Ordering::Relaxed) & ReadPolicyBit::ObservedTraversal as usize == 0
+}
+
+/// Select a traversal once, before any read or synchronous callback. This
+/// caches no Lisp state: each mutator checks its own membership when another
+/// mutator holds a scope. Scope contribution and immutable policy share one
+/// coherent atomic word, so the default inactive arm needs only one load.
+#[inline]
+pub(crate) fn reads_need_observation() -> bool {
+    let policy = CAPTURE_SCOPES.load(Ordering::Relaxed);
+    if policy == 0 {
+        return false;
+    }
+    policy & ReadPolicyBit::ObservedTraversal as usize != 0 || ACTIVE.with(Cell::get)
 }
 
 #[inline]
 pub(crate) fn is_active() -> bool {
-    CAPTURE_SCOPES.load(Ordering::Relaxed) != 0 && ACTIVE.with(Cell::get)
+    CAPTURE_SCOPES.load(Ordering::Relaxed) & !POLICY_MASK != 0 && ACTIVE.with(Cell::get)
 }
 
 #[inline]
@@ -171,7 +195,7 @@ impl CollectionReadScope {
         });
         ACTIVE.with(|active| active.set(true));
         if admitted {
-            CAPTURE_SCOPES.fetch_add(2, Ordering::Relaxed);
+            CAPTURE_SCOPES.fetch_add(SCOPE_INCREMENT, Ordering::Relaxed);
         }
         Self {
             active: admitted,
@@ -222,7 +246,7 @@ impl CollectionReadScope {
             let capture = state.captures.pop().expect("collection read scope");
             clear_recent_reads();
             ACTIVE.with(|active| active.set(!state.captures.is_empty()));
-            CAPTURE_SCOPES.fetch_sub(2, Ordering::Relaxed);
+            CAPTURE_SCOPES.fetch_sub(SCOPE_INCREMENT, Ordering::Relaxed);
             capture
         })
     }
@@ -238,7 +262,7 @@ impl Drop for CollectionReadScope {
 
 #[inline]
 pub(crate) fn observe(value: TaggedValue) {
-    if CAPTURE_SCOPES.load(Ordering::Relaxed) == 0 {
+    if CAPTURE_SCOPES.load(Ordering::Relaxed) & !(ReadPolicyBit::ObservedTraversal as usize) == 0 {
         return;
     }
     observe_active(value.bits());

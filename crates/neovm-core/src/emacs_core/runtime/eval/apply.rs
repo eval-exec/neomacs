@@ -2273,7 +2273,7 @@ impl Context {
     pub(crate) fn apply1(&mut self, function: Value, arg0: Value) -> EvalResult {
         #[cfg(feature = "jit")]
         if function.veclike_type() == Some(VecLikeType::ByteCode) {
-            return self.apply1_bytecode(function, arg0);
+            return self.apply1_bytecode::<true>(function, arg0);
         }
         let mut args = LispArgVec::new();
         args.push(arg0);
@@ -2400,8 +2400,26 @@ impl Context {
         self.finish_traced_call(bt_count, result)
     }
 
+    /// Called only by a mapping callee resolved while this mutator had no
+    /// capture. Private synchronous scopes restore that state after every
+    /// prologue hook and callback; other mutators keep their own observations.
     #[cfg(feature = "jit")]
-    fn apply1_bytecode(&mut self, function: Value, arg0: Value) -> EvalResult {
+    #[inline]
+    pub(crate) fn apply1_bytecode_unobserved(
+        &mut self,
+        function: Value,
+        arg0: Value,
+    ) -> EvalResult {
+        debug_assert!(!crate::tagged::collection_reads::is_active());
+        self.apply1_bytecode::<false>(function, arg0)
+    }
+
+    #[cfg(feature = "jit")]
+    fn apply1_bytecode<const OBSERVED: bool>(
+        &mut self,
+        function: Value,
+        arg0: Value,
+    ) -> EvalResult {
         if !self.attention_clear(super::AttentionMask::CALLBACK_ENTRY) {
             self.apply1_bytecode_entry_slow(function)?;
         }
@@ -2428,10 +2446,15 @@ impl Context {
                 {
                     // As `funcall_general_untraced`: fetched after the safe
                     // point (it may materialize a dump stub).
-                    let bc_data = function.get_bytecode_data().unwrap();
+                    let bc_data = if OBSERVED {
+                        function.get_bytecode_data()
+                    } else {
+                        function.get_bytecode_data_unobserved()
+                    }
+                    .unwrap();
                     self.execute_bytecode_call_1(bc_data, arg0, function)
                 }
-                Ok(()) => self.apply1_bytecode_probing_stack(function, arg0),
+                Ok(()) => self.apply1_bytecode_probing_stack::<OBSERVED>(function, arg0),
             }
         };
         self.depth -= 1;
@@ -2454,9 +2477,18 @@ impl Context {
     #[cfg(feature = "jit")]
     #[cold]
     #[inline(never)]
-    fn apply1_bytecode_probing_stack(&mut self, function: Value, arg0: Value) -> EvalResult {
+    fn apply1_bytecode_probing_stack<const OBSERVED: bool>(
+        &mut self,
+        function: Value,
+        arg0: Value,
+    ) -> EvalResult {
         self.maybe_grow_eval_stack(|ctx| {
-            let bc_data = function.get_bytecode_data().unwrap();
+            let bc_data = if OBSERVED {
+                function.get_bytecode_data()
+            } else {
+                function.get_bytecode_data_unobserved()
+            }
+            .unwrap();
             ctx.execute_bytecode_call_1(bc_data, arg0, function)
         })
     }

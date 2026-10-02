@@ -3801,8 +3801,7 @@ impl<'a> Vm<'a> {
         // Capture guards are synchronous and private: callbacks finish their
         // nested scopes before this driver resumes. A reentrant driver checks
         // its own enclosing scope, so this local policy is valid for this call.
-        let observe_collections = !crate::tagged::collection_reads::hoist_reads()
-            || crate::tagged::collection_reads::is_active();
+        let observe_collections = crate::tagged::collection_reads::reads_need_observation();
         // A6, extended across frames: base+len of the operand stack live in
         // registers for the whole DRIVER, not just one frame (GNU keeps
         // top/pc in locals across setup_frame/Breturn, bytecode.c). Escapes

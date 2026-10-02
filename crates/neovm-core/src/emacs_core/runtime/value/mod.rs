@@ -3102,13 +3102,14 @@ impl TaggedValue {
 
     /// Get the closure slot vector for a Lambda or Macro.
     pub fn closure_slots(self) -> Option<&'static LispValueSlice> {
-        match self.veclike_type()? {
+        let header = self.as_veclike_ptr()?;
+        match unsafe { (*header).type_tag } {
             VecLikeType::Lambda => {
-                let ptr = self.as_veclike_ptr().unwrap() as *const LambdaObj;
+                let ptr = header as *const LambdaObj;
                 Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
             }
             VecLikeType::Macro => {
-                let ptr = self.as_veclike_ptr().unwrap() as *const MacroObj;
+                let ptr = header as *const MacroObj;
                 Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
             }
             _ => None,
@@ -3131,13 +3132,14 @@ impl TaggedValue {
     }
 
     fn closure_parsed_params_cell(self) -> Option<&'static OnceLock<LambdaParams>> {
-        match self.veclike_type()? {
+        let header = self.as_veclike_ptr()?;
+        match unsafe { (*header).type_tag } {
             VecLikeType::Lambda => {
-                let ptr = self.as_veclike_ptr().unwrap() as *const LambdaObj;
+                let ptr = header as *const LambdaObj;
                 Some(unsafe { &(*ptr).parsed_params })
             }
             VecLikeType::Macro => {
-                let ptr = self.as_veclike_ptr().unwrap() as *const MacroObj;
+                let ptr = header as *const MacroObj;
                 Some(unsafe { &(*ptr).parsed_params })
             }
             _ => None,
@@ -3254,6 +3256,38 @@ impl TaggedValue {
         } else {
             None
         }
+    }
+
+    /// Project bytecode data when the caller has established that this
+    /// mutator has no active capture at this read. Private synchronous map
+    /// traversal can retain that policy across a callback only because every
+    /// nested capture finishes before traversal resumes. Prologue hooks and
+    /// callback Lisp reads must continue using ordinary observed accessors.
+    ///
+    /// The caller re-reads and materializes data after its GC/debugger
+    /// prologue; this caches no pointer or Lisp state. Other mutators capture
+    /// their own reads and do not require this mutator to observe dependencies.
+    #[cfg(feature = "jit")]
+    #[inline(always)]
+    pub(crate) fn get_bytecode_data_unobserved(
+        self,
+    ) -> Option<&'static super::bytecode::ByteCodeFunction> {
+        debug_assert!(!crate::tagged::collection_reads::is_active());
+        #[cfg(test)]
+        BYTECODE_DATA_ACCESS_COUNT.with(|count| count.set(count.get() + 1));
+        if !self.is_veclike() {
+            return None;
+        }
+        let header = (self.bits() & !TAG_MASK) as *const crate::tagged::header::VecLikeHeader;
+        if unsafe { (*header).type_tag } != VecLikeType::ByteCode {
+            return None;
+        }
+        let ptr = header as *const ByteCodeObj;
+        let data = unsafe { &(*ptr).data };
+        if data.is_pdump_stub() {
+            crate::emacs_core::pdump::materialize_and_publish_stub(self);
+        }
+        Some(unsafe { &(*ptr).data })
     }
 
     /// Whether `self` is the byte-code object whose data is `f`: an address
@@ -3639,8 +3673,9 @@ impl TaggedValue {
 
     /// Get vector elements.
     pub fn as_vector_data(self) -> Option<&'static LispValueSlice> {
-        if self.is_vector() {
-            let ptr = self.as_veclike_ptr().unwrap() as *const VectorObj;
+        let header = self.as_veclike_ptr()?;
+        if unsafe { (*header).type_tag } == VecLikeType::Vector {
+            let ptr = header as *const VectorObj;
             Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
         } else {
             None
@@ -3695,8 +3730,9 @@ impl TaggedValue {
 
     /// Borrow a GNU-shaped char-table object.
     pub fn as_char_table_obj(self) -> Option<&'static CharTableObj> {
-        if self.is_char_table() {
-            let ptr = self.as_veclike_ptr().unwrap() as *const CharTableObj;
+        let header = self.as_veclike_ptr()?;
+        if unsafe { (*header).type_tag } == VecLikeType::CharTable {
+            let ptr = header as *const CharTableObj;
             Some(unsafe { &*ptr })
         } else {
             None
@@ -3721,8 +3757,9 @@ impl TaggedValue {
 
     /// Borrow a GNU-shaped sub-char-table object.
     pub fn as_sub_char_table_obj(self) -> Option<&'static SubCharTableObj> {
-        if self.is_sub_char_table() {
-            let ptr = self.as_veclike_ptr().unwrap() as *const SubCharTableObj;
+        let header = self.as_veclike_ptr()?;
+        if unsafe { (*header).type_tag } == VecLikeType::SubCharTable {
+            let ptr = header as *const SubCharTableObj;
             Some(unsafe { &*ptr })
         } else {
             None
@@ -3761,8 +3798,9 @@ impl TaggedValue {
 
     /// Get record elements.
     pub fn as_record_data(self) -> Option<&'static LispValueSlice> {
-        if self.is_record() {
-            let ptr = self.as_veclike_ptr().unwrap() as *const RecordObj;
+        let header = self.as_veclike_ptr()?;
+        if unsafe { (*header).type_tag } == VecLikeType::Record {
+            let ptr = header as *const RecordObj;
             Some(unsafe { LispValueSlice::from_slice((*ptr).data.as_slice()) })
         } else {
             None
@@ -4154,16 +4192,8 @@ pub fn eq_value_swp(left: &Value, right: &Value, symbols_with_pos_enabled: bool)
     if !symbols_with_pos_enabled {
         return false;
     }
-    let l = if left.is_symbol_with_pos() {
-        left.as_symbol_with_pos_sym().unwrap()
-    } else {
-        *left
-    };
-    let r = if right.is_symbol_with_pos() {
-        right.as_symbol_with_pos_sym().unwrap()
-    } else {
-        *right
-    };
+    let l = left.as_symbol_with_pos_sym().unwrap_or(*left);
+    let r = right.as_symbol_with_pos_sym().unwrap_or(*right);
     l.bits() == r.bits()
 }
 
@@ -5510,3 +5540,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/bytecode_capture.rs"]
 mod bytecode_capture_tests;
+
+#[cfg(test)]
+#[path = "tests/metadata_capture.rs"]
+mod metadata_capture_tests;

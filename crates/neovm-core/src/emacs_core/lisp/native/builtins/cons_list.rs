@@ -8,7 +8,7 @@ use malachite::integer::Integer;
 /// not change which reads belong to the current thread.
 #[inline]
 fn unobserved_list_scan() -> bool {
-    crate::tagged::collection_reads::hoist_reads() && !crate::tagged::collection_reads::is_active()
+    !crate::tagged::collection_reads::reads_need_observation()
 }
 
 #[inline(always)]

@@ -110,6 +110,11 @@ pub(crate) fn map_sequence_element(sequence: Value, index: usize) -> Result<Valu
 /// `Context`; it contains no cache shared with other mutators.
 pub(crate) enum MapCallee {
     Generic(Value),
+    /// A rooted bytecode identity, selected while this mutator is inactive.
+    /// It stays within one synchronous map; callbacks/hooks cannot retain the
+    /// private capture guard. No Lisp state is shared between mutators.
+    #[cfg(feature = "jit")]
+    UnobservedByteCode(Value),
     Subr {
         designator: Value,
         subr: Value,
@@ -119,6 +124,10 @@ pub(crate) enum MapCallee {
 
 impl MapCallee {
     pub(crate) fn resolve(eval: &mut super::eval::Context, func: Value) -> Self {
+        #[cfg(feature = "jit")]
+        if !crate::tagged::collection_reads::reads_need_observation() && func.is_bytecode() {
+            return Self::UnobservedByteCode(func);
+        }
         match eval.resolve_mapped_subr_callee(func) {
             Some((subr, epoch)) => MapCallee::Subr {
                 designator: func,
@@ -133,6 +142,8 @@ impl MapCallee {
     pub(crate) fn call(&self, eval: &mut super::eval::Context, item: Value) -> EvalResult {
         match *self {
             MapCallee::Generic(func) => apply1(eval, func, item),
+            #[cfg(feature = "jit")]
+            MapCallee::UnobservedByteCode(func) => eval.apply1_bytecode_unobserved(func, item),
             MapCallee::Subr {
                 designator,
                 subr,
@@ -217,9 +228,7 @@ pub(crate) fn mapcar1_eval_from<F>(
 where
     F: FnMut(&mut super::eval::Context, Value) -> Result<Value, Flow>,
 {
-    if crate::tagged::collection_reads::hoist_reads()
-        && !crate::tagged::collection_reads::is_active()
-    {
+    if !crate::tagged::collection_reads::reads_need_observation() {
         mapcar1_eval_from_with_reads::<false, _>(
             eval,
             len,
@@ -542,9 +551,7 @@ pub(crate) fn builtin_mapconcat(eval: &mut super::eval::Context, args: Vec<Value
 
 #[inline]
 fn mapconcat_identity_list(sequence: Value, parts: &mut MapResultVec) -> usize {
-    if crate::tagged::collection_reads::hoist_reads()
-        && !crate::tagged::collection_reads::is_active()
-    {
+    if !crate::tagged::collection_reads::reads_need_observation() {
         mapconcat_identity_list_scan::<false>(sequence, parts)
     } else {
         mapconcat_identity_list_scan::<true>(sequence, parts)
@@ -1682,3 +1689,8 @@ fn merge_hi(
         *min_gallop = threshold;
     }
 }
+
+#[cfg(test)]
+#[cfg(feature = "jit")]
+#[path = "tests/higher_order_callback_policy.rs"]
+mod higher_order_callback_policy;

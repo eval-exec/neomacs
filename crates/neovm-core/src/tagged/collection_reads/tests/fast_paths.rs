@@ -29,9 +29,11 @@ fn concurrent_capture_exit_preserves_this_mutators_observations() {
         let (_, reads) = capture(|| {
             entered.wait();
             assert!(is_active());
+            assert!(reads_need_observation());
             leaving.wait();
             worker.join().unwrap();
             assert!(is_active());
+            assert!(reads_need_observation());
             source.cons_car();
         });
         source.set_car(Value::T);
@@ -52,6 +54,7 @@ fn other_mutators_capture_does_not_observe_this_threads_reads() {
         });
         entered.wait();
         assert!(!is_active());
+        assert_eq!(reads_need_observation(), !hoist_reads());
         Value::cons(Value::NIL, Value::NIL).cons_car();
         leaving.wait();
     });

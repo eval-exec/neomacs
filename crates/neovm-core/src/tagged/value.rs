@@ -532,8 +532,11 @@ impl TaggedValue {
 
     /// If this is a symbol-with-pos, return a reference to the object.
     pub fn as_symbol_with_pos(&self) -> Option<&SymbolWithPosObj> {
-        if self.is_symbol_with_pos() {
-            Some(unsafe { &*(self.as_veclike_ptr()? as *const SymbolWithPosObj) })
+        // One observed projection retains the first-read revision for both
+        // header and payload; no callback or write separates these reads.
+        let header = self.as_veclike_ptr()?;
+        if unsafe { (*header).type_tag } == VecLikeType::SymbolWithPos {
+            Some(unsafe { &*(header as *const SymbolWithPosObj) })
         } else {
             None
         }
@@ -674,8 +677,9 @@ impl TaggedValue {
     /// Extract the canonical public symbol id for a subr.
     #[inline(always)]
     pub fn as_subr_id(self) -> Option<SymId> {
-        if self.veclike_type() == Some(super::header::VecLikeType::Subr) {
-            let ptr = self.as_veclike_ptr().unwrap() as *const super::header::SubrObj;
+        let header = self.as_veclike_ptr()?;
+        if unsafe { (*header).type_tag } == VecLikeType::Subr {
+            let ptr = header as *const super::header::SubrObj;
             Some(unsafe { (*ptr).sym_id })
         } else {
             None
@@ -685,10 +689,11 @@ impl TaggedValue {
     /// Read GNU's intrinsic primitive-command state from the subr object.
     #[inline(always)]
     pub fn subr_interactivity(self) -> Option<super::header::SubrInteractivity> {
-        if self.veclike_type() != Some(super::header::VecLikeType::Subr) {
+        let header = self.as_veclike_ptr()?;
+        if unsafe { (*header).type_tag } != VecLikeType::Subr {
             return None;
         }
-        let ptr = self.as_veclike_ptr().unwrap() as *const super::header::SubrObj;
+        let ptr = header as *const super::header::SubrObj;
         Some(unsafe { (*ptr).interactivity })
     }
 

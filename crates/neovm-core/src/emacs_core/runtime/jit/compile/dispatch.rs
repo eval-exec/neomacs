@@ -446,9 +446,7 @@ fn scan_cdr<const OBSERVE: bool>(cell: Value) -> Value {
 /// every distinct cons has been visited.
 #[inline(always)]
 fn memq_fast(ctx: &Context, elt: Value, list: Value) -> Option<Value> {
-    if crate::tagged::collection_reads::hoist_reads()
-        && !crate::tagged::collection_reads::is_active()
-    {
+    if !crate::tagged::collection_reads::reads_need_observation() {
         memq_fast_walk::<false>(ctx, elt, list)
     } else {
         memq_fast_walk::<true>(ctx, elt, list)
@@ -477,9 +475,7 @@ fn memq_fast_walk<const OBSERVE: bool>(ctx: &Context, elt: Value, list: Value) -
 /// that is a cons whose car is KEY's bits.
 #[inline(always)]
 fn assq_fast(ctx: &Context, key: Value, list: Value) -> Option<Value> {
-    if crate::tagged::collection_reads::hoist_reads()
-        && !crate::tagged::collection_reads::is_active()
-    {
+    if !crate::tagged::collection_reads::reads_need_observation() {
         assq_fast_walk::<false>(ctx, key, list)
     } else {
         assq_fast_walk::<true>(ctx, key, list)

@@ -21,32 +21,29 @@ pub(crate) const GNU_INITIAL_OBARRAY_SIZE: usize = 1 << 15;
 // ===========================================================================
 
 pub(crate) fn symbol_id(value: &Value) -> Option<SymId> {
-    match value.kind() {
-        ValueKind::Nil => Some(NIL_SYM_ID),
-        ValueKind::T => Some(T_SYM_ID),
-        ValueKind::Symbol(id) => Some(id),
-        _ => {
-            // Transparently unwrap symbol-with-pos → bare symbol.
-            // The inner `.sym` is always a bare symbol, so one level
-            // of unwrapping is sufficient and safe.
-            if let Some(sym) = value.as_symbol_with_pos_sym() {
-                symbol_id(&sym)
-            } else {
-                None
-            }
-        }
+    if let Some(id) = value.as_symbol_id() {
+        return (!value.is_unbound()).then_some(id);
     }
+    // This observed projection includes wrong-type veclikes, just as the
+    // previous kind() classification did. It also unwraps positioned symbols.
+    value
+        .as_symbol_with_pos_sym()
+        .and_then(|sym| symbol_id(&sym))
 }
 
 pub(crate) fn symbol_id_checked(value: &Value, symbols_with_pos_enabled: bool) -> Option<SymId> {
-    match value.kind() {
-        ValueKind::Nil => Some(NIL_SYM_ID),
-        ValueKind::T => Some(T_SYM_ID),
-        ValueKind::Symbol(id) => Some(id),
-        _ if symbols_with_pos_enabled => value
+    if let Some(id) = value.as_symbol_id() {
+        return (!value.is_unbound()).then_some(id);
+    }
+    if symbols_with_pos_enabled {
+        value
             .as_symbol_with_pos_sym()
-            .and_then(|sym| symbol_id_checked(&sym, symbols_with_pos_enabled)),
-        _ => None,
+            .and_then(|sym| symbol_id_checked(&sym, symbols_with_pos_enabled))
+    } else {
+        // kind() previously observed every veclike even with SWP disabled.
+        // Retain that dependency while avoiding full kind decoding.
+        let _ = value.as_veclike_ptr();
+        None
     }
 }
 

@@ -265,13 +265,8 @@ pub(crate) fn builtin_type_of_with_ctx_1(
 /// JIT's GC-free `type-of` intrinsic answers records with it directly.
 #[inline]
 pub(crate) fn record_type_of(value: Value) -> Option<Value> {
-    if !value.is_record() {
-        return None;
-    }
-    let tag = value.as_record_data().and_then(|v| v.first().copied());
-    if let Some(tag_val) = tag
-        && tag_val.is_record()
-        && let Some(tv) = tag_val.as_record_data()
+    let tag = value.as_record_data()?.first().copied();
+    if let Some(tv) = tag.and_then(Value::as_record_data)
         && tv.len() > 1
     {
         return Some(tv[1]);

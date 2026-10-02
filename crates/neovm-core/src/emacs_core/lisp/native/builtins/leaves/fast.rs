@@ -24,9 +24,7 @@ use crate::emacs_core::value::Value;
 /// `bytecode_nth_values` signals or walks it. Must agree with that function
 /// wherever it answers.
 pub(crate) fn nth_fast(_: &Context, args: &[Value; 4]) -> Option<Value> {
-    if crate::tagged::collection_reads::hoist_reads()
-        && !crate::tagged::collection_reads::is_active()
-    {
+    if !crate::tagged::collection_reads::reads_need_observation() {
         nth_fast_walk::<false>(args)
     } else {
         nth_fast_walk::<true>(args)

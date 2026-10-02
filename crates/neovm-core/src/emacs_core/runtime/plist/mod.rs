@@ -166,9 +166,7 @@ pub fn plist_get_swp(plist: Value, prop: &Value, symbols_with_pos_enabled: bool)
 
 #[inline]
 fn plist_get_select<Comparison: PlistKeyComparison>(plist: Value, prop: &Value) -> Option<Value> {
-    if crate::tagged::collection_reads::hoist_reads()
-        && !crate::tagged::collection_reads::is_active()
-    {
+    if !crate::tagged::collection_reads::reads_need_observation() {
         plist_get_with::<Comparison, false>(plist, prop)
     } else {
         plist_get_with::<Comparison, true>(plist, prop)
@@ -241,9 +239,7 @@ pub fn plist_put_swp(
     value: Value,
     symbols_with_pos_enabled: bool,
 ) -> Result<(Value, bool), Flow> {
-    if crate::tagged::collection_reads::hoist_reads()
-        && !crate::tagged::collection_reads::is_active()
-    {
+    if !crate::tagged::collection_reads::reads_need_observation() {
         plist_put_walk::<false>(plist, prop, value, symbols_with_pos_enabled)
     } else {
         plist_put_walk::<true>(plist, prop, value, symbols_with_pos_enabled)

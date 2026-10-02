@@ -170,7 +170,7 @@ fn builtin_rassoc_with_symbols(args: Vec<Value>, symbols_with_pos_enabled: bool)
 /// iterations. Captures on other mutator threads do not observe our reads.
 #[inline]
 fn unobserved_rassq_scan() -> bool {
-    crate::tagged::collection_reads::hoist_reads() && !crate::tagged::collection_reads::is_active()
+    !crate::tagged::collection_reads::reads_need_observation()
 }
 
 #[inline(always)]

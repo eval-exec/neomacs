@@ -795,16 +795,18 @@ pub(crate) fn builtin_set_char_table_range(
     Ok(*value)
 }
 
-fn ct_lookup_ascii_cached(table: &Value, ch: i64) -> Option<Value> {
+fn ct_lookup_ascii_cached(mut obj: &crate::tagged::header::CharTableObj, ch: i64) -> Option<Value> {
     if !(0..CT_ASCII_CACHE_LEN as i64).contains(&ch) {
         return None;
     }
-    let mut current = *table;
     loop {
-        let obj = current.as_char_table_obj()?;
-        let value = if is_sub_char_table(obj.ascii) {
-            sub_char_table_contents(obj.ascii)
-                .and_then(|contents| contents.get(ch as usize).copied())
+        // A single observing projection covers both the type and contents.
+        // No Lisp callback or write separates these adjacent reads.
+        let value = if let Some(ascii) = obj.ascii.as_sub_char_table_obj() {
+            ascii
+                .contents
+                .get(ch as usize)
+                .copied()
                 .unwrap_or(Value::NIL)
         } else {
             obj.ascii
@@ -815,10 +817,10 @@ fn ct_lookup_ascii_cached(table: &Value, ch: i64) -> Option<Value> {
         if !obj.defalt.is_nil() {
             return Some(obj.defalt);
         }
-        if !is_char_table(&obj.parent) {
-            return Some(Value::NIL);
+        match obj.parent.as_char_table_obj() {
+            Some(parent) => obj = parent,
+            None => return Some(Value::NIL),
         }
-        current = obj.parent;
     }
 }
 
@@ -868,17 +870,18 @@ pub(crate) fn builtin_char_table_range(
 /// 2. If the local entry is nil or absent, use the char-table's default value
 /// 3. If default is nil, recursively check the parent char-table
 pub(crate) fn ct_lookup(table: &Value, ch: i64) -> EvalResult {
-    if !is_char_table(table) {
+    let Some(obj) = table.as_char_table_obj() else {
         return Err(wrong_type("char-table-p", table));
-    }
-    if let Some(value) = ct_lookup_ascii_cached(table, ch) {
+    };
+    if let Some(value) = ct_lookup_ascii_cached(obj, ch) {
         return Ok(value);
     }
-    let obj = table.as_char_table_obj().unwrap();
     let idx = chartab_idx(ch, 0, 0);
     let mut val = obj.contents[idx];
     if is_sub_char_table(val) {
-        val = sub_char_table_ref(val, ch, is_char_code_property_table(table));
+        let is_uniprop = obj.purpose.as_symbol_id() == Some(char_code_property_table_sym_id())
+            && obj.extras.len() == 5;
+        val = sub_char_table_ref(val, ch, is_uniprop);
     }
     if !val.is_nil() {
         return Ok(val);
@@ -2077,3 +2080,7 @@ pub(crate) use super::boolvec::{
 #[cfg(test)]
 #[path = "tests/mod.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/collection_lookup_capture.rs"]
+mod collection_lookup_capture;
