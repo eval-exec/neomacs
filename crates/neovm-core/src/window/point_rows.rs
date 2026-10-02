@@ -1,7 +1,7 @@
 //! C6: immutable point cells shared independently of a row's placement.
 //!
 //! `NEOMACS_PRESENT_POINT_ROWS=off|on|verify` is read once per process and
-//! defaults to off. `on` publishes row storage in place of the flat point
+//! defaults to on. `on` publishes row storage in place of the flat point
 //! vector; `verify` checks each frozen row's encoding roundtrip. This
 //! storage owns plain numeric geometry, never Lisp values or mutable caches.
 //! Producers own mutable placement descriptors and publish immutable snapshots;
@@ -9,7 +9,7 @@
 //!
 //! | Knob | Default | Values | Gate |
 //! | --- | --- | --- | --- |
-//! | `NEOMACS_PRESENT_POINT_ROWS` | `off` | `off`, `on`, `verify` | Compact immutable row cells and direct row hit queries; verify checks decoded cells. |
+//! | `NEOMACS_PRESENT_POINT_ROWS` | `on` | `off`, `on`, `verify` | Compact immutable row cells and direct row hit queries; verify checks decoded cells. |
 //! | `NEOMACS_POINT_ROW_ITER` | `on` | `off`, `on` | Concatenate row point streams when placed source bounds prove the existing heap order. |
 //! Descriptors move rows without rewriting cells. Compact encoding is checked
 //! field by field; an unencodable row retains every original i64 in wide form.
@@ -47,7 +47,7 @@ pub fn display_point_rows_mode() -> DisplayPointRowsMode {
             .map(|value| value.trim().to_ascii_lowercase())
             .as_deref()
         {
-            Some("on" | "1" | "true" | "yes") => DisplayPointRowsMode::On,
+            None | Some("on" | "1" | "true" | "yes") => DisplayPointRowsMode::On,
             Some("verify") => DisplayPointRowsMode::Verify,
             _ => DisplayPointRowsMode::Off,
         }
