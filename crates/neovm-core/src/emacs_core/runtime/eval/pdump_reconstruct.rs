@@ -233,6 +233,7 @@ impl Context {
                 super::super::builtins::current_window_configuration_registry_handle(),
             dynamic_module_registry:
                 super::super::dynamic_module::current_dynamic_module_registry_handle(),
+            in_flight_registry: super::super::error::current_in_flight_registry_handle(),
         };
         ev.setup_thread_locals();
 

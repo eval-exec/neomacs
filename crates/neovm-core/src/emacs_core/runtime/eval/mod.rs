@@ -2283,16 +2283,6 @@ fn collect_thread_local_gc_roots(
         stats,
         super::jit::cache::collect_jit_reloc_gc_roots,
     );
-    // A signal, throw or thread-yield that is unwinding lives only in a Rust
-    // `Flow`, which the precise collector cannot see; each variant's payload is
-    // pinned by its own private root handle and seeded here (DIVERGENCES.md
-    // 161 for the signal, 162 for the throw and the thread-yield).
-    collect_group(
-        roots,
-        "in-flight-flow-thread-local",
-        stats,
-        super::error::collect_in_flight_flow_gc_roots,
-    );
     collect_group(
         roots,
         "syntax-thread-local",
@@ -3610,6 +3600,7 @@ pub struct Context {
     pub(crate) file_notify_registry: super::builtins::FileNotifyRegistryHandle,
     pub(crate) window_configuration_registry: super::builtins::WindowConfigurationRegistryHandle,
     pub(crate) dynamic_module_registry: super::dynamic_module::DynamicModuleRegistryHandle,
+    pub(crate) in_flight_registry: super::error::InFlightRegistryHandle,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

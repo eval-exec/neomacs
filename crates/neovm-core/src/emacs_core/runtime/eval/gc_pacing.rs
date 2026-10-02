@@ -263,6 +263,16 @@ impl Context {
             visit(self.standard_category_table);
         }
         let mut registry_roots = Vec::new();
+        // Rust-held signals, throws and yields stay rooted when this Context moves.
+        group("in_flight_registry");
+        super::super::error::collect_in_flight_registry_gc_roots(
+            &mut registry_roots,
+            &self.in_flight_registry,
+            self.tagged_heap.identity(),
+        );
+        for root in registry_roots.drain(..) {
+            visit(root);
+        }
         group("ccl_registry");
         super::super::ccl::collect_ccl_registry_gc_roots(&self.ccl_registry, &mut registry_roots);
         for root in registry_roots.drain(..) {
@@ -517,6 +527,7 @@ impl Context {
         super::super::dynamic_module::install_dynamic_module_registry_handle(
             &self.dynamic_module_registry,
         );
+        super::super::error::install_in_flight_registry_handle(&self.in_flight_registry);
         super::super::syntax::restore_standard_syntax_table_object(self.standard_syntax_table);
         super::super::syntax::restore_syntax_code_objects(self.syntax_code_objects);
         super::super::category::restore_standard_category_table_object(

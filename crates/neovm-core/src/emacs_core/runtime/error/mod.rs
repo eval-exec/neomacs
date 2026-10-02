@@ -493,14 +493,13 @@ impl InFlightPinned for SignalData {
 // free-list link, whose low three bits are `TAG_SYMBOL`, so it decodes as a
 // symbol with a garbage id (DIVERGENCES.md 161).
 //
-// The table is a thread-local slot arena rather than the `SCRATCH_GC_ROOTS`
+// The table is a Context-owned slot arena rather than the `SCRATCH_GC_ROOTS`
 // stack because a signal's lifetime is NOT stack-shaped: it is cloned, boxed,
 // stored in a resume target, and converted to and from `EvalError`, so roots
 // are released in an order a truncating stack cannot express.
 
 thread_local! {
-    static IN_FLIGHT_ROOTS: RefCell<InFlightRootTable> =
-        RefCell::new(InFlightRootTable::default());
+    static IN_FLIGHT_ROOTS: RefCell<Option<InFlightRegistryHandle>> = const { RefCell::new(None) };
 }
 
 #[derive(Default)]
@@ -510,22 +509,65 @@ struct InFlightRootTable {
     free: Vec<usize>,
 }
 
-/// A pin on one in-flight payload's heap values. Owns a slot in the
-/// thread-local table
-/// for its whole life; `Clone` takes a fresh slot (a cloned `Flow` is a second
-/// independent owner), `Drop` releases it.
+/// Roots retained by flows from one Context, including after it moves threads.
+/// A source thread may keep or drop a public EvalError while a worker collects
+/// its owning Context, so the slot arena uses a mutex rather than RefCell.
+#[derive(Clone)]
+pub(crate) struct InFlightRegistryHandle {
+    heap_identity: Option<usize>,
+    table: std::sync::Arc<std::sync::Mutex<InFlightRootTable>>,
+}
+
+impl InFlightRegistryHandle {
+    fn new(heap_identity: Option<usize>) -> Self {
+        Self {
+            heap_identity,
+            table: std::sync::Arc::new(std::sync::Mutex::new(InFlightRootTable::default())),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, InFlightRootTable> {
+        self.table
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
+}
+
+pub(crate) fn current_in_flight_registry_handle() -> InFlightRegistryHandle {
+    let heap_identity = crate::tagged::gc::current_tagged_heap_identity();
+    IN_FLIGHT_ROOTS.with(|active| {
+        let mut active = active.borrow_mut();
+        if active
+            .as_ref()
+            .is_none_or(|registry| registry.heap_identity != heap_identity)
+        {
+            *active = Some(InFlightRegistryHandle::new(heap_identity));
+        }
+        active
+            .as_ref()
+            .expect("installed in-flight registry")
+            .clone()
+    })
+}
+
+pub(crate) fn install_in_flight_registry_handle(registry: &InFlightRegistryHandle) {
+    IN_FLIGHT_ROOTS.with(|active| *active.borrow_mut() = Some(registry.clone()));
+}
+
+struct InFlightRootPin {
+    registry: InFlightRegistryHandle,
+    slot: usize,
+}
+
+/// A pin on one in-flight payload's heap values. Owns a slot in its Context's
+/// registry for its whole life; clones take independent slots in that same
+/// registry, and Drop releases the owning slot even after Context activation
+/// changes or the Context moves to another thread.
 pub struct InFlightRoots {
-    /// `None` when the payload contained no heap object — the common case for
-    /// `quit` and for arity/type errors whose data is symbols and fixnums —
-    /// so the overwhelmingly frequent signal costs no table traffic at all.
-    slot: Option<usize>,
-    /// The slot index names a row in THIS thread's table, so the handle must
-    /// not travel: dropped on another thread it would release a slot that
-    /// thread pinned, unrooting a live payload. `PhantomData<*const ()>` is
-    /// how that is enforced — it makes the handle (and with it `SignalData`
-    /// and `Flow`) `!Send`, so a cross-thread move is a compile error rather
-    /// than a rare unrooting. That costs nothing real: a `Value` belongs to one
-    /// thread's heap already.
+    /// `None` for a payload with no traceable values, avoiding registry traffic.
+    pin: Option<InFlightRootPin>,
+    /// Flow payloads remain local to their Rust evaluator call stack. Moving
+    /// the owning Context is allowed; its registry follows it independently.
     _not_send: std::marker::PhantomData<*const ()>,
 }
 
@@ -542,18 +584,19 @@ impl InFlightRoots {
         for value in payload {
             Self::push_if_traceable(&mut values, value);
         }
-        Self {
-            slot: Self::claim(values),
-            _not_send: std::marker::PhantomData,
+        if values.is_empty() {
+            return Self {
+                pin: None,
+                _not_send: std::marker::PhantomData,
+            };
         }
+        Self::claim(current_in_flight_registry_handle(), values)
     }
 
     /// Keep what the mark phase can act on. Heap objects obviously; symbols
     /// because `seed_root` routes them to `mark_symbol`, which is what keeps a
     /// non-canonical symbol's cells. Fixnums, `nil` and `t` are immediates the
-    /// collector never touches, and dropping them is what leaves the common
-    /// signal — `quit`, and arity errors whose data is a symbol and a count —
-    /// with a short vector or none at all.
+    /// collector never touches.
     #[inline]
     fn push_if_traceable(values: &mut Vec<Value>, value: Value) {
         if value.is_nil() || value.is_t() {
@@ -564,55 +607,49 @@ impl InFlightRoots {
         }
     }
 
-    fn claim(values: Vec<Value>) -> Option<usize> {
-        if values.is_empty() {
-            return None;
-        }
-        IN_FLIGHT_ROOTS.with(|table| {
-            let mut table = table.borrow_mut();
+    fn claim(registry: InFlightRegistryHandle, values: Vec<Value>) -> Self {
+        let slot = {
+            let mut table = registry.lock();
             match table.free.pop() {
                 Some(slot) => {
                     table.slots[slot] = Some(values);
-                    Some(slot)
+                    slot
                 }
                 None => {
                     table.slots.push(Some(values));
-                    Some(table.slots.len() - 1)
+                    table.slots.len() - 1
                 }
             }
-        })
-    }
-}
-
-impl Clone for InFlightRoots {
-    fn clone(&self) -> Self {
-        let Some(slot) = self.slot else {
-            return Self {
-                slot: None,
-                _not_send: std::marker::PhantomData,
-            };
         };
-        let values = IN_FLIGHT_ROOTS
-            .with(|table| table.borrow().slots[slot].clone())
-            .unwrap_or_default();
         Self {
-            slot: Self::claim(values),
+            pin: Some(InFlightRootPin { registry, slot }),
             _not_send: std::marker::PhantomData,
         }
     }
 }
 
+impl Clone for InFlightRoots {
+    fn clone(&self) -> Self {
+        let Some(pin) = &self.pin else {
+            return Self {
+                pin: None,
+                _not_send: std::marker::PhantomData,
+            };
+        };
+        let values = pin.registry.lock().slots[pin.slot]
+            .as_ref()
+            .expect("live in-flight pin owns its slot")
+            .clone();
+        Self::claim(pin.registry.clone(), values)
+    }
+}
+
 impl Drop for InFlightRoots {
     fn drop(&mut self) {
-        let Some(slot) = self.slot else { return };
-        // A thread-local can already be destroyed during thread teardown; a
-        // failed access there means the table itself is gone, so there is
-        // nothing left to release.
-        let _ = IN_FLIGHT_ROOTS.try_with(|table| {
-            let mut table = table.borrow_mut();
-            table.slots[slot] = None;
-            table.free.push(slot);
-        });
+        let Some(pin) = &self.pin else { return };
+        let mut table = pin.registry.lock();
+        table.slots[pin.slot] = None;
+        table.free.push(pin.slot);
     }
 }
 
@@ -622,13 +659,31 @@ impl std::fmt::Debug for InFlightRoots {
     }
 }
 
-/// Seed every in-flight `Flow` payload — signal, throw and thread-yield —
-/// into the collector's root set. Wired into `collect_thread_local_gc_roots`
-/// (`eval.rs`) beside the other thread-local root groups.
-pub(crate) fn collect_in_flight_flow_gc_roots(out: &mut Vec<Value>) {
-    IN_FLIGHT_ROOTS.with(|table| {
-        for slot in table.borrow().slots.iter().flatten() {
-            out.extend(slot.iter().copied());
+/// Collect the owning Context's pins, independent of the active TLS view.
+pub(crate) fn collect_in_flight_registry_gc_roots(
+    out: &mut Vec<Value>,
+    registry: &InFlightRegistryHandle,
+    heap_id: usize,
+) {
+    if registry.heap_identity.is_some_and(|owner| owner != heap_id) {
+        return;
+    }
+    let table = registry.lock();
+    for values in table.slots.iter().flatten() {
+        for &value in values {
+            if registry.heap_identity.is_some() || !value.is_heap_object() {
+                out.push(value);
+            }
+        }
+    }
+}
+
+/// The active-view root collector, retained for ownership proof tests.
+#[cfg(test)]
+pub(crate) fn collect_in_flight_flow_gc_roots(out: &mut Vec<Value>, heap_id: usize) {
+    IN_FLIGHT_ROOTS.with(|active| {
+        if let Some(registry) = &*active.borrow() {
+            collect_in_flight_registry_gc_roots(out, registry, heap_id);
         }
     });
 }
@@ -2166,3 +2221,7 @@ impl super::eval::Context {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/gc_tls_ownership.rs"]
+mod gc_tls_ownership_tests;
