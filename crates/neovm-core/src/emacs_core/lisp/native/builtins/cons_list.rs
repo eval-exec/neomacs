@@ -6,12 +6,12 @@ use std::sync::LazyLock;
 
 // Assoc callback knob, read once per process:
 // | Knob | Values | Default | Effect |
-// | NEOVM_ASSOC_RESOLVED | off, on | off | Resolve callable TESTFN once per walk with live function-epoch guards and direct known comparisons. |
+// | NEOVM_ASSOC_RESOLVED | on, off | on | Resolve callable TESTFN once per walk with live function-epoch guards and direct known comparisons. |
 
 /// Process-constant configuration shared by all mutators; contains no Lisp
 /// state. LazyLock publishes the initialized immutable value to every thread.
 static ASSOC_RESOLVED: LazyLock<bool> =
-    LazyLock::new(|| std::env::var("NEOVM_ASSOC_RESOLVED").is_ok_and(|value| value == "on"));
+    LazyLock::new(|| !std::env::var("NEOVM_ASSOC_RESOLVED").is_ok_and(|value| value == "off"));
 
 /// A scan can keep this choice for its whole duration only when it runs no
 /// Lisp callbacks. Captures are thread scoped: another mutator's scope does
