@@ -6,6 +6,37 @@ use super::*;
 use neomacs_display_protocol::frame_glyphs::GlyphRowRole;
 use neomacs_display_protocol::glyph_matrix::GlyphRow;
 
+#[test]
+fn line_numbers_cannot_keep_chrome_for_any_other_guard_facts() {
+    use crate::types::DisplayLineNumbersMode;
+    for (mode, refuses) in [
+        (DisplayLineNumbersMode::Off, false),
+        (DisplayLineNumbersMode::Visual, false),
+        (DisplayLineNumbersMode::Absolute, true),
+        (DisplayLineNumbersMode::Relative, true),
+    ] {
+        assert_eq!(line_numbers_require_mode_line(mode), refuses);
+        if refuses {
+            let line = row(5, 9);
+            for point in [0, 5, 10, 16] {
+                for chrome_dirty in [false, true] {
+                    for selected_window in [false, true] {
+                        let mut facts = facts();
+                        facts.point = point;
+                        facts.chrome_dirty = chrome_dirty;
+                        facts.selected_window = selected_window;
+                        facts.line_numbers_displayed = true;
+                        assert!(matches!(
+                            decide(facts, &line, None),
+                            ModeLineDecision::Evaluate(_)
+                        ));
+                    }
+                }
+            }
+        }
+    }
+}
+
 struct Probe {
     text: Vec<char>,
     overlay_edges: Vec<i64>,

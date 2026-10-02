@@ -390,11 +390,7 @@ pub(crate) fn decide_edit_chrome(
         selected_window: frame.selected,
         shows_current_buffer: frame.shows_current_buffer,
         window_start_moved: replay.dvpos != 0.0 || replay.new_window_start != prev.key.window_start,
-        line_numbers_displayed: !matches!(
-            curr.display_line_numbers,
-            crate::types::DisplayLineNumbersMode::Off
-                | crate::types::DisplayLineNumbersMode::Visual
-        ),
+        line_numbers_displayed: line_numbers_require_mode_line(curr.display_line_numbers),
         bidi_auto_paragraph: bidi_auto_paragraph(buffer),
         selective_display: curr.selective_display > 0,
         old_z: new_z - delta,
@@ -420,6 +416,17 @@ pub(crate) fn decide_edit_chrome(
         previous_body = Some(row);
     }
     decide_after_edit(facts, line, buffer)
+}
+
+/// GNU xdisp.c's optimization-1 line-number clause is an unconditional
+/// refusal for absolute/relative numbers. This pure numeric predicate has no
+/// shared state: concurrent layout attempts read their own captured mode.
+#[inline]
+pub(crate) fn line_numbers_require_mode_line(mode: crate::types::DisplayLineNumbersMode) -> bool {
+    !matches!(
+        mode,
+        crate::types::DisplayLineNumbersMode::Off | crate::types::DisplayLineNumbersMode::Visual
+    )
 }
 
 #[cfg(test)]

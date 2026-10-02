@@ -4048,8 +4048,19 @@ impl LayoutEngine {
         evaluator: &neovm_core::emacs_core::Context,
     ) -> bool {
         use crate::incremental_layout::mode_line_gate::{
-            EditFrameFacts, ModeLineDecision, decide_edit_chrome,
+            EditFrameFacts, ModeLineDecision, ModeLineEvaluateReason, decide_edit_chrome,
+            line_numbers_require_mode_line,
         };
+        // GNU cannot keep optimization 1 with nonvisual line numbers. This
+        // refusal is independent of every other clause, so do not gather
+        // buffer facts or search the retained cursor row to rediscover it.
+        // Only the GNU arm calls this function; the explicit legacy path is
+        // unchanged. The diagnostic names this sufficient refusal clause.
+        if line_numbers_require_mode_line(curr_key.display_line_numbers) {
+            let decision = ModeLineDecision::Evaluate(ModeLineEvaluateReason::LineNumbersDisplayed);
+            tracing::debug!(window = params.window_id, ?decision, "mode-line gate (gnu)");
+            return false;
+        }
         let Some(buffer) = evaluator
             .buffer_manager()
             .get(neovm_core::buffer::BufferId(params.buffer_id))
