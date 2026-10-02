@@ -141,6 +141,10 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOVM_GC_CENSUS",
     "NEOVM_GC_CENSUS_REMSET",
     "NEOVM_GC_CENSUS_FILE",
+    // Callback and interpreter-pool experiments use the same editor binary.
+    "NEOVM_ASSOC_RESOLVED",
+    "NEOVM_MAPHASH_BYTECODE",
+    "NEOVM_VM_STACK_RETURN",
 ];
 
 /// Operator-set JIT diagnostic knobs (`NEOVM_JIT_PROFILE`, `NEOVM_JIT_THRESHOLD`,
