@@ -104,6 +104,7 @@ pub(crate) fn add_constant_sites(
     slots: &mut Vec<SpecSlot>,
 ) {
     if !jit_direct_shapes().constant
+        || super::direct_call::self_only_on()
         || jit_force_slow_spec()
         || (jit_direct_sites() == DirectSitesMode::Unbounded
             && !super::direct_call::unbounded_body())
@@ -452,6 +453,12 @@ pub(crate) extern "C" fn neovm_jit_call_source_spec(
 fn arm_source_direct_entry(slot: &SpecSlot, leaf: &CompiledLeaf, nargs: usize, epoch: u64) {
     #[cfg(any(test, debug_assertions))]
     SOURCE_SLOT_ARMINGS.fetch_add(1, Ordering::Relaxed);
+    if jit_direct_sites() == DirectSitesMode::SelfOnly {
+        // Feedback source speculation retains its shim cache, but the self
+        // policy never emits a source/constant direct entry.
+        slot.arm_source(leaf, std::ptr::null(), epoch);
+        return;
+    }
     let eligible = if jit_direct_memory_on() && !jit_register_abi_on() {
         jit_direct_call_on()
             && super::spec_slot::raw_memory_direct_eligible(leaf, nargs)

@@ -854,6 +854,9 @@ pub fn compile_bytecode_function_requested(
             || self_recursive
             || request.regalloc == lowering::RegallocPolicy::Full,
     );
+    // The self policy scopes only an immutable compiler-source token; its
+    // selected site maps below provide the actual self-call proof.
+    let _self_source = direct_call::SelfSourceScope::enter_for(f, self_recursive);
     let outer = (
         BYPASS_PROFIT_GATE.with(|b| b.replace(request.bypass_profit_gate)),
         ACTIVE_CALL_HEAVY.with(|b| b.replace(call_heavy)),
@@ -3460,6 +3463,7 @@ pub fn lower_leaf_full_osr(
         arity,
         /*frameless=*/ !has_binds && !has_handlers,
         dynamic_prefix,
+        direct_call::has_exact_self_site(ops, &spec_sites, arity),
     );
     let mut chains = Vec::new();
     let defined = shared::define_jit_leaf(/*per_leaf_shims=*/ true, |sink| {
@@ -3839,6 +3843,7 @@ fn build_leaf_fn<S: LeafSink>(
                 heap: None,
                 inline_alloc: !aot && jit_inline_alloc_on(),
                 direct_sites: std::cell::Cell::new(0),
+                self_direct_source: direct_call::source_for_abi(abi),
                 poll: emit.poll(),
                 inline_entry_cache: None,
             })
@@ -4903,6 +4908,9 @@ pub(crate) mod switch_dispatch;
 #[cfg(test)]
 #[path = "tests/direct_call.rs"]
 mod direct_call_tests;
+#[cfg(test)]
+#[path = "tests/direct_self.rs"]
+mod direct_self_tests;
 #[cfg(test)]
 #[path = "tests/eq_swp_prefilter.rs"]
 mod eq_swp_prefilter_tests;

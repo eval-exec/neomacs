@@ -49,6 +49,7 @@ fn countdown_clif(site: Site) -> String {
                     inline_alloc: false,
                     direct_sites: std::cell::Cell::new(0),
                     inline_entry_cache: None,
+                    self_direct_source: None,
                     poll: PollEmit {
                         count: None,
                         t2: Some(t2),

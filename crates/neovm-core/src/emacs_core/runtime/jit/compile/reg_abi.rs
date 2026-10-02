@@ -65,13 +65,18 @@ impl LeafAbi {
     ///   (`rest`: the site conses it), `arity` counting the list's slot.
     ///
     /// Every other body keeps the memory ABI, and with it every Rust caller's
-    /// entry as before the register ABI existed.
+    /// entry as before the register ABI existed. Under the self-only site
+    /// policy, `self_site` is the selected baseline/MIR map's actual named
+    /// self-call proof; absent an explicit register knob, only a required-only
+    /// unpatched body with that proof gets register arguments. This compiler
+    /// fact is never carried into the native ABI or runtime leaf state.
     pub(crate) fn for_build(
         aot: bool,
         osr: bool,
         arity: usize,
         frameless: bool,
         dynamic_prefix: usize,
+        self_site: bool,
     ) -> Self {
         if !aot
             && !osr
@@ -79,7 +84,11 @@ impl LeafAbi {
             && frameless
             && (dynamic_prefix == 0 || super::knobs::jit_spec_sources_on())
             && lambda_list().takes_register_abi()
-            && jit_register_abi_on()
+            && (jit_register_abi_on()
+                || (super::direct_call::self_only_on()
+                    && self_site
+                    && dynamic_prefix == 0
+                    && lambda_list() == LambdaList::Exact))
         {
             LeafAbi::Register { arity: arity as u8 }
         } else {

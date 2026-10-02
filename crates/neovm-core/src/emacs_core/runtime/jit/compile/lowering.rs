@@ -2719,8 +2719,12 @@ pub(super) fn lower_mir_with_plan(
     // shim symbols (it calls none).
     // A MIR body is frameless and never patched (see the leaf below).
     let abi = super::LeafAbi::for_build(
-        /*aot=*/ false, /*osr=*/ false, m.arity, /*frameless=*/ true,
+        /*aot=*/ false,
+        /*osr=*/ false,
+        m.arity,
+        /*frameless=*/ true,
         /*dynamic_prefix=*/ 0,
+        super::direct_call::has_exact_mir_self_site(m, &plan.spec_sites),
     );
     let defined =
         super::shared::define_jit_leaf(plan.needs_rt || obs.emit().t2.is_some(), |sink| {
@@ -3221,6 +3225,7 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
                 heap: None,
                 inline_alloc: !aot && super::jit_inline_alloc_on(),
                 direct_sites: std::cell::Cell::new(0),
+                self_direct_source: super::direct_call::source_for_abi(abi),
                 poll: emit.poll(),
                 inline_entry_cache: None,
             })
@@ -4089,6 +4094,10 @@ pub(crate) struct RtCtx {
     /// Direct call sites emitted so far in this function
     /// (`direct_call::DIRECT_SITE_CAP` bounds them).
     pub(crate) direct_sites: std::cell::Cell<u32>,
+    /// Parent source under the self-only policy, present only when this
+    /// body selected the register ABI. Threading: immutable compiler-thread
+    /// fact, with no Lisp values; no native address or runtime state is added.
+    pub(crate) self_direct_source: Option<usize>,
     /// What the back-edge poll block writes besides the poll: the leaf's
     /// tick counter and its tier-spine loop credit (`t2_profile`).
     pub(crate) poll: super::t2_profile::PollEmit,

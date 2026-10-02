@@ -69,9 +69,14 @@ pub(crate) static DIRECT_COLD_EXITS: AtomicU64 = AtomicU64::new(0);
 mod framed;
 #[path = "direct_call/memory.rs"]
 mod memory;
+#[path = "direct_call/self_only.rs"]
+mod self_only;
 #[cfg(test)]
 pub(crate) use framed::DIRECT_FRAMED_CALLS;
 pub(crate) use framed::neovm_jit_direct_framed;
+pub(crate) use self_only::{
+    SelfSourceScope, has_exact_mir_self_site, has_exact_self_site, self_only_on, source_for_abi,
+};
 
 std::thread_local! {
     /// Whether the body being compiled on this thread does unbounded work
@@ -241,6 +246,17 @@ impl DirectSite {
             return None;
         }
         let bc = Value::from_bits(expected as usize).bytecode_data_if_materialized()?;
+        let self_only = jit_direct_sites() == DirectSitesMode::SelfOnly;
+        if self_only {
+            let source = rt.self_direct_source?;
+            if !self_only::expected_is_source(expected, source)
+                || bc.params.required.len() != nargs
+                || !bc.params.optional.is_empty()
+                || bc.params.rest.is_some()
+            {
+                return None;
+            }
+        }
         let callee = CalleeShape {
             required: bc.params.required.len(),
             nonrest: bc.params.required.len() + bc.params.optional.len(),
@@ -257,7 +273,7 @@ impl DirectSite {
         if !callable || rt.direct_sites.get() >= DIRECT_SITE_CAP {
             return None;
         }
-        let memory_entry = jit_direct_memory_on() && !jit_register_abi_on();
+        let memory_entry = !self_only && jit_direct_memory_on() && !jit_register_abi_on();
         if memory_entry && !callee.passes_through(nargs) {
             return None;
         }
@@ -274,6 +290,9 @@ impl DirectSite {
         }
         let ops = bc.executable_ops();
         let framed = super::leaf::body_has_binds(ops) || super::leaf::body_has_handlers(ops);
+        if self_only && framed {
+            return None;
+        }
         if !framed && exceeds_register_arity {
             return None;
         }
@@ -314,6 +333,9 @@ impl DirectSite {
     /// constant base is read from the callee object.
     pub(crate) fn plan_source(rt: &RtCtx, aot: bool, nargs: usize) -> Option<Self> {
         if aot || !jit_direct_call_on() || jit_force_slow_spec() || nargs > MAX_REG_ARGS {
+            return None;
+        }
+        if jit_direct_sites() == DirectSitesMode::SelfOnly {
             return None;
         }
         if rt.direct_sites.get() >= DIRECT_SITE_CAP {
@@ -396,7 +418,10 @@ pub(crate) fn emit_direct_bytecode_call(
     };
     // 1. Armed.
     let framed_enabled = jit_direct_shapes().framed;
-    let entry = if framed_enabled || jit_direct_memory_on() {
+    let entry = if framed_enabled
+        || jit_direct_memory_on()
+        || jit_direct_sites() == DirectSitesMode::SelfOnly
+    {
         // Atomic publication: leaf/key/epoch are initialized before the
         // Release store of the entry or framed tag. CLIF atomic loads provide at
         // least Acquire ordering. The off arm is the original load verbatim.

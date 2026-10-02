@@ -939,19 +939,26 @@ fn knob_on(name: &str) -> bool {
 /// them in registers and return `(value, status)` (`reg_abi`, design
 /// `p1-1-direct-native-calls` §3.2). Default OFF; `NEOVM_JIT_REG_ABI=on`
 /// turns it on, and [`jit_direct_call_on`] implies it unless
-/// [`jit_direct_memory_on`] opts into the existing memory entry. Off,
+/// [`jit_direct_memory_on`] opts into the existing memory entry or the
+/// self-only site policy admits only individually proven self bodies. An
+/// explicit register knob keeps its existing global reach in either mode. Off,
 /// every entry keeps the memory ABI,
 /// CLIF-identical to the lowering before the register ABI existed: the
 /// single-build A/B. Read at compile time only.
 pub(crate) fn jit_register_abi_on() -> bool {
     #[cfg(test)]
     if let Some(on) = REG_ABI_TEST_OVERRIDE.with(|c| c.get()) {
-        return on || (jit_direct_call_on() && !jit_direct_memory_on());
+        return on
+            || (jit_direct_call_on()
+                && !jit_direct_memory_on()
+                && jit_direct_sites() != DirectSitesMode::SelfOnly);
     }
     use std::sync::OnceLock;
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| knob_on("NEOVM_JIT_REG_ABI"))
-        || (jit_direct_call_on() && !jit_direct_memory_on())
+        || (jit_direct_call_on()
+            && !jit_direct_memory_on()
+            && jit_direct_sites() != DirectSitesMode::SelfOnly)
 }
 
 /// Speculated calls to compiled byte-code leaves call their register-ABI
@@ -1272,7 +1279,7 @@ pub(crate) fn jit_tier2_policy() -> Tier2PolicyKnob {
 }
 
 /// Which bodies emit direct call sites (`direct_call`), when direct calls
-/// are on: `NEOVM_JIT_DIRECT_SITES=all` or `unbounded` (the default).
+/// are on: `NEOVM_JIT_DIRECT_SITES=all`, `self`, or `unbounded` (default).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DirectSitesMode {
     /// Every body.
@@ -1285,6 +1292,10 @@ pub(crate) enum DirectSitesMode {
     /// thousand times it never pays that back (elb-bytecomp: 163 of 170
     /// sites, +12% codegen, ~2,000 calls a site).
     Unbounded,
+    /// Only proven named calls of a body's own materialized source.
+    /// Without explicit REG_ABI, only an exact frameless self-call body
+    /// takes the register ABI; other bodies keep memory entries.
+    SelfOnly,
 }
 
 #[cfg(test)]
@@ -1311,6 +1322,7 @@ pub(crate) fn jit_direct_sites() -> DirectSitesMode {
     *MODE.get_or_init(
         || match std::env::var("NEOVM_JIT_DIRECT_SITES").ok().as_deref() {
             Some("all") => DirectSitesMode::All,
+            Some("self") => DirectSitesMode::SelfOnly,
             _ => DirectSitesMode::Unbounded,
         },
     )

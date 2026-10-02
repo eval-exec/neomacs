@@ -101,8 +101,9 @@ fn only_bodies_a_direct_call_can_enter_take_the_register_abi() {
     // alone decides (the suite also runs with `NEOVM_JIT_DIRECT_CALL=on`).
     force_direct_call_for_test(Some(false));
     force_register_abi_for_test(Some(true));
-    let build =
-        |aot, osr, arity, frameless, prefix| LeafAbi::for_build(aot, osr, arity, frameless, prefix);
+    let build = |aot, osr, arity, frameless, prefix| {
+        LeafAbi::for_build(aot, osr, arity, frameless, prefix, false)
+    };
     assert_eq!(
         build(false, false, 0, true, 0),
         LeafAbi::Register { arity: 0 }

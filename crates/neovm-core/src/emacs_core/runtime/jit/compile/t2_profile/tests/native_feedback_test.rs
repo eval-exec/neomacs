@@ -469,6 +469,7 @@ fn tier2_native_use_imports_helpers_only_with_actual_t1_emission() {
                     inline_alloc: false,
                     direct_sites: std::cell::Cell::new(0),
                     inline_entry_cache: None,
+                    self_direct_source: None,
                     poll: PollEmit {
                         count: None,
                         t2: profile.then(|| T2Emit::of(&obs).expect("profiling")),

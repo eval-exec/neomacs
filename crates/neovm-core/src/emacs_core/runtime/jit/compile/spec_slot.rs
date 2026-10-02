@@ -239,6 +239,8 @@ impl SpecSlot {
         debug_assert!(
             if entry as usize as u64 == DirectEntryTag::Framed as u64 {
                 flags == Self::KEY_FRAMED
+            } else if jit_direct_sites() == DirectSitesMode::SelfOnly {
+                flags == Self::KEY_REGISTER
             } else if jit_direct_memory_on() && !jit_register_abi_on() {
                 flags == 0
             } else {
@@ -338,7 +340,23 @@ pub(crate) static DIRECT_ENTRIES_ARMED: AtomicU64 = AtomicU64::new(0);
 #[inline(never)]
 pub(crate) fn arm_direct_entry_if_eligible(slot: &SpecSlot, leaf: &CompiledLeaf, nargs: usize) {
     let key = slot.direct_consts.load(Ordering::Relaxed);
-    let eligible = if jit_direct_memory_on() && !jit_register_abi_on() {
+    let eligible = if jit_direct_sites() == DirectSitesMode::SelfOnly {
+        // The self policy mixes register self bodies with memory bodies.
+        // Read the leaf's immutable ABI and key, never infer them from the
+        // global register knob or the compiler's source scope.
+        leaf.abi
+            == (LeafAbi::Register {
+                arity: nargs.min(u8::MAX as usize) as u8,
+            })
+            && leaf.required == nargs
+            && leaf.arity == nargs
+            && !leaf.has_rest
+            && leaf.dynamic_prefix == 0
+            && leaf.direct_call_eligible()
+            && key != 0
+            && key & SpecSlot::KEY_FLAGS == SpecSlot::KEY_REGISTER
+            && super::jit_layout::backtrace_layout().is_some()
+    } else if jit_direct_memory_on() && !jit_register_abi_on() {
         raw_memory_direct_eligible(leaf, nargs)
             && key != 0
             && key & SpecSlot::KEY_FLAGS == 0
@@ -358,7 +376,8 @@ pub(crate) fn arm_direct_entry_if_eligible(slot: &SpecSlot, leaf: &CompiledLeaf,
     if eligible {
         slot.arm_direct_entry(leaf.entry);
         DIRECT_ENTRIES_ARMED.fetch_add(1, Ordering::Relaxed);
-    } else if super::knobs::jit_direct_shapes().framed
+    } else if jit_direct_sites() != DirectSitesMode::SelfOnly
+        && super::knobs::jit_direct_shapes().framed
         && framed_direct_eligible(leaf, nargs)
         && key != 0
         && key & SpecSlot::KEY_FLAGS == SpecSlot::KEY_FRAMED
