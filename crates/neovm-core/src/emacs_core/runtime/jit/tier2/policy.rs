@@ -124,12 +124,32 @@ fn affordable(
         || spent.saturating_add(reserved).saturating_add(estimate)
             <= cpu_us.saturating_mul(u64::from(pct)) / 100 + u64::from(floor_ms) * 1_000
 }
-fn reserve(leaf: &CompiledLeaf) -> bool {
-    let k = jit_tier2_policy();
-    let estimate = u64::from(leaf.obs.compile_us.get())
+fn estimate_us(leaf: &CompiledLeaf) -> u64 {
+    u64::from(leaf.obs.compile_us.get())
         .saturating_mul(3)
         .div_ceil(2)
-        .max(1);
+        .max(1)
+}
+fn budget_allows(leaf: &CompiledLeaf) -> bool {
+    let k = jit_tier2_policy();
+    LEDGER.with(|c| {
+        let l = c.get();
+        affordable(
+            l.spent,
+            l.reserved,
+            estimate_us(leaf),
+            cpu_time_us(),
+            k.budget_pct,
+            k.floor_ms,
+        )
+    })
+}
+/// Reserve only at the owning mutator's compile seam, not while a Due
+/// leaf is waiting for an entry that may never happen. Pending jobs retain
+/// this reservation until install/cancellation and charge this same ledger.
+pub(crate) fn reserve_compile(leaf: &CompiledLeaf) -> bool {
+    let k = jit_tier2_policy();
+    let estimate = estimate_us(leaf);
     LEDGER.with(|c| {
         let mut l = c.get();
         if !affordable(
@@ -140,6 +160,7 @@ fn reserve(leaf: &CompiledLeaf) -> bool {
             k.budget_pct,
             k.floor_ms,
         ) {
+            bump_stats(|s| s.budget_denied += 1);
             return false;
         }
         l.reserved = l.reserved.saturating_add(estimate);
@@ -183,6 +204,17 @@ pub(crate) fn upgrade_failed(old: &CompiledLeaf) {
     bump_stats(|s| s.failed += 1);
 }
 
+/// A budget denial is temporary. Keep the stable snapshot and retry
+/// admission after another work window without reserving CPU in the meantime.
+fn admit_request(leaf: &CompiledLeaf, kind: T2Upgrade) -> Option<T2Decision> {
+    if !budget_allows(leaf) {
+        leaf.obs.t2.budget.set(i64::from(jit_tier2_policy().stable));
+        bump_stats(|s| s.budget_denied += 1);
+        return None;
+    }
+    Some(T2Decision::Upgrade(kind))
+}
+
 /// Stability and admissibility, followed by budget; no Lisp and no GC.
 pub(crate) fn request_decision(leaf: &CompiledLeaf, source: &RuntimeState) -> Option<T2Decision> {
     let k = jit_tier2_policy();
@@ -190,10 +222,10 @@ pub(crate) fn request_decision(leaf: &CompiledLeaf, source: &RuntimeState) -> Op
     let banned = source.t2_reopts.load(std::sync::atomic::Ordering::Relaxed) >= k.max_reopt
         || source.reopt_level() >= super::super::ReoptLevel::BaselineOnly;
     if banned {
-        return Some(match decide(leaf) {
-            T2Decision::Upgrade(kind) if reserve(leaf) => T2Decision::Upgrade(kind),
-            _ => T2Decision::Keep,
-        });
+        return match decide(leaf) {
+            T2Decision::Upgrade(kind) => admit_request(leaf, kind),
+            T2Decision::Keep => Some(T2Decision::Keep),
+        };
     }
     let mut p = t2.policy.borrow_mut();
     let version = Version::read(source, p.ops_len);
@@ -227,11 +259,7 @@ pub(crate) fn request_decision(leaf: &CompiledLeaf, source: &RuntimeState) -> Op
         bump_stats(|s| s.not_worth += 1);
         return Some(T2Decision::Keep);
     };
-    if !reserve(leaf) {
-        bump_stats(|s| s.budget_denied += 1);
-        return Some(T2Decision::Keep);
-    }
-    Some(T2Decision::Upgrade(kind))
+    admit_request(leaf, kind)
 }
 
 /// Called only for a counted, conclusive/repeated deopt, after its existing

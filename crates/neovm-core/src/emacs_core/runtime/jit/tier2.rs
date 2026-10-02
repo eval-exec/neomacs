@@ -8,7 +8,7 @@
 //! allocation or a safepoint; the current activation continues in T1.
 //!
 //! The first request captures feedback and requires one stable work window.
-//! Later requests compare exact lattice snapshots, reserve the compile budget,
+//! Later requests compare exact lattice snapshots, check the compile budget,
 //! and choose full-allocator T1' or the existing backend with feedback. Upgrade
 //! jobs retain the working T1 until installation. A feedback upgrade retains T1
 //! as its fallback; a conclusive/repeated T2 deopt widens the existing source
@@ -436,8 +436,8 @@ pub(crate) fn request(obs: &LeafObs) {
         _ => Some(T2Decision::Keep),
     };
     bump_stats(|s| s.requests += 1);
-    // A changed snapshot has rearmed the budget. The activation continues
-    // in this T1 and every caller may keep using its slots during the window.
+    // A changed snapshot or budget denial has rearmed the budget. This
+    // activation continues in T1; callers keep using its slots during the window.
     let Some(decision) = decision else {
         return;
     };
@@ -546,6 +546,6 @@ mod reach_tests;
 
 mod policy;
 pub(crate) use policy::{
-    charge_compile, cpu_time_us, rearm_fallback, release, revert_if_t2, upgrade_deferred,
-    upgrade_failed,
+    charge_compile, cpu_time_us, rearm_fallback, release, reserve_compile, revert_if_t2,
+    upgrade_deferred, upgrade_failed,
 };

@@ -158,7 +158,7 @@ fn tier2_policy_changed_feedback_rearms_before_upgrade() {
     force_tier2_policy_for_test(None);
 }
 #[test]
-fn tier2_policy_budget_denial_keeps_current_native_leaf() {
+fn tier2_policy_budget_denial_rearms_current_native_leaf() {
     force_tier2_for_test(Some(knob(1, 64)));
     force_tier2_policy_for_test(Some(Tier2PolicyKnob {
         stable: 1,
@@ -173,10 +173,17 @@ fn tier2_policy_budget_denial_keeps_current_native_leaf() {
     let old = current(&f);
     old.obs.compile_us.set(u32::MAX);
     run(&mut ctx, &f, &[]);
-    assert_eq!(old.obs.t2.state.get(), T2State::Kept);
-    assert_eq!(old.obs.t2.budget.get(), DISARMED);
+    assert_eq!(old.obs.t2.state.get(), T2State::Idle);
+    assert_eq!(old.obs.t2.budget.get(), 1);
+    assert_eq!(old.obs.t2.reserved_us.get(), 0);
     run(&mut ctx, &f, &[]);
     assert!(std::ptr::eq(old, current(&f)));
+    // A temporarily full ledger must not permanently disable this source.
+    old.obs.compile_us.set(1);
+    run(&mut ctx, &f, &[]);
+    assert!(old.obs.t2.due().is_some());
+    run(&mut ctx, &f, &[]);
+    assert!(!std::ptr::eq(old, current(&f)));
     force_tier2_for_test(None);
     force_tier2_policy_for_test(None);
 }
@@ -258,6 +265,64 @@ fn tier2_deopt_reverts_and_preserves_retreat_and_ban() {
         request_decision(t1, f.jit_runtime()),
         Some(T2Decision::Keep)
     );
+    force_tier2_for_test(None);
+    force_tier2_policy_for_test(None);
+}
+
+/// A load-time loop can go Due during its last activation. It must not
+/// consume admission capacity while waiting for an entry that may never come.
+#[test]
+fn tier2_policy_run_once_due_leaves_do_not_reserve_cpu() {
+    force_tier2_for_test(Some(knob(1, 64)));
+    force_tier2_policy_for_test(Some(policy(1, 4)));
+    let mut ctx = Context::new();
+    let before = LEDGER.with(Cell::get).reserved;
+    let functions: Vec<_> = (0..8).map(|_| countdown_loop()).collect();
+    for f in &functions {
+        run(&mut ctx, f, &[Value::make_int(1_000)]);
+        let leaf = current(f);
+        assert_eq!(leaf.obs.t2.due(), Some(T2Upgrade::Feedback));
+        assert_eq!(leaf.obs.t2.reserved_us.get(), 0);
+        assert_eq!(LEDGER.with(Cell::get).reserved, before);
+    }
+    force_tier2_for_test(None);
+    force_tier2_policy_for_test(None);
+}
+
+/// A Due decision is only an admission check. Other work can spend the
+/// budget before the next entry, which must retry rather than compile anyway.
+#[test]
+fn tier2_policy_due_upgrade_rechecks_budget_at_compile_seam() {
+    force_tier2_for_test(Some(knob(1, 64)));
+    force_tier2_policy_for_test(Some(policy(1, 4)));
+    let mut ctx = Context::new();
+    let f = seven();
+    run(&mut ctx, &f, &[]);
+    run(&mut ctx, &f, &[]);
+    let old = current(&f);
+    assert!(old.obs.t2.due().is_some());
+    let saved = LEDGER.with(Cell::get);
+    LEDGER.with(|c| {
+        c.set(Ledger {
+            spent: u64::MAX,
+            reserved: saved.reserved,
+        })
+    });
+    force_tier2_policy_for_test(Some(Tier2PolicyKnob {
+        budget_pct: 1,
+        ..policy(1, 4)
+    }));
+    run(&mut ctx, &f, &[]);
+    assert!(std::ptr::eq(old, current(&f)));
+    assert_eq!(old.obs.t2.state.get(), T2State::Idle);
+    assert_eq!(old.obs.t2.budget.get(), 1);
+    assert_eq!(old.obs.t2.reserved_us.get(), 0);
+    LEDGER.with(|c| c.set(saved));
+    force_tier2_policy_for_test(Some(policy(1, 4)));
+    run(&mut ctx, &f, &[]);
+    assert!(old.obs.t2.due().is_some());
+    run(&mut ctx, &f, &[]);
+    assert!(!std::ptr::eq(old, current(&f)));
     force_tier2_for_test(None);
     force_tier2_policy_for_test(None);
 }

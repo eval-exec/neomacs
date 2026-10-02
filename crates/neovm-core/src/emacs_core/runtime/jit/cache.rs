@@ -1982,6 +1982,12 @@ fn request_upgrade(
     ctx: *mut Context,
 ) -> Rc<CompiledLeaf> {
     let rt = func.jit_runtime();
+    // Recheck admission now that the compile will actually start. A Due
+    // leaf holds no reservation, so intervening work may have filled the ledger.
+    if !super::tier2::reserve_compile(&old) {
+        super::tier2::rearm_fallback(rt, &old);
+        return old;
+    }
     // SAFETY: the dormant Context provided by the native dispatch seam.
     let obarray = (!ctx.is_null()).then(|| unsafe { &(*ctx).obarray });
     let name_hint = stats::naming_enabled()
