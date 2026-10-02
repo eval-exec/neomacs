@@ -4527,6 +4527,88 @@ impl TextPropertyTable {
         table
     }
 
+    /// Append a clipped source range with the exact interval result of
+    /// `append_shifted_at_char_offset(&source.slice_char_range(range), offset)`.
+    ///
+    /// GNU `copy_intervals` clips a source partition, and
+    /// `graft_intervals_into_buffer` copies each source plist into the covered
+    /// target intervals. Here the clipped run descriptors borrow the original
+    /// plists, so the existing graft makes the only spine copy. Raw boundaries,
+    /// plist order and duplicate keys, nil gaps, target splits, and predecessor
+    /// detachment remain those of the two-step operation.
+    ///
+    /// The borrow is synchronous and immutable, and the destination requires
+    /// exclusive access. No borrowed descriptor or original plist spine escapes;
+    /// the destination stores fresh spines with shallow-shared keys/values. There
+    /// is no new shared runtime state or assumption of a single mutator.
+    /// The caller must hold the source at the same capture point as the legacy
+    /// slice, without running Lisp between capture and graft.
+    #[inline]
+    pub fn append_source_slice_at_char_offset(
+        &mut self,
+        source: &TextPropertyTable,
+        range: CharRange,
+        offset: CharLen,
+    ) {
+        self.append_source_slice_at_char_offset_with_roots(source, range, offset, |_| {});
+    }
+
+    /// Publish only freshly grafted plist roots through the enclosing walk's
+    /// incremental root owner. The callback must not evaluate Lisp or collect.
+    pub(crate) fn append_source_slice_at_char_offset_with_roots(
+        &mut self,
+        source: &TextPropertyTable,
+        range: CharRange,
+        offset: CharLen,
+        new_root: impl FnMut(Value),
+    ) {
+        let start = range.start().get();
+        let end = range.end().get();
+        let mut runs = Vec::new();
+        if !range.is_empty() {
+            source.for_each_interval_overlapping(range, |interval_start, node_end, node| {
+                let new_start = interval_start.max(start) - start;
+                let new_end = node_end.min(end) - start;
+                if new_start < new_end {
+                    let mut run = IntervalRun::from_node(
+                        CharPos0::new(new_start),
+                        node,
+                        CharLen::new(new_end - new_start),
+                    );
+                    // `copy_plist_value` drops a dangling odd key or dotted
+                    // tail. A plist with no complete pair therefore becomes
+                    // nil in the legacy slice, BEFORE shape normalization.
+                    // Other plists stay borrowed and are canonicalized by the
+                    // graft's one copy; duplicate complete pairs stay ordered.
+                    if !run.plist.is_cons() || !run.plist.cons_cdr().is_cons() {
+                        run.plist = Value::NIL;
+                    }
+                    runs.push(run);
+                }
+            });
+        }
+        // In particular, an all-nil slice has no intervals, while nil gaps
+        // surrounding a non-nil run survive. Reuse the legacy normalizer so
+        // this method neither extends implicit trailing nil text nor merges
+        // the source's raw interval boundaries.
+        let runs = IntervalTree::normalize_runs_preserving_shape(runs);
+
+        // Append bumps these ticks even when the normalized slice is empty.
+        self.mutation_tick += 1;
+        self.syntax_prop_tick += 1;
+        if runs.iter().any(|run| run.has_syntax_prop) {
+            if let Ok(mut guard) = self.syntax_prop_ranges.lock() {
+                *guard = (0, Vec::new());
+            }
+        } else {
+            self.syntax_ranges_revalidate();
+        }
+        for run in &runs {
+            self.property_names.observe_plist(run.plist);
+        }
+        self.intervals.graft_shifted_runs(&runs, offset, new_root);
+    }
+
     pub fn append_shifted_at_char_offset(&mut self, other: &TextPropertyTable, offset: CharLen) {
         self.append_shifted_raw(other, offset);
     }

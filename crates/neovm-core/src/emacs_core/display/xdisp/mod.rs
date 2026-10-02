@@ -14,6 +14,13 @@
 //! - `tab-bar-height` — get tab bar height
 //! - `line-number-display-width` — get line number display width
 //! - `long-line-optimizations-p` — check if long-line optimizations are enabled
+//!
+//! Redisplay formatting controls (read once per process):
+//!
+//! | Knob | Unset default | Values | Effect |
+//! | --- | --- | --- | --- |
+//! | `NEOMACS_MODE_LINE_PROP_SLICE` | `off` | `off`; `on`/`1`/`true`/`yes` | Clip and graft literal source intervals with one plist copy |
+//! | `NEOMACS_MODE_LINE_PROP_BORROW` | `off` | `off`; `on`/`1`/`true`/`yes` | Borrow source string intervals during synchronous mode-line property reads |
 
 #[path = "mode_line_flow.rs"]
 mod mode_line_flow_policy;
@@ -2950,6 +2957,118 @@ impl ModeLineDisplayOutput {
     }
 }
 
+/// Read once per process. The production selector is immutable plain data;
+/// there is no retained Lisp state or per-mutator cache. A formatter uses a
+/// source interval borrow only in its own synchronous, no-Lisp read span.
+#[inline]
+fn mode_line_prop_borrow_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(enabled) = MODE_LINE_PROP_BORROW_OVERRIDE.with(std::cell::Cell::get) {
+        return enabled;
+    }
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        matches!(
+            std::env::var("NEOMACS_MODE_LINE_PROP_BORROW")
+                .ok()
+                .map(|value| value.trim().to_ascii_lowercase())
+                .as_deref(),
+            Some("on" | "1" | "true" | "yes")
+        )
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    static MODE_LINE_PROP_BORROW_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn set_mode_line_prop_borrow_for_test(enabled: Option<bool>) {
+    MODE_LINE_PROP_BORROW_OVERRIDE.with(|cell| cell.set(enabled));
+}
+
+/// Read a source's properties at the same point in the formatter walk as the
+/// copied baseline. `read` never runs Lisp or keeps an interval-table borrow;
+/// later `:eval` elements may therefore mutate the source normally. Appending
+/// to the destination still copies the source plists through the existing
+/// interval graft, so already-produced output never aliases the source.
+#[inline]
+fn with_mode_line_string_properties<R>(
+    value: Value,
+    read: impl FnOnce(&TextPropertyTable) -> R,
+) -> Option<R> {
+    if mode_line_prop_borrow_enabled() {
+        borrow_string_text_properties_table_for_value(value).map(read)
+    } else {
+        get_string_text_properties_table_for_value(value)
+            .as_ref()
+            .map(read)
+    }
+}
+
+/// Immutable process selector, published by OnceLock. A source-slice graft
+/// uses only a synchronous immutable source borrow and an exclusive destination;
+/// no source Lisp state is retained between formatter elements or mutators.
+#[inline]
+fn mode_line_prop_slice_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(enabled) = MODE_LINE_PROP_SLICE_OVERRIDE.with(std::cell::Cell::get) {
+        return enabled;
+    }
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        matches!(
+            std::env::var("NEOMACS_MODE_LINE_PROP_SLICE")
+                .ok()
+                .map(|value| value.trim().to_ascii_lowercase())
+                .as_deref(),
+            Some("on" | "1" | "true" | "yes")
+        )
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    static MODE_LINE_PROP_SLICE_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn set_mode_line_prop_slice_for_test(enabled: Option<bool>) {
+    MODE_LINE_PROP_SLICE_OVERRIDE.with(|cell| cell.set(enabled));
+}
+
+/// Preserve the legacy capture point and interval partition while removing
+/// the intermediate sliced table and its plist spine copies when selected.
+#[inline]
+fn append_mode_line_source_slice(
+    target: &mut ModeLineRendered,
+    source: &TextPropertyTable,
+    start: usize,
+    end: usize,
+    offset: usize,
+) {
+    let range = display_char_range(start, end);
+    let offset = CharLen::new(offset);
+    if mode_line_prop_slice_enabled() {
+        if let Some(roots) = &mut target.gc_roots {
+            target
+                .text_props
+                .append_source_slice_at_char_offset_with_roots(source, range, offset, |value| {
+                    mode_line_gc::pin_accumulator_value(roots, value)
+                });
+        } else {
+            target
+                .text_props
+                .append_source_slice_at_char_offset(source, range, offset);
+        }
+    } else {
+        target.append_properties(&source.slice_char_range(range), offset.get());
+    }
+}
+
 #[derive(Clone, Default)]
 struct ModeLineRendered {
     /// Accumulated Emacs character codes (one entry per character). Storing
@@ -3169,9 +3288,9 @@ impl ModeLineRendered {
                 self.multibyte |= string.is_multibyte();
                 self.text.extend(mode_line_string_char_codes(string));
                 self.record_source_span(char_offset, self.char_len(), *value, 0);
-                if let Some(props) = get_string_text_properties_table_for_value(*value) {
-                    self.append_properties(&props, char_offset);
-                }
+                with_mode_line_string_properties(*value, |props| {
+                    self.append_properties(props, char_offset);
+                });
             }
             None => {
                 let Some(text) = value.as_utf8_str() else {
@@ -3217,12 +3336,9 @@ impl ModeLineRendered {
                         .take(end_char - start_char),
                 );
                 self.record_source_span(char_offset, self.char_len(), *value, start_char);
-                if let Some(props) = get_string_text_properties_table_for_value(*value) {
-                    self.append_properties(
-                        &props.slice_char_range(display_char_range(start_char, end_char)),
-                        char_offset,
-                    );
-                }
+                with_mode_line_string_properties(*value, |props| {
+                    append_mode_line_source_slice(self, props, start_char, end_char, char_offset);
+                });
             }
             None => {
                 let Some(text) = value.as_utf8_str() else {
@@ -3237,13 +3353,16 @@ impl ModeLineRendered {
                         .map(|c| c as u32),
                 );
                 self.record_source_span(char_offset, self.char_len(), *value, start_char);
-                if value.is_string()
-                    && let Some(props) = get_string_text_properties_table_for_value(*value)
-                {
-                    self.append_properties(
-                        &props.slice_char_range(display_char_range(start_char, end_char)),
-                        char_offset,
-                    );
+                if value.is_string() {
+                    with_mode_line_string_properties(*value, |props| {
+                        append_mode_line_source_slice(
+                            self,
+                            props,
+                            start_char,
+                            end_char,
+                            char_offset,
+                        );
+                    });
                 }
             }
         }
@@ -4417,9 +4536,10 @@ fn expand_mode_line_percent_in_state(
         }
 
         let props_at_percent = if value.is_string() {
-            get_string_text_properties_table_for_value(*value)
-                .map(|table| table.get_properties_at_char_pos(CharPos0::new(percent_char_pos)))
-                .unwrap_or_default()
+            with_mode_line_string_properties(*value, |table| {
+                table.get_properties_at_char_pos(CharPos0::new(percent_char_pos))
+            })
+            .unwrap_or_default()
         } else {
             Default::default()
         };

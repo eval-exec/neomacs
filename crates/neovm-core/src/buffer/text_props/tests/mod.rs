@@ -1,5 +1,8 @@
 use super::*;
 
+#[cfg(test)]
+mod source_slice_graft;
+
 fn char_pos(pos: usize) -> CharPos0 {
     CharPos0::new(pos)
 }
