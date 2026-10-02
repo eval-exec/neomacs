@@ -1595,7 +1595,7 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     // no-lexvars closure path (`on`).
     "NEOVM_CCONV_MEMO",
     "NEOVM_CCONV_FAST",
-    // P3.4 text line index: `off` (default), `on` or `verify`, its size
+    // P3.4 text line index: `on` (default), `off` or `verify`, its size
     // thresholds, and the exit report of builds, copies and served queries.
     "NEOVM_TEXT_LINE_INDEX",
     "NEOVM_TEXT_LINE_INDEX_MIN_BYTES",

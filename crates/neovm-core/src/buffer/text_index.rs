@@ -29,7 +29,7 @@
 //!
 //! | Knob | Values | Default |
 //! | --- | --- | --- |
-//! | `NEOVM_TEXT_LINE_INDEX` | `off`, `on`, `verify` (a mismatch always fails) | `off` |
+//! | `NEOVM_TEXT_LINE_INDEX` | `off`, `on`, `verify` (a mismatch always fails) | `on` |
 //! | `NEOVM_TEXT_LINE_INDEX_MIN_BYTES` | minimum buffer/build range bytes | `65536` |
 //! | `NEOVM_TEXT_LINE_INDEX_CHUNK` | target chunk bytes, at least 8 | `4096` |
 //! | `NEOVM_TEXT_LINE_INDEX_QUERY_BYTES` | minimum indexed count range bytes | `8192` |
@@ -51,9 +51,9 @@ use super::text::backend::TextBackend;
 /// What `NEOVM_TEXT_LINE_INDEX` selects.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TextLineIndexMode {
-    /// The default: no index is ever built, and line queries scan.
+    /// No index is ever built, and line queries scan.
     Off,
-    /// Line queries on large buffers use the index.
+    /// The default: line queries on large buffers use the index.
     On,
     /// Like `On`, but every index answer is recomputed by scanning, every
     /// edit recounts the chunks it touched, and a disagreement is reported
@@ -63,11 +63,11 @@ pub(crate) enum TextLineIndexMode {
 
 impl TextLineIndexMode {
     /// The mode a value of `NEOVM_TEXT_LINE_INDEX` selects: `on`/`1`/`true`/
-    /// `yes`, `verify`, anything else (or unset) off.
+    /// `yes`, `verify`; unset selects `On`, anything else selects `Off`.
     pub(crate) fn parse(value: Option<&str>) -> Self {
         match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
             Some("verify") => Self::Verify,
-            Some("1" | "on" | "true" | "yes") => Self::On,
+            None | Some("1" | "on" | "true" | "yes") => Self::On,
             _ => Self::Off,
         }
     }

@@ -267,12 +267,12 @@ fn random_edits_keep_the_index_equal_to_a_recount() {
 }
 
 #[test]
-fn config_parses_modes_sizes_and_defaults_to_off() {
+fn config_parses_modes_sizes_and_defaults_to_on() {
     crate::test_utils::init_test_tracing();
     let none = |_: &str| None;
     assert_eq!(
         TextLineIndexConfig::parse(none),
-        TextLineIndexConfig::with_mode(TextLineIndexMode::Off)
+        TextLineIndexConfig::with_mode(TextLineIndexMode::On)
     );
     assert_eq!(
         TextLineIndexMode::parse(Some(" Verify ")),
@@ -319,5 +319,17 @@ fn config_parses_modes_sizes_and_defaults_to_off() {
             (name == "NEOVM_TEXT_LINE_INDEX_BUILD_LINES").then(|| value.to_owned())
         });
         assert_eq!(config.min_build_lines, expected);
+    }
+}
+
+#[test]
+fn default_on_still_has_an_explicit_off_escape() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(TextLineIndexMode::parse(None), TextLineIndexMode::On);
+    for value in ["off", "0", "false", "no", "bogus"] {
+        assert_eq!(
+            TextLineIndexMode::parse(Some(value)),
+            TextLineIndexMode::Off
+        );
     }
 }

@@ -224,7 +224,7 @@ fn a_mismatched_index_query_panics_in_verify_mode() {
 }
 
 #[test]
-fn the_index_is_off_by_default_and_never_built() {
+fn an_explicitly_disabled_index_is_never_built() {
     crate::test_utils::init_test_tracing();
     let config = TextLineIndexConfig {
         min_buffer_bytes: 0,
