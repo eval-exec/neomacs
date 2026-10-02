@@ -128,9 +128,10 @@ fn clear_font_cache_resets_face_caches() {
     )
     .unwrap();
 
-    CREATED_LISP_FACES.with(|slot| {
+    FACE_ATTR_STATE.with(|slot| {
         assert!(
             slot.borrow()
+                .created_lisp_faces
                 .contains(&crate::emacs_core::intern::intern(face_name,))
         );
     });
@@ -141,10 +142,10 @@ fn clear_font_cache_resets_face_caches() {
     let result = clear_font_cache(vec![]).unwrap();
     assert!(result.is_nil());
 
-    CREATED_LISP_FACES.with(|slot| assert!(slot.borrow().is_empty()));
-    CREATED_FACE_IDS.with(|slot| assert!(slot.borrow().is_empty()));
-    NEXT_CREATED_FACE_ID.with(|slot| {
-        assert_eq!(*slot.borrow(), FIRST_DYNAMIC_FACE_ID);
+    FACE_ATTR_STATE.with(|slot| assert!(slot.borrow().created_lisp_faces.is_empty()));
+    FACE_ATTR_STATE.with(|slot| assert!(slot.borrow().created_face_ids.is_empty()));
+    FACE_ATTR_STATE.with(|slot| {
+        assert_eq!(slot.borrow().next_created_face_id, FIRST_DYNAMIC_FACE_ID);
     });
     FACE_ATTR_STATE.with(|slot| {
         let state = slot.borrow();
@@ -243,11 +244,11 @@ fn created_face_runtime_state_uses_symbol_identity() {
     )
     .unwrap();
 
-    CREATED_LISP_FACES.with(|slot| {
-        assert!(slot.borrow().contains(&face_symbol));
+    FACE_ATTR_STATE.with(|slot| {
+        assert!(slot.borrow().created_lisp_faces.contains(&face_symbol));
     });
-    CREATED_FACE_IDS.with(|slot| {
-        assert!(slot.borrow().contains_key(&face_symbol));
+    FACE_ATTR_STATE.with(|slot| {
+        assert!(slot.borrow().created_face_ids.contains_key(&face_symbol));
     });
     FACE_ATTR_STATE.with(|slot| {
         let state = slot.borrow();

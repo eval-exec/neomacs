@@ -276,6 +276,14 @@ impl Context {
         for root in registry_roots.drain(..) {
             visit(root);
         }
+        group("font_registry");
+        super::super::xfaces::collect_font_registry_gc_roots(
+            &self.font_registry,
+            &mut registry_roots,
+        );
+        for root in registry_roots.drain(..) {
+            visit(root);
+        }
         // Full ~all-interned-symbols walk on STW collections; only the
         // BLV-pool residual under `ObarraySymbolCellSkipGuard` (both
         // concurrent handshakes).
@@ -474,6 +482,7 @@ impl Context {
         crate::tagged::gc::set_tagged_heap(&mut self.tagged_heap);
         super::super::ccl::install_ccl_registry_handle(&self.ccl_registry);
         super::super::charset::install_charset_registry_handle(&self.charset_registry);
+        super::super::xfaces::install_font_registry_handle(&self.font_registry);
         super::super::syntax::restore_standard_syntax_table_object(self.standard_syntax_table);
         super::super::syntax::restore_syntax_code_objects(self.syntax_code_objects);
         super::super::category::restore_standard_category_table_object(

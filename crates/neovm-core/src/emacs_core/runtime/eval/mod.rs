@@ -2322,12 +2322,6 @@ fn collect_thread_local_gc_roots(
     });
     collect_group(
         roots,
-        "font-thread-local",
-        stats,
-        super::xfaces::collect_font_gc_roots,
-    );
-    collect_group(
-        roots,
         "dynamic-module-thread-local",
         stats,
         super::dynamic_module::collect_dynamic_module_gc_roots,
@@ -3626,6 +3620,7 @@ pub struct Context {
     // Semantic registries belong to this heap; TLS only selects an active view.
     pub(crate) ccl_registry: super::ccl::CclRegistryHandle,
     pub(crate) charset_registry: super::charset::CharsetRegistryHandle,
+    pub(crate) font_registry: super::xfaces::FontRegistryHandle,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -11,6 +11,7 @@
 
 use crate::emacs_core::error::EvalResult;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
+use crate::emacs_core::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
 use crate::emacs_core::intern::resolve_sym;
 use crate::emacs_core::symbol::Obarray;
 use crate::emacs_core::value::{HashKey, HashTableTest, Value, ValueKind, list_to_vec};
@@ -230,7 +231,7 @@ pub(crate) fn ensure_face_new_frame_defaults_entry(
 /// The table is the canonical existence store that `internal-lisp-face-p`'s fast
 /// path reads (via [`lookup_face_new_frame_defaults_vector`]). Every OTHER face
 /// predicate decides existence from the known/created-face set
-/// (`is_known_lisp_face_name` UNION `CREATED_LISP_FACES`). Those two stores must
+/// (`is_known_lisp_face_name` plus the created-face set). Those two stores must
 /// agree, so any code that removes a face from the created-face set
 /// (`clear_created_lisp_face`, e.g. on source unload) MUST also call this, or the
 /// predicate would keep reporting a stale face (a hit short-circuits the
@@ -333,9 +334,11 @@ pub(crate) fn upsert_frame_face_hash_entry(table: Value, key: Value, value: Valu
 }
 
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+#[cfg(test)]
 use std::cell::{Cell, RefCell};
+#[cfg(test)]
 use std::rc::Rc;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use strum::{EnumIter, EnumString, IntoEnumIterator, IntoStaticStr};
@@ -960,32 +963,45 @@ fn valid_face_box_value(value: Value) -> bool {
     true
 }
 
-#[derive(Default)]
-struct FaceAttrState {
+pub(crate) struct FaceAttrState {
     selected_created: HashSet<SymId>,
     selected_overrides: HashMap<SymId, HashMap<LFaceAttr, Value>>,
     defaults_overrides: HashMap<SymId, HashMap<LFaceAttr, Value>>,
+    created_lisp_faces: HashSet<SymId>,
+    created_face_ids: HashMap<SymId, i64>,
+    next_created_face_id: i64,
+    face_set_generation: u64,
+    // The sorted name cache follows the same Context as its face definitions.
+    face_name_list_cache: Option<(u64, Arc<[String]>)>,
+}
+
+impl Default for FaceAttrState {
+    fn default() -> Self {
+        Self {
+            selected_created: HashSet::default(),
+            selected_overrides: HashMap::default(),
+            defaults_overrides: HashMap::default(),
+            created_lisp_faces: HashSet::default(),
+            created_face_ids: HashMap::default(),
+            next_created_face_id: FIRST_DYNAMIC_FACE_ID,
+            face_set_generation: 0,
+            face_name_list_cache: None,
+        }
+    }
 }
 
 thread_local! {
-    static CREATED_LISP_FACES: RefCell<HashSet<SymId>> = RefCell::new(HashSet::default());
-    static CREATED_FACE_IDS: RefCell<HashMap<SymId, i64>> = RefCell::new(HashMap::default());
-    static NEXT_CREATED_FACE_ID: RefCell<i64> = const { RefCell::new(FIRST_DYNAMIC_FACE_ID) };
-    static FACE_ATTR_STATE: RefCell<FaceAttrState> = RefCell::new(FaceAttrState::default());
-    /// Generation counter bumped whenever the defined-face set
-    /// (`CREATED_LISP_FACES`) changes.  Keys `FACE_NAME_LIST_CACHE`.
-    static FACE_SET_GENERATION: Cell<u64> = const { Cell::new(0) };
-    /// Cached sorted face-name list, valid while `FACE_SET_GENERATION` is
-    /// unchanged.  Doom calls `face-list` and seeds face tables hundreds of
-    /// times during startup with an unchanging face set; recomputing the sort
-    /// (with a per-comparison `face_id_for_name`) each time dominated the face
-    /// path in the startup profile.
-    static FACE_NAME_LIST_CACHE: RefCell<Option<(u64, Rc<[String]>)>> = const { RefCell::new(None) };
+    // Context owns the handle; this slot selects its state at activation.
+    static FACE_ATTR_STATE: HeapRegistrySlot<FaceAttrState> =
+        HeapRegistrySlot::new(FaceAttrState::default());
 }
 
 /// Invalidate the cached face-name list after the defined-face set changes.
 fn bump_face_set_generation() {
-    FACE_SET_GENERATION.with(|generation| generation.set(generation.get().wrapping_add(1)));
+    FACE_ATTR_STATE.with(|slot| {
+        let mut state = slot.borrow_mut();
+        state.face_set_generation = state.face_set_generation.wrapping_add(1);
+    });
 }
 
 fn face_symbol_id(name: &str) -> SymId {
@@ -997,24 +1013,31 @@ fn face_attr_id(name: &str) -> SymId {
 }
 
 pub(crate) fn clear_font_cache_state() {
-    CREATED_LISP_FACES.with(|slot| slot.borrow_mut().clear());
-    CREATED_FACE_IDS.with(|slot| slot.borrow_mut().clear());
-    NEXT_CREATED_FACE_ID.with(|slot| *slot.borrow_mut() = FIRST_DYNAMIC_FACE_ID);
-    FACE_ATTR_STATE.with(|slot| *slot.borrow_mut() = FaceAttrState::default());
-    bump_face_set_generation();
+    FACE_ATTR_STATE.with(|slot| slot.reset(FaceAttrState::default()));
 }
 
-/// Collect GC roots from face attribute overrides.
-pub(crate) fn collect_font_gc_roots(roots: &mut Vec<Value>) {
-    FACE_ATTR_STATE.with(|slot| {
-        let state = slot.borrow();
-        for attrs in state.selected_overrides.values() {
-            roots.extend(attrs.values().copied());
-        }
-        for attrs in state.defaults_overrides.values() {
-            roots.extend(attrs.values().copied());
-        }
-    });
+pub(crate) type FontRegistryHandle = HeapRegistryHandle<FaceAttrState>;
+
+pub(crate) fn current_font_registry_handle() -> FontRegistryHandle {
+    FACE_ATTR_STATE.with(HeapRegistrySlot::current)
+}
+
+pub(crate) fn install_font_registry_handle(handle: &FontRegistryHandle) {
+    FACE_ATTR_STATE.with(|slot| slot.install(handle));
+}
+
+/// Collect GC roots from the collecting Context's face attribute overrides.
+pub(crate) fn collect_font_registry_gc_roots(
+    registry: &FontRegistryHandle,
+    roots: &mut Vec<Value>,
+) {
+    let state = registry.borrow();
+    for attrs in state.selected_overrides.values() {
+        roots.extend(attrs.values().copied());
+    }
+    for attrs in state.defaults_overrides.values() {
+        roots.extend(attrs.values().copied());
+    }
 }
 
 fn is_created_lisp_face(name: &str) -> bool {
@@ -1022,15 +1045,16 @@ fn is_created_lisp_face(name: &str) -> bool {
 }
 
 fn is_created_lisp_face_id(id: SymId) -> bool {
-    CREATED_LISP_FACES.with(|slot| slot.borrow().contains(&id))
+    FACE_ATTR_STATE.with(|slot| slot.borrow().created_lisp_faces.contains(&id))
 }
 
-/// Restore the `CREATED_LISP_FACES` set from an evaluator's face table.
+/// Restore the created-face set from an evaluator's face table.
 /// Called after pdump load to re-populate the thread-local face name set
 /// that was lost during serialization.
 pub(crate) fn restore_created_faces_from_table(face_names: &[String]) {
-    CREATED_LISP_FACES.with(|slot| {
-        let mut set = slot.borrow_mut();
+    FACE_ATTR_STATE.with(|slot| {
+        let mut state = slot.borrow_mut();
+        let set = &mut state.created_lisp_faces;
         for name in face_names {
             if !is_known_lisp_face_name(name) {
                 set.insert(face_symbol_id(name));
@@ -1045,7 +1069,7 @@ fn mark_created_lisp_face(name: &str) {
 }
 
 fn mark_created_lisp_face_id(id: SymId, name: &str) {
-    let inserted = CREATED_LISP_FACES.with(|slot| slot.borrow_mut().insert(id));
+    let inserted = FACE_ATTR_STATE.with(|slot| slot.borrow_mut().created_lisp_faces.insert(id));
     if inserted {
         ensure_dynamic_face_id(name);
         bump_face_set_generation();
@@ -1069,21 +1093,23 @@ fn ensure_dynamic_face_id(name: &str) {
         return;
     }
     let face = face_symbol_id(name);
-    CREATED_FACE_IDS.with(|slot| {
-        let mut ids = slot.borrow_mut();
-        if ids.contains_key(&face) {
-            return;
+    FACE_ATTR_STATE.with(|slot| {
+        let mut state = slot.borrow_mut();
+        if !state.created_face_ids.contains_key(&face) {
+            let id = state.next_created_face_id;
+            state.created_face_ids.insert(face, id);
+            state.next_created_face_id += 1;
         }
-        NEXT_CREATED_FACE_ID.with(|next_slot| {
-            let mut next = next_slot.borrow_mut();
-            ids.insert(face, *next);
-            *next += 1;
-        });
     });
 }
 
 fn dynamic_face_id(name: &str) -> Option<i64> {
-    CREATED_FACE_IDS.with(|slot| slot.borrow().get(&face_symbol_id(name)).copied())
+    FACE_ATTR_STATE.with(|slot| {
+        slot.borrow()
+            .created_face_ids
+            .get(&face_symbol_id(name))
+            .copied()
+    })
 }
 
 pub(crate) fn face_id_for_name(name: &str) -> Option<i64> {
@@ -1096,21 +1122,22 @@ pub(crate) fn face_id_for_name(name: &str) -> Option<i64> {
     dynamic_face_id(name)
 }
 
-pub(crate) fn all_defined_face_names_sorted_by_id_desc() -> Rc<[String]> {
-    let generation = FACE_SET_GENERATION.with(|generation| generation.get());
-    if let Some(cached) = FACE_NAME_LIST_CACHE.with(|cache| {
-        cache
-            .borrow()
+pub(crate) fn all_defined_face_names_sorted_by_id_desc() -> Arc<[String]> {
+    if let Some(cached) = FACE_ATTR_STATE.with(|slot| {
+        let state = slot.borrow();
+        state
+            .face_name_list_cache
             .as_ref()
-            .filter(|(cached_generation, _)| *cached_generation == generation)
-            .map(|(_, names)| Rc::clone(names))
+            .filter(|(generation, _)| *generation == state.face_set_generation)
+            .map(|(_, names)| Arc::clone(names))
     }) {
         return cached;
     }
 
-    let names: Rc<[String]> = Rc::from(compute_face_names_sorted_by_id_desc());
-    FACE_NAME_LIST_CACHE.with(|cache| {
-        *cache.borrow_mut() = Some((generation, Rc::clone(&names)));
+    let names: Arc<[String]> = Arc::from(compute_face_names_sorted_by_id_desc());
+    FACE_ATTR_STATE.with(|slot| {
+        let mut state = slot.borrow_mut();
+        state.face_name_list_cache = Some((state.face_set_generation, Arc::clone(&names)));
     });
     names
 }
@@ -1127,8 +1154,8 @@ fn compute_face_names_sorted_by_id_desc() -> Vec<String> {
             names.push(name.to_string());
         }
     }
-    CREATED_LISP_FACES.with(|slot| {
-        for symbol in slot.borrow().iter() {
+    FACE_ATTR_STATE.with(|slot| {
+        for symbol in slot.borrow().created_lisp_faces.iter() {
             if seen.insert(*symbol) {
                 names.push(resolve_sym(*symbol).to_string());
             }
@@ -1230,11 +1257,9 @@ fn clear_face_overrides(face_name: &str, defaults_frame: bool) {
 
 pub(crate) fn clear_created_lisp_face(name: &str) {
     let face = face_symbol_id(name);
-    CREATED_LISP_FACES.with(|slot| {
-        slot.borrow_mut().remove(&face);
-    });
     FACE_ATTR_STATE.with(|slot| {
         let mut state = slot.borrow_mut();
+        state.created_lisp_faces.remove(&face);
         state.selected_created.remove(&face);
         state.defaults_overrides.remove(&face);
         state.selected_overrides.remove(&face);
@@ -4646,7 +4671,9 @@ pub(crate) fn builtin_internal_set_alternative_font_registry_alist(args: Vec<Val
         for member in members {
             let downcased = crate::emacs_core::builtins::builtin_downcase(vec![member])?;
             if let Some(text) = downcased.as_lisp_string() {
-                names.push(text.clone());
+                // This static registry consumes bytes only. Retaining cloned
+                // text-property Values would keep unrooted heap pointers.
+                names.push(text.without_properties());
             }
             converted.push(downcased);
         }
@@ -4795,3 +4822,7 @@ mod font_size_test;
 #[cfg(test)]
 #[path = "tests/font_remapping_test.rs"]
 mod font_remapping_test;
+
+#[cfg(test)]
+#[path = "tests/gc_tls_ownership.rs"]
+mod gc_tls_ownership_tests;
