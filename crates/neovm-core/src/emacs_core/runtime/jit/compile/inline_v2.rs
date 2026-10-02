@@ -24,7 +24,15 @@ mod tags;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RegionKind {
     Constant,
-    Closure { prefix: usize, const_base: usize },
+    Closure {
+        prefix: usize,
+        const_base: usize,
+    },
+    /// Exact, direct function cell of this mutator's symbol. Aliases and
+    /// autoloads are left to the ordinary call protocol.
+    Named {
+        symbol: crate::emacs_core::intern::SymId,
+    },
 }
 
 pub(crate) use crate::emacs_core::jit::vframe::HofKind;
@@ -108,6 +116,10 @@ pub(crate) struct FusedV2 {
         expect(dead_code, reason = "materialized frames arrive in later P2.3 stages")
     )]
     pub(crate) materialize_at: BTreeMap<usize, Box<[usize]>>,
+    /// Static outer-to-inner frames already materialized before this op.
+    pub(crate) materialized_at: Vec<Box<[usize]>>,
+    /// Region returning at the first op of its return expansion.
+    pub(crate) exit_regions: BTreeMap<usize, usize>,
 }
 
 /// Splice admitted constant and in-unit closure sites, then describe their
@@ -120,6 +132,26 @@ pub(crate) fn fuse_calls_v2(
     feedback: &[NumericFeedback],
 ) -> Option<FusedBody> {
     let front = tags::fuse_static(ops, constants, offset_map, arity, feedback)?;
+    annotate(front)
+}
+
+/// Named callees are selected only by a T2/re-tier compile. All borrowed
+/// function cells belong to the compiling mutator; the resulting immutable
+/// body roots each observed bytecode object in its constant pool.
+pub(crate) fn fuse_named_calls_v2(
+    ops: &[Op],
+    constants: &[Value],
+    offset_map: Option<&[GnuByteOffsetMapEntry]>,
+    arity: usize,
+    feedback: &[NumericFeedback],
+    obarray: &crate::emacs_core::symbol::Obarray,
+) -> Option<FusedBody> {
+    annotate(tags::fuse_named(
+        ops, constants, offset_map, arity, feedback, obarray,
+    )?)
+}
+
+fn annotate(front: tags::StaticFront) -> Option<FusedBody> {
     let mut body = front.body;
     let mut entry_at = PcSet::new(body.ops.len());
     let mut exit_at = PcSet::new(body.ops.len());
@@ -129,7 +161,8 @@ pub(crate) fn fuse_calls_v2(
         .map(|&pc| u32::try_from(pc))
         .collect::<Result<_, _>>()
         .ok()?;
-    for region in &body.regions {
+    let mut exit_regions = BTreeMap::new();
+    for (region_id, region) in body.regions.iter().enumerate() {
         entry_at.insert(region.start);
         let callee = Value::from_bits(region.callee_bits as usize).get_bytecode_data()?;
         let mut cursor = region.start;
@@ -139,6 +172,7 @@ pub(crate) fn fuse_calls_v2(
                 // Mark the first discard, before the return expansion
                 // consumes the callee's stack and function slot.
                 exit_at.insert(cursor);
+                exit_regions.insert(cursor, region_id);
                 while matches!(body.ops.get(cursor), Some(Op::DiscardN(raw)) if raw & 0x80 != 0) {
                     *callee_pc_of_fused.get_mut(cursor)? = pc;
                     cursor += 1;
@@ -161,6 +195,8 @@ pub(crate) fn fuse_calls_v2(
         region_kind: front.region_kind,
         hof_at: front.hof_at,
         materialize_at: BTreeMap::new(),
+        materialized_at: vec![Box::default(); body.ops.len()],
+        exit_regions,
     });
     Some(body)
 }

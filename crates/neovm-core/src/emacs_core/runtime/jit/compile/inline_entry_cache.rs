@@ -235,6 +235,7 @@ pub(crate) fn candidate_regions(
                 return false;
             }
             match side.region_kind[region] {
+                RegionKind::Named { .. } => false,
                 RegionKind::Closure { .. } => true, // fresh source/prefix guards remain
                 RegionKind::Constant => constants
                     .as_ref()
@@ -385,7 +386,7 @@ fn constant_states(
                         RegionKind::Closure { prefix, const_base } => {
                             pc >= frame.start && index >= const_base && index < const_base + prefix
                         }
-                        RegionKind::Constant => false,
+                        RegionKind::Constant | RegionKind::Named { .. } => false,
                     }
                 });
                 stack.push(if index < dynamic_prefix || captured {

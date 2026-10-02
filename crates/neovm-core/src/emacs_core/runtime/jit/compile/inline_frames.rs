@@ -15,7 +15,7 @@ use cranelift_codegen::ir::{InstBuilder, MemFlagsData, Value as ClifValue, types
 use cranelift_frontend::{FunctionBuilder, Variable};
 
 use super::CompileError;
-use super::chain_framestate::{PhysicalFrameState, RegionFrameState, chain_framestate};
+use super::chain_framestate::{PhysicalFrameState, RegionFrameState, chain_framestate_at};
 use super::jit_layout;
 use super::lowering::{self, DeoptCells, PendingDeopt, RegionDeopt, RtCtx, SlotRep};
 use crate::emacs_core::bytecode::opcode::Op;
@@ -26,14 +26,24 @@ use crate::emacs_core::jit::vframe::{
 };
 use crate::emacs_core::value::Value;
 
-/// Keep builtin dependencies of admitted mapping sites in the physical leaf.
+/// Keep named-callee and mapping-builtin dependencies in the physical leaf.
 /// Threading: this mutates compiler-owned metadata before publication; it
 /// reads only immutable fused annotations and caches no mutator Lisp state.
-pub(crate) fn retain_hof_dependencies(leaf: &mut super::CompiledLeaf, fused: Option<&FusedBody>) {
+pub(crate) fn retain_inline_dependencies(
+    leaf: &mut super::CompiledLeaf,
+    fused: Option<&FusedBody>,
+) {
     let Some(side) = fused.and_then(|body| body.v2.as_ref()) else {
         return;
     };
     let mut deps = leaf.inline_deps.to_vec();
+    for kind in &side.region_kind {
+        if let RegionKind::Named { symbol } = kind
+            && !deps.contains(symbol)
+        {
+            deps.push(*symbol);
+        }
+    }
     for site in side.hof_at.values() {
         let name = match site.kind {
             crate::emacs_core::jit::inline::HofKind::Mapc => "mapc",
@@ -73,14 +83,15 @@ impl InlineDeoptWrite {
     }
 }
 
-/// The original pre-call snapshot and source of one flat virtual region.
+/// The original pre-call snapshots and sources of one nested inline chain.
 /// Threading: compile-local handles only; `Rc` explicitly prevents crossing
 /// workers. Its table is frozen before the native leaf is published.
 #[derive(Clone)]
 pub(crate) struct ChainRegion {
     fused: Rc<FusedBody>,
     region: usize,
-    function: RelocIdx,
+    snapshots: Vec<RegionFrameState>,
+    entry_caller: Option<(usize, usize)>,
     physical_binds: u16,
     table: Rc<RefCell<Vec<DeoptChain>>>,
     write: InlineDeoptWrite,
@@ -102,12 +113,16 @@ pub(crate) struct Frames {
     fused: Option<Rc<FusedBody>>,
     table: Rc<RefCell<Vec<DeoptChain>>>,
     write: InlineDeoptWrite,
+    snapshots: RefCell<Vec<Option<RegionFrameState>>>,
 }
 
 impl Frames {
     pub(crate) fn new(meta: &DeoptCells) -> Self {
+        let fused = crate::emacs_core::jit::inline::active_fused().filter(|f| f.is_v2());
+        let count = fused.as_ref().map_or(0, |body| body.regions.len());
         Self {
-            fused: crate::emacs_core::jit::inline::active_fused().filter(|f| f.is_v2()),
+            fused,
+            snapshots: RefCell::new(vec![None; count]),
             table: Rc::new(RefCell::new(Vec::new())),
             write: InlineDeoptWrite {
                 chain_addr: std::ptr::from_ref(&meta.chain) as i64,
@@ -121,6 +136,89 @@ impl Frames {
     pub(crate) fn finish(self) -> Vec<DeoptChain> {
         lowering::set_active_region(None);
         self.table.take()
+    }
+
+    /// Re-select the source ancestry at every fused op. Lowering visits
+    /// sibling blocks in source order, which is not a runtime frame stack.
+    /// The entry snapshots themselves dominate every block of their region.
+    fn activate(
+        &self,
+        region_id: usize,
+        pc: usize,
+        physical_binds: usize,
+        entry_caller: Option<(usize, usize)>,
+    ) -> Result<(), CompileError> {
+        let fused = self.fused.as_ref().expect("active v2 region");
+        let side = fused.v2.as_ref().expect("v2");
+        let saved = self.snapshots.borrow();
+        let mut ids = Vec::new();
+        let mut at = Some(region_id);
+        while let Some(id) = at {
+            if ids.contains(&id) || id >= fused.regions.len() {
+                return Err(CompileError::UnsupportedOp("inline-parent-cycle"));
+            }
+            ids.push(id);
+            at = fused.regions[id].parent;
+        }
+        ids.reverse();
+        let materialized = side.materialized_at.get(pc).map_or(&[][..], |ids| &**ids);
+        let snapshots = ids
+            .iter()
+            .map(|&id| {
+                let mut state = saved[id]
+                    .clone()
+                    .ok_or(CompileError::UnsupportedOp("inline-parent-snapshot"))?;
+                state.bt = match materialized.iter().position(|&live| live == id) {
+                    Some(index) => BtState::Materialized {
+                        spec_offset: u32::try_from(physical_binds + index)
+                            .map_err(|_| CompileError::BadOperand)?,
+                    },
+                    None => BtState::Virtual,
+                };
+                Ok(state)
+            })
+            .collect::<Result<Vec<_>, CompileError>>()?;
+        let source = snapshots.last().expect("nonempty region chain");
+        lowering::set_active_region(Some(RegionDeopt {
+            call_site_pc: fused.regions[region_id].call_site_pc,
+            stack: source.pre_call.iter().map(|(value, _)| *value).collect(),
+            reps: source.pre_call.iter().map(|(_, rep)| *rep).collect(),
+            chain: Some(ChainRegion {
+                fused: fused.clone(),
+                region: region_id,
+                snapshots,
+                entry_caller,
+                physical_binds: u16::try_from(physical_binds)
+                    .map_err(|_| CompileError::BadOperand)?,
+                table: self.table.clone(),
+                write: self.write.clone(),
+                hof: None,
+            }),
+        }));
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn region_entry_protocol(
+        &self,
+        fb: &mut FunctionBuilder,
+        pc: usize,
+        region_id: usize,
+        rt: &RtCtx,
+        stack: &[ClifValue],
+        reps: &[SlotRep],
+        pending: &mut Vec<PendingDeopt>,
+        handlers: usize,
+    ) {
+        let fused = self.fused.as_ref().expect("v2");
+        let mut extra = 1;
+        let materialized = &fused.v2.as_ref().expect("v2").materialized_at[pc];
+        let mut at = fused.regions[region_id].parent;
+        while let Some(parent) = at {
+            extra += usize::from(!materialized.contains(&parent));
+            at = fused.regions[parent].parent;
+        }
+        self.entry_protocol_with_depth(fb, pc, rt, stack, reps, pending, handlers, extra);
     }
 
     /// Hook before each fused op. `true` means the op was emitted here.
@@ -149,11 +247,20 @@ impl Frames {
         let side = fused.v2.as_ref().expect("v2");
         let rt = rt.ok_or(CompileError::UnsupportedOp("inline-vmctx"))?;
         if pc == region.start {
-            if handlers != 0 || region.parent.is_some() {
+            if handlers != 0 {
                 return Err(CompileError::UnsupportedOp("inline-chain-handlers"));
             }
             lowering::box_all_flonums(fb, Some(rt), stack, reps);
-            lowering::set_active_region(None);
+            if let Some(parent) = region.parent {
+                self.activate(
+                    parent,
+                    pc,
+                    physical_binds,
+                    Some((parent, region.call_site_pc)),
+                )?;
+            } else {
+                lowering::set_active_region(None);
+            }
             if region.frame_base == 0 || stack.len() != region.frame_base + region.nargs {
                 return Err(CompileError::UnsupportedOp("inline-region-depth"));
             }
@@ -209,35 +316,46 @@ impl Frames {
                             identity,
                         );
                     }
+                    RegionKind::Named { symbol } => {
+                        super::named_frames::emit_identity_guard(
+                            fb,
+                            rt,
+                            symbol,
+                            actual,
+                            region.callee_bits,
+                            identity,
+                        );
+                    }
                 }
                 if let Some((valid, body)) = checked_body {
-                    self.entry_protocol(fb, pc, rt, stack, reps, pending, handlers);
+                    self.region_entry_protocol(
+                        fb, pc, region_id, rt, stack, reps, pending, handlers,
+                    );
                     super::inline_entry_cache::finish(fb, valid, body);
                 } else if let Some(valid) = cached {
                     self.cached_protocol(fb, pc, rt, stack, reps, pending, handlers, valid)?;
                 } else {
-                    self.entry_protocol(fb, pc, rt, stack, reps, pending, handlers);
+                    self.region_entry_protocol(
+                        fb, pc, region_id, rt, stack, reps, pending, handlers,
+                    );
                 }
             }
             let function = *relocs
                 .get(&(region.callee_bits as usize))
                 .ok_or(CompileError::UnsupportedOp("inline-callee-reloc"))?;
-            lowering::set_active_region(Some(RegionDeopt {
-                call_site_pc: region.call_site_pc,
-                stack: stack.clone(),
-                reps: reps.clone(),
-                chain: Some(ChainRegion {
-                    fused: fused.clone(),
-                    region: region_id,
-                    function: RelocIdx(function),
-                    physical_binds: u16::try_from(physical_binds)
-                        .map_err(|_| CompileError::BadOperand)?,
-                    table: self.table.clone(),
-                    write: self.write.clone(),
-                    hof: None,
-                }),
-            }));
+            self.snapshots.borrow_mut()[region_id] = Some(RegionFrameState {
+                region: region_id,
+                function: RelocIdx(function),
+                link: Link::Bcall {
+                    nargs: region.nargs as u16,
+                },
+                bt: BtState::Virtual,
+                binds: 0,
+                handlers: 0,
+                pre_call: stack.iter().copied().zip(reps.iter().copied()).collect(),
+            });
         }
+        self.activate(region_id, pc, physical_binds, None)?;
         if let (RegionKind::Closure { prefix, const_base }, Op::Constant(index)) =
             (side.region_kind[region_id], op)
             && (*index as usize) >= const_base
@@ -307,6 +425,21 @@ impl Frames {
         pending: &mut Vec<PendingDeopt>,
         handlers: usize,
     ) {
+        self.entry_protocol_with_depth(fb, pc, rt, stack, reps, pending, handlers, 1);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn entry_protocol_with_depth(
+        &self,
+        fb: &mut FunctionBuilder,
+        pc: usize,
+        rt: &RtCtx,
+        stack: &[ClifValue],
+        reps: &[SlotRep],
+        pending: &mut Vec<PendingDeopt>,
+        handlers: usize,
+        extra: usize,
+    ) {
         use crate::emacs_core::eval::AttentionMask;
         use crate::emacs_core::forward::LISP_BOOL_FWD_VALUE_OFFSET;
         let flags = MemFlagsData::trusted();
@@ -354,7 +487,13 @@ impl Frames {
             ctx,
             jit_layout::CONTEXT_MAX_DEPTH_OFFSET as i32,
         );
-        let within = fb.ins().icmp(IntCC::UnsignedLessThan, depth, max);
+        let within = if extra == 1 {
+            // Preserve the existing flat protocol's exact CLIF.
+            fb.ins().icmp(IntCC::UnsignedLessThan, depth, max)
+        } else {
+            let logical = lowering::iadd_imm_p(fb, depth, extra as i64);
+            fb.ins().icmp(IntCC::UnsignedLessThanOrEqual, logical, max)
+        };
         lowering::emit_guard(fb, deopt, within);
     }
 
@@ -388,7 +527,8 @@ impl Frames {
         physical.chain = Some(ChainRegion {
             fused: self.fused.as_ref().expect("HOF has v2 annotations").clone(),
             region: 0,
-            function: RelocIdx(0),
+            snapshots: Vec::new(),
+            entry_caller: None,
             physical_binds: binds as u16,
             table: self.table.clone(),
             write: self.write.clone(),
@@ -469,23 +609,7 @@ pub(crate) fn plan_deopt(pc: usize, pending: &mut PendingDeopt) {
         return;
     }
     let meta = &state.fused.regions[state.region];
-    let snapshot = RegionFrameState {
-        region: state.region,
-        function: state.function,
-        link: Link::Bcall {
-            nargs: meta.nargs as u16,
-        },
-        bt: BtState::Virtual,
-        binds: 0,
-        handlers: 0,
-        pre_call: region
-            .stack
-            .iter()
-            .copied()
-            .zip(region.reps.iter().copied())
-            .collect(),
-    };
-    let mut plan = chain_framestate(
+    let mut plan = chain_framestate_at(
         &state.fused,
         pc,
         &pending.stack,
@@ -494,9 +618,10 @@ pub(crate) fn plan_deopt(pc: usize, pending: &mut PendingDeopt) {
             binds: state.physical_binds,
             handlers: 0,
         },
-        &[snapshot],
+        &state.snapshots,
+        state.entry_caller,
     )
-    .expect("validated flat virtual region");
+    .expect("validated nested inline region");
     if matches!(
         state.fused.v2.as_ref().expect("v2").region_kind[state.region],
         RegionKind::Closure { .. }

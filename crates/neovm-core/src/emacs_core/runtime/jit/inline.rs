@@ -52,7 +52,17 @@ pub(crate) use census::{CensusSite, census_callee_verdict, census_sites};
 
 #[path = "compile/inline_v2.rs"]
 mod v2;
-pub(crate) use v2::{FusedV2, HofKind, HofSite, RegionKind, fuse_calls_v2, hof_profit_credit_at};
+pub(crate) use v2::{
+    FusedV2, HofKind, HofSite, RegionKind, fuse_calls_v2, fuse_named_calls_v2, hof_profit_credit_at,
+};
+
+#[cfg(test)]
+#[path = "tests/inline_named_front.rs"]
+mod named_front_tests;
+
+#[cfg(test)]
+#[path = "tests/inline_named_runtime.rs"]
+mod named_runtime_tests;
 
 /// Ops of a callee body, at most, for one splice.
 pub(crate) const MAX_INLINE_BODY: usize = 40;

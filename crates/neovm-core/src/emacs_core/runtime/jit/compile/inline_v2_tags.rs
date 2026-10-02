@@ -213,6 +213,31 @@ pub(super) fn fuse_static(
     arity: usize,
     feedback: &[NumericFeedback],
 ) -> Option<StaticFront> {
+    fuse_front(ops, constants, offset_map, arity, feedback, None)
+}
+
+/// The same front admits named cells at a T2 compile, preserving static
+/// closure and HOF sites in mixed callers. Threading: observed function
+/// objects belong to this mutator and are rooted in the resulting pool.
+pub(super) fn fuse_named(
+    ops: &[Op],
+    constants: &[Value],
+    offset_map: Option<&[GnuByteOffsetMapEntry]>,
+    arity: usize,
+    feedback: &[NumericFeedback],
+    obarray: &crate::emacs_core::symbol::Obarray,
+) -> Option<StaticFront> {
+    fuse_front(ops, constants, offset_map, arity, feedback, Some(obarray))
+}
+
+fn fuse_front(
+    ops: &[Op],
+    constants: &[Value],
+    offset_map: Option<&[GnuByteOffsetMapEntry]>,
+    arity: usize,
+    feedback: &[NumericFeedback],
+    obarray: Option<&crate::emacs_core::symbol::Obarray>,
+) -> Option<StaticFront> {
     if offset_map.is_none() && ops.iter().any(|op| matches!(op, Op::Switch)) {
         return None;
     }
@@ -232,6 +257,8 @@ pub(super) fn fuse_static(
     let mut kinds = Vec::new();
     let mut hof_candidates = BTreeMap::new();
     let mut pool_len = constants.len();
+    let mut pool = constants.to_vec();
+    let mut growth = ops.len();
     let mut handlers = 0;
     for (pc, op) in ops.iter().enumerate() {
         if cfg.leaders.binary_search(&pc).is_ok() {
@@ -285,22 +312,31 @@ pub(super) fn fuse_static(
                 }
             }
             let candidate = match tag {
-                Tag::Constant(i) => Some((i, RegionKind::Constant)),
+                Tag::Constant(i) => constants.get(i as usize).and_then(|&target| {
+                    if target.is_bytecode() {
+                        return Some((i, RegionKind::Constant, target));
+                    }
+                    let symbol = target.as_symbol_id()?;
+                    if crate::emacs_core::jit::cache::inline_callee_is_unstable(symbol) {
+                        return None;
+                    }
+                    let target = obarray?.symbol_function_id(symbol)?;
+                    Some((i, RegionKind::Named { symbol }, target))
+                }),
                 Tag::Closure { template, prefix } if closures => Some((
                     template,
                     RegionKind::Closure {
                         prefix,
                         const_base: pool_len,
                     },
+                    *constants.get(template as usize)?,
                 )),
                 _ => None,
             };
             if handlers == 0
                 && depth[pc] > nargs
-                && let Some((template, kind)) = candidate
-                && let Some(callee) = constants
-                    .get(template as usize)
-                    .and_then(|v| v.get_bytecode_data())
+                && let Some((template, kind, target)) = candidate
+                && let Some(callee) = target.get_bytecode_data()
             {
                 // Match the existing fuser's census for a proven bytecode
                 // target that reoptimization requires to remain a call.
@@ -309,15 +345,37 @@ pub(super) fn fuse_static(
                     transfer(op, constants, &mut tags);
                     continue;
                 }
+                let named = matches!(kind, RegionKind::Named { .. });
+                let extra = callee.executable_ops().len()
+                    + callee
+                        .executable_ops()
+                        .iter()
+                        .filter(|op| matches!(op, Op::Return))
+                        .count();
                 let verdict = match kind {
-                    RegionKind::Constant if callee.jit_runtime().patched_prefix() > 0 => {
+                    RegionKind::Constant | RegionKind::Named { .. }
+                        if callee.jit_runtime().patched_prefix() > 0 =>
+                    {
                         Err("patched-prefix".into())
                     }
-                    _ => v2_depths(callee, nargs, pool_len),
+                    RegionKind::Named { .. }
+                        if growth.saturating_add(extra) > ops.len().saturating_mul(4).min(1024) =>
+                    {
+                        Err("named-growth".into())
+                    }
+                    _ => v2_depths(callee, nargs, pool_len + usize::from(named)),
                 };
                 match verdict {
                     Ok(depths) => {
-                        pool_len += callee.constants.len();
+                        let template = if named {
+                            let index = u16::try_from(pool.len()).ok()?;
+                            pool.push(target);
+                            index
+                        } else {
+                            template
+                        };
+                        pool_len += callee.constants.len() + usize::from(named);
+                        growth += extra;
                         sites.push((pc, template, nargs, depths));
                         kinds.push(kind);
                     }
@@ -358,16 +416,26 @@ pub(super) fn fuse_static(
             caller_of_fused: (0..ops.len()).collect(),
         }
     } else {
-        inline::splice_sites(ops, constants, offset_map, feedback, &depth, &sites)?
+        inline::splice_sites(ops, &pool, offset_map, feedback, &depth, &sites)?
     };
     // Prefix loads read the executing object. The prototype's placeholder (or
     // a previously captured fixnum) must never prove an SSA slot fixnum or a
     // call target constant before the runtime load hook replaces the Constant.
-    for kind in &kinds {
-        if let RegionKind::Closure { prefix, const_base } = *kind {
-            let end = const_base.checked_add(prefix)?;
+    let mut const_base = pool.len();
+    for (kind, region) in kinds.iter_mut().zip(&body.regions) {
+        if let RegionKind::Closure {
+            prefix,
+            const_base: base,
+        } = kind
+        {
+            *base = const_base;
+            let end = const_base.checked_add(*prefix)?;
             body.constants.get_mut(const_base..end)?.fill(Value::NIL);
         }
+        const_base += Value::from_bits(region.callee_bits as usize)
+            .get_bytecode_data()?
+            .constants
+            .len();
     }
     let mut hof_at = BTreeMap::new();
     for (fused_pc, &original_pc) in body.caller_of_fused.iter().enumerate() {
@@ -396,8 +464,11 @@ pub(super) fn fuse_static(
     if body.regions.is_empty() && hof_at.is_empty() {
         return None;
     }
-    for _ in &body.regions {
+    for kind in &kinds {
         crate::emacs_core::jit::stats::record_inline("fused");
+        if matches!(kind, RegionKind::Named { .. }) {
+            crate::emacs_core::jit::stats::record_inline("fused:named");
+        }
     }
     Some(StaticFront {
         body,

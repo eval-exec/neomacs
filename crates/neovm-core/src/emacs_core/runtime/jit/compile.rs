@@ -875,7 +875,8 @@ pub fn compile_bytecode_function_requested(
     );
     let started = std::time::Instant::now();
     super::stats::verdict::begin();
-    let mut result = compile_bytecode_function_inner(f, obarray);
+    let named_t2 = inline_planning::named_tier_eligible(f, request, self_recursive);
+    let mut result = compile_bytecode_function_inner(f, obarray, named_t2);
     super::stats::inline_census::note_compile_outcome(f, &result);
     let mir_verdict = super::stats::verdict::take();
     if let Ok(leaf) = &mut result {
@@ -1041,6 +1042,7 @@ fn resolve_inline_callee(ob: &Obarray, sym: Value) -> Option<mir::MirFunction> {
 fn compile_bytecode_function_inner(
     f: &ByteCodeFunction,
     obarray: Option<&Obarray>,
+    named_t2: bool,
 ) -> Result<CompiledLeaf, CompileError> {
     use super::stats::{CompilePhase, enter_phase};
     let gate_phase = enter_phase(CompilePhase::Gate);
@@ -1079,20 +1081,7 @@ fn compile_bytecode_function_inner(
     // baseline until the opt builder consumes its frame states. Off keeps
     // the original MIR-first, late-fuser path below.
     let inline2 = jit_inline2_mode();
-    let early_fused = if inline2.enabled() && inline::jit_inline_on() {
-        let _phase = enter_phase(CompilePhase::Fuse);
-        let feedback: Vec<_> = (0..ops.len()).map(active_numeric_feedback).collect();
-        inline::fuse_calls_v2(
-            ops,
-            constants,
-            f.executable_gnu_byte_offset_map(),
-            native_arity,
-            &feedback,
-        )
-        .map(std::rc::Rc::new)
-    } else {
-        None
-    };
+    let early_fused = inline_planning::early_fused(f, constants, obarray, native_arity, named_t2);
     let fused_v2 = early_fused.as_ref().is_some_and(|body| body.is_v2());
     let (ops, constants) = early_fused.as_ref().map_or((ops, constants), |body| {
         (body.ops.as_slice(), body.constants.as_slice())
@@ -1311,7 +1300,7 @@ fn compile_bytecode_function_inner(
     )?;
     leaf.required = required;
     leaf.has_rest = has_rest;
-    inline_frames::retain_hof_dependencies(&mut leaf, fused.as_deref());
+    inline_frames::retain_inline_dependencies(&mut leaf, fused.as_deref());
     // LEVEL-B redefinition guard: an inlined bit-op (logand/logior/logxor/lognot)
     // bakes the native op with NO per-call arming, so the leaf must be evicted if
     // its callee is ever redefined. Use PRECISE inline_deps only (NOT the coarse
@@ -4843,7 +4832,9 @@ pub(crate) mod inline_entry_cache;
 mod inline_frames;
 mod inline_hof;
 mod inline_physical;
+mod inline_planning;
 pub(crate) mod inline_regalloc;
+mod named_frames;
 pub(crate) mod resumed_chain;
 pub(crate) mod snapshot;
 pub(crate) mod source_slots;

@@ -27,6 +27,7 @@ pub(crate) struct PhysicalFrameState {
 /// An InlineEnter snapshot, captured before the callee can change its
 /// parameters. All stacks are in the physical fused stack's coordinates.
 /// Threading: this is compiler-local SSA data, never runtime Lisp state.
+#[derive(Clone)]
 pub(crate) struct RegionFrameState {
     pub(crate) region: usize,
     pub(crate) function: RelocIdx,
@@ -58,13 +59,33 @@ pub(crate) fn chain_framestate(
     physical: PhysicalFrameState,
     snapshots: &[RegionFrameState],
 ) -> Result<PlannedChain, CompileError> {
+    chain_framestate_at(fused, pc, model_stack, reps, physical, snapshots, None)
+}
+
+/// An entry guard has not entered its new region yet. Its chain ends in
+/// the immediate caller at the original Call pc; all ordinary sites use
+/// the fused pc's innermost region and source-pc annotation instead.
+/// Threading: this override is compile-local metadata only.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn chain_framestate_at(
+    fused: &FusedBody,
+    pc: usize,
+    model_stack: &[ClifValue],
+    reps: &[SlotRep],
+    physical: PhysicalFrameState,
+    snapshots: &[RegionFrameState],
+    entry_caller: Option<(usize, usize)>,
+) -> Result<PlannedChain, CompileError> {
     let bad = || CompileError::UnsupportedOp("inline-chain-state");
     if model_stack.len() != reps.len() || physical.handlers > 0 {
         return Err(bad());
     }
     let side = fused.v2.as_ref().ok_or_else(bad)?;
     let mut ancestors = Vec::new();
-    let mut at = *fused.region_of.get(pc).ok_or_else(bad)?;
+    let mut at = match entry_caller {
+        Some((region, _)) => Some(region),
+        None => *fused.region_of.get(pc).ok_or_else(bad)?,
+    };
     while let Some(region_id) = at {
         if ancestors.contains(&region_id) {
             return Err(bad());
@@ -148,7 +169,17 @@ pub(crate) fn chain_framestate(
                 )
             } else {
                 (
-                    *side.callee_pc_of_fused.get(pc).ok_or_else(bad)? as usize,
+                    entry_caller
+                        .map_or_else(
+                            || {
+                                side.callee_pc_of_fused
+                                    .get(pc)
+                                    .copied()
+                                    .map(|pc| pc as usize)
+                            },
+                            |(_, call_pc)| Some(call_pc),
+                        )
+                        .ok_or_else(bad)?,
                     model_stack
                         .get(region.frame_base..)
                         .ok_or_else(bad)?
@@ -196,3 +227,7 @@ pub(crate) fn chain_framestate(
 #[cfg(test)]
 #[path = "tests/chain_framestate.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/chain_entry.rs"]
+mod entry_tests;
