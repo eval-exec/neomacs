@@ -2277,12 +2277,9 @@ fn collect_thread_local_gc_roots(
     // R1a: heap-object constants loaded by JIT-compiled leaves through their reloc
     // vectors — generated code holds only indices, so these must be rooted here.
     #[cfg(feature = "jit")]
-    collect_group(
-        roots,
-        "jit-reloc-thread-local",
-        stats,
-        super::jit::cache::collect_jit_reloc_gc_roots,
-    );
+    collect_group(roots, "jit-reloc-thread-local", stats, |group| {
+        super::jit::cache::collect_jit_reloc_gc_roots_for_heap(group, heap_id)
+    });
     collect_group(roots, "syntax-thread-local", stats, |group| {
         super::syntax::collect_syntax_gc_roots(group, heap_id)
     });

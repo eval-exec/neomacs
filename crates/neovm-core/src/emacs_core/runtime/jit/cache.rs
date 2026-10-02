@@ -1756,8 +1756,14 @@ pub(crate) fn sync_cache_to_obarray(generation: u64) {
     }
 }
 
-pub(crate) fn collect_jit_reloc_gc_roots(roots: &mut Vec<Value>) {
+pub(crate) fn collect_jit_reloc_gc_roots_for_heap(roots: &mut Vec<Value>, heap_id: usize) {
     sync_cache_to_current_heap();
+    // Another live Context can collect while this thread's active view still
+    // names the cached leaves' owner. Its reloc Values belong to that owner,
+    // irrespective of which heap is currently installed in TLS.
+    if COMPILED_HEAP.with(|owner| owner.get() != Some(heap_id)) {
+        return;
+    }
     COMPILED.with(|c| {
         let cache = c.borrow();
         for entry in cache.values() {
@@ -1799,6 +1805,12 @@ pub(crate) fn collect_jit_reloc_gc_roots(roots: &mut Vec<Value>) {
             roots.extend_from_slice(osr.job.leaf().reloc_values());
         }
     });
+}
+
+#[cfg(test)]
+pub(crate) fn collect_jit_reloc_gc_roots(roots: &mut Vec<Value>) {
+    let heap_id = crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0);
+    collect_jit_reloc_gc_roots_for_heap(roots, heap_id);
 }
 
 /// GC handshake size probe: `(total COMPILED cache entries, total reloc slots
@@ -3075,3 +3087,7 @@ mod tests;
 #[cfg(test)]
 #[path = "cache/tests/tier2_off_test.rs"]
 mod tier2_off_test;
+
+#[cfg(test)]
+#[path = "cache/tests/gc_tls_ownership.rs"]
+mod gc_tls_ownership_tests;
