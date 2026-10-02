@@ -1,0 +1,84 @@
+diff --git i/compositor/src/lib.rs w/compositor/src/lib.rs
+index cdae524..2dbca04 100644
+--- i/compositor/src/lib.rs
++++ w/compositor/src/lib.rs
+@@ -7201,6 +7201,14 @@ impl Ewm {
+ 
+         serde_json::json!({
+             "surfaces": &self.surface_info,
++            "acceptance_native_surfaces": self.id_windows.iter().map(|(&id, window)| {
++                serde_json::json!({
++                    "id": id,
++                    "mapped": window.wl_surface().is_some_and(|surface| crate::utils::is_mapped(&surface)),
++                    "geometry": [window.geometry().size.w, window.geometry().size.h],
++                    "unmapped_set": self.unmapped_surfaces.contains(&id),
++                })
++            }).collect::<Vec<_>>(),
+             "emacs_surfaces": emacs_surfaces,
+             "output_strips": &self.frame_set.mapped_strips(),
+             "overview": {
+diff --git i/compositor/src/module.rs w/compositor/src/module.rs
+index 9825bbe..6dccc29 100644
+--- i/compositor/src/module.rs
++++ w/compositor/src/module.rs
+@@ -870,6 +870,28 @@ fn start(cursor_theme: Option<String>, cursor_size: i64) -> Result<bool> {
+     Ok(true)
+ }
+ 
++/// Acceptance-only entry point using upstream Fixture + HeadlessBackend.
++/// Never opens DRM, libinput, libseat, a VT, or an external display.
++#[defun]
++fn proof_start_headless() -> Result<bool> {
++    let mut state = compositor_state().lock().unwrap();
++    if state.thread.as_ref().is_some_and(|t| !t.is_finished()) {
++        return Ok(false);
++    }
++    STOP_REQUESTED.store(false, Ordering::SeqCst);
++    state.thread = Some(thread::spawn(|| {
++        let result = std::panic::catch_unwind(|| {
++            crate::testing::Fixture::new()?.run_acceptance_headless()
++        });
++        match result {
++            Ok(Ok(())) => (),
++            Ok(Err(err)) => eprintln!("EWM acceptance headless: {err}"),
++            Err(_) => eprintln!("EWM acceptance headless panicked"),
++        }
++    }));
++    Ok(true)
++}
++
+ /// Stop the compositor gracefully.
+ /// Returns t if stop was requested, nil if compositor wasn't running.
+ #[defun]
+diff --git i/compositor/src/testing/fixture.rs w/compositor/src/testing/fixture.rs
+index 4c06521..72cf62e 100644
+--- i/compositor/src/testing/fixture.rs
++++ w/compositor/src/testing/fixture.rs
+@@ -64,6 +64,27 @@ impl Fixture {
+         Ok(Self { event_loop, state })
+     }
+ 
++    /// Acceptance-only adapter: expose the native test backend to real clients.
++    pub fn run_acceptance_headless(mut self) -> Result<(), Box<dyn std::error::Error>> {
++        use smithay::wayland::socket::ListeningSocketSource;
++        let socket = ListeningSocketSource::with_name("wayland-ewm-proof")?;
++        self.event_loop.handle().insert_source(socket, |client, _, state| {
++            if let Err(err) = ClientState::insert(&mut state.ewm.display_handle, client) {
++                tracing::warn!("acceptance client insert: {err}");
++            }
++        })?;
++        let signal = self.event_loop.get_signal();
++        self.state.ewm.set_stop_signal(signal.clone());
++        let _ = crate::module::LOOP_SIGNAL.set(signal);
++        self.state.ewm.set_emacs_pid(std::process::id());
++        self.add_output("EWM-PROOF-1", 1024, 768);
++        self.state.ewm.queue_event(crate::event::Event::Ready);
++        self.event_loop.run(Some(Duration::from_millis(10)), &mut self.state, |state| {
++            state.refresh_and_flush_clients();
++        })?;
++        Ok(())
++    }
++
+     /// Pair a `UnixStream` with the server `Display` as the listener would,
+     /// returning a `TestClient` on the other end. Roundtrip after to bind globals.
+     pub fn new_client(&mut self) -> Result<TestClient, Box<dyn std::error::Error>> {

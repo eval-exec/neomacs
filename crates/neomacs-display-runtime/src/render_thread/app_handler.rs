@@ -4,6 +4,25 @@ use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::WindowId;
 
+impl RenderApp {
+    /// Called only for the exact currently pending native window. Late events
+    /// for an older WindowId never enter this boundary.
+    pub(super) fn retire_pending_primary(&mut self) {
+        let frame = self.frame_windows.primary_event_frame_id();
+        self.cancel_gpu_startup();
+        self.frame_windows
+            .reject_ready(frame, "Native window closed during GPU startup");
+        self.frame_windows.take_primary_window();
+        self.frame_windows.clear_primary_mapping();
+        if frame != 0 {
+            self.comms
+                .send_input(crate::thread_comm::InputEvent::WindowClose {
+                    emacs_frame_id: frame,
+                });
+        }
+    }
+}
+
 impl ApplicationHandler for RenderApp {
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
         self.handle_resumed(event_loop);
@@ -24,6 +43,10 @@ impl ApplicationHandler for RenderApp {
                 self.observe_pending_content(*size);
             }
             if matches!(event, WindowEvent::CloseRequested | WindowEvent::Destroyed) {
+                if self.comms.keep_alive_without_frames {
+                    self.retire_pending_primary();
+                    return;
+                }
                 self.comms
                     .send_input(crate::thread_comm::InputEvent::WindowClose { emacs_frame_id: 0 });
                 self.lifecycle_flags

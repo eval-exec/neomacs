@@ -368,7 +368,7 @@ pub fn tty_shutdown_terminal() {
 /// Returns `true` when the session is an interactive TTY (not batch and
 /// not a GUI frontend).
 pub fn should_enable_live_tty_io(startup: &StartupOptions) -> bool {
-    startup.frontend == FrontendKind::Tty && !startup.noninteractive
+    startup.frontend == FrontendKind::Tty && !startup.noninteractive && startup.daemon.is_none()
 }
 
 #[cfg(test)]

@@ -118,7 +118,16 @@ fn terminal_live_p_reports_frame_terminal_type_not_selected_global_type() {
     reset_terminal_thread_locals();
     let mut eval = Context::new();
     let buffer = eval.buffer_manager_mut().create_buffer("*scratch*");
-    let gui_frame = eval.frame_manager_mut().create_frame("F1", 80, 25, buffer);
+    let gui_id = register_graphical_terminal(
+        neomacs_display_protocol::GraphicalDisplayIdentity::named(
+            neomacs_display_protocol::GraphicalBackend::Wayland,
+            "wayland-test",
+        )
+        .unwrap(),
+    );
+    let gui_frame = eval
+        .frame_manager_mut()
+        .create_frame_on_terminal("F1", gui_id, 80, 25, buffer);
     eval.frame_manager_mut()
         .get_mut(gui_frame)
         .expect("GUI frame")
@@ -127,11 +136,19 @@ fn terminal_live_p_reports_frame_terminal_type_not_selected_global_type() {
     eval.set_variable("window-system", Value::symbol("neo"));
     eval.set_variable("initial-window-system", Value::symbol("neo"));
 
-    let hidden_terminal =
-        ensure_terminal_runtime_owner(1, "startup_terminal", TerminalRuntimeConfig::inactive());
-    let hidden_frame =
-        eval.frame_manager_mut()
-            .create_frame_on_terminal("Fstartup-tty", 1, 80, 25, buffer);
+    let hidden_id = next_terminal_id();
+    let hidden_terminal = ensure_terminal_runtime_owner(
+        hidden_id,
+        "startup_terminal",
+        TerminalRuntimeConfig::inactive(),
+    );
+    let hidden_frame = eval.frame_manager_mut().create_frame_on_terminal(
+        "Fstartup-tty",
+        hidden_id,
+        80,
+        25,
+        buffer,
+    );
     eval.frame_manager_mut()
         .get_mut(hidden_frame)
         .expect("hidden terminal frame")
@@ -148,6 +165,58 @@ fn terminal_live_p_reports_frame_terminal_type_not_selected_global_type() {
         builtin_terminal_live_p(&mut eval, vec![hidden_terminal]).unwrap(),
         Value::T
     );
+}
+
+#[test]
+fn terminal_live_p_uses_registered_type_without_frames_or_gui_globals() {
+    reset_terminal_thread_locals();
+    let mut eval = Context::new();
+    let initial = eval.eval_str("(selected-frame)").unwrap();
+    let initial_terminal = builtin_frame_terminal(&mut eval, vec![initial]).unwrap();
+    let gui_id = register_graphical_terminal(
+        neomacs_display_protocol::GraphicalDisplayIdentity::named(
+            neomacs_display_protocol::GraphicalBackend::Wayland,
+            "wayland-frame-free",
+        )
+        .unwrap(),
+    );
+    let gui_terminal = terminal_handle_value_for_id(gui_id).unwrap();
+    let tty = ensure_terminal_runtime_owner(
+        99,
+        "test-tty",
+        TerminalRuntimeConfig::interactive(
+            None,
+            neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(8),
+        ),
+    );
+    // Explicit owners keep their type whether GUI globals are absent or set.
+    for global in [Value::NIL, Value::symbol("neo")] {
+        eval.set_variable("window-system", global);
+        eval.set_variable("initial-window-system", global);
+        assert_eq!(
+            builtin_terminal_live_p(&mut eval, vec![gui_terminal]).unwrap(),
+            Value::symbol("neo")
+        );
+        assert_eq!(
+            builtin_terminal_live_p(&mut eval, vec![initial_terminal]).unwrap(),
+            Value::T
+        );
+        assert_eq!(
+            builtin_terminal_live_p(&mut eval, vec![tty]).unwrap(),
+            Value::T
+        );
+        assert!(
+            builtin_frame_initial_p(&mut eval, vec![initial_terminal])
+                .unwrap()
+                .is_truthy()
+        );
+        assert!(
+            builtin_frame_initial_p(&mut eval, vec![tty])
+                .unwrap()
+                .is_nil()
+        );
+    }
+    assert_eq!(eval.frames.frame_list().len(), 1);
 }
 
 #[test]

@@ -69,6 +69,7 @@ portable-pty = { workspace = true, optional = true }
 neomacs-infra.workspace = true
 
 [features]
+gui-test-hooks = []
 # Native video remains opt-in at this crate boundary. Linux production builds
 # enable it through neomacs's `cargo xtask fresh-build` pipeline.
 default = ["neo-term"]

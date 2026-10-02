@@ -1319,8 +1319,15 @@ pub(crate) fn builtin_display_supports_face_attributes_p(
 // ---------------------------------------------------------------------------
 
 /// (x-display-list) -> nil in batch-style vm context.
-pub(crate) fn builtin_x_display_list(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_x_display_list(eval: &Context, args: Vec<Value>) -> EvalResult {
     expect_max_args("x-display-list", &args, 0)?;
+    if let Some((_, identity)) = eval
+        .display_host
+        .as_ref()
+        .and_then(|host| host.gui_terminal())
+    {
+        return Ok(Value::list(vec![Value::string(identity.terminal_name())]));
+    }
     Ok(Value::NIL)
 }
 
@@ -3064,6 +3071,37 @@ pub(crate) fn builtin_x_open_connection(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("x-open-connection", &args, 1, 3)?;
+    if eval.gui_display_initializer.is_some() {
+        let display = if args[0].is_nil() {
+            None
+        } else {
+            Some(display_string_text(&args[0]).ok_or_else(|| {
+                signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("stringp"), args[0]],
+                )
+            })?)
+        };
+        let resources = args
+            .get(1)
+            .filter(|value| !value.is_nil())
+            .map(|resources| {
+                display_string_text(resources).ok_or_else(|| {
+                    signal(
+                        LispCondition::WrongTypeArgument,
+                        vec![Value::symbol("stringp"), *resources],
+                    )
+                })
+            })
+            .transpose()?;
+        eval.initialize_gui_display(display.as_deref())?;
+        if let Some(resources) = resources {
+            if let Some(host) = eval.display_host.as_mut() {
+                host.set_gui_resource_database(&resources);
+            }
+        }
+        return Ok(Value::NIL);
+    }
     if x_window_system_active(eval) {
         if let Some(resources) = args.get(1).filter(|value| !value.is_nil()) {
             let resources = display_string_text(resources).ok_or_else(|| {

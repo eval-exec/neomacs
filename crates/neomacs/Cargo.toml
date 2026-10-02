@@ -11,6 +11,8 @@ build = "build.rs"
 [features]
 # Windows distribution helpers; enabled by xtask on Windows only.
 windows-tools = []
+# Explicit fault regressions only; never enabled by default/shipping recipes.
+gui-test-hooks = ["neomacs-display-runtime/gui-test-hooks"]
 # Linux production builds enable `video` through `cargo xtask fresh-build`.
 # Keep it out of Cargo defaults so this Linux packaging concern does not change
 # the established macOS/Windows feature surface.
@@ -109,6 +111,7 @@ tikv-jemallocator = { version = "0.7", optional = true, default-features = false
 tracing.workspace = true
 crossbeam-channel.workspace = true
 libc.workspace = true
+socket2.workspace = true
 signal-hook.workspace = true
 crossterm = "0.29"
 hostname.workspace = true

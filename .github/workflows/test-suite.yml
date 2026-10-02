@@ -72,6 +72,36 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  neomacs-daemon-lifecycle:
+    name: daemon lifecycle (linux, matching debug runtime)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_BUILD_JOBS: "4"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/daemon-lifecycle
+      TMPDIR: ${{ github.workspace }}/tmp
+    steps:
+      - *checkout
+      - *prepare_workspace_tmp
+      - uses: ./.github/actions/install-build-deps
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: ci-daemon-lifecycle-linux
+          cache-shared-key: linux-debug-daemon-lifecycle
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Set up pinned GNU Emacs client for interoperability
+        uses: ./.github/actions/setup-gnu-emacs
+      - name: Require the installed GNU client
+        run: |
+          test -x /opt/gnu-emacs-oracle/bin/emacsclient
+          /opt/gnu-emacs-oracle/bin/emacsclient --version
+      - name: Prepare matching runtime and run all lifecycle cases serially
+        env:
+          NEOMACS_GNU_EMACSCLIENT: /opt/gnu-emacs-oracle/bin/emacsclient
+        run: cargo xtask test-daemon-lifecycle
+
   neomacs-melpa-direct-windows-tests:
     name: MELPA direct adapter Job Object contracts (windows x86_64)
     if: ${{ github.event_name != 'schedule' }}

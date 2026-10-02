@@ -20,8 +20,11 @@ pub mod display_identity;
 pub mod display_scale;
 pub mod font_defaults;
 pub mod gui_resources;
+#[cfg(feature = "gui-test-hooks")]
+pub mod gui_test_controls;
 pub mod macos_bundle_runtime;
 mod menus;
+pub mod native_window_wait;
 mod presentation;
 mod presentation_feedback;
 pub mod redisplay;

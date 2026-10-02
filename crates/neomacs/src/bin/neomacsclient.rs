@@ -14,6 +14,10 @@ use std::sync::{Arc, Mutex};
 
 use neovm_core::GNU_EMACS_VERSION;
 
+#[cfg(unix)]
+#[path = "../client_daemon.rs"]
+mod client_daemon;
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 enum FrameRequest {
     #[default]
@@ -89,6 +93,7 @@ struct Options {
     server_file: Option<String>,
     alternate_editor: Option<String>,
     timeout: Option<Duration>,
+    startup_timeout: Option<Duration>,
     tramp_prefix: Option<String>,
     display: Option<String>,
     parent_id: Option<String>,
@@ -184,7 +189,14 @@ fn parse_options(prog: &str, args: impl IntoIterator<Item = OsString>) -> Result
                     let seconds = value
                         .parse::<u64>()
                         .map_err(|_| format!("Invalid timeout: \"{value}\""))?;
-                    options.timeout = Some(Duration::from_secs(seconds));
+                    options.timeout = (seconds != 0).then(|| Duration::from_secs(seconds));
+                } else if let Some(value) =
+                    option_value(arg, "--startup-timeout", "", &args, &mut i)?
+                {
+                    let seconds = value
+                        .parse::<u64>()
+                        .map_err(|_| format!("Invalid startup timeout: \"{value}\""))?;
+                    options.startup_timeout = (seconds != 0).then(|| Duration::from_secs(seconds));
                 } else if let Some(value) = option_value(arg, "--tramp", "-T", &args, &mut i)? {
                     options.tramp_prefix = Some(value);
                 } else if let Some(value) = option_value(arg, "--display", "-d", &args, &mut i)? {
@@ -208,6 +220,9 @@ fn parse_options(prog: &str, args: impl IntoIterator<Item = OsString>) -> Result
         i += 1;
     }
 
+    if options.alternate_editor.is_none() {
+        options.alternate_editor = env::var("ALTERNATE_EDITOR").ok();
+    }
     Ok(options)
 }
 
@@ -260,7 +275,8 @@ Options:
   -s, --socket-name SOCKET   Use a local Unix server socket
 -f, --server-file FILE     Use a TCP authentication file
   -a, --alternate-editor CMD Run CMD if the server is not available
-  -w, --timeout SECONDS      Wait this many seconds for server replies
+  -w, --timeout SECONDS      Wait this many seconds for server replies (0: unlimited)
+      --startup-timeout SEC  Bound automatic startup waiting only (0: unlimited)
   -T, --tramp PREFIX         Prefix absolute file names for Tramp
 "
     );
@@ -291,23 +307,33 @@ fn run_client(prog: &str, options: Options) -> Result<(), String> {
 #[cfg(unix)]
 fn run_unix_client(prog: &str, options: Options) -> Result<(), String> {
     let socket = resolve_socket_path(&options)?;
-    let mut stream = match std::os::unix::net::UnixStream::connect(&socket) {
-        Ok(stream) => stream,
-        Err(err) => {
-            return fail_or_alternate(
-                prog,
-                &options,
-                &format!("can't connect to {}: {err}", socket.display()),
-            );
+    let mut stream = if options.alternate_editor.as_deref() == Some("") {
+        let name = options
+            .socket_name
+            .clone()
+            .or_else(|| env::var("EMACS_SOCKET_NAME").ok());
+        client_daemon::start_and_connect(prog, &socket, name.as_deref(), options.startup_timeout)?
+    } else {
+        match std::os::unix::net::UnixStream::connect(&socket) {
+            Ok(stream) => stream,
+            Err(err) => {
+                return fail_or_alternate(
+                    prog,
+                    &options,
+                    &format!("can't connect to {}: {err}", socket.display()),
+                );
+            }
         }
     };
+    // Connection/fallback precedes TTY validation and consuming stdin.
+    // Automatic startup also constructs the original request only once.
+    let request = build_request(&options)?;
     if let Some(timeout) = options.timeout {
         stream
             .set_read_timeout(Some(timeout))
             .map_err(|err| format!("failed to set socket timeout: {err}"))?;
     }
 
-    let request = build_request(&options)?;
     let lifecycle = (options.frame == FrameRequest::NewTty)
         .then(|| {
             stream
@@ -811,19 +837,115 @@ impl Drop for TtyLifecycle {
     }
 }
 
+// Match lib-src/emacsclient.c's alternate-editor tokens, not shell syntax:
+// only ASCII spaces delimit; a double quote at token start quotes up to the
+// next double quote. Other quotes, escapes and shell operators are literal.
+fn alternate_editor_tokens(mut remaining: &str) -> Vec<&str> {
+    let mut tokens = Vec::new();
+    loop {
+        remaining = remaining.trim_start_matches(' ');
+        if remaining.is_empty() {
+            return tokens;
+        }
+        let separator = if let Some(quoted) = remaining.strip_prefix('"') {
+            remaining = quoted;
+            '"'
+        } else {
+            ' '
+        };
+        match remaining.split_once(separator) {
+            Some((token, rest)) => {
+                tokens.push(token);
+                remaining = rest;
+            }
+            None => {
+                tokens.push(remaining);
+                return tokens;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_startup_is_unlimited_and_reply_budget_is_independent() {
+        for args in [vec![], vec!["-w", "1"], vec!["--timeout=0"]] {
+            let options = parse_options("client", args.into_iter().map(OsString::from)).unwrap();
+            assert_eq!(options.startup_timeout, None);
+        }
+        let options = parse_options(
+            "client",
+            ["-w", "1", "--startup-timeout=3"].map(OsString::from),
+        )
+        .unwrap();
+        assert_eq!(options.timeout, Some(Duration::from_secs(1)));
+        assert_eq!(options.startup_timeout, Some(Duration::from_secs(3)));
+        let options = parse_options(
+            "client",
+            ["-w", "1", "-w", "0", "--startup-timeout", "0"].map(OsString::from),
+        )
+        .unwrap();
+        assert_eq!(options.timeout, None);
+        assert_eq!(options.startup_timeout, None);
+        for args in [
+            vec!["--startup-timeout"],
+            vec!["--startup-timeout=-1"],
+            vec!["--startup-timeout=bad"],
+        ] {
+            assert!(parse_options("client", args.into_iter().map(OsString::from)).is_err());
+        }
+    }
+}
+
+#[cfg(test)]
+mod alternate_editor_tests {
+    use super::alternate_editor_tokens;
+
+    #[test]
+    fn tokenization_matches_gnu_source_not_shell_syntax() {
+        for (input, expected) in [
+            ("  editor  fixed  ", vec!["editor", "fixed"]),
+            (
+                "\"editor with space\" \"fixed with space\"",
+                vec!["editor with space", "fixed with space"],
+            ),
+            (
+                "editor 'a b' a\\ b $HOME ; *.txt",
+                vec!["editor", "'a", "b'", "a\\", "b", "$HOME", ";", "*.txt"],
+            ),
+            ("editor\targ next\narg", vec!["editor\targ", "next\narg"]),
+            ("\"a b\"tail \"a\"\"b\"", vec!["a b", "tail", "a", "b"]),
+            (
+                "editor \"unterminated value",
+                vec!["editor", "unterminated value"],
+            ),
+            ("editor \"\" next", vec!["editor", "", "next"]),
+            ("   ", vec![]),
+        ] {
+            assert_eq!(alternate_editor_tokens(input), expected, "{input:?}");
+        }
+    }
+}
+
 fn fail_or_alternate(prog: &str, options: &Options, message: &str) -> Result<(), String> {
     let Some(alternate) = &options.alternate_editor else {
         return Err(format!("{prog}: {message}"));
     };
     if alternate.is_empty() {
         return Err(format!(
-            "{prog}: automatic daemon startup is not implemented in neomacsclient yet"
+            "{prog}: automatic daemon startup requires a local Unix server socket"
         ));
     }
 
-    let status = Command::new("sh")
-        .arg("-c")
-        .arg(alternate)
+    let tokens = alternate_editor_tokens(alternate);
+    let Some((executable, arguments)) = tokens.split_first() else {
+        return Err(format!("{prog}: alternate editor contains no executable"));
+    };
+    let status = Command::new(executable)
+        .args(arguments)
         .args(&options.args)
         .status()
         .map_err(|err| format!("{prog}: failed to run alternate editor: {err}"))?;

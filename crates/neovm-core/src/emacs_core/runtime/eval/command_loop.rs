@@ -6,6 +6,31 @@
 use super::*;
 
 impl Context {
+    /// Initialize host termination policy after command-line mode selection.
+    pub fn initialize_termination_signals(noninteractive: bool) {
+        crate::emacs_core::os_signal::install_termination(noninteractive);
+    }
+
+    /// Mark this evaluator as a daemon before running normal-top-level.
+    /// The name is host-owned; Lisp cannot change daemonp by setting variables.
+    pub fn configure_daemon(&mut self, name: Option<String>, notify: Option<DaemonNotifier>) {
+        self.daemon = Some(DaemonState {
+            name,
+            initialized: false,
+            notify,
+        });
+    }
+
+    /// Close owned network listeners and terminate children after kill-emacs
+    /// hooks, without running Lisp sentinels after the shutdown boundary.
+    pub fn close_processes_for_exit(&mut self) {
+        for id in self.processes.list_processes() {
+            #[cfg(unix)]
+            self.processes.unlink_owned_unix_listener_for_exit(id);
+            self.processes.delete_process(id);
+        }
+    }
+
     /// Enter a recursive edit level.
     ///
     /// Mirrors GNU Emacs `Frecursive_edit()` (keyboard.c:772).
@@ -29,9 +54,24 @@ impl Context {
         }
     }
 
-    pub(crate) fn request_shutdown(&mut self, exit_code: i32, restart: bool) {
-        self.shutdown_request = Some(ShutdownRequest { exit_code, restart });
+    /// Claim exit hooks before running Lisp and publish only after they finish.
+    /// Every evaluator shutdown entry uses this first-entry-wins boundary.
+    pub(crate) fn shutdown_with_hooks(&mut self, request: ShutdownRequest) -> EvalResult {
+        if let Some(request) = self.shutdown_request {
+            return Err(Flow::Shutdown(request));
+        }
+        if self.shutdown_in_progress {
+            // A nested error, signal or explicit exit must neither recurse nor
+            // unwind the original hook list or change its exit/restart policy.
+            return Ok(Value::NIL);
+        }
+        self.shutdown_in_progress = true;
+        let _ = self.run_hook_if_bound("kill-emacs-hook");
+        self.log_cconv_memo_report();
+        self.log_tier_i_report();
+        self.shutdown_request = Some(request);
         self.command_loop.running = false;
+        Err(Flow::Shutdown(request))
     }
 
     pub fn shutdown_request(&self) -> Option<ShutdownRequest> {
@@ -289,6 +329,20 @@ impl Context {
             Err(Flow::Signal(sig)) => {
                 let rendered = super::super::error::format_signal_data_with_eval(self, &sig);
                 tracing::warn!("command_loop_top_level_1: top-level SIGNALED: {}", rendered);
+                if self
+                    .daemon
+                    .as_ref()
+                    .is_some_and(|daemon| !daemon.initialized)
+                {
+                    // A display-free startup cannot enter an interactive
+                    // debugger to report a failed init/server/action. Retire
+                    // it instead, so the readiness parent sees EOF/failure.
+                    eprintln!("Error during daemon startup: {rendered}");
+                    return self.shutdown_with_hooks(ShutdownRequest {
+                        exit_code: 1,
+                        restart: false,
+                    });
+                }
                 let error_msg = self.command_error_message(&sig);
                 let data = self.signal_error_data_value(&sig);
                 self.report_command_error(data, "")?;
@@ -316,11 +370,10 @@ impl Context {
                     // GNU keyboard.c:cmd_error treats noninteractive
                     // startup/eval errors as fatal: it prints the error and
                     // calls (kill-emacs -1), which exits with status 255.
-                    self.request_shutdown(-1, false);
-                    return Err(Flow::Shutdown(ShutdownRequest {
+                    return self.shutdown_with_hooks(ShutdownRequest {
                         exit_code: -1,
                         restart: false,
-                    }));
+                    });
                 }
                 Ok(Value::NIL)
             }
@@ -2714,6 +2767,19 @@ impl Context {
     #[cold]
     pub(super) fn maybe_quit_slow(&mut self) -> Result<(), Flow> {
         crate::emacs_core::subr::leaf::debug_assert_no_leaf_active!("a quit poll");
+        // GNU fatal_error_signal calls Fkill_emacs(signal-number, nil), even
+        // with inhibit-quit bound. Hooks run on the Lisp owner, and Shutdown
+        // unwinds to the ordinary host terminal/process cleanup boundary.
+        if let Some(sig) = crate::emacs_core::os_signal::take_termination_signal()
+            && self.shutdown_request.is_none()
+            && !self.shutdown_in_progress
+        {
+            return super::super::builtins::symbols::builtin_kill_emacs(
+                self,
+                vec![Value::fixnum(i64::from(sig))],
+            )
+            .map(|_| ());
+        }
         // Profiler sampling rides the quit poll (GNU samples in a SIGPROF
         // handler; SIGPROF belongs to the native profiler here, so the Lisp
         // profiler's watchdog raises `AsyncSource::ProfilerTick`, which sends
@@ -2748,7 +2814,7 @@ impl Context {
             // -- an `else if`, so a pending quit wins and a pending OS signal
             // is handled only when there is none.
             if crate::emacs_core::os_signal::pending() {
-                crate::emacs_core::os_signal::drain_pending_os_signals(self);
+                crate::emacs_core::os_signal::drain_pending_os_signals(self)?;
             }
             return Ok(());
         }

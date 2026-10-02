@@ -1631,6 +1631,14 @@ pub(super) fn connect_network_process_at_explicit_address(
                     proc.thread = current_thread_handle(&eval.threads);
                     proc.plist = plist_val;
                     proc.live_io.network_socket = Some(NetworkSocket::UnixListener(listener));
+                    {
+                        use std::os::unix::fs::MetadataExt;
+                        let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
+                            network_socket_io_error("Cannot identify server socket", error)
+                        })?;
+                        proc.live_io.unix_listener_path =
+                            Some((path.clone(), metadata.dev(), metadata.ino()));
+                    }
                     if !filter_val.is_nil() {
                         proc.filter = filter_val;
                         proc.childp = process_contact_plist_put(
@@ -2303,6 +2311,14 @@ pub(super) fn connect_local_socket_process(
                 proc.thread = current_thread_handle(&eval.threads);
                 proc.plist = plist_val;
                 proc.live_io.network_socket = Some(NetworkSocket::UnixListener(listener));
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    let metadata = std::fs::symlink_metadata(&service_path).map_err(|error| {
+                        network_socket_io_error("Cannot identify server socket", error)
+                    })?;
+                    proc.live_io.unix_listener_path =
+                        Some((service_path.clone(), metadata.dev(), metadata.ino()));
+                }
                 if !filter_val.is_nil() {
                     proc.filter = filter_val;
                     proc.childp = process_contact_plist_put(

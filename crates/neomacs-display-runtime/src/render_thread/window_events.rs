@@ -222,7 +222,17 @@ impl RenderApp {
                     emacs_fid,
                     is_primary
                 );
-                if is_primary {
+                if self.comms.keep_alive_without_frames {
+                    if is_primary {
+                        self.frame_windows.take_primary_window();
+                        self.frame_windows.clear_primary_mapping();
+                    } else {
+                        self.frame_windows.request_destroy(emacs_fid);
+                    }
+                    self.comms.send_input(InputEvent::WindowClose {
+                        emacs_frame_id: emacs_fid,
+                    });
+                } else if is_primary {
                     self.lifecycle_flags.request_shutdown(
                         super::state::RenderShutdownReason::NativeWindowDestroyed,
                     );

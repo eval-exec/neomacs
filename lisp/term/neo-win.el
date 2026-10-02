@@ -263,7 +263,8 @@ DISPLAY is the name of the display Emacs should connect to."
 
   ;; Open the display connection
   (x-open-connection (or display
-                         (setq x-display-name (or (getenv "DISPLAY" (selected-frame))
+                         (setq x-display-name (or (getenv "WAYLAND_DISPLAY")
+                                                  (getenv "DISPLAY" (selected-frame))
                                                   (getenv "DISPLAY"))))
 		     x-command-line-resources
 		     ;; Exit Emacs with fatal error if this fails and we

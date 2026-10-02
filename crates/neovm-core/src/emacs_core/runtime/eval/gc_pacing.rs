@@ -692,4 +692,29 @@ impl Context {
     pub fn set_tty_frame_host_factory(&mut self, factory: Box<dyn TtyFrameHostFactory>) {
         self.tty_frame_host_factory = Some(factory);
     }
+
+    /// Supply the native display boundary without coupling VM startup to a
+    /// display connection. The callback runs synchronously on the Lisp thread.
+    pub fn set_gui_display_initializer(&mut self, initializer: super::GuiDisplayInitializer) {
+        self.gui_display_initializer = Some(initializer);
+    }
+
+    pub(crate) fn initialize_gui_display(&mut self, display: Option<&str>) -> Result<(), Flow> {
+        let Some(mut initializer) = self.gui_display_initializer.take() else {
+            return Err(crate::emacs_core::error::signal(
+                "error",
+                vec![Value::string("Graphical display host unavailable")],
+            ));
+        };
+        let result = initializer(self, display);
+        self.gui_display_initializer = Some(initializer);
+        result.map_err(crate::emacs_core::error::flow_from_eval_error)
+    }
+
+    /// Frontend-owned synchronous waits retain GNU quit/supervisor signal
+    /// handling on the evaluator thread, never in a native callback.
+    pub fn poll_host_wait(&mut self) -> Result<(), EvalError> {
+        self.maybe_quit()
+            .map_err(crate::emacs_core::error::map_flow)
+    }
 }

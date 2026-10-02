@@ -4002,12 +4002,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "daemonp",
-        NativeFn::ContextVec(|_ctx, args| builtin_daemonp(args)),
+        NativeFn::ContextVec(builtin_daemonp),
         SubrArity::new(0, Some(0)),
     ));
     ctx.register_subr(SubrSpec::new(
         "daemon-initialized",
-        NativeFn::ContextVec(|_ctx, args| builtin_daemon_initialized(args)),
+        NativeFn::ContextVec(builtin_daemon_initialized),
         SubrArity::new(0, Some(0)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -7954,7 +7954,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "x-display-list",
-        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::display::builtin_x_display_list(args)),
+        NativeFn::ContextVec(|ctx, args| {
+            crate::emacs_core::display::builtin_x_display_list(ctx, args)
+        }),
         SubrArity::new(0, Some(0)),
     ));
     ctx.register_subr(SubrSpec::new(
