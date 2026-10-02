@@ -2188,3 +2188,6 @@ fn base64_decode_ignores_whitespace() {
     let r = builtin_base64_decode_string(vec![Value::string("SGVs\nbG8=")]).unwrap();
     assert_eq!(r.as_utf8_str(), Some("Hello"));
 }
+
+#[cfg(test)]
+mod compare_position_cache;

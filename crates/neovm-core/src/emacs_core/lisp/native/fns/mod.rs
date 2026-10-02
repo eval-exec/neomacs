@@ -4,6 +4,10 @@
 //! locale-info, eql, equal-including-properties, widget-get/put/apply,
 //! identity, string-to-multibyte/unibyte, string-make-multibyte/unibyte,
 //! compare-strings, string-version-lessp, string-collate-lessp/equalp.
+//!
+//! | Knob | Values | Default | Purpose |
+//! |---|---|---|---|
+//! | `NEOVM_COMPARE_STRINGS_POS_CACHE` | `on`, `off` (boolean aliases accepted) | off | Reuse GNU's rooted position cache for compare-strings START conversions. |
 
 use super::error::{EvalResult, Flow, signal};
 use super::eval::Context;
@@ -1312,6 +1316,28 @@ pub(crate) fn builtin_string_make_unibyte(args: Vec<Value>) -> EvalResult {
 // String comparison
 // ---------------------------------------------------------------------------
 
+/// The process-wide switch holds no Lisp state. OnceLock publishes one
+/// immutable boolean for all mutators; the existing position cache retains
+/// its per-mutator rooting and mutation-invalidation ownership.
+#[inline]
+fn compare_strings_pos_cache_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(read_compare_strings_pos_cache_knob)
+}
+
+#[cold]
+#[inline(never)]
+fn read_compare_strings_pos_cache_knob() -> bool {
+    std::env::var("NEOVM_COMPARE_STRINGS_POS_CACHE")
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "on" | "1" | "true" | "yes"
+            )
+        })
+}
+
 /// (compare-strings STR1 START1 END1 STR2 START2 END2 &optional IGNORE-CASE)
 ///
 /// Compare substrings of STR1 and STR2.
@@ -1337,8 +1363,18 @@ pub(crate) fn builtin_compare_strings(args: Vec<Value>) -> EvalResult {
 
     let len1 = range1.end().get() - range1.start().get();
     let len2 = range2.end().get() - range2.start().get();
-    let mut chars1 = CompareStringsChars::new(s1, range1.start().get());
-    let mut chars2 = CompareStringsChars::new(s2, range2.start().get());
+    let (mut chars1, mut chars2) = if compare_strings_pos_cache_enabled() {
+        // GNU resolves operand 1 then operand 2 through its one-entry cache.
+        // ASCII operands leave the cached multibyte string undisturbed; two
+        // distinct multibyte operands replace it in this same order.
+        let chars1 = CompareStringsChars::new_cached(args[0], s1, range1.start().get());
+        let chars2 = CompareStringsChars::new_cached(args[3], s2, range2.start().get());
+        (chars1, chars2)
+    } else {
+        let chars1 = CompareStringsChars::new(s1, range1.start().get());
+        let chars2 = CompareStringsChars::new(s2, range2.start().get());
+        (chars1, chars2)
+    };
 
     let len = len1.min(len2);
     for i in 0..len {
@@ -1394,6 +1430,24 @@ impl<'a> CompareStringsChars<'a> {
         Self {
             bytes: string.as_bytes(),
             pos: string.char_to_byte_pos(char_start),
+            multibyte: string.is_multibyte(),
+        }
+    }
+
+    /// Reuses the existing rooted, per-mutator position cache. The iterator
+    /// itself only borrows its operand for this call and introduces no new
+    /// cache, GC root or cross-mutator mutable state.
+    #[inline]
+    fn new_cached(
+        value: Value,
+        string: &'a crate::heap_types::LispString,
+        char_start: usize,
+    ) -> Self {
+        Self {
+            bytes: string.as_bytes(),
+            pos: crate::emacs_core::string_pos_cache::string_char_to_byte(
+                value, string, char_start,
+            ),
             multibyte: string.is_multibyte(),
         }
     }
