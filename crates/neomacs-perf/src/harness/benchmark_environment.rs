@@ -1,8 +1,9 @@
-//! Which operator environment variables a benchmark editor inherits:
-//! the explicit knob list plus the `NEOVM_JIT_` prefix. Kept out of the
-//! harness engine so new runtime knobs do not grow `harness.rs`.
+//! Closed benchmark environment policy shared by execution and provenance.
+//!
+//! These immutable names are safe for concurrent request preparation. Each
+//! request owns its environment values; this module stores no editor state.
 
-const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
+pub(super) const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "PATH",
     "LD_LIBRARY_PATH",
     "DYLD_LIBRARY_PATH",
@@ -37,9 +38,6 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     // Percentiles cannot say whether a slow keystroke was computing or
     // waiting, and those call for opposite work.
     "NEOMACS_PERF_LATENCY_TRACE_FILE",
-    // Request-owned GC sidecar; the controller still owns the gate port.
-    // Capture this exact path in input provenance when diagnostics are enabled.
-    "NEOMACS_PERF_GC_WINDOW_FILE",
     // GC pacing sweep: the live-proportional term as a percentage of the live
     // heap. 0 leaves GNU's `gc-cons-threshold`/`gc-cons-percentage` contract
     // exactly; the built-in default is 50.
@@ -83,6 +81,8 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     // Edit replays synchronize with the rows below the edit (GNU
     // try_window_id): `prove` (default) or `sync`.
     "NEOMACS_LAYOUT_EDIT_SYNC",
+    // Cost-only synchronized geometry transfer (`off` default, `on`).
+    "NEOMACS_EDIT_SYNC_STILL",
     // A window whose start moved back reuses its old rows: `on`.
     "NEOMACS_LAYOUT_SCROLL_BACK",
     // posn-at-point & co. read only the text the window shows: `on`.
@@ -97,12 +97,6 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     // P1.4 Stage A cached variable tiers: `=0` restores the general
     // read/set/bind/unbind paths.
     "NEOVM_VAR_CACHE",
-    // CL2 performance-cliff controls; record the exact editor environment in
-    // input-provenance.json for same-binary comparisons.
-    "NEOVM_COMPARE_STRINGS_POS_CACHE",
-    "NEOVM_REGEX_SHORT_LITERAL",
-    "NEOVM_EMACS_MULE_PREPARED",
-    "NEOVM_OVERLAY_LOCAL_MOVE",
     // P1.2 / P1.0 §3.10: Tier-0 `Bcall` of leaf builtins (`=on`).
     "NEOVM_VM_LEAF",
     // P3.3 regex knobs: alternation anchors (`=on`) and the existence DFA
@@ -113,7 +107,6 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     // Folded two-character suffix search and GNU sort predicate capture.
     "NEOVM_REGEX_SUFFIX_LITERAL",
     "NEOVM_SORT_CAPTURE",
-    "NEOVM_CALLBACK_CACHE",
     // P4.1 Stage 0 cconv memo (`off`/`stats`/`on`/`verify`) and the native
     // no-lexvars closure path (`on`).
     "NEOVM_CCONV_MEMO",
@@ -145,38 +138,6 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOVM_GC_CENSUS",
     "NEOVM_GC_CENSUS_REMSET",
     "NEOVM_GC_CENSUS_FILE",
-    // Callback and interpreter-pool experiments use the same editor binary.
-    "NEOVM_ASSOC_RESOLVED",
-    "NEOVM_HASH_TEST_PARITY",
-    "NEOVM_COMPARE_STRINGS_PARITY",
-    "NEOVM_MODE_LINE_FLOW",
-    "NEOVM_MAPHASH_BYTECODE",
-    "NEOVM_VM_STACK_RETURN",
 ];
 
-/// Operator-set JIT diagnostic knobs (`NEOVM_JIT_PROFILE`, `NEOVM_JIT_THRESHOLD`,
-/// `NEOVM_JIT_COMPILE_STATS`, ...) reach the editor too: a census of what the
-/// JIT compiles or rejects under a real scenario needs them, and an unset knob
-/// forwards nothing, so a plain benchmark run is unchanged.
-const BENCHMARK_PASSTHROUGH_PREFIX: &str = "NEOVM_JIT_";
-
-pub(crate) fn benchmark_passthrough_environment() -> Vec<(String, std::ffi::OsString)> {
-    passthrough_from(std::env::vars_os())
-}
-
-/// [`benchmark_passthrough_environment`] over an explicit environment (testable).
-pub(crate) fn passthrough_from(
-    vars: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
-) -> Vec<(String, std::ffi::OsString)> {
-    vars.into_iter()
-        .filter_map(|(name, value)| {
-            let name = name.into_string().ok()?;
-            let forwarded = BENCHMARK_PASSTHROUGH_ENVIRONMENT.contains(&name.as_str())
-                || super::benchmark_environment::BENCHMARK_PASSTHROUGH_ENVIRONMENT
-                    .contains(&name.as_str())
-                || name.starts_with(BENCHMARK_PASSTHROUGH_PREFIX)
-                || name.starts_with(super::benchmark_environment::BENCHMARK_PASSTHROUGH_PREFIX);
-            forwarded.then_some((name, value))
-        })
-        .collect()
-}
+pub(super) const BENCHMARK_PASSTHROUGH_PREFIX: &str = "NEOVM_JIT_";

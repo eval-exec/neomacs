@@ -1087,6 +1087,7 @@ fn benchmark_environment_forwards_the_allowlist_and_jit_knobs_only() {
         (os("NEOVM_TEXT_LINE_INDEX_BUILD_LINES"), os("512")),
         (os("NEOVM_TEXT_LINE_INDEX_STATS"), os("1")),
         (os("NEOVM_TEXT_LINE_INDEXING"), os("unrelated")),
+        (os("NEOMACS_EDIT_SYNC_STILL"), os("on")),
         (os("NEOVM_PPS_PROPERTIZE"), os("0")),
         (os("NEOVM_SYNTAX_PARSE_CACHE"), os("verify")),
         (os("NEOVM_SYNTAX_PARSE_CACHE_L2"), os("verify")),
@@ -1101,6 +1102,7 @@ fn benchmark_environment_forwards_the_allowlist_and_jit_knobs_only() {
     assert_eq!(
         forwarded,
         [
+            "NEOMACS_EDIT_SYNC_STILL",
             "NEOMACS_OSR_DEBUG",
             "NEOVM_AOT",
             "NEOVM_AOT_PREWARM",

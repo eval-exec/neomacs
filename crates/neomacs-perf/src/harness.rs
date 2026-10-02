@@ -30,6 +30,7 @@ use crate::{
     scenario,
 };
 
+mod benchmark_environment;
 mod passthrough;
 pub(crate) mod scenarios;
 pub(crate) use passthrough::benchmark_passthrough_environment;

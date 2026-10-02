@@ -31,6 +31,12 @@
 //! joined line), which needs a second walk at the window bottom
 //! (xdisp.c:23237-23284). Such a walk simply does not stop at `stop_pos` and
 //! continues to the bottom -- exactly today's above-only replay.
+//!
+//! | Knob | Default | Values | Gate |
+//! | --- | --- | --- | --- |
+//! | `NEOMACS_LAYOUT_EDIT_SYNC` | `prove` | `prove`, `sync` | Synchronize the edit walk with unchanged rows below it. |
+//! | `NEOMACS_EDIT_SYNC_STILL` | `off` | `off`, `on` | Transfer synchronized geometry without remapping when its placement and visibility are unchanged. |
+//! | `NEOMACS_LAYOUT_SCROLL_BACK` | `on` | `off`, `on` | Synchronize backward scrolls with the retained body. |
 
 use super::{EditDamage, RetainedWindowMatrix};
 use crate::types::LayoutCharPos0;
@@ -78,6 +84,41 @@ pub(crate) fn edit_sync_mode() -> EditSyncMode {
             Some("sync" | "on" | "1") => EditSyncMode::Sync,
             _ => EditSyncMode::Prove,
         }
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    static STILL_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Force the unchanged-placement transfer on this thread (tests only).
+#[cfg(test)]
+fn set_edit_sync_still_for_test(enabled: Option<bool>) {
+    STILL_OVERRIDE.with(|cell| cell.set(enabled));
+}
+
+/// `NEOMACS_EDIT_SYNC_STILL=on`: avoid a second geometry pass after the
+/// synchronized rows keep their placement. Read once per process; default off.
+/// The shared flag has no Lisp state; OnceLock publishes it for concurrent
+/// readers. Each plan and its owned vectors belong to one layout attempt.
+#[inline]
+fn edit_sync_still_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(enabled) = STILL_OVERRIDE.with(std::cell::Cell::get) {
+        return enabled;
+    }
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("NEOMACS_EDIT_SYNC_STILL")
+            .ok()
+            .is_some_and(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "on" | "1" | "true" | "yes"
+                )
+            })
     })
 }
 
@@ -278,6 +319,26 @@ impl EditSyncPlan {
         let dvpos = reached.display_row_index as i64 - self.first_unchanged_index as i64;
         let dy = reached.y - self.first_unchanged_y;
         let shift_y = dy.abs() >= 0.5;
+        // plan() has already shifted the buffer positions and selected only
+        // snapshots belonging to these candidates. When GNU's dvpos/dy are
+        // zero and clipping removes nothing, their placement needs no second
+        // pass: keep the vectors and immutable point cells as they are.
+        if edit_sync_still_enabled()
+            && dvpos == 0
+            && !shift_y
+            && self
+                .rows
+                .iter()
+                .all(|(index, row)| row.pixel_y < bottom_y - 0.5 && *index < index_limit)
+        {
+            return EditSyncInstall {
+                rows: self.rows,
+                row_snapshots: self.row_snapshots,
+                points: self.points,
+                point_rows: self.point_rows,
+                dy: 0.0,
+            };
+        }
         let dy_px = dy.round() as i64;
         let mut kept = rustc_hash::FxHashMap::<i64, i64>::default();
         let mut rows = Vec::with_capacity(self.rows.len());
