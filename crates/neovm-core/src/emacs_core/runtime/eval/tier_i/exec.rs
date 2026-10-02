@@ -204,9 +204,9 @@ impl Context {
         let mut last = Value::NIL;
         let mut index = 0;
         while cursor.is_cons() {
-            match self.ti_nth(act, cursor.cons_car(), seq, index) {
+            match self.ti_nth(act, cursor.cons_car(), seq, index).kinded() {
                 Ok(value) => last = value,
-                Err(Flow::ThreadBlocked(blocked)) => {
+                Err(FlowKind::ThreadBlocked(blocked)) => {
                     let remaining_forms = if blocked.remaining_forms.is_nil() {
                         cursor.cons_cdr()
                     } else {
@@ -214,7 +214,7 @@ impl Context {
                     };
                     return Err(Flow::thread_blocked(blocked.blocker, remaining_forms));
                 }
-                Err(flow) => return Err(flow),
+                Err(flow) => return Err(Flow::from_kind(flow)),
             }
             cursor = cursor.cons_cdr();
             index += 1;
@@ -902,9 +902,9 @@ impl Context {
         let mut last = Value::NIL;
         let mut index = 0;
         while cursor.is_cons() {
-            match self.ti_nth(act, cursor.cons_car(), seq, index) {
+            match self.ti_nth(act, cursor.cons_car(), seq, index).kinded() {
                 Ok(value) => last = value,
-                Err(Flow::ThreadBlocked(blocked)) => {
+                Err(FlowKind::ThreadBlocked(blocked)) => {
                     let remaining_forms = if blocked.remaining_forms.is_nil() {
                         cursor.cons_cdr()
                     } else {
@@ -912,7 +912,7 @@ impl Context {
                     };
                     return Err(Flow::thread_blocked(blocked.blocker, remaining_forms));
                 }
-                Err(flow) => return Err(flow),
+                Err(flow) => return Err(Flow::from_kind(flow)),
             }
             cursor = cursor.cons_cdr();
             index += 1;
@@ -1538,15 +1538,25 @@ impl Context {
             resume: ResumeTarget::InterpreterCatch,
         });
         let specpdl_count = self.specpdl.len();
-        let result = match self.ti_progn(act, tail.cons_cdr(), body_seq) {
+        let result = match self.ti_progn(act, tail.cons_cdr(), body_seq).kinded() {
             Ok(value) => Ok(value),
-            Err(Flow::Signal(sig)) => match self.dispatch_signal_if_needed(sig) {
-                Ok(dispatched) => Err(Flow::Signal(dispatched)),
-                Err(Flow::Throw(thrown)) if eq_value(&tag, &thrown.tag) => Ok(thrown.value),
+            Err(FlowKind::Signal(sig)) => match self.dispatch_signal_if_needed(sig) {
+                Ok(dispatched) => Err(Flow::signal_boxed(dispatched)),
+                Err(ref flow)
+                    if let Some(thrown) = flow.as_throw()
+                        && eq_value(&tag, &thrown.tag) =>
+                {
+                    Ok(thrown.value)
+                }
                 Err(flow) => Err(flow),
             },
-            Err(Flow::Throw(thrown)) if eq_value(&tag, &thrown.tag) => Ok(thrown.value),
-            Err(flow) => Err(flow),
+            Err(ref flow)
+                if let Some(thrown) = flow.as_throw()
+                    && eq_value(&tag, &thrown.tag) =>
+            {
+                Ok(thrown.value)
+            }
+            Err(flow) => Err(Flow::from_kind(flow)),
         };
         self.pop_condition_frame();
         self.unbind_to_with_result(specpdl_count, result)

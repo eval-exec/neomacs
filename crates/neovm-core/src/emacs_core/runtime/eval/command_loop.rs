@@ -24,7 +24,7 @@ impl Context {
             Ok(_) => Ok(()),
             // kill-emacs unwinds the recursive edit; the pending shutdown
             // request carries the exit code to the caller.
-            Err(Flow::Shutdown(_)) => Ok(()),
+            Err(flow) if flow.is_shutdown() => Ok(()),
             Err(flow) => Err(super::super::error::format_flow_with_eval(self, &flow)),
         }
     }
@@ -142,8 +142,10 @@ impl Context {
             match result {
                 Ok(val) => Ok(val),
                 // exit-recursive-edit: throw 'exit nil → normal return
-                Err(Flow::Throw(ref thrown))
-                    if catches_exit && thrown.tag.is_symbol_named("exit") =>
+                Err(ref flow)
+                    if let Some(thrown) = flow.as_throw()
+                        && catches_exit
+                        && thrown.tag.is_symbol_named("exit") =>
                 {
                     let value = thrown.value;
                     match self.classify_command_loop_exit(value)? {
@@ -214,7 +216,10 @@ impl Context {
             let result = if outermost_command_loop {
                 match self.command_loop_top_level_1() {
                     Ok(_) => self.command_loop_2(),
-                    Err(Flow::Throw(ref thrown)) if thrown.tag.is_symbol_named("top-level") => {
+                    Err(ref flow)
+                        if let Some(thrown) = flow.as_throw()
+                            && thrown.tag.is_symbol_named("top-level") =>
+                    {
                         // top-level throw inside top_level_1 — fall through
                         // to command_loop_2 just like GNU's two-catch flow.
                         self.command_loop_2()
@@ -231,8 +236,10 @@ impl Context {
 
             match result {
                 // top-level throw → restart the loop
-                Err(Flow::Throw(ref thrown))
-                    if outermost_command_loop && thrown.tag.is_symbol_named("top-level") =>
+                Err(ref flow)
+                    if let Some(thrown) = flow.as_throw()
+                        && outermost_command_loop
+                        && thrown.tag.is_symbol_named("top-level") =>
                 {
                     tracing::debug!("command_loop_inner: top-level throw, restarting loop");
                     continue;
@@ -241,9 +248,10 @@ impl Context {
                     // GNU keyboard.c:1145 — end of file in batch run
                     tracing::info!("command_loop_inner: noninteractive EOF, calling kill-emacs");
                     match super::super::builtins::symbols::builtin_kill_emacs(self, vec![Value::T])
+                        .kinded()
                     {
-                        Err(Flow::Shutdown(_)) | Ok(_) => {}
-                        Err(flow) => return Err(flow),
+                        Err(FlowKind::Shutdown(_)) | Ok(_) => {}
+                        Err(flow) => return Err(Flow::from_kind(flow)),
                     }
                     return Ok(value);
                 }
@@ -280,13 +288,13 @@ impl Context {
 
         tracing::debug!("command_loop_top_level_1: evaluating top-level form");
         self.log_startup_state("top-level-before");
-        match self.eval_value(&top_level) {
+        match self.eval_value(&top_level).kinded() {
             Ok(_) => {
                 tracing::debug!("command_loop_top_level_1: top-level completed OK");
                 self.log_startup_state("top-level-after");
                 Ok(Value::NIL)
             }
-            Err(Flow::Signal(sig)) => {
+            Err(FlowKind::Signal(sig)) => {
                 let rendered = super::super::error::format_signal_data_with_eval(self, &sig);
                 tracing::warn!("command_loop_top_level_1: top-level SIGNALED: {}", rendered);
                 let error_msg = self.command_error_message(&sig);
@@ -317,14 +325,14 @@ impl Context {
                     // startup/eval errors as fatal: it prints the error and
                     // calls (kill-emacs -1), which exits with status 255.
                     self.request_shutdown(-1, false);
-                    return Err(Flow::Shutdown(ShutdownRequest {
+                    return Err(Flow::shutdown(ShutdownRequest {
                         exit_code: -1,
                         restart: false,
                     }));
                 }
                 Ok(Value::NIL)
             }
-            Err(flow) => Err(flow),
+            Err(flow) => Err(Flow::from_kind(flow)),
         }
     }
 
@@ -388,19 +396,21 @@ impl Context {
     #[tracing::instrument(skip_all)]
     pub(super) fn command_loop_2(&mut self) -> EvalResult {
         loop {
-            match self.command_loop_1() {
+            match self.command_loop_1().kinded() {
                 Ok(val) => return Ok(val),
-                Err(flow @ Flow::Throw(_)) => {
+                Err(flow @ FlowKind::Throw(_)) => {
                     // Throws propagate (exit, top-level, etc.) without
                     // re-entering the command loop.  Re-running command_loop_1
                     // here traps minibuffer exit throws and blocks waiting for
                     // another key instead of unwinding like GNU Emacs.
-                    return Err(flow);
+                    return Err(Flow::from_kind(flow));
                 }
                 // A shutdown unwinds the command loop instead of restarting it:
                 // GNU never returns from Fkill_emacs to command_loop_2.
-                Err(flow @ (Flow::ThreadBlocked(_) | Flow::Shutdown(_))) => return Err(flow),
-                Err(flow @ Flow::Signal(_))
+                Err(flow @ (FlowKind::ThreadBlocked(_) | FlowKind::Shutdown(_))) => {
+                    return Err(Flow::from_kind(flow));
+                }
+                Err(flow @ FlowKind::Signal(_))
                     if self
                         .command_loop
                         .keyboard
@@ -408,9 +418,9 @@ impl Context {
                         .executing_kbd_macro
                         .is_some() =>
                 {
-                    return Err(flow);
+                    return Err(Flow::from_kind(flow));
                 }
-                Err(Flow::Signal(sig)) => {
+                Err(FlowKind::Signal(sig)) => {
                     // GNU `command_loop_2' is the sole recovery owner:
                     // `internal_condition_case (command_loop_1, ..., cmd_error)'.
                     // Keeping reporting here ensures the current buffer's

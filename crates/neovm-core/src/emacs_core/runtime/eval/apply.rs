@@ -1311,9 +1311,9 @@ impl Context {
     }
 
     pub(crate) fn push_eval_result_roots(&mut self, result: &EvalResult) {
-        match result {
+        match result.kinded_ref() {
             Ok(value) => self.push_vm_frame_root(*value),
-            Err(Flow::Signal(sig)) => {
+            Err(FlowRef::Signal(sig)) => {
                 for value in sig.data.iter().copied() {
                     self.push_vm_frame_root(value);
                 }
@@ -1321,16 +1321,16 @@ impl Context {
                     self.push_vm_frame_root(raw_data);
                 }
             }
-            Err(Flow::Throw(thrown)) => {
+            Err(FlowRef::Throw(thrown)) => {
                 self.push_vm_frame_root(thrown.tag);
                 self.push_vm_frame_root(thrown.value);
             }
-            Err(Flow::ThreadBlocked(blocked)) => {
+            Err(FlowRef::ThreadBlocked(blocked)) => {
                 self.push_vm_frame_root(blocked.blocker);
                 self.push_vm_frame_root(blocked.remaining_forms);
             }
             // No Lisp values to root.
-            Err(Flow::Shutdown(_)) => {}
+            Err(FlowRef::Shutdown(_)) => {}
         }
     }
 
@@ -2019,12 +2019,12 @@ impl Context {
             self.apply(function, args)
         })();
         let result = self.unbind_to_with_result(specpdl_count, result);
-        match result {
-            Err(Flow::Signal(flow)) => {
+        match result.kinded() {
+            Err(FlowKind::Signal(flow)) => {
                 tracing::debug!(?flow, "error muted by safe_funcall");
                 Ok(Value::NIL)
             }
-            other => other,
+            other => other.map_err(Flow::from_kind),
         }
     }
 
@@ -3575,8 +3575,8 @@ impl Context {
                 }
                 let function_is_callable = self.function_value_is_callable(&func);
 
-                match self.apply_untraced(func, args) {
-                    Err(Flow::Signal(sig))
+                match self.apply_untraced(func, args).kinded() {
+                    Err(FlowKind::Signal(sig))
                         if !function_is_callable && sig.symbol == invalid_function_symbol() =>
                     {
                         Err(signal(
@@ -3584,7 +3584,7 @@ impl Context {
                             vec![Value::from_sym_id(sym_id)],
                         ))
                     }
-                    other => other,
+                    other => other.map_err(Flow::from_kind),
                 }
             }
             NamedCallTarget::Subr(func) => {
@@ -3623,8 +3623,8 @@ impl Context {
                 }
                 let function_is_callable = self.function_value_is_callable(&func);
 
-                match self.apply(func, args) {
-                    Err(Flow::Signal(sig))
+                match self.apply(func, args).kinded() {
+                    Err(FlowKind::Signal(sig))
                         if !function_is_callable && sig.symbol == invalid_function_symbol() =>
                     {
                         Err(signal(
@@ -3632,7 +3632,7 @@ impl Context {
                             vec![Value::symbol(name)],
                         ))
                     }
-                    other => other,
+                    other => other.map_err(Flow::from_kind),
                 }
             }
             NamedCallTarget::Subr(func) => {
@@ -3713,8 +3713,8 @@ impl Context {
         };
 
         let function_is_callable = self.function_value_is_callable(&function);
-        match self.apply_untraced(function, args) {
-            Err(Flow::Signal(sig))
+        match self.apply_untraced(function, args).kinded() {
+            Err(FlowKind::Signal(sig))
                 if !function_is_callable && sig.symbol == invalid_function_symbol() =>
             {
                 Err(signal(
@@ -3722,7 +3722,7 @@ impl Context {
                     vec![Value::from_sym_id(sym_id)],
                 ))
             }
-            other => other,
+            other => other.map_err(Flow::from_kind),
         }
     }
 
@@ -3900,8 +3900,8 @@ impl Context {
     /// the forms it had left, in the current lexical environment.
     #[inline]
     pub(super) fn rewrap_thread_blocked_in_lexenv(&mut self, result: EvalResult) -> EvalResult {
-        match result {
-            Err(Flow::ThreadBlocked(blocked))
+        match result.kinded() {
+            Err(FlowKind::ThreadBlocked(blocked))
                 if !blocked.remaining_forms.is_nil()
                     && crate::emacs_core::threads::thread_condition_case_continuation_parts(
                         blocked.remaining_forms,
@@ -3921,7 +3921,7 @@ impl Context {
                     Err(flow) => Err(flow),
                 }
             }
-            other => other,
+            other => other.map_err(Flow::from_kind),
         }
     }
 

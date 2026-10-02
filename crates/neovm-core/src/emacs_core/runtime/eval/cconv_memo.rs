@@ -619,9 +619,9 @@ pub(crate) fn note_function_epoch_move(why: FunctionEpochBump, sym: Option<SymId
 
 /// Push every Lisp value RESULT holds as a specpdl root.
 fn push_result_roots(ctx: &mut Context, result: &EvalResult) {
-    match result {
+    match result.kinded_ref() {
         Ok(value) => ctx.push_specpdl_root(*value),
-        Err(Flow::Signal(sig)) => {
+        Err(FlowRef::Signal(sig)) => {
             ctx.push_specpdl_root(Value::from_sym_id(sig.symbol));
             for value in sig.data.iter().copied() {
                 ctx.push_specpdl_root(value);
@@ -630,15 +630,15 @@ fn push_result_roots(ctx: &mut Context, result: &EvalResult) {
                 ctx.push_specpdl_root(raw);
             }
         }
-        Err(Flow::Throw(thrown)) => {
+        Err(FlowRef::Throw(thrown)) => {
             ctx.push_specpdl_root(thrown.tag);
             ctx.push_specpdl_root(thrown.value);
         }
-        Err(Flow::ThreadBlocked(blocked)) => {
+        Err(FlowRef::ThreadBlocked(blocked)) => {
             ctx.push_specpdl_root(blocked.blocker);
             ctx.push_specpdl_root(blocked.remaining_forms);
         }
-        Err(Flow::Shutdown(_)) => {}
+        Err(FlowRef::Shutdown(_)) => {}
     }
 }
 

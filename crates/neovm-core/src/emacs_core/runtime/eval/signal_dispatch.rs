@@ -153,7 +153,7 @@ impl Context {
     /// a 16-byte `EvalResult` round trip per form.
     #[inline(always)]
     pub(crate) fn dispatch_signal_result_if_needed(&mut self, result: EvalResult) -> EvalResult {
-        if !matches!(result, Err(Flow::Signal(_))) {
+        if !super::super::error::is_signal_result!(result) {
             return result;
         }
         self.dispatch_signal_result_cold(result)
@@ -171,13 +171,12 @@ impl Context {
     #[cold]
     #[inline(never)]
     fn dispatch_signal_result_cold(&mut self, result: EvalResult) -> EvalResult {
-        match result {
-            Err(Flow::Signal(sig)) => match self.dispatch_signal_if_needed(sig) {
-                Ok(dispatched) => Err(Flow::Signal(dispatched)),
+        super::super::error::with_signal_result!(result, sig => {
+            match self.dispatch_signal_if_needed(sig) {
+                Ok(dispatched) => Err(Flow::signal_boxed(dispatched)),
                 Err(flow) => Err(flow),
-            },
-            other => other,
-        }
+            }
+        })
     }
 
     pub(super) fn dispatch_signal(&mut self, mut sig: SignalData) -> Result<SignalData, Flow> {
@@ -245,28 +244,28 @@ impl Context {
 
                     let handler_result = self.apply(handler, vec![make_signal_binding_value(&sig)]);
 
-                    match handler_result {
+                    match handler_result.kinded() {
                         Ok(_) => {
                             self.pop_condition_frame();
                             self.restore_specpdl_roots(specpdl_root_scope);
                             continue;
                         }
-                        Err(Flow::Signal(next_sig)) => {
+                        Err(FlowKind::Signal(next_sig)) => {
                             let dispatched =
                                 self.dispatch_signal_if_needed(next_sig).map(|sig| *sig);
                             self.pop_condition_frame();
                             self.restore_specpdl_roots(specpdl_root_scope);
                             return dispatched;
                         }
-                        Err(flow @ Flow::Throw(_)) => {
+                        Err(flow @ FlowKind::Throw(_)) => {
                             self.pop_condition_frame();
                             self.restore_specpdl_roots(specpdl_root_scope);
-                            return Err(flow);
+                            return Err(Flow::from_kind(flow));
                         }
-                        Err(flow @ (Flow::ThreadBlocked(_) | Flow::Shutdown(_))) => {
+                        Err(flow @ (FlowKind::ThreadBlocked(_) | FlowKind::Shutdown(_))) => {
                             self.pop_condition_frame();
                             self.restore_specpdl_roots(specpdl_root_scope);
-                            return Err(flow);
+                            return Err(Flow::from_kind(flow));
                         }
                     }
                 }

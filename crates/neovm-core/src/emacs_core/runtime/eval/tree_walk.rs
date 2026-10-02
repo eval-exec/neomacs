@@ -44,9 +44,9 @@ impl Context {
         let mut cursor = body;
         let mut last = Value::NIL;
         while cursor.is_cons() {
-            match self.eval_sub(cursor.cons_car()) {
+            match self.eval_sub(cursor.cons_car()).kinded() {
                 Ok(value) => last = value,
-                Err(Flow::ThreadBlocked(blocked)) => {
+                Err(FlowKind::ThreadBlocked(blocked)) => {
                     let remaining_forms = if blocked.remaining_forms.is_nil() {
                         cursor.cons_cdr()
                     } else {
@@ -54,7 +54,7 @@ impl Context {
                     };
                     return Err(Flow::thread_blocked(blocked.blocker, remaining_forms));
                 }
-                Err(flow) => return Err(flow),
+                Err(flow) => return Err(Flow::from_kind(flow)),
             }
             cursor = cursor.cons_cdr();
         }

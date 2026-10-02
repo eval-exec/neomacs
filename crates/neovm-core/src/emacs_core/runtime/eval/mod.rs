@@ -5630,13 +5630,13 @@ impl Context {
     }
 
     fn finalize_public_eval_result(&mut self, result: EvalResult) -> Result<Value, EvalError> {
-        match result {
+        match result.kinded() {
             Ok(value) => Ok(value),
-            Err(Flow::Signal(sig)) => match self.dispatch_signal_if_needed(sig) {
-                Ok(dispatched) => Err(map_flow(Flow::Signal(dispatched))),
+            Err(FlowKind::Signal(sig)) => match self.dispatch_signal_if_needed(sig) {
+                Ok(dispatched) => Err(map_flow(Flow::signal_boxed(dispatched))),
                 Err(flow) => Err(map_flow(flow)),
             },
-            Err(flow) => Err(map_flow(flow)),
+            Err(flow) => Err(map_flow(Flow::from_kind(flow))),
         }
     }
 
@@ -6099,8 +6099,8 @@ impl Context {
 
         let callable_before = self.callable_before_call_snapshot(&function);
         let result = self.apply_untraced(function, args);
-        match &result {
-            Err(Flow::Signal(sig))
+        match result.kinded_ref() {
+            Err(FlowRef::Signal(sig))
                 if sig.symbol == invalid_function_symbol()
                     && !callable_before
                         .unwrap_or_else(|| self.function_value_is_callable(&function)) =>
@@ -6154,8 +6154,8 @@ impl Context {
 
         let callable_before = self.callable_before_call_snapshot(&function);
         let result = self.funcall_general_untraced(function, args);
-        match &result {
-            Err(Flow::Signal(sig))
+        match result.kinded_ref() {
+            Err(FlowRef::Signal(sig))
                 if sig.symbol == invalid_function_symbol()
                     && !callable_before
                         .unwrap_or_else(|| self.function_value_is_callable(&function)) =>
@@ -6187,8 +6187,8 @@ impl Context {
                 }
                 let callable_before = self.callable_before_call_snapshot(&func);
                 let result = self.funcall_general_untraced(func, args);
-                match &result {
-                    Err(Flow::Signal(sig))
+                match result.kinded_ref() {
+                    Err(FlowRef::Signal(sig))
                         if sig.symbol == invalid_function_symbol()
                             && !callable_before
                                 .unwrap_or_else(|| self.function_value_is_callable(&func)) =>

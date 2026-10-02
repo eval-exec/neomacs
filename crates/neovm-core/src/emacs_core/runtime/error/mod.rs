@@ -309,6 +309,28 @@ impl<T> FlowResultExt<T> for Result<T, Flow> {
     }
 }
 
+// These private result views preserve the enum carrier's original match place
+// in signal dispatch. Projecting or rebuilding the Result here changes the
+// interpreter's hot code under ThinLTO. Stage B supplies word-carrier versions;
+// callers keep the carrier opaque. The macros introduce no state or threading
+// assumptions.
+macro_rules! is_signal_result {
+    ($result:expr) => {
+        matches!($result, Err($crate::emacs_core::error::FlowKind::Signal(_)))
+    };
+}
+pub(crate) use is_signal_result;
+
+macro_rules! with_signal_result {
+    ($result:expr, $signal:ident => $body:expr) => {
+        match $result {
+            Err($crate::emacs_core::error::FlowKind::Signal($signal)) => $body,
+            other => other,
+        }
+    };
+}
+pub(crate) use with_signal_result;
+
 impl Flow {
     /// The only way to build a `throw`: pins `tag` and `value` as GC roots for
     /// as long as the flow (or any clone of it) lives.

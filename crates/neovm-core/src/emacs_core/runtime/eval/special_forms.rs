@@ -670,9 +670,9 @@ impl Context {
             let mut cursor = forms;
             let mut last = Value::NIL;
             while cursor.is_cons() {
-                match self.eval_sub(cursor.cons_car()) {
+                match self.eval_sub(cursor.cons_car()).kinded() {
                     Ok(value) => last = value,
-                    Err(Flow::ThreadBlocked(blocked)) => {
+                    Err(FlowKind::ThreadBlocked(blocked)) => {
                         let remaining_forms = if blocked.remaining_forms.is_nil() {
                             cursor.cons_cdr()
                         } else {
@@ -680,7 +680,7 @@ impl Context {
                         };
                         return Err(Flow::thread_blocked(blocked.blocker, remaining_forms));
                     }
-                    Err(flow) => return Err(flow),
+                    Err(flow) => return Err(Flow::from_kind(flow)),
                 }
                 cursor = cursor.cons_cdr();
             }
@@ -881,15 +881,25 @@ impl Context {
             resume: ResumeTarget::InterpreterCatch,
         });
         let specpdl_count = self.specpdl.len();
-        let result = match self.sf_progn_value(tail.cons_cdr()) {
+        let result = match self.sf_progn_value(tail.cons_cdr()).kinded() {
             Ok(value) => Ok(value),
-            Err(Flow::Signal(sig)) => match self.dispatch_signal_if_needed(sig) {
-                Ok(dispatched) => Err(Flow::Signal(dispatched)),
-                Err(Flow::Throw(thrown)) if eq_value(&tag, &thrown.tag) => Ok(thrown.value),
+            Err(FlowKind::Signal(sig)) => match self.dispatch_signal_if_needed(sig) {
+                Ok(dispatched) => Err(Flow::signal_boxed(dispatched)),
+                Err(ref flow)
+                    if let Some(thrown) = flow.as_throw()
+                        && eq_value(&tag, &thrown.tag) =>
+                {
+                    Ok(thrown.value)
+                }
                 Err(flow) => Err(flow),
             },
-            Err(Flow::Throw(thrown)) if eq_value(&tag, &thrown.tag) => Ok(thrown.value),
-            Err(flow) => Err(flow),
+            Err(ref flow)
+                if let Some(thrown) = flow.as_throw()
+                    && eq_value(&tag, &thrown.tag) =>
+            {
+                Ok(thrown.value)
+            }
+            Err(flow) => Err(Flow::from_kind(flow)),
         };
         self.pop_condition_frame();
         // Catching moves the value out of pinned ThrowData. Carry it through
@@ -1034,7 +1044,7 @@ impl Context {
             });
         }
 
-        match eval_body(self) {
+        match eval_body(self).kinded() {
             Ok(value) => {
                 self.truncate_condition_stack(condition_stack_base);
                 if let Some(idx) = success_handler_idx {
@@ -1062,7 +1072,7 @@ impl Context {
                 }
                 Ok(value)
             }
-            Err(Flow::Signal(sig)) => {
+            Err(FlowKind::Signal(sig)) => {
                 let sig = match self.dispatch_signal_if_needed(sig) {
                     Ok(dispatched) => dispatched,
                     Err(flow) => {
@@ -1100,11 +1110,11 @@ impl Context {
                     let result = self.sf_progn_value(handler.cons_cdr());
                     return self.unbind_to_with_result(specpdl_count, result);
                 }
-                Err(Flow::Signal(sig))
+                Err(Flow::signal_boxed(sig))
             }
-            Err(flow @ Flow::ThreadBlocked(_)) => {
+            Err(flow @ FlowKind::ThreadBlocked(_)) => {
                 self.truncate_condition_stack(condition_stack_base);
-                if let Flow::ThreadBlocked(ref blocked) = flow
+                if let FlowKind::ThreadBlocked(ref blocked) = flow
                     && !blocked.remaining_forms.is_nil()
                 {
                     return Err(Flow::thread_blocked(
@@ -1117,13 +1127,13 @@ impl Context {
                         ),
                     ));
                 }
-                Err(flow)
+                Err(Flow::from_kind(flow))
             }
             // A shutdown is not a condition: condition-case cannot handle it,
             // matching GNU, where Fkill_emacs exits and no handler ever runs.
-            Err(flow @ (Flow::Throw(_) | Flow::Shutdown(_))) => {
+            Err(flow @ (FlowKind::Throw(_) | FlowKind::Shutdown(_))) => {
                 self.truncate_condition_stack(condition_stack_base);
-                Err(flow)
+                Err(Flow::from_kind(flow))
             }
         }
     }
@@ -1200,15 +1210,15 @@ impl Context {
     }
 
     pub(super) fn validate_throw(&self, flow: Flow) -> Flow {
-        match flow {
-            Flow::Throw(ref thrown) => {
+        match flow.kind() {
+            FlowRef::Throw(thrown) => {
                 if self.has_active_catch(&thrown.tag) {
                     flow
                 } else {
                     signal(LispCondition::NoCatch, vec![thrown.tag, thrown.value])
                 }
             }
-            other => other,
+            _ => flow,
         }
     }
 
@@ -1747,11 +1757,11 @@ impl Context {
     }
 
     pub(super) fn flow_has_active_handler(&self, flow: &Flow) -> bool {
-        match flow {
-            Flow::Signal(sig) => self.has_active_condition_handler_for_signal(sig),
-            Flow::Throw(thrown) => self.has_active_catch(&thrown.tag),
+        match flow.kind() {
+            FlowRef::Signal(sig) => self.has_active_condition_handler_for_signal(sig),
+            FlowRef::Throw(thrown) => self.has_active_catch(&thrown.tag),
             // Nothing handles a shutdown; it unwinds to the process boundary.
-            Flow::ThreadBlocked(_) | Flow::Shutdown(_) => false,
+            FlowRef::ThreadBlocked(_) | FlowRef::Shutdown(_) => false,
         }
     }
 }
