@@ -9166,6 +9166,7 @@ pub(crate) fn re_search(
     let mut dfa_first_step = dfa_lease
         .as_ref()
         .is_some_and(|lease| lease.inline_first_step_enabled());
+    let mut dfa_cold_heat = dfa::ColdSearchHeat::default();
     macro_rules! try_candidate {
         ($pos:expr, $stop:expr) => {{
             let found = match dfa_lease.as_mut() {
@@ -9205,14 +9206,25 @@ pub(crate) fn re_search(
                     // In particular, the sparse scan's EOF failure should
                     // not heat a pattern whose real candidates all match.
                     if dfa_cold_pending && $pos < $stop && $pos < text_len {
-                        dfa_lease =
-                            dfa::DfaLease::after_cold_failure(pattern, syntax, dfa_max_stop);
-                        dfa_first_step = dfa_lease
-                            .as_ref()
-                            .is_some_and(|lease| lease.inline_first_step_enabled());
-                        // Ineligible/disabled slots stop counting too. A
-                        // classless lookup stays cold and retries later.
-                        dfa_cold_pending = !pattern.dfa.initialized();
+                        // One isolated miss cannot justify filtering all the
+                        // true candidates of a mostly successful pattern.
+                        // Keep it local until a second failure in this scan;
+                        // successful candidates add no slot bookkeeping.
+                        let credit = dfa_cold_heat.failure_credit();
+                        if credit != 0 {
+                            dfa_lease = dfa::DfaLease::after_cold_failure(
+                                pattern,
+                                syntax,
+                                dfa_max_stop,
+                                credit,
+                            );
+                            dfa_first_step = dfa_lease
+                                .as_ref()
+                                .is_some_and(|lease| lease.inline_first_step_enabled());
+                            // Ineligible/disabled slots stop counting too. A
+                            // classless lookup stays cold and retries later.
+                            dfa_cold_pending = !pattern.dfa.initialized();
+                        }
                     }
                     None
                 }

@@ -1012,23 +1012,20 @@ fn cold_failure_threshold_filters_the_rest_of_the_same_search() {
     reset_dfa_stats();
     with_cold_path(true, || {
         with_dfa_mode(DfaMode::On, || {
-            for _ in 1..COLD_THRESHOLD {
-                // One real failed candidate has input to consume. The
-                // terminal EOF attempt does not count toward admission.
+            for _ in 0..COLD_THRESHOLD * 2 {
+                // An isolated failure and the terminal EOF attempt cannot
+                // justify filtering other searches of this pattern.
                 assert_eq!(search(&compiled, b"z", 0, 1, &syntax, 0), (None, false));
             }
             assert!(!compiled.dfa.initialized());
-            assert!(matches!(
-                *compiled.dfa.slot(),
-                DfaSlot::Cold { failed } if failed == COLD_THRESHOLD - 1
-            ));
+            assert!(matches!(*compiled.dfa.slot(), DfaSlot::Cold { failed: 0 }));
             assert_eq!(dfa_stats().searches, 0);
             let before = matcher_entry_count();
             assert_eq!(
                 search(&compiled, &dense, 0, dense.len() as isize, &syntax, 0),
                 (None, false)
             );
-            assert_eq!(matcher_entry_count() - before, 1);
+            assert_eq!(matcher_entry_count() - before, COLD_THRESHOLD as u64);
         });
     });
     assert!(compiled.dfa.initialized());
@@ -2249,6 +2246,70 @@ fn cold_successful_passes_with_eof_failures_never_build() {
     let stats = dfa_stats();
     assert_eq!(stats.searches, 0, "{stats:?}");
     assert_eq!(stats.builds, 0, "{stats:?}");
+}
+
+/// The board's backquoted `(defun . ,f)` is a real isolated miss before
+/// another true header. Repeating that scan cannot heat the mostly matching
+/// pattern, even after the old cumulative threshold would have built it.
+#[test]
+fn cold_isolated_literal_failures_never_build() {
+    let syntax = DefaultSyntaxLookup;
+    let mut text = vec![b'x'; 4096];
+    text.extend_from_slice(b"\n(defun first)\n`(defun . ,f)\n(defun second)\n");
+    for fold in [false, true] {
+        let compiled = regex_compile("(defun \\([-a-z0-9]+\\)", false, fold).unwrap();
+        let pass = || {
+            let mut start = 0;
+            let mut results = Vec::new();
+            loop {
+                let result = search(
+                    &compiled,
+                    &text,
+                    start,
+                    (text.len() - start) as isize,
+                    &syntax,
+                    start,
+                );
+                let next = result.0.as_ref().map(|(_, _, ends)| ends[0] as usize);
+                results.push(result);
+                let Some(end) = next else {
+                    break;
+                };
+                start = end;
+            }
+            results
+        };
+        let expected = with_dfa_mode(DfaMode::Off, pass);
+        assert_eq!(
+            expected.len(),
+            3,
+            "two captures and the terminal failed search"
+        );
+        assert!(expected[0].0.is_some() && expected[1].0.is_some());
+        assert_eq!(expected[2], (None, false));
+        reset_dfa_stats();
+        with_cold_path(true, || {
+            with_dfa_mode(DfaMode::On, || {
+                for _ in 0..COLD_THRESHOLD * 4 {
+                    let before = matcher_entry_count();
+                    assert_eq!(pass(), expected);
+                    assert_eq!(
+                        matcher_entry_count() - before,
+                        3,
+                        "two matches, one real failure, no prefilter EOF attempt"
+                    );
+                }
+            });
+        });
+        assert!(!compiled.dfa.initialized());
+        assert!(matches!(*compiled.dfa.slot(), DfaSlot::Cold { failed: 0 }));
+        let stats = dfa_stats();
+        assert_eq!(stats.searches, 0, "{stats:?}");
+        assert_eq!(stats.builds, 0, "{stats:?}");
+        let verify = with_cold_path(true, || with_dfa_mode(DfaMode::Verify, pass));
+        assert_eq!(verify, expected);
+        assert_eq!(dfa_stats().verify_bad_no + dfa_stats().verify_bad_yes, 0);
+    }
 }
 
 #[test]
