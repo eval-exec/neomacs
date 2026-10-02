@@ -1556,7 +1556,7 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOMACS_PRESENT_POINT_ROWS",
     // Certified row-stream concatenation: off, on (default); overlaps keep heap merge.
     "NEOMACS_POINT_ROW_ITER",
-    // Default-OFF deferred numeric presentation positions; paired same-binary arms.
+    // Deferred numeric presentation positions: on (default), off; same-binary arms.
     "NEOMACS_PRESENT_GEOMETRY_LAZY",
     // Source newline counting: off, on (default), verify; indexed counts unchanged.
     "NEOMACS_LAYOUT_LINE_COUNT",

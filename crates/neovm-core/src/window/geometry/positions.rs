@@ -7,7 +7,7 @@
 //!
 //! | Knob | Default | Gate |
 //! | --- | --- | --- |
-//! | `NEOMACS_PRESENT_GEOMETRY_LAZY=off\|on` | off | Defer the private presented position vector for shared point rows. |
+//! | `NEOMACS_PRESENT_GEOMETRY_LAZY=off\|on` | on | Defer the private presented position vector for shared point rows. |
 //!
 //! The mode is read once per process. Publications and their numeric caches may
 //! be cloned and read concurrently; every caller observes the same completed
@@ -32,12 +32,14 @@ pub(super) enum GeometryPositionsMode {
 impl GeometryPositionsMode {
     #[inline]
     pub(super) fn from_setting(setting: Option<&str>) -> Self {
-        if setting.is_some_and(|value| {
-            let value = value.trim();
-            ["on", "1", "true", "yes"]
-                .iter()
-                .any(|enabled| value.eq_ignore_ascii_case(enabled))
-        }) {
+        if setting.is_none()
+            || setting.is_some_and(|value| {
+                let value = value.trim();
+                ["on", "1", "true", "yes"]
+                    .iter()
+                    .any(|enabled| value.eq_ignore_ascii_case(enabled))
+            })
+        {
             Self::On
         } else {
             Self::Off

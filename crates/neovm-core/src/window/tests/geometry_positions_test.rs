@@ -288,7 +288,11 @@ fn validation_errors_keep_canonical_missing_row_and_upfront_duplicate_order() {
 
 #[test]
 fn legacy_flat_on_arm_keeps_eager_traversal_and_error_order() {
-    for setting in [None, Some(""), Some("off"), Some("unknown")] {
+    assert_eq!(
+        GeometryPositionsMode::from_setting(None),
+        GeometryPositionsMode::On
+    );
+    for setting in [Some(""), Some("off"), Some("unknown")] {
         assert_eq!(
             GeometryPositionsMode::from_setting(setting),
             GeometryPositionsMode::Off
