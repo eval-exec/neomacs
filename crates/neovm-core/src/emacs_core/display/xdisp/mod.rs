@@ -21,6 +21,7 @@
 //! | --- | --- | --- | --- |
 //! | `NEOMACS_MODE_LINE_PROP_SLICE` | `off` | `off`; `on`/`1`/`true`/`yes` | Clip and graft literal source intervals with one plist copy |
 //! | `NEOMACS_MODE_LINE_PROP_BORROW` | `off` | `off`; `on`/`1`/`true`/`yes` | Borrow source string intervals during synchronous mode-line property reads |
+//! | `NEOMACS_MODE_LINE_PLAIN_FIELD` | `off` | `off`; `on`/`1`/`true`/`yes` | Append property-free percent text directly to the mode-line output |
 
 #[path = "mode_line_flow.rs"]
 mod mode_line_flow_policy;
@@ -3729,12 +3730,62 @@ fn append_mode_line_rendered_segment(
     result.append_rendered(&segment);
 }
 
+/// Immutable process selector published by OnceLock. The direct field append
+/// uses only its caller's exclusive rendered output and retains no Lisp state;
+/// independent mutators never share formatter data through this selector.
+#[inline]
+fn mode_line_plain_field_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(enabled) = MODE_LINE_PLAIN_FIELD_OVERRIDE.with(std::cell::Cell::get) {
+        return enabled;
+    }
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        matches!(
+            std::env::var("NEOMACS_MODE_LINE_PLAIN_FIELD")
+                .ok()
+                .map(|value| value.trim().to_ascii_lowercase())
+                .as_deref(),
+            Some("on" | "1" | "true" | "yes")
+        )
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    static MODE_LINE_PLAIN_FIELD_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn set_mode_line_plain_field_for_test(enabled: Option<bool>) {
+    MODE_LINE_PLAIN_FIELD_OVERRIDE.with(|cell| cell.set(enabled));
+}
+
 fn append_mode_line_percent_string_spec(
     result: &mut ModeLineRendered,
     spec: &str,
     props_at_percent: &std::collections::HashMap<Value, Value>,
     field_width: i64,
 ) {
+    if props_at_percent.is_empty() && mode_line_plain_field_enabled() {
+        let char_offset = result.char_len();
+        // ModeLineRendered::plain decodes UTF-8 chars to these same codes.
+        // Extend the final buffer directly, avoiding its temporary String,
+        // character-code Vec, and second copy. This field has no source or
+        // min-width sidecar to append.
+        result.text.extend(spec.chars().map(|ch| ch as u32));
+        let rendered_len = (result.char_len() - char_offset) as i64;
+        if field_width > 0 && rendered_len < field_width {
+            result.pad_plain_spaces((field_width - rendered_len) as usize);
+        }
+        // Preserve the empty segment's property mutation/syntax ticks and
+        // cache revalidation. Its empty graft changes no interval boundaries.
+        result
+            .text_props
+            .append_shifted_at_char_offset(&TextPropertyTable::new(), CharLen::new(char_offset));
+        return;
+    }
     append_mode_line_percent_segment(
         result,
         ModeLineRendered::plain(spec),

@@ -20,6 +20,9 @@ mod approx_window_text_test;
 #[cfg(test)]
 mod mode_line_prop_borrow_test;
 
+#[cfg(test)]
+mod mode_line_plain_field_test;
+
 fn interactive_context() -> Context {
     let mut eval = Context::new();
     eval.set_variable("noninteractive", Value::NIL);

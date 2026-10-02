@@ -1090,6 +1090,7 @@ fn benchmark_environment_forwards_the_allowlist_and_jit_knobs_only() {
         (os("NEOMACS_EDIT_SYNC_STILL"), os("on")),
         (os("NEOMACS_MODE_LINE_PROP_BORROW"), os("on")),
         (os("NEOMACS_MODE_LINE_PROP_SLICE"), os("on")),
+        (os("NEOMACS_MODE_LINE_PLAIN_FIELD"), os("on")),
         (os("NEOVM_PPS_PROPERTIZE"), os("0")),
         (os("NEOVM_SYNTAX_PARSE_CACHE"), os("verify")),
         (os("NEOVM_SYNTAX_PARSE_CACHE_L2"), os("verify")),
@@ -1105,6 +1106,7 @@ fn benchmark_environment_forwards_the_allowlist_and_jit_knobs_only() {
         forwarded,
         [
             "NEOMACS_EDIT_SYNC_STILL",
+            "NEOMACS_MODE_LINE_PLAIN_FIELD",
             "NEOMACS_MODE_LINE_PROP_BORROW",
             "NEOMACS_MODE_LINE_PROP_SLICE",
             "NEOMACS_OSR_DEBUG",

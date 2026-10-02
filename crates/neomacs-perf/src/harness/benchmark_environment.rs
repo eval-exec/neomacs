@@ -87,6 +87,8 @@ pub(super) const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOMACS_MODE_LINE_PROP_BORROW",
     // Single-copy mode-line source slices (`off` default, `on`).
     "NEOMACS_MODE_LINE_PROP_SLICE",
+    // Direct property-free percent fields (`off` default, `on`).
+    "NEOMACS_MODE_LINE_PLAIN_FIELD",
     // A window whose start moved back reuses its old rows: `on`.
     "NEOMACS_LAYOUT_SCROLL_BACK",
     // posn-at-point & co. read only the text the window shows: `on`.
