@@ -665,6 +665,190 @@ fn countdown() -> ByteCodeFunction {
     )
 }
 
+fn assert_terminal_poll_target(f: &ByteCodeFunction, plan: &ir::Func, clif: &str) {
+    let cfg = analyze_cfg(
+        f.executable_ops(),
+        &f.constants,
+        f.executable_gnu_byte_offset_map(),
+        f.params.required.len(),
+    )
+    .unwrap();
+    // The shared scaffold allocates the source CFG's blocks, then one block
+    // per opt IR block. Its block IDs let this check the authoritative target,
+    // rather than accepting any intermediate block which eventually jumps there.
+    let base = cfg.leaders.len();
+    let lines = clif.lines().collect::<Vec<_>>();
+    let mut polls = 0;
+    for (index, data) in plan.blocks.iter().enumerate() {
+        let Some(position) = data
+            .insts
+            .iter()
+            .position(|id| plan.insts[id.index()].op == ir::Opcode::Poll)
+        else {
+            continue;
+        };
+        assert!(
+            data.insts[position + 1..]
+                .iter()
+                .all(|id| { matches!(plan.insts[id.index()].op, ir::Opcode::Refine(_)) })
+        );
+        let ir::Term::Jump(edge) = &data.term else {
+            panic!("terminal poll has a Jump")
+        };
+        let label = format!("block{}", base + index);
+        let start = lines
+            .iter()
+            .position(|line| {
+                line.trim_start()
+                    .strip_prefix(&label)
+                    .is_some_and(|tail| tail.starts_with(':') || tail.starts_with('('))
+            })
+            .expect("native poll block");
+        let body = lines[start + 1..]
+            .iter()
+            .take_while(|line| !line.trim_start().starts_with("block"))
+            .copied()
+            .collect::<Vec<_>>();
+        let branch = body
+            .iter()
+            .rev()
+            .find(|line| line.trim_start().starts_with("brif "))
+            .expect("poll countdown branch");
+        let target = format!("block{}", base + edge.target.index());
+        assert!(
+            branch.contains(&format!(", {target}("))
+                || branch.trim_end().ends_with(&format!(", {target}")),
+            "the fast poll edge must transfer directly to {target}: {branch}"
+        );
+        polls += 1;
+    }
+    assert!(polls > 0, "the shape assertion must observe a real poll");
+}
+
+#[test]
+fn opt_ir_lower_terminal_poll_carries_refinements_and_phi_to_header() {
+    let _settings = Settings::enter();
+    let mut ctx = Context::new();
+    let f = function(
+        vec![
+            Op::StackRef(1),
+            Op::Sub1,
+            Op::StackSet(2),
+            Op::StackRef(1),
+            Op::Constant(0),
+            Op::Gtr,
+            Op::GotoIfNil(10),
+            Op::StackRef(0),
+            Op::Consp,
+            Op::GotoIfNotNil(0),
+            Op::StackRef(0),
+            Op::Return,
+        ],
+        vec![Value::fixnum(0)],
+        2,
+    );
+    let original = plan(&f);
+    let poll_block = original
+        .blocks
+        .iter()
+        .find(|block| {
+            block
+                .insts
+                .iter()
+                .any(|id| original.insts[id.index()].op == ir::Opcode::Poll)
+        })
+        .unwrap();
+    assert!(poll_block.insts.iter().any(|id| {
+        matches!(
+            original.insts[id.index()].op,
+            ir::Opcode::Refine(TypeSet::CONS)
+        )
+    }));
+    let ir::Term::Jump(edge) = &poll_block.term else {
+        unreachable!()
+    };
+    assert!(!edge.args.is_empty(), "the countdown crosses a real phi");
+    let mut leaf = None;
+    let clif = captured_clif(|| leaf = Some(lower(&f, &original)));
+    assert_eq!(clif.len(), 1);
+    assert_terminal_poll_target(&f, &original, &clif[0]);
+    let leaf = leaf.unwrap();
+    let pair = Value::cons(Value::fixnum(7), Value::fixnum(9));
+    let _roots = Roots::new(&[pair]);
+    for n in [255, 256, 511] {
+        let args = [Value::fixnum(n), pair];
+        let expected = reference(&mut ctx, &original, &args);
+        assert_eq!(expected, tier0(&mut ctx, &f, &args));
+        ctx.gc_stress = true;
+        reset_bytecode_branch_poll_count();
+        assert_eq!(native(&mut ctx, &leaf, &args), expected);
+        ctx.gc_stress = false;
+        assert_eq!(bytecode_branch_poll_count(), ((n - 1) / 255) as usize);
+        assert_eq!(pair.cons_car(), Value::fixnum(7));
+        assert_eq!(pair.cons_cdr(), Value::fixnum(9));
+        assert_eq!(ctx.jit_root_stack_top, 0);
+    }
+}
+
+#[test]
+fn opt_ir_lower_nonterminal_poll_keeps_following_operation() {
+    let _settings = Settings::enter();
+    let mut ctx = Context::new();
+    let f = countdown();
+    let mut changed = plan(&f);
+    let block = changed
+        .blocks
+        .iter()
+        .position(|block| {
+            block
+                .insts
+                .iter()
+                .any(|id| changed.insts[id.index()].op == ir::Opcode::Poll)
+        })
+        .unwrap();
+    let poll = changed.blocks[block]
+        .insts
+        .iter()
+        .copied()
+        .find(|id| changed.insts[id.index()].op == ir::Opcode::Poll)
+        .unwrap();
+    let ir::Term::Jump(edge) = &changed.blocks[block].term else {
+        unreachable!()
+    };
+    assert_eq!(edge.args.len(), 1);
+    let arg = edge.args[0];
+    let arithmetic = changed.insts[opaque(&changed, &Op::Sub1)].clone();
+    let id = ir::Inst(changed.insts.len() as u32);
+    let value = ir::Value(changed.values.len() as u32);
+    changed.values.push(ir::ValueData {
+        ty: TypeSet::FIXNUM,
+        rep: ir::Rep::Tagged,
+        def: ir::ValueDef::Inst(id),
+    });
+    changed.insts.push(ir::InstData {
+        op: ir::Opcode::Opaque(Op::Sub1),
+        args: vec![arg],
+        result: Some(value),
+        eff: arithmetic.eff,
+        mem: arithmetic.mem,
+        frame: changed.insts[poll.index()].frame,
+        pc: changed.insts[poll.index()].pc,
+    });
+    changed.blocks[block].insts.push(id);
+    let ir::Term::Jump(edge) = &mut changed.blocks[block].term else {
+        unreachable!()
+    };
+    edge.args[0] = value;
+    let args = [Value::fixnum(511)];
+    let expected = reference(&mut ctx, &changed, &args);
+    assert_ne!(expected, tier0(&mut ctx, &f, &args));
+    let leaf = lower(&f, &changed);
+    reset_bytecode_branch_poll_count();
+    assert_eq!(native(&mut ctx, &leaf, &args), expected);
+    assert_eq!(bytecode_branch_poll_count(), 1);
+    assert_eq!(ctx.jit_root_stack_top, 0);
+}
+
 #[test]
 fn opt_ir_lower_polls_at_tier0_backedge_cadence() {
     let _settings = Settings::enter();
@@ -677,7 +861,11 @@ fn opt_ir_lower_polls_at_tier0_backedge_cadence() {
             .iter()
             .any(|inst| inst.op == ir::Opcode::Poll)
     );
-    let leaf = lower(&f, &original);
+    let mut leaf = None;
+    let clif = captured_clif(|| leaf = Some(lower(&f, &original)));
+    assert_eq!(clif.len(), 1);
+    assert_terminal_poll_target(&f, &original, &clif[0]);
+    let leaf = leaf.unwrap();
     for n in [254, 255, 256, 510, 100_000] {
         let args = [Value::fixnum(n)];
         reset_bytecode_branch_poll_count();
@@ -777,7 +965,11 @@ fn opt_ir_lower_compiler_only_cons_survives_poll_gc() {
         expected,
         crate::emacs_core::print::print_value(&original_result)
     );
-    let leaf = lower(&f, &changed);
+    let mut leaf = None;
+    let clif = captured_clif(|| leaf = Some(lower(&f, &changed)));
+    assert_eq!(clif.len(), 1);
+    assert_terminal_poll_target(&f, &changed, &clif[0]);
+    let leaf = leaf.unwrap();
     let collections = ctx.tagged_heap.gc_collections();
     reset_bytecode_branch_poll_count();
     let actual = native(&mut ctx, &leaf, &args);

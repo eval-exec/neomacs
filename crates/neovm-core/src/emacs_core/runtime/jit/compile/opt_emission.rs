@@ -411,6 +411,39 @@ fn publish_cross(ctx: &mut EmitContext, local: &mut LocalValues, block: ir::Bloc
     }
 }
 
+/// A terminal poll can transfer directly to its authoritative IR edge. Trailing
+/// refinements change only compiler knowledge, so their identity transport may
+/// precede the poll without moving a heap access or a guard across it. Threading:
+/// this inspects and updates compilation-owned values only.
+fn terminal_poll_edge(
+    ctx: &mut EmitContext,
+    local: &mut LocalValues,
+    block: ir::Block,
+    position: usize,
+) -> Option<(Block, Vec<BlockArg>)> {
+    let data = &ctx.func.blocks[block.index()];
+    let ir::Term::Jump(edge) = &data.term else {
+        return None;
+    };
+    if data.insts[position + 1..]
+        .iter()
+        .any(|id| !matches!(ctx.func.insts[id.index()].op, ir::Opcode::Refine(_)))
+        // Publishing a compiler-only flonum can allocate. Keep the continuation
+        // in that case so its existing materialization stays after the poll.
+        || local.values().any(|runtime| runtime.1.is_flonum())
+    {
+        return None;
+    }
+    for &id in &data.insts[position + 1..] {
+        let inst = &ctx.func.insts[id.index()];
+        let runtime = ctx.values.read(ctx.fb, ctx.func, local, inst.args[0]);
+        local.insert(inst.result.expect("verified refinement result"), runtime);
+    }
+    publish_cross(ctx, local, block);
+    let args = edge_arguments(ctx, local, edge);
+    Some((ctx.blocks[edge.target.index()], args))
+}
+
 fn guard_condition(
     ctx: &mut EmitContext,
     ty: TypeSet,
@@ -755,6 +788,7 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
         }
         let mut deopts = Vec::new();
         let mut pending = Vec::new();
+        let mut terminated = false;
         for (position, &id) in data.insts.iter().enumerate() {
             let inst = &ctx.func.insts[id.index()];
             let live_after = ctx.values.live_after[id.index()].clone();
@@ -921,7 +955,11 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
                     box_all_flonums(ctx.fb, ctx.rt, &mut stack, &mut reps);
                     synchronize(&mut local, &before, &stack, &reps);
                     let raw: Vec<_> = reps.iter().map(|rep| *rep == SlotRep::RawFixnum).collect();
-                    let continuation = ctx.fb.create_block();
+                    let direct = terminal_poll_edge(&mut ctx, &mut local, block, position);
+                    let (target, args) = match &direct {
+                        Some((target, args)) => (*target, &args[..]),
+                        None => (ctx.fb.create_block(), &[][..]),
+                    };
                     emit_backedge_jump_with_args(
                         ctx.fb,
                         ctx.rt
@@ -930,14 +968,18 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
                         ctx.signal_exit,
                         &stack,
                         Some(&raw),
-                        continuation,
-                        &[],
+                        target,
+                        args,
                         &[],
                         &mut pending,
                         None, // v2 entry protocols retain baseline lowering.
                     );
-                    ctx.fb.switch_to_block(continuation);
-                    ctx.fb.seal_block(continuation);
+                    if direct.is_some() {
+                        terminated = true;
+                    } else {
+                        ctx.fb.switch_to_block(target);
+                        ctx.fb.seal_block(target);
+                    }
                     None
                 }
                 _ => return Err(CompileError::UnsupportedOp("opt-emit:typed-opcode")),
@@ -945,17 +987,22 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
             if let (Some(value), Some(runtime)) = (inst.result, result) {
                 local.insert(value, runtime);
             }
+            if terminated {
+                break;
+            }
         }
-        publish_cross(&mut ctx, &mut local, block);
         lowering::set_active_region(None);
-        emit_term(
-            &mut ctx,
-            &mut local,
-            block,
-            &mut deopts,
-            &mut pending,
-            &constants,
-        )?;
+        if !terminated {
+            publish_cross(&mut ctx, &mut local, block);
+            emit_term(
+                &mut ctx,
+                &mut local,
+                block,
+                &mut deopts,
+                &mut pending,
+                &constants,
+            )?;
+        }
         for site in &deopts {
             if ctx.variable_raw.iter().any(|&raw| raw) || site.holds_flonum() {
                 ctx.fb.set_cold_block(site.block);
