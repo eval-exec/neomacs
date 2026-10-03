@@ -277,8 +277,26 @@ pub(crate) fn builtin_vconcat_slice(args: &[Value]) -> EvalResult {
 // ===========================================================================
 
 thread_local! {
-    static HASH_TABLE_TEST_ALIASES: HeapRegistrySlot<HashMap<String, HashTableTestAlias>> =
-        HeapRegistrySlot::new(HashMap::new());
+    static HASH_TABLE_TEST_ALIASES: HeapRegistrySlot<HashTableTestRegistry> =
+        HeapRegistrySlot::new(HashTableTestRegistry::default());
+}
+
+/// A Context owns this registry and exclusively lends it to its mutator. The
+/// existing thread-local slot selects that owner; it does not own callback
+/// state. GC inhibition accounting lives beside the Context's user-test
+/// registry and is saved/restored independently for nested table callbacks.
+#[derive(Default)]
+pub(crate) struct HashTableTestRegistry {
+    aliases: HashMap<String, HashTableTestAlias>,
+    pub(crate) gc_inhibit_accounting: Option<HashTestGcInhibitAccounting>,
+}
+
+/// Scalar allocation accounting for one synchronous user-test activation.
+/// No references cross callbacks and no state is shared between Contexts.
+#[derive(Clone, Copy)]
+pub(crate) struct HashTestGcInhibitAccounting {
+    pub(crate) bytes_at_start: usize,
+    pub(crate) threshold_at_start: usize,
 }
 
 #[derive(Clone)]
@@ -289,7 +307,7 @@ pub(crate) struct HashTableTestAlias {
 }
 
 pub(super) fn reset_collections_thread_locals() {
-    HASH_TABLE_TEST_ALIASES.with(|slot| slot.reset(HashMap::new()));
+    HASH_TABLE_TEST_ALIASES.with(|slot| slot.reset(HashTableTestRegistry::default()));
 }
 
 /// Root the custom comparison/hash closures registered via
@@ -300,7 +318,7 @@ pub(crate) fn collect_hash_table_test_registry_gc_roots(
     registry: &HashTableTestRegistryHandle,
     group: &mut Vec<Value>,
 ) {
-    for alias in registry.borrow().values() {
+    for alias in registry.borrow().aliases.values() {
         if let Some(f) = alias.user_cmp_function {
             group.push(f);
         }
@@ -310,8 +328,7 @@ pub(crate) fn collect_hash_table_test_registry_gc_roots(
     }
 }
 
-pub(crate) type HashTableTestRegistryHandle =
-    HeapRegistryHandle<HashMap<String, HashTableTestAlias>>;
+pub(crate) type HashTableTestRegistryHandle = HeapRegistryHandle<HashTableTestRegistry>;
 
 pub(crate) fn current_hash_table_test_registry_handle() -> HashTableTestRegistryHandle {
     HASH_TABLE_TEST_ALIASES.with(HeapRegistrySlot::current)
@@ -349,11 +366,11 @@ fn hash_test_from_user_test_pair(test: &Value, hash: &Value) -> Option<HashTable
 }
 
 fn register_hash_table_test_alias(name: &str, alias: HashTableTestAlias) {
-    HASH_TABLE_TEST_ALIASES.with(|slot| slot.borrow_mut().insert(name.to_string(), alias));
+    HASH_TABLE_TEST_ALIASES.with(|slot| slot.borrow_mut().aliases.insert(name.to_string(), alias));
 }
 
 pub(crate) fn lookup_hash_table_test_alias(name: &str) -> Option<HashTableTestAlias> {
-    HASH_TABLE_TEST_ALIASES.with(|slot| slot.borrow().get(name).cloned())
+    HASH_TABLE_TEST_ALIASES.with(|slot| slot.borrow().aliases.get(name).cloned())
 }
 
 fn maybe_resize_hash_table_for_insert(table: &mut LispHashTable, inserting_new_key: bool) {
@@ -394,12 +411,17 @@ pub(crate) fn builtin_define_hash_table_test(args: Vec<Value>) -> EvalResult {
     };
     let standard_test = hash_test_from_user_test_pair(&args[1], &args[2])
         .or_else(|| hash_test_from_designator(&args[1]));
+    // GNU chooses built-in tests only from make-hash-table's :test NAME.
+    // A custom NAME always retains both callbacks, even when its comparison
+    // designator is eq, eql, or equal. Keep the storage-test classification;
+    // user callbacks select the Lisp path independently of that classification.
+    let user_test = super::super::hashtab::hash_test_parity_enabled() || standard_test.is_none();
     register_hash_table_test_alias(
         alias_name,
         HashTableTestAlias {
             standard_test,
-            user_cmp_function: standard_test.is_none().then_some(args[1]),
-            user_hash_function: standard_test.is_none().then_some(args[2]),
+            user_cmp_function: user_test.then_some(args[1]),
+            user_hash_function: user_test.then_some(args[2]),
         },
     );
     Ok(Value::list(vec![args[1], args[2]]))
@@ -450,8 +472,13 @@ pub(crate) fn builtin_make_hash_table_slice(args: &[Value]) -> EvalResult {
                 ));
             };
             let test = match HashTableTest::from_symbol_name(name) {
-                Some(test) => test,
-                None => {
+                Some(test)
+                    if !super::super::hashtab::hash_test_parity_enabled()
+                        || test_arg.as_symbol_id() == Some(intern(test.name())) =>
+                {
+                    test
+                }
+                _ => {
                     if let Some(alias) = lookup_hash_table_test_alias(name) {
                         alias.standard_test.unwrap_or(HashTableTest::Equal)
                     } else {
@@ -462,7 +489,12 @@ pub(crate) fn builtin_make_hash_table_slice(args: &[Value]) -> EvalResult {
                     }
                 }
             };
-            (test, Some(intern(name)))
+            let test_name = if super::super::hashtab::hash_test_parity_enabled() {
+                test_arg.as_symbol_id()
+            } else {
+                Some(intern(name))
+            };
+            (test, test_name)
         }
     };
 
@@ -504,6 +536,9 @@ pub(crate) fn builtin_make_hash_table_slice(args: &[Value]) -> EvalResult {
         let _ = table.with_hash_table_mut(|ht| {
             ht.test_name = test_name;
             if let Some(name_id) = test_name
+                && !(super::super::hashtab::hash_test_parity_enabled()
+                    && HashTableTest::from_symbol_name(resolve_sym(name_id))
+                        .is_some_and(|test| name_id == intern(test.name())))
                 && let Some(alias) = lookup_hash_table_test_alias(resolve_sym(name_id))
             {
                 ht.user_cmp_function = alias.user_cmp_function;
@@ -570,6 +605,11 @@ fn hash_table_user_defined_call(
     function: Value,
     args: impl Into<LispArgVec>,
 ) -> EvalResult {
+    if super::super::hashtab::hash_test_parity_enabled() {
+        return super::super::hashtab::with_user_test_guard(eval, table, |eval| {
+            eval.apply(function, args)
+        });
+    }
     if table.as_hash_table().is_some_and(|ht| !ht.mutable) {
         return eval.apply(function, args);
     }
@@ -718,7 +758,7 @@ fn builtin_gethash_user_defined(
         }
     }
 
-    let ht = ht_ref.clone();
+    let ht = table.as_hash_table().unwrap().clone();
     let root_scope = eval.save_specpdl_roots();
     eval.push_specpdl_root(hash_snapshot_root_holder(&ht));
     let result = (|| -> Result<Option<Value>, Flow> {
@@ -863,7 +903,7 @@ fn builtin_puthash_user_defined(
         }
     }
 
-    let ht_snapshot = ht_ref.clone();
+    let ht_snapshot = table.as_hash_table().unwrap().clone();
     let root_scope = eval.save_specpdl_roots();
     eval.push_specpdl_root(hash_snapshot_root_holder(&ht_snapshot));
     let existing_key = (|| -> Result<Option<HashKey>, Flow> {
@@ -1019,7 +1059,7 @@ fn builtin_remhash_user_defined(
         }
     }
 
-    let ht_snapshot = ht_ref.clone();
+    let ht_snapshot = table.as_hash_table().unwrap().clone();
     let root_scope = eval.save_specpdl_roots();
     eval.push_specpdl_root(hash_snapshot_root_holder(&ht_snapshot));
     let existing_key = (|| -> Result<Option<HashKey>, Flow> {

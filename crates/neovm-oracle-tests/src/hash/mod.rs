@@ -15,3 +15,7 @@ mod table_operations_comprehensive;
 mod table_operations_extended;
 mod table_patterns;
 mod table_strict_edge_semantics;
+
+#[cfg(test)]
+#[path = "tests/hash_callback_mutation.rs"]
+mod hash_callback_mutation;

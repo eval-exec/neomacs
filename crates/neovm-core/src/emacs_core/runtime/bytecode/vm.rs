@@ -9581,6 +9581,9 @@ impl<'a> Vm<'a> {
 
     fn builtin_garbage_collect_shared(&mut self, args: &[Value]) -> EvalResult {
         builtins::expect_args("garbage-collect", args, 0)?;
+        if self.ctx.gc_inhibit_depth > 0 && crate::emacs_core::hashtab::hash_test_parity_enabled() {
+            return Ok(Value::NIL);
+        }
         self.ctx.gc_collect_exact();
         crate::emacs_core::builtins_extra::builtin_garbage_collect_stats()
     }

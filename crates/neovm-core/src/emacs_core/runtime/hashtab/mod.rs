@@ -21,6 +21,22 @@ use std::hash::{Hash, Hasher};
 // Callback knobs, read once per process:
 // | Knob | Values | Default | Effect |
 // | NEOVM_MAPHASH_BYTECODE | on, off | on | Call a bytecode maphash callback through the rooted two-argument entry without a LispArgVec on the armed path. |
+// | NEOVM_HASH_TEST_PARITY | on, off | off | Inhibit GC during user hash tests, restore mutability on unwind, make mutable copies, and preserve every custom test callback. |
+
+/// Immutable process policy contains no Lisp state. LazyLock publishes it to
+/// concurrent mutators; guarded state belongs to each table and Context.
+static HASH_TEST_PARITY: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+    std::env::var("NEOVM_HASH_TEST_PARITY").is_ok_and(|value| value == "on")
+});
+
+pub(crate) fn hash_test_parity_enabled() -> bool {
+    *HASH_TEST_PARITY
+}
+
+mod user_test_guard;
+pub(crate) use user_test_guard::{
+    gc_threshold_integer_fallback, inhibited_user_test_since_gc, with_user_test_guard,
+};
 
 /// Immutable process configuration holds no Lisp state. Concurrent mutators
 /// may read it; each maphash activation owns its callback and roots.
@@ -748,7 +764,12 @@ pub(crate) fn builtin_copy_hash_table(args: Vec<Value>) -> EvalResult {
     expect_args("copy-hash-table", &args, 1)?;
     match args[0].kind() {
         ValueKind::Veclike(VecLikeType::HashTable) => {
-            let new_table = args[0].as_hash_table().unwrap().clone();
+            let mut new_table = args[0].as_hash_table().unwrap().clone();
+            if hash_test_parity_enabled() {
+                // GNU copies entries and test functions, but a running test's
+                // logical immutability belongs only to its original table.
+                new_table.mutable = true;
+            }
             Ok(with_tagged_heap(|h| h.alloc_hash_table(new_table)))
         }
         _ => Err(signal(

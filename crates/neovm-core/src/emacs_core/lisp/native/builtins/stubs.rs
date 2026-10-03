@@ -1210,8 +1210,19 @@ pub(crate) fn builtin_garbage_collect_maybe(
 
     let since_gc = eval.tagged_heap.bytes_since_gc_exact();
     let threshold = eval.tagged_heap.gc_threshold();
-    if factor >= 1 && since_gc > threshold / (factor as usize) {
-        eval.gc_collect_exact();
+    let inhibited = eval.gc_inhibit_depth > 0 && super::super::hashtab::hash_test_parity_enabled();
+    let since_gc = if inhibited {
+        super::super::hashtab::inhibited_user_test_since_gc(eval, since_gc)
+            .unwrap_or(since_gc as i128)
+    } else {
+        since_gc as i128
+    };
+    if factor >= 1 && since_gc > (threshold / (factor as usize)) as i128 {
+        // GNU returns t when the threshold is reached even if the requested
+        // collection is inhibited by a user test.
+        if !inhibited {
+            eval.gc_collect_exact();
+        }
         Ok(Value::T)
     } else {
         Ok(Value::NIL)

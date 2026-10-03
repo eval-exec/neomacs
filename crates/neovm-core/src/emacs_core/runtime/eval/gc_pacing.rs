@@ -404,7 +404,14 @@ impl Context {
             .obarray
             .symbol_value_id(syms.threshold)
             .copied()
-            .and_then(|value| value.as_fixnum())
+            .and_then(|value| {
+                value.as_fixnum().or_else(|| {
+                    // GNU's gc-cons-threshold watcher accepts integers fitting
+                    // intmax_t, including bignums. User-test GC-maybe needs the
+                    // resulting HI_THRESHOLD countdown for its inhibited return.
+                    super::super::hashtab::gc_threshold_integer_fallback(value)
+                })
+            })
             .and_then(|n| usize::try_from(n).ok())
             .unwrap_or(GC_DEFAULT_THRESHOLD_BYTES);
         self.gc_runtime_settings_cache.gc_cons_percentage_scaled = self

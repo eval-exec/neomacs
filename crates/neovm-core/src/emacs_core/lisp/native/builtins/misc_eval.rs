@@ -724,6 +724,9 @@ pub(super) fn builtin_garbage_collect(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("garbage-collect", &args, 0)?;
+    if eval.gc_inhibit_depth > 0 && super::super::hashtab::hash_test_parity_enabled() {
+        return Ok(Value::NIL);
+    }
     eval.gc_collect_exact();
     // Return GC stats.
     super::builtins_extra::builtin_garbage_collect_stats()
