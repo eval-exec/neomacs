@@ -91,6 +91,7 @@ jobs:
           cache-key: ci-daemon-lifecycle-linux
           cache-shared-key: linux-debug-daemon-lifecycle
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+          install-nextest: true
       - name: Set up pinned GNU Emacs client for interoperability
         uses: ./.github/actions/setup-gnu-emacs
       - name: Require the installed GNU client
