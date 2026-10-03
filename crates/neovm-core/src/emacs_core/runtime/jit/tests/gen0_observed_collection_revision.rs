@@ -549,7 +549,7 @@ fn gen0_observed_mark_clears_when_gc_frees_and_reuses_the_exact_slot() {
         let keep2 = kind.allocate(&mut heap);
         let old_bits = doomed.bits();
         let (_, reads) = capture(|| kind.read(doomed));
-        drop(reads);
+        let old_reads = reads.expect("observed owner before reclamation");
         assert!(is_observed(old_bits));
         heap.collect_exact([keep, keep2].into_iter());
         assert!(!heap.owns_heap_value_for_test(doomed));
@@ -559,6 +559,9 @@ fn gen0_observed_mark_clears_when_gc_frees_and_reuses_the_exact_slot() {
         let reused = kind.allocate(&mut heap);
         assert_eq!(reused.bits(), old_bits, "exact slot reuse: {kind:?}");
         assert!(!is_observed(reused.bits()), "a new owner is unobserved");
+        // Readsets do not root owners. Retain this old certificate across
+        // reclamation/reuse, but do not validate it after its owner's lifetime.
+        drop(old_reads);
         let (_, reads) = capture(|| kind.read(reused));
         assert!(is_observed(reused.bits()));
         assert!(reads.expect("fresh reused-owner certificate").unchanged());
@@ -607,7 +610,8 @@ fn probe_kind(name: &str) -> StoreKind {
 
 fn probe_leaf(kind: StoreKind, context: &Context) -> CompiledLeaf {
     // Parameters are [owner-or-unused n]. Each iteration has exactly one
-    // accepted inline heap store and no Lisp allocation or function call.
+    // lowered heap store and no Lisp allocation or Lisp function call. Its
+    // observed owner or conservative envelope can select the existing shim.
     let mut ops = vec![Op::StackRef(0), Op::Constant(0), Op::Gtr, Op::GotoIfNil(0)];
     match kind {
         StoreKind::Setcar | StoreKind::Setcdr => {
@@ -659,6 +663,17 @@ fn gen0_observed_collection_store_cost_probe() {
     assert!(count > 0);
     let observation = std::env::var("FX1_STORE_OBSERVATION").expect("FX1_STORE_OBSERVATION");
     assert!(matches!(observation.as_str(), "observed" | "unobserved"));
+    let envelope = std::env::var("FX1_STORE_ENVELOPE").ok().as_deref() == Some("1");
+    if envelope {
+        assert_eq!(
+            observation, "unobserved",
+            "the envelope target is never read"
+        );
+        assert!(
+            !matches!(kind, StoreKind::BlvDefault | StoreKind::BlvLocal),
+            "BLV envelopes use the separately tested outlined interpreter setter"
+        );
+    }
     // Keep the runtime mode selected by the runner: this probe is shared by
     // OFF/Observed/Eager measurements and does not force correctness mode.
     let mut context = if matches!(kind, StoreKind::BlvDefault | StoreKind::BlvLocal) {
@@ -679,13 +694,31 @@ fn gen0_observed_collection_store_cost_probe() {
             Value::make_int(65)
         );
     }
-    let owner = if matches!(kind, StoreKind::BlvDefault | StoreKind::BlvLocal) {
-        warm
+    let (owner, neighbors) = if envelope {
+        let mut owners = [
+            kind.allocate(&mut context.tagged_heap),
+            kind.allocate(&mut context.tagged_heap),
+            kind.allocate(&mut context.tagged_heap),
+        ];
+        owners.sort_unstable_by_key(|owner| owner.bits());
+        let [left, target, right] = owners;
+        for owner in owners {
+            context.push_specpdl_root(owner);
+        }
+        (target, Some([left, right]))
+    } else if matches!(kind, StoreKind::BlvDefault | StoreKind::BlvLocal) {
+        (warm, None)
     } else {
-        kind.allocate(&mut context.tagged_heap)
+        (kind.allocate(&mut context.tagged_heap), None)
     };
     context.push_specpdl_root(owner);
-    let _reads = if observation == "observed" {
+    let reads = if let Some([left, right]) = neighbors {
+        Some(
+            capture(|| (kind.read(left), kind.read(right)))
+                .1
+                .expect("two live owners bracket the unobserved target"),
+        )
+    } else if observation == "observed" {
         Some(
             capture(|| kind.read(owner))
                 .1
@@ -694,13 +727,29 @@ fn gen0_observed_collection_store_cost_probe() {
     } else {
         None
     };
+    let mode = crate::tagged::collection_reads::compiled_journal_mode();
+    let (lo, hi) = crate::tagged::collection_reads::compiled_observation_window();
+    let address = owner.bits() & !crate::tagged::value::TAG_MASK;
+    let owner_in_envelope = usize::from(lo <= address && address < hi);
+    let observed_neighbors = neighbors.map_or(0, |owners| {
+        owners
+            .into_iter()
+            .filter(|owner| is_observed(owner.bits()))
+            .count()
+    });
+    if envelope && mode == CompiledJournalMode::Observed {
+        assert_eq!(owner_in_envelope, 1, "lo <= target < hi");
+        assert_eq!(observed_neighbors, 2);
+    }
     let owner_mark_before = usize::from(is_observed(owner.bits()));
     if observation == "unobserved" {
         assert_eq!(owner_mark_before, 0);
     }
     let gcs_before = context.gc_count;
+    let revision_before = LispCollectionRevision::current();
     let result = native(&mut context, &leaf, &[owner, Value::make_int(count)]);
     let gcs_after = context.gc_count;
+    let journal_steps = LispCollectionRevision::current().steps_since_for_test(revision_before);
     let owner_mark_after = usize::from(is_observed(owner.bits()));
     if observation == "unobserved" {
         assert_eq!(owner_mark_after, 0);
@@ -708,8 +757,13 @@ fn gen0_observed_collection_store_cost_probe() {
     assert_eq!(result, Value::make_int(65));
     assert_eq!(kind.read(owner), Value::make_int(65));
     assert_eq!(gcs_after, gcs_before);
+    if envelope && mode == CompiledJournalMode::Observed {
+        assert_eq!(journal_steps, 0, "the exact filter excludes this owner");
+        assert!(reads.expect("bracketing certificate").unchanged());
+    }
     tracing::info!(target: "fx1_store",
-        "FX1_STORE kind={} count={} observation={} owner_mark_before={} owner_mark_after={} bytecode=1 result={} expected=65 gcs_before={} gcs_after={} gcs_delta=0",
+        "FX1_STORE kind={} count={} observation={} owner_mark_before={} owner_mark_after={} bytecode=1 result={} expected=65 gcs_before={} gcs_after={} gcs_delta=0 envelope={} owner_in_envelope={} observed_neighbors={} journal_steps={}",
         name, count, observation, owner_mark_before, owner_mark_after,
-        result.as_fixnum().expect("fixnum result"), gcs_before, gcs_after);
+        result.as_fixnum().expect("fixnum result"), gcs_before, gcs_after,
+        usize::from(envelope), owner_in_envelope, observed_neighbors, journal_steps);
 }
