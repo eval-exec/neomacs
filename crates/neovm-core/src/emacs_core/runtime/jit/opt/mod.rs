@@ -39,4 +39,5 @@ mod gvn_eval_tests;
 mod range_licm_eval_tests;
 
 #[cfg(test)]
+#[path = "tests/native_verify_observer.rs"]
 pub(crate) mod native_verify_observer;
