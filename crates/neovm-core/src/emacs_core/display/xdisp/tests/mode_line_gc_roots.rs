@@ -60,10 +60,12 @@ fn assert_accumulated_property_survives(
                             face bold))))"
         }
         PropertySource::FreshEvalString => {
+            // Add no source span after collection: a missing source root must
+            // reach the ownership probe before any source-value comparison.
             "(setq u34-mode-line-gc-format
                     '((:eval (propertize (concat \"A\")
                                          'u34-mode-line-gc-property 73))
-                      (:eval (progn (garbage-collect) \"B\"))))"
+                      (:eval (progn (garbage-collect) \"\"))))"
         }
         PropertySource::DetachedFormatElements => {
             "(setq u34-mode-line-gc-format
@@ -108,7 +110,10 @@ fn assert_accumulated_property_survives(
         }
     };
     assert_eq!(eval.gc_count, before + 1, "the later :eval must collect");
-    let expected = if matches!(source, PropertySource::DetachedFormatElements) {
+    let expected = if matches!(
+        source,
+        PropertySource::DetachedFormatElements | PropertySource::FreshEvalString
+    ) {
         "A"
     } else {
         "AB"
@@ -137,8 +142,19 @@ fn assert_accumulated_property_survives(
     assert_eq!(rest.cons_car().bits(), Value::fixnum(73).bits());
     // A previous :eval can contribute a fresh source string that is retained
     // only in the display sidecar after its temporary evaluator root ends.
-    for source in sources {
-        assert!(matches!(source.as_utf8_str(), Some("A" | "B")));
+    // Check the arena's allocation bitmap without reading the string payload.
+    // The final rendered string is the only string allocation after :eval's
+    // collection; reject its address too, in case it reused a swept source.
+    for source_value in sources {
+        assert_ne!(
+            source_value.bits(),
+            rendered.bits(),
+            "a swept mode-line source was reused for the rendered string"
+        );
+        assert!(
+            eval.tagged_heap.owns_heap_value_for_test(source_value),
+            "the accumulated source string was swept during the later :eval"
+        );
     }
 }
 
