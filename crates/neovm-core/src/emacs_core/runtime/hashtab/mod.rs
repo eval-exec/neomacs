@@ -947,6 +947,15 @@ pub(crate) fn builtin_maphash(eval: &mut super::eval::Context, args: Vec<Value>)
     let func = args[0];
     let table = args[1];
     let callee = MaphashCallee::resolve(func);
+    // Native proof stays within this mutator's activation and owns no roots.
+    let native = if super::eval::native_callback_cache_enabled() {
+        let epoch = eval.obarray().function_epoch();
+        eval.resolve_mapped_subr_callee(func).and_then(|(subr, _)| {
+            super::eval::CheckedNativeCallback::resolve(subr, 2).map(|proof| (subr, epoch, proof))
+        })
+    } else {
+        None
+    };
     let result = (|| -> EvalResult {
         let mut slot = 0_usize;
         loop {
@@ -959,7 +968,14 @@ pub(crate) fn builtin_maphash(eval: &mut super::eval::Context, args: Vec<Value>)
             };
             eval.push_specpdl_root(key);
             eval.push_specpdl_root(val);
-            callee.call(eval, key, val)?;
+            match native {
+                Some((subr, epoch, proof)) => {
+                    eval.apply2_checked_subr(func, subr, epoch, proof, key, val)?;
+                }
+                None => {
+                    callee.call(eval, key, val)?;
+                }
+            }
             slot += 1;
         }
         Ok(Value::NIL)

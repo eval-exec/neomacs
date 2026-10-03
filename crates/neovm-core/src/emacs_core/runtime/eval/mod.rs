@@ -54,6 +54,8 @@ use crate::tagged::header::{
 };
 use crate::window::{FrameFullscreen, FrameManager, WindowId, WindowLayoutQueryAdapter};
 
+mod callback;
+pub(crate) use callback::{CheckedNativeCallback, native_callback_cache_enabled};
 mod subrs;
 #[cfg(test)]
 pub(crate) use subrs::SUBRS;
@@ -685,6 +687,7 @@ pub(crate) fn register_global_subr_entry(sym_id: SymId, entry: SubrEntry) {
         entry.dispatch_kind,
         SubrInteractivity::from(entry.interactive_spec.is_some()),
     );
+    callback::publish_native_registration();
 }
 
 /// Look up a subr entry by SymId.
@@ -907,6 +910,7 @@ pub(crate) fn clear_global_subr_table() {
     }
     GLOBAL_SUBR_TABLE.with(|table| table.borrow_mut().clear());
     INLINE_SUBR_TABLE.with(|table| table.borrow_mut().clear());
+    callback::publish_native_registration();
 }
 
 /// Cached SymId for `internal--compiler-function-overrides`.

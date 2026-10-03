@@ -1,6 +1,6 @@
 use super::*;
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_min_args};
-use crate::emacs_core::eval::LispArgVec;
+use crate::emacs_core::eval::{CheckedNativeCallback, LispArgVec, native_callback_cache_enabled};
 use smallvec::SmallVec;
 use std::sync::LazyLock;
 
@@ -135,6 +135,12 @@ pub(crate) enum MapCallee {
         subr: Value,
         epoch: u64,
     },
+    CheckedSubr {
+        designator: Value,
+        subr: Value,
+        epoch: u64,
+        proof: CheckedNativeCallback,
+    },
 }
 
 impl MapCallee {
@@ -142,6 +148,19 @@ impl MapCallee {
         #[cfg(feature = "jit")]
         if !crate::tagged::collection_reads::reads_need_observation() && func.is_bytecode() {
             return Self::UnobservedByteCode(func);
+        }
+        if native_callback_cache_enabled() {
+            let epoch = eval.obarray().function_epoch();
+            if let Some((subr, _)) = eval.resolve_mapped_subr_callee(func)
+                && let Some(proof) = CheckedNativeCallback::resolve(subr, 1)
+            {
+                return Self::CheckedSubr {
+                    designator: func,
+                    subr,
+                    epoch,
+                    proof,
+                };
+            }
         }
         match eval.resolve_mapped_subr_callee(func) {
             Some((subr, epoch)) => MapCallee::Subr {
@@ -164,6 +183,12 @@ impl MapCallee {
                 subr,
                 epoch,
             } => eval.apply1_resolved_subr(designator, subr, epoch, item),
+            MapCallee::CheckedSubr {
+                designator,
+                subr,
+                epoch,
+                proof,
+            } => eval.apply1_checked_subr(designator, subr, epoch, proof, item),
         }
     }
 }
@@ -531,12 +556,17 @@ pub(crate) fn builtin_mapconcat(eval: &mut super::eval::Context, args: Vec<Value
         if func.as_symbol_id() == Some(identity_symbol_id()) && sequence.is_cons() {
             Ok(mapconcat_identity_list(sequence, &mut parts))
         } else {
+            let callee = if native_callback_cache_enabled() {
+                MapCallee::resolve(eval, func)
+            } else {
+                MapCallee::Generic(func)
+            };
             mapcar1_eval(
                 eval,
                 len,
                 MapSink::Collect(&mut parts),
                 sequence,
-                |eval, item| apply1(eval, func, item),
+                |eval, item| callee.call(eval, item),
             )
         };
     let mapped = match mapconcat_result {
@@ -656,6 +686,7 @@ pub(crate) enum SortPredicate {
         designator: Value,
         subr: Value,
         epoch: u64,
+        proof: Option<CheckedNativeCallback>,
     },
     /// Identified from the captured implementation, never the symbol's name.
     StringLessp {
@@ -722,6 +753,9 @@ pub(super) fn capture_sort_predicate(
             designator: function,
             subr: function,
             epoch,
+            proof: native_callback_cache_enabled()
+                .then(|| CheckedNativeCallback::resolve(function, 2))
+                .flatten(),
         });
     }
     Some(SortPredicate::Generic(function))
@@ -798,11 +832,19 @@ impl SortRuntime for super::eval::Context {
         {
             return captured;
         }
+        let callback_epoch = self.obarray().function_epoch();
         match self.resolve_mapped_subr_callee(predicate) {
             Some((subr, epoch)) => SortPredicate::Subr {
                 designator: predicate,
                 subr,
-                epoch,
+                epoch: if native_callback_cache_enabled() {
+                    callback_epoch
+                } else {
+                    epoch
+                },
+                proof: native_callback_cache_enabled()
+                    .then(|| CheckedNativeCallback::resolve(subr, 2))
+                    .flatten(),
             },
             None => SortPredicate::Generic(predicate),
         }
@@ -823,7 +865,11 @@ impl SortRuntime for super::eval::Context {
                 designator,
                 subr,
                 epoch,
-            } => self.apply2_resolved_subr(designator, subr, epoch, arg0, arg1),
+                proof,
+            } => match proof {
+                Some(proof) => self.apply2_checked_subr(designator, subr, epoch, proof, arg0, arg1),
+                None => self.apply2_resolved_subr(designator, subr, epoch, arg0, arg1),
+            },
             SortPredicate::StringLessp { subr, epoch } => {
                 self.apply2_sort_string_lessp(subr, epoch, arg0, arg1)
             }
