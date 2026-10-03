@@ -353,3 +353,7 @@ mod lazy_proof_tests;
 #[cfg(test)]
 #[path = "retained_face_gather_engine_test.rs"]
 mod retained_face_gather_tests;
+
+#[cfg(test)]
+#[path = "property_keys_engine_test.rs"]
+mod property_keys_tests;

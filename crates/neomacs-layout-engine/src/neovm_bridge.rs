@@ -6,6 +6,7 @@
 //! | Knob | Default | Values | Gate |
 //! | --- | --- | --- | --- |
 //! | `NEOMACS_LAYOUT_LINE_COUNT` | `on` | `off`, `on`, `verify` | Count source newlines with `memchr` over the same backend chunks; verify compares with the scalar scan. |
+//! | `NEOMACS_LAYOUT_PROPERTY_KEYS_INLINE` | `off` | `off`; `on`/`1`/`true`/`yes` | Store a canonical-only prepared property key inline; aliases retain ordered heap storage. |
 //! The numeric mode is read once per process. Indexed counts and byte-range
 //! clamping precede the fallback scan in every mode. Concurrent readers share
 //! only the initialized numeric mode; each scan borrows its own backend view
@@ -18,6 +19,21 @@ mod buffer_snapshot;
 pub(crate) use borrowed_buffer::BorrowedLayoutBuffer;
 pub(crate) use buffer_snapshot::LayoutBufferSnapshot;
 use buffer_snapshot::capture_string_composition_rules;
+
+#[cfg(test)]
+#[path = "neovm_bridge/tests/property_keys_support.rs"]
+pub(crate) mod property_keys_test_support;
+
+#[cfg(test)]
+#[path = "neovm_bridge/tests/property_keys_canonical_test.rs"]
+mod property_keys_canonical_tests;
+
+#[cfg(test)]
+#[path = "neovm_bridge/tests/property_keys_alias_test.rs"]
+mod property_keys_alias_tests;
+
+mod property_keys;
+use property_keys::PropertyKeyOrder;
 
 mod face_colors;
 use face_colors::{FaceColorAttributes, FaceColorState};
@@ -2336,35 +2352,13 @@ pub(crate) struct OverlayFacesAtPosition {
 /// redisplay and Lisp primitives cannot quietly implement different rules.
 #[derive(Clone, Debug)]
 pub(crate) struct LayoutCharPropertyLookup {
-    lookup_order: Vec<Value>,
+    lookup_order: PropertyKeyOrder,
     default: Option<Value>,
 }
 
 impl LayoutCharPropertyLookup {
     pub(crate) fn new<B: LayoutBufferView + ?Sized>(buffer: &B, property: Value) -> Self {
-        let mut lookup_order = vec![property];
-        if let Some(mut alist) = buffer.layout_buffer_local_value(LayoutVar::CharPropertyAliasAlist)
-        {
-            while alist.is_cons() {
-                let entry = alist.cons_car();
-                alist = alist.cons_cdr();
-                if !entry.is_cons() || entry.cons_car().bits() != property.bits() {
-                    continue;
-                }
-                let mut aliases = entry.cons_cdr();
-                while aliases.is_cons() {
-                    let alias = aliases.cons_car();
-                    if !lookup_order
-                        .iter()
-                        .any(|existing| existing.bits() == alias.bits())
-                    {
-                        lookup_order.push(alias);
-                    }
-                    aliases = aliases.cons_cdr();
-                }
-                break;
-            }
-        }
+        let lookup_order = PropertyKeyOrder::capture(buffer, property);
         let default = buffer
             .layout_buffer_local_value(LayoutVar::DefaultTextProperties)
             .filter(|value| value.is_cons())
@@ -2380,7 +2374,7 @@ impl LayoutCharPropertyLookup {
         buffer: &B,
         bytepos: EmacsBytePos,
     ) -> Option<Value> {
-        let (canonical, aliases) = self.lookup_order.split_first()?;
+        let (canonical, aliases) = self.lookup_order.as_slice().split_first()?;
         resolve_effective_char_property(
             DirectCharProperties::from_getter(
                 |property| buffer.layout_text_prop_at_emacs_byte_pos(bytepos, property),
@@ -2409,7 +2403,7 @@ impl LayoutCharPropertyLookup {
         let target = self
             .text_value_at(buffer, bytepos)
             .filter(|value| !value.is_nil())?;
-        let mut watched = self.lookup_order.clone();
+        let mut watched = self.lookup_order.as_slice().to_vec();
         let category = Value::symbol("category");
         if !watched
             .iter()
@@ -2481,7 +2475,7 @@ impl LayoutCharPropertyLookup {
         buffer: &B,
         overlay: Value,
     ) -> Option<Value> {
-        let (canonical, aliases) = self.lookup_order.split_first()?;
+        let (canonical, aliases) = self.lookup_order.as_slice().split_first()?;
         let overlays = buffer.layout_overlays();
         resolve_effective_char_property(
             DirectCharProperties::from_getter(
@@ -2504,6 +2498,7 @@ impl LayoutCharPropertyLookup {
     pub(crate) fn overlay_endpoint_filter(&self) -> OverlayPropertyFilter {
         OverlayPropertyFilter::for_properties(
             self.lookup_order
+                .as_slice()
                 .iter()
                 .copied()
                 .chain(std::iter::once(Value::symbol("category"))),
@@ -2570,7 +2565,7 @@ impl LayoutCharPropertyLookup {
         bytepos: EmacsBytePos,
         current_window_id: Option<u64>,
     ) -> Vec<Value> {
-        let Some((canonical, aliases)) = self.lookup_order.split_first() else {
+        let Some((canonical, aliases)) = self.lookup_order.as_slice().split_first() else {
             return Vec::new();
         };
         let overlays = buffer.layout_overlays();

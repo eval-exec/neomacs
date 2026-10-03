@@ -89,6 +89,8 @@ pub(super) const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOMACS_EDIT_SYNC_LAZY_PROOF",
     // Direct ordinary retained-face gather (`off` default, `on`).
     "NEOMACS_RETAINED_FACE_GATHER",
+    // Canonical property-key storage only (`off` default, `on`).
+    "NEOMACS_LAYOUT_PROPERTY_KEYS_INLINE",
     // Prefer certified bounded prove inside sync (`off` default, `on`).
     "NEOMACS_EDIT_SYNC_PROVE_FIRST",
     // Omit zero-dy synchronized-row shift ledgers (`off` default, `on`).

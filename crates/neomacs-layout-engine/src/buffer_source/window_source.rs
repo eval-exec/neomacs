@@ -16,6 +16,10 @@ use neovm_core::buffer::{CharPos0, EmacsBytePos, TextPositionAnchor};
 #[path = "tests/window_source_tests.rs"]
 mod bounded_read_tests;
 
+#[cfg(test)]
+#[path = "tests/property_keys_budget_support.rs"]
+pub(crate) mod property_keys_budget_support;
+
 /// Numeric source-copy policy. This carries no Lisp state and is owned by
 /// one immutable layout attempt; its limit is never the semantic accessible end.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

@@ -1570,3 +1570,6 @@ fn scrolling_row_validates_phases_checksums_and_restoration() {
 
 #[cfg(test)]
 mod retained_face_gather_environment_test;
+
+#[cfg(test)]
+mod property_keys_environment_test;
