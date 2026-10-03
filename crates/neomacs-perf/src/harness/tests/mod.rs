@@ -1529,3 +1529,6 @@ fn scrolling_row_validates_phases_checksums_and_restoration() {
         verdict => panic!("mis-accounted scroll commands were accepted: {verdict:?}"),
     }
 }
+
+#[cfg(test)]
+mod gc_window_test;

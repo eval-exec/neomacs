@@ -40,6 +40,18 @@
         (error "performance gate rejected %s: %S"
                command neomacs-perf-workload--gate-response)))))
 
+(defun neomacs-perf-workload--sampling-command-ack (command)
+  "Return t only after the existing gate acknowledges COMMAND.
+
+Diagnostic metadata belongs to this invocation.  This adds no shared Lisp
+cache or mutator state and reads the existing observable `gcs-done' counter."
+  (unless (getenv "NEOMACS_PERF_GATE_PORT")
+    (error "GC window diagnostics require an acknowledged sampling gate"))
+  (neomacs-perf-workload--sampling-command command)
+  (unless (equal neomacs-perf-workload--gate-response "ack\n")
+    (error "GC window diagnostics lack a %s acknowledgement" command))
+  t)
+
 (defun neomacs-perf-workload--cpu-us ()
   (car (current-cpu-time)))
 
@@ -578,6 +590,30 @@ so a slow sample can be lined up against the frames around it."
           (insert (format "%d %d %d %d %d\n" (nth 0 record) (nth 1 record)
                           (nth 2 record) (nth 3 record) (nth 4 record))))))))
 
+(defun neomacs-perf-workload--write-gc-window
+    (path scenario iterations before-enable after-enable
+          before-disable after-disable enable-ack disable-ack)
+  "Write invocation-local diagnostic metadata after sampling has stopped.
+
+The four snapshots bracket both gate handshakes.  A reader may derive an
+exact edit-loop GC delta only if both acknowledgements are true and neither
+handshake changed `gcs-done'.  The file is not a scenario-result schema change."
+  (with-temp-file path
+    (insert
+     (json-serialize
+      `((schema . "t34-edit-loop-gc-window-v1")
+        (scenario . ,scenario)
+        (iterations . ,iterations)
+        (editor_pid . ,(emacs-pid))
+        (gc_window . ((scope . "acknowledged-enable-to-disable")
+                      (before_enable . ,before-enable)
+                      (after_enable . ,after-enable)
+                      (before_disable . ,before-disable)
+                      (after_disable . ,after-disable)
+                      (enable_ack . ,(if enable-ack t :json-false))
+                      (disable_ack . ,(if disable-ack t :json-false)))))
+      :false-object :json-false :null-object nil))))
+
 (defun neomacs-perf-workload--maybe-release-startup-gc-ceiling ()
   "Lift Neomacs' startup GC ceiling before measuring, when asked.
 
@@ -592,6 +628,86 @@ GNU has no such variable and ignores this."
   (when (and (equal (getenv "NEOMACS_PERF_RELEASE_STARTUP_GC_CEILING") "1")
              (boundp 'neomacs--startup-gc-ceiling-active))
     (setq neomacs--startup-gc-ceiling-active nil)))
+
+(defun neomacs-perf-workload--run-with-gc-window (gc-window-path)
+  "Run one request with optional acknowledged-window GC diagnostics.
+
+All added state is lexical and owned by this invocation.  The existing
+controller owns the gate and its acknowledgement; this function adds no
+shared cache, Lisp pointer publication, or mutator-thread-local storage.
+`gcs-done' is observed as the existing process aggregate, so simultaneous
+mutators would be reflected in that aggregate rather than attributed to
+one mutator.  A capture still has one owner of its existing sampling gate."
+  (neomacs-perf-workload--maybe-release-startup-gc-ceiling)
+  (let* ((scenario (neomacs-perf-workload--required-environment "NEOMACS_PERF_WORKLOAD"))
+         (iterations (string-to-number
+                      (neomacs-perf-workload--required-environment
+                       "NEOMACS_PERF_ITERATIONS")))
+         (result-path (neomacs-perf-workload--required-environment
+                       "NEOMACS_PERF_RESULT"))
+         (sentinel-path (neomacs-perf-workload--required-environment "SENTINEL"))
+         (gc-before-enable nil) (gc-after-enable nil)
+         (gc-before-disable nil) (gc-after-disable nil)
+         (gc-enable-ack nil) (gc-disable-ack nil)
+         (status "error") (error-message nil) (exit-code 2)
+         (elapsed-us 0) (elapsed-wall-us 0)
+         (gc-start-count 0) (gc-end-count 0)
+         (gc-start-us 0) (gc-end-us 0)
+         (initial-checksum "") (final-checksum "")
+         (initial-point 1) (point-restored nil) (expected-mode "")
+         (actual-mode "")
+         (phases '((bookkeeping . 0) (type . 0) (comment . 0) (kill-yank . 0)
+                   (indent . 0) (regex . 0) (latencies . [])
+                   (mode . 0) (fontify . 0) (replace . 0)
+                   (undo-redo . 0) (isearch . 0) (buffer-switch . 0)
+                   (how-many . 0) (motion . 0))))
+    (condition-case error-data
+        (with-temp-buffer
+          (neomacs-perf-workload--prepare-buffer scenario)
+          (setq expected-mode (symbol-name major-mode)
+                initial-checksum (neomacs-perf-workload--checksum)
+                initial-point (point))
+          (garbage-collect)
+          (setq gc-start-count gcs-done
+                gc-end-count gc-start-count
+                gc-start-us (round (* 1000000 gc-elapsed))
+                gc-end-us gc-start-us)
+          (setq gc-before-enable gcs-done)
+          (setq gc-enable-ack
+                (neomacs-perf-workload--sampling-command-ack "enable"))
+          (setq gc-after-enable gcs-done)
+          (let ((started (neomacs-perf-workload--cpu-us))
+                (wall-started (float-time)))
+            (unwind-protect
+                (setq phases (neomacs-perf-workload--execute scenario iterations)
+                      elapsed-us (max 1 (- (neomacs-perf-workload--cpu-us) started))
+                      elapsed-wall-us
+                      (max 1 (round (* 1000000 (- (float-time) wall-started)))))
+              (setq gc-before-disable gcs-done)
+              (setq gc-disable-ack
+                    (neomacs-perf-workload--sampling-command-ack "disable"))
+              (setq gc-after-disable gcs-done)
+              (setq gc-end-count gcs-done
+                    gc-end-us (round (* 1000000 gc-elapsed)))))
+          (setq final-checksum (neomacs-perf-workload--checksum)
+                point-restored (= (point) initial-point)
+                actual-mode (symbol-name major-mode)
+                status "ok" exit-code 0))
+      (error
+       (setq error-message (error-message-string error-data))
+       (message "%s failed: %s" scenario error-message)))
+    (when (processp neomacs-perf-workload--gate-process)
+      (delete-process neomacs-perf-workload--gate-process))
+    (neomacs-perf-workload--write-result
+     result-path scenario status iterations elapsed-us elapsed-wall-us iterations
+     initial-checksum final-checksum point-restored expected-mode actual-mode phases
+     gc-start-count gc-end-count gc-start-us gc-end-us error-message)
+    (neomacs-perf-workload--write-gc-window
+     gc-window-path scenario iterations gc-before-enable gc-after-enable
+     gc-before-disable gc-after-disable gc-enable-ack gc-disable-ack)
+    (neomacs-perf-workload--maybe-write-latency-trace)
+    (write-region "done\n" nil sentinel-path nil 'silent)
+    (kill-emacs exit-code)))
 
 (defun neomacs-perf-workload--run ()
   (neomacs-perf-workload--maybe-release-startup-gc-ceiling)
@@ -653,8 +769,16 @@ GNU has no such variable and ignores this."
     (write-region "done\n" nil sentinel-path nil 'silent)
     (kill-emacs exit-code)))
 
+;; Read the diagnostic once for this fixture process.  With it absent, the
+;; ordinary entry form and timed run remain literal copies of main.
+(let ((gc-window-path (getenv "NEOMACS_PERF_GC_WINDOW_FILE")))
+  (if gc-window-path
+      (if noninteractive
+          (neomacs-perf-workload--run-with-gc-window gc-window-path)
+        (run-at-time 0 nil #'neomacs-perf-workload--run-with-gc-window
+                     gc-window-path))
 (if noninteractive
     (neomacs-perf-workload--run)
   (run-at-time 0 nil #'neomacs-perf-workload--run))
-
+))
 ;;; editor-workloads.el ends here

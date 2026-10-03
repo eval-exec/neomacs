@@ -279,6 +279,26 @@ misses, cache misses, L1 data-cache load misses, and data-TLB load misses, plus
 the raw `hardware-counters.csv`. If perf omits or cannot support any requested
 event, the run is an infrastructure failure rather than a zero-valued sample.
 
+The shared editor-workload fixture has an optional diagnostic for GC parity
+inside an acknowledged edit-loop counter window:
+
+| Knob | Values and default | Behavior |
+| --- | --- | --- |
+| `NEOMACS_PERF_GC_WINDOW_FILE` | Absolute output path; unset by default | Writes a separate JSON file with editor PID, scenario, iteration count, four `gcs-done` snapshots and enable/disable acknowledgements after sampling stops. Requires the acknowledged sampling gate. |
+
+The GC delta is `before_disable - after_enable` only when both acknowledgements
+are true, `before_enable == after_enable`, and
+`before_disable == after_disable`. A collection during either handshake makes
+the exact counter-window GC comparison incomplete. The existing result's
+`gcs_done_start`, `gcs_done_end`, and `gcs_done_delta` still enclose both
+handshakes and the edit loop; their current format stays unchanged. The
+absolute `gcs_done` remains process context. Neither boundary set alone
+establishes collection parity for the acknowledged counter window. Retain the sidecar hash and its recorded environment path with input
+provenance; match its PID to the same editor's final stats when available.
+The diagnostic does not change scenario workloads or the result schema, and
+results with this instrumentation must be compared within the same configured
+capture protocol.
+
 ## Editor workflow scenarios
 
 The shared `editor-workloads.el` fixture promotes the former exploratory

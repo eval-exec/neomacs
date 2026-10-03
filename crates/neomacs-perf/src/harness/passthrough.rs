@@ -37,6 +37,9 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     // Percentiles cannot say whether a slow keystroke was computing or
     // waiting, and those call for opposite work.
     "NEOMACS_PERF_LATENCY_TRACE_FILE",
+    // Request-owned GC sidecar; the controller still owns the gate port.
+    // Capture this exact path in input provenance when diagnostics are enabled.
+    "NEOMACS_PERF_GC_WINDOW_FILE",
     // GC pacing sweep: the live-proportional term as a percentage of the live
     // heap. 0 leaves GNU's `gc-cons-threshold`/`gc-cons-percentage` contract
     // exactly; the built-in default is 50.
