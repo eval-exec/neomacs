@@ -870,6 +870,11 @@ pub fn compile_bytecode_function_requested(
         }
     }
     let _restore = Restore(outer);
+    let _opt_full_request = if jit_opt_mode() == OptMode::Opt {
+        Some(opt_backend::OptFullRequestScope::enter(request))
+    } else {
+        None
+    };
     let _t2 = super::tier2::BuildScope::enter_for(
         request.tier,
         f.jit_runtime(),
@@ -3578,6 +3583,9 @@ fn lower_leaf_full_osr_with_plan_impl(
         direct_call::has_exact_self_site(ops, &spec_sites, arity),
     );
     let mut chains = Vec::new();
+    let _opt_quality = opt
+        .as_ref()
+        .and_then(|plan| opt_backend::quality_scope(plan, osr_pc));
     let defined = shared::define_jit_leaf(/*per_leaf_shims=*/ true, |sink| {
         build_leaf_fn(
             sink,
@@ -4007,3 +4015,7 @@ mod opt_fold_select_tests;
 #[cfg(test)]
 #[path = "compile/tests/opt_passes.rs"]
 mod opt_passes_tests;
+
+#[cfg(test)]
+#[path = "compile/tests/opt_regalloc.rs"]
+mod opt_regalloc_tests;

@@ -6,6 +6,58 @@
 use super::*;
 use crate::emacs_core::jit::opt::{build, ir};
 
+thread_local! {
+    /// Scalar compiler request, never Lisp state: each synchronous opt compiler
+    /// owns its thread's value and nested opt compiles restore the outer request.
+    /// OFF/legacy compiles never enter this scope or consult its value.
+    static REQUESTED_OPT_FULL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// An opt-only compiler request, entered by the owning frontend after selecting
+/// OptMode::Opt. Threading: scalar compiler-thread state, never Lisp state;
+/// nested opt compiles restore the enclosing request when this scope drops.
+pub(super) struct OptFullRequestScope(bool);
+
+impl OptFullRequestScope {
+    pub(super) fn enter(request: CompileRequest) -> Self {
+        let requested = request.regalloc == lowering::RegallocPolicy::Full
+            && request.tier
+                == super::super::tier2::CompileTier::Upgrade(
+                    super::super::tier2::T2Upgrade::Feedback,
+                );
+        Self(REQUESTED_OPT_FULL.with(|value| value.replace(requested)))
+    }
+}
+
+impl Drop for OptFullRequestScope {
+    fn drop(&mut self) {
+        REQUESTED_OPT_FULL.with(|value| value.set(self.0));
+    }
+}
+
+fn requested_opt_full_now() -> bool {
+    REQUESTED_OPT_FULL.with(|requested| requested.get())
+}
+
+/// Honor a Feedback request's explicit Full policy only after an opt plan has
+/// passed admission and verification. Enter before ISA/module selection and
+/// retain this scope through final leaf metadata; a refused opt lowering drops
+/// it before the baseline retry. Forced allocator configuration still wins.
+/// Threading: this borrows existing scalar compiler-thread scopes, contains no
+/// Lisp state, and restores the enclosing compiler's choice on drop. Backend
+/// workers receive the resulting allocator through their existing job payload.
+pub(super) fn quality_scope(
+    _plan: &ir::Func,
+    osr_pc: Option<usize>,
+) -> Option<lowering::RegallocScope> {
+    if osr_pc.is_some() || !requested_opt_full_now() {
+        return None;
+    }
+    Some(lowering::RegallocScope::enter(
+        lowering::forced_regalloc().unwrap_or(lowering::RegallocChoice::Full),
+    ))
+}
+
 pub(crate) fn admission(
     ops: &[Op],
     params: ir::ParamShape,
