@@ -13,8 +13,7 @@ fn precise_exit(
     let frame = inst
         .frame
         .ok_or(CompileError::UnsupportedOp("opt-array:frame"))?;
-    set_snapshot(ctx, local, frame)?;
-    let exact = snapshot(ctx, local, frame)?;
+    let exact = precise_snapshot(ctx, local, frame)?;
     let state = &ctx.func.frames[frame.index()];
     let first = deopts.len();
     let site = deopt_site(

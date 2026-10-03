@@ -6,6 +6,10 @@
 use super::boolean::{BoolResultMode, tagged_bool_view};
 use super::*;
 
+#[path = "opt_sink_deopt.rs"]
+mod opt_sink_deopt;
+pub(crate) use opt_sink_deopt::emit_pending_deopts_with_sink;
+
 #[path = "lowering/array_profile_selected.rs"]
 mod array_profile_selected;
 pub(crate) use array_profile_selected::lower_simple_op_with_array_profile;
@@ -456,6 +460,20 @@ pub(crate) fn emit_float_arith(
             fb.ins().select(invalid, neg_nan, q)
         }
     }
+}
+
+/// Selected Sink's independently proven ready/Float arm. The caller proves
+/// normalized numeric operands and Float contagion; this changes no legacy
+/// dispatch path and records the same compiler-only result census once.
+pub(crate) fn emit_ready_float_result(
+    fb: &mut FunctionBuilder,
+    op: &Op,
+    left: ClifValue,
+    right: ClifValue,
+) -> ClifValue {
+    let result = emit_float_arith(fb, op, left, right);
+    flonum_census_note(|c| c.results += 1);
+    result
 }
 
 /// Run-time "both operands are floats" for model-stack slots `i` and `j`; a
@@ -2155,7 +2173,7 @@ pub(crate) fn lower_mir_inst_via_baseline(
 /// preceding callback or service poll. These loads are deliberately mutable:
 /// they cannot be forwarded across a call. Failure resumes the original call,
 /// where the interpreter handles redefinition, debugging, quit and depth.
-fn emit_mir_inline_entry_guard(
+pub(crate) fn emit_mir_inline_entry_guard(
     fb: &mut FunctionBuilder,
     rt: &RtCtx,
     epoch: u64,
@@ -4933,6 +4951,9 @@ pub(crate) struct ConsReconstruction {
 /// failing op itself.
 pub(crate) struct PendingDeopt {
     cons_rebuilds: Vec<ConsReconstruction>,
+    /// Frozen selected Opt reconstruction at one exact guard/source point.
+    /// Threading: compiler-local immutable SSA names, never runtime metadata.
+    pub(super) sink_cold: Option<super::sink_cold_snapshot::SinkColdSnapshot>,
     pub(crate) block: Block,
     pub(crate) pc: usize,
     pub(crate) handlers_len: usize,
@@ -5067,6 +5088,7 @@ pub(crate) fn deopt_site(
     };
     pending.push(PendingDeopt {
         cons_rebuilds: Vec::new(),
+        sink_cold: None,
         block,
         pc,
         handlers_len,
@@ -6148,7 +6170,7 @@ fn lower_float_site_arith_boxed(
 /// A flonum operand is read without boxing (its `f64`, or its tag word for
 /// the tag tests and the fixnum arm); the deopt snapshot `dsite` boxes it in
 /// the cold exit.
-fn lower_float_site_arith(
+pub(crate) fn lower_float_site_arith(
     fb: &mut FunctionBuilder,
     op: &Op,
     dsite: Block,

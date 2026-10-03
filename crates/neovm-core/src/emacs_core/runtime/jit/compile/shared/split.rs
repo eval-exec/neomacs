@@ -300,7 +300,10 @@ pub(super) fn selected_payload(payload: &JobPayload) -> bool {
         .imports
         .iter()
         .any(|(_, shim)| shim.group() == ShimGroup::Tier2ArrayProfile);
-    let sink_versions = false;
+    let sink_versions = payload
+        .imports
+        .iter()
+        .any(|(_, shim)| shim.group() == ShimGroup::OptSink);
 
     array_profile || sink_versions
 }
@@ -314,7 +317,10 @@ impl SharedJit {
             .imports
             .iter()
             .any(|(_, shim)| shim.group() == ShimGroup::Tier2ArrayProfile);
-        let sink_versions = false;
+        let sink_versions = payload
+            .imports
+            .iter()
+            .any(|(_, shim)| shim.group() == ShimGroup::OptSink);
 
         if !array_profile && !sink_versions {
             return self.define_payload(payload);

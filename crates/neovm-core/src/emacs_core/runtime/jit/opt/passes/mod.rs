@@ -8,6 +8,7 @@ pub(crate) mod licm;
 pub(crate) mod range;
 pub(crate) mod reps;
 pub(crate) mod reps_lift;
+pub(crate) mod sink;
 pub(crate) mod static_fix;
 
 #[cfg(test)]

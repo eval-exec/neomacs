@@ -53,6 +53,7 @@ pub(crate) struct LeafReportRow {
     pub(crate) opt_gvn: Option<Box<crate::emacs_core::jit::opt::passes::gvn::GvnStats>>,
     pub(crate) opt_range: Option<Box<crate::emacs_core::jit::opt::passes::range::RangeStats>>,
     pub(crate) opt_licm: Option<Box<crate::emacs_core::jit::opt::passes::licm::LicmStats>>,
+    pub(crate) opt_sink: Option<Box<crate::emacs_core::jit::opt::sink_recipes::SinkStats>>,
     pub(crate) opt_arrays:
         Option<Box<crate::emacs_core::jit::opt::passes::array_reads::ArrayLiftStats>>,
 }
@@ -575,6 +576,19 @@ impl FinalReport {
                 c.guards_hoisted
             ))
         });
+        let sink_rows = self.leaves.iter().filter_map(|r| {
+            let c = r.opt_sink.as_ref()?;
+            let osr = r.osr_pc.map_or_else(|| "-".to_owned(), |pc| pc.to_string());
+            Some(format!(
+                "#opt-sink,{},{},{osr},{},{},{},{}\n",
+                r.id,
+                csv_field(r.name.as_deref().unwrap_or("-")),
+                c.numeric_sources,
+                c.cons_sources,
+                c.materializations,
+                c.analysis_bailed
+            ))
+        });
         let array_rows = self.leaves.iter().filter_map(|r| {
             let c = r.opt_arrays.as_ref()?;
             let osr = r.osr_pc.map_or_else(|| "-".to_owned(), |pc| pc.to_string());
@@ -595,6 +609,7 @@ impl FinalReport {
             .chain(range_rows)
             .chain(licm_rows)
             .chain(array_rows)
+            .chain(sink_rows)
             .collect()
     }
 }

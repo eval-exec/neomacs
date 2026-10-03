@@ -1076,6 +1076,7 @@ fn leaf_report_rows(
                 opt_gvn: row.opt.opt_gvn,
                 opt_range: row.opt.opt_range,
                 opt_licm: row.opt.opt_licm,
+                opt_sink: row.opt.opt_sink,
                 opt_arrays: row.opt.opt_arrays,
             }
         })

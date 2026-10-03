@@ -56,6 +56,7 @@ pub(crate) enum ShimGroup {
     DirectFramed,
     Hof,
     Tier2ArrayProfile,
+    OptSink,
 }
 
 /// Every runtime shim generated code calls, in declaration order.
@@ -152,7 +153,9 @@ pub(crate) enum Shim {
     HofFinish,
     HofAbort,
     // Optional Opt shims follow every main identity.
+    // Optional Opt shims follow every main identity.
     T2RecordArrayUse,
+    SqrtBindingValid,
 }
 
 /// The parameter shapes of the shim signatures.
@@ -167,6 +170,7 @@ impl Shim {
     /// The shim's exported symbol.
     pub(crate) fn symbol(self) -> &'static str {
         match self {
+            Shim::SqrtBindingValid => "neovm_jit_sqrt_binding_valid",
             Shim::T2RecordArrayUse => "neovm_jit_t2_record_array_use",
             Shim::RootwinGrow => "neovm_jit_rootwin_grow",
             Shim::Cons => "neovm_jit_cons",
@@ -240,6 +244,7 @@ impl Shim {
     /// The declaration group (see [`ShimGroup`]).
     pub(crate) fn group(self) -> ShimGroup {
         match self {
+            Shim::SqrtBindingValid => ShimGroup::OptSink,
             Shim::T2RecordArrayUse => ShimGroup::Tier2ArrayProfile,
             Shim::CallSubrSpec | Shim::PredSpec | Shim::EqInclPropsSpec | Shim::ArithSpec => {
                 ShimGroup::SubrSpec
@@ -311,6 +316,7 @@ impl Shim {
     fn shape(self) -> (&'static [P], bool) {
         use P::{F64, I64, Ptr};
         match self {
+            Shim::SqrtBindingValid => (&[Ptr, I64, I64, I64], true),
             Shim::T2RecordArrayUse => (&[Ptr, I64, Ptr], false),
             // (leaf_obs) -> ()
             Shim::TierRequest => (&[Ptr], false),
@@ -449,6 +455,7 @@ pub(crate) struct ShimGroups {
 impl ShimGroups {
     pub(crate) fn contains(self, group: ShimGroup) -> bool {
         match group {
+            ShimGroup::OptSink => false,
             ShimGroup::Tier2ArrayProfile => false,
             ShimGroup::Base => true,
             ShimGroup::SubrSpec => self.subr_spec,
@@ -647,7 +654,10 @@ impl ShimIds {
         mut ids: ShimIds,
         groups: SelectedShimGroups,
     ) -> Result<ShimIds, CompileError> {
-        for (requested, shim) in [(groups.array_profile, Shim::T2RecordArrayUse)] {
+        for (requested, shim) in [
+            (groups.array_profile, Shim::T2RecordArrayUse),
+            (groups.sink_versions, Shim::SqrtBindingValid),
+        ] {
             let present = module.declarations().get_name(shim.symbol());
             let id = match present {
                 Some(cranelift_module::FuncOrDataId::Func(id)) => Some(id),
@@ -691,6 +701,9 @@ impl RtRefs {
         let refs = Self::new(ids, groups.main, func, call_conv, ptr_ty);
         if groups.array_profile {
             refs.import_selected(func, Shim::T2RecordArrayUse);
+        }
+        if groups.sink_versions {
+            refs.import_selected(func, Shim::SqrtBindingValid);
         }
         refs
     }

@@ -644,6 +644,19 @@ pub(crate) fn define_jit_leaf_with_array(
     define_jit_leaf_selected(per_leaf_shims, array_profile, false, build)
 }
 
+/// Compatibility seam for a selected sink frontend; false reaches main.
+pub(crate) fn define_jit_leaf_with_sink(
+    per_leaf_shims: bool,
+    sink_versions: bool,
+    build: impl FnOnce(&mut JitSink<'_>) -> Result<FuncId, CompileError>,
+) -> Result<JitDefined, CompileError> {
+    if !sink_versions {
+        return define_jit_leaf(per_leaf_shims, build);
+    }
+    let array_profile = super::jit_tier2().on && super::array_snapshot::selected();
+    define_jit_leaf_selected(per_leaf_shims, array_profile, sink_versions, build)
+}
+
 impl SharedJit {
     /// Run the exact main setup first, then append/recover selected suffix IDs.
     /// All main direct-shape/census/framed/HOF group unions stay as main wrote

@@ -17,12 +17,30 @@ mod array_emission;
 
 type RuntimeValue = (ClifValue, SlotRep);
 type LocalValues = HashMap<ir::Value, RuntimeValue>;
+type Snapshot = (
+    Vec<ClifValue>,
+    Vec<SlotRep>,
+    Option<sink_cold_snapshot::SinkColdSnapshot>,
+);
+use crate::emacs_core::jit::opt::sink_recipes::{
+    self, RecipeFields, RecipePoint, VerifiedSinkRecipes,
+};
+#[path = "opt_sink_emission.rs"]
+mod sink_emission;
+#[path = "opt_sink_numeric_facts.rs"]
+mod sink_numeric_facts;
+#[path = "opt_sink_snapshot.rs"]
+mod sink_snapshot;
+#[path = "opt_sqrt_emission.rs"]
+mod sqrt_emission;
 
 /// Global variables carry only values crossing IR blocks; local float payloads
 /// remain unboxed until an actual edge or observable operation needs them.
 /// Threading: compiler-owned variables and immutable representation metadata.
 pub(super) struct SsaValues {
-    vars: Vec<Variable>,
+    vars: Vec<Option<Variable>>,
+    floats: Vec<bool>,
+    logical: Vec<bool>,
     raw: Vec<bool>,
     booleans: Vec<bool>,
     cross: Vec<bool>,
@@ -59,19 +77,55 @@ pub(super) struct EmitContext<'a, 'b> {
     pub ops: &'a [Op],
     pub verified_arrays:
         Option<&'a crate::emacs_core::jit::opt::passes::array_reads::VerifiedArrayReads>,
+    pub verified_sink: Option<&'a VerifiedSinkRecipes<'a>>,
+    pub sqrt_witnesses: &'a sqrt_snapshot::SqrtCallWitnesses,
+    pub point: RecipePoint,
+    /// Contiguous defining-operation projection transport only; no mutable
+    /// semantic box cache. Published fields are ordinary explicit SSA values.
+    pub sink_produced: HashMap<ir::Value, numeric_carrier::NumericCarrier>,
+    /// Invocation-owned immutable facts for independently verified exact
+    /// recipe versions. Never shared with runtime/TLS or another compilation.
+    pub numeric_facts: sink_numeric_facts::NumericFacts,
     pub known_fixnum_slots: &'a HashMap<usize, Vec<bool>>,
 }
 
 impl SsaValues {
     pub(super) fn new(fb: &mut FunctionBuilder, func: &ir::Func, raw_slots: &[bool]) -> Self {
+        let selected_sink = !func.sink_recipes.owners.is_empty();
+        let logical: Vec<_> = func
+            .values
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                selected_sink
+                    && func.sink_recipes.owners.contains_key(&ir::Value(i as u32))
+                    && matches!(v.rep, ir::Rep::NumPair | ir::Rep::Virtual(_))
+            })
+            .collect();
+        let floats: Vec<_> = func
+            .values
+            .iter()
+            .map(|v| selected_sink && v.rep == ir::Rep::RawF64)
+            .collect();
         let booleans: Vec<_> = func
             .values
             .iter()
-            .map(|v| jit_opt_passes().bool_rep && v.rep == ir::Rep::Bool)
+            .map(|v| (jit_opt_passes().bool_rep || selected_sink) && v.rep == ir::Rep::Bool)
             .collect();
         let vars = booleans
             .iter()
-            .map(|&boolean| fb.declare_var(if boolean { types::I8 } else { types::I64 }))
+            .enumerate()
+            .map(|(i, &boolean)| {
+                (!logical[i]).then(|| {
+                    fb.declare_var(if floats[i] {
+                        types::F64
+                    } else if boolean {
+                        types::I8
+                    } else {
+                        types::I64
+                    })
+                })
+            })
             .collect();
         let raw = if jit_opt_passes().reps || jit_opt_passes().range {
             // Selected representations are properties of SSA identities. A
@@ -157,9 +211,39 @@ impl SsaValues {
                 _ => {}
             }
         }
+        // Recipe point uses include physical fields absent from the unchanged
+        // GNU frame. Publish every field crossing its actual defining block.
+        let mut inst_blocks = vec![ir::Block(0); func.insts.len()];
+        for (i, block) in func.blocks.iter().enumerate() {
+            for inst in &block.insts {
+                inst_blocks[inst.index()] = ir::Block(i as u32);
+            }
+        }
+        for (&(point, _), &version) in &func.sink_recipes.uses {
+            let block = match point {
+                RecipePoint::Entry(b) | RecipePoint::Term(b) => b,
+                RecipePoint::Before(i) | RecipePoint::After(i) => inst_blocks[i.index()],
+                RecipePoint::SourcePre(pc) | RecipePoint::SourcePost(pc) => {
+                    let Some(source) = func.source_states.get(pc as usize).and_then(Option::as_ref)
+                    else {
+                        continue;
+                    };
+                    source.block
+                }
+            };
+            let fields = match func.sink_recipes.versions[version.0 as usize].fields {
+                RecipeFields::Number(f) => vec![f.payload, f.word, f.ready, f.real_box],
+                RecipeFields::Cons(f) => vec![f.car, f.cdr, f.real_box],
+            };
+            for value in fields {
+                mark(block, value);
+            }
+        }
         let live_after = live_after_instructions(func);
         Self {
             vars,
+            floats,
+            logical,
             raw,
             booleans,
             cross,
@@ -177,14 +261,16 @@ impl SsaValues {
         let value = func.resolve(value).expect("verified opt value");
         *local.entry(value).or_insert_with(|| {
             (
-                fb.use_var(self.vars[value.index()]),
+                fb.use_var(self.vars[value.index()].expect("physical verified SSA value")),
                 self.representation(value),
             )
         })
     }
 
     fn representation(&self, value: ir::Value) -> SlotRep {
-        if self.booleans[value.index()] {
+        if self.floats[value.index()] {
+            SlotRep::Tagged // Transport-only F64, never an ordinary Lisp word.
+        } else if self.booleans[value.index()] {
             SlotRep::Bool
         } else {
             SlotRep::raw_if(self.raw[value.index()])
@@ -193,7 +279,10 @@ impl SsaValues {
 
     fn write(&self, fb: &mut FunctionBuilder, value: ir::Value, runtime: RuntimeValue) {
         let (word, rep) = runtime;
-        let word = if self.booleans[value.index()] {
+        let word = if self.floats[value.index()] {
+            debug_assert_eq!(fb.func.dfg.value_type(word), types::F64);
+            word
+        } else if self.booleans[value.index()] {
             debug_assert_eq!(rep, SlotRep::Bool);
             debug_assert_eq!(fb.func.dfg.value_type(word), types::I8);
             word
@@ -208,7 +297,10 @@ impl SsaValues {
                 _ => word,
             }
         };
-        fb.def_var(self.vars[value.index()], word);
+        fb.def_var(
+            self.vars[value.index()].expect("physical verified SSA value"),
+            word,
+        );
     }
 }
 
@@ -219,7 +311,16 @@ fn read_stack(
 ) -> (Vec<ClifValue>, Vec<SlotRep>) {
     values
         .iter()
-        .map(|&value| ctx.values.read(ctx.fb, ctx.func, local, value))
+        .map(|&value| {
+            if ctx.values.logical[canonical(ctx.func, value).index()] {
+                (
+                    ctx.fb.ins().iconst(types::I64, Value::NIL.bits() as i64),
+                    SlotRep::Tagged,
+                )
+            } else {
+                ctx.values.read(ctx.fb, ctx.func, local, value)
+            }
+        })
         .unzip()
 }
 
@@ -277,12 +378,15 @@ fn snapshot(
     ctx: &mut EmitContext,
     local: &mut LocalValues,
     frame: ir::FrameId,
-) -> Result<(Vec<ClifValue>, Vec<SlotRep>), CompileError> {
+) -> Result<Snapshot, CompileError> {
     let state = &ctx.func.frames[frame.index()];
     if state.parent.is_some() || state.handlers != 0 {
         return Err(CompileError::UnsupportedOp(
             "opt-emit:frame-chain-or-handler",
         ));
+    }
+    if ctx.verified_sink.is_some() {
+        return sink_snapshot::capture(ctx, local, frame);
     }
     if state.stack.iter().any(|&value| {
         let rep = ctx.func.values[canonical(ctx.func, value).index()].rep;
@@ -293,7 +397,8 @@ fn snapshot(
     }) {
         return Err(CompileError::UnsupportedOp("opt-emit:frame-representation"));
     }
-    Ok(read_stack(ctx, local, &state.stack))
+    let (stack, reps) = read_stack(ctx, local, &state.stack);
+    Ok((stack, reps, None))
 }
 
 fn set_snapshot(
@@ -308,10 +413,27 @@ fn set_snapshot(
     Ok(())
 }
 
+/// Reuse only ONE independently verified selected point/frame capture. The
+/// legacy path retains its original capture/clear/capture sequence exactly.
+fn precise_snapshot(
+    ctx: &mut EmitContext,
+    local: &mut LocalValues,
+    frame: ir::FrameId,
+) -> Result<Snapshot, CompileError> {
+    if ctx.verified_sink.is_some() {
+        let exact = snapshot(ctx, local, frame)?;
+        lowering::set_active_region(None);
+        Ok(exact)
+    } else {
+        set_snapshot(ctx, local, frame)?;
+        snapshot(ctx, local, frame)
+    }
+}
+
 fn override_deopts(
     func: &ir::Func,
     frame: ir::FrameId,
-    exact: &(Vec<ClifValue>, Vec<SlotRep>),
+    exact: &Snapshot,
     pending: &mut [PendingDeopt],
 ) {
     for site in pending {
@@ -320,6 +442,7 @@ fn override_deopts(
         site.stack.clone_from(&exact.0);
         site.reps.clone_from(&exact.1);
         site.region = None;
+        site.sink_cold.clone_from(&exact.2);
     }
 }
 
@@ -420,6 +543,7 @@ fn edge_arguments(
     edge.args
         .iter()
         .zip(&ctx.func.blocks[edge.target.index()].params)
+        .filter(|(_, param)| !ctx.values.logical[param.index()])
         .map(|(&value, &param)| {
             let mut runtime = ctx.values.read(ctx.fb, ctx.func, local, value);
             if runtime.1.is_flonum() {
@@ -432,7 +556,12 @@ fn edge_arguments(
                     "opt-emit:integer-edge-representation",
                 ));
             }
-            let word = if ctx.values.booleans[param.index()] {
+            let word = if ctx.values.floats[param.index()] {
+                if ctx.fb.func.dfg.value_type(runtime.0) != types::F64 {
+                    return Err(CompileError::UnsupportedOp("opt-sink:float-edge"));
+                }
+                runtime.0
+            } else if ctx.values.booleans[param.index()] {
                 debug_assert_eq!(runtime.1, SlotRep::Bool);
                 runtime.0
             } else if ctx.fb.func.dfg.value_type(runtime.0) == types::I8 {
@@ -457,7 +586,7 @@ fn publish_cross(ctx: &mut EmitContext, local: &mut LocalValues, block: ir::Bloc
     let mut values: Vec<_> = local
         .keys()
         .copied()
-        .filter(|v| ctx.values.cross[v.index()])
+        .filter(|v| ctx.values.cross[v.index()] && !ctx.values.logical[v.index()])
         .collect();
     values.sort_unstable();
     for value in values {
@@ -498,6 +627,15 @@ fn terminal_poll_edge(
     let ir::Term::Jump(edge) = &data.term else {
         return None;
     };
+    if data.insts[position + 1..].iter().any(|id| {
+        let inst = &ctx.func.insts[id.index()];
+        inst.args
+            .iter()
+            .chain(inst.result.iter())
+            .any(|&v| ctx.values.logical[canonical(ctx.func, v).index()])
+    }) {
+        return None;
+    }
     if data.insts[position + 1..]
         .iter()
         .any(|id| {
@@ -727,7 +865,12 @@ fn shared_operation(
     let frame = inst
         .frame
         .ok_or(CompileError::UnsupportedOp("opt-emit:frame"))?;
-    let (mut stack, mut reps) = snapshot(ctx, local, frame)?;
+    let initial = snapshot(ctx, local, frame)?;
+    let (mut stack, mut reps, selected_exact) = if ctx.verified_sink.is_some() {
+        (initial.0.clone(), initial.1.clone(), Some(initial))
+    } else {
+        (initial.0, initial.1, None)
+    };
     // Framestates specify every residual GNU stack value. The operation's
     // explicit SSA operands specify what it actually consumes, independently
     // of the original bytecode's stack permutations.
@@ -772,6 +915,12 @@ fn shared_operation(
         // the full GNU frame and live compiler-only heap identities stay live.
         let mut roots = ctx.func.frames[frame.index()].stack[dead.unwrap_or(0)..].to_vec();
         roots.extend_from_slice(live_after);
+        let roots = if let Some(proof) = ctx.verified_sink {
+            sink_recipes::roots_at(ctx.func, proof, ctx.point, frame, &roots)
+                .map_err(|_| CompileError::UnsupportedOp("opt-sink:call-roots"))?
+        } else {
+            roots
+        };
         let mut extra = Vec::new();
         for value in roots {
             let value = canonical(ctx.func, value);
@@ -802,8 +951,15 @@ fn shared_operation(
         lowering::prepare_op_operands(ctx.fb, ctx.rt, op, &mut stack, &mut reps)?;
         synchronize(local, &before, &stack, &reps);
     }
-    set_snapshot(ctx, local, frame)?;
-    let exact = snapshot(ctx, local, frame)?;
+    let exact = if let Some(exact) = selected_exact {
+        // Selected capture excludes legacy Flonum values. Operand preparation
+        // changes only the temporary semantic operation stack, not the frozen
+        // recipe fields/version or any original Tagged frame identity.
+        lowering::set_active_region(None);
+        exact
+    } else {
+        precise_snapshot(ctx, local, frame)?
+    };
     let deopt_start = deopts.len();
     let cons_proof = if checked_cons {
         heap_inline::ConsStoreProof::GuardedCons(stack[base])
@@ -869,8 +1025,16 @@ fn shared_operation(
 /// stream supplies compile-time specialization metadata only; SSA operands,
 /// constants, frames, block parameters and edges determine native behavior.
 pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
+    if let Some(proof) = ctx.verified_sink {
+        ctx.numeric_facts = sink_numeric_facts::NumericFacts::build(ctx.func, proof);
+    }
     if ctx.func.values.iter().enumerate().any(|(index, value)| {
         !matches!(value.rep, ir::Rep::Tagged | ir::Rep::Bool)
+            && !(ctx.verified_sink.is_some()
+                && matches!(
+                    value.rep,
+                    ir::Rep::RawF64 | ir::Rep::RawWord | ir::Rep::NumPair | ir::Rep::Virtual(_)
+                ))
             && !(jit_opt_passes().reps && matches!(value.rep, ir::Rep::TaggedFix | ir::Rep::RawInt))
             && !(jit_opt_passes().range
                 && (value.rep == ir::Rep::TaggedFix
@@ -892,9 +1056,14 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
         .collect();
     for (index, data) in ctx.func.blocks.iter().enumerate() {
         for &param in &data.params {
+            if ctx.values.logical[param.index()] {
+                continue;
+            }
             ctx.fb.append_block_param(
                 ctx.blocks[index],
-                if ctx.values.booleans[param.index()] {
+                if ctx.values.floats[param.index()] {
+                    types::F64
+                } else if ctx.values.booleans[param.index()] {
                     types::I8
                 } else {
                     types::I64
@@ -909,8 +1078,15 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
         lowering::rootwin_carry_reset();
         lowering::set_active_region(None);
         let mut local = LocalValues::new();
+        ctx.sink_produced.clear();
+        ctx.point = RecipePoint::Entry(block);
         let params = ctx.fb.block_params(ctx.blocks[index]).to_vec();
-        for (&value, &word) in data.params.iter().zip(&params) {
+        for (&value, &word) in data
+            .params
+            .iter()
+            .filter(|v| !ctx.values.logical[v.index()])
+            .zip(&params)
+        {
             local.insert(value, (word, ctx.values.representation(value)));
         }
         let mut known = HashSet::new();
@@ -923,7 +1099,7 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
                 .iter()
                 .zip(facts)
             {
-                if fact {
+                if fact && !ctx.values.logical[canonical(ctx.func, value).index()] {
                     let runtime = ctx.values.read(ctx.fb, ctx.func, &mut local, value);
                     if runtime.1 == SlotRep::Tagged {
                         known.insert(runtime.0);
@@ -936,8 +1112,12 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
         let mut terminated = false;
         for (position, &id) in data.insts.iter().enumerate() {
             let inst = &ctx.func.insts[id.index()];
+            ctx.point = RecipePoint::Before(id);
             let live_after = ctx.values.live_after[id.index()].clone();
             let result = match &inst.op {
+                ir::Opcode::Sink(_) => {
+                    sink_emission::emit(&mut ctx, &mut local, id, inst, &mut deopts)?
+                }
                 ir::Opcode::Arg(slot) | ir::Opcode::OsrSlot(slot) => {
                     let slot = *slot as usize;
                     let variable = *ctx.seed_vars.get(slot).ok_or(CompileError::BadOperand)?;
@@ -957,7 +1137,10 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
                     )
                 }
                 ir::Opcode::Const(index)
-                    if (jit_opt_passes().reps || jit_opt_passes().licm) && inst.frame.is_none() =>
+                    if (jit_opt_passes().reps
+                        || jit_opt_passes().licm
+                        || ctx.verified_sink.is_some())
+                        && inst.frame.is_none() =>
                 {
                     // Integer exposure creates pure immediate zero/one views
                     // without a source operation or recovery frame. Decode
@@ -973,7 +1156,8 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
                     let ty = TypeSet::for_constant(bits);
                     let result = inst.result.ok_or(CompileError::BadOperand)?;
                     if ty.is_bottom()
-                        || !ty.is_subset(TypeSet::FIXNUM)
+                        || !(ty.is_subset(TypeSet::FIXNUM)
+                            || (ctx.verified_sink.is_some() && bits.0 == Value::NIL.bits() as u64))
                         || !ctx.func.values[result.index()].rep.is_tagged()
                     {
                         return Err(CompileError::UnsupportedOp("opt-emit:immediate-proof"));
@@ -1091,7 +1275,12 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
                     )?
                 }
                 ir::Opcode::Refine(_) => {
-                    Some(ctx.values.read(ctx.fb, ctx.func, &mut local, inst.args[0]))
+                    if inst.result.is_some_and(|v| ctx.values.logical[v.index()]) {
+                        sink_emission::emit_view(&mut ctx, &mut local, inst)?;
+                        None
+                    } else {
+                        Some(ctx.values.read(ctx.fb, ctx.func, &mut local, inst.args[0]))
+                    }
                 }
                 ir::Opcode::CheckType(ty)
                     if jit_opt_passes().range
@@ -1116,8 +1305,8 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
                             .frame
                             .ok_or(CompileError::UnsupportedOp("opt-emit:guard-frame"))?;
                         let word = tagged(&mut ctx, &mut local, inst.args[0]);
-                        set_snapshot(&mut ctx, &mut local, frame)?;
-                        let (stack, reps) = snapshot(&mut ctx, &mut local, frame)?;
+                        let exact = precise_snapshot(&mut ctx, &mut local, frame)?;
+                        let (stack, reps) = (&exact.0, &exact.1);
                         let site = deopt_site(
                             ctx.fb,
                             ctx.func.frames[frame.index()].pc as usize,
@@ -1129,7 +1318,7 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
                         override_deopts(
                             ctx.func,
                             frame,
-                            &(stack, reps),
+                            &exact,
                             std::slice::from_mut(deopts.last_mut().expect("queued guard deopt")),
                         );
                         let condition = guard_condition(&mut ctx, *ty, word)?;
@@ -1142,7 +1331,7 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
                     let flag = non_nil_flag(&mut ctx, word, rep);
                     Some((
                         flag,
-                        if jit_opt_passes().bool_rep {
+                        if jit_opt_passes().bool_rep || ctx.verified_sink.is_some() {
                             SlotRep::Bool
                         } else {
                             SlotRep::Tagged
@@ -1160,13 +1349,8 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
                     let before: Vec<_> = stack.iter().copied().zip(reps.iter().copied()).collect();
                     materialize_model_stack(ctx.fb, ctx.rt, &mut stack, &mut reps);
                     synchronize(&mut local, &before, &stack, &reps);
-                    set_snapshot(
-                        &mut ctx,
-                        &mut local,
-                        inst.frame.ok_or(CompileError::BadOperand)?,
-                    )?;
                     let frame = inst.frame.ok_or(CompileError::BadOperand)?;
-                    let exact = snapshot(&mut ctx, &mut local, frame)?;
+                    let exact = precise_snapshot(&mut ctx, &mut local, frame)?;
                     let deopt_start = deopts.len();
                     lowering::emit_region_entry_guard(
                         ctx.fb,
@@ -1181,8 +1365,14 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
                 }
                 ir::Opcode::Poll => {
                     let frame = inst.frame.ok_or(CompileError::BadOperand)?;
-                    let (mut stack, mut reps) = snapshot(&mut ctx, &mut local, frame)?;
-                    for &value in &live_after {
+                    let (mut stack, mut reps, _) = snapshot(&mut ctx, &mut local, frame)?;
+                    let roots = if let Some(proof) = ctx.verified_sink {
+                        sink_recipes::roots_at(ctx.func, proof, ctx.point, frame, &live_after)
+                            .map_err(|_| CompileError::UnsupportedOp("opt-sink:poll-roots"))?
+                    } else {
+                        live_after.clone()
+                    };
+                    for &value in &roots {
                         let value = canonical(ctx.func, value);
                         if !ctx.func.values[value.index()].ty.may_need_root() {
                             continue;
@@ -1243,6 +1433,7 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
             }
         }
         lowering::set_active_region(None);
+        ctx.point = RecipePoint::Term(block);
         if !terminated {
             publish_cross(&mut ctx, &mut local, block);
             emit_term(
@@ -1263,13 +1454,13 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
                 ctx.fb.set_cold_block(site.block);
             }
         }
-        emit_pending_deopts(
+        lowering::emit_pending_deopts_with_sink(
             ctx.fb,
             ctx.deopt_refs,
             &mut deopts,
             ctx.rt.map(|rt| &rt.refs),
             ctx.abi,
-        );
+        )?;
         if !pending.is_empty() {
             return Err(CompileError::UnsupportedOp("opt-emit:exceptional-edge"));
         }
@@ -1352,8 +1543,8 @@ fn emit_term(
             );
         }
         ir::Term::Deopt(frame) => {
-            set_snapshot(ctx, local, *frame)?;
-            let (stack, reps) = snapshot(ctx, local, *frame)?;
+            let exact = precise_snapshot(ctx, local, *frame)?;
+            let (stack, reps) = (&exact.0, &exact.1);
             let site = deopt_site(
                 ctx.fb,
                 ctx.func.frames[frame.index()].pc as usize,
@@ -1365,7 +1556,7 @@ fn emit_term(
             override_deopts(
                 ctx.func,
                 *frame,
-                &(stack, reps),
+                &exact,
                 std::slice::from_mut(deopts.last_mut().expect("queued terminator deopt")),
             );
             ctx.fb.ins().jump(site, &[]);
@@ -1413,7 +1604,14 @@ fn emit_term(
             if let Some(frame) =
                 site.and_then(|pc| ctx.func.source_states[pc].as_ref().map(|state| state.frame))
             {
-                (stack, reps) = snapshot(ctx, local, frame)?;
+                let exact = snapshot(ctx, local, frame)?;
+                if exact.2.is_some() {
+                    return Err(CompileError::UnsupportedOp(
+                        "opt-sink:switch-exceptional-frame",
+                    ));
+                }
+                stack = exact.0;
+                reps = exact.1;
                 if stack.len() >= 2 {
                     stack.truncate(stack.len() - 2);
                     reps.truncate(stack.len());

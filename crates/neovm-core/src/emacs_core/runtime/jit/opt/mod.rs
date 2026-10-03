@@ -12,6 +12,8 @@ pub(crate) mod build;
 pub(crate) mod ir;
 pub(crate) mod mem;
 pub(crate) mod passes;
+pub(crate) mod sink_recipes;
+pub(crate) mod sink_shape;
 pub(crate) mod types;
 pub(crate) mod verify;
 
@@ -35,3 +37,6 @@ mod gvn_eval_tests;
 #[cfg(test)]
 #[path = "tests/range_licm_eval.rs"]
 mod range_licm_eval_tests;
+
+#[cfg(test)]
+pub(crate) mod native_verify_observer;

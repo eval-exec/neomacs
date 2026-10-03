@@ -27,6 +27,7 @@ pub(crate) struct OptStats {
     pub(crate) opt_gvn: Option<Box<crate::emacs_core::jit::opt::passes::gvn::GvnStats>>,
     pub(crate) opt_range: Option<Box<crate::emacs_core::jit::opt::passes::range::RangeStats>>,
     pub(crate) opt_licm: Option<Box<crate::emacs_core::jit::opt::passes::licm::LicmStats>>,
+    pub(crate) opt_sink: Option<Box<crate::emacs_core::jit::opt::sink_recipes::SinkStats>>,
     pub(crate) opt_arrays:
         Option<Box<crate::emacs_core::jit::opt::passes::array_reads::ArrayLiftStats>>,
 }
@@ -40,6 +41,7 @@ impl OptStats {
             opt_gvn: census.gvn.clone().map(Box::new),
             opt_range: census.range.clone().map(Box::new),
             opt_licm: census.licm.clone().map(Box::new),
+            opt_sink: census.sink.clone().map(Box::new),
             opt_arrays: census.arrays.clone().map(Box::new),
         }
     }
@@ -51,6 +53,7 @@ impl OptStats {
             && self.opt_gvn.is_none()
             && self.opt_range.is_none()
             && self.opt_licm.is_none()
+            && self.opt_sink.is_none()
             && self.opt_arrays.is_none()
     }
 }

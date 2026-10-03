@@ -774,6 +774,10 @@ pub(crate) fn verify_reads(
     func: &Func,
     proofs: &ArrayReadProofs,
 ) -> Result<VerifiedArrayReads, ArrayProofError> {
+    #[cfg(test)]
+    crate::emacs_core::jit::opt::native_verify_observer::entered(
+        crate::emacs_core::jit::opt::native_verify_observer::Checker::Arrays,
+    );
     // The caller must validate ordinary IR first. This entry may itself run
     // from Func::verify, so it NEVER calls Func::verify recursively. Metadata
     // definitions and source guards are independently checked below.

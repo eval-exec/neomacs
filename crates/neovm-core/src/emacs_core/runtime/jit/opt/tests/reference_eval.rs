@@ -12,7 +12,13 @@
 use super::ir::{
     Cmp, Edge, FrameId, Func, InstData, MinMax, Opcode, Rep, Term, Value, ValueBits, ValueDef,
 };
+use super::sink_recipes::{RecipePoint, VerifiedSinkRecipes, verify_recipes};
 use super::types::TypeSet;
+#[path = "reference_sink.rs"]
+mod sink;
+#[cfg(test)]
+#[path = "sink_reference_test.rs"]
+mod sink_tests;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op, Vm};
 use crate::emacs_core::error::Flow;
 use crate::emacs_core::eval::Context;
@@ -50,6 +56,9 @@ pub(crate) enum Outcome {
 pub(crate) struct Run {
     pub outcome: Outcome,
     pub trace: Vec<Snapshot>,
+    /// Selected recipe diagnostics freeze scalars/tokens without heap boxing.
+    /// Legacy trace semantics remain exactly those of Snapshot above.
+    pub recipe_trace: Vec<sink::RecipeTrace>,
 }
 
 #[derive(Debug)]
@@ -71,6 +80,10 @@ enum Cell {
     /// A symbolic slots pointer keeps the original Lisp vector identity;
     /// never an untraced Rust pointer into a possibly-reallocated Vec.
     Slots(ValueBits),
+    /// Opaque carrier word: never an ordinary Lisp value or GC root.
+    RawWord(ValueBits),
+    /// Logical dynamic identity only. Physical fields/cache are real SSA Cells.
+    Recipe(sink::Token),
 }
 
 enum TypedStep {
@@ -88,6 +101,10 @@ struct Evaluator<'a, 'b> {
     quitcounter: u8,
     live_before: Vec<Vec<Value>>,
     current_inst: usize,
+    current_point: RecipePoint,
+    recipe_state: sink::State,
+    recipe_verified: Option<VerifiedSinkRecipes<'a>>,
+    recipe_trace: Vec<sink::RecipeTrace>,
     // Invocation-local identity recipes keep all aliases of one raw float
     // materialized as one box. Dead recipes do not root dead Lisp objects.
     next_float: std::cell::Cell<u64>,
@@ -106,6 +123,14 @@ pub(crate) fn evaluate(
     ctx: &mut Context,
     inputs: Inputs<'_>,
 ) -> Result<Run, EvalError> {
+    let recipe_verified = if func.sink_recipes.owners.is_empty() {
+        None
+    } else {
+        Some(
+            verify_recipes(func, &func.sink_recipes)
+                .map_err(|error| invalid(format!("sink verification: {error:?}")))?,
+        )
+    };
     let live_before = reference_liveness(func)?;
     let roots_base = ctx.bc_buf.len();
     for bits in &func.consts {
@@ -124,6 +149,10 @@ pub(crate) fn evaluate(
         quitcounter: 1,
         live_before,
         current_inst: 0,
+        current_point: RecipePoint::Entry(func.entry),
+        recipe_state: sink::State::default(),
+        recipe_verified,
+        recipe_trace: Vec::new(),
         next_float: std::cell::Cell::new(0),
         float_boxes: std::cell::RefCell::new(std::collections::HashMap::new()),
         unboxed: std::cell::RefCell::new(std::collections::HashMap::new()),
@@ -244,12 +273,16 @@ impl Evaluator<'_, '_> {
     /// slots identities retain their Lisp base, and live float recipes retain
     /// their materialized identity without publishing an untraced raw payload.
     fn root_current(&mut self) -> Result<(), EvalError> {
+        if !self.func.sink_recipes.owners.is_empty() {
+            return self.root_recipe_current();
+        }
         let roots = self.live_before[self.current_inst]
             .iter()
             .map(|&value| match self.read(value)? {
                 Cell::Lisp(bits) | Cell::Slots(bits) => Ok(Some(bits.to_value())),
                 Cell::F64 { .. } => self.lisp(value).map(Some),
                 Cell::Int(_) | Cell::Bool(_) => Ok(None),
+                Cell::RawWord(_) | Cell::Recipe(_) => Err(invalid("recipe in legacy root path")),
             })
             .collect::<Result<Vec<_>, _>>()?;
         self.ctx.bc_buf.extend(
@@ -299,6 +332,9 @@ impl Evaluator<'_, '_> {
                 Ok(boxed)
             }
             Cell::Slots(_) => Err(invalid("a raw slots pointer cannot become a Lisp value")),
+            Cell::RawWord(_) | Cell::Recipe(_) => {
+                Err(invalid("recipe requires explicit materialization"))
+            }
         }
     }
 
@@ -317,6 +353,9 @@ impl Evaluator<'_, '_> {
         handlers: u16,
         binds: u16,
     ) -> Result<Snapshot, EvalError> {
+        if !self.func.sink_recipes.owners.is_empty() {
+            return self.recipe_snapshot(pc, stack, handlers, binds);
+        }
         let stack = stack
             .iter()
             .map(|&value| self.lisp(value).map(ValueBits::from_value))
@@ -387,6 +426,15 @@ impl Evaluator<'_, '_> {
     fn inst(&mut self, id: super::ir::Inst) -> Result<Option<Snapshot>, EvalError> {
         self.tick()?;
         self.current_inst = id.index();
+        self.current_point = RecipePoint::Before(id);
+        if let Some(step) = self.recipe_inst(id)? {
+            return match step {
+                TypedStep::Deopt(frame) => Ok(Some(frame)),
+                TypedStep::Cell(cell) => self
+                    .store_result(self.func.insts[id.index()].result, cell)
+                    .map(|()| None),
+            };
+        }
         let function = self.func;
         if let Some(step) = self.typed(&function.insts[id.index()])? {
             match step {
@@ -473,7 +521,15 @@ impl Evaluator<'_, '_> {
                 if self.quitcounter == 0 {
                     self.quitcounter = 1;
                     let root_base = self.ctx.bc_buf.len();
-                    self.frame(inst.frame.ok_or_else(|| invalid("poll has no frame"))?)?;
+                    let frame = inst.frame.ok_or_else(|| invalid("poll has no frame"))?;
+                    if self.func.sink_recipes.owners.is_empty() {
+                        self.frame(frame)?;
+                    } else {
+                        let data = &self.func.frames[frame.index()];
+                        let observation =
+                            self.recipe_observe(data.pc, &data.stack, data.handlers, data.binds)?;
+                        self.recipe_trace.push(observation);
+                    }
                     self.root_current()?;
                     let result = self.ctx.bytecode_branch_maybe_gc_and_quit();
                     self.ctx.bc_buf.truncate(root_base);
@@ -832,6 +888,9 @@ impl Evaluator<'_, '_> {
             Cell::F64 { .. } => Ok(TypeSet::FLOAT),
             Cell::Bool(false) => Ok(TypeSet::NIL),
             Cell::Bool(true) => Ok(TypeSet::T),
+            Cell::RawWord(_) | Cell::Recipe(_) => {
+                Err(invalid("logical recipe needs a semantic materializer"))
+            }
             Cell::Slots(_) => Err(invalid("raw pointer has no Lisp kind")),
             Cell::Lisp(bits) => {
                 let value = bits.to_value();
@@ -886,18 +945,26 @@ impl Evaluator<'_, '_> {
             for pc in source_pcs {
                 let state = function.source_states[pc].as_ref().unwrap();
                 let frame = &function.frames[state.frame.index()];
-                self.trace.push(self.snapshot(
-                    pc as u32,
-                    &state.pre,
-                    frame.handlers,
-                    frame.binds,
-                )?);
+                self.current_point = RecipePoint::SourcePre(pc as u32);
+                if self.func.sink_recipes.owners.is_empty() {
+                    self.trace.push(self.snapshot(
+                        pc as u32,
+                        &state.pre,
+                        frame.handlers,
+                        frame.binds,
+                    )?);
+                } else {
+                    let observation =
+                        self.recipe_observe(pc as u32, &state.pre, frame.handlers, frame.binds)?;
+                    self.recipe_trace.push(observation);
+                }
                 for &id in &data.insts {
                     if self.func.insts[id.index()].pc as usize == pc && done.insert(id) {
                         if let Some(frame) = self.inst(id)? {
                             return Ok(Run {
                                 outcome: Outcome::Deopt(frame),
                                 trace: self.trace,
+                                recipe_trace: self.recipe_trace,
                             });
                         }
                     }
@@ -909,21 +976,25 @@ impl Evaluator<'_, '_> {
                         return Ok(Run {
                             outcome: Outcome::Deopt(frame),
                             trace: self.trace,
+                            recipe_trace: self.recipe_trace,
                         });
                     }
                 }
             }
+            self.current_point = RecipePoint::Term(block);
             let edge = match &data.term {
                 Term::Return(value) => {
                     return Ok(Run {
                         outcome: Outcome::Returned(ValueBits::from_value(self.lisp(*value)?)),
                         trace: self.trace,
+                        recipe_trace: self.recipe_trace,
                     });
                 }
                 Term::Deopt(frame) => {
                     return Ok(Run {
                         outcome: Outcome::Deopt(self.frame(*frame)?),
                         trace: self.trace,
+                        recipe_trace: self.recipe_trace,
                     });
                 }
                 Term::Jump(edge) => edge,

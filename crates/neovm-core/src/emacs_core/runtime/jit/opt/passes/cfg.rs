@@ -152,6 +152,11 @@ impl Dominance {
 /// this compiler invocation. Only a verified candidate replaces `func`, so a
 /// failure leaves the caller's input unchanged. No Lisp bits are dereferenced.
 pub(crate) fn cleanup(func: &mut Func) -> Result<(), VerifyError> {
+    // Selected sink runs last. Its exact point/frame/edge recipes must not be
+    // silently dropped by a later compaction without a complete remapper.
+    if super::super::sink_shape::has_metadata(func) {
+        return func.verify();
+    }
     let dom = Dominance::new(func)?;
     let mut block_map = vec![None; func.blocks.len()];
     let mut count = 0;
@@ -432,6 +437,7 @@ pub(crate) fn cleanup(func: &mut Func) -> Result<(), VerifyError> {
         range: func.census.range.clone(),
         licm: func.census.licm.clone(),
         arrays: func.census.arrays.clone(),
+        sink: func.census.sink.clone(),
         blocks: candidate.blocks.len(),
         insts: candidate.insts.len(),
         phis: candidate.blocks.iter().map(|b| b.params.len()).sum(),

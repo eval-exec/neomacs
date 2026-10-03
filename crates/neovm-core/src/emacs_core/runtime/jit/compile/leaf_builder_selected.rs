@@ -68,6 +68,7 @@ pub(super) fn build_selected_leaf_fn<S: LeafSink>(
     // register ABI for an eligible JIT body when the knob is on.
     abi: LeafAbi,
     opt: Option<&crate::emacs_core::jit::opt::ir::Func>,
+    sqrt_witnesses: &sqrt_snapshot::SqrtCallWitnesses,
     chains: &mut Vec<super::super::vframe::DeoptChain>,
 ) -> Result<cranelift_module::FuncId, CompileError> {
     debug_assert!(
@@ -138,7 +139,8 @@ pub(super) fn build_selected_leaf_fn<S: LeafSink>(
                 main: groups,
                 array_profile: super::array_profile::selected(aot, emit.t2)
                     && ops.iter().any(|op| *op == Op::Aref),
-                sink_versions: false,
+                sink_versions: !aot
+                    && opt.is_some_and(|func| !func.sink_recipes.source_sqrt_sites.is_empty()),
             };
             let refs = RtRefs::new_selected(
                 sink.shim_ids_selected(call_conv, ptr_ty, groups)?,
@@ -498,7 +500,32 @@ pub(super) fn build_selected_leaf_fn<S: LeafSink>(
         emit_pending_deopts(&mut fb, deopt_refs, &mut entry_deopts, None, abi);
 
         if let (Some(func), Some(values), Some(blocks)) = (opt, &opt_ssa, &opt_blocks) {
-            let verified_arrays = if !func.array_reads.reads.is_empty() {
+            #[cfg(test)]
+            let native_validation =
+                crate::emacs_core::jit::opt::native_verify_observer::NativeRegion::enter();
+            // Sink-selected native validation retains proof results from one
+            // full Func check. Non-Sink Array/ordinary paths keep their prior
+            // admission and verification sequence exactly.
+            let native_proof = if !func.sink_recipes.owners.is_empty() {
+                if !func.array_reads.reads.is_empty() && (aot || !jit_opt_passes().range) {
+                    return Err(CompileError::UnsupportedOp("opt-array:pass-off"));
+                }
+                if aot || !jit_opt_passes().sink {
+                    return Err(CompileError::UnsupportedOp("opt-sink:pass-off"));
+                }
+                let invalid = if func.array_reads.reads.is_empty() {
+                    "opt-sink:final-proof"
+                } else {
+                    "opt-array:ir"
+                };
+                Some(
+                    crate::emacs_core::jit::opt::verify::verify_for_native(func)
+                        .map_err(|_| CompileError::UnsupportedOp(invalid))?,
+                )
+            } else {
+                None
+            };
+            let legacy_arrays = if native_proof.is_none() && !func.array_reads.reads.is_empty() {
                 if aot || !jit_opt_passes().range {
                     return Err(CompileError::UnsupportedOp("opt-array:pass-off"));
                 }
@@ -514,6 +541,16 @@ pub(super) fn build_selected_leaf_fn<S: LeafSink>(
             } else {
                 None
             };
+            // Consume the same immutable Func retained by the bundle. No child
+            // proof is paired with an unrelated or subsequently mutated graph.
+            let func = native_proof.as_ref().map_or(func, |proof| proof.func());
+            let verified_arrays = native_proof
+                .as_ref()
+                .and_then(|proof| proof.arrays())
+                .or(legacy_arrays.as_ref());
+            let verified_sink = native_proof.as_ref().and_then(|proof| proof.sink());
+            #[cfg(test)]
+            drop(native_validation);
             opt_emission::emit(opt_emission::EmitContext {
                 fb: &mut fb,
                 func,
@@ -541,7 +578,12 @@ pub(super) fn build_selected_leaf_fn<S: LeafSink>(
                 consts_base,
                 ops,
                 known_fixnum_slots,
-                verified_arrays: verified_arrays.as_ref(),
+                verified_arrays: verified_arrays,
+                verified_sink: verified_sink,
+                numeric_facts: Default::default(),
+                sqrt_witnesses: sqrt_witnesses,
+                point: crate::emacs_core::jit::opt::sink_recipes::RecipePoint::Entry(func.entry),
+                sink_produced: HashMap::new(),
             })?;
         } else {
             for (leader_index, &l) in cfg.leaders.iter().enumerate() {
@@ -1221,11 +1263,14 @@ pub(super) fn requirements(
     let passes = jit_opt_passes();
     let array_profile =
         super::array_profile::selected(aot, t2) && ops.iter().any(|op| *op == Op::Aref);
-    let sink_versions = false;
+    let sink_versions =
+        !aot && opt.is_some_and(|func| !func.sink_recipes.source_sqrt_sites.is_empty());
     let native_body = !aot
         && opt.is_some_and(|func| {
-            (jit_opt_mode() == OptMode::Opt && (passes.range || passes.licm))
+            (jit_opt_mode() == OptMode::Opt && (passes.range || passes.licm || passes.sink))
                 || !func.array_reads.reads.is_empty()
+                || !func.sink_recipes.owners.is_empty()
+                || !func.sink_recipes.source_sqrt_sites.is_empty()
         });
     Selection {
         array_profile,

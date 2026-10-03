@@ -110,7 +110,10 @@ const NEOVM_JIT_SHIM_NAMES: &[&str] = &[
     "neovm_jit_call_spec_census",
     "neovm_jit_direct_framed",
     // Optional Opt-only exports; excluded from the frozen AOT ABI prefix.
+    // Selected JIT-only sqrt witness guard; append to preserve old names.
+    // Optional Opt-only exports; excluded from the frozen AOT ABI prefix.
     "neovm_jit_t2_record_array_use",
+    "neovm_jit_sqrt_binding_valid",
 ];
 
 // ABI26's existing shim prefix remains the complete AOT import/salt set.

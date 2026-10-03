@@ -3531,6 +3531,18 @@ fn lower_leaf_full_osr_with_plan_impl(
         constants
     };
     let cfg = analyze_cfg(ops, constants, offset_map, arity)?;
+    let sqrt_witnesses = if (opt_params.is_some() || opt_override.is_some())
+        && jit_opt_passes().sink
+        && jit_opt_mode() == OptMode::Opt
+    {
+        obarray.map_or_else(HashMap::new, |ob| {
+            let sites = find_spec_sites(ops, constants, &cfg.leaders, ob, true);
+            sqrt_snapshot::capture(ops, &sites, ob)
+        })
+    } else {
+        HashMap::new()
+    };
+    let sqrt_sites = sqrt_witnesses.keys().map(|&pc| pc as u32).collect();
     let opt = match opt_override {
         Some(plan) => {
             plan.verify()
@@ -3539,7 +3551,15 @@ fn lower_leaf_full_osr_with_plan_impl(
         }
         None => opt_params
             .map(|params| {
-                opt_backend::build_plan(ops, constants, &cfg, params, dynamic_prefix, osr_pc)
+                opt_backend::build_plan_with_sqrt_sites(
+                    ops,
+                    constants,
+                    &cfg,
+                    params,
+                    dynamic_prefix,
+                    osr_pc,
+                    &sqrt_sites,
+                )
             })
             .transpose()?,
     };
@@ -3745,6 +3765,7 @@ fn lower_leaf_full_osr_with_plan_impl(
                     obs.emit(),
                     abi,
                     opt.as_ref(),
+                    &sqrt_witnesses,
                     &mut chains,
                 )
             },
@@ -3974,9 +3995,13 @@ pub(crate) fn build_baseline_leaf_object<S: LeafSink>(
 mod boolean;
 mod leaf_builder;
 mod leaf_builder_selected;
+mod numeric_carrier;
 pub(crate) mod opt_backend;
 pub(crate) mod opt_census;
 mod opt_emission;
+mod sink_cold_snapshot;
+mod sqrt_binding;
+mod sqrt_snapshot;
 use leaf_builder::build_leaf_fn;
 
 mod knobs;
@@ -4214,3 +4239,55 @@ mod opt_array_profile_tests;
 #[cfg(test)]
 #[path = "compile/tests/opt_arrays.rs"]
 mod opt_array_tests;
+
+#[cfg(test)]
+#[path = "compile/tests/opt_sink_alloc_probe.rs"]
+mod opt_sink_alloc_probe_tests;
+
+#[cfg(test)]
+#[path = "compile/tests/opt_sink_identity.rs"]
+mod opt_sink_identity_tests;
+
+#[cfg(test)]
+#[path = "compile/tests/opt_sink_sqrt.rs"]
+mod opt_sink_sqrt;
+
+#[cfg(test)]
+#[path = "compile/tests/opt_sink_numeric_ready.rs"]
+mod opt_sink_numeric_ready;
+
+#[cfg(test)]
+#[path = "compile/tests/opt_sink_numeric_sqrt_contagion.rs"]
+mod opt_sink_numeric_sqrt_contagion;
+
+#[cfg(test)]
+#[path = "compile/tests/opt_sink_numeric_static_contagion.rs"]
+mod opt_sink_numeric_static_contagion;
+
+#[cfg(test)]
+#[path = "compile/tests/opt_sink_numeric_cold.rs"]
+mod opt_sink_numeric_cold;
+
+#[cfg(test)]
+#[path = "compile/tests/opt_sink_numeric_infallible.rs"]
+mod opt_sink_numeric_infallible;
+
+#[cfg(test)]
+#[path = "compile/tests/opt_sink_cold_demand.rs"]
+mod opt_sink_cold_demand;
+
+#[cfg(test)]
+#[path = "compile/tests/opt_sqrt_binding.rs"]
+mod opt_sqrt_binding;
+
+#[cfg(test)]
+#[path = "compile/tests/opt_sqrt_snapshot.rs"]
+mod opt_sqrt_snapshot;
+
+#[cfg(test)]
+#[path = "compile/tests/opt_sink_numeric_resolved.rs"]
+mod opt_sink_numeric_resolved;
+
+#[cfg(test)]
+#[path = "compile/tests/opt_sink_native_verification.rs"]
+mod opt_sink_native_verification;

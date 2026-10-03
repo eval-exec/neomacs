@@ -90,6 +90,7 @@ pub(crate) struct OptCensus {
     pub range: Option<super::passes::range::RangeStats>,
     pub licm: Option<super::passes::licm::LicmStats>,
     pub arrays: Option<super::passes::array_reads::ArrayLiftStats>,
+    pub sink: Option<super::sink_recipes::SinkStats>,
 }
 
 /// Immutable numeric pass counters. Threading: a compiler owns these scalar
@@ -120,6 +121,9 @@ pub(crate) struct Func {
     /// compilation. This sidecar contains IDs/scalars only and is immutable
     /// when a backend worker receives the plan; it stores no Lisp pointers.
     pub array_reads: super::passes::array_reads::ArrayReadProofs,
+    /// Compiler-owned exact-point identities and physical SSA cache versions.
+    /// Immutable after publication; no runtime/TLS Lisp object cache.
+    pub sink_recipes: super::sink_recipes::SinkRecipes,
     /// Per-source-pc stacks for the shared baseline-emitter adapter.
     pub source_states: Vec<Option<SourceState>>,
     /// Full GNU stack at each block entry, including invariant non-phi values.
@@ -141,6 +145,7 @@ impl Func {
             arity,
             census: OptCensus::default(),
             array_reads: super::passes::array_reads::ArrayReadProofs::default(),
+            sink_recipes: super::sink_recipes::SinkRecipes::default(),
             source_states: Vec::new(),
             entry_stacks: Vec::new(),
             frame_intern: HashMap::new(),
@@ -174,6 +179,11 @@ impl Func {
     /// virtual identity. The caller supplies liveness; this function never
     /// publishes raw payloads or NumPair sentinel words.
     pub(crate) fn roots_for(&self, frame: FrameId, live: &[Value]) -> Option<Vec<Value>> {
+        // Recipe caches depend on exact source cuts. A point-free caller must
+        // use the independent selected roots_at capability instead.
+        if !self.sink_recipes.owners.is_empty() {
+            return None;
+        }
         let mut pending = live.to_vec();
         let mut current = Some(frame);
         let mut frames_seen = std::collections::HashSet::new();
@@ -208,6 +218,7 @@ impl Func {
                 | Rep::TaggedFix
                 | Rep::RawInt
                 | Rep::RawF64
+                | Rep::RawWord
                 | Rep::NumPair
                 | Rep::Bool => {}
             }
@@ -283,9 +294,13 @@ pub(crate) enum Rep {
     TaggedFix,
     RawInt,
     RawF64,
+    /// Opaque numeric transport; interpreted only with verified ready/box fields.
+    RawWord,
     NumPair,
     Bool,
-    RawPtr { base: Value },
+    RawPtr {
+        base: Value,
+    },
     Virtual(AllocId),
 }
 
@@ -331,6 +346,7 @@ pub(crate) enum MinMax {
 /// immutable source bytecodes rather than mutator-local Lisp references.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Opcode {
+    Sink(super::sink_recipes::SinkOp),
     Const(u32),
     EnvConst(u32),
     Arg(u16),
@@ -419,6 +435,10 @@ impl Opcode {
                 | Self::FixMul { checked: true }
                 | Self::FixDiv
                 | Self::FixRem
+                | Self::Sink(
+                    super::sink_recipes::SinkOp::SourceNum(_)
+                        | super::sink_recipes::SinkOp::SourceSqrt
+                )
         )
     }
 
@@ -432,7 +452,11 @@ impl Opcode {
             )
             || matches!(
                 self,
-                Self::Call { .. } | Self::Opaque(_) | Self::OpaqueBool(_) | Self::Poll
+                Self::Call { .. }
+                    | Self::Opaque(_)
+                    | Self::OpaqueBool(_)
+                    | Self::Poll
+                    | Self::Sink(super::sink_recipes::SinkOp::SourceCons(_))
             )
     }
 

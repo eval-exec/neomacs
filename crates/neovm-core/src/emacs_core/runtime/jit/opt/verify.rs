@@ -44,6 +44,7 @@ pub(crate) enum VerifyError {
     OsrShape,
     SourceState(u32),
     PublishedNonTagged(Value),
+    Sink(super::sink_recipes::SinkVerifyError),
 }
 
 impl fmt::Display for VerifyError {
@@ -59,7 +60,42 @@ impl Func {
     }
 }
 
+/// Native proof bundle anchored to the WHOLE final immutable Func. The child
+/// Sink proof itself borrows its table; this enclosing capability retains the
+/// ordinary CFG/SSA/frame/source graph borrow for the complete emission scope.
+/// Private construction occurs only after every ordinary and child check.
+/// Threading: invocation-owned immutable compiler borrows; no Lisp dereference,
+/// publication cache, identity hash, pointer token, TLS or runtime structure.
+pub(crate) struct VerifiedForNative<'a> {
+    func: &'a Func,
+    arrays: Option<super::passes::array_reads::VerifiedArrayReads>,
+    sink: Option<super::sink_recipes::VerifiedSinkRecipes<'a>>,
+}
+
+impl<'a> VerifiedForNative<'a> {
+    pub(crate) fn func(&self) -> &'a Func {
+        self.func
+    }
+    pub(crate) fn arrays(&self) -> Option<&super::passes::array_reads::VerifiedArrayReads> {
+        self.arrays.as_ref()
+    }
+    pub(crate) fn sink(&self) -> Option<&super::sink_recipes::VerifiedSinkRecipes<'a>> {
+        self.sink.as_ref()
+    }
+}
+
 pub(crate) fn verify(func: &Func) -> Result<(), VerifyError> {
+    verify_for_native(func).map(|_| ())
+}
+
+/// Run ONE complete ordinary + independent validation, retaining its actual
+/// child results instead of reconstructing them in native lowering. There is
+/// no prevalidated/skip flag: any malformed graph/table follows the same full
+/// error path used by Func::verify. Mutations require dropping this capability.
+pub(crate) fn verify_for_native(func: &Func) -> Result<VerifiedForNative<'_>, VerifyError> {
+    #[cfg(test)]
+    super::native_verify_observer::entered(super::native_verify_observer::Checker::Ordinary);
+    let mut has_sink = super::sink_shape::has_metadata(func);
     let get_block = |block: Block| {
         func.blocks
             .get(block.index())
@@ -158,7 +194,8 @@ pub(crate) fn verify(func: &Func) -> Result<(), VerifyError> {
                 }
             }
         }
-        validate_value_type(id, value)?;
+        has_sink |= value.rep == Rep::RawWord;
+        validate_value_type(func, id, value)?;
     }
     // Parent chains form an immutable compile-local graph. Validate each frame
     // once, including shared tails, rather than allocate a set per frame and
@@ -217,6 +254,7 @@ pub(crate) fn verify(func: &Func) -> Result<(), VerifyError> {
         let block = Block(index as u32);
         for (position, &inst) in block_data.insts.iter().enumerate() {
             let data = &func.insts[inst.index()];
+            has_sink |= matches!(data.op, Opcode::Sink(_));
             for &arg in &data.args {
                 check_use(arg, block, position, Some(inst))?;
             }
@@ -372,21 +410,42 @@ pub(crate) fn verify(func: &Func) -> Result<(), VerifyError> {
             return Err(VerifyError::OsrShape);
         }
     }
-    if !func.array_reads.reads.is_empty() {
+    let arrays = if !func.array_reads.reads.is_empty() {
         // The sidecar validator borrows already validated ordinary SSA. It
         // never recursively calls Func::verify and returns owned capabilities.
-        super::passes::array_reads::verify_reads(func, &func.array_reads)
-            .map_err(|error| VerifyError::InvalidInst(error.inst))?;
-    }
-    Ok(())
+        Some(
+            super::passes::array_reads::verify_reads(func, &func.array_reads)
+                .map_err(|error| VerifyError::InvalidInst(error.inst))?,
+        )
+    } else {
+        None
+    };
+    let sink = if has_sink {
+        // Ordinary ownership, use dominance and source cuts are established
+        // first. This independent child borrows that graph without recursively
+        // invoking Func::verify, and proves every provisional tuple/RawWord.
+        Some(
+            super::sink_recipes::verify_recipes(func, &func.sink_recipes)
+                .map_err(VerifyError::Sink)?,
+        )
+    } else {
+        None
+    };
+    Ok(VerifiedForNative { func, arrays, sink })
 }
 
-fn validate_value_type(value: Value, data: &ValueData) -> Result<(), VerifyError> {
+fn validate_value_type(func: &Func, value: Value, data: &ValueData) -> Result<(), VerifyError> {
     let valid = match data.rep {
         Rep::Tagged => true,
         Rep::TaggedFix | Rep::RawInt => data.ty.is_subset(TypeSet::FIXNUM),
         Rep::RawF64 => data.ty.is_subset(TypeSet::FLOAT),
-        Rep::NumPair => data.ty.is_subset(TypeSet::FIXNUM.join(TypeSet::FLOAT)),
+        // An opaque word is provisionally typed here; the final independent
+        // recipe verifier must prove its actual field definition and all uses.
+        Rep::RawWord => data.ty == TypeSet::TOP,
+        Rep::NumPair => {
+            data.ty.is_subset(TypeSet::FIXNUM.join(TypeSet::FLOAT))
+                || super::sink_shape::owned_borrowable(func, value, data)
+        }
         Rep::Bool => data.ty.is_subset(TypeSet::BOOLEAN),
         Rep::RawPtr { .. } => true,
         Rep::Virtual(_) => data.ty.is_subset(TypeSet::CONS.join(TypeSet::FLOAT)),
@@ -458,6 +517,7 @@ fn validate_inst(func: &Func, inst: Inst, data: &InstData) -> Result<(), VerifyE
     };
     let nonempty_fixnum = |ty: TypeSet| !ty.is_bottom() && ty.is_subset(TypeSet::FIXNUM);
     match &data.op {
+        Opcode::Sink(op) => super::sink_shape::validate_inst(func, inst, data, op)?,
         Opcode::BoolConst(_) => {
             args(0)?;
             result_rep(Rep::Bool)?;

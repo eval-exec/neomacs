@@ -108,6 +108,30 @@ pub(super) fn build_plan(
     prefix: usize,
     osr_pc: Option<usize>,
 ) -> Result<ir::Func, CompileError> {
+    build_plan_with_sqrt_sites(
+        ops,
+        constants,
+        cfg,
+        params,
+        prefix,
+        osr_pc,
+        &std::collections::HashSet::new(),
+    )
+}
+
+/// Scalar source-PC witnesses are captured by the synchronous mutator front;
+/// the worker never performs a Lisp function lookup. Native lowering separately
+/// checks the actual immutable callee/builtin witness. Sink off follows the
+/// existing pipeline without reading these sites or creating recipe metadata.
+pub(super) fn build_plan_with_sqrt_sites(
+    ops: &[Op],
+    constants: &[Value],
+    cfg: &Cfg,
+    params: ir::ParamShape,
+    prefix: usize,
+    osr_pc: Option<usize>,
+    sqrt_sites: &std::collections::HashSet<u32>,
+) -> Result<ir::Func, CompileError> {
     admission(ops, params, prefix)?;
     // Main's v2 front carries virtual frame chains, named/closure identities,
     // mapping callbacks and entry protocols. This backend's frames replay the
@@ -220,6 +244,20 @@ pub(super) fn build_plan(
             })?;
         tracing::debug!(target: "neovm_jit::opt", ?lift, ?selection, "opt integer census");
         func.census.reps = Some(ir::RepsCensus { lift, selection });
+    }
+    if jit_opt_passes().sink {
+        let feedback = (0..ops.len())
+            .map(active_numeric_feedback)
+            .collect::<Vec<_>>();
+        let stats = crate::emacs_core::jit::opt::passes::sink::run_with_sqrt_sites(
+            &mut func, &feedback, sqrt_sites,
+        )
+        .map_err(|error| {
+            tracing::debug!(?error, "opt Sink pass refused a compilation");
+            CompileError::UnsupportedOp("opt-sink:verify")
+        })?;
+        tracing::debug!(target: "neovm_jit::opt", ?stats, "opt Sink census");
+        func.census.sink = Some(stats);
     }
     func.verify().map_err(|error| {
         tracing::debug!(?error, "opt IR verifier refused a compilation");

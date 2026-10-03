@@ -520,6 +520,11 @@ pub(super) fn build_leaf_fn<S: LeafSink>(
                 ops,
                 known_fixnum_slots,
                 verified_arrays: None,
+                verified_sink: None,
+                numeric_facts: Default::default(),
+                sqrt_witnesses: &HashMap::new(),
+                point: crate::emacs_core::jit::opt::sink_recipes::RecipePoint::Entry(func.entry),
+                sink_produced: HashMap::new(),
             })?;
         } else {
             for (leader_index, &l) in cfg.leaders.iter().enumerate() {

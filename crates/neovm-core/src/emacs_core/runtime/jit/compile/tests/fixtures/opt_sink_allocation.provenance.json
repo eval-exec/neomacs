@@ -1,0 +1,94 @@
+{
+  "capture_cpu": 8,
+  "capture_utc": "2026-10-02T22:19:28.778216+00:00",
+  "float_calls_per_bracket": 32,
+  "format": "gnu31.1-allocation-fixture-v1",
+  "functions": [
+    {
+      "arg_descriptor": 257,
+      "byte_count": 21,
+      "byte_sha256": "2ce823cb3e0b20d80512286083aee47b33fc614008f71311efbcace0dda37c88",
+      "constant_count": 4,
+      "max_stack": 5,
+      "name": "t34-o36-allocation-float"
+    },
+    {
+      "arg_descriptor": 0,
+      "byte_count": 18,
+      "byte_sha256": "ed8dcef55c8558bc8a6d5cc39e168cb412490350f53f676ace6f095f61b8dc4e",
+      "constant_count": 6,
+      "max_stack": 6,
+      "name": "t34-o36-allocation-setup"
+    },
+    {
+      "arg_descriptor": 514,
+      "byte_count": 101,
+      "byte_sha256": "d3d2d1a1efc4e1a18473a8677eddf83344f0654ec415a09f28348036a7ffdd05",
+      "constant_count": 8,
+      "max_stack": 12,
+      "name": "elb-advance"
+    },
+    {
+      "arg_descriptor": 771,
+      "byte_count": 147,
+      "byte_sha256": "52123e1f631c42db75d42825f1d26a310e8d42c3d49317ebb2faf87819fae2ed",
+      "constant_count": 9,
+      "max_stack": 18,
+      "name": "elb-applyforces"
+    },
+    {
+      "arg_descriptor": 257,
+      "byte_count": 82,
+      "byte_sha256": "5dd1b7f4138dd9dc3d82fb57151511a7bc885c1163bb63f0b625420c0a726456",
+      "constant_count": 7,
+      "max_stack": 11,
+      "name": "elb-offset-momentum"
+    },
+    {
+      "arg_descriptor": 257,
+      "byte_count": 127,
+      "byte_sha256": "96eefa988e0920c680e612b5c517b9e51f258f1d44977dc3ee8c556f25b6ab37",
+      "constant_count": 11,
+      "max_stack": 15,
+      "name": "elb-energy"
+    }
+  ],
+  "gnu_source_head": "a360712c9d272d950d8d8255ef74570f7e90b7d9",
+  "gnu_version": "GNU Emacs 31.1",
+  "identity_checks": {
+    "float:identity": "(t t t t t)",
+    "nbody:one-trip-identity": "(t t t t)",
+    "nbody:setup-identity": "(t t t)",
+    "nbody:zero-trip-identity": "(t t t t t t)"
+  },
+  "neo_replay": "Unexecuted draft; input-valid isolated test required before optimization assertions",
+  "notes": [
+    "Loader is exact 92-line GNU-exported graph replay, no require/cl-lib or interpreted defun.",
+    "GNU loader warning about missing lexical-binding cookie is pre-existing; bytes preserved.",
+    "Equal-valued float objects are separate graph nodes. All 37 floats and 5 body vectors are preserved.",
+    "Physical snapshots use owning TaggedHeap counters; never Lisp memory-use-counts.",
+    "Nbody 95 to 75 per step is a design target, not measured evidence in this fixture."
+  ],
+  "object_graph": {
+    "globals": 7,
+    "kinds": {
+      "float": 37,
+      "vector": 5
+    },
+    "objects": 42
+  },
+  "purpose": "Frozen correctness graph for native allocation probes; no physical allocation measurements captured",
+  "replay_stdout_identical": true,
+  "semantic_line_count": 25,
+  "source_worktree_head": "9862ac5bd4a1c56e3f760f009478437605e7733e",
+  "upstream_sources": {
+    "benchmark-nbody.el": "61b8c2a2f5521e87dcd92cb3109bcda297538a45e3b01f678ef1f59b92364a12",
+    "benchmark-nbody.elc": "ec2762c7224440feb1d8eff239a8f9f11908ade18dce8d5aac8153458786265b",
+    "fixture-load.el": "1b6f71a5c985e2ef0aa0857e4915bed6b5b54296f8e85f396e06f9accccff042",
+    "fixtures.json": "c6b11fd7294cd19c209a74c0c2fad08a3a48a07624aacb7a7b9699fc449ff6ee",
+    "gnu.stdout": "20feb811332625d80d1444baec443f3acfacaa4173f9e995b89813b47875e820",
+    "oracle.el": "86ed07023a21ad89eab5017847f6f1491d3d223a1ffebc2d728d96f2e2bd68f1",
+    "oracle.elc": "ef46357cb2e61cdb23d1f91ca4179c1e5330791e1e31ca2dfa4c593f29b16705",
+    "replay.stdout": "20feb811332625d80d1444baec443f3acfacaa4173f9e995b89813b47875e820"
+  }
+}
