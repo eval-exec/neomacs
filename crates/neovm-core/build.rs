@@ -43,6 +43,7 @@ fn main() {
     detect_dbus();
     detect_wkwebview();
     ensure_generated_unicode_lisp(&project_root);
+    ensure_generated_charset_lisp(&project_root);
     generate_x11_color_table(&project_root, &manifest_dir);
 
     // R1c call-bearing AOT: export the host's `neovm_jit_*` shims
@@ -112,6 +113,50 @@ fn ensure_generated_unicode_lisp(project_root: &Path) {
         for dependency in recipe.dependencies(&roots) {
             println!("cargo:rerun-if-changed={}", dependency.display());
         }
+        watch_generated_output(&recipe.output_path(&roots));
+        match recipe.regenerate(&roots) {
+            Ok(generated_lisp::Regenerated::Unchanged) => {}
+            Ok(generated_lisp::Regenerated::Written) => {
+                println!(
+                    "cargo:warning=regenerated lisp/{} from {} (GNU {})",
+                    recipe.output, recipe.script, recipe.gnu_rule,
+                );
+            }
+            Err(err) => panic!("{err}"),
+        }
+    }
+}
+
+/// Watch a generated file so its *absence* reruns this build script.
+///
+/// Cargo decides whether to rerun a build script from the files it is told to
+/// watch, and the recipe inputs say nothing about whether the output still
+/// exists: delete `lisp/international/cp51932.el` and, with the awk script and
+/// map unchanged, nothing reruns -- the tree stays unbootable until some
+/// unrelated edit happens to touch this script.  GNU's `make` does not have
+/// that hole (its target *is* the file), and watching the output closes it:
+/// cargo treats a missing watched file as changed, so the next build
+/// regenerates it.  Verified by deleting both charset outputs and rebuilding.
+fn watch_generated_output(output: &Path) {
+    println!("cargo:rerun-if-changed={}", output.display());
+}
+
+/// Generate GNU's charset translation Lisp (`lisp/international/cp51932.el`
+/// and `eucjp-ms.el`) from the same recipe table `cargo xtask fresh-build`
+/// iterates.
+///
+/// These two files are load-bearing for anything that boots: `lisp/loadup.el`
+/// loads them with no noerror flag (loadup.el:231-232), so a checkout whose
+/// build never produced them cannot dump a runtime image -- which is exactly
+/// the tree a fresh `cargo nextest run` has.  GNU's `make` generates them as
+/// part of building, so this build does too.
+fn ensure_generated_charset_lisp(project_root: &Path) {
+    let roots = generated_lisp::GeneratedLispRoots::of_project(project_root);
+    for recipe in generated_lisp::AWK_GENERATED_CHARSET_LISP {
+        for dependency in recipe.dependencies(&roots) {
+            println!("cargo:rerun-if-changed={}", dependency.display());
+        }
+        watch_generated_output(&recipe.output_path(&roots));
         match recipe.regenerate(&roots) {
             Ok(generated_lisp::Regenerated::Unchanged) => {}
             Ok(generated_lisp::Regenerated::Written) => {

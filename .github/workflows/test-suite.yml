@@ -97,10 +97,10 @@ jobs:
         run: |
           test -x /opt/gnu-emacs-oracle/bin/emacsclient
           /opt/gnu-emacs-oracle/bin/emacsclient --version
-      - name: Prepare matching runtime and run all lifecycle cases serially
+      - name: Run all lifecycle cases serially
         env:
           NEOMACS_GNU_EMACSCLIENT: /opt/gnu-emacs-oracle/bin/emacsclient
-        run: cargo xtask test-daemon-lifecycle
+        run: cargo nextest run --locked -p neomacs --test daemon_lifecycle
 
   neomacs-melpa-direct-windows-tests:
     name: MELPA direct adapter Job Object contracts (windows x86_64)

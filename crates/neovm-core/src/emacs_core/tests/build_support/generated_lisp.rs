@@ -11,6 +11,15 @@
 //!     $(AM_V_GEN)$(AWK) -f ${zwj} ${zwj_sources} > $@
 //! ```
 //!
+//! The same is true one directory over: `lisp/international/cp51932.el` and
+//! `eucjp-ms.el` come from GNU's `admin/charsets/Makefile.in:213-217`, and
+//! `lisp/loadup.el:231-232` loads both with **no** noerror flag -- a tree
+//! without them cannot bootstrap at all, which is how a fresh checkout's
+//! `cargo nextest run` used to fail with a daemon-readiness timeout a whole
+//! layer away from the cause.  Both tables are scanned below; the checks are
+//! per-recipe, not per-table, so a third table cannot be added without these
+//! tests learning about it.
+//!
 //! There is exactly one recipe per file and no post-processing, so **what awk
 //! prints is the file**.  Until ledger 206 this port had two producers for
 //! those two names -- `cargo xtask fresh-build` ran GNU's awk, and
@@ -52,7 +61,10 @@
 #[path = "../../../../build_support/generated_lisp.rs"]
 mod generated_lisp;
 
-use generated_lisp::{AWK_GENERATED_UNICODE_LISP, AwkGeneratedLisp, GeneratedLispRoots};
+use generated_lisp::{
+    AWK_GENERATED_CHARSET_LISP, AWK_GENERATED_UNICODE_LISP, AwkGeneratedLisp,
+    CharsetTranslationLisp, GeneratedLispRoots,
+};
 use std::path::{Path, PathBuf};
 
 fn project_root() -> PathBuf {
@@ -64,16 +76,87 @@ fn roots() -> GeneratedLispRoots {
     GeneratedLispRoots::of_project(&project_root())
 }
 
+/// One generated file, whichever recipe table owns it.
+///
+/// The checks below are scans, not lists: they ask "is the file on disk what
+/// the one recipe prints", not "does the table contain the expected rows".
+/// Keeping that property while a second table exists means the wrapper has to
+/// cover both, so a third table cannot be added without these checks failing
+/// to compile.
+enum Recipe {
+    Unicode(&'static AwkGeneratedLisp),
+    Charset(&'static CharsetTranslationLisp),
+}
+
+impl Recipe {
+    fn output(&self) -> &'static str {
+        match self {
+            Self::Unicode(recipe) => recipe.output,
+            Self::Charset(recipe) => recipe.output,
+        }
+    }
+
+    fn source(&self) -> &'static str {
+        match self {
+            Self::Unicode(recipe) => recipe.script,
+            Self::Charset(recipe) => recipe.script,
+        }
+    }
+
+    fn gnu_rule(&self) -> &'static str {
+        match self {
+            Self::Unicode(recipe) => recipe.gnu_rule,
+            Self::Charset(recipe) => recipe.gnu_rule,
+        }
+    }
+
+    fn output_path(&self, roots: &GeneratedLispRoots) -> PathBuf {
+        match self {
+            Self::Unicode(recipe) => recipe.output_path(roots),
+            Self::Charset(recipe) => recipe.output_path(roots),
+        }
+    }
+
+    fn dependencies(&self, roots: &GeneratedLispRoots) -> Vec<PathBuf> {
+        match self {
+            Self::Unicode(recipe) => recipe.dependencies(roots),
+            Self::Charset(recipe) => recipe.dependencies(roots),
+        }
+    }
+
+    fn generate(&self, roots: &GeneratedLispRoots) -> Result<Vec<u8>, String> {
+        match self {
+            Self::Unicode(recipe) => recipe.generate(roots),
+            Self::Charset(recipe) => recipe.generate(roots),
+        }
+    }
+}
+
 /// Anti-vacuity: a table that lost its rows would satisfy every loop below.
-fn recipes() -> &'static [AwkGeneratedLisp] {
+///
+/// GNU generates four Lisp files with its own awk in the two Makefiles these
+/// tables transcribe (`admin/unidata/Makefile.in:111-123`,
+/// `admin/charsets/Makefile.in:213-217`), so a shorter combined table means
+/// rows were lost and every check in this file is vacuous for them.
+fn recipes() -> Vec<Recipe> {
     assert!(
         AWK_GENERATED_UNICODE_LISP.len() >= 2,
-        "the recipe table has {} rows; GNU's admin/unidata/Makefile.in has two \
-         awk-generated Lisp targets, so a shorter table means rows were lost \
-         and every check in this file is vacuous",
+        "the Unicode recipe table has {} rows; GNU's admin/unidata/Makefile.in \
+         has two awk-generated Lisp targets",
         AWK_GENERATED_UNICODE_LISP.len()
     );
+    assert!(
+        AWK_GENERATED_CHARSET_LISP.len() >= 2,
+        "the charset recipe table has {} rows; GNU's admin/charsets/Makefile.in \
+         has two awk-generated Lisp targets, and lisp/loadup.el loads both with \
+         no noerror flag",
+        AWK_GENERATED_CHARSET_LISP.len()
+    );
     AWK_GENERATED_UNICODE_LISP
+        .iter()
+        .map(Recipe::Unicode)
+        .chain(AWK_GENERATED_CHARSET_LISP.iter().map(Recipe::Charset))
+        .collect()
 }
 
 /// **The file on disk is what the one recipe prints.**
@@ -95,13 +178,13 @@ fn every_generated_unicode_lisp_file_is_byte_for_byte_what_gnus_awk_prints() {
         let output = recipe.output_path(&roots);
         let printed = recipe
             .generate(&roots)
-            .unwrap_or_else(|err| panic!("running GNU's recipe for {}: {err}", recipe.output));
+            .unwrap_or_else(|err| panic!("running GNU's recipe for {}: {err}", recipe.output()));
         assert!(
             printed.len() > 1000,
             "GNU's awk printed only {} bytes for {}; an empty or truncated run \
              would make the comparison below meaningless",
             printed.len(),
-            recipe.output
+            recipe.output()
         );
         let on_disk = std::fs::read(&output).unwrap_or_else(|err| {
             panic!(
@@ -119,7 +202,7 @@ fn every_generated_unicode_lisp_file_is_byte_for_byte_what_gnus_awk_prints() {
              producer",
             output.display(),
             generated_lisp::AWK_PROGRAM,
-            recipe.script,
+            recipe.source(),
         );
     }
 }
@@ -141,7 +224,7 @@ fn describe_bytes(bytes: &[u8]) -> String {
 /// the defect had, so the table may not carry one.
 #[test]
 fn no_generated_lisp_artifact_has_more_than_one_recipe() {
-    let mut outputs: Vec<&str> = recipes().iter().map(|recipe| recipe.output).collect();
+    let mut outputs: Vec<&str> = recipes().iter().map(|recipe| recipe.output()).collect();
     outputs.sort_unstable();
     let mut deduped = outputs.clone();
     deduped.dedup();
@@ -154,26 +237,34 @@ fn no_generated_lisp_artifact_has_more_than_one_recipe() {
 
 /// Every recipe names inputs that exist, and names GNU's own script.
 ///
-/// The inputs are `admin/unidata/`, GNU's directory, and no other: the second
-/// copy under `crates/neovm-core/unicode-data/` was deleted with the reimplementation
-/// that read it, because two copies of an input are the same defect one level
-/// down.
+/// The inputs are GNU's own directories -- `admin/unidata`, `admin/charsets`
+/// and the committed `etc/charsets` maps -- and no others: the second copy
+/// under `crates/neovm-core/unicode-data/` was deleted with the
+/// reimplementation that read it, because two copies of an input are the same
+/// defect one level down.
 #[test]
 fn every_recipe_reads_gnus_own_script_and_data_and_nothing_else() {
     let root = project_root();
     let roots = roots();
+    let gnu_input_dirs = [
+        root.join("admin").join("unidata"),
+        root.join("admin").join("charsets"),
+        root.join("etc").join("charsets"),
+    ];
     for recipe in recipes() {
         for dependency in recipe.dependencies(&roots) {
             assert!(
                 dependency.is_file(),
                 "recipe for {} names {}, which is not a file",
-                recipe.output,
+                recipe.output(),
                 dependency.display()
             );
             assert!(
-                dependency.starts_with(root.join("admin").join("unidata")),
-                "recipe for {} reads {}, outside GNU's own admin/unidata",
-                recipe.output,
+                gnu_input_dirs
+                    .iter()
+                    .any(|directory| dependency.starts_with(directory)),
+                "recipe for {} reads {}, outside GNU's own data directories",
+                recipe.output(),
                 dependency.display()
             );
         }
@@ -203,7 +294,7 @@ fn the_recipes_print_the_same_bytes_twice() {
             describe_bytes(&first),
             describe_bytes(&second),
             "{} is not reproducible, so every build would rewrite it",
-            recipe.output
+            recipe.output()
         );
     }
 }
@@ -235,8 +326,8 @@ fn the_recipes_print_the_same_bytes_twice() {
 fn the_hand_derived_flag_regexps_use_gnus_single_backslash_escapes() {
     let roots = roots();
     let recipe = recipes()
-        .iter()
-        .find(|recipe| recipe.output.ends_with("emoji-zwj.el"))
+        .into_iter()
+        .find(|recipe| recipe.output().ends_with("emoji-zwj.el"))
         .expect("emoji-zwj.el has a recipe");
     let output = recipe.output_path(&roots);
     let text = std::fs::read_to_string(&output)
@@ -267,9 +358,9 @@ fn the_hand_derived_flag_regexps_use_gnus_single_backslash_escapes() {
 
 /// A generated file is never source, and the tree must say so.
 ///
-/// Both outputs are gitignored -- which is exactly why they do not travel with
-/// a pull and why staleness is invisible (ledger 202 §1).  If one were ever
-/// committed, `git` would hand every checkout a fourth producer.
+/// All four outputs are gitignored -- which is exactly why they do not travel
+/// with a pull and why staleness is invisible (ledger 202 §1).  If one were
+/// ever committed, `git` would hand every checkout a fourth producer.
 #[test]
 fn no_generated_unicode_lisp_file_is_tracked_in_git() {
     let root = project_root();
@@ -314,7 +405,7 @@ fn output_paths_land_under_lisp_international() {
             output.display()
         );
         assert!(
-            Path::new(recipe.output).is_relative(),
+            Path::new(recipe.output()).is_relative(),
             "recipe outputs are relative to lisp/, so they cannot escape it"
         );
     }

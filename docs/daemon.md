@@ -63,23 +63,36 @@ With the normal Linux build prerequisites and Rust toolchain installed, run from
 the repository root:
 
 ```sh
-cargo xtask test-daemon-lifecycle
+cargo nextest run -p neomacs --test daemon_lifecycle
 ```
 
-This command prepares early generated Lisp inputs using the existing bootstrap
-pipeline, compiles the default-feature debug test target and matching editor/client,
-copies that editor to the native `neomacs-temacs` role, and creates and smoke-tests
-its bootstrap image. It then runs the entire `daemon_lifecycle` target serially,
-with the tests' existing deadlines and disposable HOME/XDG data. Failures are
-errors, not skipped tests. The existing test-suite CI runs this same Linux command.
-This is source/bootstrap verification, not the optimized, fully byte-compiled
-release runtime produced by `cargo xtask fresh-build --release`.
+Nothing has to be prepared first, and nothing outside the checkout is required.
+The build generates the Lisp inputs a bootstrap loads from source — GNU's
+`admin/charsets` awk recipes produce `lisp/international/cp51932.el` and
+`eucjp-ms.el`, and `admin/unidata`'s produce `charscript.el` and `emoji-zwj.el` —
+the way GNU's own `make` generates them. The suite's fixture then provisions the
+bootstrap runtime image beside the debug editor binary on first use: it copies
+the editor to its `neomacs-temacs` role name, dumps the image from Lisp sources,
+smoke-tests the result, and reuses it for every later case, regenerating it only
+when the editor binary is newer. The image is shared through an advisory lock,
+so concurrent test processes serialize the one bootstrap instead of repeating
+it. The whole target runs serially (a `.config/nextest.toml` override), because
+every case carries wall-clock deadlines against real daemon and client
+processes. Failures are errors, not skipped tests. This is source/bootstrap
+verification, not the optimized, fully byte-compiled release runtime produced by
+`cargo xtask fresh-build --release`.
+
+A *final* runtime image sitting beside the debug binaries wins over the
+bootstrap image at load time; if one is older than the editor binary the fixture
+fails with that path in the message rather than letting the daemon run stale
+code. Remove it or use a clean `CARGO_TARGET_DIR`.
 
 The native gate does not require a GNU installation. To additionally exercise a
 GNU client, explicitly select it:
 
 ```sh
-NEOMACS_GNU_EMACSCLIENT=/path/to/emacsclient cargo xtask test-daemon-lifecycle
+NEOMACS_GNU_EMACSCLIENT=/path/to/emacsclient \
+  cargo nextest run -p neomacs --test daemon_lifecycle
 ```
 
 A selected oracle must pass; it is not silently skipped if missing or failing.
@@ -99,19 +112,19 @@ shell code: single quotes, backslashes, variable expansions and operators are
 literal. Double-quote an executable path or fixed argument containing spaces;
 filenames retain their existing argv boundaries without shell interpolation.
 
-`CARGO_TARGET_DIR` selects both the binaries and image. To exercise clean build
-and runtime state, use a fresh checkout (without generated Lisp/bytecode) and an
-empty target directory, for example:
+`CARGO_TARGET_DIR` selects both the binaries and the image. To exercise clean
+build and runtime state, use a fresh checkout and an empty target directory, for
+example:
 
 ```sh
-CARGO_TARGET_DIR=target/daemon-lifecycle cargo xtask test-daemon-lifecycle
+CARGO_TARGET_DIR=target/daemon-lifecycle \
+  cargo nextest run -p neomacs --test daemon_lifecycle
 ```
 
-The command generates only the ordinary bootstrap inputs in the checkout and
-build artifacts in the selected target; it does not install Neomacs or use your
-init files. A conflicting final image in that debug directory is rejected rather
-than silently used; choose a clean target directory. `CARGO_BUILD_JOBS` can bound
-compilation concurrency without changing test scheduling.
+The build generates only the ordinary bootstrap inputs in the checkout and build
+artifacts in the selected target; it does not install Neomacs or use your init
+files. `CARGO_BUILD_JOBS` can bound compilation concurrency without changing test
+scheduling.
 
 ## Automatic local startup
 
