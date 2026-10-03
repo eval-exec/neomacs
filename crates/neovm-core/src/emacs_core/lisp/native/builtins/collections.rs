@@ -1191,6 +1191,42 @@ pub(crate) fn builtin_plist_get_3(
     builtin_plist_get_with_ctx(eval, vec![plist, prop, predicate])
 }
 
+/// GNU `FOR_EACH_TAIL_INTERNAL`'s Brent state for the predicate plist walks,
+/// so a circular plist ends the walk after the same number of predicate
+/// calls as GNU (and `circular-list` carries the same tail).
+struct PredicatePlistTail {
+    tortoise: Value,
+    max: i64,
+    n: i64,
+    q: i64,
+}
+
+impl PredicatePlistTail {
+    fn new(plist: Value) -> Self {
+        Self {
+            tortoise: plist,
+            max: 2,
+            n: 0,
+            q: 2,
+        }
+    }
+
+    /// The macro's step after the walk moved to `tail`: the tail at which a
+    /// cycle closes.
+    fn advance(&mut self, tail: Value) -> Option<Value> {
+        if !tail.is_cons() {
+            return None;
+        }
+        super::cons_list::for_each_tail_cycle_tail(
+            tail,
+            &mut self.tortoise,
+            &mut self.max,
+            &mut self.n,
+            &mut self.q,
+        )
+    }
+}
+
 pub(crate) fn builtin_plist_get_with_ctx(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
@@ -1213,23 +1249,35 @@ pub(crate) fn builtin_plist_get_with_ctx(
     // cells this cursor still points at; root the moving cursor in one
     // updatable slot so the remainder stays alive transitively (the GNU
     // equivalent survives via conservative C-stack scanning of the tail).
+    // The cycle tortoise is compared by identity, so it is rooted too.
     let cursor_slot = eval.push_specpdl_root_slot(Value::NIL);
+    let tortoise_slot = eval.push_specpdl_root_slot(Value::NIL);
     let mut cursor = plist;
-    let mut safe_tail = crate::emacs_core::plist::SafeTailGuard::new(cursor);
+    let mut cycle = PredicatePlistTail::new(cursor);
     let plist_result = loop {
         match cursor.kind() {
             ValueKind::Cons => {
                 eval.set_specpdl_root_slot(&cursor_slot, cursor);
-                let pair_car = cursor.cons_car();
-                let pair_cdr = cursor.cons_cdr();
-                if !pair_cdr.is_cons() {
+                eval.set_specpdl_root_slot(&tortoise_slot, cycle.tortoise);
+                if !cursor.cons_cdr().is_cons() {
                     break Ok(Value::NIL);
                 }
-                match eval.apply2(predicate, pair_car, prop) {
-                    Ok(value) if value.is_truthy() => break Ok(pair_cdr.cons_car()),
-                    Ok(_) => {
+                match eval.apply2(predicate, cursor.cons_car(), prop) {
+                    Ok(value) => {
+                        // GNU re-reads XCDR (tail) after the call: the
+                        // predicate may have replaced the value cell. GNU
+                        // dereferences a non-cons here; plist-get never
+                        // signals, so end the walk.
+                        let pair_cdr = cursor.cons_cdr();
+                        if !pair_cdr.is_cons() {
+                            break Ok(Value::NIL);
+                        }
+                        if value.is_truthy() {
+                            break Ok(pair_cdr.cons_car());
+                        }
                         cursor = pair_cdr.cons_cdr();
-                        if safe_tail.found_cycle_after_advance(cursor) {
+                        // FOR_EACH_TAIL_SAFE: a cycle just ends the walk.
+                        if cycle.advance(cursor).is_some() {
                             break Ok(Value::NIL);
                         }
                     }
@@ -1288,30 +1336,52 @@ pub(crate) fn builtin_plist_put_with_ctx(
     // the append path, so a freed prev would be a write to swept memory.
     let cursor_slot = eval.push_specpdl_root_slot(Value::NIL);
     let prev_slot = eval.push_specpdl_root_slot(Value::NIL);
+    let tortoise_slot = eval.push_specpdl_root_slot(Value::NIL);
     let mut cursor = plist;
     let mut prev = Value::NIL;
+    let mut cycle = PredicatePlistTail::new(cursor);
     let plist_result = loop {
         match cursor.kind() {
             ValueKind::Cons => {
                 eval.set_specpdl_root_slot(&cursor_slot, cursor);
                 eval.set_specpdl_root_slot(&prev_slot, prev);
-                let entry_key = cursor.cons_car();
-                let entry_rest = cursor.cons_cdr();
-                if !entry_rest.is_cons() {
+                eval.set_specpdl_root_slot(&tortoise_slot, cycle.tortoise);
+                if !cursor.cons_cdr().is_cons() {
                     break Err(signal(
                         LispCondition::WrongTypeArgument,
                         vec![Value::symbol("plistp"), plist],
                     ));
                 }
 
-                match eval.apply2(predicate, entry_key, key) {
-                    Ok(value) if value.is_truthy() => {
-                        entry_rest.set_car(new_val);
-                        break Ok(plist);
-                    }
-                    Ok(_) => {
+                match eval.apply2(predicate, cursor.cons_car(), key) {
+                    Ok(value) => {
+                        // GNU re-reads XCDR (tail) after the call: the
+                        // predicate may have replaced the value cell.
+                        let entry_rest = cursor.cons_cdr();
+                        if value.is_truthy() {
+                            // Fsetcar (XCDR (tail), val) checks the cell.
+                            if !entry_rest.is_cons() {
+                                break Err(signal(
+                                    LispCondition::WrongTypeArgument,
+                                    vec![Value::symbol("consp"), entry_rest],
+                                ));
+                            }
+                            entry_rest.set_car(new_val);
+                            break Ok(plist);
+                        }
+                        // GNU dereferences a non-cons here; treat it as the
+                        // dotted tail it now is.
+                        if !entry_rest.is_cons() {
+                            break Err(signal(
+                                LispCondition::WrongTypeArgument,
+                                vec![Value::symbol("plistp"), plist],
+                            ));
+                        }
                         prev = cursor;
                         cursor = entry_rest.cons_cdr();
+                        if let Some(cycle_tail) = cycle.advance(cursor) {
+                            break Err(signal(LispCondition::CircularList, vec![cycle_tail]));
+                        }
                     }
                     Err(err) => break Err(err),
                 }
@@ -1422,15 +1492,18 @@ pub(crate) fn builtin_plist_member(
         eval.push_specpdl_root(p);
     }
 
-    // Root the moving cursor across the predicate calls (see plist_get).
+    // Root the moving cursor and the cycle tortoise across the predicate
+    // calls (see plist_get).
     let cursor_slot = eval.push_specpdl_root_slot(Value::NIL);
+    let tortoise_slot = eval.push_specpdl_root_slot(Value::NIL);
     let mut cursor = plist;
+    let mut cycle = PredicatePlistTail::new(cursor);
     let plist_result = loop {
         match cursor.kind() {
             ValueKind::Cons => {
                 eval.set_specpdl_root_slot(&cursor_slot, cursor);
+                eval.set_specpdl_root_slot(&tortoise_slot, cycle.tortoise);
                 let entry_key = cursor.cons_car();
-                let entry_rest = cursor.cons_cdr();
 
                 let matches = if let Some(predicate) = &predicate {
                     match eval.apply2(*predicate, entry_key, prop) {
@@ -1448,10 +1521,15 @@ pub(crate) fn builtin_plist_member(
 
                 // See `plist_member_eq` for the nil-terminator
                 // rule: an unpaired last key is a valid end per
-                // GNU, only dotted tails signal plistp.
+                // GNU, only dotted tails signal plistp. GNU reads
+                // XCDR (tail) after the predicate call.
+                let entry_rest = cursor.cons_cdr();
                 match entry_rest.kind() {
                     ValueKind::Cons => {
                         cursor = entry_rest.cons_cdr();
+                        if let Some(cycle_tail) = cycle.advance(cursor) {
+                            break Err(signal(LispCondition::CircularList, vec![cycle_tail]));
+                        }
                     }
                     ValueKind::Nil => {
                         break Ok(Value::NIL);

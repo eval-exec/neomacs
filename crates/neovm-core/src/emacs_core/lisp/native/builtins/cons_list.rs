@@ -55,7 +55,10 @@ fn builtin_cons_values(car: Value, cdr: Value) -> EvalResult {
     Ok(Value::cons(car, cdr))
 }
 
-fn for_each_tail_cycle_tail(
+/// One step of GNU `FOR_EACH_TAIL_INTERNAL`'s Brent cycle check, run after
+/// the walk advanced to the cons `tail`: returns `tail` when it closes a
+/// cycle (the object GNU signals `circular-list` with).
+pub(super) fn for_each_tail_cycle_tail(
     tail: Value,
     tortoise: &mut Value,
     max: &mut i64,
@@ -90,6 +93,50 @@ where
     F: FnMut(Value) -> Result<Option<Value>, Flow>,
 {
     for_each_proper_list_tail_scan::<true, _>(list, improper_error_object, visit)
+}
+
+/// [`for_each_proper_list_tail`] for walks that call Lisp between steps:
+/// `visit` also receives the current Brent tortoise so the caller can keep
+/// it rooted. The cycle check compares the tortoise by identity; a callback
+/// can unlink it, and once collected its address can be reused by a cons
+/// spliced into the list, which would raise a false `circular-list` (GNU's
+/// `FOR_EACH_TAIL` tortoise is a conservatively scanned C local).
+fn for_each_proper_list_tail_rooting_tortoise<F>(
+    list: Value,
+    improper_error_object: Value,
+    mut visit: F,
+) -> EvalResult
+where
+    F: FnMut(Value, Value) -> Result<Option<Value>, Flow>,
+{
+    let mut tail = list;
+    let mut tortoise = list;
+    let mut max = 2i64;
+    let mut n = 0i64;
+    let mut q = 2i64;
+
+    while tail.is_cons() {
+        if let Some(result) = visit(tail, tortoise)? {
+            return Ok(result);
+        }
+
+        tail = scan_cdr::<true>(tail);
+        if tail.is_cons()
+            && let Some(cycle_tail) =
+                for_each_tail_cycle_tail(tail, &mut tortoise, &mut max, &mut n, &mut q)
+        {
+            return Err(signal(LispCondition::CircularList, vec![cycle_tail]));
+        }
+    }
+
+    if tail.is_nil() {
+        Ok(Value::NIL)
+    } else {
+        Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("listp"), improper_error_object],
+        ))
+    }
 }
 
 #[inline]
@@ -1494,24 +1541,34 @@ pub(crate) fn builtin_assoc_slice(eval: &mut super::eval::Context, args: &[Value
             // the alist, unlinking the current tail from the rooted head;
             // the slot keeps the remainder alive transitively.
             let cursor_slot = eval.push_specpdl_root_slot(Value::NIL);
-            let assoc_result = for_each_proper_list_tail(list, list, |tail| {
-                eval.set_specpdl_root_slot(&cursor_slot, tail);
-                let pair_car = tail.cons_car();
-                if let ValueKind::Cons = pair_car.kind() {
-                    let entry_key = pair_car.cons_car();
-                    let matches = match &predicate {
-                        Some(predicate) => {
-                            eval.apply2_assoc_predicate(test_fn, predicate, entry_key, *key)?
+            // The matched entry is returned after the predicate runs, and
+            // the cycle tortoise is compared by identity after it: TESTFN
+            // can unlink either and collect, so root both (GNU Fassoc keeps
+            // `car` and the tortoise alive as conservatively scanned C
+            // locals).
+            let entry_slot = eval.push_specpdl_root_slot(Value::NIL);
+            let tortoise_slot = eval.push_specpdl_root_slot(Value::NIL);
+            let assoc_result =
+                for_each_proper_list_tail_rooting_tortoise(list, list, |tail, tortoise| {
+                    eval.set_specpdl_root_slot(&cursor_slot, tail);
+                    eval.set_specpdl_root_slot(&tortoise_slot, tortoise);
+                    let pair_car = tail.cons_car();
+                    if let ValueKind::Cons = pair_car.kind() {
+                        eval.set_specpdl_root_slot(&entry_slot, pair_car);
+                        let entry_key = pair_car.cons_car();
+                        let matches = match &predicate {
+                            Some(predicate) => {
+                                eval.apply2_assoc_predicate(test_fn, predicate, entry_key, *key)?
+                            }
+                            None => eval.apply2(test_fn, entry_key, *key)?,
                         }
-                        None => eval.apply2(test_fn, entry_key, *key)?,
+                        .is_truthy();
+                        if matches {
+                            return Ok(Some(pair_car));
+                        }
                     }
-                    .is_truthy();
-                    if matches {
-                        return Ok(Some(pair_car));
-                    }
-                }
-                Ok(None)
-            });
+                    Ok(None)
+                });
             eval.restore_specpdl_roots(roots);
             return assoc_result;
         }

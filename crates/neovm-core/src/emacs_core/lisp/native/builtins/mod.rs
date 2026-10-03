@@ -677,6 +677,9 @@ mod obarray_order_test;
 #[path = "tests/assoc_callbacks.rs"]
 mod assoc_callbacks_test;
 #[cfg(test)]
+#[path = "tests/predicate_walk_gc.rs"]
+mod predicate_walk_gc_test;
+#[cfg(test)]
 #[path = "tests/sort_capture.rs"]
 mod sort_capture_test;
 
