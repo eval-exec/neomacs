@@ -929,11 +929,38 @@ pub struct ExpectedBoundWalk {
 }
 
 fn referenced_face_ids<'a>(rows: impl IntoIterator<Item = &'a GlyphRow>) -> Vec<FaceId> {
+    #[cfg(test)]
+    crate::engine::retained_face_gather_test_support::note_materialization();
     rows.into_iter()
         .flat_map(GlyphRow::referenced_face_ids)
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect()
+}
+
+/// Add every row dependency to the exclusively owned numeric frame set.
+/// Immutable retained rows and face IDs contain no Lisp state; the set
+/// belongs to one synchronous attempt and is not shared or cached.
+#[inline]
+fn extend_referenced_face_ids<'a>(
+    rows: impl IntoIterator<Item = &'a GlyphRow>,
+    ids: &mut std::collections::BTreeSet<FaceId>,
+) {
+    for row in rows {
+        // Attempt-local numeric state, reset at every row boundary. All row
+        // dependencies still pass through the same complete iterator.
+        let mut previous = None;
+        for id in row.referenced_face_ids() {
+            if id == FaceId::new(0) {
+                previous = None;
+                continue;
+            }
+            if previous != Some(id) {
+                ids.insert(id);
+            }
+            previous = Some(id);
+        }
+    }
 }
 
 /// The face IDs a reused chrome plan references, so Phase A admits them with
@@ -953,6 +980,20 @@ fn chrome_face_ids<'a>(
 }
 
 impl CursorOnlyReplay {
+    #[inline]
+    pub(crate) fn extend_retained_face_ids(&self, ids: &mut std::collections::BTreeSet<FaceId>) {
+        extend_referenced_face_ids(
+            self.body_rows
+                .iter()
+                .map(|(_, row)| row.as_ref())
+                .chain(chrome_face_ids(
+                    self.chrome.as_ref(),
+                    self.chrome_memo.as_ref(),
+                )),
+            ids,
+        );
+    }
+
     pub(crate) fn retained_face_ids(&self) -> Vec<FaceId> {
         referenced_face_ids(self.body_rows.iter().map(|(_, row)| row.as_ref()).chain(
             chrome_face_ids(self.chrome.as_ref(), self.chrome_memo.as_ref()),
@@ -961,6 +1002,25 @@ impl CursorOnlyReplay {
 }
 
 impl ScrollReplay {
+    #[inline]
+    pub(crate) fn extend_retained_face_ids(&self, ids: &mut std::collections::BTreeSet<FaceId>) {
+        let sync_rows = self
+            .sync
+            .iter()
+            .flat_map(|plan| plan.rows.iter().map(|(_, row)| row.as_ref()));
+        extend_referenced_face_ids(
+            self.reused_rows
+                .iter()
+                .map(|(_, row)| row.as_ref())
+                .chain(sync_rows)
+                .chain(chrome_face_ids(
+                    self.chrome.as_ref(),
+                    self.chrome_memo.as_ref(),
+                )),
+            ids,
+        );
+    }
+
     pub(crate) fn retained_face_ids(&self) -> Vec<FaceId> {
         // The rows an edit sync may install are retained rows too: their
         // faces must be admitted with the rest, whether or not the walk ends
@@ -2277,3 +2337,7 @@ mod scroll_classifier_tests;
 #[cfg(test)]
 #[path = "incremental_layout/tests/edit_sync_lazy_proof_support.rs"]
 pub(crate) mod lazy_proof_test_support;
+
+#[cfg(test)]
+#[path = "incremental_layout/tests/retained_face_gather_boundary_test.rs"]
+mod retained_face_gather_boundary_tests;

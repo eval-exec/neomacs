@@ -349,3 +349,7 @@ fn prove_first_preserves_sync_extra_reuse_at_a_line_start() {
 #[cfg(test)]
 #[path = "edit_sync_lazy_proof_engine_test.rs"]
 mod lazy_proof_tests;
+
+#[cfg(test)]
+#[path = "retained_face_gather_engine_test.rs"]
+mod retained_face_gather_tests;

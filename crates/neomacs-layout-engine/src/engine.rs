@@ -9,7 +9,12 @@ mod mini_source_start;
 mod mini_source_stop;
 mod posn_object_extent;
 mod prepared_viewports;
+
 mod query_cache;
+mod retained_face_gather;
+#[cfg(test)]
+#[path = "engine/tests/retained_face_gather_support.rs"]
+pub(crate) mod retained_face_gather_test_support;
 mod scroll_coverage;
 pub use scroll_coverage::ScrollCoverageProgress;
 mod scroll_preview;
@@ -1239,6 +1244,15 @@ impl IncrementalWindowPlan {
             .or_else(|| self.scroll.as_ref().map(|replay| replay.face_generation))
     }
 
+    #[inline]
+    fn extend_retained_face_ids(&self, ids: &mut std::collections::BTreeSet<FaceId>) {
+        if let Some(replay) = &self.cursor_only {
+            replay.extend_retained_face_ids(ids);
+        } else if let Some(replay) = &self.scroll {
+            replay.extend_retained_face_ids(ids);
+        }
+    }
+
     fn retained_face_ids(&self) -> Vec<FaceId> {
         self.cursor_only
             .as_ref()
@@ -1311,6 +1325,7 @@ fn admit_retained_frame_faces(
     committed_arena: &FrameFaceArena,
 ) -> Result<(), FrameFaceReuseError> {
     let current_generation = committed_arena.generation();
+    let gather_directly = retained_face_gather::enabled();
     let mut face_ids = std::collections::BTreeSet::new();
     for plan in plans {
         if let Some(source) = &plan.prepared_faces {
@@ -1332,11 +1347,15 @@ fn admit_retained_frame_faces(
                 current: current_generation,
             });
         }
-        face_ids.extend(
-            plan.retained_face_ids()
-                .into_iter()
-                .filter(|face_id| *face_id != FaceId::new(0)),
-        );
+        if gather_directly {
+            plan.extend_retained_face_ids(&mut face_ids);
+        } else {
+            face_ids.extend(
+                plan.retained_face_ids()
+                    .into_iter()
+                    .filter(|face_id| *face_id != FaceId::new(0)),
+            );
+        }
     }
     face_attempt.admit_retained(current_generation, face_ids, committed_arena)
 }
