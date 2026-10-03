@@ -173,7 +173,7 @@ pub(crate) fn emit_cons_store_barrier(
     let heap = heap_ptr(fb, rt);
     emit_barrier_window_check(fb, heap, owner, slow);
     if !rt.generational_enabled() {
-        if jit_gen0_collection_journal_on() {
+        if jit_gen0_collection_journal_eager() {
             emit_collection_write(fb, rt, owner, TAG_CONS);
         }
         return;
@@ -265,7 +265,7 @@ fn emit_slot_store_barrier(
     fb.ins().brif(needs_remembering, slow, &[], store, &[]);
     fb.switch_to_block(store);
     fb.seal_block(store);
-    if rt.generational_enabled() || jit_gen0_collection_journal_on() {
+    if rt.generational_enabled() || jit_gen0_collection_journal_eager() {
         emit_collection_write(fb, rt, owner, crate::tagged::value::TAG_VECLIKE);
     }
 }

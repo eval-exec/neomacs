@@ -519,3 +519,7 @@ mod collection_revision;
 #[cfg(test)]
 #[path = "inline_heap_gen0_collection_revision.rs"]
 mod gen0_collection_revision;
+
+#[cfg(test)]
+#[path = "gen0_observed_collection_revision.rs"]
+mod gen0_observed_collection_revision;

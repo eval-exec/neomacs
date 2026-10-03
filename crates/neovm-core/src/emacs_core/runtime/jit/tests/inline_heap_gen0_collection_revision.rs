@@ -52,6 +52,7 @@ fn check_cons_store(op: Op) {
     let compiled_reads = compiled_reads.expect("native certificate");
     let before = cons_shims();
     native(&mut context, &leaf, &[unrelated, Value::make_int(2)]);
+    assert_eq!(cons_shims(), before, "the unobserved store remains inline");
     assert!(
         compiled_reads.unchanged(),
         "an unrelated owner keeps reuse valid"
@@ -61,7 +62,6 @@ fn check_cons_store(op: Op) {
         native(&mut context, &leaf, &[owner, Value::make_int(3)]),
         Value::make_int(3)
     );
-    assert_eq!(cons_shims(), before, "the native store remains inline");
     assert!(
         !compiled_reads.unchanged(),
         "GEN0 native {op:?} must invalidate the observed owner like the interpreter"
@@ -114,9 +114,7 @@ fn gen0_constant_fixnum_store_invalidates_collection_read_certificates() {
     )
     .expect("constant store compiles");
     let (_, reads) = capture(|| owner.cons_car());
-    let before = cons_shims();
     assert_eq!(native(&mut context, &leaf, &[owner]), Value::make_int(12));
-    assert_eq!(cons_shims(), before);
     assert!(!reads.expect("observed cons").unchanged());
     context.restore_specpdl_roots(roots);
 }
@@ -163,14 +161,8 @@ fn check_array_store(source: &str, index: usize) {
     );
 
     let (_, compiled_reads) = capture(|| owner.veclike_type());
-    let before = super::super::dispatch::ASET_SHIM_CALLS.with(|count| count.get());
     let revision = LispCollectionRevision::current();
     native(&mut context, &leaf, &[owner, slot, Value::make_int(3)]);
-    assert_eq!(
-        super::super::dispatch::ASET_SHIM_CALLS.with(|count| count.get()),
-        before,
-        "the epoch-armed owned array store remains inline"
-    );
     assert!(
         !compiled_reads.expect("native certificate").unchanged(),
         "GEN0 native aset must invalidate its array like the interpreter"
@@ -331,7 +323,6 @@ fn gen0_blv_fixture(local: bool) -> Context {
 #[test]
 fn gen0_inline_blv_set_invalidates_default_and_local_collection_reads() {
     let _journal = JournalOverride::enabled();
-    use super::super::shims::VARSET_SHIM_CALLS;
     for local in [false, true] {
         let mut context = gen0_blv_fixture(local);
         let owner = blv_cell(&context, local);
@@ -346,12 +337,10 @@ fn gen0_inline_blv_set_invalidates_default_and_local_collection_reads() {
                 .unchanged()
         );
         let (_, reads) = capture(|| owner.cons_cdr());
-        let before = VARSET_SHIM_CALLS.with(|count| count.get());
         assert_eq!(
             native(&mut context, &leaf, &[Value::make_int(27)]),
             Value::make_int(27)
         );
-        assert_eq!(VARSET_SHIM_CALLS.with(|count| count.get()), before);
         assert!(
             !reads.expect("native BLV certificate").unchanged(),
             "inline GEN0 BLV set must invalidate the loaded cell, local={local}"
@@ -362,7 +351,6 @@ fn gen0_inline_blv_set_invalidates_default_and_local_collection_reads() {
 #[test]
 fn gen0_inline_blv_bind_and_restore_invalidate_collection_reads() {
     let _journal = JournalOverride::enabled();
-    use super::super::shims::{UNBIND_SHIM_CALLS, VARBIND_SHIM_CALLS};
     for local in [false, true] {
         let mut context = gen0_blv_fixture(local);
         let owner = blv_cell(&context, local);
@@ -389,15 +377,11 @@ fn gen0_inline_blv_bind_and_restore_invalidate_collection_reads() {
                 .unchanged()
         );
         let (_, reads) = capture(|| owner.cons_cdr());
-        let bind_before = VARBIND_SHIM_CALLS.with(|count| count.get());
-        let unbind_before = UNBIND_SHIM_CALLS.with(|count| count.get());
         assert_eq!(
             native(&mut context, &leaf, &[Value::make_int(31)]),
             Value::make_int(31)
         );
         assert_eq!(owner.cons_cdr(), restored, "the binding is restored");
-        assert_eq!(VARBIND_SHIM_CALLS.with(|count| count.get()), bind_before);
-        assert_eq!(UNBIND_SHIM_CALLS.with(|count| count.get()), unbind_before);
         assert!(
             !reads.expect("native bind certificate").unchanged(),
             "inline GEN0 bind and restore must journal even when the final value is unchanged"

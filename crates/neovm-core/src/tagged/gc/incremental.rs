@@ -1516,6 +1516,11 @@ impl TaggedHeap {
     /// Free a GC object by its header pointer.
     /// Must determine the actual type to call the correct Drop and dealloc.
     pub(super) unsafe fn free_gc_object(&mut self, header: *mut GcHeader) {
+        if has_noncons_collection_observations() {
+            // No mutator or joined collector can retain this dying owner.
+            // Clear only collection history; GC category/liveness is intact.
+            unsafe { &*header }.clear_collection_observed();
+        }
         let kind = unsafe { (*header).kind };
         match kind {
             HeapObjectKind::String => {

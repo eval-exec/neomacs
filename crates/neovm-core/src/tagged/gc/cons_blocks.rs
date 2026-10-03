@@ -45,6 +45,9 @@ impl ConsBlock {
         if storage.is_null() {
             alloc::handle_alloc_error(layout);
         }
+        // A fresh owned allocation may reuse an address once occupied by a
+        // foreign cons; its object lifetime starts with no observation.
+        clear_cons_observed_block(storage as usize);
         Self {
             storage,
             next_index: 0,
@@ -188,6 +191,12 @@ impl ConsBlock {
     /// with allocation regions closed and no concurrent marker; old cells
     /// stay intact in a minor; major promotion first replaces old with mark.
     pub(super) fn sweep_generational(&mut self, free_list: &mut *mut ConsCell) -> usize {
+        clear_cons_observed_dead(
+            self.base_addr(),
+            self.trailer(),
+            self.next_index as usize,
+            true,
+        );
         let mut live = 0usize;
         for i in (0..self.next_index as usize).rev() {
             let cell = unsafe { self.cells_ptr().add(i) };
@@ -219,6 +228,12 @@ impl ConsBlock {
     /// Sweep: thread reclaimed cells into the global intrusive free list and
     /// return the number of live cells in this block.
     pub(super) fn sweep(&mut self, free_list: &mut *mut ConsCell) -> usize {
+        clear_cons_observed_dead(
+            self.base_addr(),
+            self.trailer(),
+            self.next_index as usize,
+            false,
+        );
         let mut live = 0;
 
         // Match GNU alloc.c: reclaimed conses are linked through the dead
@@ -241,6 +256,7 @@ impl ConsBlock {
 
 impl Drop for ConsBlock {
     fn drop(&mut self) {
+        clear_cons_observed_block(self.base_addr());
         unsafe { alloc::dealloc(self.storage, Self::layout()) };
     }
 }

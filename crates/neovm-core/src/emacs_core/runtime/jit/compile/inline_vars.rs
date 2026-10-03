@@ -714,6 +714,15 @@ fn cons_store_ok(
     let outside = fb
         .ins()
         .icmp(IntCC::UnsignedGreaterThanOrEqual, offset, window.len);
+    // An observed dumped BLV must still reach its journaling setter, even
+    // when the GC remembered-set proof would allow a plain store.
+    let remembered = if crate::tagged::collection_reads::compiled_journal_mode()
+        == crate::tagged::collection_reads::CompiledJournalMode::Observed
+    {
+        None
+    } else {
+        remembered
+    };
     match remembered {
         None => outside,
         Some(bits) => {
@@ -950,7 +959,7 @@ fn emit_varset_fast(
             if rt.generational_enabled() {
                 let owner = iadd_imm_p(fb, valcell, -(TAG_CONS as i64));
                 super::heap_inline::emit_cons_store_barrier(fb, rt, owner, stored, slow);
-            } else if super::jit_gen0_collection_journal_on() {
+            } else if super::jit_gen0_collection_journal_eager() {
                 let owner = iadd_imm_p(fb, valcell, -(TAG_CONS as i64));
                 super::heap_inline::emit_collection_write(fb, rt, owner, TAG_CONS);
             }
@@ -1202,7 +1211,7 @@ fn emit_varbind_fast(
             if rt.generational_enabled() {
                 let owner = iadd_imm_p(fb, valcell, -(TAG_CONS as i64));
                 super::heap_inline::emit_cons_store_barrier(fb, rt, owner, stored, slow);
-            } else if super::jit_gen0_collection_journal_on() {
+            } else if super::jit_gen0_collection_journal_eager() {
                 let owner = iadd_imm_p(fb, valcell, -(TAG_CONS as i64));
                 super::heap_inline::emit_collection_write(fb, rt, owner, TAG_CONS);
             }
@@ -1475,7 +1484,7 @@ fn emit_unbind_fast(
             Restore::Cell { cell, value } => store_word(fb, value, cell, LISP_SYMBOL_VAL_OFFSET),
             Restore::Fwd { desc, kind, value } => fwd_store(fb, desc, kind, value),
             Restore::Cons { cons, value } => {
-                if !generational && super::jit_gen0_collection_journal_on() {
+                if !generational && super::jit_gen0_collection_journal_eager() {
                     let owner = iadd_imm_p(fb, cons, -(TAG_CONS as i64));
                     super::heap_inline::emit_collection_write(fb, rt, owner, TAG_CONS);
                 }

@@ -279,36 +279,31 @@ pub(crate) fn jit_inline_heap_write_on() -> bool {
     })
 }
 
-/// Retain interpreter collection-write history on all native stores, including
-/// GEN0 cons/BLV/vector/record stores and string byte stores at either generation.
+/// Retain collection-write history for observed native GEN0 owners by default.
+/// The eager comparison mode retains it on every native store.
 /// Read once at compile time (the vector fallback reads the same process knob).
 /// Threading: immutable process configuration; the test override is scalar only.
 /// Journal state remains owned by the executing mutator, as in the interpreter.
 pub(crate) fn jit_gen0_collection_journal_on() -> bool {
-    #[cfg(test)]
-    if let Some(on) = GEN0_COLLECTION_JOURNAL_TEST_OVERRIDE.with(std::cell::Cell::get) {
-        return on;
-    }
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| {
-        matches!(
-            std::env::var("NEOVM_JIT_GEN0_COLLECTION_JOURNAL")
-                .ok()
-                .as_deref(),
-            Some("1" | "on" | "true" | "yes")
-        )
-    })
+    crate::tagged::collection_reads::compiled_journal_mode()
+        != crate::tagged::collection_reads::CompiledJournalMode::Off
 }
 
-#[cfg(test)]
-thread_local! {
-    /// Compiler configuration only, never a cache of Lisp state.
-    static GEN0_COLLECTION_JOURNAL_TEST_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+pub(crate) fn jit_gen0_collection_journal_eager() -> bool {
+    crate::tagged::collection_reads::compiled_journal_mode()
+        == crate::tagged::collection_reads::CompiledJournalMode::Eager
 }
 
 #[cfg(test)]
 pub(crate) fn force_gen0_collection_journal_for_test(on: Option<bool>) {
-    GEN0_COLLECTION_JOURNAL_TEST_OVERRIDE.with(|setting| setting.set(on));
+    use crate::tagged::collection_reads::{CompiledJournalMode, force_compiled_journal_for_test};
+    force_compiled_journal_for_test(on.map(|on| {
+        if on {
+            CompiledJournalMode::Observed
+        } else {
+            CompiledJournalMode::Off
+        }
+    }));
 }
 
 /// Allocate conses and box floats inline at JIT sites, bumping the heap's

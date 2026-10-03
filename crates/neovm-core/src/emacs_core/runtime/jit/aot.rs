@@ -117,7 +117,8 @@ pub(crate) const ABI_TAG: u32 = compute_abi_tag();
 // v25: AOT re-tier adds monotone shared-source exclusion and salts its runtime layout.
 // v26: generational JIT cons stores read the shared cons-block unlogged bitmap.
 // v27: deferred mode-line display exits add a Context field and change its layout.
-// v28: the optional string collection-journal shim extends the exported generated-code contract.
+// v28: collection-aware stores add a string-journal shim and consume header byte 7
+// as a sticky observed mark; GEN0 JitHeapState windows also include observed owners.
 const ABI_TAG_VERSION: u32 = 28;
 
 /// Format version of the AOT descriptor spec-section + the runtime spec ABI

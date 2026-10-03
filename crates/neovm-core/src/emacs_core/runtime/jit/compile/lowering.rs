@@ -1274,11 +1274,31 @@ fn emit_inline_string_aset(
     );
     let at = fb.ins().iadd(data, i);
     if super::jit_gen0_collection_journal_on() {
+        let continuation =
+            if !rt.generational_enabled() && !super::jit_gen0_collection_journal_eager() {
+                use super::jit_layout::heap::GC_HEADER_COLLECTION_OBSERVED_OFFSET;
+                let observed = iadd_imm_p(fb, object, GC_HEADER_COLLECTION_OBSERVED_OFFSET as i64);
+                let mark = fb.ins().atomic_load(types::I8, flags, observed);
+                let journal = fb.create_block();
+                let continuation = fb.create_block();
+                fb.set_cold_block(journal);
+                fb.ins().brif(mark, journal, &[], continuation, &[]);
+                fb.switch_to_block(journal);
+                fb.seal_block(journal);
+                Some(continuation)
+            } else {
+                None
+            };
         let record = rt
             .refs
             .try_get(fb.func, Shim::StringCollectionWrite)
             .expect("string-collection-journal refs");
         fb.ins().call(record, &[array]);
+        if let Some(continuation) = continuation {
+            fb.ins().jump(continuation, &[]);
+            fb.switch_to_block(continuation);
+            fb.seal_block(continuation);
+        }
     }
     fb.ins().istore8(flags, code, at, 0);
     fb.def_var(res, value);

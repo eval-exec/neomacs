@@ -566,7 +566,7 @@ pub extern "C" fn neovm_jit_setcar(ctx: *mut u8, cell: i64, new_car: i64) -> i64
     LIST_STORE_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     let cell = Value::from_bits(cell as usize);
     let new_car = Value::from_bits(new_car as usize);
-    if crate::tagged::mutate::set_cons_car(cell, new_car) {
+    if compiled_cons_store(cell, new_car, false) {
         return new_car.bits() as i64;
     }
     list_slow(ctx, pure_setcar, cell, new_car)
@@ -581,10 +581,51 @@ pub extern "C" fn neovm_jit_setcdr(ctx: *mut u8, cell: i64, new_cdr: i64) -> i64
     LIST_STORE_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     let cell = Value::from_bits(cell as usize);
     let new_cdr = Value::from_bits(new_cdr as usize);
-    if crate::tagged::mutate::set_cons_cdr(cell, new_cdr) {
+    if compiled_cons_store(cell, new_cdr, true) {
         return new_cdr.bits() as i64;
     }
     list_slow(ctx, pure_setcdr, cell, new_cdr)
+}
+
+/// A window hit can be an unobserved hole in the observation envelope.
+/// Keep the GC barrier on every accepted store, but journal only an exact
+/// observed owner in GEN0 observed mode. No callback or safe point intervenes.
+#[inline]
+fn compiled_cons_store(cell: Value, value: Value, cdr: bool) -> bool {
+    use crate::tagged::collection_reads::{
+        CompiledJournalMode, compiled_journal_mode, is_observed,
+    };
+    if compiled_journal_mode() != CompiledJournalMode::Observed
+        || crate::tagged::gc::current_heap_generational_enabled()
+    {
+        return if cdr {
+            crate::tagged::mutate::set_cons_cdr(cell, value)
+        } else {
+            crate::tagged::mutate::set_cons_car(cell, value)
+        };
+    }
+    if !cell.is_cons() {
+        return false;
+    }
+    if is_observed(cell.bits()) {
+        crate::tagged::gc::TaggedHeap::record_compiled_collection_write(cell.bits());
+    }
+    let kind = if cdr {
+        crate::tagged::gc::HeapWriteKind::ConsCdr
+    } else {
+        crate::tagged::gc::HeapWriteKind::ConsCar
+    };
+    crate::tagged::gc::note_heap_slot_write(cell, kind, usize::from(cdr), value);
+    let owner = (cell.bits() & !TAG_MASK) as *mut crate::tagged::header::ConsCell;
+    // SAFETY: the Cons tag names a live cell, and the GC barrier completed.
+    unsafe {
+        if cdr {
+            (*owner).set_cdr(value);
+        } else {
+            (*owner).set_car(value);
+        }
+    }
+    true
 }
 
 #[cold]
@@ -698,21 +739,27 @@ fn aset_journaled_vector(array: Value, idx: usize, value: Value) -> Option<bool>
     let header = (array.bits() & !TAG_MASK) as *const crate::tagged::header::VecLikeHeader;
     // SAFETY: a live veclike, with an immutable subtype header. There is
     // no callback or GC safe point between the guards and this mutation.
-    if unsafe { (*header).type_tag } != crate::tagged::header::VecLikeType::Vector {
-        return None;
-    }
-    let obj = header as *mut crate::tagged::header::VectorObj;
-    let data = unsafe { &mut (*obj).data };
+    let (data, kind) = match unsafe { (*header).type_tag } {
+        crate::tagged::header::VecLikeType::Vector => (
+            unsafe { &mut (*(header as *mut crate::tagged::header::VectorObj)).data },
+            crate::tagged::gc::HeapWriteKind::VectorSlot,
+        ),
+        crate::tagged::header::VecLikeType::Record => (
+            unsafe { &mut (*(header as *mut crate::tagged::header::RecordObj)).data },
+            crate::tagged::gc::HeapWriteKind::RecordSlot,
+        ),
+        _ => return None,
+    };
     if !data.is_owned() || idx >= data.as_slice().len() {
         return Some(false);
     }
-    crate::tagged::gc::TaggedHeap::record_compiled_collection_write(array.bits());
-    crate::tagged::gc::note_heap_slot_write(
-        array,
-        crate::tagged::gc::HeapWriteKind::VectorSlot,
-        idx,
-        value,
-    );
+    if jit_gen0_collection_journal_eager()
+        || crate::tagged::gc::current_heap_generational_enabled()
+        || crate::tagged::collection_reads::is_observed(array.bits())
+    {
+        crate::tagged::gc::TaggedHeap::record_compiled_collection_write(array.bits());
+    }
+    crate::tagged::gc::note_heap_slot_write(array, kind, idx, value);
     data.store_atomic(idx, value);
     Some(true)
 }

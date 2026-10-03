@@ -630,18 +630,34 @@ impl<T: PagedObject> Drop for ObjectPage<T> {
         // or when the owning `TaggedHeap` drops. Both paths run on the mutator
         // after any concurrent marker has joined, so no GC thread can still be
         // reading these slots. Retired pages are freed only at heap teardown.
-        if std::mem::needs_drop::<T>() {
+        if has_noncons_collection_observations() {
+            self.drop_objects::<true>();
+        } else if std::mem::needs_drop::<T>() {
+            self.drop_objects::<false>();
+        }
+        Self::free_storage(self.storage);
+    }
+}
+
+impl<T: PagedObject> ObjectPage<T> {
+    /// Destruction is exclusive with all mutator observations. The false
+    /// specialization retains the POD fast path and ordinary payload walk.
+    fn drop_objects<const OBSERVED: bool>(&mut self) {
+        if OBSERVED || std::mem::needs_drop::<T>() {
             for word_index in 0..Self::ALLOC_WORDS {
                 let mut bits = self.alloc_bits[word_index];
                 while bits != 0 {
                     let bit = bits.trailing_zeros() as usize;
                     bits &= bits - 1;
                     let index = word_index * usize::BITS as usize + bit;
-                    unsafe { std::ptr::drop_in_place(self.slot_ptr(index)) };
+                    let slot = self.slot_ptr(index);
+                    if OBSERVED {
+                        unsafe { &*(slot as *const GcHeader) }.clear_collection_observed();
+                    }
+                    unsafe { std::ptr::drop_in_place(slot) };
                 }
             }
         }
-        Self::free_storage(self.storage);
     }
 }
 
@@ -993,6 +1009,24 @@ impl<T: PagedObject> ObjectArena<T> {
         end: usize,
         parity: MarkParity,
         scope: CollectionScope,
+        on_free: impl FnMut(usize),
+    ) -> (usize, usize) {
+        if has_noncons_collection_observations() {
+            self.sweep_range_observed::<GENERATIONAL, true>(start, end, parity, scope, on_free)
+        } else {
+            self.sweep_range_observed::<GENERATIONAL, false>(start, end, parity, scope, on_free)
+        }
+    }
+
+    /// The observation gate is outside the sweep loop, so ordinary GC keeps
+    /// its existing slot walk. A dying object is cleared before its payload
+    /// drops or its allocation bit/free-list storage can be reused.
+    fn sweep_range_observed<const GENERATIONAL: bool, const OBSERVED: bool>(
+        &mut self,
+        start: usize,
+        end: usize,
+        parity: MarkParity,
+        scope: CollectionScope,
         mut on_free: impl FnMut(usize),
     ) -> (usize, usize) {
         let mut live_bytes = 0usize;
@@ -1047,6 +1081,9 @@ impl<T: PagedObject> ObjectArena<T> {
                         // payload IN PLACE, then clear the bit (the oracle
                         // answers NOT-owned from here on).
                         on_free(slot as usize);
+                        if OBSERVED {
+                            header.clear_collection_observed();
+                        }
                         unsafe { std::ptr::drop_in_place(slot) };
                         page.free_slot(index);
                         freed += 1;

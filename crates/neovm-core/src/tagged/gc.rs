@@ -2657,6 +2657,11 @@ mod incremental;
 
 mod cons_block_trailer;
 use cons_block_trailer::*;
+mod collection_observed;
+use collection_observed::{
+    clear_cons_observed_block, clear_cons_observed_dead, has_noncons_collection_observations,
+};
+pub(crate) use collection_observed::{collection_observed, mark_collection_observed};
 mod cons_blocks;
 /// The cons-block trailer's shape, for `jit_layout::heap`.
 #[cfg_attr(not(feature = "jit"), allow(unused_imports))]
@@ -2673,7 +2678,7 @@ mod gc_thread;
 pub use gc_thread::*;
 
 mod barrier_window;
-pub(crate) use barrier_window::BarrierWindow;
+pub(crate) use barrier_window::{BarrierWindow, publish_collection_observation_window};
 
 mod jit_state;
 

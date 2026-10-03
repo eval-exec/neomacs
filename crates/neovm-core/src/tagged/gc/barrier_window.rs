@@ -126,13 +126,39 @@ impl TaggedHeap {
         }
     }
 
+    /// Native GEN0 stores share the existing window test with certificate
+    /// owners. The enclosing span is only a coarse rejection filter: its
+    /// outlined setter checks the exact sticky mark before journaling.
+    pub(super) fn compiled_barrier_window(
+        &self,
+        ordinary: BarrierWindow,
+        observed_lo: usize,
+        observed_hi: usize,
+    ) -> BarrierWindow {
+        if self.generational.enabled || observed_hi <= observed_lo {
+            return ordinary;
+        }
+        if ordinary == BarrierWindow::ALL {
+            return ordinary;
+        }
+        if ordinary.len == 0 {
+            return BarrierWindow::span(observed_lo, observed_hi);
+        }
+        BarrierWindow::span(
+            ordinary.lo.min(observed_lo),
+            ordinary.lo.saturating_add(ordinary.len).max(observed_hi),
+        )
+    }
+
     /// THE publisher of the barrier window: recompute it from this heap's
     /// state and store it where the barriers read it — the thread-local
     /// mirror the Rust stores test and the heap field compiled code tests
     /// (`JitHeapState`). Called at every writer of an input.
     pub(super) fn publish_barrier_window(&mut self) {
         let window = self.barrier_window();
-        self.jit.set_barrier_window(window);
+        let (lo, hi) = super::super::collection_reads::compiled_observation_window();
+        self.jit
+            .set_barrier_window(self.compiled_barrier_window(window, lo, hi));
         TAGGED_HEAP_BARRIER_WINDOW.with(|w| w.set(window));
         TAGGED_HEAP_CONS_BARRIER_WINDOW.with(|w| w.set(self.cons_barrier_window(window)));
     }
@@ -149,6 +175,26 @@ impl TaggedHeap {
         TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(on));
         self.publish_barrier_window();
     }
+}
+
+/// Publish the executing mutator's observation envelope before its revision
+/// snapshot and object read. This has no allocation, callback or safe point,
+/// and does not borrow collection history (its caller may already hold it).
+/// Certificates and Context execution remain mutator-local: another Lisp
+/// mutator needs shared revision/journal publication, not just this atomic mark.
+pub(crate) fn publish_collection_observation_window(lo: usize, hi: usize) {
+    TAGGED_HEAP.with(|slot| {
+        let heap = slot.get();
+        if heap.is_null() {
+            return;
+        }
+        // SAFETY: installation retains this heap; only its executing mutator
+        // publishes JitHeapState Cells. The collector never reads that state.
+        let heap = unsafe { &*heap };
+        let ordinary = heap.barrier_window();
+        heap.jit
+            .set_barrier_window(heap.compiled_barrier_window(ordinary, lo, hi));
+    });
 }
 
 #[cfg(test)]

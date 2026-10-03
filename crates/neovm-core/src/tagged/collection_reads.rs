@@ -122,6 +122,11 @@ struct State {
     writes: Box<[usize; JOURNAL_SIZE]>,
     captures: Vec<Capture>,
     journal_policy: JournalPolicy,
+    // A conservative envelope of this mutator's sticky observed owners. It
+    // lives with the existing journal, not a Context, and never resets while
+    // certificates can survive. Holes are filtered by exact object marks.
+    observed_lo: usize,
+    observed_hi: usize,
 }
 
 impl Default for State {
@@ -137,6 +142,8 @@ impl Default for State {
             } else {
                 JournalPolicy::BeforeFirstCapture
             },
+            observed_lo: usize::MAX,
+            observed_hi: 0,
         }
     }
 }
@@ -166,7 +173,13 @@ impl CollectionReads {
         }
         if ACTIVE.with(Cell::get) {
             for &bits in &self.reads {
-                observe_bits(bits);
+                // The original observation already published its sticky mark
+                // and this mutator's envelope. Certificates retain identities,
+                // not object storage: transitive reuse must not dereference an
+                // old header merely to re-publish that existing metadata.
+                if !recently_observed(bits) {
+                    observe_uncached(bits);
+                }
             }
         }
         true
@@ -330,7 +343,10 @@ fn observe_bits(bits: usize) {
     // cons/vector access can inline this check without entering the slow
     // dependency recorder. Scope changes clear it so every active scope
     // still observes nested reads; collisions only cause another lookup.
-    if !recently_observed(bits) {
+    // Mark before the revision snapshot and before the read-cache shortcut:
+    // GC may have recycled this address since its prior observation.
+    let newly_observed = publish_observed_owner(bits);
+    if newly_observed || !recently_observed(bits) {
         observe_uncached(bits);
     }
 }
@@ -413,6 +429,9 @@ pub(super) fn record_projected_write(value: TaggedValue, projection: WriteProjec
                 false
             }
         };
+        if observe && projected {
+            publish_observed_owner_in_state(&mut state, value.bits());
+        }
         let revision = LispCollectionRevision::advance();
         state.writes[revision.sequence() as usize % JOURNAL_SIZE] = value.bits();
         if observe && projected && !recently_observed(value.bits()) {
@@ -420,6 +439,60 @@ pub(super) fn record_projected_write(value: TaggedValue, projection: WriteProjec
         }
     });
     projected
+}
+
+mod compiled_journal;
+#[cfg(test)]
+pub(crate) use compiled_journal::force_compiled_journal_for_test;
+pub(crate) use compiled_journal::{CompiledJournalMode, compiled_journal_mode, is_observed};
+
+/// Snapshot only the current mutator's existing journal metadata. Installation
+/// of a Context is exclusive on that mutator and republishes this envelope.
+pub(crate) fn compiled_observation_window() -> (usize, usize) {
+    if compiled_journal_mode() != CompiledJournalMode::Observed {
+        return (usize::MAX, 0);
+    }
+    STATE.with(|state| {
+        let state = state.borrow();
+        (state.observed_lo, state.observed_hi)
+    })
+}
+
+fn publish_compiled_observation_window() {
+    let (lo, hi) = compiled_observation_window();
+    super::gc::publish_collection_observation_window(lo, hi);
+}
+
+#[cold]
+fn publish_observed_owner(bits: usize) -> bool {
+    if compiled_journal_mode() != CompiledJournalMode::Observed {
+        return false;
+    }
+    STATE.with(|state| publish_observed_owner_in_state(&mut state.borrow_mut(), bits))
+}
+
+fn publish_observed_owner_in_state(state: &mut State, bits: usize) -> bool {
+    if compiled_journal_mode() != CompiledJournalMode::Observed {
+        return false;
+    }
+    let newly = super::gc::mark_collection_observed(bits);
+    let tag = bits & super::value::TAG_MASK;
+    if matches!(
+        tag,
+        super::value::TAG_CONS | super::value::TAG_STRING | super::value::TAG_VECLIKE
+    ) && bits & !super::value::TAG_MASK != 0
+    {
+        let address = bits & !super::value::TAG_MASK;
+        let lo = state.observed_lo.min(address);
+        let hi = state.observed_hi.max(address + 1);
+        if lo != state.observed_lo || hi != state.observed_hi {
+            state.observed_lo = lo;
+            state.observed_hi = hi;
+            // No callback or STATE reborrow occurs in the heap-side publisher.
+            super::gc::publish_collection_observation_window(lo, hi);
+        }
+    }
+    newly
 }
 
 /// Observe reads made by `read`, rejecting reuse if its dependency budget or
