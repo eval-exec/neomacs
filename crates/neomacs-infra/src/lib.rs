@@ -9,6 +9,9 @@
 //! * [`display`] — the deterministic, isolated display sessions
 //!   (loopback-TCP Xvfb, weston-headless, sway) those suites run their
 //!   scenarios on;
+//! * [`runtime_image`] — the editor's bootstrap runtime image, provisioned
+//!   on demand beside the editor binary and shared by every test process
+//!   that boots a real daemon;
 //! * [`workspace_root`] — the runtime-resolved workspace identity that
 //!   archive-shipped binaries must use.
 //!
@@ -19,6 +22,7 @@ pub mod config_env;
 pub mod display;
 pub mod inventory;
 pub mod packages;
+pub mod runtime_image;
 pub mod tools;
 
 pub use config_env::{

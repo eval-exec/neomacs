@@ -3188,6 +3188,16 @@ impl LoadupDumpInvocation {
     }
 }
 
+/// The program name that selects the editor's raw (temacs) runtime role.
+///
+/// A byte copy of the editor under this name bootstraps from Lisp sources and
+/// owns the dump protocol (`--batch -l loadup --temacs=pbootstrap`), which is
+/// how [`RuntimeImageRole::Bootstrap`]'s image is produced beside the editor
+/// binary.  `crates/neomacs/src/main.rs` (`RuntimeMode::Raw`) and any test
+/// fixture that regenerates the image must agree on this name, so it lives
+/// here rather than as a literal in each of them.
+pub const TEMACS_ROLE_BINARY_NAME: &str = "neomacs-temacs";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeImageRole {
     Bootstrap,

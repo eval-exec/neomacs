@@ -205,7 +205,7 @@ use neovm_core::emacs_core::image_catalog::{
 use neovm_core::emacs_core::intern::intern;
 use neovm_core::emacs_core::load::{
     LoadupDumpInvocation, LoadupDumpMode, LoadupInvocation, RuntimeImageRole,
-    find_file_in_load_path, get_load_path, load_file,
+    TEMACS_ROLE_BINARY_NAME, find_file_in_load_path, get_load_path, load_file,
 };
 #[cfg(test)]
 use neovm_core::emacs_core::print_value_with_eval;
@@ -257,7 +257,7 @@ pub enum DumpImageKind {
 impl RuntimeMode {
     pub const fn binary_name(self) -> &'static str {
         match self {
-            Self::Raw => "neomacs-temacs",
+            Self::Raw => TEMACS_ROLE_BINARY_NAME,
             Self::BootstrapUse => "bootstrap-neomacs",
             Self::FinalRun => "neomacs",
         }
@@ -279,7 +279,7 @@ fn runtime_mode_from_program_name(program: &str) -> RuntimeMode {
         .to_string_lossy();
     let file_name = file_name.strip_suffix(".exe").unwrap_or(&file_name);
     match file_name {
-        "neomacs-temacs" => RuntimeMode::Raw,
+        TEMACS_ROLE_BINARY_NAME => RuntimeMode::Raw,
         "bootstrap-neomacs" => RuntimeMode::BootstrapUse,
         _ => RuntimeMode::FinalRun,
     }
