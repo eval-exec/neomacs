@@ -38,7 +38,7 @@ fn generational_pacing_knob_defaults_and_invalid_values() {
             defaults.major_max_minors,
             defaults.stress_major_every
         ),
-        (100, 64, 8)
+        (15, 64, 8)
     );
     assert_eq!(
         GenerationalPacingKnobs::from_values(None, None, None),
@@ -73,7 +73,10 @@ fn generational_pacing_zero_limits_and_constructor_off_defaults() {
     assert!(major_due(knobs, 0, counters(0, 0, 0), false, false));
     assert_eq!(
         super::knobs::generational_pacing_knobs(false),
-        GenerationalPacingKnobs::default()
+        GenerationalPacingKnobs {
+            major_growth_percent: 100,
+            ..GenerationalPacingKnobs::default()
+        }
     );
 }
 
@@ -91,6 +94,97 @@ fn generational_pacing_growth_floor_has_exact_boundary() {
         knobs,
         0,
         counters(MIN_MAJOR_GROWTH_BYTES, 0, 0),
+        false,
+        false
+    ));
+}
+
+#[test]
+fn generational_pacing_default_growth_bounds_large_old_heaps() {
+    let mib = 1024 * 1024;
+    let baseline = 80 * mib;
+    let budget = 12 * mib;
+    let defaults = GenerationalPacingKnobs::default();
+    assert_eq!(
+        major_growth_bytes(baseline, defaults.major_growth_percent),
+        budget
+    );
+    assert!(!major_due(
+        defaults,
+        baseline,
+        counters(budget - 1, 0, 0),
+        false,
+        false
+    ));
+    assert!(major_due(
+        defaults,
+        baseline,
+        counters(budget, 0, 0),
+        false,
+        false
+    ));
+
+    let previous_policy = GenerationalPacingKnobs::from_values(Some("100"), None, None);
+    assert_eq!(
+        major_growth_bytes(baseline, previous_policy.major_growth_percent),
+        baseline
+    );
+    assert!(!major_due(
+        previous_policy,
+        baseline,
+        counters(budget, 0, 0),
+        false,
+        false
+    ));
+    assert!(!major_due(
+        previous_policy,
+        baseline,
+        counters(baseline - 1, 0, 0),
+        false,
+        false
+    ));
+    assert!(major_due(
+        previous_policy,
+        baseline,
+        counters(baseline, 0, 0),
+        false,
+        false
+    ));
+}
+
+#[test]
+fn generational_pacing_default_growth_keeps_small_heap_floor_and_minor_cap() {
+    let defaults = GenerationalPacingKnobs::default();
+    let baseline = 48 * 1024 * 1024;
+    assert_eq!(
+        major_growth_bytes(baseline, defaults.major_growth_percent),
+        MIN_MAJOR_GROWTH_BYTES
+    );
+    assert!(!major_due(
+        defaults,
+        baseline,
+        counters(MIN_MAJOR_GROWTH_BYTES - 1, 0, 0),
+        false,
+        false
+    ));
+    assert!(major_due(
+        defaults,
+        baseline,
+        counters(MIN_MAJOR_GROWTH_BYTES, 0, 0),
+        false,
+        false
+    ));
+    assert!(!major_due(
+        defaults,
+        baseline,
+        counters(0, 63, 0),
+        false,
+        false
+    ));
+    assert!(major_due(
+        defaults,
+        baseline,
+        counters(0, 64, 0),
         false,
         false
     ));

@@ -10,7 +10,7 @@
 //! | `NEOVM_GC_MEMORY_TELEMETRY=1` | off | stopped-world retained/live inventory (requires `gc-memory-telemetry` feature) |
 //! | `NEOVM_GC_MEMORY_FILE=<path>` | unset | append memory snapshots as JSONL when telemetry or GC trace is enabled |
 //! | `NEOVM_GC_CHUNK_MAP` | on (`=0` disables) | page and block ownership through the chunk map (`chunk_map.rs`), on the mutator and on the GC thread |
-//! | `NEOVM_GC_MAJOR_GROWTH_PERCENT` | `100` | major growth limit, with an 8 MiB floor; generational only |
+//! | `NEOVM_GC_MAJOR_GROWTH_PERCENT` | `15` | major growth limit, with an 8 MiB floor; generational only |
 //! | `NEOVM_GC_MAJOR_MAX_MINORS` | `64` | maximum completed minors between majors; generational only |
 //! | `NEOVM_GC_STRESS_MAJOR_EVERY` | `8` | stressed cycle stride, normalized to at least one; generational only |
 //! | `NEOVM_GC_VEC_SCAN=defer` | `snapshot` | MEASUREMENT ONLY (falsifier F-G (c), P3.2 F1b): no Tier-B vector snapshot and no vector claims, so page vectors defer to the stop-the-world termination and are traced by reachability |
@@ -159,7 +159,7 @@ pub(super) struct GenerationalPacingKnobs {
 impl Default for GenerationalPacingKnobs {
     fn default() -> Self {
         Self {
-            major_growth_percent: 100,
+            major_growth_percent: 15,
             major_max_minors: 64,
             stress_major_every: 8,
         }
@@ -196,7 +196,12 @@ impl GenerationalPacingKnobs {
 #[inline(never)]
 pub(super) fn generational_pacing_knobs(enabled: bool) -> GenerationalPacingKnobs {
     if !enabled {
-        return GenerationalPacingKnobs::default();
+        // Disabled heaps never consult these limits. Preserve their existing
+        // constructor values while changing the generational policy.
+        return GenerationalPacingKnobs {
+            major_growth_percent: 100,
+            ..GenerationalPacingKnobs::default()
+        };
     }
     let growth = std::env::var("NEOVM_GC_MAJOR_GROWTH_PERCENT").ok();
     let minors = std::env::var("NEOVM_GC_MAJOR_MAX_MINORS").ok();
