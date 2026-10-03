@@ -14,7 +14,7 @@ windows-tools = []
 # Linux production builds enable `video` through `cargo xtask fresh-build`.
 # Keep it out of Cargo defaults so this Linux packaging concern does not change
 # the established macOS/Windows feature surface.
-default = ["jit", "platform-allocator", "neo-term", "sqlite"]
+default = ["jit", "platform-allocator", "neo-term", "sqlite", "flow-word"]
 # Use the memory-efficient allocator on Linux without changing the established
 # allocator on macOS and Windows.
 platform-allocator = ["dep:neomacs-allocator", "tikv-jemalloc-sys"]
@@ -40,7 +40,7 @@ jemalloc-profiling = [
 # dispatch cut ~60%), so it ships on by default. Build `--no-default-features`
 # (plus the features you want) to get the interpreter-only binary.
 jit = ["neovm-core/jit"]
-# Forward the default-off P0.12 Flow carrier feature to the evaluator.
+# Forward the default-on P0.12 one-word Flow carrier to the evaluator.
 flow-word = ["neovm-core/flow-word"]
 # GNU-compatible native SQLite support. Default-on for distributed Neomacs
 # builds, while remaining a compile-time capability for minimal builds.

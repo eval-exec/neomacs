@@ -113,8 +113,10 @@ inotify.workspace = true
 dbus = { version = "0.9", default-features = false }
 
 [features]
-default = ["jit", "sqlite"]
-# P0.12 one-word owning Flow carrier; opt-in while performance gates run.
+default = ["jit", "sqlite", "flow-word"]
+# P0.12 one-word owning Flow carrier (default on since batch 19: every
+# elisp-benchmarks and board row measured fewer instructions). Build with
+# --no-default-features --features jit,sqlite for the two-word enum carrier.
 flow-word = []
 sqlite = ["dep:rusqlite"]
 # Static-link the crate's bundled libdbus instead of pkg-config `dbus-1`.
