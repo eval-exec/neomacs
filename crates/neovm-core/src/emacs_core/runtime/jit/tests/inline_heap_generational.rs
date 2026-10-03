@@ -523,3 +523,7 @@ mod gen0_collection_revision;
 #[cfg(test)]
 #[path = "gen0_observed_collection_revision.rs"]
 mod gen0_observed_collection_revision;
+
+#[cfg(test)]
+#[path = "string_observed_capacity.rs"]
+mod string_observed_capacity;

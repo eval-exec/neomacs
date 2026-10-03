@@ -83,12 +83,15 @@ impl TaggedHeap {
     /// would corrupt the heap on a page pointer. The page sweep is the only
     /// string reclaimer (it `drop_in_place`s dead slots, freeing the byte
     /// storage and interval table the string owns).
-    pub fn alloc_string(&mut self, s: crate::heap_types::LispString) -> TaggedValue {
+    pub fn alloc_string(&mut self, mut s: crate::heap_types::LispString) -> TaggedValue {
         let empty_kind = (s.sbytes() == 0).then(|| s.storage_kind());
         if let Some(value) = empty_kind.and_then(|kind| self.canonical_empty_strings.get(kind)) {
             return value;
         }
 
+        // Payloads may have been detached from another observed string. A
+        // fresh heap identity starts with neither owner nor payload observed.
+        s.clear_owned_storage_collection_observed();
         self.add_memory_use_count(MemoryUseCountSlot::Strings, 1);
         self.add_memory_use_count(MemoryUseCountSlot::StringChars, s.sbytes() as u64);
         let ptr = self.string_arena.alloc_slot();

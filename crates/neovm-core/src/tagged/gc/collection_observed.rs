@@ -15,7 +15,7 @@
 //! snapshot; its exclusive Context publishes the JIT gate before any store.
 
 use super::cons_block_trailer::{CONS_BLOCK_BYTES, ConsBlockTrailer};
-use crate::tagged::header::{ConsCell, GcHeader};
+use crate::tagged::header::{ConsCell, GcHeader, StringObj};
 use crate::tagged::value::{TAG_CONS, TAG_FLOAT, TAG_MASK, TAG_STRING, TAG_VECLIKE};
 use rustc_hash::FxHashMap;
 use std::sync::{
@@ -103,7 +103,18 @@ pub(crate) fn mark_collection_observed(bits: usize) -> bool {
             HAS_CONS_MARKS.store(true, Ordering::Release);
             newly_set
         }
-        TAG_STRING | TAG_FLOAT | TAG_VECLIKE => {
+        TAG_STRING => {
+            // SAFETY: the caller supplies a live string owner. Complete both
+            // sticky publications before the certificate's revision snapshot.
+            let owner = unsafe { &*(address as *const StringObj) };
+            let newly_set = owner.header.mark_collection_observed();
+            // Also repair the owned mirror when this header was marked while
+            // its payload was borrowed. Repeated owner observations are safe.
+            owner.data.mark_owned_storage_collection_observed();
+            HAS_NONCONS_MARKS.store(true, Ordering::Release);
+            newly_set
+        }
+        TAG_FLOAT | TAG_VECLIKE => {
             // SAFETY: a live non-cons heap owner begins with GcHeader. Raw
             // tag decoding avoids recursively observing while STATE is held.
             let newly_set = unsafe { &*(address as *const GcHeader) }.mark_collection_observed();

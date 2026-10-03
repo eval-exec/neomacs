@@ -18,6 +18,8 @@ use super::header::{
 };
 use super::value::{TAG_MASK, TaggedValue};
 
+mod string_observed;
+
 thread_local! {
     static COLLECTION_REVISION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
@@ -323,6 +325,8 @@ pub fn with_lisp_string_mut<R>(
     note_heap_write(value, HeapWriteKind::StringData);
     #[cfg(debug_assertions)]
     let _guard = HeapMutClosureGuard::enter();
+    // SAFETY: the owner is retained through this mutation, including unwind.
+    let _observation = unsafe { string_observed::StringStorageObservationGuard::new(ptr) };
     Some(f(unsafe { &mut (*ptr).data }))
 }
 
@@ -341,7 +345,13 @@ pub fn set_string_byte_same_char_count(value: TaggedValue, byte_pos: usize, byte
     };
     let ptr = ptr as *mut StringObj;
     // SAFETY: a live string object; the caller holds the only mutation.
-    unsafe { (*ptr).data.set_byte_same_char_count(byte_pos, byte) };
+    unsafe {
+        (*ptr)
+            .data
+            .set_byte_same_char_count_with_owned_observer(byte_pos, byte, |storage| {
+                string_observed::observe_materialized_string_storage(ptr, storage);
+            });
+    }
     true
 }
 

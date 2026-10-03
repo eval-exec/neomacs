@@ -1237,17 +1237,42 @@ fn emit_inline_string_aset(
         object,
         (base + LispString::JIT_SIZE_BYTE_OFFSET) as i32,
     );
-    let capacity = fb.ins().load(
-        types::I64,
-        flags,
-        object,
-        (base + LispString::JIT_STORAGE_CAPACITY_OFFSET) as i32,
-    );
+    let observed_gen0 = super::jit_gen0_collection_journal_on()
+        && !rt.generational_enabled()
+        && !super::jit_gen0_collection_journal_eager();
+    let capacity = if observed_gen0 {
+        let at = iadd_imm_p(
+            fb,
+            object,
+            (base + LispString::JIT_STORAGE_CAPACITY_OFFSET) as i64,
+        );
+        fb.ins().atomic_load(types::I64, flags, at)
+    } else {
+        // Preserve the original OFF/GEN1 load and ownership predicate.
+        fb.ins().load(
+            types::I64,
+            flags,
+            object,
+            (base + LispString::JIT_STORAGE_CAPACITY_OFFSET) as i32,
+        )
+    };
     let i = sshr_imm_p(fb, index, FIXNUM_SHIFT as i64);
     let code = sshr_imm_p(fb, value, FIXNUM_SHIFT as i64);
     // Unsigned: a negative index or code is out of range too.
     let in_range = fb.ins().icmp(IntCC::UnsignedLessThan, i, size);
-    let owned = icmp_imm_p(fb, IntCC::NotEqual, capacity, 0);
+    // Owned Vec<u8> capacities fit below the sign bit. The sticky observed
+    // mirror occupies that bit, folding its rejection into the existing
+    // ownership check without another hot-path load, test or branch.
+    let owned = icmp_imm_p(
+        fb,
+        if observed_gen0 {
+            IntCC::SignedGreaterThan
+        } else {
+            IntCC::NotEqual
+        },
+        capacity,
+        0,
+    );
     let unibyte = icmp_imm_p(
         fb,
         IntCC::Equal,
@@ -1273,24 +1298,14 @@ fn emit_inline_string_aset(
         (base + LispString::JIT_DATA_OFFSET) as i32,
     );
     let at = fb.ins().iadd(data, i);
-    if super::jit_gen0_collection_journal_on() {
-        if !rt.generational_enabled() && !super::jit_gen0_collection_journal_eager() {
-            use super::jit_layout::heap::GC_HEADER_COLLECTION_OBSERVED_OFFSET;
-            let observed = iadd_imm_p(fb, object, GC_HEADER_COLLECTION_OBSERVED_OFFSET as i64);
-            let mark = fb.ins().atomic_load(types::I8, flags, observed);
-            let unobserved = fb.ins().icmp_imm(IntCC::Equal, mark, 0);
-            // Reuse the existing full setter edge. A journal-only call here
-            // would keep the byte address/code live across another call site,
-            // spilling even the unobserved string and other array paths.
-            // The setter journals once and performs the observed store itself.
-            emit_guard(fb, slow, unobserved);
-        } else {
-            let record = rt
-                .refs
-                .try_get(fb.func, Shim::StringCollectionWrite)
-                .expect("string-collection-journal refs");
-            fb.ins().call(record, &[array]);
-        }
+    if super::jit_gen0_collection_journal_on()
+        && (rt.generational_enabled() || super::jit_gen0_collection_journal_eager())
+    {
+        let record = rt
+            .refs
+            .try_get(fb.func, Shim::StringCollectionWrite)
+            .expect("string-collection-journal refs");
+        fb.ins().call(record, &[array]);
     }
     fb.ins().istore8(flags, code, at, 0);
     fb.def_var(res, value);

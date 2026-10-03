@@ -11,7 +11,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 use std::ops::{Deref, DerefMut};
-use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 /// A Lisp string.
@@ -50,11 +50,17 @@ pub struct LispString {
     /// Direct string byte pointer, like GNU's `Lisp_String.u.s.data`.
     ///
     data: *const u8,
-    /// Capacity of allocator-owned storage, including the trailing NUL. Zero
-    /// denotes borrowed mapped/static bytes. The logical length comes from
-    /// `size`/`size_byte`, so this one word is enough to reconstruct the Vec
-    /// for mutation or drop without a separately allocated storage sidecar.
-    storage_capacity: usize,
+    /// Capacity of allocator-owned storage, including the trailing NUL, with
+    /// its spare high bit mirroring collection observation. Vec capacities
+    /// cannot exceed isize::MAX. Borrowed mapped/static bytes remain exactly
+    /// zero, including after observation, so the legacy nonzero ownership
+    /// guard remains valid. Allocator capacity consumers mask the high bit.
+    ///
+    /// Threading: payload mutation still requires exclusive access. Shared
+    /// observers may atomically publish only this metadata bit, with Release
+    /// ordering; capacity rewrites preserve a concurrent publication. This
+    /// does not permit concurrent reads or mutation of the payload fields.
+    storage_capacity: AtomicUsize,
 }
 
 const SIZE_BYTE_UNIBYTE_NORMAL: i64 = -1;
@@ -164,7 +170,8 @@ impl DerefMut for OwnedStringDataGuard<'_> {
 impl Drop for OwnedStringDataGuard<'_> {
     fn drop(&mut self) {
         self.string.data = self.data.as_ptr();
-        self.string.storage_capacity = self.data.capacity();
+        self.string
+            .update_owned_storage_capacity(self.data.capacity());
     }
 }
 
@@ -195,6 +202,41 @@ impl LispString {
 }
 
 impl LispString {
+    /// Spare high bit in allocator-owned capacity; never set on borrowed bytes.
+    pub(crate) const OWNED_STORAGE_COLLECTION_OBSERVED_MASK: usize = 1usize << (usize::BITS - 1);
+
+    /// Mirror an observation without changing borrowed ownership metadata.
+    ///
+    /// Threading: this shared operation publishes metadata with Release
+    /// ordering. The caller retains the string's lifetime and coordinates
+    /// payload access separately; this method does not read its bytes.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn mark_owned_storage_collection_observed(&self) {
+        let _ =
+            self.storage_capacity
+                .fetch_update(Ordering::Release, Ordering::Relaxed, |encoded| {
+                    (encoded != 0 && encoded & Self::OWNED_STORAGE_COLLECTION_OBSERVED_MASK == 0)
+                        .then_some(encoded | Self::OWNED_STORAGE_COLLECTION_OBSERVED_MASK)
+                });
+    }
+
+    /// Reset transferred payload metadata before publishing a new owner.
+    /// Exclusive lifetime access excludes all shared observation publishers.
+    pub(crate) fn clear_owned_storage_collection_observed(&mut self) {
+        *self.storage_capacity.get_mut() &= !Self::OWNED_STORAGE_COLLECTION_OBSERVED_MASK;
+    }
+
+    #[inline]
+    fn update_owned_storage_capacity(&self, capacity: usize) {
+        debug_assert!(capacity != 0 && capacity <= isize::MAX as usize);
+        let _ =
+            self.storage_capacity
+                .fetch_update(Ordering::Release, Ordering::Relaxed, |encoded| {
+                    Some(capacity | (encoded & Self::OWNED_STORAGE_COLLECTION_OBSERVED_MASK))
+                });
+    }
+
     // -- Constructors --------------------------------------------------------
 
     fn normalize_size_byte(size_byte: i64, static_rodata: bool) -> i64 {
@@ -266,7 +308,7 @@ impl LispString {
             size_byte,
             intervals: AtomicPtr::new(std::ptr::null_mut()),
             data,
-            storage_capacity,
+            storage_capacity: AtomicUsize::new(storage_capacity),
         }
     }
 
@@ -287,42 +329,59 @@ impl LispString {
             size_byte,
             intervals: AtomicPtr::new(std::ptr::null_mut()),
             data: ptr,
-            storage_capacity: 0,
+            storage_capacity: AtomicUsize::new(0),
         }
     }
 
     fn release_owned_storage(&mut self) {
-        if self.storage_capacity == 0 {
+        // Reclamation has exclusive lifetime access, so no shared observer
+        // can publish a mark while this allocation is being freed.
+        let encoded = self.storage_capacity.load(Ordering::Relaxed);
+        if encoded == 0 {
             return;
         }
         let len = self.sbytes() + 1;
-        let capacity = self.storage_capacity;
+        let capacity = encoded & !Self::OWNED_STORAGE_COLLECTION_OBSERVED_MASK;
         debug_assert!(capacity >= len);
         drop(unsafe { Vec::from_raw_parts(self.data as *mut u8, len, capacity) });
         self.data = std::ptr::null();
-        self.storage_capacity = 0;
+        self.storage_capacity.store(0, Ordering::Relaxed);
     }
 
     fn replace_owned_payload(&mut self, mut payload: Vec<u8>) {
-        self.release_owned_storage();
+        // Finish fallible allocation before detaching the existing payload.
+        // Keep its capacity word live until the CAS publishes the replacement,
+        // so a shared observer cannot lose a mark between release and install.
         Self::push_terminator(&mut payload);
+        let old_data = self.data;
+        let old_len = self.sbytes() + 1;
+        let old_capacity = self.owned_capacity();
         self.data = payload.as_ptr();
-        self.storage_capacity = payload.capacity();
+        self.update_owned_storage_capacity(payload.capacity());
         std::mem::forget(payload);
+        if old_capacity != 0 {
+            drop(unsafe { Vec::from_raw_parts(old_data as *mut u8, old_len, old_capacity) });
+        }
     }
 
     fn ensure_owned(&mut self) {
-        if self.storage_capacity != 0 {
+        self.ensure_owned_with_observer(|_| {});
+    }
+
+    #[inline]
+    fn ensure_owned_with_observer(&mut self, observe: impl FnOnce(&LispString)) {
+        if self.storage_capacity.load(Ordering::Relaxed) != 0 {
             return;
         }
         let payload = Self::copy_payload(self.as_bytes());
         self.replace_owned_payload(payload);
+        observe(self);
     }
 
     fn owned_data_guard(&mut self) -> OwnedStringDataGuard<'_> {
         self.ensure_owned();
         let len = self.sbytes() + 1;
-        let capacity = self.storage_capacity;
+        let capacity = self.owned_capacity();
         let data = unsafe { Vec::from_raw_parts(self.data as *mut u8, len, capacity) };
         OwnedStringDataGuard {
             string: self,
@@ -505,7 +564,7 @@ impl LispString {
     ) -> Result<(), String> {
         self.validate_storage_install(ptr, len)?;
         self.data = ptr;
-        self.storage_capacity = 0;
+        self.storage_capacity.store(0, Ordering::Relaxed);
         Ok(())
     }
 
@@ -527,7 +586,7 @@ impl LispString {
         })?;
         self.validate_storage_install(ptr, len)?;
         self.data = ptr;
-        self.storage_capacity = 0;
+        self.storage_capacity.store(0, Ordering::Relaxed);
         Ok(())
     }
 
@@ -800,11 +859,12 @@ impl LispString {
     /// payload bytes in this process; their bytes belong to the pdump mapping
     /// or executable image instead.
     pub(crate) fn owned_capacity(&self) -> usize {
-        self.storage_capacity
+        self.storage_capacity.load(Ordering::Relaxed)
+            & !Self::OWNED_STORAGE_COLLECTION_OBSERVED_MASK
     }
 
     pub(crate) fn has_owned_storage(&self) -> bool {
-        self.storage_capacity != 0
+        self.storage_capacity.load(Ordering::Relaxed) != 0
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -825,6 +885,22 @@ impl LispString {
     /// and recount a multibyte string's characters (a scan of the whole
     /// string per `aset`).
     pub fn set_byte_same_char_count(&mut self, byte_pos: usize, byte: u8) {
+        self.set_byte_same_char_count_with_owned_observer(byte_pos, byte, |_| {});
+    }
+
+    /// Notify an owning runtime only when borrowed bytes become owned.
+    ///
+    /// The callback runs after publishing the new storage capacity and before
+    /// the byte write. Already-owned storage performs no callback or added
+    /// header check. Payload mutation remains exclusive; the callback may
+    /// atomically mirror observation metadata without reading the bytes.
+    #[inline]
+    pub(crate) fn set_byte_same_char_count_with_owned_observer(
+        &mut self,
+        byte_pos: usize,
+        byte: u8,
+        observe: impl FnOnce(&LispString),
+    ) {
         debug_assert!(byte_pos < self.sbytes(), "byte position in range");
         debug_assert!(
             !self.is_multibyte() || (byte < 0x80 && self.as_bytes()[byte_pos] < 0x80),
@@ -833,7 +909,7 @@ impl LispString {
         if self.is_rodata() {
             self.size_byte = SIZE_BYTE_UNIBYTE_NORMAL;
         }
-        self.ensure_owned();
+        self.ensure_owned_with_observer(observe);
         // SAFETY: owned storage holds `sbytes() + 1` initialized bytes.
         unsafe { *(self.data as *mut u8).add(byte_pos) = byte };
     }
@@ -1031,7 +1107,7 @@ impl LispString {
     /// process lifetime (the same contract the aliased string itself relies
     /// on).
     pub(crate) fn borrowed_alias(&self) -> Option<LispString> {
-        if self.storage_capacity != 0 || self.has_intervals() {
+        if self.storage_capacity.load(Ordering::Relaxed) != 0 || self.has_intervals() {
             return None;
         }
         Some(LispString {
@@ -1039,7 +1115,7 @@ impl LispString {
             size_byte: self.size_byte,
             intervals: AtomicPtr::new(std::ptr::null_mut()),
             data: self.data,
-            storage_capacity: 0,
+            storage_capacity: AtomicUsize::new(0),
         })
     }
 }
@@ -1156,6 +1232,10 @@ impl<'de> Deserialize<'de> for LispString {
 #[cfg(test)]
 #[path = "heap_types/tests/heap_types_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "heap_types/tests/string_collection_capacity_test.rs"]
+mod string_collection_capacity_tests;
 
 #[derive(Debug)]
 pub struct OverlayData {

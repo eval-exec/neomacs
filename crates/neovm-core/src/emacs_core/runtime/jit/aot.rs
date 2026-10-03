@@ -119,7 +119,8 @@ pub(crate) const ABI_TAG: u32 = compute_abi_tag();
 // v27: deferred mode-line display exits add a Context field and change its layout.
 // v28: collection-aware stores add a string-journal shim and consume header byte 7
 // as a sticky observed mark; GEN0 JitHeapState windows also include observed owners.
-const ABI_TAG_VERSION: u32 = 28;
+// v29: observed GEN0 string stores read the sticky high bit in owned capacity.
+const ABI_TAG_VERSION: u32 = 29;
 
 /// Format version of the AOT descriptor spec-section + the runtime spec ABI
 /// (`SpecSlot`/`spec_expected` sidecar bases, the loader re-classify+arm protocol).
