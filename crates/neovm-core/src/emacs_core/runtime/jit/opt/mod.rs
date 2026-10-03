@@ -15,6 +15,11 @@ pub(crate) mod types;
 pub(crate) mod verify;
 
 #[cfg(test)]
+pub(crate) mod eval;
+#[cfg(test)]
+#[path = "tests/eval.rs"]
+mod eval_tests;
+#[cfg(test)]
 #[path = "tests/ir_verify.rs"]
 mod ir_verify_tests;
 #[cfg(test)]
