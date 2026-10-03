@@ -2,6 +2,8 @@
 //! is observed from the sealed Tier-0 program before inspecting selected CLIF.
 //! Contexts, roots, feedback snapshots and compiler overrides are test-local.
 
+use crate::emacs_core::jit::compile::opt_census::SelectedTier;
+
 use super::super::compile_pipeline_tests::{captured_clif, function};
 use super::super::*;
 use crate::emacs_core::error::Flow;
@@ -107,7 +109,7 @@ pub(super) fn compile(
     });
     assert_eq!(clif.len(), 1);
     let leaf = leaf.unwrap();
-    assert_eq!(leaf.tier(), LeafTier::Opt);
+    assert_eq!(leaf.selected_tier(), SelectedTier::Opt);
     roots.add(leaf.reloc_values());
     (leaf, clif.into_iter().next().unwrap())
 }

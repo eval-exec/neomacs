@@ -4,6 +4,8 @@
 //! Threading: Context/LeafObs/cache are mutator-owned; source site joins alone
 //! are multiwriter atomics. Settings restore compiler-test scalar overrides.
 
+use crate::emacs_core::jit::compile::opt_census::SelectedTier;
+
 use super::compile_pipeline_tests::{captured_clif, function};
 use super::*;
 use crate::emacs_core::jit::bg::{BgMode, force_mode_for_test};
@@ -173,7 +175,7 @@ fn opt_array_native_t1_records_only_live_window_and_holds_source() {
     let f = source();
     let answers = [vector, record, string].map(|arg| expected(&mut ctx, &f, &[arg]));
     let leaf = t1(&ctx, &f);
-    assert_eq!(leaf.tier(), LeafTier::Baseline);
+    assert_eq!(leaf.selected_tier(), SelectedTier::Baseline);
     assert!(
         leaf.feedback_holds
             .iter()
@@ -295,7 +297,7 @@ fn opt_array_native_kind_transition_rearms_stable_version_but_samples_do_not() {
     let ptr = cache::compiled_leaf_ptr_for_test(id).unwrap();
     // SAFETY: current/retained source and leaves remain cached on this mutator.
     let original = unsafe { &*ptr };
-    assert_eq!(original.tier(), LeafTier::Baseline);
+    assert_eq!(original.selected_tier(), SelectedTier::Baseline);
     assert_eq!(original.obs.t2.state.get(), T2State::Idle);
     let unstable = crate::emacs_core::jit::tier2::stats().unstable;
     let array_sites = f.jit_runtime().array_sites().unwrap();
@@ -333,7 +335,7 @@ fn opt_array_native_kind_transition_rearms_stable_version_but_samples_do_not() {
     run(&mut ctx, record, &b);
     let ptr = cache::compiled_leaf_ptr_for_test(id).unwrap();
     let opt = unsafe { &*ptr };
-    assert_eq!(opt.tier(), LeafTier::Opt);
+    assert_eq!(opt.selected_tier(), SelectedTier::Opt);
     assert_eq!(opt.obs.t2.origin, T2Origin::Upgrade(T2Upgrade::Feedback));
     let frozen = site.samples();
     for _ in 0..20 {
@@ -380,7 +382,7 @@ fn opt_array_native_observed_dynamic_arefs_upgrade_and_serve_normal_entries() {
     // SAFETY: current/retained leaves stay cached on this test's mutator; no
     // cache clear occurs while pointers are inspected or the source is live.
     let opt = unsafe { &*ptr };
-    assert_eq!(opt.tier(), LeafTier::Opt);
+    assert_eq!(opt.selected_tier(), SelectedTier::Opt);
     assert_eq!(opt.obs.t2.origin, T2Origin::Upgrade(T2Upgrade::Feedback));
     let fallback = opt.tier1_fallback.borrow();
     let fallback = fallback.as_ref().expect("normal T1 retained");

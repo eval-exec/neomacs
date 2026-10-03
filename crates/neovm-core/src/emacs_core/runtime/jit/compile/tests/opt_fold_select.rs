@@ -2,6 +2,8 @@
 //! Threading: all plans and runtime contexts belong to one test invocation;
 //! overrides hold compiler settings only and are restored on scope exit.
 
+use crate::emacs_core::jit::compile::opt_census::SelectedTier;
+
 use super::compile_pipeline_tests::function;
 use super::*;
 use crate::emacs_core::jit::opt::mem::{AliasClass, Effects};
@@ -167,7 +169,7 @@ fn opt_fold_select_mixed_local_and_incoming_bool_materializes_gnu_boolean() {
                 &plan,
             )
             .expect("native lowering accepts mixed-width Bool Select");
-            assert_eq!(leaf.tier(), LeafTier::Opt);
+            assert_eq!(leaf.selected_tier(), SelectedTier::Opt);
             for condition in [Value::NIL, Value::T] {
                 // Zero is truthy in GNU Lisp; the incoming flag is not a raw
                 // numeric zero test and still must return the exact T word.

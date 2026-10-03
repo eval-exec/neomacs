@@ -341,8 +341,8 @@ impl LeafRow {
             regalloc: leaf.regalloc,
             clif_insts: leaf.clif_insts,
             obs: leaf.obs.snapshot(),
-            opt: if leaf.tier() == LeafTier::Opt {
-                super::compile::opt_census::snapshot(&leaf.obs)
+            opt: if super::compile::jit_opt_mode() == super::compile::OptMode::Opt {
+                super::compile::opt_census::snapshot_leaf(leaf)
             } else {
                 super::compile::opt_census::OptStats::default()
             },

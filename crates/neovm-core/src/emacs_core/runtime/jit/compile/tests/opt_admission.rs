@@ -2,6 +2,8 @@
 //! forced to Tier-0. Threading: every test owns its context and compiled leaf;
 //! settings affect compiler configuration on the test's existing scoped TLS.
 
+use crate::emacs_core::jit::compile::opt_census::SelectedTier;
+
 use super::compile_pipeline_tests::function;
 use super::*;
 use crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry;
@@ -57,7 +59,7 @@ fn compile(ctx: &Context, f: &ByteCodeFunction) -> CompiledLeaf {
         },
     )
     .expect("the admitted body compiles");
-    assert_eq!(leaf.tier(), LeafTier::Opt);
+    assert_eq!(leaf.selected_tier(), SelectedTier::Opt);
     leaf
 }
 

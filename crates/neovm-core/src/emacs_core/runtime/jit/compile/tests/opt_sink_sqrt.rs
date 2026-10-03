@@ -1,6 +1,8 @@
 //! Native selected sqrt behavior follows independent sealed Tier-0 baselines.
 //! Frozen GNU19 sqrt observations supply the argument/identity cases.
 
+use crate::emacs_core::jit::compile::opt_census::SelectedTier;
+
 use super::compile_pipeline_tests::{captured_clif, function};
 use super::*;
 use crate::emacs_core::error::Flow;
@@ -92,7 +94,7 @@ fn compile(ctx: &Context, f: &ByteCodeFunction, sink: bool) -> (CompiledLeaf, St
     });
     assert_eq!(clif.len(), 1);
     let leaf = leaf.unwrap();
-    assert_eq!(leaf.tier(), LeafTier::Opt);
+    assert_eq!(leaf.selected_tier(), SelectedTier::Opt);
     (leaf, clif.into_iter().next().unwrap())
 }
 fn native_ok(

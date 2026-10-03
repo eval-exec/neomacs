@@ -3,6 +3,8 @@
 //! come from forced Tier-0 execution. Threading: plans, roots and compiler-only
 //! overrides belong to one test invocation and are restored on exit.
 
+use crate::emacs_core::jit::compile::opt_census::SelectedTier;
+
 use super::compile_pipeline_tests::{captured_clif, function};
 use super::*;
 use crate::emacs_core::error::Flow;
@@ -97,7 +99,7 @@ fn lower(source: &ByteCodeFunction, plan: &ir::Func) -> CompiledLeaf {
         plan,
     )
     .expect("verified typed integer IR has native support");
-    assert_eq!(leaf.tier(), LeafTier::Opt);
+    assert_eq!(leaf.selected_tier(), SelectedTier::Opt);
     leaf
 }
 

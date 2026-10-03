@@ -484,7 +484,12 @@ fn jit_profile_emit(
         .jit_runtime()
         .compiled_id()
         .map_or_else(|| "-".to_string(), |id| id.to_string());
-    let tier = result.map_or("-", |l| l.tier().name());
+    let tier = if jit_opt_mode() == OptMode::Opt {
+        result.map_or("-", |l| l.selected_tier().name())
+    } else {
+        let tier = result.map_or("-", |l| l.tier().name());
+        tier
+    };
     let name = super::stats::perf_map::active_label_name()
         .map_or_else(|| "-".to_string(), |n| n.replace(',', ";"));
     let mut line = format!(
@@ -875,11 +880,6 @@ pub fn compile_bytecode_function_requested(
         }
     }
     let _restore = Restore(outer);
-    let _opt_full_request = if jit_opt_mode() == OptMode::Opt {
-        Some(opt_backend::OptFullRequestScope::enter(request))
-    } else {
-        None
-    };
     let _t2 = super::tier2::BuildScope::enter_for(
         request.tier,
         f.jit_runtime(),
@@ -889,8 +889,14 @@ pub fn compile_bytecode_function_requested(
     let started = std::time::Instant::now();
     super::stats::verdict::begin();
     let named_t2 = inline_planning::named_tier_eligible(f, request, self_recursive);
-    let mut result = compile_bytecode_function_inner(f, obarray, named_t2, request.tier);
-    super::stats::inline_census::note_compile_outcome(f, &result);
+    let opt_request = (jit_opt_mode() == OptMode::Opt).then_some(request);
+    let mut result =
+        compile_bytecode_function_inner(f, obarray, named_t2, request.tier, opt_request);
+    if jit_opt_mode() == OptMode::Opt {
+        super::stats::inline_census::note_selected_compile_outcome(f, &result);
+    } else {
+        super::stats::inline_census::note_compile_outcome(f, &result);
+    }
     let mir_verdict = super::stats::verdict::take();
     if let Ok(leaf) = &mut result {
         leaf.obs.mir_verdict = mir_verdict.clone();
@@ -1059,6 +1065,7 @@ fn compile_bytecode_function_inner(
     obarray: Option<&Obarray>,
     named_t2: bool,
     tier: super::tier2::CompileTier,
+    opt_request: Option<CompileRequest>,
 ) -> Result<CompiledLeaf, CompileError> {
     use super::stats::{CompilePhase, enter_phase};
     let gate_phase = enter_phase(CompilePhase::Gate);
@@ -1316,19 +1323,36 @@ fn compile_bytecode_function_inner(
             optional: nonrest - required,
             has_rest,
         });
-    let mut leaf = opt_backend::lower_best(
-        ops,
-        constants,
-        native_arity,
-        match &fused {
-            Some(fused) => fused.offset_map.as_deref(),
-            None => f.executable_gnu_byte_offset_map(),
-        },
-        obarray,
-        None,
-        dynamic_prefix,
-        opt_params,
-    )?;
+    let mut leaf = if let Some(request) = opt_request {
+        opt_backend::lower_best_requested(
+            ops,
+            constants,
+            native_arity,
+            match &fused {
+                Some(fused) => fused.offset_map.as_deref(),
+                None => f.executable_gnu_byte_offset_map(),
+            },
+            obarray,
+            None,
+            dynamic_prefix,
+            opt_params,
+            Some(request),
+        )?
+    } else {
+        opt_backend::lower_best(
+            ops,
+            constants,
+            native_arity,
+            match &fused {
+                Some(fused) => fused.offset_map.as_deref(),
+                None => f.executable_gnu_byte_offset_map(),
+            },
+            obarray,
+            None,
+            dynamic_prefix,
+            opt_params,
+        )?
+    };
     leaf.required = required;
     leaf.has_rest = has_rest;
     inline_frames::retain_inline_dependencies(&mut leaf, fused.as_deref());
@@ -3482,6 +3506,7 @@ pub(crate) fn lower_leaf_full_osr_with_opt(
         dynamic_prefix,
         opt_params,
         None,
+        None,
     )
 }
 
@@ -3505,6 +3530,7 @@ pub(crate) fn lower_opt_ir_for_test(
         plan.dynamic_prefix,
         Some(plan.arity),
         Some(plan),
+        None,
     )
 }
 
@@ -3519,6 +3545,7 @@ fn lower_leaf_full_osr_with_plan_impl(
     dynamic_prefix: usize,
     opt_params: Option<super::opt::ir::ParamShape>,
     opt_override: Option<&super::opt::ir::Func>,
+    opt_request: Option<CompileRequest>,
 ) -> Result<CompiledLeaf, CompileError> {
     // Every analysis and the reloc collection below see the MASKED view; only
     // the emitter's `Op::Constant` arm knows the prefix (it loads those slots
@@ -3732,7 +3759,8 @@ fn lower_leaf_full_osr_with_plan_impl(
     let mut chains = Vec::new();
     let _opt_quality = opt
         .as_ref()
-        .and_then(|plan| opt_backend::quality_scope(plan, osr_pc));
+        .zip(opt_request)
+        .and_then(|(plan, request)| opt_backend::quality_scope(plan, osr_pc, request));
     // BEGIN T35 SELECTED CALLER
     let selection = leaf_builder_selected::requirements(false, obs.emit().t2, ops, opt.as_ref());
     let defined = if selection.is_selected() {
@@ -3829,11 +3857,7 @@ fn lower_leaf_full_osr_with_plan_impl(
     });
     obs.label = label.map(String::into_boxed_str);
     Ok(CompiledLeaf {
-        tier: if opt.is_some() {
-            LeafTier::Opt
-        } else {
-            LeafTier::Baseline
-        },
+        tier: LeafTier::Baseline,
         regalloc: lowering::active_regalloc_choice(),
         profit_gate_bypassed: profit_gate_bypassed_now(),
         call_heavy: call_heavy_now(),
@@ -4015,6 +4039,10 @@ use calls::{cbsym_spec_kind, named_builtin_call};
 pub(crate) mod intrinsics;
 pub(crate) mod leaf_abi;
 
+// The cold Opt ownership reader uses feedback_holds. Keep main's leaf model
+// and its field attributes exact; its sole dead-code expectation predates
+// this legitimate reader and no longer applies.
+#[cfg_attr(not(test), allow(unfulfilled_lint_expectations))]
 mod leaf;
 pub use leaf::*;
 

@@ -4,6 +4,8 @@
 //! execution; native baseline runs precede assertions about optimization.
 //! Threading: every plan, context, root and override is invocation-owned.
 
+use crate::emacs_core::jit::compile::opt_census::SelectedTier;
+
 use super::compile_pipeline_tests::function;
 use super::*;
 use crate::emacs_core::error::Flow;
@@ -143,7 +145,7 @@ fn lower(source: &ByteCodeFunction, plan: &ir::Func) -> CompiledLeaf {
         plan,
     )
     .expect("baseline/candidate verified GVN IR lowers");
-    assert_eq!(leaf.tier(), LeafTier::Opt);
+    assert_eq!(leaf.selected_tier(), SelectedTier::Opt);
     leaf
 }
 fn tier0(ctx: &mut Context, source: &ByteCodeFunction, args: &[Value]) -> Result<Value, Flow> {

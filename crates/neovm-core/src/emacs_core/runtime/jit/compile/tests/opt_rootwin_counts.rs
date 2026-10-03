@@ -2,6 +2,8 @@
 //! body on the same compiler thread. Threading: each test owns its native leaves
 //! and context; the backend mode scope restores the exact previous override.
 
+use crate::emacs_core::jit::compile::opt_census::SelectedTier;
+
 use super::compile_pipeline_tests::{captured_clif, function};
 use super::*;
 use crate::emacs_core::jit::opt::ir::ParamShape;
@@ -60,7 +62,7 @@ fn seed_root_stores() -> CompiledLeaf {
         2,
     );
     let (leaf, clif) = lower(&rooted, None);
-    assert_eq!(leaf.tier(), LeafTier::Baseline);
+    assert_eq!(leaf.selected_tier(), SelectedTier::Baseline);
     assert!(
         root_counts(&clif).0 > 0,
         "the preceding leaf emitted root stores"
@@ -98,7 +100,7 @@ fn opt_t1_root_counts_do_not_inherit_the_preceding_leaf() {
     let _rooted = seed_root_stores();
     let f = pure();
     let (leaf, clif) = lower(&f, None);
-    assert_eq!(leaf.tier(), LeafTier::Baseline);
+    assert_eq!(leaf.selected_tier(), SelectedTier::Baseline);
     assert_eq!(root_counts(&clif), (0, 0));
     assert_native_parity(&mut ctx, &f, &leaf);
 }
@@ -116,7 +118,7 @@ fn opt_success_root_counts_do_not_inherit_the_preceding_leaf() {
             ..ParamShape::default()
         }),
     );
-    assert_eq!(leaf.tier(), LeafTier::Opt);
+    assert_eq!(leaf.selected_tier(), SelectedTier::Opt);
     assert_eq!(root_counts(&clif), (0, 0));
     assert_native_parity(&mut ctx, &f, &leaf);
 }
@@ -143,7 +145,7 @@ fn opt_refused_root_counts_do_not_inherit_the_preceding_leaf() {
         Err(CompileError::UnsupportedOp("opt-budget:ops"))
     ));
     let (leaf, clif) = lower(&f, Some(params));
-    assert_eq!(leaf.tier(), LeafTier::Baseline);
+    assert_eq!(leaf.selected_tier(), SelectedTier::Baseline);
     assert_eq!(root_counts(&clif), (0, 0));
     assert_native_parity(&mut ctx, &f, &leaf);
 }

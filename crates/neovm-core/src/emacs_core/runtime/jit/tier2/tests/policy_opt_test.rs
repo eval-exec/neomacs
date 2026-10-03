@@ -1,5 +1,7 @@
 //! Compact opt helper admission and service through the normal native seam.
 
+use crate::emacs_core::jit::compile::opt_census::SelectedTier;
+
 use super::*;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op, Vm};
 use crate::emacs_core::eval::Context;
@@ -84,7 +86,7 @@ fn policy_fixture(ops_len: usize) -> (ByteCodeFunction, CompiledLeaf) {
     )
     .unwrap();
     assert!(leaf.obs.t2.profiling());
-    assert_eq!(leaf.tier(), LeafTier::Baseline);
+    assert_eq!(leaf.selected_tier(), SelectedTier::Baseline);
     leaf.call_heavy = true;
     leaf.regalloc = RegallocChoice::Full;
     leaf.obs.t2.policy.borrow_mut().ops_len = ops_len;
@@ -221,7 +223,7 @@ fn tier2_opt_compact_builtin_helper_serves_native_spec_calls() {
         upgraded.call_heavy,
         "allocator retiering cannot admit this helper"
     );
-    assert_eq!(upgraded.tier(), LeafTier::Opt);
+    assert_eq!(upgraded.selected_tier(), SelectedTier::Opt);
     assert_eq!(
         upgraded.obs.t2.origin,
         T2Origin::Upgrade(T2Upgrade::Feedback)
@@ -288,7 +290,7 @@ fn tier2_opt_budget_denial_retries_native_helper_after_stable_windows() {
     // SAFETY: this mutator's cache retains the current leaf and later its T1
     // fallback; neither the cache nor the rooted caller is cleared here.
     let original = unsafe { &*original_ptr };
-    assert_eq!(original.tier(), LeafTier::Baseline);
+    assert_eq!(original.selected_tier(), SelectedTier::Baseline);
     original.obs.compile_us.set(u32::MAX);
     force_tier2_policy_for_test(Some(Tier2PolicyKnob {
         budget_pct: 1,
@@ -353,7 +355,7 @@ fn tier2_opt_budget_denial_retries_native_helper_after_stable_windows() {
             .unwrap();
     let upgraded = unsafe { &*upgraded_ptr };
     assert_ne!(original_ptr, upgraded_ptr);
-    assert_eq!(upgraded.tier(), LeafTier::Opt);
+    assert_eq!(upgraded.selected_tier(), SelectedTier::Opt);
     assert_eq!(
         upgraded.obs.t2.origin,
         T2Origin::Upgrade(T2Upgrade::Feedback)
@@ -519,7 +521,7 @@ fn tier2_opt_budget_wait_freezes_use_feedback_and_reopens_a_fresh_window() {
             .unwrap();
     let upgraded = unsafe { &*upgraded_ptr };
     assert_ne!(original_ptr, upgraded_ptr);
-    assert_eq!(upgraded.tier(), LeafTier::Opt);
+    assert_eq!(upgraded.selected_tier(), SelectedTier::Opt);
     assert_eq!(
         upgraded.obs.t2.origin,
         T2Origin::Upgrade(T2Upgrade::Feedback)

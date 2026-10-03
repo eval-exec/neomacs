@@ -6,54 +6,24 @@
 use super::*;
 use crate::emacs_core::jit::opt::{build, ir};
 
-thread_local! {
-    /// Scalar compiler request, never Lisp state: each synchronous opt compiler
-    /// owns its thread's value and nested opt compiles restore the outer request.
-    /// OFF/legacy compiles never enter this scope or consult its value.
-    static REQUESTED_OPT_FULL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// An opt-only compiler request, entered by the owning frontend after selecting
-/// OptMode::Opt. Threading: scalar compiler-thread state, never Lisp state;
-/// nested opt compiles restore the enclosing request when this scope drops.
-pub(super) struct OptFullRequestScope(bool);
-
-impl OptFullRequestScope {
-    pub(super) fn enter(request: CompileRequest) -> Self {
-        let requested = request.regalloc == lowering::RegallocPolicy::Full
-            && request.tier
-                == super::super::tier2::CompileTier::Upgrade(
-                    super::super::tier2::T2Upgrade::Feedback,
-                );
-        Self(REQUESTED_OPT_FULL.with(|value| value.replace(requested)))
-    }
-}
-
-impl Drop for OptFullRequestScope {
-    fn drop(&mut self) {
-        REQUESTED_OPT_FULL.with(|value| value.set(self.0));
-    }
-}
-
-fn requested_opt_full_now() -> bool {
-    REQUESTED_OPT_FULL.with(|requested| requested.get())
-}
-
 /// Honor a Feedback request's explicit Full policy when the verified opt plan
 /// transports at least two parameters simultaneously at an actual join. Entry
 /// parameters and serial single-parameter joins retain the outer allocator
 /// policy. Enter before ISA/module selection and retain this scope through final
 /// leaf metadata; a refused lowering drops it before the baseline retry. Forced
-/// allocator configuration still wins. Threading: the inspected plan belongs to
-/// this compilation; existing scalar compiler-thread scopes contain no Lisp
-/// state and restore the enclosing choice on drop. Backend workers receive the
-/// resulting allocator through their existing job payload.
+/// allocator configuration still wins. Threading: the plan and copied request
+/// belong to this compilation; no request TLS is published. The existing
+/// allocator scope restores the enclosing choice on drop. Backend workers
+/// receive the resulting allocator through their existing owned job payload.
 pub(super) fn quality_scope(
     plan: &ir::Func,
     osr_pc: Option<usize>,
+    request: CompileRequest,
 ) -> Option<lowering::RegallocScope> {
     if osr_pc.is_some()
-        || !requested_opt_full_now()
+        || request.regalloc != lowering::RegallocPolicy::Full
+        || request.tier
+            != super::super::tier2::CompileTier::Upgrade(super::super::tier2::T2Upgrade::Feedback)
         || !plan
             .blocks
             .iter()
@@ -282,6 +252,25 @@ pub(crate) fn lower_best(
     prefix: usize,
     opt_params: Option<ir::ParamShape>,
 ) -> Result<CompiledLeaf, CompileError> {
+    lower_best_requested(
+        ops, constants, arity, offset_map, obarray, osr_pc, prefix, opt_params, None,
+    )
+}
+
+/// The selected Opt frontend carries its copied request through this attempt.
+/// Threading: request metadata is owned compiler data, never Lisp state; a
+/// refused plan drops its quality scope before the shared baseline retry.
+pub(super) fn lower_best_requested(
+    ops: &[Op],
+    constants: &[Value],
+    arity: usize,
+    offset_map: Option<&[GnuByteOffsetMapEntry]>,
+    obarray: Option<&Obarray>,
+    osr_pc: Option<usize>,
+    prefix: usize,
+    opt_params: Option<ir::ParamShape>,
+    opt_request: Option<CompileRequest>,
+) -> Result<CompiledLeaf, CompileError> {
     // The shared baseline only clears root-window counters when it emits a
     // hoisted prologue. Opt T1 bodies can have no prologue, so reset this
     // compiler-thread state before each attempt, including the baseline retry.
@@ -291,7 +280,7 @@ pub(crate) fn lower_best(
         if reset_opt_counts {
             lowering::rootwin_counters_reset();
         }
-        match lower_leaf_full_osr_with_opt(
+        match lower_leaf_full_osr_with_plan_impl(
             ops,
             constants,
             arity,
@@ -300,6 +289,8 @@ pub(crate) fn lower_best(
             osr_pc,
             prefix,
             Some(params),
+            None,
+            opt_request,
         ) {
             Ok(leaf) => return Ok(leaf),
             Err(error) => {

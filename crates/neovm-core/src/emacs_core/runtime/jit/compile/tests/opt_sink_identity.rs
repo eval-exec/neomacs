@@ -3,6 +3,8 @@
 //! Threading: contexts, compiler-only plans/overrides and scratch-root scopes
 //! belong to this invocation's mutator; no new runtime state is introduced.
 
+use crate::emacs_core::jit::compile::opt_census::SelectedTier;
+
 use super::compile_pipeline_tests::function;
 use super::*;
 use crate::emacs_core::error::Flow;
@@ -220,7 +222,7 @@ fn lower(source: &ByteCodeFunction, plan: &ir::Func, roots: &Roots) -> CompiledL
             plan.display()
         )
     });
-    assert_eq!(leaf.tier(), LeafTier::Opt);
+    assert_eq!(leaf.selected_tier(), SelectedTier::Opt);
     roots.add(leaf.reloc_values());
     leaf
 }

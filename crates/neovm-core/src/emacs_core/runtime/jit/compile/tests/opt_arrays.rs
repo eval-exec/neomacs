@@ -4,6 +4,8 @@
 //! store semantics are frozen67; mutation uses real Aset and bytecode Call.
 //! Context, roots, plans, proofs and override settings belong to this mutator.
 
+use crate::emacs_core::jit::compile::opt_census::SelectedTier;
+
 use super::compile_pipeline_tests::function;
 use super::*;
 use crate::emacs_core::error::Flow;
@@ -106,7 +108,7 @@ fn lower(f: &ByteCodeFunction, ir: &ir::Func) -> CompiledLeaf {
         ir,
     )
     .expect("actual verified array macro lowers natively");
-    assert_eq!(leaf.tier(), LeafTier::Opt);
+    assert_eq!(leaf.selected_tier(), SelectedTier::Opt);
     leaf
 }
 fn tier0(ctx: &mut Context, f: &ByteCodeFunction, args: &[Value]) -> Result<Value, Flow> {
@@ -163,7 +165,7 @@ fn observe_t1(ctx: &mut Context, f: &ByteCodeFunction, args: &[Value]) {
         },
     )
     .unwrap();
-    assert_eq!(leaf.tier(), LeafTier::Baseline);
+    assert_eq!(leaf.selected_tier(), SelectedTier::Baseline);
     let expected = tier0(ctx, f, args).unwrap();
     let _root = Roots::new(&[expected]);
     assert_eq!(
@@ -737,7 +739,7 @@ fn opt_range_native_array_singleton_shape_guard_preserves_exact_word_identity() 
         Err(CompileError::UnsupportedOp("opt-array:shape-singleton")) => return,
         Err(error) => panic!("unexpected native admission failure: {error:?}"),
     };
-    assert_eq!(selected.tier(), LeafTier::Opt);
+    assert_eq!(selected.selected_tier(), SelectedTier::Opt);
     assert_eq!(
         print_value(&native(&mut ctx, &source, &selected, &[expected_array])),
         print_value(&expected)

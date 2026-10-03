@@ -290,7 +290,6 @@ pub(crate) enum LeafTier {
     Baseline,
     Mir,
     Aot,
-    Opt,
 }
 
 impl LeafTier {
@@ -299,7 +298,6 @@ impl LeafTier {
             LeafTier::Baseline => "baseline",
             LeafTier::Mir => "mir",
             LeafTier::Aot => "aot",
-            LeafTier::Opt => "opt",
         }
     }
 }

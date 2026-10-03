@@ -3,6 +3,8 @@
 //! come from forced Tier-0 execution. Threading: contexts, roots and compiler
 //! overrides are test-owned and restored; no new runtime state is introduced.
 
+use crate::emacs_core::jit::compile::opt_census::SelectedTier;
+
 use super::compile_pipeline_tests::{captured_clif, function};
 use super::*;
 use crate::emacs_core::error::Flow;
@@ -101,7 +103,7 @@ fn compile_recorded(
         );
     });
     let leaf = leaf.expect("captured native leaf");
-    assert_eq!(leaf.tier(), LeafTier::Opt);
+    assert_eq!(leaf.selected_tier(), SelectedTier::Opt);
     assert_eq!(
         crate::emacs_core::jit::compile::opt_census::snapshot(&leaf.obs)
             .opt_bool

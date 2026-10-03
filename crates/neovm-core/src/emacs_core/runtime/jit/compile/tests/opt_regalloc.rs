@@ -2,6 +2,8 @@
 //! Threading: each fixture owns its Context and leaves; existing compiler-test
 //! overrides are scoped to this test's compiler thread and restored on drop.
 
+use crate::emacs_core::jit::compile::opt_census::SelectedTier;
+
 use super::*;
 use crate::emacs_core::jit::compile::compile_pipeline_tests::function;
 use crate::emacs_core::jit::inline::force_inline_for_test;
@@ -181,7 +183,7 @@ fn opt_full_request_uses_full_allocator_for_actual_feedback_plan() {
         RegallocPolicy::Full,
         CompileTier::Upgrade(T2Upgrade::Feedback),
     );
-    assert_eq!(leaf.tier(), LeafTier::Opt);
+    assert_eq!(leaf.selected_tier(), SelectedTier::Opt);
     assert_native_parity(&mut ctx, &f, &leaf);
     assert_eq!(
         leaf.regalloc,
@@ -220,7 +222,7 @@ fn opt_full_request_keeps_fast_without_simultaneous_join_parameters() {
             RegallocPolicy::Full,
             CompileTier::Upgrade(T2Upgrade::Feedback),
         );
-        assert_eq!(leaf.tier(), LeafTier::Opt);
+        assert_eq!(leaf.selected_tier(), SelectedTier::Opt);
         assert_native_parity(&mut ctx, &f, &leaf);
         observed.push((name, leaf.regalloc));
     }
@@ -255,7 +257,7 @@ fn opt_full_request_keeps_fast_for_separate_single_parameter_joins() {
         RegallocPolicy::Full,
         CompileTier::Upgrade(T2Upgrade::Feedback),
     );
-    assert_eq!(leaf.tier(), LeafTier::Opt);
+    assert_eq!(leaf.selected_tier(), SelectedTier::Opt);
     assert_native_parity(&mut ctx, &f, &leaf);
     assert_eq!(
         leaf.regalloc,
@@ -274,36 +276,40 @@ fn opt_auto_t1_and_off_requests_keep_the_existing_allocator() {
             OptMode::Opt,
             RegallocPolicy::Auto,
             CompileTier::Upgrade(T2Upgrade::Feedback),
-            LeafTier::Opt,
+            SelectedTier::Opt,
         ),
         (
             OptMode::Opt,
             RegallocPolicy::Full,
             CompileTier::T1,
-            LeafTier::Baseline,
+            SelectedTier::Baseline,
         ),
         (
             OptMode::Opt,
             RegallocPolicy::Full,
             CompileTier::Upgrade(T2Upgrade::Retier),
-            LeafTier::Baseline,
+            SelectedTier::Baseline,
         ),
         (
             OptMode::Off,
             RegallocPolicy::Full,
             CompileTier::Upgrade(T2Upgrade::Feedback),
-            LeafTier::Baseline,
+            SelectedTier::Baseline,
         ),
         (
             OptMode::Legacy,
             RegallocPolicy::Full,
             CompileTier::Upgrade(T2Upgrade::Feedback),
-            LeafTier::Baseline,
+            SelectedTier::Baseline,
         ),
     ];
     for (mode, policy, tier, expected_tier) in cases {
         let leaf = compile_requested(&ctx, &f, mode, policy, tier);
-        assert_eq!(leaf.tier(), expected_tier, "mode {mode:?}, tier {tier:?}");
+        assert_eq!(
+            leaf.selected_tier(),
+            expected_tier,
+            "mode {mode:?}, tier {tier:?}"
+        );
         assert_eq!(
             leaf.regalloc,
             lowering::forced_regalloc().unwrap_or(lowering::RegallocChoice::Fast),
@@ -332,7 +338,7 @@ fn opt_refused_plan_keeps_the_call_heavy_baseline_allocator() {
         },
     )
     .expect("a refused opt argument shape retains its baseline compile");
-    assert_eq!(leaf.tier(), LeafTier::Baseline);
+    assert_eq!(leaf.selected_tier(), SelectedTier::Baseline);
     assert_eq!(
         leaf.regalloc,
         lowering::forced_regalloc().unwrap_or(lowering::RegallocChoice::Fast),

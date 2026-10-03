@@ -701,9 +701,13 @@ pub(crate) fn install(
         asm_dump::restash(asm);
         let tier = match leaf.obs.osr_pc {
             Some(pc) => super::stats::perf_map::LabelTier::Osr(pc as usize),
+            None if super::compile::jit_opt_mode() == super::compile::OptMode::Opt
+                && super::compile::opt_census::is_opt_leaf(&leaf) =>
+            {
+                super::stats::perf_map::LabelTier::Opt
+            }
             None => match leaf.tier() {
                 super::compile::LeafTier::Mir => super::stats::perf_map::LabelTier::Mir,
-                super::compile::LeafTier::Opt => super::stats::perf_map::LabelTier::Opt,
                 super::compile::LeafTier::Baseline | super::compile::LeafTier::Aot => {
                     super::stats::perf_map::LabelTier::Baseline
                 }

@@ -331,7 +331,10 @@ fn opt_cons_store_proofs_keep_deopt_and_barrier_paths() {
         let mut leaf = None;
         let optimized = captured_clif(|| leaf = Some(lower(&f)));
         let leaf = leaf.unwrap();
-        assert_eq!(leaf.tier(), LeafTier::Opt);
+        assert_eq!(
+            leaf.selected_tier(),
+            crate::emacs_core::jit::compile::opt_census::SelectedTier::Opt
+        );
         assert_eq!(baseline.len(), 1);
         assert_eq!(optimized.len(), 1);
         let tag_tests = |clif: &str| clif.lines().filter(|line| line.contains("band ")).count();

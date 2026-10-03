@@ -2,6 +2,8 @@
 //! Threading: all contexts, roots, Rc leaves and counter snapshots are
 //! owned by this invocation's mutator. No new runtime cache/state is introduced.
 
+use crate::emacs_core::jit::compile::opt_census::SelectedTier;
+
 use super::*;
 use crate::emacs_core::eval::{
     push_scratch_gc_root_slot, push_scratch_gc_roots, restore_scratch_gc_roots,
@@ -238,7 +240,7 @@ fn normal_opt(value: Value) -> Option<Rc<CompiledLeaf>> {
     // SAFETY: lookup and immediate owned Rc clone are consecutive; no Lisp,
     // cache clear, heap replacement or runtime callback occurs between them.
     let leaf = cache::current_leaf_of(unsafe { &(*ptr).obs })?;
-    (leaf.tier() == LeafTier::Opt
+    (leaf.selected_tier() == SelectedTier::Opt
         && leaf.obs.osr_pc.is_none()
         && leaf.obs.t2.origin == tier2::T2Origin::Upgrade(tier2::T2Upgrade::Feedback))
     .then_some(leaf)
@@ -256,7 +258,7 @@ fn cache_diagnostic(value: Value) -> String {
     let leaf = unsafe { &*ptr };
     format!(
         "id={id} tier={:?} obs={:?} policy={:?} compile_stats={:?}",
-        leaf.tier(),
+        leaf.selected_tier(),
         leaf.obs.snapshot(),
         leaf.obs.t2.policy.borrow(),
         stats::compile_stats_snapshot()

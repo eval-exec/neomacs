@@ -1,6 +1,8 @@
 //! Passes-off opt lowering is a real native tier, with baseline observation
 //! and exact deopt state. Threading: contexts/leaves are owned by each test.
 
+use crate::emacs_core::jit::compile::opt_census::SelectedTier;
+
 use super::compile_pipeline_tests::{captured_clif, function, mask_code_text};
 use super::*;
 use crate::emacs_core::jit::opt::ir::ParamShape;
@@ -61,7 +63,7 @@ fn opt_lower_global_ssa_loop_matches_tier0_and_reports_opt() {
     let _settings = Settings::enter();
     let f = count_loop();
     let leaf = lower(&f, None);
-    assert_eq!(leaf.tier(), LeafTier::Opt);
+    assert_eq!(leaf.selected_tier(), SelectedTier::Opt);
     let mut ev = Context::new();
     for n in [0, 1, 10, 10000] {
         let args = [Value::make_int(n)];
@@ -153,7 +155,7 @@ fn opt_lower_osr_prunes_prologue_and_checks_untouched_snapshot() {
     let _settings = Settings::enter();
     let f = count_loop();
     let leaf = lower(&f, Some(1));
-    assert_eq!(leaf.tier(), LeafTier::Opt);
+    assert_eq!(leaf.selected_tier(), SelectedTier::Opt);
     let mut ev = Context::new();
     let args = [
         Value::make_int(10000).bits() as i64,
@@ -228,15 +230,15 @@ fn opt_backend_selects_baseline_at_t1_and_opt_at_upgrade() {
         .unwrap()
     };
     let t1 = compile(crate::emacs_core::jit::tier2::CompileTier::T1);
-    assert_eq!(t1.tier(), LeafTier::Baseline);
+    assert_eq!(t1.selected_tier(), SelectedTier::Baseline);
     let t2 = compile(crate::emacs_core::jit::tier2::CompileTier::Upgrade(
         crate::emacs_core::jit::tier2::T2Upgrade::Feedback,
     ));
-    assert_eq!(t2.tier(), LeafTier::Opt);
+    assert_eq!(t2.selected_tier(), SelectedTier::Opt);
     let conservative = compile(crate::emacs_core::jit::tier2::CompileTier::Upgrade(
         crate::emacs_core::jit::tier2::T2Upgrade::Retier,
     ));
-    assert_eq!(conservative.tier(), LeafTier::Baseline);
+    assert_eq!(conservative.selected_tier(), SelectedTier::Baseline);
     assert!(matches!(
         t2.obs.t2.origin,
         crate::emacs_core::jit::tier2::T2Origin::Upgrade(_)
@@ -290,8 +292,8 @@ fn opt_tier2_seam_keeps_rooted_t1_fallback_and_reverts() {
     assert_ne!(t1, t2);
     // Both pointers are retained by this mutator's cache/fallback, with no clear.
     let (t1, t2) = unsafe { (&*t1, &*t2) };
-    assert_eq!(t1.tier(), LeafTier::Baseline);
-    assert_eq!(t2.tier(), LeafTier::Opt);
+    assert_eq!(t1.selected_tier(), SelectedTier::Baseline);
+    assert_eq!(t2.selected_tier(), SelectedTier::Opt);
     assert_eq!(
         t2.obs.t2.origin,
         tier2::T2Origin::Upgrade(tier2::T2Upgrade::Feedback)
