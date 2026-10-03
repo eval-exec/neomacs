@@ -1,3 +1,6 @@
+mod unlet_inhibition;
+mod watcher_boundary;
+
 fn test_ob() -> crate::emacs_core::symbol::Obarray {
     crate::emacs_core::symbol::Obarray::new()
 }
