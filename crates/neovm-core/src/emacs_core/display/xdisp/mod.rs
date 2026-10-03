@@ -15,6 +15,7 @@
 //! - `line-number-display-width` — get line number display width
 //! - `long-line-optimizations-p` — check if long-line optimizations are enabled
 
+mod mode_line_gc;
 pub(crate) mod motion;
 
 use self::motion::MotionEngine;
@@ -2081,15 +2082,20 @@ pub fn format_mode_line_for_display_with_sources(
             // before the walk; an :eval that renames the frame would orphan
             // them mid-walk. Root them for the walk's span.
             let pctx_root_scope = eval.save_specpdl_roots();
-            for value in [pctx.frame_name, pctx.eol_indicator].into_iter().flatten() {
-                if value.is_heap_object() {
-                    eval.push_specpdl_root(value);
-                }
+            for value in [pctx.frame_name, pctx.eol_indicator, face_spec.face]
+                .into_iter()
+                .flatten()
+            {
+                eval.push_specpdl_root(value);
             }
             format_mode_line_recursive(eval, &pctx, &format_val, &mut rendered, 0, false);
+            // The completed sidecar still crosses the final string allocation
+            // before its plists become children of that heap object.
+            mode_line_gc::pin_rendered(eval, &rendered);
+            let output = rendered.into_display_output(face_spec);
             eval.restore_specpdl_roots(pctx_root_scope);
+            output
         }
-        rendered.into_display_output(face_spec)
     };
 
     if let Some((buffer_id, saved)) = saved_point
@@ -2142,15 +2148,18 @@ pub(crate) fn finish_format_mode_line_in_eval(
             // before the walk; an :eval that renames the frame would orphan
             // them mid-walk. Root them for the walk's span.
             let pctx_root_scope = eval.save_specpdl_roots();
-            for value in [pctx.frame_name, pctx.eol_indicator].into_iter().flatten() {
-                if value.is_heap_object() {
-                    eval.push_specpdl_root(value);
-                }
+            for value in [pctx.frame_name, pctx.eol_indicator, face_spec.face]
+                .into_iter()
+                .flatten()
+            {
+                eval.push_specpdl_root(value);
             }
             format_mode_line_recursive(eval, &pctx, &format_val, &mut result, 0, false);
+            mode_line_gc::pin_rendered(eval, &result);
+            let output = result.into_value(face_spec);
             eval.restore_specpdl_roots(pctx_root_scope);
+            output
         }
-        result.into_value(face_spec)
     };
 
     if let Some(buffer_id) = saved_buffer {
@@ -2169,6 +2178,12 @@ pub(crate) fn finish_format_mode_line_in_state_with_eval(
     args: &[Value],
     mut eval_form: impl FnMut(&Value, &crate::buffer::BufferManager) -> Result<Value, Flow>,
 ) -> EvalResult {
+    // The compatibility callback must collect from the same active heap as
+    // these split-state Values; the scratch registry carries its identity.
+    let roots = mode_line_gc::ScratchRoots::new();
+    for &arg in args {
+        roots.pin(arg);
+    }
     expect_args_range("format-mode-line", args, 1, 4)?;
     validate_optional_window_designator_in_state(
         frames,
@@ -2189,6 +2204,9 @@ pub(crate) fn finish_format_mode_line_in_state_with_eval(
         let format_val = args[0];
         let face_spec = resolve_mode_line_face_spec(args);
         let pctx = build_mode_line_percent_context(frames, &*buffers, None, obarray, args.get(2));
+        if let Some(face) = face_spec.face {
+            roots.pin(face);
+        }
         let mut result = ModeLineRendered::default();
         format_mode_line_recursive_in_state_with_eval(
             obarray,
@@ -2202,6 +2220,7 @@ pub(crate) fn finish_format_mode_line_in_state_with_eval(
             false,
             &mut eval_form,
         )?;
+        roots.pin_rendered(&result);
         result.into_value(face_spec)
     };
 
@@ -3456,6 +3475,24 @@ fn format_mode_line_recursive(
         return; // Guard against infinite recursion
     }
 
+    // Each recursive entry snapshots the current accumulator. Its parent's
+    // scope remains active while a nested :propertize/width branch runs Lisp,
+    // and the next sibling snapshots any newly appended plist/source Values.
+    let root_scope = eval.save_specpdl_roots();
+    eval.push_specpdl_root(*format);
+    mode_line_gc::pin_rendered(eval, result);
+    format_mode_line_recursive_rooted(eval, pctx, format, result, depth, risky);
+    eval.restore_specpdl_roots(root_scope);
+}
+
+fn format_mode_line_recursive_rooted(
+    eval: &mut super::eval::Context,
+    pctx: &ModeLinePercentContext,
+    format: &Value,
+    result: &mut ModeLineRendered,
+    depth: usize,
+    risky: bool,
+) {
     match format.kind() {
         ValueKind::Nil => {}
 
@@ -3517,6 +3554,9 @@ fn format_mode_line_recursive(
         _ if format.is_cons() => {
             let car = format.cons_car();
             let cdr = format.cons_cdr();
+            // A nested :eval may detach these from FORMAT before collecting.
+            eval.push_specpdl_root(car);
+            eval.push_specpdl_root(cdr);
 
             if car.is_symbol_named(":eval") {
                 if risky {
@@ -3524,16 +3564,11 @@ fn format_mode_line_recursive(
                 }
                 if cdr.is_cons() {
                     let form_val = cdr.cons_car();
+                    eval.push_specpdl_root(form_val);
                     if let Ok(val) = eval.eval_value(&form_val) {
-                        // val is a FRESH structure held only in this Rust
-                        // local; a nested :eval inside the recursion runs
-                        // Lisp whose GC would free it mid-walk. Root it for
-                        // the recursion span (mode lines contain few :evals,
-                        // so the push/pop pair is negligible).
-                        let root_scope = eval.save_specpdl_roots();
-                        eval.push_specpdl_root(val);
+                        // The recursive entry roots the fresh return value
+                        // before a nested element can run Lisp again.
                         format_mode_line_recursive(eval, pctx, &val, result, depth + 1, risky);
-                        eval.restore_specpdl_roots(root_scope);
                     }
                 }
                 return;
@@ -3579,6 +3614,11 @@ fn format_mode_line_recursive(
             }
 
             if let Some(elements) = list_to_vec(format) {
+                // The walker uses this snapshot even if :eval mutates the
+                // original format spine; keep detached later elements alive.
+                for &element in &elements {
+                    eval.push_specpdl_root(element);
+                }
                 for elem in &elements {
                     format_mode_line_recursive(eval, pctx, elem, result, depth + 1, risky);
                 }
@@ -3772,6 +3812,32 @@ fn format_mode_line_recursive_in_state_with_eval(
         return Ok(());
     }
 
+    let roots = mode_line_gc::ScratchRoots::new();
+    roots.pin(*format);
+    roots.pin_rendered(result);
+    for value in [pctx.frame_name, pctx.eol_indicator].into_iter().flatten() {
+        roots.pin(value);
+    }
+    format_mode_line_recursive_in_state_with_eval_rooted(
+        obarray, dynamic, buffers, processes, pctx, format, result, depth, risky, eval_form,
+    )
+}
+
+#[allow(clippy::too_many_arguments)] // split-state mode-line compatibility seam
+fn format_mode_line_recursive_in_state_with_eval_rooted(
+    obarray: &crate::emacs_core::symbol::Obarray,
+    dynamic: &[OrderedRuntimeBindingMap],
+    buffers: &crate::buffer::BufferManager,
+    processes: &crate::emacs_core::process::ProcessManager,
+    pctx: &ModeLinePercentContext,
+    format: &Value,
+    result: &mut ModeLineRendered,
+    depth: usize,
+    risky: bool,
+    eval_form: &mut impl FnMut(&Value, &crate::buffer::BufferManager) -> Result<Value, Flow>,
+) -> Result<(), Flow> {
+    let roots = mode_line_gc::ScratchRoots::new();
+
     match format.kind() {
         ValueKind::Nil => {}
 
@@ -3814,6 +3880,8 @@ fn format_mode_line_recursive_in_state_with_eval(
         _ if format.is_cons() => {
             let car = format.cons_car();
             let cdr = format.cons_cdr();
+            roots.pin(car);
+            roots.pin(cdr);
 
             if car.is_symbol_named(":eval") {
                 if risky {
@@ -3821,6 +3889,7 @@ fn format_mode_line_recursive_in_state_with_eval(
                 }
                 if cdr.is_cons() {
                     let form_val = cdr.cons_car();
+                    roots.pin(form_val);
                     let val = eval_form(&form_val, buffers)?;
                     format_mode_line_recursive_in_state_with_eval(
                         obarray,
@@ -3913,6 +3982,9 @@ fn format_mode_line_recursive_in_state_with_eval(
             }
 
             if let Some(elements) = list_to_vec(format) {
+                for &element in &elements {
+                    roots.pin(element);
+                }
                 for elem in &elements {
                     format_mode_line_recursive_in_state_with_eval(
                         obarray,
@@ -9018,3 +9090,7 @@ pub(crate) fn builtin_buffer_text_pixel_size(
 #[cfg(test)]
 #[path = "tests/mod.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/mode_line_gc_roots.rs"]
+mod mode_line_gc_roots;
