@@ -8,6 +8,7 @@
 
 #![allow(dead_code)] // The independently gated mid-end is being brought up.
 
+pub(crate) mod build;
 pub(crate) mod ir;
 pub(crate) mod mem;
 pub(crate) mod types;
