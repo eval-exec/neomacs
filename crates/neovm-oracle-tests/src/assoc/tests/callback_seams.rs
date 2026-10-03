@@ -250,3 +250,20 @@ fn oracle_assoc_callbacks_named_bytecode_and_closures_match_gnu() {
     ]];
     crate::common::assert_oracle_parity_under_envs_expect(form, BOTH, expect);
 }
+
+#[test]
+fn oracle_assoc_testfn_that_unlinks_the_entry_and_collects_matches_gnu() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    // The predicate unlinks the matching entry and collects before assoc
+    // returns it; the entry must survive (GNU keeps it in a C local).
+    let form = r#"(let* ((alist (list (cons 'k 'v) (cons 'other 'w)))
+                  (r (assoc 'k alist
+                            (lambda (a b)
+                              (setcar alist nil)
+                              (garbage-collect)
+                              (eq a b)))))
+             (dotimes (_ 64) (list 1 2 3))
+             (list (consp r) (car-safe r) (cdr-safe r) alist))"#;
+    let expect = expect_test::expect![[r#""OK (t k v (nil (other . w)))""#]];
+    crate::common::assert_oracle_parity_under_envs_expect(form, BOTH, expect);
+}

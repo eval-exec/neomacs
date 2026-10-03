@@ -304,6 +304,7 @@ mod propertize_advanced;
 mod propertize_func_narrow_edge_semantics;
 mod property_list_advanced;
 mod property_list_comprehensive;
+mod property_list_predicate_walks;
 mod provide_require_comprehensive;
 mod purecopy_strict_edge_semantics;
 mod put;
