@@ -867,68 +867,12 @@ fn alternate_editor_tokens(mut remaining: &str) -> Vec<&str> {
 }
 
 #[cfg(test)]
-mod timeout_tests {
-    use super::*;
-
-    #[test]
-    fn ordinary_startup_is_unlimited_and_reply_budget_is_independent() {
-        for args in [vec![], vec!["-w", "1"], vec!["--timeout=0"]] {
-            let options = parse_options("client", args.into_iter().map(OsString::from)).unwrap();
-            assert_eq!(options.startup_timeout, None);
-        }
-        let options = parse_options(
-            "client",
-            ["-w", "1", "--startup-timeout=3"].map(OsString::from),
-        )
-        .unwrap();
-        assert_eq!(options.timeout, Some(Duration::from_secs(1)));
-        assert_eq!(options.startup_timeout, Some(Duration::from_secs(3)));
-        let options = parse_options(
-            "client",
-            ["-w", "1", "-w", "0", "--startup-timeout", "0"].map(OsString::from),
-        )
-        .unwrap();
-        assert_eq!(options.timeout, None);
-        assert_eq!(options.startup_timeout, None);
-        for args in [
-            vec!["--startup-timeout"],
-            vec!["--startup-timeout=-1"],
-            vec!["--startup-timeout=bad"],
-        ] {
-            assert!(parse_options("client", args.into_iter().map(OsString::from)).is_err());
-        }
-    }
-}
+#[path = "neomacsclient/tests/timeout_tests.rs"]
+mod timeout_tests;
 
 #[cfg(test)]
-mod alternate_editor_tests {
-    use super::alternate_editor_tokens;
-
-    #[test]
-    fn tokenization_matches_gnu_source_not_shell_syntax() {
-        for (input, expected) in [
-            ("  editor  fixed  ", vec!["editor", "fixed"]),
-            (
-                "\"editor with space\" \"fixed with space\"",
-                vec!["editor with space", "fixed with space"],
-            ),
-            (
-                "editor 'a b' a\\ b $HOME ; *.txt",
-                vec!["editor", "'a", "b'", "a\\", "b", "$HOME", ";", "*.txt"],
-            ),
-            ("editor\targ next\narg", vec!["editor\targ", "next\narg"]),
-            ("\"a b\"tail \"a\"\"b\"", vec!["a b", "tail", "a", "b"]),
-            (
-                "editor \"unterminated value",
-                vec!["editor", "unterminated value"],
-            ),
-            ("editor \"\" next", vec!["editor", "", "next"]),
-            ("   ", vec![]),
-        ] {
-            assert_eq!(alternate_editor_tokens(input), expected, "{input:?}");
-        }
-    }
-}
+#[path = "neomacsclient/tests/alternate_editor_tests.rs"]
+mod alternate_editor_tests;
 
 fn fail_or_alternate(prog: &str, options: &Options, message: &str) -> Result<(), String> {
     let Some(alternate) = &options.alternate_editor else {
