@@ -138,6 +138,64 @@ fn termination_capture_runs_kill_emacs_at_safe_point_once() {
     let _ = os_signal::take_pending();
 }
 
+/// SIGINT is in GNU's fatal set too: `maybe_fatal_sig` captures SIGHUP,
+/// **SIGINT** and SIGTERM alike (`src/sysdep.c:2044-2046`), so `kill -INT`
+/// runs the ordinary kill-emacs boundary (hooks, exit code = the signal)
+/// instead of dropping the daemon without them.
+///
+/// The disposition is asserted *before* the self-kill: without a handler this
+/// test process would simply die by SIGINT, which nextest reports as a killed
+/// test rather than a failed assertion.
+#[test]
+#[cfg(unix)]
+fn sigint_is_captured_like_the_other_fatal_signals() {
+    os_signal::install_termination(false);
+    let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+    // SAFETY: initialized storage for a valid signal number.
+    assert_eq!(
+        unsafe { libc::sigaction(libc::SIGINT, std::ptr::null(), &mut action) },
+        0
+    );
+    assert_eq!(
+        action.sa_sigaction,
+        super::deliver_user_signal as *const () as usize,
+        "SIGINT must be captured before this test signals itself"
+    );
+
+    let mut eval = crate::emacs_core::eval::Context::new();
+    eval.eval_str(
+        "(setq sigint-hook-count 0 kill-emacs-hook (list (lambda () (setq sigint-hook-count (1+ sigint-hook-count)))))",
+    )
+    .unwrap();
+    super::TERMINATION_SIGNAL.store(0, std::sync::atomic::Ordering::Release);
+    let _ = os_signal::take_pending();
+    kill_self(libc::SIGINT);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while super::TERMINATION_SIGNAL.load(std::sync::atomic::Ordering::Acquire) == 0
+        || !os_signal::pending()
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "SIGINT was never captured"
+        );
+        std::thread::yield_now();
+    }
+    assert!(eval.shutdown_request().is_none(), "handler entered Lisp");
+    assert!(matches!(
+        eval.maybe_quit(),
+        Err(crate::emacs_core::error::Flow::Shutdown(_))
+    ));
+    assert_eq!(eval.shutdown_request().unwrap().exit_code, libc::SIGINT);
+    assert_eq!(
+        eval.obarray.symbol_value("sigint-hook-count").copied(),
+        Some(crate::emacs_core::Value::fixnum(1))
+    );
+    super::deliver_user_signal(libc::SIGINT);
+    assert_eq!(os_signal::take_termination_signal(), None);
+    super::TERMINATION_SIGNAL.store(0, std::sync::atomic::Ordering::Release);
+    let _ = os_signal::take_pending();
+}
+
 /// The red this entry started from: with no handler installed, this test's
 /// process is TERMINATED by the signal and nextest reports it killed rather
 /// than failed.  It survives only because [`os_signal::install`] ran.
