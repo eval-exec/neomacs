@@ -328,6 +328,9 @@ fn bytecode_obj_is_only_named_by_its_chokepoints() {
         "tagged/gc/gc_thread.rs",
         "tagged/gc/incremental.rs",
         "tagged/gc/mark_sweep.rs",
+        // The gc-memory-telemetry heap walker sizes objects by header type,
+        // like the sweep above; it is diagnostics only (default-off feature).
+        "tagged/gc/memory_inventory.rs",
         "tagged/gc/bytecode_arena_tests.rs",
         "tagged/mutate.rs",
         "tagged/tests.rs",
