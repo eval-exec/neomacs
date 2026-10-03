@@ -187,6 +187,9 @@ mod jit_call_frames;
 #[path = "tests/jit_direct_observables.rs"]
 mod jit_direct_observables;
 mod jit_flonum_semantics;
+#[cfg(test)]
+#[path = "tests/jit_opt_semantics.rs"]
+mod jit_opt_semantics;
 mod jit_source_slots;
 mod json_availability_semantics;
 mod json_semantics;
