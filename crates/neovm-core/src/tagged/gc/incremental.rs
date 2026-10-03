@@ -115,6 +115,8 @@ impl TaggedHeap {
         // Unchain dead markers before the sweep frees them (mirrors GNU
         // sweep_buffer -> unchain_dead_markers). Reads marks, which are intact.
         let unchain_t0 = std::time::Instant::now();
+        #[cfg(feature = "gc-memory-telemetry")]
+        memory_telemetry::observe(self, memory_telemetry::Phase::FinalMark);
         self.promote_survivors_world_stopped();
         self.unchain_dead_markers();
         self.reset_generational_remembered_world_stopped();
@@ -491,6 +493,8 @@ impl TaggedHeap {
         if self.generational.enabled {
             self.finish_generation_pacing();
         }
+        #[cfg(feature = "gc-memory-telemetry")]
+        memory_telemetry::observe(self, memory_telemetry::Phase::SweepComplete);
         self.sweep_in_progress = false;
         self.generational.major_in_progress = false;
     }

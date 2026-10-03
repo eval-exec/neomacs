@@ -49,6 +49,7 @@ libloading.workspace = true
 tree-sitter.workspace = true
 tree-sitter-language.workspace = true
 serde.workspace = true
+serde_json = { workspace = true, optional = true }
 bytemuck.workspace = true
 memmap2.workspace = true
 tempfile.workspace = true
@@ -118,6 +119,8 @@ default = ["jit", "sqlite", "flow-word"]
 # elisp-benchmarks and board row measured fewer instructions). Build with
 # --no-default-features --features jit,sqlite for the two-word enum carrier.
 flow-word = []
+# Diagnostic inventory walks and JSONL records; absent from ordinary builds.
+gc-memory-telemetry = ["dep:serde_json"]
 sqlite = ["dep:rusqlite"]
 # Static-link the crate's bundled libdbus instead of pkg-config `dbus-1`.
 # Production/Nix builds leave this off and use the system library.

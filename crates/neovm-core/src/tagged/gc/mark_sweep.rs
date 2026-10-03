@@ -111,6 +111,8 @@ impl TaggedHeap {
         // A region never outlives the phase it was granted in (I1): close
         // before the flip that ends it.
         self.close_alloc_regions();
+        #[cfg(feature = "gc-memory-telemetry")]
+        memory_telemetry::observe(self, memory_telemetry::Phase::CollectionBegin { stw_entry });
         self.mark_parity = self.mark_parity.flip();
         self.image_premarked = false;
 
@@ -1837,6 +1839,8 @@ impl TaggedHeap {
         // Mirrors GNU `sweep_buffer → unchain_dead_markers` (`alloc.c`).
         // Reading `header.gc.marked` is sound here because the
         // allocation is still live until `sweep_objects` runs below.
+        #[cfg(feature = "gc-memory-telemetry")]
+        memory_telemetry::observe(self, memory_telemetry::Phase::FinalMark);
         self.promote_survivors_world_stopped();
         self.unchain_dead_markers();
         self.reset_generational_remembered_world_stopped();
@@ -1910,6 +1914,8 @@ impl TaggedHeap {
         let elapsed = t0.elapsed();
         self.gc_collections += 1;
         self.gc_total_elapsed_us += elapsed.as_micros() as u64;
+        #[cfg(feature = "gc-memory-telemetry")]
+        memory_telemetry::observe(self, memory_telemetry::Phase::SweepComplete);
 
         // Phase split + dump-partition opportunity sizing. `mapped_marked` is
         // the immutable pdump (mapped) objects re-traced this cycle — the work

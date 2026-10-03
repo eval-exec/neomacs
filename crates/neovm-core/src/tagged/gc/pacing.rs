@@ -71,6 +71,8 @@ impl TaggedHeap {
     /// use begin_stw_collection. The bootstrap/first partition stays major.
     #[inline]
     pub(crate) fn should_run_minor(&self, memory_full: bool, stress: bool) -> bool {
+        #[cfg(feature = "gc-memory-telemetry")]
+        memory_telemetry::note_selection(self, memory_full, stress);
         self.generational.enabled
             && self.should_run_concurrent()
             && !self.generation_major_due(memory_full, stress)

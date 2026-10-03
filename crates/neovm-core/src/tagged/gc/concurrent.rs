@@ -445,6 +445,8 @@ impl TaggedHeap {
         self.concurrent_mark_running = false;
         TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(false));
         self.publish_barrier_window();
+        #[cfg(feature = "gc-memory-telemetry")]
+        memory_telemetry::observe(self, memory_telemetry::Phase::ConcurrentJoined);
         if self.generational.enabled {
             for id in result.symbols {
                 self.mark_symbol(id);

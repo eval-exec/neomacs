@@ -42,6 +42,10 @@ jemalloc-profiling = [
 jit = ["neovm-core/jit"]
 # Forward the default-on P0.12 one-word Flow carrier to the evaluator.
 flow-word = ["neovm-core/flow-word"]
+# Opt-in GC inventory plus statistics from an already-selected jemalloc.
+# Enabling this feature changes allocator bookkeeping; use ordinary builds
+# for performance gates and this build for same-binary memory attribution.
+gc-memory-telemetry = ["neovm-core/gc-memory-telemetry", "tikv-jemalloc-sys?/stats"]
 # GNU-compatible native SQLite support. Default-on for distributed Neomacs
 # builds, while remaining a compile-time capability for minimal builds.
 sqlite = ["neovm-core/sqlite"]

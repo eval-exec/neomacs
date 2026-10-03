@@ -292,6 +292,11 @@ impl TaggedHeap {
         self.record_generation_promoted_bytes(
             newly_promoted_header_bytes.saturating_add(newly_promoted_cons_bytes),
         );
+        #[cfg(feature = "gc-memory-telemetry")]
+        memory_telemetry::note_promotion(
+            self,
+            newly_promoted_header_bytes.saturating_add(newly_promoted_cons_bytes),
+        );
         if !partition_first {
             self.clear_black_births_world_stopped();
         }

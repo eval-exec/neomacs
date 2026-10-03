@@ -2562,6 +2562,79 @@ impl Clone for TextPropertyTable {
 #[cfg(test)]
 type IntervalPlistRun = (usize, usize, Vec<(Value, Value)>);
 
+#[cfg(feature = "gc-memory-telemetry")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TextPropertyMemoryStorage {
+    /// LispString owns the table in a unique Box. An inline buffer table's
+    /// struct must instead be counted by its owner; callers choose correctly.
+    pub(crate) table_struct_bytes: usize,
+    pub(crate) node_logical_bytes: usize,
+    pub(crate) node_capacity_bytes: usize,
+    pub(crate) cached_range_logical_bytes: Option<usize>,
+    pub(crate) cached_range_capacity_bytes: Option<usize>,
+    /// Property-name summaries are Arc-shared. Usable hash capacity does not
+    /// reveal bucket-allocation bytes, so these are reference counts only.
+    pub(crate) shared_property_names: usize,
+    pub(crate) shared_property_name_capacity_entries: usize,
+    pub(crate) shared_property_name_owners: usize,
+}
+
+#[cfg(feature = "gc-memory-telemetry")]
+impl TextPropertyMemoryStorage {
+    pub(crate) fn known_boxed_owned_capacity_bytes(self) -> usize {
+        self.table_struct_bytes
+            .saturating_add(self.node_capacity_bytes)
+            .saturating_add(self.cached_range_capacity_bytes.unwrap_or(0))
+    }
+}
+
+#[cfg(feature = "gc-memory-telemetry")]
+impl TextPropertyTable {
+    pub(crate) fn memory_telemetry_storage(&self) -> TextPropertyMemoryStorage {
+        use std::mem::size_of;
+        let (
+            shared_property_names,
+            shared_property_name_capacity_entries,
+            shared_property_name_owners,
+        ) = match &self.property_names {
+            ConservativePropertyNames::Empty => (0, 0, 0),
+            ConservativePropertyNames::Assigned(names) => {
+                (names.len(), names.capacity(), Arc::strong_count(names))
+            }
+        };
+        let cached_ranges = self.syntax_prop_ranges.try_lock().ok().map(|guard| {
+            (
+                guard
+                    .1
+                    .len()
+                    .saturating_mul(size_of::<(CharPos0, CharPos0)>()),
+                guard
+                    .1
+                    .capacity()
+                    .saturating_mul(size_of::<(CharPos0, CharPos0)>()),
+            )
+        });
+        TextPropertyMemoryStorage {
+            table_struct_bytes: size_of::<Self>(),
+            node_logical_bytes: self
+                .intervals
+                .nodes
+                .len()
+                .saturating_mul(size_of::<IntervalNode>()),
+            node_capacity_bytes: self
+                .intervals
+                .nodes
+                .capacity()
+                .saturating_mul(size_of::<IntervalNode>()),
+            cached_range_logical_bytes: cached_ranges.map(|(logical, _)| logical),
+            cached_range_capacity_bytes: cached_ranges.map(|(_, capacity)| capacity),
+            shared_property_names,
+            shared_property_name_capacity_entries,
+            shared_property_name_owners,
+        }
+    }
+}
+
 impl TextPropertyTable {
     pub fn new() -> Self {
         Self {

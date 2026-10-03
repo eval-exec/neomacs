@@ -7,6 +7,8 @@
 //! | `NEOVM_GC_CENSUS=1` | off | the generation census, one record per cycle (`census.rs`) |
 //! | `NEOVM_GC_CENSUS_REMSET=1` | off | the census plus its remembered-set estimate: the barrier window covers every owner, so every store reaches the census |
 //! | `NEOVM_GC_CENSUS_FILE=<path>` | unset | also append each census record to this file (read once, by `census.rs`) |
+//! | `NEOVM_GC_MEMORY_TELEMETRY=1` | off | stopped-world retained/live inventory (requires `gc-memory-telemetry` feature) |
+//! | `NEOVM_GC_MEMORY_FILE=<path>` | unset | append memory snapshots as JSONL when telemetry or GC trace is enabled |
 //! | `NEOVM_GC_CHUNK_MAP` | on (`=0` disables) | page and block ownership through the chunk map (`chunk_map.rs`), on the mutator and on the GC thread |
 //! | `NEOVM_GC_MAJOR_GROWTH_PERCENT` | `100` | major growth limit, with an 8 MiB floor; generational only |
 //! | `NEOVM_GC_MAJOR_MAX_MINORS` | `64` | maximum completed minors between majors; generational only |

@@ -2641,6 +2641,11 @@ mod allocation;
 
 mod mark_sweep;
 
+#[cfg(feature = "gc-memory-telemetry")]
+mod memory_inventory;
+#[cfg(feature = "gc-memory-telemetry")]
+pub mod memory_telemetry;
+
 mod birth_logs;
 mod generational;
 mod old_sweep;

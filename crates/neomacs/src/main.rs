@@ -111,6 +111,8 @@ mod args;
 mod build_info;
 mod daemon;
 pub(crate) mod frame_layout;
+#[cfg(feature = "gc-memory-telemetry")]
+mod gc_memory_allocator;
 mod image_catalog;
 mod input_bridge;
 mod secondary_tty;
@@ -4686,6 +4688,8 @@ fn run_temacs_dump_mode(dump_mode: LoadupDumpMode, startup: &StartupOptions) {
 #[allow(dead_code)]
 fn main() {
     neomacs_display_runtime::macos_bundle_runtime::configure_before_threads();
+    #[cfg(feature = "gc-memory-telemetry")]
+    neovm_core::tagged::gc::memory_telemetry::set_allocator_sampler(gc_memory_allocator::sample);
 
     // Before the evaluator can build an image, mark this as a shipped editor.
     // It must do what GNU does about bytecode older than its source -- name the
