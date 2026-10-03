@@ -2,7 +2,8 @@
 
 use super::{ModeLineRendered, Value};
 use crate::emacs_core::eval::{
-    push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
+    push_scratch_gc_root, push_scratch_gc_root_slot, restore_scratch_gc_roots,
+    save_scratch_gc_roots, set_scratch_gc_root,
 };
 
 #[inline]
@@ -100,6 +101,16 @@ impl ScratchRoots {
     #[inline]
     pub(super) fn pin(&self, value: Value) {
         push_scratch_gc_root(value);
+    }
+
+    #[inline]
+    pub(super) fn slot(&self, value: Value) -> usize {
+        push_scratch_gc_root_slot(value)
+    }
+
+    #[inline]
+    pub(super) fn set(&self, slot: usize, value: Value) {
+        set_scratch_gc_root(slot, value);
     }
 }
 

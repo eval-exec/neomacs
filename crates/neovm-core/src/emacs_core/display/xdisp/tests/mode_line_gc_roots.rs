@@ -108,11 +108,16 @@ fn assert_accumulated_property_survives(
         }
     };
     assert_eq!(eval.gc_count, before + 1, "the later :eval must collect");
-    assert_eq!(rendered.as_utf8_str(), Some("AB"));
+    let expected = if matches!(source, PropertySource::DetachedFormatElements) {
+        "A"
+    } else {
+        "AB"
+    };
+    assert_eq!(rendered.as_utf8_str(), Some(expected));
     let string = rendered.as_lisp_string().expect("rendered string");
     let runs = string
         .intervals()
-        .object_interval_plist_runs_for_char_len(crate::buffer::CharLen::new(2));
+        .object_interval_plist_runs_for_char_len(crate::buffer::CharLen::new(expected.len()));
     let first = runs.first().expect("retained first interval");
     assert_eq!(first.start(), crate::buffer::CharPos0::ZERO);
     let plist = first.plist();
@@ -244,7 +249,7 @@ fn gc_mode_line_display_fresh_eval_source_survives_later_eval_gen1() {
 }
 
 #[test]
-fn gc_mode_line_display_detached_format_elements_survive_eval_gen0() {
+fn gc_mode_line_display_detached_tail_is_not_rendered_gen0() {
     assert_accumulated_property_survives(
         false,
         PropertySource::DetachedFormatElements,
@@ -253,10 +258,28 @@ fn gc_mode_line_display_detached_format_elements_survive_eval_gen0() {
 }
 
 #[test]
-fn gc_mode_line_display_detached_format_elements_survive_eval_gen1() {
+fn gc_mode_line_display_detached_tail_is_not_rendered_gen1() {
     assert_accumulated_property_survives(
         true,
         PropertySource::DetachedFormatElements,
         FormatEntry::Display,
+    );
+}
+
+#[test]
+fn gc_mode_line_detached_tail_is_not_rendered_gen0() {
+    assert_accumulated_property_survives(
+        false,
+        PropertySource::DetachedFormatElements,
+        FormatEntry::LispString,
+    );
+}
+
+#[test]
+fn gc_mode_line_detached_tail_is_not_rendered_gen1() {
+    assert_accumulated_property_survives(
+        true,
+        PropertySource::DetachedFormatElements,
+        FormatEntry::LispString,
     );
 }

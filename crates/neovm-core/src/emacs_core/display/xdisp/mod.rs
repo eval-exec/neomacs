@@ -3509,6 +3509,38 @@ fn append_mode_line_string_in_state(
     }
 }
 
+/// GNU FOR_EACH_TAIL_SAFE's Brent checkpoints, without signaling or quitting.
+/// Evaluator-backed walkers root the checkpoint separately from the current
+/// tail so detaching it cannot let collection reuse its address.
+struct ModeLineTailCycle {
+    checkpoint: usize,
+    remaining: usize,
+    period: usize,
+}
+
+impl ModeLineTailCycle {
+    fn new(tail: Value) -> Self {
+        Self {
+            checkpoint: tail.bits(),
+            remaining: 2,
+            period: 2,
+        }
+    }
+
+    fn step(&mut self, tail: Value, mut update_checkpoint: impl FnMut(Value)) -> bool {
+        self.remaining -= 1;
+        if self.remaining == 0 {
+            self.period = self.period.saturating_mul(2);
+            self.remaining = self.period;
+            self.checkpoint = tail.bits();
+            update_checkpoint(tail);
+            false
+        } else {
+            tail.bits() == self.checkpoint
+        }
+    }
+}
+
 /// Recursively process a mode-line format spec, appending output to `result`.
 ///
 /// FORMAT can be:
@@ -3667,14 +3699,21 @@ fn format_mode_line_recursive_rooted(
                 return;
             }
 
-            if let Some(elements) = list_to_vec(format) {
-                // The walker uses this snapshot even if :eval mutates the
-                // original format spine; keep detached later elements alive.
-                for &element in &elements {
-                    eval.push_specpdl_root(element);
-                }
-                for elem in &elements {
-                    format_mode_line_recursive(eval, pctx, elem, result, depth + 1, risky);
+            // GNU FOR_EACH_TAIL_SAFE reads XCDR after rendering each element:
+            // :eval can detach or replace the remaining live list spine.
+            let mut tail = *format;
+            let tail_root = eval.push_specpdl_root_slot(tail);
+            let checkpoint_root = eval.push_specpdl_root_slot(tail);
+            let mut cycle = ModeLineTailCycle::new(tail);
+            while tail.is_cons() {
+                let element = tail.cons_car();
+                format_mode_line_recursive(eval, pctx, &element, result, depth + 1, risky);
+                tail = tail.cons_cdr();
+                eval.set_specpdl_root_slot(&tail_root, tail);
+                if cycle.step(tail, |checkpoint| {
+                    eval.set_specpdl_root_slot(&checkpoint_root, checkpoint);
+                }) {
+                    break;
                 }
             }
         }
@@ -3822,21 +3861,26 @@ fn format_mode_line_recursive_in_state(
                 return false;
             }
 
-            if let Some(elements) = list_to_vec(format) {
-                for elem in &elements {
-                    if format_mode_line_recursive_in_state(
-                        obarray,
-                        dynamic,
-                        buffers,
-                        processes,
-                        pctx,
-                        elem,
-                        result,
-                        depth + 1,
-                        risky,
-                    ) {
-                        return true;
-                    }
+            let mut tail = *format;
+            let mut cycle = ModeLineTailCycle::new(tail);
+            while tail.is_cons() {
+                let element = tail.cons_car();
+                if format_mode_line_recursive_in_state(
+                    obarray,
+                    dynamic,
+                    buffers,
+                    processes,
+                    pctx,
+                    &element,
+                    result,
+                    depth + 1,
+                    risky,
+                ) {
+                    return true;
+                }
+                tail = tail.cons_cdr();
+                if cycle.step(tail, |_| {}) {
+                    break;
                 }
             }
         }
@@ -4017,24 +4061,29 @@ fn format_mode_line_recursive_in_state_with_eval_rooted(
                 return Ok(());
             }
 
-            if let Some(elements) = list_to_vec(format) {
-                for &element in &elements {
-                    roots.pin(element);
-                }
-                for elem in &elements {
-                    format_mode_line_recursive_in_state_with_eval_rooted(
-                        obarray,
-                        dynamic,
-                        buffers,
-                        processes,
-                        pctx,
-                        elem,
-                        result,
-                        depth + 1,
-                        risky,
-                        eval_form,
-                        roots,
-                    )?;
+            let mut tail = *format;
+            let tail_root = roots.slot(tail);
+            let checkpoint_root = roots.slot(tail);
+            let mut cycle = ModeLineTailCycle::new(tail);
+            while tail.is_cons() {
+                let element = tail.cons_car();
+                format_mode_line_recursive_in_state_with_eval_rooted(
+                    obarray,
+                    dynamic,
+                    buffers,
+                    processes,
+                    pctx,
+                    &element,
+                    result,
+                    depth + 1,
+                    risky,
+                    eval_form,
+                    roots,
+                )?;
+                tail = tail.cons_cdr();
+                roots.set(tail_root, tail);
+                if cycle.step(tail, |checkpoint| roots.set(checkpoint_root, checkpoint)) {
+                    break;
                 }
             }
         }
@@ -9135,3 +9184,7 @@ mod mode_line_gc_roots;
 #[cfg(test)]
 #[path = "tests/mode_line_incremental_roots.rs"]
 mod mode_line_incremental_roots;
+
+#[cfg(test)]
+#[path = "tests/mode_line_live_spine.rs"]
+mod mode_line_live_spine;
