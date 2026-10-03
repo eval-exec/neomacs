@@ -101,6 +101,22 @@ struct Options {
     args: Vec<String>,
 }
 
+impl Options {
+    /// The read timeout the client arms for server replies.
+    ///
+    /// GNU always arms one: the `-w` value when given, its 30-second
+    /// `DEFAULT_TIMEOUT` otherwise (`lib-src/emacsclient.c:69`, `:2211`).
+    /// The timeout only ever *fails* the wait before the first response
+    /// (`:2225-2247`); see [`ReplyWatch`].
+    fn reply_timeout(&self) -> Duration {
+        self.timeout.unwrap_or(DEFAULT_REPLY_TIMEOUT)
+    }
+}
+
+/// GNU `DEFAULT_TIMEOUT` (`lib-src/emacsclient.c:69`): the reply read
+/// timeout armed when `-w` does not name one.
+const DEFAULT_REPLY_TIMEOUT: Duration = Duration::from_secs(30);
+
 fn main() {
     let code = match run(env::args_os().collect()) {
         Ok(()) => 0,
@@ -328,11 +344,9 @@ fn run_unix_client(prog: &str, options: Options) -> Result<(), String> {
     // Connection/fallback precedes TTY validation and consuming stdin.
     // Automatic startup also constructs the original request only once.
     let request = build_request(&options)?;
-    if let Some(timeout) = options.timeout {
-        stream
-            .set_read_timeout(Some(timeout))
-            .map_err(|err| format!("failed to set socket timeout: {err}"))?;
-    }
+    stream
+        .set_read_timeout(Some(options.reply_timeout()))
+        .map_err(|err| format!("failed to set socket timeout: {err}"))?;
 
     let lifecycle = (options.frame == FrameRequest::NewTty)
         .then(|| {
@@ -349,7 +363,13 @@ fn run_unix_client(prog: &str, options: Options) -> Result<(), String> {
             .write_all(request.as_bytes())
             .map_err(|err| format!("failed to send request to server: {err}"))?;
     }
-    read_responses(&mut stream, &options, lifecycle.as_ref())
+    read_responses(
+        &mut stream,
+        &options,
+        lifecycle.as_ref(),
+        &mut io::stdout().lock(),
+        &mut io::stderr().lock(),
+    )
 }
 
 fn run_tcp_client(prog: &str, options: Options, server_file: &str) -> Result<(), String> {
@@ -367,11 +387,9 @@ fn run_tcp_client(prog: &str, options: Options, server_file: &str) -> Result<(),
             );
         }
     };
-    if let Some(timeout) = options.timeout {
-        stream
-            .set_read_timeout(Some(timeout))
-            .map_err(|err| format!("failed to set socket timeout: {err}"))?;
-    }
+    stream
+        .set_read_timeout(Some(options.reply_timeout()))
+        .map_err(|err| format!("failed to set socket timeout: {err}"))?;
 
     let mut request = String::new();
     push_arg_command(&mut request, "-auth", &config.auth_key);
@@ -399,7 +417,13 @@ fn run_tcp_client(prog: &str, options: Options, server_file: &str) -> Result<(),
     stream
         .write_all(request.as_bytes())
         .map_err(|err| format!("failed to send request to server: {err}"))?;
-    read_responses(&mut stream, &options, lifecycle.as_ref())
+    read_responses(
+        &mut stream,
+        &options,
+        lifecycle.as_ref(),
+        &mut io::stdout().lock(),
+        &mut io::stderr().lock(),
+    )
 }
 
 struct TcpServerConfig {
@@ -688,44 +712,118 @@ fn unquote_argument(arg: &str) -> String {
     out
 }
 
+fn is_read_timeout(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+    )
+}
+
+/// How a quiet socket is treated while waiting for replies.
+///
+/// GNU arms a read timeout for every reply but only gives up on it *before*
+/// the first server byte (`emacsclient.c:2211` arms `-w`/`DEFAULT_TIMEOUT`,
+/// `:2225-2247` decides what an expiry means): once a response has arrived a
+/// quiet stream is normal — an interactive `-t` client is idle most of the
+/// time — and the client keeps waiting forever.  Two states keep "kill a live
+/// session because its user paused" out of the error path by construction.
+enum ReplyWatch {
+    /// No server byte yet; an expiry is governed by the `-w` policy.
+    AwaitingFirst { notice_shown: bool },
+    /// At least one byte has arrived; an expiry is not a failure.
+    Streaming,
+}
+
+impl ReplyWatch {
+    fn saw_response(&mut self) {
+        *self = Self::Streaming;
+    }
+
+    /// Handle one read timeout.  `Err` is the explicit `-w` expiry before any
+    /// reply — fatal, like GNU, after printing GNU's notice.
+    fn on_timeout(&mut self, options: &Options, err: &mut impl Write) -> Result<(), String> {
+        match self {
+            Self::Streaming => Ok(()),
+            Self::AwaitingFirst { notice_shown } => {
+                if let Some(timeout) = options.timeout {
+                    let seconds = timeout.as_secs();
+                    let _ = write!(
+                        err,
+                        "\nServer not responding; timed out after {seconds} seconds"
+                    );
+                    Err(format!(
+                        "Server not responding; timed out after {seconds} seconds"
+                    ))
+                } else {
+                    if !*notice_shown {
+                        *notice_shown = true;
+                        let _ = write!(err, "\nServer not responding; use Ctrl+C to break");
+                    }
+                    Ok(())
+                }
+            }
+        }
+    }
+}
+
 fn read_responses(
     stream: &mut impl Read,
     options: &Options,
     lifecycle: Option<&TtyLifecycle>,
+    out: &mut impl Write,
+    err: &mut impl Write,
 ) -> Result<(), String> {
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
     let mut ok = true;
+    let mut watch = ReplyWatch::AwaitingFirst {
+        notice_shown: false,
+    };
 
     loop {
-        line.clear();
-        let read = reader
-            .read_line(&mut line)
-            .map_err(|err| format!("failed to read server response: {err}"))?;
-        if read == 0 {
-            break;
+        match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) if line.ends_with('\n') => watch.saw_response(),
+            // `read_line` also returns `Ok` for a partial line, and a timed-out
+            // read keeps whatever it delivered in `line`.  Either way bytes
+            // arrived, which is all GNU's `saw_response` counts (`nrecv += rl`
+            // before the message loop, `emacsclient.c:2249-2251`); the rest of
+            // the line is completed by a later read.
+            Ok(_) => {
+                watch.saw_response();
+                continue;
+            }
+            Err(error) if is_read_timeout(&error) => {
+                if !line.is_empty() {
+                    watch.saw_response();
+                }
+                watch.on_timeout(options, err)?;
+                continue;
+            }
+            Err(error) => return Err(format!("failed to read server response: {error}")),
         }
-        let line = line.trim_end_matches(['\r', '\n']);
-        if let Some(value) = line.strip_prefix("-print ") {
+        let completed = line.trim_end_matches(['\r', '\n']);
+        if let Some(value) = completed.strip_prefix("-print ") {
             if !options.suppress_output {
-                print!("{}", unquote_argument(value));
+                let _ = write!(out, "{}", unquote_argument(value));
             }
-        } else if let Some(value) = line.strip_prefix("-print-nonl ") {
+        } else if let Some(value) = completed.strip_prefix("-print-nonl ") {
             if !options.suppress_output {
-                print!("{}", unquote_argument(value));
+                let _ = write!(out, "{}", unquote_argument(value));
             }
-        } else if let Some(value) = line.strip_prefix("-error ") {
-            eprintln!("*ERROR*: {}", unquote_argument(value));
+        } else if let Some(value) = completed.strip_prefix("-error ") {
+            let _ = writeln!(err, "*ERROR*: {}", unquote_argument(value));
             ok = false;
-        } else if let Some(value) = line.strip_prefix("-emacs-pid ") {
+        } else if let Some(value) = completed.strip_prefix("-emacs-pid ") {
             if let (Some(lifecycle), Ok(pid)) = (lifecycle, value.trim().parse::<i32>()) {
                 lifecycle.record_emacs_pid(pid);
             }
-        } else if line.starts_with("-suspend ")
+        } else if completed.starts_with("-suspend ")
             && let Some(lifecycle) = lifecycle
         {
             lifecycle.stop_from_server();
         }
+        line.clear();
     }
 
     if ok {
