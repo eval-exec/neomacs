@@ -106,8 +106,29 @@ fn a_partial_line_survives_a_read_timeout() {
 }
 
 #[test]
+fn a_zero_reply_timeout_is_rejected_like_gnu() {
+    // GNU `emacsclient.c:540-549`: "Invalid timeout: \"0\"" then exit 1.
+    for args in [
+        vec!["-w", "0"],
+        vec!["--timeout=0"],
+        vec!["--timeout", "-1"],
+        vec!["-w", "not-a-number"],
+    ] {
+        let error = parse_options("client", args.clone().into_iter().map(OsString::from))
+            .expect_err("a zero or unparsable timeout must be rejected");
+        assert!(
+            error.starts_with("Invalid timeout: \""),
+            "{args:?}: {error}"
+        );
+    }
+    // `--startup-timeout` is a Neomacs extension; zero stays "unlimited".
+    let options = parse_options("client", ["--startup-timeout", "0"].map(OsString::from)).unwrap();
+    assert_eq!(options.startup_timeout, None);
+}
+
+#[test]
 fn ordinary_startup_is_unlimited_and_reply_budget_is_independent() {
-    for args in [vec![], vec!["-w", "1"], vec!["--timeout=0"]] {
+    for args in [vec![], vec!["-w", "1"]] {
         let options = parse_options("client", args.into_iter().map(OsString::from)).unwrap();
         assert_eq!(options.startup_timeout, None);
     }
@@ -120,10 +141,10 @@ fn ordinary_startup_is_unlimited_and_reply_budget_is_independent() {
     assert_eq!(options.startup_timeout, Some(Duration::from_secs(3)));
     let options = parse_options(
         "client",
-        ["-w", "1", "-w", "0", "--startup-timeout", "0"].map(OsString::from),
+        ["-w", "1", "--startup-timeout", "0"].map(OsString::from),
     )
     .unwrap();
-    assert_eq!(options.timeout, None);
+    assert_eq!(options.timeout, Some(Duration::from_secs(1)));
     assert_eq!(options.startup_timeout, None);
     for args in [
         vec!["--startup-timeout"],
