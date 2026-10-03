@@ -131,7 +131,7 @@ impl Context {
                 epoch,
                 target,
                 pure,
-                native: native_callback_cache_enabled()
+                native: (pure.is_none() && native_callback_cache_enabled())
                     .then(|| CheckedNativeCallback::resolve(function, 2))
                     .flatten(),
             });
@@ -151,17 +151,17 @@ impl Context {
         arg0: Value,
         arg1: Value,
     ) -> EvalResult {
-        if let Some(proof) = predicate.native {
-            return self.apply2_checked_subr(
-                designator,
-                predicate.callable,
-                predicate.epoch,
-                proof,
-                arg0,
-                arg1,
-            );
-        }
         if predicate.target == AssocTarget::Builtin && predicate.pure.is_none() {
+            if let Some(proof) = predicate.native {
+                return self.apply2_checked_subr(
+                    designator,
+                    predicate.callable,
+                    predicate.epoch,
+                    proof,
+                    arg0,
+                    arg1,
+                );
+            }
             return self.apply2_resolved_subr(
                 designator,
                 predicate.callable,

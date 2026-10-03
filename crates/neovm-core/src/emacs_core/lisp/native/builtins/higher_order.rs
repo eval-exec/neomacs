@@ -135,12 +135,6 @@ pub(crate) enum MapCallee {
         subr: Value,
         epoch: u64,
     },
-    CheckedSubr {
-        designator: Value,
-        subr: Value,
-        epoch: u64,
-        proof: CheckedNativeCallback,
-    },
 }
 
 impl MapCallee {
@@ -148,19 +142,6 @@ impl MapCallee {
         #[cfg(feature = "jit")]
         if !crate::tagged::collection_reads::reads_need_observation() && func.is_bytecode() {
             return Self::UnobservedByteCode(func);
-        }
-        if native_callback_cache_enabled() {
-            let epoch = eval.obarray().function_epoch();
-            if let Some((subr, _)) = eval.resolve_mapped_subr_callee(func)
-                && let Some(proof) = CheckedNativeCallback::resolve(subr, 1)
-            {
-                return Self::CheckedSubr {
-                    designator: func,
-                    subr,
-                    epoch,
-                    proof,
-                };
-            }
         }
         match eval.resolve_mapped_subr_callee(func) {
             Some((subr, epoch)) => MapCallee::Subr {
@@ -183,14 +164,36 @@ impl MapCallee {
                 subr,
                 epoch,
             } => eval.apply1_resolved_subr(designator, subr, epoch, item),
-            MapCallee::CheckedSubr {
-                designator,
-                subr,
-                epoch,
-                proof,
-            } => eval.apply1_checked_subr(designator, subr, epoch, proof, item),
         }
     }
+}
+
+/// Select the native body capability once for this mapping activation.
+/// The caller's existing root scope retains its designator and sequence; the
+/// immutable proof contains no Lisp references and stays with this mutator.
+#[inline]
+fn mapcar1_with_callee(
+    eval: &mut super::eval::Context,
+    len: usize,
+    values: MapSink<'_>,
+    sequence: Value,
+    callee: &MapCallee,
+) -> Result<usize, Flow> {
+    if let MapCallee::Subr {
+        designator,
+        subr,
+        epoch,
+    } = *callee
+        && native_callback_cache_enabled()
+        && let Some(proof) = CheckedNativeCallback::resolve(subr, 1)
+    {
+        return mapcar1_eval(eval, len, values, sequence, |eval, item| {
+            eval.apply1_checked_subr(designator, subr, epoch, proof, item)
+        });
+    }
+    mapcar1_eval(eval, len, values, sequence, |eval, item| {
+        callee.call(eval, item)
+    })
 }
 
 /// Where [`mapcar1_eval_from`] puts each callback's result.
@@ -487,9 +490,7 @@ pub(crate) fn builtin_mapcar_2(
     // collect, so the slice needs no further rooting).
     let base = eval.reserve_vm_frame_root_slots(len);
     let callee = MapCallee::resolve(eval, func);
-    let map_result = mapcar1_eval(eval, len, MapSink::RootSlots(base), seq, |eval, item| {
-        callee.call(eval, item)
-    });
+    let map_result = mapcar1_with_callee(eval, len, MapSink::RootSlots(base), seq, &callee);
     let result_list =
         map_result.map(|mapped| Value::list_from_slice(eval.vm_frame_root_slots(base, mapped)));
     eval.restore_vm_roots(roots);
@@ -512,9 +513,7 @@ pub(crate) fn builtin_mapc_2(
         }
     };
     let callee = MapCallee::resolve(eval, func);
-    let result = mapcar1_eval(eval, len, MapSink::Discard, seq, |eval, item| {
-        callee.call(eval, item)
-    });
+    let result = mapcar1_with_callee(eval, len, MapSink::Discard, seq, &callee);
     eval.restore_vm_roots(roots);
     result.map(|_| ())?;
     Ok(seq)
@@ -556,18 +555,18 @@ pub(crate) fn builtin_mapconcat(eval: &mut super::eval::Context, args: Vec<Value
         if func.as_symbol_id() == Some(identity_symbol_id()) && sequence.is_cons() {
             Ok(mapconcat_identity_list(sequence, &mut parts))
         } else {
-            let callee = if native_callback_cache_enabled() {
-                MapCallee::resolve(eval, func)
+            if native_callback_cache_enabled() {
+                let callee = MapCallee::resolve(eval, func);
+                mapcar1_with_callee(eval, len, MapSink::Collect(&mut parts), sequence, &callee)
             } else {
-                MapCallee::Generic(func)
-            };
-            mapcar1_eval(
-                eval,
-                len,
-                MapSink::Collect(&mut parts),
-                sequence,
-                |eval, item| callee.call(eval, item),
-            )
+                mapcar1_eval(
+                    eval,
+                    len,
+                    MapSink::Collect(&mut parts),
+                    sequence,
+                    |eval, item| apply1(eval, func, item),
+                )
+            }
         };
     let mapped = match mapconcat_result {
         Ok(mapped) => mapped,
