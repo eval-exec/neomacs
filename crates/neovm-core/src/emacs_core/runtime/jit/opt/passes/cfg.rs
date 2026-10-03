@@ -407,6 +407,7 @@ pub(crate) fn cleanup(func: &mut Func) -> Result<(), VerifyError> {
     candidate.census = OptCensus {
         fold: func.census.fold.clone(),
         bools: func.census.bools.clone(),
+        reps: func.census.reps.clone(),
         blocks: candidate.blocks.len(),
         insts: candidate.insts.len(),
         phis: candidate.blocks.iter().map(|b| b.params.len()).sum(),

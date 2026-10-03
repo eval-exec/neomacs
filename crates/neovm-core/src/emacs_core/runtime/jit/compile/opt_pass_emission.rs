@@ -51,6 +51,23 @@ pub(super) fn emit(
         ir::Opcode::Select => {
             let result_rep =
                 ctx.func.values[inst.result.expect("verified Select result").index()].rep;
+            if jit_opt_passes().reps && result_rep == ir::Rep::RawInt {
+                let (flag, _) = ctx.values.read(ctx.fb, ctx.func, local, inst.args[0]);
+                let (yes, yes_rep) = ctx.values.read(ctx.fb, ctx.func, local, inst.args[1]);
+                let (no, no_rep) = ctx.values.read(ctx.fb, ctx.func, local, inst.args[2]);
+                if yes_rep != SlotRep::RawFixnum || no_rep != SlotRep::RawFixnum {
+                    return Err(CompileError::UnsupportedOp("opt-emit:raw-select-operands"));
+                }
+                let flag = if ctx.fb.func.dfg.value_type(flag) == types::I8 {
+                    flag
+                } else {
+                    lowering::icmp_imm_p(ctx.fb, IntCC::NotEqual, flag, 0)
+                };
+                return Ok(Some((
+                    ctx.fb.ins().select(flag, yes, no),
+                    SlotRep::RawFixnum,
+                )));
+            }
             if result_rep != ir::Rep::Bool && !result_rep.is_tagged() {
                 return Err(CompileError::UnsupportedOp(
                     "opt-emit:select-representation",

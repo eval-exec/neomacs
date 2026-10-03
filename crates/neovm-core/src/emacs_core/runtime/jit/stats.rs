@@ -1072,6 +1072,7 @@ fn leaf_report_rows(
                 t2: row.obs.t2,
                 opt_fold: row.opt.opt_fold,
                 opt_bool: row.opt.opt_bool,
+                opt_reps: row.opt.opt_reps,
             }
         })
         .collect();

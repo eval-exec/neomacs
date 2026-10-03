@@ -211,6 +211,7 @@ fn leaf_row(id: u64, deopt_at: u64, deopt_rerun: u64) -> LeafReportRow {
         t2: Default::default(),
         opt_fold: None,
         opt_bool: None,
+        opt_reps: None,
     }
 }
 
@@ -616,4 +617,54 @@ fn jit_final_report_boolean_census_is_optional_and_eleven_columns() {
         "#opt-bool,13,bool;name,7,1,2,3,4,5,6,7\n"
     );
     assert_eq!(bool_rows[0].trim_end().split(',').count(), 11);
+}
+
+#[test]
+fn jit_final_report_integer_census_is_optional_and_twelve_columns() {
+    use crate::emacs_core::jit::opt::{
+        ir::RepsCensus,
+        passes::{reps::RepsStats, reps_lift::LiftStats},
+    };
+    let mut leaf = leaf_row(17, 0, 0);
+    let absent = FinalReport {
+        leaves: vec![leaf.clone()],
+        ..Default::default()
+    };
+    assert!(
+        absent
+            .profile_leaf_rows()
+            .iter()
+            .all(|r| !r.starts_with("#opt-reps,"))
+    );
+    leaf.name = Some("integer,name".into());
+    leaf.osr_pc = Some(9);
+    leaf.opt_reps = Some(Box::new(RepsCensus {
+        lift: LiftStats {
+            lifted_arithmetic: 1,
+            lifted_comparisons: 2,
+            type_guards: 3,
+        },
+        selection: RepsStats {
+            raw_values: 4,
+            raw_phis: 5,
+            tagged_arithmetic: 6,
+            raw_arithmetic: 7,
+            tagged_views: 8,
+        },
+    }));
+    let present = FinalReport {
+        leaves: vec![leaf],
+        ..Default::default()
+    };
+    let rows = present.profile_leaf_rows();
+    let reps_rows: Vec<_> = rows
+        .iter()
+        .filter(|r| r.starts_with("#opt-reps,"))
+        .collect();
+    assert_eq!(reps_rows.len(), 1);
+    assert_eq!(
+        reps_rows[0].as_str(),
+        "#opt-reps,17,integer;name,9,1,2,3,4,5,6,7,8\n"
+    );
+    assert_eq!(reps_rows[0].trim_end().split(',').count(), 12);
 }

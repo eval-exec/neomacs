@@ -4147,3 +4147,7 @@ mod opt_bool_tests;
 #[cfg(test)]
 #[path = "compile/tests/opt_bool_numeric.rs"]
 mod opt_bool_numeric_tests;
+
+#[cfg(test)]
+#[path = "compile/tests/opt_reps.rs"]
+mod opt_reps_tests;

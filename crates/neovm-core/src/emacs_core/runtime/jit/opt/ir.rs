@@ -85,6 +85,15 @@ pub(crate) struct OptCensus {
     pub refinements: usize,
     pub fold: Option<super::passes::fold::FoldStats>,
     pub bools: Option<super::passes::bools::BoolStats>,
+    pub reps: Option<RepsCensus>,
+}
+
+/// Immutable numeric pass counters. Threading: a compiler owns these scalar
+/// counts, then transfers them with its leaf; they contain no Lisp state.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RepsCensus {
+    pub lift: super::passes::reps_lift::LiftStats,
+    pub selection: super::passes::reps::RepsStats,
 }
 
 /// One owned function. Constants carry source-pool indices in `Const` and

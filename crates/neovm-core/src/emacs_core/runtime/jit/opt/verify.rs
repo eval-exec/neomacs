@@ -450,6 +450,7 @@ fn validate_inst(func: &Func, inst: Inst, data: &InstData) -> Result<(), VerifyE
             Err(VerifyError::OperandArity(inst))
         }
     };
+    let nonempty_fixnum = |ty: TypeSet| !ty.is_bottom() && ty.is_subset(TypeSet::FIXNUM);
     match &data.op {
         Opcode::BoolConst(_) => {
             args(0)?;
@@ -486,10 +487,18 @@ fn validate_inst(func: &Func, inst: Inst, data: &InstData) -> Result<(), VerifyE
             args(1)?;
             rep(0, Rep::RawInt)?;
             require_tagged(func, result()?.0, Some(inst))?;
+            let (output, output_data) = result()?;
+            if !nonempty_fixnum(output_data.ty) {
+                return Err(VerifyError::TypeMismatch(output));
+            }
         }
         Opcode::UntagFix => {
             args(1)?;
-            require_tagged(func, operand(0)?.0, Some(inst))?;
+            let (input, input_data) = operand(0)?;
+            require_tagged(func, input, Some(inst))?;
+            if !nonempty_fixnum(input_data.ty) {
+                return Err(VerifyError::TypeMismatch(input));
+            }
             result_rep(Rep::RawInt)?;
         }
         Opcode::UnboxF64 => {
@@ -574,7 +583,20 @@ fn validate_inst(func: &Func, inst: Inst, data: &InstData) -> Result<(), VerifyE
             args(1)?;
             let (input, actual) = operand(0)?;
             let (output, output_data) = result()?;
-            if actual.rep != output_data.rep {
+            // TaggedFix and Tagged have identical physical words. A real
+            // guard may establish the narrower representation; a pure view
+            // needs a verifier-visible declared proof on its operand. The
+            // reverse view preserves the existing result representation,
+            // including an impossible Tagged/BOTTOM guard kept until fold.
+            let tagged_fix_view = actual.rep == Rep::Tagged
+                && output_data.rep == Rep::TaggedFix
+                && nonempty_fixnum(*ty)
+                && nonempty_fixnum(output_data.ty)
+                && (matches!(data.op, Opcode::CheckType(_)) || nonempty_fixnum(actual.ty));
+            let tagged_view = actual.rep == Rep::TaggedFix
+                && output_data.rep == Rep::Tagged
+                && nonempty_fixnum(actual.ty);
+            if actual.rep != output_data.rep && !tagged_fix_view && !tagged_view {
                 return Err(VerifyError::RepMismatch {
                     inst: Some(inst),
                     value: input,

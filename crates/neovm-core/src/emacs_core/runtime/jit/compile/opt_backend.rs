@@ -138,6 +138,19 @@ pub(super) fn build_plan(
     if func.insts.len() > 20_000 {
         return Err(CompileError::UnsupportedOp("opt-budget:instructions"));
     }
+    let lift = if jit_opt_passes().reps {
+        let feedback: Vec<_> = (0..ops.len()).map(active_numeric_feedback).collect();
+        Some(
+            crate::emacs_core::jit::opt::passes::reps_lift::run(&mut func, &feedback).map_err(
+                |error| {
+                    tracing::debug!(?error, "opt integer lift refused a compilation");
+                    CompileError::UnsupportedOp("opt-reps-lift:verify")
+                },
+            )?,
+        )
+    } else {
+        None
+    };
     if jit_opt_passes().fold {
         let stats = crate::emacs_core::jit::opt::passes::fold::run(&mut func).map_err(|error| {
             tracing::debug!(?error, "opt fold pass refused a compilation");
@@ -154,6 +167,18 @@ pub(super) fn build_plan(
             })?;
         tracing::debug!(target: "neovm_jit::opt", ?stats, "opt Bool census");
         func.census.bools = Some(stats);
+    }
+    if let Some(lift) = lift {
+        let selection =
+            crate::emacs_core::jit::opt::passes::reps::run(&mut func).map_err(|error| {
+                tracing::debug!(
+                    ?error,
+                    "opt integer representation pass refused a compilation"
+                );
+                CompileError::UnsupportedOp("opt-reps:verify")
+            })?;
+        tracing::debug!(target: "neovm_jit::opt", ?lift, ?selection, "opt integer census");
+        func.census.reps = Some(ir::RepsCensus { lift, selection });
     }
     func.verify().map_err(|error| {
         tracing::debug!(?error, "opt IR verifier refused a compilation");

@@ -83,11 +83,42 @@ pub(crate) fn run(func: &mut Func) -> Result<FoldStats, VerifyError> {
                 }
                 let proven = input.meet(target);
                 if !input.is_bottom() && input.is_subset(target) {
-                    let inst = &mut func.insts[id.index()];
-                    inst.op = Opcode::Refine(proven);
-                    inst.eff = Effects::PURE;
-                    inst.mem = AliasClass::None;
-                    stats.guards_folded += 1;
+                    // A type fact at this program point does not globally
+                    // narrow an original GNU Arg/phi identity. A numeric
+                    // representation bridge needs an actual checked SSA view
+                    // before its runtime guard may become a pure refinement.
+                    let input_value = func.resolve(old.args[0]).expect("verified guard input");
+                    let output_rep = old.result.map(|v| func.values[v.index()].rep);
+                    let needs_fix_view = output_rep == Some(Rep::TaggedFix)
+                        && func.values[input_value.index()].rep == Rep::Tagged
+                        && (!func.values[input_value.index()]
+                            .ty
+                            .is_subset(TypeSet::FIXNUM)
+                            || func.values[input_value.index()].ty.is_bottom());
+                    let checked_view = needs_fix_view
+                        .then(|| {
+                            proof_values
+                                .get(&analysis.origins[old.args[0].index()])
+                                .copied()
+                        })
+                        .flatten()
+                        .filter(|&v| {
+                            let v = func.resolve(v).expect("verified earlier guard view");
+                            let data = &func.values[v.index()];
+                            data.rep.is_tagged()
+                                && !data.ty.is_bottom()
+                                && data.ty.is_subset(TypeSet::FIXNUM)
+                        });
+                    if !needs_fix_view || checked_view.is_some() {
+                        let inst = &mut func.insts[id.index()];
+                        if let Some(view) = checked_view {
+                            inst.args[0] = view;
+                        }
+                        inst.op = Opcode::Refine(proven);
+                        inst.eff = Effects::PURE;
+                        inst.mem = AliasClass::None;
+                        stats.guards_folded += 1;
+                    }
                 } else if target == TypeSet::LIST
                     && !input.contains(TypeKind::Nil)
                     && !input.is_bottom()

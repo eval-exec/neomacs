@@ -49,6 +49,7 @@ pub(crate) struct LeafReportRow {
     /// Compiler counters only; empty for baseline and passes-disabled opt.
     pub(crate) opt_fold: Option<Box<crate::emacs_core::jit::opt::passes::fold::FoldStats>>,
     pub(crate) opt_bool: Option<Box<crate::emacs_core::jit::opt::passes::bools::BoolStats>>,
+    pub(crate) opt_reps: Option<Box<crate::emacs_core::jit::opt::ir::RepsCensus>>,
 }
 
 impl LeafReportRow {
@@ -515,10 +516,28 @@ impl FinalReport {
                 c.tagged_views
             ))
         });
+        let reps_rows = self.leaves.iter().filter_map(|r| {
+            let c = r.opt_reps.as_ref()?;
+            let osr = r.osr_pc.map_or_else(|| "-".to_owned(), |pc| pc.to_string());
+            Some(format!(
+                "#opt-reps,{},{},{osr},{},{},{},{},{},{},{},{}\n",
+                r.id,
+                csv_field(r.name.as_deref().unwrap_or("-")),
+                c.lift.lifted_arithmetic,
+                c.lift.lifted_comparisons,
+                c.lift.type_guards,
+                c.selection.raw_values,
+                c.selection.raw_phis,
+                c.selection.tagged_arithmetic,
+                c.selection.raw_arithmetic,
+                c.selection.tagged_views,
+            ))
+        });
         leaf_rows
             .chain(t2_rows)
             .chain(opt_rows)
             .chain(bool_rows)
+            .chain(reps_rows)
             .collect()
     }
 }
