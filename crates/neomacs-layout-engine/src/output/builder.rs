@@ -500,6 +500,7 @@ impl DisplayOutputBuilder {
         outer_border_width: f32,
         outer_border_color: Color,
         background_alpha: f32,
+        frame_alpha: [f32; 2],
         no_accept_focus: bool,
     ) {
         self.install_output_frame_state(OutputFrameStateInstallRequest::Identity(
@@ -515,6 +516,7 @@ impl DisplayOutputBuilder {
                 outer_border_width,
                 outer_border_color,
                 background_alpha,
+                frame_alpha,
                 no_accept_focus,
             },
         ));

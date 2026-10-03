@@ -150,3 +150,97 @@ fn category_symbol_writes_invalidate_idle_redisplay() {
         "event metadata is not a layout dependency"
     );
 }
+
+/// Frame paint state is not part of the idle signature. A background-only
+/// setter must therefore schedule layout even without point or input changes.
+#[test]
+fn background_alpha_repaints_an_idle_gui_frame() {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(None);
+        }
+    }
+    let _reset = Reset;
+    crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(Some(true));
+    let (mut eval, layouts) = idle_context();
+    let frame = eval.frames.selected_frame().expect("frame").id;
+    eval.frames
+        .get_mut(frame)
+        .unwrap()
+        .set_window_system(Some(Value::symbol("neo")));
+    eval.eval_str("(redisplay t)").unwrap();
+    eval.eval_str("(redisplay t)").unwrap();
+    assert_eq!(layouts.get(), 1, "the unchanged frame is positively idle");
+    eval.eval_str("(condition-case nil (modify-frame-parameters nil '((alpha-background . bad))) (error nil))").unwrap();
+    assert_eq!(eval.frames.get(frame).unwrap().background_alpha, 1.0);
+    assert_eq!(
+        eval.frames
+            .get(frame)
+            .unwrap()
+            .parameter("alpha-background"),
+        Some(Value::symbol("bad"))
+    );
+    eval.eval_str("(redisplay t)").unwrap();
+    assert_eq!(
+        layouts.get(),
+        1,
+        "a rejected value does not dirty accepted paint"
+    );
+    eval.eval_str("(modify-frame-parameters nil '((alpha-background . 50)))")
+        .unwrap();
+    assert_eq!(eval.frames.get(frame).unwrap().background_alpha, 0.5);
+    eval.eval_str("(redisplay t)").unwrap();
+    assert_eq!(
+        layouts.get(),
+        2,
+        "accepted background-only update must repaint"
+    );
+    eval.eval_str("(redisplay t)").unwrap();
+    assert_eq!(layouts.get(), 2, "no continuous forced repaint");
+    eval.eval_str("(modify-frame-parameters nil '((alpha-background . nil)))")
+        .unwrap();
+    assert_eq!(eval.frames.get(frame).unwrap().background_alpha, 1.0);
+    eval.eval_str("(redisplay t)").unwrap();
+    assert_eq!(layouts.get(), 3, "nil restores opaque paint");
+}
+
+#[test]
+fn background_alpha_repaints_an_unselected_idle_child() {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(None);
+        }
+    }
+    let _reset = Reset;
+    crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(Some(true));
+    let (mut eval, layouts) = idle_context();
+    let selected = eval.frames.selected_frame().expect("selected").id;
+    let buffer = eval.buffers.current_buffer_id().unwrap();
+    let child = eval.frames.create_frame("idle-child", 200, 160, buffer);
+    for id in [selected, child] {
+        eval.frames
+            .get_mut(id)
+            .unwrap()
+            .set_window_system(Some(Value::symbol("neo")));
+    }
+    eval.frames.get_mut(child).unwrap().parent_frame = Value::make_frame(selected.0);
+    eval.frames.select_frame(selected);
+    eval.obarray_mut()
+        .set_symbol_value("idle-alpha-child", Value::make_frame(child.0));
+    eval.eval_str("(redisplay t)").unwrap();
+    eval.eval_str("(redisplay t)").unwrap();
+    assert_eq!(layouts.get(), 1);
+    eval.eval_str("(modify-frame-parameters idle-alpha-child '((alpha-background . 25)))")
+        .unwrap();
+    assert_eq!(
+        eval.frames.selected_frame().map(|frame| frame.id),
+        Some(selected)
+    );
+    assert_eq!(eval.frames.get(child).unwrap().background_alpha, 0.25);
+    eval.eval_str("(redisplay t)").unwrap();
+    assert_eq!(layouts.get(), 2, "unselected child paint must reach layout");
+    eval.eval_str("(redisplay t)").unwrap();
+    assert_eq!(layouts.get(), 2);
+}

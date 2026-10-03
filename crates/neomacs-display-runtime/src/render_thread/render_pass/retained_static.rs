@@ -60,6 +60,11 @@ pub(super) fn is_eligible(
         && std::env::var_os("NEOMACS_DISABLE_RETAINED_STATIC").is_none()
 }
 
+pub(super) fn is_valid(render: &GuiFrameRenderState, size: SnapshotSize) -> bool {
+    matches!(&render.compositor.retained_static,
+        Some(rs) if rs.generation == render.compositor.current_scene_generation && rs.texture.size() == size)
+}
+
 /// Compose one frame from the retained cursorless scene: blit it, draw the
 /// cursor over it, and redraw each filled-box cell.
 ///
@@ -89,10 +94,7 @@ pub(super) fn draw(
         return;
     };
     let generation = render.compositor.current_scene_generation;
-    let retained_valid = matches!(
-        &render.compositor.retained_static,
-        Some(rs) if rs.generation == generation && rs.texture.size() == native_size
-    );
+    let retained_valid = is_valid(render, native_size);
     if !retained_valid {
         ensure_retained_static_texture(renderer, render, native_size);
         let retained_view = render
@@ -297,7 +299,7 @@ pub(super) fn pointer_appearance_allowed(pointer_appearance: &PointerAppearanceS
 ///
 /// [`UnpooledTexture::RetainedStaticScene`]:
 ///     neomacs_renderer_wgpu::UnpooledTexture::RetainedStaticScene
-fn ensure_retained_static_texture(
+pub(super) fn ensure_retained_static_texture(
     renderer: &WgpuRenderer,
     render: &mut GuiFrameRenderState,
     size: SnapshotSize,

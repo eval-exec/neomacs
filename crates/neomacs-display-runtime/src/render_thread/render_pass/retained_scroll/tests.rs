@@ -2,7 +2,7 @@ use super::*;
 use neomacs_display_protocol::input_progress::InputStream;
 use neomacs_display_protocol::*;
 
-fn fixture() -> FrameGlyphBuffer {
+pub(in crate::render_thread::render_pass) fn fixture() -> FrameGlyphBuffer {
     fixture_with(|_| {})
 }
 

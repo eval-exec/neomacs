@@ -7,6 +7,20 @@ use winit::dpi::PhysicalPosition;
 use winit::window::UserAttentionType;
 
 impl RenderApp {
+    pub(super) fn refresh_frame_opacity(&mut self) {
+        // Never hold this CPU lock across GPU work or callback-capable code.
+        let controls = self
+            .comms
+            .frame_opacity
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        for window in self.frame_windows.windows.values_mut() {
+            if window.render.apply_frame_opacity(&controls) {
+                window.request_redraw();
+            }
+        }
+    }
+
     fn remove_pending_child_subtree(&mut self, frame_id: u64) {
         let mut subtree = std::collections::HashSet::from([frame_id]);
         loop {
@@ -31,6 +45,7 @@ impl RenderApp {
 
     pub(super) fn handle_window(&mut self, cmd: WindowCommand) {
         match cmd {
+            WindowCommand::RefreshFrameOpacity => self.refresh_frame_opacity(),
             WindowCommand::ScrollPreview(intent) => {
                 if let Some(state) = self.frame_windows.get_mut(intent.frame)
                     && matches!(
@@ -307,6 +322,19 @@ impl RenderApp {
                 let emacs_frame_id = frame.raw_id();
                 tracing::info!("AdoptPrimaryFrame request: frame_id=0x{:x}", emacs_frame_id);
                 self.frame_windows.adopt_primary_frame_id(emacs_frame_id);
+                if self
+                    .frame_windows
+                    .get(emacs_frame_id)
+                    .and_then(|state| state.window())
+                    .is_some_and(|window| window.has_focus())
+                {
+                    self.comms
+                        .frame_opacity
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .focus(emacs_frame_id, true);
+                    self.refresh_frame_opacity();
+                }
                 // The window's scheduling identity moves from the pending id
                 // (0) to the adopted Emacs frame id; retire the old entry so
                 // its deadlines and request token cannot go stale.

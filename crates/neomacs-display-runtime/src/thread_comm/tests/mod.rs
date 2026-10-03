@@ -17,6 +17,38 @@ fn test_image_load(image: u32, attempt: u64) -> ImageLoadToken {
 }
 
 #[test]
+fn accepted_opacity_is_independent_of_superseded_visual_mailbox() {
+    let (emacs, render) = ThreadComms::new().split();
+    emacs.frame_opacity.lock().unwrap().accept(1, [0.5; 2], 0.2);
+    let mut numeric = FrameDisplayState::new(12, 4, 8.0, 16.0);
+    numeric.frame_alpha = [0.5; 2];
+    assert!(
+        emacs
+            .frame_tx
+            .submit(sealed_test_state(numeric))
+            .unwrap()
+            .is_none()
+    );
+    emacs
+        .frame_opacity
+        .lock()
+        .unwrap()
+        .accept(1, [-1.0; 2], 0.2);
+    let mut nil = FrameDisplayState::new(12, 4, 8.0, 16.0);
+    nil.frame_alpha = [-1.0; 2];
+    assert!(
+        emacs
+            .frame_tx
+            .submit(sealed_test_state(nil))
+            .unwrap()
+            .is_some()
+    );
+    let latest = render.frame_rx.try_recv().unwrap();
+    assert_eq!(latest.frame_alpha, [-1.0; 2]);
+    assert_eq!(render.frame_opacity.lock().unwrap().applied(1), Some(0.5));
+}
+
+#[test]
 fn render_capabilities_are_one_shared_evaluator_visible_snapshot() {
     let (emacs, render) = ThreadComms::new().split();
     assert_eq!(

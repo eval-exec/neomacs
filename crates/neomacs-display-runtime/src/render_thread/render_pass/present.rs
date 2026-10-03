@@ -42,6 +42,7 @@ impl RenderApp {
             return SubmissionResult::Skipped;
         }
         self.prepare_frame_state_for_render();
+        self.refresh_frame_opacity();
 
         let bg_gradient = if self.effects.bg_gradient.enabled {
             Some((

@@ -57,7 +57,7 @@ pub struct PaneBlit {
     /// Where in its source picture its content lives.
     pub content_origin: (f32, f32),
     pub source: PaneSource,
-    /// How opaque to draw it, for a pane entering or leaving.
+    /// The source picture's interpolation weight for a pane entering or leaving.
     pub opacity: f32,
 }
 
@@ -82,9 +82,8 @@ impl WgpuRenderer {
         let corner = |x: f32, y: f32, u: f32, v: f32, a: f32| GlyphVertex {
             position: [x, y],
             tex_coords: [u, v],
-            // Premultiplied by the pipeline's blend, so the alpha alone carries
-            // a departing pane's fade; there is no separate opacity uniform to
-            // keep in step with the geometry.
+            // The copy shader weights premultiplied RGB and alpha together.
+            // The patch blend applies the complementary destination weight.
             color: [1.0, 1.0, 1.0, a],
         };
 
@@ -189,16 +188,42 @@ impl WgpuRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.pipelines.image);
+            pass.set_pipeline(&self.pipelines.surface_copy);
             pass.set_bind_group(0, self.frame_parameters().binding(), &[]);
             pass.set_bind_group(1, source, &[]);
             pass.set_vertex_buffer(0, upload.buffer_slice());
-            pass.draw(0..destination_vertices, 0..1);
+            pass.draw(0..6, 0..1);
+            // Entering destination patches also interpolate with the backdrop,
+            // rather than replacing it with a faded (less opaque) picture.
+            pass.set_pipeline(&self.pipelines.picture_interpolate);
+            for start in (6..destination_vertices).step_by(6) {
+                let weight = vertices[start as usize].color[3] as f64;
+                pass.set_blend_constant(wgpu::Color {
+                    r: weight,
+                    g: weight,
+                    b: weight,
+                    a: weight,
+                });
+                pass.draw(start..start + 6, 0..1);
+            }
             if destination_vertices < vertices.len() as u32
                 && let Some(previous) = previous
             {
+                pass.set_pipeline(&self.pipelines.picture_interpolate);
                 pass.set_bind_group(1, previous, &[]);
-                pass.draw(destination_vertices..vertices.len() as u32, 0..1);
+                // Each patch can have a different old-picture weight (held
+                // strips are 1, reflow patches fade). Interpolate RGBA without
+                // treating two alternative backgrounds as source-over layers.
+                for start in (destination_vertices..vertices.len() as u32).step_by(6) {
+                    let weight = vertices[start as usize].color[3] as f64;
+                    pass.set_blend_constant(wgpu::Color {
+                        r: weight,
+                        g: weight,
+                        b: weight,
+                        a: weight,
+                    });
+                    pass.draw(start..start + 6, 0..1);
+                }
             }
         }
         self.queue.submit(std::iter::once(encoder.finish()));
