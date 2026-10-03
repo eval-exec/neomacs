@@ -1807,6 +1807,9 @@ fn read_key_sequence_with_timeout_returns_nil_like_gnu() {
     );
 }
 
+#[path = "timer_reader.rs"]
+mod timer_reader;
+
 #[test]
 fn fresh_character_events_go_through_keyboard_translate_table_like_gnu() {
     // GNU `read_char' translates a freshly read character through
