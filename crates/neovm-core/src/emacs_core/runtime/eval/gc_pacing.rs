@@ -475,7 +475,7 @@ impl Context {
         gc_threshold_cap_from_env().map_or(threshold, |cap| threshold.min(cap))
     }
 
-    pub(super) fn sync_gc_threshold_from_runtime_settings(&mut self) {
+    pub(crate) fn sync_gc_threshold_from_runtime_settings(&mut self) {
         // Read the Lisp variables LIVE here, like GNU's `garbage_collect` end
         // (`consing_until_gc = consing_threshold (gc_cons_threshold,
         // Vgc_cons_percentage, 0)`), instead of trusting a cache that only the

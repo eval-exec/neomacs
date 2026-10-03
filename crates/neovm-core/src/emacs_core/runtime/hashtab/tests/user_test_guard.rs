@@ -202,3 +202,44 @@ fn hash_user_guard_restores_outer_gc_maybe_accounting_after_other_table() {
             .is_none()
     );
 }
+
+#[test]
+fn hash_user_guard_refreshes_dynamic_let_gc_threshold() {
+    let (mut context, table) = fixture();
+    let bound_threshold = Value::MOST_POSITIVE_FIXNUM as usize;
+    assert!(context.gc_threshold() < bound_threshold);
+    let scope = context.specpdl.len();
+    // The same specbind operations used by a Lisp dynamic `let`: a binding
+    // updates the forwarded variable while the collector's projection can
+    // remain stale until the callback's cold entry refreshes it.
+    context
+        .try_specbind(
+            crate::emacs_core::intern::intern("gc-cons-threshold"),
+            Value::fixnum(Value::MOST_POSITIVE_FIXNUM),
+        )
+        .expect("bind allocation threshold");
+    context
+        .try_specbind(
+            crate::emacs_core::intern::intern("gc-cons-percentage"),
+            Value::make_float(0.0),
+        )
+        .expect("bind allocation percentage");
+    with_user_test_guard(&mut context, table, |context| {
+        assert_eq!(context.gc_threshold(), bound_threshold);
+        assert_eq!(
+            context
+                .hash_table_test_registry
+                .borrow()
+                .gc_inhibit_accounting
+                .unwrap()
+                .threshold_at_start,
+            bound_threshold
+        );
+    });
+    context
+        .unbind_to_with_result(scope, Ok(Value::NIL))
+        .expect("restore dynamic bindings");
+    with_user_test_guard(&mut context, table, |context| {
+        assert!(context.gc_threshold() < bound_threshold);
+    });
+}

@@ -56,6 +56,9 @@ pub(crate) fn with_user_test_guard<T>(
     if table.as_hash_table().is_some_and(|ht| !ht.mutable) {
         return callback(eval);
     }
+    // Dynamic bindings update the Lisp setting before the collector's cached
+    // projection. GNU snapshots the live threshold when inhibition starts.
+    eval.sync_gc_threshold_from_runtime_settings();
     eval.with_gc_inhibited(|eval| {
         let _mutability = UserTestMutabilityGuard::enter(eval, table);
         callback(eval)

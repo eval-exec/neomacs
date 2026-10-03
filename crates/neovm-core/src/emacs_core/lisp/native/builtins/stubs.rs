@@ -1209,8 +1209,13 @@ pub(crate) fn builtin_garbage_collect_maybe(
     }
 
     let since_gc = eval.tagged_heap.bytes_since_gc_exact();
-    let threshold = eval.tagged_heap.gc_threshold();
     let inhibited = eval.gc_inhibit_depth > 0 && super::super::hashtab::hash_test_parity_enabled();
+    if inhibited {
+        // A callback can dynamically bind a new divisor threshold. The saved
+        // allocation countdown still uses the threshold at guard entry.
+        eval.sync_gc_threshold_from_runtime_settings();
+    }
+    let threshold = eval.tagged_heap.gc_threshold();
     let since_gc = if inhibited {
         super::super::hashtab::inhibited_user_test_since_gc(eval, since_gc)
             .unwrap_or(since_gc as i128)
