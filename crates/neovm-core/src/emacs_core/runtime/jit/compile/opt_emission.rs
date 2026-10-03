@@ -157,10 +157,16 @@ impl SsaValues {
 
     fn write(&self, fb: &mut FunctionBuilder, value: ir::Value, runtime: RuntimeValue) {
         let (word, rep) = runtime;
-        let word = match (rep == SlotRep::RawFixnum, self.raw[value.index()]) {
-            (true, false) => retag_fixnum(fb, word),
-            (false, true) => lowering::sshr_imm_p(fb, word, FIXNUM_SHIFT as i64),
-            _ => word,
+        let word = if fb.func.dfg.value_type(word) == types::I8 {
+            // Local Bool flags become full-width only when another IR block
+            // reads this identity through an I64 SSA variable.
+            fb.ins().uextend(types::I64, word)
+        } else {
+            match (rep == SlotRep::RawFixnum, self.raw[value.index()]) {
+                (true, false) => retag_fixnum(fb, word),
+                (false, true) => lowering::sshr_imm_p(fb, word, FIXNUM_SHIFT as i64),
+                _ => word,
+            }
         };
         fb.def_var(self.vars[value.index()], word);
     }
@@ -356,13 +362,18 @@ fn edge_arguments(
             if runtime.1.is_flonum() {
                 runtime = (tagged(ctx, local, value), SlotRep::Tagged);
             }
-            let word = match (
-                runtime.1 == SlotRep::RawFixnum,
-                ctx.values.raw[param.index()],
-            ) {
-                (true, false) => retag_fixnum(ctx.fb, runtime.0),
-                (false, true) => lowering::sshr_imm_p(ctx.fb, runtime.0, FIXNUM_SHIFT as i64),
-                _ => runtime.0,
+            let word = if ctx.fb.func.dfg.value_type(runtime.0) == types::I8 {
+                // Block parameters use I64 even when an edge carries a Bool.
+                ctx.fb.ins().uextend(types::I64, runtime.0)
+            } else {
+                match (
+                    runtime.1 == SlotRep::RawFixnum,
+                    ctx.values.raw[param.index()],
+                ) {
+                    (true, false) => retag_fixnum(ctx.fb, runtime.0),
+                    (false, true) => lowering::sshr_imm_p(ctx.fb, runtime.0, FIXNUM_SHIFT as i64),
+                    _ => runtime.0,
+                }
             };
             BlockArg::from(word)
         })
@@ -426,7 +437,7 @@ fn guard_condition(
     if !ty.is_subset(supported) {
         return Err(CompileError::UnsupportedOp("opt-emit:check-type"));
     }
-    let mut valid = ctx.fb.ins().iconst(types::I8, 0);
+    let mut valid = None;
     for (kind, tag) in [
         (TypeKind::Cons, TAG_CONS),
         (TypeKind::Float, TAG_FLOAT),
@@ -435,7 +446,10 @@ fn guard_condition(
         if ty.contains(kind) {
             let masked = lowering::band_imm_p(ctx.fb, word, TAG_MASK as i64);
             let test = lowering::icmp_imm_p(ctx.fb, IntCC::Equal, masked, tag as i64);
-            valid = ctx.fb.ins().bor(valid, test);
+            valid = Some(match valid {
+                Some(previous) => ctx.fb.ins().bor(previous, test),
+                None => test,
+            });
         }
     }
     for (kind, bits) in [
@@ -444,7 +458,10 @@ fn guard_condition(
     ] {
         if ty.contains(kind) {
             let test = lowering::icmp_imm_p(ctx.fb, IntCC::Equal, word, bits as i64);
-            valid = ctx.fb.ins().bor(valid, test);
+            valid = Some(match valid {
+                Some(previous) => ctx.fb.ins().bor(previous, test),
+                None => test,
+            });
         }
     }
     if ty.contains(TypeKind::Fixnum) {
@@ -456,9 +473,12 @@ fn guard_condition(
             let interval = ctx.fb.ins().band(lo, hi);
             test = ctx.fb.ins().band(test, interval);
         }
-        valid = ctx.fb.ins().bor(valid, test);
+        valid = Some(match valid {
+            Some(previous) => ctx.fb.ins().bor(previous, test),
+            None => test,
+        });
     }
-    Ok(valid)
+    Ok(valid.unwrap_or_else(|| ctx.fb.ins().iconst(types::I8, 0)))
 }
 
 fn coemitted_list_guard(func: &ir::Func, data: &ir::BlockData, position: usize) -> bool {
@@ -476,6 +496,25 @@ fn coemitted_list_guard(func: &ir::Func, data: &ir::BlockData, position: usize) 
         && guard
             .result
             .is_some_and(|result| next.args.first() == Some(&result))
+}
+
+// A shared store may use this proof only for the exact result of an adjacent
+// explicit CONS guard with the same observable frame. The guard still emits its
+// deopt (including FORCE_DEOPT); the shared store retains all barrier handling.
+fn checked_cons_store(func: &ir::Func, data: &ir::BlockData, position: usize) -> bool {
+    let store = &func.insts[data.insts[position].index()];
+    let Some(previous) = position
+        .checked_sub(1)
+        .map(|index| &func.insts[data.insts[index].index()])
+    else {
+        return false;
+    };
+    matches!(store.op, ir::Opcode::Opaque(Op::Setcar | Op::Setcdr))
+        && matches!(previous.op, ir::Opcode::CheckType(ty) if ty == TypeSet::CONS)
+        && previous.frame == store.frame
+        && previous
+            .result
+            .is_some_and(|result| store.args.first() == Some(&result))
 }
 
 fn returns_call_result(
@@ -515,6 +554,7 @@ fn shared_operation(
     inst: &ir::InstData,
     live_after: &[ir::Value],
     returns_result: bool,
+    checked_cons: bool,
     op: &Op,
     known: &HashSet<ClifValue>,
     deopts: &mut Vec<PendingDeopt>,
@@ -606,7 +646,12 @@ fn shared_operation(
     set_snapshot(ctx, local, frame)?;
     let exact = snapshot(ctx, local, frame)?;
     let deopt_start = deopts.len();
-    lower_simple_op(
+    let cons_proof = if checked_cons {
+        heap_inline::ConsStoreProof::GuardedCons(stack[base])
+    } else {
+        heap_inline::ConsStoreProof::Dynamic
+    };
+    lowering::lower_simple_op_with_cons_proof(
         ctx.fb,
         inst.pc as usize,
         deopts,
@@ -627,6 +672,7 @@ fn shared_operation(
         ctx.spec_expected_base,
         ctx.dynamic_prefix,
         ctx.consts_base,
+        cons_proof,
     )?;
     override_deopts(ctx.func, frame, &exact, &mut deopts[deopt_start..]);
     synchronize(local, &before[..base], &stack[..base], &reps[..base]);
@@ -739,6 +785,7 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
                         inst,
                         &live_after,
                         false,
+                        false,
                         &Op::Constant(index),
                         &known,
                         &mut deopts,
@@ -755,12 +802,14 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
                     }
                     let returns_result =
                         returns_call_result(ctx.func, data, position, inst, &live_after);
+                    let checked_cons = checked_cons_store(ctx.func, data, position);
                     shared_operation(
                         &mut ctx,
                         &mut local,
                         inst,
                         &live_after,
                         returns_result,
+                        checked_cons,
                         op,
                         &known,
                         &mut deopts,
@@ -772,6 +821,11 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
                     Some(ctx.values.read(ctx.fb, ctx.func, &mut local, inst.args[0]))
                 }
                 ir::Opcode::CheckType(ty) => {
+                    if ctx.func.values[canonical(ctx.func, inst.args[0]).index()].rep
+                        != ir::Rep::Tagged
+                    {
+                        return Err(CompileError::UnsupportedOp("opt-emit:guard-representation"));
+                    }
                     if !coemitted_list_guard(ctx.func, data, position) {
                         let frame = inst
                             .frame
@@ -801,15 +855,14 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
                 ir::Opcode::IsNonNil => {
                     let (word, rep) = ctx.values.read(ctx.fb, ctx.func, &mut local, inst.args[0]);
                     let flag = if rep == SlotRep::RawFixnum || rep.is_flonum() {
-                        ctx.fb.ins().iconst(types::I64, 1)
+                        ctx.fb.ins().iconst(types::I8, 1)
                     } else {
-                        let flag = lowering::icmp_imm_p(
+                        lowering::icmp_imm_p(
                             ctx.fb,
                             IntCC::NotEqual,
                             word,
                             Value::NIL.bits() as i64,
-                        );
-                        ctx.fb.ins().uextend(types::I64, flag)
+                        )
                     };
                     Some((flag, SlotRep::Tagged))
                 }
@@ -978,7 +1031,12 @@ fn emit_term(
             // Bool uses zero/one; tagged Lisp uses nil/non-nil. A raw fixnum
             // always denotes a non-nil Lisp value, including numerical zero.
             // Flonum payloads likewise denote only a float or a fixnum.
-            let condition = if rep == SlotRep::RawFixnum || rep.is_flonum() {
+            let condition = if ctx.func.values[canonical(ctx.func, *flag).index()].rep
+                == ir::Rep::Bool
+                && ctx.fb.func.dfg.value_type(word) == types::I8
+            {
+                word
+            } else if rep == SlotRep::RawFixnum || rep.is_flonum() {
                 ctx.fb.ins().iconst(types::I8, 1)
             } else {
                 lowering::icmp_imm_p(ctx.fb, IntCC::NotEqual, word, 0)

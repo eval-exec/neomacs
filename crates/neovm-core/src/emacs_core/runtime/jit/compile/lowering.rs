@@ -6232,6 +6232,75 @@ pub(crate) fn lower_simple_op(
     dynamic_prefix: usize,
     consts_base: Option<ClifValue>,
 ) -> Result<(), CompileError> {
+    lower_simple_op_with_cons_proof(
+        fb,
+        pc,
+        deopt_sites,
+        signal_exit,
+        constants,
+        stack,
+        reps,
+        rt,
+        handlers,
+        pending,
+        spec,
+        op,
+        known,
+        reloc_base,
+        reloc_index,
+        aot,
+        spec_slot_base,
+        spec_expected_base,
+        dynamic_prefix,
+        consts_base,
+        super::heap_inline::ConsStoreProof::Dynamic,
+    )
+}
+
+/// Shared per-op lowering with an explicit proof for a cons store operand.
+/// Baseline callers use [`lower_simple_op`] and retain their dynamic tag test.
+/// A proof never replaces the caller's explicit guard or the write barrier.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn lower_simple_op_with_cons_proof(
+    fb: &mut FunctionBuilder,
+    pc: usize,
+    deopt_sites: &mut Vec<PendingDeopt>,
+    signal_exit: &mut Option<Block>,
+    constants: &[Value],
+    stack: &mut Vec<ClifValue>,
+    // Per-slot representations (cross-op unboxing), kept in lockstep with
+    // `stack`.
+    reps: &mut Vec<SlotRep>,
+    rt: Option<&RtCtx>,
+    handlers: &[HandlerStatic],
+    pending: &mut Vec<PendingDispatch>,
+    // R2 increment B2: an `Op::Call` spec site carries `(sym, expected, slot_ptr,
+    // slot_idx, kind)`. `slot_ptr` is the baked `SpecSlot*` (JIT); `slot_idx` indexes
+    // the AOT sidecar's `spec_slot_base`/`spec_expected_base` arrays.
+    spec: Option<(u32, u64, i64, usize, SpecCalleeKind)>,
+    op: &Op,
+    // Cross-block known-fixnum operand values at this block (seeded by
+    // `lower_leaf_full` from `compute_known_fixnum_slots`); `guard_fixnum` elides
+    // guards for members.
+    known: &HashSet<ClifValue>,
+    // R1a: heap-constant reloc vector base (baked in entry) + bits->index map, so
+    // `Op::Constant` loads a heap object from reloc_base[idx] instead of baking it.
+    reloc_base: Option<ClifValue>,
+    reloc_index: &std::collections::HashMap<usize, u32>,
+    // R2 increment B2: false → JIT (spec `expected`/`slot` baked as `iconst`,
+    // byte-identical); true → AOT (loaded from the sidecar's `spec_expected_base`/
+    // `spec_slot_base` at `slot_idx`). The two bases are `Some` only in AOT mode at a
+    // body with an `Op::Call` spec site (loaded once in the entry block).
+    aot: bool,
+    spec_slot_base: Option<ClifValue>,
+    spec_expected_base: Option<ClifValue>,
+    // `make-closure` patched prefix + the callee constant base bound in the entry
+    // block (JIT only, `None` when the prefix is 0): `Op::Constant(idx)` with
+    // `idx < dynamic_prefix` loads `consts_base[idx]` instead of baking.
+    dynamic_prefix: usize,
+    consts_base: Option<ClifValue>,
+    cons_proof: super::heap_inline::ConsStoreProof,
+) -> Result<(), CompileError> {
     // Non-unboxing ops must see only tagged Values: force-tag the whole stack so
     // their gc_push / signal snapshot / shim args never observe a raw slot (closes
     // the GC-root + dispatch-snapshot soundness holes in one place). A
@@ -6265,6 +6334,7 @@ pub(crate) fn lower_simple_op(
         spec_expected_base,
         dynamic_prefix,
         consts_base,
+        cons_proof,
     )?;
     // Re-sync the reps after a non-unboxing op: the slots below `keep` are
     // untouched (the audited-op invariant, checked in debug builds), and its
@@ -6390,6 +6460,7 @@ fn lower_simple_op_arms(
     // `idx < dynamic_prefix` loads `consts_base[idx]` instead of baking.
     dynamic_prefix: usize,
     consts_base: Option<ClifValue>,
+    cons_proof: super::heap_inline::ConsStoreProof,
 ) -> Result<(), CompileError> {
     if let Some(rt) = rt
         && !aot
@@ -8299,16 +8370,30 @@ fn lower_simple_op_arms(
                     let merge = fb.create_block();
                     let slow = fb.create_block();
                     let res = fb.declare_var(types::I64);
-                    super::heap_inline::emit_inline_cons_store(
-                        fb,
-                        rt,
-                        operands[0],
-                        operands[1],
-                        matches!(other, Op::Setcdr),
-                        slow,
-                        res,
-                        merge,
-                    );
+                    if matches!(cons_proof, super::heap_inline::ConsStoreProof::Dynamic) {
+                        super::heap_inline::emit_inline_cons_store(
+                            fb,
+                            rt,
+                            operands[0],
+                            operands[1],
+                            matches!(other, Op::Setcdr),
+                            slow,
+                            res,
+                            merge,
+                        );
+                    } else {
+                        super::heap_inline::emit_inline_cons_store_with_proof(
+                            fb,
+                            rt,
+                            operands[0],
+                            operands[1],
+                            matches!(other, Op::Setcdr),
+                            slow,
+                            res,
+                            merge,
+                            cons_proof,
+                        );
+                    }
                     fb.switch_to_block(slow);
                     fb.seal_block(slow);
                     fb.set_cold_block(slow);

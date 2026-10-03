@@ -2,7 +2,7 @@
 //! Native behavior must follow the IR. Threading: plans, contexts and roots
 //! belong to one test invocation; overrides contain compiler settings only.
 
-use super::compile_pipeline_tests::function;
+use super::compile_pipeline_tests::{captured_clif, function};
 use super::*;
 use crate::emacs_core::eval::{
     bytecode_branch_poll_count, push_scratch_gc_roots, reset_bytecode_branch_poll_count,
@@ -255,11 +255,82 @@ fn opt_ir_lower_branch_successors_control_native_selection() {
         unreachable!()
     };
     core::mem::swap(if_true, if_false);
-    let leaf = lower(&f, &changed);
-    for argument in [Value::NIL, Value::T] {
+    let mut leaf = None;
+    let clif = captured_clif(|| leaf = Some(lower(&f, &changed)));
+    let leaf = leaf.unwrap();
+    assert_eq!(clif.len(), 1);
+    assert!(
+        !clif[0].contains("uextend"),
+        "a local Bool should reach brif without I64 transport: {}",
+        clif[0]
+    );
+    for argument in [
+        Value::NIL,
+        Value::T,
+        Value::fixnum(0),
+        Value::make_float(-0.0),
+    ] {
+        let _root = Roots::new(&[argument]);
         let expected = reference(&mut ctx, &changed, &[argument]);
         assert_ne!(expected, tier0(&mut ctx, &f, &[argument]));
         assert_eq!(native(&mut ctx, &leaf, &[argument]), expected);
+    }
+
+    // Verified IR may transport a Bool through an I64 SSA variable or an
+    // explicit I64 block parameter. Both paths must preserve zero/one flags.
+    for via_phi in [false, true] {
+        let mut changed = plan(&f);
+        let producer = ir::Block(
+            changed
+                .blocks
+                .iter()
+                .position(|block| matches!(block.term, ir::Term::Branch { .. }))
+                .unwrap() as u32,
+        );
+        let target = ir::Block(changed.blocks.len() as u32);
+        let mut term = core::mem::replace(
+            &mut changed.blocks[producer.index()].term,
+            ir::Term::Unreachable,
+        );
+        let ir::Term::Branch { flag, .. } = &mut term else {
+            unreachable!()
+        };
+        let original = *flag;
+        let mut transport = ir::BlockData::new(changed.blocks[producer.index()].pc);
+        transport.preds.push(producer);
+        if via_phi {
+            let param = ir::Value(changed.values.len() as u32);
+            changed.values.push(ir::ValueData {
+                ty: TypeSet::BOOLEAN,
+                rep: ir::Rep::Bool,
+                def: ir::ValueDef::Param {
+                    block: target,
+                    index: 0,
+                },
+            });
+            transport.params.push(param);
+            *flag = param;
+        }
+        for edge in term.edges() {
+            for predecessor in &mut changed.blocks[edge.target.index()].preds {
+                if *predecessor == producer {
+                    *predecessor = target;
+                }
+            }
+        }
+        transport.term = term;
+        changed.blocks.push(transport);
+        changed.entry_stacks.push(Box::default());
+        changed.blocks[producer.index()].term = ir::Term::Jump(ir::Edge {
+            target,
+            args: if via_phi { vec![original] } else { vec![] },
+        });
+        let leaf = lower(&f, &changed);
+        for argument in [Value::NIL, Value::T, Value::fixnum(0)] {
+            let expected = reference(&mut ctx, &changed, &[argument]);
+            assert_eq!(expected, tier0(&mut ctx, &f, &[argument]));
+            assert_eq!(native(&mut ctx, &leaf, &[argument]), expected);
+        }
     }
 
     // The verifier also accepts a tagged Lisp branch operand. Sub1 lowers
@@ -474,6 +545,41 @@ fn opt_ir_lower_rejects_an_unimplemented_typed_opcode() {
     assert!(matches!(
         result,
         Err(CompileError::UnsupportedOp("opt-emit:frame-representation"))
+    ));
+
+    // A Bool guard also needs Lisp materialization before tag/singleton tests.
+    // Refuse this verified future representation instead of treating an I8
+    // flag as a tagged Lisp word or emitting a mismatched-width comparison.
+    let original_frame = changed.source_states[2].as_ref().unwrap().frame;
+    changed.insts[cons].frame = Some(original_frame);
+    let checked = ir::Value(changed.values.len() as u32);
+    let guard = ir::Inst(changed.insts.len() as u32);
+    changed.values.push(ir::ValueData {
+        ty: TypeSet::BOOLEAN,
+        rep: ir::Rep::Bool,
+        def: ir::ValueDef::Inst(guard),
+    });
+    changed.insts.push(ir::InstData {
+        op: ir::Opcode::CheckType(TypeSet::BOOLEAN),
+        args: vec![flag],
+        result: Some(checked),
+        eff: crate::emacs_core::jit::opt::mem::Effects::MAY_DEOPT,
+        mem: crate::emacs_core::jit::opt::mem::AliasClass::None,
+        frame: Some(original_frame),
+        pc: 2,
+    });
+    let block = changed
+        .blocks
+        .iter_mut()
+        .find(|block| block.insts.contains(&inst))
+        .unwrap();
+    let position = block.insts.iter().position(|id| *id == inst).unwrap();
+    block.insts.insert(position + 1, guard);
+    changed.verify().expect("Bool guards verify");
+    let result = lower_opt_ir_for_test(f.executable_ops(), &f.constants, 0, None, &changed);
+    assert!(matches!(
+        result,
+        Err(CompileError::UnsupportedOp("opt-emit:guard-representation"))
     ));
 }
 

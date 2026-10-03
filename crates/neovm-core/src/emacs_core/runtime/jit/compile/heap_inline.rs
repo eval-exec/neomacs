@@ -255,6 +255,17 @@ fn emit_slot_store_barrier(
     }
 }
 
+/// Compile-owned proof that the immediately preceding explicit cons guard
+/// checked this exact tagged CLIF operand with the store's deopt frame. The
+/// guard, including forced deopt, remains the Opt caller's responsibility.
+/// Threading: one compilation owns this value; it contains no runtime state.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ConsStoreProof {
+    #[default]
+    Dynamic,
+    GuardedCons(ClifValue),
+}
+
 /// `setcar` (`is_cdr == false`) or `setcdr` of `cell` to `value`, inline —
 /// GNU `Bsetcar`/`Bsetcdr`'s `XSETCAR`/`XSETCDR`: a cons outside the barrier
 /// window is stored in place, `res` is defined as `value` and control jumps
@@ -310,6 +321,30 @@ pub(crate) fn emit_inline_cons_store_known_cons(
     fb.ins().jump(merge, &[]);
     #[cfg(debug_assertions)]
     INLINE_HEAP_STORES_EMITTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Opt-only proof seam. Dynamic or mismatched proofs emit the original main
+/// helper; an exact guarded cons emits main's existing known-cons helper.
+/// Both routes preserve its window reload, GEN1 unlogged-bit store, collection
+/// revision mutation, output, slow shim and instrumentation unchanged.
+/// Threading: the proof is compiler-owned, with no shared mutator state.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_inline_cons_store_with_proof(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    cell: ClifValue,
+    value: ClifValue,
+    is_cdr: bool,
+    slow: Block,
+    res: Variable,
+    merge: Block,
+    proof: ConsStoreProof,
+) {
+    if matches!(proof, ConsStoreProof::GuardedCons(checked) if checked == cell) {
+        emit_inline_cons_store_known_cons(fb, rt, cell, value, is_cdr, slow, res, merge);
+    } else {
+        emit_inline_cons_store(fb, rt, cell, value, is_cdr, slow, res, merge);
+    }
 }
 
 /// `aset` of a plain vector or record, inline — GNU `Baset`'s in-bytecode
