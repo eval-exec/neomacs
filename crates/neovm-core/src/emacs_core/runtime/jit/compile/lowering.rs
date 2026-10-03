@@ -6321,7 +6321,7 @@ pub(crate) fn op_keeps_residual_flonums(op: &Op) -> bool {
 /// fixnums are always retagged. Under [`FlonumMode::Resident`] an audited op
 /// ([`op_keeps_residual_flonums`]) boxes only its own operands (and their
 /// aliases, which then share the box); every other op boxes every flonum.
-fn prepare_op_operands(
+pub(crate) fn prepare_op_operands(
     fb: &mut FunctionBuilder,
     rt: Option<&RtCtx>,
     op: &Op,

@@ -275,6 +275,19 @@ pub(crate) fn request_decision(leaf: &CompiledLeaf, source: &RuntimeState) -> Op
         None
     };
     drop(p);
+    // An opt compile replaces code rather than merely changing its allocator:
+    // use the T2 lifecycle so the existing T1 fallback remains rooted and can
+    // be restored on a counted deopt. The legacy decision is unchanged.
+    let kind = kind.map(|kind| {
+        if !banned
+            && !unstable
+            && super::super::compile::jit_opt_mode() == super::super::compile::OptMode::Opt
+        {
+            T2Upgrade::Feedback
+        } else {
+            kind
+        }
+    });
     let Some(kind) = kind else {
         bump_stats(|s| s.not_worth += 1);
         return Some(T2Decision::Keep);

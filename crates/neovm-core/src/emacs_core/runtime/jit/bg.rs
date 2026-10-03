@@ -703,6 +703,7 @@ pub(crate) fn install(
             Some(pc) => super::stats::perf_map::LabelTier::Osr(pc as usize),
             None => match leaf.tier() {
                 super::compile::LeafTier::Mir => super::stats::perf_map::LabelTier::Mir,
+                super::compile::LeafTier::Opt => super::stats::perf_map::LabelTier::Opt,
                 super::compile::LeafTier::Baseline | super::compile::LeafTier::Aot => {
                     super::stats::perf_map::LabelTier::Baseline
                 }
@@ -710,6 +711,7 @@ pub(crate) fn install(
         };
         let default_name = match tier {
             super::stats::perf_map::LabelTier::Mir => "__neovm_mir_leaf",
+            super::stats::perf_map::LabelTier::Opt => "__neovm_opt_leaf",
             super::stats::perf_map::LabelTier::Baseline
             | super::stats::perf_map::LabelTier::Osr(_) => "__neovm_jit_leaf",
         };

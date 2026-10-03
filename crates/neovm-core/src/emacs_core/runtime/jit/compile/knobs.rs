@@ -1539,3 +1539,89 @@ pub(crate) fn jit_call_census_on() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| knob_on("NEOVM_JIT_CALL_CENSUS"))
 }
+
+/// Mid-end selection, independent of the T2 countdown trigger. Threading:
+/// immutable process configuration; test overrides contain configuration only.
+/// Legacy is the default, so the new backend is off and existing CLIF is kept.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum OptMode {
+    #[default]
+    Legacy,
+    Off,
+    Opt,
+}
+impl OptMode {
+    pub(crate) fn parse(value: Option<&str>) -> Self {
+        match value.map(str::trim) {
+            Some("off") => Self::Off,
+            Some("opt") => Self::Opt,
+            _ => Self::Legacy,
+        }
+    }
+}
+pub(crate) fn jit_opt_mode() -> OptMode {
+    #[cfg(test)]
+    if let Some(mode) = OPT_TEST_OVERRIDE.with(|v| v.get()) {
+        return mode;
+    }
+    static MODE: std::sync::OnceLock<OptMode> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| OptMode::parse(std::env::var("NEOVM_JIT_OPT").ok().as_deref()))
+}
+
+/// Reach admissions for the new backend. Threading: an immutable scalar mask,
+/// shared by compilers; it contains neither Lisp values nor mutator state.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct OptAdmit {
+    pub args: bool,
+    pub env: bool,
+    pub vars: bool,
+    pub binds: bool,
+    pub switch: bool,
+    pub handlers: bool,
+}
+impl OptAdmit {
+    pub(crate) const ALL: Self = Self {
+        args: true,
+        env: true,
+        vars: true,
+        binds: true,
+        switch: true,
+        handlers: true,
+    };
+    pub(crate) fn parse(value: Option<&str>) -> Self {
+        let mut bits = Self::default();
+        for bit in value.unwrap_or("").split(',').map(str::trim) {
+            match bit {
+                "all" => return Self::ALL,
+                "args" => bits.args = true,
+                "env" => bits.env = true,
+                "vars" => bits.vars = true,
+                "binds" => bits.binds = true,
+                "switch" => bits.switch = true,
+                "handlers" => bits.handlers = true,
+                _ => {}
+            }
+        }
+        bits
+    }
+}
+pub(crate) fn jit_opt_admit() -> OptAdmit {
+    #[cfg(test)]
+    if let Some(bits) = OPT_ADMIT_TEST_OVERRIDE.with(|v| v.get()) {
+        return bits;
+    }
+    static BITS: std::sync::OnceLock<OptAdmit> = std::sync::OnceLock::new();
+    *BITS.get_or_init(|| OptAdmit::parse(std::env::var("NEOVM_JIT_OPT_ADMIT").ok().as_deref()))
+}
+#[cfg(test)]
+thread_local! {
+    /// Configuration only, never Lisp state.
+    static OPT_TEST_OVERRIDE: std::cell::Cell<Option<OptMode>> = const { std::cell::Cell::new(None) };
+    /// Configuration only, never Lisp state.
+    static OPT_ADMIT_TEST_OVERRIDE: std::cell::Cell<Option<OptAdmit>> = const { std::cell::Cell::new(None) };
+}
+#[cfg(test)]
+pub(crate) fn force_opt_for_test(mode: Option<OptMode>, admit: Option<OptAdmit>) {
+    OPT_TEST_OVERRIDE.with(|v| v.set(mode));
+    OPT_ADMIT_TEST_OVERRIDE.with(|v| v.set(admit));
+}

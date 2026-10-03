@@ -67,6 +67,7 @@ pub(super) fn build_leaf_fn<S: LeafSink>(
     // The entry's shape (`reg_abi`): the memory ABI for AOT and OSR, the
     // register ABI for an eligible JIT body when the knob is on.
     abi: LeafAbi,
+    opt: Option<&crate::emacs_core::jit::opt::ir::Func>,
     chains: &mut Vec<super::super::vframe::DeoptChain>,
 ) -> Result<cranelift_module::FuncId, CompileError> {
     debug_assert!(
@@ -195,6 +196,7 @@ pub(super) fn build_leaf_fn<S: LeafSink>(
             .map(|_| fb.declare_var(types::I64))
             .collect();
         let out_var = fb.declare_var(ptr_ty);
+        let opt_ssa = opt.map(|func| opt_emission::SsaValues::new(&mut fb, func, &variable_raw));
 
         // One CLIF block per bytecode basic block.
         let block_for: HashMap<usize, Block> = cfg
@@ -202,6 +204,12 @@ pub(super) fn build_leaf_fn<S: LeafSink>(
             .iter()
             .map(|&l| (l, fb.create_block()))
             .collect();
+        let opt_blocks = opt.map(|func| {
+            func.blocks
+                .iter()
+                .map(|_| fb.create_block())
+                .collect::<Vec<_>>()
+        });
         // Deopt-buffer base addresses (for the JIT `iconst` path). The CLIF
         // `DeoptRefs` is materialized in the entry block below (the baseline tier
         // has no AOT path yet, so always the `iconst` form).
@@ -374,7 +382,7 @@ pub(super) fn build_leaf_fn<S: LeafSink>(
                     &mut fb,
                     rt,
                     vmctx_param,
-                    cfg.max_depth,
+                    opt.map_or(cfg.max_depth, |func| cfg.max_depth + func.values.len()),
                 );
             }
         }
@@ -470,6 +478,10 @@ pub(super) fn build_leaf_fn<S: LeafSink>(
                 fb.def_var(var, raw);
             }
         }
+        let jump_target = match (opt, &opt_blocks) {
+            (Some(func), Some(blocks)) => blocks[func.entry.index()],
+            _ => jump_target,
+        };
         fb.ins().jump(jump_target, &[]);
         if has_raw_slots {
             for site in &entry_deopts {
@@ -479,603 +491,641 @@ pub(super) fn build_leaf_fn<S: LeafSink>(
         // An OSR entry snapshot is all tagged: no flonum crosses an edge.
         emit_pending_deopts(&mut fb, deopt_refs, &mut entry_deopts, None, abi);
 
-        for (leader_index, &l) in cfg.leaders.iter().enumerate() {
-            let blk = block_for[&l];
-            fb.switch_to_block(blk);
-            // A leader may be reached from any store history: drop the
-            // root-window record (see `lowering::RootWinCarry`).
-            lowering::rootwin_carry_reset();
-            // An unreachable block — no path from the entry, so the dataflow
-            // gave it no entry depth: the byte-compiler emits code after an
-            // unconditional exit that nothing targets (ebrowse, eglot, wdired,
-            // texinfo, ns-win all have one) — lowers to a trap. Nothing it
-            // does can run, and anything reachable only through it is
-            // unreachable too, so skipping it leaves every jump target with
-            // a depth. Indexing here panicked ("no entry found for key") the
-            // moment the profitability gate stopped vetoing such bodies.
-            let Some(&depth) = cfg.entry_depth.get(&l) else {
-                fb.ins()
-                    .trap(cranelift_codegen::ir::TrapCode::unwrap_user(1));
-                continue;
-            };
-            let mut stack: Vec<ClifValue> = (0..depth).map(|k| fb.use_var(vars[k])).collect();
-            // OSR slot representations are uniform at all reachable leaders.
-            let mut reps: Vec<SlotRep> = variable_raw[..depth]
-                .iter()
-                .map(|&raw| SlotRep::raw_if(raw))
-                .collect();
-            // Cross-block known-fixnum operands at this block's entry: each slot
-            // the dataflow analysis proved fixnum maps to its just-materialized
-            // ClifValue. StackRef/Dup keep the same ClifValue, so the set stays
-            // valid as the block runs; `guard_fixnum` elides guards for members.
-            let known_fixnum: HashSet<ClifValue> = known_fixnum_slots
-                .get(&l)
-                .map(|slots| {
-                    slots
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(k, &is_fix)| {
-                            (is_fix && !variable_raw[k])
-                                .then(|| stack.get(k).copied())
-                                .flatten()
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            // Active handler frames at block entry (static), kept in sync as
-            // PopHandler ops run; signal sites inside a protected extent queue
-            // a dispatch block here, filled after the block's terminator.
-            let mut physical_binds = cfg.entry_binds.get(&l).copied().unwrap_or(0);
-            let mut handlers: Vec<HandlerStatic> =
-                cfg.entry_handlers.get(&l).cloned().unwrap_or_default();
-            let mut pending: Vec<PendingDispatch> = Vec::new();
-            let mut pending_deopt: Vec<PendingDeopt> = Vec::new();
+        if let (Some(func), Some(values), Some(blocks)) = (opt, &opt_ssa, &opt_blocks) {
+            opt_emission::emit(opt_emission::EmitContext {
+                fb: &mut fb,
+                func,
+                values,
+                blocks,
+                cfg,
+                seed_vars: &vars,
+                variable_raw: &variable_raw,
+                constants,
+                rt: rt.as_ref(),
+                spec_sites,
+                spec_slots,
+                deopt_refs,
+                signal_exit: &mut signal_exit,
+                backedge_counter,
+                out_var,
+                out_present: out_ptr.is_some(),
+                abi,
+                reloc_base,
+                reloc_index,
+                aot,
+                spec_slot_base,
+                spec_expected_base,
+                dynamic_prefix,
+                consts_base,
+                ops,
+                known_fixnum_slots,
+            })?;
+        } else {
+            for (leader_index, &l) in cfg.leaders.iter().enumerate() {
+                let blk = block_for[&l];
+                fb.switch_to_block(blk);
+                // A leader may be reached from any store history: drop the
+                // root-window record (see `lowering::RootWinCarry`).
+                lowering::rootwin_carry_reset();
+                // An unreachable block — no path from the entry, so the dataflow
+                // gave it no entry depth: the byte-compiler emits code after an
+                // unconditional exit that nothing targets (ebrowse, eglot, wdired,
+                // texinfo, ns-win all have one) — lowers to a trap. Nothing it
+                // does can run, and anything reachable only through it is
+                // unreachable too, so skipping it leaves every jump target with
+                // a depth. Indexing here panicked ("no entry found for key") the
+                // moment the profitability gate stopped vetoing such bodies.
+                let Some(&depth) = cfg.entry_depth.get(&l) else {
+                    fb.ins()
+                        .trap(cranelift_codegen::ir::TrapCode::unwrap_user(1));
+                    continue;
+                };
+                let mut stack: Vec<ClifValue> = (0..depth).map(|k| fb.use_var(vars[k])).collect();
+                // OSR slot representations are uniform at all reachable leaders.
+                let mut reps: Vec<SlotRep> = variable_raw[..depth]
+                    .iter()
+                    .map(|&raw| SlotRep::raw_if(raw))
+                    .collect();
+                // Cross-block known-fixnum operands at this block's entry: each slot
+                // the dataflow analysis proved fixnum maps to its just-materialized
+                // ClifValue. StackRef/Dup keep the same ClifValue, so the set stays
+                // valid as the block runs; `guard_fixnum` elides guards for members.
+                let known_fixnum: HashSet<ClifValue> = known_fixnum_slots
+                    .get(&l)
+                    .map(|slots| {
+                        slots
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(k, &is_fix)| {
+                                (is_fix && !variable_raw[k])
+                                    .then(|| stack.get(k).copied())
+                                    .flatten()
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                // Active handler frames at block entry (static), kept in sync as
+                // PopHandler ops run; signal sites inside a protected extent queue
+                // a dispatch block here, filled after the block's terminator.
+                let mut physical_binds = cfg.entry_binds.get(&l).copied().unwrap_or(0);
+                let mut handlers: Vec<HandlerStatic> =
+                    cfg.entry_handlers.get(&l).cloned().unwrap_or_default();
+                let mut pending: Vec<PendingDispatch> = Vec::new();
+                let mut pending_deopt: Vec<PendingDeopt> = Vec::new();
 
-            let end = cfg.leaders.get(leader_index + 1).copied().unwrap_or(n);
-            let mut terminated = false;
-            for (off, op) in ops[l..end].iter().enumerate() {
-                let i = l + off;
-                // An inlined region's ops deopt to the CALL they replaced,
-                // with the caller's pre-call stack — captured here, at the
-                // region's first op, where the stack still holds
-                // `[...residual, callee, args]`.
-                if let Some(fused) = inline::active_fused().filter(|f| !f.is_v2()) {
-                    match fused.region_at(i) {
-                        Some(region) if i == region.start => {
-                            let region = region.clone();
-                            // Regions stay allocation-free (`inline.rs`: a
-                            // collection inside one would strand its
-                            // framestate), so box any flonum BEFORE the
-                            // snapshot: the region's deopt replays the call
-                            // with boxed arguments.
-                            box_all_flonums(&mut fb, rt.as_ref(), &mut stack, &mut reps);
-                            lowering::set_active_region(Some(lowering::RegionDeopt {
-                                call_site_pc: region.call_site_pc,
-                                stack: stack.clone(),
-                                reps: reps.clone(),
-                                chain: None,
-                            }));
-                            // ...and the splice is a speculation, so check the
-                            // slot still holds the callee whose body is next.
-                            lowering::emit_region_entry_guard(
-                                &mut fb,
-                                &region,
-                                handlers.len(),
-                                &stack,
-                                &reps,
-                                &mut pending_deopt,
-                            )?;
-                        }
-                        None => lowering::set_active_region(None),
-                        // A region is single-entry and the walk ascends, so
-                        // its snapshot was taken at its start and is still
-                        // the active one. Check it instead of trusting it: a
-                        // deopt under someone else's framestate replays the
-                        // wrong call.
-                        Some(region) => {
-                            if lowering::active_region_call_site() != Some(region.call_site_pc) {
-                                return Err(CompileError::UnsupportedOp("inline-region-entry"));
+                let end = cfg.leaders.get(leader_index + 1).copied().unwrap_or(n);
+                let mut terminated = false;
+                for (off, op) in ops[l..end].iter().enumerate() {
+                    let i = l + off;
+                    // An inlined region's ops deopt to the CALL they replaced,
+                    // with the caller's pre-call stack — captured here, at the
+                    // region's first op, where the stack still holds
+                    // `[...residual, callee, args]`.
+                    if let Some(fused) = inline::active_fused().filter(|f| !f.is_v2()) {
+                        match fused.region_at(i) {
+                            Some(region) if i == region.start => {
+                                let region = region.clone();
+                                // Regions stay allocation-free (`inline.rs`: a
+                                // collection inside one would strand its
+                                // framestate), so box any flonum BEFORE the
+                                // snapshot: the region's deopt replays the call
+                                // with boxed arguments.
+                                box_all_flonums(&mut fb, rt.as_ref(), &mut stack, &mut reps);
+                                lowering::set_active_region(Some(lowering::RegionDeopt {
+                                    call_site_pc: region.call_site_pc,
+                                    stack: stack.clone(),
+                                    reps: reps.clone(),
+                                    chain: None,
+                                }));
+                                // ...and the splice is a speculation, so check the
+                                // slot still holds the callee whose body is next.
+                                lowering::emit_region_entry_guard(
+                                    &mut fb,
+                                    &region,
+                                    handlers.len(),
+                                    &stack,
+                                    &reps,
+                                    &mut pending_deopt,
+                                )?;
+                            }
+                            None => lowering::set_active_region(None),
+                            // A region is single-entry and the walk ascends, so
+                            // its snapshot was taken at its start and is still
+                            // the active one. Check it instead of trusting it: a
+                            // deopt under someone else's framestate replays the
+                            // wrong call.
+                            Some(region) => {
+                                if lowering::active_region_call_site() != Some(region.call_site_pc)
+                                {
+                                    return Err(CompileError::UnsupportedOp("inline-region-entry"));
+                                }
                             }
                         }
                     }
-                }
-                if let Some(site) =
-                    inline::active_fused().and_then(|f| f.admitted_hof_at(i).copied())
-                {
-                    inline_hof::emit(
-                        &frames,
+                    if let Some(site) =
+                        inline::active_fused().and_then(|f| f.admitted_hof_at(i).copied())
+                    {
+                        inline_hof::emit(
+                            &frames,
+                            &mut fb,
+                            i,
+                            site,
+                            rt.as_ref().expect("HOF runtime"),
+                            physical_binds,
+                            &mut stack,
+                            &mut reps,
+                            &mut pending_deopt,
+                            &mut signal_exit,
+                            reloc_base,
+                            reloc_index,
+                        )?;
+                        continue;
+                    }
+                    if frames.before_op(
                         &mut fb,
                         i,
-                        site,
-                        rt.as_ref().expect("HOF runtime"),
+                        op,
+                        rt.as_ref(),
                         physical_binds,
+                        handlers.len(),
                         &mut stack,
                         &mut reps,
                         &mut pending_deopt,
-                        &mut signal_exit,
-                        reloc_base,
                         reloc_index,
-                    )?;
-                    continue;
-                }
-                if frames.before_op(
-                    &mut fb,
-                    i,
-                    op,
-                    rt.as_ref(),
-                    physical_binds,
-                    handlers.len(),
-                    &mut stack,
-                    &mut reps,
-                    &mut pending_deopt,
-                    reloc_index,
-                )? {
-                    continue;
-                }
-                match op {
-                    Op::VarBind(_)
-                    | Op::SaveCurrentBuffer
-                    | Op::SaveExcursion
-                    | Op::SaveRestriction
-                    | Op::UnwindProtectPop => physical_binds += 1,
-                    Op::Unbind(n) => physical_binds -= *n as usize,
-                    _ => {}
-                }
-                // Terminators consume / snapshot / spill the operand stack as tagged
-                // Values; force-tag any raw slots and box any flonums first (the
-                // block's slot state is discarded after the terminator, so no
-                // per-pop lockstep is needed past this point).
-                if matches!(
-                    op,
-                    Op::Throw
-                        | Op::Switch
-                        | Op::PushConditionCase(_)
-                        | Op::PushConditionCaseRaw(_)
-                        | Op::PushCatch(_)
-                ) {
-                    materialize_model_stack(&mut fb, rt.as_ref(), &mut stack, &mut reps);
-                } else if matches!(op, Op::Return) {
-                    // Only the returned value escapes: box it if it is a
-                    // flonum. The slots below it die here, so a flonum among
-                    // them is never boxed.
-                    if let Some(top) = stack.len().checked_sub(1)
-                        && reps[top].is_flonum()
-                    {
-                        let rt = rt.as_ref().expect("a flonum implies the runtime refs");
-                        box_flonum_slot(&mut fb, rt, &mut stack, &mut reps, top);
+                    )? {
+                        continue;
                     }
-                    retag_raw_fixnums(&mut fb, &mut stack, &mut reps);
-                }
-                match op {
-                    Op::Return => {
-                        let result = stack.pop().ok_or(CompileError::StackUnderflow)?;
-                        let out = out_ptr.map(|_| fb.use_var(out_var));
-                        reg_abi::emit_leaf_return(&mut fb, abi, out, Some(result), STATUS_OK);
-                        terminated = true;
-                        break;
+                    match op {
+                        Op::VarBind(_)
+                        | Op::SaveCurrentBuffer
+                        | Op::SaveExcursion
+                        | Op::SaveRestriction
+                        | Op::UnwindProtectPop => physical_binds += 1,
+                        Op::Unbind(n) => physical_binds -= *n as usize,
+                        _ => {}
                     }
-                    Op::Throw => {
-                        // Stash Flow::Throw{tag, value} and exit via the signal
-                        // path; inside a protected extent that path is the
-                        // handler dispatch (a same-function `catch` is caught
-                        // natively via the match shim).
-                        let value = stack.pop().ok_or(CompileError::StackUnderflow)?;
-                        let tag = stack.pop().ok_or(CompileError::StackUnderflow)?;
-                        let rt = rt.as_ref().ok_or(CompileError::UnsupportedOp("throw"))?;
-                        let throw_flow = rt.refs.get(fb.func, Shim::ThrowFlow);
-                        fb.ins().call(throw_flow, &[tag, value]);
-                        let se = signal_target_for_site(
-                            &mut fb,
-                            &mut signal_exit,
-                            &handlers,
-                            &mut pending,
-                            &stack,
-                            &reps,
-                        );
-                        fb.ins().jump(se, &[]);
-                        terminated = true;
-                        break;
+                    // Terminators consume / snapshot / spill the operand stack as tagged
+                    // Values; force-tag any raw slots and box any flonums first (the
+                    // block's slot state is discarded after the terminator, so no
+                    // per-pop lockstep is needed past this point).
+                    if matches!(
+                        op,
+                        Op::Throw
+                            | Op::Switch
+                            | Op::PushConditionCase(_)
+                            | Op::PushConditionCaseRaw(_)
+                            | Op::PushCatch(_)
+                    ) {
+                        materialize_model_stack(&mut fb, rt.as_ref(), &mut stack, &mut reps);
+                    } else if matches!(op, Op::Return) {
+                        // Only the returned value escapes: box it if it is a
+                        // flonum. The slots below it die here, so a flonum among
+                        // them is never boxed.
+                        if let Some(top) = stack.len().checked_sub(1)
+                            && reps[top].is_flonum()
+                        {
+                            let rt = rt.as_ref().expect("a flonum implies the runtime refs");
+                            box_flonum_slot(&mut fb, rt, &mut stack, &mut reps, top);
+                        }
+                        retag_raw_fixnums(&mut fb, &mut stack, &mut reps);
                     }
-                    Op::Goto(t) => {
-                        write_edge_stack_to_vars(
-                            &mut fb,
-                            rt.as_ref(),
-                            &vars,
-                            &mut stack,
-                            &mut reps,
-                            &variable_raw,
-                        );
-                        let tu = *t as usize;
-                        if tu <= i {
-                            // Backward jump: bump the quit counter and poll on
-                            // wrap, exactly like the interpreter's branch_to!.
-                            let (rt, slot) = (
-                                rt.as_ref().expect("backedge implies rt"),
-                                backedge_counter.expect("backedge implies counter"),
-                            );
-                            emit_backedge_jump(
+                    match op {
+                        Op::Return => {
+                            let result = stack.pop().ok_or(CompileError::StackUnderflow)?;
+                            let out = out_ptr.map(|_| fb.use_var(out_var));
+                            reg_abi::emit_leaf_return(&mut fb, abi, out, Some(result), STATUS_OK);
+                            terminated = true;
+                            break;
+                        }
+                        Op::Throw => {
+                            // Stash Flow::Throw{tag, value} and exit via the signal
+                            // path; inside a protected extent that path is the
+                            // handler dispatch (a same-function `catch` is caught
+                            // natively via the match shim).
+                            let value = stack.pop().ok_or(CompileError::StackUnderflow)?;
+                            let tag = stack.pop().ok_or(CompileError::StackUnderflow)?;
+                            let rt = rt.as_ref().ok_or(CompileError::UnsupportedOp("throw"))?;
+                            let throw_flow = rt.refs.get(fb.func, Shim::ThrowFlow);
+                            fb.ins().call(throw_flow, &[tag, value]);
+                            let se = signal_target_for_site(
                                 &mut fb,
-                                rt,
-                                slot,
                                 &mut signal_exit,
-                                &vars,
-                                &variable_raw,
-                                cfg.entry_depth[&tu],
-                                block_for[&tu],
                                 &handlers,
                                 &mut pending,
-                                inline_physical::poll_admission(
-                                    rt,
-                                    &frames,
-                                    tu,
-                                    &mut pending_deopt,
-                                ),
+                                &stack,
+                                &reps,
                             );
-                        } else {
-                            fb.ins().jump(block_for[&tu], &[]);
+                            fb.ins().jump(se, &[]);
+                            terminated = true;
+                            break;
                         }
-                        terminated = true;
-                        break;
-                    }
-                    Op::GotoIfNil(t) | Op::GotoIfNotNil(t) => {
-                        let cond = stack.pop().ok_or(CompileError::StackUnderflow)?;
-                        let rep = reps.pop().ok_or(CompileError::StackUnderflow)?;
-                        let cond = if rep == SlotRep::RawFixnum {
-                            retag_fixnum(&mut fb, cond)
-                        } else {
-                            cond
-                        };
-                        write_edge_stack_to_vars(
-                            &mut fb,
-                            rt.as_ref(),
-                            &vars,
-                            &mut stack,
-                            &mut reps,
-                            &variable_raw,
-                        );
-                        let is_nil =
-                            fb.ins()
-                                .icmp_imm_u(IntCC::Equal, cond, Value::NIL.bits() as i64);
-                        let tu = *t as usize;
-                        let mut target = block_for[&tu];
-                        let fallthrough = block_for[&(i + 1)];
-                        let backedge = (tu <= i).then(|| fb.create_block());
-                        if let Some(tramp) = backedge {
-                            target = tramp;
-                        }
-                        // brif takes the `then` block when the condition is true.
-                        if matches!(op, Op::GotoIfNil(_)) {
-                            fb.ins().brif(is_nil, target, &[], fallthrough, &[]);
-                        } else {
-                            fb.ins().brif(is_nil, fallthrough, &[], target, &[]);
-                        }
-                        if let Some(tramp) = backedge {
-                            // Taken-edge trampoline carrying the back-edge poll.
-                            fb.switch_to_block(tramp);
-                            fb.seal_block(tramp);
-                            let (rt, slot) = (
-                                rt.as_ref().expect("backedge implies rt"),
-                                backedge_counter.expect("backedge implies counter"),
-                            );
-                            emit_backedge_jump(
+                        Op::Goto(t) => {
+                            write_edge_stack_to_vars(
                                 &mut fb,
-                                rt,
-                                slot,
-                                &mut signal_exit,
+                                rt.as_ref(),
                                 &vars,
+                                &mut stack,
+                                &mut reps,
                                 &variable_raw,
-                                cfg.entry_depth[&tu],
-                                block_for[&tu],
+                            );
+                            let tu = *t as usize;
+                            if tu <= i {
+                                // Backward jump: bump the quit counter and poll on
+                                // wrap, exactly like the interpreter's branch_to!.
+                                let (rt, slot) = (
+                                    rt.as_ref().expect("backedge implies rt"),
+                                    backedge_counter.expect("backedge implies counter"),
+                                );
+                                emit_backedge_jump(
+                                    &mut fb,
+                                    rt,
+                                    slot,
+                                    &mut signal_exit,
+                                    &vars,
+                                    &variable_raw,
+                                    cfg.entry_depth[&tu],
+                                    block_for[&tu],
+                                    &handlers,
+                                    &mut pending,
+                                    inline_physical::poll_admission(
+                                        rt,
+                                        &frames,
+                                        tu,
+                                        &mut pending_deopt,
+                                    ),
+                                );
+                            } else {
+                                fb.ins().jump(block_for[&tu], &[]);
+                            }
+                            terminated = true;
+                            break;
+                        }
+                        Op::GotoIfNil(t) | Op::GotoIfNotNil(t) => {
+                            let cond = stack.pop().ok_or(CompileError::StackUnderflow)?;
+                            let rep = reps.pop().ok_or(CompileError::StackUnderflow)?;
+                            let cond = if rep == SlotRep::RawFixnum {
+                                retag_fixnum(&mut fb, cond)
+                            } else {
+                                cond
+                            };
+                            write_edge_stack_to_vars(
+                                &mut fb,
+                                rt.as_ref(),
+                                &vars,
+                                &mut stack,
+                                &mut reps,
+                                &variable_raw,
+                            );
+                            let is_nil =
+                                fb.ins()
+                                    .icmp_imm_u(IntCC::Equal, cond, Value::NIL.bits() as i64);
+                            let tu = *t as usize;
+                            let mut target = block_for[&tu];
+                            let fallthrough = block_for[&(i + 1)];
+                            let backedge = (tu <= i).then(|| fb.create_block());
+                            if let Some(tramp) = backedge {
+                                target = tramp;
+                            }
+                            // brif takes the `then` block when the condition is true.
+                            if matches!(op, Op::GotoIfNil(_)) {
+                                fb.ins().brif(is_nil, target, &[], fallthrough, &[]);
+                            } else {
+                                fb.ins().brif(is_nil, fallthrough, &[], target, &[]);
+                            }
+                            if let Some(tramp) = backedge {
+                                // Taken-edge trampoline carrying the back-edge poll.
+                                fb.switch_to_block(tramp);
+                                fb.seal_block(tramp);
+                                let (rt, slot) = (
+                                    rt.as_ref().expect("backedge implies rt"),
+                                    backedge_counter.expect("backedge implies counter"),
+                                );
+                                emit_backedge_jump(
+                                    &mut fb,
+                                    rt,
+                                    slot,
+                                    &mut signal_exit,
+                                    &vars,
+                                    &variable_raw,
+                                    cfg.entry_depth[&tu],
+                                    block_for[&tu],
+                                    &handlers,
+                                    &mut pending,
+                                    inline_physical::poll_admission(
+                                        rt,
+                                        &frames,
+                                        tu,
+                                        &mut pending_deopt,
+                                    ),
+                                );
+                            }
+                            terminated = true;
+                            break;
+                        }
+                        Op::GotoIfNilElsePop(t) | Op::GotoIfNotNilElsePop(t) => {
+                            // Peek the condition without popping; write the FULL stack
+                            // (cond on top) to vars. The jump-taken successor reads it
+                            // all (depth D); the fall-through (depth D-1) ignores the
+                            // top slot — implementing the "ElsePop".
+                            let cond = *stack.last().ok_or(CompileError::StackUnderflow)?;
+                            let rep = *reps.last().ok_or(CompileError::StackUnderflow)?;
+                            let cond = if rep == SlotRep::RawFixnum {
+                                retag_fixnum(&mut fb, cond)
+                            } else {
+                                cond
+                            };
+                            write_edge_stack_to_vars(
+                                &mut fb,
+                                rt.as_ref(),
+                                &vars,
+                                &mut stack,
+                                &mut reps,
+                                &variable_raw,
+                            );
+                            let is_nil =
+                                fb.ins()
+                                    .icmp_imm_u(IntCC::Equal, cond, Value::NIL.bits() as i64);
+                            let tu = *t as usize;
+                            let mut target = block_for[&tu];
+                            let fallthrough = block_for[&(i + 1)];
+                            let backedge = (tu <= i).then(|| fb.create_block());
+                            if let Some(tramp) = backedge {
+                                target = tramp;
+                            }
+                            if matches!(op, Op::GotoIfNilElsePop(_)) {
+                                fb.ins().brif(is_nil, target, &[], fallthrough, &[]);
+                            } else {
+                                fb.ins().brif(is_nil, fallthrough, &[], target, &[]);
+                            }
+                            if let Some(tramp) = backedge {
+                                fb.switch_to_block(tramp);
+                                fb.seal_block(tramp);
+                                let (rt, slot) = (
+                                    rt.as_ref().expect("backedge implies rt"),
+                                    backedge_counter.expect("backedge implies counter"),
+                                );
+                                emit_backedge_jump(
+                                    &mut fb,
+                                    rt,
+                                    slot,
+                                    &mut signal_exit,
+                                    &vars,
+                                    &variable_raw,
+                                    cfg.entry_depth[&tu],
+                                    block_for[&tu],
+                                    &handlers,
+                                    &mut pending,
+                                    inline_physical::poll_admission(
+                                        rt,
+                                        &frames,
+                                        tu,
+                                        &mut pending_deopt,
+                                    ),
+                                );
+                            }
+                            terminated = true;
+                            break;
+                        }
+                        Op::Switch => {
+                            // [dispatch table] -> a static target, or fall
+                            // through on a miss (`switch_dispatch`).
+                            let rt_ref =
+                                rt.as_ref().ok_or(CompileError::UnsupportedOp("switch"))?;
+                            let table = stack.pop().ok_or(CompileError::StackUnderflow)?;
+                            let dispatch = stack.pop().ok_or(CompileError::StackUnderflow)?;
+                            reps.truncate(stack.len());
+                            write_edge_stack_to_vars(
+                                &mut fb,
+                                rt.as_ref(),
+                                &vars,
+                                &mut stack,
+                                &mut reps,
+                                &variable_raw,
+                            );
+                            let targets = cfg.switch_targets.get(&i).expect("resolved in analyze");
+                            let sig = signal_target_for_site(
+                                &mut fb,
+                                &mut signal_exit,
                                 &handlers,
                                 &mut pending,
-                                inline_physical::poll_admission(
-                                    rt,
-                                    &frames,
-                                    tu,
-                                    &mut pending_deopt,
-                                ),
+                                &stack,
+                                &reps,
                             );
-                        }
-                        terminated = true;
-                        break;
-                    }
-                    Op::GotoIfNilElsePop(t) | Op::GotoIfNotNilElsePop(t) => {
-                        // Peek the condition without popping; write the FULL stack
-                        // (cond on top) to vars. The jump-taken successor reads it
-                        // all (depth D); the fall-through (depth D-1) ignores the
-                        // top slot — implementing the "ElsePop".
-                        let cond = *stack.last().ok_or(CompileError::StackUnderflow)?;
-                        let rep = *reps.last().ok_or(CompileError::StackUnderflow)?;
-                        let cond = if rep == SlotRep::RawFixnum {
-                            retag_fixnum(&mut fb, cond)
-                        } else {
-                            cond
-                        };
-                        write_edge_stack_to_vars(
-                            &mut fb,
-                            rt.as_ref(),
-                            &vars,
-                            &mut stack,
-                            &mut reps,
-                            &variable_raw,
-                        );
-                        let is_nil =
-                            fb.ins()
-                                .icmp_imm_u(IntCC::Equal, cond, Value::NIL.bits() as i64);
-                        let tu = *t as usize;
-                        let mut target = block_for[&tu];
-                        let fallthrough = block_for[&(i + 1)];
-                        let backedge = (tu <= i).then(|| fb.create_block());
-                        if let Some(tramp) = backedge {
-                            target = tramp;
-                        }
-                        if matches!(op, Op::GotoIfNilElsePop(_)) {
-                            fb.ins().brif(is_nil, target, &[], fallthrough, &[]);
-                        } else {
-                            fb.ins().brif(is_nil, fallthrough, &[], target, &[]);
-                        }
-                        if let Some(tramp) = backedge {
-                            fb.switch_to_block(tramp);
-                            fb.seal_block(tramp);
-                            let (rt, slot) = (
-                                rt.as_ref().expect("backedge implies rt"),
-                                backedge_counter.expect("backedge implies counter"),
-                            );
-                            emit_backedge_jump(
-                                &mut fb,
-                                rt,
-                                slot,
-                                &mut signal_exit,
-                                &vars,
-                                &variable_raw,
-                                cfg.entry_depth[&tu],
-                                block_for[&tu],
-                                &handlers,
-                                &mut pending,
-                                inline_physical::poll_admission(
-                                    rt,
-                                    &frames,
-                                    tu,
-                                    &mut pending_deopt,
-                                ),
-                            );
-                        }
-                        terminated = true;
-                        break;
-                    }
-                    Op::Switch => {
-                        // [dispatch table] -> a static target, or fall
-                        // through on a miss (`switch_dispatch`).
-                        let rt_ref = rt.as_ref().ok_or(CompileError::UnsupportedOp("switch"))?;
-                        let table = stack.pop().ok_or(CompileError::StackUnderflow)?;
-                        let dispatch = stack.pop().ok_or(CompileError::StackUnderflow)?;
-                        reps.truncate(stack.len());
-                        write_edge_stack_to_vars(
-                            &mut fb,
-                            rt.as_ref(),
-                            &vars,
-                            &mut stack,
-                            &mut reps,
-                            &variable_raw,
-                        );
-                        let targets = cfg.switch_targets.get(&i).expect("resolved in analyze");
-                        let sig = signal_target_for_site(
-                            &mut fb,
-                            &mut signal_exit,
-                            &handlers,
-                            &mut pending,
-                            &stack,
-                            &reps,
-                        );
-                        let fall = block_for[&(i + 1)];
-                        let inline = if !aot && jit_inline_switch_on() {
-                            switch_dispatch::inline_switch_for_site(
-                                ops,
-                                constants,
-                                dynamic_prefix,
-                                &cfg.leaders,
-                                i,
+                            let fall = block_for[&(i + 1)];
+                            let inline = if !aot && jit_inline_switch_on() {
+                                switch_dispatch::inline_switch_for_site(
+                                    ops,
+                                    constants,
+                                    dynamic_prefix,
+                                    &cfg.leaders,
+                                    i,
+                                    targets,
+                                )
+                            } else {
+                                None
+                            };
+                            let mut landings = switch_dispatch::BaselineSwitchLandings {
+                                site: i,
                                 targets,
-                            )
-                        } else {
-                            None
-                        };
-                        let mut landings = switch_dispatch::BaselineSwitchLandings {
-                            site: i,
-                            targets,
-                            block_for: &block_for,
-                            entry_depth: &cfg.entry_depth,
-                            rt: rt_ref,
-                            backedge_counter,
-                            signal_exit: &mut signal_exit,
-                            vars: &vars,
-                            variable_raw: &variable_raw,
-                            handlers: &handlers,
-                            pending: &mut pending,
-                            trampolines: Vec::new(),
-                            unfilled: Vec::new(),
-                        };
-                        switch_dispatch::emit_switch_dispatch(
-                            &mut fb,
-                            rt_ref,
-                            dispatch,
-                            table,
-                            targets,
-                            fall,
-                            sig,
-                            &mut landings,
-                            inline.as_ref(),
-                        );
-                        terminated = true;
-                        break;
-                    }
-                    Op::PushConditionCase(t) | Op::PushConditionCaseRaw(t) | Op::PushCatch(t) => {
-                        // Register the handler frame via the shim (interpreter
-                        // arm parity), then end the block with an "anchor"
-                        // edge: a never-taken branch to the handler target
-                        // that (a) guarantees the target block always has a
-                        // Cranelift predecessor with every entry var defined
-                        // (its real entries are the runtime match dispatches)
-                        // and (b) falls through to the protected body.
-                        let rt_ref = rt.as_ref().ok_or(CompileError::UnsupportedOp("handler"))?;
-                        let tu = *t as usize;
-                        let vmctx = fb.use_var(rt_ref.vmctx_var);
-                        // The target serves two consumers that need DIFFERENT
-                        // numbering. The compiled dispatch below reaches its
-                        // handler through `block_for`, keyed by the pc of the
-                        // ops being lowered — fused. But the shim stores this
-                        // operand in a `ResumeTarget`, and the only code that
-                        // reads it back is a RESUMED INTERPRETER frame, which
-                        // jumps to it in the UNFUSED ops. So the runtime gets
-                        // the original pc and `block_for` keeps the fused one.
-                        let runtime_target = inline::active_fused()
-                            .and_then(|f| f.caller_pc(tu))
-                            .unwrap_or(tu);
-                        let t_v = fb.ins().iconst(types::I64, runtime_target as i64);
-                        match op {
-                            Op::PushConditionCase(_) => {
-                                let d_v = fb.ins().iconst(types::I64, stack.len() as i64);
-                                let push_cc = rt_ref.refs.get(fb.func, Shim::PushCc);
-                                fb.ins().call(push_cc, &[vmctx, t_v, d_v]);
-                            }
-                            Op::PushConditionCaseRaw(_) => {
-                                let conditions = stack.pop().ok_or(CompileError::StackUnderflow)?;
-                                let d_v = fb.ins().iconst(types::I64, stack.len() as i64);
-                                let push_cc_raw = rt_ref.refs.get(fb.func, Shim::PushCcRaw);
-                                fb.ins().call(push_cc_raw, &[vmctx, t_v, d_v, conditions]);
-                            }
-                            Op::PushCatch(_) => {
-                                let tag = stack.pop().ok_or(CompileError::StackUnderflow)?;
-                                let d_v = fb.ins().iconst(types::I64, stack.len() as i64);
-                                let push_catch = rt_ref.refs.get(fb.func, Shim::PushCatch);
-                                fb.ins().call(push_catch, &[vmctx, t_v, d_v, tag]);
-                            }
-                            _ => unreachable!("matched Push* above"),
+                                block_for: &block_for,
+                                entry_depth: &cfg.entry_depth,
+                                rt: rt_ref,
+                                backedge_counter,
+                                signal_exit: &mut signal_exit,
+                                vars: &vars,
+                                variable_raw: &variable_raw,
+                                handlers: &handlers,
+                                pending: &mut pending,
+                                trampolines: Vec::new(),
+                                unfilled: Vec::new(),
+                            };
+                            switch_dispatch::emit_switch_dispatch(
+                                &mut fb,
+                                rt_ref,
+                                dispatch,
+                                table,
+                                targets,
+                                fall,
+                                sig,
+                                &mut landings,
+                                inline.as_ref(),
+                            );
+                            terminated = true;
+                            break;
                         }
-                        reps.truncate(stack.len());
-                        write_edge_stack_to_vars(
-                            &mut fb,
-                            rt.as_ref(),
-                            &vars,
-                            &mut stack,
-                            &mut reps,
-                            &variable_raw,
-                        );
-                        // Placeholder error-value slot for the never-taken
-                        // anchor edge (real entries define it from the shim).
-                        let nil = fb.ins().iconst(types::I64, Value::NIL.bits() as i64);
-                        fb.def_var(vars[stack.len()], nil);
-                        let never = fb.ins().iconst(types::I8, 0);
-                        fb.ins()
-                            .brif(never, block_for[&tu], &[], block_for[&(i + 1)], &[]);
-                        terminated = true;
-                        break;
-                    }
-                    Op::PopHandler => {
-                        // Normal exit from the protected extent: drop the
-                        // runtime frame and the static tracking entry.
-                        let rt_ref = rt.as_ref().ok_or(CompileError::UnsupportedOp("handler"))?;
-                        let vmctx = fb.use_var(rt_ref.vmctx_var);
-                        let pop_handler = rt_ref.refs.get(fb.func, Shim::PopHandler);
-                        fb.ins().call(pop_handler, &[vmctx]);
-                        handlers
-                            .pop()
-                            .ok_or(CompileError::UnsupportedOp("unbalanced-pophandler"))?;
-                    }
-                    other => {
-                        let spec = spec_sites.get(&i).map(|site| {
-                            (
-                                site.sym,
-                                site.expected_bits,
-                                &spec_slots[site.slot] as *const SpecSlot as i64,
-                                // R2 increment B2: the slot index the AOT sidecar's
-                                // spec-slot / spec-expected arrays are keyed by.
-                                site.slot,
-                                site.kind,
+                        Op::PushConditionCase(t)
+                        | Op::PushConditionCaseRaw(t)
+                        | Op::PushCatch(t) => {
+                            // Register the handler frame via the shim (interpreter
+                            // arm parity), then end the block with an "anchor"
+                            // edge: a never-taken branch to the handler target
+                            // that (a) guarantees the target block always has a
+                            // Cranelift predecessor with every entry var defined
+                            // (its real entries are the runtime match dispatches)
+                            // and (b) falls through to the protected body.
+                            let rt_ref =
+                                rt.as_ref().ok_or(CompileError::UnsupportedOp("handler"))?;
+                            let tu = *t as usize;
+                            let vmctx = fb.use_var(rt_ref.vmctx_var);
+                            // The target serves two consumers that need DIFFERENT
+                            // numbering. The compiled dispatch below reaches its
+                            // handler through `block_for`, keyed by the pc of the
+                            // ops being lowered — fused. But the shim stores this
+                            // operand in a `ResumeTarget`, and the only code that
+                            // reads it back is a RESUMED INTERPRETER frame, which
+                            // jumps to it in the UNFUSED ops. So the runtime gets
+                            // the original pc and `block_for` keeps the fused one.
+                            let runtime_target = inline::active_fused()
+                                .and_then(|f| f.caller_pc(tu))
+                                .unwrap_or(tu);
+                            let t_v = fb.ins().iconst(types::I64, runtime_target as i64);
+                            match op {
+                                Op::PushConditionCase(_) => {
+                                    let d_v = fb.ins().iconst(types::I64, stack.len() as i64);
+                                    let push_cc = rt_ref.refs.get(fb.func, Shim::PushCc);
+                                    fb.ins().call(push_cc, &[vmctx, t_v, d_v]);
+                                }
+                                Op::PushConditionCaseRaw(_) => {
+                                    let conditions =
+                                        stack.pop().ok_or(CompileError::StackUnderflow)?;
+                                    let d_v = fb.ins().iconst(types::I64, stack.len() as i64);
+                                    let push_cc_raw = rt_ref.refs.get(fb.func, Shim::PushCcRaw);
+                                    fb.ins().call(push_cc_raw, &[vmctx, t_v, d_v, conditions]);
+                                }
+                                Op::PushCatch(_) => {
+                                    let tag = stack.pop().ok_or(CompileError::StackUnderflow)?;
+                                    let d_v = fb.ins().iconst(types::I64, stack.len() as i64);
+                                    let push_catch = rt_ref.refs.get(fb.func, Shim::PushCatch);
+                                    fb.ins().call(push_catch, &[vmctx, t_v, d_v, tag]);
+                                }
+                                _ => unreachable!("matched Push* above"),
+                            }
+                            reps.truncate(stack.len());
+                            write_edge_stack_to_vars(
+                                &mut fb,
+                                rt.as_ref(),
+                                &vars,
+                                &mut stack,
+                                &mut reps,
+                                &variable_raw,
+                            );
+                            // Placeholder error-value slot for the never-taken
+                            // anchor edge (real entries define it from the shim).
+                            let nil = fb.ins().iconst(types::I64, Value::NIL.bits() as i64);
+                            fb.def_var(vars[stack.len()], nil);
+                            let never = fb.ins().iconst(types::I8, 0);
+                            fb.ins()
+                                .brif(never, block_for[&tu], &[], block_for[&(i + 1)], &[]);
+                            terminated = true;
+                            break;
+                        }
+                        Op::PopHandler => {
+                            // Normal exit from the protected extent: drop the
+                            // runtime frame and the static tracking entry.
+                            let rt_ref =
+                                rt.as_ref().ok_or(CompileError::UnsupportedOp("handler"))?;
+                            let vmctx = fb.use_var(rt_ref.vmctx_var);
+                            let pop_handler = rt_ref.refs.get(fb.func, Shim::PopHandler);
+                            fb.ins().call(pop_handler, &[vmctx]);
+                            handlers
+                                .pop()
+                                .ok_or(CompileError::UnsupportedOp("unbalanced-pophandler"))?;
+                        }
+                        other => {
+                            let spec = spec_sites.get(&i).map(|site| {
+                                (
+                                    site.sym,
+                                    site.expected_bits,
+                                    &spec_slots[site.slot] as *const SpecSlot as i64,
+                                    // R2 increment B2: the slot index the AOT sidecar's
+                                    // spec-slot / spec-expected arrays are keyed by.
+                                    site.slot,
+                                    site.kind,
+                                )
+                            });
+                            // A tail call's residual is dead: the emitter sees
+                            // the call's own operands only, so it roots nothing.
+                            let dead = lowering::tail_call_dead_residuals(
+                                other,
+                                ops.get(i + 1),
+                                !handlers.is_empty(),
+                                spec.map(|(_, _, _, _, kind)| kind),
+                                stack.len(),
                             )
-                        });
-                        // A tail call's residual is dead: the emitter sees
-                        // the call's own operands only, so it roots nothing.
-                        let dead = lowering::tail_call_dead_residuals(
-                            other,
-                            ops.get(i + 1),
-                            !handlers.is_empty(),
-                            spec.map(|(_, _, _, _, kind)| kind),
-                            stack.len(),
-                        )
-                        .unwrap_or(0);
-                        let residual: Vec<ClifValue> = stack.drain(..dead).collect();
-                        let residual_reps: Vec<SlotRep> = reps.drain(..dead).collect();
-                        lower_simple_op(
-                            &mut fb,
-                            i,
-                            &mut pending_deopt,
-                            &mut signal_exit,
-                            constants,
-                            &mut stack,
-                            &mut reps,
-                            rt.as_ref(),
-                            &handlers,
-                            &mut pending,
-                            spec,
-                            other,
-                            &known_fixnum,
-                            reloc_base,
-                            reloc_index,
-                            aot,
-                            spec_slot_base,
-                            spec_expected_base,
-                            dynamic_prefix,
-                            consts_base,
-                        )?;
-                        stack.splice(0..0, residual);
-                        reps.splice(0..0, residual_reps);
-                        // `lower_simple_op` keeps `reps` in lockstep with `stack`
-                        // (it re-syncs after a non-unboxing op itself).
+                            .unwrap_or(0);
+                            let residual: Vec<ClifValue> = stack.drain(..dead).collect();
+                            let residual_reps: Vec<SlotRep> = reps.drain(..dead).collect();
+                            lower_simple_op(
+                                &mut fb,
+                                i,
+                                &mut pending_deopt,
+                                &mut signal_exit,
+                                constants,
+                                &mut stack,
+                                &mut reps,
+                                rt.as_ref(),
+                                &handlers,
+                                &mut pending,
+                                spec,
+                                other,
+                                &known_fixnum,
+                                reloc_base,
+                                reloc_index,
+                                aot,
+                                spec_slot_base,
+                                spec_expected_base,
+                                dynamic_prefix,
+                                consts_base,
+                            )?;
+                            stack.splice(0..0, residual);
+                            reps.splice(0..0, residual_reps);
+                            // `lower_simple_op` keeps `reps` in lockstep with `stack`
+                            // (it re-syncs after a non-unboxing op itself).
+                        }
                     }
                 }
-            }
-            if !terminated {
-                // Fall through with the uniform variable representations.
-                write_edge_stack_to_vars(
-                    &mut fb,
-                    rt.as_ref(),
-                    &vars,
-                    &mut stack,
-                    &mut reps,
-                    &variable_raw,
-                );
-                fb.ins().jump(block_for[&end], &[]);
-            }
-            // Keep failed-guard reconstruction out of the ordinary emitted
-            // path. Cranelift sinks cold blocks during final code emission;
-            // this is a layout hint, not a register-allocation weight.
-            // A snapshot holding a flonum boxes it there: cold too.
-            for site in &pending_deopt {
-                if has_raw_slots || site.holds_flonum() {
-                    fb.set_cold_block(site.block);
+                if !terminated {
+                    // Fall through with the uniform variable representations.
+                    write_edge_stack_to_vars(
+                        &mut fb,
+                        rt.as_ref(),
+                        &vars,
+                        &mut stack,
+                        &mut reps,
+                        &variable_raw,
+                    );
+                    fb.ins().jump(block_for[&end], &[]);
                 }
-            }
-            // Fill the precise-deopt exit blocks queued by this block's guards.
-            emit_pending_deopts(
-                &mut fb,
-                deopt_refs,
-                &mut pending_deopt,
-                rt.as_ref().map(|rt| &rt.refs),
-                abi,
-            );
-            // Fill the handler-dispatch blocks queued by this block's signal
-            // sites (the builder can switch blocks now that it's terminated).
-            if !pending.is_empty() {
-                let rt_ref = rt.as_ref().expect("pending dispatches imply rt");
-                emit_pending_dispatches(
+                // Keep failed-guard reconstruction out of the ordinary emitted
+                // path. Cranelift sinks cold blocks during final code emission;
+                // this is a layout hint, not a register-allocation weight.
+                // A snapshot holding a flonum boxes it there: cold too.
+                for site in &pending_deopt {
+                    if has_raw_slots || site.holds_flonum() {
+                        fb.set_cold_block(site.block);
+                    }
+                }
+                // Fill the precise-deopt exit blocks queued by this block's guards.
+                emit_pending_deopts(
                     &mut fb,
-                    rt_ref,
-                    &mut signal_exit,
-                    &vars,
-                    &block_for,
-                    &mut pending,
-                )?;
+                    deopt_refs,
+                    &mut pending_deopt,
+                    rt.as_ref().map(|rt| &rt.refs),
+                    abi,
+                );
+                // Fill the handler-dispatch blocks queued by this block's signal
+                // sites (the builder can switch blocks now that it's terminated).
+                if !pending.is_empty() {
+                    let rt_ref = rt.as_ref().expect("pending dispatches imply rt");
+                    emit_pending_dispatches(
+                        &mut fb,
+                        rt_ref,
+                        &mut signal_exit,
+                        &vars,
+                        &block_for,
+                        &mut pending,
+                    )?;
+                }
             }
         }
 

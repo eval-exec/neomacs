@@ -879,7 +879,7 @@ pub fn compile_bytecode_function_requested(
     let started = std::time::Instant::now();
     super::stats::verdict::begin();
     let named_t2 = inline_planning::named_tier_eligible(f, request, self_recursive);
-    let mut result = compile_bytecode_function_inner(f, obarray, named_t2);
+    let mut result = compile_bytecode_function_inner(f, obarray, named_t2, request.tier);
     super::stats::inline_census::note_compile_outcome(f, &result);
     let mir_verdict = super::stats::verdict::take();
     if let Ok(leaf) = &mut result {
@@ -1048,6 +1048,7 @@ fn compile_bytecode_function_inner(
     f: &ByteCodeFunction,
     obarray: Option<&Obarray>,
     named_t2: bool,
+    tier: super::tier2::CompileTier,
 ) -> Result<CompiledLeaf, CompileError> {
     use super::stats::{CompilePhase, enter_phase};
     let gate_phase = enter_phase(CompilePhase::Gate);
@@ -1087,6 +1088,7 @@ fn compile_bytecode_function_inner(
     // the original MIR-first, late-fuser path below.
     let inline2 = jit_inline2_mode();
     let early_fused = inline_planning::early_fused(f, constants, obarray, native_arity, named_t2);
+    opt_backend::build_census(f, early_fused.as_deref());
     let fused_v2 = early_fused.as_ref().is_some_and(|body| body.is_v2());
     let (ops, constants) = early_fused.as_ref().map_or((ops, constants), |body| {
         (body.ops.as_slice(), body.constants.as_slice())
@@ -1118,7 +1120,8 @@ fn compile_bytecode_function_inner(
     }
     drop(gate_phase);
     let mir_phase = enter_phase(CompilePhase::MirBuild);
-    let mir_built = (!has_rest
+    let mir_built = (jit_opt_mode() == OptMode::Legacy
+        && !has_rest
         && f.params.optional.is_empty()
         && dynamic_prefix == 0
         && !reopt_gate
@@ -1292,7 +1295,18 @@ fn compile_bytecode_function_inner(
     let _fused_feedback = fused
         .as_ref()
         .map(|fused| publish_numeric_feedback_vec(fused.feedback.clone()));
-    let mut leaf = lower_leaf_full(
+    let opt_params = (jit_opt_mode() == OptMode::Opt
+        && matches!(
+            tier,
+            super::tier2::CompileTier::Upgrade(super::tier2::T2Upgrade::Feedback)
+        )
+        && !reopt_gate)
+        .then_some(super::opt::ir::ParamShape {
+            required,
+            optional: nonrest - required,
+            has_rest,
+        });
+    let mut leaf = opt_backend::lower_best(
         ops,
         constants,
         native_arity,
@@ -1301,7 +1315,9 @@ fn compile_bytecode_function_inner(
             None => f.executable_gnu_byte_offset_map(),
         },
         obarray,
+        None,
         dynamic_prefix,
+        opt_params,
     )?;
     leaf.required = required;
     leaf.has_rest = has_rest;
@@ -3305,6 +3321,76 @@ pub fn lower_leaf_full_osr(
     osr_pc: Option<usize>,
     dynamic_prefix: usize,
 ) -> Result<CompiledLeaf, CompileError> {
+    lower_leaf_full_osr_with_opt(
+        ops,
+        constants,
+        arity,
+        offset_map,
+        obarray,
+        osr_pc,
+        dynamic_prefix,
+        None,
+    )
+}
+
+pub(crate) fn lower_leaf_full_osr_with_opt(
+    ops: &[Op],
+    constants: &[Value],
+    arity: usize,
+    offset_map: Option<&[GnuByteOffsetMapEntry]>,
+    obarray: Option<&Obarray>,
+    osr_pc: Option<usize>,
+    dynamic_prefix: usize,
+    opt_params: Option<super::opt::ir::ParamShape>,
+) -> Result<CompiledLeaf, CompileError> {
+    lower_leaf_full_osr_with_plan_impl(
+        ops,
+        constants,
+        arity,
+        offset_map,
+        obarray,
+        osr_pc,
+        dynamic_prefix,
+        opt_params,
+        None,
+    )
+}
+
+/// Direct IR harness: only test-owned verified plans, with source-derived
+/// guard facts disabled so mutations cannot reuse an obsolete source proof.
+#[cfg(test)]
+pub(crate) fn lower_opt_ir_for_test(
+    ops: &[Op],
+    constants: &[Value],
+    arity: usize,
+    offset_map: Option<&[GnuByteOffsetMapEntry]>,
+    plan: &super::opt::ir::Func,
+) -> Result<CompiledLeaf, CompileError> {
+    lower_leaf_full_osr_with_plan_impl(
+        ops,
+        constants,
+        arity,
+        offset_map,
+        None,
+        plan.osr.as_ref().map(|osr| osr.entry_pc as usize),
+        plan.dynamic_prefix,
+        Some(plan.arity),
+        Some(plan),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_leaf_full_osr_with_plan_impl(
+    ops: &[Op],
+    constants: &[Value],
+    arity: usize,
+    offset_map: Option<&[GnuByteOffsetMapEntry]>,
+    obarray: Option<&Obarray>,
+    osr_pc: Option<usize>,
+    dynamic_prefix: usize,
+    opt_params: Option<super::opt::ir::ParamShape>,
+    opt_override: Option<&super::opt::ir::Func>,
+) -> Result<CompiledLeaf, CompileError> {
     // Every analysis and the reloc collection below see the MASKED view; only
     // the emitter's `Op::Constant` arm knows the prefix (it loads those slots
     // through the callee at run time).
@@ -3316,12 +3402,29 @@ pub fn lower_leaf_full_osr(
         constants
     };
     let cfg = analyze_cfg(ops, constants, offset_map, arity)?;
+    let opt = match opt_override {
+        Some(plan) => {
+            plan.verify()
+                .map_err(|_| CompileError::UnsupportedOp("opt-build:verify"))?;
+            Some(plan.clone())
+        }
+        None => opt_params
+            .map(|params| {
+                opt_backend::build_plan(ops, constants, &cfg, params, dynamic_prefix, osr_pc)
+            })
+            .transpose()?,
+    };
+
     // Cross-block redundant-guard elimination: per-block-entry known-fixnum slots
     // (empty if the function has an op the analysis doesn't model -> no elision).
     // OSR adds an entry predecessor that guards the header's proven slots.
     // Once those checks pass, the same must-analysis facts remain valid on
     // every reachable edge; untyped slots still retain their per-op guards.
-    let known_fixnum_slots = compute_known_fixnum_slots(ops, constants, &cfg);
+    let known_fixnum_slots = if opt_override.is_some() {
+        HashMap::new()
+    } else {
+        compute_known_fixnum_slots(ops, constants, &cfg)
+    };
     let n = ops.len();
     // What the lowering bakes addresses inside goes into the leaf (see
     // `call_feedback::FeedbackHolds`).
@@ -3430,6 +3533,7 @@ pub fn lower_leaf_full_osr(
     // A declaration-table string only; the code is the same either way.
     let label = super::stats::perf_map::active_label(match osr_pc {
         Some(pc) => super::stats::perf_map::LabelTier::Osr(pc),
+        None if opt.is_some() => super::stats::perf_map::LabelTier::Opt,
         None => super::stats::perf_map::LabelTier::Baseline,
     });
     let entry_name = label.as_deref().unwrap_or("__neovm_jit_leaf");
@@ -3495,6 +3599,7 @@ pub fn lower_leaf_full_osr(
             dynamic_prefix,
             obs.emit(),
             abi,
+            opt.as_ref(),
             &mut chains,
         )
     })?;
@@ -3515,6 +3620,7 @@ pub fn lower_leaf_full_osr(
     super::stats::asm_dump::flush(&super::stats::asm_dump::AsmLeafInfo {
         tier: match osr_pc {
             Some(pc) => super::stats::perf_map::LabelTier::Osr(pc),
+            None if opt.is_some() => super::stats::perf_map::LabelTier::Opt,
             None => super::stats::perf_map::LabelTier::Baseline,
         },
         entry_name,
@@ -3524,7 +3630,11 @@ pub fn lower_leaf_full_osr(
     });
     obs.label = label.map(String::into_boxed_str);
     Ok(CompiledLeaf {
-        tier: LeafTier::Baseline,
+        tier: if opt.is_some() {
+            LeafTier::Opt
+        } else {
+            LeafTier::Baseline
+        },
         regalloc: lowering::active_regalloc_choice(),
         profit_gate_bypassed: profit_gate_bypassed_now(),
         call_heavy: call_heavy_now(),
@@ -3671,6 +3781,7 @@ pub(crate) fn build_baseline_leaf_object<S: LeafSink>(
         /*dynamic_prefix=*/ 0,               // AOT never targets a patched source
         LeafEmit::NONE,  // AOT code never counts or profiles
         LeafAbi::Memory, // AOT keeps the memory ABI
+        None,            // AOT retains the original backend
         &mut Vec::new(),
     )?;
     Ok(BaselineAotMeta {
@@ -3683,6 +3794,8 @@ pub(crate) fn build_baseline_leaf_object<S: LeafSink>(
 }
 
 mod leaf_builder;
+pub(crate) mod opt_backend;
+mod opt_emission;
 use leaf_builder::build_leaf_fn;
 
 mod knobs;
@@ -3870,3 +3983,15 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/varref_inline.rs"]
 mod varref_inline_tests;
+
+#[cfg(test)]
+#[path = "tests/opt_lower.rs"]
+mod opt_lower_tests;
+
+#[cfg(test)]
+#[path = "compile/tests/opt_admission.rs"]
+mod opt_admission_tests;
+
+#[cfg(test)]
+#[path = "compile/tests/opt_ir_lower.rs"]
+mod opt_ir_lower_tests;

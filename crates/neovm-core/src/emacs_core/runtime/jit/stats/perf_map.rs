@@ -23,6 +23,7 @@ const MAX_NAME_BYTES: usize = 128;
 pub(crate) enum LabelTier {
     Baseline,
     Mir,
+    Opt,
     /// An OSR variant entered at this loop-header pc.
     Osr(usize),
 }
@@ -89,6 +90,7 @@ pub(crate) fn format_label(name: &str, id: u64, tier: LabelTier) -> String {
     match tier {
         LabelTier::Baseline => format!("lisp:{name}#{id}:baseline"),
         LabelTier::Mir => format!("lisp:{name}#{id}:mir"),
+        LabelTier::Opt => format!("lisp:{name}#{id}:opt"),
         LabelTier::Osr(pc) => format!("lisp:{name}#{id}:osr@{pc}"),
     }
 }

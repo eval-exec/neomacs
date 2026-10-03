@@ -707,7 +707,14 @@ fn compile_osr_leaf_timed(
         .then(|| stats::perf_map::LeafLabelScope::enter(id, name_hint, func));
     drop(gate_phase);
     let lower_phase = stats::enter_phase(stats::CompilePhase::Lower);
-    let mut leaf = match super::compile::lower_leaf_full_osr(
+    let opt_params = (super::compile::jit_opt_mode() == super::compile::OptMode::Opt
+        && func.jit_runtime().reopt_level() < ReoptLevel::BaselineOnly)
+        .then_some(super::opt::ir::ParamShape {
+            required: func.params.required.len(),
+            optional: func.params.optional.len(),
+            has_rest: func.params.rest.is_some(),
+        });
+    let mut leaf = match super::compile::opt_backend::lower_best(
         ops,
         constants,
         native_arity,
@@ -715,6 +722,7 @@ fn compile_osr_leaf_timed(
         Some(obarray),
         Some(fused_osr_pc),
         func.jit_runtime().patched_prefix(),
+        opt_params,
     ) {
         Ok(leaf) => leaf,
         Err(e) => {

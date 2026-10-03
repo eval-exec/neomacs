@@ -135,6 +135,7 @@ fn render(info: &AsmLeafInfo<'_>, pending: &PendingAsm) -> String {
     let tier = match info.tier {
         LabelTier::Baseline => "baseline".to_string(),
         LabelTier::Mir => "mir".to_string(),
+        LabelTier::Opt => "opt".to_string(),
         LabelTier::Osr(pc) => format!("osr@{pc}"),
     };
     let addr = info.entry as usize;

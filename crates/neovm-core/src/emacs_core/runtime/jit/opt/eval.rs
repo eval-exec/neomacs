@@ -86,6 +86,8 @@ struct Evaluator<'a, 'b> {
     trace: Vec<Snapshot>,
     steps: usize,
     quitcounter: u8,
+    live_before: Vec<Vec<Value>>,
+    current_inst: usize,
     // Invocation-local identity recipes keep all aliases of one raw float
     // materialized as one box. Dead recipes do not root dead Lisp objects.
     next_float: std::cell::Cell<u64>,
@@ -104,6 +106,7 @@ pub(crate) fn evaluate(
     ctx: &mut Context,
     inputs: Inputs<'_>,
 ) -> Result<Run, EvalError> {
+    let live_before = reference_liveness(func)?;
     let roots_base = ctx.bc_buf.len();
     for bits in &func.consts {
         ctx.bc_buf.push(bits.to_value());
@@ -119,6 +122,8 @@ pub(crate) fn evaluate(
         trace: Vec::new(),
         steps: 0,
         quitcounter: 1,
+        live_before,
+        current_inst: 0,
         next_float: std::cell::Cell::new(0),
         float_boxes: std::cell::RefCell::new(std::collections::HashMap::new()),
         unboxed: std::cell::RefCell::new(std::collections::HashMap::new()),
@@ -128,7 +133,134 @@ pub(crate) fn evaluate(
     result
 }
 
+type Live = std::collections::BTreeSet<Value>;
+
+fn live_value(func: &Func, value: Value) -> Result<Value, EvalError> {
+    func.resolve(value)
+        .ok_or_else(|| invalid("invalid live SSA value"))
+}
+
+fn live_frame(func: &Func, mut id: Option<FrameId>, live: &mut Live) -> Result<(), EvalError> {
+    let mut seen = std::collections::HashSet::new();
+    while let Some(frame) = id {
+        if !seen.insert(frame) {
+            return Err(invalid("cyclic live frame chain"));
+        }
+        let frame = func
+            .frames
+            .get(frame.index())
+            .ok_or_else(|| invalid("missing live frame"))?;
+        for &value in &frame.stack {
+            live.insert(live_value(func, value)?);
+        }
+        id = frame.parent;
+    }
+    Ok(())
+}
+
+fn live_term(func: &Func, term: &Term, entries: &[Live]) -> Result<Live, EvalError> {
+    let mut live = Live::new();
+    for edge in term.edges() {
+        let target = func
+            .blocks
+            .get(edge.target.index())
+            .ok_or_else(|| invalid("missing live successor"))?;
+        for &value in &entries[edge.target.index()] {
+            let value = if let Some(index) = target.params.iter().position(|&param| param == value)
+            {
+                *edge
+                    .args
+                    .get(index)
+                    .ok_or_else(|| invalid("missing live phi operand"))?
+            } else {
+                value
+            };
+            live.insert(live_value(func, value)?);
+        }
+    }
+    match term {
+        Term::Return(value) | Term::Branch { flag: value, .. } => {
+            live.insert(live_value(func, *value)?);
+        }
+        Term::Switch { value, table, .. } => {
+            live.insert(live_value(func, *value)?);
+            live.insert(live_value(func, *table)?);
+        }
+        Term::Deopt(frame) => live_frame(func, Some(*frame), &mut live)?,
+        _ => {}
+    }
+    Ok(live)
+}
+
+fn live_instruction(func: &Func, inst: &InstData, live: &mut Live) -> Result<(), EvalError> {
+    if let Some(result) = inst.result {
+        live.remove(&live_value(func, result)?);
+    }
+    for &value in &inst.args {
+        live.insert(live_value(func, value)?);
+    }
+    if inst.op.requires_frame(inst.eff) {
+        live_frame(func, inst.frame, live)?;
+    }
+    Ok(())
+}
+
+/// Semantic SSA liveness for reference roots, independent of CLIF emission.
+/// Edge arguments substitute live successor parameters simultaneously. Exact
+/// observation frames add uses even if the normal IR result no longer needs a
+/// stack operand. Threading: invocation-owned SSA handles, no Lisp-state cache.
+fn reference_liveness(func: &Func) -> Result<Vec<Vec<Value>>, EvalError> {
+    let mut entries = vec![Live::new(); func.blocks.len()];
+    loop {
+        let mut changed = false;
+        for (index, block) in func.blocks.iter().enumerate().rev() {
+            let mut live = live_term(func, &block.term, &entries)?;
+            for &id in block.insts.iter().rev() {
+                live_instruction(func, &func.insts[id.index()], &mut live)?;
+            }
+            if live != entries[index] {
+                entries[index] = live;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let mut before = vec![Vec::new(); func.insts.len()];
+    for block in &func.blocks {
+        let mut live = live_term(func, &block.term, &entries)?;
+        for &id in block.insts.iter().rev() {
+            live_instruction(func, &func.insts[id.index()], &mut live)?;
+            before[id.index()] = live.iter().copied().collect();
+        }
+    }
+    Ok(before)
+}
+
 impl Evaluator<'_, '_> {
+    /// Retain the exact frame plus SSA identities used after this safepoint.
+    /// Storage is invocation-local; dead SSA cells are never GC roots. Raw
+    /// slots identities retain their Lisp base, and live float recipes retain
+    /// their materialized identity without publishing an untraced raw payload.
+    fn root_current(&mut self) -> Result<(), EvalError> {
+        let roots = self.live_before[self.current_inst]
+            .iter()
+            .map(|&value| match self.read(value)? {
+                Cell::Lisp(bits) | Cell::Slots(bits) => Ok(Some(bits.to_value())),
+                Cell::F64 { .. } => self.lisp(value).map(Some),
+                Cell::Int(_) | Cell::Bool(_) => Ok(None),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.ctx.bc_buf.extend(
+            roots
+                .into_iter()
+                .flatten()
+                .filter(|value| value.is_heap_object()),
+        );
+        Ok(())
+    }
+
     fn read(&self, mut value: Value) -> Result<Cell, EvalError> {
         for _ in 0..=self.func.values.len() {
             if let Some(cell) = self.values.get(value.index()).and_then(|v| *v) {
@@ -254,6 +386,7 @@ impl Evaluator<'_, '_> {
 
     fn inst(&mut self, id: super::ir::Inst) -> Result<Option<Snapshot>, EvalError> {
         self.tick()?;
+        self.current_inst = id.index();
         let function = self.func;
         if let Some(step) = self.typed(&function.insts[id.index()])? {
             match step {
@@ -320,23 +453,7 @@ impl Evaluator<'_, '_> {
                 Some(Cell::Lisp(bits))
             }
             Opcode::Opaque(op) => {
-                let root_base = self.ctx.bc_buf.len();
-                // The full GNU operand stack, not only opcode arguments, stays
-                // live across calls, allocation and any nested collection.
-                if let Some(frame) = inst.frame {
-                    for bits in self.frame(frame)?.stack {
-                        self.ctx.bc_buf.push(bits.to_value());
-                    }
-                }
-                let result = evaluate_opaque(
-                    self.ctx,
-                    op,
-                    &self.func.consts,
-                    &args,
-                    inst.result.is_some(),
-                );
-                self.ctx.bc_buf.truncate(root_base);
-                let result = result?;
+                let result = self.opaque(inst, op, &function.consts, &args)?;
                 inst.result
                     .map(|_| Cell::Lisp(ValueBits::from_value(result)))
             }
@@ -345,11 +462,8 @@ impl Evaluator<'_, '_> {
                 if self.quitcounter == 0 {
                     self.quitcounter = 1;
                     let root_base = self.ctx.bc_buf.len();
-                    let frame =
-                        self.frame(inst.frame.ok_or_else(|| invalid("poll has no frame"))?)?;
-                    for bits in frame.stack {
-                        self.ctx.bc_buf.push(bits.to_value());
-                    }
+                    self.frame(inst.frame.ok_or_else(|| invalid("poll has no frame"))?)?;
+                    self.root_current()?;
                     let result = self.ctx.bytecode_branch_maybe_gc_and_quit();
                     self.ctx.bc_buf.truncate(root_base);
                     result.map_err(EvalError::Flow)?;
@@ -439,11 +553,7 @@ impl Evaluator<'_, '_> {
         args: &[LispValue],
     ) -> Result<LispValue, EvalError> {
         let root_base = self.ctx.bc_buf.len();
-        if let Some(frame) = inst.frame {
-            for bits in self.frame(frame)?.stack {
-                self.ctx.bc_buf.push(bits.to_value());
-            }
-        }
+        self.root_current()?;
         let result = evaluate_opaque(self.ctx, op, constants, args, inst.result.is_some());
         self.ctx.bc_buf.truncate(root_base);
         result
