@@ -13,6 +13,9 @@
 //! jobs retain the working T1 until installation. A feedback upgrade retains T1
 //! as its fallback; a conclusive/repeated T2 deopt widens the existing source
 //! policy before reverting to T1. The bounded source ban survives cache evictions.
+//! Opt requests waiting for CPU budget close feedback recording and HOF credit;
+//! only entry and poll work drive their retry countdown. Once affordable, they
+//! reopen profiling and HOF credit for a full fresh stable sampling window.
 //! Off, profiling emission and the heat-driven re-tier stay unchanged.
 //!
 //! # Threading
@@ -86,6 +89,10 @@ pub(crate) enum T2State {
     Due(T2Upgrade),
     /// The upgrade replaced this leaf.
     Upgraded(T2Upgrade),
+    /// Retained T1 waiting for CPU allowance. Entry/poll countdowns stay live,
+    /// but Use recording and HOF credit wait for a fresh stable sample window.
+    /// Mutator-owned runtime state; never a persisted or worker discriminant.
+    BudgetWait,
 }
 
 /// A disarmed countdown: no entry, poll or credit can bring it to zero.
@@ -429,8 +436,14 @@ fn bounded_length(seq: crate::emacs_core::value::Value, cap: usize) -> usize {
 pub(crate) fn request(obs: &LeafObs) {
     let t2 = &obs.t2;
     t2.budget.set(DISARMED);
-    if t2.state.get() != T2State::Idle {
-        return;
+    if super::compile::jit_opt_mode() == super::compile::OptMode::Opt {
+        if !matches!(t2.state.get(), T2State::Idle | T2State::BudgetWait) {
+            return;
+        }
+    } else {
+        if t2.state.get() != T2State::Idle {
+            return;
+        }
     }
     t2.at_request.set((obs.entries.get(), t2.polls.get()));
     // Retain the source across every unstable/deferred window. Taking it
@@ -466,7 +479,7 @@ pub(crate) fn request(obs: &LeafObs) {
         T2State::Kept => s.kept += 1,
         T2State::Stale => s.stale += 1,
         T2State::Due(_) => s.due += 1,
-        T2State::Idle | T2State::Upgraded(_) => {}
+        T2State::Idle | T2State::Upgraded(_) | T2State::BudgetWait => {}
     });
     if let (T2State::Due(kind), Some(leaf)) = (state, leaf) {
         // Every way into the leaf now leads to a seam that compiles the
@@ -562,5 +575,5 @@ mod reach_tests;
 mod policy;
 pub(crate) use policy::{
     charge_compile, cpu_time_us, rearm_fallback, release, reserve_compile, revert_if_t2,
-    upgrade_deferred, upgrade_failed,
+    upgrade_deferred, upgrade_failed, wait_for_opt_budget,
 };

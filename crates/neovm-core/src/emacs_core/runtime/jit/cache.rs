@@ -2244,6 +2244,15 @@ fn request_upgrade(
     // Recheck admission now that the compile will actually start. A Due
     // leaf holds no reservation, so intervening work may have filled the ledger.
     if !super::tier2::reserve_compile(&old) {
+        // An opt request can become unaffordable between Due admission and
+        // this compile seam. Retain the original T1/history and close Use/HOF
+        // until a fresh affordable sample window; every legacy branch below
+        // remains main's admission/re-arm policy.
+        if super::compile::jit_opt_mode() == super::compile::OptMode::Opt
+            && super::tier2::wait_for_opt_budget(&old, kind)
+        {
+            return old;
+        }
         if old.is_aot_backed() {
             super::tier2::upgrade_deferred(rt, &old);
         } else {

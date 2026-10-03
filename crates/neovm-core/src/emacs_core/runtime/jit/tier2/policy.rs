@@ -230,6 +230,27 @@ fn admit_request(leaf: &CompiledLeaf, kind: T2Upgrade) -> Option<T2Decision> {
     Some(T2Decision::Upgrade(kind))
 }
 
+/// Retain a profiling T1 whose selected opt feedback upgrade cannot compile
+/// yet. Only its owning mutator calls this cold helper. No source snapshot is
+/// scanned or replaced, no reservation is held, and no Lisp values are touched.
+/// The existing Idle-only Use/HOF gates close recording and credit while entry
+/// and poll countdowns continue. The next affordable request starts sampling.
+#[cold]
+#[inline(never)]
+pub(crate) fn wait_for_opt_budget(leaf: &CompiledLeaf, kind: T2Upgrade) -> bool {
+    if super::super::compile::jit_opt_mode() != super::super::compile::OptMode::Opt
+        || kind != T2Upgrade::Feedback
+        || leaf.tier() == LeafTier::Aot
+        || !leaf.obs.t2.profiling()
+    {
+        return false;
+    }
+    release(leaf);
+    leaf.obs.t2.state.set(T2State::BudgetWait);
+    leaf.obs.t2.budget.set(i64::from(jit_tier2_policy().stable));
+    true
+}
+
 /// Stability and admissibility, followed by budget; no Lisp and no GC.
 pub(crate) fn request_decision(leaf: &CompiledLeaf, source: &RuntimeState) -> Option<T2Decision> {
     if leaf.tier() == LeafTier::Aot {
@@ -253,6 +274,23 @@ pub(crate) fn request_decision(leaf: &CompiledLeaf, source: &RuntimeState) -> Op
             T2Decision::Upgrade(kind) => admit_request(leaf, kind),
             T2Decision::Keep => Some(T2Decision::Keep),
         };
+    }
+    if super::super::compile::jit_opt_mode() == super::super::compile::OptMode::Opt
+        && t2.state.get() == T2State::BudgetWait
+    {
+        if !budget_allows(leaf) {
+            bump_stats(|s| s.budget_denied += 1);
+            t2.budget.set(i64::from(k.stable));
+            return None;
+        }
+        // Closed Use/HOF windows did not record call targets. Capture a fresh
+        // source snapshot and sample a full stable window before admitting any
+        // upgrade; affordability alone cannot prove stability across the pause.
+        let mut p = t2.policy.borrow_mut();
+        p.version = Some(Version::read(source, p.ops_len));
+        t2.state.set(T2State::Idle);
+        t2.budget.set(i64::from(k.stable));
+        return None;
     }
     let mut p = t2.policy.borrow_mut();
     let version = Version::read(source, p.ops_len);
@@ -315,7 +353,15 @@ pub(crate) fn request_decision(leaf: &CompiledLeaf, source: &RuntimeState) -> Op
         bump_stats(|s| s.not_worth += 1);
         return Some(T2Decision::Keep);
     };
-    admit_request(leaf, kind)
+    if super::super::compile::jit_opt_mode() == super::super::compile::OptMode::Opt {
+        let decision = admit_request(leaf, kind);
+        if decision.is_none() && !banned && !unstable {
+            wait_for_opt_budget(leaf, kind);
+        }
+        decision
+    } else {
+        admit_request(leaf, kind)
+    }
 }
 
 /// Called only for a counted, conclusive/repeated deopt, after its existing
