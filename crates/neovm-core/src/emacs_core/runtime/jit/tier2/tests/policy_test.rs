@@ -159,6 +159,9 @@ fn tier2_policy_changed_feedback_rearms_before_upgrade() {
 }
 #[test]
 fn tier2_policy_budget_denial_rearms_current_native_leaf() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     force_tier2_for_test(Some(knob(1, 64)));
     force_tier2_policy_for_test(Some(Tier2PolicyKnob {
         stable: 1,
@@ -293,6 +296,9 @@ fn tier2_policy_run_once_due_leaves_do_not_reserve_cpu() {
 /// budget before the next entry, which must retry rather than compile anyway.
 #[test]
 fn tier2_policy_due_upgrade_rechecks_budget_at_compile_seam() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     force_tier2_for_test(Some(knob(1, 64)));
     force_tier2_policy_for_test(Some(policy(1, 4)));
     let mut ctx = Context::new();

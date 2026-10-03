@@ -124,6 +124,9 @@ fn named_front_requires_matching_required_arity() {
 
 #[test]
 fn named_front_off_compile_has_no_named_chains() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     struct Reset;
     impl Drop for Reset {
         fn drop(&mut self) {

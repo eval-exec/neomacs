@@ -329,6 +329,9 @@ fn cold_census() -> [u64; stats::COLD_EXIT_KINDS] {
 /// The census counts each kind the lowering marked, and nothing off.
 #[test]
 fn cold_exit_census_counts_each_kind() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     use strum::IntoEnumIterator;
     force_deopt_for_test(false);
     force_profit_gate_for_test(false);

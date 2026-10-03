@@ -282,7 +282,15 @@ pub(crate) fn lower_best(
     prefix: usize,
     opt_params: Option<ir::ParamShape>,
 ) -> Result<CompiledLeaf, CompileError> {
+    // The shared baseline only clears root-window counters when it emits a
+    // hoisted prologue. Opt T1 bodies can have no prologue, so reset this
+    // compiler-thread state before each attempt, including the baseline retry.
+    // Legacy emission keeps its original initialization and diagnostics.
+    let reset_opt_counts = jit_opt_mode() == OptMode::Opt;
     if let Some(params) = opt_params {
+        if reset_opt_counts {
+            lowering::rootwin_counters_reset();
+        }
         match lower_leaf_full_osr_with_opt(
             ops,
             constants,
@@ -299,6 +307,9 @@ pub(crate) fn lower_best(
                 tracing::debug!(target: "neovm_jit::opt", ?error, "opt backend declined; keeping baseline");
             }
         }
+    }
+    if reset_opt_counts {
+        lowering::rootwin_counters_reset();
     }
     lower_leaf_full_osr(ops, constants, arity, offset_map, obarray, osr_pc, prefix)
 }

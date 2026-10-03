@@ -433,6 +433,9 @@ fn add2() -> ByteCodeFunction {
 /// At `BaselineOnly` the MIR tier is skipped (and the funnel says why).
 #[test]
 fn ceiling_baseline_only_skips_the_mir_tier() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     force_deopt_for_test(false);
     let ev = Context::new();
     let f = add2();
@@ -610,6 +613,9 @@ fn no_inline_bit_skips_the_fuser() {
 /// A no-inline bit at a call site keeps the MIR inliner from inlining it.
 #[test]
 fn no_inline_bit_skips_the_mir_inliner() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     force_deopt_for_test(false);
     // Without the inline the body is call-dominated.
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);

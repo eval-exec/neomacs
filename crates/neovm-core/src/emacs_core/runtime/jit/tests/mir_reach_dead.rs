@@ -90,6 +90,9 @@ fn jit_mir_reach_knob_parses_bits() {
 /// MIR leaf with the interpreter's answers, and the census counts it.
 #[test]
 fn jit_mir_reach_dead_tiers_a_named_let_body_to_mir() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     force_deopt_for_test(false);
     observe_stats();
     let mut ev = Context::new();
@@ -126,6 +129,9 @@ fn jit_mir_reach_dead_tiers_a_named_let_body_to_mir() {
 /// wrong.
 #[test]
 fn jit_mir_reach_dead_named_let_under_forced_deopt() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     force_deopt_for_test(true);
     force_mir_reach_for_test(Some(DEAD));
     let mut ev = Context::new();
@@ -144,6 +150,9 @@ fn jit_mir_reach_dead_named_let_under_forced_deopt() {
 /// body is a MIR leaf with the interpreter's answers with it.
 #[test]
 fn jit_mir_reach_dead_fibn_named_let_from_the_byte_compiler() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     crate::test_utils::init_test_tracing();
     force_deopt_for_test(false);
     let mut ev = crate::test_utils::runtime_startup_context();

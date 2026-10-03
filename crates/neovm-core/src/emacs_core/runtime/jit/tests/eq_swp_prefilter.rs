@@ -180,6 +180,9 @@ fn check_eq_matrix(eval: &mut Context, f: &ByteCodeFunction, leaf: &CompiledLeaf
 
 #[test]
 fn eq_prefilter_matches_the_interpreter_on_both_tiers() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     force_profit_gate_for_test(false);
     let mut eval = Context::new();
     let mir = eq_body(Shape::RequiredOnly);

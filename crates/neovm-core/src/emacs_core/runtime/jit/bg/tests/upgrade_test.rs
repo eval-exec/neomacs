@@ -81,6 +81,9 @@ fn request(ctx: &mut Context, f: &ByteCodeFunction) -> &'static CompiledLeaf {
 
 #[test]
 fn jit_bg_upgrade_serves_old_native_until_successful_install() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     let mut ctx = setup();
     let f = constant(Value::make_int(7));
     let old = request(&mut ctx, &f);
@@ -127,6 +130,9 @@ fn jit_bg_upgrade_serves_old_native_until_successful_install() {
 
 #[test]
 fn jit_bg_failed_upgrade_keeps_the_old_leaf_native() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     let mut ctx = setup();
     let f = constant(Value::make_int(7));
     let old = request(&mut ctx, &f);
@@ -146,6 +152,9 @@ fn jit_bg_failed_upgrade_keeps_the_old_leaf_native() {
 
 #[test]
 fn jit_bg_pending_upgrade_roots_both_leaves_and_idle_drain_installs() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     let mut ctx = setup();
     let value = ctx.eval_str("(list 1 2)").expect("heap constant");
     let f = constant(value);
@@ -171,6 +180,9 @@ fn jit_bg_pending_upgrade_roots_both_leaves_and_idle_drain_installs() {
 
 #[test]
 fn jit_bg_deopt_of_old_leaf_supersedes_pending_upgrade() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     let mut ctx = setup();
     let f = constant(Value::make_int(7));
     let old = request(&mut ctx, &f);
@@ -223,6 +235,9 @@ fn jit_bg_retier_job_class_is_opt_in() {
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
 fn jit_bg_worker_upgrade_keeps_t1_running_until_install() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     let mut ctx = setup();
     let f = constant(Value::make_int(7));
     let old = request(&mut ctx, &f);
@@ -298,11 +313,17 @@ fn jit_bg_feedback_upgrade_retains_and_reverts_to_its_t1() {
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
 fn jit_bg_pending_upgrade_mutator_thread_exit_is_safe() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     {
         // Only the workers are held, by a parent-owned RAII guard. The
         // child creates all Lisp/cache state itself and sends none back.
         let _held = hold_workers_for_test();
         std::thread::spawn(|| {
+            let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+                crate::emacs_core::jit::compile::OptMode::Legacy,
+            );
             let mut ctx = setup();
             let f = constant(Value::make_int(7));
             let old = request(&mut ctx, &f);

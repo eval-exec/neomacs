@@ -1626,6 +1626,20 @@ pub(crate) fn force_opt_for_test(mode: Option<OptMode>, admit: Option<OptAdmit>)
     OPT_ADMIT_TEST_OVERRIDE.with(|v| v.set(admit));
 }
 
+/// Select the backend a test asserts, independently of the process configuration.
+/// Threading: test-thread compiler configuration only, never Lisp state; nested
+/// scopes restore the exact previous override, including its absence.
+#[cfg(test)]
+pub(crate) fn opt_mode_scope_for_test(mode: OptMode) -> impl Drop {
+    struct Scope(Option<OptMode>);
+    impl Drop for Scope {
+        fn drop(&mut self) {
+            OPT_TEST_OVERRIDE.with(|value| value.set(self.0));
+        }
+    }
+    Scope(OPT_TEST_OVERRIDE.with(|value| value.replace(Some(mode))))
+}
+
 /// Independently selected mid-end passes. Threading: immutable process-wide
 /// compiler configuration only; it contains no Lisp values or mutator state.
 /// An empty list runs no transformations. Negative entries support bisection

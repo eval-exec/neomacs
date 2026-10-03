@@ -1013,6 +1013,9 @@ fn osr_into_a_cons_loop_allocates_inline() {
 /// allocates nothing at all.
 #[test]
 fn mir_conses_allocate_inline_or_not_at_all() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     let mut eval = legacy_context();
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     // (lambda (a b) (cons a (cons b nil))): both escape.

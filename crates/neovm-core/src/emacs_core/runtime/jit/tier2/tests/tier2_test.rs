@@ -174,6 +174,9 @@ fn tier2_off_leaves_carry_no_countdown() {
 /// retired.
 #[test]
 fn tier2_fast_leaf_retiers_at_the_countdown() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     if forced_regalloc().is_some() || crate::emacs_core::jit::retier_factor() == 0 {
         return; // the allocator knobs veto the re-tier
     }
@@ -227,6 +230,9 @@ fn tier2_fast_leaf_retiers_at_the_countdown() {
 /// window.
 #[test]
 fn tier2_spec_reached_leaf_upgrades_and_serves_the_work() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     if forced_regalloc().is_some() || crate::emacs_core::jit::retier_factor() == 0 {
         return;
     }

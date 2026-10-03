@@ -18,6 +18,9 @@ use std::sync::atomic::Ordering;
 
 #[test]
 fn tier2_inline_epoch_moved_does_not_count_as_feedback_failure() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     force_tier2_for_test(Some(Tier2Knob {
         on: true,
         window: 1,

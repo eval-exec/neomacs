@@ -356,6 +356,9 @@ fn jit_final_report_profile_leaf_rows_have_fewer_than_13_columns() {
 /// deopt pc is annotated with the bytecode op there.
 #[test]
 fn jit_final_report_collects_named_leaves_from_a_context() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     // Exact native outcomes: immune to a NEOVM_JIT_FORCE_DEOPT=1 suite run.
     crate::emacs_core::jit::compile::force_deopt_for_test(false);
     use crate::emacs_core::bytecode::ByteCodeFunction;

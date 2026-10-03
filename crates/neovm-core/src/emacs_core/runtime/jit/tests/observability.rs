@@ -339,6 +339,9 @@ fn jit_obs_spec_revalidation_counts_rearm_and_rebind() {
 /// eviction is counted.
 #[test]
 fn jit_obs_inline_eviction_counted() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     // Exact native outcomes: immune to a NEOVM_JIT_FORCE_DEOPT=1 suite run.
     crate::emacs_core::jit::compile::force_deopt_for_test(false);
     use crate::emacs_core::jit::stats::epoch::EpochCounters;
@@ -523,6 +526,9 @@ fn jit_obs_entry_counter_absent_by_default() {
 /// seam, the speculated native-to-native call, and runs that deopt.
 #[test]
 fn jit_obs_entry_counter_counts_every_path() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     // Exact native outcomes: immune to a NEOVM_JIT_FORCE_DEOPT=1 suite run.
     crate::emacs_core::jit::compile::force_deopt_for_test(false);
     force_profit_gate_for_test(false);

@@ -78,6 +78,9 @@ fn mir_named_calls_signal_with_the_same_payload_as_the_interpreter() {
 
 #[test]
 fn mir_named_read_loop_observes_gc_hook_changes() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     let mut ev = Context::new();
     ev.eval_str(
         "(insert \"abcd\") (goto-char 1) (setq post-gc-hook (list (lambda () (goto-char 4))))",

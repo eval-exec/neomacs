@@ -683,6 +683,9 @@ fn cached_leaf(
 /// source backs off to the baseline, whose deopts are precise.
 #[test]
 fn mir_rerun_learns_or_escalates() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     force_deopt_for_test(false);
     force_reopt_for_test(Some(knobs_with_heat(5)));
     let mut ev = Context::new();
@@ -791,6 +794,9 @@ fn mir_rerun_learns_or_escalates() {
 /// current epoch, at once (no re-profile window).
 #[test]
 fn inline_epoch_moved_recompiles_once() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     force_deopt_for_test(false);
     force_reopt_for_test(Some(knobs_with_heat(5)));
     let mut ev = Context::new();

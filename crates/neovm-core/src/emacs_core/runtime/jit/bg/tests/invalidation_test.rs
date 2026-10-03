@@ -181,6 +181,9 @@ fn square() -> ByteCodeFunction {
 /// pending entry (superseded); the recompile inlines the new body.
 #[test]
 fn jit_bg_redefined_inlined_callee_supersedes_the_pending_compile() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     deferred_held();
     let mut ev = Context::new();
     let ctx = &mut ev as *mut Context;
@@ -232,6 +235,9 @@ fn jit_bg_redefined_inlined_callee_supersedes_the_pending_compile() {
 /// compile runs in line.
 #[test]
 fn jit_bg_moved_epoch_discards_a_guarded_inline_leaf_twice_then_compiles_in_line() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     deferred_held();
     let mut ev = Context::new();
     let ctx = &mut ev as *mut Context;

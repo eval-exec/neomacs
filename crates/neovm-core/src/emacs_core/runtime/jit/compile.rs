@@ -4291,3 +4291,7 @@ mod opt_sink_numeric_resolved;
 #[cfg(test)]
 #[path = "compile/tests/opt_sink_native_verification.rs"]
 mod opt_sink_native_verification;
+
+#[cfg(test)]
+#[path = "compile/tests/opt_rootwin_counts.rs"]
+mod opt_rootwin_count_tests;

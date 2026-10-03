@@ -176,7 +176,7 @@ fn opt_lower_osr_prunes_prologue_and_checks_untouched_snapshot() {
 #[test]
 fn opt_legacy_knob_preserves_normalized_clif() {
     let f = count_loop();
-    force_opt_for_test(None, None);
+    force_opt_for_test(Some(OptMode::parse(None)), None);
     let original = captured_clif(|| {
         compile_bytecode_function_with(&f, None).unwrap();
     });

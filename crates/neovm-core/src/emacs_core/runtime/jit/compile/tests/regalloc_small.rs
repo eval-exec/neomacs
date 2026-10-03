@@ -74,6 +74,9 @@ fn regalloc_small_knob_parsing() {
 
 #[test]
 fn regalloc_small_selection_covers_baseline_and_mir() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     use super::*;
     use crate::emacs_core::value::LambdaParams;
 

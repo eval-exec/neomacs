@@ -141,6 +141,9 @@ fn nth_loop() -> ByteCodeFunction {
 /// is live across the leaf call).
 #[test]
 fn a_leaf_call_admits_a_loop_into_the_mir_tier() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     let mut ev = Context::new();
     let ctx = &mut ev as *mut Context as *mut u8;
     let f = nth_loop();
@@ -199,6 +202,9 @@ fn a_leaf_call_admits_a_loop_into_the_mir_tier() {
 ///     (lambda (l n) (+ (1+ n) (nth 1 l)))
 #[test]
 fn a_leaf_call_keeps_raw_values_raw() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     let mut ev = Context::new();
     let ctx = &mut ev as *mut Context as *mut u8;
     let f = function(

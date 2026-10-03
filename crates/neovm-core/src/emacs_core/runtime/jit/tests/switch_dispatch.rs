@@ -102,6 +102,9 @@ fn pcase_dispatch_answers_every_value_shape_like_the_interpreter() {
 /// instruction indices, the same offsets failed as a stack-model error.
 #[test]
 fn elb_pcase_mir_build_resolves_the_jump_table_through_the_offset_map() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::runtime_startup_context();
     let f = byte_compile(&mut ev, ELB_PCASE);

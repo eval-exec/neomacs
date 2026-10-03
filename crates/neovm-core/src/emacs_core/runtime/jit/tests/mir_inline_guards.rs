@@ -44,6 +44,9 @@ pub(super) fn resume(ev: &mut Context, f: &ByteCodeFunction, result: NativeRun) 
 
 #[test]
 fn mir_inline_identity_rechecks_after_a_variable_watcher() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     let mut ev = Context::new();
     ev.eval_str(
         "(setq mir-inline-v 0 mir-inline-effects 0)
@@ -90,6 +93,9 @@ fn mir_inline_identity_rechecks_after_a_variable_watcher() {
 
 #[test]
 fn mir_inline_identity_honors_debug_override_quit_and_depth() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     for variable in [
         "debug-on-next-call",
         "internal--compiler-function-overrides",
@@ -153,6 +159,9 @@ fn mir_inline_identity_honors_debug_override_quit_and_depth() {
 /// call before it runs, and the resumed call completes once it is lowered.
 #[test]
 fn mir_inline_identity_deopts_on_each_asynchronous_source() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     use crate::emacs_core::eval::{ASYNC_ATTENTION, AsyncSource, QuitRequest};
     for source in ["profiler-tick", "os-signal", "quit-request"] {
         let mut ev = Context::new();
@@ -216,6 +225,9 @@ fn mir_inline_identity_deopts_on_each_asynchronous_source() {
 
 #[test]
 fn mir_inline_guard_reconstructs_a_virtual_argument() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     let mut ev = Context::new();
     ev.eval_str(
         "(setq mir-inline-pair-v 0 mir-inline-pair-effects 0)
@@ -269,6 +281,9 @@ fn mir_inline_guard_reconstructs_a_virtual_argument() {
 
 #[test]
 fn mir_inline_keeps_a_callees_non_fixnum_feedback_on_the_native_call_path() {
+    let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
+        crate::emacs_core::jit::compile::OptMode::Legacy,
+    );
     use crate::emacs_core::jit::NumericFeedback;
     for (feedback, literal) in [
         (NumericFeedback::Float, false),
