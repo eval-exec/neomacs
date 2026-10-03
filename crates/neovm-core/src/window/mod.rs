@@ -80,6 +80,8 @@ pub struct WindowId(pub u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FrameId(pub u64);
 
+pub mod frame_alpha;
+
 /// Whether a logical frame selection may retarget existing focus redirections.
 /// GNU `do_switch_frame` tracks explicit selections, but not input events.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3983,6 +3985,10 @@ pub struct Frame {
     /// active display backend. Wiring the dispatch is tracked as
     /// audit Phase 6.
     pub parameters: HashMap<Value, Value>,
+    /// Accepted GUI opacity, independent of the raw Lisp parameter alist.
+    /// GNU stores a new raw value before its handler can signal an error.
+    pub background_alpha: f32,
+    pub frame_alpha: [f32; 2],
     /// Whether the frame is visible, iconified, or invisible.
     pub visibility: FrameVisibility,
     /// Whether the menu / tab / tool bars are actually displayed and therefore
@@ -4176,6 +4182,8 @@ impl Frame {
                 params.insert(Value::symbol("minibuffer"), Value::T);
                 params
             },
+            background_alpha: 1.0,
+            frame_alpha: [-1.0; 2],
             visibility: FrameVisibility::Visible,
             // Set true only once an interactive frontend displays this frame.
             displays_chrome: false,
@@ -4496,6 +4504,21 @@ impl Frame {
     }
 
     pub fn set_parameter(&mut self, key: Value, value: Value) -> Option<Value> {
+        // Only successful decoding changes the backend state. The raw value
+        // remains observable even when the GUI parameter handler later errors.
+        match key.as_symbol_id().and_then(FrameParam::from_symbol_id) {
+            Some(FrameParam::Alpha) => {
+                if let Ok(alpha) = frame_alpha::pair(value) {
+                    self.frame_alpha = alpha;
+                }
+            }
+            Some(FrameParam::AlphaBackground) => {
+                if let Ok(alpha) = frame_alpha::component(value, 1.0) {
+                    self.background_alpha = alpha;
+                }
+            }
+            _ => {}
+        }
         self.parameters.insert(key, value)
     }
 

@@ -8,6 +8,10 @@
 //! `pixel_width`; GUI backends must use that rather than reconstructing every
 //! glyph as one frame column.
 
+fn default_frame_alpha() -> [f32; 2] {
+    [-1.0; 2]
+}
+
 use super::effect_config::EffectsConfig;
 use super::face::{BoxVerticalEdges, FaceAttributes, UnderlineStyle};
 use super::frame_chrome::{FrameChrome, FrameChromeContent, PresentationId};
@@ -2024,6 +2028,9 @@ pub struct FrameDisplayState {
     #[serde(default)]
     pub outer_border_color: Color,
     pub background_alpha: f32,
+    /// GNU whole-frame active/inactive opacity; negative means leave unchanged.
+    #[serde(default = "default_frame_alpha")]
+    pub frame_alpha: [f32; 2],
     pub no_accept_focus: bool,
     pub window_infos: Vec<WindowInfo>,
     pub transition_hints: Vec<ContentTransitionHint>,
@@ -2549,6 +2556,7 @@ impl FrameDisplayState {
                 a: 1.0,
             },
             background_alpha: 1.0,
+            frame_alpha: [-1.0; 2],
             no_accept_focus: false,
             window_infos: Vec::new(),
             transition_hints: Vec::new(),
@@ -2622,6 +2630,7 @@ impl FrameDisplayState {
         state.outer_border_width = buf.outer_border_width;
         state.outer_border_color = buf.outer_border_color;
         state.background_alpha = buf.background_alpha;
+        state.frame_alpha = buf.frame_alpha;
         state.no_accept_focus = buf.no_accept_focus;
         state.faces = buf.faces.clone();
         state.font_catalog_generation = buf.font_catalog_generation;
@@ -2775,6 +2784,7 @@ impl FrameDisplayState {
         buf.outer_border_width = self.outer_border_width;
         buf.outer_border_color = self.outer_border_color;
         buf.background_alpha = self.background_alpha;
+        buf.frame_alpha = self.frame_alpha;
         buf.no_accept_focus = self.no_accept_focus;
 
         // Copy faces

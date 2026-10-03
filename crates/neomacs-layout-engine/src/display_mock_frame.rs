@@ -340,6 +340,7 @@ fn set_mock_frame_identity(builder: &mut DisplayOutputBuilder, identity: FrameOu
         identity.outer_border_width,
         identity.outer_border_color,
         identity.background_alpha,
+        identity.frame_alpha,
         identity.no_accept_focus,
     );
 }
@@ -368,6 +369,7 @@ pub(crate) fn layout_mock_frame_content(
             outer_border_width: 0.0,
             outer_border_color: Color::BLACK,
             background_alpha: 1.0,
+            frame_alpha: [-1.0; 2],
             no_accept_focus: false,
         },
     );
@@ -571,6 +573,7 @@ pub(crate) fn layout_mock_frame_content(
                 outer_border_width: 0.0,
                 outer_border_color: Color::BLACK,
                 background_alpha: 1.0,
+                frame_alpha: [-1.0; 2],
                 no_accept_focus: false,
             },
         );

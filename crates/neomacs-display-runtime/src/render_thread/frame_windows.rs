@@ -318,6 +318,9 @@ pub(crate) struct GuiFrameRenderState {
     /// into the swapchain as the final step. Recreated on resize.
     pub(super) frame_post_src: Option<neomacs_renderer_wgpu::SnapshotLease>,
     pub(super) native_content_src: Option<neomacs_renderer_wgpu::SnapshotLease>,
+    pub(super) child_opacity_src: Option<neomacs_renderer_wgpu::SnapshotLease>,
+    pub(super) child_resize_src: Option<neomacs_renderer_wgpu::SnapshotLease>,
+    pub(super) applied_frame_alpha: f32,
     /// The current native input-method composition, if any.
     ///
     /// `Option` is the active-state invariant: a preedit cannot be "active"
@@ -523,6 +526,9 @@ impl GuiFrameRenderState {
             },
             frame_post_src: None,
             native_content_src: None,
+            child_opacity_src: None,
+            child_resize_src: None,
+            applied_frame_alpha: 1.0,
             input_method: InputMethodState::default(),
             cursor: CursorState::new(at),
             mouse_pos: (0.0, 0.0),
@@ -552,6 +558,17 @@ impl GuiFrameRenderState {
     }
 
     pub(super) fn set_surface_state(&mut self, state: SurfaceState) {
+        if let GuiFramePresentState::Drawable { surface, .. } = self.present_state {
+            let compatible = matches!(state, SurfaceState::Drawable(next)
+                if surface.content_surface() == next.content_surface());
+            if !compatible {
+                // Historical pane UVs describe the old content geometry. Keep
+                // motion/interaction CPU state, but use the established missing-
+                // history fallback until an acquired frame publishes placement.
+                self.compositor.layout.discard_outgoing_picture();
+                self.mark_dirty();
+            }
+        }
         self.present_state = match state {
             SurfaceState::Suspended => GuiFramePresentState::Suspended,
             SurfaceState::Drawable(surface) => GuiFramePresentState::Drawable {
@@ -593,6 +610,38 @@ impl GuiFrameRenderState {
         let point = neomacs_display_protocol::PresentedFramePoint::from_px(x, y).ok()?;
         let point = self.present_mapping()?.surface_from_frame(point).ok()?;
         Some((point.x(), point.y()))
+    }
+
+    /// Project already-applied native controls; scenes never replay setters.
+    pub(super) fn apply_frame_opacity(
+        &mut self,
+        controls: &crate::thread_comm::FrameOpacityState,
+    ) -> bool {
+        let mut changed = false;
+        if let Some(alpha) = controls.applied(self.emacs_frame_id)
+            && alpha != self.applied_frame_alpha
+        {
+            self.applied_frame_alpha = alpha;
+            changed = true;
+        }
+        let mut child_changed = false;
+        for (&id, entry) in &mut self.compositor.child_frames.frames {
+            if let Some(alpha) = controls.applied(id)
+                && alpha != entry.applied_frame_alpha
+            {
+                entry.applied_frame_alpha = alpha;
+                child_changed = true;
+            }
+        }
+        if child_changed {
+            self.compositor.current_scene_generation =
+                crate::render_thread::frame_state::next_scene_generation();
+            self.compositor.current_row_damage = None;
+        }
+        if changed || child_changed {
+            self.compositor.dirty = true;
+        }
+        changed || child_changed
     }
 
     // Retained for focused render-state tests; production callers inspect the
@@ -2618,6 +2667,7 @@ impl GuiFrameWindowManager {
             // Composition ring plus every running transition's leased
             // source picture.
             clear_frame_transition_textures(&mut render.compositor.transitions);
+            render.compositor.layout.discard_outgoing_picture();
             // Full-frame post shader composition target.
             render.frame_post_src = None;
             render.native_content_src = None;

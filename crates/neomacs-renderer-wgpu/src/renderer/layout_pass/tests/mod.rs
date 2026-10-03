@@ -185,10 +185,10 @@ fn the_base_is_the_destination_and_the_motion_rides_on_top_of_it() {
          the fading group are then the same picture and nothing appears to move"
     );
     let destination_draw = source
-        .find("pass.draw(0..destination_vertices, 0..1);")
+        .find("pass.draw(0..6, 0..1);")
         .expect("the destination draw, carrying the base, is still first");
     let previous_draw = source
-        .find("pass.draw(destination_vertices..vertices.len() as u32, 0..1);")
+        .rfind("pass.draw(start..start + 6, 0..1);")
         .expect("the previous-sourced draw still exists");
     assert!(
         destination_draw < previous_draw,
@@ -222,10 +222,10 @@ fn a_departing_pane_is_drawn_over_the_panes_that_replace_it() {
     // covered by it on the first frame and never seen.
     let source = include_str!("../../layout_pass.rs");
     let destination_draw = source
-        .find("pass.draw(0..destination_vertices, 0..1);")
+        .find("pass.draw(0..6, 0..1);")
         .expect("the destination draw is still first");
     let previous_draw = source
-        .find("pass.draw(destination_vertices..vertices.len() as u32, 0..1);")
+        .rfind("pass.draw(start..start + 6, 0..1);")
         .expect("the departing draw still exists");
     assert!(destination_draw < previous_draw);
 }

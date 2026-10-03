@@ -19,6 +19,90 @@ mod frame_position_test;
 mod frame_resize_test;
 
 #[test]
+fn alpha_lower_limit_variable_projects_without_replaying_alpha_policy() {
+    let mut ev = Context::new();
+    let host = RecordingDisplayHost::new();
+    let limits = host.alpha_limits.clone();
+    let operations = host.alpha_operations.clone();
+    ev.set_display_host(Box::new(host));
+    let results = ev.eval_str_each("(setq frame-alpha-lower-limit 20) (let ((frame-alpha-lower-limit 60)) (setq frame-alpha-lower-limit 70)) (defvaralias 'alpha-limit-alias 'frame-alpha-lower-limit) (set 'alpha-limit-alias 40)");
+    assert!(results.iter().all(Result::is_ok), "{results:?}");
+    assert_eq!(*limits.borrow(), vec![0.2, 0.6, 0.7, 0.2, 0.2, 0.4]);
+    assert!(operations.borrow().is_empty());
+}
+
+#[test]
+fn accepted_root_and_child_alpha_operations_survive_numeric_then_nil_without_layout() {
+    let mut ev = Context::new();
+    let buf = ev.buffers.create_buffer("*scratch*");
+    ev.buffers.set_current(buf);
+    let root = ev.frames.create_frame("Root", 800, 600, buf);
+    ev.frames
+        .get_mut(root)
+        .unwrap()
+        .set_window_system(Some(Value::symbol("neo")));
+    let host = RecordingDisplayHost::new();
+    let operations = host.alpha_operations.clone();
+    ev.set_display_host(Box::new(host));
+    let values = ev.eval_str_each("(let* ((root (selected-frame)) (child (x-create-frame (list (cons 'parent-frame root))))) (modify-frame-parameters root '((alpha . 50))) (modify-frame-parameters root '((alpha . nil))) (modify-frame-parameters child '((alpha . 50))) (modify-frame-parameters child '((alpha . nil))) (list (frame-parameter root 'alpha) (frame-parameter child 'alpha)))");
+    assert_eq!(format_eval_result(&values[0]), "OK (nil nil)");
+    let operations = operations.borrow();
+    assert_eq!(operations.len(), 5); // child creation, then both accepted setters per frame
+    assert_eq!(operations[1].0, root);
+    assert_eq!(operations[1].1, [0.5; 2]);
+    assert_eq!(operations[2].1, [-1.0; 2]);
+    assert_ne!(operations[3].0, root);
+    assert_eq!(operations[3].1, [0.5; 2]);
+    assert_eq!(operations[4].1, [-1.0; 2]);
+}
+
+#[test]
+fn x_create_frame_resolves_alpha_defaults_and_explicit_nil() {
+    for (parameter, value, explicit, expected, background) in [
+        ("alpha", "50", "nil", [0.5, 0.5], 1.0),
+        ("alpha", "(80 . 40)", "nil", [0.8, 0.4], 1.0),
+        ("alpha-background", "50", "nil", [-1.0, -1.0], 0.5),
+        ("alpha", "50", "'((alpha . nil))", [-1.0, -1.0], 1.0),
+        ("alpha", "invalid", "'((alpha . nil))", [-1.0, -1.0], 1.0),
+        (
+            "alpha-background",
+            "invalid",
+            "'((alpha-background . nil))",
+            [-1.0, -1.0],
+            1.0,
+        ),
+        (
+            "alpha-background",
+            "50",
+            "'((alpha-background . nil))",
+            [-1.0, -1.0],
+            1.0,
+        ),
+    ] {
+        let mut ev = Context::new();
+        let buf = ev.buffers.create_buffer("*scratch*");
+        ev.buffers.set_current(buf);
+        ev.frames.create_frame("F1", 800, 600, buf);
+        ev.set_display_host(Box::new(RecordingDisplayHost::new()));
+        let src = format!(
+            "(let ((default-frame-alist '(({parameter} . {value})))) (x-create-frame {explicit}))"
+        );
+        let result = ev.eval_str_each(&src);
+        let frame_value = result[0].as_ref().expect("valid inherited/default alpha");
+        let id = crate::window::FrameId(frame_value.as_frame_id().expect("created frame"));
+        let frame = ev.frames.get(id).unwrap();
+        assert_eq!(frame.frame_alpha, expected, "{src}");
+        assert_eq!(frame.background_alpha, background, "{src}");
+    }
+    for parameter in ["alpha", "alpha-background"] {
+        let out = eval_with_gui_frame(&format!(
+            "(let ((default-frame-alist '(({parameter} . invalid)))) (condition-case err (x-create-frame nil) (error (car err))))"
+        ));
+        assert_eq!(out, vec!["OK wrong-type-argument"], "{parameter}");
+    }
+}
+
+#[test]
 fn frame_scale_factor_reads_the_selected_frames_presented_device_scale() {
     let mut eval = Context::new();
     let frame_id = super::ensure_selected_frame_id(&mut eval);
@@ -183,6 +267,8 @@ fn active_minibuffer_window_tracks_live_minibuffer_state() {
 
 #[derive(Clone, Default)]
 struct RecordingDisplayHost {
+    alpha_operations: Rc<RefCell<Vec<(crate::window::FrameId, [f32; 2], f32)>>>,
+    alpha_limits: Rc<RefCell<Vec<f32>>>,
     realized: Rc<RefCell<Vec<GuiFrameHostRequest>>>,
     resized: Rc<RefCell<Vec<GuiFrameHostRequest>>>,
     destroyed_gui_frames: Rc<RefCell<Vec<crate::window::FrameId>>>,
@@ -256,6 +342,20 @@ fn remapped_mono_font_metrics() -> ResolvedFrameFont {
 }
 
 impl DisplayHost for RecordingDisplayHost {
+    fn set_gui_frame_alpha_lower_limit(&mut self, limit: f32) {
+        self.alpha_limits.borrow_mut().push(limit);
+    }
+    fn set_gui_frame_alpha(
+        &mut self,
+        frame: crate::window::FrameId,
+        pair: [f32; 2],
+        limit: f32,
+    ) -> Result<(), String> {
+        self.alpha_operations
+            .borrow_mut()
+            .push((frame, pair, limit));
+        Ok(())
+    }
     fn realize_gui_frame(&mut self, request: GuiFrameHostRequest) -> Result<(), String> {
         self.realized.borrow_mut().push(request);
         Ok(())

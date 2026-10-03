@@ -72,19 +72,10 @@ pub(super) fn through_composition_ring(
         // frame. Read straight from the ring instead, it would be the previous
         // frame *of the motion* — the destination fading into the destination,
         // which renders as a completely static frame.
-        let candidate = render
-            .compositor
-            .transitions
-            .previous_composition()
-            .cloned();
-        let previous = render
-            .compositor
-            .layout
-            .pin_outgoing(candidate)
-            .map(|lease| lease.bind_group().clone());
-        renderer.render_pane_layout(
-            composition.bind_group(),
-            previous.as_ref(),
+        place_pane_composition(
+            renderer,
+            render,
+            composition,
             composition_view,
             (
                 native.content_size().0 as f32 / native.scale_factor as f32,
@@ -114,6 +105,35 @@ pub(super) fn through_composition_ring(
         inputs.child_frame_style,
         inputs.scroll_indicators_enabled,
         inputs.toolbar,
+    );
+}
+
+/// Place and pin a pane picture using the content-local geometry supplied by
+/// the native window. Admission and motion sampling remain the caller's work.
+pub(super) fn place_pane_composition(
+    renderer: &mut WgpuRenderer,
+    render: &mut GuiFrameRenderState,
+    composition: &SnapshotLease,
+    destination: &wgpu::TextureView,
+    logical_size: (f32, f32),
+    pane_blits: &[PaneBlit],
+) {
+    let candidate = render
+        .compositor
+        .transitions
+        .previous_composition()
+        .cloned();
+    let previous = render
+        .compositor
+        .layout
+        .pin_outgoing(candidate)
+        .map(|lease| lease.bind_group().clone());
+    renderer.render_pane_layout(
+        composition.bind_group(),
+        previous.as_ref(),
+        destination,
+        logical_size,
+        pane_blits,
     );
 }
 

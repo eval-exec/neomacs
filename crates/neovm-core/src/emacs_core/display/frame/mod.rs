@@ -98,6 +98,45 @@ pub(crate) fn builtin_frame_ancestor_p(
     ))
 }
 
+pub(crate) fn sync_gui_frame_focus_redirects(eval: &mut super::eval::Context) -> EvalResult {
+    let redirects = eval
+        .frames
+        .frame_list()
+        .into_iter()
+        .filter_map(|id| {
+            let frame = eval.frames.get(id)?;
+            frame
+                .effective_window_system()
+                .is_some()
+                .then_some((id, frame.focus_frame.as_frame_id().map(FrameId)))
+        })
+        .collect();
+    if let Some(host) = eval.display_host.as_mut() {
+        host.set_gui_frame_focus_redirects(redirects)
+            .map_err(|message| signal("error", vec![Value::string(message)]))?;
+    }
+    Ok(Value::NIL)
+}
+
+pub(crate) fn sync_gui_frame_alpha(eval: &mut super::eval::Context, frame: FrameId) -> EvalResult {
+    let alpha = eval
+        .frames
+        .get(frame)
+        .map(|frame| frame.frame_alpha)
+        .unwrap_or([-1.0; 2]);
+    let limit = crate::window::frame_alpha::lower_limit(
+        eval.obarray()
+            .symbol_value("frame-alpha-lower-limit")
+            .copied()
+            .unwrap_or(Value::fixnum(20)),
+    );
+    if let Some(host) = eval.display_host.as_mut() {
+        host.set_gui_frame_alpha(frame, alpha, limit)
+            .map_err(|message| signal("error", vec![Value::string(message)]))?;
+    }
+    Ok(Value::NIL)
+}
+
 /// `(redirect-frame-focus FRAME FOCUS-FRAME)` -> nil.
 pub(crate) fn builtin_redirect_frame_focus(
     eval: &mut super::eval::Context,
@@ -131,7 +170,7 @@ pub(crate) fn builtin_redirect_frame_focus(
         .get_mut(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
     frame.focus_frame = focus_frame;
-    Ok(Value::NIL)
+    sync_gui_frame_focus_redirects(eval)
 }
 
 /// `(iconify-frame &optional FRAME)` -> nil.
@@ -276,6 +315,7 @@ pub(crate) fn builtin_make_frame_invisible(
                     }
                     sync_selected_window_buffer_in_state(&eval.frames, &mut eval.buffers, fallback);
                     eval.sync_keyboard_terminal_owner();
+                    sync_gui_frame_focus_redirects(eval)?;
                 }
             }
         }
@@ -1594,6 +1634,30 @@ pub(crate) fn builtin_modify_frame_parameters(
                         }
                     }
                     _ => match FrameParamKey::from_symbol_id(key) {
+                        FrameParamKey::Known(
+                            param @ (FrameParam::Alpha | FrameParam::AlphaBackground),
+                        ) => {
+                            let gui = eval
+                                .frames
+                                .get(fid)
+                                .is_some_and(|frame| frame.effective_window_system().is_some());
+                            if let Some(frame) = eval.frames.get_mut(fid) {
+                                frame.set_known_parameter(param, pair_cdr);
+                            }
+                            if gui {
+                                if param == FrameParam::Alpha {
+                                    crate::window::frame_alpha::pair(pair_cdr)?;
+                                    sync_gui_frame_alpha(eval, fid)?;
+                                } else {
+                                    crate::window::frame_alpha::component(pair_cdr, 1.0)?;
+                                    // Background opacity is carried by layout, not
+                                    // the native whole-frame alpha command. Paint
+                                    // setters must defeat an otherwise idle skip,
+                                    // including changes to unselected children.
+                                    eval.invalidate_redisplay();
+                                }
+                            }
+                        }
                         FrameParamKey::Known(FrameParam::Name) => {
                             if let Some(name) = frame_name_parameter_value(&pair_cdr) {
                                 let is_tty = eval

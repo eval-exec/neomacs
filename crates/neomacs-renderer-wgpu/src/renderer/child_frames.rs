@@ -7,6 +7,15 @@ use neomacs_display_protocol::frame_glyphs::FrameGlyphBuffer;
 use neomacs_display_protocol::types::{AnimatedCursor, Color};
 use neomacs_display_protocol::{PointerAppearanceSelection, RootSurfaceRect};
 
+/// Unscaled old picture and preflighted scratch for a child resize mix.
+pub struct ChildResizePicture<'a> {
+    pub old: &'a super::SnapshotLease,
+    pub old_width: f32,
+    pub old_height: f32,
+    pub mix: f32,
+    pub composition: &'a super::SnapshotLease,
+}
+
 impl WgpuRenderer {
     /// The scissor rect a child frame's clip resolves to on this surface.
     ///
@@ -66,6 +75,36 @@ impl WgpuRenderer {
         alpha: f32,
         scissor: Option<(u32, u32, u32, u32)>,
     ) {
+        self.draw_child_picture_quad(
+            view,
+            snapshot_bind_group,
+            x,
+            y,
+            width,
+            height,
+            surface_width,
+            surface_height,
+            alpha,
+            scissor,
+            false,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_child_picture_quad(
+        &mut self,
+        view: &wgpu::TextureView,
+        snapshot_bind_group: &wgpu::BindGroup,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        surface_width: u32,
+        surface_height: u32,
+        alpha: f32,
+        scissor: Option<(u32, u32, u32, u32)>,
+        additive: bool,
+    ) {
         let logical_w = surface_width as f32 / self.scale_factor;
         let logical_h = surface_height as f32 / self.scale_factor;
         let draw = self.parameters([logical_w, logical_h], 0.0);
@@ -120,7 +159,11 @@ impl WgpuRenderer {
                 if let Some((sx, sy, sw, sh)) = scissor {
                     pass.set_scissor_rect(sx, sy, sw, sh);
                 }
-                pass.set_pipeline(&self.pipelines.image);
+                pass.set_pipeline(if additive {
+                    &self.pipelines.crossfade_add
+                } else {
+                    &self.pipelines.composition
+                });
                 pass.set_bind_group(0, draw.binding(), &[]);
                 pass.set_bind_group(1, snapshot_bind_group, &[]);
                 pass.set_vertex_buffer(0, upload.buffer_slice());
@@ -139,9 +182,9 @@ impl WgpuRenderer {
     ///
     /// `alpha` scales the frame's whole picture — background, border, shadow
     /// and glyphs alike — toward transparent. The composition path passes the
-    /// interpolated value of a lifecycle animation, or 1.0 for a settled
-    /// frame; the multiply happens in the shared uniform, so no vertex
-    /// builder changes shape.
+    /// interpolated value of a lifecycle animation combined with legacy
+    /// frame opacity. Non-opaque pictures are isolated before composition,
+    /// so overlapping background fills never multiply opacity twice.
     #[allow(clippy::too_many_arguments)]
     pub fn render_child_frame(
         &mut self,
@@ -164,12 +207,281 @@ impl WgpuRenderer {
         alpha: f32,
         scale: f32,
         pivot: [f32; 2],
+    ) -> Result<(), super::BudgetExceeded> {
+        let size = super::SnapshotSize::new(surface_width, surface_height)
+            .expect("child target dimensions are nonzero");
+        let picture = if child.background_alpha != 1.0 || alpha != 1.0 {
+            Some(self.acquire_snapshot(size)?)
+        } else {
+            None
+        };
+        self.render_child_frame_prepared(
+            view,
+            child,
+            offset_x,
+            offset_y,
+            clip_in_root,
+            glyph_atlas,
+            surface_width,
+            surface_height,
+            cursor_visible,
+            animated_cursor,
+            corner_radius,
+            shadow_enabled,
+            shadow_layers,
+            shadow_offset,
+            shadow_opacity,
+            pointer_selection,
+            alpha,
+            scale,
+            pivot,
+            picture.as_ref(),
+            None,
+        );
+        Ok(())
+    }
+
+    /// Draw using a mandatory composition lease reserved before acquisition
+    /// and presentation sampling. All children in one pass may reuse it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_child_frame_prepared(
+        &mut self,
+        view: &wgpu::TextureView,
+        child: &FrameGlyphBuffer,
+        offset_x: f32,
+        offset_y: f32,
+        clip_in_root: RootSurfaceRect,
+        glyph_atlas: &mut WgpuGlyphAtlas,
+        surface_width: u32,
+        surface_height: u32,
+        cursor_visible: bool,
+        animated_cursor: Option<AnimatedCursor>,
+        corner_radius: f32,
+        shadow_enabled: bool,
+        shadow_layers: u32,
+        shadow_offset: f32,
+        shadow_opacity: f32,
+        pointer_selection: Option<PointerAppearanceSelection>,
+        alpha: f32,
+        scale: f32,
+        pivot: [f32; 2],
+        picture: Option<&super::SnapshotLease>,
+        resize: Option<ChildResizePicture<'_>>,
     ) {
         let alpha = if alpha.is_finite() {
             alpha.clamp(0.0, 1.0)
         } else {
             1.0
         };
+        if child.background_alpha != 1.0 || alpha != 1.0 || resize.is_some() {
+            let picture = picture.expect("non-opaque child composition was preflighted");
+            self.clear_child_picture(picture.view());
+            // Backgrounds replace one another inside the child's own picture;
+            // text is source-over coverage. Apply lifecycle opacity only once,
+            // to the completed premultiplied picture, not overlapping fills.
+            self.render_child_frame_picture(
+                picture.view(),
+                child,
+                offset_x,
+                offset_y,
+                clip_in_root,
+                glyph_atlas,
+                surface_width,
+                surface_height,
+                cursor_visible,
+                animated_cursor,
+                corner_radius,
+                shadow_enabled,
+                shadow_layers,
+                shadow_offset,
+                shadow_opacity,
+                pointer_selection,
+                1.0,
+                scale,
+                pivot,
+            );
+            let composed = if let Some(resize) = resize {
+                let mixed = resize.composition;
+                self.clear_child_picture(mixed.view());
+                let scissor = self.child_frame_scissor(clip_in_root, surface_width, surface_height);
+                // Both pictures are already premultiplied. Sum their weighted
+                // RGBA, then source-over the complete result once below.
+                self.draw_child_picture_quad(
+                    mixed.view(),
+                    resize.old.bind_group(),
+                    offset_x,
+                    offset_y,
+                    resize.old_width * scale,
+                    resize.old_height * scale,
+                    surface_width,
+                    surface_height,
+                    1.0 - resize.mix,
+                    scissor,
+                    true,
+                );
+                self.draw_child_picture_quad(
+                    mixed.view(),
+                    picture.bind_group(),
+                    0.0,
+                    0.0,
+                    surface_width as f32 / self.scale_factor,
+                    surface_height as f32 / self.scale_factor,
+                    surface_width,
+                    surface_height,
+                    resize.mix,
+                    None,
+                    true,
+                );
+                mixed
+            } else {
+                picture
+            };
+            self.draw_child_crossfade_quad(
+                view,
+                composed.bind_group(),
+                0.0,
+                0.0,
+                surface_width as f32 / self.scale_factor,
+                surface_height as f32 / self.scale_factor,
+                surface_width,
+                surface_height,
+                alpha,
+                None,
+            );
+            return;
+        }
+        self.render_child_frame_picture(
+            view,
+            child,
+            offset_x,
+            offset_y,
+            clip_in_root,
+            glyph_atlas,
+            surface_width,
+            surface_height,
+            cursor_visible,
+            animated_cursor,
+            corner_radius,
+            shadow_enabled,
+            shadow_layers,
+            shadow_offset,
+            shadow_opacity,
+            pointer_selection,
+            alpha,
+            scale,
+            pivot,
+        );
+    }
+
+    /// Capture the complete unscaled child picture in an already budgeted lease.
+    /// The caller includes shadow extent in its dimensions; opacity is not baked.
+    #[allow(clippy::too_many_arguments)]
+    pub fn capture_child_frame_picture(
+        &mut self,
+        picture: &super::SnapshotLease,
+        child: &FrameGlyphBuffer,
+        atlas: &mut WgpuGlyphAtlas,
+        corner_radius: f32,
+        shadow_enabled: bool,
+        shadow_layers: u32,
+        shadow_offset: f32,
+        shadow_opacity: f32,
+    ) {
+        self.clear_child_picture(picture.view());
+        atlas.set_current_frame_fonts(child.font_bindings());
+        let w = picture.size().width();
+        let h = picture.size().height();
+        // Only the target-local clip attachment changes. Do not resize or
+        // reconfigure an installed native surface to the capture dimensions.
+        let previous_size = (
+            self.stencil.texture.view().texture().width(),
+            self.stencil.texture.view().texture().height(),
+        );
+        if previous_size != (w, h) {
+            self.install_stencil_targets(w, h);
+        }
+        self.render_child_frame_picture(
+            picture.view(),
+            child,
+            0.0,
+            0.0,
+            RootSurfaceRect::new(
+                0.0,
+                0.0,
+                w as f32 / self.scale_factor,
+                h as f32 / self.scale_factor,
+            )
+            .unwrap(),
+            atlas,
+            w,
+            h,
+            false,
+            None,
+            corner_radius,
+            shadow_enabled,
+            shadow_layers,
+            shadow_offset,
+            shadow_opacity,
+            None,
+            1.0,
+            1.0,
+            [0.0; 2],
+        );
+        if previous_size != (w, h) {
+            self.install_stencil_targets(previous_size.0, previous_size.1);
+        }
+    }
+
+    fn clear_child_picture(&self, view: &wgpu::TextureView) {
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Child Picture Clear"),
+            });
+        {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Child Picture Clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
+        self.queue.submit([encoder.finish()]);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_child_frame_picture(
+        &mut self,
+        view: &wgpu::TextureView,
+        child: &FrameGlyphBuffer,
+        offset_x: f32,
+        offset_y: f32,
+        clip_in_root: RootSurfaceRect,
+        glyph_atlas: &mut WgpuGlyphAtlas,
+        surface_width: u32,
+        surface_height: u32,
+        cursor_visible: bool,
+        animated_cursor: Option<AnimatedCursor>,
+        corner_radius: f32,
+        shadow_enabled: bool,
+        shadow_layers: u32,
+        shadow_offset: f32,
+        shadow_opacity: f32,
+        pointer_selection: Option<PointerAppearanceSelection>,
+        alpha: f32,
+        scale: f32,
+        pivot: [f32; 2],
+    ) {
         // An identity scale normalizes to (1.0, origin) so the draw-parameters
         // cache key -- and therefore the immutable uniform snapshot -- is
         // byte-identical to the pre-scale pipeline for every settled frame.
@@ -310,7 +622,7 @@ impl WgpuRenderer {
                                 .rounded
                                 .upload(&self.device, &self.queue, &bg_verts)
                         {
-                            pass.set_pipeline(&self.pipelines.rounded_rect);
+                            pass.set_pipeline(&self.pipelines.rounded_fill);
                             pass.set_bind_group(0, draw.binding(), &[]);
                             pass.set_vertex_buffer(0, upload.buffer_slice());
                             pass.draw(0..bg_verts.len() as u32, 0..1);

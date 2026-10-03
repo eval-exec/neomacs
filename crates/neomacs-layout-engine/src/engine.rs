@@ -2085,7 +2085,23 @@ impl LayoutEngine {
                         .and_then(neovm_core::face::Color::parse)
                         .map(|color| Color::from_pixel(color.to_pixel()))
                         .unwrap_or(Color::BLACK),
-                    background_alpha: 1.0,
+                    background_alpha: frame.background_alpha,
+                    frame_alpha: {
+                        let mut alpha = frame.frame_alpha;
+                        let limit = neovm_core::window::frame_alpha::lower_limit(
+                            evaluator
+                                .obarray()
+                                .symbol_value("frame-alpha-lower-limit")
+                                .copied()
+                                .unwrap_or(Value::fixnum(20)),
+                        );
+                        for value in &mut alpha {
+                            if *value >= 0.0 && (0.0..=1.0).contains(&limit) {
+                                *value = value.max(limit);
+                            }
+                        }
+                        alpha
+                    },
                     no_accept_focus: frame.no_accept_focus,
                 })
             } else {

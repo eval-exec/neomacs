@@ -192,6 +192,55 @@ fn raster_frame(
     raster
 }
 
+fn retention_allowed(
+    renderer: &WgpuRenderer,
+    render: &GuiFrameRenderState,
+    frame: &FrameGlyphBuffer,
+    has_gradient: bool,
+) -> bool {
+    !has_gradient
+        && static_body_effects(&renderer.effects)
+        && !render.compositor.renderer_effects.needs_redraw()
+        && !super::retained_static::window_has_active_overlays(render)
+        && render.pointer_selection_for(frame).is_none()
+        && std::env::var_os("NEOMACS_DISABLE_RETAINED_SCROLL").is_none()
+}
+
+fn coverage_live(cache: &RetainedScroll, frame: &FrameGlyphBuffer) -> bool {
+    frame.scroll_surfaces.iter().any(|next| {
+        next.coverage().epoch == cache.paint.surface.coverage().epoch
+            && next.coverage().content.window_id == cache.paint.surface.coverage().content.window_id
+    })
+}
+
+/// Borrow-only retirement: never sample, acknowledge or publish input scroll.
+pub(super) fn retire_unusable(
+    renderer: &WgpuRenderer,
+    render: &mut GuiFrameRenderState,
+    has_gradient: bool,
+    scale: DeviceScale,
+) {
+    let obsolete = render
+        .compositor
+        .retained_scroll
+        .as_ref()
+        .is_some_and(|cache| {
+            render
+                .compositor
+                .current_frame
+                .as_ref()
+                .is_none_or(|frame| {
+                    !coverage_live(cache, frame)
+                        || !retention_allowed(renderer, render, frame, has_gradient)
+                        || cache.paint.scale != scale
+                        || body_background(frame, cache.paint.surface.coverage().viewport).is_none()
+                })
+        });
+    if obsolete {
+        render.compositor.retained_scroll = None;
+    }
+}
+
 /// Prepare before the root draw, so every rejection takes the unchanged full
 /// glyph path. The pool applies its global memory ceiling; an oversized page
 /// or refused lease is an ordinary fallback, never an untracked allocation.
@@ -209,13 +258,7 @@ pub(super) fn prepare(
             .compositor
             .retained_scroll
             .as_ref()
-            .is_some_and(|cache| {
-                !frame.scroll_surfaces.iter().any(|next| {
-                    next.coverage().epoch == cache.paint.surface.coverage().epoch
-                        && next.coverage().content.window_id
-                            == cache.paint.surface.coverage().content.window_id
-                })
-            })
+            .is_some_and(|cache| !coverage_live(cache, frame))
         {
             render.compositor.retained_scroll = None;
         }
@@ -224,13 +267,7 @@ pub(super) fn prepare(
     // Effects which alter body pixels need their own raster dependencies.
     // Enabled body effects and live overlays conservatively retain the
     // established full-render path. Disabled parameters are not dependencies.
-    if has_gradient
-        || !static_body_effects(&renderer.effects)
-        || render.compositor.renderer_effects.needs_redraw()
-        || super::retained_static::window_has_active_overlays(render)
-        || render.pointer_selection_for(frame).is_some()
-        || std::env::var_os("NEOMACS_DISABLE_RETAINED_SCROLL").is_some()
-    {
+    if !retention_allowed(renderer, render, frame, has_gradient) {
         render.compositor.retained_scroll = None;
         return None;
     }
@@ -368,7 +405,7 @@ pub(super) fn prepare(
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 #[cfg(test)]
 mod geometry_tests {

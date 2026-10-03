@@ -10,8 +10,12 @@
 //! Skips (passes) cleanly where no GPU adapter is available.
 
 use neomacs_display_protocol::face::BoxVerticalEdges;
+#[path = "offscreen_frame/fade_edges_test.rs"]
+mod fade_edges_test;
 #[path = "offscreen_frame/menu_test.rs"]
 mod menu_test;
+#[path = "offscreen_frame/opacity_test.rs"]
+mod opacity_test;
 #[path = "offscreen_frame/scroll_texture_test.rs"]
 mod scroll_texture_test;
 use neomacs_display_protocol::frame_chrome::PresentationId;

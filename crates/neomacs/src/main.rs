@@ -1186,6 +1186,7 @@ struct PrimaryWindowDisplayHost {
     /// Renderer-published effective availability. Requested shader state is
     /// retained separately so hardware recovery can restore it.
     render_capabilities: Arc<SharedRenderCapabilities>,
+    frame_opacity: Arc<Mutex<neomacs_display_runtime::thread_comm::FrameOpacityState>>,
     /// The exact shader requested by Lisp. This is one transactionally
     /// updated value so installation state, source, and live uniforms cannot
     /// drift. It survives temporary quality-policy suppression and device
@@ -1868,6 +1869,59 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         self.send_render_command(
             RenderCommand::Window(WindowCommand::SetWindowVisibility { frame, visibility }),
             "failed to update GUI frame visibility",
+        )
+    }
+
+    fn set_gui_frame_alpha_lower_limit(&mut self, limit: f32) {
+        self.frame_opacity
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .set_lower_limit(limit);
+    }
+
+    fn set_gui_frame_alpha(
+        &mut self,
+        frame: FrameId,
+        alpha: [f32; 2],
+        limit: f32,
+    ) -> Result<(), String> {
+        self.frame_opacity
+            .lock()
+            .map_err(|err| err.to_string())?
+            .accept(frame.0, alpha, limit);
+        self.send_render_command(
+            RenderCommand::Window(WindowCommand::RefreshFrameOpacity),
+            "failed to refresh frame opacity",
+        )
+    }
+
+    fn set_gui_frame_focus_redirects(
+        &mut self,
+        redirects: Vec<(FrameId, Option<FrameId>)>,
+    ) -> Result<(), String> {
+        self.frame_opacity
+            .lock()
+            .map_err(|err| err.to_string())?
+            .set_redirects(
+                redirects
+                    .into_iter()
+                    .map(|(frame, target)| (frame.0, target.map(|target| target.0)))
+                    .collect(),
+            );
+        self.send_render_command(
+            RenderCommand::Window(WindowCommand::RefreshFrameOpacity),
+            "failed to refresh frame highlight",
+        )
+    }
+
+    fn retire_gui_frame_alpha(&mut self, frame: FrameId) -> Result<(), String> {
+        self.frame_opacity
+            .lock()
+            .map_err(|err| err.to_string())?
+            .retire(frame.0);
+        self.send_render_command(
+            RenderCommand::Window(WindowCommand::RefreshFrameOpacity),
+            "failed to retire frame opacity",
         )
     }
 
@@ -2947,9 +3001,21 @@ fn adopt_existing_primary_gui_frame(eval: &mut Context) -> Result<(), String> {
         .get(frame_id)
         .map(|frame| frame.gui_geometry_hints())
         .ok_or_else(|| "selected GUI frame disappeared before adoption".to_string())?;
+    let alpha = eval
+        .frame_manager()
+        .get(frame_id)
+        .map(|frame| frame.frame_alpha)
+        .unwrap_or([-1.0; 2]);
+    let limit = neovm_core::window::frame_alpha::lower_limit(
+        eval.obarray()
+            .symbol_value("frame-alpha-lower-limit")
+            .copied()
+            .unwrap_or(Value::fixnum(20)),
+    );
     let Some(host) = eval.display_host.as_mut() else {
         return Ok(());
     };
+    host.set_gui_frame_alpha(frame_id, alpha, limit)?;
     host.realize_gui_frame(GuiFrameHostRequest {
         frame_id,
         width,
@@ -3751,6 +3817,7 @@ fn run_gui_evaluator_worker(
         resolved_webkits: Mutex::new(HashMap::new()),
         resolved_surfaces: Mutex::new(ResolvedSurfaceMemo::default()),
         render_capabilities: Arc::clone(&emacs_comms.capabilities),
+        frame_opacity: Arc::clone(&emacs_comms.frame_opacity),
         requested_frame_shader: Mutex::new(None),
         #[cfg(feature = "neo-term")]
         terminal_state: TerminalHostState::new(shared_terminals),

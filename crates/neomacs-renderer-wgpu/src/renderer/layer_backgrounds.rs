@@ -32,7 +32,7 @@ impl WgpuRenderer {
         &self,
         params: &FrameParams<'_>,
         spans: &BoxSpanSet,
-    ) -> Vec<RectVertex> {
+    ) -> (Vec<RectVertex>, Vec<RectVertex>) {
         let frame_glyphs = params.frame_glyphs;
         let faces = params.faces;
         let box_spans = &spans.spans;
@@ -42,6 +42,7 @@ impl WgpuRenderer {
         let logical_h = params.logical_h;
         // --- Collect non-overlay backgrounds ---
         let mut non_overlay_rect_vertices: Vec<RectVertex> = Vec::new();
+        let mut foreground_rect_vertices: Vec<RectVertex> = Vec::new();
 
         // Background gradient (rendered behind everything)
         if let Some((top, bottom)) = background_gradient {
@@ -155,7 +156,7 @@ impl WgpuRenderer {
                     if let Some(pat) = face.and_then(|f| f.stipple.as_deref()) {
                         let rf = frame_glyphs.resolved_face(face_id);
                         self.add_stipple_paint(
-                            &mut non_overlay_rect_vertices,
+                            &mut foreground_rect_vertices,
                             &rf.fg,
                             pat,
                             paint,
@@ -243,7 +244,7 @@ impl WgpuRenderer {
                         // `highlight-indent-guides` draw their vertical bars.
                         if let Some(pat) = face.and_then(|f| f.stipple.as_deref()) {
                             self.add_stipple_paint(
-                                &mut non_overlay_rect_vertices,
+                                &mut foreground_rect_vertices,
                                 &rf.fg,
                                 pat,
                                 paint,
@@ -329,7 +330,7 @@ impl WgpuRenderer {
                         );
                         if let Some(pat) = face.and_then(|f| f.stipple.as_deref()) {
                             self.add_stipple_paint(
-                                &mut non_overlay_rect_vertices,
+                                &mut foreground_rect_vertices,
                                 &rf.fg,
                                 pat,
                                 paint,
@@ -360,7 +361,7 @@ impl WgpuRenderer {
                 };
                 let face = frame_glyphs.resolved_face(*face_id);
                 self.render_fringe_bitmap(
-                    &mut non_overlay_rect_vertices,
+                    &mut foreground_rect_vertices,
                     *x,
                     *y,
                     *width,
@@ -483,7 +484,7 @@ impl WgpuRenderer {
                         guide_color
                     };
                     self.add_rect(
-                        &mut non_overlay_rect_vertices,
+                        &mut foreground_rect_vertices,
                         col_x,
                         row.y,
                         guide_width,
@@ -522,7 +523,7 @@ impl WgpuRenderer {
                         let dot_x = *x + (*width - dot_size) / 2.0;
                         let dot_y = *y + (*ascent - dot_size / 2.0);
                         self.add_rect(
-                            &mut non_overlay_rect_vertices,
+                            &mut foreground_rect_vertices,
                             dot_x,
                             dot_y,
                             dot_size,
@@ -537,7 +538,7 @@ impl WgpuRenderer {
                         let arrow_x = *x + 2.0;
                         // Shaft
                         self.add_rect(
-                            &mut non_overlay_rect_vertices,
+                            &mut foreground_rect_vertices,
                             arrow_x,
                             arrow_y,
                             arrow_w,
@@ -547,7 +548,7 @@ impl WgpuRenderer {
                         // Arrowhead (small triangle approximated as 2 rects)
                         let tip_x = arrow_x + arrow_w;
                         self.add_rect(
-                            &mut non_overlay_rect_vertices,
+                            &mut foreground_rect_vertices,
                             tip_x - 3.0,
                             arrow_y - 1.5,
                             3.0,
@@ -559,7 +560,7 @@ impl WgpuRenderer {
             }
         }
 
-        non_overlay_rect_vertices
+        (non_overlay_rect_vertices, foreground_rect_vertices)
     }
 
     /// Collect the overlay (mode-line/echo area) background layer.
@@ -703,9 +704,75 @@ impl WgpuRenderer {
         &mut self,
         render_pass: &mut wgpu::RenderPass<'_>,
         non_overlay_rect_vertices: &[RectVertex],
+        opacity: f32,
     ) {
-        // === Step 1: Draw non-overlay backgrounds ===
-        self.draw_rect_vertex_layer(render_pass, non_overlay_rect_vertices);
+        self.draw_background_rects(render_pass, non_overlay_rect_vertices, opacity);
+    }
+
+    pub(super) fn draw_background_rects(
+        &mut self,
+        pass: &mut wgpu::RenderPass<'_>,
+        vertices: &[RectVertex],
+        opacity: f32,
+    ) {
+        if opacity == 1.0 {
+            self.draw_rect_vertex_layer(pass, vertices);
+            return;
+        }
+        let mut vertices = vertices.to_vec();
+        for vertex in &mut vertices {
+            for channel in &mut vertex.color[..3] {
+                *channel *= opacity;
+            }
+        }
+        if let Some(upload) = self
+            .arenas
+            .rect
+            .upload(&self.device, &self.queue, &vertices)
+        {
+            pass.set_blend_constant(wgpu::Color {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: opacity as f64,
+            });
+            pass.set_pipeline(&self.pipelines.background_rect);
+            pass.set_vertex_buffer(0, upload.buffer_slice());
+            pass.draw(0..vertices.len() as u32, 0..1);
+        }
+    }
+
+    pub(super) fn draw_background_rounded_rects(
+        &mut self,
+        pass: &mut wgpu::RenderPass<'_>,
+        vertices: &[RoundedRectVertex],
+        opacity: f32,
+    ) {
+        let mut vertices = vertices.to_vec();
+        for vertex in &mut vertices {
+            for channel in &mut vertex.color[..3] {
+                *channel *= opacity;
+            }
+        }
+        if let Some(upload) = self
+            .arenas
+            .rounded
+            .upload(&self.device, &self.queue, &vertices)
+        {
+            pass.set_blend_constant(wgpu::Color {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: opacity as f64,
+            });
+            pass.set_pipeline(if opacity == 1.0 {
+                &self.pipelines.rounded_rect
+            } else {
+                &self.pipelines.background_rounded_rect
+            });
+            pass.set_vertex_buffer(0, upload.buffer_slice());
+            pass.draw(0..vertices.len() as u32, 0..1);
+        }
     }
 
     /// Draw the overlay background rects and rounded box fills. Runs at the
@@ -719,15 +786,8 @@ impl WgpuRenderer {
         let render_pass = &mut ctx.pass;
         let faces = ctx.params.faces;
         let box_spans = &spans.spans;
-        if let Some(upload) =
-            self.arenas
-                .rect
-                .upload(&self.device, &self.queue, overlay_rect_vertices)
-        {
-            render_pass.set_pipeline(&self.pipelines.rect);
-            render_pass.set_vertex_buffer(0, upload.buffer_slice());
-            render_pass.draw(0..overlay_rect_vertices.len() as u32, 0..1);
-        }
+        let opacity = ctx.params.frame_glyphs.background_alpha;
+        self.draw_background_rects(render_pass, overlay_rect_vertices, opacity);
 
         // Image textures leave their GNU margin/row-sized box slot uncovered.
         let mut required_box_fill: Vec<RectVertex> = Vec::new();
@@ -741,7 +801,7 @@ impl WgpuRenderer {
                 );
             }
         }
-        self.draw_rect_vertex_layer(render_pass, &required_box_fill);
+        self.draw_background_rects(render_pass, &required_box_fill, opacity);
 
         // Draw filled rounded rect backgrounds for overlay ROUNDED boxed spans.
         {
@@ -760,15 +820,7 @@ impl WgpuRenderer {
                     );
                 }
             }
-            if let Some(upload) =
-                self.arenas
-                    .rounded
-                    .upload(&self.device, &self.queue, &overlay_box_fill)
-            {
-                render_pass.set_pipeline(&self.pipelines.rounded_rect);
-                render_pass.set_vertex_buffer(0, upload.buffer_slice());
-                render_pass.draw(0..overlay_box_fill.len() as u32, 0..1);
-            }
+            self.draw_background_rounded_rects(render_pass, &overlay_box_fill, opacity);
         }
     }
 }
