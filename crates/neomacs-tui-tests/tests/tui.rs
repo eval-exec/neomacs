@@ -84,6 +84,9 @@ mod modes;
 #[path = "org.rs"]
 mod org;
 #[cfg(test)]
+#[path = "posn_current_matrix_clear_oracle.rs"]
+mod posn_current_matrix_clear_oracle;
+#[cfg(test)]
 #[path = "posn_object_extent_oracle.rs"]
 mod posn_object_extent_oracle;
 #[path = "pre_redisplay_function_oracle.rs"]

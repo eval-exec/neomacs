@@ -25,6 +25,13 @@ fn accepted_terminal_frame_pool_answers_a_split_child_before_redisplay() {
         frame.char_height = 1.0;
         frame.font_pixel_size = 1.0;
         frame.set_window_system(None);
+        // Frame::new used GUI metrics; realize the live GNU probe's one-cell
+        // TTY minibuffer before computing the desired matrix allocation.
+        if let Some(mini) = frame.minibuffer_leaf.as_mut() {
+            let mut bounds = *mini.bounds();
+            bounds.height = 1.0;
+            mini.set_bounds(bounds);
+        }
         frame.set_window_layout_text_size(80, 24);
     }
     let mut engine = LayoutEngine::new_without_font_metrics();
@@ -138,6 +145,13 @@ fn accepted_terminal_frame_pool_fallback_reads_eob_iterator_cell_before_reported
         frame.char_height = 1.0;
         frame.font_pixel_size = 1.0;
         frame.set_window_system(None);
+        // Frame::new used GUI metrics; realize the live GNU probe's one-cell
+        // TTY minibuffer before computing the desired matrix allocation.
+        if let Some(mini) = frame.minibuffer_leaf.as_mut() {
+            let mut bounds = *mini.bounds();
+            bounds.height = 1.0;
+            mini.set_bounds(bounds);
+        }
         frame.set_window_layout_text_size(80, 24);
     }
     let mut engine = LayoutEngine::new_without_font_metrics();

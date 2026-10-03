@@ -3573,6 +3573,9 @@ pub(crate) fn builtin_set_window_margins(
         let next = WindowMargins::new(left, right);
         if *margins != next {
             *margins = next;
+            if let Some(frame) = frames.get_mut(fid) {
+                frame.tty_posn_apply_window_adjustment(wid);
+            }
             // GNU apply_window_adjustment (window.c:8415-8421).
             eval.gnu_mark_window_redisplay(wid);
             return Ok(Value::T);
@@ -5432,6 +5435,12 @@ pub(crate) fn builtin_set_window_buffer(
                 scroll_bars: next_scroll_bars,
             },
         );
+        // GNU clears current rows even for the same buffer when margins are
+        // reset. Adjustment can then repopulate only a changed real allocation;
+        // the entire operation precedes eager window-scroll-functions.
+        if !keep_margins && let Some(frame) = frames.get_mut(fid) {
+            frame.tty_posn_apply_window_adjustment(wid);
+        }
         // Mirror GNU: non-T dedication (side, soft, etc.) is cleared
         // when the buffer changes (switch-to-buffer / set-window-buffer).
         if old_state.is_some_and(|(old_buf, _, _, ded)| {
@@ -7896,6 +7905,7 @@ pub(crate) fn builtin_window_resize_apply(
 
     // Recalculate minibuffer position after tree resize.
     frame.recalculate_minibuffer_bounds();
+    frame.tty_posn_adjust_current_matrices();
     // GNU window_resize_apply marks FRAME_WINDOW_CHANGE, and its public
     // pixel primitive additionally calls fset_redisplay (window.c:4994).
     eval.gnu_mark_frame_redisplay(fid);

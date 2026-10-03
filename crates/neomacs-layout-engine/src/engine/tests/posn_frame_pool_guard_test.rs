@@ -32,6 +32,13 @@ fn accepted_empty_frame() -> (Context, FrameId, BufferId, WindowId, LayoutEngine
         frame.char_height = 1.0;
         frame.font_pixel_size = 1.0;
         frame.set_window_system(None);
+        // Frame::new used GUI metrics; realize the live GNU probe's one-cell
+        // TTY minibuffer before computing the desired matrix allocation.
+        if let Some(mini) = frame.minibuffer_leaf.as_mut() {
+            let mut bounds = *mini.bounds();
+            bounds.height = 1.0;
+            mini.set_bounds(bounds);
+        }
         frame.set_window_layout_text_size(120, 40);
     }
     eval.set_variable("posn-control-frame", Value::make_frame(frame_id.0));

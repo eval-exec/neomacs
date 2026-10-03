@@ -49,6 +49,8 @@ mod lazy_text_hit_test;
 mod mini_window_still_test;
 mod mode_line_gate_engine_test;
 #[cfg(test)]
+mod posn_current_matrix_clear_engine_test;
+#[cfg(test)]
 mod posn_frame_pool_engine_test;
 #[cfg(test)]
 mod posn_frame_pool_guard_test;

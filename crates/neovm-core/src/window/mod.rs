@@ -38,6 +38,7 @@ pub mod part;
 mod pixel_input;
 mod point_rows;
 mod posn_object_extent;
+mod tty_posn_current;
 pub use point_rows::{
     DisplayPointRow, DisplayPointRowIter, DisplayPointRows, DisplayPointRowsIter,
     DisplayPointRowsMode, PointCell, display_point_rows_mode,
@@ -4126,8 +4127,9 @@ pub struct Frame {
     /// surviving redisplay cache. One frame mutator replaces a fully initialized
     /// Arc only at validated presentation prepare; concurrent readers retain
     /// immutable numeric views through the existing publication transport.
-    /// Query-only layouts and tree edits never publish new pool observations.
-    tty_posn_pool: Option<Arc<neomacs_display_protocol::posn_frame_pool::PosnFramePool>>,
+    /// Query-only layouts never publish new pool observations. Typed allocation
+    /// adjustments update only TEXT current-row admission, preserving physical cells.
+    tty_posn_pool: Option<Arc<tty_posn_current::TtyPosnCurrentOwner>>,
     /// GNU preserves pool-backed topology only when the accepted tree has no margins.
     tty_posn_pool_can_repartition: bool,
     /// Last recorded redisplay state for GNU window change hooks.
@@ -5277,12 +5279,8 @@ impl Frame {
                 presentation,
             ));
         }
-        if posn_object_extent_mode().enabled()
-            && self.effective_window_system().is_none()
-            && let Some(pool) = pool
-        {
-            self.tty_posn_pool_can_repartition = self.tty_posn_live_margins_clear();
-            self.tty_posn_pool = Some(pool);
+        if posn_object_extent_mode().enabled() && self.effective_window_system().is_none() {
+            self.note_tty_current_matrix_publication(&prepared.publications, pool);
         }
         self.commit_completed_window_output(presentation, &prepared.publications);
         let geometry_only_windows: HashSet<_> = prepared
@@ -5519,7 +5517,7 @@ impl Frame {
     pub fn tty_posn_pool(
         &self,
     ) -> Option<&Arc<neomacs_display_protocol::posn_frame_pool::PosnFramePool>> {
-        self.tty_posn_pool.as_ref()
+        self.tty_posn_pool.as_ref()?.pool.as_ref()
     }
 
     /// GNU current-matrix lookup before after-EOL iterator column advancement.
@@ -5534,16 +5532,22 @@ impl Frame {
     ) -> neomacs_display_protocol::posn_object_extent::PosnObjectExtent {
         use neomacs_display_protocol::glyph_matrix::GlyphArea;
         use neomacs_display_protocol::posn_object_extent::PosnObjectExtent;
-        if let Some(snapshot) = self
-            .redisplay_snapshot(id)
-            .filter(|snapshot| snapshot.posn_matrix.is_some())
+        use tty_posn_current::TtyCurrentMatrixAuthority;
+        let authority = self.tty_posn_current_matrix_authority(id);
+        if authority == Some(TtyCurrentMatrixAuthority::Undrawn) {
+            return PosnObjectExtent::Undrawn;
+        }
+        if authority != Some(TtyCurrentMatrixAuthority::FramePoolPartition)
+            && let Some(snapshot) = self
+                .redisplay_snapshot(id)
+                .filter(|snapshot| snapshot.posn_matrix.is_some())
         {
             return retained_posn_extent(Some(snapshot), row, column, GlyphArea::Text);
         }
         if !self.tty_posn_pool_can_repartition || !self.tty_posn_live_margins_clear() {
             return PosnObjectExtent::Undrawn;
         }
-        let Some(pool) = self.tty_posn_pool.as_ref() else {
+        let Some(pool) = self.tty_posn_pool() else {
             return PosnObjectExtent::Undrawn;
         };
         if pool.columns as i64 != (self.width as f32 / self.char_width.max(1.0)).round() as i64
@@ -7145,6 +7149,7 @@ impl FrameManager {
         // about `sync_window_area_bounds` was describing, and a
         // character-edge-only sync does it just the same.
         frame.recalculate_minibuffer_bounds();
+        frame.tty_posn_adjust_current_matrices();
         self.mark_window_topology_changed();
         Some(new_id)
     }
@@ -7191,6 +7196,7 @@ impl FrameManager {
         let parent_id = frame.tree().parent_of(new_window_id)?;
         let horflag = matches!(direction, SplitDirection::Horizontal);
         window_resize_apply(frame.tree_mut(), parent_id, horflag, 1.0, 1.0);
+        frame.tty_posn_adjust_current_matrices();
         Some(())
     }
 
@@ -7240,6 +7246,7 @@ impl FrameManager {
             // `window-resize-apply-total` runs -- which is what `window.el`
             // does on the paths GNU allows into this code at all.
             frame.recalculate_minibuffer_bounds();
+            frame.tty_posn_adjust_current_matrices();
         }
 
         // Deleting an INTERNAL window takes its whole subtree with it, so the
@@ -7378,6 +7385,7 @@ impl FrameManager {
             frame.selected_window = *first;
         }
         frame.recalculate_minibuffer_bounds();
+        frame.tty_posn_adjust_current_matrices();
 
         for (id, parameters) in removed_windows {
             self.deleted_windows.insert(
