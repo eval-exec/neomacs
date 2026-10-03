@@ -222,25 +222,53 @@ fn gen0_inline_string_aset_invalidates_and_observes_collection_reads() {
 
         let (_, compiled_reads) = capture(|| owner.as_str_owned());
         let before = super::super::dispatch::ASET_SHIM_CALLS.with(|count| count.get());
+        let revision = LispCollectionRevision::current();
         assert_eq!(native(&mut context, &leaf, &args), args[2]);
         assert_eq!(owner.as_str_owned().as_deref(), Some("b"));
         assert_eq!(
             super::super::dispatch::ASET_SHIM_CALLS.with(|count| count.get()),
-            before
+            before + 1,
+            "the observed string uses the existing aset setter edge"
+        );
+        assert_eq!(
+            LispCollectionRevision::current().steps_since_for_test(revision),
+            1,
+            "the observed native setter journals exactly once"
         );
         assert!(
             !compiled_reads
                 .expect("native string certificate")
                 .unchanged(),
-            "inline string aset must invalidate a completed certificate"
+            "native string aset must invalidate a completed certificate"
         );
-        let (_, projected) = capture(|| native(&mut context, &leaf, &args));
-        assert!(owner.set_string_byte_same_char_count(0, b'd'));
+        // The existing full string setter checks the string before journaling
+        // its write. Like actual interpreted aset, that setter-only capture
+        // conservatively refuses a certificate instead of projecting one.
+        let revision = LispCollectionRevision::current();
+        let (native_result, native_reads) = capture(|| native(&mut context, &leaf, &args));
+        assert_eq!(native_result, args[2]);
+        assert_eq!(
+            LispCollectionRevision::current().steps_since_for_test(revision),
+            1
+        );
+        let revision = LispCollectionRevision::current();
+        let (interpreted_result, interpreted_reads) = capture(|| {
+            crate::emacs_core::builtins::builtin_aset_args(&args)
+                .expect("interpreted string setter")
+        });
+        assert_eq!(interpreted_result, args[2]);
+        assert_eq!(owner.as_str_owned().as_deref(), Some("b"));
+        assert_eq!(
+            LispCollectionRevision::current().steps_since_for_test(revision),
+            1
+        );
         assert!(
-            !projected
-                .expect("native string setter certificate")
-                .unchanged(),
-            "inline string aset must project its owner into setter-only captures"
+            interpreted_reads.is_none(),
+            "interpreted setter reads first"
+        );
+        assert!(
+            native_reads.is_none(),
+            "native string aset matches the interpreted setter-only capture"
         );
         let (_, incoherent) = capture(|| {
             owner.as_str_owned();
