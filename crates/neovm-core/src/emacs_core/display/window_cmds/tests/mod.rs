@@ -14,6 +14,12 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+#[cfg(test)]
+mod core_hook_defaults;
+
+#[cfg(test)]
+mod core_hook_restore;
+
 mod body_geometry_test;
 mod frame_position_test;
 mod frame_resize_test;

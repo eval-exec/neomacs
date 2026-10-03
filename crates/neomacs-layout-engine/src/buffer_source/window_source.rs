@@ -23,6 +23,7 @@ enum BufferWindowReadBudget {
     #[default]
     WindowRows,
     SyncStop(crate::types::LayoutCharPos0),
+    AccessibleEnd,
 }
 
 /// Why the copied bytes end; the real accessible end remains independent.
@@ -217,7 +218,7 @@ enum PreviousViewportPointRelation {
 
 impl BufferWindowSourceRequest {
     pub(crate) fn from_window_params(params: &WindowParams, max_rows: usize) -> Self {
-        Self::new(
+        let mut request = Self::new(
             params.window_start_charpos().get(),
             params.previous_visible_end_charpos().map(|pos| pos.get()),
             params.point_charpos().get(),
@@ -227,7 +228,11 @@ impl BufferWindowSourceRequest {
             params.kind,
             ScrollPolicy::from_window_params(params),
             params.scroll_margin,
-        )
+        );
+        if params.mini_measurement == crate::types::MiniWindowMeasurement::ToEnd {
+            request.read_budget = BufferWindowReadBudget::AccessibleEnd;
+        }
+        request
     }
 
     /// Build a source request for an incremental partial walk without changing
@@ -389,8 +394,13 @@ impl BufferWindowSourceRequest {
             // property can consume. Wrapping and inserted strings add rows;
             // face-only overlays do not force a full-buffer copy. Selective
             // display still needs the unrestricted source walk.
-            let bounded_to = if crate::neovm_bridge::buffer_selective_display(access.view()) == 0 {
+            let bounded_to = if self.read_budget == BufferWindowReadBudget::AccessibleEnd {
+                byte_to
+            } else if crate::neovm_bridge::buffer_selective_display(access.view()) == 0 {
                 let (scan_from, newlines, boundary) = match self.read_budget {
+                    BufferWindowReadBudget::AccessibleEnd => {
+                        unreachable!("handled by full measurement")
+                    }
                     BufferWindowReadBudget::WindowRows => (
                         text_start_byte as i64,
                         self.max_rows + 2,

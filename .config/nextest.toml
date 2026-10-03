@@ -19,6 +19,29 @@ slow-timeout = { period = "60s", terminate-after = 1 }
 capture-stdout = true
 capture-stderr = true
 
+# Real layout producer fixtures link neovm-core as a normal dependency, so
+# its cfg(test) numeric policy guards are unavailable. Select only each
+# fixture's owned behavior before its independent test child starts.
+[scripts.setup.layout-gnu-mini-policy]
+command = { command-line = ["crates/neomacs-layout-engine/tests/redisplay-policy-env.sh", "gnu-hooks"], relative-to = "workspace-root" }
+slow-timeout = { period = "5s", terminate-after = 1 }
+capture-stdout = true
+capture-stderr = true
+
+# Public snapshot fixtures use normal neovm-core dependencies, so select
+# their immutable hook policy before each independently owned test process.
+[scripts.setup.snapshot-gnu-policy]
+command = { command-line = ["crates/neomacs/tests/redisplay-snapshot-policy-env.sh", "gnu"], relative-to = "workspace-root" }
+slow-timeout = { period = "5s", terminate-after = 1 }
+capture-stdout = true
+capture-stderr = true
+
+[scripts.setup.snapshot-legacy-policy]
+command = { command-line = ["crates/neomacs/tests/redisplay-snapshot-policy-env.sh", "legacy"], relative-to = "workspace-root" }
+slow-timeout = { period = "5s", terminate-after = 1 }
+capture-stdout = true
+capture-stderr = true
+
 [profile.default]
 test-threads = 24
 
@@ -67,6 +90,27 @@ setup = 'layout-posn-extent-policy'
 filter = 'test(~package_tui::)'
 platform = { host = "cfg(unix)" }
 setup = 'melpa-infra-preflight'
+
+# Exactly seven real MiniPreparation tests require GNU hooks ON: four source-stop
+# cases and three committed-scroll cases. Together with the five extent cases
+# above, exactly twelve child tests receive these bounded startup policies.
+# This selects their behavior rather than skipping assertions when default OFF.
+[[profile.default.scripts]]
+filter = 'package(neomacs-layout-engine) and test(/^(?:engine::mini_source_stop::tests::gnu_mini_to_end_hard_newline_does_not_measure_eob_after_string|engine::mini_source_stop::tests::gnu_mini_to_end_hard_newline_skips_after_string_condition_until_presentation|engine::mini_source_stop::tests::gnu_mini_to_end_without_final_newline_keeps_after_string|engine::mini_source_stop::tests::gnu_mini_to_end_transformed_final_newline_keeps_inclusive_fallback|engine::tests::mini_scroll_sites::gnu_overlay_mini_reaches_conservative_then_recenter_scroll_sites_at_same_start|engine::tests::mini_scroll_sites::gnu_plain_mini_overflow_keeps_prepared_source_start_without_scroll_callbacks|engine::tests::mini_scroll_sites::gnu_final_newline_mini_reaches_scroll_sites_with_fresh_source_motion)$/)'
+platform = { host = "cfg(unix)" }
+setup = 'layout-gnu-mini-policy'
+
+# Exactly these three GNU public snapshot/redisplay tests receive hooks ON.
+[[profile.default.scripts]]
+filter = 'package(neomacs) and test(/^(?:startup::tests::main_test::frame_snapshot_policy::gnu_hidden_frame_snapshot_does_not_run_or_defer_scroll_hooks|startup::tests::main_test::frame_snapshot_policy::gnu_visible_frame_redisplay_still_propagates_scroll_hook_throw|startup::tests::main_test::frame_snapshot_policy::gnu_hidden_frame_snapshot_keeps_fresh_chrome_and_echo_source)$/)'
+platform = { host = "cfg(unix)" }
+setup = 'snapshot-gnu-policy'
+
+# The compatibility control retains the explicit old snapshot policy.
+[[profile.default.scripts]]
+filter = 'package(neomacs) and test(/^startup::tests::main_test::frame_snapshot_policy::legacy_hidden_frame_snapshot_preserves_scroll_hook_policy$/)'
+platform = { host = "cfg(unix)" }
+setup = 'snapshot-legacy-policy'
 
 # Minimax oracle cases intentionally evaluate game trees in both Neomacs
 # and GNU Emacs.  The exhaustive tic-tac-toe forms can legitimately exceed

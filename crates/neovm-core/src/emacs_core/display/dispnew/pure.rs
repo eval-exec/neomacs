@@ -100,6 +100,14 @@ pub(crate) fn builtin_redraw_frame(
     // GNU `redraw_frame` clears the current matrices and marks every window
     // inaccurate, even when the Lisp-visible display state did not change.
     eval.request_menu_bar_rebuild(crate::emacs_core::eval::MenuBarRebuildReason::FullFrameRedraw);
+    if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+        let frame = crate::emacs_core::window_cmds::resolve_frame_id(
+            eval,
+            args.first(),
+            crate::emacs_core::window_cmds::FrameDomain::Live,
+        )?;
+        publish_gnu_frame_redraw(eval, frame);
+    }
     Ok(Value::NIL)
 }
 
@@ -111,6 +119,109 @@ pub(crate) fn builtin_redraw_display(
     expect_args("redraw-display", &args, 0)?;
     eval.request_menu_bar_rebuild(crate::emacs_core::eval::MenuBarRebuildReason::FullFrameRedraw);
     Ok(Value::NIL)
+}
+
+/// Context dispatch for GNU redraw-display. The baseline pure entry and its
+/// argument/error behavior stay available when the policy is disabled.
+#[cold]
+#[inline(never)]
+pub(crate) fn builtin_redraw_display_in_context(
+    eval: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let result = builtin_redraw_display(eval, args)?;
+    if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+        crate::emacs_core::window_cmds::ensure_selected_frame_id(eval);
+        let mut frames = eval.frames.frame_list();
+        // GNU frame creation conses onto Vframe_list. IDs increase at creation.
+        frames.sort_unstable_by_key(|frame| std::cmp::Reverse(frame.0));
+        for frame in frames {
+            if gnu_frame_redisplay_p(&eval.frames, frame) {
+                publish_gnu_frame_redraw(eval, frame);
+            }
+        }
+    }
+    Ok(result)
+}
+
+/// GNU frame_redisplay_p (frame.c:452-491), using borrowed frame IDs only.
+/// The owning Context is exclusively borrowed by the caller. Temporary cycle
+/// tracking contains no Lisp state and is not shared across mutator threads.
+#[cold]
+#[inline(never)]
+fn gnu_frame_redisplay_p(
+    frames: &crate::window::FrameManager,
+    frame: crate::window::FrameId,
+) -> bool {
+    let Some(target) = frames.get(frame) else {
+        return false;
+    };
+    if target.effective_window_system().is_some() {
+        return target.visibility.is_visible();
+    }
+    let terminal = target.terminal_id;
+    let mut current = frame;
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        if !seen.insert(current) {
+            return false;
+        }
+        let Some(target) = frames.get(current) else {
+            return false;
+        };
+        if !target.visibility.is_visible() {
+            return false;
+        }
+        if let Some(parent) = frames.frame_parent_id(current) {
+            current = parent;
+        } else {
+            return frames.top_frame_on_terminal(terminal) == Some(current);
+        }
+    }
+}
+
+/// Publish one actual GNU redraw (dispnew.c:3213-3241), including the terminal
+/// repaint obligation. IDs belong to this exclusive Context; no Lisp values,
+/// thread-local cache, or process-shared mutable state is introduced here.
+#[cold]
+#[inline(never)]
+pub(crate) fn publish_gnu_frame_redraw(
+    eval: &mut crate::emacs_core::eval::Context,
+    frame: crate::window::FrameId,
+) {
+    if !crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+        return;
+    }
+    let Some((windows, is_tty)) = eval.frames.get(frame).map(|target| {
+        let windows = target
+            .window_list()
+            .into_iter()
+            .chain(target.minibuffer_window)
+            .filter(|window| {
+                target
+                    .find_window(*window)
+                    .and_then(crate::window::Window::buffer_id)
+                    .is_some()
+            })
+            .collect::<Vec<_>>();
+        (windows, target.effective_window_system().is_none())
+    }) else {
+        return;
+    };
+    // GNU fset_redisplay is SOME. Redraw never raises global windows ALL or
+    // frame-window-change merely because every glyph must be repainted.
+    eval.gnu_mark_frame_redisplay(frame);
+    for window in windows {
+        // GNU marks every live leaf inaccurate and must_be_updated. A general
+        // redisplay generation drops retained-body reuse; chrome is targeted
+        // at these leaves without inventing update_mode_lines ALL.
+        eval.gnu_mark_window_redisplay(window);
+        eval.mark_chrome_dirty_window(window);
+    }
+    if is_tty {
+        eval.gnu_request_frame_redraw(frame);
+    }
+    eval.request_menu_bar_rebuild(crate::emacs_core::eval::MenuBarRebuildReason::FullFrameRedraw);
 }
 
 /// (open-termscript FILE) -> error

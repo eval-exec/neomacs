@@ -249,6 +249,14 @@ impl BufferCursorCandidate {
     }
 }
 
+/// Numeric candidate provenance owned by one exclusive row walk. Each
+/// mutator has disjoint cursor state; no Lisp value is retained here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EobCursorCandidateKind {
+    BufferPosition,
+    ExplicitStringProperty,
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CursorCaptureState {
     captured: Option<BufferCursorCandidate>,
@@ -1100,6 +1108,34 @@ impl CursorCaptureState {
     #[cfg(test)]
     pub(crate) fn as_ref(&self) -> Option<&CapturedCursorInfo> {
         self.captured.as_ref().map(|candidate| &candidate.info)
+    }
+
+    /// Point-proven numeric candidates from this exclusive row walk. The
+    /// kind distinguishes an explicit display-string cursor property from
+    /// the buffer insertion approximation; it is not shared between mutators.
+    #[inline]
+    pub(crate) fn eob_row_candidates(
+        &self,
+    ) -> impl Iterator<Item = (usize, EobCursorCandidateKind)> + '_ {
+        self.captured
+            .iter()
+            .map(|candidate| {
+                (
+                    candidate.info.display_row_offset,
+                    EobCursorCandidateKind::BufferPosition,
+                )
+            })
+            .chain(
+                self.integer_string_overrides
+                    .iter()
+                    .chain(&self.string_fallbacks)
+                    .map(|candidate| {
+                        (
+                            candidate.display_row_offset,
+                            EobCursorCandidateKind::ExplicitStringProperty,
+                        )
+                    }),
+            )
     }
 
     pub(crate) fn captured(&self) -> Option<CapturedCursorInfo> {

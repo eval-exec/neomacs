@@ -7,7 +7,7 @@ use crate::output::row_request::{
     OutputCompleteRowInstallRequest, OutputCurrentRowDecorationRequest, OutputRowBeginRequest,
     OutputRowLifecycleRequest, OutputRowMetricsRequest,
 };
-use crate::output::window_request::OutputWindowLifecycleRequest;
+use crate::output::window_request::{OutputWindowLifecycleRequest, OutputWindowRowCapacity};
 use neomacs_display_protocol::frame_glyphs::GlyphRowRole;
 use neomacs_display_protocol::frame_glyphs::PhysCursor;
 use neomacs_display_protocol::glyph_matrix::MatrixRow;
@@ -100,7 +100,10 @@ impl OutputWindowBuildState {
     pub(crate) fn install_window_lifecycle(&mut self, request: OutputWindowLifecycleRequest) {
         match request {
             OutputWindowLifecycleRequest::Begin(begin) => {
-                self.current_row_grid = Some(OutputWindowRowGrid::new(begin.nrows, begin.ncols));
+                self.current_row_grid = Some(
+                    OutputWindowRowGrid::new(begin.nrows, begin.ncols)
+                        .with_row_capacity(begin.row_capacity),
+                );
                 self.current_window_id = begin.window_id;
                 self.current_pixel_bounds = begin.pixel_bounds;
                 self.current_text_pixel_bounds = begin.text_pixel_bounds;
@@ -242,6 +245,17 @@ impl OutputWindowBuildState {
             .map(|window| window.grid.content_height_px(fallback_row_height))
     }
 
+    pub(crate) fn mini_measurement_height_px(
+        &self,
+        window_id: i64,
+        fallback_row_height: f32,
+    ) -> Option<f32> {
+        self.windows
+            .iter()
+            .find(|window| window.window_id == window_id as u64)
+            .map(|window| window.grid.mini_measurement_height_px(fallback_row_height))
+    }
+
     #[cfg(test)]
     pub(crate) fn completed_window_count(&self) -> usize {
         self.windows.len()
@@ -372,6 +386,7 @@ pub(crate) struct OutputWindowRowGrid {
     /// `Finalize` a true no-op instead of a double-reorder. Cleared whenever a
     /// row's contents are (re)installed via `begin_row` / `replace_row`.
     finalized_rows: Vec<bool>,
+    row_capacity: OutputWindowRowCapacity,
 }
 
 /// Why an enabled buffer row owns point.
@@ -441,7 +456,13 @@ impl OutputWindowRowGrid {
         Self {
             matrix: GlyphMatrix::new(nrows, ncols),
             finalized_rows: vec![false; nrows],
+            row_capacity: OutputWindowRowCapacity::Fixed,
         }
+    }
+
+    fn with_row_capacity(mut self, capacity: OutputWindowRowCapacity) -> Self {
+        self.row_capacity = capacity;
+        self
     }
 
     fn clear_finalized(&mut self, row: usize) {
@@ -471,6 +492,20 @@ impl OutputWindowRowGrid {
 
     fn ensure_hashes(&mut self) {
         self.matrix.ensure_hashes();
+    }
+
+    /// GNU removes the final row's spacing after move_it_to(ZV).
+    fn mini_measurement_height_px(&self, fallback_row_height: f32) -> f32 {
+        let last = self
+            .matrix
+            .rows
+            .iter()
+            .rev()
+            .find(|row| row.enabled && row.height_px > 0.0);
+        last.map_or_else(
+            || self.content_height_px(fallback_row_height),
+            |row| row.pixel_y + row.height_without_line_spacing(),
+        )
     }
 
     pub(crate) fn content_height_px(&self, fallback_row_height: f32) -> f32 {
@@ -601,6 +636,11 @@ impl OutputWindowRowGrid {
     }
 
     pub(crate) fn begin_row(&mut self, begin: OutputRowBeginRequest) {
+        if begin.row >= self.matrix.nrows && self.row_capacity == OutputWindowRowCapacity::Growing {
+            let rows = begin.row.saturating_add(1);
+            self.matrix.resize(rows, self.matrix.ncols);
+            self.finalized_rows.resize(rows, false);
+        }
         self.clear_finalized(begin.row);
         let Some(row) = self.row_mut(begin.row) else {
             return;
@@ -697,3 +737,7 @@ impl OutputWindowGridEntry {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "window_state/tests/mini_preparation.rs"]
+mod mini_preparation_tests;

@@ -24,6 +24,7 @@
 //! | `NEOMACS_MODE_LINE_PROP_BORROW` | `off` | `off`; `on`/`1`/`true`/`yes` | Borrow source string intervals during synchronous mode-line property reads |
 //! | `NEOMACS_MODE_LINE_PLAIN_FIELD` | `off` | `off`; `on`/`1`/`true`/`yes` | Append property-free percent text directly to the mode-line output |
 //! | `NEOMACS_MODE_LINE_NUMERIC_PADDING` | `off` | `off`; `on`/`1`/`true`/`yes` | Keep numeric-wrapper padding independent of inherited mode-line properties |
+//! | `NEOMACS_REDISPLAY_GNU_HOOKS` | `off` | `off`; `on`/`1`/`true`/`yes` | GNU redisplay transaction, owned pre targets, live hook order and core configuration-hook default; selected-mini preparation; renderer-inert snapshot positions |
 
 #[path = "mode_line_flow.rs"]
 mod mode_line_flow_policy;
@@ -163,7 +164,20 @@ impl super::eval::Context {
     /// because this remains part of the same logical redisplay even though the
     /// physical layout attempt has released its borrow. Errors are demoted,
     /// mirroring GNU's `safe_run_hooks_2`.
-    pub fn run_window_scroll_functions_for_committed_start(&mut self, window_id: WindowId) {
+    pub fn run_window_scroll_functions_for_committed_start(
+        &mut self,
+        window_id: WindowId,
+    ) -> EvalResult {
+        if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+            return crate::emacs_core::builtins::run_gnu_committed_scroll_functions(
+                self, window_id,
+            );
+        }
+        self.run_window_scroll_functions_for_committed_start_legacy(window_id);
+        Ok(Value::NIL)
+    }
+
+    fn run_window_scroll_functions_for_committed_start_legacy(&mut self, window_id: WindowId) {
         // No global-value early-out: `window-scroll-functions` may be
         // buffer-local, and the builtin enters the displayed buffer before it
         // reads the hook (GNU `run_window_scroll_functions` runs with the

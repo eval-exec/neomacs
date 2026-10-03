@@ -990,6 +990,9 @@ fn retirement_before_pointer_rejects_stale_hit_without_reordering_key() {
 
 #[test]
 fn layout_invalidation_forces_redisplay_when_evaluator_signature_is_unchanged() {
+    // This callback-count spy publishes no GNU accepted frame. Keep its
+    // legacy signature contract; live frontend tests cover accepted ownership.
+    let _policy = crate::emacs_core::eval::RedisplayHookPolicyGuard::legacy();
     let redisplays = std::rc::Rc::new(std::cell::Cell::new(0));
     let observed = std::rc::Rc::clone(&redisplays);
     let mut eval = crate::emacs_core::Context::new();

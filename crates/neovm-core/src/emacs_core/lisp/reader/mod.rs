@@ -14,6 +14,8 @@ use super::value::*;
 use crate::buffer::{EmacsBytePos, EmacsByteRange, LispCharPos1};
 use std::io::Write;
 use std::time::Duration;
+
+mod minibuffer_redisplay;
 use strum::{EnumString, IntoStaticStr};
 
 // ---------------------------------------------------------------------------
@@ -447,6 +449,7 @@ impl MinibufferWindowRestoreEffect {
             // `read_minibuf_unwind` has restored the caller's selection this
             // mini-window is normally nonselected, so `wset_redisplay` also
             // raises `windows_or_buffers_changed` and rebuilds the menu bar.
+            eval.gnu_mark_window_mode_line(window);
             eval.mark_chrome_dirty_window(window);
         }
     }
@@ -703,6 +706,9 @@ fn activate_minibuffer_window(
     minibuf_id: crate::buffer::BufferId,
     entry_level: super::minibuffer::MinibufferEntryLevel,
 ) -> Option<ActiveMinibufferWindowState> {
+    if super::eval::gnu_redisplay_hooks_enabled() {
+        return minibuffer_redisplay::activate(eval, minibuf_id, entry_level);
+    }
     activate_minibuffer_window_in_state(
         &mut eval.frames,
         &mut eval.buffers,
@@ -711,6 +717,27 @@ fn activate_minibuffer_window(
         minibuf_id,
         entry_level,
     )
+}
+
+/// GNU's separate minibuffer_unwind action runs after window configurations.
+/// The payload holds only owning Context buffer/window identities, never Values.
+/// Each mutator owns a disjoint payload and restores it through an exclusive
+/// Context borrow; independent mutators never share this unwind state.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct MinibufferBufferUnwind {
+    saved: Option<ActiveMinibufferWindowState>,
+}
+
+#[cold]
+#[inline(never)]
+pub(crate) fn unwind_minibuffer_buffer(
+    eval: &mut super::eval::Context,
+    state: MinibufferBufferUnwind,
+) -> EvalResult {
+    if let Some(saved) = state.saved {
+        minibuffer_redisplay::restore_buffer(eval, saved).apply(eval);
+    }
+    Ok(Value::NIL)
 }
 
 fn restore_minibuffer_window_in_state(
@@ -741,6 +768,23 @@ fn restore_minibuffer_window_in_state(
                 saved.previous_minibuffer_point,
             );
         }
+    }
+    restore_minibuffer_selection_in_state(
+        frames,
+        minibuffer_selected_window,
+        active_minibuffer_window,
+        saved,
+    );
+    window_restore
+}
+
+fn restore_minibuffer_selection_in_state(
+    frames: &mut crate::window::FrameManager,
+    minibuffer_selected_window: &mut Option<crate::window::WindowId>,
+    active_minibuffer_window: &mut Option<crate::window::WindowId>,
+    saved: ActiveMinibufferWindowState,
+) {
+    if let Some(frame) = frames.get_mut(saved.minibuffer_frame.0) {
         let _ = frame.select_window(saved.previous_minibuffer_frame_selected_window);
     }
     if let Some(frame) = frames.get_mut(saved.calling_frame.0) {
@@ -755,7 +799,6 @@ fn restore_minibuffer_window_in_state(
     }
     *minibuffer_selected_window = saved.previous_minibuffer_selected_window;
     *active_minibuffer_window = saved.previous_active_minibuffer_window;
-    window_restore
 }
 
 fn erase_expired_minibuffer_buffer_in_state(
@@ -871,23 +914,29 @@ pub(crate) fn unwind_minibuffer_session(
 
     let teardown_outcome = if let Some(saved) = state.active_window_state {
         let _ = shared.buffers.switch_current_unrecorded(state.minibuf_id);
-        let shared_ptr = std::ptr::NonNull::from(&mut *shared);
-        teardown_minibuffer_level_in_state(
-            &mut shared.frames,
-            &mut shared.buffers,
-            &mut shared.minibuffer_selected_window,
-            &mut shared.active_minibuffer_window,
-            state.minibuf_id,
-            shared.minibuffers.depth(),
-            saved,
-            move || unsafe {
-                run_minibuffer_mode_if_bound(
-                    shared_ptr.as_ptr().as_mut().unwrap(),
-                    "minibuffer-inactive-mode",
-                )
-            },
-        )
+        if super::eval::gnu_redisplay_hooks_enabled() {
+            let depth_after_pop = shared.minibuffers.depth();
+            minibuffer_redisplay::teardown(shared, state.minibuf_id, depth_after_pop, saved)
+        } else {
+            let shared_ptr = std::ptr::NonNull::from(&mut *shared);
+            teardown_minibuffer_level_in_state(
+                &mut shared.frames,
+                &mut shared.buffers,
+                &mut shared.minibuffer_selected_window,
+                &mut shared.active_minibuffer_window,
+                state.minibuf_id,
+                shared.minibuffers.depth(),
+                saved,
+                move || unsafe {
+                    run_minibuffer_mode_if_bound(
+                        shared_ptr.as_ptr().as_mut().unwrap(),
+                        "minibuffer-inactive-mode",
+                    )
+                },
+            )
+        }
     } else {
+        minibuffer_redisplay::publish_expired_buffer(shared, state.minibuf_id);
         erase_expired_minibuffer_buffer_in_state(&mut shared.buffers, state.minibuf_id);
         MinibufferTeardownOutcome {
             inactive_mode_result: run_minibuffer_mode_if_bound(shared, "minibuffer-inactive-mode"),
@@ -902,9 +951,16 @@ pub(crate) fn unwind_minibuffer_session(
     {
         shared.buffers.switch_current(buffer_id);
     }
-    let selection_record_result = restored_calling_selection
-        .map(|active| record_restored_calling_window_selection(shared, active))
-        .unwrap_or(Ok(Value::NIL));
+    // A sizing/inactive-mode transfer skips the remaining read_minibuf_unwind
+    // statements. Separate configuration and minibuffer restoration still run.
+    let selection_record_result =
+        if super::eval::gnu_redisplay_hooks_enabled() && inactive_mode_result.is_err() {
+            Ok(Value::NIL)
+        } else {
+            restored_calling_selection
+                .map(|active| record_restored_calling_window_selection(shared, active))
+                .unwrap_or(Ok(Value::NIL))
+        };
     shared.obarray.set_symbol_value(
         "minibuffer-depth",
         Value::fixnum(shared.minibuffers.depth() as i64),
@@ -1005,6 +1061,10 @@ fn run_minibuffer_mode_if_bound(eval: &mut super::eval::Context, mode: &str) -> 
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn restore_minibuffer_window(eval: &mut super::eval::Context, saved: ActiveMinibufferWindowState) {
+    if super::eval::gnu_redisplay_hooks_enabled() {
+        minibuffer_redisplay::restore(eval, saved).apply(eval);
+        return;
+    }
     let effect = restore_minibuffer_window_in_state(
         &mut eval.frames,
         &mut eval.buffers,
@@ -1790,6 +1850,7 @@ impl MinibufferInvocationRestoration {
         if let Some(calling_frame) = self.calling_frame
             && eval.frames.get(calling_frame.0).is_some()
         {
+            minibuffer_redisplay::publish_frame_switch(eval, calling_frame.0);
             let _ = eval.frames.select_frame(calling_frame.0);
         }
     }
@@ -2091,8 +2152,16 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
 
         let restoration = MinibufferInvocationRestoration::capture(shared)?;
         let lifecycle_result = shared.with_unwind_scope(|shared| {
-            // Window configurations are below the session action on the inner
-            // specpdl stack, so teardown runs first and configurations follow.
+            // GNU registers minibuffer_unwind before configuration actions:
+            // session teardown runs first, configurations next, and only then
+            // the mini-window returns to its previous source buffer.
+            let buffer_unwind = super::eval::gnu_redisplay_hooks_enabled().then(|| {
+                shared.record_native_unwind(
+                    super::eval::NativeUnwindAction::MinibufferBuffer {
+                        state: Box::new(MinibufferBufferUnwind::default()),
+                    },
+                )
+            });
             restoration.record(shared);
 
             let recursive_policy = if shared
@@ -2156,16 +2225,21 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
     let ambient_directory = minibuffer_ambient_directory_in_state(&shared.buffers);
 
     let minibuf_depth = entry_permit.depth();
+    if super::eval::gnu_redisplay_hooks_enabled()
+        && let Some(existing) = shared.buffers.find_buffer_by_name(&format!(" *Minibuf-{minibuf_depth}*")) {
+        minibuffer_redisplay::publish_expired_buffer(shared, existing);
+    }
     let minibuf_id = find_or_create_minibuffer_buffer_in_state(&mut shared.buffers, minibuf_depth);
 
-    let active_window_state = activate_minibuffer_window_in_state(
-        &mut shared.frames,
-        &mut shared.buffers,
-        &mut shared.minibuffer_selected_window,
-        &mut shared.active_minibuffer_window,
-        minibuf_id,
-        entry_permit.level(),
-    );
+    let active_window_state = activate_minibuffer_window(shared, minibuf_id, entry_permit.level());
+    if let Some(token) = buffer_unwind {
+        match shared.native_unwind_action_mut(token) {
+            Some(super::eval::NativeUnwindAction::MinibufferBuffer { state }) => {
+                state.saved = active_window_state;
+            }
+            other => debug_assert!(false, "minibuffer buffer unwind disappeared: {other:?}"),
+        }
+    }
     if active_window_state.is_none() {
         shared.buffers.switch_current(minibuf_id);
     }
@@ -2207,6 +2281,9 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
         .symbol_value("minibuffer-prompt-properties")
         .copied()
         .unwrap_or(Value::NIL);
+    let mini_source_before = super::eval::gnu_redisplay_hooks_enabled().then(||
+        shared.buffers.get(minibuf_id).map(|buffer| (buffer.chars_modified_tick(), buffer.props_modified_tick()))
+    ).flatten();
     super::minibuffer::install_minibuffer_buffer_contents(
         &mut shared.buffers,
         minibuf_id,
@@ -2214,6 +2291,12 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
         initial_input.as_ref(),
         prompt_properties,
     );
+    if super::eval::gnu_redisplay_hooks_enabled()
+        && shared.buffers.get(minibuf_id)
+        .map(|buffer| (buffer.chars_modified_tick(), buffer.props_modified_tick())) != mini_source_before
+    {
+        shared.gnu_mark_buffer_redisplay(minibuf_id);
+    }
     tracing::debug!(
         "read-from-minibuffer: prompt={:?} minibuf_id={:?} current_buffer={:?} active_window={:?} selected_window={:?}",
         prompt_display,
@@ -3308,6 +3391,9 @@ pub(crate) fn finish_read_key_sequence_vector_interactive_in_runtime(
 #[cfg(test)]
 #[path = "tests/minibuffer_teardown.rs"]
 mod minibuffer_teardown_tests;
+#[cfg(test)]
+#[path = "tests/minibuffer_unwind_order.rs"]
+mod minibuffer_unwind_order_tests;
 #[cfg(test)]
 #[path = "tests/raw_bytes.rs"]
 mod raw_bytes_tests;

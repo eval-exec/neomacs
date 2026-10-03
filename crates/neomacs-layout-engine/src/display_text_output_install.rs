@@ -36,6 +36,7 @@ pub(crate) struct DisplayOutputTextWindowBeginInstallRequest {
     text_bounds: Rect,
     text_clip_bounds: Rect,
     selected: bool,
+    row_capacity: crate::output::window_request::OutputWindowRowCapacity,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,19 +81,31 @@ impl DisplayOutputTextWindowBeginInstallRequest {
             text_bounds,
             text_clip_bounds,
             selected,
+            row_capacity: crate::output::window_request::OutputWindowRowCapacity::Fixed,
         }
     }
 
+    pub(crate) fn with_row_capacity(
+        mut self,
+        capacity: crate::output::window_request::OutputWindowRowCapacity,
+    ) -> Self {
+        self.row_capacity = capacity;
+        self
+    }
+
     pub(crate) fn install(self, builder: &mut DisplayOutputBuilder) {
-        builder.install_output_window_lifecycle(OutputWindowLifecycleRequest::begin(
-            self.window_id,
-            self.rows,
-            self.cols,
-            self.bounds,
-            self.text_bounds,
-            self.text_clip_bounds,
-            self.selected,
-        ));
+        builder.install_output_window_lifecycle(
+            OutputWindowLifecycleRequest::begin(
+                self.window_id,
+                self.rows,
+                self.cols,
+                self.bounds,
+                self.text_bounds,
+                self.text_clip_bounds,
+                self.selected,
+            )
+            .with_row_capacity(self.row_capacity),
+        );
     }
 }
 

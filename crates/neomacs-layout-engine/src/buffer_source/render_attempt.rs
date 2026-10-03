@@ -47,10 +47,19 @@ pub(crate) struct BufferSourceRenderAttemptContext<'a, 'face> {
 pub(crate) enum WindowPositionPublication {
     #[default]
     Redisplay,
+    /// GNU renderer-inert snapshot: use the exact live viewport without
+    /// publishing starts/ends or entering scroll hooks, while rendering fresh
+    /// chrome. This numeric policy is local to an exclusively borrowed row
+    /// producer; independent mutators share no Lisp owner or mutable cache.
+    Snapshot,
     /// This logical redisplay already acknowledged the window's scroll hook.
     /// Physical convergence retries may still commit a corrected live start,
     /// but they must not replay the Lisp callback.
     RedisplayResumedScrollHook,
+    /// GNU has acknowledged conservative/recenter sites but the EOB after-
+    /// string still has no cursor row. Finish at its bounded fallback without
+    /// replaying either semantic callback during physical convergence.
+    RedisplayMiniEobFallback,
     /// Redisplay's preliminary GNU `resize_mini_window` measurement.
     ///
     /// The row walk is lifted to `max-mini-window-height`. If it reaches ZV,
@@ -70,7 +79,10 @@ impl WindowPositionPublication {
     /// Redisplay may resolve a different source start to keep point visible;
     /// GNU `Fwindow_end` does not run that viewport policy.
     pub(crate) const fn uses_exact_window_start(self) -> bool {
-        matches!(self, Self::InactiveEchoArea | Self::SynchronousQueryEnd)
+        matches!(
+            self,
+            Self::Snapshot | Self::InactiveEchoArea | Self::SynchronousQueryEnd
+        )
     }
 
     /// A synchronous GNU `window-end` query walks only the text area using
@@ -109,14 +121,16 @@ impl WindowPositionPublication {
                     ));
                 }
             }
-            Self::RedisplayResumedScrollHook | Self::RedisplayMinibufferMeasurement => {
+            Self::RedisplayResumedScrollHook
+            | Self::RedisplayMinibufferMeasurement
+            | Self::RedisplayMiniEobFallback => {
                 let _ = evaluator.publish_redisplay_window_start(
                     frame_id,
                     window_id,
                     window_start_lisp,
                 );
             }
-            Self::InactiveEchoArea | Self::SynchronousQueryEnd => {}
+            Self::Snapshot | Self::InactiveEchoArea | Self::SynchronousQueryEnd => {}
         }
         None
     }
@@ -140,6 +154,11 @@ pub(crate) enum BufferSourceRenderAttemptOutcome {
     /// source projection. The frame transaction must discard this attempt and
     /// recollect the live window/buffer pair.
     LogicalInputsChanged,
+    /// Actual EOB producer rows did not admit point. The evaluator-owned GNU
+    /// mini redisplay must visit its bounded conservative/recenter sites.
+    GnuMiniEobCursorUnavailable {
+        boundary: crate::buffer_source::tail_render::GnuMiniEobSourceBoundary,
+    },
     Retry {
         window_start: i64,
     },
@@ -374,6 +393,7 @@ impl BufferSourceRedisplayPublishRequest {
         match self.publication {
             WindowPositionPublication::Redisplay
             | WindowPositionPublication::RedisplayResumedScrollHook
+            | WindowPositionPublication::RedisplayMiniEobFallback
             | WindowPositionPublication::RedisplayMinibufferMeasurement => {
                 evaluator.publish_redisplay_window_end(self.frame_id, self.window_id, window_end);
             }
@@ -381,7 +401,8 @@ impl BufferSourceRedisplayPublishRequest {
             // answer belongs to `WindowLayoutQuery`, not retained redisplay
             // state, so a query nested inside a hook cannot validate a
             // discarded attempt.
-            WindowPositionPublication::InactiveEchoArea
+            WindowPositionPublication::Snapshot
+            | WindowPositionPublication::InactiveEchoArea
             | WindowPositionPublication::SynchronousQueryEnd => {}
         }
     }

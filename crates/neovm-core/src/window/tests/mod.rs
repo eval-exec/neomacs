@@ -4170,3 +4170,6 @@ fn fontset_changes_invalidate_window_query_and_attempt_freshness() {
         assert!(!attempt.remains_valid_across(&after_attempt, boundary));
     }
 }
+
+#[cfg(test)]
+mod split_hook_epoch;

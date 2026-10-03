@@ -1682,6 +1682,7 @@ pub fn window_params_from_neovm_with_font_sizing(
         // Normalize to the layout engine's internal 0-based char positions.
         window_start: lisp_char_pos_to_layout_i64(window_start),
         measurement_rows: None,
+        mini_measurement: crate::types::MiniWindowMeasurement::Presentation,
         measurement_pixels: None,
         query_target: None,
         force_start,

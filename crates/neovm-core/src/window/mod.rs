@@ -7510,6 +7510,19 @@ impl FrameManager {
         }
     }
 
+    /// Numeric object state used by GNU window-configuration restoration.
+    /// A live leaf supplies its outgoing buffer and epoch; a resurrected leaf
+    /// retains its deletion record. Reads require an immutable FrameManager
+    /// borrow within the owning Context and add no shared or thread-local state.
+    pub(crate) fn window_restore_change_record(
+        &self,
+        window_id: WindowId,
+    ) -> Option<DeletedWindowRecord> {
+        self.lookup_window(window_id)
+            .map(|window| Self::deletion_record(Some(window)))
+            .or_else(|| self.deleted_windows.get(&window_id).copied())
+    }
+
     /// What a window should remember once it is deleted.
     ///
     /// Mirrors GNU's `wset_old_buffer (w, w->contents)` in
@@ -7686,6 +7699,8 @@ fn make_split_sibling(
         old_point,
         vscroll,
         preserve_vscroll_p,
+        old_buffer,
+        change_stamp,
         ..
     } = &mut sibling
     {
@@ -7705,6 +7720,15 @@ fn make_split_sibling(
         *history = WindowHistoryState::default();
         *position_markers = WindowPositionMarkerState::Detached;
         *window_end = WindowEndState::Unrecorded;
+        if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+            // GNU make_window starts old_buffer NIL and change_stamp zero.
+            // A cloned decoration is not a recorded redisplay epoch: the new
+            // leaf must run its first buffer-change callback even when it
+            // shows the reference's buffer. Each frame's exclusive mutator
+            // owns these numeric IDs/stamps; no shared Lisp state is added.
+            *old_buffer = None;
+            *change_stamp = None;
+        }
         if !same_buffer {
             *window_start = LispCharPos1::ONE;
             *point = LispCharPos1::ONE;

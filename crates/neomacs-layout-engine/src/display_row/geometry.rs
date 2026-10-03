@@ -293,8 +293,17 @@ pub(crate) enum DisplayRowFlagKind {
     WideCut,
 }
 
+/// Capacity policy for numeric flags owned by one exclusively borrowed
+/// window-render attempt. No Lisp state or cross-mutator cache is retained.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DisplayRowFlagCapacity {
+    Fixed,
+    Growing,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DisplayRowFlags {
+    capacity: DisplayRowFlagCapacity,
     continued: Vec<bool>,
     truncated: Vec<bool>,
     continuation: Vec<bool>,
@@ -305,6 +314,7 @@ pub(crate) struct DisplayRowFlags {
 impl DisplayRowFlags {
     pub(crate) fn new(row_count: usize) -> Self {
         Self {
+            capacity: DisplayRowFlagCapacity::Fixed,
             continued: vec![false; row_count],
             truncated: vec![false; row_count],
             continuation: vec![false; row_count],
@@ -313,14 +323,39 @@ impl DisplayRowFlags {
         }
     }
 
+    /// An unbounded measurement owns flags only for rows the walk marks.
+    pub(crate) fn growing() -> Self {
+        Self {
+            capacity: DisplayRowFlagCapacity::Growing,
+            ..Self::new(0)
+        }
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.truncated.len()
     }
 
     pub(crate) fn mark(&mut self, row: usize, kind: DisplayRowFlagKind) {
+        if self.capacity == DisplayRowFlagCapacity::Growing && row >= self.len() {
+            self.grow_for_row(row);
+        }
         if let Some(flag) = self.flags_mut(kind).get_mut(row) {
             *flag = true;
         }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn grow_for_row(&mut self, row: usize) {
+        // The logical unbounded sentinel is not a materialized row.
+        let Some(row_count) = row.checked_add(1) else {
+            return;
+        };
+        self.continued.resize(row_count, false);
+        self.truncated.resize(row_count, false);
+        self.continuation.resize(row_count, false);
+        self.continued_mid_element.resize(row_count, false);
+        self.wide_cut.resize(row_count, false);
     }
 
     pub(crate) fn is_set(&self, row: usize, kind: DisplayRowFlagKind) -> bool {

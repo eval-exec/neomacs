@@ -324,6 +324,7 @@ mod tests {
             observed
                 .borrow_mut()
                 .push(eval.permits_compositor_pixel_scroll(window));
+            crate::test_utils::mock_redisplay::accept_all_frames(eval);
         }));
         eval.redisplay().expect("redisplay");
         eval.redisplay().expect("redisplay");

@@ -155,6 +155,15 @@ impl FrameOutputOwner {
         ))
     }
 
+    pub(crate) fn mini_measurement_height_px(
+        &self,
+        window_id: i64,
+        fallback_row_height: f32,
+    ) -> Option<f32> {
+        self.builder
+            .mini_measurement_height_px(window_id, fallback_row_height)
+    }
+
     pub(crate) fn latest_window_info(&self, window_id: i64) -> Option<WindowInfo> {
         let window_id = DisplayWindowId::new(window_id);
         self.builder

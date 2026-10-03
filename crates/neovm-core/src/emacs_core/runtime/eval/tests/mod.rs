@@ -26,6 +26,14 @@ use std::rc::Rc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+/// These spies test the legacy signature/callback contract, and the two
+/// batch hook fixtures intentionally run without a display backend. Returning
+/// from a spy is not a GNU accepted frame seal. GNU accepted ownership and
+/// hook order are exercised by dedicated ownership and live frontend tests.
+fn legacy_redisplay_fixture_policy() -> RedisplayHookPolicyGuard {
+    RedisplayHookPolicyGuard::legacy()
+}
+
 fn eval_one(src: &str) -> String {
     let mut ev = Context::new();
     let result = ev.eval_str(src);
@@ -2010,6 +2018,7 @@ fn read_char_respects_inhibit_redisplay_during_input_wait() {
 
 #[test]
 fn redisplay_skips_callback_when_visible_state_is_unchanged() {
+    let _policy = legacy_redisplay_fixture_policy();
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
 
@@ -2118,6 +2127,7 @@ fn overlay_property_change_invalidates_redisplay_signature() {
 
 #[test]
 fn redisplay_skips_callback_after_unwatched_symbol_value_change() {
+    let _policy = legacy_redisplay_fixture_policy();
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
     ev.obarray
@@ -2140,6 +2150,7 @@ fn redisplay_skips_callback_after_unwatched_symbol_value_change() {
 
 #[test]
 fn set_buffer_redisplay_watcher_invalidates_redisplay() {
+    let _policy = legacy_redisplay_fixture_policy();
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
 
@@ -2173,6 +2184,7 @@ fn set_buffer_redisplay_watcher_invalidates_redisplay() {
 /// stale until the next keystroke (the "Doom blank pane" class of bug).
 #[test]
 fn setq_display_var_invalidates_redisplay_without_watcher() {
+    let _policy = legacy_redisplay_fixture_policy();
     crate::test_utils::init_test_tracing();
 
     for form in [
@@ -2222,6 +2234,7 @@ fn setq_display_var_invalidates_redisplay_without_watcher() {
 /// requirement.
 #[test]
 fn setq_non_display_var_does_not_invalidate_redisplay() {
+    let _policy = legacy_redisplay_fixture_policy();
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
     ev.obarray
@@ -11692,6 +11705,7 @@ fn run_window_configuration_change_hook_ignores_sides_inhibit_check() {
 
 #[test]
 fn redisplay_runs_window_change_functions_with_selected_frame_context() {
+    let _policy = legacy_redisplay_fixture_policy();
     crate::test_utils::init_test_tracing();
     let result = eval_one(
         "(progn
@@ -11734,6 +11748,7 @@ fn redisplay_runs_window_change_functions_with_selected_frame_context() {
 
 #[test]
 fn set_frame_window_state_change_forces_state_hooks_on_redisplay() {
+    let _policy = legacy_redisplay_fixture_policy();
     crate::test_utils::init_test_tracing();
     let result = eval_one(
         "(progn
@@ -27998,6 +28013,7 @@ fn native_input_progress_completion_requires_a_fresh_presentation() {
 
 #[test]
 fn fontset_changes_invalidate_redisplay_skip_signature() {
+    let _policy = legacy_redisplay_fixture_policy();
     let mut ev = Context::new();
     let calls = Rc::new(RefCell::new(0usize));
     let observed = Rc::clone(&calls);

@@ -224,6 +224,7 @@ pub(crate) struct TextWindowBegin {
     pub(crate) text_clip_bounds: Rect,
     pub(crate) selected: bool,
     pub(crate) first_row: DisplayTextRowBegin,
+    pub(crate) row_capacity: crate::output::window_request::OutputWindowRowCapacity,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -235,6 +236,7 @@ pub(crate) struct TextWindowOutputBegin {
     pub(crate) text_bounds: Rect,
     pub(crate) text_clip_bounds: Rect,
     pub(crate) selected: bool,
+    pub(crate) row_capacity: crate::output::window_request::OutputWindowRowCapacity,
 }
 
 impl From<TextWindowBegin> for TextWindowOutputBegin {
@@ -247,6 +249,7 @@ impl From<TextWindowBegin> for TextWindowOutputBegin {
             text_bounds: request.text_bounds,
             text_clip_bounds: request.text_clip_bounds,
             selected: request.selected,
+            row_capacity: request.row_capacity,
         }
     }
 }
@@ -262,6 +265,7 @@ impl TextWindowOutputBegin {
             self.text_clip_bounds,
             self.selected,
         )
+        .with_row_capacity(self.row_capacity)
     }
 }
 

@@ -714,6 +714,15 @@ impl DisplayOutputBuilder {
             .window_content_height_px(window_id, fallback_row_height)
     }
 
+    pub(crate) fn mini_measurement_height_px(
+        &self,
+        window_id: i64,
+        fallback_row_height: f32,
+    ) -> Option<f32> {
+        self.window_state
+            .mini_measurement_height_px(window_id, fallback_row_height)
+    }
+
     #[cfg(test)]
     pub(crate) fn completed_window_count(&self) -> usize {
         self.window_state.completed_window_count()

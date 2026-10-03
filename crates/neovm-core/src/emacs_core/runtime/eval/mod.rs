@@ -1211,6 +1211,9 @@ pub(crate) enum NativeUnwindAction {
     MinibufferSession {
         state: Box<super::reader::MinibufferSessionUnwind>,
     },
+    MinibufferBuffer {
+        state: Box<super::reader::MinibufferBufferUnwind>,
+    },
 }
 
 impl NativeUnwindAction {
@@ -1220,6 +1223,7 @@ impl NativeUnwindAction {
                 visit(configuration.trace_value())
             }
             Self::MinibufferSession { state } => state.trace_roots(visit),
+            Self::MinibufferBuffer { .. } => {}
         }
     }
 
@@ -1235,6 +1239,9 @@ impl NativeUnwindAction {
             } => configuration.restore(context, options),
             Self::MinibufferSession { state } => {
                 super::reader::unwind_minibuffer_session(context, *state)
+            }
+            Self::MinibufferBuffer { state } => {
+                super::reader::unwind_minibuffer_buffer(context, *state)
             }
         };
         context.restore_vm_roots(root_scope);
@@ -3325,6 +3332,11 @@ pub struct Context {
     /// independent mutators own independent slots. Flow owns its payload's
     /// GC pins until redisplay restores its state and returns the exit.
     pub(crate) mode_line_display_flow: Option<Flow>,
+    /// Renderer-inert mini/echo geometry preparation before window-change
+    /// hooks. Exclusively invoked by the guarded redisplay transaction.
+    #[allow(clippy::type_complexity)]
+    pub redisplay_prepare_fn:
+        Option<Box<dyn FnMut(&mut Self, RedisplayMiniGeometryRequest) -> EvalResult>>,
     /// Frontend-installed font-shaping driver (GNU `font->driver->shape`).
     /// The gstring contract lives in src/font.c's `Ffont_shape_gstring`; the
     /// shaping engine lives in the display layer, so the frontend installs
@@ -3436,6 +3448,9 @@ pub struct Context {
     /// Which windows' chrome (mode/header/tab line) must be re-generated on
     /// the next redisplay. See [`ChromeDirty`].
     chrome_dirty: crate::emacs_core::chrome_dirty::ChromeDirty,
+    /// Pending GNU display ownership and private transaction state. Each
+    /// exclusively borrowed Context owns it; never a process/TLS Lisp cache.
+    pub(crate) gnu_redisplay_hooks: redisplay_hooks::RedisplayHookOwnership,
     /// Process-unique id for THIS evaluator instance. Lets thread-local
     /// caches outside neovm-core (e.g. the layout engine's menu-bar item
     /// cache) refuse entries from a previous Context: tests create many
@@ -5246,6 +5261,16 @@ impl Context {
             return Ok(None);
         };
         let previous_selected_window = frame.selected_window;
+        if super::eval::gnu_redisplay_hooks_enabled()
+            && frame.find_window(minibuffer_window_id).is_some()
+        {
+            // GNU minibuf.c:828 publishes set_window_buffer before normal
+            // Fselect_window; no Lisp executes until this transition commits.
+            self.gnu_mark_window_mode_line(minibuffer_window_id);
+            if previous_selected_window != minibuffer_window_id {
+                self.gnu_mark_selection(Some(previous_selected_window), minibuffer_window_id, true);
+            }
+        }
 
         super::window_cmds::remember_selected_window_point_in_state(
             &mut self.frames,
@@ -5255,6 +5280,12 @@ impl Context {
         if let Some(frame) = self.frames.get_mut(frame_id) {
             if let Some(window) = frame.find_window_mut(minibuffer_window_id) {
                 window.set_buffer(minibuf_id);
+                if super::eval::gnu_redisplay_hooks_enabled() {
+                    if let crate::window::Window::Leaf { hscroll, .. } = window {
+                        *hscroll = 0;
+                    }
+                    window.set_suspend_auto_hscroll(false);
+                }
                 crate::window::window_markers::attach_window_position_markers(
                     &mut self.buffers,
                     window,
@@ -7673,6 +7704,14 @@ pub(crate) mod assoc_predicate;
 mod sort_predicate;
 
 mod command_loop;
+
+pub(crate) mod redisplay_hooks;
+#[cfg(test)]
+pub(crate) use redisplay_hooks::RedisplayHookPolicyGuard;
+pub(crate) use redisplay_hooks::gnu_redisplay_hooks_enabled;
+pub use redisplay_hooks::{
+    RedisplayMiniGeometryRequest, RedisplayMiniGeometrySource, RedisplayMiniPreparationFailure,
+};
 
 mod vm_shared;
 

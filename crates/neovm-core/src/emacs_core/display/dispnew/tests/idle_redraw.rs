@@ -34,6 +34,7 @@ fn idle_context() -> (Context, Rc<Cell<usize>>) {
             .current_buffer()
             .unwrap()
             .reset_unchanged_region();
+        crate::test_utils::mock_redisplay::accept_all_frames(eval);
     }));
     eval.redisplay_with_force(true).expect("redisplay");
     eval.redisplay_with_force(true).expect("redisplay");

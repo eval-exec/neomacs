@@ -349,6 +349,33 @@ enum BufferChangeKind {
     PropertiesOnly,
 }
 
+/// Verify intervals at the preparation seam. This only reads the owning
+/// Context and publishes no process-global or thread-local state.
+fn verify_change_text_read_only(
+    ctx: &crate::emacs_core::eval::Context,
+    byte_range: EmacsByteRange,
+) -> Result<(), Flow> {
+    if let Some(current_id) = ctx.buffers.current_buffer_id() {
+        if byte_range.is_empty() {
+            crate::emacs_core::textprop::verify_text_read_only_for_insert_in_state(
+                &ctx.obarray,
+                &ctx.buffers,
+                current_id,
+                byte_range.start(),
+            )?;
+        } else {
+            crate::emacs_core::textprop::verify_text_read_only_emacs_byte_range_in_state(
+                &ctx.obarray,
+                &ctx.buffers,
+                current_id,
+                byte_range,
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
 /// GNU buffer-modification preparation, with an explicit distinction between
 /// character input consumed by Tree-sitter and property-only modifications.
 /// `byte_range` is 0-based Emacs bytes and is converted to 1-based character
@@ -371,31 +398,9 @@ fn prepare_buffer_change(
     // hook.
     ensure_current_buffer_writable_in_state(&ctx.obarray, &[], &ctx.buffers)?;
 
-    // GNU `prepare_to_modify_buffer` -> `verify_interval_modification`: enforce
-    // the `read-only` text property before any modification. This is the central
-    // modification chokepoint (every insert/delete/replace/case/abbrev/indent
-    // primitive routes through `signal_before_text_change`), so checking here
-    // matches GNU's single enforcement point. It runs regardless of
-    // `inhibit-modification-hooks` (read-only is gated only by
-    // `inhibit-read-only`). For an insertion (empty range) the stickiness of the
-    // adjacent characters' `read-only` decides; for a range modification any
-    // read-only interval in the range signals.
-    if let Some(current_id) = ctx.buffers.current_buffer_id() {
-        if byte_range.is_empty() {
-            crate::emacs_core::textprop::verify_text_read_only_for_insert_in_state(
-                &ctx.obarray,
-                &ctx.buffers,
-                current_id,
-                byte_range.start(),
-            )?;
-        } else {
-            crate::emacs_core::textprop::verify_text_read_only_emacs_byte_range_in_state(
-                &ctx.obarray,
-                &ctx.buffers,
-                current_id,
-                byte_range,
-            )?;
-        }
+    let gnu_hooks = crate::emacs_core::eval::gnu_redisplay_hooks_enabled();
+    if !gnu_hooks {
+        verify_change_text_read_only(ctx, byte_range)?;
     }
 
     if let Some(current_id) = ctx.buffers.current_buffer_id() {
@@ -412,6 +417,12 @@ fn prepare_buffer_change(
     let Some(current_id) = ctx.buffers.current_buffer_id() else {
         return Ok(());
     };
+    // GNU insdel.c:2145 publishes after undoable-change and before any
+    // interval callback, including the inhibited-modification-hooks arm.
+    ctx.gnu_mark_buffer_redisplay(current_id);
+    if gnu_hooks {
+        verify_change_text_read_only(ctx, byte_range)?;
+    }
     let beg = byte_range.start();
     let end = byte_range.end();
 

@@ -2138,7 +2138,14 @@ pub(crate) fn builtin_rename_buffer(
     // `update_mode_lines` even when CURRENT-BUFFER is offscreen, which makes
     // a subsequent file/Dired buffer switch rebuild the selected window's
     // menu as well as its chrome.
-    eval.request_global_mode_line_update();
+    if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+        // GNU bset_update_mode_line is SOME. The typed helper marks only
+        // windows sharing this buffer's text and requests the menu rebuild.
+        // Broad chrome cache dirtiness would evaluate unrelated :eval forms.
+        eval.gnu_mark_buffer_mode_line(current_id);
+    } else {
+        eval.request_global_mode_line_update();
+    }
 
     // GNU `Frename_buffer` (buffer.c:1726) runs `buffer-list-update-hook'
     // after updating the buffer's name in `Vbuffer_alist', unless the buffer
@@ -2214,6 +2221,11 @@ pub(crate) fn builtin_set_buffer_redisplay(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("set-buffer-redisplay", &args, 4)?;
+    // GNU xdisp.c:928 ignores watcher WHERE and marks current_buffer,
+    // even when it is undisplayed. This is SOME, not global ALL.
+    if let Some(buffer) = eval.buffers.current_buffer_id() {
+        eval.gnu_mark_buffer_mode_line(buffer);
+    }
     eval.invalidate_redisplay();
     Ok(Value::NIL)
 }

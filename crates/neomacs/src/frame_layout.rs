@@ -145,6 +145,9 @@ struct SnapshotGeometryDoc<'a> {
 /// Called by both frontends right where they install `redisplay_fn`; batch
 /// mode installs nothing, so the subr signals "no display attached" there.
 pub fn install_frame_snapshot_fn(evaluator: &mut Context) {
+    evaluator.redisplay_prepare_fn = Some(Box::new(|eval, request| {
+        REDISPLAY_RUNTIME.with(|runtime| runtime.prepare_minibuffer_geometry(eval, request))
+    }));
     use neovm_core::emacs_core::xdisp::SnapshotFormat;
 
     evaluator.frame_snapshot_fn = Some(Box::new(|eval, request| {
@@ -409,6 +412,18 @@ pub fn install_tty_redisplay_callback_with_popup_redraw(
             tty_rif.force_redraw();
         }
         if let Some((root, children)) = run_tty_layout_tree(eval) {
+            // Consume only physically prepared frames, after layout and just
+            // before repaint. Pending requests for unrendered devices remain
+            // Context-owned; no new frontend Lisp cache or TLS is introduced.
+            let mut full_redraw =
+                eval.gnu_take_tty_frame_redraw(FrameId(root.frame_placement.frame().get()));
+            for child in &children {
+                full_redraw |=
+                    eval.gnu_take_tty_frame_redraw(FrameId(child.frame_placement.frame().get()));
+            }
+            if full_redraw {
+                tty_rif.force_redraw();
+            }
             run_tty_rif_redisplay(&mut tty_rif, &root, &children);
         }
     }));

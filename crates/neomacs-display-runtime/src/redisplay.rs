@@ -267,6 +267,22 @@ impl RedisplayRuntime {
         }
     }
 
+    /// Prepare only mini/echo geometry before the owned hook pass. This uses
+    /// the exclusively borrowed idle presentation engine, publishes no paint
+    /// ticket, and carries a callback Flow to the enclosing transaction.
+    pub fn prepare_minibuffer_geometry(
+        &self,
+        evaluator: &mut Context,
+        request: neovm_core::emacs_core::eval::RedisplayMiniGeometryRequest,
+    ) -> Result<neovm_core::emacs_core::Value, neovm_core::emacs_core::error::Flow> {
+        let mut engine = self.engine.try_borrow_mut().map_err(|_| {
+            evaluator.failed_redisplay_mini_preparation(
+                neovm_core::emacs_core::eval::RedisplayMiniPreparationFailure::PresentationBorrowed,
+            )
+        })?;
+        engine.prepare_minibuffer_geometry(evaluator, request)
+    }
+
     /// Run the canonical row producer for one synchronous logical query.
     pub fn query_window(
         &self,

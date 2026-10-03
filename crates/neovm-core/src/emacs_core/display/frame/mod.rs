@@ -268,6 +268,15 @@ pub(crate) fn builtin_make_frame_invisible(
                         old_fid,
                     );
                 }
+                if let Some(new_window) =
+                    eval.frames.get(fallback).map(|frame| frame.selected_window)
+                {
+                    let old_window = eval
+                        .frames
+                        .selected_frame()
+                        .map(|frame| frame.selected_window);
+                    eval.gnu_mark_selection(old_window, new_window, true);
+                }
                 if eval.frames.select_frame(fallback) {
                     if let Some(selected_wid) =
                         eval.frames.get(fallback).map(|frame| frame.selected_window)
@@ -281,6 +290,8 @@ pub(crate) fn builtin_make_frame_invisible(
         }
     }
 
+    // GNU Fmake_frame_invisible publishes global ALL (frame.c:3586).
+    eval.gnu_mark_windows_all();
     eval.invalidate_redisplay();
     Ok(Value::NIL)
 }
@@ -631,6 +642,10 @@ pub(crate) fn builtin_set_frame_height(
     )?;
     let pretend = args.get(2).is_some_and(|v| v.is_truthy());
     let pixelwise = args.get(3).is_some_and(|v| v.is_truthy());
+    let old_root_bounds = ctx
+        .frames
+        .get(fid)
+        .map(|frame| *frame.root_window().bounds());
     let (current_text_width_px, char_height, uses_window_system_pixels) = {
         let frame = &mut ctx
             .frames
@@ -703,6 +718,29 @@ pub(crate) fn builtin_set_frame_height(
             .get_mut(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         set_frame_text_size(frame, cols, text_lines);
+    } else if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+        // GNU preserves native terminal size; only the window text layout
+        // changes. The other axis follows the already applied root/mini tree.
+        let frame = ctx
+            .frames
+            .get_mut(fid)
+            .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+        let cols = (frame.root_window().bounds().width / frame.char_width.max(1.0))
+            .floor()
+            .max(1.0) as i64;
+        let text_lines = (text_height_px as f32 / frame.char_height.max(1.0))
+            .floor()
+            .max(1.0) as i64;
+        frame.set_window_layout_text_size(cols, text_lines);
+    }
+    if ctx
+        .frames
+        .get(fid)
+        .map(|frame| *frame.root_window().bounds())
+        != old_root_bounds
+    {
+        ctx.gnu_mark_frame_redisplay(fid);
+        ctx.gnu_mark_frame_window_change(fid);
     }
     Ok(Value::NIL)
 }
@@ -722,6 +760,10 @@ pub(crate) fn builtin_set_frame_width(
     )?;
     let pretend = args.get(2).is_some_and(|v| v.is_truthy());
     let pixelwise = args.get(3).is_some_and(|v| v.is_truthy());
+    let old_root_bounds = ctx
+        .frames
+        .get(fid)
+        .map(|frame| *frame.root_window().bounds());
     let (current_text_height_px, char_width, uses_window_system_pixels) = {
         let frame = &mut ctx
             .frames
@@ -774,6 +816,34 @@ pub(crate) fn builtin_set_frame_width(
             .get_mut(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         set_frame_text_size(frame, cols, text_lines);
+    } else if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+        // GNU preserves native terminal size; only the window text layout
+        // changes. The other axis follows the already applied root/mini tree.
+        let frame = ctx
+            .frames
+            .get_mut(fid)
+            .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+        let cols = (text_width_px as f32 / frame.char_width.max(1.0))
+            .floor()
+            .max(1.0) as i64;
+        let mini_height = frame
+            .minibuffer_leaf
+            .as_ref()
+            .map_or(0.0, |mini| mini.bounds().height);
+        let text_lines = ((frame.root_window().bounds().height + mini_height)
+            / frame.char_height.max(1.0))
+        .floor()
+        .max(1.0) as i64;
+        frame.set_window_layout_text_size(cols, text_lines);
+    }
+    if ctx
+        .frames
+        .get(fid)
+        .map(|frame| *frame.root_window().bounds())
+        != old_root_bounds
+    {
+        ctx.gnu_mark_frame_redisplay(fid);
+        ctx.gnu_mark_frame_window_change(fid);
     }
     Ok(Value::NIL)
 }
@@ -792,6 +862,10 @@ pub(crate) fn builtin_set_frame_size(
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     let pixelwise = args.get(3).is_some_and(|v| v.is_truthy());
+    let old_root_bounds = ctx
+        .frames
+        .get(fid)
+        .map(|frame| *frame.root_window().bounds());
     let (char_width, char_height, uses_window_system_pixels) = {
         let frame = &mut ctx
             .frames
@@ -897,6 +971,15 @@ pub(crate) fn builtin_set_frame_size(
             text_lines
         );
         frame.set_window_layout_text_size(cols, text_lines);
+    }
+    if ctx
+        .frames
+        .get(fid)
+        .map(|frame| *frame.root_window().bounds())
+        != old_root_bounds
+    {
+        ctx.gnu_mark_frame_redisplay(fid);
+        ctx.gnu_mark_frame_window_change(fid);
     }
     Ok(Value::NIL)
 }
@@ -1516,6 +1599,10 @@ pub(crate) fn builtin_modify_frame_parameters(
         Some(&args[0]),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
+    let old_root_bounds = eval
+        .frames
+        .get(fid)
+        .map(|frame| *frame.root_window().bounds());
     let items = super::value::list_to_vec(&args[1]).unwrap_or_default();
 
     if eval.frames.get(fid).is_none() {
@@ -1662,7 +1749,12 @@ pub(crate) fn builtin_modify_frame_parameters(
                                         iconify_frame_in_state(eval, fid)?
                                     }
                                     FrameVisibility::Invisible => {
-                                        set_frame_visibility(eval, fid, FrameVisibility::Invisible)?
+                                        set_frame_visibility(
+                                            eval,
+                                            fid,
+                                            FrameVisibility::Invisible,
+                                        )?;
+                                        eval.gnu_mark_windows_all();
                                     }
                                 }
                             } else if let Some(frame) = eval.frames.get_mut(fid) {
@@ -1853,6 +1945,15 @@ pub(crate) fn builtin_modify_frame_parameters(
         }
     }
 
+    if eval
+        .frames
+        .get(fid)
+        .map(|frame| *frame.root_window().bounds())
+        != old_root_bounds
+    {
+        eval.gnu_mark_frame_redisplay(fid);
+        eval.gnu_mark_frame_window_change(fid);
+    }
     apply_frame_position(&mut eval.frames, fid, requested_left, requested_top);
 
     Ok(Value::NIL)

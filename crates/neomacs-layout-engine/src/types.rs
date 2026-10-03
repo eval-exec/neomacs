@@ -10,6 +10,16 @@ use neovm_core::emacs_core::image_catalog::{
     ImageCatalog, ImageLookup, ImageResolveRequest, ImageScaleEnvironment, ImageSizeLimit,
 };
 
+/// Numeric extent of a mini-window walk, owned by one exclusive attempt.
+/// Full measurement is only requested before GNU window-change hooks. It
+/// carries no Lisp values, shared cache, renderer or presentation authority.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MiniWindowMeasurement {
+    #[default]
+    Presentation,
+    ToEnd,
+}
+
 /// Parameters for a window that the layout engine needs.
 /// Populated from Emacs data via FFI before layout runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -246,6 +256,8 @@ pub struct WindowParams {
     /// A stack-local measurement is bounded by rows, not viewport pixels.
     /// Redisplay leaves this absent and uses the physical window extent.
     pub measurement_rows: Option<std::num::NonZeroUsize>,
+    /// GNU mini preparation walks all display rows through accessible EOB.
+    pub mini_measurement: MiniWindowMeasurement,
     /// Explicit pixel extent for a synchronous query, independent of the viewport.
     pub measurement_pixels: Option<std::num::NonZeroUsize>,
     /// Complete a live viewport query once its target row has been emitted.
@@ -434,6 +446,9 @@ impl WindowParams {
     /// conditional display and composition must all honor offscreen queries;
     /// the physical viewport is only the default for a presentation walk.
     pub(crate) fn source_interpretation_rows(&self) -> usize {
+        if self.mini_measurement == MiniWindowMeasurement::ToEnd {
+            return usize::MAX;
+        }
         self.measurement_rows.map_or_else(
             || {
                 (self

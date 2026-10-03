@@ -1,4 +1,6 @@
 use super::*;
+mod redisplay_gnu;
+mod window_configuration_redisplay;
 use crate::buffer::LispCharPos1;
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_max_args, expect_min_args};
 use crate::emacs_core::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
@@ -306,6 +308,9 @@ fn run_window_default_hook_value(
 }
 
 pub(crate) fn run_redisplay_window_change_hooks(eval: &mut super::eval::Context) -> EvalResult {
+    if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+        return redisplay_gnu::run(eval);
+    }
     // Mirrors GNU `run_window_change_functions` (window.c:4116):
     //   specbind (Qinhibit_redisplay, Qt);
     // Any hook function that calls `redisplay` (directly or indirectly)
@@ -631,6 +636,9 @@ impl WindowConfigurationRestoreOptions {
 
 pub(crate) struct WindowConfigurationSnapshot {
     frame_id: crate::window::FrameId,
+    /// Numeric GNU frame epoch at capture. The heap-owned configuration and
+    /// its restore are accessed only under the owning Context mutator borrow.
+    change_stamp: crate::window::ChangeStamp,
     /// This configuration's window tree.
     ///
     /// A DETACHED copy: `current-window-configuration` clones the frame's tree
@@ -1043,6 +1051,7 @@ impl WindowConfigurationSnapshot {
     fn clone_for_restore(&self, buffers: &mut crate::buffer::BufferManager) -> Self {
         Self {
             frame_id: self.frame_id,
+            change_stamp: self.change_stamp,
             tree:
                 crate::window::window_markers::clone_window_tree_with_independent_position_markers(
                     buffers, &self.tree,
@@ -1474,6 +1483,7 @@ pub(crate) fn builtin_current_window_configuration(
     if let Some(frame_state) = eval.frames.get(frame_id) {
         let mut snapshot = WindowConfigurationSnapshot {
             frame_id,
+            change_stamp: frame_state.change_stamp,
             tree:
                 crate::window::window_markers::clone_window_tree_with_independent_position_markers(
                     &mut eval.buffers,
@@ -1706,6 +1716,9 @@ pub(crate) fn set_window_configuration_with_options(
         merge_snapshot_window_parameters(&mut snapshot, &live_parameters);
         prepare_saved_window_buffer_restoration(eval, &mut snapshot);
         prepare_reused_window_histories(eval, &mut snapshot)?;
+        window_configuration_redisplay::prepare(eval, &mut snapshot, options);
+        // GNU fset_redisplay precedes restoring the window tree.
+        eval.gnu_mark_frame_redisplay(snapshot.frame_id);
         unshow_frame_root_buffers(eval, snapshot.frame_id);
         if let Some(frame) = eval.frames.get_mut(snapshot.frame_id) {
             frame.set_tree(snapshot.tree);
@@ -1717,6 +1730,15 @@ pub(crate) fn set_window_configuration_with_options(
             frame.selected_window = snapshot.selected_window;
             if options.minibuffer_window == MinibufferWindowRestoration::RestoreSaved {
                 frame.minibuffer_window = snapshot.minibuffer_window;
+                frame.minibuffer_leaf = snapshot.minibuffer_leaf;
+            } else if crate::emacs_core::eval::gnu_redisplay_hooks_enabled()
+                && snapshot
+                    .minibuffer_leaf
+                    .as_ref()
+                    .is_some_and(|mini| frame.minibuffer_window == Some(mini.id()))
+            {
+                // DONT-SET-MINIWINDOW keeps its live source, not its geometry.
+                // `prepare` preserved that source on the restored saved leaf.
                 frame.minibuffer_leaf = snapshot.minibuffer_leaf;
             }
         }
@@ -1837,6 +1859,7 @@ pub(crate) fn set_window_configuration_with_options(
             frame.reconcile_restored_window_configuration_geometry();
         }
 
+        eval.gnu_mark_frame_window_change(snapshot.frame_id);
         let frame_to_select = match options.selected_frame {
             SelectedFrameRestoration::RestoreSaved => Some(snapshot.frame_id),
             SelectedFrameRestoration::KeepSelected => selected_frame_before_restore,
@@ -1887,6 +1910,9 @@ pub(crate) fn builtin_run_window_configuration_change_hook(
         return Ok(Value::NIL);
     };
     let frame_id = crate::window::FrameId(fid);
+    if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+        return redisplay_gnu::run_configuration(eval, frame_id);
+    }
     let Some(frame_state) = eval.frames.get(frame_id) else {
         return Ok(Value::NIL);
     };
@@ -1945,6 +1971,13 @@ pub(crate) fn builtin_run_window_configuration_change_hook(
     result
 }
 
+pub(crate) fn run_gnu_committed_scroll_functions(
+    eval: &mut super::eval::Context,
+    window: crate::window::WindowId,
+) -> EvalResult {
+    redisplay_gnu::run_committed_scroll(eval, window)
+}
+
 pub(crate) fn builtin_run_window_scroll_functions(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
@@ -1962,6 +1995,9 @@ pub(crate) fn builtin_run_window_scroll_functions(
         return Ok(Value::NIL);
     };
     let window_id = crate::window::WindowId(wid);
+    if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+        return redisplay_gnu::run_eager_scroll(eval, window_id);
+    }
     let frame_id = eval.frames.find_window_frame_id(window_id).ok_or_else(|| {
         signal(
             LispCondition::WrongTypeArgument,

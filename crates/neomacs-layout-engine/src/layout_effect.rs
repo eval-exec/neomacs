@@ -4,6 +4,7 @@
 //! their GNU leaf-local position; synchronous display queries made by those
 //! hooks are routed through the redisplay runtime's disjoint query engine.
 
+use neovm_core::buffer::BufferId;
 use neovm_core::window::WindowId;
 
 use crate::buffer_source::window_source::ResolvedWindowStart;
@@ -12,11 +13,15 @@ use crate::buffer_source::window_source::ResolvedWindowStart;
 ///
 /// A visibility retry can choose another start for the same window and must
 /// still run its hook. Keying the ledger by this typed pair prevents a retry
-/// from either replaying one site or suppressing a distinct one.
+/// from either replaying one site or suppressing a distinct one. GNU's
+/// conservative/recenter program-counter identity also distinguishes equal
+/// markers. One exclusive frame ledger owns these numeric acknowledgements;
+/// independent mutators never share them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct WindowScrollHookSite {
     window_id: WindowId,
     window_start: ResolvedWindowStart,
+    decision: WindowScrollDecision,
 }
 
 impl WindowScrollHookSite {
@@ -24,8 +29,59 @@ impl WindowScrollHookSite {
         Self {
             window_id,
             window_start,
+            decision: WindowScrollDecision::StartCommit,
         }
     }
+
+    #[inline]
+    pub(crate) const fn mini_eob(
+        window_id: WindowId,
+        window_start: ResolvedWindowStart,
+        buffer: BufferId,
+        decision: MiniEobScrollDecision,
+    ) -> Self {
+        Self {
+            window_id,
+            window_start,
+            decision: WindowScrollDecision::MiniEob { buffer, decision },
+        }
+    }
+
+    #[inline]
+    pub(crate) const fn window_start(self) -> ResolvedWindowStart {
+        self.window_start
+    }
+
+    #[inline]
+    pub(crate) const fn mini_eob_decision(
+        self,
+    ) -> Option<(WindowId, BufferId, MiniEobScrollDecision)> {
+        match self.decision {
+            WindowScrollDecision::StartCommit => None,
+            WindowScrollDecision::MiniEob { buffer, decision } => {
+                Some((self.window_id, buffer, decision))
+            }
+        }
+    }
+}
+
+/// Numeric GNU decision identity owned by an exclusive frame attempt. Distinct
+/// mutators retain disjoint ledgers; this stores no Lisp values or shared cache.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum WindowScrollDecision {
+    StartCommit,
+    MiniEob {
+        buffer: BufferId,
+        decision: MiniEobScrollDecision,
+    },
+}
+
+/// GNU program-counter identity for one exclusive window attempt, with no
+/// shared mutator cache or Lisp-owned payload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum MiniEobScrollDecision {
+    Conservative,
+    Recenter,
 }
 
 /// Work that must cross from layout back into the Lisp evaluator.
@@ -48,7 +104,10 @@ impl LayoutEffect {
     /// recursively borrowing the presentation engine. Keeping this operation
     /// on the typed effect prevents an arbitrary callback from being smuggled
     /// into the row producer while preserving GNU's per-leaf Lisp order.
-    pub(crate) fn execute_inline(self, evaluator: &mut neovm_core::emacs_core::Context) {
+    pub(crate) fn execute_inline(
+        self,
+        evaluator: &mut neovm_core::emacs_core::Context,
+    ) -> Result<neovm_core::emacs_core::value::Value, neovm_core::emacs_core::error::Flow> {
         match self {
             Self::RunWindowScrollFunctions(effect) => effect.execute(evaluator),
         }
@@ -66,7 +125,10 @@ impl WindowScrollEffect {
         Self { site }
     }
 
-    fn execute(self, evaluator: &mut neovm_core::emacs_core::Context) {
-        evaluator.run_window_scroll_functions_for_committed_start(self.site.window_id);
+    fn execute(
+        self,
+        evaluator: &mut neovm_core::emacs_core::Context,
+    ) -> Result<neovm_core::emacs_core::value::Value, neovm_core::emacs_core::error::Flow> {
+        evaluator.run_window_scroll_functions_for_committed_start(self.site.window_id)
     }
 }

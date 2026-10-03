@@ -637,3 +637,8 @@ mod tests {
         );
     }
 }
+
+/// Accepted viewport publication for counter-only frontend fixtures.
+#[cfg(test)]
+#[path = "test_utils/mock_redisplay.rs"]
+pub mod mock_redisplay;

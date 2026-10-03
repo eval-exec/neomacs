@@ -374,7 +374,7 @@ pub(crate) fn builtin_message(ctx: &mut super::eval::Context, args: Vec<Value>) 
     // and then, unless `inhibit-message', reaches `message_to_stderr (Qnil)' in
     // batch -- so the clear is not silent there.
     if args[0].is_nil() {
-        clear_echo_area_and_report_to_stderr(ctx);
+        clear_echo_area_and_report_to_stderr(ctx)?;
         return Ok(Value::NIL);
     }
     if args[0].is_string()
@@ -384,7 +384,7 @@ pub(crate) fn builtin_message(ctx: &mut super::eval::Context, args: Vec<Value>) 
             .as_bytes()
             .is_empty()
     {
-        clear_echo_area_and_report_to_stderr(ctx);
+        clear_echo_area_and_report_to_stderr(ctx)?;
         return Ok(args[0]);
     }
     // GNU Emacs's `message` ALWAYS calls `format-message` on the args,
@@ -435,7 +435,10 @@ pub(crate) fn builtin_message(ctx: &mut super::eval::Context, args: Vec<Value>) 
         match &displayed_message {
             EchoMessageSetResult::EchoArea(displayed) => {
                 ctx.ensure_echo_area_buffers();
-                ctx.set_current_message(Some(displayed.clone()))
+                ctx.set_current_message(Some(displayed.clone()));
+                if ctx.gnu_redisplay_hooks_policy_enabled() {
+                    ctx.gnu_display_message_geometry_flow()?;
+                }
             }
             EchoMessageSetResult::LispHandled => ctx.discard_current_message_without_clear_hook(),
             EchoMessageSetResult::Inhibited => {}
@@ -450,7 +453,7 @@ pub(crate) fn builtin_message(ctx: &mut super::eval::Context, args: Vec<Value>) 
 /// GNU `message3 (Qnil)` for the echo-area-clearing case: log, then unless
 /// `inhibit-message' reach `message3_nolog' -- which in batch is
 /// `message_to_stderr', printing the empty line described above.
-fn clear_echo_area_and_report_to_stderr(ctx: &mut super::eval::Context) {
+fn clear_echo_area_and_report_to_stderr(ctx: &mut super::eval::Context) -> EvalResult {
     // GNU `message1 (0)` reaches `log_message (Qnil)`, which does not log a
     // new message but does terminate printer output left as a partial line.
     message_dolog(
@@ -458,15 +461,20 @@ fn clear_echo_area_and_report_to_stderr(ctx: &mut super::eval::Context) {
         &crate::heap_types::LispString::from_unibyte(Vec::new()),
         MessageLogTermination::FlushPendingFragment,
     );
-    ctx.clear_echo_area_message();
+    let cleared = ctx.clear_echo_area_message();
     if !ctx.noninteractive() {
-        return;
+        if ctx.gnu_redisplay_hooks_policy_enabled()
+            && cleared == super::eval::EchoMessageClearResult::ClearEchoArea
+        {
+            ctx.gnu_display_message_geometry_flow()?;
+        }
+        return Ok(Value::NIL);
     }
     if ctx
         .visible_variable_value_or_nil("inhibit-message")
         .is_truthy()
     {
-        return;
+        return Ok(Value::NIL);
     }
     let cursor_in_echo_area = ctx
         .visible_variable_value_or_nil("cursor-in-echo-area")
@@ -477,6 +485,7 @@ fn clear_echo_area_and_report_to_stderr(ctx: &mut super::eval::Context) {
         let _ = err.write_all(b"\n");
         let _ = err.flush();
     }
+    Ok(Value::NIL)
 }
 
 pub(crate) fn builtin_message_box(ctx: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {

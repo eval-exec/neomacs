@@ -99,6 +99,8 @@ pub(super) const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOMACS_MODE_LINE_PLAIN_FIELD",
     // Preserve partial mode-line owners across Lisp/GC (`off` default, `on`).
     "NEOMACS_MODE_LINE_NUMERIC_PADDING",
+    // Owned GNU redisplay hook transaction (`off` default, `on`).
+    "NEOMACS_REDISPLAY_GNU_HOOKS",
     // Bounded watched-property demand loop (`off` default, `on`).
     "NEOMACS_WATCHED_PROP_DEMAND",
     // A window whose start moved back reuses its old rows: `on`.

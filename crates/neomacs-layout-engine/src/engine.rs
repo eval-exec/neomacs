@@ -4,6 +4,9 @@
 //! character position, computes line breaks, positions glyphs on a fixed-width
 //! grid, and publishes `FrameDisplayState` snapshots for render backends.
 
+mod mini_eob_scroll;
+mod mini_source_start;
+mod mini_source_stop;
 mod posn_object_extent;
 mod prepared_viewports;
 mod query_cache;
@@ -174,6 +177,9 @@ impl EditReplayStructureProperty {
 pub(crate) enum LayoutPurpose {
     Redisplay,
     Snapshot,
+    MiniPreparation {
+        window_id: neovm_core::window::WindowId,
+    },
     SynchronousQuery {
         window_id: neovm_core::window::WindowId,
         scope: neovm_core::window::WindowLayoutQueryScope,
@@ -184,7 +190,9 @@ impl LayoutPurpose {
     const fn query_window(self) -> Option<neovm_core::window::WindowId> {
         match self {
             Self::Redisplay | Self::Snapshot => None,
-            Self::SynchronousQuery { window_id, .. } => Some(window_id),
+            Self::SynchronousQuery { window_id, .. } | Self::MiniPreparation { window_id } => {
+                Some(window_id)
+            }
         }
     }
 }
@@ -307,6 +315,11 @@ fn uses_adhoc_minibuffer_resize_scroll(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WindowLayoutWalkPurpose {
     Redisplay,
+    /// GNU renderer-inert snapshot. This numeric purpose belongs to one
+    /// exclusively borrowed engine/Context; independent mutators share no
+    /// Lisp values or mutable cache through it.
+    Snapshot,
+    MiniPreparation,
     SynchronousQuery(neovm_core::window::WindowLayoutQueryScope),
 }
 
@@ -327,11 +340,25 @@ fn window_position_publication(
     purpose: WindowLayoutWalkPurpose,
     source: WindowDisplaySource,
 ) -> WindowPositionPublication {
-    if matches!(purpose, WindowLayoutWalkPurpose::SynchronousQuery(_)) {
+    if matches!(
+        purpose,
+        WindowLayoutWalkPurpose::SynchronousQuery(_) | WindowLayoutWalkPurpose::MiniPreparation
+    ) {
         return WindowPositionPublication::SynchronousQueryEnd;
     }
     if source == WindowDisplaySource::InactiveEchoArea {
         return WindowPositionPublication::InactiveEchoArea;
+    }
+    if purpose == WindowLayoutWalkPurpose::Snapshot {
+        return WindowPositionPublication::Snapshot;
+    }
+    // A real GNU transaction already performed the pre-hook resize walk.
+    // Its presentation now enters redisplay_window. Standalone engine calls
+    // and the explicit legacy policy retain the original measurement route.
+    if evaluator.gnu_redisplay_hooks_policy_enabled()
+        && evaluator.gnu_redisplay_transaction_active()
+    {
+        return WindowPositionPublication::Redisplay;
     }
     if params.is_minibuffer() {
         let buffer_id = neovm_core::buffer::BufferId(params.buffer_id);
@@ -512,6 +539,13 @@ fn resolve_window_display_source_params(
     // (GNU resolves it inline with `lookup_image`). This is the single point
     // every window's params pass through that also holds the evaluator.
     let mut params = params.clone();
+    if purpose == WindowLayoutWalkPurpose::MiniPreparation {
+        params.window_start = params.buffer_begv;
+        params.vscroll = 0;
+        params.force_start = true;
+        params.previous_visible_end = None;
+        params.mini_measurement = crate::types::MiniWindowMeasurement::ToEnd;
+    }
     if let WindowLayoutWalkPurpose::SynchronousQuery(scope) = purpose {
         use neovm_core::window::WindowLayoutQueryScope;
         let start = match scope {
@@ -551,8 +585,10 @@ fn resolve_window_display_source_params(
         .map(crate::types::SharedImageCatalog);
     let params = &params;
 
-    if matches!(purpose, WindowLayoutWalkPurpose::SynchronousQuery(_))
-        || !params.is_minibuffer()
+    if matches!(
+        purpose,
+        WindowLayoutWalkPurpose::SynchronousQuery(_) | WindowLayoutWalkPurpose::MiniPreparation
+    ) || !params.is_minibuffer()
         || evaluator.minibuffer_window_is_active(window_id)
     {
         return ResolvedWindowDisplaySource {
@@ -689,11 +725,12 @@ fn collect_live_window_layout_inputs(
             .is_some_and(|selected| selected.id == frame_id);
         let is_selected = frame_is_selected && live_frame.selected_window == window_id;
         let cursor_role = match purpose {
-            WindowLayoutWalkPurpose::Redisplay => {
+            WindowLayoutWalkPurpose::Redisplay | WindowLayoutWalkPurpose::Snapshot => {
                 super::neovm_bridge::redisplay_cursor_target(evaluator, frame_id)
                     .role_for(window_id)
             }
-            WindowLayoutWalkPurpose::SynchronousQuery(_) => {
+            WindowLayoutWalkPurpose::SynchronousQuery(_)
+            | WindowLayoutWalkPurpose::MiniPreparation => {
                 WindowCursorRole::from_active(is_selected)
             }
         };
@@ -822,6 +859,9 @@ pub struct LayoutEngine {
     /// the frame converges.
     window_snapshots: Vec<WindowPresentationSnapshot>,
     query_restart_rows: Vec<(neovm_core::buffer::LispCharPos1, i64)>,
+    /// One renderer-inert full mini measurement. Owned numeric attempt result;
+    /// never shared with other Context mutators or retained presentations.
+    mini_preparation_height: Option<f32>,
     /// Granted only by the canonical walk's semantic reuse barrier. Geometry
     /// queries with evaluated Lisp conditions must never skip that walk.
     query_body_reuse_allowed: bool,
@@ -1091,6 +1131,7 @@ impl FrameWindowEndAttempts {
 struct RedisplayLispLedger {
     acknowledged_scroll_hooks: rustc_hash::FxHashSet<WindowScrollHookSite>,
     exact_hook_resumes: rustc_hash::FxHashMap<neovm_core::window::WindowId, ResolvedWindowStart>,
+    mini_eob_scroll: mini_eob_scroll::MiniEobScrollLedger,
 }
 
 impl RedisplayLispLedger {
@@ -1109,8 +1150,9 @@ impl RedisplayLispLedger {
     }
 
     fn acknowledge_scroll_hook(&mut self, effect: &LayoutEffect) {
-        self.acknowledged_scroll_hooks
-            .insert(effect.scroll_hook_site());
+        let site = effect.scroll_hook_site();
+        self.acknowledged_scroll_hooks.insert(site);
+        self.mini_eob_scroll.acknowledge(site);
     }
 
     /// GNU resumes the same callback site from the start after Lisp has had a
@@ -1332,6 +1374,7 @@ impl LayoutEngine {
         self.pending_tab_bar_pointer = None;
         self.window_snapshots.clear();
         self.query_restart_rows.clear();
+        self.mini_preparation_height = None;
         self.cursor_only_window_ids.clear();
         self.prepared_window_ids.clear();
         self.scroll_window_ids.clear();
@@ -1477,6 +1520,7 @@ impl LayoutEngine {
             text_buf: Vec::with_capacity(64 * 1024), // 64KB initial
             window_snapshots: Vec::new(),
             query_restart_rows: Vec::new(),
+            mini_preparation_height: None,
             query_body_reuse_allowed: false,
             query_cache: Default::default(),
             font_metrics: Some(FontMetricsService::new()),
@@ -1516,6 +1560,7 @@ impl LayoutEngine {
             text_buf: Vec::with_capacity(64 * 1024),
             window_snapshots: Vec::new(),
             query_restart_rows: Vec::new(),
+            mini_preparation_height: None,
             query_body_reuse_allowed: false,
             query_cache: Default::default(),
             font_metrics: None,
@@ -1635,6 +1680,9 @@ impl LayoutEngine {
         purpose: LayoutPurpose,
     ) -> FrameLayoutAttempt {
         debug_assert!(purpose.query_window().is_none());
+        if evaluator.redisplay_hook_flow_pending() {
+            return FrameLayoutAttempt::Aborted;
+        }
         self.layout_frame_rust_for_purpose_inner(evaluator, frame_id, purpose);
         if evaluator.has_mode_line_display_flow() {
             self.last_frame_display_state = None;
@@ -1862,16 +1910,23 @@ impl LayoutEngine {
             .get(&frame_id)
             .cloned()
             .unwrap_or_default();
-        let mut minibuffer_measurement_needs_begv = query_window.is_none();
         let mut frame_window_end_attempts = FrameWindowEndAttempts::default();
         let layout_walk_purpose = match purpose {
+            LayoutPurpose::MiniPreparation { .. } => WindowLayoutWalkPurpose::MiniPreparation,
             LayoutPurpose::SynchronousQuery { scope, .. } => {
                 WindowLayoutWalkPurpose::SynchronousQuery(scope)
+            }
+            LayoutPurpose::Snapshot if evaluator.gnu_redisplay_hooks_policy_enabled() => {
+                WindowLayoutWalkPurpose::Snapshot
             }
             LayoutPurpose::Redisplay | LayoutPurpose::Snapshot => {
                 WindowLayoutWalkPurpose::Redisplay
             }
         };
+        let mut minibuffer_measurement_needs_begv = query_window.is_none()
+            && layout_walk_purpose != WindowLayoutWalkPurpose::Snapshot
+            && !(evaluator.gnu_redisplay_hooks_policy_enabled()
+                && evaluator.gnu_redisplay_transaction_active());
 
         let (
             frame_params,
@@ -2158,7 +2213,11 @@ impl LayoutEngine {
                 .zip(&window_layout_inputs)
                 .zip(&retained_keys)
                 .map(|((params, (_, layout_box)), (_, key))| {
-                    if query_window.is_some() {
+                    if query_window.is_some()
+                        || layout_walk_purpose == WindowLayoutWalkPurpose::Snapshot
+                    {
+                        // Snapshot/query rows must start at the live marker;
+                        // historical viewport replay belongs to redisplay.
                         return IncrementalWindowPlan {
                             prepared_faces: None,
                             cursor_only: None,
@@ -2521,7 +2580,9 @@ impl LayoutEngine {
                 let mut cursor_only_replay = plan.cursor_only.take();
                 let mut scroll_replay = plan.scroll.take();
                 let mut is_edit = plan.is_edit;
-                let mut visibility_retry_budget = if query_window.is_some() {
+                let mut visibility_retry_budget = if query_window.is_some()
+                    || layout_walk_purpose == WindowLayoutWalkPurpose::Snapshot
+                {
                     0
                 } else {
                     MAX_WINDOW_VISIBILITY_RETRIES
@@ -2568,7 +2629,14 @@ impl LayoutEngine {
                         }
                         LeafLayoutAttempt::Effect(effect) => {
                             lisp_ledger.acknowledge_scroll_hook(&effect);
-                            effect.execute_inline(evaluator);
+                            if let Err(flow) = effect.execute_inline(evaluator) {
+                                evaluator.defer_redisplay_hook_flow(flow);
+                                frame_window_end_attempts.reject_all(evaluator);
+                                evaluator.retire_interaction_presentation(presentation_id);
+                                self.last_frame_display_state = None;
+                                self.reset_frame_attempt_state();
+                                return None;
+                            }
                             lisp_ledger
                                 .acknowledge_live_hook_resume(evaluator, frame_id, window_id);
                             let current_topology_generation =
@@ -2640,7 +2708,9 @@ impl LayoutEngine {
                             // A hook effect re-enters this leaf from its live
                             // inputs, which is the same fresh attempt the old
                             // recursion performed by unwinding to this loop.
-                            visibility_retry_budget = if query_window.is_some() {
+                            visibility_retry_budget = if query_window.is_some()
+                                || layout_walk_purpose == WindowLayoutWalkPurpose::Snapshot
+                            {
                                 0
                             } else {
                                 MAX_WINDOW_VISIBILITY_RETRIES
@@ -2851,7 +2921,18 @@ impl LayoutEngine {
                             .any(|row| row.row == *index && row.start_buffer_pos == Some(*anchor))
                     })
                 });
+                let mini_height = if matches!(purpose, LayoutPurpose::MiniPreparation { .. }) {
+                    self.frame_output.mini_measurement_height_px(
+                        target.0 as i64,
+                        window_params_list
+                            .first()
+                            .map_or(1.0, |params| params.char_height.max(1.0)),
+                    )
+                } else {
+                    None
+                };
                 self.reset_frame_attempt_state();
+                self.mini_preparation_height = mini_height;
                 // The completed query owns these small certificates until
                 // `query_window_layout` transfers them into its cache entry.
                 self.query_restart_rows = query_restart_rows;
@@ -2863,7 +2944,9 @@ impl LayoutEngine {
             // this speculative frame, then apply it and retry within the
             // shared convergence budget. Resize policy controls which planned
             // growth or shrink is permitted; the frame owns its geometry.
-            if let Some(mini_params) = window_params_list.last()
+            if !(evaluator.gnu_redisplay_hooks_policy_enabled()
+                && evaluator.gnu_redisplay_transaction_active())
+                && let Some(mini_params) = window_params_list.last()
                 && mini_params.is_minibuffer()
                 && let Some(mini_content_height_px) = self.output_window_content_height_px(
                     mini_params.window_id,
@@ -3592,6 +3675,14 @@ impl LayoutEngine {
             }
         }
 
+        if layout_walk_purpose == WindowLayoutWalkPurpose::Snapshot {
+            // Frame preparation also commits live output and window ends.
+            // A renderer-inert snapshot owns only its fresh geometry.
+            for snapshot in &mut self.window_snapshots {
+                snapshot.retain_as_geometry_only();
+            }
+        }
+
         // Fringe bitmaps are stamped onto matrix rows after the row walk has
         // pushed their snapshot rows, so pair the two up now that both are
         // final — this is what makes `fringe-bitmaps-at-pos` readable from the
@@ -3638,12 +3729,193 @@ impl LayoutEngine {
                     accepted_tty_posn_pool,
                 )
                 .expect("layout presentation identity is fresh");
+            // Body dimensions are now authoritative before renderer activation.
+            // Failed prepare and missing-frame paths cannot acknowledge output.
+            evaluator.note_gnu_frame_display_accepted(
+                frame_id,
+                self.retained_window_matrices
+                    .keys()
+                    .map(|window| neovm_core::window::WindowId(window.get() as u64)),
+            );
         }
         frame_window_end_attempts.accept_all();
         for face_name in face_resolver.take_invalid_face_references() {
             evaluator.add_to_log(&format!("Invalid face reference: {face_name}"));
         }
         None
+    }
+
+    /// GNU resize_mini_window's full, renderer-inert BEGV-to-ZV walk. The
+    /// exclusive presentation engine is idle before window-change hooks; this
+    /// query retires speculative rows and never seals or paints a frame.
+    pub fn prepare_minibuffer_geometry(
+        &mut self,
+        evaluator: &mut neovm_core::emacs_core::Context,
+        request: neovm_core::emacs_core::eval::RedisplayMiniGeometryRequest,
+    ) -> Result<neovm_core::emacs_core::value::Value, neovm_core::emacs_core::error::Flow> {
+        use neovm_core::buffer::LispCharPos1;
+        let Some(frame) = evaluator.frame_manager().get(request.frame) else {
+            return Ok(Value::NIL);
+        };
+        let Some(_window) = frame.find_window(request.window) else {
+            return Ok(Value::NIL);
+        };
+        if frame.minibuffer_window != Some(request.window) {
+            return Ok(Value::NIL);
+        }
+        let mini_only = frame.root_window().id() == request.window;
+        let char_height = frame.char_height.max(1.0);
+        let old_height = _window.bounds().height;
+        let inner_height = frame.root_window().bounds().height
+            + if mini_only {
+                0.0
+            } else {
+                _window.bounds().height
+            };
+        let frame_rows = inner_height / char_height;
+        let begv = evaluator
+            .buffer_manager()
+            .get(request.buffer)
+            .map(|buffer| {
+                LispCharPos1::from_one_based_usize(
+                    buffer.point_min_char_pos().get().saturating_add(1),
+                )
+            })
+            .unwrap_or(LispCharPos1::ONE);
+        let adhoc = uses_adhoc_minibuffer_resize_scroll(evaluator, request.buffer);
+        // GNU resets the default start before the nil-policy early return.
+        if adhoc {
+            evaluator.gnu_set_prepared_minibuffer_start(request.frame, request.window, begv, false);
+        }
+        if mini_only {
+            return evaluator.gnu_resize_prepared_mini_frame(request.frame);
+        }
+        let mode = resize_mini_windows_mode_for_buffer(evaluator, request.buffer);
+        if !mode.should_grow() {
+            return Ok(Value::NIL);
+        }
+        let raw_maximum = evaluator
+            .buffer_manager()
+            .get(request.buffer)
+            .and_then(|buffer| buffer.buffer_local_value("max-mini-window-height"))
+            .or_else(|| {
+                evaluator
+                    .obarray()
+                    .symbol_value("max-mini-window-height")
+                    .copied()
+            })
+            .unwrap_or_else(|| Value::make_float(0.25));
+        let max_lines = max_mini_window_lines_from_value(raw_maximum, frame_rows);
+        self.mini_preparation_height = None;
+        self.query_body_reuse_allowed = false;
+        evaluator.sync_runtime_faces_for_frame(request.frame);
+        let query = self.layout_frame_rust_for_purpose_inner(
+            evaluator,
+            request.frame,
+            LayoutPurpose::MiniPreparation {
+                window_id: request.window,
+            },
+        );
+        self.report_image_failures(evaluator);
+        let query = query.ok_or_else(|| {
+            evaluator.failed_redisplay_mini_preparation(
+                neovm_core::emacs_core::eval::RedisplayMiniPreparationFailure::DidNotConverge,
+            )
+        })?;
+        let height = self
+            .mini_preparation_height
+            .take()
+            .unwrap_or(char_height)
+            .max(char_height);
+        let empty = evaluator
+            .buffer_manager()
+            .get(request.buffer)
+            .is_none_or(|buffer| buffer.accessible_emacs_byte_range().is_empty());
+        // GNU grow-only's allowed shrink is shrink_mini_window(unit), even
+        // when a nonempty shorter message requests more than one line.
+        let desired_height = if mode == ResizeMiniWindowsMode::GrowOnly && height < old_height {
+            if mode.should_shrink(request.exact, empty) {
+                char_height
+            } else {
+                old_height
+            }
+        } else {
+            height
+        };
+        let resize = evaluator
+            .frame_manager()
+            .get(request.frame)
+            .and_then(|frame| frame.plan_mini_window_resize(desired_height, max_lines))
+            .filter(|resize| {
+                if resize.is_growth() {
+                    mode.should_grow()
+                } else {
+                    mode.should_shrink(request.exact, empty)
+                }
+            });
+        // The display-row producer supplies exact source anchors, including
+        // overlay/display-string rows. Choose the last screenful from these
+        // rows, rather than counting physical newlines or measuring a prefix.
+        let max_height = (max_lines * char_height).max(char_height).min(inner_height);
+        let start = if height > max_height && adhoc {
+            query
+                .geometry()
+                .and_then(|snapshot| {
+                    let target_y = snapshot
+                        .rows
+                        .last()?
+                        .y
+                        .saturating_sub((max_height - char_height).round() as i64);
+                    if evaluator.gnu_redisplay_hooks_policy_enabled() {
+                        let end = evaluator
+                            .buffer_manager()
+                            .get(request.buffer)
+                            .map(|buffer| {
+                                LispCharPos1::from_one_based_usize(
+                                    buffer.point_max_char_pos().get().saturating_add(1),
+                                )
+                            })?;
+                        mini_source_start::aligned_after_string_start(snapshot, target_y, end)
+                    } else {
+                        snapshot
+                            .rows
+                            .iter()
+                            .rev()
+                            .find(|row| row.y <= target_y)
+                            .and_then(|row| row.start_buffer_pos)
+                    }
+                })
+                .unwrap_or(begv)
+        } else if height <= max_height {
+            begv
+        } else {
+            evaluator
+                .frame_manager()
+                .get(request.frame)
+                .and_then(|frame| frame.find_window(request.window))
+                .and_then(|window| {
+                    if let neovm_core::window::Window::Leaf { window_start, .. } = window {
+                        Some(*window_start)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(begv)
+        };
+        evaluator.gnu_set_prepared_minibuffer_start(
+            request.frame,
+            request.window,
+            start,
+            height > max_height && adhoc,
+        );
+        if let Some(resize) = resize {
+            evaluator.gnu_apply_prepared_minibuffer_resize(
+                request.frame,
+                request.window,
+                resize.height_px(),
+            )?;
+        }
+        Ok(Value::NIL)
     }
 
     /// Answer a live window query from validated geometry or the canonical row
@@ -3670,6 +3942,7 @@ impl LayoutEngine {
         }
         self.query_body_reuse_allowed = true;
         self.query_restart_rows.clear();
+        self.mini_preparation_height = None;
         let (query, collections) = neovm_core::tagged::collection_reads::capture_normalized(
             evaluator,
             |evaluator| {
@@ -4232,8 +4505,18 @@ impl LayoutEngine {
             &resolved_params
         };
         let scroll_hook_site = WindowScrollHookSite::new(window_id, resolved_window_start);
-        let site_publication =
-            lisp_ledger.publication_for_site(position_publication, scroll_hook_site);
+        let site_publication = if params.is_minibuffer()
+            && matches!(position_publication, WindowPositionPublication::Redisplay)
+            && evaluator.gnu_redisplay_hooks_policy_enabled()
+            && evaluator.gnu_redisplay_transaction_active()
+            && lisp_ledger
+                .mini_eob_scroll
+                .completed(window_id, neovm_core::buffer::BufferId(params.buffer_id))
+        {
+            WindowPositionPublication::RedisplayMiniEobFallback
+        } else {
+            lisp_ledger.publication_for_site(position_publication, scroll_hook_site)
+        };
         if !matches!(&viewport_resolution, ViewportResolutionPhase::Measure(_))
             && let Some(effect) = site_publication.publish_window_start(
                 evaluator,
@@ -4272,14 +4555,30 @@ impl LayoutEngine {
         let display_target = crate::display_property::DisplayPropertyTarget::for_window_system(
             face_resolver.is_window_system(),
         );
-        let display_when = crate::display_when::evaluate_window_display_when_forms(
-            evaluator,
-            buf_id,
-            Some(window_id.0),
-            neovm_core::buffer::CharPos0::new(window_start.max(0) as usize),
-            neovm_core::buffer::CharPos0::new(fontify_end.max(0) as usize),
-            display_target,
-        );
+        let display_when = if params.mini_measurement == MiniWindowMeasurement::ToEnd
+            && evaluator.gnu_redisplay_hooks_policy_enabled()
+        {
+            let condition_end =
+                mini_source_stop::condition_end_boundary(evaluator, params, fontify_end);
+            crate::display_when::evaluate_window_display_when_forms_at_end(
+                evaluator,
+                buf_id,
+                Some(window_id.0),
+                neovm_core::buffer::CharPos0::new(window_start.max(0) as usize),
+                neovm_core::buffer::CharPos0::new(fontify_end.max(0) as usize),
+                display_target,
+                condition_end,
+            )
+        } else {
+            crate::display_when::evaluate_window_display_when_forms(
+                evaluator,
+                buf_id,
+                Some(window_id.0),
+                neovm_core::buffer::CharPos0::new(window_start.max(0) as usize),
+                neovm_core::buffer::CharPos0::new(fontify_end.max(0) as usize),
+                display_target,
+            )
+        };
         // The retained key tracks buffer/face changes, not arbitrary Lisp
         // dependencies. A newly evaluated condition can change glyphs without
         // moving any of those ticks. This applies to cursor, scroll, and edit
@@ -4501,6 +4800,46 @@ impl LayoutEngine {
                     evaluator.reject_redisplay_window_end_attempt(attempt);
                 }
                 return LeafLayoutAttempt::LogicalInputsChanged;
+            }
+            BufferSourceRenderAttemptOutcome::GnuMiniEobCursorUnavailable { boundary } => {
+                if let Some(attempt) = window_end_attempt.take() {
+                    evaluator.reject_redisplay_window_end_attempt(attempt);
+                }
+                let Ok(site) = lisp_ledger.mini_eob_scroll.next_site(
+                    evaluator,
+                    frame_id,
+                    window_id,
+                    buf_id,
+                    resolved_window_start,
+                    params,
+                    layout_box.body().height,
+                    topology_generation,
+                    boundary,
+                ) else {
+                    return LeafLayoutAttempt::LogicalInputsChanged;
+                };
+                // Commit the independently resolved decision marker, even
+                // when the producer proved the prepared source line is stable.
+                let _ = evaluator.publish_redisplay_window_start(
+                    frame_id,
+                    window_id,
+                    crate::coords::layout_i64_char_pos_to_lisp_char_pos(site.window_start().get()),
+                );
+                let effect = LayoutEffect::RunWindowScrollFunctions(
+                    crate::layout_effect::WindowScrollEffect::new(site),
+                );
+                if evaluator.window_scroll_functions_may_run(window_id) {
+                    return LeafLayoutAttempt::Effect(effect);
+                }
+                // With no Lisp hook, acknowledge the same semantic decision
+                // and re-enter the real producer instead of manufacturing a
+                // second callback or treating a missing hook as convergence.
+                lisp_ledger.acknowledge_scroll_hook(&effect);
+                return LeafLayoutAttempt::Retry(Box::new(WindowLayoutRetry {
+                    params: params.clone(),
+                    remaining_visibility_retries,
+                    viewport_resolution: ViewportResolutionPhase::Commit(site.window_start()),
+                }));
             }
             BufferSourceRenderAttemptOutcome::Skipped => {
                 self.frame_output

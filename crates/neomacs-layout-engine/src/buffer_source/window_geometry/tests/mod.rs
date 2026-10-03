@@ -24,6 +24,7 @@ fn window_params() -> WindowParams {
         top_line: 0,
         window_start: 17,
         measurement_rows: None,
+        mini_measurement: crate::types::MiniWindowMeasurement::Presentation,
         measurement_pixels: None,
         query_target: None,
         force_start: false,

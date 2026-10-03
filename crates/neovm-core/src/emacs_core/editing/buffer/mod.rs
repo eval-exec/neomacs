@@ -1487,6 +1487,13 @@ pub(crate) fn builtin_kill_all_local_variables(
     // buffer's local variables and local hook value still in effect, and with
     // `major-mode' still naming the *previous* mode -- matches GNU exactly.
     run_buffer_change_major_mode_hook(eval)?;
+    let current_id = if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+        eval.buffers
+            .current_buffer_id()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
+    } else {
+        current_id
+    };
 
     // GNU buffer.c reset_buffer_local_variables:
     // - preserves most always-local slots
@@ -1500,7 +1507,14 @@ pub(crate) fn builtin_kill_all_local_variables(
     // raises global `update_mode_lines` even for an offscreen buffer, ensuring
     // the menu and mode line are rebuilt if this major-mode transition is
     // immediately followed by displaying that buffer.
-    eval.request_global_mode_line_update();
+    if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+        // GNU bset_update_mode_line is SOME. The typed helper marks only
+        // windows sharing this buffer's text and requests the menu rebuild.
+        // Broad chrome cache dirtiness would evaluate unrelated :eval forms.
+        eval.gnu_mark_buffer_mode_line(current_id);
+    } else {
+        eval.request_global_mode_line_update();
+    }
     Ok(Value::NIL)
 }
 
@@ -2254,6 +2268,15 @@ pub(crate) fn builtin_set_buffer_multibyte(
         eval.sync_window_positions(snapshot.id);
     }
 
+    // GNU buffer.c:2985-2989: a real displayed-buffer conversion raises
+    // windows_or_buffers_changed ALL after remapping text and overlays.
+    if crate::emacs_core::eval::gnu_redisplay_hooks_enabled()
+        && eval.frames.buffer_window_count(&eval.buffers, current_id) > 0
+    {
+        eval.gnu_mark_windows_all();
+        eval.request_menu_bar_rebuild(super::eval::MenuBarRebuildReason::WindowsOrBuffersChanged);
+    }
+
     if !old_undo_list.is_t() {
         let restore_flag = if flag.is_nil() { Value::T } else { Value::NIL };
         let undo_entry = Value::list(vec![
@@ -2348,6 +2371,18 @@ pub(crate) fn builtin_split_window_internal(
         args[3],
         combination_limit,
     )?;
+    if crate::emacs_core::eval::gnu_redisplay_hooks_enabled()
+        && let Some(window) = result.as_window_id().map(crate::window::WindowId)
+        && let Some(frame) = eval.frames.find_window_frame_id(window)
+    {
+        // No arbitrary Lisp occurs between the structural commit above and
+        // these publications. GNU has FRAME_WINDOW_CHANGE already set by
+        // window_resize_apply before set_window_buffer's eager scroll hook.
+        eval.gnu_mark_frame_redisplay(frame);
+        eval.gnu_mark_frame_window_change(frame);
+        eval.gnu_mark_window_mode_line(window);
+        super::window_cmds::builtin_run_window_scroll_functions(eval, vec![result])?;
+    }
     // GNU does NOT run `window-configuration-change-hook' eagerly from
     // `split-window-internal'.  It is deferred to `run_window_change_functions'
     // during redisplay (window.c:4308-4312); neomacs mirrors this in
@@ -5212,7 +5247,17 @@ pub(crate) fn builtin_delete_overlay(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_delete_overlay_in_buffers(&mut eval.buffers, args)
+    if !crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+        return builtin_delete_overlay_in_buffers(&mut eval.buffers, args);
+    }
+    expect_args("delete-overlay", &args, 1)?;
+    let overlay = expect_overlay(&args[0])?;
+    let buffer = resolve_overlay_buffer_id(overlay);
+    let result = builtin_delete_overlay_in_buffers(&mut eval.buffers, args)?;
+    if let Some(buffer) = buffer {
+        eval.gnu_mark_buffer_redisplay(buffer);
+    }
+    Ok(result)
 }
 
 pub(crate) fn builtin_delete_overlay_in_buffers(
@@ -5229,7 +5274,26 @@ pub(crate) fn builtin_delete_overlay_in_buffers(
 
 /// (overlay-put OVERLAY PROP VAL)
 pub(crate) fn builtin_overlay_put(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    builtin_overlay_put_in_buffers(&mut eval.buffers, args)
+    if !crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+        return builtin_overlay_put_in_buffers(&mut eval.buffers, args);
+    }
+    expect_args("overlay-put", &args, 3)?;
+    let overlay = expect_overlay(&args[0])?;
+    let before = resolve_overlay_buffer_id(overlay).and_then(|buffer| {
+        eval.buffers
+            .get(buffer)
+            .map(|value| (buffer, value.overlay_modified_tick()))
+    });
+    let result = builtin_overlay_put_in_buffers(&mut eval.buffers, args)?;
+    if let Some((buffer, tick)) = before
+        && eval
+            .buffers
+            .get(buffer)
+            .is_some_and(|value| value.overlay_modified_tick() != tick)
+    {
+        eval.gnu_mark_buffer_redisplay(buffer);
+    }
+    Ok(result)
 }
 
 pub(crate) fn builtin_overlay_put_in_buffers(
@@ -5423,7 +5487,28 @@ pub(crate) fn builtin_move_overlay(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_move_overlay_in_buffers(&mut eval.buffers, args)
+    if !crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+        return builtin_move_overlay_in_buffers(&mut eval.buffers, args);
+    }
+    expect_min_args("move-overlay", &args, 3)?;
+    expect_max_args("move-overlay", &args, 4)?;
+    let overlay = expect_overlay(&args[0])?;
+    let old_buffer = resolve_overlay_buffer_id(overlay);
+    let new_buffer = if args.get(3).is_some_and(|value| value.is_truthy()) {
+        resolve_buffer_id_in_buffers(&eval.buffers, args.get(3))?
+    } else {
+        old_buffer
+            .or_else(|| eval.buffers.current_buffer_id())
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
+    };
+    let result = builtin_move_overlay_in_buffers(&mut eval.buffers, args)?;
+    if let Some(buffer) = old_buffer.filter(|buffer| *buffer != new_buffer) {
+        eval.gnu_mark_buffer_redisplay(buffer);
+    }
+    // GNU modify_overlay runs even when endpoints are unchanged; also retain
+    // the destination publication if the empty overlay evaporated there.
+    eval.gnu_mark_buffer_redisplay(new_buffer);
+    Ok(result)
 }
 
 pub(crate) fn builtin_move_overlay_in_buffers(

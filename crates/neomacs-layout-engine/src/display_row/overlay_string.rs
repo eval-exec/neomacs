@@ -516,6 +516,11 @@ impl<'a> BufferOverlayStringTextRowRenderContext<'a> {
         self.enabled && row_geometry.is_within_row_limit(self.row_context_row_limit())
     }
 
+    #[inline]
+    pub(crate) fn row_limit_for_eob_proof(self) -> DisplayRowLimit {
+        self.row_context_row_limit()
+    }
+
     fn row_context_row_limit(self) -> DisplayRowLimit {
         DisplayRowLimit {
             max_rows: self.max_rows,

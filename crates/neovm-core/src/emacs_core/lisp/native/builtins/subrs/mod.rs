@@ -7865,7 +7865,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         SubrSpec::new(
             "redraw-display",
-            NativeFn::ContextVec(crate::emacs_core::dispnew::pure::builtin_redraw_display),
+            NativeFn::ContextVec(
+                crate::emacs_core::dispnew::pure::builtin_redraw_display_in_context,
+            ),
             SubrArity::new(0, Some(0)),
         )
         .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("")),

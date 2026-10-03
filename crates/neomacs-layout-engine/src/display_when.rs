@@ -86,6 +86,16 @@ impl DisplayWhenConditions {
     }
 }
 
+/// The terminal source position reached by a proved GNU mini measurement.
+/// Ordinary/presentation scans keep the existing inclusive overlay anchor.
+/// This numeric selector belongs to one exclusive evaluator attempt; it owns
+/// no Lisp state and is never published to another mutator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DisplayWhenEndBoundary {
+    InclusiveAnchor,
+    BufferPositionReached,
+}
+
 /// Evaluate the `when` forms of every display spec the walk of
 /// `[from, to]` of `buf_id` can reach: `display`, `line-prefix` and
 /// `wrap-prefix` text properties and overlay properties, overlay
@@ -113,12 +123,39 @@ pub(crate) fn evaluate_window_display_when_forms(
     to: CharPos0,
     target: crate::display_property::DisplayPropertyTarget,
 ) -> DisplayWhenConditions {
+    evaluate_window_display_when_forms_at_end(
+        evaluator,
+        buf_id,
+        window_id,
+        from,
+        to,
+        target,
+        DisplayWhenEndBoundary::InclusiveAnchor,
+    )
+}
+
+pub(crate) fn evaluate_window_display_when_forms_at_end(
+    evaluator: &mut Context,
+    buf_id: BufferId,
+    window_id: Option<u64>,
+    from: CharPos0,
+    to: CharPos0,
+    target: crate::display_property::DisplayPropertyTarget,
+    end_boundary: DisplayWhenEndBoundary,
+) -> DisplayWhenConditions {
     let default_prefixes: Vec<Value> = ["line-prefix", "wrap-prefix"]
         .iter()
         .filter_map(|name| evaluator.buffer_default_value(name))
         .collect();
     let sites = match evaluator.buffer_manager().get(buf_id) {
-        Some(buffer) => collect_when_form_sites(buffer, window_id, from, to, &default_prefixes),
+        Some(buffer) => collect_when_form_sites_at_end(
+            buffer,
+            window_id,
+            from,
+            to,
+            &default_prefixes,
+            end_boundary,
+        ),
         None => Vec::new(),
     };
     match evaluator.evaluate_display_when_sites(
@@ -147,12 +184,31 @@ pub(crate) fn evaluate_window_display_when_forms(
     }
 }
 
+#[cfg(test)]
 fn collect_when_form_sites(
     buffer: &Buffer,
     window_id: Option<u64>,
     from: CharPos0,
     to: CharPos0,
     default_prefixes: &[Value],
+) -> Vec<DisplayWhenSite> {
+    collect_when_form_sites_at_end(
+        buffer,
+        window_id,
+        from,
+        to,
+        default_prefixes,
+        DisplayWhenEndBoundary::InclusiveAnchor,
+    )
+}
+
+fn collect_when_form_sites_at_end(
+    buffer: &Buffer,
+    window_id: Option<u64>,
+    from: CharPos0,
+    to: CharPos0,
+    default_prefixes: &[Value],
+    end_boundary: DisplayWhenEndBoundary,
 ) -> Vec<DisplayWhenSite> {
     let mut sites = Vec::new();
     let buffer_object = Value::make_buffer(buffer.id());
@@ -224,7 +280,10 @@ fn collect_when_form_sites(
         // and forms of rows past the last displayed one are evaluated
         // although GNU would not reach them (declared).
         for at in [start, end] {
-            if at >= from && at <= to {
+            if at >= from
+                && at <= to
+                && (end_boundary == DisplayWhenEndBoundary::InclusiveAnchor || at < to)
+            {
                 boundaries.push(at);
             }
         }

@@ -67,11 +67,28 @@ pub(crate) struct BufferSourceTailRequestContext<'a> {
     regions: PresentedWindowRegions,
 }
 
+/// Cursor-row proof from the completed real source/overlay producer. This
+/// numeric result belongs to one exclusive attempt and carries no Lisp owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BufferSourceEobCursorRow {
+    Unchanged,
+    Unavailable { boundary: GnuMiniEobSourceBoundary },
+}
+
+/// Actual buffer-row boundary before EOB strings. The source producer owns
+/// this numeric fact exclusively; it carries no Lisp state between mutators.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GnuMiniEobSourceBoundary {
+    BufferScreenLine,
+    FreshLineAfterBufferNewline,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct BufferSourcePostLoopRenderOutcome {
     pub(crate) retry: TextWindowVisibilityRetryOutcome,
     pub(crate) rendered_rows_len: usize,
     pub(crate) cursor_publish_status: TextWindowCursorPublishStatus,
+    pub(crate) eob_cursor_row: BufferSourceEobCursorRow,
 }
 
 impl BufferSourceBodyInstallContext {
@@ -322,12 +339,29 @@ pub(crate) fn render_buffer_source_tail_and_decide_retry<
     active_face_state: &'request DisplayRowActiveFaceState,
     buffer: &B,
     buf_access: &'rows RustBufferAccess<'buf, B>,
+    source_stop: crate::buffer_source::loop_render::BufferSourceVisibleLoopOutcome,
 ) -> BufferSourcePostLoopRenderOutcome
 where
     'surface: 'request,
 {
-    let point_is_visible_eob = loop_context
+    let boundary = if text.last() == Some(&b'\n')
+        && row_source_start.covers(charpos)
+        && !row_source_start.covers(charpos.saturating_sub(1))
+        && source_render.output_rows().last().is_some_and(|row| {
+            row.end_source == neovm_core::window::DisplayRowEndSource::Buffer
+                && row.end_buffer_pos == Some(neovm_core::buffer::LispCharPos1::new(charpos))
+        }) {
+        GnuMiniEobSourceBoundary::FreshLineAfterBufferNewline
+    } else {
+        GnuMiniEobSourceBoundary::BufferScreenLine
+    };
+    let tail_progress = loop_context
         .end_of_buffer_tail_request(byte_idx, charpos, overlay_context, active_face_state)
+        .with_overlay_policy(match source_stop {
+            crate::buffer_source::loop_render::BufferSourceVisibleLoopOutcome::MiniSourcePositionReached =>
+                crate::buffer_source::row_lifecycle::BufferSourceEobOverlayPolicy::SourcePositionReached,
+            _ => crate::buffer_source::row_lifecycle::BufferSourceEobOverlayPolicy::Render,
+        })
         .render_and_apply(
             buffer,
             source_render.reborrow(),
@@ -339,8 +373,8 @@ where
             face_ids,
             line_numbers,
             face_scan,
-        )
-        .point_is_visible_eob();
+        );
+    let point_is_visible_eob = tail_progress.point_is_visible_eob();
 
     let finalized = tail_context
         .tail_finalize_request(text, charpos, point_is_visible_eob)
@@ -351,6 +385,51 @@ where
             row_source_start,
             source_render.output_render(),
         ));
+
+    let eob_cursor_row = if tail_context.params.is_minibuffer()
+        && !tail_context.params.window_system
+        && match tail_progress.progress {
+            crate::buffer_source::row_lifecycle::BufferSourceEobTailProgress::OverlayRowsExhausted => true,
+            crate::buffer_source::row_lifecycle::BufferSourceEobTailProgress::SourceRowsExhausted =>
+                boundary == GnuMiniEobSourceBoundary::FreshLineAfterBufferNewline,
+            crate::buffer_source::row_lifecycle::BufferSourceEobTailProgress::Complete => false,
+        }
+        && source_render.output_render().with_output_target_parts(|_, _, eval| {
+            eval.gnu_redisplay_hooks_policy_enabled() && eval.gnu_redisplay_transaction_active()
+        })
+    {
+        // GNU row_for_charpos_p admits a continued string row or an explicit
+        // cursor property, but an ordinary overlay newline cannot own point.
+        // Inspect only rows the actual producer completed inside the text box.
+        let point = crate::coords::layout_i64_char_pos_to_lisp_char_pos(tail_context.params.point_charpos().get());
+        let admits_cursor = cursor_info.eob_row_candidates().any(|(offset, explicit)| {
+            let index = tail_context.display_text_row_base.saturating_add(offset);
+            let Some(row) = source_render.output_rows().iter().find(|row| row.row == index as i64) else {
+                return false;
+            };
+            let top = row.y;
+            let bottom = top.saturating_add(row.height);
+            let fully_visible = top >= tail_context.retry_bounds.text_area_top()
+                && bottom <= tail_context.retry_bounds.text_area_bottom();
+            // GNU cursor_row_fully_visible_p accepts a mini cursor row at
+            // least as tall as its window, provided that row is on screen.
+            let visible_oversized = row.height >= tail_context.params.bounds.height.round() as i64
+                && top < tail_context.retry_bounds.text_area_bottom()
+                && bottom > tail_context.retry_bounds.text_area_top();
+            if !fully_visible && !visible_oversized {
+                return false;
+            }
+            let ordinary_overlay_newline = row.end_buffer_pos == Some(point)
+                && row.end_source == neovm_core::window::DisplayRowEndSource::OverlayAfterString;
+            explicit == crate::display_cursor::EobCursorCandidateKind::ExplicitStringProperty || !ordinary_overlay_newline
+                || source_render.output_render().with_output_target_parts(|mut output, _, _| {
+                    output.builder().current_window_row(index).is_some_and(|row| row.continued)
+                })
+        });
+        if admits_cursor { BufferSourceEobCursorRow::Unchanged } else { BufferSourceEobCursorRow::Unavailable { boundary } }
+    } else {
+        BufferSourceEobCursorRow::Unchanged
+    };
 
     // GNU redisplay keeps iterating until point visibility converges or no
     // further progress can be made. Advance by actual rendered row spans
@@ -368,5 +447,6 @@ where
         retry,
         rendered_rows_len: source_render.output_rows_len(),
         cursor_publish_status: finalized.cursor_publish_status(),
+        eob_cursor_row,
     }
 }

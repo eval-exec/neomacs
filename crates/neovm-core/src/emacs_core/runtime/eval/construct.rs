@@ -87,6 +87,8 @@ impl Context {
         ev.eval_task_rx = None;
         ev.redisplay_fn = None;
         ev.mode_line_display_flow = None;
+        ev.redisplay_prepare_fn = None;
+        ev.gnu_redisplay_hooks = redisplay_hooks::RedisplayHookOwnership::initial();
         ev.display_idle_maintenance_fn = None;
         ev.scroll_preview_fn = None;
         ev.frame_snapshot_fn = None;
@@ -2251,6 +2253,7 @@ impl Context {
             quit_requested: QuitRequest::new(),
             redisplay_fn: None,
             mode_line_display_flow: None,
+            redisplay_prepare_fn: None,
             font_shape_fn: None,
             gstring_shape_cache: HashMap::new(),
             display_idle_maintenance_fn: None,
@@ -2276,6 +2279,7 @@ impl Context {
             body_redisplay_by_buffer: FxHashMap::default(),
             menu_bar_rebuild_generation: 0,
             chrome_dirty: Default::default(),
+            gnu_redisplay_hooks: redisplay_hooks::RedisplayHookOwnership::initial(),
             context_instance_id: next_context_instance_id(),
             media_generation: 0,
             last_redisplay_signature: None,

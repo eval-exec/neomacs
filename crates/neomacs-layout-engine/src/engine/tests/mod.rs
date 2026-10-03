@@ -48,6 +48,10 @@ mod layout_validity;
 mod lazy_text_hit_test;
 mod mini_window_still_test;
 mod mode_line_gate_engine_test;
+#[cfg(test)]
+mod posn_frame_pool_engine_test;
+#[cfg(test)]
+mod posn_frame_pool_guard_test;
 mod replay_cursor_on_tab_test;
 mod scroll_back_engine_test;
 mod scroll_input_policy_test;
@@ -1690,6 +1694,7 @@ fn test_window_params() -> WindowParams {
         top_line: 0,
         window_start: 1,
         measurement_rows: None,
+        mini_measurement: crate::types::MiniWindowMeasurement::Presentation,
         measurement_pixels: None,
         query_target: None,
         force_start: false,
@@ -37022,3 +37027,7 @@ fn unchanged_frame_layout_consults_the_image_catalog_once_per_pass() {
 
 #[cfg(test)]
 mod point_rows_test;
+
+#[cfg(test)]
+#[path = "mini_scroll_sites.rs"]
+mod mini_scroll_sites;

@@ -88,6 +88,10 @@ use std::time::{Duration, Instant};
 #[path = "../tests/platform_startup_test.rs"]
 mod platform_fonts;
 
+#[cfg(test)]
+#[path = "frame_snapshot_policy.rs"]
+mod frame_snapshot_policy;
+
 fn gui_display() -> BootstrapDisplayConfig {
     let observation = neomacs_display_protocol::DisplayObservation::X11(
         neomacs_display_protocol::X11DisplayObservation::new(

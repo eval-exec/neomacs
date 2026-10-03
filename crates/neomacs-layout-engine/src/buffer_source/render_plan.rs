@@ -495,6 +495,9 @@ impl BufferSourceOutputSetup {
             max_rows,
             walk_setup,
         );
+        if params.mini_measurement == crate::types::MiniWindowMeasurement::ToEnd {
+            setup.begin_request = setup.begin_request.with_growing_rows();
+        }
         setup.row_visibility_limit.allow_partial = params.window_system
             && !params.kind.is_minibuffer()
             && params.measurement_rows.is_none();
@@ -1502,6 +1505,19 @@ impl BufferSourceOutputSetup {
             }
         };
 
+        if let crate::buffer_source::tail_render::BufferSourceEobCursorRow::Unavailable { boundary } =
+            post_loop.eob_cursor_row
+            && !params.force_start
+            && matches!(
+                self.position_publication,
+                WindowPositionPublication::Redisplay
+                    | WindowPositionPublication::RedisplayResumedScrollHook
+            )
+        {
+            output.restore_retry_checkpoint(retry_checkpoint);
+            return BufferSourceRenderAttemptOutcome::GnuMiniEobCursorUnavailable { boundary };
+        }
+
         let retry_plan = BufferSourceRetryPlan::from_post_loop(
             tail_context.params.window_id,
             tail_context.window_start,
@@ -1569,25 +1585,30 @@ impl BufferSourceOutputSetup {
         // fringe bitmap when requested. This runs after the body is installed
         // (so `walk_setup.row_geometry` is immediately below the last buffer
         // row) and before mode-line chrome, with row and pixel boundary guards.
-        EndOfBufferRowsFillRequest::new(
-            params,
-            geometry.display_text_row_base,
-            geometry.max_rows,
-            geometry.text_y,
-            geometry.text_height,
-            geometry.char_height,
-            window_metrics.ascent(),
-            line_number_field,
-            walk_setup.beyond_accessible_end_line_prefix.as_ref(),
-        )
-        .fill(
-            buffer,
-            output.reborrow(),
-            evaluator,
-            window_faces,
-            render_services.face_ids(),
-            &walk_setup.row_geometry,
-        );
+        // A BEGV-to-ZV mini measurement ends at the real source row; the
+        // display-only EOB decoration tail must not hold its old allocation.
+        if params.mini_measurement != crate::types::MiniWindowMeasurement::ToEnd {
+            EndOfBufferRowsFillRequest::new(
+                params,
+                geometry.display_text_row_base,
+                geometry.max_rows,
+                geometry.text_y,
+                geometry.text_height,
+                geometry.char_height,
+                window_metrics.ascent(),
+                line_number_field,
+                walk_setup.beyond_accessible_end_line_prefix.as_ref(),
+            )
+            .fill(
+                buffer,
+                output.reborrow(),
+                evaluator,
+                window_faces,
+                render_services.face_ids(),
+                &walk_setup.row_geometry,
+            );
+        }
+
         // GNU's `overlay_arrow_at_row` draws the overlay arrow — a left-fringe
         // bitmap on a window-system frame with a left fringe, else the string
         // over the marked row's leading glyphs. Stamp it here for the same

@@ -280,7 +280,7 @@ impl BufferSourceLoopRequestContext {
         self.tab_width
     }
 
-    #[cfg(test)]
+    #[inline]
     pub(crate) fn accessible_end(self) -> i64 {
         self.accessible_end
     }

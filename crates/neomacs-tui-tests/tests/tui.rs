@@ -96,6 +96,12 @@ mod project;
 mod raw_terminal_snapshot_test;
 #[path = "redisplay_display_vars.rs"]
 mod redisplay_display_vars;
+#[cfg(test)]
+#[path = "redisplay_hook_order_oracle.rs"]
+mod redisplay_hook_order_oracle;
+#[cfg(test)]
+#[path = "redisplay_hook_transfer_oracle.rs"]
+mod redisplay_hook_transfer_oracle;
 #[path = "registers_bookmarks.rs"]
 mod registers_bookmarks;
 #[path = "replace_sort.rs"]
@@ -127,3 +133,10 @@ mod window_divider_overlay_arrow;
 mod window_end_oracle;
 #[path = "windows_tabs.rs"]
 mod windows_tabs;
+
+#[path = "gnu_redisplay_mutation_oracle.rs"]
+mod gnu_redisplay_mutation_oracle;
+
+#[cfg(test)]
+#[path = "redisplay_mini_source_start_oracle.rs"]
+mod redisplay_mini_source_start_oracle;

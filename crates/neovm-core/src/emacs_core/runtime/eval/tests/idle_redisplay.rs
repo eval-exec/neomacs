@@ -7,6 +7,9 @@ use super::*;
 
 /// A context with one frame showing a buffer of text, a counting
 /// `redisplay_fn`, and a recording `pre-redisplay-function`.
+/// This spy resets buffer revisions but never seals a GNU accepted frame.
+/// Counter fixtures explicitly select the legacy contract; the marker-value
+/// fixture keeps the ambient policy to exercise GNU ownership when enabled.
 fn idle_context() -> (Context, std::rc::Rc<std::cell::Cell<usize>>) {
     let mut eval = Context::new();
     let buf_id = eval.buffers.current_buffer_id().expect("current buffer");
@@ -46,6 +49,7 @@ fn prered_args(eval: &mut Context) -> String {
 
 #[test]
 fn an_idle_redisplay_skips_layout_but_runs_pre_redisplay_function() {
+    let _policy = RedisplayHookPolicyGuard::legacy();
     let (mut eval, layouts) = idle_context();
     for _ in 0..3 {
         eval.eval_str("(redisplay)").expect("redisplay");
@@ -61,6 +65,7 @@ fn an_idle_redisplay_skips_layout_but_runs_pre_redisplay_function() {
 
 #[test]
 fn a_forced_idle_redisplay_lays_out_unless_the_idle_skip_is_on() {
+    let _policy = RedisplayHookPolicyGuard::legacy();
     crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(Some(false));
     let (mut eval, layouts) = idle_context();
     eval.eval_str("(redisplay t)").expect("first");
@@ -99,6 +104,7 @@ fn window_old_point_follows_its_marker_across_redisplays() {
 /// next redisplay redisplays such a buffer, so a forced one must not skip.
 #[test]
 fn a_forced_idle_redisplay_lays_out_a_change_made_after_the_last_layout() {
+    let _policy = RedisplayHookPolicyGuard::legacy();
     let (mut eval, layouts) = idle_context();
     let changed_after = std::rc::Rc::new(std::cell::Cell::new(false));
     let flag = changed_after.clone();
@@ -127,6 +133,7 @@ fn a_forced_idle_redisplay_lays_out_a_change_made_after_the_last_layout() {
 
 #[test]
 fn category_symbol_writes_invalidate_idle_redisplay() {
+    let _policy = RedisplayHookPolicyGuard::legacy();
     let (mut eval, layouts) = idle_context();
     eval.eval_str("(progn (put 'idle-category 'face '(:height 100)) (overlay-put (make-overlay 1 20) 'category 'idle-category) (redisplay))").unwrap();
     assert_eq!(layouts.get(), 1);

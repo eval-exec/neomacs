@@ -1570,7 +1570,19 @@ impl Context {
             return;
         }
 
-        self.request_global_mode_line_update();
+        if gnu_redisplay_hooks_enabled() {
+            match target {
+                ModeLineUpdateTarget::CurrentBuffer(buffer) => {
+                    self.gnu_mark_buffer_mode_line(buffer)
+                }
+                ModeLineUpdateTarget::AllBuffers => {
+                    self.gnu_mark_mode_lines_all();
+                    self.request_global_mode_line_update();
+                }
+            }
+        } else {
+            self.request_global_mode_line_update();
+        }
     }
 
     /// Mark redisplay dirty when a display-affecting variable is set.
@@ -1625,7 +1637,13 @@ impl Context {
             // the same list by another name, so the chrome members of it get
             // the chrome flag too.
             if crate::buffer::buffer::variable_affects_chrome_by_sym_id(resolved) {
-                self.chrome_dirty.mark_all();
+                if gnu_redisplay_hooks_enabled() {
+                    if let Some(buffer) = self.buffers.current_buffer_id() {
+                        self.gnu_mark_buffer_chrome_cache(buffer);
+                    }
+                } else {
+                    self.chrome_dirty.mark_all();
+                }
             }
             // A display-affecting variable changed: the incremental fast paths
             // key on this counter so they re-lay instead of reusing rows shaped
@@ -1635,6 +1653,10 @@ impl Context {
     }
 
     pub(crate) fn redisplay_with_force(&mut self, force: bool) -> Result<(), Flow> {
+        self.redisplay_with_force_flow(force).map(|_| ())
+    }
+
+    pub(super) fn redisplay_with_force_legacy(&mut self, force: bool) -> Result<(), Flow> {
         if let Some(flow) = self.take_mode_line_display_flow() {
             return Err(flow);
         }

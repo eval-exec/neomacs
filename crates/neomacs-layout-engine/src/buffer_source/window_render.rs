@@ -27,6 +27,7 @@ use neovm_core::window::{FrameId, WindowId};
 /// Attempt-owned numeric read policy. An artificial horizon retry keeps
 /// the exact admitted replay and reads its original window-row budget; it
 /// does not repeat outer Lisp preparation or change process/TLS policy.
+/// Each exclusive source walk owns its selector; independent mutators share no mutable state.
 #[derive(Clone, Copy)]
 enum SyncSourceRead {
     AllowHorizon,
@@ -286,12 +287,38 @@ where
             .ceil()
             .max(1.0) as usize
         };
+        let geometry_request = BufferWindowGeometryRequest::new(params, layout_box, char_w, char_h);
+        let geometry_request = if params.is_minibuffer()
+            && matches!(
+                self.position_publication,
+                WindowPositionPublication::Redisplay
+                    | WindowPositionPublication::RedisplayResumedScrollHook
+                    | WindowPositionPublication::RedisplayMiniEobFallback
+            )
+            && state
+                .output_mut()
+                .evaluator()
+                .gnu_redisplay_hooks_policy_enabled()
+            && state
+                .output_mut()
+                .evaluator()
+                .gnu_redisplay_transaction_active()
+        {
+            // GNU resize_mini_window already measured and committed allocation.
+            // try_window now produces only its physical rows; extending this
+            // walk to the sizing ceiling invokes virtual strings off screen.
+            geometry_request
+        } else {
+            geometry_request.with_max_mini_window_rows(max_mini_window_rows)
+        };
         let BufferWindowGeometryPlan {
             mut geometry,
             line_number_field,
-        } = BufferWindowGeometryRequest::new(params, layout_box, char_w, char_h)
-            .with_max_mini_window_rows(max_mini_window_rows)
-            .into_window_plan(&local_display_policy, &buf_access, line_number_cell_width);
+        } = geometry_request.into_window_plan(
+            &local_display_policy,
+            &buf_access,
+            line_number_cell_width,
+        );
 
         // Phase 2 pure-scroll: lay ONLY the newly-exposed rows. Start the body
         // walk at the exposed region (`text_y` + first row index); the unchanged

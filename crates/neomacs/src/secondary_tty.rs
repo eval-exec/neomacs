@@ -78,6 +78,19 @@ impl SecondaryTtyRegistry {
         if session.device.is_active()
             && let Some((root, children)) = presentations
         {
+            // This terminal's session mutex protects only its native renderer;
+            // Lisp redraw obligations stay on the exclusively borrowed Context.
+            let mut full_redraw = eval.gnu_take_tty_frame_redraw(neovm_core::window::FrameId(
+                root.frame_placement.frame().get(),
+            ));
+            for child in &children {
+                full_redraw |= eval.gnu_take_tty_frame_redraw(neovm_core::window::FrameId(
+                    child.frame_placement.frame().get(),
+                ));
+            }
+            if full_redraw {
+                session.rif.force_redraw();
+            }
             frame_layout::run_tty_rif_redisplay_to(
                 &mut session.rif,
                 &root,

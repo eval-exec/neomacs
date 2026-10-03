@@ -20,6 +20,8 @@ use crate::types::WindowParams;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BufferSourceVisibleLoopOutcome {
     Complete,
+    /// GNU move_it_to(ZV) reached a fresh buffer row before EOB strings.
+    MiniSourcePositionReached,
     SyncHorizonExhausted,
 }
 
@@ -157,6 +159,33 @@ impl<'rows, 'emit, 'surface> BufferSourceLoopMutableState<'rows, 'emit, 'surface
             } else {
                 BufferSourceVisibleLoopOutcome::SyncHorizonExhausted
             };
+        }
+
+        // GNU move_it_to(ZV) tests Buffer/GET_FROM_BUFFER before fetching
+        // the next display element on a new row (xdisp.c:11096). A completed
+        // hard newline at ZV therefore stops before its empty-row prefix or
+        // EOB overlay strings. Presentation keeps both tails.
+        if params.mini_measurement == crate::types::MiniWindowMeasurement::ToEnd
+            && self.progress.byte_idx() == text.len()
+            && self.progress.charpos() == loop_context.accessible_end()
+            && text.last() == Some(&b'\n')
+            && self.row_source_start.covers(self.progress.charpos())
+            && !self
+                .row_source_start
+                .covers(self.progress.charpos().saturating_sub(1))
+            && self.source_render.output_rows().last().is_some_and(|row| {
+                row.end_source == neovm_core::window::DisplayRowEndSource::Buffer
+                    && row.end_buffer_pos
+                        == Some(neovm_core::buffer::LispCharPos1::new(
+                            self.progress.charpos(),
+                        ))
+            })
+            && self
+                .source_render
+                .output_render()
+                .with_output_target_parts(|_, _, eval| eval.gnu_redisplay_hooks_policy_enabled())
+        {
+            return BufferSourceVisibleLoopOutcome::MiniSourcePositionReached;
         }
 
         // A trailing newline begins the next visual row at the same moment it
