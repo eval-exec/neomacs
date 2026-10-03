@@ -103,7 +103,7 @@ fn spec_slots_arm_a_direct_entry_only_for_exact_frameless_register_callees() {
 }
 
 /// Direct sites go where they pay their compile back
-/// (`DirectSitesMode::Unbounded`, the default): a caller whose body loops or
+/// (`DirectSitesMode::Unbounded`, explicitly selected): a caller whose body loops or
 /// calls itself, or a re-tier of one that proved hot; a straight-line caller
 /// keeps the shim call. `NEOVM_JIT_DIRECT_SITES=all` emits them in every
 /// body.

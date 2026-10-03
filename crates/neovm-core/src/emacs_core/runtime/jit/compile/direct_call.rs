@@ -1,6 +1,6 @@
 //! Direct native calls between compiled leaves (design
 //! `p1-1-direct-native-calls` §3.4-§3.5, P1.0 S2.1c; `NEOVM_JIT_DIRECT_CALL`,
-//! default off).
+//! default on with profitable exact self sites).
 //!
 //! A speculated `Op::Call` site of a byte-code callee runs GNU's `Bcall`
 //! protocol inline instead of calling `neovm_jit_call_spec`, when the site's

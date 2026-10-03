@@ -3,12 +3,15 @@
 //!
 //! A leaf body's entry has one of two shapes ([`LeafAbi`]):
 //!
-//! * **memory** (every AOT and OSR leaf, and every leaf while the knob is
-//!   off): `fn(vmctx, args: *const i64, out: *mut i64, sidecar) -> status`.
+//! * **memory** (every AOT and OSR leaf, and every JIT leaf not selected
+//!   for a register entry):
+//!   `fn(vmctx, args: *const i64, out: *mut i64, sidecar) -> status`.
 //!   The arguments are read from the caller's words and the result written
 //!   through `out`.
-//! * **register** (`NEOVM_JIT_REG_ABI=on`, implied by
-//!   `NEOVM_JIT_DIRECT_CALL=on` unless `NEOVM_JIT_DIRECT_MEMORY=on`; a
+//! * **register** (`NEOVM_JIT_REG_ABI=on`, or an admitted self site under
+//!   the default `NEOVM_JIT_DIRECT_CALL=on NEOVM_JIT_DIRECT_SITES=self`;
+//!   other direct-site policies imply it globally unless
+//!   `NEOVM_JIT_DIRECT_MEMORY=on`; a
 //!   JIT, non-OSR, frameless, unpatched leaf
 //!   of at most [`MAX_REG_ARGS`] required parameters, the bodies a direct
 //!   call can enter: [`LeafAbi::for_build`]): `fn(vmctx, aux, a0, .., a{k-1}) ->

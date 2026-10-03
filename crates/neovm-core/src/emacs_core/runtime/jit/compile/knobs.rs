@@ -959,8 +959,9 @@ fn knob_on(name: &str) -> bool {
 /// turns it on, and [`jit_direct_call_on`] implies it unless
 /// [`jit_direct_memory_on`] opts into the existing memory entry or the
 /// self-only site policy admits only individually proven self bodies. An
-/// explicit register knob keeps its existing global reach in either mode. Off,
-/// every entry keeps the memory ABI,
+/// explicit register knob keeps its existing global reach in either mode.
+/// With direct calls and the explicit register knob off, every entry keeps
+/// the memory ABI,
 /// CLIF-identical to the lowering before the register ABI existed: the
 /// single-build A/B. Read at compile time only.
 pub(crate) fn jit_register_abi_on() -> bool {
@@ -982,8 +983,9 @@ pub(crate) fn jit_register_abi_on() -> bool {
 /// Speculated calls to compiled byte-code leaves call their register-ABI
 /// entry directly from the site (`lowering::emit_direct_bytecode_call`,
 /// design `p1-1-direct-native-calls` §3.4), with `neovm_jit_call_spec` as
-/// the slow path. Default OFF; `NEOVM_JIT_DIRECT_CALL=on` turns it on (and
-/// with it the register ABI unless `NEOVM_JIT_DIRECT_MEMORY=on`). Off,
+/// the slow path. Default on with the profitable self-only policy;
+/// `NEOVM_JIT_DIRECT_CALL=off` disables it. Other site policies imply the
+/// register ABI unless `NEOVM_JIT_DIRECT_MEMORY=on`. Off,
 /// no spec slot arms a direct entry and no
 /// site emits a direct call: the lowering is CLIF-identical to the one
 /// before direct calls, for the single-build A/B. Read when a spec slot is
@@ -995,7 +997,12 @@ pub(crate) fn jit_direct_call_on() -> bool {
     }
     use std::sync::OnceLock;
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| knob_on("NEOVM_JIT_DIRECT_CALL"))
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("NEOVM_JIT_DIRECT_CALL").ok().as_deref(),
+            Some("0" | "off" | "false" | "no")
+        )
+    })
 }
 
 /// Per-emitted-site atomic attempt/hit diagnostics. Default off; read only
@@ -1020,7 +1027,8 @@ pub(crate) fn force_direct_self_kernel_for_test(on: Option<bool>) {
 
 /// Admit self sites and their implicit register entry only when the existing
 /// profitability classifier does not find more calls than arithmetic.
-/// Default off. Threading: immutable process configuration, compiler-only;
+/// Default on; `NEOVM_JIT_DIRECT_SELF_KERNEL=off` restores unrestricted
+/// self admission. Threading: immutable process configuration, compiler-only;
 /// the test override is a scalar and never holds Lisp or mutator state.
 pub(crate) fn jit_direct_self_kernel_on() -> bool {
     #[cfg(test)]
@@ -1028,7 +1036,14 @@ pub(crate) fn jit_direct_self_kernel_on() -> bool {
         return on;
     }
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| knob_on("NEOVM_JIT_DIRECT_SELF_KERNEL"))
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("NEOVM_JIT_DIRECT_SELF_KERNEL")
+                .ok()
+                .as_deref(),
+            Some("0" | "off" | "false" | "no")
+        )
+    })
 }
 
 #[cfg(test)]
@@ -1352,7 +1367,7 @@ pub(crate) fn jit_tier2_policy() -> Tier2PolicyKnob {
 }
 
 /// Which bodies emit direct call sites (`direct_call`), when direct calls
-/// are on: `NEOVM_JIT_DIRECT_SITES=all`, `self`, or `unbounded` (default).
+/// are on: `NEOVM_JIT_DIRECT_SITES=self` (default), `all`, or `unbounded`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DirectSitesMode {
     /// Every body.
@@ -1395,8 +1410,8 @@ pub(crate) fn jit_direct_sites() -> DirectSitesMode {
     *MODE.get_or_init(
         || match std::env::var("NEOVM_JIT_DIRECT_SITES").ok().as_deref() {
             Some("all") => DirectSitesMode::All,
-            Some("self") => DirectSitesMode::SelfOnly,
-            _ => DirectSitesMode::Unbounded,
+            Some("unbounded") => DirectSitesMode::Unbounded,
+            _ => DirectSitesMode::SelfOnly,
         },
     )
 }
