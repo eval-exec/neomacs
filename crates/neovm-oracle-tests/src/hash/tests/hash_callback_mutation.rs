@@ -4,6 +4,157 @@
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
 #[test]
+fn oracle_hash_callback_gc_maybe_preserves_entry_accounting_after_live_settings_changes() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"
+(let (answers)
+  (dolist (callback '(hash compare))
+    (dolist (binding '(setq let))
+      (dolist (change '(raise-threshold lower-threshold lower-percentage))
+        (let* ((start-threshold (if (eq change 'lower-threshold) (ash 1 62) 800000))
+               (start-percentage (if (eq change 'lower-percentage) 1e100 0.0))
+               (next-threshold (if (eq change 'raise-threshold) (ash 1 62) 800000))
+               (gc-cons-threshold start-threshold)
+               (gc-cons-percentage start-percentage)
+               (table nil) (armed nil) (observed nil) (after nil))
+          (let* ((probe
+                  (lambda (before)
+                    (list (garbage-collect-maybe most-positive-fixnum)
+                          (garbage-collect-maybe 1)
+                          (garbage-collect-maybe 0)
+                          (null (garbage-collect))
+                          (= before gcs-done))))
+                 (action
+                  (lambda ()
+                    (when armed
+                      (let ((before gcs-done))
+                        (make-list 32 nil)
+                        (if (eq binding 'let)
+                            (let ((gc-cons-threshold next-threshold)
+                                  (gc-cons-percentage 0.0))
+                              (setq observed (funcall probe before)))
+                          (setq gc-cons-threshold next-threshold
+                                gc-cons-percentage 0.0)
+                          (setq observed (funcall probe before))
+                          (setq gc-cons-threshold start-threshold
+                                gc-cons-percentage start-percentage))
+                        (setq after
+                              (list (garbage-collect-maybe most-positive-fixnum)
+                                    (= before gcs-done))))))))
+            (define-hash-table-test
+             'gp-live-settings-callback
+             (lambda (a b)
+               (when (eq callback 'compare) (funcall action))
+               (equal a b))
+             (lambda (_key)
+               (when (eq callback 'hash) (funcall action))
+               0))
+            (setq table (make-hash-table :test 'gp-live-settings-callback))
+            (puthash (copy-sequence "key") 'payload table)
+            (setq armed t)
+            (let ((value (gethash (copy-sequence "key") table)))
+              (setq armed nil)
+              (push (list callback binding change value observed after
+                          (puthash "after" 'mutable table)) answers)))))))
+  (nreverse answers))
+"#;
+    let expect = expect_test::expect![[
+        r#""OK ((hash setq raise-threshold payload (nil nil nil t t) (nil t) mutable) (hash setq lower-threshold payload (t nil nil t t) (t t) mutable) (hash setq lower-percentage payload (t nil nil t t) (t t) mutable) (hash let raise-threshold payload (nil nil nil t t) (nil t) mutable) (hash let lower-threshold payload (t nil nil t t) (t t) mutable) (hash let lower-percentage payload (t nil nil t t) (t t) mutable) (compare setq raise-threshold payload (nil nil nil t t) (nil t) mutable) (compare setq lower-threshold payload (t nil nil t t) (t t) mutable) (compare setq lower-percentage payload (t nil nil t t) (t t) mutable) (compare let raise-threshold payload (nil nil nil t t) (nil t) mutable) (compare let lower-threshold payload (t nil nil t t) (t t) mutable) (compare let lower-percentage payload (t nil nil t t) (t t) mutable))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_hash_callback_gc_maybe_nested_other_table_restores_outer_accounting() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"
+(let (answers)
+  (dolist (callback '(hash compare))
+    (dolist (exit '(normal signal throw))
+      (let ((gc-cons-threshold 800000) (gc-cons-percentage 0.0)
+            (outer nil) (inner nil) (phase nil) (inner-armed nil)
+            (inner-result nil) (inner-state nil) (same-result nil)
+            (same-state nil) (outer-state nil) (mutation nil) (other-write nil))
+        (let* ((inner-action
+                (lambda ()
+                  (when inner-armed
+                    (let ((before gcs-done))
+                      (make-list 32 nil)
+                      (setq inner-state
+                            (list (garbage-collect-maybe most-positive-fixnum)
+                                  (null (garbage-collect)) (= before gcs-done))))
+                    (cond ((eq exit 'signal) (error "gp nested callback failed"))
+                          ((eq exit 'throw) (throw 'gp-nested-callback-exit 'thrown))))))
+               (outer-action
+                (lambda ()
+                  (cond
+                   ((eq phase 'outer)
+                    (setq phase 'busy)
+                    (let ((gc-cons-threshold (ash 1 62)))
+                      (setq inner-armed t)
+                      (setq inner-result
+                            (condition-case err
+                                (catch 'gp-nested-callback-exit
+                                  (gethash (copy-sequence "inner") inner))
+                              (error (list (car err) (cadr err)))))
+                      (setq inner-armed nil)
+                      (setq other-write (puthash "after" 'allowed inner))
+                      (setq phase 'same)
+                      (setq same-result (gethash (copy-sequence "outer") outer))
+                      (let ((before gcs-done))
+                        (setq outer-state
+                              (list (garbage-collect-maybe most-positive-fixnum)
+                                    (null (garbage-collect)) (= before gcs-done))))
+                      (setq mutation
+                            (condition-case err (clrhash outer)
+                              (error (list (car err) (cadr err)
+                                           (eq (nth 2 err) outer)))))))
+                   ((eq phase 'same)
+                    (setq phase 'done)
+                    (let ((before gcs-done))
+                      (make-list 32 nil)
+                      (setq same-state
+                            (list (garbage-collect-maybe most-positive-fixnum)
+                                  (null (garbage-collect)) (= before gcs-done)))))))))
+          (define-hash-table-test
+           'gp-nested-outer-accounting
+           (lambda (a b)
+             (when (eq callback 'compare) (funcall outer-action))
+             (equal a b))
+           (lambda (_key)
+             (when (eq callback 'hash) (funcall outer-action))
+             0))
+          (define-hash-table-test
+           'gp-nested-inner-accounting
+           (lambda (a b)
+             (when (eq callback 'compare) (funcall inner-action))
+             (equal a b))
+           (lambda (_key)
+             (when (eq callback 'hash) (funcall inner-action))
+             0))
+          (setq outer (make-hash-table :test 'gp-nested-outer-accounting)
+                inner (make-hash-table :test 'gp-nested-inner-accounting))
+          (puthash (copy-sequence "outer") 7 outer)
+          (puthash (copy-sequence "inner") 22 inner)
+          (setq phase 'outer)
+          (let ((value (gethash (copy-sequence "outer") outer)))
+            (setq phase nil)
+            (let ((outer-after (puthash "outer" 9 outer))
+                  (inner-after (puthash "inner" 44 inner))
+                  (before gcs-done))
+              (garbage-collect)
+              (push (list callback exit value inner-result inner-state
+                          same-result same-state outer-state mutation other-write
+                          outer-after inner-after (> gcs-done before)) answers)))))))
+  (nreverse answers))
+"#;
+    let expect = expect_test::expect![[
+        r#""OK ((hash normal 7 22 (t t t) 7 (nil t t) (nil t t) (error \"hash table test modifies table\" t) allowed 9 44 t) (hash signal 7 (error \"gp nested callback failed\") (t t t) 7 (nil t t) (nil t t) (error \"hash table test modifies table\" t) allowed 9 44 t) (hash throw 7 thrown (t t t) 7 (nil t t) (nil t t) (error \"hash table test modifies table\" t) allowed 9 44 t) (compare normal 7 22 (t t t) 7 (nil t t) (nil t t) (error \"hash table test modifies table\" t) allowed 9 44 t) (compare signal 7 (error \"gp nested callback failed\") (t t t) 7 (nil t t) (nil t t) (error \"hash table test modifies table\" t) allowed 9 44 t) (compare throw 7 thrown (t t t) 7 (nil t t) (nil t t) (error \"hash table test modifies table\" t) allowed 9 44 t))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
 fn oracle_hash_callback_user_mutation_matrix() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     // 42 cases. Equal but distinct strings ensure the comparison callback runs.
