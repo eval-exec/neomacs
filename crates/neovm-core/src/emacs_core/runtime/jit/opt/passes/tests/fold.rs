@@ -418,3 +418,145 @@ fn opt_fold_seeded_loop_diamonds_preserve_tier0_and_every_observable_stack() {
         assert_eq!(after, expected, "seed {seed}");
     }
 }
+
+#[test]
+fn opt_fold_gnu_dhry_proc3_alias_join_remains_verifiable() {
+    let mut ctx = Context::new();
+    // Copied from the GNU-built elisp-benchmarks-1.16 dhrystone.elc fixture.
+    // Its ret slot joins the original unknown argument and a heap-load result;
+    // later cl-struct checks retain both values in complete source frames.
+    let raw = vec![
+        137, 8, 131, 8, 0, 136, 8, 65, 8, 64, 196, 1, 33, 9, 62, 132, 25, 0, 197, 198, 199, 3, 68,
+        34, 136, 137, 200, 72, 178, 1, 196, 1, 33, 10, 62, 132, 45, 0, 197, 198, 201, 3, 68, 34,
+        136, 137, 200, 202, 203, 11, 34, 73, 182, 2, 135,
+    ];
+    let mut constants = vec![
+        Value::symbol("dhry-ptr-glob"),
+        Value::symbol("cl-struct-dhry-record-tags"),
+        Value::symbol("cl-struct-dhry-var-1-tags"),
+        Value::symbol("dhry-int-glob"),
+        Value::symbol("type-of"),
+        Value::symbol("signal"),
+        Value::symbol("wrong-type-argument"),
+        Value::symbol("dhry-record"),
+        Value::fixnum(2),
+        Value::symbol("dhry-var-1"),
+        Value::symbol("dhry-proc-7"),
+        Value::fixnum(10),
+    ];
+    let (ops, offsets) = crate::emacs_core::bytecode::decode::decode_gnu_bytecode_with_offset_map(
+        &raw,
+        &mut constants,
+    )
+    .expect("GNU fixture decodes");
+    let mut function = source(ops, constants, 1);
+    function.max_stack = 8;
+    function.gnu_byte_offset_map = Some(offsets);
+    function.gnu_bytecode_bytes = Some(crate::tagged::header::LispByteVec::owned(raw));
+    // Installing GNU bytes must use the canonical decode publication path.
+    // Merely attaching decoded ops does not establish the unchecked driver's
+    // sealed-code proof, and test-only hand-assembly sealing refuses GNU bodies.
+    function
+        .restore_gnu_decode_policy()
+        .expect("GNU decode publication");
+    assert!(function.executes_sealed_ops());
+    assert!(function.executes_verified_ops());
+    let original = plan(&function, 0);
+    assert_eq!(function.executable_ops().len(), 47);
+    assert_eq!(
+        (
+            original.blocks.len(),
+            original.insts.len(),
+            original.census.phis
+        ),
+        (11, 35, 1)
+    );
+    let mut folded = original.clone();
+    let result = run(&mut folded);
+    assert!(
+        result.is_ok(),
+        "GNU dhry-proc-3 fold must remain admissible: {result:?}\n{}",
+        folded.display()
+    );
+    folded.verify().expect("folded GNU helper remains valid");
+
+    ctx.eval_str(
+        "(progn
+           (setq cl-struct-dhry-record-tags '(dhry-record)
+                 cl-struct-dhry-var-1-tags '(dhry-var-1)
+                 dhry-int-glob 5
+                 dhry-ptr-glob (cons (record 'dhry-record 0 (record 'dhry-var-1 0 0 \"x\")) '(tail))))",
+    ).expect("runtime inputs for the GNU fixture");
+    ctx.obarray.set_symbol_function_id(
+        crate::emacs_core::intern::intern("dhry-proc-7"),
+        Value::make_bytecode(source(
+            vec![
+                Op::StackRef(1),
+                Op::Constant(0),
+                Op::Add,
+                Op::StackRef(1),
+                Op::StackRef(1),
+                Op::Add,
+                Op::Return,
+            ],
+            vec![Value::fixnum(2)],
+            2,
+        )),
+    );
+    for argument in [
+        Value::NIL,
+        Value::fixnum(37),
+        Value::list(vec![Value::fixnum(1)]),
+    ] {
+        let reset = "(aset (aref (car dhry-ptr-glob) 2) 2 0)";
+        let observed = "(aref (aref (car dhry-ptr-glob) 2) 2)";
+        ctx.eval_str(reset).unwrap();
+        let expected = {
+            let mut vm = Vm::from_context(&mut ctx);
+            vm.force_interpreter_only_for_test();
+            let value = vm
+                .execute(&function, vec![argument])
+                .unwrap_or_else(|flow| {
+                    let strings = flow.as_signal().map(|signal| {
+                        signal
+                            .data
+                            .iter()
+                            .filter_map(|value| value.as_runtime_string_owned())
+                            .collect::<Vec<_>>()
+                    });
+                    panic!("Tier0 GNU fixture execution failed: {flow:?}; strings={strings:?}")
+                });
+            ValueBits::from_value(value)
+        };
+        let expected_store = ctx.eval_str(observed).unwrap();
+        ctx.eval_str(reset).unwrap();
+        let before = evaluate(
+            &original,
+            &mut ctx,
+            Inputs {
+                args: &[argument],
+                ..Inputs::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(ctx.eval_str(observed).unwrap(), expected_store);
+        ctx.eval_str(reset).unwrap();
+        let after = evaluate(
+            &folded,
+            &mut ctx,
+            Inputs {
+                args: &[argument],
+                ..Inputs::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(ctx.eval_str(observed).unwrap(), expected_store);
+        assert_eq!(after.trace, before.trace, "original GNU source stacks");
+        let (Outcome::Returned(before), Outcome::Returned(after)) = (before.outcome, after.outcome)
+        else {
+            panic!("valid GNU records must return")
+        };
+        assert_eq!(before, expected);
+        assert_eq!(after, expected);
+    }
+}

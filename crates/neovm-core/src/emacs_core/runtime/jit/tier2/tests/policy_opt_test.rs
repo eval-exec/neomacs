@@ -174,6 +174,8 @@ fn tier2_opt_compact_helper_respects_the_compile_cpu_budget() {
     assert_eq!(request_decision(&leaf, f.jit_runtime()), None);
     assert_eq!(request_decision(&leaf, f.jit_runtime()), None);
     assert_eq!(leaf.obs.t2.reserved_us.get(), 0);
+    assert_eq!(leaf.obs.t2.budget.get(), i64::from(policy().stable));
+    assert_eq!(leaf.obs.t2.policy.borrow().attempts, 1);
 }
 
 #[test]
@@ -242,6 +244,135 @@ fn tier2_opt_compact_builtin_helper_serves_native_spec_calls() {
             .bytecode_spec_slots()
             .any(|slot| std::ptr::eq(slot.leaf_ptr(), upgraded)),
         "the normal native caller seam relinks to the opt helper"
+    );
+    crate::emacs_core::eval::restore_scratch_gc_roots(saved_roots);
+}
+
+#[test]
+fn tier2_opt_budget_denial_retries_native_helper_after_stable_windows() {
+    const DENIED_CALLS: u64 = 40;
+    const SERVED_CALLS: u64 = 400;
+    let _settings = Settings::enter(OptMode::Opt);
+    let mut ctx = Context::new();
+    let helper = function(
+        vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return],
+        vec![Value::from_sym_id(intern("length"))],
+        1,
+    );
+    let arg = Value::vector(vec![Value::NIL; 3]);
+    let expected = Vm::from_context(&mut ctx)
+        .execute(&helper, vec![arg])
+        .unwrap();
+    let helper = Value::make_bytecode(helper);
+    let name = intern("neovm--t2-opt-budget-retry-helper");
+    ctx.obarray.set_symbol_function_id(name, helper);
+    let caller = Value::make_bytecode(function(
+        vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return],
+        vec![Value::from_sym_id(name)],
+        1,
+    ));
+    let saved_roots = crate::emacs_core::eval::save_scratch_gc_roots();
+    crate::emacs_core::eval::push_scratch_gc_roots(&[arg, helper, caller]);
+    let helper_data = helper.get_bytecode_data().unwrap();
+    let caller_data = caller.get_bytecode_data().unwrap();
+    let call = |ctx: &mut Context| {
+        assert_eq!(
+            cache::try_run_compiled(ctx, caller_data, caller, &[arg]).unwrap(),
+            Some(expected.bits())
+        );
+    };
+    call(&mut ctx);
+    let original_id = helper_data.jit_runtime().compiled_id().unwrap();
+    let original_ptr = cache::compiled_leaf_ptr_for_test(original_id).unwrap();
+    // SAFETY: this mutator's cache retains the current leaf and later its T1
+    // fallback; neither the cache nor the rooted caller is cleared here.
+    let original = unsafe { &*original_ptr };
+    assert_eq!(original.tier(), LeafTier::Baseline);
+    original.obs.compile_us.set(u32::MAX);
+    force_tier2_policy_for_test(Some(Tier2PolicyKnob {
+        budget_pct: 1,
+        floor_ms: 0,
+        ..policy()
+    }));
+    let denied_before = stats().budget_denied;
+    for _ in 0..DENIED_CALLS {
+        call(&mut ctx);
+    }
+    assert!(stats().budget_denied > denied_before);
+    assert_eq!(
+        original.obs.t2.state.get(),
+        T2State::Idle,
+        "temporary budget denial must retain the normal T1 service window"
+    );
+    assert!((1..=i64::from(policy().stable)).contains(&original.obs.t2.budget.get()));
+    assert_eq!(original.obs.t2.reserved_us.get(), 0);
+    assert!(original.obs.t2.source.borrow().is_some());
+    assert_eq!(original.obs.t2.policy.borrow().attempts, 1);
+    assert!(!original.retired.get());
+    assert_eq!(helper_data.jit_runtime().compiled_id(), Some(original_id));
+    let caller_ptr =
+        cache::compiled_leaf_ptr_for_test(caller_data.jit_runtime().compiled_id().unwrap())
+            .unwrap();
+    let caller_leaf = unsafe { &*caller_ptr };
+    assert!(
+        caller_leaf
+            .bytecode_spec_slots()
+            .any(|slot| { std::ptr::eq(slot.leaf_ptr(), original) }),
+        "denied requests leave normal caller slots linked to the retained T1"
+    );
+
+    // A denial must not reset the stability history. A widened source still
+    // consumes a new stable window, while repeated denied windows do not use
+    // additional instability attempts or reserve any compiler work.
+    let unstable_before = stats().unstable;
+    helper_data.jit_runtime().widen_numeric(
+        0,
+        helper_data.executable_ops().len(),
+        NumericFeedback::Float,
+    );
+    for _ in 0..policy().stable {
+        call(&mut ctx);
+    }
+    assert!(stats().unstable > unstable_before);
+    assert_eq!(original.obs.t2.policy.borrow().attempts, 2);
+    assert_eq!(original.obs.t2.state.get(), T2State::Idle);
+    assert_eq!(original.obs.t2.reserved_us.get(), 0);
+
+    // Make the resource policy affordable deterministically; the earlier
+    // denial did not consume a reservation and cannot permanently keep T1.
+    original.obs.compile_us.set(1);
+    force_tier2_policy_for_test(Some(policy()));
+    for _ in 0..SERVED_CALLS {
+        call(&mut ctx);
+    }
+    let upgraded_ptr =
+        cache::compiled_leaf_ptr_for_test(helper_data.jit_runtime().compiled_id().unwrap())
+            .unwrap();
+    let upgraded = unsafe { &*upgraded_ptr };
+    assert_ne!(original_ptr, upgraded_ptr);
+    assert_eq!(upgraded.tier(), LeafTier::Opt);
+    assert_eq!(
+        upgraded.obs.t2.origin,
+        T2Origin::Upgrade(T2Upgrade::Feedback)
+    );
+    assert_eq!(
+        original.obs.t2.state.get(),
+        T2State::Upgraded(T2Upgrade::Feedback)
+    );
+    assert_eq!(original.obs.t2.reserved_us.get(), 0);
+    assert_eq!(original.obs.t2.budget.get(), DISARMED);
+    let retained = upgraded.tier1_fallback.borrow();
+    assert!(std::ptr::eq(&**retained.as_ref().unwrap(), original));
+    assert!(!original.retired.get());
+    assert!(upgraded.obs.entries.get() * 10 >= (SERVED_CALLS - 3) * 9);
+    let caller_ptr =
+        cache::compiled_leaf_ptr_for_test(caller_data.jit_runtime().compiled_id().unwrap())
+            .unwrap();
+    let caller_leaf = unsafe { &*caller_ptr };
+    assert!(
+        caller_leaf
+            .bytecode_spec_slots()
+            .any(|slot| { std::ptr::eq(slot.leaf_ptr(), upgraded) })
     );
     crate::emacs_core::eval::restore_scratch_gc_roots(saved_roots);
 }

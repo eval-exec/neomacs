@@ -219,6 +219,8 @@ pub(crate) fn upgrade_failed(old: &CompiledLeaf) {
 
 /// A budget denial is temporary. Keep the stable snapshot and retry
 /// admission after another work window without reserving CPU in the meantime.
+/// Stable opt helpers use this existing retry too: denial preserves their T1,
+/// source, caller slots and stability history until the normal seam can compile.
 fn admit_request(leaf: &CompiledLeaf, kind: T2Upgrade) -> Option<T2Decision> {
     if !budget_allows(leaf) {
         leaf.obs.t2.budget.set(i64::from(jit_tier2_policy().stable));
