@@ -287,7 +287,10 @@ fn batch_fatal_report_and_nested_shutdown_share_first_entry_hook_ownership() {
         } else {
             eval.shutdown_with_hooks(request).map(|_| ())
         };
-        assert!(matches!(reported, Err(Flow::Shutdown(actual)) if actual == request));
+        assert_eq!(
+            reported.err().and_then(|flow| flow.shutdown_request()),
+            Some(request)
+        );
         assert_eq!(eval.shutdown_request(), Some(request));
         assert_eq!(
             eval.obarray.symbol_value("shutdown-count").copied(),
@@ -305,7 +308,10 @@ fn batch_fatal_report_and_nested_shutdown_share_first_entry_hook_ownership() {
             exit_code: 42,
             restart: false,
         });
-        assert!(matches!(repeated, Err(Flow::Shutdown(actual)) if actual == request));
+        assert_eq!(
+            repeated.err().and_then(|flow| flow.shutdown_request()),
+            Some(request)
+        );
         assert_eq!(
             eval.obarray.symbol_value("shutdown-count").copied(),
             Some(Value::fixnum(1))

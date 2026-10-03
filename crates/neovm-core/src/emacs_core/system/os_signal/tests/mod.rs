@@ -116,10 +116,11 @@ fn termination_capture_runs_kill_emacs_at_safe_point_once() {
             std::thread::yield_now();
         }
         assert!(eval.shutdown_request().is_none(), "handler entered Lisp");
-        assert!(matches!(
-            eval.maybe_quit(),
-            Err(crate::emacs_core::error::Flow::Shutdown(_))
-        ));
+        assert!(
+            eval.maybe_quit()
+                .err()
+                .is_some_and(|flow| flow.is_shutdown())
+        );
         assert_eq!(eval.shutdown_request().unwrap().exit_code, sig);
         assert_eq!(
             eval.obarray.symbol_value("signal-hook-count").copied(),
@@ -181,10 +182,11 @@ fn sigint_is_captured_like_the_other_fatal_signals() {
         std::thread::yield_now();
     }
     assert!(eval.shutdown_request().is_none(), "handler entered Lisp");
-    assert!(matches!(
-        eval.maybe_quit(),
-        Err(crate::emacs_core::error::Flow::Shutdown(_))
-    ));
+    assert!(
+        eval.maybe_quit()
+            .err()
+            .is_some_and(|flow| flow.is_shutdown())
+    );
     assert_eq!(eval.shutdown_request().unwrap().exit_code, libc::SIGINT);
     assert_eq!(
         eval.obarray.symbol_value("sigint-hook-count").copied(),

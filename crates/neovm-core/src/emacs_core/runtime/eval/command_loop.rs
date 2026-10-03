@@ -61,7 +61,7 @@ impl Context {
     /// Every evaluator shutdown entry uses this first-entry-wins boundary.
     pub(crate) fn shutdown_with_hooks(&mut self, request: ShutdownRequest) -> EvalResult {
         if let Some(request) = self.shutdown_request {
-            return Err(Flow::Shutdown(request));
+            return Err(Flow::shutdown(request));
         }
         if self.shutdown_in_progress {
             // A nested error, signal or explicit exit must neither recurse nor
@@ -74,7 +74,7 @@ impl Context {
         self.log_tier_i_report();
         self.shutdown_request = Some(request);
         self.command_loop.running = false;
-        Err(Flow::Shutdown(request))
+        Err(Flow::shutdown(request))
     }
 
     pub fn shutdown_request(&self) -> Option<ShutdownRequest> {
