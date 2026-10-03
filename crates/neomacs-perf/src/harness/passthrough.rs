@@ -143,6 +143,8 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOVM_GC_CENSUS_FILE",
     // Callback and interpreter-pool experiments use the same editor binary.
     "NEOVM_ASSOC_RESOLVED",
+    "NEOVM_HASH_TEST_PARITY",
+    "NEOVM_COMPARE_STRINGS_PARITY",
     "NEOVM_MAPHASH_BYTECODE",
     "NEOVM_VM_STACK_RETURN",
 ];

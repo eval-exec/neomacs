@@ -7,7 +7,7 @@
 //!
 //! | Knob | Values | Default | Purpose |
 //! |---|---|---|---|
-//! | `NEOVM_COMPARE_STRINGS_PARITY` | `on`, `off` (boolean aliases accepted) | off | Use the current buffer case table and GNU character upcase rules for case-insensitive string comparison. |
+//! | `NEOVM_COMPARE_STRINGS_PARITY` | `on`, `off` (boolean aliases accepted) | on | Use the current buffer case table and GNU character upcase rules for case-insensitive string comparison. |
 //! | `NEOVM_COMPARE_STRINGS_POS_CACHE` | `on`, `off` (boolean aliases accepted) | on | Reuse GNU's rooted position cache when a validated compare-strings START is nonzero. |
 
 use super::error::{EvalResult, Flow, signal};
@@ -1423,12 +1423,12 @@ pub(crate) fn compare_strings_parity_enabled() -> bool {
 #[cold]
 #[inline(never)]
 fn read_compare_strings_parity_knob() -> bool {
-    std::env::var("NEOVM_COMPARE_STRINGS_PARITY")
+    !std::env::var("NEOVM_COMPARE_STRINGS_PARITY")
         .ok()
         .is_some_and(|value| {
             matches!(
                 value.trim().to_ascii_lowercase().as_str(),
-                "on" | "1" | "true" | "yes"
+                "off" | "0" | "false" | "no"
             )
         })
 }

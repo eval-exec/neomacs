@@ -21,12 +21,12 @@ use std::hash::{Hash, Hasher};
 // Callback knobs, read once per process:
 // | Knob | Values | Default | Effect |
 // | NEOVM_MAPHASH_BYTECODE | on, off | on | Call a bytecode maphash callback through the rooted two-argument entry without a LispArgVec on the armed path. |
-// | NEOVM_HASH_TEST_PARITY | on, off | off | Inhibit GC during user hash tests, restore mutability on unwind, make mutable copies, and preserve every custom test callback. |
+// | NEOVM_HASH_TEST_PARITY | on, off | on | Inhibit GC during user hash tests, restore mutability on unwind, make mutable copies, and preserve every custom test callback. |
 
 /// Immutable process policy contains no Lisp state. LazyLock publishes it to
 /// concurrent mutators; guarded state belongs to each table and Context.
 static HASH_TEST_PARITY: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
-    std::env::var("NEOVM_HASH_TEST_PARITY").is_ok_and(|value| value == "on")
+    !std::env::var("NEOVM_HASH_TEST_PARITY").is_ok_and(|value| value == "off")
 });
 
 pub(crate) fn hash_test_parity_enabled() -> bool {
