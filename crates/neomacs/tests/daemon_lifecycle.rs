@@ -1688,6 +1688,16 @@ fn daemon_client_tty_attaches_evaluates_detaches_and_leaves_daemon_usable() {
         .write(true)
         .open(slave_name)
         .unwrap();
+    // Configure this client's terminal with ERASE = ^H before it attaches.
+    // GNU reads each terminal's ERASE byte in `init_sys_modes`
+    // (src/sysdep.c:1130) and `normal-erase-is-backspace-setup-frame` acts on
+    // it, so the daemon must report the *attaching* terminal's byte rather
+    // than the one it read from its own (absent) stdin.
+    {
+        let mut modes = rustix::termios::tcgetattr(&slave).unwrap();
+        modes.special_codes[rustix::termios::SpecialCodeIndex::VERASE] = 8;
+        rustix::termios::tcsetattr(&slave, rustix::termios::OptionalActions::Now, &modes).unwrap();
+    }
     let original_modes = format!("{:?}", rustix::termios::tcgetattr(&slave).unwrap());
     // SAFETY: master is an owned, live descriptor. Nonblocking drain prevents
     // a failed client assertion from hanging the integration test runner.
@@ -1743,6 +1753,11 @@ fn daemon_client_tty_attaches_evaluates_detaches_and_leaves_daemon_usable() {
         "\"Attempt to delete daemon's initial frame\""
     );
     assert_eq!(fixture.eval("tty", "(+ 2 3)"), "5");
+    assert_eq!(
+        fixture.eval("tty", "tty-erase-char"),
+        "8",
+        "the attaching terminal's ERASE byte must replace the daemon's"
+    );
     assert_eq!(
         format!("{:?}", rustix::termios::tcgetattr(&slave).unwrap()),
         original_modes,

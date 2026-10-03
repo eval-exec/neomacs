@@ -252,6 +252,13 @@ impl TtyFrameSize {
 pub struct OpenedTtyFrameHost {
     size: TtyFrameSize,
     attribute_capabilities: TtyAttributeCapabilities,
+    /// The ERASE byte of the modes this terminal had before raw mode was
+    /// entered.  The host reads it at open because only the host owns the
+    /// descriptor; the evaluator publishes it as `tty-erase-char`, as GNU's
+    /// `init_sys_modes` does for every terminal it initializes
+    /// (src/sysdep.c:1130) — a daemon must not keep the answer it read from
+    /// its own stdin.
+    erase_char: u8,
     host: Box<dyn TerminalHost>,
 }
 
@@ -259,13 +266,19 @@ impl OpenedTtyFrameHost {
     pub fn new(
         size: TtyFrameSize,
         attribute_capabilities: TtyAttributeCapabilities,
+        erase_char: u8,
         host: Box<dyn TerminalHost>,
     ) -> Self {
         Self {
             size,
             attribute_capabilities,
+            erase_char,
             host,
         }
+    }
+
+    pub fn erase_char(&self) -> u8 {
+        self.erase_char
     }
 }
 
