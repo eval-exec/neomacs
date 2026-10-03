@@ -1084,33 +1084,43 @@ impl Drop for TtyLifecycle {
     }
 }
 
-// Match lib-src/emacsclient.c's alternate-editor tokens, not shell syntax:
-// only ASCII spaces delimit; a double quote at token start quotes up to the
-// next double quote. Other quotes, escapes and shell operators are literal.
-fn alternate_editor_tokens(mut remaining: &str) -> Vec<&str> {
+/// Split an alternate-editor command exactly as GNU's `fail()` does
+/// (`lib-src/emacsclient.c:750-768`).
+///
+/// Every run of spaces *and* double quotes is a delimiter; a token that was
+/// opened by a quote runs to the next quote, otherwise to the next space.
+/// There is no shell syntax, quotes never nest, and runs of delimiters never
+/// produce an empty token — GNU skips them wholesale with
+/// `strspn(tok, " \"")` before it starts the next token.
+fn alternate_editor_tokens(editor: &str) -> Vec<&str> {
+    let bytes = editor.as_bytes();
     let mut tokens = Vec::new();
-    loop {
-        remaining = remaining.trim_start_matches(' ');
-        if remaining.is_empty() {
-            return tokens;
+    let mut pos = 0;
+    while pos < bytes.len() {
+        let delimiter_run = pos;
+        while pos < bytes.len() && matches!(bytes[pos], b' ' | b'"') {
+            pos += 1;
         }
-        let separator = if let Some(quoted) = remaining.strip_prefix('"') {
-            remaining = quoted;
-            '"'
+        if pos >= bytes.len() {
+            break;
+        }
+        let separator = if pos > delimiter_run && bytes[pos - 1] == b'"' {
+            b'"'
         } else {
-            ' '
+            b' '
         };
-        match remaining.split_once(separator) {
-            Some((token, rest)) => {
-                tokens.push(token);
-                remaining = rest;
-            }
-            None => {
-                tokens.push(remaining);
-                return tokens;
-            }
-        }
+        let end = bytes[pos..]
+            .iter()
+            .position(|byte| *byte == separator)
+            .map_or(bytes.len(), |offset| pos + offset);
+        tokens.push(&editor[pos..end]);
+        pos = if end < bytes.len() {
+            end + 1
+        } else {
+            bytes.len()
+        };
     }
+    tokens
 }
 
 #[cfg(test)]
@@ -1143,14 +1153,28 @@ fn fail_or_alternate(prog: &str, options: &Options, message: &str) -> Result<(),
     let Some((executable, arguments)) = tokens.split_first() else {
         return Err(format!("{prog}: alternate editor contains no executable"));
     };
-    let status = Command::new(executable)
-        .args(arguments)
-        .args(&options.args)
-        .status()
-        .map_err(|err| format!("{prog}: failed to run alternate editor: {err}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("{prog}: alternate editor exited with {status}"))
+    let mut command = Command::new(executable);
+    command.args(arguments).args(&options.args);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // GNU `execvp`s the alternate editor: the client *becomes* it, so the
+        // editor's exit status is the client's and its terminal stays intact
+        // (lib-src/emacsclient.c:772-777).  Only a failed exec returns.
+        let error = command.exec();
+        Err(format!(
+            "{prog}: error executing alternate editor \"{alternate}\": {error}"
+        ))
+    }
+    #[cfg(not(unix))]
+    {
+        let status = command
+            .status()
+            .map_err(|err| format!("{prog}: failed to run alternate editor: {err}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("{prog}: alternate editor exited with {status}"))
+        }
     }
 }
