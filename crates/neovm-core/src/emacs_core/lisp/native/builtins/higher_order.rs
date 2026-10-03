@@ -171,6 +171,8 @@ impl MapCallee {
 /// Select the native body capability once for this mapping activation.
 /// The caller's existing root scope retains its designator and sequence; the
 /// immutable proof contains no Lisp references and stays with this mutator.
+/// The epoch must be captured before resolving the callee, so publication
+/// cannot pair an older body with a newer function-cell epoch.
 #[inline]
 fn mapcar1_with_callee(
     eval: &mut super::eval::Context,
@@ -178,17 +180,16 @@ fn mapcar1_with_callee(
     values: MapSink<'_>,
     sequence: Value,
     callee: &MapCallee,
+    checked_epoch: u64,
 ) -> Result<usize, Flow> {
     if let MapCallee::Subr {
-        designator,
-        subr,
-        epoch,
+        designator, subr, ..
     } = *callee
         && native_callback_cache_enabled()
         && let Some(proof) = CheckedNativeCallback::resolve(subr, 1)
     {
         return mapcar1_eval(eval, len, values, sequence, |eval, item| {
-            eval.apply1_checked_subr(designator, subr, epoch, proof, item)
+            eval.apply1_checked_subr(designator, subr, checked_epoch, proof, item)
         });
     }
     mapcar1_eval(eval, len, values, sequence, |eval, item| {
@@ -489,8 +490,16 @@ pub(crate) fn builtin_mapcar_2(
     // the list is built straight from the slots (cons allocation cannot
     // collect, so the slice needs no further rooting).
     let base = eval.reserve_vm_frame_root_slots(len);
+    let checked_epoch = eval.obarray.function_epoch();
     let callee = MapCallee::resolve(eval, func);
-    let map_result = mapcar1_with_callee(eval, len, MapSink::RootSlots(base), seq, &callee);
+    let map_result = mapcar1_with_callee(
+        eval,
+        len,
+        MapSink::RootSlots(base),
+        seq,
+        &callee,
+        checked_epoch,
+    );
     let result_list =
         map_result.map(|mapped| Value::list_from_slice(eval.vm_frame_root_slots(base, mapped)));
     eval.restore_vm_roots(roots);
@@ -512,8 +521,9 @@ pub(crate) fn builtin_mapc_2(
             return Err(flow);
         }
     };
+    let checked_epoch = eval.obarray.function_epoch();
     let callee = MapCallee::resolve(eval, func);
-    let result = mapcar1_with_callee(eval, len, MapSink::Discard, seq, &callee);
+    let result = mapcar1_with_callee(eval, len, MapSink::Discard, seq, &callee, checked_epoch);
     eval.restore_vm_roots(roots);
     result.map(|_| ())?;
     Ok(seq)
@@ -556,8 +566,16 @@ pub(crate) fn builtin_mapconcat(eval: &mut super::eval::Context, args: Vec<Value
             Ok(mapconcat_identity_list(sequence, &mut parts))
         } else {
             if native_callback_cache_enabled() {
+                let checked_epoch = eval.obarray.function_epoch();
                 let callee = MapCallee::resolve(eval, func);
-                mapcar1_with_callee(eval, len, MapSink::Collect(&mut parts), sequence, &callee)
+                mapcar1_with_callee(
+                    eval,
+                    len,
+                    MapSink::Collect(&mut parts),
+                    sequence,
+                    &callee,
+                    checked_epoch,
+                )
             } else {
                 mapcar1_eval(
                     eval,
