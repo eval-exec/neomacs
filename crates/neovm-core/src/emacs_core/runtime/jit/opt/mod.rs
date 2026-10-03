@@ -15,6 +15,7 @@ pub(crate) mod types;
 pub(crate) mod verify;
 
 #[cfg(test)]
+#[path = "tests/reference_eval.rs"]
 pub(crate) mod eval;
 #[cfg(test)]
 #[path = "tests/eval.rs"]
