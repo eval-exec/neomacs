@@ -203,7 +203,7 @@ fn generational_memory_full_uses_live_lisp_setting_to_select_major() {
             .eval_str("(setq memory-full t)")
             .expect("set the real runtime setting");
     });
-    assert!(context.gc_runtime_settings_cache.memory_full);
+    assert!(context.gc_runtime_settings_cache.memory_full.is_full());
     run_due_cycle(&mut context, false);
     assert_eq!(weak_entries(&context), 0);
     context.with_gc_inhibited(|context| {
@@ -211,7 +211,7 @@ fn generational_memory_full_uses_live_lisp_setting_to_select_major() {
             .eval_str("(setq memory-full nil)")
             .expect("clear the real runtime setting");
     });
-    assert!(!context.gc_runtime_settings_cache.memory_full);
+    assert!(!context.gc_runtime_settings_cache.memory_full.is_full());
     run_due_cycle(&mut context, true);
 }
 
@@ -313,7 +313,7 @@ fn generational_memory_full_waits_for_due_then_selects_major_at_real_safe_point(
             .eval_str("(setq memory-full t)")
             .expect("set memory-full through Lisp");
     });
-    assert!(context.gc_runtime_settings_cache.memory_full);
+    assert!(context.gc_runtime_settings_cache.memory_full.is_full());
     let before = counts(&context);
     context.gc_safe_point_exact();
     assert_eq!(

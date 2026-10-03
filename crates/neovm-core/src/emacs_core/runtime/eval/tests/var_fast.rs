@@ -1118,6 +1118,23 @@ fn bind_tier_pushes_the_general_paths_entry() {
     for &(var, value) in taken {
         let cached = bind_once(var, value, true);
         let general = bind_once(var, value, false);
+        if var == "gc-cons-threshold" && crate::emacs_core::hashtab::hash_test_parity_enabled() {
+            assert!(
+                !cached.0,
+                "GC bindings must publish their parity projection"
+            );
+            assert_eq!(cached.1, "none", "cached refusal leaves no binding");
+            assert_ne!(
+                cached.2, general.2,
+                "cached refusal leaves the value unchanged"
+            );
+            assert_eq!(general.2, "(900000 900000)");
+            assert_eq!(
+                cached.3, general.3,
+                "the publishing path restores the old value"
+            );
+            continue;
+        }
         assert!(cached.0, "{var}: a cached shape");
         assert_eq!(cached, general, "{var}: tier vs general specbind");
     }

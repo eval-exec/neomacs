@@ -203,6 +203,97 @@ fn hash_user_guard_restores_outer_gc_maybe_accounting_after_other_table() {
 }
 
 #[test]
+fn hash_user_guard_preserves_live_settings_fallback_after_nested_exit() {
+    let (mut context, table) = fixture();
+    let other = Value::hash_table(HashTableTest::Eq);
+    let threshold = crate::emacs_core::intern::intern("gc-cons-threshold");
+    let result = with_user_test_guard(&mut context, table, |context| {
+        let bytes = context.tagged_heap.bytes_since_gc_exact();
+        let outer = inhibited_user_test_since_gc(context, bytes).unwrap();
+        context
+            .eval_str("(make-local-variable 'gc-cons-percentage)")
+            .expect("mark settings volatile while accounting is active");
+        assert_eq!(inhibited_user_test_since_gc(context, bytes), Some(outer));
+        // A redirected GC variable's base cell can change without its normal
+        // canonical publisher. The sticky fallback must read it live.
+        context
+            .obarray
+            .set_symbol_value_id(threshold, Value::fixnum(1_048_576));
+        with_user_test_guard(context, other, |context| {
+            assert_eq!(
+                context
+                    .capture_user_test_gc_accounting()
+                    .entry_threshold_bytes,
+                1_048_576
+            );
+            let before = context.eval_str("gcs-done").expect("read collection count");
+            assert!(
+                context
+                    .eval_str("(garbage-collect)")
+                    .expect("inhibited GC")
+                    .is_nil()
+            );
+            assert_eq!(
+                context.eval_str("gcs-done").expect("read collection count"),
+                before
+            );
+        });
+        assert_eq!(inhibited_user_test_since_gc(context, bytes), Some(outer));
+        context.eval_str("(signal 'error '(sticky-accounting))")
+    });
+    assert!(result.is_err());
+    assert!(table.as_hash_table().unwrap().mutable);
+    assert!(other.as_hash_table().unwrap().mutable);
+    assert_eq!(context.gc_inhibit_depth, 0);
+    assert!(context.user_test_gc_accounting_pointer().is_none());
+    context
+        .obarray
+        .set_symbol_value_id(threshold, Value::fixnum(2_097_152));
+    assert_eq!(
+        context
+            .capture_user_test_gc_accounting()
+            .entry_threshold_bytes,
+        2_097_152
+    );
+}
+
+#[test]
+fn hash_user_guard_keeps_gc_binding_projection_current() {
+    let (mut context, table) = fixture();
+    let initial = context.gc_threshold();
+    let scope = context.specpdl.len();
+    context
+        .try_specbind(
+            crate::emacs_core::intern::intern("gc-cons-threshold"),
+            Value::fixnum(Value::MOST_POSITIVE_FIXNUM),
+        )
+        .expect("bind allocation threshold");
+    assert!(
+        context.gc_threshold() > initial,
+        "a dynamic GC setting must be published before a callback reads its cached entry operands"
+    );
+    with_user_test_guard(&mut context, table, |context| {
+        let entry_bytes = context.tagged_heap.bytes_since_gc_exact();
+        context
+            .eval_str("(setq gc-cons-threshold 1048576 gc-cons-percentage 0.0)")
+            .expect("change settings before the first GC-maybe query");
+        let bytes = context.tagged_heap.bytes_since_gc_exact();
+        let hi_threshold = (i64::MAX as usize) / 2;
+        assert_eq!(
+            inhibited_user_test_since_gc(context, bytes),
+            Some(
+                Value::MOST_POSITIVE_FIXNUM as i128 - hi_threshold as i128
+                    + bytes.saturating_sub(entry_bytes) as i128
+            )
+        );
+    });
+    context
+        .unbind_to_with_result(scope, Ok(Value::NIL))
+        .expect("restore allocation threshold");
+    assert!(context.gc_threshold() < Value::MOST_POSITIVE_FIXNUM as usize);
+}
+
+#[test]
 fn hash_user_guard_refreshes_dynamic_let_gc_threshold() {
     let (mut context, table) = fixture();
     let bound_threshold = Value::MOST_POSITIVE_FIXNUM as usize;

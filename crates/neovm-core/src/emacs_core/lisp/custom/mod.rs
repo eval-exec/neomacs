@@ -68,14 +68,16 @@ pub(crate) fn builtin_make_variable_buffer_local(
     args: Vec<Value>,
 ) -> EvalResult {
     let (obarray, custom) = (&mut eval.obarray, &mut eval.custom);
-    builtin_make_variable_buffer_local_with_state(obarray, custom, args)
+    let (result, resolved) = builtin_make_variable_buffer_local_with_state(obarray, custom, args)?;
+    eval.mark_user_test_gc_settings_volatile_if_gc_symbol(resolved);
+    Ok(result)
 }
 
 pub(crate) fn builtin_make_variable_buffer_local_with_state(
     obarray: &mut crate::emacs_core::symbol::Obarray,
     _custom: &mut CustomManager,
     args: Vec<Value>,
-) -> EvalResult {
+) -> Result<(Value, SymId), Flow> {
     expect_args("make-variable-buffer-local", &args, 1)?;
     let symbol = match args[0].kind() {
         ValueKind::Symbol(id) => id,
@@ -106,7 +108,7 @@ pub(crate) fn builtin_make_variable_buffer_local_with_state(
     let default_value = obarray.find_symbol_value(resolved_id).unwrap_or(Value::NIL);
     obarray.make_symbol_localized(resolved_id, default_value);
     obarray.set_blv_local_if_set(resolved_id, true);
-    Ok(args[0])
+    Ok((args[0], resolved_id))
 }
 
 /// `(make-local-variable VARIABLE)` -- make variable local in current buffer.
@@ -216,6 +218,7 @@ pub(crate) fn builtin_make_local_variable(
         .find_symbol_value(resolved)
         .unwrap_or(Value::UNBOUND);
     ctx.obarray.make_symbol_localized(resolved, default_value);
+    ctx.mark_user_test_gc_settings_volatile_if_gc_symbol(resolved);
     if let Some(current_id) = ctx.buffers.current_buffer_id() {
         let current_buf = Value::make_buffer(current_id);
         if let Some(blv) = ctx.obarray.blv_mut(resolved)
@@ -618,6 +621,7 @@ pub(crate) fn builtin_kill_local_variable_impl(
             .map(|s| s.redirect() == SymbolRedirect::Localized)
             .unwrap_or(false);
         if is_localized {
+            ctx.mark_user_test_gc_settings_volatile_if_gc_symbol(resolved);
             // GNU `Fkill_local_variable` notifies watchers before removing the
             // buffer's local alist entry or swapping the BLV back to the
             // global binding, so the callback still observes the local value.

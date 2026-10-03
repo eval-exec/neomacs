@@ -510,6 +510,7 @@ pub(crate) fn install_defvaralias_state(
     ctx.obarray
         .make_alias(state_change.alias_id, state_change.base_id);
     ctx.obarray.make_special_id(state_change.base_id);
+    ctx.mark_user_test_gc_settings_volatile_if_gc_symbol(state_change.alias_id);
     ctx.refresh_gc_runtime_settings_after_change_by_id(state_change.alias_id);
 }
 

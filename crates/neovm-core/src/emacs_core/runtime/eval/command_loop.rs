@@ -2088,8 +2088,8 @@ impl Context {
                 // generation before advancing the next-cycle stride; an
                 // explicit full collection and every continuation took the
                 // earlier branches and never advance this counter here.
-                let minor =
-                    (*heap_ptr).should_run_minor(self.gc_runtime_settings_cache.memory_full, true);
+                let minor = (*heap_ptr)
+                    .should_run_minor(self.gc_runtime_settings_cache.memory_full.is_full(), true);
                 (*heap_ptr).note_generation_stress_cycle_started();
                 if minor {
                     (*heap_ptr).begin_minor_collection();
@@ -2103,7 +2103,7 @@ impl Context {
                 }
                 cycle_completed = true;
             } else if (*heap_ptr)
-                .should_run_minor(self.gc_runtime_settings_cache.memory_full, false)
+                .should_run_minor(self.gc_runtime_settings_cache.memory_full.is_full(), false)
             {
                 // Minor marking stops every registered mutator and visits
                 // their roots. Promotion completes before mutating resumes;

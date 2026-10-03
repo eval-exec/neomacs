@@ -147,6 +147,7 @@ impl Context {
             }
             self.obarray.store_plain_value_id(sym_id, value);
             self.sync_cached_runtime_binding_by_id(sym_id, value);
+            self.sync_user_test_gc_binding_by_id(sym_id);
             return Ok(());
         }
         let resolved =
@@ -176,6 +177,7 @@ impl Context {
                 .buffers
                 .set_buffer_local_property_by_sym_id(buf_id, resolved, value);
             self.sync_cached_runtime_binding_by_id(resolved, value);
+            self.sync_user_test_gc_binding_by_id(resolved);
             return Ok(());
         }
 
@@ -364,6 +366,7 @@ impl Context {
                 buf.replace_local_var_alist(new_alist);
             }
             self.sync_cached_runtime_binding_by_id(resolved, stored);
+            self.sync_user_test_gc_binding_by_id(resolved);
             return Ok(());
         }
 
@@ -393,6 +396,7 @@ impl Context {
         };
         self.obarray.set_symbol_value_id(resolved, stored);
         self.sync_cached_runtime_binding_by_id(resolved, stored);
+        self.sync_user_test_gc_binding_by_id(resolved);
         Ok(())
     }
 
@@ -445,6 +449,7 @@ impl Context {
         // LOCALIZED/FORWARDED cell and must do the same, or a cache keeps a
         // value the binding it mirrors has already given up.
         self.sync_cached_runtime_binding_by_id(sym_id, old_value.unwrap_or(Value::NIL));
+        self.sync_user_test_gc_binding_by_id(sym_id);
         Ok(())
     }
 
@@ -509,6 +514,7 @@ impl Context {
                 .set_buffer_local_property_by_sym_id(buffer_id, sym_id, value);
         }
         self.sync_cached_runtime_binding_by_id(sym_id, value);
+        self.sync_user_test_gc_binding_by_id(sym_id);
     }
 
     pub(super) fn swap_let_binding_for_thread_switch(&mut self, index: usize) -> Result<(), Flow> {
@@ -543,10 +549,12 @@ impl Context {
                 Some(value) => {
                     self.obarray.set_symbol_value_id(sym_id, value);
                     self.sync_cached_runtime_binding_by_id(sym_id, value);
+                    self.sync_user_test_gc_binding_by_id(sym_id);
                 }
                 None => {
                     self.obarray.makunbound_id(sym_id);
                     self.sync_cached_runtime_binding_by_id(sym_id, Value::NIL);
+                    self.sync_user_test_gc_binding_by_id(sym_id);
                 }
             }
         }
@@ -718,10 +726,12 @@ impl Context {
                                 Some(val) => {
                                     self.obarray.set_symbol_value_id(sym_id, val);
                                     self.sync_cached_runtime_binding_by_id(sym_id, val);
+                                    self.sync_user_test_gc_binding_by_id(sym_id);
                                 }
                                 None => {
                                     self.obarray.makunbound_id(sym_id);
                                     self.sync_cached_runtime_binding_by_id(sym_id, Value::NIL);
+                                    self.sync_user_test_gc_binding_by_id(sym_id);
                                 }
                             }
                         } else {
@@ -820,6 +830,7 @@ impl Context {
                                 );
                             }
                             self.sync_cached_runtime_binding_by_id(sym_id, old_value);
+                            self.sync_user_test_gc_binding_by_id(sym_id);
                         }
                     }
                     SpecBinding::LetDefault {

@@ -3664,7 +3664,7 @@ pub(crate) enum LispExecution {
 struct GcRuntimeSettingsCache {
     gc_cons_threshold_bytes: usize,
     gc_cons_percentage_scaled: Option<std::num::NonZeroU64>,
-    memory_full: bool,
+    memory_full: GcMemoryPressure,
     /// The four Lisp variables the threshold formula reads, resolved against
     /// the LIVE interner on every settings refresh (rare) instead of through
     /// process-lifetime `cached_symbol_id!` OnceLocks: these ids are first
@@ -3679,13 +3679,100 @@ struct GcRuntimeSettingsCache {
     /// during a synchronous GC-inhibited callback. It restores the previous
     /// pointer before the activation dies; Context transfers occur outside
     /// that borrowed scope. No process or thread-local Lisp state is added.
-    hash_test_accounting: Option<std::ptr::NonNull<super::builtins::HashTestGcInhibitAccounting>>,
+    hash_test_accounting: HashTestGcAccountingSlot,
+}
+
+/// One Context-owned accounting pointer and a sticky live-settings fallback.
+/// Only the exclusive owning mutator updates this slot. The low address bit
+/// records that a GC variable acquired an alias or localized redirect; it is
+/// retained while nested guards replace and restore the aligned stack pointer.
+/// `map_addr` preserves pointer provenance, and all readers remove the bit
+/// before forming a `NonNull` or dereferencing the accounting. No Lisp state
+/// is shared between independent mutators. Keeping one pointer word preserves
+/// the runtime-settings cache's size and its word-sized discriminant niche.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+struct HashTestGcAccountingSlot(*mut super::builtins::HashTestGcInhibitAccounting);
+
+impl HashTestGcAccountingSlot {
+    const NEEDS_LIVE_SETTINGS: usize = 1;
+
+    #[inline]
+    fn accounting(self) -> Option<std::ptr::NonNull<super::builtins::HashTestGcInhibitAccounting>> {
+        std::ptr::NonNull::new(
+            self.0
+                .map_addr(|address| address & !Self::NEEDS_LIVE_SETTINGS),
+        )
+    }
+
+    #[inline]
+    fn replace_accounting(
+        &mut self,
+        pointer: Option<std::ptr::NonNull<super::builtins::HashTestGcInhibitAccounting>>,
+    ) -> Option<std::ptr::NonNull<super::builtins::HashTestGcInhibitAccounting>> {
+        let previous = self.accounting();
+        let visibility = self.0.addr() & Self::NEEDS_LIVE_SETTINGS;
+        self.0 = pointer
+            .map_or(std::ptr::null_mut(), std::ptr::NonNull::as_ptr)
+            .map_addr(|address| address | visibility);
+        previous
+    }
+
+    #[inline]
+    fn needs_live_settings(self) -> bool {
+        self.0.addr() & Self::NEEDS_LIVE_SETTINGS != 0
+    }
+
+    #[inline]
+    fn mark_live_settings(&mut self) {
+        self.0 = self
+            .0
+            .map_addr(|address| address | Self::NEEDS_LIVE_SETTINGS);
+    }
+}
+
+impl Default for HashTestGcAccountingSlot {
+    fn default() -> Self {
+        Self(std::ptr::null_mut())
+    }
+}
+
+const _: () = {
+    assert!(std::mem::align_of::<super::builtins::HashTestGcInhibitAccounting>() >= 2);
+    assert!(std::mem::size_of::<HashTestGcAccountingSlot>() == std::mem::size_of::<usize>());
+};
+
+/// The Context-owned cache's two memory-pressure states. The word-sized
+/// discriminant preserves the former `Option<u64>`'s large invalid-tag niche:
+/// that niche determines where Rust places this cache inside `Context`.
+/// Independent mutators read and refresh their own cache; no state is shared.
+#[repr(u64)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GcMemoryPressure {
+    Normal = 0,
+    Full = 1,
+}
+
+impl GcMemoryPressure {
+    #[inline]
+    fn from_full(full: bool) -> Self {
+        if full { Self::Full } else { Self::Normal }
+    }
+
+    #[inline]
+    fn is_full(self) -> bool {
+        self == Self::Full
+    }
 }
 
 /// See [`GcRuntimeSettingsCache::syms`].
 #[derive(Clone, Copy, Debug)]
 struct GcSettingSyms {
-    threshold: SymId,
+    /// Id zero is permanently `nil`; the distinct `gc-cons-threshold`
+    /// symbol cannot have that id. Its null niche keeps `Option<Self>` at
+    /// four symbol words, making room for the accounting pointer without
+    /// growing the cache or moving Context's baked JIT field offsets.
+    threshold: std::num::NonZeroU32,
     percentage: SymId,
     memory_full: SymId,
     startup_ceiling: SymId,
@@ -3694,16 +3781,22 @@ struct GcSettingSyms {
 impl GcSettingSyms {
     fn resolve() -> Self {
         Self {
-            threshold: intern("gc-cons-threshold"),
+            threshold: std::num::NonZeroU32::new(intern("gc-cons-threshold").0)
+                .expect("gc-cons-threshold is distinct from the nil symbol"),
             percentage: intern("gc-cons-percentage"),
             memory_full: intern("memory-full"),
             startup_ceiling: intern("neomacs--startup-gc-ceiling-active"),
         }
     }
 
+    #[inline]
+    fn threshold(self) -> SymId {
+        SymId(self.threshold.get())
+    }
+
     fn all(&self) -> [SymId; 4] {
         [
-            self.threshold,
+            self.threshold(),
             self.percentage,
             self.memory_full,
             self.startup_ceiling,
@@ -3711,21 +3804,29 @@ impl GcSettingSyms {
     }
 
     fn contains(&self, sym_id: SymId) -> bool {
-        sym_id == self.threshold
+        sym_id == self.threshold()
             || sym_id == self.percentage
             || sym_id == self.memory_full
             || sym_id == self.startup_ceiling
     }
 }
 
+#[cfg(target_pointer_width = "64")]
+const _: () = {
+    assert!(std::mem::size_of::<Option<GcSettingSyms>>() == 16);
+    assert!(std::mem::size_of::<GcMemoryPressure>() == 8);
+    assert!(std::mem::size_of::<GcRuntimeSettingsCache>() == 48);
+    assert!(std::mem::align_of::<GcRuntimeSettingsCache>() == 8);
+};
+
 impl Default for GcRuntimeSettingsCache {
     fn default() -> Self {
         Self {
             gc_cons_threshold_bytes: GC_DEFAULT_THRESHOLD_BYTES,
             gc_cons_percentage_scaled: std::num::NonZeroU64::new(100_000),
-            memory_full: false,
+            memory_full: GcMemoryPressure::Normal,
             syms: None,
-            hash_test_accounting: None,
+            hash_test_accounting: HashTestGcAccountingSlot::default(),
         }
     }
 }

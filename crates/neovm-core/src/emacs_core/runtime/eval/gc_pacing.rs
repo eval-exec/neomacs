@@ -400,9 +400,41 @@ impl Context {
         // (four hash lookups on a rare path): see `GcRuntimeSettingsCache::syms`.
         let syms = GcSettingSyms::resolve();
         self.gc_runtime_settings_cache.syms = Some(syms);
+        // Cached binding/unbinding tiers already refuse this flag. Only the
+        // parity lane needs GC settings to be authoritative between refreshes;
+        // marking the four canonical cells on this rare path keeps their
+        // dynamic bindings on the publishing path without another check in
+        // ordinary cached bindings. Redirect changes preserve this flag.
+        if super::super::hashtab::hash_test_parity_enabled() {
+            for id in syms.all() {
+                if !self
+                    .obarray
+                    .get_by_id(id)
+                    .is_some_and(|symbol| symbol.flags.runtime_projected())
+                {
+                    self.obarray.mark_runtime_projected_id(id);
+                }
+            }
+        }
+        // Buffer switches and writes through an alias target can bypass the
+        // normal GC-setting publisher. Once a setting leaves global storage,
+        // user-test guards keep refreshing its live projection on their cold
+        // path. The owning Context's flag is sticky, so restoring a binding
+        // or changing buffers cannot make a stale projection authoritative.
+        use super::super::symbol::SymbolRedirect;
+        if syms.all().into_iter().any(|id| {
+            self.obarray.get_by_id(id).is_some_and(|symbol| {
+                matches!(
+                    symbol.redirect(),
+                    SymbolRedirect::Localized | SymbolRedirect::Varalias
+                )
+            })
+        }) {
+            self.mark_user_test_gc_settings_volatile();
+        }
         self.gc_runtime_settings_cache.gc_cons_threshold_bytes = self
             .obarray
-            .symbol_value_id(syms.threshold)
+            .symbol_value_id(syms.threshold())
             .copied()
             .and_then(|value| {
                 value.as_fixnum().or_else(|| {
@@ -424,14 +456,16 @@ impl Context {
                     ((float * GC_PERCENT_SCALE as f64).ceil() as u64).clamp(1, u64::MAX),
                 )
             });
-        self.gc_runtime_settings_cache.memory_full = !self
-            .obarray
-            .symbol_value_id_or_nil(syms.memory_full)
-            .is_nil();
+        self.gc_runtime_settings_cache.memory_full = GcMemoryPressure::from_full(
+            !self
+                .obarray
+                .symbol_value_id_or_nil(syms.memory_full)
+                .is_nil(),
+        );
     }
 
     pub(super) fn effective_gc_threshold_bytes(&mut self) -> usize {
-        if self.gc_runtime_settings_cache.memory_full {
+        if self.gc_runtime_settings_cache.memory_full.is_full() {
             return self.tagged_heap.gc_threshold();
         }
 
