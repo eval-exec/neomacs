@@ -1,3 +1,4 @@
+use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 mod menu_buttons_test;
 mod menu_semantics_test;
 mod menu_submenu_test;
@@ -660,8 +661,8 @@ fn frame_terminal_rejects_non_frame_arg_like_gnu() {
     // arguments signal `wrong-type-argument frame-live-p`. Mirror that.
     let mut eval = crate::emacs_core::Context::new();
     let result = builtin_frame_terminal(&mut eval, vec![Value::fixnum(1)]);
-    match result {
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data[0], Value::symbol("frame-live-p"));
         }
@@ -742,8 +743,8 @@ fn frame_edges_string_designator_uses_unquoted_live_frame_error_message() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::Context::new();
     let result = builtin_frame_edges(&mut eval, vec![Value::string("x")]);
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(sig.data, vec![Value::string("x is not a live frame")]);
         }
@@ -756,8 +757,8 @@ fn eval_frame_edges_numeric_designator_reports_numeric_message() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::Context::new();
     let result = builtin_frame_edges(&mut eval, vec![Value::fixnum(999_999)]);
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(sig.data, vec![Value::string("999999 is not a live frame")]);
         }
@@ -773,8 +774,8 @@ fn eval_frame_edges_live_window_designator_includes_buffer_context() {
     let window =
         crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, vec![]).unwrap();
     let result = builtin_frame_edges(&mut eval, vec![window]);
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             let message = match sig.data.as_slice() {
                 [val] => val
@@ -795,8 +796,8 @@ fn eval_frame_edges_live_window_designator_includes_buffer_context() {
 fn open_termscript_uses_batch_tty_error_payload() {
     crate::test_utils::init_test_tracing();
     let result = builtin_open_termscript(vec![Value::NIL]);
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -985,8 +986,8 @@ fn suspend_tty_signals_non_text_terminal_error() {
     let mut eval = crate::emacs_core::Context::new();
     for args in [vec![], vec![Value::NIL], vec![terminal_handle_value()]] {
         let result = builtin_suspend_tty(&mut eval, args);
-        match result {
-            Err(Flow::Signal(sig)) => {
+        match result.kinded() {
+            Err(FlowKind::Signal(sig)) => {
                 assert_eq!(sig.symbol_name(), "error");
                 assert_eq!(
                     sig.data,
@@ -1017,8 +1018,8 @@ fn resume_tty_signals_non_text_terminal_error() {
     let mut eval = crate::emacs_core::Context::new();
     for args in [vec![], vec![Value::NIL], vec![terminal_handle_value()]] {
         let result = builtin_resume_tty(&mut eval, args);
-        match result {
-            Err(Flow::Signal(sig)) => {
+        match result.kinded() {
+            Err(FlowKind::Signal(sig)) => {
                 assert_eq!(sig.symbol_name(), "error");
                 assert_eq!(
                     sig.data,
@@ -1089,14 +1090,14 @@ fn x_open_connection_arity_errors() {
     );
     assert!(x_open_none.is_err());
     assert!(x_open_four.is_err());
-    match x_open_none {
-        Err(Flow::Signal(sig)) => {
+    match x_open_none.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
         }
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
-    match x_open_four {
-        Err(Flow::Signal(sig)) => {
+    match x_open_four.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
         }
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
@@ -1125,20 +1126,20 @@ fn x_close_connection_argument_shape_errors() {
     assert!(x_raw.is_err());
     assert!(x_close_none.is_err());
     assert!(x_close_two.is_err());
-    match x_close_none {
-        Err(Flow::Signal(sig)) => {
+    match x_close_none.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
         }
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
-    match x_close_two {
-        Err(Flow::Signal(sig)) => {
+    match x_close_two.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
         }
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
-    match x_term {
-        Err(Flow::Signal(sig)) => {
+    match x_term.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -1156,8 +1157,8 @@ fn eval_x_close_connection_live_frame_uses_window_system_error() {
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0;
 
     let result = builtin_x_close_connection(&mut eval, vec![Value::make_frame(frame_id)]);
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -1273,8 +1274,8 @@ fn x_display_pixel_size_errors_match_batch_shapes() {
     assert!(height_none.is_err());
     assert!(height_int.is_err());
     assert!(height_str.is_err());
-    match width_term {
-        Err(Flow::Signal(sig)) => {
+    match width_term.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -1283,8 +1284,8 @@ fn x_display_pixel_size_errors_match_batch_shapes() {
         }
         other => panic!("expected error signal, got {other:?}"),
     }
-    match height_term {
-        Err(Flow::Signal(sig)) => {
+    match height_term.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -1316,8 +1317,8 @@ fn x_missing_optional_display_queries_match_batch_no_x_shapes() {
         builtin_x_server_input_extension_version,
         builtin_x_server_vendor,
     ] {
-        match eval_query(&mut eval, vec![]) {
-            Err(Flow::Signal(sig)) => {
+        match eval_query(&mut eval, vec![]).kinded() {
+            Err(FlowKind::Signal(sig)) => {
                 assert_eq!(sig.symbol_name(), "error");
                 assert_eq!(
                     sig.data,
@@ -1327,8 +1328,8 @@ fn x_missing_optional_display_queries_match_batch_no_x_shapes() {
             other => panic!("expected error signal, got {other:?}"),
         }
 
-        match eval_query(&mut eval, vec![term]) {
-            Err(Flow::Signal(sig)) => {
+        match eval_query(&mut eval, vec![term]).kinded() {
+            Err(FlowKind::Signal(sig)) => {
                 assert_eq!(sig.symbol_name(), "error");
                 // Terminal ID may vary; just check the message pattern.
                 let msg = sig.data[0].as_utf8_str().unwrap_or_default();
@@ -1340,8 +1341,8 @@ fn x_missing_optional_display_queries_match_batch_no_x_shapes() {
             other => panic!("expected error signal, got {other:?}"),
         }
 
-        match eval_query(&mut eval, vec![Value::string("x")]) {
-            Err(Flow::Signal(sig)) => {
+        match eval_query(&mut eval, vec![Value::string("x")]).kinded() {
+            Err(FlowKind::Signal(sig)) => {
                 assert_eq!(sig.symbol_name(), "error");
                 let actual_msg = sig.data[0].as_utf8_str().map(String::from);
                 assert_eq!(
@@ -1354,8 +1355,8 @@ fn x_missing_optional_display_queries_match_batch_no_x_shapes() {
             other => panic!("expected error signal, got {other:?}"),
         }
 
-        match eval_query(&mut eval, vec![Value::fixnum(1)]) {
-            Err(Flow::Signal(sig)) => {
+        match eval_query(&mut eval, vec![Value::fixnum(1)]).kinded() {
+            Err(FlowKind::Signal(sig)) => {
                 assert_eq!(sig.symbol_name(), "wrong-type-argument");
                 assert_eq!(
                     sig.data,
@@ -1365,8 +1366,8 @@ fn x_missing_optional_display_queries_match_batch_no_x_shapes() {
             other => panic!("expected wrong-type-argument signal, got {other:?}"),
         }
 
-        match eval_query(&mut eval, vec![Value::make_frame(frame_id)]) {
-            Err(Flow::Signal(sig)) => {
+        match eval_query(&mut eval, vec![Value::make_frame(frame_id)]).kinded() {
+            Err(FlowKind::Signal(sig)) => {
                 assert_eq!(sig.symbol_name(), "error");
                 assert_eq!(
                     sig.data,
@@ -1491,8 +1492,8 @@ fn x_display_set_last_user_time_batch_semantics() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::Context::new();
 
-    match builtin_x_display_set_last_user_time(&mut eval, vec![Value::NIL]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_display_set_last_user_time(&mut eval, vec![Value::NIL]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -1502,8 +1503,8 @@ fn x_display_set_last_user_time_batch_semantics() {
         other => panic!("expected error signal, got {other:?}"),
     }
 
-    match builtin_x_display_set_last_user_time(&mut eval, vec![Value::NIL, Value::NIL]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_display_set_last_user_time(&mut eval, vec![Value::NIL, Value::NIL]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -1513,8 +1514,10 @@ fn x_display_set_last_user_time_batch_semantics() {
         other => panic!("expected error signal, got {other:?}"),
     }
 
-    match builtin_x_display_set_last_user_time(&mut eval, vec![Value::string("x"), Value::NIL]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_display_set_last_user_time(&mut eval, vec![Value::string("x"), Value::NIL])
+        .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -1524,8 +1527,10 @@ fn x_display_set_last_user_time_batch_semantics() {
         other => panic!("expected error signal, got {other:?}"),
     }
 
-    match builtin_x_display_set_last_user_time(&mut eval, vec![Value::NIL, Value::string("x")]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_display_set_last_user_time(&mut eval, vec![Value::NIL, Value::string("x")])
+        .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(sig.data, vec![Value::string("Display x can’t be opened")]);
         }
@@ -1533,8 +1538,9 @@ fn x_display_set_last_user_time_batch_semantics() {
     }
 
     match builtin_x_display_set_last_user_time(&mut eval, vec![Value::NIL, terminal_handle_value()])
+        .kinded()
     {
-        Err(Flow::Signal(sig)) => {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -1544,8 +1550,10 @@ fn x_display_set_last_user_time_batch_semantics() {
         other => panic!("expected error signal, got {other:?}"),
     }
 
-    match builtin_x_display_set_last_user_time(&mut eval, vec![Value::NIL, Value::fixnum(1)]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_display_set_last_user_time(&mut eval, vec![Value::NIL, Value::fixnum(1)])
+        .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -1555,16 +1563,18 @@ fn x_display_set_last_user_time_batch_semantics() {
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
 
-    match builtin_x_display_set_last_user_time(&mut eval, vec![]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match builtin_x_display_set_last_user_time(&mut eval, vec![]).kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 
     match builtin_x_display_set_last_user_time(
         &mut eval,
         vec![Value::NIL, Value::fixnum(1), Value::NIL],
-    ) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    )
+    .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 }
@@ -1584,8 +1594,10 @@ fn x_display_set_last_user_time_eval_uses_user_time_designator_payloads() {
         Value::make_frame(frame_id),
         term,
     ] {
-        match builtin_x_display_set_last_user_time(&mut eval, vec![display, Value::string("x")]) {
-            Err(Flow::Signal(sig)) => {
+        match builtin_x_display_set_last_user_time(&mut eval, vec![display, Value::string("x")])
+            .kinded()
+        {
+            Err(FlowKind::Signal(sig)) => {
                 assert_eq!(sig.symbol_name(), "error");
                 assert_eq!(sig.data, vec![Value::string("Display x can’t be opened")]);
             }
@@ -1595,8 +1607,10 @@ fn x_display_set_last_user_time_eval_uses_user_time_designator_payloads() {
         match builtin_x_display_set_last_user_time(
             &mut eval,
             vec![display, Value::make_frame(frame_id)],
-        ) {
-            Err(Flow::Signal(sig)) => {
+        )
+        .kinded()
+        {
+            Err(FlowKind::Signal(sig)) => {
                 assert_eq!(sig.symbol_name(), "error");
                 assert_eq!(
                     sig.data,
@@ -1606,8 +1620,8 @@ fn x_display_set_last_user_time_eval_uses_user_time_designator_payloads() {
             other => panic!("expected error signal, got {other:?}"),
         }
 
-        match builtin_x_display_set_last_user_time(&mut eval, vec![display, term]) {
-            Err(Flow::Signal(sig)) => {
+        match builtin_x_display_set_last_user_time(&mut eval, vec![display, term]).kinded() {
+            Err(FlowKind::Signal(sig)) => {
                 assert_eq!(sig.symbol_name(), "error");
                 assert_eq!(
                     sig.data,
@@ -1634,15 +1648,15 @@ fn x_selection_queries_and_old_gtk_dialog_batch_semantics() {
             .unwrap()
             .is_nil()
     );
-    match builtin_x_selection_exists_p(vec![Value::fixnum(1)]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_selection_exists_p(vec![Value::fixnum(1)]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("symbolp"), Value::fixnum(1)]);
         }
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
-    match builtin_x_selection_owner_p(vec![Value::fixnum(1)]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_selection_owner_p(vec![Value::fixnum(1)]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("symbolp"), Value::fixnum(1)]);
         }
@@ -1650,8 +1664,8 @@ fn x_selection_queries_and_old_gtk_dialog_batch_semantics() {
     }
 
     assert!(builtin_x_uses_old_gtk_dialog(vec![]).unwrap().is_nil());
-    match builtin_x_uses_old_gtk_dialog(vec![Value::NIL]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match builtin_x_uses_old_gtk_dialog(vec![Value::NIL]).kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 }
@@ -1680,8 +1694,8 @@ fn x_geometry_fonts_and_resource_batch_semantics() {
             .unwrap()
             .is_nil()
     );
-    match builtin_x_parse_geometry(vec![Value::fixnum(1)]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_parse_geometry(vec![Value::fixnum(1)]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::fixnum(1)]);
         }
@@ -1694,8 +1708,8 @@ fn x_geometry_fonts_and_resource_batch_semantics() {
             .unwrap()
             .is_nil()
     );
-    match builtin_x_family_fonts(vec![Value::fixnum(1), Value::fixnum(1)]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_family_fonts(vec![Value::fixnum(1), Value::fixnum(1)]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -1704,8 +1718,8 @@ fn x_geometry_fonts_and_resource_batch_semantics() {
         }
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
-    match builtin_x_family_fonts(vec![Value::fixnum(1), Value::NIL]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_family_fonts(vec![Value::fixnum(1), Value::NIL]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::fixnum(1)]);
         }
@@ -1714,8 +1728,8 @@ fn x_geometry_fonts_and_resource_batch_semantics() {
 
     let mut eval = crate::emacs_core::Context::new();
 
-    match builtin_x_list_fonts(&mut eval, vec![Value::NIL]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_list_fonts(&mut eval, vec![Value::NIL]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -1727,8 +1741,8 @@ fn x_geometry_fonts_and_resource_batch_semantics() {
         other => panic!("expected error signal, got {other:?}"),
     }
 
-    match builtin_x_get_resource(&mut eval, vec![Value::NIL, Value::NIL]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_get_resource(&mut eval, vec![Value::NIL, Value::NIL]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -1739,8 +1753,8 @@ fn x_geometry_fonts_and_resource_batch_semantics() {
         }
         other => panic!("expected error signal, got {other:?}"),
     }
-    match builtin_x_get_resource(&mut eval, vec![Value::NIL]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match builtin_x_get_resource(&mut eval, vec![Value::NIL]).kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 }
@@ -1749,8 +1763,8 @@ fn x_geometry_fonts_and_resource_batch_semantics() {
 fn x_property_and_frame_arg_batch_semantics() {
     crate::test_utils::init_test_tracing();
     for args in [vec![], vec![Value::NIL], vec![Value::make_frame(1)]] {
-        match builtin_x_backspace_delete_keys_p(args) {
-            Err(Flow::Signal(sig)) => {
+        match builtin_x_backspace_delete_keys_p(args).kinded() {
+            Err(FlowKind::Signal(sig)) => {
                 assert_eq!(sig.symbol_name(), "error");
                 assert_eq!(
                     sig.data,
@@ -1760,8 +1774,8 @@ fn x_property_and_frame_arg_batch_semantics() {
             other => panic!("expected error signal, got {other:?}"),
         }
     }
-    match builtin_x_backspace_delete_keys_p(vec![Value::fixnum(1)]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_backspace_delete_keys_p(vec![Value::fixnum(1)]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -1771,8 +1785,8 @@ fn x_property_and_frame_arg_batch_semantics() {
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
 
-    match builtin_x_get_atom_name(vec![Value::symbol("WM_CLASS")]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_get_atom_name(vec![Value::symbol("WM_CLASS")]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -1781,8 +1795,8 @@ fn x_property_and_frame_arg_batch_semantics() {
         }
         other => panic!("expected error signal, got {other:?}"),
     }
-    match builtin_x_get_atom_name(vec![Value::symbol("WM_CLASS"), Value::fixnum(1)]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_get_atom_name(vec![Value::symbol("WM_CLASS"), Value::fixnum(1)]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -1792,8 +1806,8 @@ fn x_property_and_frame_arg_batch_semantics() {
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
 
-    match builtin_x_window_property(vec![Value::string("WM_NAME")]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_window_property(vec![Value::string("WM_NAME")]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -1802,8 +1816,8 @@ fn x_property_and_frame_arg_batch_semantics() {
         }
         other => panic!("expected error signal, got {other:?}"),
     }
-    match builtin_x_window_property(vec![Value::string("WM_NAME"), Value::fixnum(1)]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_window_property(vec![Value::string("WM_NAME"), Value::fixnum(1)]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -1820,13 +1834,15 @@ fn x_property_and_frame_arg_batch_semantics() {
         Value::NIL,
         Value::NIL,
         Value::NIL,
-    ]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    ])
+    .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 
-    match builtin_x_window_property_attributes(vec![Value::string("WM_NAME")]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_window_property_attributes(vec![Value::string("WM_NAME")]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -1835,8 +1851,10 @@ fn x_property_and_frame_arg_batch_semantics() {
         }
         other => panic!("expected error signal, got {other:?}"),
     }
-    match builtin_x_window_property_attributes(vec![Value::string("WM_NAME"), Value::fixnum(1)]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_window_property_attributes(vec![Value::string("WM_NAME"), Value::fixnum(1)])
+        .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -1850,8 +1868,10 @@ fn x_property_and_frame_arg_batch_semantics() {
         Value::NIL,
         Value::NIL,
         Value::NIL,
-    ]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    ])
+    .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 }
@@ -1869,8 +1889,8 @@ fn x_coordinate_sync_and_message_batch_semantics() {
         vec![Value::string("x"), Value::NIL],
         vec![term, Value::NIL],
     ] {
-        match builtin_x_synchronize(args) {
-            Err(Flow::Signal(sig)) => {
+        match builtin_x_synchronize(args).kinded() {
+            Err(FlowKind::Signal(sig)) => {
                 assert_eq!(sig.symbol_name(), "error");
                 assert_eq!(
                     sig.data,
@@ -1880,13 +1900,13 @@ fn x_coordinate_sync_and_message_batch_semantics() {
             other => panic!("expected error signal, got {other:?}"),
         }
     }
-    match builtin_x_synchronize(vec![]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match builtin_x_synchronize(vec![]).kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 
-    match builtin_x_translate_coordinates(vec![Value::NIL]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_translate_coordinates(vec![Value::NIL]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -1895,8 +1915,8 @@ fn x_coordinate_sync_and_message_batch_semantics() {
         }
         other => panic!("expected error signal, got {other:?}"),
     }
-    match builtin_x_translate_coordinates(vec![Value::make_frame(1)]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_translate_coordinates(vec![Value::make_frame(1)]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -1905,8 +1925,8 @@ fn x_coordinate_sync_and_message_batch_semantics() {
         }
         other => panic!("expected error signal, got {other:?}"),
     }
-    match builtin_x_translate_coordinates(vec![Value::fixnum(1)]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_translate_coordinates(vec![Value::fixnum(1)]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -1915,15 +1935,15 @@ fn x_coordinate_sync_and_message_batch_semantics() {
         }
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
-    match builtin_x_translate_coordinates(vec![Value::string("x")]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_translate_coordinates(vec![Value::string("x")]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(sig.data, vec![Value::string("Display x can’t be opened")]);
         }
         other => panic!("expected error signal, got {other:?}"),
     }
-    match builtin_x_translate_coordinates(vec![term]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_translate_coordinates(vec![term]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -1932,8 +1952,8 @@ fn x_coordinate_sync_and_message_batch_semantics() {
         }
         other => panic!("expected error signal, got {other:?}"),
     }
-    match builtin_x_translate_coordinates(vec![]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match builtin_x_translate_coordinates(vec![]).kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
     match builtin_x_translate_coordinates(vec![
@@ -1944,13 +1964,15 @@ fn x_coordinate_sync_and_message_batch_semantics() {
         Value::NIL,
         Value::NIL,
         Value::NIL,
-    ]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    ])
+    .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 
-    match builtin_x_frame_list_z_order(vec![]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_frame_list_z_order(vec![]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -1959,8 +1981,8 @@ fn x_coordinate_sync_and_message_batch_semantics() {
         }
         other => panic!("expected error signal, got {other:?}"),
     }
-    match builtin_x_frame_list_z_order(vec![Value::make_frame(1)]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_frame_list_z_order(vec![Value::make_frame(1)]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -1969,8 +1991,8 @@ fn x_coordinate_sync_and_message_batch_semantics() {
         }
         other => panic!("expected error signal, got {other:?}"),
     }
-    match builtin_x_frame_list_z_order(vec![Value::fixnum(1)]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_frame_list_z_order(vec![Value::fixnum(1)]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -1979,15 +2001,15 @@ fn x_coordinate_sync_and_message_batch_semantics() {
         }
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
-    match builtin_x_frame_list_z_order(vec![Value::string("x")]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_frame_list_z_order(vec![Value::string("x")]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(sig.data, vec![Value::string("Display x can’t be opened")]);
         }
         other => panic!("expected error signal, got {other:?}"),
     }
-    match builtin_x_frame_list_z_order(vec![term]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_frame_list_z_order(vec![term]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -1996,8 +2018,8 @@ fn x_coordinate_sync_and_message_batch_semantics() {
         }
         other => panic!("expected error signal, got {other:?}"),
     }
-    match builtin_x_frame_list_z_order(vec![Value::NIL, Value::NIL]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match builtin_x_frame_list_z_order(vec![Value::NIL, Value::NIL]).kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 
@@ -2008,8 +2030,10 @@ fn x_coordinate_sync_and_message_batch_semantics() {
         Value::NIL,
         Value::NIL,
         Value::NIL,
-    ]) {
-        Err(Flow::Signal(sig)) => {
+    ])
+    .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -2025,8 +2049,10 @@ fn x_coordinate_sync_and_message_batch_semantics() {
         Value::NIL,
         Value::NIL,
         Value::NIL,
-    ]) {
-        Err(Flow::Signal(sig)) => {
+    ])
+    .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -2042,8 +2068,10 @@ fn x_coordinate_sync_and_message_batch_semantics() {
         Value::NIL,
         Value::NIL,
         Value::NIL,
-    ]) {
-        Err(Flow::Signal(sig)) => {
+    ])
+    .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -2059,8 +2087,10 @@ fn x_coordinate_sync_and_message_batch_semantics() {
         Value::NIL,
         Value::NIL,
         Value::NIL,
-    ]) {
-        Err(Flow::Signal(sig)) => {
+    ])
+    .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(sig.data, vec![Value::string("Display x can’t be opened")]);
         }
@@ -2073,8 +2103,10 @@ fn x_coordinate_sync_and_message_batch_semantics() {
         Value::NIL,
         Value::NIL,
         Value::NIL,
-    ]) {
-        Err(Flow::Signal(sig)) => {
+    ])
+    .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -2089,8 +2121,10 @@ fn x_coordinate_sync_and_message_batch_semantics() {
         Value::NIL,
         Value::NIL,
         Value::NIL,
-    ]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    ])
+    .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 }
@@ -2103,15 +2137,15 @@ fn x_popup_dialog_and_menu_batch_semantics() {
     let mut eval = Context::new();
     let term = terminal_handle_value();
 
-    match builtin_x_popup_dialog_batch(vec![Value::NIL, Value::NIL]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_popup_dialog_batch(vec![Value::NIL, Value::NIL]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("windowp"), Value::NIL]);
         }
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
-    match builtin_x_popup_dialog_batch(vec![Value::make_frame(1), Value::NIL]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_popup_dialog_batch(vec![Value::make_frame(1), Value::NIL]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::NIL]);
         }
@@ -2120,8 +2154,10 @@ fn x_popup_dialog_and_menu_batch_semantics() {
     match builtin_x_popup_dialog_batch(vec![
         Value::make_frame(1),
         Value::list(vec![Value::string("A")]),
-    ]) {
-        Err(Flow::Signal(sig)) => {
+    ])
+    .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("consp"), Value::NIL]);
         }
@@ -2158,29 +2194,31 @@ fn x_popup_dialog_and_menu_batch_semantics() {
         .is_nil()
     );
     for arg in [Value::string("x"), Value::fixnum(1), term] {
-        match builtin_x_popup_dialog_batch(vec![arg, Value::NIL]) {
-            Err(Flow::Signal(sig)) => {
+        match builtin_x_popup_dialog_batch(vec![arg, Value::NIL]).kinded() {
+            Err(FlowKind::Signal(sig)) => {
                 assert_eq!(sig.symbol_name(), "wrong-type-argument");
                 assert_eq!(sig.data, vec![Value::symbol("windowp"), Value::NIL]);
             }
             other => panic!("expected wrong-type-argument signal, got {other:?}"),
         }
     }
-    match builtin_x_popup_dialog_batch(vec![]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match builtin_x_popup_dialog_batch(vec![]).kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
-    match builtin_x_popup_dialog_batch(vec![Value::NIL]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match builtin_x_popup_dialog_batch(vec![Value::NIL]).kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
-    match builtin_x_popup_dialog_batch(vec![Value::NIL, Value::NIL, Value::NIL, Value::NIL]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match builtin_x_popup_dialog_batch(vec![Value::NIL, Value::NIL, Value::NIL, Value::NIL])
+        .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 
-    let assert_wta = |result: EvalResult, pred: &str, arg: Value| match result {
-        Err(Flow::Signal(sig)) => {
+    let assert_wta = |result: EvalResult, pred: &str, arg: Value| match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol(pred), arg]);
         }
@@ -2510,16 +2548,16 @@ fn x_popup_dialog_and_menu_batch_semantics() {
         "listp",
         Value::fixnum(0),
     );
-    match builtin_x_popup_menu(&mut eval, vec![]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match builtin_x_popup_menu(&mut eval, vec![]).kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
-    match builtin_x_popup_menu(&mut eval, vec![Value::NIL]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match builtin_x_popup_menu(&mut eval, vec![Value::NIL]).kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
-    match builtin_x_popup_menu(&mut eval, vec![Value::NIL, Value::NIL, Value::NIL]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match builtin_x_popup_menu(&mut eval, vec![Value::NIL, Value::NIL, Value::NIL]).kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 }
@@ -2669,22 +2707,22 @@ fn x_clipboard_input_context_batch_semantics() {
     let term = terminal_handle_value();
     let frame = Value::make_frame(1);
 
-    let assert_wrong_type = |result: EvalResult, pred: &str, arg: Value| match result {
-        Err(Flow::Signal(sig)) => {
+    let assert_wrong_type = |result: EvalResult, pred: &str, arg: Value| match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol(pred), arg]);
         }
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     };
-    let assert_error = |result: EvalResult, msg: &str| match result {
-        Err(Flow::Signal(sig)) => {
+    let assert_error = |result: EvalResult, msg: &str| match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(sig.data, vec![Value::string(msg)]);
         }
         other => panic!("expected error signal, got {other:?}"),
     };
-    let assert_wrong_number = |result: EvalResult| match result {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    let assert_wrong_number = |result: EvalResult| match result.kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     };
 
@@ -2773,22 +2811,22 @@ fn x_clipboard_input_context_batch_semantics() {
 #[test]
 fn x_selection_property_tip_batch_semantics() {
     crate::test_utils::init_test_tracing();
-    let assert_wrong_type = |result: EvalResult, pred: &str, arg: Value| match result {
-        Err(Flow::Signal(sig)) => {
+    let assert_wrong_type = |result: EvalResult, pred: &str, arg: Value| match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol(pred), arg]);
         }
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     };
-    let assert_error = |result: EvalResult, msg: &str| match result {
-        Err(Flow::Signal(sig)) => {
+    let assert_error = |result: EvalResult, msg: &str| match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(sig.data, vec![Value::string(msg)]);
         }
         other => panic!("expected error signal, got {other:?}"),
     };
-    let assert_wrong_number = |result: EvalResult| match result {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    let assert_wrong_number = |result: EvalResult| match result.kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     };
 
@@ -2954,15 +2992,15 @@ fn x_selection_property_tip_batch_semantics() {
 #[test]
 fn gui_selection_batch_semantics() {
     crate::test_utils::init_test_tracing();
-    let assert_error = |result: EvalResult, msg: &str| match result {
-        Err(Flow::Signal(sig)) => {
+    let assert_error = |result: EvalResult, msg: &str| match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(sig.data, vec![Value::string(msg)]);
         }
         other => panic!("expected error signal, got {other:?}"),
     };
-    let assert_wrong_number = |result: EvalResult| match result {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    let assert_wrong_number = |result: EvalResult| match result.kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     };
 
@@ -3022,8 +3060,8 @@ fn gui_selection_batch_semantics() {
 #[test]
 fn x_frame_restack_safe_arity_surface() {
     crate::test_utils::init_test_tracing();
-    match builtin_x_frame_restack(vec![Value::NIL, Value::NIL]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_frame_restack(vec![Value::NIL, Value::NIL]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -3032,8 +3070,8 @@ fn x_frame_restack_safe_arity_surface() {
         }
         other => panic!("expected error signal, got {other:?}"),
     }
-    match builtin_x_frame_restack(vec![Value::NIL, Value::NIL, Value::NIL]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_frame_restack(vec![Value::NIL, Value::NIL, Value::NIL]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -3042,16 +3080,16 @@ fn x_frame_restack_safe_arity_surface() {
         }
         other => panic!("expected error signal, got {other:?}"),
     }
-    match builtin_x_frame_restack(vec![]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match builtin_x_frame_restack(vec![]).kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
-    match builtin_x_frame_restack(vec![Value::NIL]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match builtin_x_frame_restack(vec![Value::NIL]).kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
-    match builtin_x_frame_restack(vec![Value::NIL, Value::NIL, Value::NIL, Value::NIL]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match builtin_x_frame_restack(vec![Value::NIL, Value::NIL, Value::NIL, Value::NIL]).kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 }
@@ -3067,8 +3105,8 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
         vec![Value::make_frame(1)],
         vec![Value::NIL, Value::NIL],
     ] {
-        match builtin_x_export_frames(args) {
-            Err(Flow::Signal(sig)) => {
+        match builtin_x_export_frames(args).kinded() {
+            Err(FlowKind::Signal(sig)) => {
                 assert_eq!(sig.symbol_name(), "error");
                 assert_eq!(
                     sig.data,
@@ -3079,16 +3117,16 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
         }
     }
     for arg in [Value::fixnum(1), Value::string("x"), term] {
-        match builtin_x_export_frames(vec![arg]) {
-            Err(Flow::Signal(sig)) => {
+        match builtin_x_export_frames(vec![arg]).kinded() {
+            Err(FlowKind::Signal(sig)) => {
                 assert_eq!(sig.symbol_name(), "wrong-type-argument");
                 assert_eq!(sig.data, vec![Value::symbol("frame-live-p"), arg]);
             }
             other => panic!("expected wrong-type-argument signal, got {other:?}"),
         }
     }
-    match builtin_x_export_frames(vec![Value::NIL, Value::NIL, Value::NIL]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match builtin_x_export_frames(vec![Value::NIL, Value::NIL, Value::NIL]).kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 
@@ -3099,8 +3137,8 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
         vec![Value::make_frame(focus_frame_id.0)],
         vec![Value::NIL, Value::NIL],
     ] {
-        match builtin_x_focus_frame(&mut focus_eval, args) {
-            Err(Flow::Signal(sig)) => {
+        match builtin_x_focus_frame(&mut focus_eval, args).kinded() {
+            Err(FlowKind::Signal(sig)) => {
                 assert_eq!(sig.symbol_name(), "error");
                 assert_eq!(
                     sig.data,
@@ -3111,16 +3149,16 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
         }
     }
     for arg in [Value::fixnum(999999), Value::string("x"), term] {
-        match builtin_x_focus_frame(&mut focus_eval, vec![arg]) {
-            Err(Flow::Signal(sig)) => {
+        match builtin_x_focus_frame(&mut focus_eval, vec![arg]).kinded() {
+            Err(FlowKind::Signal(sig)) => {
                 assert_eq!(sig.symbol_name(), "wrong-type-argument");
                 assert_eq!(sig.data, vec![Value::symbol("frame-live-p"), arg]);
             }
             other => panic!("expected wrong-type-argument signal, got {other:?}"),
         }
     }
-    match builtin_x_focus_frame(&mut focus_eval, vec![]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match builtin_x_focus_frame(&mut focus_eval, vec![]).kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 
@@ -3136,8 +3174,8 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
             .unwrap()
             .is_nil()
     );
-    match builtin_x_frame_edges(vec![Value::fixnum(1)]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_frame_edges(vec![Value::fixnum(1)]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -3146,8 +3184,8 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
         }
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
-    match builtin_x_frame_edges(vec![Value::string("x")]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_frame_edges(vec![Value::string("x")]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -3156,8 +3194,8 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
         }
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
-    match builtin_x_frame_edges(vec![Value::NIL, Value::NIL, Value::NIL]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match builtin_x_frame_edges(vec![Value::NIL, Value::NIL, Value::NIL]).kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 
@@ -3168,8 +3206,8 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
             .unwrap()
             .is_nil()
     );
-    match builtin_x_frame_geometry(vec![Value::fixnum(1)]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_frame_geometry(vec![Value::fixnum(1)]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -3178,8 +3216,8 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
         }
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
-    match builtin_x_frame_geometry(vec![Value::string("x")]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_x_frame_geometry(vec![Value::string("x")]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -3188,8 +3226,8 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
         }
         other => panic!("expected wrong-type-argument signal, got {other:?}"),
     }
-    match builtin_x_frame_geometry(vec![Value::NIL, Value::NIL]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match builtin_x_frame_geometry(vec![Value::NIL, Value::NIL]).kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 
@@ -3198,8 +3236,8 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
             .unwrap()
             .is_nil()
     );
-    match builtin_x_mouse_absolute_pixel_position(vec![Value::NIL]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match builtin_x_mouse_absolute_pixel_position(vec![Value::NIL]).kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 
@@ -3213,12 +3251,14 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
             .unwrap()
             .is_nil()
     );
-    match builtin_x_set_mouse_absolute_pixel_position(vec![Value::NIL]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match builtin_x_set_mouse_absolute_pixel_position(vec![Value::NIL]).kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
-    match builtin_x_set_mouse_absolute_pixel_position(vec![Value::NIL, Value::NIL, Value::NIL]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match builtin_x_set_mouse_absolute_pixel_position(vec![Value::NIL, Value::NIL, Value::NIL])
+        .kinded()
+    {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 
@@ -3229,8 +3269,8 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
         vec![terminal_handle_value()],
         vec![Value::NIL, Value::NIL],
     ] {
-        match builtin_x_register_dnd_atom(args) {
-            Err(Flow::Signal(sig)) => {
+        match builtin_x_register_dnd_atom(args).kinded() {
+            Err(FlowKind::Signal(sig)) => {
                 assert_eq!(sig.symbol_name(), "error");
                 assert_eq!(
                     sig.data,
@@ -3240,12 +3280,12 @@ fn x_frame_mouse_and_dnd_batch_semantics() {
             other => panic!("expected error signal, got {other:?}"),
         }
     }
-    match builtin_x_register_dnd_atom(vec![]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match builtin_x_register_dnd_atom(vec![]).kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
-    match builtin_x_register_dnd_atom(vec![Value::NIL, Value::NIL, Value::NIL]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match builtin_x_register_dnd_atom(vec![Value::NIL, Value::NIL, Value::NIL]).kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 }
@@ -3370,8 +3410,8 @@ fn x_focus_frame_rejects_live_tty_frame() {
         .set_window_system(None);
 
     let err = builtin_x_focus_frame(&mut eval, vec![Value::make_frame(frame_id.0)]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -3598,8 +3638,8 @@ fn window_system_prefers_selected_frame_then_global_fallback() {
     );
 
     let err = builtin_window_system(&mut eval, vec![Value::string("x")]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("framep"), Value::string("x")]);
         }
@@ -3636,8 +3676,8 @@ fn eval_display_queries_reject_invalid_frame_designator() {
 fn eval_display_queries_string_designator_reports_missing_display() {
     crate::test_utils::init_test_tracing();
     fn assert_missing_display(result: EvalResult) {
-        match result {
-            Err(Flow::Signal(sig)) => {
+        match result.kinded() {
+            Err(FlowKind::Signal(sig)) => {
                 assert_eq!(sig.symbol_name(), "error");
                 assert_eq!(sig.data, vec![Value::string("Display x does not exist")]);
             }
@@ -3716,8 +3756,8 @@ fn eval_display_monitor_errors_render_window_designators() {
         .expect_err("window designator should be rejected");
 
     for err in [list_err, frame_err] {
-        match err {
-            Flow::Signal(sig) => {
+        match err.into_kind() {
+            FlowKind::Signal(sig) => {
                 assert_eq!(sig.symbol_name(), "error");
                 match sig.data.as_slice() {
                     [val] => {
@@ -3773,8 +3813,8 @@ fn display_images_p_shapes_and_errors() {
         Value::T
     );
 
-    match builtin_display_images_p(&mut eval, vec![Value::fixnum(1)]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_display_images_p(&mut eval, vec![Value::fixnum(1)]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -3784,8 +3824,8 @@ fn display_images_p_shapes_and_errors() {
         other => panic!("expected error signal, got {other:?}"),
     }
 
-    match builtin_display_images_p(&mut eval, vec![Value::NIL, Value::NIL]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match builtin_display_images_p(&mut eval, vec![Value::NIL, Value::NIL]).kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments, got {other:?}"),
     }
 }
@@ -3814,8 +3854,8 @@ fn display_save_under_and_display_selections_p_shapes_and_errors() {
             .is_nil()
     );
 
-    match builtin_display_save_under(&mut eval, vec![Value::fixnum(1)]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_display_save_under(&mut eval, vec![Value::fixnum(1)]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -3825,8 +3865,8 @@ fn display_save_under_and_display_selections_p_shapes_and_errors() {
         other => panic!("expected error signal, got {other:?}"),
     }
 
-    match builtin_display_selections_p(&mut eval, vec![Value::fixnum(1)]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_display_selections_p(&mut eval, vec![Value::fixnum(1)]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -3836,13 +3876,13 @@ fn display_save_under_and_display_selections_p_shapes_and_errors() {
         other => panic!("expected error signal, got {other:?}"),
     }
 
-    match builtin_display_save_under(&mut eval, vec![Value::NIL, Value::NIL]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match builtin_display_save_under(&mut eval, vec![Value::NIL, Value::NIL]).kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments, got {other:?}"),
     }
 
-    match builtin_display_selections_p(&mut eval, vec![Value::NIL, Value::NIL]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match builtin_display_selections_p(&mut eval, vec![Value::NIL, Value::NIL]).kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments, got {other:?}"),
     }
 }
@@ -3867,13 +3907,13 @@ fn display_optional_capability_queries_match_color_shapes() {
                 .is_nil()
         );
 
-        match query(&mut eval, vec![Value::fixnum(1)]) {
-            Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "error"),
+        match query(&mut eval, vec![Value::fixnum(1)]).kinded() {
+            Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "error"),
             other => panic!("expected error signal, got {other:?}"),
         }
 
-        match query(&mut eval, vec![Value::string("x")]) {
-            Err(Flow::Signal(sig)) => {
+        match query(&mut eval, vec![Value::string("x")]).kinded() {
+            Err(FlowKind::Signal(sig)) => {
                 assert_eq!(sig.symbol_name(), "error");
                 assert_eq!(sig.data, vec![Value::string("Display x does not exist")]);
             }
@@ -3925,13 +3965,14 @@ fn display_supports_face_attributes_p_arity_and_nil_result() {
             .is_nil()
     );
 
-    match builtin_display_supports_face_attributes_p(&mut eval, vec![]) {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match builtin_display_supports_face_attributes_p(&mut eval, vec![]).kinded() {
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments, got {other:?}"),
     }
     match builtin_display_supports_face_attributes_p(&mut eval, vec![attrs, Value::NIL, Value::NIL])
+        .kinded()
     {
-        Err(Flow::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+        Err(FlowKind::Signal(sig)) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments, got {other:?}"),
     }
 }

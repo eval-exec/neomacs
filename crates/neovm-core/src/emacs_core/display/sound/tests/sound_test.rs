@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 
 #[test]
 fn sound_spec_head_domain_matches_gnu() {
@@ -19,8 +20,8 @@ fn parse_sound_spec_odd_plist_signals_malformed_keyword_arg_list() {
     crate::test_utils::init_test_tracing();
 
     let invalid = Value::list(vec![Value::symbol("sound"), Value::symbol(":data")]);
-    match parse_sound_spec(invalid) {
-        Err(Flow::Signal(sig)) => {
+    match parse_sound_spec(invalid).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "malformed-keyword-arg-list");
             assert!(sig.data.is_empty());
         }
@@ -40,8 +41,8 @@ fn parse_sound_spec_validates_device_like_gnu() {
         Value::symbol(":device"),
         Value::fixnum(1),
     ]);
-    match parse_sound_spec(invalid) {
-        Err(Flow::Signal(sig)) => {
+    match parse_sound_spec(invalid).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(sig.data, vec![Value::string("Invalid sound specification")]);
         }

@@ -3,6 +3,7 @@
 use super::*;
 use crate::buffer::{Buffer, CharPos0, CharRange};
 use crate::emacs_core::display_host::FontResolveRequest;
+use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 use crate::emacs_core::eval::{
     Context, DisplayHost, FontPxProbeResult, GuiFrameHostRequest, ResolvedFontMatch,
     ResolvedFrameFont,
@@ -438,8 +439,8 @@ fn internal_lisp_face_p_rejects_circular_face_aliases() {
         .put_property("__neovm_circular_face_alias_b", "face-alias", first)
         .unwrap();
 
-    match builtin_internal_lisp_face_p(&mut eval, vec![first]) {
-        Err(Flow::Signal(signal)) => {
+    match builtin_internal_lisp_face_p(&mut eval, vec![first]).kinded() {
+        Err(FlowKind::Signal(signal)) => {
             assert_eq!(signal.symbol_name(), "circular-list");
             assert_eq!(signal.data, vec![first]);
         }
@@ -1073,7 +1074,8 @@ fn internal_get_lisp_face_attribute_invalid_plist_face_spreads_signal_data() {
         &mut eval,
         vec![face, Value::keyword(":background")],
     );
-    let Err(Flow::Signal(signal)) = result else {
+    let result = result.kinded();
+    let Err(FlowKind::Signal(signal)) = result else {
         panic!("expected invalid face signal");
     };
 
@@ -2849,8 +2851,8 @@ fn color_values_from_color_spec_semantics() {
 
     let type_err = builtin_color_values_from_color_spec(vec![Value::fixnum(1)])
         .expect_err("color-values-from-color-spec should enforce stringp");
-    match type_err {
-        Flow::Signal(sig) => {
+    match type_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::fixnum(1)]);
         }
@@ -2975,8 +2977,8 @@ fn color_gray_and_supported_semantics() {
 
     let gray_color_type = builtin_color_gray_p(&mut eval, vec![Value::fixnum(1)])
         .expect_err("color-gray-p should enforce stringp");
-    match gray_color_type {
-        Flow::Signal(sig) => {
+    match gray_color_type.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::fixnum(1)]);
         }
@@ -2986,8 +2988,8 @@ fn color_gray_and_supported_semantics() {
     let gray_frame_type =
         builtin_color_gray_p(&mut eval, vec![Value::string("#fff"), Value::fixnum(0)])
             .expect_err("color-gray-p should validate FRAME");
-    match gray_frame_type {
-        Flow::Signal(sig) => {
+    match gray_frame_type.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("framep"), Value::fixnum(0)]);
         }
@@ -3012,8 +3014,8 @@ fn color_gray_and_supported_semantics() {
 
     let supported_type = builtin_color_supported_p(vec![Value::fixnum(1)])
         .expect_err("color-supported-p should enforce stringp");
-    match supported_type {
-        Flow::Signal(sig) => {
+    match supported_type.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::fixnum(1)]);
         }
@@ -3023,8 +3025,8 @@ fn color_gray_and_supported_semantics() {
     let supported_frame_type =
         builtin_color_supported_p(vec![Value::string("#fff"), Value::fixnum(1)])
             .expect_err("color-supported-p should validate FRAME");
-    match supported_frame_type {
-        Flow::Signal(sig) => {
+    match supported_frame_type.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("framep"), Value::fixnum(1)]);
         }
@@ -3143,8 +3145,8 @@ fn color_distance_errors_match_oracle_shape() {
     let invalid_left =
         builtin_color_distance(&mut eval, vec![Value::string("#00"), Value::string("#fff")])
             .unwrap_err();
-    match invalid_left {
-        Flow::Signal(sig) => {
+    match invalid_left.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -3157,8 +3159,8 @@ fn color_distance_errors_match_oracle_shape() {
     let invalid_type =
         builtin_color_distance(&mut eval, vec![Value::fixnum(1), Value::string("#fff")])
             .expect_err("color-distance should signal invalid color for non-string args");
-    match invalid_type {
-        Flow::Signal(sig) => {
+    match invalid_type.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -3173,8 +3175,8 @@ fn color_distance_errors_match_oracle_shape() {
         vec![Value::string("#000"), Value::string("#fff"), Value::T],
     )
     .expect_err("color-distance should validate optional FRAME");
-    match frame_err {
-        Flow::Signal(sig) => {
+    match frame_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("frame-live-p"), Value::T]);
         }
@@ -3244,8 +3246,9 @@ fn color_distance_accepts_the_terminal_default_sentinels() {
         vec![Value::string("black"), Value::string("not-a-color")],
     )
     .expect_err("an unknown colour name still signals")
+    .into_kind()
     {
-        Flow::Signal(sig) => {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,

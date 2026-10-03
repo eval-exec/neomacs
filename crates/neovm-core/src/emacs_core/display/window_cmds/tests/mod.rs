@@ -1,4 +1,5 @@
 use crate::buffer::{EmacsBytePos, LispCharPos1};
+use crate::emacs_core::error::FlowResultExt as _;
 use crate::emacs_core::eval::{FontPxProbeResult, GuiFrameHostSize, ResolvedFrameFont};
 use crate::emacs_core::window_cmds::{FrameDomain, SplitWindowSide, WindowDomain};
 use crate::emacs_core::{Context, DisplayHost, GuiFrameHostRequest, Value, format_eval_result};
@@ -3286,8 +3287,8 @@ fn live_frame_subrs_reject_a_deleted_frame_like_gnu() {
         "lower-frame",
         crate::emacs_core::builtins::symbols::builtin_lower_frame(&mut ev, vec![dead]),
     )] {
-        match result {
-            Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+        match result.kinded() {
+            Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
                 assert_eq!(sig.symbol_name(), "wrong-type-argument", "{name}");
                 assert_eq!(
                     sig.data,
@@ -6138,8 +6139,8 @@ fn frame_old_selected_window_direct_wrapper_matches_batch_nil_semantics() {
 
     let err = super::builtin_frame_old_selected_window(&mut ev, vec![Value::fixnum(999999)])
         .expect_err("invalid frame should signal");
-    match err {
-        crate::emacs_core::error::Flow::Signal(sig) => {
+    match err.into_kind() {
+        crate::emacs_core::error::FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -9765,7 +9766,8 @@ fn window_end_update_signals_when_installed_layout_query_does_not_converge() {
 
     let error = super::builtin_window_end(&mut ev, vec![Value::NIL, Value::T])
         .expect_err("an installed adapter failure must not return stale retained state");
-    let crate::emacs_core::error::Flow::Signal(signal) = error else {
+    let error = error.into_kind();
+    let crate::emacs_core::error::FlowKind::Signal(signal) = error else {
         panic!("expected a Lisp error signal, got {error:?}")
     };
     assert_eq!(signal.symbol_name(), "error");
@@ -11846,10 +11848,10 @@ fn window_lines_pixel_dimensions_refuses_what_gnu_refuses() {
         vec![Value::make_window(wid.0), Value::fixnum(100)],
     )
     .expect_err("an out-of-range FIRST signals");
-    match err {
+    match err.into_kind() {
         // GNU `check_integer_range (first, 0, matrix->nrows)`: the upper bound
         // is the matrix's own row count.
-        crate::emacs_core::error::Flow::Signal(sig) => {
+        crate::emacs_core::error::FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "args-out-of-range");
             assert_eq!(
                 sig.data,
@@ -11879,8 +11881,8 @@ fn window_lines_pixel_dimensions_refuses_what_gnu_refuses() {
         vec![Value::make_window(dead.0), Value::fixnum(0)],
     )
     .expect_err("a dead window signals");
-    match err {
-        crate::emacs_core::error::Flow::Signal(sig) => {
+    match err.into_kind() {
+        crate::emacs_core::error::FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data.first(), Some(&Value::symbol("window-live-p")));
         }

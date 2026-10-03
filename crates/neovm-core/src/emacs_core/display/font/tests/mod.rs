@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::error::{FlowKind, FlowRef, FlowResultExt as _};
 mod system_font_test;
 use crate::buffer::{Buffer, CharPos0};
 use crate::emacs_core::display_host::{AvailableFontFamilyName, FontResolveRequest, FrameFontSize};
@@ -322,7 +323,15 @@ fn font_c_pure_primitives_validate_and_project_font_values() {
     );
 
     let err = font_match_p(vec![Value::NIL, font_spec]).unwrap_err();
-    assert!(matches!(err, Flow::Signal(sig) if sig.symbol_name() == "wrong-type-argument"));
+    assert!(
+        if matches!(err.kind(), FlowRef::Signal(sig) if sig.symbol_name() == "wrong-type-argument")
+        {
+            drop(err);
+            true
+        } else {
+            false
+        }
+    );
 }
 
 #[derive(Default)]
@@ -1019,18 +1028,23 @@ fn font_xlfd_name_too_many_args() {
         Value::NIL,
         Value::NIL,
     ]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-number-of-arguments"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
 fn close_font_requires_font_object() {
     crate::test_utils::init_test_tracing();
     let wrong_nil = close_font(vec![Value::NIL]).unwrap_err();
-    match wrong_nil {
-        Flow::Signal(sig) => {
+    match wrong_nil.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("font-object"), Value::NIL]);
         }
@@ -1038,8 +1052,8 @@ fn close_font_requires_font_object() {
     }
 
     let wrong_spec = close_font(vec![font_spec(vec![]).unwrap()]).unwrap_err();
-    match wrong_spec {
-        Flow::Signal(sig) => {
+    match wrong_spec.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data[0], Value::symbol("font-object"));
         }
@@ -1078,8 +1092,8 @@ fn font_at_eval_returns_nil_on_terminal_frame_after_position_validation() {
 
     let err = font_at(&mut eval, vec![Value::fixnum(4)])
         .expect_err("out-of-range terminal font-at should still validate position");
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "args-out-of-range"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "args-out-of-range"),
         other => panic!("expected args-out-of-range signal, got {other:?}"),
     }
 }
@@ -1446,12 +1460,17 @@ fn internal_char_font_returns_nil_when_current_buffer_is_not_displayed() {
         vec![Value::fixnum(1), Value::symbol("not-a-character")],
     )
     .unwrap_err();
-    assert!(matches!(
-        err,
-        Flow::Signal(sig)
+    assert!(if matches!(
+        err.kind(),
+        FlowRef::Signal(sig)
             if sig.symbol_name() == "wrong-type-argument"
                 && sig.data == vec![Value::symbol("wholenump"), Value::symbol("not-a-character")]
-    ));
+    ) {
+        drop(err);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -1656,15 +1675,19 @@ fn query_font_uses_stored_metrics_when_file_probe_is_unavailable() {
     assert!(values[8].cons_cdr().cons_car().is_cons());
 
     let err = query_font(&mut eval, vec![Value::NIL]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.data, vec![Value::symbol("font-object"), Value::NIL]),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
+            assert_eq!(sig.data, vec![Value::symbol("font-object"), Value::NIL])
+        }
         other => panic!("expected wrong-type-argument, got {other:?}"),
     }
 
     let fabricated = Value::vector(vec![Value::keyword(FONT_OBJECT_TAG)]);
     let err = query_font(&mut eval, vec![fabricated]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.data, vec![Value::symbol("font-object"), fabricated]),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
+            assert_eq!(sig.data, vec![Value::symbol("font-object"), fabricated])
+        }
         other => panic!("expected wrong-type-argument, got {other:?}"),
     }
 }
@@ -1841,7 +1864,14 @@ fn font_shape_gstring_rejects_invalid_shape_and_accepts_valid_opened_font() {
     let mut eval = Context::new();
     let invalid = Value::vector(vec![Value::fixnum(0)]);
     let err = font_shape_gstring(&mut eval, vec![invalid, Value::NIL]).unwrap_err();
-    assert!(matches!(err, Flow::Signal(sig) if sig.symbol_name() == "error"));
+    assert!(
+        if matches!(err.kind(), FlowRef::Signal(sig) if sig.symbol_name() == "error") {
+            drop(err);
+            true
+        } else {
+            false
+        }
+    );
 
     let font = build_font_object(&RuntimeFace::new("default"));
     let gstring = crate::emacs_core::composite::composition_get_gstring(

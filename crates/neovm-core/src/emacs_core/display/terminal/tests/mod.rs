@@ -1,5 +1,5 @@
 use super::pure::*;
-use crate::emacs_core::error::Flow;
+use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::value::Value;
 use std::cell::RefCell;
@@ -365,8 +365,8 @@ fn suspend_tty_signals_error() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
     let mut eval = Context::new();
-    match builtin_suspend_tty(&mut eval, vec![]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_suspend_tty(&mut eval, vec![]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
         }
         other => panic!("expected error signal, got {other:?}"),
@@ -378,8 +378,8 @@ fn resume_tty_signals_error() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
     let mut eval = Context::new();
-    match builtin_resume_tty(&mut eval, vec![]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_resume_tty(&mut eval, vec![]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
         }
         other => panic!("expected error signal, got {other:?}"),
@@ -456,8 +456,8 @@ fn delete_terminal_nil_signals_sole_terminal_error() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
     let mut eval = Context::new();
-    match builtin_delete_terminal(&mut eval, vec![]) {
-        Err(Flow::Signal(sig)) => {
+    match builtin_delete_terminal(&mut eval, vec![]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,
@@ -896,8 +896,8 @@ fn make_terminal_frame_rolls_back_the_provisional_frame_when_tty_open_fails() {
     let error = crate::emacs_core::frame::builtin_make_terminal_frame(&mut eval, vec![params])
         .expect_err("failed device open must fail frame creation");
 
-    match error {
-        Flow::Signal(signal) => {
+    match error.into_kind() {
+        FlowKind::Signal(signal) => {
             assert_eq!(signal.symbol_name(), "error");
             assert_eq!(signal.data, vec![Value::string("test TTY open failure")]);
         }

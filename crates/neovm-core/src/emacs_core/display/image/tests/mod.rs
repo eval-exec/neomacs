@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::error::{FlowRef, FlowResultExt as _};
 use crate::emacs_core::eval::{DisplayHost, GuiFrameHostRequest};
 use crate::emacs_core::image_catalog::{
     AxisSize, ImageAnimationInvalidation, ImageCatalog, ImageEmbeddedMetadata, ImageFrameDelay,
@@ -469,10 +470,15 @@ fn create_image_bad_type() {
         Value::string("test.png"),
         Value::fixnum(42), // not a symbol
     ]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "error"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "error"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 // -----------------------------------------------------------------------
@@ -628,12 +634,17 @@ fn put_image_bad_point() {
     let spec = builtin_create_image(vec![Value::string("test.png"), Value::symbol("png")]).unwrap();
 
     let result = builtin_put_image(vec![spec, Value::string("not a point")]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "wrong-type-argument"
             && sig.data.first() == Some(&Value::symbol("integer-or-marker-p"))
-    ));
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -646,24 +657,34 @@ fn put_image_invalid_area() {
         Value::NIL,
         Value::symbol("center"),
     ]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "error"
             && sig.data.first() == Some(&Value::string("Invalid area center"))
-    ));
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
 fn put_image_not_image() {
     crate::test_utils::init_test_tracing();
     let result = builtin_put_image(vec![Value::fixnum(1), Value::fixnum(1)]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "error"
             && sig.data.first() == Some(&Value::string("Not an image: 1"))
-    ));
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 // -----------------------------------------------------------------------
@@ -684,12 +705,17 @@ fn insert_image_without_position_returns_true() {
 fn insert_image_not_image() {
     crate::test_utils::init_test_tracing();
     let result = builtin_insert_image(vec![Value::fixnum(42)]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "error"
             && sig.data.first() == Some(&Value::string("Not an image: 42"))
-    ));
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -697,12 +723,17 @@ fn insert_image_invalid_area() {
     crate::test_utils::init_test_tracing();
     let spec = builtin_create_image(vec![Value::string("test.png"), Value::symbol("png")]).unwrap();
     let result = builtin_insert_image(vec![spec, Value::NIL, Value::symbol("center")]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "error"
             && sig.data.first() == Some(&Value::string("Invalid area center"))
-    ));
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -744,24 +775,34 @@ fn remove_images_accepts_char_positions() {
 fn remove_images_bad_start() {
     crate::test_utils::init_test_tracing();
     let result = builtin_remove_images(vec![Value::string("x"), Value::fixnum(100)]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "wrong-type-argument"
             && sig.data.first() == Some(&Value::symbol("integer-or-marker-p"))
-    ));
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
 fn remove_images_bad_end() {
     crate::test_utils::init_test_tracing();
     let result = builtin_remove_images(vec![Value::fixnum(1), Value::string("x")]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "wrong-type-argument"
             && sig.data.first() == Some(&Value::symbol("integer-or-marker-p"))
-    ));
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -789,12 +830,17 @@ fn image_flush_rejects_non_window_frame() {
     let spec = builtin_create_image(vec![Value::string("test.png"), Value::symbol("png")]).unwrap();
 
     let result = builtin_image_flush(vec![spec]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "error"
             && sig.data.first() == Some(&Value::string("Window system frame should be used"))
-    ));
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -922,24 +968,34 @@ fn image_flush_non_t_frame_errors() {
     crate::test_utils::init_test_tracing();
     let spec = builtin_create_image(vec![Value::string("test.png"), Value::symbol("png")]).unwrap();
     let result = builtin_image_flush(vec![spec, Value::fixnum(1)]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "wrong-type-argument"
                 && sig.data.first() == Some(&Value::symbol("frame-live-p"))
-    ));
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
 fn image_flush_not_image() {
     crate::test_utils::init_test_tracing();
     let result = builtin_image_flush(vec![Value::fixnum(42)]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "error"
             && sig.data.first() == Some(&Value::string("Invalid image specification"))
-    ));
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 // -----------------------------------------------------------------------
@@ -972,12 +1028,17 @@ fn clear_image_cache_with_filter() {
 fn clear_image_cache_animation_cache_non_list() {
     crate::test_utils::init_test_tracing();
     let result = builtin_clear_image_cache(vec![Value::T, Value::T]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "wrong-type-argument"
             && sig.data.first() == Some(&Value::symbol("listp"))
-    ));
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -1168,12 +1229,17 @@ fn image_metadata_window_system_error_shape() {
     let spec = builtin_create_image(vec![Value::string("test.png"), Value::symbol("png")])
         .expect("create-image should succeed");
     let result = builtin_image_metadata(vec![spec]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "error"
             && sig.data.first() == Some(&Value::string("Window system frame should be used"))
-    ));
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -1182,12 +1248,17 @@ fn image_metadata_second_arg_validates_frame_designator() {
     let spec = builtin_create_image(vec![Value::string("test.png"), Value::symbol("png")])
         .expect("create-image should succeed");
     let result = builtin_image_metadata(vec![spec, Value::T]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "wrong-type-argument"
             && sig.data.first() == Some(&Value::symbol("frame-live-p"))
-    ));
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]
@@ -1363,10 +1434,15 @@ fn image_type_explicit_type() {
 fn image_type_unknown_signals() {
     crate::test_utils::init_test_tracing();
     let result = builtin_image_type(vec![Value::string("unknown.bin")]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig)) if sig.symbol_name() == "unknown-image-type"
-    ));
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig)) if sig.symbol_name() == "unknown-image-type"
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 // -----------------------------------------------------------------------
@@ -1435,13 +1511,18 @@ fn image_transforms_p_with_non_integer_or_small_frame() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::Context::new();
     let result = builtin_image_transforms_p(&mut eval, vec![Value::fixnum(1)]);
-    assert!(matches!(
-        result,
-        Err(Flow::Signal(sig))
+    assert!(if matches!(
+        result.kinded_ref(),
+        Err(FlowRef::Signal(sig))
             if sig.symbol_name() == "wrong-type-argument"
                 && sig.data
                     == vec![Value::symbol("frame-live-p"), Value::fixnum(1)]
-    ));
+    ) {
+        drop(result);
+        true
+    } else {
+        false
+    });
 }
 
 #[test]

@@ -1,5 +1,5 @@
 use super::pure::*;
-use crate::emacs_core::error::Flow;
+use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 use crate::emacs_core::value::Value;
 
 #[cfg(test)]
@@ -47,8 +47,8 @@ fn ding_with_arg_returns_nil() {
 fn open_termscript_signals_tty_error() {
     crate::test_utils::init_test_tracing();
     let result = builtin_open_termscript(vec![Value::NIL]);
-    match result {
-        Err(Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
             assert_eq!(
                 sig.data,

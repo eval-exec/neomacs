@@ -14,7 +14,7 @@
 use super::eval::Context;
 use crate::buffer::BufferId;
 use crate::emacs_core::display_spec::{DisplayPropertySpecs, display_spec_when_parts};
-use crate::emacs_core::error::Flow;
+use crate::emacs_core::error::{Flow, FlowKind, FlowResultExt as _};
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::value::Value;
 use crate::window::{Window, WindowId};
@@ -230,13 +230,13 @@ impl Context {
             }
             self.funcall_general(Value::symbol("eval"), vec![form, Value::T])
         })();
-        match self.unbind_to_with_result(count, result) {
+        match self.unbind_to_with_result(count, result).kinded() {
             Ok(value) => Ok(!value.is_nil()),
-            Err(Flow::Signal(signal)) => {
+            Err(FlowKind::Signal(signal)) => {
                 tracing::debug!(?signal, "display `when' form signaled; treated as nil");
                 Ok(false)
             }
-            Err(flow) => Err(flow),
+            Err(flow) => Err(Flow::from_kind(flow)),
         }
     }
 }

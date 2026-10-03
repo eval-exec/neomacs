@@ -1,5 +1,6 @@
 use super::menu_test_support::publish;
 use super::*;
+use crate::emacs_core::error::{FlowRef, FlowResultExt as _};
 
 #[test]
 fn gui_menu_deep_acyclic_menu_is_complete_or_reports_resource_exhaustion() {
@@ -20,7 +21,13 @@ fn gui_menu_deep_acyclic_menu_is_complete_or_reports_resource_exhaustion() {
 
     let result = publish(&mut eval, &fixture(64));
     assert!(
-        matches!(result, Err(Flow::Signal(data)) if data.symbol == intern("error")),
+        if matches!(result.kinded_ref(), Err(FlowRef::Signal(data)) if data.symbol == intern("error"))
+        {
+            drop(result);
+            true
+        } else {
+            false
+        },
         "exhausting the nesting budget must not publish a partial menu"
     );
 }
@@ -35,7 +42,13 @@ fn gui_menu_cycle_is_reported_instead_of_silently_truncating() {
         map)"#,
     );
     assert!(
-        matches!(result, Err(Flow::Signal(data)) if data.symbol == intern("error")),
+        if matches!(result.kinded_ref(), Err(FlowRef::Signal(data)) if data.symbol == intern("error"))
+        {
+            drop(result);
+            true
+        } else {
+            false
+        },
         "a cyclic source cannot be published as a successful truncated snapshot"
     );
 }
@@ -498,7 +511,14 @@ fn gui_menu_property_errors_are_nil_but_quit_escapes() {
         (quit menu-item "Quit predicate" ignore :button (:toggle . (signal 'quit nil))))"#,
     )
     .unwrap_err();
-    assert!(matches!(error, Flow::Signal(data) if data.symbol == intern("quit")));
+    assert!(
+        if matches!(error.kind(), FlowRef::Signal(data) if data.symbol == intern("quit")) {
+            drop(error);
+            true
+        } else {
+            false
+        }
+    );
 }
 
 #[test]

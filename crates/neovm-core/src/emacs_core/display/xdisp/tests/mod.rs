@@ -2,6 +2,7 @@ use super::*;
 use crate::buffer::buffer::BUFFER_SLOT_BUFFER_FILE_CODING_SYSTEM;
 use crate::buffer::{BufferTextBackendKind, CharPos0, LispCharPos1};
 use crate::emacs_core::Context;
+use crate::emacs_core::error::FlowKind;
 use crate::emacs_core::eval::DisplayHost;
 use crate::emacs_core::image_catalog::{
     ImageCatalog, ImageId, ImageLayoutExtent, ImageLoadAttempt, ImageLoadToken, ImageLookup,
@@ -210,8 +211,8 @@ fn test_format_mode_line() {
         Value::symbol("window"),
     ])
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected wrong-type-argument, got {:?}", other),
     }
 
@@ -222,8 +223,8 @@ fn test_format_mode_line() {
         Value::symbol("buffer"),
     ])
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected wrong-type-argument, got {:?}", other),
     }
 
@@ -261,8 +262,8 @@ fn test_format_mode_line_eval_optional_designators() {
         vec![Value::string("%b"), Value::NIL, Value::string("x")],
     )
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected wrong-type-argument, got {:?}", other),
     }
 
@@ -276,8 +277,8 @@ fn test_format_mode_line_eval_optional_designators() {
         ],
     )
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected wrong-type-argument, got {:?}", other),
     }
 }
@@ -295,8 +296,8 @@ fn test_format_mode_line_noninteractive_returns_empty_after_validation() {
         vec![Value::string("%b"), Value::NIL, Value::string("x")],
     )
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected wrong-type-argument, got {:?}", other),
     }
 }
@@ -1765,8 +1766,8 @@ fn test_invisible_p() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
     let err = builtin_invisible_p(&mut eval, vec![Value::fixnum(0)]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "args-out-of-range"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "args-out-of-range"),
         other => panic!("expected args-out-of-range, got {:?}", other),
     }
     let result = builtin_invisible_p(&mut eval, vec![Value::fixnum(1)]).unwrap();
@@ -1813,21 +1814,21 @@ fn test_window_text_pixel_size() {
 fn test_window_text_pixel_size_arg_validation() {
     crate::test_utils::init_test_tracing();
     let err = builtin_window_text_pixel_size(vec![Value::fixnum(1)]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected wrong-type-argument, got {:?}", other),
     }
 
     let err = builtin_window_text_pixel_size(vec![Value::NIL, Value::symbol("x")]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected wrong-type-argument, got {:?}", other),
     }
 
     let err = builtin_window_text_pixel_size(vec![Value::NIL, Value::NIL, Value::symbol("x")])
         .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected wrong-type-argument, got {:?}", other),
     }
 
@@ -1856,8 +1857,8 @@ fn test_window_text_pixel_size_arg_validation() {
         Value::cons(Value::fixnum(1), Value::symbol("bad-offset")),
     ])
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -1931,8 +1932,8 @@ fn test_window_text_pixel_size_eval_window_validation() {
 
     let err =
         builtin_window_text_pixel_size_ctx(&mut eval, vec![Value::fixnum(999_999)]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected wrong-type-argument, got {:?}", other),
     }
 }
@@ -3792,8 +3793,8 @@ fn test_pos_visible_in_window_p() {
 
     let result = builtin_pos_visible_in_window_p(vec![Value::fixnum(100), Value::symbol("window")])
         .unwrap_err();
-    match result {
-        Flow::Signal(sig) => {
+    match result.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data[0], Value::symbol("window-live-p"));
         }
@@ -3802,8 +3803,8 @@ fn test_pos_visible_in_window_p() {
 
     let result =
         builtin_pos_visible_in_window_p(vec![Value::symbol("left"), Value::fixnum(1)]).unwrap_err();
-    match result {
-        Flow::Signal(sig) => {
+    match result.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data[0], Value::symbol("window-live-p"));
         }
@@ -3811,8 +3812,8 @@ fn test_pos_visible_in_window_p() {
     }
 
     let result = builtin_pos_visible_in_window_p(vec![Value::symbol("left")]).unwrap_err();
-    match result {
-        Flow::Signal(sig) => {
+    match result.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data[0], Value::symbol("integer-or-marker-p"));
         }
@@ -3831,8 +3832,8 @@ fn test_pos_visible_in_window_p_eval_window_validation() {
     let mut eval = interactive_context();
     let err = builtin_pos_visible_in_window_p_ctx(&mut eval, vec![Value::NIL, Value::string("x")])
         .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected wrong-type-argument, got {:?}", other),
     }
 
@@ -3841,8 +3842,8 @@ fn test_pos_visible_in_window_p_eval_window_validation() {
         vec![Value::symbol("left"), Value::fixnum(1)],
     )
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data[0], Value::symbol("window-live-p"));
         }
@@ -5988,21 +5989,21 @@ fn test_move_point_visually() {
     crate::test_utils::init_test_tracing();
     for direction in [1_i64, 0, -1, 2] {
         let err = builtin_move_point_visually(vec![Value::fixnum(direction)]).unwrap_err();
-        match err {
-            Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "args-out-of-range"),
+        match err.into_kind() {
+            FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "args-out-of-range"),
             other => panic!("expected args-out-of-range, got {:?}", other),
         }
     }
 
     let err = builtin_move_point_visually(vec![Value::char('a')]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "args-out-of-range"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "args-out-of-range"),
         other => panic!("expected args-out-of-range, got {:?}", other),
     }
 
     let err = builtin_move_point_visually(vec![Value::symbol("left")]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected wrong-type-argument, got {:?}", other),
     }
 }
@@ -6024,8 +6025,8 @@ fn test_lookup_image_map() {
         Value::symbol("y"),
     ])
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected wrong-type-argument, got {:?}", other),
     }
 
@@ -6035,8 +6036,8 @@ fn test_lookup_image_map() {
         Value::symbol("y"),
     ])
     .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected wrong-type-argument, got {:?}", other),
     }
 
@@ -6045,8 +6046,8 @@ fn test_lookup_image_map() {
     assert!(result.is_nil());
 
     let err = builtin_lookup_image_map(vec![]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-number-of-arguments"),
         other => panic!("expected wrong-number-of-arguments, got {:?}", other),
     }
 }
@@ -6067,8 +6068,8 @@ fn test_current_bidi_paragraph_direction() {
 
     let err = builtin_current_bidi_paragraph_direction(&mut eval, vec![Value::symbol("buffer")])
         .unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected wrong-type-argument, got {:?}", other),
     }
 }
@@ -6089,8 +6090,8 @@ fn test_bidi_resolved_levels() {
     );
 
     let err = builtin_bidi_resolved_levels(vec![Value::T]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => {
+    match err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("fixnump"), Value::T]);
         }
@@ -6135,8 +6136,8 @@ fn test_bidi_find_overridden_directionality() {
         Value::fixnum(3),
     ])
     .unwrap_err();
-    match third_arg_err {
-        Flow::Signal(sig) => {
+    match third_arg_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data, vec![Value::symbol("stringp"), Value::fixnum(3)]);
         }
@@ -6146,8 +6147,8 @@ fn test_bidi_find_overridden_directionality() {
     let region_arg_err =
         builtin_bidi_find_overridden_directionality(vec![Value::NIL, Value::fixnum(2), Value::NIL])
             .unwrap_err();
-    match region_arg_err {
-        Flow::Signal(sig) => {
+    match region_arg_err.into_kind() {
+        FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
                 sig.data,
@@ -6165,8 +6166,8 @@ fn test_move_to_window_line() {
     let mut ev = crate::emacs_core::Context::new();
     for arg in [Value::fixnum(1), Value::fixnum(0), Value::symbol("left")] {
         let err = builtin_move_to_window_line(&mut ev, vec![arg]).unwrap_err();
-        match err {
-            Flow::Signal(sig) => {
+        match err.into_kind() {
+            FlowKind::Signal(sig) => {
                 assert_eq!(sig.symbol_name(), "error");
             }
             other => panic!("expected error signal, got {:?}", other),
@@ -6211,8 +6212,8 @@ fn test_tool_bar_height_eval_frame_validation() {
     assert_eq!(pixelwise, Value::fixnum(34));
 
     let err = builtin_tool_bar_height_ctx(&mut eval, vec![Value::string("x")]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected wrong-type-argument, got {:?}", other),
     }
 }
@@ -6239,8 +6240,8 @@ fn test_tab_bar_height_eval_frame_validation() {
     assert_eq!(result, Value::fixnum(0));
 
     let err = builtin_tab_bar_height_ctx(&mut eval, vec![Value::string("x")]).unwrap_err();
-    match err {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match err.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected wrong-type-argument, got {:?}", other),
     }
 }
