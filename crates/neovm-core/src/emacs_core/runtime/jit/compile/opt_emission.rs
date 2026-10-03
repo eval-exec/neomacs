@@ -604,12 +604,51 @@ fn coemitted_list_guard(func: &ir::Func, data: &ir::BlockData, position: usize) 
     else {
         return false;
     };
-    matches!(guard.op,ir::Opcode::CheckType(ty) if ty == TypeSet::LIST)
-        && matches!(next.op, ir::Opcode::Opaque(Op::Car | Op::Cdr))
+    let same_source = matches!(guard.op,ir::Opcode::CheckType(ty) if ty == TypeSet::LIST)
         && guard.frame == next.frame
         && guard
             .result
-            .is_some_and(|result| next.args.first() == Some(&result))
+            .is_some_and(|result| next.args.first() == Some(&result));
+    // Keep the existing opaque path's predicate and emission order unchanged.
+    if matches!(next.op, ir::Opcode::Opaque(Op::Car | Op::Cdr)) {
+        return same_source;
+    }
+    // GVN exposes the same source read as a typed LIST load. The guard may
+    // move into that accessor ONLY when the accessor is also dispatched to
+    // shared_operation below, which emits the original three-way guard.
+    // Threading: this is compiler-local adjacency/identity metadata only.
+    jit_opt_passes().gvn
+        && same_source
+        && guard.frame.is_some()
+        && guard.pc == next.pc
+        && guard.args.len() == 1
+        && guard.eff == crate::emacs_core::jit::opt::mem::Effects::MAY_DEOPT
+        && guard.mem == crate::emacs_core::jit::opt::mem::AliasClass::None
+        && next.args.len() == 1
+        && next
+            .result
+            .is_some_and(|result| func.values[result.index()].rep == ir::Rep::Tagged)
+        && next.eff == crate::emacs_core::jit::opt::mem::Effects::READ_HEAP
+        && matches!(
+            (next.op.clone(), next.mem),
+            (
+                ir::Opcode::LoadCar,
+                crate::emacs_core::jit::opt::mem::AliasClass::ConsCar
+            ) | (
+                ir::Opcode::LoadCdr,
+                crate::emacs_core::jit::opt::mem::AliasClass::ConsCdr
+            )
+        )
+        && guard.result.is_some_and(|result| {
+            let value = &func.values[result.index()];
+            value.rep == ir::Rep::Tagged && value.ty == TypeSet::LIST
+        })
+}
+
+fn coemitted_typed_list_read(func: &ir::Func, data: &ir::BlockData, position: usize) -> bool {
+    position
+        .checked_sub(1)
+        .is_some_and(|previous| coemitted_list_guard(func, data, previous))
 }
 
 // A shared store may use this proof only for the exact result of an adjacent
@@ -956,8 +995,37 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
                 {
                     pass_emission::emit(&mut ctx, &mut local, inst)?
                 }
-                ir::Opcode::LoadCar | ir::Opcode::LoadCdr if jit_opt_passes().fold => {
-                    pass_emission::emit(&mut ctx, &mut local, inst)?
+                ir::Opcode::LoadCar | ir::Opcode::LoadCdr
+                    if jit_opt_passes().fold || jit_opt_passes().gvn =>
+                {
+                    if coemitted_typed_list_read(ctx.func, data, position) {
+                        let op = if matches!(inst.op, ir::Opcode::LoadCdr) {
+                            Op::Cdr
+                        } else {
+                            Op::Car
+                        };
+                        // This is the counterpart of the deferred CheckType.
+                        // The shared accessor emits its real nil/cons/nonlist
+                        // guard (including FORCE_DEOPT), then the original
+                        // nil/field branch. It never consumes an unchecked
+                        // nonlist as a cons pointer. Full frame/pc overrides
+                        // remain exactly those used by the opaque baseline.
+                        shared_operation(
+                            &mut ctx,
+                            &mut local,
+                            inst,
+                            &live_after,
+                            false,
+                            false,
+                            &op,
+                            &known,
+                            &mut deopts,
+                            &mut pending,
+                            &constants,
+                        )?
+                    } else {
+                        pass_emission::emit(&mut ctx, &mut local, inst)?
+                    }
                 }
                 ir::Opcode::TagFix
                 | ir::Opcode::UntagFix

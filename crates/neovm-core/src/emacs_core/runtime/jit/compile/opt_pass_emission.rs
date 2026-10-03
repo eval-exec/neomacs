@@ -115,9 +115,11 @@ pub(super) fn emit(
         }
         ir::Opcode::LoadCar | ir::Opcode::LoadCdr => {
             let input = canonical(ctx.func, inst.args[0]);
-            if !ctx.func.values[input.index()].ty.is_subset(TypeSet::CONS)
-                || ctx.func.values[input.index()].ty.is_bottom()
-            {
+            let ty = ctx.func.values[input.index()].ty;
+            let proven_cons = !ty.is_bottom() && ty.is_subset(TypeSet::CONS);
+            let proven_list =
+                jit_opt_passes().gvn && !ty.is_bottom() && ty.is_subset(TypeSet::LIST);
+            if !proven_cons && !proven_list {
                 return Err(CompileError::UnsupportedOp("opt-emit:cons-read-proof"));
             }
             let (word, rep) = ctx.values.read(ctx.fb, ctx.func, local, input);
@@ -126,18 +128,61 @@ pub(super) fn emit(
                     "opt-emit:cons-read-representation",
                 ));
             }
-            let ptr = lowering::band_imm_p(ctx.fb, word, !(crate::tagged::value::TAG_MASK as i64));
-            let offset = if matches!(inst.op, ir::Opcode::LoadCdr) {
-                jit_layout::CONS_CDR_OFFSET
+            // Keep the existing proven-CONS straight-line path exactly as emitted.
+            // The pointer mask stays before offset selection as in the old source.
+            if proven_cons {
+                let ptr =
+                    lowering::band_imm_p(ctx.fb, word, !(crate::tagged::value::TAG_MASK as i64));
+                let offset = if matches!(inst.op, ir::Opcode::LoadCdr) {
+                    jit_layout::CONS_CDR_OFFSET
+                } else {
+                    jit_layout::CONS_CAR_OFFSET
+                };
+                (
+                    ctx.fb
+                        .ins()
+                        .load(types::I64, MemFlagsData::trusted(), ptr, offset as i32),
+                    SlotRep::Tagged,
+                )
+            } else if ty.is_subset(TypeSet::NIL) {
+                // The physical tagged nil comes from the actual crate value, never
+                // an invented Bool literal. No heap access, frame or guard change.
+                (
+                    ctx.fb.ins().iconst(types::I64, Value::NIL.bits() as i64),
+                    SlotRep::Tagged,
+                )
             } else {
-                jit_layout::CONS_CAR_OFFSET
-            };
-            (
-                ctx.fb
-                    .ins()
-                    .load(types::I64, MemFlagsData::trusted(), ptr, offset as i32),
-                SlotRep::Tagged,
-            )
+                // Successful original LIST guards establish the exhaustive nil/cons
+                // domain. Check nil BEFORE deriving/loading the cons address.
+                let nil = ctx.fb.create_block();
+                let cons = ctx.fb.create_block();
+                let done = ctx.fb.create_block();
+                ctx.fb.append_block_param(done, types::I64);
+                let is_nil =
+                    lowering::icmp_imm_p(ctx.fb, IntCC::Equal, word, Value::NIL.bits() as i64);
+                ctx.fb.ins().brif(is_nil, nil, &[], cons, &[]);
+                ctx.fb.switch_to_block(nil);
+                let empty = ctx.fb.ins().iconst(types::I64, Value::NIL.bits() as i64);
+                ctx.fb.ins().jump(done, &[empty.into()]);
+                ctx.fb.seal_block(nil);
+                ctx.fb.switch_to_block(cons);
+                let ptr =
+                    lowering::band_imm_p(ctx.fb, word, !(crate::tagged::value::TAG_MASK as i64));
+                let offset = if matches!(inst.op, ir::Opcode::LoadCdr) {
+                    jit_layout::CONS_CDR_OFFSET
+                } else {
+                    jit_layout::CONS_CAR_OFFSET
+                };
+                let field =
+                    ctx.fb
+                        .ins()
+                        .load(types::I64, MemFlagsData::trusted(), ptr, offset as i32);
+                ctx.fb.ins().jump(done, &[field.into()]);
+                ctx.fb.seal_block(cons);
+                ctx.fb.switch_to_block(done);
+                ctx.fb.seal_block(done);
+                (ctx.fb.block_params(done)[0], SlotRep::Tagged)
+            }
         }
         _ => return Err(CompileError::UnsupportedOp("opt-emit:pass-opcode")),
     };

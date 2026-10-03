@@ -1,6 +1,7 @@
 pub(crate) mod bools;
 pub(crate) mod cfg;
 pub(crate) mod fold;
+pub(crate) mod gvn;
 pub(crate) mod reps;
 pub(crate) mod reps_lift;
 

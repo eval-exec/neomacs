@@ -212,6 +212,7 @@ fn leaf_row(id: u64, deopt_at: u64, deopt_rerun: u64) -> LeafReportRow {
         opt_fold: None,
         opt_bool: None,
         opt_reps: None,
+        opt_gvn: None,
     }
 }
 
@@ -667,4 +668,36 @@ fn jit_final_report_integer_census_is_optional_and_twelve_columns() {
         "#opt-reps,17,integer;name,9,1,2,3,4,5,6,7,8\n"
     );
     assert_eq!(reps_rows[0].trim_end().split(',').count(), 12);
+}
+
+#[test]
+fn jit_final_report_gvn_census_is_optional_and_seven_columns() {
+    use crate::emacs_core::jit::opt::passes::gvn::GvnStats;
+    let mut leaf = leaf_row(19, 0, 0);
+    let absent = FinalReport {
+        leaves: vec![leaf.clone()],
+        ..Default::default()
+    };
+    assert!(
+        absent
+            .profile_leaf_rows()
+            .iter()
+            .all(|r| !r.starts_with("#opt-gvn,"))
+    );
+    leaf.name = Some("gvn,name".into());
+    leaf.osr_pc = Some(11);
+    leaf.opt_gvn = Some(Box::new(GvnStats {
+        pure_reuses: 1,
+        load_reuses: 2,
+        store_forwards: 3,
+    }));
+    let present = FinalReport {
+        leaves: vec![leaf],
+        ..Default::default()
+    };
+    let rows = present.profile_leaf_rows();
+    let gvn_rows: Vec<_> = rows.iter().filter(|r| r.starts_with("#opt-gvn,")).collect();
+    assert_eq!(gvn_rows.len(), 1);
+    assert_eq!(gvn_rows[0].as_str(), "#opt-gvn,19,gvn;name,11,1,2,3\n");
+    assert_eq!(gvn_rows[0].trim_end().split(',').count(), 7);
 }

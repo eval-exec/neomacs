@@ -168,6 +168,14 @@ pub(super) fn build_plan(
         tracing::debug!(target: "neovm_jit::opt", ?stats, "opt Bool census");
         func.census.bools = Some(stats);
     }
+    if jit_opt_passes().gvn {
+        let stats = crate::emacs_core::jit::opt::passes::gvn::run(&mut func).map_err(|error| {
+            tracing::debug!(?error, "opt GVN pass refused a compilation");
+            CompileError::UnsupportedOp("opt-gvn:verify")
+        })?;
+        tracing::debug!(target: "neovm_jit::opt", ?stats, "opt GVN census");
+        func.census.gvn = Some(stats);
+    }
     if let Some(lift) = lift {
         let selection =
             crate::emacs_core::jit::opt::passes::reps::run(&mut func).map_err(|error| {

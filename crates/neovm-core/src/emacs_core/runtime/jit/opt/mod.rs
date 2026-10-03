@@ -27,3 +27,7 @@ mod ir_verify_tests;
 #[cfg(test)]
 #[path = "tests/types.rs"]
 mod type_tests;
+
+#[cfg(test)]
+#[path = "tests/gvn_eval_test.rs"]
+mod gvn_eval_tests;

@@ -86,6 +86,7 @@ pub(crate) struct OptCensus {
     pub fold: Option<super::passes::fold::FoldStats>,
     pub bools: Option<super::passes::bools::BoolStats>,
     pub reps: Option<RepsCensus>,
+    pub gvn: Option<super::passes::gvn::GvnStats>,
 }
 
 /// Immutable numeric pass counters. Threading: a compiler owns these scalar

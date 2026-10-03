@@ -1073,6 +1073,7 @@ fn leaf_report_rows(
                 opt_fold: row.opt.opt_fold,
                 opt_bool: row.opt.opt_bool,
                 opt_reps: row.opt.opt_reps,
+                opt_gvn: row.opt.opt_gvn,
             }
         })
         .collect();

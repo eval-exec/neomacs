@@ -24,6 +24,7 @@ pub(crate) struct OptStats {
     pub(crate) opt_fold: Option<Box<crate::emacs_core::jit::opt::passes::fold::FoldStats>>,
     pub(crate) opt_bool: Option<Box<crate::emacs_core::jit::opt::passes::bools::BoolStats>>,
     pub(crate) opt_reps: Option<Box<crate::emacs_core::jit::opt::ir::RepsCensus>>,
+    pub(crate) opt_gvn: Option<Box<crate::emacs_core::jit::opt::passes::gvn::GvnStats>>,
 }
 
 impl OptStats {
@@ -32,11 +33,15 @@ impl OptStats {
             opt_fold: census.fold.clone().map(Box::new),
             opt_bool: census.bools.clone().map(Box::new),
             opt_reps: census.reps.clone().map(Box::new),
+            opt_gvn: census.gvn.clone().map(Box::new),
         }
     }
 
     fn is_empty(&self) -> bool {
-        self.opt_fold.is_none() && self.opt_bool.is_none() && self.opt_reps.is_none()
+        self.opt_fold.is_none()
+            && self.opt_bool.is_none()
+            && self.opt_reps.is_none()
+            && self.opt_gvn.is_none()
     }
 }
 
