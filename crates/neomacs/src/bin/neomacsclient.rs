@@ -391,8 +391,6 @@ fn run_unix_client(prog: &str, options: Options) -> Result<(), String> {
     };
     // Connection/fallback precedes TTY validation and consuming stdin.
     // Automatic startup also constructs the original request only once.
-    let plan = build_request(&options)?;
-    let request = plan.request;
     stream
         .set_read_timeout(Some(options.reply_timeout()))
         .map_err(|err| format!("failed to set socket timeout: {err}"))?;
@@ -400,30 +398,43 @@ fn run_unix_client(prog: &str, options: Options) -> Result<(), String> {
     // The tty lifecycle runs whenever the request carried a tty identity,
     // not only for `-t`: a plain file request on a terminal attaches this
     // client's tty too (GNU `init_signals` at emacsclient.c:2110-2112).
-    let lifecycle = plan
-        .tty
-        .is_some()
-        .then(|| {
+    let mut lifecycle: Option<TtyLifecycle> = None;
+    let mut retry: Option<FrameTransport> = None;
+    loop {
+        let display = effective_display(&options);
+        let attempt = resolve_attempt(&options, display.is_some(), retry);
+        let plan = build_request(
+            &options,
+            &attempt,
+            display.as_deref(),
+            TtyIdentity::from_stdout(),
+        )?;
+        if plan.tty.is_some() && lifecycle.is_none() {
+            lifecycle =
+                Some(TtyLifecycle::start(stream.try_clone().map_err(|err| {
+                    format!("failed to clone server connection: {err}")
+                })?)?);
+        }
+        if let Some(lifecycle) = &lifecycle {
+            lifecycle.write_request(plan.request.as_bytes())?;
+        } else {
             stream
-                .try_clone()
-                .map_err(|err| format!("failed to clone server connection: {err}"))
-                .and_then(TtyLifecycle::start)
-        })
-        .transpose()?;
-    if let Some(lifecycle) = &lifecycle {
-        lifecycle.write_request(request.as_bytes())?;
-    } else {
-        stream
-            .write_all(request.as_bytes())
-            .map_err(|err| format!("failed to send request to server: {err}"))?;
+                .write_all(plan.request.as_bytes())
+                .map_err(|err| format!("failed to send request to server: {err}"))?;
+        }
+        match read_responses(
+            &mut stream,
+            &options,
+            lifecycle.as_ref(),
+            &mut io::stdout().lock(),
+            &mut io::stderr().lock(),
+        )? {
+            ReplyOutcome::Done => return Ok(()),
+            // Retry on this terminal, on the same connection the server kept
+            // open for it (GNU `nowait = false; tty = true; goto retry`).
+            ReplyOutcome::WindowSystemUnsupported => retry = Some(FrameTransport::Tty),
+        }
     }
-    read_responses(
-        &mut stream,
-        &options,
-        lifecycle.as_ref(),
-        &mut io::stdout().lock(),
-        &mut io::stderr().lock(),
-    )
 }
 
 fn run_tcp_client(prog: &str, options: Options, server_file: &str) -> Result<(), String> {
@@ -445,42 +456,55 @@ fn run_tcp_client(prog: &str, options: Options, server_file: &str) -> Result<(),
         .set_read_timeout(Some(options.reply_timeout()))
         .map_err(|err| format!("failed to set socket timeout: {err}"))?;
 
-    let plan = build_request(&options)?;
-    let mut request = String::new();
-    push_arg_command(&mut request, "-auth", &config.auth_key);
-    request.push_str(&plan.request);
-    #[cfg(unix)]
-    let lifecycle = plan
-        .tty
-        .is_some()
-        .then(|| {
+    let mut retry: Option<FrameTransport> = None;
+    loop {
+        let display = effective_display(&options);
+        let attempt = resolve_attempt(&options, display.is_some(), retry);
+        let plan = build_request(
+            &options,
+            &attempt,
+            display.as_deref(),
+            TtyIdentity::from_stdout(),
+        )?;
+        let mut request = String::new();
+        push_arg_command(&mut request, "-auth", &config.auth_key);
+        request.push_str(&plan.request);
+        #[cfg(unix)]
+        let lifecycle = plan
+            .tty
+            .is_some()
+            .then(|| {
+                stream
+                    .try_clone()
+                    .map_err(|err| format!("failed to clone server connection: {err}"))
+                    .and_then(TtyLifecycle::start)
+            })
+            .transpose()?;
+        #[cfg(not(unix))]
+        let lifecycle: Option<TtyLifecycle> = None;
+        #[cfg(unix)]
+        if let Some(lifecycle) = &lifecycle {
+            lifecycle.write_request(request.as_bytes())?;
+        } else {
             stream
-                .try_clone()
-                .map_err(|err| format!("failed to clone server connection: {err}"))
-                .and_then(TtyLifecycle::start)
-        })
-        .transpose()?;
-    #[cfg(not(unix))]
-    let lifecycle: Option<TtyLifecycle> = None;
-    #[cfg(unix)]
-    if let Some(lifecycle) = &lifecycle {
-        lifecycle.write_request(request.as_bytes())?;
-    } else {
+                .write_all(request.as_bytes())
+                .map_err(|err| format!("failed to send request to server: {err}"))?;
+        }
+        #[cfg(not(unix))]
         stream
             .write_all(request.as_bytes())
             .map_err(|err| format!("failed to send request to server: {err}"))?;
+        match read_responses(
+            &mut stream,
+            &options,
+            lifecycle.as_ref(),
+            &mut io::stdout().lock(),
+            &mut io::stderr().lock(),
+        )? {
+            ReplyOutcome::Done => return Ok(()),
+            ReplyOutcome::WindowSystemUnsupported => retry = Some(FrameTransport::Tty),
+        }
     }
-    #[cfg(not(unix))]
-    stream
-        .write_all(request.as_bytes())
-        .map_err(|err| format!("failed to send request to server: {err}"))?;
-    read_responses(
-        &mut stream,
-        &options,
-        lifecycle.as_ref(),
-        &mut io::stdout().lock(),
-        &mut io::stderr().lock(),
-    )
 }
 
 struct TcpServerConfig {
@@ -597,28 +621,63 @@ fn effective_uid() -> u32 {
     unsafe { libc::geteuid() }
 }
 
+/// One attempt's resolved shape: what to ask for, and whether the server may
+/// keep the client waiting for it.
+///
+/// GNU resolves this before writing any token, and again from scratch after a
+/// `-window-system-unsupported` retry, which is what clears `nowait`
+/// (`emacsclient.c:2275-2295`).  Keeping it a value lets the request builder
+/// be tested without a terminal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AttemptPlan {
+    transport: FrameTransport,
+    nowait: bool,
+}
+
+/// Resolve one attempt from the flags, the display, and the server's answer
+/// to a previous attempt.
+fn resolve_attempt(
+    options: &Options,
+    display_available: bool,
+    retry: Option<FrameTransport>,
+) -> AttemptPlan {
+    AttemptPlan {
+        transport: retry.unwrap_or_else(|| options.frame_transport(display_available)),
+        nowait: options.nowait && retry.is_none(),
+    }
+}
+
 /// A built request plus the transport it encodes, so the bytes and the
 /// caller's lifecycle decision cannot disagree about whether a tty was
 /// attached.
+#[derive(Debug)]
 struct RequestPlan {
     request: String,
     tty: Option<TtyIdentity>,
 }
 
-fn build_request(options: &Options) -> Result<RequestPlan, String> {
+/// Build the request bytes for one resolved attempt.
+///
+/// `tty_identity` is this client's terminal, or the reason it could not be
+/// read; GNU aborts on that reason only when a tty frame was actually
+/// requested (`find_tty`'s `noabort = !tty`, emacsclient.c:1136-1174).
+fn build_request(
+    options: &Options,
+    attempt: &AttemptPlan,
+    display: Option<&str>,
+    tty_identity: Result<TtyIdentity, String>,
+) -> Result<RequestPlan, String> {
     let mut request = String::new();
     let cwd = env::current_dir().map_err(|err| format!("cannot get current directory: {err}"))?;
     let mut cwd = cwd.to_string_lossy().into_owned();
     if !cwd.ends_with('/') {
         cwd.push('/');
     }
-    let display = effective_display(options);
-    let transport = options.frame_transport(display.is_some());
+    let transport = attempt.transport;
+    let nowait = attempt.nowait;
     let tty = if options.offers_tty_identity() {
-        match TtyIdentity::from_stdout() {
+        match tty_identity {
             Ok(identity) => Some(identity),
-            // GNU aborts only for a request that is really a tty frame;
-            // otherwise it just goes without a tty identity (`find_tty`).
             Err(_) if transport != FrameTransport::Tty => None,
             Err(error) => return Err(error),
         }
@@ -642,13 +701,13 @@ fn build_request(options: &Options) -> Result<RequestPlan, String> {
     request.push_str(&quote_argument(&cwd));
     request.push(' ');
 
-    if options.nowait {
+    if nowait {
         push_flag(&mut request, "-nowait");
     }
     if options.frame.uses_current_frame() {
         push_flag(&mut request, "-current-frame");
     }
-    if let Some(display) = &display {
+    if let Some(display) = display {
         push_arg_command(&mut request, "-display", display);
     }
     if let Some(parent_id) = &options.parent_id {
@@ -840,13 +899,24 @@ impl ReplyWatch {
     }
 }
 
+/// What the server asked the client to do when the reply stream ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReplyOutcome {
+    /// The request ran to completion.
+    Done,
+    /// The server could not open a window-system frame and kept the
+    /// connection open for a retry on this client's terminal — GNU's
+    /// `-window-system-unsupported` token (`emacsclient.c:2275-2295`).
+    WindowSystemUnsupported,
+}
+
 fn read_responses(
     stream: &mut impl Read,
     options: &Options,
     lifecycle: Option<&TtyLifecycle>,
     out: &mut impl Write,
     err: &mut impl Write,
-) -> Result<(), String> {
+) -> Result<ReplyOutcome, String> {
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
     let mut ok = true;
@@ -896,12 +966,17 @@ fn read_responses(
             && let Some(lifecycle) = lifecycle
         {
             lifecycle.stop_from_server();
+        } else if completed.starts_with("-window-system-unsupported") {
+            // The server keeps the connection open for the retry: GNU answers
+            // with `nowait = false; tty = true` and re-sends the request on
+            // this same socket (`emacsclient.c:2275-2295`).
+            return Ok(ReplyOutcome::WindowSystemUnsupported);
         }
         line.clear();
     }
 
     if ok {
-        Ok(())
+        Ok(ReplyOutcome::Done)
     } else {
         Err("server reported an error".to_string())
     }
@@ -1041,6 +1116,10 @@ fn alternate_editor_tokens(mut remaining: &str) -> Vec<&str> {
 #[cfg(test)]
 #[path = "neomacsclient/tests/timeout_tests.rs"]
 mod timeout_tests;
+
+#[cfg(test)]
+#[path = "neomacsclient/tests/support.rs"]
+mod test_support;
 
 #[cfg(test)]
 #[path = "neomacsclient/tests/transport_tests.rs"]

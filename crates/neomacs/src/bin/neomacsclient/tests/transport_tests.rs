@@ -1,3 +1,4 @@
+use super::test_support::{Step, read_script};
 use super::*;
 
 fn options(args: &[&str]) -> Options {
@@ -51,4 +52,61 @@ fn only_a_graphical_transport_asks_for_the_window_system() {
         options(&["-c", "FILE"]).frame_transport(false),
         FrameTransport::Graphical
     );
+}
+
+/// GNU answers `-window-system-unsupported` with `nowait = false; tty = true`
+/// and re-sends the request on the connection the server kept open
+/// (`emacsclient.c:2275-2295`).
+#[test]
+fn the_server_can_ask_for_a_retry_on_the_terminal() {
+    let (outcome, _out, _err) = read_script(
+        [Step::Data(b"-window-system-unsupported \n")],
+        &["-c", "FILE"],
+    );
+    assert_eq!(outcome.unwrap(), ReplyOutcome::WindowSystemUnsupported);
+}
+
+fn tty_identity() -> TtyIdentity {
+    TtyIdentity {
+        device: "/dev/pts/9".to_string(),
+        terminal_type: "xterm-256color".to_string(),
+    }
+}
+
+#[test]
+fn a_retry_plan_drops_nowait_and_asks_for_no_window_system() {
+    let options = options(&["-n", "-c", "FILE"]);
+    let attempt = resolve_attempt(&options, true, Some(FrameTransport::Tty));
+    assert_eq!(attempt.transport, FrameTransport::Tty);
+    assert!(!attempt.nowait, "GNU clears nowait on the retry");
+
+    let plan = build_request(&options, &attempt, Some(":0"), Ok(tty_identity())).unwrap();
+    assert!(plan.request.contains("-tty "), "{}", plan.request);
+    assert!(!plan.request.contains("-nowait"), "{}", plan.request);
+    assert!(!plan.request.contains("-window-system"), "{}", plan.request);
+    assert!(plan.tty.is_some());
+}
+
+/// GNU `find_tty` aborts when a tty frame was requested and this process has
+/// no terminal; for every other request the identity is simply omitted.
+#[test]
+fn a_missing_terminal_is_fatal_only_for_a_tty_request() {
+    let tty_request = options(&["-t", "FILE"]);
+    let attempt = resolve_attempt(&tty_request, false, None);
+    assert_eq!(attempt.transport, FrameTransport::Tty);
+    let error = build_request(&tty_request, &attempt, None, Err("no terminal".into()))
+        .expect_err("a tty request without a terminal must fail");
+    assert!(error.contains("no terminal"), "{error}");
+
+    let file_request = options(&["FILE"]);
+    let attempt = resolve_attempt(&file_request, true, None);
+    let plan = build_request(
+        &file_request,
+        &attempt,
+        Some(":0"),
+        Err("no terminal".into()),
+    )
+    .expect("a file request goes without a tty identity");
+    assert!(plan.tty.is_none());
+    assert!(!plan.request.contains("-tty "), "{}", plan.request);
 }
