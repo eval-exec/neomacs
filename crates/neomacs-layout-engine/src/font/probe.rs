@@ -408,6 +408,102 @@ pub struct OtfCapability {
     pub gpos: Vec<OtfScript>,
 }
 
+/// Metadata belongs to the native FontMetricsService and is retired with its
+/// caches. Store only parsed capabilities, never whole font allocations.
+#[derive(Default)]
+pub(crate) struct OtfCapabilityCache {
+    entries: std::collections::HashMap<(String, u32), (OtfFileIdentity, Option<OtfCapability>)>,
+}
+
+const OTF_CAPABILITY_CACHE_CAP: usize = 64;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OtfFileIdentity {
+    len: u64,
+    modified: std::time::SystemTime,
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+    #[cfg(unix)]
+    changed: (i64, i64),
+}
+
+impl OtfFileIdentity {
+    fn for_file(file: &str) -> Option<Self> {
+        // On Unix, inode/device distinguish replacement, and ctime catches
+        // in-place changes even if mtime is restored. Other platforms retain
+        // the uncached probe until an equally strong native identity is used.
+        #[cfg(not(unix))]
+        {
+            let _ = file;
+            None
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let metadata = std::fs::metadata(file).ok()?;
+            if !metadata.is_file() {
+                return None;
+            }
+            Some(Self {
+                len: metadata.len(),
+                modified: metadata.modified().ok()?,
+                device: metadata.dev(),
+                inode: metadata.ino(),
+                changed: (metadata.ctime(), metadata.ctime_nsec()),
+            })
+        }
+    }
+}
+
+impl OtfCapabilityCache {
+    pub(crate) fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    pub(crate) fn get(&mut self, file: &str, face_index: u32) -> Option<OtfCapability> {
+        self.get_with(file, face_index, |path| std::fs::read(path))
+    }
+
+    fn get_with(
+        &mut self,
+        file: &str,
+        face_index: u32,
+        read: impl FnOnce(&str) -> std::io::Result<Vec<u8>>,
+    ) -> Option<OtfCapability> {
+        let key = (file.to_owned(), face_index);
+        let identity = OtfFileIdentity::for_file(file);
+        if let Some(identity) = &identity
+            && let Some((cached_identity, capability)) = self.entries.get(&key)
+            && identity == cached_identity
+        {
+            return capability.clone();
+        }
+        // Never return an earlier successful observation after a missing,
+        // unreadable or changed file. Read errors remain immediately retryable.
+        self.entries.remove(&key);
+        let data = read(file).ok()?;
+        let capability = otf_capability_from_bytes(&data, face_index);
+        // A malformed but unchanged readable asset may cache None; a changing
+        // asset is not cached. This is a metadata observation, not an atomic
+        // defense against adversarial concurrent file replacement.
+        if let Some(identity) = identity
+            && Some(&identity) == OtfFileIdentity::for_file(file).as_ref()
+        {
+            if self.entries.len() >= OTF_CAPABILITY_CACHE_CAP {
+                self.clear();
+            }
+            self.entries.insert(key, (identity, capability.clone()));
+        }
+        capability
+    }
+}
+
+#[cfg(all(test, unix))]
+#[path = "tests/otf_cache_test.rs"]
+mod otf_cache_tests;
+
 pub fn otf_capability(file: &str, face_index: u32) -> Option<OtfCapability> {
     let data = std::fs::read(file).ok()?;
     otf_capability_from_bytes(&data, face_index)

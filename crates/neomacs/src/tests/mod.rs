@@ -4,4 +4,5 @@ mod chrome_memo_session_test;
 mod edit_sync_session_test;
 mod idle_redisplay_session_test;
 mod main_test;
+mod selected_font_capability_test;
 mod tty_damage_session_test;

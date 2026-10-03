@@ -650,6 +650,8 @@ pub struct FontMetricsService {
     metrics_cache: HashMap<MetricsCacheKey, FontMetricObservation>,
     /// Cache for pre-loading font files and resolving fontdb family names
     font_file_cache: FontFileCache,
+    /// Parsed layout-table metadata, owned by the same native font lifetime.
+    otf_capability_cache: crate::font::probe::OtfCapabilityCache,
     /// Cache: (face, run text) → shaped glyphs. A run is shaped by BOTH the
     /// measure pass (wrap/cursor advance) and the render pass (glyph
     /// production); this makes the second a cache hit so cosmic-text shapes
@@ -834,6 +836,7 @@ impl FontMetricsService {
             char_cache: HashMap::default(),
             metrics_cache: HashMap::default(),
             font_file_cache: FontFileCache::new(),
+            otf_capability_cache: crate::font::probe::OtfCapabilityCache::default(),
             shaped_run_cache: HashMap::default(),
             shaped_run_cache_cap: SHAPED_RUN_CACHE_CAP,
             n_shape_calls: 0,
@@ -984,6 +987,16 @@ impl FontMetricsService {
     /// font selection on this platform.
     pub fn list_font_families(&self) -> Vec<crate::font_backend::FontFamilyName> {
         self.font_resolver.list_families()
+    }
+
+    /// Probe one selected collection face, reusing unchanged file metadata.
+    /// Clearing this service's native caches also retires these observations.
+    pub fn otf_capability_for_file(
+        &mut self,
+        file: &str,
+        face_index: u32,
+    ) -> Option<crate::font::probe::OtfCapability> {
+        self.otf_capability_cache.get(file, face_index)
     }
 
     pub fn resolve_font_entity(
@@ -3267,6 +3280,7 @@ impl FontMetricsService {
     /// Canonical font instances intentionally survive: IDs are durable and
     /// records are dropped only by a catalog advance, not request changes.
     pub fn clear_caches(&mut self) {
+        self.otf_capability_cache.clear();
         self.ascii_cache.clear();
         self.char_cache.clear();
         self.metrics_cache.clear();
