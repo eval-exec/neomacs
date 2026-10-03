@@ -2648,6 +2648,8 @@ impl LayoutEngine {
                         }
                         LeafLayoutAttempt::LogicalInputsChanged => {
                             if evaluator.has_mode_line_display_flow() {
+                                frame_window_end_attempts.reject_all(evaluator);
+                                evaluator.retire_interaction_presentation(presentation_id);
                                 return None;
                             }
                             let request = FrameRelayoutRequest::LogicalInputsChanged {

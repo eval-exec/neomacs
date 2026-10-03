@@ -5711,7 +5711,7 @@ fn publish_gui_frame(
             frame_layout::FrameLayoutPurpose::Redisplay,
         );
         if evaluator.has_mode_line_display_flow() {
-            return;
+            break;
         }
         let Some(prepared) = prepared else {
             continue;

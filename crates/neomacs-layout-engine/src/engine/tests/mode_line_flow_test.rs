@@ -67,7 +67,7 @@ fn frame_with_format(line: ChromeLine, format: &str) -> (Context, FrameId) {
     }
     let frame = eval
         .frame_manager_mut()
-        .create_frame("mode-line-flow", 80, 24, buffer);
+        .create_frame("mode-line-flow", 640, 384, buffer);
     // GNU keeps the inactive mini-window separate from the displayed buffer.
     let minibuffer = eval
         .buffer_manager()
@@ -114,6 +114,16 @@ fn mode_line_flow_throws_abort_real_layout_before_publishing() {
             ))
             .expect("following chrome row");
         }
+        let selected = eval
+            .frame_manager()
+            .get(frame)
+            .expect("frame")
+            .selected_window;
+        let previous_window_end = eval
+            .frame_manager()
+            .get(frame)
+            .and_then(|frame| frame.find_window(selected))
+            .and_then(neovm_core::window::Window::window_end_state);
         let calls = Rc::new(Cell::new(0));
         let observed = calls.clone();
         let mut engine = LayoutEngine::new_without_font_metrics();
@@ -135,6 +145,13 @@ fn mode_line_flow_throws_abort_real_layout_before_publishing() {
             let frame = eval.frame_manager().get(frame).expect("frame after throw");
             assert!(!frame.has_prepared_display_presentations());
             assert!(frame.active_presentation().is_none());
+            assert_eq!(
+                frame
+                    .find_window(selected)
+                    .and_then(neovm_core::window::Window::window_end_state),
+                previous_window_end,
+                "an aborted chrome walk must restore its speculative window end"
+            );
             assert_original_match_data(eval);
         }));
 

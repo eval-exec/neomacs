@@ -221,6 +221,10 @@ pub fn run_tty_layout_tree(
         .frame_manager()
         .frames_in_reverse_z_order(root_id, RenderFrameVisibility::VisibleOnly);
 
+    if neovm_core::emacs_core::xdisp::mode_line_flow_enabled() {
+        return prepare_tty_tree_before_activation(evaluator, root_id, frame_order);
+    }
+
     let root_state = layout_frame_display_state(evaluator, root_id, FrameLayoutPurpose::Redisplay)?
         .activate(evaluator)
         .ok()?;
@@ -247,6 +251,53 @@ pub fn run_tty_layout_tree(
     }
 
     Some((root_state, child_states))
+}
+
+/// A mode-line exit must leave every frame's previously active presentation
+/// intact. This call-local staging belongs to the Context's current mutator;
+/// no prepared ticket is activated until every child has finished evaluation.
+fn prepare_tty_tree_before_activation(
+    evaluator: &mut Context,
+    root_id: FrameId,
+    frame_order: Vec<FrameId>,
+) -> Option<(SealedFramePresentation, Vec<SealedFramePresentation>)> {
+    let root = layout_frame_display_state(evaluator, root_id, FrameLayoutPurpose::Redisplay)?;
+    let mut children: Vec<PreparedFrameDisplay> = Vec::new();
+    for frame_id in frame_order {
+        if frame_id == root_id {
+            continue;
+        }
+        let child = layout_frame_display_state(evaluator, frame_id, FrameLayoutPurpose::Redisplay);
+        if evaluator.has_mode_line_display_flow() {
+            // Discard all tickets before the driver returns the original Flow.
+            // Both primary and auxiliary TTYs use this tree producer.
+            root.discard(evaluator);
+            for prepared in children {
+                prepared.discard(evaluator);
+            }
+            if let Some(prepared) = child {
+                prepared.discard(evaluator);
+            }
+            return None;
+        }
+        if let Some(child) = child {
+            children.push(child);
+        }
+    }
+    let root = match root.activate(evaluator) {
+        Ok(root) => root,
+        Err(_) => {
+            for prepared in children {
+                prepared.discard(evaluator);
+            }
+            return None;
+        }
+    };
+    let children = children
+        .into_iter()
+        .filter_map(|prepared| prepared.activate(evaluator).ok())
+        .collect();
+    Some((root, children))
 }
 
 /// Rasterize the display state into a `TtyRif` and write ANSI output to stdout.
@@ -365,3 +416,7 @@ pub fn install_tty_redisplay_callback_with_popup_redraw(
     install_window_layout_query_fn(evaluator);
     install_font_shape_driver(evaluator);
 }
+
+#[cfg(test)]
+#[path = "tests/tty_mode_line_flow_test.rs"]
+mod tty_mode_line_flow_test;

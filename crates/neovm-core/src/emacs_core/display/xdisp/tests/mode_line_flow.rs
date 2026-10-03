@@ -134,11 +134,24 @@ fn mode_line_display_restored_match_string_survives_collecting_eval() {
     )
     .expect("display evaluation");
     assert_eq!(output.value().as_utf8_str(), Some("ok"));
+    let searched = eval
+        .match_data
+        .as_ref()
+        .and_then(crate::emacs_core::regex::MatchData::searched_string)
+        .and_then(crate::emacs_core::regex::SearchedString::as_lisp_string)
+        .expect("restored heap match string");
+    assert_eq!(searched.as_utf8_str(), Some("abcd"));
     assert_eq!(
-        eval.eval_str("(match-string 0)")
-            .expect("restored match string")
-            .as_utf8_str(),
-        Some("ab")
+        eval.eval_str("(match-beginning 0)")
+            .expect("restored match beginning")
+            .as_fixnum(),
+        Some(0)
+    );
+    assert_eq!(
+        eval.eval_str("(match-end 0)")
+            .expect("restored match end")
+            .as_fixnum(),
+        Some(2)
     );
     assert_eq!(save_scratch_gc_roots(), roots);
 }

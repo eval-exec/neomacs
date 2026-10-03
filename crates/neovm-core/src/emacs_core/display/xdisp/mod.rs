@@ -19,7 +19,7 @@
 mod mode_line_flow_policy;
 
 #[inline]
-pub(crate) fn mode_line_flow_enabled() -> bool {
+pub fn mode_line_flow_enabled() -> bool {
     mode_line_flow_policy::enabled()
 }
 mod mode_line_gc;
@@ -2055,6 +2055,15 @@ pub fn try_format_frame_title_for_display(
     buffer: Value,
     target_cols: usize,
 ) -> EvalResult {
+    if !mode_line_flow_policy::enabled() {
+        return Ok(format_mode_line_for_display(
+            eval,
+            format_val,
+            window,
+            buffer,
+            target_cols,
+        ));
+    }
     try_format_mode_line_display(eval, format_val, window, buffer, target_cols, false)
         .map(ModeLineDisplayOutput::into_value)
 }
@@ -2295,6 +2304,8 @@ pub(crate) fn finish_format_mode_line_in_state_with_eval(
 ) -> EvalResult {
     // The compatibility callback must collect from the same active heap as
     // these split-state Values; the scratch registry carries its identity.
+    // Its evaluator owns GNU's inhibit bindings and internal condition
+    // barrier; this split seam applies the returned signal/nonlocal policy.
     let roots = mode_line_gc::ScratchRoots::new();
     for &arg in args {
         roots.pin(arg);
@@ -2342,6 +2353,10 @@ pub(crate) fn finish_format_mode_line_in_state_with_eval(
         .map(|()| result.into_value(face_spec))
     };
 
+    if result.is_err() && !mode_line_flow_policy::enabled() {
+        // Preserve the legacy callback's error exit while the fix is off.
+        return result;
+    }
     if let Some(buffer_id) = saved_buffer {
         buffers.switch_current_unrecorded(buffer_id);
     }

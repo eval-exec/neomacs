@@ -155,6 +155,7 @@ fn format_mode_line_eval_signal_preserves_percent_construct_output() {
                  (progn
                    (with-current-buffer buffer
                      (erase-buffer) (insert "abc\ndef\n") (goto-char 5))
+                   (set-window-buffer (selected-window) buffer)
                    (format-mode-line
                     '("%%:%b:" (:eval (signal 'error '("mode-line signal"))) ":%l:%c:%%")
                     0 (selected-window) buffer))
@@ -320,7 +321,7 @@ fn format_mode_line_eval_signal_does_not_reach_outer_handler_bind() {
                (lambda (err)
                  (setq fx2-mode-line-handlers (cons 'outer fx2-mode-line-handlers))))
               fx2-mode-line-handlers))"#,
-        expect_test::expect![[""]],
+        expect_test::expect![[r#""OK (\"beforeafter\" nil)""#]],
     );
 }
 
@@ -347,7 +348,7 @@ fn format_mode_line_eval_inner_handler_bind_precedes_safe_signal_handler() {
                (lambda (err)
                  (setq fx2-mode-line-handlers (cons 'outer fx2-mode-line-handlers))))
               fx2-mode-line-handlers))"#,
-        expect_test::expect![[""]],
+        expect_test::expect![[r#""OK (\"beforeafter\" (inner))""#]],
     );
 }
 
@@ -368,6 +369,6 @@ fn format_mode_line_eval_safe_handler_suppresses_debug_on_error() {
                    '("before" (:eval (signal 'error '("mode-line signal"))) "after") 0)
                 ((debug error) (list 'outer-handler err)))
               debugger-calls))"#,
-        expect_test::expect![[""]],
+        expect_test::expect![[r#""OK (\"beforeafter\" nil)""#]],
     );
 }
