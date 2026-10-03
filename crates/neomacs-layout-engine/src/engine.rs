@@ -4,6 +4,7 @@
 //! character position, computes line breaks, positions glyphs on a fixed-width
 //! grid, and publishes `FrameDisplayState` snapshots for render backends.
 
+mod posn_object_extent;
 mod prepared_viewports;
 mod query_cache;
 mod scroll_coverage;
@@ -3153,6 +3154,13 @@ impl LayoutEngine {
             );
         }
 
+        if window_system.is_none() && neovm_core::window::posn_object_extent_mode().enabled() {
+            posn_object_extent::capture_terminal_object_extents(
+                &frame_display_state,
+                &mut self.window_snapshots,
+            );
+        }
+
         // NOTE: GlyphMatrix vs FrameGlyphBuffer character count validation removed.
         // FrameGlyphBuffer no longer receives glyph output; the DisplayOutputBuilder
         // is now the sole output path.
@@ -3595,12 +3603,39 @@ impl LayoutEngine {
             );
         }
 
+        // The sealed producer contains final New/Reused/Shifted row operations,
+        // including the final chrome adjustments. Queries never reach this seam.
+        let accepted_tty_posn_pool =
+            if window_system.is_none() && neovm_core::window::posn_object_extent_mode().enabled() {
+                let previous = evaluator
+                    .frame_manager()
+                    .get(frame_id)
+                    .and_then(|frame| frame.tty_posn_pool());
+                let captured =
+                    neomacs_display_protocol::posn_frame_pool::PosnFramePool::from_terminal_frame(
+                        self.last_frame_display_state
+                            .as_ref()
+                            .expect("accepted sealed state")
+                            .state(),
+                        previous.map(|pool| &**pool),
+                        neovm_core::encoding::char_width,
+                    );
+                Some(
+                    match previous.filter(|pool| captured.retains_same_observations(pool)) {
+                        Some(pool) => std::sync::Arc::clone(pool),
+                        None => std::sync::Arc::new(captured),
+                    },
+                )
+            } else {
+                None
+            };
         let snapshots = std::mem::take(&mut self.window_snapshots);
         if let Some(frame) = evaluator.frame_manager_mut().get_mut(frame_id) {
             frame
-                .prepare_display_presentation(
+                .prepare_display_presentation_with_tty_posn_pool(
                     neovm_core::window::geometry::PresentationId::new(presentation_id),
                     snapshots,
+                    accepted_tty_posn_pool,
                 )
                 .expect("layout presentation identity is fresh");
         }

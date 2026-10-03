@@ -37,10 +37,14 @@ mod parameters;
 pub mod part;
 mod pixel_input;
 mod point_rows;
+mod posn_object_extent;
 pub use point_rows::{
     DisplayPointRow, DisplayPointRowIter, DisplayPointRows, DisplayPointRowsIter,
     DisplayPointRowsMode, PointCell, display_point_rows_mode,
 };
+#[cfg(test)]
+pub(crate) use posn_object_extent::force_posn_object_extent_for_test;
+pub use posn_object_extent::{PosnObjectExtentMode, posn_object_extent_mode, retained_posn_extent};
 mod scroll_bar;
 mod sibling_layout;
 pub mod split;
@@ -2371,15 +2375,7 @@ fn collect_leaf_window_paths(
 /// and `posn-at-point` answers `(0 . 1)` -- the glyph. So the marker slot
 /// answers a COORDINATE, and stands in for a POSITION only when nothing drew
 /// one.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum DisplayPointRole {
-    /// The glyph the row drew for this position.
-    #[default]
-    Glyph,
-    /// A column a special glyph covered, standing in for the position the
-    /// display walk was at when it reached that column.
-    OverlaidMarker,
-}
+pub use neomacs_display_protocol::posn_object_extent::PosnPointRole as DisplayPointRole;
 
 /// Authoritative display geometry for a single visible buffer position.
 ///
@@ -2755,6 +2751,11 @@ pub struct WindowDisplaySnapshot {
     /// cannot leave query-visible layout stale. `None` is reserved for
     /// synthetic test fixtures that intentionally install trusted rows.
     pub layout_freshness: Option<WindowDisplaySnapshotFreshness>,
+    /// Numeric matrix facts produced with this snapshot. Only the retained
+    /// accepted output is current-matrix state; a query snapshot has no
+    /// publication authority. Immutable Arc data is safe for concurrent readers.
+    pub posn_matrix:
+        Option<std::sync::Arc<neomacs_display_protocol::posn_object_extent::PosnMatrixSnapshot>>,
     /// Exact end record produced by the same row walk as this snapshot.
     pub window_end_record: Option<WindowEndRecord>,
 }
@@ -3165,7 +3166,7 @@ impl WindowDisplaySnapshot {
             let run = &self.points[idx..];
             let run = &run[..run.partition_point(|point| point.buffer_pos == pos)];
             run.iter()
-                .find(|point| point.role == DisplayPointRole::Glyph)
+                .find(|point| point.role.is_position())
                 .or_else(|| run.first())
                 .cloned()
         };
@@ -3248,7 +3249,11 @@ impl WindowDisplaySnapshot {
             return Some(point);
         }
         Some(DisplayPointSnapshot {
-            role: DisplayPointRole::Glyph,
+            role: if posn_object_extent_mode().enabled() {
+                DisplayPointRole::SyntheticBoundary
+            } else {
+                DisplayPointRole::Glyph
+            },
             buffer_pos: end,
             x: row.end_x,
             y: row.y,
@@ -3293,7 +3298,11 @@ impl WindowDisplaySnapshot {
         });
         let Some(mut last) = row_points.next() else {
             return row.start_buffer_pos.map(|buffer_pos| DisplayPointSnapshot {
-                role: DisplayPointRole::Glyph,
+                role: if posn_object_extent_mode().enabled() {
+                    DisplayPointRole::SyntheticBoundary
+                } else {
+                    DisplayPointRole::Glyph
+                },
                 buffer_pos,
                 x: row.start_x,
                 y: row.y,
@@ -3467,6 +3476,7 @@ impl PartialEq for WindowDisplaySnapshot {
             && self.buffer_modiff == other.buffer_modiff
             && self.layout_freshness == other.layout_freshness
             && self.window_end_record == other.window_end_record
+            && self.posn_matrix == other.posn_matrix
             && self.iter_points().eq(other.iter_points())
     }
 }
@@ -3491,6 +3501,7 @@ impl Default for WindowDisplaySnapshot {
             rows: Vec::new(),
             buffer_modiff: None,
             layout_freshness: None,
+            posn_matrix: None,
             window_end_record: None,
         }
     }
@@ -4111,6 +4122,14 @@ pub struct Frame {
     /// Latest completed layout output used for incremental redisplay and GNU
     /// output bookkeeping. This cache is not renderer-active geometry.
     redisplay_cache: HashMap<WindowId, std::sync::Arc<WindowDisplaySnapshot>>,
+    /// Exact accepted TTY frame-pool numeric cells, independent of a leaf's
+    /// surviving redisplay cache. One frame mutator replaces a fully initialized
+    /// Arc only at validated presentation prepare; concurrent readers retain
+    /// immutable numeric views through the existing publication transport.
+    /// Query-only layouts and tree edits never publish new pool observations.
+    tty_posn_pool: Option<Arc<neomacs_display_protocol::posn_frame_pool::PosnFramePool>>,
+    /// GNU preserves pool-backed topology only when the accepted tree has no margins.
+    tty_posn_pool_can_repartition: bool,
     /// Last recorded redisplay state for GNU window change hooks.
     pub(crate) window_hook_record: FrameWindowHookRecord,
     /// GNU `frame-window-state-change` flag.
@@ -4261,6 +4280,8 @@ impl Frame {
             pending_gui_resize: None,
             presentation_state: FramePresentationState::default(),
             redisplay_cache: HashMap::default(),
+            tty_posn_pool: None,
+            tty_posn_pool_can_repartition: false,
             window_hook_record: FrameWindowHookRecord::default(),
             window_state_change: false,
             face_hash_table: Value::hash_table(HashTableTest::Eq),
@@ -4796,6 +4817,13 @@ impl Frame {
         let top_margin = self.frame_top_margin();
         let minibuffer_lines = i64::from(self.minibuffer_leaf.is_some());
         let root_lines = (text_lines - minibuffer_lines).max(1);
+        if posn_object_extent_mode().enabled()
+            && ((self.root_window().bounds().width / char_width).round() as i64 != cols.max(1)
+                || (self.root_window().bounds().height / char_height).round() as i64 != root_lines)
+        {
+            self.tty_posn_pool = None;
+            self.tty_posn_pool_can_repartition = false;
+        }
         let root_bounds = Rect::new(
             0.0,
             top_margin as f32 * char_height,
@@ -5199,6 +5227,18 @@ impl Frame {
         presentation: geometry::PresentationId,
         publications: Vec<WindowPresentationSnapshot>,
     ) -> Result<(), geometry::PresentationPrepareError> {
+        self.prepare_display_presentation_with_tty_posn_pool(presentation, publications, None)
+    }
+
+    /// Admit a completed producer's pool with the same validated publication.
+    /// Numeric state is owned by this exclusive Frame mutator; readers never
+    /// mutate the Arc, and rejected/reused presentations cannot replace it.
+    pub fn prepare_display_presentation_with_tty_posn_pool(
+        &mut self,
+        presentation: geometry::PresentationId,
+        publications: Vec<WindowPresentationSnapshot>,
+        pool: Option<Arc<neomacs_display_protocol::posn_frame_pool::PosnFramePool>>,
+    ) -> Result<(), geometry::PresentationPrepareError> {
         let publications: Vec<_> = publications
             .into_iter()
             .filter(|publication| self.find_window(publication.window_id()).is_some())
@@ -5236,6 +5276,13 @@ impl Frame {
             return Err(geometry::PresentationPrepareError::ReusedPresentation(
                 presentation,
             ));
+        }
+        if posn_object_extent_mode().enabled()
+            && self.effective_window_system().is_none()
+            && let Some(pool) = pool
+        {
+            self.tty_posn_pool_can_repartition = self.tty_posn_live_margins_clear();
+            self.tty_posn_pool = Some(pool);
         }
         self.commit_completed_window_output(presentation, &prepared.publications);
         let geometry_only_windows: HashSet<_> = prepared
@@ -5449,6 +5496,86 @@ impl Frame {
         self.redisplay_cache.get(&id).map(|snapshot| &**snapshot)
     }
 
+    /// GNU checks the entire live tree, including the minibuffer, before
+    /// preserving a pool through topology changes. This borrowed walk allocates
+    /// no leaf list and does not treat detached windows as live partitions.
+    fn tty_posn_live_margins_clear(&self) -> bool {
+        fn clear(tree: &WindowTree, id: WindowId) -> bool {
+            match tree.find(id) {
+                Some(Window::Leaf { margins, .. }) => *margins == WindowMargins::ZERO,
+                Some(Window::Internal { children, .. }) => {
+                    children.iter().all(|id| clear(tree, *id))
+                }
+                _ => false,
+            }
+        }
+        clear(&self.tree, self.tree.root_id()) && self.minibuffer_leaf.as_ref().is_none_or(|leaf| {
+            matches!(leaf, Window::Leaf { margins, .. } if *margins == WindowMargins::ZERO)
+        })
+    }
+
+    /// Accepted numeric producer input for the next speculative TTY capture.
+    /// Callers must already have the process policy ON; this read is inert.
+    pub fn tty_posn_pool(
+        &self,
+    ) -> Option<&Arc<neomacs_display_protocol::posn_frame_pool::PosnFramePool>> {
+        self.tty_posn_pool.as_ref()
+    }
+
+    /// GNU current-matrix lookup before after-EOL iterator column advancement.
+    /// A local accepted matrix stays authoritative. Without one, a new leaf
+    /// can still slice the unchanged accepted frame pool (fake_current_matrices).
+    /// Pure numeric read: no allocation, Arc cloning, or source-row publication.
+    pub(crate) fn retained_tty_posn_extent(
+        &self,
+        id: WindowId,
+        row: i64,
+        column: i64,
+    ) -> neomacs_display_protocol::posn_object_extent::PosnObjectExtent {
+        use neomacs_display_protocol::glyph_matrix::GlyphArea;
+        use neomacs_display_protocol::posn_object_extent::PosnObjectExtent;
+        if let Some(snapshot) = self
+            .redisplay_snapshot(id)
+            .filter(|snapshot| snapshot.posn_matrix.is_some())
+        {
+            return retained_posn_extent(Some(snapshot), row, column, GlyphArea::Text);
+        }
+        if !self.tty_posn_pool_can_repartition || !self.tty_posn_live_margins_clear() {
+            return PosnObjectExtent::Undrawn;
+        }
+        let Some(pool) = self.tty_posn_pool.as_ref() else {
+            return PosnObjectExtent::Undrawn;
+        };
+        if pool.columns as i64 != (self.width as f32 / self.char_width.max(1.0)).round() as i64
+            || pool.lines as i64 != (self.height as f32 / self.char_height.max(1.0)).round() as i64
+        {
+            return PosnObjectExtent::Undrawn;
+        }
+        let Some(window) = self.find_window(id) else {
+            return PosnObjectExtent::Undrawn;
+        };
+        let Window::Leaf { margins, .. } = window else {
+            return PosnObjectExtent::Undrawn;
+        };
+        // GNU's unchanged-pool topology preservation is disabled for margins.
+        // A local accepted margin matrix above is still exact; no such matrix
+        // means this path must not infer its current rows from painted pixels.
+        if *margins != WindowMargins::ZERO {
+            return PosnObjectExtent::Undrawn;
+        }
+        let width = usize::try_from(window.total_columns(self.char_width)).unwrap_or(0);
+        let height = usize::try_from(window.total_lines(self.char_height)).unwrap_or(0);
+        pool.at_partition(
+            window.top_line(),
+            height,
+            [window.left_col(); GlyphArea::COUNT],
+            [0, width, 0],
+            row,
+            column,
+            GlyphArea::Text,
+        )
+    }
+
     /// GNU `coordinates_in_window`'s inputs for one live window of this frame
     /// (src/window.c:1348-1489).
     ///
@@ -5556,6 +5683,10 @@ impl Frame {
 
     /// Resize the frame and window tree to new pixel dimensions.
     pub fn resize_pixelwise(&mut self, width: u32, height: u32) {
+        if posn_object_extent_mode().enabled() && (self.width != width || self.height != height) {
+            self.tty_posn_pool = None;
+            self.tty_posn_pool_can_repartition = false;
+        }
         let horizontal_geometry_changed = self.width != width;
         self.clear_pending_gui_resize();
         self.width = width;

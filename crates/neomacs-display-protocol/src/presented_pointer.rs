@@ -272,6 +272,11 @@ pub struct PresentedTextPosition {
     buffer_position: i64,
     row: i64,
     column: i64,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::posn_object_extent::PosnPointRole::is_default"
+    )]
+    point_role: crate::posn_object_extent::PosnPointRole,
 }
 
 /// Exact position in a displayed Lisp string occupying one chrome rectangle.
@@ -371,6 +376,7 @@ impl PresentedTextPosition {
             buffer_position,
             row,
             column,
+            point_role: crate::posn_object_extent::PosnPointRole::Glyph,
         }
     }
 
@@ -397,6 +403,14 @@ impl PresentedTextPosition {
     #[must_use]
     pub const fn column(self) -> i64 {
         self.column
+    }
+    pub const fn with_point_role(mut self, role: crate::posn_object_extent::PosnPointRole) -> Self {
+        self.point_role = role;
+        self
+    }
+
+    pub const fn point_role(self) -> crate::posn_object_extent::PosnPointRole {
+        self.point_role
     }
 }
 

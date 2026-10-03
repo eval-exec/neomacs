@@ -6979,6 +6979,20 @@ impl crate::emacs_core::eval::Context {
                 if let Some(snapshot) = frame.redisplay_snapshot(window_id)
                     && let Some(point) = snapshot.point_at_coords(at)
                 {
+                    let (object_width, object_height) = if part == crate::window::WindowPart::Text
+                        && frame.effective_window_system().is_none()
+                        && crate::window::posn_object_extent_mode().enabled()
+                    {
+                        crate::window::retained_posn_extent(
+                            Some(snapshot),
+                            point.row,
+                            point.col,
+                            neomacs_display_protocol::glyph_matrix::GlyphArea::Text,
+                        )
+                        .dimensions()
+                    } else {
+                        (point.width.max(1), point.height.max(1))
+                    };
                     return Self::mouse_posn_descriptor_value(MousePosnDescriptor {
                         window_or_frame: Value::make_window(window_id.0),
                         area: part.area_symbol(),
@@ -6995,8 +7009,8 @@ impl crate::emacs_core::eval::Context {
                             // two cannot drift apart.
                             col: Some(point.column_for_click(report_x, column_width)),
                             row: Some(point.row),
-                            width: Some(point.width.max(1)),
-                            height: Some(point.height.max(1)),
+                            width: Some(object_width),
+                            height: Some(object_height),
                             anchor_x: None,
                             anchor_y: None,
                         },
@@ -7129,12 +7143,80 @@ impl crate::emacs_core::eval::Context {
         ) {
             (crate::window::WindowPresentationSnapshot::LiveWindow(_), Some(point)) => {
                 let bounds = point.bounds();
+                let mut object_dimensions = (
+                    bounds.width().round().max(1.0) as i64,
+                    bounds.height().round().max(1.0) as i64,
+                );
+                if region.kind() == neomacs_display_protocol::PresentedRegionKind::TextBody
+                    && frame.effective_window_system().is_none()
+                    && crate::window::posn_object_extent_mode().enabled()
+                {
+                    let snapshot = frame
+                        .active_window_presentation(window_id)?
+                        .display_snapshot();
+                    let output_row = snapshot
+                        .body_rows
+                        .iter()
+                        .find(|row| row.body_row == point.row())
+                        .map(|row| row.output_row)
+                        .unwrap_or(point.row());
+                    let mut matrix_position = (output_row, point.column());
+                    if point.point_role() == neomacs_display_protocol::posn_object_extent::PosnPointRole::SyntheticBoundary {
+                        if let Some(at) = crate::window::WindowPart::Text.text_area_coordinate(
+                            (x - presented.regions().text_body().origin().x().get()).round() as i64,
+                            (y - outer.origin().y().get()).round() as i64,
+                            snapshot.header_line_height + snapshot.tab_line_height)
+                            && let Some(walked) = snapshot.point_at_coords(at)
+                        { matrix_position = (walked.row, walked.col); }
+                    }
+                    object_dimensions = crate::window::retained_posn_extent(
+                        Some(snapshot),
+                        matrix_position.0,
+                        matrix_position.1,
+                        neomacs_display_protocol::glyph_matrix::GlyphArea::Text,
+                    )
+                    .dimensions();
+                }
                 MousePosnMetrics {
                     point: Some(point.buffer_position()),
                     col: Some(point.column()),
                     row: Some(point.row()),
-                    width: Some(bounds.width().round().max(1.0) as i64),
-                    height: Some(bounds.height().round().max(1.0) as i64),
+                    width: Some(object_dimensions.0),
+                    height: Some(object_dimensions.1),
+                    anchor_x: None,
+                    anchor_y: None,
+                }
+            }
+            (crate::window::WindowPresentationSnapshot::LiveWindow(snapshot), None)
+                if region.kind() == neomacs_display_protocol::PresentedRegionKind::TextBody
+                    && frame.effective_window_system().is_none()
+                    && crate::window::posn_object_extent_mode().enabled() =>
+            {
+                let extent = crate::window::WindowPart::Text
+                    .text_area_coordinate(
+                        (x - presented.regions().text_body().origin().x().get()).round() as i64,
+                        (y - outer.origin().y().get()).round() as i64,
+                        snapshot.header_line_height + snapshot.tab_line_height,
+                    )
+                    .and_then(|at| snapshot.point_at_coords(at))
+                    .map_or(
+                        neomacs_display_protocol::posn_object_extent::PosnObjectExtent::Undrawn,
+                        |point| {
+                            crate::window::retained_posn_extent(
+                                Some(snapshot),
+                                point.row,
+                                point.col,
+                                neomacs_display_protocol::glyph_matrix::GlyphArea::Text,
+                            )
+                        },
+                    );
+                let (width, height) = extent.dimensions();
+                MousePosnMetrics {
+                    point: fallback_point,
+                    col: None,
+                    row: None,
+                    width: Some(width),
+                    height: Some(height),
                     anchor_x: None,
                     anchor_y: None,
                 }

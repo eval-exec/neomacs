@@ -772,13 +772,15 @@ fn push_text_position_span(
     }
     let bounds = FrameRect::new(x, y, width, height)
         .map_err(|_| PresentedHitError::InvalidTextPositionGeometry)?;
-    positions.push(PresentedTextPosition::new(
-        window,
-        bounds,
-        buffer_position,
-        row,
-        column,
-    ));
+    positions.push(
+        PresentedTextPosition::new(window, bounds, buffer_position, row, column).with_point_role(
+            if neovm_core::window::posn_object_extent_mode().enabled() {
+                neomacs_display_protocol::posn_object_extent::PosnPointRole::SyntheticBoundary
+            } else {
+                neomacs_display_protocol::posn_object_extent::PosnPointRole::Glyph
+            },
+        ),
+    );
     Ok(())
 }
 
@@ -836,13 +838,22 @@ pub(crate) fn body_text_positions(
         }
         let bounds = FrameRect::new(left, top, right - left, bottom - top)
             .map_err(|_| PresentedHitError::InvalidTextPositionGeometry)?;
-        positions.push(PresentedTextPosition::new(
-            window,
-            bounds,
-            point.buffer_pos.as_i64(),
-            body_row.body_row,
-            point.col,
-        ));
+        positions.push(
+            PresentedTextPosition::new(
+                window,
+                bounds,
+                point.buffer_pos.as_i64(),
+                body_row.body_row,
+                point.col,
+            )
+            .with_point_role(
+                if neovm_core::window::posn_object_extent_mode().enabled() {
+                    point.role
+                } else {
+                    neomacs_display_protocol::posn_object_extent::PosnPointRole::Glyph
+                },
+            ),
+        );
     }
     push_row_fallback_positions(&mut positions, window, snapshot, text_body)?;
     Ok(positions)

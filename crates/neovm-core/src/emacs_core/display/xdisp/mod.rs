@@ -7833,6 +7833,7 @@ fn live_position_visibility(
 
 #[derive(Clone, Copy)]
 struct ExactVisibleMetrics {
+    object_extent: Option<neomacs_display_protocol::posn_object_extent::PosnObjectExtent>,
     point: LispCharPos1,
     x: i64,
     y: i64,
@@ -7844,11 +7845,37 @@ struct ExactVisibleMetrics {
     col: i64,
 }
 
+impl ExactVisibleMetrics {
+    fn object_dimensions(&self) -> (i64, i64) {
+        self.object_extent.map_or(
+            (self.width, self.height),
+            neomacs_display_protocol::posn_object_extent::PosnObjectExtent::dimensions,
+        )
+    }
+}
+
+fn with_tty_posn_extent(
+    mut metrics: ExactVisibleMetrics,
+    terminal: bool,
+    frame: Option<&crate::window::Frame>,
+    window: WindowId,
+    point: &crate::window::DisplayPointSnapshot,
+) -> ExactVisibleMetrics {
+    if terminal && crate::window::posn_object_extent_mode().enabled() {
+        metrics.object_extent = Some(frame.map_or(
+            neomacs_display_protocol::posn_object_extent::PosnObjectExtent::Undrawn,
+            |frame| frame.retained_tty_posn_extent(window, point.row, point.col),
+        ));
+    }
+    metrics
+}
+
 fn exact_metrics_from_point(
     point: crate::window::geometry::SnapshotPointGeometry,
 ) -> ExactVisibleMetrics {
     let body_point = point.in_text_body();
     ExactVisibleMetrics {
+        object_extent: None,
         point: point.buffer_pos(),
         x: body_point.x().get().round() as i64,
         y: body_point.y().get().round() as i64,
@@ -7867,6 +7894,7 @@ fn exact_metrics_from_redisplay_point(
 ) -> ExactVisibleMetrics {
     let (body_row, body_y) = snapshot.text_body_position(point.row, point.y);
     ExactVisibleMetrics {
+        object_extent: None,
         point: point.buffer_pos,
         x: point.x,
         y: body_y,
@@ -7879,9 +7907,20 @@ fn exact_metrics_from_redisplay_point(
     }
 }
 
+/// Numeric source coordinates resolved by the approximate walk, before
+/// report-only after-EOL columns or clicked rows. GNU reads the current matrix
+/// with iterator hpos/vpos, not the separately reported click geometry.
+/// Each query mutator owns these numeric values; copied observations are
+/// immutable and contain no shared mutable state or Lisp-state cache.
+#[derive(Clone, Copy)]
+struct ApproxMatrixPosition {
+    row: i64,
+    column: i64,
+}
+
 /// What `approximate_point_at_coords` found.
 enum ApproxPointAtCoords {
-    Point(ExactVisibleMetrics),
+    Point(ExactVisibleMetrics, ApproxMatrixPosition),
     /// The coordinates lie below the rows the context's text covers: only the
     /// whole buffer's text answers them (`live_window_display_context_with_all_text`).
     NeedsAllText,
@@ -7908,6 +7947,7 @@ fn approximate_point_at_coords(
 
     let mut row = 0_i64;
     let mut line_start = start;
+    let matrix_position;
     loop {
         let line_end = match ctx.text.find_newline(line_start) {
             Some(line_end) => line_end,
@@ -7929,17 +7969,24 @@ fn approximate_point_at_coords(
                         .saturating_add(usize::try_from(chosen_col).ok()?)
                         .saturating_add(1)
                         .min(total.saturating_add(1));
-                    return Some(ApproxPointAtCoords::Point(ExactVisibleMetrics {
-                        point: LispCharPos1::from_one_based_usize(point),
-                        x,
-                        y,
-                        dx: x - chosen_col.saturating_mul(char_width),
-                        dy: y - query_row.saturating_mul(char_height),
-                        width: 0,
-                        height: 0,
-                        row: query_row,
-                        col: query_col,
-                    }));
+                    return Some(ApproxPointAtCoords::Point(
+                        ExactVisibleMetrics {
+                            object_extent: None,
+                            point: LispCharPos1::from_one_based_usize(point),
+                            x,
+                            y,
+                            dx: x - chosen_col.saturating_mul(char_width),
+                            dy: y - query_row.saturating_mul(char_height),
+                            width: 0,
+                            height: 0,
+                            row: query_row,
+                            col: query_col,
+                        },
+                        ApproxMatrixPosition {
+                            row: query_row,
+                            column: chosen_col,
+                        },
+                    ));
                 }
                 return Some(ApproxPointAtCoords::NeedsAllText);
             }
@@ -7958,37 +8005,56 @@ fn approximate_point_at_coords(
                 .saturating_add(1)
                 .min(total.saturating_add(1));
 
-            return Some(ApproxPointAtCoords::Point(ExactVisibleMetrics {
-                point: LispCharPos1::from_one_based_usize(point),
-                x,
-                y,
-                dx: x - chosen_col.saturating_mul(char_width),
-                dy: y - query_row.saturating_mul(char_height),
-                width: 0,
-                height: 0,
-                row: query_row,
-                col: query_col,
-            }));
+            return Some(ApproxPointAtCoords::Point(
+                ExactVisibleMetrics {
+                    object_extent: None,
+                    point: LispCharPos1::from_one_based_usize(point),
+                    x,
+                    y,
+                    dx: x - chosen_col.saturating_mul(char_width),
+                    dy: y - query_row.saturating_mul(char_height),
+                    width: 0,
+                    height: 0,
+                    row: query_row,
+                    col: query_col,
+                },
+                ApproxMatrixPosition {
+                    row: query_row,
+                    column: chosen_col,
+                },
+            ));
         }
 
         if line_end >= total {
+            // A click below ZV stops at the final source segment. Keep that
+            // numeric matrix row/column separate from main's clicked-row
+            // reporting and offset behavior below.
+            let final_segment = visual_rows.saturating_sub(1);
+            matrix_position = ApproxMatrixPosition {
+                row: row.saturating_add(final_segment),
+                column: line_len.saturating_sub(final_segment.saturating_mul(wrap_cols)),
+            };
             break;
         }
         row += visual_rows;
         line_start = line_end + 1;
     }
 
-    Some(ApproxPointAtCoords::Point(ExactVisibleMetrics {
-        point: LispCharPos1::from_one_based_usize(total.saturating_add(1)),
-        x,
-        y,
-        dx: x,
-        dy: y - query_row.saturating_mul(char_height),
-        width: 0,
-        height: 0,
-        row: query_row,
-        col: query_col,
-    }))
+    Some(ApproxPointAtCoords::Point(
+        ExactVisibleMetrics {
+            object_extent: None,
+            point: LispCharPos1::from_one_based_usize(total.saturating_add(1)),
+            x,
+            y,
+            dx: x,
+            dy: y - query_row.saturating_mul(char_height),
+            width: 0,
+            height: 0,
+            row: query_row,
+            col: query_col,
+        },
+        matrix_position,
+    ))
 }
 
 /// Lisp motion queries use current redisplay rows, recomputed when stale.
@@ -8094,9 +8160,20 @@ fn resolve_exact_visible_metrics_with_layout(
         else {
             return Ok(None);
         };
-        return Ok(geometry
-            .point_for_buffer_pos(pos_lisp)
-            .map(|point| (wid, exact_metrics_from_redisplay_point(&geometry, &point))));
+        return Ok(geometry.point_for_buffer_pos(pos_lisp).map(|point| {
+            (
+                wid,
+                with_tty_posn_extent(
+                    exact_metrics_from_redisplay_point(&geometry, &point),
+                    eval.frames
+                        .get(fid)
+                        .is_some_and(|frame| frame.effective_window_system().is_none()),
+                    eval.frames.get(fid),
+                    wid,
+                    &point,
+                ),
+            )
+        }));
     }
     if retained_rows_valid {
         return Ok(None);
@@ -8162,9 +8239,18 @@ fn resolve_exact_visible_metrics(
         let Some(snapshot) = frame.redisplay_snapshot(wid) else {
             return Ok(None);
         };
-        return Ok(snapshot
-            .point_for_buffer_pos(pos_lisp)
-            .map(|point| (wid, exact_metrics_from_redisplay_point(snapshot, &point))));
+        return Ok(snapshot.point_for_buffer_pos(pos_lisp).map(|point| {
+            (
+                wid,
+                with_tty_posn_extent(
+                    exact_metrics_from_redisplay_point(snapshot, &point),
+                    true,
+                    Some(frame),
+                    wid,
+                    &point,
+                ),
+            )
+        }));
     }
     let publication = match source {
         PositionGeometrySource::Redisplay => frame.completed_presentation_geometry(),
@@ -8194,6 +8280,7 @@ fn geometry_query_flow(error: crate::window::geometry::GeometryQueryError) -> Fl
 }
 
 fn make_text_area_position(window_id: WindowId, metrics: ExactVisibleMetrics) -> Value {
+    let (object_width, object_height) = metrics.object_dimensions();
     Value::list(vec![
         Value::make_window(window_id.0),
         Value::fixnum(metrics.point.as_i64()),
@@ -8204,7 +8291,7 @@ fn make_text_area_position(window_id: WindowId, metrics: ExactVisibleMetrics) ->
         Value::cons(Value::fixnum(metrics.col), Value::fixnum(metrics.row)),
         Value::NIL,
         Value::cons(Value::fixnum(metrics.dx), Value::fixnum(metrics.dy)),
-        Value::cons(Value::fixnum(metrics.width), Value::fixnum(metrics.height)),
+        Value::cons(Value::fixnum(object_width), Value::fixnum(object_height)),
     ])
 }
 
@@ -8767,6 +8854,47 @@ impl TextAreaClick {
         }
     }
 
+    /// GNU dispnew.c buffer_posn_from_coords records click minus the
+    /// iterator's current x/y, before reading current-matrix object extents.
+    /// Insertion/synthetic tails retain that canonical iterator origin even
+    /// when their physical hit box extends across terminal default fill.
+    /// Ordinary glyphs keep their existing path: a tab/wide source rectangle
+    /// alone does not record GNU's per-terminal-cell iterator advancement.
+    /// This helper owns only numbers/local immutable row state, no Lisp cache.
+    fn apply_tty_boundary_offsets(
+        self,
+        mut metrics: ExactVisibleMetrics,
+        snapshot: &WindowDisplaySnapshot,
+        point: &crate::window::DisplayPointSnapshot,
+        first_visible_x: i64,
+    ) -> ExactVisibleMetrics {
+        if matches!(
+            point.role,
+            crate::window::DisplayPointRole::InsertionBoundary
+                | crate::window::DisplayPointRole::SyntheticBoundary
+        ) {
+            let (_, iterator_y) = snapshot.text_body_position(point.row, point.y);
+            // An empty hscrolled row has no emitted source glyph to move the
+            // physical output pen. GNU's live iterator still measures TO_X
+            // from first_visible_x, before its current-matrix extent read.
+            // Keep this origin query-local: cursor, columns and visibility
+            // continue to use the producer's physical geometry.
+            let empty_row = snapshot.row_metrics(point.row).is_some_and(|row| {
+                row.start_buffer_pos == Some(point.buffer_pos)
+                    && row.end_buffer_pos == Some(point.buffer_pos)
+                    && row.start_x == row.end_x
+            });
+            let iterator_x = if empty_row {
+                point.x.saturating_sub(first_visible_x)
+            } else {
+                point.x
+            };
+            metrics.dx = self.x.saturating_sub(iterator_x);
+            metrics.dy = self.y.saturating_sub(iterator_y);
+        }
+        metrics
+    }
+
     /// Rewrite a posn this port derived without a display point of its own --
     /// the approximate scanner ledger 201 named as residual 4. Same two cells
     /// and the same rule, with the metrics' own column standing in for the
@@ -8807,6 +8935,7 @@ fn make_window_part_position(
         crate::window::WindowPart::LeftFringe | crate::window::WindowPart::RightFringe => 0,
         _ => metrics.col,
     };
+    let (object_width, object_height) = metrics.object_dimensions();
     Value::list(vec![
         Value::make_window(window_id.0),
         Value::symbol(area),
@@ -8817,7 +8946,7 @@ fn make_window_part_position(
         Value::cons(Value::fixnum(col), Value::fixnum(metrics.row)),
         Value::NIL,
         Value::cons(Value::fixnum(metrics.dx), Value::fixnum(metrics.dy)),
-        Value::cons(Value::fixnum(metrics.width), Value::fixnum(metrics.height)),
+        Value::cons(Value::fixnum(object_width), Value::fixnum(object_height)),
     ])
 }
 
@@ -9037,11 +9166,37 @@ fn posn_at_x_y_impl(
             if let Some(snapshot) = snapshot {
                 let click = TextAreaClick::new(report_x, report_y, column_width);
                 if let Some(point) = snapshot.point_at_coords(at) {
-                    return Ok(make_window_part_position(
-                        hit.window,
-                        part,
-                        click.apply(exact_metrics_from_redisplay_point(snapshot, &point), &point),
-                    ));
+                    let mut metrics =
+                        click.apply(exact_metrics_from_redisplay_point(snapshot, &point), &point);
+                    if part == crate::window::WindowPart::Text
+                        && frame.effective_window_system().is_none()
+                        && crate::window::posn_object_extent_mode().enabled()
+                    {
+                        let first_visible_x = frame.find_window(hit.window).map_or(0, |window| {
+                            let at_eob = window
+                                .buffer_id()
+                                .and_then(|buffer| buffers.get(buffer))
+                                .is_some_and(|buffer| {
+                                    point.buffer_pos == buffer.point_max_lisp_char_pos()
+                                });
+                            if at_eob {
+                                i64::try_from(window.hscroll())
+                                    .unwrap_or(i64::MAX)
+                                    .saturating_mul(column_width)
+                            } else {
+                                0
+                            }
+                        });
+                        metrics = click.apply_tty_boundary_offsets(
+                            metrics,
+                            snapshot,
+                            &point,
+                            first_visible_x,
+                        );
+                        metrics.object_extent =
+                            Some(frame.retained_tty_posn_extent(hit.window, point.row, point.col));
+                    }
+                    return Ok(make_window_part_position(hit.window, part, metrics));
                 }
                 return Ok(Value::NIL);
             }
@@ -9057,26 +9212,42 @@ fn posn_at_x_y_impl(
             let Some(ctx) = live_window_display_context_for(frames, buffers, fid, wid)? else {
                 return Ok(Value::NIL);
             };
-            let metrics = match approximate_point_at_coords(&ctx, at.text_area_x(), at.window_y()) {
-                Some(ApproxPointAtCoords::Point(metrics)) => metrics,
-                Some(ApproxPointAtCoords::NeedsAllText) => {
-                    let Some(ctx) =
-                        live_window_display_context_with_all_text(frames, buffers, fid, wid)?
-                    else {
-                        return Ok(Value::NIL);
-                    };
-                    match approximate_point_at_coords(&ctx, at.text_area_x(), at.window_y()) {
-                        Some(ApproxPointAtCoords::Point(metrics)) => metrics,
-                        _ => return Ok(Value::NIL),
+            let (metrics, matrix_position) =
+                match approximate_point_at_coords(&ctx, at.text_area_x(), at.window_y()) {
+                    Some(ApproxPointAtCoords::Point(metrics, matrix_position)) => {
+                        (metrics, matrix_position)
                     }
-                }
-                None => return Ok(Value::NIL),
-            };
-            Ok(make_window_part_position(
-                hit.window,
-                part,
-                TextAreaClick::new(report_x, report_y, column_width).apply_to_metrics(metrics),
-            ))
+                    Some(ApproxPointAtCoords::NeedsAllText) => {
+                        let Some(ctx) =
+                            live_window_display_context_with_all_text(frames, buffers, fid, wid)?
+                        else {
+                            return Ok(Value::NIL);
+                        };
+                        match approximate_point_at_coords(&ctx, at.text_area_x(), at.window_y()) {
+                            Some(ApproxPointAtCoords::Point(metrics, matrix_position)) => {
+                                (metrics, matrix_position)
+                            }
+                            _ => return Ok(Value::NIL),
+                        }
+                    }
+                    None => return Ok(Value::NIL),
+                };
+            // The fallback reports clicked rows/columns, while GNU reads
+            // current-matrix extents at the walk's resolved source coordinates
+            // before after-EOL advancement (dispnew.c buffer_posn_from_coords).
+            // A cold child can still own an accepted frame-pool slice.
+            let matrix_row = matrix_position.row;
+            let matrix_column = matrix_position.column;
+            let mut metrics =
+                TextAreaClick::new(report_x, report_y, column_width).apply_to_metrics(metrics);
+            if part == crate::window::WindowPart::Text
+                && frame.effective_window_system().is_none()
+                && crate::window::posn_object_extent_mode().enabled()
+            {
+                metrics.object_extent =
+                    Some(frame.retained_tty_posn_extent(hit.window, matrix_row, matrix_column));
+            }
+            Ok(make_window_part_position(hit.window, part, metrics))
         }
     }
 }

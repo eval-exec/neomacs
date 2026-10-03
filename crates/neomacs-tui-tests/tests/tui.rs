@@ -83,6 +83,9 @@ mod mode_line_numeric_padding_oracle;
 mod modes;
 #[path = "org.rs"]
 mod org;
+#[cfg(test)]
+#[path = "posn_object_extent_oracle.rs"]
+mod posn_object_extent_oracle;
 #[path = "pre_redisplay_function_oracle.rs"]
 mod pre_redisplay_function_oracle;
 #[path = "programming.rs"]

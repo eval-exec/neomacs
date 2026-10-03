@@ -105,6 +105,8 @@ pub(super) const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOMACS_LAYOUT_SCROLL_BACK",
     // Approximate position fallbacks copy only visible text: `on` (default).
     "NEOMACS_POSN_BOUNDED_TEXT",
+    // Current-matrix TTY posn object extents (`off` default, `on`).
+    "NEOMACS_POSN_OBJECT_EXTENT",
     // `(redisplay t)` skips the layout when nothing visible changed: `on`.
     "NEOMACS_REDISPLAY_IDLE_SKIP",
     // An evaluated mode line that renders the same reuses its row: `on|verify`.

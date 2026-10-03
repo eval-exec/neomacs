@@ -2436,28 +2436,37 @@ impl TtyRif {
             }
 
             if area == GlyphArea::Text {
-                let right_edge = if glyph_row.glyphs[GlyphArea::RightMargin.index()].is_empty() {
-                    match area_layout.placement(GlyphArea::Text) {
-                        GlyphAreaPlacement::Structural(geometry) => {
-                            frame_origin_col.saturating_add(
-                                (geometry.bounds().right() / char_width).round() as i64,
-                            )
-                        }
-                        GlyphAreaPlacement::FollowingPreviousArea => screen_width,
-                    }
+                let right_edge = if neovm_core::window::posn_object_extent_mode().enabled() {
+                    neomacs_display_protocol::posn_object_extent::tty_text_fill_right_edge(
+                        area_layout,
+                        !glyph_row.glyphs[GlyphArea::RightMargin.index()].is_empty(),
+                        char_width,
+                        frame_origin_col,
+                        screen_width,
+                    )
                 } else {
-                    match area_layout.placement(GlyphArea::RightMargin) {
-                        GlyphAreaPlacement::Structural(geometry) => frame_origin_col
-                            .saturating_add((geometry.bounds().x / char_width).round() as i64),
-                        GlyphAreaPlacement::FollowingPreviousArea => frame_origin_col
-                            .saturating_add(
-                                (area_layout
-                                    .structural_coverage()
-                                    .map(|coverage| coverage.right())
-                                    .unwrap_or(self.desired.width as f32)
-                                    / char_width)
-                                    .round() as i64,
-                            ),
+                    if glyph_row.glyphs[GlyphArea::RightMargin.index()].is_empty() {
+                        match area_layout.placement(GlyphArea::Text) {
+                            GlyphAreaPlacement::Structural(geometry) => frame_origin_col
+                                .saturating_add(
+                                    (geometry.bounds().right() / char_width).round() as i64
+                                ),
+                            GlyphAreaPlacement::FollowingPreviousArea => screen_width,
+                        }
+                    } else {
+                        match area_layout.placement(GlyphArea::RightMargin) {
+                            GlyphAreaPlacement::Structural(geometry) => frame_origin_col
+                                .saturating_add((geometry.bounds().x / char_width).round() as i64),
+                            GlyphAreaPlacement::FollowingPreviousArea => frame_origin_col
+                                .saturating_add(
+                                    (area_layout
+                                        .structural_coverage()
+                                        .map(|coverage| coverage.right())
+                                        .unwrap_or(self.desired.width as f32)
+                                        / char_width)
+                                        .round() as i64,
+                                ),
+                        }
                     }
                 };
                 if col < right_edge {

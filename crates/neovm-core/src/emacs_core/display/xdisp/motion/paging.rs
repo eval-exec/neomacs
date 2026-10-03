@@ -436,7 +436,7 @@ fn plan_scroll(
                 y: point_geometry.map_or(0, |(_, top, _)| top),
                 x: snapshot
                     .iter_points()
-                    .find(|stop| stop.buffer_pos == point && stop.role == DisplayPointRole::Glyph)
+                    .find(|stop| stop.buffer_pos == point && stop.role.is_position())
                     .map_or(0, |stop| stop.x),
             })
     });

@@ -474,7 +474,11 @@ impl WindowRowGeometry {
             return;
         }
         self.points.push(DisplayPointSnapshot {
-            role: neovm_core::window::DisplayPointRole::Glyph,
+            role: if neovm_core::window::posn_object_extent_mode().enabled() {
+                neovm_core::window::DisplayPointRole::InsertionBoundary
+            } else {
+                neovm_core::window::DisplayPointRole::Glyph
+            },
             buffer_pos: terminator.pos,
             x: progress.x,
             y: progress.y,
@@ -571,6 +575,11 @@ impl WindowRowGeometry {
         col: usize,
     ) {
         self.push_text_display_point(buffer_pos, x, y, width, height, row, col);
+        if neovm_core::window::posn_object_extent_mode().enabled()
+            && let Some(point) = self.points.last_mut()
+        {
+            point.role = neovm_core::window::DisplayPointRole::InsertionBoundary;
+        }
     }
 
     pub(super) fn current_display_text_row_index(&self) -> usize {

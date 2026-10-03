@@ -182,7 +182,7 @@ fn check(text: &str, window_start: usize) {
             let x = query_col * ctx.char_width;
             let y = query_row * ctx.char_height;
             let answer = match approximate_point_at_coords(&ctx, x, y) {
-                Some(ApproxPointAtCoords::Point(metrics)) => Some(metrics),
+                Some(ApproxPointAtCoords::Point(metrics, _)) => Some(metrics),
                 Some(ApproxPointAtCoords::NeedsAllText) => {
                     let whole = live_window_display_context_with_all_text(
                         &eval.frames,
@@ -193,7 +193,7 @@ fn check(text: &str, window_start: usize) {
                     .expect("context")
                     .expect("a live window");
                     match approximate_point_at_coords(&whole, x, y) {
-                        Some(ApproxPointAtCoords::Point(metrics)) => Some(metrics),
+                        Some(ApproxPointAtCoords::Point(metrics, _)) => Some(metrics),
                         _ => None,
                     }
                 }

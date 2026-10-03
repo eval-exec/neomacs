@@ -1842,6 +1842,7 @@ impl WindowOutputEmitter {
             evaluator.window_display_snapshot_freshness(frame_id, window_id, buffer_id)
         });
         let snapshot = WindowDisplaySnapshot {
+            posn_matrix: None,
             window_id,
             cell_origin,
             regions,

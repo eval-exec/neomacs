@@ -7,6 +7,12 @@ experimental = ["wrapper-scripts", "setup-scripts"]
 [scripts.wrapper.memory-limit]
 command = 'prlimit --as=8589934592 --'
 
+[scripts.setup.layout-posn-extent-policy]
+command = { command-line = ["crates/neomacs-layout-engine/tests/redisplay-policy-env.sh", "object-extent"], relative-to = "workspace-root" }
+slow-timeout = { period = "5s", terminate-after = 1 }
+capture-stdout = true
+capture-stderr = true
+
 [scripts.setup.melpa-infra-preflight]
 command = { command-line = "scripts/melpa-infra-preflight.sh", relative-to = "workspace-root" }
 slow-timeout = { period = "60s", terminate-after = 1 }
@@ -46,6 +52,14 @@ run-wrapper = 'memory-limit'
 filter = 'package(neomacs-melpa-tests) and not (test(~parity_tests::harness_contract::) or test(~source_lock::tests::))'
 platform = { host = "cfg(unix)" }
 setup = 'melpa-infra-preflight'
+
+# Exactly five accepted extent cases require object extent ON: three frame-pool
+# controls, one fallback-read regression and one row-role regression.
+# Other policies and TUI children stay inherited.
+[[profile.default.scripts]]
+filter = 'package(neomacs-layout-engine) and test(/^(?:engine::tests::posn_frame_pool_engine_test::accepted_terminal_frame_pool_answers_a_split_child_before_redisplay|engine::tests::posn_frame_pool_engine_test::accepted_terminal_frame_pool_fallback_reads_eob_iterator_cell_before_reported_columns|engine::tests::posn_frame_pool_guard_test::tty_posn_resize_away_and_back_does_not_revive_old_frame_pool|engine::tests::posn_frame_pool_guard_test::tty_posn_live_other_window_margins_block_cold_leaf_pool_repartition|presentation::spatial::row_text::canonical_role_tests::indexed_row_hits_preserve_eager_canonical_point_roles)$/)'
+platform = { host = "cfg(unix)" }
+setup = 'layout-posn-extent-policy'
 
 # The interactive package-TUI suites (moved out of the MELPA jobs) provision
 # pinned packages and boot editor pairs; give them the same preflight.
