@@ -3,6 +3,7 @@
 //! Moved out of `compile.rs` unchanged; a child module so it keeps the
 //! parent's view of its private items (`use super::*`).
 
+use super::boolean::{BoolResultMode, tagged_bool_view};
 use super::*;
 
 /// Emit a speculation guard.
@@ -294,6 +295,10 @@ pub(crate) fn stack_as_f64_or_promote(
     match reps[k] {
         SlotRep::RawFixnum => return fb.ins().fcvt_from_sint(types::F64, stack[k]),
         SlotRep::Flonum { f64, .. } => return f64,
+        SlotRep::Bool => {
+            let tagged = tagged_bool_view(fb, stack[k]);
+            return stack_as_f64_or_promote(fb, deopt, &[tagged], &[SlotRep::Tagged], 0);
+        }
         SlotRep::Tagged => {}
     }
     let v = stack[k];
@@ -342,6 +347,10 @@ pub(crate) fn stack_as_f64_and_int(
     k: usize,
 ) -> (ClifValue, ClifValue) {
     match reps[k] {
+        SlotRep::Bool => {
+            let tagged = tagged_bool_view(fb, stack[k]);
+            return stack_as_f64_and_int(fb, deopt, &[tagged], &[SlotRep::Tagged], 0);
+        }
         SlotRep::RawFixnum => {
             let f = fb.ins().fcvt_from_sint(types::F64, stack[k]);
             return (f, stack[k]);
@@ -457,6 +466,9 @@ fn both_float_test(
     i: usize,
     j: usize,
 ) -> ClifValue {
+    if reps[i] == SlotRep::Bool || reps[j] == SlotRep::Bool {
+        return fb.ins().iconst(types::I8, 0);
+    }
     if reps[i] == SlotRep::RawFixnum || reps[j] == SlotRep::RawFixnum {
         return fb.ins().iconst(types::I8, 0);
     }
@@ -491,6 +503,9 @@ fn both_fixnum_test(
     j: usize,
 ) -> ClifValue {
     debug_assert!(!reps[i].is_static_float() && !reps[j].is_static_float());
+    if reps[i] == SlotRep::Bool || reps[j] == SlotRep::Bool {
+        return fb.ins().iconst(types::I8, 0);
+    }
     match (reps[i] == SlotRep::RawFixnum, reps[j] == SlotRep::RawFixnum) {
         (true, true) => fb.ins().iconst(types::I8, 1),
         (true, false) => fixnum_tag_test(fb, stack[j]),
@@ -528,6 +543,12 @@ fn float_payload(
 ) -> ClifValue {
     match reps[k] {
         SlotRep::Flonum { f64, .. } => f64,
+        SlotRep::Bool => {
+            // Its both-floats test is false: retain a semantic tagged word in
+            // this unreachable arm instead of treating the flag as a pointer.
+            let tagged = tagged_bool_view(fb, stack[k]);
+            unbox_float(fb, tagged)
+        }
         SlotRep::Tagged | SlotRep::RawFixnum => unbox_float(fb, stack[k]),
     }
 }
@@ -543,6 +564,9 @@ fn fixnum_payload(
 ) -> ClifValue {
     if reps[k] == SlotRep::RawFixnum {
         stack[k]
+    } else if reps[k] == SlotRep::Bool {
+        let tagged = tagged_bool_view(fb, stack[k]);
+        sshr_imm_p(fb, tagged, FIXNUM_SHIFT as i64)
     } else {
         sshr_imm_p(fb, stack[k], FIXNUM_SHIFT as i64)
     }
@@ -798,6 +822,34 @@ pub(crate) fn lower_predicate(fb: &mut FunctionBuilder, kind: PredKind, a: ClifV
     let t = fb.ins().iconst(types::I64, Value::T.bits() as i64);
     let nil = fb.ins().iconst(types::I64, Value::NIL.bits() as i64);
     fb.ins().select(cond, t, nil)
+}
+
+pub(crate) fn lower_predicate_flag(
+    fb: &mut FunctionBuilder,
+    kind: PredKind,
+    a: ClifValue,
+) -> ClifValue {
+    match kind {
+        PredKind::Null => fb
+            .ins()
+            .icmp_imm_u(IntCC::Equal, a, Value::NIL.bits() as i64),
+        PredKind::Consp => {
+            let tag = band_imm_p(fb, a, TAG_MASK as i64);
+            icmp_imm_p(fb, IntCC::Equal, tag, TAG_CONS as i64)
+        }
+        PredKind::Stringp => {
+            let tag = band_imm_p(fb, a, TAG_MASK as i64);
+            icmp_imm_p(fb, IntCC::Equal, tag, TAG_STRING as i64)
+        }
+        PredKind::Listp => {
+            let is_nil = fb
+                .ins()
+                .icmp_imm_u(IntCC::Equal, a, Value::NIL.bits() as i64);
+            let tag = band_imm_p(fb, a, TAG_MASK as i64);
+            let is_cons = icmp_imm_p(fb, IntCC::Equal, tag, TAG_CONS as i64);
+            fb.ins().bor(is_nil, is_cons)
+        }
+    }
 }
 
 /// Lower `car`/`cdr` (and the `-safe` variants) with exact interpreter parity:
@@ -4967,7 +5019,13 @@ pub(crate) fn emit_region_entry_guard(
     let dsite = deopt_site(fb, region.call_site_pc, handlers_len, stack, reps, pending);
     // A raw slot holds an untagged fixnum, which is never a bytecode object:
     // retagging makes the comparison false, so such a site simply deopts.
-    let v = if raw { retag_fixnum(fb, v) } else { v };
+    let v = if raw {
+        retag_fixnum(fb, v)
+    } else if reps[slot] == SlotRep::Bool {
+        tagged_bool_view(fb, v)
+    } else {
+        v
+    };
     let expected = fb.ins().iconst(types::I64, region.callee_bits as i64);
     let same = fb.ins().icmp(IntCC::Equal, v, expected);
     emit_guard(fb, dsite, same);
@@ -5444,6 +5502,9 @@ pub(crate) enum SlotRep {
     /// (`Dup`, `StackRef`, `StackSet`) copies this rep, so two slots with
     /// equal reps are the same Lisp object and must share one box.
     Flonum { f64: ClifValue, kind: FlonumKind },
+    /// Normalized I8 NIL/T view, compilation-local. Never a numeric operand,
+    /// root, spill or shim argument; observations reconstruct its tagged view.
+    Bool,
 }
 
 /// What a [`SlotRep::Flonum`] can hold at run time.
@@ -5651,6 +5712,10 @@ pub(crate) fn materialize_model_stack(
     for k in 0..stack.len() {
         match reps[k] {
             SlotRep::Tagged => {}
+            SlotRep::Bool => {
+                stack[k] = tagged_bool_view(fb, stack[k]);
+                reps[k] = SlotRep::Tagged;
+            }
             SlotRep::RawFixnum => stack_force_tagged(fb, stack, reps, k),
             SlotRep::Flonum { .. } => {
                 let rt = rt.expect("a flonum implies the runtime refs (float sites declare them)");
@@ -5671,7 +5736,10 @@ pub(crate) fn emit_model_roots_pre(
     reps: &[SlotRep],
 ) -> CondRoots {
     let reps = &reps[..stack.len()];
-    if !reps.iter().any(|rep| rep.is_flonum()) {
+    if !reps
+        .iter()
+        .any(|rep| rep.is_flonum() || *rep == SlotRep::Bool)
+    {
         debug_assert!(
             !reps.contains(&SlotRep::RawFixnum),
             "rooting sites run after the raw retag"
@@ -5688,7 +5756,7 @@ pub(crate) fn emit_model_roots_pre(
                 debug_assert!(false, "rooting sites run after the raw retag");
                 None
             }
-            SlotRep::Flonum { .. } => None,
+            SlotRep::Bool | SlotRep::Flonum { .. } => None,
         })
         .collect();
     emit_cond_residual_roots_pre(fb, rt, &tagged)
@@ -5708,6 +5776,7 @@ fn snapshot_slot_tagged(
 ) -> ClifValue {
     match rep {
         SlotRep::Tagged => v,
+        SlotRep::Bool => tagged_bool_view(fb, v),
         SlotRep::RawFixnum => retag_fixnum(fb, v),
         SlotRep::Flonum { f64, kind } => {
             if let Some(&(_, b)) = boxed.iter().find(|&&(key, _)| key == f64) {
@@ -5741,6 +5810,14 @@ pub(crate) fn stack_as_raw(
 ) -> ClifValue {
     match reps[k] {
         SlotRep::RawFixnum => stack[k],
+        SlotRep::Bool => {
+            // A Lisp Boolean is a symbol, never the numeric integer 0 or 1.
+            // Guard the semantic view without consulting fixnum knowledge.
+            let tagged = tagged_bool_view(fb, stack[k]);
+            let is_fix = fixnum_tag_test(fb, tagged);
+            emit_guard(fb, deopt, is_fix);
+            sshr_imm_p(fb, tagged, FIXNUM_SHIFT as i64)
+        }
         SlotRep::Tagged => {
             guard_fixnum(fb, deopt, stack[k], known);
             sshr_imm_p(fb, stack[k], FIXNUM_SHIFT as i64)
@@ -5975,6 +6052,15 @@ fn lower_float_site_arith_boxed(
     reps: &mut Vec<SlotRep>,
 ) {
     let n = stack.len();
+    for k in n - 2..n {
+        if reps[k] == SlotRep::Bool {
+            // This boxed emitter directly reads I64 operand words in its dead
+            // fast arms too. Give it semantic T/NIL, retaining the original
+            // Bool snapshot captured before these consumed views were made.
+            stack[k] = tagged_bool_view(fb, stack[k]);
+            reps[k] = SlotRep::Tagged;
+        }
+    }
     let res_var = fb.declare_var(types::I64);
     let ff_b = fb.create_block();
     let slow_b = fb.create_block();
@@ -6398,6 +6484,33 @@ pub(crate) fn prepare_op_operands(
     stack: &mut [ClifValue],
     reps: &mut [SlotRep],
 ) -> Result<usize, CompileError> {
+    if reps.contains(&SlotRep::Bool) {
+        let (needs, _) = super::simple_effect(op)?;
+        let at = stack
+            .len()
+            .checked_sub(needs)
+            .ok_or(CompileError::StackUnderflow)?;
+        let resident = super::jit_flonum_mode() == super::FlonumMode::Resident
+            && op_keeps_residual_flonums(op);
+        // Preserve the old float alias policy. Boolean views are per consumed
+        // slot and never rewrite an untouched residual flag or its aliases.
+        for k in 0..stack.len() {
+            match reps[k] {
+                SlotRep::RawFixnum => stack_force_tagged(fb, stack, reps, k),
+                SlotRep::Bool if k >= at => {
+                    stack[k] = tagged_bool_view(fb, stack[k]);
+                    reps[k] = SlotRep::Tagged;
+                }
+                SlotRep::Flonum { .. } if !resident || k >= at => {
+                    let rt =
+                        rt.expect("a flonum implies the runtime refs (float sites declare them)");
+                    box_flonum_slot(fb, rt, stack, reps, k);
+                }
+                SlotRep::Tagged | SlotRep::Bool | SlotRep::Flonum { .. } => {}
+            }
+        }
+        return Ok(at);
+    }
     if super::jit_flonum_mode() == super::FlonumMode::Resident
         && op_keeps_residual_flonums(op)
         && let Ok((needs, _)) = super::simple_effect(op)
@@ -8494,3 +8607,6 @@ fn lower_simple_op_arms(
     }
     Ok(())
 }
+
+mod bool_lowering;
+pub(crate) use bool_lowering::lower_simple_op_with_cons_proof_and_result;

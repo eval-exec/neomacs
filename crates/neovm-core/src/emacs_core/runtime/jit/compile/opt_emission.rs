@@ -18,6 +18,7 @@ type LocalValues = HashMap<ir::Value, RuntimeValue>;
 pub(super) struct SsaValues {
     vars: Vec<Variable>,
     raw: Vec<bool>,
+    booleans: Vec<bool>,
     cross: Vec<bool>,
     live_after: Vec<Vec<ir::Value>>,
 }
@@ -55,10 +56,14 @@ pub(super) struct EmitContext<'a, 'b> {
 
 impl SsaValues {
     pub(super) fn new(fb: &mut FunctionBuilder, func: &ir::Func, raw_slots: &[bool]) -> Self {
-        let vars = func
+        let booleans: Vec<_> = func
             .values
             .iter()
-            .map(|_| fb.declare_var(types::I64))
+            .map(|v| jit_opt_passes().bool_rep && v.rep == ir::Rep::Bool)
+            .collect();
+        let vars = booleans
+            .iter()
+            .map(|&boolean| fb.declare_var(if boolean { types::I8 } else { types::I64 }))
             .collect();
         let mut raw = vec![true; func.values.len()];
         let mut seen = vec![false; func.values.len()];
@@ -137,6 +142,7 @@ impl SsaValues {
         Self {
             vars,
             raw,
+            booleans,
             cross,
             live_after,
         }
@@ -153,14 +159,26 @@ impl SsaValues {
         *local.entry(value).or_insert_with(|| {
             (
                 fb.use_var(self.vars[value.index()]),
-                SlotRep::raw_if(self.raw[value.index()]),
+                self.representation(value),
             )
         })
     }
 
+    fn representation(&self, value: ir::Value) -> SlotRep {
+        if self.booleans[value.index()] {
+            SlotRep::Bool
+        } else {
+            SlotRep::raw_if(self.raw[value.index()])
+        }
+    }
+
     fn write(&self, fb: &mut FunctionBuilder, value: ir::Value, runtime: RuntimeValue) {
         let (word, rep) = runtime;
-        let word = if fb.func.dfg.value_type(word) == types::I8 {
+        let word = if self.booleans[value.index()] {
+            debug_assert_eq!(rep, SlotRep::Bool);
+            debug_assert_eq!(fb.func.dfg.value_type(word), types::I8);
+            word
+        } else if fb.func.dfg.value_type(word) == types::I8 {
             // Local Bool flags become full-width only when another IR block
             // reads this identity through an I64 SSA variable.
             fb.ins().uextend(types::I64, word)
@@ -196,7 +214,7 @@ fn synchronize(
 ) {
     for (old, (&word, &rep)) in before.iter().zip(stack.iter().zip(reps)) {
         let new = (word, rep);
-        if *old != new {
+        if old.1 != SlotRep::Bool && *old != new {
             for runtime in local.values_mut() {
                 if runtime == old {
                     *runtime = new;
@@ -219,7 +237,9 @@ fn tagged(ctx: &mut EmitContext, local: &mut LocalValues, value: ir::Value) -> C
 /// flonum's word is its nonzero numeric tag word, never its f64 payload; testing
 /// it needs no boxing. Threading: only compilation-local operands and settings.
 fn non_nil_flag(ctx: &mut EmitContext, word: ClifValue, rep: SlotRep) -> ClifValue {
-    if jit_opt_passes().bool_rep && (rep == SlotRep::RawFixnum || rep.is_flonum()) {
+    if rep == SlotRep::Bool {
+        word
+    } else if jit_opt_passes().bool_rep && (rep == SlotRep::RawFixnum || rep.is_flonum()) {
         ctx.fb.ins().iconst(types::I8, 1)
     } else {
         let word = if rep == SlotRep::RawFixnum {
@@ -242,11 +262,10 @@ fn snapshot(
             "opt-emit:frame-chain-or-handler",
         ));
     }
-    if state
-        .stack
-        .iter()
-        .any(|&value| ctx.func.values[canonical(ctx.func, value).index()].rep != ir::Rep::Tagged)
-    {
+    if state.stack.iter().any(|&value| {
+        let rep = ctx.func.values[canonical(ctx.func, value).index()].rep;
+        rep != ir::Rep::Tagged && !(jit_opt_passes().bool_rep && rep == ir::Rep::Bool)
+    }) {
         return Err(CompileError::UnsupportedOp("opt-emit:frame-representation"));
     }
     Ok(read_stack(ctx, local, &state.stack))
@@ -381,7 +400,10 @@ fn edge_arguments(
             if runtime.1.is_flonum() {
                 runtime = (tagged(ctx, local, value), SlotRep::Tagged);
             }
-            let word = if ctx.fb.func.dfg.value_type(runtime.0) == types::I8 {
+            let word = if ctx.values.booleans[param.index()] {
+                debug_assert_eq!(runtime.1, SlotRep::Bool);
+                runtime.0
+            } else if ctx.fb.func.dfg.value_type(runtime.0) == types::I8 {
                 // Block parameters use I64 even when an edge carries a Bool.
                 ctx.fb.ins().uextend(types::I64, runtime.0)
             } else {
@@ -446,7 +468,9 @@ fn terminal_poll_edge(
     };
     if data.insts[position + 1..]
         .iter()
-        .any(|id| !matches!(ctx.func.insts[id.index()].op, ir::Opcode::Refine(_)))
+        .any(|id| !matches!(ctx.func.insts[id.index()].op, ir::Opcode::Refine(_))
+            && !(jit_opt_passes().bool_rep
+                && matches!(ctx.func.insts[id.index()].op, ir::Opcode::BoolToLisp)))
         // Publishing a compiler-only flonum can allocate. Keep the continuation
         // in that case so its existing materialization stays after the poll.
         || local.values().any(|runtime| runtime.1.is_flonum())
@@ -455,8 +479,12 @@ fn terminal_poll_edge(
     }
     for &id in &data.insts[position + 1..] {
         let inst = &ctx.func.insts[id.index()];
-        let runtime = ctx.values.read(ctx.fb, ctx.func, local, inst.args[0]);
-        local.insert(inst.result.expect("verified refinement result"), runtime);
+        let runtime = if matches!(inst.op, ir::Opcode::BoolToLisp) {
+            pass_emission::emit(ctx, local, inst).ok()??
+        } else {
+            ctx.values.read(ctx.fb, ctx.func, local, inst.args[0])
+        };
+        local.insert(inst.result.expect("verified terminal pure result"), runtime);
     }
     publish_cross(ctx, local, block);
     let args = edge_arguments(ctx, local, edge);
@@ -705,7 +733,7 @@ fn shared_operation(
     } else {
         heap_inline::ConsStoreProof::Dynamic
     };
-    lowering::lower_simple_op_with_cons_proof(
+    lowering::lower_simple_op_with_cons_proof_and_result(
         ctx.fb,
         inst.pc as usize,
         deopts,
@@ -727,6 +755,11 @@ fn shared_operation(
         ctx.dynamic_prefix,
         ctx.consts_base,
         cons_proof,
+        if matches!(inst.op, ir::Opcode::OpaqueBool(_)) {
+            boolean::BoolResultMode::BoolFlag
+        } else {
+            boolean::BoolResultMode::TaggedLisp
+        },
     )?;
     override_deopts(ctx.func, frame, &exact, &mut deopts[deopt_start..]);
     synchronize(local, &before[..base], &stack[..base], &reps[..base]);
@@ -771,8 +804,15 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
         .map(|bits| Value::from_bits(bits.0 as usize))
         .collect();
     for (index, data) in ctx.func.blocks.iter().enumerate() {
-        for _ in &data.params {
-            ctx.fb.append_block_param(ctx.blocks[index], types::I64);
+        for &param in &data.params {
+            ctx.fb.append_block_param(
+                ctx.blocks[index],
+                if ctx.values.booleans[param.index()] {
+                    types::I8
+                } else {
+                    types::I64
+                },
+            );
         }
     }
     for index in 0..ctx.func.blocks.len() {
@@ -784,10 +824,7 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
         let mut local = LocalValues::new();
         let params = ctx.fb.block_params(ctx.blocks[index]).to_vec();
         for (&value, &word) in data.params.iter().zip(&params) {
-            local.insert(
-                value,
-                (word, SlotRep::raw_if(ctx.values.raw[value.index()])),
-            );
+            local.insert(value, (word, ctx.values.representation(value)));
         }
         let mut known = HashSet::new();
         if let Some(facts) = ctx.known_fixnum_slots.get(&(data.pc as usize)) {
@@ -852,13 +889,19 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
                 | ir::Opcode::BoolToLisp
                 | ir::Opcode::TypeTest(_)
                 | ir::Opcode::Select
-                | ir::Opcode::LoadCar
-                | ir::Opcode::LoadCdr
-                    if jit_opt_passes().fold =>
+                    if jit_opt_passes().fold || jit_opt_passes().bool_rep =>
                 {
                     pass_emission::emit(&mut ctx, &mut local, inst)?
                 }
-                ir::Opcode::Opaque(op) => {
+                ir::Opcode::LoadCar | ir::Opcode::LoadCdr if jit_opt_passes().fold => {
+                    pass_emission::emit(&mut ctx, &mut local, inst)?
+                }
+                ir::Opcode::Opaque(op) | ir::Opcode::OpaqueBool(op) => {
+                    if matches!(inst.op, ir::Opcode::OpaqueBool(_))
+                        && (!jit_opt_passes().bool_rep || !boolean::BoolResultMode::supports(op))
+                    {
+                        return Err(CompileError::UnsupportedOp("opt-emit:bool-opcode"));
+                    }
                     if matches!(
                         op,
                         Op::StackRef(_) | Op::StackSet(_) | Op::Dup | Op::Pop | Op::DiscardN(_)
@@ -920,7 +963,14 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
                 ir::Opcode::IsNonNil => {
                     let (word, rep) = ctx.values.read(ctx.fb, ctx.func, &mut local, inst.args[0]);
                     let flag = non_nil_flag(&mut ctx, word, rep);
-                    Some((flag, SlotRep::Tagged))
+                    Some((
+                        flag,
+                        if jit_opt_passes().bool_rep {
+                            SlotRep::Bool
+                        } else {
+                            SlotRep::Tagged
+                        },
+                    ))
                 }
                 ir::Opcode::InlineEntry(region) => {
                     let fused = inline::active_fused()
@@ -982,7 +1032,8 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
                         Some((target, args)) => (*target, &args[..]),
                         None => (ctx.fb.create_block(), &[][..]),
                     };
-                    emit_backedge_jump_with_args(
+                    let bools: Vec<_> = reps.iter().map(|rep| *rep == SlotRep::Bool).collect();
+                    emit_backedge_jump_with_representations(
                         ctx.fb,
                         ctx.rt
                             .ok_or(CompileError::UnsupportedOp("opt-emit:poll-runtime"))?,
@@ -990,6 +1041,7 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
                         ctx.signal_exit,
                         &stack,
                         Some(&raw),
+                        bools.iter().any(|&flag| flag).then_some(&bools[..]),
                         target,
                         args,
                         &[],
@@ -1026,7 +1078,10 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
             )?;
         }
         for site in &deopts {
-            if ctx.variable_raw.iter().any(|&raw| raw) || site.holds_flonum() {
+            if ctx.variable_raw.iter().any(|&raw| raw)
+                || site.holds_flonum()
+                || site.reps.contains(&SlotRep::Bool)
+            {
                 ctx.fb.set_cold_block(site.block);
             }
         }

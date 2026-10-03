@@ -48,6 +48,7 @@ pub(crate) struct LeafReportRow {
     pub(crate) t2: crate::emacs_core::jit::tier2::T2Snapshot,
     /// Compiler counters only; empty for baseline and passes-disabled opt.
     pub(crate) opt_fold: Option<Box<crate::emacs_core::jit::opt::passes::fold::FoldStats>>,
+    pub(crate) opt_bool: Option<Box<crate::emacs_core::jit::opt::passes::bools::BoolStats>>,
 }
 
 impl LeafReportRow {
@@ -496,7 +497,29 @@ impl FinalReport {
                 usize::from(c.analysis_bailed),
             ))
         });
-        leaf_rows.chain(t2_rows).chain(opt_rows).collect()
+        // Selected-pass census is immutable compiler metadata; no hot runtime
+        // updates or mutator-dependent state are introduced.
+        let bool_rows = self.leaves.iter().filter_map(|r| {
+            let c = r.opt_bool.as_ref()?;
+            let osr = r.osr_pc.map_or_else(|| "-".to_owned(), |pc| pc.to_string());
+            Some(format!(
+                "#opt-bool,{},{},{osr},{},{},{},{},{},{},{}\n",
+                r.id,
+                csv_field(r.name.as_deref().unwrap_or("-")),
+                c.opaque_producers,
+                c.constant_producers,
+                c.phi_params,
+                c.refinements,
+                c.selects,
+                c.nil_tests,
+                c.tagged_views
+            ))
+        });
+        leaf_rows
+            .chain(t2_rows)
+            .chain(opt_rows)
+            .chain(bool_rows)
+            .collect()
     }
 }
 

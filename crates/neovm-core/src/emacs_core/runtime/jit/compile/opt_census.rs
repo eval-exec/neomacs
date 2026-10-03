@@ -22,17 +22,19 @@ use crate::emacs_core::jit::opt::ir::OptCensus;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct OptStats {
     pub(crate) opt_fold: Option<Box<crate::emacs_core::jit::opt::passes::fold::FoldStats>>,
+    pub(crate) opt_bool: Option<Box<crate::emacs_core::jit::opt::passes::bools::BoolStats>>,
 }
 
 impl OptStats {
     fn from_census(census: &OptCensus) -> Self {
         Self {
             opt_fold: census.fold.clone().map(Box::new),
+            opt_bool: census.bools.clone().map(Box::new),
         }
     }
 
     fn is_empty(&self) -> bool {
-        self.opt_fold.is_none()
+        self.opt_fold.is_none() && self.opt_bool.is_none()
     }
 }
 

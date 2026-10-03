@@ -210,6 +210,7 @@ fn leaf_row(id: u64, deopt_at: u64, deopt_rerun: u64) -> LeafReportRow {
         mir: Some("taken".into()),
         t2: Default::default(),
         opt_fold: None,
+        opt_bool: None,
     }
 }
 
@@ -571,4 +572,48 @@ fn jit_final_report_t2_line_renders_the_work_split() {
         line.contains("top=2:f:106:0.0:94.3,1:f:100:90.0:90.0"),
         "{line}"
     );
+}
+
+/// Pass metadata must stay absent by default and remain a distinct short CSV
+/// record when selected, even for an OSR leaf or a comma-bearing source name.
+#[test]
+fn jit_final_report_boolean_census_is_optional_and_eleven_columns() {
+    use crate::emacs_core::jit::opt::passes::bools::BoolStats;
+    let mut leaf = leaf_row(13, 0, 0);
+    let absent = FinalReport {
+        leaves: vec![leaf.clone()],
+        ..Default::default()
+    };
+    assert!(
+        absent
+            .profile_leaf_rows()
+            .iter()
+            .all(|r| !r.starts_with("#opt-bool,"))
+    );
+    leaf.name = Some("bool,name".into());
+    leaf.osr_pc = Some(7);
+    leaf.opt_bool = Some(Box::new(BoolStats {
+        opaque_producers: 1,
+        constant_producers: 2,
+        phi_params: 3,
+        refinements: 4,
+        selects: 5,
+        nil_tests: 6,
+        tagged_views: 7,
+    }));
+    let present = FinalReport {
+        leaves: vec![leaf],
+        ..Default::default()
+    };
+    let rows = present.profile_leaf_rows();
+    let bool_rows: Vec<_> = rows
+        .iter()
+        .filter(|r| r.starts_with("#opt-bool,"))
+        .collect();
+    assert_eq!(bool_rows.len(), 1);
+    assert_eq!(
+        bool_rows[0].as_str(),
+        "#opt-bool,13,bool;name,7,1,2,3,4,5,6,7\n"
+    );
+    assert_eq!(bool_rows[0].trim_end().split(',').count(), 11);
 }

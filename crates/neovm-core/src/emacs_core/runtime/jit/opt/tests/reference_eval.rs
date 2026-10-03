@@ -458,6 +458,16 @@ impl Evaluator<'_, '_> {
                 inst.result
                     .map(|_| Cell::Lisp(ValueBits::from_value(result)))
             }
+            Opcode::OpaqueBool(op) => {
+                // The real Tier-0 routine retains GNU numeric, identity and
+                // dynamic positioned-symbol semantics. Only its successful
+                // T/NIL result changes representation in this evaluator.
+                let result = self.opaque(inst, op, &function.consts, &args)?;
+                if !result.is_nil() && !result.is_t() {
+                    return Err(invalid("opaque Bool returned a non-Boolean Lisp value"));
+                }
+                Some(Cell::Bool(result.is_t()))
+            }
             Opcode::Poll => {
                 self.quitcounter = self.quitcounter.wrapping_add(1);
                 if self.quitcounter == 0 {

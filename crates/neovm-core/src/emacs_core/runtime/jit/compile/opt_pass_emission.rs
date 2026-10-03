@@ -12,7 +12,11 @@ pub(super) fn emit(
     let runtime = match &inst.op {
         ir::Opcode::BoolConst(value) => (
             ctx.fb.ins().iconst(types::I8, i64::from(*value)),
-            SlotRep::Tagged,
+            if jit_opt_passes().bool_rep {
+                SlotRep::Bool
+            } else {
+                SlotRep::Tagged
+            },
         ),
         ir::Opcode::BoolToLisp => {
             let (flag, _) = ctx.values.read(ctx.fb, ctx.func, local, inst.args[0]);
@@ -35,7 +39,14 @@ pub(super) fn emit(
             } else {
                 word
             };
-            (guard_condition(ctx, *ty, word)?, SlotRep::Tagged)
+            (
+                guard_condition(ctx, *ty, word)?,
+                if jit_opt_passes().bool_rep {
+                    SlotRep::Bool
+                } else {
+                    SlotRep::Tagged
+                },
+            )
         }
         ir::Opcode::Select => {
             let result_rep =
@@ -56,7 +67,9 @@ pub(super) fn emit(
             } else {
                 lowering::icmp_imm_p(ctx.fb, IntCC::NotEqual, flag, 0)
             };
-            let yes = if result_rep == ir::Rep::Bool && ctx.fb.func.dfg.value_type(yes) == types::I8
+            let yes = if !jit_opt_passes().bool_rep
+                && result_rep == ir::Rep::Bool
+                && ctx.fb.func.dfg.value_type(yes) == types::I8
             {
                 ctx.fb.ins().uextend(types::I64, yes)
             } else if yes_rep == SlotRep::RawFixnum {
@@ -64,14 +77,24 @@ pub(super) fn emit(
             } else {
                 yes
             };
-            let no = if result_rep == ir::Rep::Bool && ctx.fb.func.dfg.value_type(no) == types::I8 {
+            let no = if !jit_opt_passes().bool_rep
+                && result_rep == ir::Rep::Bool
+                && ctx.fb.func.dfg.value_type(no) == types::I8
+            {
                 ctx.fb.ins().uextend(types::I64, no)
             } else if no_rep == SlotRep::RawFixnum {
                 retag_fixnum(ctx.fb, no)
             } else {
                 no
             };
-            (ctx.fb.ins().select(flag, yes, no), SlotRep::Tagged)
+            (
+                ctx.fb.ins().select(flag, yes, no),
+                if jit_opt_passes().bool_rep && result_rep == ir::Rep::Bool {
+                    SlotRep::Bool
+                } else {
+                    SlotRep::Tagged
+                },
+            )
         }
         ir::Opcode::LoadCar | ir::Opcode::LoadCdr => {
             let input = canonical(ctx.func, inst.args[0]);

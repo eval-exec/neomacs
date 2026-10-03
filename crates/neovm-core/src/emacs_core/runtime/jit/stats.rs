@@ -1071,6 +1071,7 @@ fn leaf_report_rows(
                 mir: row.obs.mir_verdict,
                 t2: row.obs.t2,
                 opt_fold: row.opt.opt_fold,
+                opt_bool: row.opt.opt_bool,
             }
         })
         .collect();

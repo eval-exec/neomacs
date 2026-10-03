@@ -146,6 +146,15 @@ pub(super) fn build_plan(
         tracing::debug!(target: "neovm_jit::opt", ?stats, "opt fold census");
         func.census.fold = Some(stats);
     }
+    if jit_opt_passes().bool_rep {
+        let stats =
+            crate::emacs_core::jit::opt::passes::bools::run(&mut func).map_err(|error| {
+                tracing::debug!(?error, "opt Bool pass refused a compilation");
+                CompileError::UnsupportedOp("opt-bool:verify")
+            })?;
+        tracing::debug!(target: "neovm_jit::opt", ?stats, "opt Bool census");
+        func.census.bools = Some(stats);
+    }
     func.verify().map_err(|error| {
         tracing::debug!(?error, "opt IR verifier refused a compilation");
         CompileError::UnsupportedOp("opt-build:verify")

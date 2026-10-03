@@ -84,6 +84,7 @@ pub(crate) struct OptCensus {
     pub critical_edges: usize,
     pub refinements: usize,
     pub fold: Option<super::passes::fold::FoldStats>,
+    pub bools: Option<super::passes::bools::BoolStats>,
 }
 
 /// One owned function. Constants carry source-pool indices in `Const` and
@@ -373,6 +374,10 @@ pub(crate) enum Opcode {
     Builtin(Op),
     /// Initial lowering uses the baseline emitter with its source framestate.
     Opaque(Op),
+    /// The same ordered baseline operation with a normalized Boolean result.
+    /// Explicit operands remain Lisp words; effects and source frames are
+    /// preserved rather than inferred from the successful result's type.
+    OpaqueBool(Op),
     /// Pure inline-region replay/attention/depth guard; indexes fuser metadata.
     InlineEntry(u32),
     /// Pinned back-edge poll, with the baseline's exact countdown cadence.
@@ -407,12 +412,36 @@ impl Opcode {
                     .with(Effects::MAY_REENTER)
                     .with(Effects::MAY_SIGNAL),
             )
-            || matches!(self, Self::Call { .. } | Self::Opaque(_) | Self::Poll)
+            || matches!(
+                self,
+                Self::Call { .. } | Self::Opaque(_) | Self::OpaqueBool(_) | Self::Poll
+            )
     }
 
     pub(crate) fn is_safepoint(&self, effects: Effects) -> bool {
         effects.intersects(Effects::MAY_GC.with(Effects::MAY_REENTER))
-            || matches!(self, Self::Call { .. } | Self::Opaque(_) | Self::Poll)
+            || matches!(
+                self,
+                Self::Call { .. } | Self::Opaque(_) | Self::OpaqueBool(_) | Self::Poll
+            )
+    }
+}
+
+/// Exact successful T/NIL producers supported by the Boolean shared-emitter
+/// adapter. Threading: immutable opcode classification, no Lisp state. Numeric
+/// comparisons retain the original ordered guards and slow error protocol.
+pub(crate) fn opaque_bool_arity(op: &Op) -> Option<usize> {
+    match op {
+        Op::Null
+        | Op::Not
+        | Op::Consp
+        | Op::Stringp
+        | Op::Listp
+        | Op::Symbolp
+        | Op::Integerp
+        | Op::Numberp => Some(1),
+        Op::Eq | Op::Eqlsign | Op::Lss | Op::Gtr | Op::Leq | Op::Geq => Some(2),
+        _ => None,
     }
 }
 
@@ -506,6 +535,9 @@ impl fmt::Display for Func {
         )?;
         if let Some(fold) = &self.census.fold {
             writeln!(f, "  fold {fold:?}")?;
+        }
+        if let Some(bools) = &self.census.bools {
+            writeln!(f, "  bool {bools:?}")?;
         }
         for (i, constant) in self.consts.iter().enumerate() {
             writeln!(f, "  const{k} = 0x{bits:016x}", k = i, bits = constant.0)?;

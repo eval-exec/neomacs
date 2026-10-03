@@ -3127,6 +3127,125 @@ fn emit_backedge_jump_with_args(
     cold.end(fb, Some(cold_exits::ColdExit::Poll));
 }
 
+/// Opt-only Boolean poll views; original counter/protocol path is unchanged.
+#[allow(clippy::too_many_arguments)]
+fn emit_backedge_jump_with_representations(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    counter_slot: StackSlot,
+    signal_exit: &mut Option<Block>,
+    vals: &[ClifValue],
+    raw_slots: Option<&[bool]>,
+    bool_slots: Option<&[bool]>,
+    target_block: Block,
+    target_args: &[BlockArg],
+    handlers: &[HandlerStatic],
+    pending: &mut Vec<PendingDispatch>,
+    physical: Option<inline_physical::PollAdmission<'_>>,
+) {
+    if bool_slots.is_none() {
+        emit_backedge_jump_with_args(
+            fb,
+            rt,
+            counter_slot,
+            signal_exit,
+            vals,
+            raw_slots,
+            target_block,
+            target_args,
+            handlers,
+            pending,
+            physical,
+        );
+        return;
+    }
+    let c = fb.ins().stack_load(rt.ptr_ty, types::I64, counter_slot, 0);
+    let c1 = lowering::iadd_imm_p(fb, c, 1);
+    let c1m = lowering::band_imm_p(fb, c1, 0xFF);
+    fb.ins().stack_store(rt.ptr_ty, c1m, counter_slot, 0);
+    let wrapped = lowering::icmp_imm_p(fb, IntCC::Equal, c1m, 0);
+    let cold = cold_exits::ColdSpan::begin(fb);
+    let poll = fb.create_block();
+    fb.ins().brif(wrapped, poll, &[], target_block, target_args);
+
+    fb.switch_to_block(poll);
+    fb.seal_block(poll);
+    // A poll block is a store history of its own: a Switch compare chain
+    // emits one per backward target, as SIBLING paths that the compile-time
+    // record would otherwise thread through one another (rule 3 on
+    // `lowering::RootWinCarry`). It runs once per 255 backward jumps, so storing
+    // afresh costs nothing measurable.
+    lowering::rootwin_carry_reset();
+    let one = fb.ins().iconst(types::I64, 1);
+    fb.ins().stack_store(rt.ptr_ty, one, counter_slot, 0);
+    // The tick counter and the tier spine's loop credit, when asked for at
+    // compile time; the poll below runs either way.
+    t2_profile::emit_poll_extras(fb, rt);
+    // Materialize tagged roots only after entering the rare poll path.
+    // The successor variables and MIR edge arguments keep their representations.
+    let tagged_vals;
+    let vals = if raw_slots.is_some() || bool_slots.is_some() {
+        if let Some(raw) = raw_slots {
+            debug_assert_eq!(raw.len(), vals.len());
+        }
+        if let Some(bools) = bool_slots {
+            debug_assert_eq!(bools.len(), vals.len());
+        }
+        tagged_vals = vals
+            .iter()
+            .enumerate()
+            .map(|(i, &value)| {
+                if bool_slots.is_some_and(|bools| bools[i]) {
+                    boolean::tagged_bool_view(fb, value)
+                } else if raw_slots.is_some_and(|raw| raw[i]) {
+                    retag_fixnum(fb, value)
+                } else {
+                    value
+                }
+            })
+            .collect::<Vec<_>>();
+        &tagged_vals[..]
+    } else {
+        vals
+    };
+    // Root the target stack across the poll, including a handler-entry
+    // snapshot when a baseline loop is inside a protected extent.
+    let saved = if vals.is_empty() {
+        CondRoots::NONE
+    } else {
+        emit_cond_residual_roots_pre(fb, rt, vals)
+    };
+    let vmctx = fb.use_var(rt.vmctx_var);
+    let backedge = rt.refs.get(fb.func, Shim::Backedge);
+    let call = fb.ins().call(backedge, &[vmctx]);
+    let status = fb.inst_results(call)[0];
+    emit_cond_residual_roots_post(fb, rt, saved);
+    let tagged_reps = vec![SlotRep::Tagged; vals.len()];
+    let se = signal_target_for_site(fb, signal_exit, handlers, pending, vals, &tagged_reps);
+    let ok = lowering::icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
+    if let Some(cache) = &rt.inline_entry_cache {
+        let refreshed = fb.create_block();
+        fb.ins().brif(ok, refreshed, &[], se, &[]);
+        fb.switch_to_block(refreshed);
+        fb.seal_block(refreshed);
+        cache.invalidate(fb);
+        if let Some(admission) = physical {
+            inline_physical::emit(
+                fb,
+                rt,
+                admission.frames,
+                admission.pc,
+                vals,
+                admission.pending,
+            );
+        }
+        fb.ins().jump(target_block, target_args);
+    } else {
+        fb.ins().brif(ok, target_block, target_args, se, &[]);
+    }
+    cold.end(fb, Some(cold_exits::ColdExit::Poll));
+}
+
 /// Lower a leaf bytecode body taking `arity` fixed arguments to native code.
 ///
 /// Whether the body has a BACKWARD jump (a loop) — needs the back-edge poll
@@ -3804,6 +3923,7 @@ pub(crate) fn build_baseline_leaf_object<S: LeafSink>(
     })
 }
 
+mod boolean;
 mod leaf_builder;
 pub(crate) mod opt_backend;
 pub(crate) mod opt_census;
@@ -4019,3 +4139,11 @@ mod opt_passes_tests;
 #[cfg(test)]
 #[path = "compile/tests/opt_regalloc.rs"]
 mod opt_regalloc_tests;
+
+#[cfg(test)]
+#[path = "compile/tests/opt_bool.rs"]
+mod opt_bool_tests;
+
+#[cfg(test)]
+#[path = "compile/tests/opt_bool_numeric.rs"]
+mod opt_bool_numeric_tests;

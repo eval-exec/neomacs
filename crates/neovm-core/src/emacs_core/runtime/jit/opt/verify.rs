@@ -641,6 +641,13 @@ fn validate_inst(func: &Func, inst: Inst, data: &InstData) -> Result<(), VerifyE
                 require_tagged(func, value, Some(inst))?;
             }
         }
+        Opcode::OpaqueBool(op) => {
+            args(opaque_bool_arity(op).ok_or(VerifyError::OperandArity(inst))?)?;
+            for &value in &data.args {
+                require_tagged(func, value, Some(inst))?;
+            }
+            result_rep(Rep::Bool)?;
+        }
         Opcode::LoadCar | Opcode::LoadCdr | Opcode::LoadVecLen | Opcode::LoadRecTag => {
             args(1)?;
             require_tagged(func, operand(0)?.0, Some(inst))?;
