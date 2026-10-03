@@ -9,7 +9,7 @@
 //! and the inline ones, `Bchar_after`); and the specpdl is balanced after.
 
 use super::*;
-use crate::emacs_core::error::Flow;
+use crate::emacs_core::error::{FlowRef, FlowResultExt};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::print::print_value;
 use crate::emacs_core::value::LambdaParams;
@@ -50,8 +50,8 @@ fn rooted(v: Value) -> Value {
 }
 
 fn signal_name(result: &EvalResult) -> String {
-    match result {
-        Err(Flow::Signal(sig)) => crate::emacs_core::intern::resolve_sym(sig.symbol).to_string(),
+    match result.kinded_ref() {
+        Err(FlowRef::Signal(sig)) => crate::emacs_core::intern::resolve_sym(sig.symbol).to_string(),
         other => panic!("expected a signal, got {other:?}"),
     }
 }

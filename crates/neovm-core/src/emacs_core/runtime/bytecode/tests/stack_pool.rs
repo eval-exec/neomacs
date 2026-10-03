@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::error::{FlowKind, FlowResultExt};
 
 struct StackReturnOverride(Option<bool>);
 
@@ -141,7 +142,10 @@ fn stack_return_reuses_storage_after_an_unhandled_signal() {
         let mut vm = Vm::from_context(&mut context);
         #[cfg(feature = "jit")]
         vm.force_interpreter_only_for_test();
-        assert!(matches!(vm.execute(&failing, vec![]), Err(Flow::Signal(_))));
+        assert!(matches!(
+            vm.execute(&failing, vec![]).kinded(),
+            Err(FlowKind::Signal(_))
+        ));
         let returned = &vm.ctx.interpreter_stacks.free;
         assert_eq!(returned.len(), 1);
         assert!(returned[0].frames.is_empty());

@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::error::{FlowKind, FlowRef, FlowResultExt as _};
 use crate::emacs_core::value::LambdaParams;
 use cranelift_frontend::FunctionBuilderContext;
 
@@ -1930,8 +1931,8 @@ fn compiles_trivial_natives_carsafe_maxmin_throw_numpreds() {
     )
     .unwrap();
     assert_eq!(thrown.call(ctx_ptr, &[]), NativeRun::Signal);
-    match take_pending_flow().expect("throw Flow stashed") {
-        Flow::Throw(thrown) => {
+    match take_pending_flow().expect("throw Flow stashed").into_kind() {
+        FlowKind::Throw(thrown) => {
             assert_eq!(thrown.tag, tag);
             assert_eq!(thrown.value, Value::make_int(42));
         }
@@ -3184,9 +3185,9 @@ fn jit_builtin2_pure_matches_the_table() {
         "(list 1.5 (copy-sequence \"abc\") (cons 1.5 'f))",
     ];
     let outcome = |r: Result<Value, Flow>| -> String {
-        match r {
+        match r.kinded() {
             Ok(v) => crate::emacs_core::print::print_value(&v),
-            Err(Flow::Signal(sig)) => format!("signal {}", sig.symbol_name()),
+            Err(FlowKind::Signal(sig)) => format!("signal {}", sig.symbol_name()),
             Err(other) => format!("{other:?}"),
         }
     };
@@ -3246,9 +3247,9 @@ fn jit_builtin1_pure_matches_the_table() {
         "(record 'foo 1)",
     ];
     let outcome = |r: Result<Value, Flow>| -> String {
-        match r {
+        match r.kinded() {
             Ok(v) => crate::emacs_core::print::print_value(&v),
-            Err(Flow::Signal(sig)) => format!(
+            Err(FlowKind::Signal(sig)) => format!(
                 "signal {} {:?}",
                 sig.symbol_name(),
                 sig.data
@@ -3343,7 +3344,6 @@ fn gc_free_builtin_sites_root_no_residual() {
 /// for both the compiled call and the reference call.
 #[test]
 fn compiled_aset_matches_the_builtin() {
-    use crate::emacs_core::error::Flow;
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::print::print_value;
     let mut ev = Context::new();
@@ -3388,10 +3388,12 @@ fn compiled_aset_matches_the_builtin() {
         );
         let native = match leaf.call(ctx, &[a, i, v]) {
             NativeRun::Ok(bits) => Ok(Value::from_bits(bits)),
-            NativeRun::Signal => match take_pending_flow() {
-                Some(Flow::Signal(sig)) => Err(format!("signal {}", sig.symbol_name())),
-                other => Err(format!("{other:?}")),
-            },
+            NativeRun::Signal => {
+                match take_pending_flow().map(crate::emacs_core::error::Flow::into_kind) {
+                    Some(FlowKind::Signal(sig)) => Err(format!("signal {}", sig.symbol_name())),
+                    other => Err(format!("{other:?}")),
+                }
+            }
             other => Err(format!("unexpected {other:?}")),
         };
         let got = show(native, a);
@@ -3401,9 +3403,9 @@ fn compiled_aset_matches_the_builtin() {
             args.cons_cdr().cons_car(),
             args.cons_cdr().cons_cdr().cons_car(),
         );
-        let reference = match crate::emacs_core::builtins::builtin_aset_args(&[a, i, v]) {
+        let reference = match crate::emacs_core::builtins::builtin_aset_args(&[a, i, v]).kinded() {
             Ok(v) => Ok(v),
-            Err(Flow::Signal(sig)) => Err(format!("signal {}", sig.symbol_name())),
+            Err(FlowKind::Signal(sig)) => Err(format!("signal {}", sig.symbol_name())),
             Err(other) => Err(format!("{other:?}")),
         };
         assert_eq!(got, show(reference, a), "(aset . {case})");
@@ -3705,7 +3707,6 @@ fn mir_cons_only_body_does_not_hoist() {
 /// (side-effecting) like any shim-bearing body.
 #[test]
 fn mir_adapter_lowers_a_variable_read() {
-    use crate::emacs_core::error::Flow;
     use crate::emacs_core::eval::Context;
     let mut ev = Context::new();
     let ctx = &mut ev as *mut Context as *mut u8;
@@ -3715,8 +3716,11 @@ fn mir_adapter_lowers_a_variable_read() {
     let leaf = lower_mir_pure(&mir).expect("VarRef lowers via the adapter");
     assert!(leaf.has_side_effects, "an Opaque body is precise");
     assert_eq!(leaf.call(ctx, &[]), NativeRun::Signal, "unbound: signals");
-    match take_pending_flow().expect("the signal is stashed") {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "void-variable"),
+    match take_pending_flow()
+        .expect("the signal is stashed")
+        .into_kind()
+    {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "void-variable"),
         other => panic!("expected void-variable, got {other:?}"),
     }
     ev.eval_str("(setq jit-mir-adapter-var 41)").expect("bind");
@@ -4012,8 +4016,8 @@ fn list_and_slice_builtins_run_natively() {
     .expect("substring body compiles");
     assert_eq!(leaf.call(ctx_ptr, &[]), NativeRun::Signal);
     let flow = take_pending_flow().expect("signal stashed");
-    match flow {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
+    match flow.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
         other => panic!("expected wrong-type-argument, got {other:?}"),
     }
 }
@@ -4756,8 +4760,11 @@ fn switch_follows_mutation_after_compile() {
     );
     let stale = |arg: Value| {
         assert_eq!(leaf.call(ctx_ptr, &[arg]), NativeRun::Signal, "{arg:?}");
-        match take_pending_flow().expect("the stale-table signal is stashed") {
-            crate::emacs_core::error::Flow::Signal(sig) => {
+        match take_pending_flow()
+            .expect("the stale-table signal is stashed")
+            .into_kind()
+        {
+            crate::emacs_core::error::FlowKind::Signal(sig) => {
                 assert_eq!(sig.symbol_name(), "error");
             }
             other => panic!("expected an error signal, got {other:?}"),
@@ -4838,8 +4845,8 @@ fn handler_frames_unwound_on_propagation() {
     let base = ev.condition_stack.len();
     assert_eq!(leaf.call(ctx_ptr, &[]), NativeRun::Signal);
     let flow = take_pending_flow().expect("no-catch flow stashed");
-    match flow {
-        Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "no-catch"),
+    match flow.into_kind() {
+        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "no-catch"),
         other => panic!("expected no-catch signal, got {other:?}"),
     }
     assert_eq!(ev.condition_stack.len(), base, "frames unwound");
@@ -5077,7 +5084,12 @@ fn compiled_unbind_and_frame_exit_propagate_restore_watcher_signals() {
     )
     .expect("explicit unbind body compiles");
     assert_eq!(explicit.call(explicit_ptr, &[]), NativeRun::Signal);
-    assert!(matches!(take_pending_flow(), Some(Flow::Signal(_))));
+    assert!(matches!(
+        take_pending_flow()
+            .as_ref()
+            .map(crate::emacs_core::error::Flow::kind),
+        Some(FlowRef::Signal(_))
+    ));
     assert_eq!(explicit_ctx.specpdl.len(), explicit_base);
 
     let variable = "jit-test-frame-unbind-error";
@@ -5090,7 +5102,12 @@ fn compiled_unbind_and_frame_exit_propagate_restore_watcher_signals() {
     )
     .expect("dangling binding body compiles");
     assert_eq!(dangling.call(frame_ptr, &[]), NativeRun::Signal);
-    assert!(matches!(take_pending_flow(), Some(Flow::Signal(_))));
+    assert!(matches!(
+        take_pending_flow()
+            .as_ref()
+            .map(crate::emacs_core::error::Flow::kind),
+        Some(FlowRef::Signal(_))
+    ));
     assert_eq!(frame_ctx.specpdl.len(), frame_base);
 }
 
@@ -5150,8 +5167,11 @@ fn cleanup_flow_does_not_pop_an_outer_callers_handler() {
     assert_eq!(ctx.condition_stack.len(), 1, "caller handler survives");
     assert_eq!(ctx.specpdl.len(), 0, "cleanup extent fully unwound");
     let flow = take_pending_flow().expect("cleanup throw propagated to caller");
-    let Flow::Throw(thrown) = flow else {
-        panic!("expected cleanup throw, got {flow:?}");
+    let thrown = match flow.into_kind() {
+        FlowKind::Throw(thrown) => thrown,
+        flow => {
+            panic!("expected cleanup throw, got {flow:?}");
+        }
     };
     assert_eq!(thrown.tag, outer_tag);
     assert_eq!(thrown.value, Value::make_int(42));
@@ -7031,8 +7051,11 @@ fn contained_shim_panic_surfaces_as_error_flow_and_vm_survives() {
     let leaf = panicking_call_leaf("shim-boom");
     assert_eq!(leaf.call(ctx_ptr, &[]), NativeRun::Signal);
     let flow = take_pending_flow().expect("contained panic stashes a flow");
-    let Flow::Signal(sig) = flow else {
-        panic!("expected Signal, got {flow:?}");
+    let sig = match flow.into_kind() {
+        FlowKind::Signal(sig) => sig,
+        flow => {
+            panic!("expected Signal, got {flow:?}");
+        }
     };
     assert_eq!(sig.symbol_name(), "error");
     let msg = sig.data[0].as_str_owned().expect("string payload");
@@ -7211,8 +7234,11 @@ fn a_panic_contained_in_a_direct_callee_is_healed_by_the_caller() {
             assert!(shim_fast() > before, "the second call takes the fast path");
         }
         let flow = take_pending_flow().expect("the contained panic stashes a flow");
-        let Flow::Signal(sig) = flow else {
-            panic!("{label}: expected Signal, got {flow:?}");
+        let sig = match flow.into_kind() {
+            FlowKind::Signal(sig) => sig,
+            flow => {
+                panic!("{label}: expected Signal, got {flow:?}");
+            }
         };
         assert_eq!(sig.symbol_name(), "error", "{label}");
         let msg = sig.data[0].as_str_owned().expect("string payload");
@@ -7338,8 +7364,11 @@ fn a_panic_contained_on_the_spec_fast_path_is_healed_by_the_caller() {
             assert!(shim_fast() > before, "the second call takes the fast path");
         }
         let flow = take_pending_flow().expect("the contained panic stashes a flow");
-        let Flow::Signal(sig) = flow else {
-            panic!("{label}: expected Signal, got {flow:?}");
+        let sig = match flow.into_kind() {
+            FlowKind::Signal(sig) => sig,
+            flow => {
+                panic!("{label}: expected Signal, got {flow:?}");
+            }
         };
         assert_eq!(sig.symbol_name(), "error", "{label}");
         let msg = sig.data[0].as_str_owned().expect("string payload");
@@ -7599,7 +7628,7 @@ fn contained_panic_wins_over_stale_pending_flow() {
     let payload: Box<dyn std::any::Any + Send> = Box::new("late-panic");
     contain_jit_shim_panic(ctx_ptr, payload).expect("containable");
     let flow = take_pending_flow().expect("panic flow present");
-    let Flow::Signal(sig) = flow else {
+    let FlowKind::Signal(sig) = flow.into_kind() else {
         panic!("expected Signal");
     };
     assert_eq!(sig.symbol_name(), "error");
@@ -7684,8 +7713,11 @@ fn parked_panic_survives_leaf_exit_cleanup_running_compiled_code() {
     // The outer dispatcher's take sees the PANIC error, not the
     // cleanup's arith-error and not an empty slot.
     let flow = take_pending_flow().expect("parked panic re-stashed for the dispatcher take");
-    let Flow::Signal(sig) = flow else {
-        panic!("expected Signal, got {flow:?}");
+    let sig = match flow.into_kind() {
+        FlowKind::Signal(sig) => sig,
+        flow => {
+            panic!("expected Signal, got {flow:?}");
+        }
     };
     assert_eq!(sig.symbol_name(), "error");
     let msg = sig.data[0].as_str_owned().expect("string payload");
@@ -7782,8 +7814,11 @@ fn wide_arg_call_panic_releases_backtrace_args_cleanly() {
     let args0 = ev.backtrace_args_stack_len_for_test();
     assert_eq!(leaf.call(ctx_ptr, &[]), NativeRun::Signal);
     let flow = take_pending_flow().expect("panic flow stashed");
-    let Flow::Signal(sig) = flow else {
-        panic!("expected Signal, got {flow:?}");
+    let sig = match flow.into_kind() {
+        FlowKind::Signal(sig) => sig,
+        flow => {
+            panic!("expected Signal, got {flow:?}");
+        }
     };
     let msg = sig.data[0].as_str_owned().expect("string payload");
     assert!(msg.contains("wide-boom"), "unexpected message: {msg}");
@@ -7859,8 +7894,11 @@ fn contained_panic_in_load_unwinds_load_bookkeeping() {
     for round in 0..5 {
         assert_eq!(leaf.call(ctx_ptr, &[]), NativeRun::Signal, "round {round}");
         let flow = take_pending_flow().expect("panic flow stashed");
-        let Flow::Signal(sig) = flow else {
-            panic!("round {round}: expected Signal, got {flow:?}");
+        let sig = match flow.into_kind() {
+            FlowKind::Signal(sig) => sig,
+            flow => {
+                panic!("round {round}: expected Signal, got {flow:?}");
+            }
         };
         let msg = sig.data[0].as_str_owned().expect("string payload");
         assert!(
@@ -8334,8 +8372,8 @@ fn generic_arith_fn(
 }
 
 fn outcome_of_flow(flow: crate::emacs_core::error::Flow) -> String {
-    match flow {
-        crate::emacs_core::error::Flow::Signal(sig) => format!(
+    match flow.into_kind() {
+        crate::emacs_core::error::FlowKind::Signal(sig) => format!(
             "signal {} {:?}",
             sig.symbol_name(),
             sig.data
@@ -8961,9 +8999,9 @@ fn fboundp_call_sites_answer_as_the_builtin_on_the_fast_path() {
     crate::emacs_core::eval::push_scratch_gc_root(pool);
     let items = crate::emacs_core::value::list_to_vec(&pool).expect("list");
     let outcome = |r: Result<Value, crate::emacs_core::error::Flow>| -> String {
-        match r {
+        match r.kinded() {
             Ok(v) => crate::emacs_core::print::print_value(&v),
-            Err(crate::emacs_core::error::Flow::Signal(sig)) => format!(
+            Err(crate::emacs_core::error::FlowKind::Signal(sig)) => format!(
                 "signal {} {:?}",
                 sig.symbol_name(),
                 sig.data
@@ -9087,9 +9125,9 @@ fn autoload_do_load_call_sites_answer_as_the_builtin_on_the_fast_path() {
                           (list 'autoload \"jit-adl-missing-file\" nil nil nil)
                           (list 'autoload \"jit-adl-missing-file\" \"doc\" t 'macro))";
     let outcome = |r: Result<Value, crate::emacs_core::error::Flow>| -> String {
-        match r {
+        match r.kinded() {
             Ok(v) => crate::emacs_core::print::print_value(&v),
-            Err(crate::emacs_core::error::Flow::Signal(sig)) => format!(
+            Err(crate::emacs_core::error::FlowKind::Signal(sig)) => format!(
                 "signal {} {:?}",
                 sig.symbol_name(),
                 sig.data

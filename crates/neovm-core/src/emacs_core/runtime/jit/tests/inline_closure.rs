@@ -3,7 +3,7 @@
 //! precise snapshot before transferring it to Tier-0.
 
 use super::*;
-use crate::emacs_core::error::Flow;
+use crate::emacs_core::error::{Flow, FlowRef, FlowResultExt as _};
 use crate::emacs_core::eval::{Context, push_scratch_gc_root};
 use crate::emacs_core::jit::compile::{self, CompiledLeaf, Inline2Mode, NativeRun};
 use crate::emacs_core::jit::reopt::DeoptCause;
@@ -202,7 +202,15 @@ fn inline_closure_chain_retains_assigned_argument_and_committed_store_once() {
     assert_eq!(frames[0].stack, vec![assigned, assigned]);
     assert_eq!(cell.cons_car(), Value::make_int(1));
     let flow = compile::resumed_chain::resume_deopt(&mut ev, &f, Value::NIL, &leaf, *resume);
-    assert!(matches!(flow, Err(Flow::Signal(sig)) if sig.symbol_name() == "wrong-type-argument"));
+    assert!(
+        if matches!(flow.kinded_ref(), Err(FlowRef::Signal(sig)) if sig.symbol_name() == "wrong-type-argument")
+        {
+            drop(flow);
+            true
+        } else {
+            false
+        }
+    );
     assert_eq!(cell.cons_car(), Value::make_int(1), "no call replay");
     assert_eq!(ev.jit_root_stack_top, 0);
 }

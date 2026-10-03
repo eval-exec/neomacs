@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 use crate::emacs_core::value::LambdaParams;
 
 fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFunction {
@@ -79,8 +80,8 @@ fn mir_call_retains_native_callee_slots_and_revalidates_redefinition() {
     let expected = Vm::from_context(&mut ev)
         .execute(&f, vec![Value::make_int(5)])
         .unwrap_err();
-    let payload = |flow| match flow {
-        Flow::Signal(s) => (
+    let payload = |flow: crate::emacs_core::error::Flow| match flow.into_kind() {
+        FlowKind::Signal(s) => (
             s.symbol,
             s.data
                 .iter()
@@ -300,9 +301,9 @@ fn mir_call_observability_matches_the_interpreter() {
             } else {
                 Vm::from_context(&mut ev).execute(&f, vec![])
             };
-            let outcome = match outcome {
+            let outcome = match outcome.kinded() {
                 Ok(v) => format!("ok:{}", crate::emacs_core::print::print_value(&v)),
-                Err(Flow::Signal(s)) => format!(
+                Err(FlowKind::Signal(s)) => format!(
                     "{}:{:?}",
                     s.symbol_name(),
                     s.data

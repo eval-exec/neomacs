@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunction;
-use crate::emacs_core::error::Flow;
+use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 use crate::emacs_core::eval::{
     Context, bytecode_branch_poll_count, reset_bytecode_branch_poll_count,
 };
@@ -166,9 +166,9 @@ fn inline_hof_captures_noncons_declines_without_an_early_branch_error() {
         assert_eq!(readback.frames[0].stack, vec![Value::make_int(argument)]);
         let result =
             compile::resumed_chain::resume_deopt(&mut ctx, &source, Value::NIL, &leaf, *resume);
-        match (result, reference) {
+        match (result.kinded(), reference.kinded()) {
             (Ok(value), Ok(reference)) => assert_eq!(print_value(&value), print_value(&reference)),
-            (Err(Flow::Signal(signal)), Err(Flow::Signal(reference))) => {
+            (Err(FlowKind::Signal(signal)), Err(FlowKind::Signal(reference))) => {
                 assert_eq!(signal.symbol, reference.symbol);
                 assert_eq!(signal.data, reference.data);
             }

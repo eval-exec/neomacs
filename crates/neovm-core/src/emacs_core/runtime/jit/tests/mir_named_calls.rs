@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::error::FlowKind;
 use crate::emacs_core::value::LambdaParams;
 
 fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFunction {
@@ -67,8 +68,8 @@ fn mir_named_calls_signal_with_the_same_payload_as_the_interpreter() {
         );
         let actual = take_pending_flow().unwrap();
         let expected = Vm::from_context(&mut ev).execute(&f, vec![]).unwrap_err();
-        let payload = |flow| match flow {
-            Flow::Signal(s) => (s.symbol, s.data.iter().map(print_value).collect::<Vec<_>>()),
+        let payload = |flow: crate::emacs_core::error::Flow| match flow.into_kind() {
+            FlowKind::Signal(s) => (s.symbol, s.data.iter().map(print_value).collect::<Vec<_>>()),
             other => panic!("expected a signal: {other:?}"),
         };
         assert_eq!(payload(actual), payload(expected), "{name}");

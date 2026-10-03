@@ -6,6 +6,7 @@
 //! one or two arguments, the function alone for any other count.
 
 use super::*;
+use crate::emacs_core::error::FlowRef;
 use crate::emacs_core::eval::{Context, SpecBinding};
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::value::LambdaParams;
@@ -40,8 +41,8 @@ enum Route {
 
 /// The message of a contained panic's error signal.
 fn panic_message(flow: &Flow) -> String {
-    match flow {
-        Flow::Signal(sig) => sig
+    match flow.kind() {
+        FlowRef::Signal(sig) => sig
             .data
             .first()
             .and_then(|v| v.as_str_owned())

@@ -1,7 +1,7 @@
 //! Native first-entry and post-service-poll semantics for both protocol policies.
 
 use super::*;
-use crate::emacs_core::error::Flow;
+use crate::emacs_core::error::FlowKind;
 use crate::emacs_core::eval::{
     Context, bytecode_branch_poll_count, reset_bytecode_branch_poll_count,
 };
@@ -283,7 +283,7 @@ fn inline_entry_physical_admission_fallback_preserves_argument_and_depth_error_o
         assert_eq!(resume.stack.as_slice(), &[arg]);
         let error = compile::resumed_chain::resume_deopt(&mut ev, &f, Value::NIL, &leaf, *resume)
             .unwrap_err();
-        let Flow::Signal(signal) = error else {
+        let FlowKind::Signal(signal) = error.into_kind() else {
             panic!("the original bytecode must signal")
         };
         assert_eq!(signal.symbol_name(), expected);

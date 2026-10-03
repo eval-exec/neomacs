@@ -5,6 +5,7 @@
 //! every state of the epoch, the compiler overrides and the force harness.
 
 use super::*;
+use crate::emacs_core::error::FlowResultExt as _;
 use crate::emacs_core::eval::{AttentionMask, Context};
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::value::LambdaParams;
@@ -154,8 +155,8 @@ fn a_quit_set_by_compiled_code_stops_the_next_spec_call_before_its_frame() {
     let specpdl = ev.specpdl.len();
     let depth = ev.depth;
     let result = ev.funcall_general_untraced(caller, vec![Value::T, x]);
-    match result {
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+    match result.kinded() {
+        Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "quit")
         }
         other => panic!("expected a quit signal, got {other:?}"),

@@ -3,6 +3,7 @@
 use crate::emacs_core::bytecode::ByteCodeFunction;
 use crate::emacs_core::bytecode::Vm;
 use crate::emacs_core::bytecode::opcode::Op;
+use crate::emacs_core::error::FlowResultExt as _;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::NumericFeedback;
 use crate::emacs_core::jit::inline::fuse_calls;
@@ -27,9 +28,11 @@ fn lexical_fn(required: u32, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFun
 /// Run `f` on the interpreter and print the result or the signal.
 fn interp(ev: &mut Context, f: &ByteCodeFunction, args: Vec<Value>) -> String {
     let mut vm = Vm::from_context(ev);
-    match vm.execute(f, args) {
+    match vm.execute(f, args).kinded() {
         Ok(v) => print_value(&v),
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => format!("signal {}", sig.symbol_name()),
+        Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
+            format!("signal {}", sig.symbol_name())
+        }
         Err(other) => format!("{other:?}"),
     }
 }
@@ -183,9 +186,12 @@ fn an_inlined_call_runs_and_deopts_as_the_interpreter_does() {
         Value::make_float(12.5),
     ] {
         let want = interp(&mut ev, &interp_only, vec![arg]);
-        let got = match ev.funcall_general_untraced(caller_value, vec![arg]) {
+        let got = match ev
+            .funcall_general_untraced(caller_value, vec![arg])
+            .kinded()
+        {
             Ok(v) => print_value(&v),
-            Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+            Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
                 format!("signal {}", sig.symbol_name())
             }
             Err(other) => format!("{other:?}"),
@@ -264,9 +270,9 @@ fn a_deopt_after_a_spliced_region_resumes_the_original_body() {
     ] {
         let args = vec![Value::make_int(3), z];
         let want = interp(&mut ev, &interp_only, args.clone());
-        let got = match ev.funcall_general_untraced(caller_value, args) {
+        let got = match ev.funcall_general_untraced(caller_value, args).kinded() {
             Ok(v) => print_value(&v),
-            Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+            Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
                 format!("signal {}", sig.symbol_name())
             }
             Err(other) => format!("{other:?}"),
@@ -511,9 +517,9 @@ fn a_caller_handler_catches_in_the_original_body_after_a_deopt() {
     ] {
         let args = vec![y, z];
         let want = interp(&mut ev, &interp_only, args.clone());
-        let got = match ev.funcall_general_untraced(caller_value, args) {
+        let got = match ev.funcall_general_untraced(caller_value, args).kinded() {
             Ok(v) => print_value(&v),
-            Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+            Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
                 format!("signal {}", sig.symbol_name())
             }
             Err(other) => format!("{other:?}"),

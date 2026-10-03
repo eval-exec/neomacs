@@ -10,6 +10,7 @@
 
 use super::*;
 use crate::emacs_core::bytecode::Vm;
+use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::NumericFeedback as NF;
 use crate::emacs_core::value::{LambdaParams, ValueKind};
@@ -383,8 +384,8 @@ fn deopt_mid_chain_boxes_live_flonums_like_the_interpreter() {
     );
     let interp = Vm::from_context(&mut ev).execute(&f, args.to_vec());
     for (what, result) in [("resumed", resumed), ("interpreter", interp)] {
-        match result {
-            Err(Flow::Signal(sig)) => assert_eq!(
+        match result.kinded() {
+            Err(FlowKind::Signal(sig)) => assert_eq!(
                 sig.symbol_name(),
                 "wrong-type-argument",
                 "{what} signals like GNU"

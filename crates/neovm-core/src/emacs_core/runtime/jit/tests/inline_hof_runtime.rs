@@ -3,6 +3,7 @@
 use super::*;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::bytecode::vm::{ChainBacktrace, ChainLink};
+use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::jit::compile::{self, Inline2Mode, NativeRun};
 use crate::emacs_core::jit::vframe::{
@@ -225,7 +226,7 @@ fn inline_hof_runtime_abort_dispatches_signal_with_live_map_depth_and_frame() {
             )
             .expect_err("cold completion preserves quit")
         };
-        let Flow::Signal(signal) = flow else {
+        let FlowKind::Signal(signal) = flow.into_kind() else {
             panic!("mapping completion preserves signal kind")
         };
         assert_eq!(signal.symbol, intern("quit"));
@@ -424,7 +425,7 @@ fn inline_hof_runtime_entry_depth_guard_uses_funcall_and_restores_map() {
         0,
     )
     .unwrap_err();
-    let Flow::Signal(signal) = error else {
+    let FlowKind::Signal(signal) = error.into_kind() else {
         panic!("depth guard must signal")
     };
     assert_eq!(signal.symbol_name(), "excessive-lisp-nesting");
@@ -454,7 +455,7 @@ fn inline_hof_runtime_mid_callback_skips_entry_depth_guard_and_unwinds_error() {
         0,
     )
     .unwrap_err();
-    let Flow::Signal(signal) = error else {
+    let FlowKind::Signal(signal) = error.into_kind() else {
         panic!("car must signal")
     };
     assert_eq!(signal.symbol_name(), "wrong-type-argument");
@@ -858,11 +859,11 @@ fn inline_hof_runtime_nonlist_or_invalid_list_keeps_builtin_protocol() {
             ctx.push_vm_frame_root(*value);
         }
         let reference = ctx.apply2(f.constants[0], callback, sequence);
-        match (native, reference) {
+        match (native.kinded(), reference.kinded()) {
             (Ok(native), Ok(reference)) => {
                 assert_eq!(print_value(&native), print_value(&reference))
             }
-            (Err(Flow::Signal(native)), Err(Flow::Signal(reference))) => {
+            (Err(FlowKind::Signal(native)), Err(FlowKind::Signal(reference))) => {
                 assert_eq!(native.symbol_name(), reference.symbol_name());
                 assert_eq!(native.data, reference.data);
             }

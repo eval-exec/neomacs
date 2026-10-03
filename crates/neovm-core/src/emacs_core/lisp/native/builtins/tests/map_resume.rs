@@ -4,7 +4,7 @@
 //! second proper-list prewalk on resume.
 
 use super::{MapCallee, MapSink, map_sequence_length, mapcar1_eval, mapcar1_eval_from};
-use crate::emacs_core::error::Flow;
+use crate::emacs_core::error::{Flow, FlowKind, FlowResultExt};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::print::print_value;
 use crate::emacs_core::value::Value;
@@ -144,9 +144,10 @@ fn map_resume_roots_completed_results_and_disconnected_cursor_under_gc_stress() 
 }
 
 fn outcome(result: Result<Value, Flow>) -> String {
+    let result = result.kinded();
     match result {
         Ok(value) => print_value(&value),
-        Err(Flow::Signal(sig)) => format!(
+        Err(FlowKind::Signal(sig)) => format!(
             "{} {:?}",
             sig.symbol_name(),
             sig.data.iter().map(print_value).collect::<Vec<_>>()

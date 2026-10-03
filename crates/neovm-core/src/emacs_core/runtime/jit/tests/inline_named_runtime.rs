@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::emacs_core::bytecode::opcode::Op;
-use crate::emacs_core::error::Flow;
+use crate::emacs_core::error::{Flow, FlowRef};
 use crate::emacs_core::eval::{Context, push_scratch_gc_root};
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::jit::compile::lowering::RegallocPolicy;
@@ -282,7 +282,14 @@ fn inline_named_runtime_depth_guard_precedes_callee_and_uses_bcall_error() {
     assert!(resume.inlined.is_none());
     let error =
         compile::resumed_chain::resume_deopt(&mut ctx, &f, Value::NIL, &leaf, *resume).unwrap_err();
-    assert!(matches!(error, Flow::Signal(signal) if signal.symbol_name() == "error"));
+    assert!(
+        if matches!(error.kind(), FlowRef::Signal(signal) if signal.symbol_name() == "error") {
+            drop(error);
+            true
+        } else {
+            false
+        }
+    );
     assert_eq!(ctx.depth, 120);
     assert!(ctx.specpdl.is_empty());
     ctx.depth = 0;
@@ -364,7 +371,15 @@ fn inline_named_runtime_assigned_argument_is_resumed_without_losing_original_cal
     );
     let error =
         compile::resumed_chain::resume_deopt(&mut ctx, &f, Value::NIL, &leaf, *resume).unwrap_err();
-    assert!(matches!(error, Flow::Signal(signal) if signal.symbol_name() == "wrong-type-argument"));
+    assert!(
+        if matches!(error.kind(), FlowRef::Signal(signal) if signal.symbol_name() == "wrong-type-argument")
+        {
+            drop(error);
+            true
+        } else {
+            false
+        }
+    );
     let observed = ctx
         .obarray
         .symbol_value("named-runtime-observed-call")

@@ -3,6 +3,7 @@
 //! the production entry and readback tests separately prove native transfer.
 
 use super::*;
+use crate::emacs_core::error::FlowRef;
 use crate::emacs_core::eval::{BcFrame, ConditionFrame, Context, ResumeTarget};
 use crate::emacs_core::value::LambdaParams;
 
@@ -236,7 +237,7 @@ fn osr_chain_in_place_error_leaves_physical_bindings_for_its_owner_to_unwind() {
         .unwrap_err();
     // With no registered catcher, Tier-0 turns the throw into GNU's
     // no-catch signal; its physical owner still owns this binding.
-    assert!(matches!(&flow, Flow::Signal(_)));
+    assert!(matches!(flow.kind(), FlowRef::Signal(_)));
     assert_eq!(vm.ctx.depth, 1);
     assert_eq!(vm.ctx.specpdl.len(), 1);
     assert_eq!(vm.ctx.bc_frames.len(), 1);

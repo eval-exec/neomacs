@@ -1,7 +1,7 @@
 use super::*;
 use crate::buffer::LispCharPos1;
 use crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry;
-use crate::emacs_core::error::Flow;
+use crate::emacs_core::error::{FlowKind, FlowRef, FlowResultExt};
 use crate::emacs_core::eval::{ConditionFrame, Context, GuiFrameHostSize, ResumeTarget};
 use crate::emacs_core::value::HashTableTest;
 use crate::window::{SplitDirection, SplitPlacement};
@@ -2739,8 +2739,9 @@ fn vm_bcall_max_eval_depth_reports_error_like_gnu_bytecode() {
         let mut vm = new_vm(&mut eval);
         vm.execute(&recurse, vec![])
     };
+    let result = result.kinded();
     match result {
-        Err(Flow::Signal(sig)) => {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(resolve_sym(sig.symbol), "error");
             assert_eq!(
                 sig.data,
@@ -2781,8 +2782,9 @@ fn vm_bcall_funcall_recursion_reports_bytecode_error_like_gnu() {
         let mut vm = new_vm(&mut eval);
         vm.execute(&recurse, vec![])
     };
+    let result = result.kinded();
     match result {
-        Err(Flow::Signal(sig)) => {
+        Err(FlowKind::Signal(sig)) => {
             assert_eq!(resolve_sym(sig.symbol), "error");
             assert_eq!(
                 sig.data,
@@ -2962,8 +2964,8 @@ fn vm_eval_shared_runtime_path_preserves_active_shared_catches() {
     let result = vm.call_function(Value::symbol("eval"), vec![throw_form, Value::NIL]);
 
     assert!(matches!(
-        result,
-        Err(Flow::Throw(ref thrown))
+        result.kinded_ref(),
+        Err(FlowRef::Throw(thrown))
             if thrown.tag == Value::symbol("vm-bridge-catch")
                 && thrown.value == Value::fixnum(7)
     ));
@@ -12198,8 +12200,9 @@ fn vm_inline_opcode_builtins_dispatch_directly_like_gnu() {
             Op::Return,
         ],
     );
+    let result = result.kinded();
     match result {
-        Err(Flow::Signal(sig)) => assert_eq!(
+        Err(FlowKind::Signal(sig)) => assert_eq!(
             crate::emacs_core::intern::resolve_sym(sig.symbol),
             "wrong-type-argument"
         ),

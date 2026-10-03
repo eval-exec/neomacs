@@ -4,6 +4,7 @@
 //! parent's view of its private items (`use super::*`).
 
 use super::*;
+use crate::emacs_core::error::FlowKind;
 use crate::emacs_core::eval::AttentionMask;
 
 pub(crate) type JitBuiltin1 = fn(&mut Context, Value) -> Result<Value, Flow>;
@@ -3086,12 +3087,12 @@ pub extern "C" fn neovm_jit_match_handler(ctx: *mut u8, ours: i64, out: *mut i64
         'resume: loop {
             // Frames still ours: `ours` less those popped by earlier passes.
             let remaining = ours - popped_ordinal_base;
-            match flow {
-                Flow::ThreadBlocked(_) | Flow::Shutdown(_) => {
-                    stash_pending_flow(flow);
+            match flow.into_kind() {
+                kind @ (FlowKind::ThreadBlocked(_) | FlowKind::Shutdown(_)) => {
+                    stash_pending_flow(Flow::from_kind(kind));
                     return -1;
                 }
-                Flow::Throw(thrown) => {
+                FlowKind::Throw(thrown) => {
                     let (tag, value) = (thrown.tag, thrown.value);
                     let Some(selected) = ctx.matching_catch_resume(&tag) else {
                         // No matching catch anywhere: unwind all our frames and
@@ -3139,11 +3140,11 @@ pub extern "C" fn neovm_jit_match_handler(ctx: *mut u8, ours: i64, out: *mut i64
                     stash_pending_flow(Flow::throw(tag, value));
                     return -1;
                 }
-                Flow::Signal(sig) => {
+                FlowKind::Signal(sig) => {
                     if sig.symbol == intern("kill-emacs") {
                         // Interpreter parity: propagate immediately, frames left
                         // to the frame-exit truncation.
-                        stash_pending_flow(Flow::Signal(sig));
+                        stash_pending_flow(Flow::signal_boxed(sig));
                         return -1;
                     }
                     // Signal hooks / handler-bind handlers may run lisp and GC;
@@ -3171,7 +3172,7 @@ pub extern "C" fn neovm_jit_match_handler(ctx: *mut u8, ours: i64, out: *mut i64
                         for _ in 0..remaining {
                             ctx.pop_condition_frame();
                         }
-                        stash_pending_flow(Flow::Signal(sig));
+                        stash_pending_flow(Flow::signal_boxed(sig));
                         return -1;
                     };
                     for m in 0..remaining {
@@ -3215,7 +3216,7 @@ pub extern "C" fn neovm_jit_match_handler(ctx: *mut u8, ours: i64, out: *mut i64
                             return (popped_ordinal_base + m) as i64;
                         }
                     }
-                    stash_pending_flow(Flow::Signal(sig));
+                    stash_pending_flow(Flow::signal_boxed(sig));
                     return -1;
                 }
             }

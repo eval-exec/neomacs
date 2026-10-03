@@ -413,8 +413,16 @@ fn inline_chain_deopt_invalid_site_signals_and_resets_before_single_frame() {
         NativeRun::Signal
     );
     let flow = compile::take_pending_flow().expect("invalid bytecode flow");
-    assert!(matches!(flow, crate::emacs_core::error::Flow::Signal(sig)
-        if sig.symbol == intern("invalid-byte-code")));
+    assert!(
+        if matches!(flow.kind(), crate::emacs_core::error::FlowRef::Signal(sig)
+        if sig.symbol == intern("invalid-byte-code"))
+        {
+            drop(flow);
+            true
+        } else {
+            false
+        }
+    );
     assert_eq!(leaf.deopt_meta.chain.get(), DeoptCells::SINGLE_FRAME);
     let NativeRun::DeoptAt(resume) = leaf.call(&mut ctx as *mut Context as *mut u8, &[]) else {
         panic!("next single-frame deopt remains valid");
@@ -455,7 +463,10 @@ fn inline_chain_deopt_direct_cold_forwards_invalid_metadata_signal() {
         crate::emacs_core::jit::cache::NativeCallOutcome::FlowStashed
     ));
     let flow = compile::take_pending_flow().expect("metadata error is forwarded");
-    assert!(matches!(flow, crate::emacs_core::error::Flow::Signal(_)));
+    assert!(matches!(
+        flow.kind(),
+        crate::emacs_core::error::FlowRef::Signal(_)
+    ));
     assert_eq!(leaf.deopt_meta.chain.get(), DeoptCells::SINGLE_FRAME);
     assert_eq!(
         leaf.obs.deopt_rerun.get(),

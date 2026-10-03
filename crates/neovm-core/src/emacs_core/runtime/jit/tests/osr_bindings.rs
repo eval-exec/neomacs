@@ -1,5 +1,6 @@
 use super::*;
 use crate::emacs_core::bytecode::vm::Vm;
+use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 use crate::emacs_core::eval::{ConditionFrame, Context, ResumeTarget};
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::jit::{cache, force_osr_for_test};
@@ -282,12 +283,14 @@ fn osr_binding_unlet_watchers_collect_and_preserve_cleanup_exit_semantics() {
             }
             let conditions = ctx.condition_stack_len();
             let result = Vm::from_context(&mut ctx).execute(&f, vec![Value::make_int(2000)]);
-            match (mode, result) {
+            match (mode, result.kinded()) {
                 ("collect", Ok(value)) => {
                     assert_eq!(value.as_utf8_str(), Some("x".repeat(40).as_str()))
                 }
-                ("signal", Err(Flow::Signal(signal))) => assert_eq!(signal.symbol, intern("error")),
-                ("throw", Err(Flow::Throw(flow))) => {
+                ("signal", Err(FlowKind::Signal(signal))) => {
+                    assert_eq!(signal.symbol, intern("error"))
+                }
+                ("throw", Err(FlowKind::Throw(flow))) => {
                     assert_eq!(flow.value, Value::symbol("cleanup-throw"))
                 }
                 (_, result) => panic!("mode={mode}, osr={osr}: {result:?}"),
@@ -361,10 +364,12 @@ fn osr_binding_frame_exit_unwinds_inherited_and_new_binds_for_each_outcome() {
             }
             let conditions = ctx.condition_stack_len();
             let result = Vm::from_context(&mut ctx).execute(&f, vec![Value::make_int(2000)]);
-            match (exit, result) {
+            match (exit, result.kinded()) {
                 ("return", Ok(value)) => assert_eq!(value, Value::make_int(6000)),
-                ("signal", Err(Flow::Signal(signal))) => assert_eq!(signal.symbol, intern("error")),
-                ("throw", Err(Flow::Throw(flow))) => {
+                ("signal", Err(FlowKind::Signal(signal))) => {
+                    assert_eq!(signal.symbol, intern("error"))
+                }
+                ("throw", Err(FlowKind::Throw(flow))) => {
                     assert_eq!(flow.tag, Value::symbol("osr-exit"))
                 }
                 (_, result) => panic!("exit={exit}, osr={osr}: {result:?}"),

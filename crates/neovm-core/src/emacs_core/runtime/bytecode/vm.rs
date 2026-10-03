@@ -2606,25 +2606,25 @@ impl<'a> Vm<'a> {
     }
 
     fn collect_flow_roots(flow: &Flow, out: &mut Vec<Value>) {
-        match flow {
-            Flow::Signal(sig) => {
+        match flow.kind() {
+            FlowRef::Signal(sig) => {
                 out.push(Value::from_sym_id(sig.symbol));
                 out.extend(sig.data.iter().copied());
                 if let Some(raw) = sig.raw_data {
                     out.push(raw);
                 }
             }
-            Flow::Throw(thrown) => {
+            FlowRef::Throw(thrown) => {
                 out.push(thrown.tag);
                 out.push(thrown.value);
             }
-            Flow::ThreadBlocked(blocked) => {
+            FlowRef::ThreadBlocked(blocked) => {
                 out.push(blocked.blocker);
                 out.push(blocked.remaining_forms);
             }
             // Carries only an exit code and a restart flag: no Lisp values to
             // keep alive.
-            Flow::Shutdown(_) => {}
+            FlowRef::Shutdown(_) => {}
         }
     }
 
@@ -9106,11 +9106,12 @@ impl<'a> Vm<'a> {
         bind_stack: &mut BindStack,
         flow: Flow,
     ) -> Result<(), Flow> {
+        let flow = flow.into_kind();
         match flow {
             // Neither is resumable inside the VM: a blocked thread and a
             // shutdown both unwind past every handler this frame owns.
-            Flow::ThreadBlocked(_) | Flow::Shutdown(_) => Err(flow),
-            Flow::Throw(thrown) => {
+            FlowKind::ThreadBlocked(_) | FlowKind::Shutdown(_) => Err(Flow::from_kind(flow)),
+            FlowKind::Throw(thrown) => {
                 let (tag, value) = (thrown.tag, thrown.value);
                 let selected_resume = self.ctx.matching_catch_resume(&tag);
                 if let Some(ResumeTarget::VmCatch {
@@ -9153,13 +9154,13 @@ impl<'a> Vm<'a> {
                 );
                 Err(signal(LispCondition::NoCatch, vec![tag, value]))
             }
-            Flow::Signal(sig) => {
+            FlowKind::Signal(sig) => {
                 // dispatch_signal_if_needed may call signal hooks and
                 // handler-bind handlers via eval.apply(), which can trigger
                 // GC.  We must root the current frame so values survive
                 // collection.
                 let mut sig_extra = Vec::new();
-                Self::collect_flow_roots(&Flow::Signal(sig.clone()), &mut sig_extra);
+                Self::collect_flow_roots(&Flow::signal_boxed(sig.clone()), &mut sig_extra);
                 let sig = match self.with_frame_roots(_func, &sig_extra, |vm| {
                     vm.ctx.dispatch_signal_if_needed(sig)
                 }) {
@@ -9199,7 +9200,7 @@ impl<'a> Vm<'a> {
                     *pc = target as usize;
                     return Ok(());
                 }
-                Err(Flow::Signal(sig))
+                Err(Flow::signal_boxed(sig))
             }
         }
     }

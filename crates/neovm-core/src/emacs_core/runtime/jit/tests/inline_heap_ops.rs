@@ -32,8 +32,8 @@ fn store_fn(op: Op) -> ByteCodeFunction {
 }
 
 fn flow_text(flow: crate::emacs_core::error::Flow) -> String {
-    match flow {
-        crate::emacs_core::error::Flow::Signal(sig) => format!(
+    match flow.into_kind() {
+        crate::emacs_core::error::FlowKind::Signal(sig) => format!(
             "signal {} {:?}",
             sig.symbol_name(),
             sig.data.iter().map(print_value).collect::<Vec<_>>()

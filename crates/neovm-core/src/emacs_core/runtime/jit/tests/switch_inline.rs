@@ -363,8 +363,11 @@ fn a_changed_table_is_answered_by_the_shim() {
         NativeRun::Signal,
         "an uncompiled target"
     );
-    match take_pending_flow().expect("the stale-table signal is stashed") {
-        crate::emacs_core::error::Flow::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
+    match take_pending_flow()
+        .expect("the stale-table signal is stashed")
+        .into_kind()
+    {
+        crate::emacs_core::error::FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "error"),
         other => panic!("expected an error signal, got {other:?}"),
     }
 }

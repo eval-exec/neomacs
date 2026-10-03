@@ -89,8 +89,8 @@ fn constants(var: &str) -> Vec<Value> {
 }
 
 fn flow_text(flow: crate::emacs_core::error::Flow) -> String {
-    match flow {
-        crate::emacs_core::error::Flow::Signal(sig) => format!(
+    match flow.into_kind() {
+        crate::emacs_core::error::FlowKind::Signal(sig) => format!(
             "ERR {} {}",
             sig.symbol_name(),
             sig.data

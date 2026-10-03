@@ -590,7 +590,7 @@ fn a_contained_framed_panic_detaches_three_args_before_gc_and_caller_healing() {
         ev.restore_jit_shim_boundary(&caller_boundary, cond0);
         ev.unbind_to(spec0);
         let flow = take_pending_flow().expect("panic materializes at the caller boundary");
-        let crate::emacs_core::error::Flow::Signal(signal) = flow else { panic!("panic must become a Lisp signal") };
+        let crate::emacs_core::error::FlowKind::Signal(signal) = flow.into_kind() else { panic!("panic must become a Lisp signal") };
         assert_eq!(signal.symbol_name(), "error");
         assert!(signal.data[0].as_str_owned().expect("message").contains("framed-before-heal"));
         assert!(!shim_panic_pending());

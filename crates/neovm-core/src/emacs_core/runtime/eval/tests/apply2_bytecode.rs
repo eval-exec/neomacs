@@ -4,7 +4,7 @@
 
 use crate::emacs_core::bytecode::ByteCodeFunction;
 use crate::emacs_core::bytecode::opcode::Op;
-use crate::emacs_core::error::Flow;
+use crate::emacs_core::error::{Flow, FlowKind, FlowResultExt};
 use crate::emacs_core::eval::{
     Context, LispArgVec, push_scratch_gc_roots, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
@@ -32,9 +32,10 @@ fn lister(required: u32, optional: u32, rest: bool, hot: bool) -> ByteCodeFuncti
 }
 
 fn outcome(result: Result<Value, Flow>) -> String {
+    let result = result.kinded();
     match result {
         Ok(value) => print_value(&value),
-        Err(Flow::Signal(signal)) => format!(
+        Err(FlowKind::Signal(signal)) => format!(
             "signal {} {:?}",
             signal.symbol_name(),
             signal.data.iter().map(print_value).collect::<Vec<_>>()

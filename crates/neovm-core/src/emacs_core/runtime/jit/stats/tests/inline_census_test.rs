@@ -1,5 +1,6 @@
 use super::*;
 use crate::emacs_core::bytecode::opcode::Op;
+use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 use crate::emacs_core::jit::inline::CensusShape;
 use crate::emacs_core::value::LambdaParams;
 
@@ -136,8 +137,6 @@ fn inline_census_callbacks_are_opt_in_and_share_source_identity() {
 /// the calling mutator's attention word. Ordinary quit polls stay clear.
 #[test]
 fn inline_census_callback_entries_include_quit_and_depth_refusals() {
-    use crate::emacs_core::error::Flow;
-
     FORCE_ENABLED.with(|on| on.set(Some(true)));
     let mut ev = Context::new();
     let _roots = ev.save_vm_roots();
@@ -151,8 +150,8 @@ fn inline_census_callback_entries_include_quit_and_depth_refusals() {
 
     ev.set_quit_flag_value(Value::T);
     assert!(matches!(
-        ev.apply1(target, Value::NIL),
-        Err(Flow::Signal(signal)) if signal.symbol_name() == "quit"
+        ev.apply1(target, Value::NIL).kinded(),
+        Err(FlowKind::Signal(signal)) if signal.symbol_name() == "quit"
     ));
     assert_eq!(snapshot().callbacks[&source].count, 2);
     ev.set_quit_flag_value(Value::NIL);
@@ -162,8 +161,8 @@ fn inline_census_callback_entries_include_quit_and_depth_refusals() {
 
     ev.depth = ev.max_depth;
     assert!(matches!(
-        ev.apply1(target, Value::NIL),
-        Err(Flow::Signal(signal)) if signal.symbol_name() == "excessive-lisp-nesting"
+        ev.apply1(target, Value::NIL).kinded(),
+        Err(FlowKind::Signal(signal)) if signal.symbol_name() == "excessive-lisp-nesting"
     ));
     assert_eq!(snapshot().callbacks[&source].count, 4);
     ev.depth = 0;

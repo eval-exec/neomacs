@@ -5,6 +5,7 @@
 //! assertion alone passes just as well when it did not).
 
 use super::*;
+use crate::emacs_core::error::{FlowKind, FlowResultExt};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::print::print_value;
 use crate::emacs_core::value::LambdaParams;
@@ -30,9 +31,9 @@ fn bcall_fn(callee: &str, nargs: usize) -> ByteCodeFunction {
 }
 
 fn run(ev: &mut Context, f: &ByteCodeFunction, args: &[Value]) -> String {
-    match Vm::from_context(ev).execute(f, args.to_vec()) {
+    match Vm::from_context(ev).execute(f, args.to_vec()).kinded() {
         Ok(v) => print_value(&v),
-        Err(crate::emacs_core::error::Flow::Signal(sig)) => format!(
+        Err(FlowKind::Signal(sig)) => format!(
             "signal {} {:?}",
             sig.symbol_name(),
             sig.data.iter().map(print_value).collect::<Vec<_>>()

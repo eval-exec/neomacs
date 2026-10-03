@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::error::FlowRef;
 use crate::tagged::collection_reads::capture;
 use crate::tagged::mutate::LispCollectionRevision;
 
@@ -36,7 +37,12 @@ fn shim_aref(ctx: &mut Context, array: Value, index: Value) -> i64 {
 
 fn assert_signal(result: i64) {
     assert_eq!(result, VALUE_SHIM_SIGNAL);
-    assert!(matches!(take_pending_flow(), Some(Flow::Signal(_))));
+    assert!(matches!(
+        take_pending_flow()
+            .as_ref()
+            .map(crate::emacs_core::error::Flow::kind),
+        Some(FlowRef::Signal(_))
+    ));
 }
 
 #[test]

@@ -174,8 +174,8 @@ fn a_leaf_call_admits_a_loop_into_the_mir_tier() {
                 NativeRun::Signal,
                 "effects={effects} {knob:?}"
             );
-            let payload = |flow| match flow {
-                crate::emacs_core::error::Flow::Signal(s) => (
+            let payload = |flow: crate::emacs_core::error::Flow| match flow.into_kind() {
+                crate::emacs_core::error::FlowKind::Signal(s) => (
                     s.symbol,
                     s.data
                         .iter()
