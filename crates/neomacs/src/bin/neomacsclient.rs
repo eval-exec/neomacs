@@ -202,10 +202,15 @@ fn parse_options(prog: &str, args: impl IntoIterator<Item = OsString>) -> Result
                 {
                     options.alternate_editor = Some(value);
                 } else if let Some(value) = option_value(arg, "--timeout", "-w", &args, &mut i)? {
+                    // GNU rejects a zero or unparsable timeout outright
+                    // (lib-src/emacsclient.c:540-549).  `--startup-timeout` is a
+                    // Neomacs extension and keeps reading zero as "unlimited".
                     let seconds = value
                         .parse::<u64>()
-                        .map_err(|_| format!("Invalid timeout: \"{value}\""))?;
-                    options.timeout = (seconds != 0).then(|| Duration::from_secs(seconds));
+                        .ok()
+                        .filter(|seconds| *seconds != 0)
+                        .ok_or_else(|| format!("Invalid timeout: \"{value}\""))?;
+                    options.timeout = Some(Duration::from_secs(seconds));
                 } else if let Some(value) =
                     option_value(arg, "--startup-timeout", "", &args, &mut i)?
                 {
@@ -291,7 +296,7 @@ Options:
   -s, --socket-name SOCKET   Use a local Unix server socket
 -f, --server-file FILE     Use a TCP authentication file
   -a, --alternate-editor CMD Run CMD if the server is not available
-  -w, --timeout SECONDS      Wait this many seconds for server replies (0: unlimited)
+  -w, --timeout SECONDS      Bound the wait for the server's first reply to SECONDS
       --startup-timeout SEC  Bound automatic startup waiting only (0: unlimited)
   -T, --tramp PREFIX         Prefix absolute file names for Tramp
 "
