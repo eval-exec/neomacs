@@ -98,12 +98,34 @@ fn heapless_runtime_lowering_does_not_install_a_fallback_heap() {
     let mut heap = crate::tagged::gc::TaggedHeap::new();
     crate::tagged::gc::set_tagged_heap(&mut heap);
     crate::tagged::gc::clear_tagged_heap_if_installed(&heap);
-    // Length needs runtime shims, so this exercises RtCtx's mode capture.
-    // It emits no heap store and does not need an executing heap at compile.
-    let _leaf = lower_leaf(&[Op::Constant(0), Op::Length, Op::Return], &[Value::NIL], 0)
-        .expect("heapless runtime lowering preserves the legacy shape");
-    assert!(!crate::tagged::gc::tagged_heap_is_installed());
-    assert_eq!(crate::tagged::gc::current_tagged_heap_identity(), None);
+    // Each store reaches RtCtx's lazy generational-mode capture. With no
+    // installed heap it must choose the legacy gate without creating one.
+    for op in [Op::Setcar, Op::Setcdr] {
+        #[cfg(debug_assertions)]
+        let before = crate::tagged::gc::heap_generational_mode_reads_for_test();
+        #[cfg(debug_assertions)]
+        let gates_before = super::heap_inline::GENERATIONAL_CONS_TESTS_EMITTED
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let leaf = lower_leaf(&[Op::StackRef(1), Op::StackRef(1), op, Op::Return], &[], 2)
+            .expect("heapless store lowering preserves the legacy shape");
+        assert!(leaf.needs_vmctx, "the heap-store gate must be emitted");
+        #[cfg(debug_assertions)]
+        {
+            assert_eq!(
+                crate::tagged::gc::heap_generational_mode_reads_for_test(),
+                before + 1,
+                "the store gate must query the heapless generational mode"
+            );
+            assert_eq!(
+                super::heap_inline::GENERATIONAL_CONS_TESTS_EMITTED
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                gates_before,
+                "heapless lowering must select the legacy store gate"
+            );
+        }
+        assert!(!crate::tagged::gc::tagged_heap_is_installed());
+        assert_eq!(crate::tagged::gc::current_tagged_heap_identity(), None);
+    }
 }
 
 #[cfg(debug_assertions)]
@@ -211,7 +233,7 @@ fn young_cons_and_fixnum_or_character_stores_stay_inline() {
 }
 
 #[test]
-fn bare_uninterned_symbol_store_logs_and_keeps_a_weak_key_alive() {
+fn bare_uninterned_symbol_store_logs_owner_once_before_a_minor() {
     let mut context = context(true);
     context
         .eval_str(
@@ -231,10 +253,32 @@ fn bare_uninterned_symbol_store_logs_and_keeps_a_weak_key_alive() {
     let key = global(&context, "u34-inline-key");
     assert!(key.is_symbol());
     assert!(!key.is_heap_object(), "the symbol needs side-table marking");
+    assert!(context.tagged_heap.value_is_old_for_test(owner));
+    assert!(!context.tagged_heap.is_remembered_for_test(owner));
+    let logs_before = context.tagged_heap.remembered_log_len_for_test();
     let before = cons_shims();
     assert_eq!(native(&mut context, &leaf, &[owner, key]), key);
+    // A minor conservatively retains every symbol id, so the weak-key check
+    // below cannot prove logging. Observe the owner's mutator log directly.
+    assert!(
+        context.tagged_heap.is_remembered_for_test(owner),
+        "storing a bare symbol must log the old owner"
+    );
+    assert_eq!(
+        context.tagged_heap.remembered_log_len_for_test(),
+        logs_before + 1
+    );
     assert_eq!(cons_shims() - before, 1);
-    assert!(context.tagged_heap.is_remembered_for_test(owner));
+    assert_eq!(native(&mut context, &leaf, &[owner, key]), key);
+    assert_eq!(
+        context.tagged_heap.remembered_log_len_for_test(),
+        logs_before + 1
+    );
+    assert_eq!(
+        cons_shims() - before,
+        1,
+        "an already logged owner stays inline"
+    );
     context.assign("u34-inline-key", Value::NIL);
     minor(&mut context);
     assert_eq!(owner.cons_car(), key);
