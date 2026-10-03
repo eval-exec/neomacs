@@ -58,14 +58,19 @@ fn builtin_cons_values(car: Value, cdr: Value) -> EvalResult {
 /// One step of GNU `FOR_EACH_TAIL_INTERNAL`'s Brent cycle check, run after
 /// the walk advanced to the cons `tail`: returns `tail` when it closes a
 /// cycle (the object GNU signals `circular-list` with).
-pub(super) fn for_each_tail_cycle_tail(
+///
+/// `q` is GNU's `unsigned short`: `li.q = li.max` keeps only the low 16 bits
+/// and the decrement wraps. With a wider counter the tortoise stops moving
+/// once `max` reaches 2^17, and a cycle entered past ~131K steps is never
+/// found (the walk spins instead of signaling).
+fn for_each_tail_cycle_tail(
     tail: Value,
     tortoise: &mut Value,
     max: &mut i64,
     n: &mut i64,
-    q: &mut i64,
+    q: &mut u16,
 ) -> Option<Value> {
-    *q -= 1;
+    *q = q.wrapping_sub(1);
     let check_against_tortoise = if *q != 0 {
         true
     } else {
@@ -74,7 +79,7 @@ pub(super) fn for_each_tail_cycle_tail(
             true
         } else {
             *max = max.saturating_mul(2);
-            *q = *max;
+            *q = *max as u16;
             *n = *max >> u16::BITS;
             *tortoise = tail;
             false
@@ -113,7 +118,7 @@ where
     let mut tortoise = list;
     let mut max = 2i64;
     let mut n = 0i64;
-    let mut q = 2i64;
+    let mut q = 2u16;
 
     while tail.is_cons() {
         if let Some(result) = visit(tail, tortoise)? {
@@ -152,7 +157,7 @@ where
     let mut tortoise = list;
     let mut max = 2i64;
     let mut n = 0i64;
-    let mut q = 2i64;
+    let mut q = 2u16;
 
     while tail.is_cons() {
         if let Some(result) = visit(tail)? {
@@ -193,7 +198,7 @@ fn proper_list_length_or_signal_scan<const OBSERVED: bool>(list: Value) -> Resul
     let mut tortoise = list;
     let mut max = 2i64;
     let mut n = 0i64;
-    let mut q = 2i64;
+    let mut q = 2u16;
 
     while tail.is_cons() {
         len = len.saturating_add(1);
@@ -223,7 +228,7 @@ pub(crate) fn collect_proper_list_items(list: Value) -> Result<Vec<Value>, Flow>
     let mut tortoise = list;
     let mut max = 2i64;
     let mut n = 0i64;
-    let mut q = 2i64;
+    let mut q = 2u16;
 
     while tail.is_cons() {
         items.push(tail.cons_car());
@@ -600,7 +605,7 @@ fn list_length_internal_for_predicate_scan<const OBSERVED: bool>(
     let mut tortoise = sequence;
     let mut max = 2i64;
     let mut n = 0i64;
-    let mut q = 2i64;
+    let mut q = 2u16;
     while sequence.is_cons() {
         len -= 1;
         if len <= 0 {
@@ -884,7 +889,7 @@ fn nthcdr_large_or_bignum_scan<const OBSERVED: bool>(
     let mut tortoise = tail;
     let mut max = 2i64;
     let mut n = 0i64;
-    let mut q = 2i64;
+    let mut q = 2u16;
     let mut found_cycle = false;
 
     while tail.is_cons() {
@@ -973,7 +978,7 @@ fn builtin_append_slice_impl(args: &[Value]) -> EvalResult {
         let mut tortoise = list;
         let mut max = 2i64;
         let mut n = 0i64;
-        let mut q = 2i64;
+        let mut q = 2u16;
 
         while tail.is_cons() {
             append_element(result, last, tail.cons_car());
@@ -1409,7 +1414,7 @@ fn memq_swp_exact(bare: Value, list: Value) -> EvalResult {
     let mut tortoise = list;
     let mut max = 2i64;
     let mut n = 0i64;
-    let mut q = 2i64;
+    let mut q = 2u16;
     while tail.is_cons() {
         if eq_bare_symbol_swp(tail.cons_car(), bare) {
             return Ok(tail);
@@ -1842,7 +1847,7 @@ fn copy_list_sequence_scan<const OBSERVED: bool>(arg: Value) -> EvalResult {
     let mut tortoise = tail;
     let mut max = 2i64;
     let mut n = 0i64;
-    let mut q = 2i64;
+    let mut q = 2u16;
 
     while tail.is_cons() {
         let next = Value::cons(scan_car::<OBSERVED>(tail), Value::NIL);
@@ -1897,7 +1902,7 @@ where
     let mut tortoise = list;
     let mut max = 2i64;
     let mut n = 0i64;
-    let mut q = 2i64;
+    let mut q = 2u16;
 
     while tail.is_cons() {
         let remove = {

@@ -114,6 +114,58 @@ fn plist_entry(prop: Value, value: Value, tail: Value) -> Value {
     entry
 }
 
+/// GNU `FOR_EACH_TAIL_INTERNAL`'s Brent cycle state (lisp.h), for plist
+/// walks that must signal `circular-list` like GNU's `FOR_EACH_TAIL`: the
+/// same tail after the same number of steps. `q` is GNU's `unsigned short`
+/// (it keeps the low 16 bits of `max` and wraps); a wider counter stops the
+/// tortoise once `max` reaches 2^17 and never finds a late cycle.
+pub(crate) struct TailCycleCheck {
+    tortoise: Value,
+    max: i64,
+    n: i64,
+    q: u16,
+}
+
+impl TailCycleCheck {
+    #[inline]
+    pub(crate) fn new(list: Value) -> Self {
+        Self {
+            tortoise: list,
+            max: 2,
+            n: 0,
+            q: 2,
+        }
+    }
+
+    /// The current tortoise, for walks that call Lisp between steps and must
+    /// keep it rooted (it is compared by identity).
+    #[inline]
+    pub(crate) fn tortoise(&self) -> Value {
+        self.tortoise
+    }
+
+    /// The macro's step after the walk advanced to `tail`: returns `tail`
+    /// when it closes a cycle (the object GNU signals with).
+    #[inline]
+    pub(crate) fn step(&mut self, tail: Value) -> Option<Value> {
+        if !tail.is_cons() {
+            return None;
+        }
+        self.q = self.q.wrapping_sub(1);
+        if self.q == 0 {
+            self.n -= 1;
+            if self.n <= 0 {
+                self.max = self.max.saturating_mul(2);
+                self.q = self.max as u16;
+                self.n = self.max >> u16::BITS;
+                self.tortoise = tail;
+                return None;
+            }
+        }
+        (tail.bits() == self.tortoise.bits()).then_some(tail)
+    }
+}
+
 pub(crate) struct SafeTailGuard {
     tortoise: Value,
     power: usize,
@@ -266,6 +318,7 @@ fn plist_put_walk<const OBSERVE: bool>(
     }
     let mut tail = plist;
     let mut last_value_cell: Option<Value> = None;
+    let mut cycle = TailCycleCheck::new(plist);
     loop {
         if !tail.is_cons() {
             // End of walk. If it's nil, append. If not, malformed plist.
@@ -309,6 +362,10 @@ fn plist_put_walk<const OBSERVE: bool>(
         }
         last_value_cell = Some(rest);
         tail = read_cdr::<OBSERVE>(rest);
+        // GNU plist_put walks with FOR_EACH_TAIL: a circular plist signals.
+        if let Some(cycle_tail) = cycle.step(tail) {
+            return Err(signal(LispCondition::CircularList, vec![cycle_tail]));
+        }
     }
 }
 

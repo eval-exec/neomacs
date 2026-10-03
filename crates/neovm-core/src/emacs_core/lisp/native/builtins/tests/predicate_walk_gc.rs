@@ -98,3 +98,34 @@ fn plist_predicate_walks_signal_or_stop_on_circular_plists() {
     );
     assert_eq!(got, "OK ((t 4) (t 4) (nil 4))");
 }
+
+#[test]
+fn list_walks_detect_a_cycle_entered_past_131k_steps() {
+    // GNU's Brent counter is an unsigned short; with a wider one the
+    // tortoise froze at step 131070 and these walks spun forever.
+    let got = eval_after_churn(
+        "(let ((m (make-list 280000 nil)))
+           (setcdr (nthcdr 279999 m) (nthcdr 279998 m))
+           (condition-case nil (length m) (circular-list 'circ)))",
+    );
+    assert_eq!(got, "OK circ");
+}
+
+#[test]
+fn eq_plist_walks_and_put_signal_on_circular_plists() {
+    // GNU plist_put and plist_member walk with FOR_EACH_TAIL.
+    let got = eval_after_churn(
+        "(let ((l (list 'a 1 'b 2)))
+           (setcdr (nthcdr 3 l) l)
+           (setplist 'neovm--circular-plist-sym l)
+           (prog1
+               (list
+                (condition-case err (plist-put l 'zz 9) (circular-list (eq (car (cdr err)) l)))
+                (condition-case err (plist-member l 'zz) (circular-list (eq (car (cdr err)) l)))
+                (plist-get l 'zz)
+                (condition-case err (put 'neovm--circular-plist-sym 'zz 9)
+                  (circular-list (eq (car (cdr err)) l))))
+             (setplist 'neovm--circular-plist-sym nil)))",
+    );
+    assert_eq!(got, "OK (t t nil t)");
+}

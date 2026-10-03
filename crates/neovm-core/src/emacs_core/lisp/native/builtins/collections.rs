@@ -1191,42 +1191,6 @@ pub(crate) fn builtin_plist_get_3(
     builtin_plist_get_with_ctx(eval, vec![plist, prop, predicate])
 }
 
-/// GNU `FOR_EACH_TAIL_INTERNAL`'s Brent state for the predicate plist walks,
-/// so a circular plist ends the walk after the same number of predicate
-/// calls as GNU (and `circular-list` carries the same tail).
-struct PredicatePlistTail {
-    tortoise: Value,
-    max: i64,
-    n: i64,
-    q: i64,
-}
-
-impl PredicatePlistTail {
-    fn new(plist: Value) -> Self {
-        Self {
-            tortoise: plist,
-            max: 2,
-            n: 0,
-            q: 2,
-        }
-    }
-
-    /// The macro's step after the walk moved to `tail`: the tail at which a
-    /// cycle closes.
-    fn advance(&mut self, tail: Value) -> Option<Value> {
-        if !tail.is_cons() {
-            return None;
-        }
-        super::cons_list::for_each_tail_cycle_tail(
-            tail,
-            &mut self.tortoise,
-            &mut self.max,
-            &mut self.n,
-            &mut self.q,
-        )
-    }
-}
-
 pub(crate) fn builtin_plist_get_with_ctx(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
@@ -1253,12 +1217,12 @@ pub(crate) fn builtin_plist_get_with_ctx(
     let cursor_slot = eval.push_specpdl_root_slot(Value::NIL);
     let tortoise_slot = eval.push_specpdl_root_slot(Value::NIL);
     let mut cursor = plist;
-    let mut cycle = PredicatePlistTail::new(cursor);
+    let mut cycle = crate::emacs_core::plist::TailCycleCheck::new(cursor);
     let plist_result = loop {
         match cursor.kind() {
             ValueKind::Cons => {
                 eval.set_specpdl_root_slot(&cursor_slot, cursor);
-                eval.set_specpdl_root_slot(&tortoise_slot, cycle.tortoise);
+                eval.set_specpdl_root_slot(&tortoise_slot, cycle.tortoise());
                 if !cursor.cons_cdr().is_cons() {
                     break Ok(Value::NIL);
                 }
@@ -1277,7 +1241,7 @@ pub(crate) fn builtin_plist_get_with_ctx(
                         }
                         cursor = pair_cdr.cons_cdr();
                         // FOR_EACH_TAIL_SAFE: a cycle just ends the walk.
-                        if cycle.advance(cursor).is_some() {
+                        if cycle.step(cursor).is_some() {
                             break Ok(Value::NIL);
                         }
                     }
@@ -1339,13 +1303,13 @@ pub(crate) fn builtin_plist_put_with_ctx(
     let tortoise_slot = eval.push_specpdl_root_slot(Value::NIL);
     let mut cursor = plist;
     let mut prev = Value::NIL;
-    let mut cycle = PredicatePlistTail::new(cursor);
+    let mut cycle = crate::emacs_core::plist::TailCycleCheck::new(cursor);
     let plist_result = loop {
         match cursor.kind() {
             ValueKind::Cons => {
                 eval.set_specpdl_root_slot(&cursor_slot, cursor);
                 eval.set_specpdl_root_slot(&prev_slot, prev);
-                eval.set_specpdl_root_slot(&tortoise_slot, cycle.tortoise);
+                eval.set_specpdl_root_slot(&tortoise_slot, cycle.tortoise());
                 if !cursor.cons_cdr().is_cons() {
                     break Err(signal(
                         LispCondition::WrongTypeArgument,
@@ -1379,7 +1343,7 @@ pub(crate) fn builtin_plist_put_with_ctx(
                         }
                         prev = cursor;
                         cursor = entry_rest.cons_cdr();
-                        if let Some(cycle_tail) = cycle.advance(cursor) {
+                        if let Some(cycle_tail) = cycle.step(cursor) {
                             break Err(signal(LispCondition::CircularList, vec![cycle_tail]));
                         }
                     }
@@ -1426,6 +1390,7 @@ fn builtin_plist_put_eq_swp(args: Vec<Value>, symbols_with_pos_enabled: bool) ->
 
     let mut cursor = plist;
     let mut last_value_cell: Option<Value> = None;
+    let mut cycle = crate::emacs_core::plist::TailCycleCheck::new(plist);
 
     loop {
         match cursor.kind() {
@@ -1442,6 +1407,10 @@ fn builtin_plist_put_eq_swp(args: Vec<Value>, symbols_with_pos_enabled: bool) ->
                         let value_cell = entry_rest;
                         cursor = entry_rest.cons_cdr();
                         last_value_cell = Some(value_cell);
+                        // GNU plist_put walks with FOR_EACH_TAIL.
+                        if let Some(cycle_tail) = cycle.step(cursor) {
+                            return Err(signal(LispCondition::CircularList, vec![cycle_tail]));
+                        }
                     }
                     _ => {
                         return Err(signal(
@@ -1497,12 +1466,12 @@ pub(crate) fn builtin_plist_member(
     let cursor_slot = eval.push_specpdl_root_slot(Value::NIL);
     let tortoise_slot = eval.push_specpdl_root_slot(Value::NIL);
     let mut cursor = plist;
-    let mut cycle = PredicatePlistTail::new(cursor);
+    let mut cycle = crate::emacs_core::plist::TailCycleCheck::new(cursor);
     let plist_result = loop {
         match cursor.kind() {
             ValueKind::Cons => {
                 eval.set_specpdl_root_slot(&cursor_slot, cursor);
-                eval.set_specpdl_root_slot(&tortoise_slot, cycle.tortoise);
+                eval.set_specpdl_root_slot(&tortoise_slot, cycle.tortoise());
                 let entry_key = cursor.cons_car();
 
                 let matches = if let Some(predicate) = &predicate {
@@ -1527,7 +1496,7 @@ pub(crate) fn builtin_plist_member(
                 match entry_rest.kind() {
                     ValueKind::Cons => {
                         cursor = entry_rest.cons_cdr();
-                        if let Some(cycle_tail) = cycle.advance(cursor) {
+                        if let Some(cycle_tail) = cycle.step(cursor) {
                             break Err(signal(LispCondition::CircularList, vec![cycle_tail]));
                         }
                     }
@@ -1575,8 +1544,10 @@ pub(crate) fn plist_member_eq_swp(args: Vec<Value>, symbols_with_pos_enabled: bo
     // the plist two elements at a time looking for PROP. A nil tail at
     // any step ends the walk cleanly and returns nil (not-found),
     // matching GNU `FOR_EACH_TAIL`'s implicit break on non-cons. Only a
-    // non-nil improper tail (dotted list) signals `plistp`.
+    // non-nil improper tail (dotted list) signals `plistp`. GNU walks with
+    // FOR_EACH_TAIL, so a circular plist signals `circular-list`.
     let mut cursor = plist;
+    let mut cycle = crate::emacs_core::plist::TailCycleCheck::new(plist);
     loop {
         match cursor.kind() {
             ValueKind::Cons => {
@@ -1590,6 +1561,9 @@ pub(crate) fn plist_member_eq_swp(args: Vec<Value>, symbols_with_pos_enabled: bo
                 match entry_rest.kind() {
                     ValueKind::Cons => {
                         cursor = entry_rest.cons_cdr();
+                        if let Some(cycle_tail) = cycle.step(cursor) {
+                            return Err(signal(LispCondition::CircularList, vec![cycle_tail]));
+                        }
                     }
                     ValueKind::Nil => {
                         // Unpaired last key: valid end of plist per
