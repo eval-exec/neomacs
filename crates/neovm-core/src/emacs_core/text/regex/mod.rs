@@ -4947,5 +4947,9 @@ mod gc_tls_ownership_tests;
 mod gc_collection_epoch_tests;
 
 #[cfg(test)]
+#[path = "tests/gc_collection_epoch_minor.rs"]
+mod gc_collection_epoch_minor_tests;
+
+#[cfg(test)]
 #[path = "tests/gc_literal_epoch.rs"]
 mod gc_literal_epoch_tests;

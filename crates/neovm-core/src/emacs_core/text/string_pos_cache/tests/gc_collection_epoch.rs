@@ -2,9 +2,10 @@ use super::*;
 use crate::emacs_core::eval::Context;
 use crate::tagged::gc::{CONS_BLOCK_CELLS, TaggedHeap, set_tagged_heap};
 
-fn populate_cache(context: &mut Context) -> Value {
+pub(super) fn populate_cache(context: &mut Context) -> Value {
     context.setup_thread_locals();
     let string = Value::string("aжλb");
+    assert!(context.tagged_heap.owns_heap_value_for_test(string));
     assert_eq!(
         string_char_to_byte(string, string.as_lisp_string().unwrap(), 2),
         3
@@ -208,7 +209,7 @@ fn gc_collection_epoch_string_pos_partial_sweep_root_scan_discards_swept_entry()
     heap.finish_incremental_sweep_now();
 }
 
-fn assert_warm_entry(string: Value, before: Entry) {
+pub(super) fn assert_warm_entry(string: Value, before: Entry) {
     let after = CACHE
         .with(Cell::get)
         .expect("owning-thread GC evicted the warm entry");
@@ -263,9 +264,20 @@ fn start_deferred_sweep(context: &mut Context) {
     panic!("concurrent marking did not enter deferred sweep");
 }
 
+fn non_generational_context() -> Context {
+    // Nextest gives each test its own process. Select the legacy concurrent
+    // path before the constructor reads the generational knob.
+    unsafe { std::env::set_var("NEOVM_GC_GENERATIONAL", "0") };
+    let mut context = Context::new();
+    context.gc_stress = false;
+    assert!(!context.tagged_heap.generational_enabled());
+    assert!(!context.gc_stress);
+    context
+}
+
 #[test]
 fn gc_collection_epoch_string_pos_concurrent_collections_keep_warm_entry() {
-    let mut context = Context::new();
+    let mut context = non_generational_context();
     context.gc_collect_exact();
     let string = populate_cache(&mut context);
     let before = CACHE.with(Cell::get).unwrap();
@@ -293,7 +305,7 @@ enum ForeignPhase {
 }
 
 fn assert_foreign_cycle_discards_entry(phase: ForeignPhase) {
-    let mut context = Context::new();
+    let mut context = non_generational_context();
     context.gc_collect_exact();
     let string = populate_cache(&mut context);
     let completed = context.tagged_heap.gc_collections();

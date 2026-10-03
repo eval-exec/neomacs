@@ -209,3 +209,7 @@ mod gc_tls_ownership_tests;
 #[cfg(test)]
 #[path = "tests/gc_collection_epoch.rs"]
 mod gc_collection_epoch_tests;
+
+#[cfg(test)]
+#[path = "tests/gc_collection_epoch_minor.rs"]
+mod gc_collection_epoch_minor_tests;

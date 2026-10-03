@@ -76,7 +76,7 @@ SURFACE_RE+='|^emacs_core::eval::gc_root_ownership_tests::'
 SURFACE_RE+='|^emacs_core::terminal::tests::gc_heap_ownership::'
 SURFACE_RE+='|::gc_tls_ownership_tests::|::thread_local_ownership_tests::|::heap_registry::ownership_tests::'
 SURFACE_RE+='|^tagged::gc::symbol_barrier_tests::'
-SURFACE_RE+='|::gc_collection_epoch_tests::|::gc_literal_epoch_tests::|::gc_tls_migration_proof_tests::|::gc_context_migration_tests::'
+SURFACE_RE+='|::gc_collection_epoch_tests::|::gc_collection_epoch_minor_tests::|::gc_literal_epoch_tests::|::gc_tls_migration_proof_tests::|::gc_context_migration_tests::'
 
 # --- TSan needs an unlimited virtual address space -------------------------
 ulimit -v unlimited 2>/dev/null || true

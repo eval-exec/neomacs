@@ -30,6 +30,17 @@ fn regex_roots(ctx: &Context) -> Vec<Value> {
     roots
 }
 
+fn non_generational_context() -> Context {
+    // Constructor-read selection, isolated per test by nextest. These tests
+    // specifically require concurrent marking rather than a deferred minor.
+    unsafe { std::env::set_var("NEOVM_GC_GENERATIONAL", "0") };
+    let mut ctx = Context::new();
+    ctx.gc_stress = false;
+    assert!(!ctx.tagged_heap.generational_enabled());
+    assert!(!ctx.gc_stress);
+    ctx
+}
+
 fn populate_cache(ctx: &mut Context, owner: CacheOwner) -> (Value, Value) {
     let payload = ctx.eval_str("(make-hash-table)").unwrap();
     let table = match owner {
@@ -229,7 +240,7 @@ fn gc_collection_epoch_regex_enumeration_discards_swept_literal_translation() {
     );
 }
 
-struct WarmRegexCaches {
+pub(super) struct WarmRegexCaches {
     syntax: BufferSyntaxLookup,
     syntax_table: Value,
     translation_table: Value,
@@ -240,10 +251,14 @@ struct WarmRegexCaches {
 }
 
 impl WarmRegexCaches {
-    fn new(ctx: &mut Context) -> Self {
+    pub(super) fn new(ctx: &mut Context) -> Self {
         ctx.gc_inhibit_depth += 1;
         let syntax_table = ctx
-            .eval_str("(progn (set-syntax-table (copy-syntax-table)) (syntax-table))")
+            .eval_str(
+                "(progn (set-syntax-table (copy-syntax-table))
+                        (modify-syntax-entry ?@ \"w\")
+                        (syntax-table))",
+            )
             .unwrap();
         let syntax = buffer_syntax_lookup(ctx.buffers.current_buffer().unwrap());
         let pattern = LispString::from_utf8("[[:word:]]+");
@@ -262,6 +277,15 @@ impl WarmRegexCaches {
 
         let translation_table =
             crate::emacs_core::chartable::make_char_table_value(Value::NIL, Value::NIL);
+        crate::emacs_core::chartable::builtin_set_char_table_range(
+            vec![
+                translation_table,
+                Value::cons(Value::fixnum(b'A' as i64), Value::fixnum(b'B' as i64)),
+                Value::fixnum(b'~' as i64),
+            ],
+            None,
+        )
+        .unwrap();
         let lisp_translation = compile_lisp_pattern_with_posix_translation(
             &LispString::from_utf8("gc-steady-translation[AB]+"),
             true,
@@ -281,6 +305,15 @@ impl WarmRegexCaches {
             None,
         )
         .unwrap();
+        crate::emacs_core::chartable::builtin_set_char_table_range(
+            vec![
+                custom,
+                Value::fixnum('\u{03bb}' as i64),
+                Value::fixnum(b'?' as i64),
+            ],
+            None,
+        )
+        .unwrap();
         crate::emacs_core::casetab::builtin_set_case_table(ctx, vec![custom]).unwrap();
         let literal_translation =
             buffer_search_translation(ctx.buffers.current_buffer().unwrap(), true).unwrap();
@@ -296,7 +329,15 @@ impl WarmRegexCaches {
         }
     }
 
-    fn assert_present_and_hit(&self, ctx: &Context) {
+    pub(super) fn cache_tables(&self) -> [Value; 3] {
+        [
+            self.syntax_table,
+            self.translation_table,
+            self.literal_translation.gc_root().unwrap(),
+        ]
+    }
+
+    pub(super) fn assert_present_and_compiled_hits(&self, ctx: &Context) {
         // Holding the original Rc allocations makes an identity comparison
         // distinguish a cache hit from recompilation, even with address reuse.
         // Check membership before a lookup could read a reclaimed table.
@@ -322,12 +363,11 @@ impl WarmRegexCaches {
                 .is_some_and(|(_, trt)| { Rc::ptr_eq(trt, &self.literal_translation) })),
             "owning-thread collection discarded the literal translation"
         );
-        // These custom tables have no Context root; the cache keeps them live.
-        assert!(ctx.tagged_heap.owns_heap_value_for_test(self.syntax_table));
-        assert!(
-            ctx.tagged_heap
-                .owns_heap_value_for_test(self.translation_table)
-        );
+        // Guard all cache-held tables before compiled or literal lookups.
+        // The minor liveness fixture also detaches the literal case table.
+        for table in self.cache_tables() {
+            assert!(ctx.tagged_heap.owns_heap_value_for_test(table));
+        }
         let pattern = LispString::from_utf8("[[:word:]]+");
         let CompiledSearchPattern::Emacs(search) =
             compile_search_pattern_with_posix(&pattern, false, false, &self.syntax).unwrap()
@@ -364,15 +404,53 @@ impl WarmRegexCaches {
             Rc::ptr_eq(&lisp, &self.lisp_translation),
             "translated regexp recompiled"
         );
+    }
+
+    pub(super) fn assert_present_and_hit(&self, ctx: &Context) {
+        self.assert_present_and_compiled_hits(ctx);
         let literal =
             buffer_search_translation(ctx.buffers.current_buffer().unwrap(), true).unwrap();
         assert!(Rc::ptr_eq(&literal, &self.literal_translation));
         assert_eq!(literal.translate(b'[' as u32), b']' as u32);
     }
+
+    pub(super) fn assert_cached_search_results(&self, ctx: &Context) {
+        // Guard every table dereference, including the syntax lookup's raw
+        // identity and the literal translator's non-ASCII table lookup.
+        for table in self.cache_tables() {
+            assert!(ctx.tagged_heap.owns_heap_value_for_test(table));
+        }
+        for compiled in [&self.search, &self.lisp_syntax] {
+            let (start, regs) = regex_emacs::re_search(compiled, b".@.", 0, 3, &self.syntax, 0)
+                .expect("cache-only syntax table still classifies @ as word syntax");
+            assert_eq!((start, regs.end[0]), (1, 2));
+        }
+        let text = b"..gc-steady-translation~~~";
+        let (start, regs) = regex_emacs::re_search(
+            &self.lisp_translation,
+            text,
+            0,
+            text.len() as isize,
+            &DefaultSyntaxLookup,
+            0,
+        )
+        .expect("cache-only translation still folds [AB] to ~");
+        assert_eq!((start, regs.end[0]), (2, text.len() as i64));
+        let literal = LITERAL_TRT_CACHE.with(|cache| {
+            let cache = cache.borrow();
+            let (_, literal) = cache.as_ref().expect("literal cache remains populated");
+            assert!(Rc::ptr_eq(literal, &self.literal_translation));
+            literal.clone()
+        });
+        let matched = canon_fold_literal_find(b"..?..", "\u{03bb}".as_bytes(), true, &literal)
+            .expect("cache-only literal translation still folds lambda to ?");
+        assert_eq!((matched.start(), matched.end()), (2, 3));
+    }
 }
 
 fn start_public_concurrent_cycle(ctx: &mut Context) {
     // The completed bootstrap makes the public safe-point path concurrent.
+    assert!(!ctx.tagged_heap.generational_enabled());
     assert!(ctx.tagged_heap.should_run_concurrent());
     for i in 0..20_000u64 {
         ctx.tagged_heap
@@ -416,7 +494,7 @@ fn gc_collection_epoch_regex_same_thread_exact_keeps_warm_entries() {
 
 #[test]
 fn gc_collection_epoch_regex_same_thread_concurrent_keeps_warm_entries() {
-    let mut ctx = Context::new();
+    let mut ctx = non_generational_context();
     ctx.gc_collect_exact();
     ctx.setup_thread_locals();
     let warm = WarmRegexCaches::new(&mut ctx);
@@ -443,7 +521,7 @@ fn gc_collection_epoch_regex_same_thread_concurrent_keeps_warm_entries() {
 
 #[test]
 fn gc_collection_epoch_regex_exact_after_older_sweep_keeps_warm_entries() {
-    let mut ctx = Context::new();
+    let mut ctx = non_generational_context();
     ctx.gc_collect_exact();
     ctx.setup_thread_locals();
     let warm = WarmRegexCaches::new(&mut ctx);
@@ -465,7 +543,7 @@ enum ForeignCollectionPhase {
 }
 
 fn assert_foreign_in_progress_activation_clears(phase: ForeignCollectionPhase) {
-    let mut ctx = Context::new();
+    let mut ctx = non_generational_context();
     ctx.gc_collect_exact();
     ctx.setup_thread_locals();
     let _warm = WarmRegexCaches::new(&mut ctx);
