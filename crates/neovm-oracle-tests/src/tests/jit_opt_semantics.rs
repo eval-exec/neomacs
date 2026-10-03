@@ -100,9 +100,19 @@ fn oracle_prop_opt_native_call_backtrace_arguments() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let form = r#"(progn
       (fset 'opt-oracle-frame-callee
-        (byte-compile (lambda (x) (backtrace-frames))))
+        (byte-compile (lambda (x)
+          (let ((n 2) (result nil))
+            (while (> n 0)
+              (setq result (backtrace-frames))
+              (setq n (1- n)))
+            result))))
       (fset 'opt-oracle-frame-caller
-        (byte-compile (lambda (x) (opt-oracle-frame-callee x))))
+        (byte-compile (lambda (x)
+          (let ((n 2) (result nil))
+            (while (> n 0)
+              (setq result (opt-oracle-frame-callee x))
+              (setq n (1- n)))
+            result))))
       (dotimes (_ 200) (opt-oracle-frame-callee 7))
       (dotimes (_ 200) (opt-oracle-frame-caller 7))
       (let ((frames (opt-oracle-frame-caller 23)) (out nil))
