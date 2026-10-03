@@ -100,6 +100,23 @@ pub(crate) fn set_edit_sync_mode_for_test(mode: Option<EditSyncMode>) {
     MODE_OVERRIDE.with(|cell| cell.set(mode));
 }
 
+/// Pure numeric knob parser: absence alone selects the unset default.
+/// It retains no Lisp state, environment mutation or mutable cache. Independent
+/// mutators may call it concurrently; the existing OnceLock publishes policy.
+fn parse_edit_sync_mode(value: Option<&std::ffi::OsStr>) -> EditSyncMode {
+    let Some(value) = value else {
+        return EditSyncMode::Prove;
+    };
+    match value
+        .to_str()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("sync" | "on" | "1") => EditSyncMode::Sync,
+        _ => EditSyncMode::Prove,
+    }
+}
+
 /// The mode in effect. Read once per process; default `prove`.
 pub(crate) fn edit_sync_mode() -> EditSyncMode {
     #[cfg(test)]
@@ -108,14 +125,7 @@ pub(crate) fn edit_sync_mode() -> EditSyncMode {
     }
     static MODE: std::sync::OnceLock<EditSyncMode> = std::sync::OnceLock::new();
     *MODE.get_or_init(|| {
-        match std::env::var("NEOMACS_LAYOUT_EDIT_SYNC")
-            .ok()
-            .map(|value| value.trim().to_ascii_lowercase())
-            .as_deref()
-        {
-            Some("sync" | "on" | "1") => EditSyncMode::Sync,
-            _ => EditSyncMode::Prove,
-        }
+        parse_edit_sync_mode(std::env::var_os("NEOMACS_LAYOUT_EDIT_SYNC").as_deref())
     })
 }
 
@@ -786,9 +796,17 @@ pub(crate) fn plan_positions(
 }
 
 #[cfg(test)]
+#[path = "tests/edit_sync_lazy_proof_policy_aliases.rs"]
+mod lazy_proof_policy_aliases;
+
+#[cfg(test)]
 #[path = "tests/edit_sync_test.rs"]
 mod tests;
 
 #[cfg(test)]
 #[path = "tests/edit_sync_lazy_proof_selector_test.rs"]
 mod lazy_proof_selector_tests;
+
+#[cfg(test)]
+#[path = "tests/edit_sync_policy_aliases.rs"]
+mod edit_sync_policy_aliases_tests;

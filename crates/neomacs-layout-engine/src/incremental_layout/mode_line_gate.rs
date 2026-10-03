@@ -47,6 +47,23 @@ pub(crate) fn set_mode_line_gate_for_test(gate: Option<ModeLineGate>) {
     GATE_OVERRIDE.with(|cell| cell.set(gate));
 }
 
+/// Pure numeric knob parser: absence alone selects the unset default.
+/// It retains no Lisp state, environment mutation or mutable cache. Independent
+/// mutators may call it concurrently; the existing OnceLock publishes policy.
+fn parse_mode_line_gate(value: Option<&std::ffi::OsStr>) -> ModeLineGate {
+    let Some(value) = value else {
+        return ModeLineGate::Legacy;
+    };
+    match value
+        .to_str()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("gnu" | "on" | "1") => ModeLineGate::Gnu,
+        _ => ModeLineGate::Legacy,
+    }
+}
+
 /// The gate in effect. Read once per process; default `legacy`.
 pub(crate) fn mode_line_gate() -> ModeLineGate {
     #[cfg(test)]
@@ -54,16 +71,8 @@ pub(crate) fn mode_line_gate() -> ModeLineGate {
         return gate;
     }
     static GATE: std::sync::OnceLock<ModeLineGate> = std::sync::OnceLock::new();
-    *GATE.get_or_init(|| {
-        match std::env::var("NEOMACS_MODE_LINE_GATE")
-            .ok()
-            .map(|value| value.trim().to_ascii_lowercase())
-            .as_deref()
-        {
-            Some("gnu" | "on" | "1") => ModeLineGate::Gnu,
-            _ => ModeLineGate::Legacy,
-        }
-    })
+    *GATE
+        .get_or_init(|| parse_mode_line_gate(std::env::var_os("NEOMACS_MODE_LINE_GATE").as_deref()))
 }
 
 /// Why GNU would evaluate the mode line on this frame. One variant per GNU
@@ -432,3 +441,7 @@ pub(crate) fn line_numbers_require_mode_line(mode: crate::types::DisplayLineNumb
 #[cfg(test)]
 #[path = "tests/mode_line_gate_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/mode_line_gate_policy_aliases.rs"]
+mod mode_line_gate_policy_aliases_tests;

@@ -93,6 +93,21 @@ pub(crate) fn sync_source_budget_horizon_reads_for_test() -> u64 {
     SYNC_SOURCE_BUDGET_HORIZON_READS.with(std::cell::Cell::get)
 }
 
+/// Pure numeric knob parser: absence alone selects the unset default.
+/// It retains no Lisp state, environment mutation or mutable cache. Independent
+/// mutators may call it concurrently; the existing OnceLock publishes policy.
+fn parse_sync_source_budget(value: Option<&std::ffi::OsStr>) -> bool {
+    let Some(value) = value else {
+        return false;
+    };
+    value.to_str().is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "on" | "1" | "true" | "yes"
+        )
+    })
+}
+
 /// Process-read flag with no Lisp or layout state. OnceLock publishes it for
 /// concurrent readers; every source bound and retry belongs to one attempt.
 #[inline]
@@ -103,14 +118,7 @@ pub(crate) fn sync_source_budget_enabled() -> bool {
     }
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| {
-        std::env::var("NEOMACS_EDIT_SYNC_SOURCE_BUDGET")
-            .ok()
-            .is_some_and(|value| {
-                matches!(
-                    value.trim().to_ascii_lowercase().as_str(),
-                    "on" | "1" | "true" | "yes"
-                )
-            })
+        parse_sync_source_budget(std::env::var_os("NEOMACS_EDIT_SYNC_SOURCE_BUDGET").as_deref())
     })
 }
 
@@ -652,3 +660,7 @@ impl BufferWindowSourceRequest {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/source_budget_policy_aliases.rs"]
+mod source_budget_policy_aliases_tests;
