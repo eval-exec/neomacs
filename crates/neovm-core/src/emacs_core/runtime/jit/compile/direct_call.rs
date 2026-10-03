@@ -67,8 +67,11 @@ pub(crate) static DIRECT_COLD_EXITS: AtomicU64 = AtomicU64::new(0);
 
 #[path = "direct_call/framed.rs"]
 mod framed;
+#[path = "direct_call/heat.rs"]
+mod heat;
 #[path = "direct_call/memory.rs"]
 mod memory;
+pub(crate) use heat::DirectSelfHeat;
 #[path = "direct_call/profile.rs"]
 mod profile;
 #[path = "direct_call/self_only.rs"]

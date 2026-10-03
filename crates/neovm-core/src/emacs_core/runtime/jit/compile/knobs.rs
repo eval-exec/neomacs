@@ -1006,6 +1006,34 @@ pub(crate) fn jit_direct_profile_on() -> bool {
     *ON.get_or_init(|| knob_on("NEOVM_JIT_DIRECT_PROFILE"))
 }
 
+#[cfg(test)]
+std::thread_local! {
+    // Compiler configuration only; no Lisp values or mutator runtime state.
+    static DIRECT_SELF_HEAT_TEST_OVERRIDE: std::cell::Cell<Option<super::direct_call::DirectSelfHeat>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn force_direct_self_heat_for_test(mode: Option<super::direct_call::DirectSelfHeat>) {
+    DIRECT_SELF_HEAT_TEST_OVERRIDE.with(|current| current.set(mode));
+}
+
+/// Existing source heat required before a self body gains direct sites and
+/// an implicit register entry. Default off retains the original policy.
+/// Threading: immutable process configuration, read only by the compiler.
+pub(crate) fn jit_direct_self_heat() -> super::direct_call::DirectSelfHeat {
+    #[cfg(test)]
+    if let Some(mode) = DIRECT_SELF_HEAT_TEST_OVERRIDE.with(core::cell::Cell::get) {
+        return mode;
+    }
+    static MODE: std::sync::OnceLock<super::direct_call::DirectSelfHeat> =
+        std::sync::OnceLock::new();
+    *MODE.get_or_init(|| {
+        super::direct_call::DirectSelfHeat::parse(
+            std::env::var("NEOVM_JIT_DIRECT_SELF_HEAT").ok().as_deref(),
+        )
+    })
+}
+
 /// Which variable ops `NEOVM_JIT_INLINE_VARS` inlines in JIT code (design
 /// `p1-4-inline-binding-blv` Stage B, `inline_vars`; default `read`).
 /// Read at compile time only, so both sides of an A/B run in one binary

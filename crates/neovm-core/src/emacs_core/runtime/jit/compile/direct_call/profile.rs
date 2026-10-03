@@ -16,6 +16,10 @@
 //! RMWs, preserving counts across mutators; relaxed report loads publish no
 //! runtime state and a live snapshot need not describe one instant. The
 //! knob is read only at compile time. Off, no registration or CLIF is added.
+//! An optional `NEOVM_JIT_DIRECT_PROFILE_FILE` exports immutable counter
+//! addresses before code publication. An ancestor profiler can snapshot
+//! these atomics around an edit-loop barrier. Registry locking serializes
+//! complete TSV rows across compiler threads; cells remain alive at exit.
 
 use super::super::knobs::jit_direct_profile_on;
 use crate::emacs_core::intern::SymId;
@@ -82,12 +86,42 @@ fn register_site_enabled(ordinal: usize, callee: Option<SymId>) -> Arc<SiteProfi
         attempts: AtomicU64::new(0),
         hits: AtomicU64::new(0),
     });
-    SITES
+    let mut sites = SITES
         .get_or_init(|| Mutex::new(Vec::new()))
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .push(Arc::clone(&site));
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    sites.push(Arc::clone(&site));
+    export_counter_addresses(&site);
     site
+}
+
+fn export_counter_addresses(site: &SiteProfile) {
+    use std::io::Write;
+
+    static PATH: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
+    let Some(path) = PATH.get_or_init(|| {
+        std::env::var_os("NEOVM_JIT_DIRECT_PROFILE_FILE")
+            .filter(|value| !value.is_empty())
+            .map(std::path::PathBuf::from)
+    }) else {
+        return;
+    };
+    let write = || -> std::io::Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        if file.metadata()?.len() == 0 {
+            writeln!(
+                file,
+                "pid\tid\tsource\tsite\towner\tattempts_addr\thits_addr"
+            )?;
+        }
+        writeln!(file, "{}", site.counter_addresses())
+    };
+    if let Err(error) = write() {
+        tracing::warn!(?path, %error, "cannot export direct-site diagnostic addresses");
+    }
 }
 
 /// Count an execution immediately before the direct site's first guard.
@@ -122,6 +156,20 @@ fn emit_increment(fb: &mut FunctionBuilder<'_>, ptr_ty: Type, counter: &AtomicU6
 }
 
 impl SiteProfile {
+    fn counter_addresses(&self) -> String {
+        let owner = self.owner.replace(['\t', '\n', '\r'], "_");
+        format!(
+            "{}\t{}\t{}\t{}\t{}\t{:#x}\t{:#x}",
+            std::process::id(),
+            self.id,
+            self.source_id,
+            self.ordinal,
+            owner,
+            core::ptr::from_ref(&self.attempts) as usize,
+            core::ptr::from_ref(&self.hits) as usize,
+        )
+    }
+
     fn render(&self) -> String {
         // Load hits first: every hit is sequenced after its attempt. Counts
         // can still advance during the snapshot, hence saturating subtraction.

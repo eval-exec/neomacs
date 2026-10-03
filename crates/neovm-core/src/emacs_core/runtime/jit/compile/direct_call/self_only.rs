@@ -26,8 +26,16 @@ pub(crate) struct SelfSourceScope(Option<usize>);
 
 impl SelfSourceScope {
     pub(crate) fn enter_for(f: &ByteCodeFunction, may_call_self: bool) -> Self {
-        let source =
-            (self_only_on() && may_call_self).then(|| runtime_identity_word(f.jit_runtime()));
+        let source = (self_only_on()
+            && may_call_self
+            && match jit_direct_self_heat() {
+                DirectSelfHeat::Off => true,
+                mode => mode.allows(
+                    f.jit_runtime().heat(),
+                    crate::emacs_core::jit::hot_threshold(),
+                ),
+            })
+        .then(|| runtime_identity_word(f.jit_runtime()));
         Self(SELF_SOURCE.with(|current| current.replace(source)))
     }
 }
