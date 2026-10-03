@@ -101,6 +101,22 @@ struct Options {
     args: Vec<String>,
 }
 
+/// Which way the request will be shown, resolved once.
+///
+/// GNU decides this before it writes a single token
+/// (`lib-src/emacsclient.c:656-661`): a frame-creating request with no
+/// available display *is* a tty request, so `-c` on a display-less terminal
+/// opens a frame on the client's own terminal instead of failing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FrameTransport {
+    /// No frame is created: `-e`, or the selected frame is reused.
+    None,
+    /// A new graphical frame: `-window-system`.
+    Graphical,
+    /// A new tty frame on this client's terminal: `-tty`.
+    Tty,
+}
+
 impl Options {
     /// The read timeout the client arms for server replies.
     ///
@@ -110,6 +126,33 @@ impl Options {
     /// (`:2225-2247`); see [`ReplyWatch`].
     fn reply_timeout(&self) -> Duration {
         self.timeout.unwrap_or(DEFAULT_REPLY_TIMEOUT)
+    }
+
+    /// GNU `emacsclient.c:656-661`: without an available display, a
+    /// frame-creating request is a tty request.
+    fn frame_transport(&self, display_available: bool) -> FrameTransport {
+        match self.frame {
+            FrameRequest::Current => FrameTransport::None,
+            FrameRequest::NewTty => FrameTransport::Tty,
+            FrameRequest::NewGraphical | FrameRequest::Reuse => {
+                if display_available {
+                    FrameTransport::Graphical
+                } else {
+                    FrameTransport::Tty
+                }
+            }
+        }
+    }
+
+    /// Whether the request carries this client's tty identity.
+    ///
+    /// GNU sends `-tty NAME TYPE` whenever `create_frame || !eval`
+    /// (`emacsclient.c:2104-2113`) — a daemon with no other frame may need to
+    /// occupy this tty even for a plain file request — and treats a missing
+    /// tty or `TERM` as fatal only when a tty frame was actually requested
+    /// (`find_tty`'s `noabort = !tty`, `:1136-1174`).
+    fn offers_tty_identity(&self) -> bool {
+        self.frame.creates_frame() || !self.eval
     }
 }
 
@@ -348,12 +391,18 @@ fn run_unix_client(prog: &str, options: Options) -> Result<(), String> {
     };
     // Connection/fallback precedes TTY validation and consuming stdin.
     // Automatic startup also constructs the original request only once.
-    let request = build_request(&options)?;
+    let plan = build_request(&options)?;
+    let request = plan.request;
     stream
         .set_read_timeout(Some(options.reply_timeout()))
         .map_err(|err| format!("failed to set socket timeout: {err}"))?;
 
-    let lifecycle = (options.frame == FrameRequest::NewTty)
+    // The tty lifecycle runs whenever the request carried a tty identity,
+    // not only for `-t`: a plain file request on a terminal attaches this
+    // client's tty too (GNU `init_signals` at emacsclient.c:2110-2112).
+    let lifecycle = plan
+        .tty
+        .is_some()
         .then(|| {
             stream
                 .try_clone()
@@ -396,11 +445,14 @@ fn run_tcp_client(prog: &str, options: Options, server_file: &str) -> Result<(),
         .set_read_timeout(Some(options.reply_timeout()))
         .map_err(|err| format!("failed to set socket timeout: {err}"))?;
 
+    let plan = build_request(&options)?;
     let mut request = String::new();
     push_arg_command(&mut request, "-auth", &config.auth_key);
-    request.push_str(&build_request(&options)?);
+    request.push_str(&plan.request);
     #[cfg(unix)]
-    let lifecycle = (options.frame == FrameRequest::NewTty)
+    let lifecycle = plan
+        .tty
+        .is_some()
         .then(|| {
             stream
                 .try_clone()
@@ -545,7 +597,15 @@ fn effective_uid() -> u32 {
     unsafe { libc::geteuid() }
 }
 
-fn build_request(options: &Options) -> Result<String, String> {
+/// A built request plus the transport it encodes, so the bytes and the
+/// caller's lifecycle decision cannot disagree about whether a tty was
+/// attached.
+struct RequestPlan {
+    request: String,
+    tty: Option<TtyIdentity>,
+}
+
+fn build_request(options: &Options) -> Result<RequestPlan, String> {
     let mut request = String::new();
     let cwd = env::current_dir().map_err(|err| format!("cannot get current directory: {err}"))?;
     let mut cwd = cwd.to_string_lossy().into_owned();
@@ -553,9 +613,18 @@ fn build_request(options: &Options) -> Result<String, String> {
         cwd.push('/');
     }
     let display = effective_display(options);
-    let tty = (options.frame == FrameRequest::NewTty)
-        .then(TtyIdentity::from_stdout)
-        .transpose()?;
+    let transport = options.frame_transport(display.is_some());
+    let tty = if options.offers_tty_identity() {
+        match TtyIdentity::from_stdout() {
+            Ok(identity) => Some(identity),
+            // GNU aborts only for a request that is really a tty frame;
+            // otherwise it just goes without a tty identity (`find_tty`).
+            Err(_) if transport != FrameTransport::Tty => None,
+            Err(error) => return Err(error),
+        }
+    } else {
+        None
+    };
 
     if options.frame.creates_frame() {
         for (name, value) in env::vars_os() {
@@ -597,10 +666,10 @@ fn build_request(options: &Options) -> Result<String, String> {
         request.push_str(&quote_argument(&tty.terminal_type));
         request.push(' ');
     }
-    // This flag asks the server to use its window-system display.  GNU sends
-    // it even when the client has no explicit DISPLAY/WAYLAND_DISPLAY; a
-    // daemon may already own a usable graphical display.
-    if options.frame.requests_window_system() {
+    // GNU sends this only for a graphical request (`create_frame && !tty`,
+    // emacsclient.c:2131-2132); a display-less `-c` was already resolved to a
+    // tty request above, which is what the server needs to hear.
+    if transport == FrameTransport::Graphical {
         push_flag(&mut request, "-window-system");
     }
 
@@ -636,7 +705,7 @@ fn build_request(options: &Options) -> Result<String, String> {
     }
 
     request.push('\n');
-    Ok(request)
+    Ok(RequestPlan { request, tty })
 }
 
 fn effective_display(options: &Options) -> Option<String> {
@@ -972,6 +1041,10 @@ fn alternate_editor_tokens(mut remaining: &str) -> Vec<&str> {
 #[cfg(test)]
 #[path = "neomacsclient/tests/timeout_tests.rs"]
 mod timeout_tests;
+
+#[cfg(test)]
+#[path = "neomacsclient/tests/transport_tests.rs"]
+mod transport_tests;
 
 #[cfg(test)]
 #[path = "neomacsclient/tests/alternate_editor_tests.rs"]
