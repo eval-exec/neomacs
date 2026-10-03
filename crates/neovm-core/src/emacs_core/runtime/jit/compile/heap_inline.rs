@@ -126,12 +126,24 @@ fn emit_barrier_window_check(
     fb.seal_block(outside);
 }
 
-/// Record the collection mutation on a generational inline-store path.
+/// Record an accepted Cons or VecLike store with the existing GEN1 helper.
 /// This has no Lisp allocation, callback or safe point; it runs the same
 /// projected recorder as the interpreter's setter before the actual store.
-/// The generation-disabled emitter never imports or calls it.
-fn emit_collection_write(fb: &mut FunctionBuilder, rt: &RtCtx, owner: ClifValue, tag: usize) {
-    let tagged = bor_imm_p(fb, owner, tag as i64);
+/// GEN0 calls it only under the collection-journal knob. Knob-off GEN1
+/// retains its original tag restoration, indirect call and generated CLIF.
+pub(crate) fn emit_collection_write(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    owner: ClifValue,
+    tag: usize,
+) {
+    let tagged = if jit_gen0_collection_journal_on() {
+        // Owners are aligned and already untagged. Addition restores the
+        // tag and lets Cranelift cancel the cons site's earlier subtraction.
+        iadd_imm_p(fb, owner, tag as i64)
+    } else {
+        bor_imm_p(fb, owner, tag as i64)
+    };
     let mut signature = Signature::new(rt.refs.call_conv);
     signature.params.push(AbiParam::new(rt.ptr_ty));
     let signature = fb.import_signature(signature);
@@ -161,6 +173,9 @@ pub(crate) fn emit_cons_store_barrier(
     let heap = heap_ptr(fb, rt);
     emit_barrier_window_check(fb, heap, owner, slow);
     if !rt.generational_enabled() {
+        if jit_gen0_collection_journal_on() {
+            emit_collection_write(fb, rt, owner, TAG_CONS);
+        }
         return;
     }
     if super::lowering::is_known_fixnum(fb, value) {
@@ -250,7 +265,7 @@ fn emit_slot_store_barrier(
     fb.ins().brif(needs_remembering, slow, &[], store, &[]);
     fb.switch_to_block(store);
     fb.seal_block(store);
-    if rt.generational_enabled() {
+    if rt.generational_enabled() || jit_gen0_collection_journal_on() {
         emit_collection_write(fb, rt, owner, crate::tagged::value::TAG_VECLIKE);
     }
 }

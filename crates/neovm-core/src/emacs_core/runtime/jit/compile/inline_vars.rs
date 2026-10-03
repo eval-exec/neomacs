@@ -950,6 +950,9 @@ fn emit_varset_fast(
             if rt.generational_enabled() {
                 let owner = iadd_imm_p(fb, valcell, -(TAG_CONS as i64));
                 super::heap_inline::emit_cons_store_barrier(fb, rt, owner, stored, slow);
+            } else if super::jit_gen0_collection_journal_on() {
+                let owner = iadd_imm_p(fb, valcell, -(TAG_CONS as i64));
+                super::heap_inline::emit_collection_write(fb, rt, owner, TAG_CONS);
             }
             store_word(fb, stored, valcell, TAGGED_CONS_CDR);
         }
@@ -1199,6 +1202,9 @@ fn emit_varbind_fast(
             if rt.generational_enabled() {
                 let owner = iadd_imm_p(fb, valcell, -(TAG_CONS as i64));
                 super::heap_inline::emit_cons_store_barrier(fb, rt, owner, stored, slow);
+            } else if super::jit_gen0_collection_journal_on() {
+                let owner = iadd_imm_p(fb, valcell, -(TAG_CONS as i64));
+                super::heap_inline::emit_collection_write(fb, rt, owner, TAG_CONS);
             }
             let local = imm64(fb, lets.let_local.header_with(sym) as i64);
             let default = imm64(fb, lets.let_default.header_with(sym) as i64);
@@ -1468,7 +1474,13 @@ fn emit_unbind_fast(
         match restore {
             Restore::Cell { cell, value } => store_word(fb, value, cell, LISP_SYMBOL_VAL_OFFSET),
             Restore::Fwd { desc, kind, value } => fwd_store(fb, desc, kind, value),
-            Restore::Cons { cons, value } => store_word(fb, value, cons, TAGGED_CONS_CDR),
+            Restore::Cons { cons, value } => {
+                if !generational && super::jit_gen0_collection_journal_on() {
+                    let owner = iadd_imm_p(fb, cons, -(TAG_CONS as i64));
+                    super::heap_inline::emit_collection_write(fb, rt, owner, TAG_CONS);
+                }
+                store_word(fb, value, cons, TAGGED_CONS_CDR);
+            }
         }
     }
     let vmctx = load_vmctx(fb, rt);

@@ -101,6 +101,7 @@ fn tier2_profile_shims_are_optional_for_a_leaf() {
         call_census: false,
         direct_framed: false,
         hof: false,
+        collection_journal: false,
     };
     assert!(!groups.contains(super::super::shim_refs::ShimGroup::Tier2Profile));
 }

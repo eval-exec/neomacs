@@ -1273,6 +1273,13 @@ fn emit_inline_string_aset(
         (base + LispString::JIT_DATA_OFFSET) as i32,
     );
     let at = fb.ins().iadd(data, i);
+    if super::jit_gen0_collection_journal_on() {
+        let record = rt
+            .refs
+            .try_get(fb.func, Shim::StringCollectionWrite)
+            .expect("string-collection-journal refs");
+        fb.ins().call(record, &[array]);
+    }
     fb.ins().istore8(flags, code, at, 0);
     fb.def_var(res, value);
     fb.ins().jump(merge, &[]);
@@ -3280,6 +3287,7 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
                 direct_shapes: !aot && (shapes.optional || shapes.rest),
                 call_census: !aot && jit_call_census_on(),
                 direct_framed: !aot && shapes.framed,
+                collection_journal: !aot && jit_gen0_collection_journal_on(),
                 hof: false,
             };
             let refs = super::RtRefs::new(

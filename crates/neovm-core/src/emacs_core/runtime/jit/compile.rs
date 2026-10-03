@@ -4105,6 +4105,7 @@ mod array_shim_tests;
 #[cfg(test)]
 #[path = "tests/call_feedback.rs"]
 mod call_feedback_tests;
+mod collection_journal;
 #[cfg(test)]
 #[path = "tests/compile_pipeline.rs"]
 pub(crate) mod compile_pipeline_tests;

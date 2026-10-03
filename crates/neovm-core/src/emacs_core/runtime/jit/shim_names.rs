@@ -16,6 +16,7 @@
 // bare `const` keeps this usable both as a crate item (aot.rs) and as a local
 // const inside each build.rs `main` (no module/use context required).
 const NEOVM_JIT_SHIM_NAMES: &[&str] = &[
+    "neovm_jit_string_collection_write",
     "neovm_jit_hof_length",
     "neovm_jit_hof_start",
     "neovm_jit_hof_store",

@@ -31,6 +31,12 @@ thread_local! {
 pub struct LispCollectionRevision(u64);
 
 impl LispCollectionRevision {
+    /// Exact mutation count for regression tests, including sequence wrap.
+    #[cfg(test)]
+    pub(crate) fn steps_since_for_test(self, earlier: Self) -> u64 {
+        self.0.wrapping_sub(earlier.0)
+    }
+
     pub fn current() -> Self {
         Self(COLLECTION_REVISION.with(std::cell::Cell::get))
     }

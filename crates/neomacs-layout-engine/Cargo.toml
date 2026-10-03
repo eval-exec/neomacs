@@ -50,6 +50,7 @@ wio.workspace = true
 
 [dev-dependencies]
 neomacs-test-fonts.workspace = true
+neovm-core = { workspace = true, features = ["jit"] }
 serde_json.workspace = true
 tracing-test.workspace = true
 

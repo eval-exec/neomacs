@@ -53,6 +53,7 @@ pub(crate) fn pure_entry_refs<S: sink::LeafSink>(
         call_census: false,
         direct_framed: false,
         hof: false,
+        collection_journal: false,
     };
     Ok(RtRefs::new(
         sink.shim_ids(call_conv, ptr_ty, groups)?,

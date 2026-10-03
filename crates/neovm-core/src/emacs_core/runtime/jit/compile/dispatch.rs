@@ -615,6 +615,11 @@ fn aset_fast(array: Value, index: Value, value: Value) -> bool {
     let Some(idx) = index.as_fixnum().and_then(|i| usize::try_from(i).ok()) else {
         return false;
     };
+    if jit_gen0_collection_journal_on()
+        && let Some(stored) = aset_journaled_vector(array, idx, value)
+    {
+        return stored;
+    }
     if array.veclike_type() == Some(crate::tagged::header::VecLikeType::Vector) {
         // One pass over what `set_vector_slot` would check again: owned
         // storage (a mapped pdump vector copies itself on the slow path),
@@ -675,6 +680,41 @@ fn aset_fast(array: Value, index: Value, value: Value) -> bool {
         return fits && array.set_string_byte_same_char_count(idx, code as u8);
     }
     false
+}
+
+/// The native vector setter's projected write must precede its observed
+/// pointer projection. Inspect the immutable header and backing guards
+/// without observing them, then reuse the interpreter's fused recorder.
+/// A failed guard leaves all effects to the existing generic path.
+///
+/// Threading: no state is retained here. The caller's mutator owns the
+/// existing collection journal and heap barrier; the slot store remains
+/// atomic for the concurrent collector, as in the ordinary fast path.
+#[inline]
+fn aset_journaled_vector(array: Value, idx: usize, value: Value) -> Option<bool> {
+    if !array.is_veclike() {
+        return None;
+    }
+    let header = (array.bits() & !TAG_MASK) as *const crate::tagged::header::VecLikeHeader;
+    // SAFETY: a live veclike, with an immutable subtype header. There is
+    // no callback or GC safe point between the guards and this mutation.
+    if unsafe { (*header).type_tag } != crate::tagged::header::VecLikeType::Vector {
+        return None;
+    }
+    let obj = header as *mut crate::tagged::header::VectorObj;
+    let data = unsafe { &mut (*obj).data };
+    if !data.is_owned() || idx >= data.as_slice().len() {
+        return Some(false);
+    }
+    crate::tagged::gc::TaggedHeap::record_compiled_collection_write(array.bits());
+    crate::tagged::gc::note_heap_slot_write(
+        array,
+        crate::tagged::gc::HeapWriteKind::VectorSlot,
+        idx,
+        value,
+    );
+    data.store_atomic(idx, value);
+    Some(true)
 }
 
 /// `Op::Aset` (GNU `Baset`) from compiled code: VALUE's bits, or one of the

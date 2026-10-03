@@ -29,10 +29,11 @@ fn context(generational: bool) -> Context {
     let mut context = {
         let _restore = RestoreKnob(std::env::var_os("NEOVM_GC_GENERATIONAL"));
         unsafe {
-            std::env::set_var(
-                "NEOVM_GC_GENERATIONAL",
-                if generational { "1" } else { "0" },
-            );
+            if generational {
+                std::env::set_var("NEOVM_GC_GENERATIONAL", "1");
+            } else {
+                std::env::remove_var("NEOVM_GC_GENERATIONAL");
+            }
         }
         Context::new()
     };
@@ -514,3 +515,7 @@ fn mapped_blv_default_never_uses_the_owned_cons_trailer_or_a_baked_remembered_fa
 
 #[path = "inline_heap_collection_revision.rs"]
 mod collection_revision;
+
+#[cfg(test)]
+#[path = "inline_heap_gen0_collection_revision.rs"]
+mod gen0_collection_revision;

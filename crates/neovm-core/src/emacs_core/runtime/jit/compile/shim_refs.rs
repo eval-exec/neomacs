@@ -57,6 +57,8 @@ pub(crate) enum ShimGroup {
     Hof,
     Tier2ArrayProfile,
     OptSink,
+    /// String collection journaling, selected only by its compile-time knob.
+    CollectionJournal,
 }
 
 /// Every runtime shim generated code calls, in declaration order.
@@ -156,6 +158,8 @@ pub(crate) enum Shim {
     // Optional Opt shims follow every main identity.
     T2RecordArrayUse,
     SqrtBindingValid,
+    /// A guarded string byte store; no Lisp allocation, callback or safe point.
+    StringCollectionWrite,
 }
 
 /// The parameter shapes of the shim signatures.
@@ -238,6 +242,7 @@ impl Shim {
             Shim::HofCursor => "neovm_jit_hof_cursor",
             Shim::HofFinish => "neovm_jit_hof_finish",
             Shim::HofAbort => "neovm_jit_hof_abort",
+            Shim::StringCollectionWrite => "neovm_jit_string_collection_write",
         }
     }
 
@@ -246,6 +251,7 @@ impl Shim {
         match self {
             Shim::SqrtBindingValid => ShimGroup::OptSink,
             Shim::T2RecordArrayUse => ShimGroup::Tier2ArrayProfile,
+            Shim::StringCollectionWrite => ShimGroup::CollectionJournal,
             Shim::CallSubrSpec | Shim::PredSpec | Shim::EqInclPropsSpec | Shim::ArithSpec => {
                 ShimGroup::SubrSpec
             }
@@ -318,6 +324,7 @@ impl Shim {
         match self {
             Shim::SqrtBindingValid => (&[Ptr, I64, I64, I64], true),
             Shim::T2RecordArrayUse => (&[Ptr, I64, Ptr], false),
+            Shim::StringCollectionWrite => (&[I64], false),
             // (leaf_obs) -> ()
             Shim::TierRequest => (&[Ptr], false),
             // Generic call's ABI plus the leaf's observation pointer.
@@ -450,6 +457,7 @@ pub(crate) struct ShimGroups {
     pub(crate) call_census: bool,
     pub(crate) direct_framed: bool,
     pub(crate) hof: bool,
+    pub(crate) collection_journal: bool,
 }
 
 impl ShimGroups {
@@ -465,6 +473,7 @@ impl ShimGroups {
             ShimGroup::CallCensus => self.call_census,
             ShimGroup::DirectFramed => self.direct_framed,
             ShimGroup::Hof => self.hof,
+            ShimGroup::CollectionJournal => self.collection_journal,
         }
     }
 }

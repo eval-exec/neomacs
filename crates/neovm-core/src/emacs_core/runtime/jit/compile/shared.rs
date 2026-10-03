@@ -365,6 +365,7 @@ impl SharedJit {
                         call_census: true,
                         direct_framed: true,
                         hof: true,
+                        collection_journal: true,
                     },
                 )?;
             }
@@ -388,6 +389,7 @@ impl SharedJit {
                 call_census: true,
                 direct_framed: true,
                 hof: true,
+                collection_journal: true,
             },
         )?;
         *slot = Some(SharedModule {

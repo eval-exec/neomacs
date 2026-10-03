@@ -4,6 +4,10 @@ use neovm_core::buffer::CharPos0;
 use neovm_core::emacs_core::Context;
 use neovm_core::face::{Color as NeoColor, Face as NeoFace, FaceTable};
 
+#[cfg(test)]
+#[path = "compiled_collection_mutation.rs"]
+mod compiled_collection_mutation;
+
 fn test_buffer_snapshot() -> LayoutBufferSnapshot {
     let mut context = Context::new();
     let buf_id = context
