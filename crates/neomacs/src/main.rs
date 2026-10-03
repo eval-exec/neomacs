@@ -2041,7 +2041,9 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         );
         Ok(Some(ResolvedFrameFont {
             height_tenths,
-            font: core_opened_font_from_selection(font, font_otf_capability_for_file),
+            font: core_opened_font_from_selection(font, |file, face_index| {
+                self.font_otf_capability(file, face_index).ok().flatten()
+            }),
         }))
     }
 
@@ -2152,7 +2154,13 @@ impl DisplayHost for PrimaryWindowDisplayHost {
             .open_font_entity(&query, pixel_size)
         {
             let file = opened.entity.matched.file_path().map(LispString::from_utf8);
-            let capability = font_otf_capability_for_asset(&opened.entity.matched.asset);
+            let capability = match &opened.entity.matched.asset {
+                neomacs_display_protocol::font::FontOutlineAsset::File(file) => self
+                    .font_otf_capability(file.path(), file.face_index())
+                    .ok()
+                    .flatten(),
+                asset => font_otf_capability_for_asset(asset),
+            };
             return Ok(Some(ResolvedFontEntityMetrics {
                 metrics: core_font_px_metrics(opened.metrics),
                 file,
@@ -2174,7 +2182,7 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         ) else {
             return Ok(None);
         };
-        let capability = font_otf_capability_for_file(file, 0);
+        let capability = self.font_otf_capability(file, 0).ok().flatten();
         Ok(Some(ResolvedFontEntityMetrics {
             metrics: core_font_px_metrics(metrics),
             file: request.file,
@@ -2187,7 +2195,10 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         file: &str,
         face_index: u32,
     ) -> Result<Option<neovm_core::emacs_core::eval::FontOtfCapability>, String> {
-        Ok(font_otf_capability_for_file(file, face_index))
+        Ok(self
+            .synchronized_font_metrics()
+            .otf_capability_for_file(file, face_index)
+            .map(core_font_otf_capability))
     }
 
     fn resolve_image_sync(
