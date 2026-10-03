@@ -126,6 +126,23 @@ fn emit_barrier_window_check(
     fb.seal_block(outside);
 }
 
+/// Record the collection mutation on a generational inline-store path.
+/// This has no Lisp allocation, callback or safe point; it runs the same
+/// projected recorder as the interpreter's setter before the actual store.
+/// The generation-disabled emitter never imports or calls it.
+fn emit_collection_write(fb: &mut FunctionBuilder, rt: &RtCtx, owner: ClifValue, tag: usize) {
+    let tagged = bor_imm_p(fb, owner, tag as i64);
+    let mut signature = Signature::new(rt.refs.call_conv);
+    signature.params.push(AbiParam::new(rt.ptr_ty));
+    let signature = fb.import_signature(signature);
+    let record = fb.ins().iconst(
+        rt.ptr_ty,
+        crate::tagged::gc::TaggedHeap::record_compiled_collection_write as *const () as usize
+            as i64,
+    );
+    fb.ins().call_indirect(signature, record, &[tagged]);
+}
+
 /// The single cons-store gate, shared by setcar/setcdr, HOF stores and BLVs.
 /// OWNER is an untagged, shape-guarded live cons. Window refusal comes first:
 /// mapped cells have no owned-block trailer, and marks/tracking need the shim
@@ -143,7 +160,11 @@ pub(crate) fn emit_cons_store_barrier(
     note_inline_site();
     let heap = heap_ptr(fb, rt);
     emit_barrier_window_check(fb, heap, owner, slow);
-    if !rt.generational_enabled() || super::lowering::is_known_fixnum(fb, value) {
+    if !rt.generational_enabled() {
+        return;
+    }
+    if super::lowering::is_known_fixnum(fb, value) {
+        emit_collection_write(fb, rt, owner, TAG_CONS);
         return;
     }
     let store = fb.create_block();
@@ -179,6 +200,7 @@ pub(crate) fn emit_cons_store_barrier(
     fb.ins().brif(unlogged, slow, &[], store, &[]);
     fb.switch_to_block(store);
     fb.seal_block(store);
+    emit_collection_write(fb, rt, owner, TAG_CONS);
     #[cfg(debug_assertions)]
     GENERATIONAL_CONS_TESTS_EMITTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
@@ -197,6 +219,7 @@ fn emit_slot_store_barrier(
     use crate::tagged::header::GcHeader;
     emit_barrier_window_check(fb, heap, owner, slow);
     if rt.generational_enabled() && super::lowering::is_known_fixnum(fb, value) {
+        emit_collection_write(fb, rt, owner, crate::tagged::value::TAG_VECLIKE);
         return;
     }
     let immediate_store =
@@ -227,6 +250,9 @@ fn emit_slot_store_barrier(
     fb.ins().brif(needs_remembering, slow, &[], store, &[]);
     fb.switch_to_block(store);
     fb.seal_block(store);
+    if rt.generational_enabled() {
+        emit_collection_write(fb, rt, owner, crate::tagged::value::TAG_VECLIKE);
+    }
 }
 
 /// `setcar` (`is_cdr == false`) or `setcdr` of `cell` to `value`, inline —

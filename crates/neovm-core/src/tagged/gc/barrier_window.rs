@@ -78,6 +78,26 @@ impl BarrierWindow {
 }
 
 impl TaggedHeap {
+    /// Collection history is independent of GC barrier eligibility. A native
+    /// generational store outside the owner window calls this before writing,
+    /// including immediate values and owners already logged for a minor.
+    /// Like the interpreter's setter, it journals and observes the projected
+    /// owner. This touches only the mutator's Rust bookkeeping: no Lisp
+    /// allocation, callback, collection or safe point can run here.
+    #[cfg(feature = "jit")]
+    pub(crate) extern "C" fn record_compiled_collection_write(bits: usize) {
+        use super::super::collection_reads::{WriteProjection, record_projected_write};
+        let owner = TaggedValue::from_bits(bits);
+        let projection = if owner.is_cons() {
+            WriteProjection::Cons
+        } else {
+            debug_assert!(owner.is_veclike());
+            WriteProjection::VecLike
+        };
+        let projected = record_projected_write(owner, projection);
+        debug_assert!(projected);
+    }
+
     /// The window this heap's current state implies (see the module doc).
     pub(crate) fn barrier_window(&self) -> BarrierWindow {
         if self.concurrent_mark_running

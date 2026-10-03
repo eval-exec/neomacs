@@ -467,3 +467,6 @@ fn mapped_blv_default_never_uses_the_owned_cons_trailer_or_a_baked_remembered_fa
     context.gc_collect_exact();
     assert_eq!(owner.cons_cdr().cons_car(), Value::make_int(67));
 }
+
+#[path = "inline_heap_collection_revision.rs"]
+mod collection_revision;
