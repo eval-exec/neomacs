@@ -1978,7 +1978,7 @@ fn assert_startup_locked(fixture: &Fixture, name: &str) {
 }
 
 #[test]
-fn reply_timeout_starts_after_gated_initialization_and_zero_is_unlimited() {
+fn reply_timeout_starts_after_gated_initialization_and_zero_is_rejected() {
     let fixture = Fixture::new();
     gate_startup(&fixture, false);
     let mut command = fixture.client("reply", "(list (emacs-pid) daemon-probe-ready)");
@@ -2006,11 +2006,17 @@ fn reply_timeout_starts_after_gated_initialization_and_zero_is_unlimited() {
     );
     fs::write(fixture.path("release-init"), "release").unwrap();
     assert!(wait_child(&mut client.0, Duration::from_secs(15)).success());
+    // GNU rejects a zero reply timeout outright — `Invalid timeout: "0"`,
+    // exit 1 (lib-src/emacsclient.c:540-549) — so zero is not a way to ask for
+    // an unlimited reply budget; only the absence of `-w` is.
     let mut zero = fixture.client("reply", "(progn (sleep-for 1.3) daemon-probe-ready)");
     zero.args(["-w", "0"]);
     let output = bounded(zero, Duration::from_secs(10));
-    assert!(output.status.success(), "{output:?}");
-    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "t");
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("Invalid timeout: \"0\""),
+        "{output:?}"
+    );
     fixture.eval("reply", "(kill-emacs)");
 }
 
