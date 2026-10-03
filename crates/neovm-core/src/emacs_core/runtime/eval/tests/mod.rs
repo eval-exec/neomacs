@@ -23393,6 +23393,9 @@ fn run_command_loop_error_commands(ev: &mut Context, global_map: Value, commands
         .expect("command loop should recover and run the stop command");
 }
 
+#[path = "quit_recovery.rs"]
+mod quit_recovery;
+
 /// GNU `command_loop_2' catches an unhandled command signal with `cmd_error',
 /// which delegates to the current buffer's `command-error-function'.  This is
 /// load-bearing in an active minibuffer: `minibuffer-error-initialize' installs

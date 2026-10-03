@@ -303,6 +303,10 @@ impl Context {
                 let error_msg = self.command_error_message(&sig);
                 let data = self.signal_error_data_value(&sig);
                 self.report_command_error(data, "")?;
+                // GNU cmd_error, not the shared cmd_error_internal reporter,
+                // releases reporting inhibition only after normal return.
+                self.set_quit_flag_value(Value::NIL);
+                self.assign("inhibit-quit", Value::NIL);
                 if cfg!(test) {
                     let last_phase = self
                         .obarray
@@ -440,6 +444,10 @@ impl Context {
 
                     let data = self.signal_error_data_value(&sig);
                     self.report_command_error(data, "")?;
+                    // GNU cmd_error, not the shared cmd_error_internal reporter,
+                    // releases reporting inhibition only after normal return.
+                    self.set_quit_flag_value(Value::NIL);
+                    self.assign("inhibit-quit", Value::NIL);
 
                     // GNU only ever shows the message; the log is this port's
                     // diagnostic, so it follows GNU's own ranking of signals
