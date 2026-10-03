@@ -17,6 +17,61 @@ fn test_image_load(image: u32, attempt: u64) -> ImageLoadToken {
 }
 
 #[test]
+fn native_repeat_tracking_does_not_fill_command_completion_ledger() {
+    let (emacs, render) = ThreadComms::new().split();
+    let mut progress = neomacs_display_protocol::input_progress::InputProgress::default();
+    let _command = progress.begin_command();
+    // A single interactive command may read held-key input indefinitely.
+    for _ in 0..1300 {
+        let (observer, _, _) = render.send_key_input_with_receipt(InputEvent::Key {
+            keysym: b'p' as u32,
+            modifiers: 0,
+            pressed: true,
+            emacs_frame_id: 1,
+        });
+        let observer = observer.expect("every native key needs a read receipt");
+        assert!(!observer.consumed_or_cancelled());
+        let InputEvent::Tracked { receipt, .. } = emacs.input_rx.try_recv().unwrap() else {
+            panic!("native key must retain read ownership through the bridge");
+        };
+        progress.consumed(receipt);
+        assert!(observer.consumed_or_cancelled());
+    }
+    assert!(progress.current_command_receipts().is_empty());
+}
+
+#[test]
+fn native_page_keys_keep_read_and_scroll_completion_receipts_separate() {
+    let (emacs, render) = ThreadComms::new().split();
+    let (read, completion, _) = render.send_key_input_with_receipt(InputEvent::Key {
+        keysym: 0xff55,
+        modifiers: 0,
+        pressed: true,
+        emacs_frame_id: 1,
+    });
+    let read = read.unwrap();
+    let completion = completion.unwrap();
+    assert!(!read.same_input(&completion));
+    let mut progress = neomacs_display_protocol::input_progress::InputProgress::default();
+    let command = progress.begin_command();
+    let InputEvent::Tracked { receipt, event } = emacs.input_rx.try_recv().unwrap() else {
+        panic!("missing native read receipt");
+    };
+    progress.consumed(receipt);
+    let InputEvent::Tracked { receipt, .. } = *event else {
+        panic!("missing scroll completion receipt");
+    };
+    progress.consumed(receipt);
+    assert!(read.consumed_or_cancelled());
+    assert!(!completion.acknowledged_by(&progress.checkpoint()));
+    assert_eq!(progress.current_command_receipts().len(), 1);
+    assert!(progress.current_command_receipts()[0].same_input(&completion));
+    drop(command);
+    assert!(completion.acknowledged_by(&progress.checkpoint()));
+    assert!(!read.acknowledged_by(&progress.checkpoint()));
+}
+
+#[test]
 fn render_capabilities_are_one_shared_evaluator_visible_snapshot() {
     let (emacs, render) = ThreadComms::new().split();
     assert_eq!(
