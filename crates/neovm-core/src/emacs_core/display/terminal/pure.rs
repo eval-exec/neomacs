@@ -12,7 +12,7 @@ use crate::emacs_core::value::{ValueKind, VecLikeType};
 use crate::window::FrameId;
 use neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities;
 use std::cell::{OnceCell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::Entry};
 use std::num::NonZeroU32;
 
 // ---------------------------------------------------------------------------
@@ -34,6 +34,24 @@ struct TerminalLispState {
 #[derive(Default)]
 pub(crate) struct TerminalLispRegistry {
     terminals: HashMap<u64, TerminalLispState>,
+    // GNU prepends native terminals, then Fterminal_list reverses them again.
+    // Preserve creation order independently of hash iteration and terminal ids.
+    creation_order: Vec<u64>,
+}
+
+impl TerminalLispRegistry {
+    fn ensure_terminal(&mut self, id: u64) -> &mut TerminalLispState {
+        match self.terminals.entry(id) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                self.creation_order.push(id);
+                entry.insert(TerminalLispState {
+                    handle: Value::make_terminal(id),
+                    params: Vec::new(),
+                })
+            }
+        }
+    }
 }
 
 pub(crate) type TerminalRegistryHandle = HeapRegistryHandle<TerminalLispRegistry>;
@@ -57,20 +75,28 @@ pub(crate) fn current_terminal_registry_handle() -> TerminalRegistryHandle {
 
 pub(crate) fn install_terminal_registry_handle(handle: &TerminalRegistryHandle) {
     TERMINAL_LISP_STATE.with(|slot| slot.install(handle));
-    let ids = handle
-        .borrow()
-        .terminals
-        .keys()
-        .copied()
-        .collect::<Vec<_>>();
+    let ids = handle.borrow().creation_order.clone();
     // A destination thread may not have seen these terminal ids before. Create
     // inactive native records without moving a host or duplicating Lisp Values.
     TERMINAL_MANAGER.with(|state| {
         let slot = state.get_or_init(|| RefCell::new(TerminalManager::new()));
         let mut manager = slot.borrow_mut();
-        for id in ids {
-            manager.ensure_lisp_terminal_record(id);
+        // A reset or another Context can leave native records absent from this
+        // registry, including the default initial terminal after its deletion.
+        // Keep their tombstones so next_terminal_id does not reuse their ids.
+        for terminal in &mut manager.terminals {
+            if !ids.contains(&terminal.id) {
+                terminal.mark_deleted();
+            }
         }
+        for id in &ids {
+            manager.ensure_lisp_terminal_record(*id);
+        }
+        manager.terminals.sort_by_key(|terminal| {
+            ids.iter()
+                .position(|id| *id == terminal.id)
+                .unwrap_or(ids.len())
+        });
     });
 }
 
@@ -347,6 +373,12 @@ impl TerminalRecord {
         !self.deleted
     }
 
+    fn mark_deleted(&mut self) {
+        self.deleted = true;
+        self.runtime = TerminalRuntime::inactive();
+        self.host = None;
+    }
+
     fn is_active(&self) -> bool {
         if !self.is_live() {
             return false;
@@ -373,15 +405,21 @@ impl TerminalManager {
     }
 
     fn ensure_lisp_terminal_record(&mut self, id: u64) {
-        if self.get(id).is_none() {
-            self.terminals.push(TerminalRecord::new(
-                id,
-                if id == TERMINAL_ID {
-                    TERMINAL_NAME.to_owned()
-                } else {
-                    format!("terminal-{id}")
-                },
-            ));
+        if self.get(id).is_some_and(TerminalRecord::is_live) {
+            return;
+        }
+        let record = TerminalRecord::new(
+            id,
+            if id == TERMINAL_ID {
+                TERMINAL_NAME.to_owned()
+            } else {
+                format!("terminal-{id}")
+            },
+        );
+        if let Some(terminal) = self.get_mut(id) {
+            *terminal = record;
+        } else {
+            self.terminals.push(record);
         }
     }
 
@@ -650,22 +688,18 @@ pub(crate) fn reset_terminal_handle() {
     let ids = TERMINAL_MANAGER.with(|state| {
         let slot = state.get_or_init(|| RefCell::new(TerminalManager::new()));
         slot.borrow()
-            .terminals
-            .iter()
+            .live_terminals()
             .map(|terminal| terminal.id)
             .collect::<Vec<_>>()
     });
     TERMINAL_LISP_STATE.with(|slot| {
         let mut registry = slot.borrow_mut();
         for id in ids {
-            let terminal = registry
-                .terminals
-                .entry(id)
-                .or_insert_with(|| TerminalLispState {
-                    handle: Value::NIL,
-                    params: Vec::new(),
-                });
-            terminal.handle = Value::make_terminal(id);
+            if let Some(terminal) = registry.terminals.get_mut(&id) {
+                terminal.handle = Value::make_terminal(id);
+            } else {
+                registry.ensure_terminal(id);
+            }
         }
     });
 }
@@ -688,26 +722,18 @@ pub(crate) fn collect_terminal_gc_roots(roots: &mut Vec<Value>, heap_identity: u
 
 fn terminal_handle_for_id(id: u64) -> Value {
     ensure_current_terminal_registry();
-    TERMINAL_LISP_STATE.with(|slot| {
-        slot.borrow_mut()
-            .terminals
-            .entry(id)
-            .or_insert_with(|| TerminalLispState {
-                handle: Value::make_terminal(id),
-                params: Vec::new(),
-            })
-            .handle
-    })
+    TERMINAL_LISP_STATE.with(|slot| slot.borrow_mut().ensure_terminal(id).handle)
 }
 
 pub(crate) fn terminal_handle_value() -> Value {
-    terminal_handle_value_for_id(TERMINAL_ID).unwrap_or_else(|| terminal_handle_for_id(TERMINAL_ID))
+    terminal_handle_value_for_id(TERMINAL_ID).unwrap_or(Value::NIL)
 }
 
 pub(crate) fn terminal_handle_value_for_id(id: u64) -> Option<Value> {
     with_terminal_manager(|slot| {
         slot.borrow()
             .get(id)
+            .filter(|terminal| terminal.is_live())
             .map(|terminal| terminal_handle_for_id(terminal.id))
     })
 }
@@ -1039,12 +1065,19 @@ fn with_terminal_host_for_id<R>(
 }
 
 fn delete_terminal_record(id: u64) {
+    // Deletion is Context-owned too: otherwise reinstall would recreate this
+    // terminal and retain its parameters as roots on every destination thread.
+    TERMINAL_LISP_STATE.with(|slot| {
+        let mut registry = slot.borrow_mut();
+        registry.terminals.remove(&id);
+        registry
+            .creation_order
+            .retain(|terminal_id| *terminal_id != id);
+    });
     with_terminal_manager(|slot| {
         let mut manager = slot.borrow_mut();
         if let Some(terminal) = manager.get_mut(id) {
-            terminal.deleted = true;
-            terminal.runtime = TerminalRuntime::inactive();
-            terminal.host = None;
+            terminal.mark_deleted();
         }
     });
 }
@@ -1590,3 +1623,7 @@ pub(crate) fn builtin_delete_terminal(
 #[cfg(test)]
 #[path = "tests/gc_context_migration.rs"]
 mod gc_context_migration_tests;
+
+#[cfg(test)]
+#[path = "tests/registry_reinstall.rs"]
+mod registry_reinstall_tests;
