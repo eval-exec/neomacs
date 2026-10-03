@@ -1991,3 +1991,6 @@ fn test_completion_answers_an_obarray_like_gnu() {
         "OK (t nil t nil t nil t nil t (t nil t nil t nil t nil))"
     );
 }
+
+#[cfg(test)]
+mod compare_case_table;

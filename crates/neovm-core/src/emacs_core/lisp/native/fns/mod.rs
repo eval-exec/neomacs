@@ -7,12 +7,14 @@
 //!
 //! | Knob | Values | Default | Purpose |
 //! |---|---|---|---|
+//! | `NEOVM_COMPARE_STRINGS_PARITY` | `on`, `off` (boolean aliases accepted) | off | Use the current buffer case table and GNU character upcase rules for case-insensitive string comparison. |
 //! | `NEOVM_COMPARE_STRINGS_POS_CACHE` | `on`, `off` (boolean aliases accepted) | on | Reuse GNU's rooted position cache when a validated compare-strings START is nonzero. |
 
 use super::error::{EvalResult, Flow, signal};
 use super::eval::Context;
 use super::intern::{intern, resolve_sym};
 use crate::emacs_core::builtins::{FromValue, StringDesignator};
+use crate::emacs_core::emacs_char;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_min_args};
 // bytes_to_unibyte_storage_string and encode_nonunicode_char_for_storage
@@ -1408,6 +1410,236 @@ pub(crate) fn builtin_compare_strings(args: Vec<Value>) -> EvalResult {
     } else {
         Ok(Value::fixnum((len + 1) as i64))
     }
+}
+
+/// Immutable process policy only, published through OnceLock; every mutator
+/// shares the scalar policy, while all case-table values remain in its Context.
+#[inline]
+pub(crate) fn compare_strings_parity_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(read_compare_strings_parity_knob)
+}
+
+#[cold]
+#[inline(never)]
+fn read_compare_strings_parity_knob() -> bool {
+    std::env::var("NEOVM_COMPARE_STRINGS_PARITY")
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "on" | "1" | "true" | "yes"
+            )
+        })
+}
+
+/// Buffer-aware entry point. A case-sensitive call never reads the parity knob
+/// and continues through the unchanged comparison and START-cache path.
+#[inline]
+pub(crate) fn builtin_compare_strings_in_state(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+    if args.get(6).is_some_and(|value| value.is_truthy()) && compare_strings_parity_enabled() {
+        compare_strings_with_current_case_table(ctx, args)
+    } else {
+        builtin_compare_strings(args)
+    }
+}
+
+#[cfg(test)]
+fn compare_strings_in_state_with_parity(
+    ctx: &mut Context,
+    args: Vec<Value>,
+    parity: bool,
+) -> EvalResult {
+    if parity && args.get(6).is_some_and(|value| value.is_truthy()) {
+        compare_strings_with_current_case_table(ctx, args)
+    } else {
+        builtin_compare_strings(args)
+    }
+}
+
+/// A call-local projection of the upcase char-table's ASCII cache. This holds
+/// only values rooted by the current buffer; no Lisp callback, collection or
+/// mutation can intervene while it is read. Mutators own their Context and the
+/// projection introduces no shared mutable state or persistent Lisp cache.
+enum CompareStringsAsciiCase {
+    Uniform(Value),
+    Values(Value),
+    Lookup,
+}
+
+/// Call-local case state belongs to the current mutator's Context. Its table
+/// roots are held by the buffer; comparison runs without Lisp calls or writes.
+struct CompareStringsCase {
+    up: Value,
+    ascii: CompareStringsAsciiCase,
+    multibyte_buffer: bool,
+}
+
+impl CompareStringsCase {
+    fn for_current_buffer(ctx: &mut Context) -> Result<Self, Flow> {
+        let multibyte_buffer = ctx
+            .buffers
+            .current_buffer()
+            .is_none_or(|buf| buf.get_multibyte());
+        let up = crate::emacs_core::casetab::current_case_upcase_table(ctx)?;
+        let ascii = match up.as_char_table_obj() {
+            Some(obj) if obj.defalt.is_nil() && obj.parent.is_nil() => {
+                if obj.ascii.as_sub_char_table_obj().is_some() {
+                    CompareStringsAsciiCase::Values(obj.ascii)
+                } else {
+                    CompareStringsAsciiCase::Uniform(obj.ascii)
+                }
+            }
+            _ => CompareStringsAsciiCase::Lookup,
+        };
+        Ok(Self {
+            up,
+            ascii,
+            multibyte_buffer,
+        })
+    }
+
+    /// GNU Fupcase's integer path (casefiddle.c do_casify_natnum). The string
+    /// iterator has already converted unibyte operands to multibyte codes; the
+    /// current buffer then controls how Fupcase interprets codes below 256.
+    #[inline]
+    fn upcase_code(&self, original: u32) -> i32 {
+        let multibyte = original >= 256 || self.multibyte_buffer;
+        let code = if multibyte {
+            original
+        } else {
+            emacs_char::make_char_multibyte(original as i32)
+        };
+        let mapped = if code < 128 {
+            match self.ascii {
+                CompareStringsAsciiCase::Uniform(value) => value,
+                CompareStringsAsciiCase::Values(value) => value
+                    .as_sub_char_table_obj()
+                    .and_then(|obj| obj.contents.as_slice().get(code as usize).copied())
+                    .unwrap_or(Value::NIL),
+                CompareStringsAsciiCase::Lookup => {
+                    crate::emacs_core::chartable::ct_ref(&self.up, code as i64)
+                }
+            }
+        } else {
+            crate::emacs_core::chartable::ct_ref(&self.up, code as i64)
+        };
+        let cased = match mapped.kind() {
+            ValueKind::Fixnum(n) if n >= 0 => n as i32,
+            _ => code as i32,
+        };
+        if cased == code as i32 {
+            original as i32
+        } else if multibyte {
+            cased
+        } else if cased > emacs_char::MAX_5_BYTE_CHAR as i32 {
+            cased - emacs_char::byte8_to_char(0) as i32
+        } else {
+            cased & 0xff
+        }
+    }
+}
+
+fn compare_strings_with_current_case_table(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_args_range("compare-strings", &args, 6, 7)?;
+    let s1 = borrow_lisp_string(&args[0])?;
+    let s2 = borrow_lisp_string(&args[3])?;
+    let size1 = s1.schars();
+    let size2 = s2.schars();
+    let end1 = compare_strings_clamp_too_large_end(args[2], size1);
+    let end2 = compare_strings_clamp_too_large_end(args[5], size2);
+    let range1 = validate_compare_strings_subarray(args[0], args[1], end1, size1)?;
+    let range2 = validate_compare_strings_subarray(args[3], args[4], end2, size2)?;
+    let len1 = range1.end().get() - range1.start().get();
+    let len2 = range2.end().get() - range2.start().get();
+    let has_nonzero_start = range1.start().get() != 0 || range2.start().get() != 0;
+    let (chars1, chars2) = if has_nonzero_start && compare_strings_pos_cache_enabled() {
+        (
+            CompareStringsChars::new_cached(args[0], s1, range1.start().get()),
+            CompareStringsChars::new_cached(args[3], s2, range2.start().get()),
+        )
+    } else {
+        (
+            CompareStringsChars::new(s1, range1.start().get()),
+            CompareStringsChars::new(s2, range2.start().get()),
+        )
+    };
+    compare_strings_iterators_with_current_case_table(ctx, chars1, chars2, len1, len2)
+}
+
+/// GNU's Fcompare_strings over two prefixes with IGNORE-CASE. Completion
+/// scanners use this instead of their hardwired fold only when parity is on.
+/// Each call resolves the buffer table anew, since predicates between calls
+/// may change the current buffer or modify its case table.
+#[inline]
+pub(crate) fn compare_string_prefixes_in_state(
+    ctx: &mut Context,
+    left: &crate::heap_types::LispString,
+    right: &crate::heap_types::LispString,
+    len: usize,
+) -> EvalResult {
+    compare_strings_iterators_with_current_case_table(
+        ctx,
+        CompareStringsChars::new(left, 0),
+        CompareStringsChars::new(right, 0),
+        len.min(left.schars()),
+        len.min(right.schars()),
+    )
+}
+
+/// The folded suffix comparison used by GNU file completion's ignored
+/// extensions. Owned decoded names carry no Lisp identity for a START cache.
+pub(crate) fn compare_string_suffixes_in_state(
+    ctx: &mut Context,
+    left: &crate::heap_types::LispString,
+    right: &crate::heap_types::LispString,
+) -> EvalResult {
+    let len = right.schars();
+    if left.schars() < len {
+        return Ok(Value::NIL);
+    }
+    compare_strings_iterators_with_current_case_table(
+        ctx,
+        CompareStringsChars::new(left, left.schars() - len),
+        CompareStringsChars::new(right, 0),
+        len,
+        len,
+    )
+}
+
+#[inline]
+fn compare_strings_iterators_with_current_case_table(
+    ctx: &mut Context,
+    mut chars1: CompareStringsChars<'_>,
+    mut chars2: CompareStringsChars<'_>,
+    len1: usize,
+    len2: usize,
+) -> EvalResult {
+    let len = len1.min(len2);
+    let mut case = None;
+    for i in 0..len {
+        let (c1, c2) = (chars1.next_code(), chars2.next_code());
+        // GNU bypasses Fupcase when the fetched character codes already match.
+        if c1 == c2 {
+            continue;
+        }
+        if case.is_none() {
+            case = Some(CompareStringsCase::for_current_buffer(ctx)?);
+        }
+        let case = case.as_ref().expect("case table was initialized");
+        let (c1, c2) = (case.upcase_code(c1), case.upcase_code(c2));
+        if c1 != c2 {
+            let pos = (i + 1) as i64;
+            return Ok(Value::fixnum(if c1 < c2 { -pos } else { pos }));
+        }
+    }
+    Ok(if len1 == len2 {
+        Value::T
+    } else if len1 < len2 {
+        Value::fixnum(-((len + 1) as i64))
+    } else {
+        Value::fixnum((len + 1) as i64)
+    })
 }
 
 fn borrow_lisp_string(value: &Value) -> Result<&crate::heap_types::LispString, Flow> {

@@ -463,6 +463,21 @@ pub(crate) fn current_case_canon_table(
     Ok(case_table_extra(table, 1))
 }
 
+/// Resolve GNU Fupcase's actual upcase table, including explicit changes to
+/// the standard table. The caller keeps a call-local, read-only projection;
+/// this adds no cache or Lisp state shared between independently owned Contexts.
+pub(crate) fn current_case_upcase_table(
+    ctx: &mut crate::emacs_core::eval::Context,
+) -> Result<Value, Flow> {
+    let table = current_case_table_for_buffer_in_state(&mut ctx.obarray, &mut ctx.buffers)?;
+    // GNU prepare_casing_context only rebuilds a modified table when the
+    // canonicalize slot is nil, so ordinary comparisons do not write tables.
+    if case_table_extra(table, 1).is_nil() {
+        ensure_case_table_derived_slots(table)?;
+    }
+    Ok(case_table_extra(table, 0))
+}
+
 /// The case-fold canon char-table to use as the search translate table for a
 /// search in `buf` -- GNU's `BVAR (current_buffer, case_canon_table)` used as
 /// the search `trt`. Returns `None` when `buf` uses the standard case table

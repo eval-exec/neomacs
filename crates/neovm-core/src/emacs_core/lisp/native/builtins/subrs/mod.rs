@@ -6488,13 +6488,11 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         2,
         Some(2)
     );
-    register_pure_subr!(
-        ctx,
+    ctx.register_subr(SubrSpec::new(
         "assoc-string",
-        crate::emacs_core::builtins_extra::builtin_assoc_string,
-        2,
-        Some(3)
-    );
+        NativeFn::ContextVec(crate::emacs_core::builtins_extra::builtin_assoc_string_in_state),
+        SubrArity::new(2, Some(3)),
+    ));
     register_pure_subr!(
         ctx,
         "string-search",
@@ -6959,7 +6957,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "compare-strings",
-        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::fns::builtin_compare_strings(args)),
+        NativeFn::ContextVec(crate::emacs_core::fns::builtin_compare_strings_in_state),
         SubrArity::new(6, Some(7)),
     ));
     ctx.register_subr(SubrSpec::new(

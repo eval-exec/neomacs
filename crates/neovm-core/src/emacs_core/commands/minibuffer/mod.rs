@@ -2025,6 +2025,58 @@ fn completion_text_equals_string(
     })
 }
 
+#[inline]
+fn completion_prefix_matches_with_parity(
+    ctx: &mut super::eval::Context,
+    string: &crate::heap_types::LispString,
+    prefix: &CompletionPrefix,
+    completion: &CompletionText,
+    ignore_case: bool,
+    parity: bool,
+) -> Result<bool, Flow> {
+    if !ignore_case || !parity {
+        return Ok(prefix.matches(completion, ignore_case));
+    }
+    if string.schars() > completion.lisp_string().schars() {
+        return Ok(false);
+    }
+    Ok(crate::emacs_core::fns::compare_string_prefixes_in_state(
+        ctx,
+        string,
+        completion.lisp_string(),
+        string.schars(),
+    )?
+    .is_t())
+}
+
+#[inline]
+fn completion_equals_with_parity(
+    ctx: &mut super::eval::Context,
+    string: &crate::heap_types::LispString,
+    prefix: &CompletionPrefix,
+    completion: &CompletionText,
+    ignore_case: bool,
+    parity: bool,
+) -> Result<bool, Flow> {
+    if !ignore_case || !parity {
+        return Ok(completion_text_equals_string(
+            completion,
+            prefix.characters(),
+            ignore_case,
+        ));
+    }
+    if string.schars() != completion.lisp_string().schars() {
+        return Ok(false);
+    }
+    Ok(crate::emacs_core::fns::compare_string_prefixes_in_state(
+        ctx,
+        completion.lisp_string(),
+        string,
+        string.schars(),
+    )?
+    .is_t())
+}
+
 /// GNU-faithful result of `Fcompare_strings` over the first `len` chars of two
 /// char-code slices (each compared from offset 0).  Mirrors `fns.c`
 /// `Fcompare_strings`: returns [`StringCompare::Equal`] when the compared
@@ -2239,6 +2291,7 @@ pub(crate) fn builtin_try_completion_with_candidates(
     // `completion_ignore_case` is set the *identity* of `bestmatch` can switch
     // to a later candidate so the returned case pattern matches GNU exactly.
     let prefix = CompletionPrefix::from_lisp_string(&string);
+    let case_table_parity = ignore_case && crate::emacs_core::fns::compare_strings_parity_enabled();
     let string_codes = prefix.characters();
     let string_schars = string_codes.len();
 
@@ -2248,7 +2301,14 @@ pub(crate) fn builtin_try_completion_with_candidates(
     let mut matchcount = 0i32;
 
     for candidate in &candidates {
-        if !prefix.matches(&candidate.completion, ignore_case) {
+        if !completion_prefix_matches_with_parity(
+            eval,
+            &string,
+            &prefix,
+            &candidate.completion,
+            ignore_case,
+            case_table_parity,
+        )? {
             continue;
         }
         if !regexps.is_empty()
@@ -2280,7 +2340,24 @@ pub(crate) fn builtin_try_completion_with_candidates(
 
         let best_schars = best_codes.len();
         let compare = bestmatchsize.min(elt_schars);
-        let cmp = gnu_compare_strings(&best_codes, &elt_codes, compare, ignore_case);
+        let cmp = if case_table_parity {
+            let result = crate::emacs_core::fns::compare_string_prefixes_in_state(
+                eval,
+                bestmatch
+                    .expect("best match was initialized")
+                    .completion
+                    .lisp_string(),
+                candidate.completion.lisp_string(),
+                compare,
+            )?;
+            match result.as_int() {
+                Some(pos) if pos < 0 => StringCompare::Less((-pos - 1) as usize),
+                Some(pos) => StringCompare::Greater((pos - 1) as usize),
+                None => StringCompare::Equal,
+            }
+        } else {
+            gnu_compare_strings(&best_codes, &elt_codes, compare, ignore_case)
+        };
         let matchsize = cmp.match_size(compare);
 
         // Whether the previous bestmatch (case-sensitively) prefix-matched the
@@ -2375,9 +2452,17 @@ pub(crate) fn builtin_all_completions_with_candidates(
     // This avoids holding unrooted Value strings across GC-triggering
     // predicate calls.
     let prefix = CompletionPrefix::from_lisp_string(&string);
+    let case_table_parity = ignore_case && crate::emacs_core::fns::compare_strings_parity_enabled();
     let mut matching_completions: Vec<CompletionText> = Vec::new();
     for candidate in &candidates {
-        if !prefix.matches(&candidate.completion, ignore_case) {
+        if !completion_prefix_matches_with_parity(
+            eval,
+            &string,
+            &prefix,
+            &candidate.completion,
+            ignore_case,
+            case_table_parity,
+        )? {
             continue;
         }
         if !regexps.is_empty()
@@ -2426,8 +2511,16 @@ pub(crate) fn builtin_test_completion_with_candidates(
     };
 
     let prefix = CompletionPrefix::from_lisp_string(&string);
+    let case_table_parity = ignore_case && crate::emacs_core::fns::compare_strings_parity_enabled();
     for candidate in &candidates {
-        if !completion_text_equals_string(&candidate.completion, prefix.characters(), ignore_case) {
+        if !completion_equals_with_parity(
+            eval,
+            &string,
+            &prefix,
+            &candidate.completion,
+            ignore_case,
+            case_table_parity,
+        )? {
             continue;
         }
         if !regexps.is_empty()

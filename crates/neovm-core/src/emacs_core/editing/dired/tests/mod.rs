@@ -1390,3 +1390,6 @@ fn file_attributes_resolves_names_only_for_the_string_id_format_like_gnu() {
     );
     assert_eq!(result, "OK ((t t) (t t) (t t) (t t) t t t)");
 }
+
+#[cfg(test)]
+mod compare_case_table;

@@ -638,14 +638,20 @@ pub(crate) fn builtin_file_name_completion(eval: &mut Context, args: Vec<Value>)
         args.get(2).copied().unwrap_or(Value::NIL),
     ];
     let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
-    let plan = prepare_file_name_completion_in_state(
-        &eval.obarray,
-        &[],
-        &eval.buffers,
-        syntax,
-        &args,
-        |bytes| super::fileio::decode_file_name_lisp(eval, bytes),
-    )?;
+    let plan = if get_completion_ignore_case(&eval.obarray, &eval.buffers)
+        && super::fns::compare_strings_parity_enabled()
+    {
+        prepare_file_name_completion_with_case_table(eval, &args, syntax)?
+    } else {
+        prepare_file_name_completion_in_state(
+            &eval.obarray,
+            &[],
+            &eval.buffers,
+            syntax,
+            &args,
+            |bytes| super::fileio::decode_file_name_lisp(eval, bytes),
+        )?
+    };
     let predicate = args.get(2);
     finish_file_name_completion_with_eval_predicate(
         eval,
@@ -686,13 +692,18 @@ pub(crate) fn builtin_file_name_all_completions(
     // GNU Emacs: file-name-all-completions does NOT filter by
     // completion-ignored-extensions (the "all_flag" path).
     let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
+    let raw = if ignore_case && super::fns::compare_strings_parity_enabled() {
+        collect_file_name_completions_with_parity(eval, &file, &directory, true, true)?
+    } else {
+        collect_file_name_completions(&file, &directory, ignore_case, true, |bytes| {
+            super::fileio::decode_file_name_lisp(eval, bytes)
+        })?
+    };
     let completions = filter_by_completion_regexps(
         syntax,
         &eval.obarray,
         &eval.buffers,
-        collect_file_name_completions(&file, &directory, ignore_case, true, |bytes| {
-            super::fileio::decode_file_name_lisp(eval, bytes)
-        })?,
+        raw,
         &regexps,
         ignore_case,
     )?;
@@ -787,6 +798,157 @@ fn collect_file_name_completions(
     }
 
     Ok(completions)
+}
+
+fn collect_file_name_completions_with_parity(
+    ctx: &mut Context,
+    file: &LispString,
+    directory: &LispString,
+    reverse: bool,
+    parity: bool,
+) -> Result<Vec<LispString>, Flow> {
+    if !parity {
+        return collect_file_name_completions(file, directory, true, reverse, |bytes| {
+            super::fileio::decode_file_name_lisp(ctx, bytes)
+        });
+    }
+    let names = read_directory_names(directory)?;
+    let dir_path = super::fileio::lisp_file_name_to_path_buf(directory);
+    let mut completions = Vec::new();
+    for raw_name in names {
+        // GNU keeps the encoded byte-length eligibility check even when
+        // differently-sized decoded characters would compare equal.
+        if raw_name.as_bytes().len() < file.as_bytes().len() {
+            continue;
+        }
+        let name = super::fileio::decode_file_name_lisp(ctx, raw_name.as_bytes());
+        if !super::fns::compare_string_prefixes_in_state(ctx, &name, file, file.schars())?.is_t() {
+            continue;
+        }
+        let path = dir_path.join(super::fileio::lisp_file_name_to_path_buf(&raw_name));
+        completions.push(if path.is_dir() {
+            ensure_trailing_slash_lisp(&name)
+        } else {
+            name
+        });
+    }
+    if reverse {
+        completions.reverse();
+    }
+    Ok(completions)
+}
+
+fn resolve_file_name_completion_with_parity(
+    ctx: &mut Context,
+    file: &LispString,
+    completions: Vec<LispString>,
+    parity: bool,
+) -> EvalResult {
+    if !parity {
+        return Ok(resolve_file_name_completion(file, completions, true));
+    }
+    if completions.is_empty() {
+        return Ok(Value::NIL);
+    }
+    let completions = filter_completion_candidates(file, completions);
+    if completions.is_empty() {
+        return Ok(Value::heap_string(file.clone()));
+    }
+    let mut best = &completions[0];
+    let mut best_size = best.schars();
+    if completions.len() == 1 && best.as_bytes() == file.as_bytes() {
+        return Ok(Value::T);
+    }
+    for name in &completions[1..] {
+        let compare = best_size.min(name.schars());
+        let result = super::fns::compare_string_prefixes_in_state(ctx, best, name, compare)?;
+        let matched = result
+            .as_int()
+            .map_or(compare, |pos| pos.unsigned_abs() as usize - 1);
+        let directory = usize::from(name.as_bytes().ends_with(b"/"));
+        let input_case_matches = |name: &LispString| {
+            name.schars() >= file.schars()
+                && &name.as_bytes()[..name.char_to_byte_pos(file.schars())] == file.as_bytes()
+        };
+        // GNU dired.c prefers an exact completion and then the candidate
+        // whose prefix retains the user's spelling (including case).
+        if (matched == name.schars() && matched + directory < best.schars())
+            || ((matched == name.schars()) == (matched + directory == best.schars())
+                && input_case_matches(name)
+                && !input_case_matches(best))
+        {
+            best = name;
+        }
+        best_size = matched;
+    }
+    Ok(file_name_value(file_name_lisp_from_bytes(
+        best.as_bytes()[..best.char_to_byte_pos(best_size)].to_vec(),
+    )))
+}
+
+fn prepare_file_name_completion_with_case_table(
+    ctx: &mut Context,
+    args: &[Value],
+    syntax: super::builtins::search::FastStringMatchSyntax,
+) -> Result<FileNameCompletionPlan, Flow> {
+    let file = expect_lisp_string("file-name-completion", &args[0])?;
+    let directory = expect_lisp_string("file-name-completion", &args[1])?;
+    let completions = if file.as_bytes().contains(&b'/') {
+        Vec::new()
+    } else {
+        let raw = collect_file_name_completions_with_parity(ctx, &file, &directory, false, true)?;
+        let extensions = get_ignored_extensions(&ctx.obarray);
+        let raw = filter_ignored_extensions_with_case_table(ctx, &file, raw, &extensions)?;
+        let regexps = super::minibuffer::completion_regexp_lisp_list_from_obarray(&ctx.obarray);
+        filter_by_completion_regexps(syntax, &ctx.obarray, &ctx.buffers, raw, &regexps, true)?
+    };
+    Ok(FileNameCompletionPlan {
+        file,
+        directory,
+        completions,
+        ignore_case: true,
+    })
+}
+
+fn filter_ignored_extensions_with_case_table(
+    ctx: &mut Context,
+    file: &LispString,
+    completions: Vec<LispString>,
+    extensions: &[LispString],
+) -> Result<Vec<LispString>, Flow> {
+    let mut classified = Vec::with_capacity(completions.len());
+    for name in completions {
+        let directory = name.as_bytes().ends_with(b"/");
+        let base_len = name.as_bytes().len() - usize::from(directory);
+        let base = file_name_lisp_from_bytes(name.as_bytes()[..base_len].to_vec());
+        let mut excluded = matches!(base.as_bytes(), b"." | b"..");
+        if !excluded && base_len > file.as_bytes().len() {
+            for extension in extensions {
+                if extension.as_bytes().ends_with(b"/") != directory {
+                    continue;
+                }
+                let len = extension.as_bytes().len() - usize::from(directory);
+                if directory && len == 0 {
+                    continue;
+                }
+                if base_len < len {
+                    continue;
+                }
+                let extension = file_name_lisp_from_bytes(extension.as_bytes()[..len].to_vec());
+                if super::fns::compare_string_suffixes_in_state(ctx, &base, &extension)?.is_t() {
+                    excluded = true;
+                    break;
+                }
+            }
+        }
+        classified.push((name, excluded));
+    }
+    let has_included = classified.iter().any(|(_, excluded)| !excluded);
+    Ok(classified
+        .into_iter()
+        .filter(|(_, excluded)| !has_included || !excluded)
+        .map(|(name, _)| name)
+        .collect())
 }
 
 fn filter_by_completion_regexps(
@@ -1011,6 +1173,25 @@ pub(crate) fn finish_file_name_completion_with_eval_predicate(
     completions: Vec<LispString>,
     ignore_case: bool,
 ) -> EvalResult {
+    if ignore_case && super::fns::compare_strings_parity_enabled() {
+        let completions =
+            if let Some(predicate) = predicate.copied().filter(|value| !value.is_nil()) {
+                let use_absolute = predicate_uses_absolute_file_argument(&eval.obarray, &predicate);
+                filter_completions_by_callable_predicate(
+                    use_absolute,
+                    &directory,
+                    completions,
+                    |arg| {
+                        with_default_directory_binding(eval, &directory, |eval| {
+                            eval.apply(predicate, vec![arg])
+                        })
+                    },
+                )?
+            } else {
+                completions
+            };
+        return resolve_file_name_completion_with_parity(eval, &file, completions, true);
+    }
     let Some(predicate) = predicate.copied() else {
         return Ok(resolve_file_name_completion(
             &file,

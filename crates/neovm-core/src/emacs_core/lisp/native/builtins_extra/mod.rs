@@ -457,6 +457,64 @@ pub(crate) fn builtin_assoc_string(args: Vec<Value>) -> EvalResult {
     }
 }
 
+/// GNU assoc-string calls Fcompare_strings for each candidate. Keep the
+/// existing path unless folded comparison and the parity policy both apply.
+#[inline]
+pub(crate) fn builtin_assoc_string_in_state(
+    ctx: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    if args.get(2).is_some_and(|value| value.is_truthy())
+        && crate::emacs_core::fns::compare_strings_parity_enabled()
+    {
+        assoc_string_with_current_case_table(ctx, args)
+    } else {
+        builtin_assoc_string(args)
+    }
+}
+
+fn assoc_string_with_current_case_table(
+    ctx: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_min_args("assoc-string", &args, 2)?;
+    expect_max_args("assoc-string", &args, 3)?;
+    let key = args[0];
+    let key = symbol_like_name(&key).map(Value::string).unwrap_or(key);
+    let mut cursor = args[1];
+    while cursor.is_cons() {
+        let entry = cursor.cons_car();
+        cursor = cursor.cons_cdr();
+        let entry_key = if entry.is_cons() {
+            entry.cons_car()
+        } else {
+            entry
+        };
+        let entry_key = symbol_like_name(&entry_key)
+            .map(Value::string)
+            .unwrap_or(entry_key);
+        if !entry_key.is_string() {
+            continue;
+        }
+        let equal = crate::emacs_core::fns::builtin_compare_strings_in_state(
+            ctx,
+            vec![
+                entry_key,
+                Value::fixnum(0),
+                Value::NIL,
+                key,
+                Value::fixnum(0),
+                Value::NIL,
+                Value::T,
+            ],
+        )?;
+        if equal.is_t() {
+            return Ok(entry);
+        }
+    }
+    Ok(Value::NIL)
+}
+
 /// `(car-less-than-car A B)` -> t if `(car A) < (car B)`.
 pub(crate) fn builtin_car_less_than_car(args: Vec<Value>) -> EvalResult {
     expect_args("car-less-than-car", &args, 2)?;

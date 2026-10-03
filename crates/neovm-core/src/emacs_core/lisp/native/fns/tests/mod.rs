@@ -2214,3 +2214,6 @@ fn base64_decode_ignores_whitespace() {
 
 #[cfg(test)]
 mod compare_position_cache;
+
+#[cfg(test)]
+mod compare_case_table;
