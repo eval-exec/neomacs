@@ -175,6 +175,10 @@ pub mod inline;
 #[cfg(feature = "jit")]
 pub mod mir;
 
+/// Owned global-SSA mid-end, selected only by the opt-in backend knob.
+#[cfg(feature = "jit")]
+pub(crate) mod opt;
+
 /// AOT (ahead-of-time) object emission (Phase R1c): emit the same CLIF the JIT
 /// does, but through Cranelift's `ObjectModule`, producing a relocatable `.o`
 /// that is linked to a `.so`, `dlopen`'d, and inserted as a pre-warmed
