@@ -39,6 +39,9 @@ mod bufferp_semantics;
 mod button_semantics;
 mod byte_operations_comprehensive;
 mod call_shell_region_semantics;
+#[cfg(test)]
+#[path = "tests/callback_redefinition.rs"]
+mod callback_redefinition;
 mod called_interactively_semantics;
 mod car_cdr_combinations;
 mod car_safe;
