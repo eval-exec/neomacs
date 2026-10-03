@@ -1,60 +1,9 @@
+use super::test_support::{Step, read_script};
 use super::*;
-use std::collections::VecDeque;
 
-/// A reader that replays a script of chunks and would-block errors, so the
-/// reply policy is testable without a socket.  GNU's client arms a read
-/// timeout for every reply (`emacsclient.c:2211`: `-w` or `DEFAULT_TIMEOUT`)
-/// but only fails on it before the first server byte (`:2225-2247`); these
-/// tests pin that distinction.
-enum Step {
-    Data(&'static [u8]),
-    WouldBlock,
-}
-
-struct ScriptedReader {
-    steps: VecDeque<Step>,
-}
-
-impl ScriptedReader {
-    fn new(steps: impl IntoIterator<Item = Step>) -> Self {
-        Self {
-            steps: steps.into_iter().collect(),
-        }
-    }
-}
-
-impl Read for ScriptedReader {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match self.steps.pop_front() {
-            Some(Step::Data(bytes)) => {
-                assert!(
-                    bytes.len() <= buf.len(),
-                    "a script chunk must fit one read buffer"
-                );
-                buf[..bytes.len()].copy_from_slice(bytes);
-                Ok(bytes.len())
-            }
-            Some(Step::WouldBlock) => Err(io::Error::new(io::ErrorKind::WouldBlock, "timed out")),
-            None => Ok(0),
-        }
-    }
-}
-
-fn read_script(
-    steps: impl IntoIterator<Item = Step>,
-    args: &[&str],
-) -> (Result<(), String>, String, String) {
-    let mut reader = ScriptedReader::new(steps);
-    let options = parse_options("client", args.iter().copied().map(OsString::from)).unwrap();
-    let mut out = Vec::new();
-    let mut err = Vec::new();
-    let result = read_responses(&mut reader, &options, None, &mut out, &mut err);
-    (
-        result,
-        String::from_utf8(out).unwrap(),
-        String::from_utf8(err).unwrap(),
-    )
-}
+// GNU's client arms a read timeout for every reply (`emacsclient.c:2211`:
+// `-w` or `DEFAULT_TIMEOUT`) but only fails on it before the first server
+// byte (`:2225-2247`); these tests pin that distinction.
 
 #[test]
 fn a_quiet_stream_after_the_first_response_keeps_waiting() {
