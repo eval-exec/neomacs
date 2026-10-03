@@ -4255,9 +4255,9 @@ pub fn run(mode: RuntimeMode) {
     //   stdout logging is safe and useful.
     //
     // - `neomacs` (RuntimeMode::FinalRun) is the user-facing binary.
-    //   Under a GUI frontend, stdout is captured to a file by the
-    //   calling shell (e.g. `> /tmp/neomacs-gui.log 2>&1`), so
-    //   LogTarget::Stdout is fine. Under a TTY frontend (`-nw`,
+    //   Under a GUI frontend, bounded nonblocking stdout diagnostics
+    //   keep slow terminal readers off evaluator/render/input paths.
+    //   Under a TTY frontend (`-nw`,
     //   `--batch`), stdout is the alt-screen pty the redisplay
     //   engine is drawing into, so LogTarget::File routes tracing
     //   to a file instead.
@@ -4268,7 +4268,7 @@ pub fn run(mode: RuntimeMode) {
     let log_target = match mode {
         RuntimeMode::Raw | RuntimeMode::BootstrapUse => neovm_core::logging::LogTarget::Stdout,
         RuntimeMode::FinalRun => match startup.frontend {
-            FrontendKind::Gui => neovm_core::logging::LogTarget::Stdout,
+            FrontendKind::Gui => neovm_core::logging::LogTarget::GuiStdout,
             FrontendKind::Tty => neovm_core::logging::LogTarget::File,
         },
     };
