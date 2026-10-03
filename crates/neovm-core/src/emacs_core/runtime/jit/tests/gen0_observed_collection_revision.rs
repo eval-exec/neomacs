@@ -206,6 +206,9 @@ fn check_first_store(kind: StoreKind) {
     assert!(!is_observed(owner.bits()), "fresh owner: {kind:?}");
     let before = LispCollectionRevision::current();
     let shims_before = kind.shim_calls();
+    let (lo, hi) = crate::tagged::collection_reads::compiled_observation_window();
+    let address = owner.bits() & !crate::tagged::value::TAG_MASK;
+    let outside_window = address < lo || address >= hi;
     let supplied = Value::make_int(65);
     assert_eq!(
         native(&mut context, &leaf, &kind.args(owner, supplied)),
@@ -217,11 +220,13 @@ fn check_first_store(kind: StoreKind) {
         "never-read native owner skips the journal: {kind:?}"
     );
     assert!(!is_observed(owner.bits()), "the store is not a read");
-    assert_eq!(
-        kind.shim_calls(),
-        shims_before,
-        "the outside-window unobserved store stays inline: {kind:?}"
-    );
+    if outside_window {
+        assert_eq!(
+            kind.shim_calls(),
+            shims_before,
+            "the outside-window unobserved store stays inline: {kind:?}"
+        );
+    }
     let (value, reads) = capture(|| {
         let value = kind.read(owner);
         assert!(
@@ -301,14 +306,31 @@ fn gen0_observed_store_before_read_in_the_same_capture_is_coherent() {
         let (mut context, owner, leaf) = fixture(kind);
         assert!(!is_observed(owner.bits()));
         let before = LispCollectionRevision::current();
+        let shims_before = kind.shim_calls();
         let supplied = Value::make_int(65);
         let (result, reads) = capture(|| {
             native(&mut context, &leaf, &kind.args(owner, supplied));
-            assert!(!is_observed(owner.bits()), "setter alone: {kind:?}");
-            assert_eq!(
-                LispCollectionRevision::current().steps_since_for_test(before),
-                0
-            );
+            let shim_delta = kind.shim_calls() - shims_before;
+            // Earlier captures may put this new BLV address inside the
+            // conservative envelope. Its outlined variable setter retains
+            // interpreter projection; selective native stores skip it.
+            if matches!(kind, StoreKind::BlvDefault | StoreKind::BlvLocal) && shim_delta != 0 {
+                assert_eq!(shim_delta, 1);
+                assert!(is_observed(owner.bits()));
+                assert_eq!(
+                    LispCollectionRevision::current().steps_since_for_test(before),
+                    1
+                );
+            } else {
+                assert!(!is_observed(owner.bits()), "native setter alone: {kind:?}");
+                assert_eq!(
+                    LispCollectionRevision::current().steps_since_for_test(before),
+                    0
+                );
+            }
+            tracing::info!(target: "fx1_collection",
+                "FX1_CAPTURE case=store-before-read kind={kind:?} shim_delta={shim_delta} owner_mark={}",
+                usize::from(is_observed(owner.bits())));
             kind.read(owner)
         });
         assert_eq!(result, kind.expected(supplied));
@@ -321,25 +343,49 @@ fn gen0_observed_store_before_read_in_the_same_capture_is_coherent() {
 }
 
 #[test]
-fn gen0_observed_never_read_setter_capture_keeps_an_empty_safe_certificate() {
+fn gen0_observed_setter_capture_preserves_inline_and_outlined_dependencies() {
     let _journal = JournalMode::observed();
     for kind in STORE_KINDS {
         let (mut context, owner, leaf) = fixture(kind);
         let supplied = Value::make_int(65);
         let before = LispCollectionRevision::current();
+        let shims_before = kind.shim_calls();
         let (result, empty) = capture(|| native(&mut context, &leaf, &kind.args(owner, supplied)));
         assert_eq!(result, kind.expected(supplied));
-        assert!(!is_observed(owner.bits()), "not an owner read: {kind:?}");
-        let empty = empty.expect("setter result depends only on its supplied value");
-        native(&mut context, &leaf, &kind.args(owner, Value::make_int(66)));
-        assert!(
-            empty.unchanged(),
-            "an empty dependency set is safe: {kind:?}"
-        );
-        assert_eq!(
-            LispCollectionRevision::current().steps_since_for_test(before),
-            0
-        );
+        let shim_delta = kind.shim_calls() - shims_before;
+        let reads = empty.expect("setter capture is coherent");
+        let outlined_blv =
+            matches!(kind, StoreKind::BlvDefault | StoreKind::BlvLocal) && shim_delta != 0;
+        if outlined_blv {
+            // The existing variable shim projects its interpreted store's
+            // owner. Preserve that dependency while keeping native setters
+            // free of observations invented solely by their stores.
+            assert_eq!(shim_delta, 1);
+            assert!(is_observed(owner.bits()));
+            assert_eq!(
+                LispCollectionRevision::current().steps_since_for_test(before),
+                1
+            );
+            owner.set_cdr(Value::NIL);
+            assert!(!reads.unchanged(), "outlined setter projects its cell");
+        } else {
+            assert!(
+                !is_observed(owner.bits()),
+                "native setter is not a read: {kind:?}"
+            );
+            native(&mut context, &leaf, &kind.args(owner, Value::make_int(66)));
+            assert!(
+                reads.unchanged(),
+                "an empty dependency set is safe: {kind:?}"
+            );
+            assert_eq!(
+                LispCollectionRevision::current().steps_since_for_test(before),
+                0
+            );
+        }
+        tracing::info!(target: "fx1_collection",
+            "FX1_CAPTURE case=setter-only kind={kind:?} shim_delta={shim_delta} owner_mark={}",
+            usize::from(is_observed(owner.bits())));
         let (_, actual) = capture(|| kind.read(owner));
         native(&mut context, &leaf, &kind.args(owner, Value::make_int(67)));
         assert!(!actual.expect("actual owner read").unchanged());

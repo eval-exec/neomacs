@@ -199,7 +199,9 @@ thread_local! {
     /// The write barrier's owner window (`barrier_window.rs`): every owner
     /// it covers takes the out-of-line barrier, every other store is plain
     /// unless its owner is a tenured non-cons the remembered set has not
-    /// recorded. Rust non-cons stores and compiled stores test it; published by
+    /// recorded. Rust non-cons stores test it; compiled GEN0 observed stores
+    /// additionally cover certificate owners in their JitHeapState window.
+    /// Published by
     /// `TaggedHeap::publish_barrier_window` at every writer of its inputs
     /// and re-derived whenever a heap is (re)installed.
     static TAGGED_HEAP_BARRIER_WINDOW: Cell<BarrierWindow> =

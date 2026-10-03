@@ -10,12 +10,12 @@ use neovm_core::emacs_core::jit::compile::{NativeRun, lower_leaf};
 
 #[test]
 fn gen0_compiled_face_plist_mutation_rebuilds_cached_realization() {
-    // Nextest runs this regression in its own process. Select GEN0 before
-    // constructing its heap, including when the outer suite selects GEN1.
+    // Nextest runs this regression in its own process. Test the default
+    // journal policy at GEN0, including when the outer suite selects GEN1.
     let previous_journal = std::env::var_os("NEOVM_JIT_GEN0_COLLECTION_JOURNAL");
     let previous_generational = std::env::var_os("NEOVM_GC_GENERATIONAL");
     unsafe {
-        std::env::set_var("NEOVM_JIT_GEN0_COLLECTION_JOURNAL", "on");
+        std::env::remove_var("NEOVM_JIT_GEN0_COLLECTION_JOURNAL");
         std::env::remove_var("NEOVM_GC_GENERATIONAL");
     }
     let mut context = Context::new();

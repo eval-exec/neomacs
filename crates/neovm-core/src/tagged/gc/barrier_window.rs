@@ -19,7 +19,9 @@
 //! a cons outside the window is stored inline. Rust cons stores use a
 //! separate protocol mirror, equal to this window with generations disabled
 //! and ALL otherwise; the outlined filter then checks generation eligibility.
-//! Compiled stores keep the real window and test the cons bitmap inline.
+//! GEN1 compiled stores keep the ordinary window and test the cons bitmap
+//! inline. GEN0 observed mode widens only the compiled window with the
+//! mutator's collection-read envelope; exact object marks filter those hits.
 //!
 //! The window is PROTOCOL STATE, like `TAGGED_HEAP_CONCURRENT_ACTIVE`: it is
 //! recomputed and republished by [`TaggedHeap::publish_barrier_window`] at

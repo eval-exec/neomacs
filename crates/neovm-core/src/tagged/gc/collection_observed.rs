@@ -234,3 +234,7 @@ fn clear_cons_observed_block_slow(base: usize) {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/collection_observed_tests.rs"]
+mod tests;
