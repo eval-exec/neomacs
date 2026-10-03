@@ -155,6 +155,12 @@ struct Capture {
 }
 
 /// Exact mutable collection reads made by one completed observation.
+///
+/// This grants mutation freshness, not object lifetime. Consumers must retain
+/// the dependency owners, or discard their cached result when its source
+/// lifetime ends. Identities are not roots: a reclaimed address can be reused
+/// for an unrelated, initially unobserved object. Certificates and their
+/// mutation journals remain local to the observing mutator.
 pub struct CollectionReads {
     reads: FxHashSet<usize>,
     revision: LispCollectionRevision,
@@ -346,7 +352,8 @@ fn observe_bits(bits: usize) {
     // Mark before the revision snapshot and before the read-cache shortcut:
     // GC may have recycled this address since its prior observation.
     let newly_observed = publish_observed_owner(bits);
-    if newly_observed || !recently_observed(bits) {
+    let recent = recently_observed(bits);
+    if newly_observed || !recent {
         observe_uncached(bits);
     }
 }
