@@ -3663,7 +3663,7 @@ pub(crate) enum LispExecution {
 #[derive(Clone, Copy, Debug)]
 struct GcRuntimeSettingsCache {
     gc_cons_threshold_bytes: usize,
-    gc_cons_percentage_scaled: Option<u64>,
+    gc_cons_percentage_scaled: Option<std::num::NonZeroU64>,
     memory_full: bool,
     /// The four Lisp variables the threshold formula reads, resolved against
     /// the LIVE interner on every settings refresh (rare) instead of through
@@ -3675,6 +3675,11 @@ struct GcRuntimeSettingsCache {
     /// noninteractive sessions — see `configure_gnu_startup_state`.) `None`
     /// until first resolved.
     syms: Option<GcSettingSyms>,
+    /// The exclusive owning mutator publishes a pinned stack activation only
+    /// during a synchronous GC-inhibited callback. It restores the previous
+    /// pointer before the activation dies; Context transfers occur outside
+    /// that borrowed scope. No process or thread-local Lisp state is added.
+    hash_test_accounting: Option<std::ptr::NonNull<super::builtins::HashTestGcInhibitAccounting>>,
 }
 
 /// See [`GcRuntimeSettingsCache::syms`].
@@ -3717,9 +3722,10 @@ impl Default for GcRuntimeSettingsCache {
     fn default() -> Self {
         Self {
             gc_cons_threshold_bytes: GC_DEFAULT_THRESHOLD_BYTES,
-            gc_cons_percentage_scaled: Some(100_000),
+            gc_cons_percentage_scaled: std::num::NonZeroU64::new(100_000),
             memory_full: false,
             syms: None,
+            hash_test_accounting: None,
         }
     }
 }
@@ -7484,6 +7490,7 @@ fn value_list_to_values(list: &Value) -> LispArgVec {
 // Tests
 // ---------------------------------------------------------------------------
 mod gc_pacing;
+mod hash_test_gc_inhibit;
 
 mod attention;
 pub use attention::QuitRequest;

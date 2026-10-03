@@ -16,6 +16,23 @@ fn fixture() -> (Context, Value) {
 }
 
 #[test]
+fn hash_user_guard_preserves_key_cache_epoch() {
+    let (mut context, table) = fixture();
+    let epoch = table.as_hash_table().unwrap().data.switch_epoch;
+    with_user_test_guard(&mut context, table, |context| {
+        assert_eq!(table.as_hash_table().unwrap().data.switch_epoch, epoch);
+        assert_eq!(
+            context
+                .eval_str(r#"(gethash "stored" neovm-guard-table)"#)
+                .expect("guarded read")
+                .as_fixnum(),
+            Some(7)
+        );
+    });
+    assert_eq!(table.as_hash_table().unwrap().data.switch_epoch, epoch);
+}
+
+#[test]
 fn hash_user_guard_restores_success_and_nested_depth() {
     let (mut context, table) = fixture();
     let other = Value::hash_table(HashTableTest::Eq);
@@ -120,13 +137,7 @@ fn hash_user_guard_restores_after_rust_unwind() {
     assert!(result.is_err());
     assert!(table.as_hash_table().unwrap().mutable);
     assert_eq!(context.gc_inhibit_depth, 0);
-    assert!(
-        context
-            .hash_table_test_registry
-            .borrow()
-            .gc_inhibit_accounting
-            .is_none()
-    );
+    assert!(context.user_test_gc_accounting_pointer().is_none());
     context
         .eval_str(r#"(puthash "stored" 13 neovm-guard-table)"#)
         .expect("table is writable after Rust unwind");
@@ -157,13 +168,7 @@ fn hash_user_guard_accounts_gc_maybe_countdown_and_threshold_changes() {
             "raising threshold inside a callback preserves since_gc"
         );
     });
-    assert!(
-        context
-            .hash_table_test_registry
-            .borrow()
-            .gc_inhibit_accounting
-            .is_none()
-    );
+    assert!(context.user_test_gc_accounting_pointer().is_none());
     with_user_test_guard(&mut context, table, |context| {
         let bytes = context.tagged_heap.bytes_since_gc_exact();
         assert_eq!(inhibited_user_test_since_gc(context, bytes), Some(0));
@@ -194,13 +199,7 @@ fn hash_user_guard_restores_outer_gc_maybe_accounting_after_other_table() {
             assert_eq!(inhibited_user_test_since_gc(context, bytes), Some(outer));
         });
     });
-    assert!(
-        context
-            .hash_table_test_registry
-            .borrow()
-            .gc_inhibit_accounting
-            .is_none()
-    );
+    assert!(context.user_test_gc_accounting_pointer().is_none());
 }
 
 #[test]
@@ -211,7 +210,8 @@ fn hash_user_guard_refreshes_dynamic_let_gc_threshold() {
     let scope = context.specpdl.len();
     // The same specbind operations used by a Lisp dynamic `let`: a binding
     // updates the forwarded variable while the collector's projection can
-    // remain stale until the callback's cold entry refreshes it.
+    // remain stale. The callback must preserve the live setting in its entry
+    // operands even when the first GC-maybe resolves them lazily.
     context
         .try_specbind(
             crate::emacs_core::intern::intern("gc-cons-threshold"),
@@ -225,21 +225,22 @@ fn hash_user_guard_refreshes_dynamic_let_gc_threshold() {
         )
         .expect("bind allocation percentage");
     with_user_test_guard(&mut context, table, |context| {
-        assert_eq!(context.gc_threshold(), bound_threshold);
+        let bytes = context.tagged_heap.bytes_since_gc_exact();
+        let hi_threshold = (i64::MAX as usize) / 2;
         assert_eq!(
-            context
-                .hash_table_test_registry
-                .borrow()
-                .gc_inhibit_accounting
-                .unwrap()
-                .threshold_at_start,
-            bound_threshold
+            inhibited_user_test_since_gc(context, bytes),
+            Some(bound_threshold as i128 - hi_threshold as i128)
         );
     });
     context
         .unbind_to_with_result(scope, Ok(Value::NIL))
         .expect("restore dynamic bindings");
     with_user_test_guard(&mut context, table, |context| {
-        assert!(context.gc_threshold() < bound_threshold);
+        let bytes = context.tagged_heap.bytes_since_gc_exact();
+        let hi_threshold = (i64::MAX as usize) / 2;
+        assert!(
+            inhibited_user_test_since_gc(context, bytes).unwrap()
+                < bound_threshold as i128 - hi_threshold as i128
+        );
     });
 }

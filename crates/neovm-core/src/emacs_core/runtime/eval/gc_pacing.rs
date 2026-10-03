@@ -419,7 +419,11 @@ impl Context {
             .symbol_value_id_or_nil(syms.percentage)
             .as_number_f64()
             .filter(|float| float.is_finite() && *float > 0.0)
-            .map(|float| ((float * GC_PERCENT_SCALE as f64).ceil() as u64).clamp(1, u64::MAX));
+            .and_then(|float| {
+                std::num::NonZeroU64::new(
+                    ((float * GC_PERCENT_SCALE as f64).ceil() as u64).clamp(1, u64::MAX),
+                )
+            });
         self.gc_runtime_settings_cache.memory_full = !self
             .obarray
             .symbol_value_id_or_nil(syms.memory_full)
@@ -441,7 +445,7 @@ impl Context {
                 .live_bytes()
                 .saturating_add(self.tagged_heap.bytes_since_gc() / 2);
             let pct_threshold = ((live_estimate as u128)
-                .saturating_mul(percentage_scaled as u128)
+                .saturating_mul(percentage_scaled.get() as u128)
                 .saturating_add((GC_PERCENT_SCALE - 1) as u128)
                 / GC_PERCENT_SCALE as u128)
                 .min(GC_HI_THRESHOLD_BYTES as u128) as usize;

@@ -283,20 +283,28 @@ thread_local! {
 
 /// A Context owns this registry and exclusively lends it to its mutator. The
 /// existing thread-local slot selects that owner; it does not own callback
-/// state. GC inhibition accounting lives beside the Context's user-test
-/// registry and is saved/restored independently for nested table callbacks.
+/// state. Callback accounting belongs to the Context's GC settings cache.
 #[derive(Default)]
 pub(crate) struct HashTableTestRegistry {
     aliases: HashMap<String, HashTableTestAlias>,
-    pub(crate) gc_inhibit_accounting: Option<HashTestGcInhibitAccounting>,
 }
 
-/// Scalar allocation accounting for one synchronous user-test activation.
-/// No references cross callbacks and no state is shared between Contexts.
+/// Entry operands for one synchronous, GC-inhibited user-test activation.
+/// The owning mutator pins this on its stack and its Context selects it;
+/// independent mutators never share it. Copied Lisp setting words stay alive
+/// under GC inhibition. No table or setting references cross Lisp callbacks.
 #[derive(Clone, Copy)]
 pub(crate) struct HashTestGcInhibitAccounting {
     pub(crate) bytes_at_start: usize,
-    pub(crate) threshold_at_start: usize,
+    pub(crate) charged_bytes_at_start: usize,
+    pub(crate) collector_threshold_at_start: usize,
+    /// Resolved only when GC-maybe first needs the saved entry operands.
+    pub(crate) threshold_at_start: Option<std::num::NonZeroUsize>,
+    pub(crate) threshold_setting: Value,
+    pub(crate) percentage_setting: Value,
+    pub(crate) threshold_overridden: bool,
+    pub(crate) memory_full: bool,
+    pub(crate) startup_ceiling: bool,
 }
 
 #[derive(Clone)]
