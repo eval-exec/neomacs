@@ -23,7 +23,7 @@ fn every_kind() -> Vec<Flow> {
     ];
     for exit_code in [i32::MIN, -1, 0, 1, i32::MAX] {
         for restart in [false, true] {
-            flows.push(FlowKind::shutdown(ShutdownRequest { exit_code, restart }));
+            flows.push(Flow::shutdown(ShutdownRequest { exit_code, restart }));
         }
     }
     flows
@@ -52,7 +52,7 @@ fn debug_text_matches_the_owned_enum() {
     }
     let text = format!(
         "{:?}",
-        FlowKind::shutdown(ShutdownRequest {
+        Flow::shutdown(ShutdownRequest {
             exit_code: 3,
             restart: true
         })
@@ -142,7 +142,7 @@ fn signal_boxed_rewraps_a_taken_payload() {
     let FlowKind::Signal(sig) = flow.into_kind() else {
         panic!("a signal")
     };
-    assert_eq!(format!("{:?}", FlowKind::signal_boxed(sig)), before);
+    assert_eq!(format!("{:?}", Flow::signal_boxed(sig)), before);
 }
 
 #[test]
@@ -185,6 +185,6 @@ fn eval_error_round_trip_per_kind() {
         exit_code: -1,
         restart: true,
     };
-    let back = flow_from_eval_error(map_flow(FlowKind::shutdown(request)));
+    let back = flow_from_eval_error(map_flow(Flow::shutdown(request)));
     assert_eq!(back.shutdown_request(), Some(request));
 }

@@ -893,12 +893,7 @@ impl Context {
                 }
                 Err(flow) => Err(flow),
             },
-            Err(ref flow)
-                if let Some(thrown) = flow.as_throw()
-                    && eq_value(&tag, &thrown.tag) =>
-            {
-                Ok(thrown.value)
-            }
+            Err(FlowKind::Throw(ref thrown)) if eq_value(&tag, &thrown.tag) => Ok(thrown.value),
             Err(flow) => Err(Flow::from_kind(flow)),
         };
         self.pop_condition_frame();

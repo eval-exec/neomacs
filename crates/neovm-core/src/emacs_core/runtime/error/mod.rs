@@ -1,4 +1,8 @@
 //! Error and signal types for the evaluator.
+//!
+//! | Cargo feature | Default | Effect |
+//! | --- | --- | --- |
+//! | `flow-word` | OFF | One-word owning Flow carrier; payload boxes and Context-owned GC pins remain unchanged. |
 
 use std::cell::RefCell;
 use std::error::Error;
@@ -122,16 +126,11 @@ pub(crate) fn flow_from_eval_error(err: EvalError) -> Flow {
     }
 }
 
-/// Internal non-local control flow: the OWNED view of a flow.
+/// Internal non-local control flow: the owned view of a flow.
 ///
-/// Today [`Flow`] is an alias of this enum (P0.12 Stage A), so matching on
-/// `Flow::Signal(..)` and on `FlowKind::Signal(..)` is the same thing. New
-/// code should match through [`FlowKind`] and read through the accessors
-/// below ([`FlowKind::kind`], [`FlowKind::as_signal`], [`FlowKind::as_throw`],
-/// ...), which are the whole surface a one-word `Flow` (P0.12 Stage B, the
-/// `flow-word` representation) will keep. Constructing: `signal(..)`,
-/// `Flow::throw`, `Flow::thread_blocked`, [`FlowKind::signal_boxed`],
-/// [`FlowKind::shutdown`], or `Flow::from_kind(FlowKind::X(..))`.
+/// Match [`FlowKind`] after [`Flow::into_kind`], or inspect [`FlowRef`] after
+/// [`Flow::kind`]. The carrier is an enum alias by default and a one-word
+/// owning pointer with `flow-word`; payload ownership and GC pins are the same.
 #[derive(Clone, Debug)]
 pub enum FlowKind {
     Signal(Box<SignalData>),
@@ -163,17 +162,18 @@ pub enum FlowKind {
     Shutdown(super::eval::ShutdownRequest),
 }
 
-/// The carrier of a flow in `EvalResult` and every `Result<_, Flow>`.
-///
-/// P0.12 Stage A: an alias of the owned enum, so all existing
-/// `Flow::Variant` paths keep compiling and nothing changes in the generated
-/// code. Stage B replaces it (behind the `flow-word` feature) with a
-/// one-word tagged owning pointer, so `EvalResult` returns in two registers;
-/// then only [`FlowKind`]/[`FlowRef`] and the accessor API remain matchable.
+/// The carrier of internal control flow. `flow-word` selects a tagged owning
+/// pointer; the default enum alias preserves the established representation.
+#[cfg(not(feature = "flow-word"))]
 pub type Flow = FlowKind;
 
+#[cfg(feature = "flow-word")]
+mod flow_word;
+#[cfg(feature = "flow-word")]
+pub use flow_word::Flow;
+
 /// The BORROWED view of a flow, for `match flow.kind()` and `if let`
-/// guards. Built by [`FlowKind::kind`] and [`FlowResultExt::kinded_ref`].
+/// guards. Built by [`Flow::kind`] and [`FlowResultExt::kinded_ref`].
 #[derive(Clone, Copy, Debug)]
 pub enum FlowRef<'a> {
     Signal(&'a SignalData),
@@ -182,6 +182,7 @@ pub enum FlowRef<'a> {
     Shutdown(super::eval::ShutdownRequest),
 }
 
+#[cfg(not(feature = "flow-word"))]
 impl FlowKind {
     /// Pack an owned flow into its carrier. The identity today; a pointer
     /// tag under the one-word representation. Deliberately not a
@@ -314,13 +315,21 @@ impl<T> FlowResultExt<T> for Result<T, Flow> {
 // interpreter's hot code under ThinLTO. Stage B supplies word-carrier versions;
 // callers keep the carrier opaque. The macros introduce no state or threading
 // assumptions.
+#[cfg(not(feature = "flow-word"))]
 macro_rules! is_signal_result {
     ($result:expr) => {
         matches!($result, Err($crate::emacs_core::error::FlowKind::Signal(_)))
     };
 }
+#[cfg(feature = "flow-word")]
+macro_rules! is_signal_result {
+    ($result:expr) => {
+        matches!(&$result, Err(flow) if flow.is_signal())
+    };
+}
 pub(crate) use is_signal_result;
 
+#[cfg(not(feature = "flow-word"))]
 macro_rules! with_signal_result {
     ($result:expr, $signal:ident => $body:expr) => {
         match $result {
@@ -329,8 +338,23 @@ macro_rules! with_signal_result {
         }
     };
 }
+#[cfg(feature = "flow-word")]
+macro_rules! with_signal_result {
+    ($result:expr, $signal:ident => $body:expr) => {
+        match $result {
+            Err(flow) if flow.is_signal() => {
+                let $crate::emacs_core::error::FlowKind::Signal($signal) = flow.into_kind() else {
+                    unreachable!("signal result was checked before consuming its carrier")
+                };
+                $body
+            }
+            other => other,
+        }
+    };
+}
 pub(crate) use with_signal_result;
 
+#[cfg(not(feature = "flow-word"))]
 impl Flow {
     /// The only way to build a `throw`: pins `tag` and `value` as GC roots for
     /// as long as the flow (or any clone of it) lives.
@@ -341,6 +365,22 @@ impl Flow {
     /// The only way to build a thread-yield handoff; pins both payloads.
     pub(crate) fn thread_blocked(blocker: Value, remaining_forms: Value) -> Self {
         Self::ThreadBlocked(Box::new(ThreadBlockedData::new(blocker, remaining_forms)))
+    }
+}
+
+#[cfg(feature = "flow-word")]
+impl Flow {
+    /// Pin the throw payload for the entire carrier lifetime.
+    pub(crate) fn throw(tag: Value, value: Value) -> Self {
+        Self::from_kind(FlowKind::Throw(Box::new(ThrowData::new(tag, value))))
+    }
+
+    /// Pin the cooperative yield payload for the entire carrier lifetime.
+    pub(crate) fn thread_blocked(blocker: Value, remaining_forms: Value) -> Self {
+        Self::from_kind(FlowKind::ThreadBlocked(Box::new(ThreadBlockedData::new(
+            blocker,
+            remaining_forms,
+        ))))
     }
 }
 
@@ -2249,3 +2289,11 @@ impl super::eval::Context {
 #[cfg(test)]
 #[path = "tests/gc_tls_ownership.rs"]
 mod gc_tls_ownership_tests;
+
+#[cfg(test)]
+#[path = "tests/flow_word.rs"]
+mod flow_word_tests;
+
+#[cfg(test)]
+#[path = "tests/flow_word_gc.rs"]
+mod flow_word_gc_tests;

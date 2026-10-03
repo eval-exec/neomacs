@@ -114,8 +114,7 @@ dbus = { version = "0.9", default-features = false }
 
 [features]
 default = ["jit", "sqlite"]
-# P0.12 opt-in scaffold; Stage A keeps the enum carrier in both configs.
-# The word carrier lands separately, and this feature stays default off.
+# P0.12 one-word owning Flow carrier; opt-in while performance gates run.
 flow-word = []
 sqlite = ["dep:rusqlite"]
 # Static-link the crate's bundled libdbus instead of pkg-config `dbus-1`.
