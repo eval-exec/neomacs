@@ -155,6 +155,71 @@ fn opt_verify_rejects_non_dominating_operand() {
 }
 
 #[test]
+fn opt_verify_dominator_intervals_reject_sibling_and_unreachable_values() {
+    for unreachable in [false, true] {
+        let mut func = empty();
+        func.blocks
+            .extend([BlockData::new(1), BlockData::new(2), BlockData::new(3)]);
+        let nil = const_value(&mut func, Block(0), 0);
+        let sibling = const_value(&mut func, Block(1), 6);
+        let dead = const_value(&mut func, Block(3), 10);
+        func.blocks[0].term = Term::Branch {
+            flag: nil,
+            if_true: Edge {
+                target: Block(1),
+                args: vec![],
+            },
+            if_false: Edge {
+                target: Block(2),
+                args: vec![],
+            },
+        };
+        func.blocks[1].preds = vec![Block(0)];
+        func.blocks[2].preds = vec![Block(0)];
+        func.blocks[1].term = Term::Return(sibling);
+        func.blocks[3].term = Term::Return(dead);
+        let invalid = if unreachable { dead } else { sibling };
+        func.blocks[2].term = Term::Return(invalid);
+        assert!(matches!(
+            func.verify(),
+            Err(VerifyError::NonDominating { value, block: Block(2), .. }) if value == invalid
+        ));
+    }
+}
+
+#[test]
+fn opt_verify_source_cursors_preserve_prefix_checks_with_nonmonotone_pcs() {
+    let mut func = empty();
+    let first = const_value(&mut func, Block(0), 0);
+    let future = const_value(&mut func, Block(0), 6);
+    let earlier_pc = const_value(&mut func, Block(0), 10);
+    func.insts[1].pc = 3;
+    func.insts[2].pc = 1;
+    let state = frame(&mut func, &[first]);
+    func.source_states = vec![None; 4];
+    func.source_states[1] = Some(SourceState {
+        pre: vec![first].into(),
+        post: vec![first].into(),
+        frame: state,
+        block: Block(0),
+    });
+    func.source_states[2] = Some(SourceState {
+        pre: vec![first].into(),
+        post: vec![earlier_pc].into(),
+        frame: state,
+        block: Block(0),
+    });
+    func.blocks[0].term = Term::Return(future);
+    assert!(
+        matches!(
+            func.verify(),
+            Err(VerifyError::NonDominating { value, .. }) if value == earlier_pc
+        ),
+        "the prefix stops at the future pc before reaching the lower pc"
+    );
+}
+
+#[test]
 fn opt_verify_rejects_same_instruction_framestate_result() {
     let mut func = empty();
     let input = const_value(&mut func, Block(0), 6);
@@ -292,6 +357,33 @@ fn opt_verify_rejects_frame_parent_cycle() {
     func.frames[state.index()].parent = Some(state);
     func.blocks[0].term = Term::Deopt(state);
     assert_eq!(func.verify(), Err(VerifyError::FrameCycle(state)));
+}
+
+#[test]
+fn opt_verify_validates_forward_parent_chains_and_unused_frames() {
+    let mut func = empty();
+    let nil = const_value(&mut func, Block(0), 0);
+    func.frames = (0..3)
+        .map(|pc| FrameState {
+            pc,
+            stack: vec![nil].into(),
+            handlers: 0,
+            binds: 0,
+            parent: (pc < 2).then_some(FrameId(2)),
+            site: None,
+        })
+        .collect();
+    func.blocks[0].term = Term::Deopt(FrameId(0));
+    assert_eq!(
+        func.verify(),
+        Ok(()),
+        "children share a later-indexed parent"
+    );
+    func.blocks[0].term = Term::Return(nil);
+    func.frames[2].parent = Some(FrameId(0));
+    assert_eq!(func.verify(), Err(VerifyError::FrameCycle(FrameId(0))));
+    func.frames[2].parent = Some(FrameId(3));
+    assert_eq!(func.verify(), Err(VerifyError::InvalidFrame(FrameId(3))));
 }
 
 #[test]

@@ -160,24 +160,39 @@ pub(crate) fn verify(func: &Func) -> Result<(), VerifyError> {
         }
         validate_value_type(id, value)?;
     }
-    for (index, _) in func.frames.iter().enumerate() {
-        let frame = FrameId(index as u32);
-        let mut seen = HashSet::new();
-        let mut current = Some(frame);
+    // Parent chains form an immutable compile-local graph. Validate each frame
+    // once, including shared tails, rather than allocate a set per frame and
+    // repeatedly revisit all ancestors of every child.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum FrameVisit {
+        Unseen,
+        Visiting,
+        Done,
+    }
+    let mut frame_visits = vec![FrameVisit::Unseen; func.frames.len()];
+    let mut frame_path = Vec::new();
+    for index in 0..func.frames.len() {
+        let mut current = Some(FrameId(index as u32));
         while let Some(id) = current {
-            if !seen.insert(id) {
-                return Err(VerifyError::FrameCycle(id));
-            }
             let state = func
                 .frames
                 .get(id.index())
                 .ok_or(VerifyError::InvalidFrame(id))?;
+            match frame_visits[id.index()] {
+                FrameVisit::Done => break,
+                FrameVisit::Visiting => return Err(VerifyError::FrameCycle(id)),
+                FrameVisit::Unseen => frame_visits[id.index()] = FrameVisit::Visiting,
+            }
+            frame_path.push(id);
             for &value in &state.stack {
                 func.values
                     .get(value.index())
                     .ok_or(VerifyError::InvalidValue(value))?;
             }
             current = state.parent;
+        }
+        for id in frame_path.drain(..) {
+            frame_visits[id.index()] = FrameVisit::Done;
         }
     }
     let dominance = Dominance::new(func, &actual_preds);
@@ -307,25 +322,29 @@ pub(crate) fn verify(func: &Func) -> Result<(), VerifyError> {
             }
         }
     }
+    // Source pcs are visited in increasing order. Each block cursor therefore
+    // scans its instruction list once while retaining the prefix semantics of
+    // the original pre/post tests, even for malformed non-monotone pc metadata.
+    // Threading: these positions are invocation-local verifier scratch.
+    let mut source_positions = vec![(0, 0); func.blocks.len()];
     for (pc, source) in func.source_states.iter().enumerate() {
         if let Some(source) = source {
             let block = get_block(source.block)?;
-            let pre_position = block
-                .insts
-                .iter()
-                .take_while(|&&inst| {
-                    let data = &func.insts[inst.index()];
-                    data.pc < pc as u32 || matches!(data.op, Opcode::Arg(_) | Opcode::OsrSlot(_))
-                })
-                .count();
-            let post_position = block
-                .insts
-                .iter()
-                .take_while(|&&inst| {
-                    let data = &func.insts[inst.index()];
-                    data.pc <= pc as u32 || matches!(data.op, Opcode::Arg(_) | Opcode::OsrSlot(_))
-                })
-                .count();
+            let (pre_position, post_position) = &mut source_positions[source.block.index()];
+            while let Some(&inst) = block.insts.get(*pre_position) {
+                let data = &func.insts[inst.index()];
+                if data.pc >= pc as u32 && !matches!(data.op, Opcode::Arg(_) | Opcode::OsrSlot(_)) {
+                    break;
+                }
+                *pre_position += 1;
+            }
+            while let Some(&inst) = block.insts.get(*post_position) {
+                let data = &func.insts[inst.index()];
+                if data.pc > pc as u32 && !matches!(data.op, Opcode::Arg(_) | Opcode::OsrSlot(_)) {
+                    break;
+                }
+                *post_position += 1;
+            }
             let frame = func
                 .frames
                 .get(source.frame.index())
@@ -335,12 +354,12 @@ pub(crate) fn verify(func: &Func) -> Result<(), VerifyError> {
             if frame.site.is_none() && frame.stack.as_ref() != source.pre.as_ref() {
                 return Err(VerifyError::SourceState(pc as u32));
             }
-            check_frame(source.frame, source.block, pre_position, None)?;
+            check_frame(source.frame, source.block, *pre_position, None)?;
             for &value in &source.pre {
-                check_use(value, source.block, pre_position, None)?;
+                check_use(value, source.block, *pre_position, None)?;
             }
             for &value in &source.post {
-                check_use(value, source.block, post_position, None)?;
+                check_use(value, source.block, *post_position, None)?;
             }
         }
     }
@@ -718,10 +737,12 @@ fn check_dominance(
     Ok(())
 }
 
-/// Cooper-style immediate dominators over reverse postorder: O(blocks) storage
-/// rather than a quadratic dominance matrix. Threading: local scratch only.
+/// Cooper-style immediate dominators followed by dominator-tree DFS intervals.
+/// Uses O(blocks) storage and answers repeated frame-use queries in O(1).
+/// Threading: immutable intervals derived from invocation-local compiler data.
 struct Dominance {
-    idom: Vec<Option<Block>>,
+    enter: Vec<usize>,
+    exit: Vec<usize>,
 }
 
 impl Dominance {
@@ -778,18 +799,36 @@ impl Dominance {
                 }
             }
         }
-        Self { idom }
-    }
-
-    fn dominates(&self, definition: Block, mut block: Block) -> bool {
-        loop {
-            if definition == block {
-                return true;
-            }
-            match self.idom[block.index()] {
-                Some(parent) if parent != block => block = parent,
-                _ => return false,
+        let mut children = vec![Vec::new(); func.blocks.len()];
+        for (index, parent) in idom.iter().enumerate() {
+            let block = Block(index as u32);
+            if let Some(parent) = *parent
+                && parent != block
+            {
+                children[parent.index()].push(block);
             }
         }
+        let mut enter = vec![usize::MAX; func.blocks.len()];
+        let mut exit = vec![usize::MAX; func.blocks.len()];
+        let mut walk = vec![(func.entry, false)];
+        let mut clock = 0;
+        while let Some((block, exiting)) = walk.pop() {
+            if exiting {
+                exit[block.index()] = clock;
+            } else {
+                enter[block.index()] = clock;
+                walk.push((block, true));
+                walk.extend(children[block.index()].iter().rev().map(|&b| (b, false)));
+            }
+            clock += 1;
+        }
+        Self { enter, exit }
+    }
+
+    fn dominates(&self, definition: Block, block: Block) -> bool {
+        definition == block
+            || self.enter[definition.index()] != usize::MAX
+                && self.enter[definition.index()] <= self.enter[block.index()]
+                && self.exit[block.index()] <= self.exit[definition.index()]
     }
 }

@@ -96,6 +96,89 @@ fn opt_ssa_stack_shuffles_preserve_single_definition() {
 }
 
 #[test]
+fn opt_ssa_completed_forward_edges_do_not_allocate_provisional_values() {
+    let params = ParamShape {
+        required: 64,
+        optional: 0,
+        has_rest: false,
+    };
+    let ops = [Op::Goto(1), Op::Goto(2), Op::Goto(3), Op::Return];
+    let func = make(&ops, &[], params);
+    assert_eq!(func.values.len(), 64, "only the original Arg definitions");
+    assert_eq!(func.census.phis, 0);
+    assert!(
+        func.values
+            .iter()
+            .all(|value| !matches!(value.def, ValueDef::Alias(_)))
+    );
+    let original = &func.entry_stacks[func.entry.index()];
+    for state in func.source_states.iter().flatten() {
+        assert_eq!(&state.pre, original, "the complete GNU stack stays live");
+        assert_eq!(&state.post, original);
+        assert_eq!(&func.frames[state.frame.index()].stack, original);
+    }
+}
+
+#[test]
+fn opt_ssa_completed_refinement_edge_supplies_its_dominating_value() {
+    let func = make(
+        &[
+            Op::Dup,
+            Op::Consp,
+            Op::GotoIfNil(5),
+            Op::Car,
+            Op::Return,
+            Op::Return,
+        ],
+        &[],
+        one_arg(),
+    );
+    let car = func.source_states[3].as_ref().unwrap();
+    let entry_value = car.pre[0];
+    let ValueDef::Inst(inst) = func.values[entry_value.index()].def else {
+        panic!("the completed edge must directly supply its refinement");
+    };
+    assert!(matches!(
+        func.insts[inst.index()].op,
+        Opcode::Refine(TypeSet::CONS)
+    ));
+    assert!(func.blocks[car.block.index()].params.is_empty());
+    assert!(
+        !func
+            .values
+            .iter()
+            .any(|value| matches!(value.def, ValueDef::Alias(_)))
+    );
+}
+
+#[test]
+fn opt_ssa_unemitted_backward_predecessor_keeps_changed_argument_phi() {
+    let func = make(
+        &[
+            Op::Goto(4),
+            Op::Add1,
+            Op::Goto(4),
+            Op::Return,
+            Op::Dup,
+            Op::GotoIfNotNil(1),
+            Op::Return,
+        ],
+        &[],
+        one_arg(),
+    );
+    let header = func.source_states[1].as_ref().unwrap().block;
+    let arg = func.entry_stacks[func.entry.index()][0];
+    let carried = func.entry_stacks[header.index()][0];
+    assert_ne!(
+        arg, carried,
+        "the forward jump has not emitted this predecessor yet"
+    );
+    let loop_join = func.source_states[4].as_ref().unwrap().block;
+    assert_eq!(func.blocks[loop_join.index()].params.len(), 1);
+    assert_ne!(func.entry_stacks[loop_join.index()][0], arg);
+}
+
+#[test]
 fn opt_ssa_loop_prunes_invariant_argument_phi() {
     let func = make(&loop_ops(), &[LispValue::fixnum(0)], one_arg());
     let header = func.source_states[1].as_ref().unwrap().block;

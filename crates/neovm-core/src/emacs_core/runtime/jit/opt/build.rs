@@ -4,9 +4,9 @@
 //! This builder only reads immutable Rust data and opaque constant bits: it
 //! never dereferences a Lisp object or consults a mutator-local cache. Separate
 //! compiler workers can therefore build independent functions concurrently.
-//! Lazy block parameters stand in for stack-slot reads whose predecessor has
-//! not been emitted yet. Sealing resolves their inputs and recursively removes
-//! trivial parameters, including loop-invariant parameters.
+//! A completed single predecessor supplies its stack without parameters. Lazy
+//! block parameters stand in for other stack-slot reads, whose inputs sealing
+//! resolves before recursively removing trivial loop-invariant parameters.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -337,6 +337,22 @@ impl<'a> Builder<'a> {
             return self.func.entry_stacks[block.index()].to_vec();
         }
         let depth = self.input.cfg.entry_depth[&(self.func.blocks[block.index()].pc as usize)];
+        // Once the unique source predecessor has been emitted, its outgoing
+        // stack dominates this block. A split edge may supply refined values;
+        // those dominate through the edge block as well. Do not forward an
+        // unsealed join or loop header: a later predecessor can change a slot.
+        // Duplicate Switch edges from one predecessor must also agree exactly.
+        if self.cfg_predecessors[block.index()] == 1
+            && let Some(first) = self.incoming[block.index()].first()
+            && first.len() == depth
+            && self.incoming[block.index()]
+                .iter()
+                .all(|incoming| incoming == first)
+        {
+            let stack = first.clone();
+            self.func.entry_stacks[block.index()] = stack.clone().into_boxed_slice();
+            return stack;
+        }
         let mut stack = Vec::with_capacity(depth);
         // Each read makes one pending phi. The complete GNU stack is live at
         // deopt/GC boundaries, even when only a subset feeds the next opcode.
@@ -733,7 +749,9 @@ impl<'a> Builder<'a> {
             cold: false,
         });
         self.func.entry_stacks.push(stack.into());
-        self.incoming.push(vec![stack.to_vec()]);
+        // Only source blocks need provisional-parameter inputs. Edge blocks
+        // consume dominating values directly and never participate in sealing.
+        self.incoming.push(Vec::new());
         self.func.census.critical_edges += usize::from(critical);
         if backward {
             let frame = self.source_frame(
@@ -859,8 +877,7 @@ impl<'a> Builder<'a> {
         loop {
             let mut changed = false;
             for block in 0..self.source_blocks {
-                let params = self.func.blocks[block].params.clone();
-                for (slot, phi) in params.into_iter().enumerate() {
+                for (slot, &phi) in self.func.blocks[block].params.iter().enumerate() {
                     if canonical(&aliases, phi) != phi {
                         continue;
                     }
@@ -935,9 +952,12 @@ impl<'a> Builder<'a> {
         for block in &mut self.func.blocks {
             map_term(&mut block.term, &aliases, &retained);
         }
+        let mut frames_changed = false;
         for frame in &mut self.func.frames {
             for value in &mut frame.stack {
-                *value = canonical(&aliases, *value);
+                let canonical = canonical(&aliases, *value);
+                frames_changed |= canonical != *value;
+                *value = canonical;
             }
         }
         for stack in &mut self.func.entry_stacks {
@@ -953,7 +973,9 @@ impl<'a> Builder<'a> {
                 *value = canonical(&aliases, *value);
             }
         }
-        self.reintern_frames();
+        if frames_changed {
+            self.reintern_frames();
+        }
         // Join parameter types only after aliases and edge arities are final.
         // A finite kind-set lattice converges for loops without range widening.
         for block in &self.func.blocks {
