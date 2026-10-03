@@ -1625,3 +1625,72 @@ pub(crate) fn force_opt_for_test(mode: Option<OptMode>, admit: Option<OptAdmit>)
     OPT_TEST_OVERRIDE.with(|v| v.set(mode));
     OPT_ADMIT_TEST_OVERRIDE.with(|v| v.set(admit));
 }
+
+/// Independently selected mid-end passes. Threading: immutable process-wide
+/// compiler configuration only; it contains no Lisp values or mutator state.
+/// An empty list runs no transformations. Negative entries support bisection
+/// of an explicit list (for example `all,-gvn`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct OptPasses {
+    pub fold: bool,
+    pub bool_rep: bool,
+    pub reps: bool,
+    pub gvn: bool,
+    pub range: bool,
+    pub licm: bool,
+    pub sink: bool,
+}
+
+impl OptPasses {
+    pub(crate) const ALL: Self = Self {
+        fold: true,
+        bool_rep: true,
+        reps: true,
+        gvn: true,
+        range: true,
+        licm: true,
+        sink: true,
+    };
+
+    pub(crate) fn parse(value: Option<&str>) -> Self {
+        let mut passes = Self::default();
+        for token in value.unwrap_or("").split(',').map(str::trim) {
+            let (name, on) = token
+                .strip_prefix('-')
+                .map_or((token, true), |name| (name, false));
+            match name {
+                "none" if on => passes = Self::default(),
+                "all" => passes = if on { Self::ALL } else { Self::default() },
+                "fold" => passes.fold = on,
+                "bool" => passes.bool_rep = on,
+                "reps" => passes.reps = on,
+                "gvn" => passes.gvn = on,
+                "range" => passes.range = on,
+                "licm" => passes.licm = on,
+                "sink" => passes.sink = on,
+                _ => {}
+            }
+        }
+        passes
+    }
+}
+
+pub(crate) fn jit_opt_passes() -> OptPasses {
+    #[cfg(test)]
+    if let Some(passes) = OPT_PASSES_TEST_OVERRIDE.with(|v| v.get()) {
+        return passes;
+    }
+    static PASSES: std::sync::OnceLock<OptPasses> = std::sync::OnceLock::new();
+    *PASSES.get_or_init(|| OptPasses::parse(std::env::var("NEOVM_JIT_OPT_PASSES").ok().as_deref()))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Compiler configuration only, never mutator or Lisp state.
+    static OPT_PASSES_TEST_OVERRIDE: std::cell::Cell<Option<OptPasses>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn force_opt_passes_for_test(passes: Option<OptPasses>) {
+    OPT_PASSES_TEST_OVERRIDE.with(|v| v.set(passes));
+}

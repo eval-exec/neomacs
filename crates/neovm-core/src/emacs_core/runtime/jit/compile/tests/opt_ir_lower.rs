@@ -15,6 +15,7 @@ struct Settings;
 impl Settings {
     fn enter() -> Self {
         force_opt_for_test(Some(OptMode::Opt), Some(OptAdmit::ALL));
+        force_opt_passes_for_test(Some(OptPasses::default()));
         force_deopt_for_test(false);
         Self
     }
@@ -22,6 +23,7 @@ impl Settings {
 impl Drop for Settings {
     fn drop(&mut self) {
         force_opt_for_test(None, None);
+        force_opt_passes_for_test(None);
         force_deopt_for_test(false);
     }
 }
@@ -140,6 +142,131 @@ fn opaque(plan: &ir::Func, op: &Op) -> usize {
         .iter()
         .position(|inst| matches!(&inst.op, ir::Opcode::Opaque(found) if found == op))
         .unwrap()
+}
+
+fn clif_fields(expression: &str) -> Vec<&str> {
+    expression
+        .split(';')
+        .next()
+        .unwrap()
+        .split_whitespace()
+        .map(|field| field.trim_end_matches(','))
+        .collect()
+}
+
+// Require the nil test to consume the retagged arithmetic result itself. A
+// mere count of arithmetic/retag operations could pass on cold-frame spills
+// while the successful arithmetic result was still dead before its branch.
+fn raw_arithmetic_feeds_nil_test(clif: &str) -> bool {
+    let definitions: HashMap<_, _> = clif
+        .lines()
+        .filter_map(|line| line.trim().split_once(" = "))
+        .collect();
+    let fields = |value: &str| {
+        definitions
+            .get(value)
+            .map_or_else(Vec::new, |expression| clif_fields(expression))
+    };
+    let opcode = |fields: &[&str], expected: &str| {
+        fields
+            .first()
+            .is_some_and(|field| field.split('.').next() == Some(expected))
+    };
+    definitions.values().any(|expression| {
+        let compare = clif_fields(expression);
+        if !opcode(&compare, "icmp") || compare.get(1) != Some(&"ne") || compare.len() < 4 {
+            return false;
+        }
+        let retag = fields(compare[2]);
+        if !opcode(&retag, "bor") || retag.len() < 3 {
+            return false;
+        }
+        let shifted = fields(retag[1]);
+        if !opcode(&shifted, "ishl") || shifted.len() < 3 {
+            return false;
+        }
+        opcode(&fields(shifted[1]), "iadd")
+    })
+}
+
+#[test]
+fn opt_ir_lower_numeric_truth_is_only_folded_with_bool_pass() {
+    let _settings = Settings::enter();
+    let mut ctx = Context::new();
+    let f = function(
+        vec![
+            Op::StackRef(0),
+            Op::Sub1,
+            Op::GotoIfNil(5),
+            Op::Constant(0),
+            Op::Goto(6),
+            Op::Constant(1),
+            Op::Return,
+        ],
+        vec![Value::fixnum(7), Value::fixnum(41)],
+        1,
+    );
+    let original = plan(&f);
+    let mut leaves = Vec::new();
+    for bool_rep in [false, true] {
+        force_opt_passes_for_test(Some(OptPasses {
+            bool_rep,
+            ..OptPasses::default()
+        }));
+        let mut leaf = None;
+        let clif = captured_clif(|| leaf = Some(lower(&f, &original)));
+        assert_eq!(clif.len(), 1);
+        assert_eq!(raw_arithmetic_feeds_nil_test(&clif[0]), !bool_rep);
+        assert_eq!(clif[0].contains("iconst.i8 1"), bool_rep);
+        let leaf = leaf.unwrap();
+        for argument in [Value::fixnum(1), Value::fixnum(0)] {
+            // Sub1 produces numerical zero for input 1. Both representations
+            // must still take the true arm, exactly as Tier-0 does.
+            let expected = tier0(&mut ctx, &f, &[argument]);
+            assert_eq!(native(&mut ctx, &leaf, &[argument]), expected);
+        }
+        leaves.push(leaf);
+    }
+    for argument in [Value::fixnum(Value::MOST_NEGATIVE_FIXNUM), Value::NIL] {
+        let first = leaves[0].call(&mut ctx as *mut Context as *mut u8, &[argument]);
+        let second = leaves[1].call(&mut ctx as *mut Context as *mut u8, &[argument]);
+        assert_eq!(first, second, "the arithmetic guard's exact frame survives");
+        let NativeRun::DeoptAt(frame) = first else {
+            panic!("Sub1 overflow or type rejection deopts precisely")
+        };
+        assert_eq!(frame.pc, 1);
+        assert_eq!(frame.stack, vec![argument, argument]);
+        assert_eq!(ctx.jit_root_stack_top, 0);
+    }
+
+    // A verified transformed IR can branch directly on a numeric SSA value.
+    // It must use the same gated truth test as the builder's IsNonNil flag.
+    let mut direct = original;
+    let number = direct.insts[opaque(&direct, &Op::Sub1)].result.unwrap();
+    let ir::Term::Branch { flag, .. } = &mut direct
+        .blocks
+        .iter_mut()
+        .find(|block| matches!(block.term, ir::Term::Branch { .. }))
+        .unwrap()
+        .term
+    else {
+        unreachable!()
+    };
+    *flag = number;
+    for bool_rep in [false, true] {
+        force_opt_passes_for_test(Some(OptPasses {
+            bool_rep,
+            ..OptPasses::default()
+        }));
+        let mut leaf = None;
+        let clif = captured_clif(|| leaf = Some(lower(&f, &direct)));
+        assert_eq!(raw_arithmetic_feeds_nil_test(&clif[0]), !bool_rep);
+        let argument = Value::fixnum(1);
+        assert_eq!(
+            native(&mut ctx, &leaf.unwrap(), &[argument]),
+            reference(&mut ctx, &direct, &[argument])
+        );
+    }
 }
 
 #[test]

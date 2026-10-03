@@ -212,6 +212,22 @@ fn tagged(ctx: &mut EmitContext, local: &mut LocalValues, value: ir::Value) -> C
     stack[0]
 }
 
+/// Match the baseline's nil test unless Bool optimization is selected. A
+/// flonum's word is its nonzero numeric tag word, never its f64 payload; testing
+/// it needs no boxing. Threading: only compilation-local operands and settings.
+fn non_nil_flag(ctx: &mut EmitContext, word: ClifValue, rep: SlotRep) -> ClifValue {
+    if jit_opt_passes().bool_rep && (rep == SlotRep::RawFixnum || rep.is_flonum()) {
+        ctx.fb.ins().iconst(types::I8, 1)
+    } else {
+        let word = if rep == SlotRep::RawFixnum {
+            retag_fixnum(ctx.fb, word)
+        } else {
+            word
+        };
+        lowering::icmp_imm_p(ctx.fb, IntCC::NotEqual, word, Value::NIL.bits() as i64)
+    }
+}
+
 fn snapshot(
     ctx: &mut EmitContext,
     local: &mut LocalValues,
@@ -888,16 +904,7 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
                 }
                 ir::Opcode::IsNonNil => {
                     let (word, rep) = ctx.values.read(ctx.fb, ctx.func, &mut local, inst.args[0]);
-                    let flag = if rep == SlotRep::RawFixnum || rep.is_flonum() {
-                        ctx.fb.ins().iconst(types::I8, 1)
-                    } else {
-                        lowering::icmp_imm_p(
-                            ctx.fb,
-                            IntCC::NotEqual,
-                            word,
-                            Value::NIL.bits() as i64,
-                        )
-                    };
+                    let flag = non_nil_flag(&mut ctx, word, rep);
                     Some((flag, SlotRep::Tagged))
                 }
                 ir::Opcode::InlineEntry(region) => {
@@ -1083,10 +1090,8 @@ fn emit_term(
                 && ctx.fb.func.dfg.value_type(word) == types::I8
             {
                 word
-            } else if rep == SlotRep::RawFixnum || rep.is_flonum() {
-                ctx.fb.ins().iconst(types::I8, 1)
             } else {
-                lowering::icmp_imm_p(ctx.fb, IntCC::NotEqual, word, 0)
+                non_nil_flag(ctx, word, rep)
             };
             let yes = edge_arguments(ctx, local, if_true);
             let no = edge_arguments(ctx, local, if_false);

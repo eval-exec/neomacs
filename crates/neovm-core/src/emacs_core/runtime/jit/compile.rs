@@ -3995,3 +3995,7 @@ mod opt_admission_tests;
 #[cfg(test)]
 #[path = "compile/tests/opt_ir_lower.rs"]
 mod opt_ir_lower_tests;
+
+#[cfg(test)]
+#[path = "compile/tests/opt_passes.rs"]
+mod opt_passes_tests;
