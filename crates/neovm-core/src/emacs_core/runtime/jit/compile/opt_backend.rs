@@ -39,18 +39,26 @@ fn requested_opt_full_now() -> bool {
     REQUESTED_OPT_FULL.with(|requested| requested.get())
 }
 
-/// Honor a Feedback request's explicit Full policy only after an opt plan has
-/// passed admission and verification. Enter before ISA/module selection and
-/// retain this scope through final leaf metadata; a refused opt lowering drops
-/// it before the baseline retry. Forced allocator configuration still wins.
-/// Threading: this borrows existing scalar compiler-thread scopes, contains no
-/// Lisp state, and restores the enclosing compiler's choice on drop. Backend
-/// workers receive the resulting allocator through their existing job payload.
+/// Honor a Feedback request's explicit Full policy when the verified opt plan
+/// transports at least two parameters simultaneously at an actual join. Entry
+/// parameters and serial single-parameter joins retain the outer allocator
+/// policy. Enter before ISA/module selection and retain this scope through final
+/// leaf metadata; a refused lowering drops it before the baseline retry. Forced
+/// allocator configuration still wins. Threading: the inspected plan belongs to
+/// this compilation; existing scalar compiler-thread scopes contain no Lisp
+/// state and restore the enclosing choice on drop. Backend workers receive the
+/// resulting allocator through their existing job payload.
 pub(super) fn quality_scope(
-    _plan: &ir::Func,
+    plan: &ir::Func,
     osr_pc: Option<usize>,
 ) -> Option<lowering::RegallocScope> {
-    if osr_pc.is_some() || !requested_opt_full_now() {
+    if osr_pc.is_some()
+        || !requested_opt_full_now()
+        || !plan
+            .blocks
+            .iter()
+            .any(|block| block.preds.len() >= 2 && block.params.len() >= 2)
+    {
         return None;
     }
     Some(lowering::RegallocScope::enter(
