@@ -468,6 +468,20 @@ impl AsyncSignalScope {
     }
 }
 
+/// The signals GNU's `maybe_fatal_sig` captures as process-fatal
+/// (`src/sysdep.c:2044-2046`): SIGHUP, SIGINT, SIGTERM.
+///
+/// One list, read by both the installer and the handler, so a signal cannot
+/// be installed without also being latched — which is exactly how SIGINT was
+/// once installed and then silently dropped on delivery.
+#[cfg(unix)]
+pub(crate) const FATAL_SIGNALS: [libc::c_int; 3] = [libc::SIGHUP, libc::SIGINT, libc::SIGTERM];
+
+#[cfg(unix)]
+pub(crate) fn is_fatal_signal(sig: libc::c_int) -> bool {
+    FATAL_SIGNALS.contains(&sig)
+}
+
 /// GNU's `deliver_user_signal` (src/keyboard.c:8524-8531) with the forwarding
 /// removed, because this handler is correct on any thread.
 ///
@@ -482,7 +496,7 @@ extern "C" fn deliver_user_signal(sig: libc::c_int) {
     // restoring it is what GNU does at src/sysdep.c:1733 and :1750.
     let saved_errno = platform::save_errno();
 
-    if sig == libc::SIGTERM || sig == libc::SIGHUP {
+    if is_fatal_signal(sig) {
         let scope = AsyncSignalScope(std::marker::PhantomData);
         scope.record_termination(sig);
         scope.set_pending_signals();
@@ -630,11 +644,14 @@ fn install_once() -> InstallReport {
 /// Install termination capture only once the host knows batch/interactive mode.
 /// Process-manager construction may create the wake pipe, but must not choose
 /// fatal-signal policy. GNU maybe_fatal_sig preserves SIG_IGN in batch mode.
+///
+/// The set is GNU's: `maybe_fatal_sig` captures SIGHUP, SIGINT and SIGTERM
+/// (`src/sysdep.c:2044-2046`).
 pub(crate) fn install_termination(noninteractive: bool) {
     #[cfg(unix)]
     {
         install();
-        for sig in [libc::SIGTERM, libc::SIGHUP] {
+        for sig in FATAL_SIGNALS {
             // SAFETY: valid signals and initialized local sigaction storage.
             let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
             if unsafe { libc::sigaction(sig, std::ptr::null(), &mut old) } != 0 {
