@@ -43,11 +43,16 @@ pub(super) unsafe fn synchronize_string_storage_observation(owner: *const String
     }
 }
 
-#[inline]
+#[cold]
+#[inline(never)]
 pub(super) unsafe fn observe_materialized_string_storage(
     owner: *const StringObj,
-    _storage: &LispString,
+    storage: &LispString,
 ) {
-    // SAFETY: the byte setter retains the owner; materialization completed.
-    unsafe { synchronize_string_storage_observation(owner) };
+    // SAFETY: the byte setter retains the owner. Borrow only its disjoint
+    // header while the setter lends the payload to this shared callback.
+    let header = unsafe { &*std::ptr::addr_of!((*owner).header) };
+    if header.collection_observed() {
+        storage.mark_owned_storage_collection_observed();
+    }
 }
