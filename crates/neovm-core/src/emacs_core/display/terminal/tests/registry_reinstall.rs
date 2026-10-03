@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::pdump::clone_active_evaluator;
 
@@ -35,8 +36,8 @@ fn assert_deleted_terminal(ctx: &mut Context, deleted: Value) {
             .expect("frame-initial-p accepts a deleted handle")
             .is_nil()
     );
-    match builtin_delete_terminal(ctx, vec![terminal_handle_value()]) {
-        Err(Flow::Signal(condition)) => {
+    match builtin_delete_terminal(ctx, vec![terminal_handle_value()]).kinded() {
+        Err(FlowKind::Signal(condition)) => {
             assert_eq!(condition.symbol_name(), "error");
             assert_eq!(
                 condition.data,
