@@ -966,6 +966,7 @@ fn jit_reads_take_the_read_tier() {
 #[test]
 fn set_tier_stores_cached_shapes_and_refuses_the_rest() {
     let mut ev = fixture();
+    let gc_refusal_is_early = crate::emacs_core::hashtab::hash_test_parity_enabled();
     set_var_cache_tiers_for_test(&VarCacheTier::ALL);
     for &var in FIXTURE_VARS {
         let _ = run(&mut ev, Engine::Interpreter, &Prog::read(), var, &[]);
@@ -1008,7 +1009,17 @@ fn set_tier_stores_cached_shapes_and_refuses_the_rest() {
         "inhibit-quit",      // host-projected
         "buffer-undo-list",  // plain, host-projected
     ] {
+        let refused_before = var_cache_event_count(VarCacheEvent::SetRefused);
         assert!(!set(&mut ev, var, n), "{var}: the general path's");
+        if var == "gc-cons-threshold" {
+            // Parity marks the canonical GC cell as runtime-projected, so
+            // its write window refuses before the set tier records a miss.
+            assert_eq!(
+                var_cache_event_count(VarCacheEvent::SetRefused) - refused_before,
+                u64::from(!gc_refusal_is_early),
+                "only the GC projection's refusal moves before the miss counter"
+            );
+        }
     }
     // Type rules the general path signals for.
     assert!(!set(&mut ev, "vft-int", Value::string("s")));
@@ -1018,11 +1029,18 @@ fn set_tier_stores_cached_shapes_and_refuses_the_rest() {
         .map(|v| eval(&mut ev, &observe_form(v)))
         .collect();
     assert_eq!(before, after, "a refusal stores nothing");
-    assert_eq!(var_cache_event_count(VarCacheEvent::SetRefused), 7);
+    let expected_refusals = 7 - u64::from(gc_refusal_is_early);
+    assert_eq!(
+        var_cache_event_count(VarCacheEvent::SetRefused),
+        expected_refusals
+    );
     // The observations above ended in the other buffer, so every BLV is now
     // loaded for it: a miss here, refused.
     assert!(!set(&mut ev, "vft-loc", n));
-    assert_eq!(var_cache_event_count(VarCacheEvent::SetRefused), 8);
+    assert_eq!(
+        var_cache_event_count(VarCacheEvent::SetRefused),
+        expected_refusals + 1
+    );
     assert_eq!(eval(&mut ev, "vft-loc"), "100");
     // Tier off.
     set_var_cache_tiers_for_test(&[VarCacheTier::Read]);
