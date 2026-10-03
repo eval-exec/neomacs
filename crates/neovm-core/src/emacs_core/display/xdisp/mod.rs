@@ -2023,11 +2023,7 @@ pub fn format_mode_line_for_display_with_sources(
     ) {
         Ok(output) => output,
         Err(flow) => {
-            if !flow.is_signal() && mode_line_flow_policy::enabled() {
-                eval.defer_mode_line_display_flow(flow);
-            } else {
-                tracing::debug!("mode-line display failed: {flow:?}");
-            }
+            mode_line_flow_policy::handle_display_error(eval, flow);
             ModeLineDisplayOutput::from_root_string(Value::string(""))
         }
     }
@@ -9386,3 +9382,7 @@ mod mode_line_live_spine;
 #[cfg(test)]
 #[path = "tests/mode_line_flow.rs"]
 mod mode_line_flow;
+
+#[cfg(test)]
+#[path = "tests/mode_line_outer_flow.rs"]
+mod mode_line_outer_flow;

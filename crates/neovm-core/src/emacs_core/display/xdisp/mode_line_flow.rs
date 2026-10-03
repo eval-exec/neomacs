@@ -2,7 +2,7 @@
 //!
 //! | Knob | Default | Effect |
 //! | --- | --- | --- |
-//! | `NEOVM_MODE_LINE_FLOW` | off | Catch/log signals, propagate nonlocal exits after restoring display scopes. Graduate after active GNU parity and instruction gates. |
+//! | `NEOVM_MODE_LINE_FLOW` | off | Catch/log signals inside safe `:eval`, propagate other exits after restoring display scopes. Graduate after active GNU parity and instruction gates. |
 
 use super::*;
 use crate::emacs_core::error::{FlowKind, FlowResultExt};
@@ -101,6 +101,27 @@ pub(super) fn split_eval_result(form: &Value, result: EvalResult) -> EvalResult 
             Ok(Value::NIL)
         }
         other => other.map_err(Flow::from_kind),
+    }
+}
+
+#[cold]
+#[inline(never)]
+pub(super) fn handle_display_error(eval: &mut super::super::eval::Context, flow: Flow) {
+    // dsafe__call's bindings and outer unwind are outside its Qt handler.
+    // GNU's enclosing redisplay handler catches only the `error` family;
+    // quit and other non-error conditions must escape just like throws.
+    let propagate = enabled()
+        && flow.as_signal().is_none_or(|data| {
+            !crate::emacs_core::errors::signal_matches_condition_value_sym(
+                &eval.obarray,
+                data.symbol,
+                &Value::symbol("error"),
+            )
+        });
+    if propagate {
+        eval.defer_mode_line_display_flow(flow);
+    } else {
+        tracing::debug!("mode-line display failed: {flow:?}");
     }
 }
 

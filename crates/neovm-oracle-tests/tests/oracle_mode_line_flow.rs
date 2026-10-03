@@ -372,3 +372,51 @@ fn format_mode_line_eval_safe_handler_suppresses_debug_on_error() {
         expect_test::expect![[r#""OK (\"beforeafter\" nil)""#]],
     );
 }
+
+#[test]
+fn format_mode_line_binding_watchers_signal_outside_safe_handler() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_active_mode_line_parity(
+        r#"(let ((noninteractive nil))
+             (put 'fx2-derived-quit 'error-conditions '(fx2-derived-quit quit))
+             (put 'fx2-non-error 'error-conditions '(fx2-non-error))
+             (mapcar
+              (lambda (condition)
+                (let ((watcher (lambda (symbol value operation where)
+                                 (when (eq operation 'let)
+                                   (signal condition nil)))))
+                  (unwind-protect
+                      (progn
+                        (add-variable-watcher 'inhibit-quit watcher)
+                        (condition-case err
+                            (format-mode-line '("before" (:eval "body") "after") 0)
+                          (t (car err))))
+                    (remove-variable-watcher 'inhibit-quit watcher))))
+              '(quit fx2-derived-quit fx2-non-error error)))"#,
+        expect_test::expect![[r#""OK (quit fx2-derived-quit fx2-non-error error)""#]],
+    );
+}
+
+#[test]
+fn format_mode_line_unbinding_watchers_signal_outside_safe_handler() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_active_mode_line_parity(
+        r#"(let ((noninteractive nil))
+             (put 'fx2-derived-quit 'error-conditions '(fx2-derived-quit quit))
+             (put 'fx2-non-error 'error-conditions '(fx2-non-error))
+             (mapcar
+              (lambda (condition)
+                (let ((watcher (lambda (symbol value operation where)
+                                 (when (eq operation 'unlet)
+                                   (signal condition nil)))))
+                  (unwind-protect
+                      (progn
+                        (add-variable-watcher 'inhibit-quit watcher)
+                        (condition-case err
+                            (format-mode-line '("before" (:eval "body") "after") 0)
+                          (t (car err))))
+                    (remove-variable-watcher 'inhibit-quit watcher))))
+              '(quit fx2-derived-quit fx2-non-error error)))"#,
+        expect_test::expect![[r#""OK (quit fx2-derived-quit fx2-non-error error)""#]],
+    );
+}
