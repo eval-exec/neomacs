@@ -49,7 +49,7 @@
 //! ## Opt-in features (default-OFF, pending a graduation decision)
 //! | Knob | Enable | Meaning / graduation blocker |
 //! |---|---|---|
-//! | `NEOVM_JIT_OPT` | `legacy` (opt backend off); `off`, `opt` | Backend selector independent of `NEOVM_JIT_TIER2=off\|on`: legacy keeps the existing MIR/baseline front; off selects baseline only; opt selects baseline at T1 and global SSA at T2 upgrades and OSR. Entry upgrades require TIER2=on; OSR selects opt directly. Graduation requires F-M2, later pass gates, compile census and GNU soak. |
+//! | `NEOVM_JIT_OPT` | `legacy` (opt backend off); `off`, `opt` | Backend selector independent of `NEOVM_JIT_TIER2=off\|on`: legacy keeps the existing MIR/baseline front; off selects baseline only; opt selects baseline at T1 and global SSA at T2 upgrades and OSR. Entry upgrades require TIER2=on; OSR selects opt directly. Graduation requires F-M2, later pass gates, compile census and GNU soak. With opt selected, stable unbanned baseline helpers of 1–64 ops are also worth a T2 rebuild; allocator, dynamic-target and legacy admissions keep main policy. |
 //! | `NEOVM_JIT_OPT_ADMIT` | empty; `args,env,vars,binds,switch,handlers`, `all` | Compile-time admissions for the opt front; each defaults off. Handlers/Throw remain a counted builder refusal until exceptional SSA is implemented. |
 //! | `NEOVM_JIT_OPT_BUILD_CENSUS` | off; `PATH` | Append per-build verdict, ops, blocks, insts, phis, frames, full-stack baseline params, split edges, refinements, frame uses and dead leaders. Captures all attempted bodies without selecting opt code. |
 //! | `NEOVM_JIT_DUMP_OPT` | off; `PATH` | Append verified IR text for opt builds (or the build census), with explicit SSA, effects, frames and source positions. |

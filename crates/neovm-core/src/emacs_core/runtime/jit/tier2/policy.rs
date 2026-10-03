@@ -84,6 +84,11 @@ struct Ledger {
 }
 thread_local! { static LEDGER: Cell<Ledger> = const { Cell::new(Ledger { spent: 0, reserved: 0 }) }; }
 
+/// Newly admitted straight-line opt helpers stay small. Their countdown proves
+/// repeated native use; a stable snapshot and the existing CPU budget still
+/// precede compilation. Large call-dominated bodies keep the legacy worth test.
+const OPT_HELPER_MAX_OPS: usize = 64;
+
 /// A scalar OS thread CPU clock, also usable by the backend worker (no Lisp).
 pub(crate) fn cpu_time_us() -> u64 {
     #[cfg(unix)]
@@ -274,6 +279,22 @@ pub(crate) fn request_decision(leaf: &CompiledLeaf, source: &RuntimeState) -> Op
     } else {
         None
     };
+    // An opt rebuild can improve a compact statically named call helper even
+    // when main's allocator/dynamic-target worth decision found no opportunity.
+    // Only opt selects this additional admission; every existing stability,
+    // source-ban and compile-budget check remains in force.
+    let kind = kind.or_else(|| {
+        if !unstable
+            && !banned
+            && super::super::compile::jit_opt_mode() == super::super::compile::OptMode::Opt
+            && leaf.tier() == LeafTier::Baseline
+            && (1..=OPT_HELPER_MAX_OPS).contains(&p.ops_len)
+        {
+            Some(T2Upgrade::Feedback)
+        } else {
+            None
+        }
+    });
     drop(p);
     // An opt compile replaces code rather than merely changing its allocator:
     // use the T2 lifecycle so the existing T1 fallback remains rooted and can
@@ -336,3 +357,7 @@ pub(crate) fn revert_if_t2(
 #[cfg(test)]
 #[path = "tests/policy_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/policy_opt_test.rs"]
+mod opt_tests;
