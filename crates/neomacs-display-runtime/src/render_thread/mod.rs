@@ -19,6 +19,7 @@ pub(crate) mod frame_stats;
 pub(crate) mod frame_windows;
 mod gpu_startup;
 mod input;
+mod key_repeat;
 mod lifecycle;
 mod media;
 #[cfg(test)]

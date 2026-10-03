@@ -937,6 +937,7 @@ pub(super) struct RenderApp {
     /// which winit's aggregate `ModifiersState` cannot express; updated
     /// from the physical modifier keys' own key events.
     pub(super) modifier_sides: super::modifier_sides::ModifierSides,
+    pub(super) key_repeats: super::key_repeat::KeyRepeats,
     pub(super) pending_file_drops: std::collections::HashSet<winit::event_loop::AsyncRequestSerial>,
 
     pub(super) image_metadata: SharedImageRenderState,
@@ -1149,6 +1150,7 @@ impl RenderApp {
             modifier_policy: neomacs_display_protocol::ModifierPolicy::gnu_ns_default(),
             modifier_state: winit::keyboard::ModifiersState::empty(),
             modifier_sides: super::modifier_sides::ModifierSides::default(),
+            key_repeats: super::key_repeat::KeyRepeats::default(),
             pending_file_drops: Default::default(),
             image_metadata,
             cursor_defaults: CursorState::new(
