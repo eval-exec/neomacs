@@ -998,6 +998,14 @@ pub(crate) fn jit_direct_call_on() -> bool {
     *ON.get_or_init(|| knob_on("NEOVM_JIT_DIRECT_CALL"))
 }
 
+/// Per-emitted-site atomic attempt/hit diagnostics. Default off; read only
+/// while compiling or arming a cold slot. Threading: immutable process
+/// configuration, with no Lisp state or mutator-local cache.
+pub(crate) fn jit_direct_profile_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| knob_on("NEOVM_JIT_DIRECT_PROFILE"))
+}
+
 /// Which variable ops `NEOVM_JIT_INLINE_VARS` inlines in JIT code (design
 /// `p1-4-inline-binding-blv` Stage B, `inline_vars`; default `read`).
 /// Read at compile time only, so both sides of an A/B run in one binary

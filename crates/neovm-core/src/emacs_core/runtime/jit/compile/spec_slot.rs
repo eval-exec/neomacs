@@ -339,6 +339,7 @@ pub(crate) static DIRECT_ENTRIES_ARMED: AtomicU64 = AtomicU64::new(0);
 #[cold]
 #[inline(never)]
 pub(crate) fn arm_direct_entry_if_eligible(slot: &SpecSlot, leaf: &CompiledLeaf, nargs: usize) {
+    super::direct_call::note_arming();
     let key = slot.direct_consts.load(Ordering::Relaxed);
     let eligible = if jit_direct_sites() == DirectSitesMode::SelfOnly {
         // The self policy mixes register self bodies with memory bodies.

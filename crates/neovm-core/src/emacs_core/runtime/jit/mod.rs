@@ -95,6 +95,7 @@
 //! ## Measurement / bisection
 //! | Knob | Meaning |
 //! |---|---|
+//! | `NEOVM_JIT_DIRECT_PROFILE` | off; `=on` counts attempts and guarded native-entry hits for each emitted direct site using atomic RMWs; the exit builtin-leaf census includes owner/source/site ordinal, zero-use sites, misses, and cold slot-arming attempts. Use with `NEOVM_JIT_COMPILE_STATS=1` or `NEOVM_JIT_STATS_FILE` for the report. Diagnostic runs only; off emits identical CLIF. |
 //! | `NEOVM_JIT_MAX_ID` | Compile only functions with id ≤ N (ids assigned in first-hot order) — clean prefix bisection of a misbehaving workload. |
 //! | `NEOVM_JIT_DEBUG_ID` | Dump the bytecode body of the one compiled function with this id. |
 //! | `NEOVM_JIT_PROFILE` | Append per-function workload-characterization records to this file path: one CSV row per compile attempt (its last three columns are `compiled_id,tier,name`), each followed by a `#mir,compiled_id,verdict` row (why the MIR tier did or did not take the body: `taken`, the pre-build gates such as `gate_opt+gate_prefix`, or the first bail key the census counted; `-` when the compile never reached the MIR tier; see `stats::verdict`), and at exit one `#leaf,compiled_id,name,tier,osr_pc,entries,deopt_at,deopt_rerun,signals,top_deopt_pc` row per compiled leaf, joinable on `compiled_id`. Also turns on per-leaf entry counting and per-function names (see `NEOVM_JIT_COMPILE_STATS`). |
