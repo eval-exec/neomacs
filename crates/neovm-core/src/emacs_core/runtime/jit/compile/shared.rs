@@ -595,3 +595,151 @@ pub(crate) fn declare_leaf_entry(
     };
     declared.map_err(|e| CompileError::Backend(BackendError::Define(e.to_string())))
 }
+
+// BEGIN T35 SELECTED SHIM BACKEND
+/// Selected frontend-only backend dispatch. Threading: both scalars are
+/// compile-owned requirements; the original main function and all its helper
+/// bodies remain unchanged, and no Lisp runtime layout/state is added.
+pub(crate) fn define_jit_leaf_selected(
+    per_leaf_shims: bool,
+    array_profile: bool,
+    sink_versions: bool,
+    build: impl FnOnce(&mut JitSink<'_>) -> Result<FuncId, CompileError>,
+) -> Result<JitDefined, CompileError> {
+    if !array_profile && !sink_versions {
+        return define_jit_leaf(per_leaf_shims, build);
+    }
+    let mut build = Some(build);
+    if persistent_module_enabled() {
+        // Read once per compile: the front/backend split (`NEOVM_JIT_BG`).
+        let split = crate::emacs_core::jit::bg::split_enabled();
+        // `try_with`: a compile during thread-local teardown (the backend
+        // already destroyed) takes the per-leaf path like a re-entrant one.
+        let shared = SHARED_JIT
+            .try_with(|cell| {
+                let mut guard = cell.try_borrow_mut().ok()?;
+                let build = build.take().expect("build runs once");
+                Some(if split {
+                    split::define_split_selected(&mut guard, array_profile, sink_versions, build)
+                } else {
+                    define_shared_selected(&mut guard, array_profile, sink_versions, build)
+                })
+            })
+            .ok()
+            .flatten();
+        match shared {
+            Some(result) => return result,
+            None => bump_stats(|s| s.reentrant_fallbacks += 1),
+        }
+    }
+    define_per_leaf(per_leaf_shims, build.take().expect("build runs once"))
+}
+
+/// A selected array-observing frontend passes the actual normal-T1 requirement.
+pub(crate) fn define_jit_leaf_with_array(
+    per_leaf_shims: bool,
+    array_profile: bool,
+    build: impl FnOnce(&mut JitSink<'_>) -> Result<FuncId, CompileError>,
+) -> Result<JitDefined, CompileError> {
+    define_jit_leaf_selected(per_leaf_shims, array_profile, false, build)
+}
+
+impl SharedJit {
+    /// Run the exact main setup first, then append/recover selected suffix IDs.
+    /// All main direct-shape/census/framed/HOF group unions stay as main wrote
+    /// them. Optional IDs are monotone within the compiler-owned module.
+    fn ensure_module_selected(
+        &mut self,
+        choice: RegallocChoice,
+        tier2_profile: bool,
+        array_profile: bool,
+        sink_versions: bool,
+    ) -> Result<(), CompileError> {
+        self.ensure_module(choice, tier2_profile)?;
+        let shared = self.modules[choice.index()]
+            .as_mut()
+            .expect("ensure_module installed it");
+        let config = shared.module.target_config();
+        shared.shims = super::shim_refs::ShimIds::append_selected(
+            &mut shared.module,
+            config.default_call_conv,
+            config.pointer_type(),
+            shared.shims,
+            super::shim_refs::SelectedShimGroups {
+                main: ShimGroups {
+                    subr_spec: true,
+                    cbsym_spec: true,
+                    tier2_profile,
+                    direct_shapes: true,
+                    call_census: true,
+                    direct_framed: true,
+                    hof: true,
+                },
+                array_profile,
+                sink_versions,
+            },
+        )?;
+        Ok(())
+    }
+}
+
+fn define_shared_selected(
+    jit: &mut Option<SharedJit>,
+    array_profile: bool,
+    sink_versions: bool,
+    build: impl FnOnce(&mut JitSink<'_>) -> Result<FuncId, CompileError>,
+) -> Result<JitDefined, CompileError> {
+    let setup_phase = enter_phase(CompilePhase::Setup);
+    let jit = jit.get_or_insert_with(SharedJit::fresh);
+    let choice = active_regalloc_choice();
+    jit.ensure_module_selected(choice, super::jit_tier2().on, array_profile, sink_versions)?;
+    drop(setup_phase);
+    let SharedJit {
+        modules,
+        ctx,
+        fbctx,
+        ..
+    } = jit;
+    let shared = modules[choice.index()]
+        .as_mut()
+        .expect("ensure_module installed it");
+    let fid = build(&mut JitSink::Shared(SharedSink {
+        module: &mut shared.module,
+        shims: &shared.shims,
+        ctx,
+        fbctx,
+        seq: shared.leaves,
+    }))?;
+    let finalize_phase = enter_phase(CompilePhase::Finalize);
+    shared
+        .module
+        .finalize_definitions()
+        .map_err(|e| CompileError::Backend(BackendError::Finalize(e.to_string())))?;
+    let entry = shared.module.get_finalized_function(fid);
+    drop(finalize_phase);
+    shared.leaves += 1;
+    bump_stats(|s| s.shared_leaves += 1);
+    Ok(JitDefined {
+        entry,
+        backing: LeafBacking::Shared,
+    })
+}
+
+impl WorkerBackend {
+    /// The worker derives requirements only from owned imports, never knobs.
+    /// An ordinary payload reaches the original worker/body unchanged.
+    pub(crate) fn define_with_groups(
+        &mut self,
+        payload: split::JobPayload,
+    ) -> Result<WorkerCode, CompileError> {
+        if !split::selected_payload(&payload) {
+            return self.define(payload);
+        }
+        let code = self.0.define_payload_with_groups(payload)?;
+        Ok(WorkerCode {
+            entry: code.entry as usize,
+            code_bytes: code.code_bytes,
+        })
+    }
+}
+// END T35 SELECTED SHIM BACKEND

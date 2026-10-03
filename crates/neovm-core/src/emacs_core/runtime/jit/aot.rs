@@ -138,9 +138,17 @@ const SPEC_ENCODING_VERSION: u32 = 1;
 // MUST match the shim DEFINITIONS in `compile.rs` + the `JIT_SHIM_TABLE` array.
 include!("shim_names.rs");
 
-/// The exported `neovm_jit_*` shim name set (alias of the single-source
-/// `NEOVM_JIT_SHIM_NAMES` from `shim_names.rs`).
-pub(crate) const MIR_SHIM_NAMES: &[&str] = NEOVM_JIT_SHIM_NAMES;
+/// ABI26 AOT import and salt set: the original prefix of the single-source
+/// `NEOVM_JIT_SHIM_NAMES`. Additive selected-only exports remain JIT-only.
+pub(crate) const MIR_SHIM_NAMES: &[&str] = NEOVM_JIT_SHIM_NAMES
+    .split_at(NEOVM_JIT_AOT_ABI_SHIM_COUNT)
+    .0;
+
+/// Complete host-exported JIT shim set, including additive selected-only names.
+/// AOT continues to use the unchanged ABI26 MIR prefix above. This alias adds
+/// no runtime state and is immutable for every mutator/compiler worker.
+#[cfg(test)]
+pub(crate) const JIT_SHIM_NAMES: &[&str] = NEOVM_JIT_SHIM_NAMES;
 
 /// Compute [`ABI_TAG`] at compile time from the structural invariants. A `const`
 /// FNV-1a over the salient constants + the shim names, so any drift in the ABI

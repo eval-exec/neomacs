@@ -838,7 +838,12 @@ pub fn compile_bytecode_function_requested(
     let gate_phase = super::stats::enter_phase(super::stats::CompilePhase::Gate);
     // Publish this body's per-site operand types and no-inline call sites
     // for the whole compile, before anything below reads them.
-    let _numeric = publish_numeric_feedback(f);
+    let _numeric = if array_snapshot::selected() {
+        snapshot::publish_numeric_feedback_with_arrays(f)
+    } else {
+        let _numeric = publish_numeric_feedback(f);
+        snapshot::FrontFeedbackScope::Main { _scope: _numeric }
+    };
     let call_heavy = body_is_call_heavy(f.executable_ops(), &f.constants);
     let self_recursive = body_calls_itself(f, obarray);
     let _scope = lowering::RegallocScope::enter(regalloc_for_shape(
@@ -3673,6 +3678,9 @@ fn lower_leaf_full_osr_with_plan_impl(
     if osr_pc.is_none() {
         obs.t2 = super::tier2::cells_for_build();
     }
+    if array_snapshot::selected() && obs.t2.profiling() && ops.iter().any(|op| *op == Op::Aref) {
+        super::tier2::array_stability::attach(&obs);
+    }
 
     // Baseline tier runs Cranelift at the default opt_level="none": its job is
     // FAST compilation (low tier-up latency; the soak compiles every function).
@@ -3705,34 +3713,74 @@ fn lower_leaf_full_osr_with_plan_impl(
     let _opt_quality = opt
         .as_ref()
         .and_then(|plan| opt_backend::quality_scope(plan, osr_pc));
-    let defined = shared::define_jit_leaf(/*per_leaf_shims=*/ true, |sink| {
-        build_leaf_fn(
-            sink,
-            ops,
-            constants,
-            arity,
-            &cfg,
-            &known_fixnum_slots,
-            &spec_sites,
-            &spec_slots,
-            n,
-            &deopt_spill,
-            &deopt_meta,
-            &reloc_data,
-            &reloc_index,
-            has_backedge,
-            needs_rt,
-            /*aot=*/ false,
-            entry_name,
-            Linkage::Local,
-            osr_pc,
-            dynamic_prefix,
-            obs.emit(),
-            abi,
-            opt.as_ref(),
-            &mut chains,
-        )
-    })?;
+    // BEGIN T35 SELECTED CALLER
+    let selection = leaf_builder_selected::requirements(false, obs.emit().t2, ops, opt.as_ref());
+    let defined = if selection.is_selected() {
+        shared::define_jit_leaf_selected(
+            /*per_leaf_shims=*/ true,
+            selection.array_profile,
+            selection.sink_versions,
+            |sink| {
+                leaf_builder_selected::build_selected_leaf_fn(
+                    sink,
+                    ops,
+                    constants,
+                    arity,
+                    &cfg,
+                    &known_fixnum_slots,
+                    &spec_sites,
+                    &spec_slots,
+                    n,
+                    &deopt_spill,
+                    &deopt_meta,
+                    &reloc_data,
+                    &reloc_index,
+                    has_backedge,
+                    needs_rt,
+                    /*aot=*/ false,
+                    entry_name,
+                    Linkage::Local,
+                    osr_pc,
+                    dynamic_prefix,
+                    obs.emit(),
+                    abi,
+                    opt.as_ref(),
+                    &mut chains,
+                )
+            },
+        )?
+    } else {
+        let defined = shared::define_jit_leaf(/*per_leaf_shims=*/ true, |sink| {
+            build_leaf_fn(
+                sink,
+                ops,
+                constants,
+                arity,
+                &cfg,
+                &known_fixnum_slots,
+                &spec_sites,
+                &spec_slots,
+                n,
+                &deopt_spill,
+                &deopt_meta,
+                &reloc_data,
+                &reloc_index,
+                has_backedge,
+                needs_rt,
+                /*aot=*/ false,
+                entry_name,
+                Linkage::Local,
+                osr_pc,
+                dynamic_prefix,
+                obs.emit(),
+                abi,
+                opt.as_ref(),
+                &mut chains,
+            )
+        })?;
+        defined
+    };
+    // END T35 SELECTED CALLER
     let entry = defined.entry;
     if entry.is_null() {
         // A deferred backend (`jit::bg`): its install may re-stamp a slot
@@ -3925,6 +3973,7 @@ pub(crate) fn build_baseline_leaf_object<S: LeafSink>(
 
 mod boolean;
 mod leaf_builder;
+mod leaf_builder_selected;
 pub(crate) mod opt_backend;
 pub(crate) mod opt_census;
 mod opt_emission;
@@ -3967,6 +4016,8 @@ pub(crate) mod direct_call;
 pub(crate) mod jit_layout;
 pub(crate) mod reg_abi;
 pub(crate) use reg_abi::LeafAbi;
+pub(crate) mod array_profile;
+pub(crate) mod array_snapshot;
 pub(crate) mod chain_framestate;
 pub(crate) mod hof_runtime;
 pub(crate) mod inline_entry_cache;
@@ -4155,3 +4206,11 @@ mod opt_reps_tests;
 #[cfg(test)]
 #[path = "compile/tests/opt_gvn_test.rs"]
 mod opt_gvn_tests;
+
+#[cfg(test)]
+#[path = "compile/tests/opt_array_profile.rs"]
+mod opt_array_profile_tests;
+
+#[cfg(test)]
+#[path = "compile/tests/opt_arrays.rs"]
+mod opt_array_tests;

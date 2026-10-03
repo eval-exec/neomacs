@@ -55,6 +55,18 @@ pub(crate) trait LeafSink {
     ) -> Result<super::ShimIds, CompileError> {
         super::ShimIds::declare(self.module(), call_conv, ptr_ty, groups)
     }
+    // BEGIN T35 SELECTED SHIM BACKEND
+    /// Selected compiler-only suffixes; the ordinary shim_ids method stays exact.
+    fn shim_ids_selected(
+        &mut self,
+        call_conv: cranelift_codegen::isa::CallConv,
+        ptr_ty: cranelift_codegen::ir::Type,
+        groups: super::shim_refs::SelectedShimGroups,
+    ) -> Result<super::ShimIds, CompileError> {
+        let ids = self.shim_ids(call_conv, ptr_ty, groups.main)?;
+        super::ShimIds::append_selected(self.module(), call_conv, ptr_ty, ids, groups)
+    }
+    // END T35 SELECTED SHIM BACKEND
 
     /// A `FunctionBuilderContext` for the next function. The default is a
     /// fresh one; a long-lived sink hands out its cleared scratch state.

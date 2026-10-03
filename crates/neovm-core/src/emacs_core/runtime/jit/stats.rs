@@ -1074,6 +1074,9 @@ fn leaf_report_rows(
                 opt_bool: row.opt.opt_bool,
                 opt_reps: row.opt.opt_reps,
                 opt_gvn: row.opt.opt_gvn,
+                opt_range: row.opt.opt_range,
+                opt_licm: row.opt.opt_licm,
+                opt_arrays: row.opt.opt_arrays,
             }
         })
         .collect();

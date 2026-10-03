@@ -12,6 +12,9 @@ mod pass_emission;
 #[path = "opt_arith_emission.rs"]
 mod arith_emission;
 
+#[path = "opt_array_emission.rs"]
+mod array_emission;
+
 type RuntimeValue = (ClifValue, SlotRep);
 type LocalValues = HashMap<ir::Value, RuntimeValue>;
 
@@ -54,6 +57,8 @@ pub(super) struct EmitContext<'a, 'b> {
     pub dynamic_prefix: usize,
     pub consts_base: Option<ClifValue>,
     pub ops: &'a [Op],
+    pub verified_arrays:
+        Option<&'a crate::emacs_core::jit::opt::passes::array_reads::VerifiedArrayReads>,
     pub known_fixnum_slots: &'a HashMap<usize, Vec<bool>>,
 }
 
@@ -68,7 +73,7 @@ impl SsaValues {
             .iter()
             .map(|&boolean| fb.declare_var(if boolean { types::I8 } else { types::I64 }))
             .collect();
-        let raw = if jit_opt_passes().reps {
+        let raw = if jit_opt_passes().reps || jit_opt_passes().range {
             // Selected representations are properties of SSA identities. A
             // source stack slot can hold different representations at distinct
             // program points; the legacy slot hints cannot select these webs.
@@ -229,7 +234,7 @@ fn synchronize(
     for (old, (&word, &rep)) in before.iter().zip(stack.iter().zip(reps)) {
         let new = (word, rep);
         if old.1 != SlotRep::Bool
-            && !(jit_opt_passes().reps && old.1 == SlotRep::RawFixnum)
+            && !((jit_opt_passes().reps || jit_opt_passes().range) && old.1 == SlotRep::RawFixnum)
             && *old != new
         {
             for runtime in local.values_mut() {
@@ -283,7 +288,8 @@ fn snapshot(
         let rep = ctx.func.values[canonical(ctx.func, value).index()].rep;
         rep != ir::Rep::Tagged
             && !(jit_opt_passes().bool_rep && rep == ir::Rep::Bool)
-            && !(jit_opt_passes().reps && matches!(rep, ir::Rep::TaggedFix | ir::Rep::RawInt))
+            && !((jit_opt_passes().reps || jit_opt_passes().range)
+                && matches!(rep, ir::Rep::TaggedFix | ir::Rep::RawInt))
     }) {
         return Err(CompileError::UnsupportedOp("opt-emit:frame-representation"));
     }
@@ -804,34 +810,42 @@ fn shared_operation(
     } else {
         heap_inline::ConsStoreProof::Dynamic
     };
-    lowering::lower_simple_op_with_cons_proof_and_result(
-        ctx.fb,
-        inst.pc as usize,
-        deopts,
-        ctx.signal_exit,
-        constants,
-        &mut stack,
-        &mut reps,
-        ctx.rt,
-        &[],
-        pending,
-        spec,
-        op,
-        known,
-        ctx.reloc_base,
-        ctx.reloc_index,
-        ctx.aot,
-        ctx.spec_slot_base,
-        ctx.spec_expected_base,
-        ctx.dynamic_prefix,
-        ctx.consts_base,
-        cons_proof,
-        if matches!(inst.op, ir::Opcode::OpaqueBool(_)) {
-            boolean::BoolResultMode::BoolFlag
-        } else {
-            boolean::BoolResultMode::TaggedLisp
-        },
-    )?;
+    if array_emission::has_plain_read(ctx, inst) {
+        let result = array_emission::emit_plain_read(ctx, local, inst)?;
+        stack.truncate(base);
+        reps.truncate(base);
+        stack.push(result.0);
+        reps.push(result.1);
+    } else {
+        lowering::lower_simple_op_with_cons_proof_and_result(
+            ctx.fb,
+            inst.pc as usize,
+            deopts,
+            ctx.signal_exit,
+            constants,
+            &mut stack,
+            &mut reps,
+            ctx.rt,
+            &[],
+            pending,
+            spec,
+            op,
+            known,
+            ctx.reloc_base,
+            ctx.reloc_index,
+            ctx.aot,
+            ctx.spec_slot_base,
+            ctx.spec_expected_base,
+            ctx.dynamic_prefix,
+            ctx.consts_base,
+            cons_proof,
+            if matches!(inst.op, ir::Opcode::OpaqueBool(_)) {
+                boolean::BoolResultMode::BoolFlag
+            } else {
+                boolean::BoolResultMode::TaggedLisp
+            },
+        )?;
+    }
     override_deopts(ctx.func, frame, &exact, &mut deopts[deopt_start..]);
     synchronize(local, &before[..base], &stack[..base], &reps[..base]);
     // Operand materialization can replace a flonum by its one shared box.
@@ -855,9 +869,13 @@ fn shared_operation(
 /// stream supplies compile-time specialization metadata only; SSA operands,
 /// constants, frames, block parameters and edges determine native behavior.
 pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
-    if ctx.func.values.iter().any(|value| {
+    if ctx.func.values.iter().enumerate().any(|(index, value)| {
         !matches!(value.rep, ir::Rep::Tagged | ir::Rep::Bool)
             && !(jit_opt_passes().reps && matches!(value.rep, ir::Rep::TaggedFix | ir::Rep::RawInt))
+            && !(jit_opt_passes().range
+                && (value.rep == ir::Rep::TaggedFix
+                    || (value.rep == ir::Rep::RawInt
+                        && array_emission::proved_raw_value(&ctx, ir::Value(index as u32)))))
     }) {
         return Err(CompileError::UnsupportedOp("opt-emit:representation"));
     }
@@ -924,17 +942,23 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
                     let slot = *slot as usize;
                     let variable = *ctx.seed_vars.get(slot).ok_or(CompileError::BadOperand)?;
                     let word = ctx.fb.use_var(variable);
-                    Some(if jit_opt_passes().reps && ctx.variable_raw[slot] {
-                        // Entry guards and ABI slot hints belong to the shared
-                        // scaffold. Original Arg/OsrSlot identities still hold
-                        // their full GNU words; explicit checked views select
-                        // the numeric representations inside the opt body.
-                        (retag_fixnum(ctx.fb, word), SlotRep::Tagged)
-                    } else {
-                        (word, SlotRep::raw_if(ctx.variable_raw[slot]))
-                    })
+                    Some(
+                        if (jit_opt_passes().reps || jit_opt_passes().range)
+                            && ctx.variable_raw[slot]
+                        {
+                            // Entry guards and ABI slot hints belong to the shared
+                            // scaffold. Original Arg/OsrSlot identities still hold
+                            // their full GNU words; explicit checked views select
+                            // the numeric representations inside the opt body.
+                            (retag_fixnum(ctx.fb, word), SlotRep::Tagged)
+                        } else {
+                            (word, SlotRep::raw_if(ctx.variable_raw[slot]))
+                        },
+                    )
                 }
-                ir::Opcode::Const(index) if jit_opt_passes().reps && inst.frame.is_none() => {
+                ir::Opcode::Const(index)
+                    if (jit_opt_passes().reps || jit_opt_passes().licm) && inst.frame.is_none() =>
+                {
                     // Integer exposure creates pure immediate zero/one views
                     // without a source operation or recovery frame. Decode
                     // only opaque static fixnum bits on the owning compiler.
@@ -1069,10 +1093,21 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
                 ir::Opcode::Refine(_) => {
                     Some(ctx.values.read(ctx.fb, ctx.func, &mut local, inst.args[0]))
                 }
+                ir::Opcode::CheckType(ty)
+                    if jit_opt_passes().range
+                        && !ty.is_bottom()
+                        && ty.is_subset(TypeSet::VECTOR.join(TypeSet::RECORD)) =>
+                {
+                    array_emission::emit(&mut ctx, &mut local, id, inst, &mut deopts)?
+                }
+                ir::Opcode::LoadVecLen | ir::Opcode::CheckBounds if jit_opt_passes().range => {
+                    array_emission::emit(&mut ctx, &mut local, id, inst, &mut deopts)?
+                }
                 ir::Opcode::CheckType(ty) => {
                     let input_rep = ctx.func.values[canonical(ctx.func, inst.args[0]).index()].rep;
                     if input_rep != ir::Rep::Tagged
-                        && !(jit_opt_passes().reps && input_rep == ir::Rep::TaggedFix)
+                        && !((jit_opt_passes().reps || jit_opt_passes().range)
+                            && input_rep == ir::Rep::TaggedFix)
                     {
                         return Err(CompileError::UnsupportedOp("opt-emit:guard-representation"));
                     }

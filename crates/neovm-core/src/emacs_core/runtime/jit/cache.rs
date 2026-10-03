@@ -651,7 +651,12 @@ fn compile_osr_leaf_timed(
     ));
     // Same feedback the tier-up compile sees: without it every Float site
     // read FixnumOnly and an OSR'd float loop deopted straight back.
-    let _numeric = super::compile::publish_numeric_feedback(func);
+    let _numeric = if super::compile::array_snapshot::selected() {
+        super::compile::snapshot::publish_numeric_feedback_with_arrays(func)
+    } else {
+        let _numeric = super::compile::publish_numeric_feedback(func);
+        super::compile::snapshot::FrontFeedbackScope::Main { _scope: _numeric }
+    };
     // Static inlining also applies to a running loop. The transfer keeps
     // the original header as its cache key and observation pc, while native
     // lowering enters its corresponding instruction in the fused body.

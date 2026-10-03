@@ -176,6 +176,39 @@ pub(super) fn build_plan(
         tracing::debug!(target: "neovm_jit::opt", ?stats, "opt GVN census");
         func.census.gvn = Some(stats);
     }
+    if jit_opt_passes().range {
+        if jit_inline_aref_on()
+            && !jit_aref_slot0_on()
+            && jit_layout::heap::plain_array_offsets().is_some()
+        {
+            let hints = array_snapshot::admission(ops.len(), constants, prefix);
+            let mut proofs = func.array_reads.clone();
+            let stats = crate::emacs_core::jit::opt::passes::array_reads::lift(
+                &mut func,
+                &mut proofs,
+                &hints,
+            )
+            .map_err(|error| {
+                tracing::debug!(?error, "opt array lift refused a compilation");
+                CompileError::UnsupportedOp("opt-array-lift:verify")
+            })?;
+            func.array_reads = proofs;
+            func.census.arrays = Some(stats);
+        }
+        let stats =
+            crate::emacs_core::jit::opt::passes::range::run(&mut func).map_err(|error| {
+                tracing::debug!(?error, "opt Range pass refused a compilation");
+                CompileError::UnsupportedOp("opt-range:verify")
+            })?;
+        func.census.range = Some(stats);
+    }
+    if jit_opt_passes().licm {
+        let stats = crate::emacs_core::jit::opt::passes::licm::run(&mut func).map_err(|error| {
+            tracing::debug!(?error, "opt LICM pass refused a compilation");
+            CompileError::UnsupportedOp("opt-licm:verify")
+        })?;
+        func.census.licm = Some(stats);
+    }
     if let Some(lift) = lift {
         let selection =
             crate::emacs_core::jit::opt::passes::reps::run(&mut func).map_err(|error| {

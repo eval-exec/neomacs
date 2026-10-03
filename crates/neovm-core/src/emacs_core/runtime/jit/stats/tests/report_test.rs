@@ -213,6 +213,9 @@ fn leaf_row(id: u64, deopt_at: u64, deopt_rerun: u64) -> LeafReportRow {
         opt_bool: None,
         opt_reps: None,
         opt_gvn: None,
+        opt_range: None,
+        opt_licm: None,
+        opt_arrays: None,
     }
 }
 

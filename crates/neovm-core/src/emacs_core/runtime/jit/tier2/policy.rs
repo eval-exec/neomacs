@@ -187,12 +187,34 @@ pub(crate) fn release(leaf: &CompiledLeaf) {
 /// Re-arm the retained T1 against widened feedback. The next request compares
 /// that exact snapshot after one stable work window (entries + cold poll credit).
 pub(crate) fn rearm_fallback(source: &RuntimeState, old: &CompiledLeaf) {
+    if super::super::compile::array_snapshot::selected() {
+        rearm_with_array_version(source, old);
+        return;
+    }
     release(old);
     let t2 = &old.obs.t2;
     if !t2.profiling() {
         return;
     }
     let mut p = t2.policy.borrow_mut();
+    p.version = Some(Version::read(source, p.ops_len));
+    p.attempts = 0;
+    t2.state.set(T2State::Idle);
+    t2.budget.set(i64::from(jit_tier2_policy().stable));
+}
+/// Selected-only twin: main's policy snapshot and array masks start one
+/// fresh stable window together. Threading: the leaf's owning mutator only;
+/// side rows contain scalar masks and never enlarge the hot policy layout.
+#[cold]
+#[inline(never)]
+fn rearm_with_array_version(source: &RuntimeState, old: &CompiledLeaf) {
+    release(old);
+    let t2 = &old.obs.t2;
+    if !t2.profiling() {
+        return;
+    }
+    let mut p = t2.policy.borrow_mut();
+    super::array_stability::reset(&old.obs, source, p.ops_len);
     p.version = Some(Version::read(source, p.ops_len));
     p.attempts = 0;
     t2.state.set(T2State::Idle);
@@ -253,6 +275,78 @@ pub(crate) fn wait_for_opt_budget(leaf: &CompiledLeaf, kind: T2Upgrade) -> bool 
 
 /// Stability and admissibility, followed by budget; no Lisp and no GC.
 pub(crate) fn request_decision(leaf: &CompiledLeaf, source: &RuntimeState) -> Option<T2Decision> {
+    if super::super::compile::jit_opt_mode() == super::super::compile::OptMode::Opt {
+        request_decision_opt(leaf, source)
+    } else {
+        request_decision_legacy(leaf, source)
+    }
+}
+
+/// Original main admission, selected for OFF and Legacy. Threading: only the
+/// leaf's owning mutator calls this policy; shared feedback keeps its existing
+/// atomic accessors. No Opt state or array side registry is read by this body.
+fn request_decision_legacy(leaf: &CompiledLeaf, source: &RuntimeState) -> Option<T2Decision> {
+    if leaf.tier() == LeafTier::Aot {
+        // AOT has no T1 feedback window. Check affordability without
+        // reserving until the compile seam, as every tier-spine job does.
+        return Some(match decide(leaf) {
+            T2Decision::Upgrade(kind) if budget_allows(leaf) => T2Decision::Upgrade(kind),
+            T2Decision::Upgrade(_) => {
+                bump_stats(|s| s.budget_denied += 1);
+                T2Decision::Keep
+            }
+            T2Decision::Keep => T2Decision::Keep,
+        });
+    }
+    let k = jit_tier2_policy();
+    let t2 = &leaf.obs.t2;
+    let banned = source.t2_reopts.load(std::sync::atomic::Ordering::Relaxed) >= k.max_reopt
+        || source.reopt_level() >= super::super::ReoptLevel::BaselineOnly;
+    if banned {
+        return match decide(leaf) {
+            T2Decision::Upgrade(kind) => admit_request(leaf, kind),
+            T2Decision::Keep => Some(T2Decision::Keep),
+        };
+    }
+    let mut p = t2.policy.borrow_mut();
+    let version = Version::read(source, p.ops_len);
+    let unstable = p.version.as_ref() != Some(&version);
+    if unstable && p.attempts < k.attempts {
+        p.version = Some(version);
+        p.attempts += 1;
+        t2.budget.set(i64::from(k.stable));
+        bump_stats(|s| s.unstable += 1);
+        return None;
+    }
+    let fallback = decide(leaf);
+    let dynamic_worth = source.call_sites().is_some_and(|sites| {
+        sites.sites().iter().any(|s| {
+            s.count() >= jit_tier2().window / 8
+                && matches!(s.target(), CallTarget::Sym(_) | CallTarget::Sources(_))
+        })
+    });
+    let kind = if let T2Decision::Upgrade(kind) = fallback {
+        Some(kind)
+    } else if !unstable
+        && !banned
+        && (p.loop_or_recursive || leaf.tier() == LeafTier::Mir || dynamic_worth)
+    {
+        Some(T2Upgrade::Feedback)
+    } else {
+        None
+    };
+    drop(p);
+    let Some(kind) = kind else {
+        bump_stats(|s| s.not_worth += 1);
+        return Some(T2Decision::Keep);
+    };
+    admit_request(leaf, kind)
+}
+
+/// Integrated Opt admission, selected by the existing immutable process mode.
+/// Threading: the leaf's policy and resource ledger belong to its owning mutator;
+/// array snapshots retain their existing synchronized side-registry protocol.
+fn request_decision_opt(leaf: &CompiledLeaf, source: &RuntimeState) -> Option<T2Decision> {
     if leaf.tier() == LeafTier::Aot {
         // AOT has no T1 feedback window. Check affordability without
         // reserving until the compile seam, as every tier-spine job does.
@@ -287,6 +381,7 @@ pub(crate) fn request_decision(leaf: &CompiledLeaf, source: &RuntimeState) -> Op
         // source snapshot and sample a full stable window before admitting any
         // upgrade; affordability alone cannot prove stability across the pause.
         let mut p = t2.policy.borrow_mut();
+        super::array_stability::reset(&leaf.obs, source, p.ops_len);
         p.version = Some(Version::read(source, p.ops_len));
         t2.state.set(T2State::Idle);
         t2.budget.set(i64::from(k.stable));
@@ -295,7 +390,19 @@ pub(crate) fn request_decision(leaf: &CompiledLeaf, source: &RuntimeState) -> Op
     let mut p = t2.policy.borrow_mut();
     let version = Version::read(source, p.ops_len);
     let unstable = p.version.as_ref() != Some(&version);
+    let array_version = if super::super::compile::array_snapshot::selected() {
+        super::array_stability::read(&leaf.obs, source, p.ops_len)
+    } else {
+        None
+    };
+    let unstable = unstable
+        || array_version
+            .as_ref()
+            .is_some_and(|version| version.changed);
     if unstable && p.attempts < k.attempts {
+        if let Some(version) = array_version {
+            super::array_stability::publish(&leaf.obs, version);
+        }
         p.version = Some(version);
         p.attempts += 1;
         t2.budget.set(i64::from(k.stable));

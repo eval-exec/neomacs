@@ -5,10 +5,12 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use super::range;
+
 use crate::emacs_core::jit::opt::{
     ir::{Block, Func, Inst, InstData, Opcode, Rep, Term, Value, ValueData, ValueDef},
     mem::{AliasClass, Effects},
-    types::TypeSet,
+    types::{Range, TypeSet},
     verify::VerifyError,
 };
 
@@ -99,6 +101,44 @@ fn canonical_values(func: &Func) -> Vec<Value> {
     resolved.into_iter().map(Option::unwrap).collect()
 }
 
+/// An unchecked opcode is not itself a range proof. Accept only the exact
+/// independently validated payload domain supplied by Range's point-local
+/// semantic operand views. Unknown Arg/Env/OSR dependencies still prune the
+/// grounded web below; this does not promote a declared type into a seed.
+fn unchecked_arithmetic_proven(func: &Func, inst: &InstData) -> bool {
+    if !matches!(
+        inst.op,
+        Opcode::FixAdd { checked: false }
+            | Opcode::FixSub { checked: false }
+            | Opcode::FixMul { checked: false }
+    ) || inst.eff != Effects::PURE
+        || inst.mem != AliasClass::None
+        || inst.args.len() != 2
+    {
+        return false;
+    }
+    let Some(result) = inst.result else {
+        return false;
+    };
+    let output = &func.values[result.index()];
+    if !matches!(output.rep, Rep::TaggedFix | Rep::RawInt)
+        || output.ty.is_bottom()
+        || !output.ty.is_subset(TypeSet::FIXNUM)
+    {
+        return false;
+    }
+    let fixed = |value: Value| -> Option<Range> {
+        let data = &func.values[func.resolve(value)?.index()];
+        (data.rep == output.rep && !data.ty.is_bottom() && data.ty.is_subset(TypeSet::FIXNUM))
+            .then(|| data.ty.range())
+            .flatten()
+    };
+    let (Some(a), Some(b)) = (fixed(inst.args[0]), fixed(inst.args[1])) else {
+        return false;
+    };
+    range::arithmetic_result_fits(&inst.op, a, b, output.ty)
+}
+
 fn prove_fixnums(func: &Func, canonical: &[Value]) -> GroundedProof {
     let count = func.values.len();
     let mut nodes = vec![Node::Unknown; count];
@@ -164,6 +204,13 @@ fn prove_fixnums(func: &Func, canonical: &[Value]) -> GroundedProof {
             Opcode::FixAdd { checked: true }
             | Opcode::FixSub { checked: true }
             | Opcode::FixMul { checked: true } => Node::Arithmetic,
+            Opcode::FixAdd { checked: false }
+            | Opcode::FixSub { checked: false }
+            | Opcode::FixMul { checked: false }
+                if unchecked_arithmetic_proven(func, inst) =>
+            {
+                Node::Arithmetic
+            }
             Opcode::Refine(_) => Node::Refine,
             Opcode::Select => Node::Select,
             Opcode::TagFix | Opcode::UntagFix => Node::Projection,
@@ -264,8 +311,19 @@ fn analyze(func: &Func, canonical: &[Value]) -> Analysis {
         if let ValueDef::Inst(inst) = func.values[index].def
             && matches!(func.insts[inst.index()].op, Opcode::FixMul { .. })
         {
-            // Tagged checked Mul has three conversion operations; Raw has two.
-            costs[component].benefit += weight;
+            // Checked Tagged Mul has three conversions; Raw has two.
+            // Independently proved unchecked Tagged Mul still untags A,
+            // debiases B and rebiases its product; Raw is one plain imul.
+            // These are emitter-shape counts, not measured instruction gains.
+            let conversions_saved = if matches!(
+                func.insts[inst.index()].op,
+                Opcode::FixMul { checked: false }
+            ) {
+                3
+            } else {
+                1
+            };
+            costs[component].benefit += conversions_saved * weight;
         }
         for &input in &dependencies[index] {
             if components[input.index()] != Some(component) {
@@ -283,7 +341,7 @@ fn analyze(func: &Func, canonical: &[Value]) -> Analysis {
                     .args
                     .iter()
                     .all(|value| grounded[canonical[value.index()].index()]);
-            for &argument in &inst.args {
+            for (argument_index, &argument) in inst.args.iter().enumerate() {
                 let value = canonical[argument.index()];
                 let Some(component) = components[value.index()] else {
                     continue;
@@ -311,6 +369,18 @@ fn analyze(func: &Func, canonical: &[Value]) -> Analysis {
                         | Opcode::CheckType(_)
                         | Opcode::Refine(_)
                         | Opcode::Select => inst
+                            .result
+                            .map(|value| func.values[value.index()].rep)
+                            .unwrap_or(Rep::TaggedFix),
+                        // This component is being costed as hypothetical RawInt.
+                        // Bounds accepts an independent raw length and a raw
+                        // index when it has no semantic result. Neither needs a
+                        // tagged boundary. A resultful index must match its
+                        // unchanged output representation.
+                        Opcode::CheckBounds if argument_index > 0 || inst.result.is_none() => {
+                            Rep::RawInt
+                        }
+                        Opcode::CheckBounds => inst
                             .result
                             .map(|value| func.values[value.index()].rep)
                             .unwrap_or(Rep::TaggedFix),
@@ -394,7 +464,9 @@ fn prune(selected: &mut [bool], dependencies: &[Vec<Value>], dependents: &[Vec<u
 /// once. A direct immutable fixnum Const costs zero untag conversions: native
 /// emission creates its raw payload immediate after the successful type proof.
 /// Shared seed views across independent components can make this conservative.
-/// A loop phi credits repeated raw transport and Mul credits one conversion.
+/// A loop phi credits repeated raw transport. Checked Mul credits one saved
+/// conversion and independently proved unchecked Mul credits three; its native
+/// RawInt emitter uses one plain imul instead of a scaled checked product.
 /// Frames/source metadata cost nothing here: their reconstruction remains cold.
 #[derive(Default)]
 struct Cost {
@@ -504,6 +576,25 @@ fn raw_cmp(func: &Func, inst: &InstData, canonical: &[Value], analysis: &Analysi
             .any(|value| func.values[canonical[value.index()].index()].rep == Rep::RawInt)
 }
 
+/// Bounds compares payloads; the length is not an index-result view. Preserve
+/// an already valid RawInt length rather than emitting TagFix + native Untag.
+/// This transport rule creates no numeric/layout proof and cannot ground an
+/// unknown web. Final array verification still checks owner/epoch/provenance.
+fn bounds_operand_rep(func: &Func, inst: &InstData, index: usize, canonical: &[Value]) -> Rep {
+    if index == 0
+        && let Some(result) = inst.result
+    {
+        return func.values[result.index()].rep;
+    }
+    let data = &func.values[canonical[inst.args[index].index()].index()];
+    if data.rep == Rep::RawInt && !data.ty.is_bottom() && data.ty.is_subset(TypeSet::FIXNUM) {
+        Rep::RawInt
+    } else {
+        // Retain the old tagged fallback for unsupported declarations/reps.
+        Rep::TaggedFix
+    }
+}
+
 fn desired_rep(
     func: &Func,
     inst: &InstData,
@@ -522,6 +613,7 @@ fn desired_rep(
         | Opcode::Refine(_) => inst.result.map(|value| func.values[value.index()].rep),
         Opcode::Select if index > 0 => inst.result.map(|value| func.values[value.index()].rep),
         Opcode::Select => None,
+        Opcode::CheckBounds => Some(bounds_operand_rep(func, inst, index, canonical)),
         Opcode::FixCmp(_) => Some(if raw_cmp(func, inst, canonical, analysis) {
             Rep::RawInt
         } else {

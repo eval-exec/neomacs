@@ -291,3 +291,167 @@ pub(super) fn define_split(
 #[cfg(test)]
 #[path = "split/tests/remap_test.rs"]
 mod remap_tests;
+
+// BEGIN T35 SELECTED SHIM BACKEND
+/// Owned imports are the complete selected requirement. No frontend knob or
+/// mutator state is read by this worker-side dispatcher.
+pub(super) fn selected_payload(payload: &JobPayload) -> bool {
+    let array_profile = payload
+        .imports
+        .iter()
+        .any(|(_, shim)| shim.group() == ShimGroup::Tier2ArrayProfile);
+    let sink_versions = false;
+
+    array_profile || sink_versions
+}
+
+impl SharedJit {
+    pub(crate) fn define_payload_with_groups(
+        &mut self,
+        payload: JobPayload,
+    ) -> Result<DefinedCode, CompileError> {
+        let array_profile = payload
+            .imports
+            .iter()
+            .any(|(_, shim)| shim.group() == ShimGroup::Tier2ArrayProfile);
+        let sink_versions = false;
+
+        if !array_profile && !sink_versions {
+            return self.define_payload(payload);
+        }
+        self.define_payload_selected(payload, array_profile, sink_versions)
+    }
+
+    fn define_payload_selected(
+        &mut self,
+        mut payload: JobPayload,
+        array_profile: bool,
+        sink_versions: bool,
+    ) -> Result<DefinedCode, CompileError> {
+        let setup_phase = enter_phase(CompilePhase::Setup);
+        // Workers do not inherit frontend test overrides. The payload's
+        // imported names are the complete declaration requirement instead.
+        let tier2_profile = payload
+            .imports
+            .iter()
+            .any(|(_, shim)| shim.group() == ShimGroup::Tier2Profile);
+        self.ensure_module_selected(
+            payload.regalloc,
+            tier2_profile,
+            array_profile,
+            sink_versions,
+        )?;
+        drop(setup_phase);
+        let SharedJit { modules, ctx, .. } = self;
+        let shared = modules[payload.regalloc.index()]
+            .as_mut()
+            .expect("ensure_module installed it");
+        if payload.portable {
+            remap_imports(&mut payload.func, &payload.imports, &shared.shims)?;
+        }
+        let signature = payload.func.signature.clone();
+        let fid = declare_leaf_entry(
+            &mut shared.module,
+            LeafEntry {
+                name: &payload.name,
+                linkage: payload.linkage,
+                signature: &signature,
+            },
+            payload.named,
+            shared.leaves,
+        )?;
+        ctx.clear();
+        ctx.func = payload.func;
+        let defined = define_with_context(&mut shared.module, fid, ctx, payload.disasm);
+        let code_bytes = ctx
+            .compiled_code()
+            .map_or(0, |code| code.code_buffer().len());
+        shared.module.clear_context(ctx);
+        defined?;
+        let finalize_phase = enter_phase(CompilePhase::Finalize);
+        shared
+            .module
+            .finalize_definitions()
+            .map_err(|e| CompileError::Backend(BackendError::Finalize(e.to_string())))?;
+        let entry = shared.module.get_finalized_function(fid);
+        drop(finalize_phase);
+        shared.leaves += 1;
+        bump_stats(|s| {
+            s.shared_leaves += 1;
+            s.split_payloads += 1;
+        });
+        Ok(DefinedCode { entry, code_bytes })
+    }
+}
+
+/// Selected twin of the original frontend packaging path.
+pub(super) fn define_split_selected(
+    jit: &mut Option<SharedJit>,
+    array_profile: bool,
+    sink_versions: bool,
+    build: impl FnOnce(&mut JitSink<'_>) -> Result<FuncId, CompileError>,
+) -> Result<JitDefined, CompileError> {
+    let setup_phase = enter_phase(CompilePhase::Setup);
+    let jit = jit.get_or_insert_with(SharedJit::fresh);
+    let choice = active_regalloc_choice();
+    jit.ensure_module_selected(
+        choice,
+        super::super::jit_tier2().on,
+        array_profile,
+        sink_versions,
+    )?;
+    drop(setup_phase);
+    let payload = {
+        let SharedJit { modules, fbctx, .. } = &mut *jit;
+        let shared = modules[choice.index()]
+            .as_mut()
+            .expect("ensure_module installed it");
+        let mut sink = JitSink::Deferred(DeferredSink {
+            module: &mut shared.module,
+            shims: &shared.shims,
+            fbctx,
+            captured: None,
+        });
+        build(&mut sink)?;
+        let JitSink::Deferred(sink) = sink else {
+            unreachable!("the sink stays deferred")
+        };
+        let captured = sink
+            .captured
+            .expect("a finished leaf build hands over its function");
+        JobPayload::package(captured, &shared.shims, choice)
+    };
+    // A compile the cache lets defer leaves its leaf pending: the entry
+    // stays null until a probe installs the backend's (`jit::bg`). Only a
+    // portable payload may go: another module could not link the rest.
+    let mut payload = payload;
+    if payload.portable
+        && let Some((class, route)) = crate::emacs_core::jit::bg::defer_route()
+    {
+        use crate::emacs_core::jit::bg::{self, DeferRoute};
+        let pending = JitDefined {
+            entry: std::ptr::null(),
+            backing: LeafBacking::Shared,
+        };
+        match route {
+            DeferRoute::Worker => match bg::enqueue(class, payload) {
+                Ok(()) => return Ok(pending),
+                // No worker could start: compile in line after all.
+                Err(back) => payload = back,
+            },
+            DeferRoute::InLine => {
+                bg::defer_in_line(class, || {
+                    jit.define_payload_with_groups(payload)
+                        .map(|code| code.entry as usize)
+                });
+                return Ok(pending);
+            }
+        }
+    }
+    let code = jit.define_payload_with_groups(payload)?;
+    Ok(JitDefined {
+        entry: code.entry,
+        backing: LeafBacking::Shared,
+    })
+}
+// END T35 SELECTED SHIM BACKEND

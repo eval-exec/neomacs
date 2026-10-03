@@ -51,6 +51,10 @@ pub(crate) struct LeafReportRow {
     pub(crate) opt_bool: Option<Box<crate::emacs_core::jit::opt::passes::bools::BoolStats>>,
     pub(crate) opt_reps: Option<Box<crate::emacs_core::jit::opt::ir::RepsCensus>>,
     pub(crate) opt_gvn: Option<Box<crate::emacs_core::jit::opt::passes::gvn::GvnStats>>,
+    pub(crate) opt_range: Option<Box<crate::emacs_core::jit::opt::passes::range::RangeStats>>,
+    pub(crate) opt_licm: Option<Box<crate::emacs_core::jit::opt::passes::licm::LicmStats>>,
+    pub(crate) opt_arrays:
+        Option<Box<crate::emacs_core::jit::opt::passes::array_reads::ArrayLiftStats>>,
 }
 
 impl LeafReportRow {
@@ -546,12 +550,51 @@ impl FinalReport {
                 c.store_forwards,
             ))
         });
+        let range_rows = self.leaves.iter().filter_map(|r| {
+            let c = r.opt_range.as_ref()?;
+            let osr = r.osr_pc.map_or_else(|| "-".to_owned(), |pc| pc.to_string());
+            Some(format!(
+                "#opt-range,{},{},{osr},{},{},{},{}\n",
+                r.id,
+                csv_field(r.name.as_deref().unwrap_or("-")),
+                c.overflow_checks_elided,
+                c.bounds_checks_elided,
+                c.range_views,
+                c.analysis_bailed
+            ))
+        });
+        let licm_rows = self.leaves.iter().filter_map(|r| {
+            let c = r.opt_licm.as_ref()?;
+            let osr = r.osr_pc.map_or_else(|| "-".to_owned(), |pc| pc.to_string());
+            Some(format!(
+                "#opt-licm,{},{},{osr},{},{},{}\n",
+                r.id,
+                csv_field(r.name.as_deref().unwrap_or("-")),
+                c.pure_hoisted,
+                c.immutable_loads_hoisted,
+                c.guards_hoisted
+            ))
+        });
+        let array_rows = self.leaves.iter().filter_map(|r| {
+            let c = r.opt_arrays.as_ref()?;
+            let osr = r.osr_pc.map_or_else(|| "-".to_owned(), |pc| pc.to_string());
+            Some(format!(
+                "#opt-arrays,{},{},{osr},{},{}\n",
+                r.id,
+                csv_field(r.name.as_deref().unwrap_or("-")),
+                c.reads_lifted,
+                c.bounds_inserted
+            ))
+        });
         leaf_rows
             .chain(t2_rows)
             .chain(opt_rows)
             .chain(bool_rows)
             .chain(reps_rows)
             .chain(gvn_rows)
+            .chain(range_rows)
+            .chain(licm_rows)
+            .chain(array_rows)
             .collect()
     }
 }

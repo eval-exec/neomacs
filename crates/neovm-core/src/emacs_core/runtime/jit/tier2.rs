@@ -572,6 +572,7 @@ mod tests;
 #[path = "tier2/tests/reach_test.rs"]
 mod reach_tests;
 
+pub(crate) mod array_stability;
 mod policy;
 pub(crate) use policy::{
     charge_compile, cpu_time_us, rearm_fallback, release, reserve_compile, revert_if_t2,

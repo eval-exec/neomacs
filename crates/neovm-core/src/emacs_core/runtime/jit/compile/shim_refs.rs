@@ -55,6 +55,7 @@ pub(crate) enum ShimGroup {
     /// The contained framed direct call (JIT only, independent shape bit).
     DirectFramed,
     Hof,
+    Tier2ArrayProfile,
 }
 
 /// Every runtime shim generated code calls, in declaration order.
@@ -150,6 +151,8 @@ pub(crate) enum Shim {
     HofCursor,
     HofFinish,
     HofAbort,
+    // Optional Opt shims follow every main identity.
+    T2RecordArrayUse,
 }
 
 /// The parameter shapes of the shim signatures.
@@ -164,6 +167,7 @@ impl Shim {
     /// The shim's exported symbol.
     pub(crate) fn symbol(self) -> &'static str {
         match self {
+            Shim::T2RecordArrayUse => "neovm_jit_t2_record_array_use",
             Shim::RootwinGrow => "neovm_jit_rootwin_grow",
             Shim::Cons => "neovm_jit_cons",
             Shim::MakeFloat => "neovm_jit_make_float",
@@ -236,6 +240,7 @@ impl Shim {
     /// The declaration group (see [`ShimGroup`]).
     pub(crate) fn group(self) -> ShimGroup {
         match self {
+            Shim::T2RecordArrayUse => ShimGroup::Tier2ArrayProfile,
             Shim::CallSubrSpec | Shim::PredSpec | Shim::EqInclPropsSpec | Shim::ArithSpec => {
                 ShimGroup::SubrSpec
             }
@@ -306,6 +311,7 @@ impl Shim {
     fn shape(self) -> (&'static [P], bool) {
         use P::{F64, I64, Ptr};
         match self {
+            Shim::T2RecordArrayUse => (&[Ptr, I64, Ptr], false),
             // (leaf_obs) -> ()
             Shim::TierRequest => (&[Ptr], false),
             // Generic call's ABI plus the leaf's observation pointer.
@@ -443,6 +449,7 @@ pub(crate) struct ShimGroups {
 impl ShimGroups {
     pub(crate) fn contains(self, group: ShimGroup) -> bool {
         match group {
+            ShimGroup::Tier2ArrayProfile => false,
             ShimGroup::Base => true,
             ShimGroup::SubrSpec => self.subr_spec,
             ShimGroup::CbsymSpec => self.cbsym_spec,
@@ -606,3 +613,110 @@ thread_local! {
 pub(crate) fn force_lazy_shims_for_test(on: bool) {
     LAZY_SHIMS_TEST_OVERRIDE.with(|c| c.set(Some(on)));
 }
+
+// BEGIN T35 SELECTED SHIM BACKEND
+/// Additional compiler-owned import requirements for one selected frontend.
+/// Threading: immutable scalars belong to one compilation; no Lisp state,
+/// runtime layout, mutator cache, or worker-side knob read is introduced.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SelectedShimGroups {
+    pub(crate) main: ShimGroups,
+    pub(crate) array_profile: bool,
+    pub(crate) sink_versions: bool,
+}
+
+impl ShimIds {
+    /// Declare the unchanged main prefix, then requested optional suffixes.
+    pub(crate) fn declare_selected<M: Module>(
+        module: &mut M,
+        call_conv: CallConv,
+        ptr_ty: Type,
+        groups: SelectedShimGroups,
+    ) -> Result<ShimIds, CompileError> {
+        let ids = Self::declare(module, call_conv, ptr_ty, groups.main)?;
+        Self::append_selected(module, call_conv, ptr_ty, ids, groups)
+    }
+
+    /// Recover every already-published optional ID and append absent requests.
+    /// Module-name lookup preserves the union even if an intervening main-only
+    /// profiling redeclaration returned a table containing just main IDs.
+    pub(crate) fn append_selected<M: Module>(
+        module: &mut M,
+        call_conv: CallConv,
+        ptr_ty: Type,
+        mut ids: ShimIds,
+        groups: SelectedShimGroups,
+    ) -> Result<ShimIds, CompileError> {
+        for (requested, shim) in [(groups.array_profile, Shim::T2RecordArrayUse)] {
+            let present = module.declarations().get_name(shim.symbol());
+            let id = match present {
+                Some(cranelift_module::FuncOrDataId::Func(id)) => Some(id),
+                Some(cranelift_module::FuncOrDataId::Data(_)) => {
+                    return Err(CompileError::Backend(BackendError::Define(format!(
+                        "selected shim {} is declared as data",
+                        shim.symbol()
+                    ))));
+                }
+                None if requested => Some(
+                    module
+                        .declare_function(
+                            shim.symbol(),
+                            Linkage::Import,
+                            &shim.signature(call_conv, ptr_ty),
+                        )
+                        .map_err(|error| {
+                            CompileError::Backend(BackendError::Define(error.to_string()))
+                        })?,
+                ),
+                None => None,
+            };
+            ids.0[shim as usize] = id;
+        }
+        Ok(ids)
+    }
+}
+
+impl RtRefs {
+    /// Preserve the main constructor and eagerly append only the selected
+    /// optional refs. Their cached cells make the unchanged try_get accept
+    /// them; unselected optional refs remain unavailable even in a module
+    /// that previously published their IDs. Main lazy/eager behavior is exact.
+    pub(crate) fn new_selected(
+        ids: ShimIds,
+        groups: SelectedShimGroups,
+        func: &mut Function,
+        call_conv: CallConv,
+        ptr_ty: Type,
+    ) -> RtRefs {
+        let refs = Self::new(ids, groups.main, func, call_conv, ptr_ty);
+        if groups.array_profile {
+            refs.import_selected(func, Shim::T2RecordArrayUse);
+        }
+        refs
+    }
+
+    fn import_selected(&self, func: &mut Function, shim: Shim) -> Option<FuncRef> {
+        let cell = &self.imported[shim as usize];
+        if let Some(r) = cell.get() {
+            return Some(r);
+        }
+        let id = self.ids.get(shim)?;
+        // `Module::declare_func_in_func`, without needing the module: an
+        // import is its signature plus the module-level name.
+        let signature = func.import_signature(shim.signature(self.call_conv, self.ptr_ty));
+        let name = func.declare_imported_user_function(UserExternalName {
+            namespace: 0,
+            index: id.as_u32(),
+        });
+        let r = func.import_function(ExtFuncData {
+            name: ExternalName::user(name),
+            signature,
+            // An import is never final (`Linkage::Import.is_final()`).
+            colocated: false,
+            patchable: false,
+        });
+        cell.set(Some(r));
+        Some(r)
+    }
+}
+// END T35 SELECTED SHIM BACKEND

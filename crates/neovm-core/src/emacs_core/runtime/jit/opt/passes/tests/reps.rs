@@ -738,3 +738,603 @@ fn opt_reps_existing_raw_checktype_preserves_guard_without_grounding_cycle() {
     assert_eq!(func.values[checked.index()].rep, Rep::RawInt);
     func.verify().unwrap();
 }
+
+// O3.5 proof-bearing unchecked arithmetic and independent bounds transport.
+use crate::emacs_core::jit::opt::types::Range;
+
+fn range_unchecked_for_reps(
+    func: &mut Func,
+    block: Block,
+    pc: u32,
+    op: Opcode,
+    a: Value,
+    b: Value,
+    ty: TypeSet,
+) -> Value {
+    emit(func, block, pc, op, &[a, b], ty, Rep::TaggedFix)
+}
+
+fn range_input_for_reps(func: &mut Func, index: u16, interval: Range) -> Value {
+    let original = emit(
+        func,
+        Block(0),
+        0,
+        Opcode::Arg(index),
+        &[],
+        TypeSet::TOP,
+        Rep::Tagged,
+    );
+    let checked_ty = TypeSet::fixnum_range(interval);
+    let checked = emit(
+        func,
+        Block(0),
+        0,
+        Opcode::CheckType(checked_ty),
+        &[original],
+        checked_ty,
+        Rep::TaggedFix,
+    );
+    let state = frame(func, 0, &[original]);
+    let id = inst_of(func, checked);
+    func.insts[id.index()].eff = Effects::MAY_DEOPT;
+    func.insts[id.index()].frame = Some(state);
+    checked
+}
+
+#[test]
+fn opt_reps_range_proven_loop_increment_keeps_grounded_raw_phi_web() {
+    let (mut func, carried, next, one) = loop_add();
+    let add = inst_of(&func, next);
+    // The actual loop tests i < 100 and starts at 0. Range may expose this
+    // taken-edge interval without narrowing the original full-domain phi.
+    let narrowed = emit(
+        &mut func,
+        Block(2),
+        2,
+        Opcode::Refine(TypeSet::fixnum_range(Range { lo: 0, hi: 99 })),
+        &[carried],
+        TypeSet::fixnum_range(Range { lo: 0, hi: 99 }),
+        Rep::TaggedFix,
+    );
+    let view_id = func.blocks[2].insts.pop().unwrap();
+    assert_eq!(view_id, inst_of(&func, narrowed));
+    func.blocks[2].insts.insert(0, view_id);
+    func.insts[add.index()].args[0] = narrowed;
+    func.insts[add.index()].op = Opcode::FixAdd { checked: false };
+    func.insts[add.index()].eff = Effects::PURE;
+    let recovery = func.insts[add.index()].frame.unwrap();
+    func.entry_stacks = vec![
+        vec![].into(),
+        vec![carried].into(),
+        vec![carried, one].into(),
+        vec![carried].into(),
+    ];
+    func.source_states.resize_with(4, || None);
+    func.source_states[2] = Some(SourceState {
+        pre: vec![carried, one].into(),
+        post: vec![next].into(),
+        frame: recovery,
+        block: Block(2),
+    });
+    func.verify().unwrap();
+    let original_frames = func.frames.clone();
+    let original_entries = func.entry_stacks.clone();
+    let original_count = func.values.len();
+    let stats = run(&mut func).unwrap();
+    assert_eq!(stats.raw_phis, 1);
+    assert_eq!(stats.raw_arithmetic, 1);
+    assert_eq!(func.values[carried.index()].rep, Rep::RawInt);
+    assert_eq!(func.values[carried.index()].ty, TypeSet::FIXNUM);
+    assert_eq!(func.values[next.index()].rep, Rep::RawInt);
+    assert_eq!(
+        func.values[narrowed.index()].ty.range(),
+        Some(Range { lo: 0, hi: 99 })
+    );
+    assert_eq!(func.frames, original_frames);
+    assert_eq!(func.entry_stacks, original_entries);
+    assert_eq!(func.insts[add.index()].frame, Some(recovery));
+    assert_eq!(func.insts[add.index()].pc, 2);
+    assert_eq!(func.insts[add.index()].result, Some(next));
+    assert_eq!(
+        func.source_states[2].as_ref().unwrap().pre.as_ref(),
+        &[carried, one]
+    );
+    assert_eq!(
+        func.source_states[2].as_ref().unwrap().post.as_ref(),
+        &[next]
+    );
+    assert_eq!(func.source_states[2].as_ref().unwrap().frame, recovery);
+    assert!(func.values.len() >= original_count);
+    func.verify().unwrap();
+}
+
+#[test]
+fn opt_reps_unchecked_endpoint_and_result_domains_require_independent_proof() {
+    let full = Range::FULL;
+    let singleton = |n| Range { lo: n, hi: n };
+    let cases = [
+        (
+            Opcode::FixAdd { checked: false },
+            full,
+            singleton(0),
+            TypeSet::FIXNUM,
+            true,
+        ),
+        (
+            Opcode::FixAdd { checked: false },
+            full,
+            singleton(1),
+            TypeSet::FIXNUM,
+            false,
+        ),
+        (
+            Opcode::FixSub { checked: false },
+            full,
+            singleton(0),
+            TypeSet::FIXNUM,
+            true,
+        ),
+        (
+            Opcode::FixSub { checked: false },
+            full,
+            singleton(1),
+            TypeSet::FIXNUM,
+            false,
+        ),
+        (
+            Opcode::FixMul { checked: false },
+            full,
+            singleton(1),
+            TypeSet::FIXNUM,
+            true,
+        ),
+        (
+            Opcode::FixMul { checked: false },
+            full,
+            singleton(-1),
+            TypeSet::FIXNUM,
+            false,
+        ),
+        (
+            Opcode::FixMul { checked: false },
+            singleton(full.hi),
+            singleton(-1),
+            TypeSet::FIXNUM,
+            true,
+        ),
+        (
+            Opcode::FixMul { checked: false },
+            singleton(full.hi),
+            singleton(2),
+            TypeSet::FIXNUM,
+            false,
+        ),
+        (
+            Opcode::FixMul { checked: false },
+            Range { lo: -8, hi: 8 },
+            Range { lo: -8, hi: 8 },
+            TypeSet::fixnum_range(Range { lo: -64, hi: 64 }),
+            true,
+        ),
+        // All four signed Mul extrema are required. A narrower declaration
+        // cannot hide the reachable -64 result even though fixnum overflow fits.
+        (
+            Opcode::FixMul { checked: false },
+            Range { lo: -8, hi: 8 },
+            Range { lo: -8, hi: 8 },
+            TypeSet::fixnum_range(Range { lo: -63, hi: 64 }),
+            false,
+        ),
+        (
+            Opcode::FixAdd { checked: false },
+            singleton(0),
+            singleton(1),
+            TypeSet::BOTTOM,
+            false,
+        ),
+        (
+            Opcode::FixAdd { checked: false },
+            singleton(0),
+            singleton(1),
+            TypeSet::FIXNUM.join(TypeSet::FLOAT),
+            false,
+        ),
+    ];
+    for (op, a_range, b_range, output_ty, expected) in cases {
+        let mut func = empty(1, 2);
+        let a = range_input_for_reps(&mut func, 0, a_range);
+        let b = range_input_for_reps(&mut func, 1, b_range);
+        let result = range_unchecked_for_reps(&mut func, Block(0), 1, op.clone(), a, b, output_ty);
+        func.blocks[0].term = Term::Return(result);
+        // A mixed union is not a legal TaggedFix declaration. Keep its
+        // defensive classifier negative explicit, without claiming it is a
+        // verified transformation input or running the pass on invalid IR.
+        if !output_ty.is_subset(TypeSet::FIXNUM) {
+            assert!(matches!(func.verify(),
+                Err(crate::emacs_core::jit::opt::verify::VerifyError::TypeMismatch(value))
+                    if value == result));
+            assert!(!grounded_fixnums(&func)[result.index()]);
+            continue;
+        }
+        // Legal FIX-domain and bottom declarations verify first; independent
+        // unchecked admission is deliberately stronger than this verifier.
+        func.verify().unwrap();
+        assert_eq!(
+            grounded_fixnums(&func)[result.index()],
+            expected,
+            "{op:?} {a_range:?} {b_range:?} {output_ty:?}"
+        );
+        let original = func.insts[inst_of(&func, result).index()].clone();
+        run(&mut func).unwrap();
+        let current = &func.insts[inst_of(&func, result).index()];
+        assert_eq!(current.op, original.op);
+        assert_eq!(current.pc, original.pc);
+        assert_eq!(current.frame, original.frame);
+        assert_eq!(current.result, original.result);
+        func.verify().unwrap();
+    }
+}
+
+#[test]
+fn opt_reps_unchecked_mul_cost_matches_plain_raw_product() {
+    let mut func = empty(1, 0);
+    let a = literal(&mut func, Block(0), 1);
+    let b = literal(&mut func, Block(0), 2);
+    let product = range_unchecked_for_reps(
+        &mut func,
+        Block(0),
+        1,
+        Opcode::FixMul { checked: false },
+        a,
+        b,
+        TypeSet::FIXNUM,
+    );
+    func.blocks[0].term = Term::Return(product);
+    func.verify().unwrap();
+    let stats = run(&mut func).unwrap();
+    assert_eq!(stats.raw_arithmetic, 1);
+    assert_eq!(func.values[product.index()].rep, Rep::RawInt);
+    assert_eq!(stats.tagged_views, 1);
+    assert_eq!(
+        func.insts[inst_of(&func, product).index()].op,
+        Opcode::FixMul { checked: false }
+    );
+    let Term::Return(returned) = func.blocks[0].term else {
+        panic!("Lisp return")
+    };
+    assert_eq!(
+        func.insts[inst_of(&func, returned).index()].op,
+        Opcode::TagFix
+    );
+    func.verify().unwrap();
+}
+
+#[test]
+fn opt_reps_unchecked_taken_edge_view_does_not_prove_full_domain_sibling() {
+    let mut func = empty(3, 1);
+    let input = range_input_for_reps(&mut func, 0, Range::FULL);
+    func.consts = func
+        .consts
+        .iter()
+        .copied()
+        .chain([ValueBits::from_value(LispValue::make_int(Range::FULL.hi))])
+        .collect::<Vec<_>>()
+        .into();
+    let bound = literal(&mut func, Block(0), 4);
+    let one = literal(&mut func, Block(0), 1);
+    let condition = emit(
+        &mut func,
+        Block(0),
+        1,
+        Opcode::FixCmp(Cmp::Lt),
+        &[input, bound],
+        TypeSet::BOOLEAN,
+        Rep::Bool,
+    );
+    let edge_ty = TypeSet::fixnum_range(Range {
+        lo: Range::FULL.lo,
+        hi: Range::FULL.hi - 1,
+    });
+    let edge_view = emit(
+        &mut func,
+        Block(1),
+        2,
+        Opcode::Refine(edge_ty),
+        &[input],
+        edge_ty,
+        Rep::TaggedFix,
+    );
+    let safe = range_unchecked_for_reps(
+        &mut func,
+        Block(1),
+        2,
+        Opcode::FixAdd { checked: false },
+        edge_view,
+        one,
+        TypeSet::FIXNUM,
+    );
+    let rejected = range_unchecked_for_reps(
+        &mut func,
+        Block(2),
+        3,
+        Opcode::FixAdd { checked: false },
+        input,
+        one,
+        TypeSet::FIXNUM,
+    );
+    func.blocks[0].term = Term::Branch {
+        flag: condition,
+        if_true: Edge {
+            target: Block(1),
+            args: vec![],
+        },
+        if_false: Edge {
+            target: Block(2),
+            args: vec![],
+        },
+    };
+    func.blocks[1].preds = vec![Block(0)];
+    func.blocks[2].preds = vec![Block(0)];
+    func.blocks[1].term = Term::Return(safe);
+    func.blocks[2].term = Term::Return(rejected);
+    func.verify().unwrap();
+    let proof = grounded_fixnums(&func);
+    assert!(proof[safe.index()]);
+    assert!(!proof[rejected.index()]);
+    let frames = func.frames.clone();
+    run(&mut func).unwrap();
+    assert_eq!(func.values[input.index()].ty, TypeSet::FIXNUM);
+    assert_eq!(func.values[edge_view.index()].ty, edge_ty);
+    let sibling = &func.insts[inst_of(&func, rejected).index()];
+    assert_eq!(func.values[sibling.args[0].index()].ty, TypeSet::FIXNUM);
+    assert_eq!(func.values[rejected.index()].rep, Rep::TaggedFix);
+    assert_eq!(func.frames, frames);
+    func.verify().unwrap();
+}
+
+#[test]
+fn opt_reps_unchecked_declared_fix_arg_does_not_seed_unknown_web() {
+    let mut func = empty(1, 1);
+    let arg = emit(
+        &mut func,
+        Block(0),
+        0,
+        Opcode::Arg(0),
+        &[],
+        TypeSet::FIXNUM,
+        Rep::TaggedFix,
+    );
+    let zero = literal(&mut func, Block(0), 0);
+    let sum = range_unchecked_for_reps(
+        &mut func,
+        Block(0),
+        1,
+        Opcode::FixAdd { checked: false },
+        arg,
+        zero,
+        TypeSet::FIXNUM,
+    );
+    func.blocks[0].term = Term::Return(sum);
+    func.verify().unwrap();
+    assert!(!grounded_fixnums(&func)[sum.index()]);
+    let stats = run(&mut func).unwrap();
+    assert_eq!(stats.raw_arithmetic, 0);
+    assert_eq!(func.values[sum.index()].rep, Rep::TaggedFix);
+    func.verify().unwrap();
+}
+
+#[test]
+fn opt_reps_bounds_preserves_proven_raw_length_and_tagged_index_result() {
+    let mut func = empty(1, 0);
+    let index = literal(&mut func, Block(0), 1);
+    let length_seed = literal(&mut func, Block(0), 2);
+    let length_ty = func.values[length_seed.index()].ty;
+    let raw_length = emit(
+        &mut func,
+        Block(0),
+        1,
+        Opcode::UntagFix,
+        &[length_seed],
+        length_ty,
+        Rep::RawInt,
+    );
+    let index_ty = func.values[index.index()].ty;
+    let result = emit(
+        &mut func,
+        Block(0),
+        2,
+        Opcode::CheckBounds,
+        &[index, raw_length],
+        index_ty,
+        Rep::TaggedFix,
+    );
+    let check = inst_of(&func, result);
+    let recovery = frame(&mut func, 2, &[index, length_seed]);
+    func.insts[check.index()].frame = Some(recovery);
+    func.insts[check.index()].eff = Effects::MAY_DEOPT;
+    func.source_states.resize_with(3, || None);
+    func.source_states[2] = Some(SourceState {
+        pre: vec![index, length_seed].into(),
+        post: vec![result].into(),
+        frame: recovery,
+        block: Block(0),
+    });
+    func.entry_stacks = vec![vec![].into()];
+    func.blocks[0].term = Term::Return(result);
+    func.verify().unwrap();
+    let original = func.clone();
+    let stats = run(&mut func).unwrap();
+    let selected = &func.insts[check.index()];
+    assert_eq!(selected.args, [index, raw_length]);
+    assert_eq!(func.values[raw_length.index()].rep, Rep::RawInt);
+    assert_eq!(func.values[result.index()].rep, Rep::TaggedFix);
+    assert_eq!(
+        stats.tagged_views, 0,
+        "raw length needs no tag/untag boundary"
+    );
+    assert_eq!(selected.op, Opcode::CheckBounds);
+    assert_eq!(selected.pc, 2);
+    assert_eq!(selected.frame, Some(recovery));
+    assert_eq!(selected.result, Some(result));
+    assert_eq!(selected.eff, Effects::MAY_DEOPT);
+    assert_eq!(func.frames, original.frames);
+    assert_eq!(func.entry_stacks, original.entry_stacks);
+    assert_eq!(
+        func.source_states[2].as_ref().unwrap().pre,
+        original.source_states[2].as_ref().unwrap().pre
+    );
+    assert_eq!(
+        func.source_states[2].as_ref().unwrap().post,
+        original.source_states[2].as_ref().unwrap().post
+    );
+    func.verify().unwrap();
+}
+
+#[test]
+fn opt_reps_bounds_raw_index_result_accepts_independent_tagged_length() {
+    let mut func = empty(1, 0);
+    let tagged_index = literal(&mut func, Block(0), 1);
+    let tagged_length = literal(&mut func, Block(0), 2);
+    let index_ty = func.values[tagged_index.index()].ty;
+    let raw_index = emit(
+        &mut func,
+        Block(0),
+        1,
+        Opcode::UntagFix,
+        &[tagged_index],
+        index_ty,
+        Rep::RawInt,
+    );
+    let raw_result = emit(
+        &mut func,
+        Block(0),
+        2,
+        Opcode::CheckBounds,
+        &[raw_index, tagged_length],
+        index_ty,
+        Rep::RawInt,
+    );
+    let check = inst_of(&func, raw_result);
+    let recovery = frame(&mut func, 2, &[tagged_index, tagged_length]);
+    func.insts[check.index()].frame = Some(recovery);
+    func.insts[check.index()].eff = Effects::MAY_DEOPT;
+    let returned = emit(
+        &mut func,
+        Block(0),
+        3,
+        Opcode::TagFix,
+        &[raw_result],
+        index_ty,
+        Rep::TaggedFix,
+    );
+    func.blocks[0].term = Term::Return(returned);
+    func.verify().unwrap();
+    let original_frames = func.frames.clone();
+    let stats = run(&mut func).unwrap();
+    assert_eq!(func.insts[check.index()].args, [raw_index, tagged_length]);
+    assert_eq!(func.values[raw_result.index()].rep, Rep::RawInt);
+    assert_eq!(func.values[tagged_length.index()].rep, Rep::TaggedFix);
+    assert_eq!(
+        stats.tagged_views, 0,
+        "the explicit semantic return view is original"
+    );
+    assert_eq!(func.insts[check.index()].result, Some(raw_result));
+    assert_eq!(func.insts[check.index()].frame, Some(recovery));
+    assert_eq!(func.frames, original_frames);
+    func.verify().unwrap();
+}
+
+#[test]
+fn opt_reps_bounds_noresult_guard_preserves_proven_raw_scalar_operands() {
+    let mut func = empty(1, 0);
+    let tagged_index = literal(&mut func, Block(0), 1);
+    let tagged_length = literal(&mut func, Block(0), 2);
+    let index_ty = func.values[tagged_index.index()].ty;
+    let length_ty = func.values[tagged_length.index()].ty;
+    let index = emit(
+        &mut func,
+        Block(0),
+        1,
+        Opcode::UntagFix,
+        &[tagged_index],
+        index_ty,
+        Rep::RawInt,
+    );
+    let length = emit(
+        &mut func,
+        Block(0),
+        1,
+        Opcode::UntagFix,
+        &[tagged_length],
+        length_ty,
+        Rep::RawInt,
+    );
+    let recovery = frame(&mut func, 2, &[tagged_index, tagged_length]);
+    let check = Inst(func.insts.len() as u32);
+    func.insts.push(InstData {
+        op: Opcode::CheckBounds,
+        args: vec![index, length],
+        result: None,
+        eff: Effects::MAY_DEOPT,
+        mem: AliasClass::None,
+        frame: Some(recovery),
+        pc: 2,
+    });
+    func.blocks[0].insts.push(check);
+    func.blocks[0].term = Term::Return(tagged_index);
+    func.verify().unwrap();
+    let before = func.insts[check.index()].clone();
+    let stats = run(&mut func).unwrap();
+    assert_eq!(func.insts[check.index()].args, [index, length]);
+    assert_eq!(stats.tagged_views, 0);
+    assert_eq!(func.insts[check.index()].op, before.op);
+    assert_eq!(func.insts[check.index()].frame, before.frame);
+    assert_eq!(func.insts[check.index()].result, None);
+    assert_eq!(func.insts[check.index()].pc, before.pc);
+    func.verify().unwrap();
+}
+
+#[test]
+fn opt_reps_bounds_length_boundary_cost_matches_raw_capable_consumer() {
+    let mut func = empty(1, 0);
+    let index = literal(&mut func, Block(0), 1);
+    let length_seed = literal(&mut func, Block(0), 2);
+    let length = checked(
+        &mut func,
+        Block(0),
+        1,
+        Opcode::FixMul { checked: true },
+        &[length_seed, index],
+    );
+    let index_ty = func.values[index.index()].ty;
+    let bounded = emit(
+        &mut func,
+        Block(0),
+        2,
+        Opcode::CheckBounds,
+        &[index, length],
+        index_ty,
+        Rep::TaggedFix,
+    );
+    let check = inst_of(&func, bounded);
+    let recovery = frame(&mut func, 2, &[index, length]);
+    func.insts[check.index()].eff = Effects::MAY_DEOPT;
+    func.insts[check.index()].frame = Some(recovery);
+    func.blocks[0].term = Term::Return(bounded);
+    func.verify().unwrap();
+    let original_frames = func.frames.clone();
+    let stats = run(&mut func).unwrap();
+    // One checked-Mul conversion benefit, two direct static inputs with zero
+    // untag cost, and no fabricated TagFix boundary for the raw-capable length.
+    // This is the existing documented heuristic, not measured native cost.
+    assert_eq!(stats.raw_arithmetic, 1);
+    assert_eq!(func.values[length.index()].rep, Rep::RawInt);
+    assert_eq!(func.insts[check.index()].args[1], length);
+    assert_eq!(func.insts[check.index()].args[0], index);
+    assert_eq!(func.values[bounded.index()].rep, Rep::TaggedFix);
+    assert_eq!(stats.tagged_views, 0);
+    assert_eq!(func.frames, original_frames);
+    assert_eq!(func.insts[check.index()].op, Opcode::CheckBounds);
+    assert_eq!(func.insts[check.index()].frame, Some(recovery));
+    func.verify().unwrap();
+}

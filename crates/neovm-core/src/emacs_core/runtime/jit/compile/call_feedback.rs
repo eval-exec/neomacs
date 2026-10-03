@@ -22,6 +22,7 @@
 use super::lowering::RtCtx;
 use super::*;
 use crate::emacs_core::jit::RuntimeState;
+use crate::emacs_core::jit::feedback::arrays::ArraySiteFeedback;
 use crate::emacs_core::jit::feedback::{CallSiteFeedback, CallTarget, SiteShape};
 use cranelift_codegen::isa::CallConv;
 use std::sync::Arc;
@@ -117,6 +118,21 @@ fn original_pc(pc: usize) -> Option<usize> {
         Some(fused) => fused.caller_pc(pc),
         None => Some(pc),
     }
+}
+
+/// Source-held scalar array site for the original caller pc. Compiler scope
+/// only: callee regions are rejected before mapping, and the source Arc is
+/// retained by this leaf before an immutable-address site can be emitted.
+pub(crate) fn array_recording_site_at(pc: usize) -> Option<*const ArraySiteFeedback> {
+    let pc = original_pc(pc)?;
+    ACTIVE_CALL_SOURCE.with(|source| {
+        let source = source.borrow();
+        let source = source.as_ref()?;
+        let array_sites = source.array_sites()?;
+        let site = array_sites.site_at(pc)? as *const ArraySiteFeedback;
+        hold_for_leaf(source);
+        Some(site)
+    })
 }
 
 /// The recording site of the call at lowered pc `pc`, when compiled sites

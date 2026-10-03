@@ -3,11 +3,17 @@
 //! object is inspected or cached across workers or mutators.
 
 use super::*;
+use crate::emacs_core::jit::opt::mem::{AliasClass, Effects};
 
 /// Decode only an actual immutable literal, never an environment template or
 /// a refined value. Threading: opaque constant bits and proofs are owned by the
 /// compilation; this reads no Lisp heap or mutator state.
 fn static_fixnum_payload(ctx: &EmitContext, value: ir::Value) -> Option<i64> {
+    if jit_opt_passes().licm {
+        let (_, bits) =
+            crate::emacs_core::jit::opt::passes::static_fix::static_fix_origin(ctx.func, value)?;
+        return Some((bits.0 as i64) >> FIXNUM_SHIFT);
+    }
     let data = &ctx.func.values[value.index()];
     if data.ty.is_bottom() || !data.ty.is_subset(TypeSet::FIXNUM) {
         return None;
@@ -96,6 +102,9 @@ pub(super) fn emit(
 ) -> Result<Option<RuntimeValue>, CompileError> {
     if !jit_opt_passes().reps {
         return Err(CompileError::UnsupportedOp("opt-emit:integer-pass-off"));
+    }
+    if let Some(runtime) = emit_range_proved_unchecked(ctx, local, inst)? {
+        return Ok(Some(runtime));
     }
     let runtime = match inst.op {
         ir::Opcode::UntagFix => {
@@ -215,4 +224,96 @@ pub(super) fn emit(
         _ => return Err(CompileError::UnsupportedOp("opt-emit:integer-opcode")),
     };
     Ok(Some(runtime))
+}
+
+/// Optional new branch inside the existing selected native integer emitter.
+/// Neither source PCs nor full recovery frames are rewritten here. Independent
+/// endpoint validation refuses bad/unsupported IR rather than emitting wrapping
+/// Lisp arithmetic. The trusted Range producer still owns branch-fact validity.
+/// Threading: exclusively borrowed compiler values, no retained Lisp state.
+fn emit_range_proved_unchecked(
+    ctx: &mut EmitContext,
+    local: &mut LocalValues,
+    inst: &ir::InstData,
+) -> Result<Option<RuntimeValue>, CompileError> {
+    if !matches!(
+        inst.op,
+        ir::Opcode::FixAdd { checked: false }
+            | ir::Opcode::FixSub { checked: false }
+            | ir::Opcode::FixMul { checked: false }
+    ) {
+        return Ok(None);
+    }
+    if !jit_opt_passes().range
+        || !jit_opt_passes().reps
+        || inst.eff != Effects::PURE
+        || inst.mem != AliasClass::None
+        || inst.args.len() != 2
+    {
+        return Err(CompileError::UnsupportedOp(
+            "opt-emit:range-unchecked-contract",
+        ));
+    }
+    let result = inst.result.ok_or(CompileError::BadOperand)?;
+    let result_data = &ctx.func.values[result.index()];
+    let rep = result_data.rep;
+    if !matches!(rep, ir::Rep::TaggedFix | ir::Rep::RawInt)
+        || result_data.ty.is_bottom()
+        || !result_data.ty.is_subset(TypeSet::FIXNUM)
+    {
+        return Err(CompileError::UnsupportedOp("opt-emit:range-result-proof"));
+    }
+    let intervals = inst
+        .args
+        .iter()
+        .map(|&input| {
+            let input = canonical(ctx.func, input);
+            let data = &ctx.func.values[input.index()];
+            if data.rep != rep || data.ty.is_bottom() || !data.ty.is_subset(TypeSet::FIXNUM) {
+                return None;
+            }
+            data.ty.range()
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or(CompileError::UnsupportedOp("opt-emit:range-operand-proof"))?;
+    if !crate::emacs_core::jit::opt::passes::range::arithmetic_result_fits(
+        &inst.op,
+        intervals[0],
+        intervals[1],
+        result_data.ty,
+    ) {
+        return Err(CompileError::UnsupportedOp(
+            "opt-emit:range-declaration-proof",
+        ));
+    }
+    let a = fixnum_operand(ctx, local, inst.args[0], rep)?;
+    let b = fixnum_operand(ctx, local, inst.args[1], rep)?;
+    // No snapshot, precise_exit, overflow flag or guard on proved arithmetic.
+    // Current checked emit logic remains byte-for-byte below this new branch.
+    let value = if rep == ir::Rep::RawInt {
+        match inst.op {
+            ir::Opcode::FixAdd { .. } => ctx.fb.ins().iadd(a, b),
+            ir::Opcode::FixSub { .. } => ctx.fb.ins().isub(a, b),
+            _ => ctx.fb.ins().imul(a, b),
+        }
+    } else {
+        let scaled = lowering::iadd_imm_p(ctx.fb, b, -(FIXNUM_CHECK_VALUE as i64));
+        match inst.op {
+            ir::Opcode::FixAdd { .. } => ctx.fb.ins().iadd(a, scaled),
+            ir::Opcode::FixSub { .. } => ctx.fb.ins().isub(a, scaled),
+            _ => {
+                let raw = lowering::sshr_imm_p(ctx.fb, a, FIXNUM_SHIFT as i64);
+                let product = ctx.fb.ins().imul(raw, scaled);
+                lowering::iadd_imm_p(ctx.fb, product, FIXNUM_CHECK_VALUE as i64)
+            }
+        }
+    };
+    Ok(Some((
+        value,
+        if rep == ir::Rep::RawInt {
+            SlotRep::RawFixnum
+        } else {
+            SlotRep::Tagged
+        },
+    )))
 }

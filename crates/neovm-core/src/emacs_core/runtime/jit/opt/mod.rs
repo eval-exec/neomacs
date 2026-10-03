@@ -31,3 +31,7 @@ mod type_tests;
 #[cfg(test)]
 #[path = "tests/gvn_eval_test.rs"]
 mod gvn_eval_tests;
+
+#[cfg(test)]
+#[path = "tests/range_licm_eval.rs"]
+mod range_licm_eval_tests;

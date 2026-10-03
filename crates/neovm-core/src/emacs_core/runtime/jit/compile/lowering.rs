@@ -6,6 +6,10 @@
 use super::boolean::{BoolResultMode, tagged_bool_view};
 use super::*;
 
+#[path = "lowering/array_profile_selected.rs"]
+mod array_profile_selected;
+pub(crate) use array_profile_selected::lower_simple_op_with_array_profile;
+
 /// Emit a speculation guard.
 ///
 /// If `cond` (an `i8` boolean from `icmp`) is false, branch to the shared deopt
@@ -8610,3 +8614,42 @@ fn lower_simple_op_arms(
 
 mod bool_lowering;
 pub(crate) use bool_lowering::lower_simple_op_with_cons_proof_and_result;
+
+/// Read one final-capability-certified plain array slot, with current backing.
+/// Threading: physical words belong to the current compiler/activation; this
+/// helper publishes no cache and holds no address across a safepoint or event.
+/// The caller proves successful type/index/current-length guards independently.
+pub(crate) fn emit_verified_plain_aref(
+    fb: &mut FunctionBuilder,
+    array: ClifValue,
+    index: ClifValue,
+    index_rep: SlotRep,
+) -> Result<(ClifValue, SlotRep), CompileError> {
+    if !jit_opt_passes().range
+        || !jit_inline_aref_on()
+        || jit_aref_slot0_on()
+        || fb.func.dfg.value_type(array) != types::I64
+        || fb.func.dfg.value_type(index) != types::I64
+        || !matches!(index_rep, SlotRep::Tagged | SlotRep::RawFixnum)
+    {
+        return Err(CompileError::UnsupportedOp("opt-array:plain-read-contract"));
+    }
+    let layout = super::jit_layout::heap::plain_array_offsets()
+        .ok_or(CompileError::UnsupportedOp("opt-array:layout"))?;
+    let object = band_imm_p(fb, array, !(TAG_MASK as i64));
+    // Fresh backing even when numerical bounds are eliminated. The mapped
+    // storage case reads its current slice; mutation/COW goes through the
+    // existing barrier path and invalidates layout epochs in the IR.
+    let slots = fb
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), object, layout.slots);
+    let raw_index = match index_rep {
+        SlotRep::Tagged => sshr_imm_p(fb, index, FIXNUM_SHIFT as i64),
+        SlotRep::RawFixnum => index,
+        _ => unreachable!("checked scalar representation"),
+    };
+    let byte_offset = ishl_imm_p(fb, raw_index, layout.element_shift);
+    let slot = fb.ins().iadd(slots, byte_offset);
+    let element = fb.ins().load(types::I64, MemFlagsData::trusted(), slot, 0);
+    Ok((element, SlotRep::Tagged))
+}

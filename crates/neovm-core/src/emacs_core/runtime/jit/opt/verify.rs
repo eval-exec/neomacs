@@ -372,6 +372,12 @@ pub(crate) fn verify(func: &Func) -> Result<(), VerifyError> {
             return Err(VerifyError::OsrShape);
         }
     }
+    if !func.array_reads.reads.is_empty() {
+        // The sidecar validator borrows already validated ordinary SSA. It
+        // never recursively calls Func::verify and returns owned capabilities.
+        super::passes::array_reads::verify_reads(func, &func.array_reads)
+            .map_err(|error| VerifyError::InvalidInst(error.inst))?;
+    }
     Ok(())
 }
 
@@ -611,6 +617,30 @@ fn validate_inst(func: &Func, inst: Inst, data: &InstData) -> Result<(), VerifyE
         }
         Opcode::CheckBounds => {
             args(2)?;
+            // Index and length have independent scalar representations. A
+            // successful result preserves the index word and declaration;
+            // a result-free guard keeps the same operand contract.
+            for n in 0..2 {
+                let (value, actual) = operand(n)?;
+                if !matches!(actual.rep, Rep::Tagged | Rep::TaggedFix | Rep::RawInt)
+                    || !nonempty_fixnum(actual.ty)
+                {
+                    return Err(VerifyError::TypeMismatch(value));
+                }
+            }
+            if data.result.is_some() {
+                let (value, output) = result()?;
+                let input = operand(0)?.1;
+                if output.rep != input.rep {
+                    return Err(VerifyError::RepMismatch {
+                        inst: Some(inst),
+                        value,
+                    });
+                }
+                if !nonempty_fixnum(output.ty) || !output.ty.is_subset(input.ty) {
+                    return Err(VerifyError::TypeMismatch(value));
+                }
+            }
         }
         Opcode::CheckNoOverflow => {
             args(1)?;
@@ -669,6 +699,29 @@ fn validate_inst(func: &Func, inst: Inst, data: &InstData) -> Result<(), VerifyE
                 require_tagged(func, value, Some(inst))?;
             }
             result_rep(Rep::Bool)?;
+        }
+        Opcode::LoadVecLen if result()?.1.rep == Rep::RawInt => {
+            args(1)?;
+            let (base, input) = operand(0)?;
+            if input.rep != Rep::Tagged
+                || input.ty.is_bottom()
+                || !input.ty.is_subset(TypeSet::VECTOR.join(TypeSet::RECORD))
+            {
+                return Err(VerifyError::TypeMismatch(base));
+            }
+            let (value, output) = result()?;
+            let length = TypeSet::fixnum_range(super::types::Range {
+                lo: 0,
+                hi: super::types::Range::FULL.hi,
+            });
+            if output.ty != length
+                || data.eff != Effects::READ_HEAP
+                || data.mem != super::mem::AliasClass::Unknown
+            {
+                return Err(VerifyError::TypeMismatch(value));
+            }
+            // Ordinary typing certifies scalar layout, never pointer authority.
+            // The final original-Aref sidecar verifies actual ordered guards.
         }
         Opcode::LoadCar | Opcode::LoadCdr | Opcode::LoadVecLen | Opcode::LoadRecTag => {
             args(1)?;

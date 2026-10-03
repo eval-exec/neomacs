@@ -25,6 +25,10 @@ pub(crate) struct OptStats {
     pub(crate) opt_bool: Option<Box<crate::emacs_core::jit::opt::passes::bools::BoolStats>>,
     pub(crate) opt_reps: Option<Box<crate::emacs_core::jit::opt::ir::RepsCensus>>,
     pub(crate) opt_gvn: Option<Box<crate::emacs_core::jit::opt::passes::gvn::GvnStats>>,
+    pub(crate) opt_range: Option<Box<crate::emacs_core::jit::opt::passes::range::RangeStats>>,
+    pub(crate) opt_licm: Option<Box<crate::emacs_core::jit::opt::passes::licm::LicmStats>>,
+    pub(crate) opt_arrays:
+        Option<Box<crate::emacs_core::jit::opt::passes::array_reads::ArrayLiftStats>>,
 }
 
 impl OptStats {
@@ -34,6 +38,9 @@ impl OptStats {
             opt_bool: census.bools.clone().map(Box::new),
             opt_reps: census.reps.clone().map(Box::new),
             opt_gvn: census.gvn.clone().map(Box::new),
+            opt_range: census.range.clone().map(Box::new),
+            opt_licm: census.licm.clone().map(Box::new),
+            opt_arrays: census.arrays.clone().map(Box::new),
         }
     }
 
@@ -42,6 +49,9 @@ impl OptStats {
             && self.opt_bool.is_none()
             && self.opt_reps.is_none()
             && self.opt_gvn.is_none()
+            && self.opt_range.is_none()
+            && self.opt_licm.is_none()
+            && self.opt_arrays.is_none()
     }
 }
 

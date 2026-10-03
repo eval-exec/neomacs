@@ -807,7 +807,7 @@ pub(crate) struct ShimAddr(*const ());
 unsafe impl Sync for ShimAddr {}
 
 #[used]
-pub(crate) static JIT_SHIM_TABLE: [(&str, ShimAddr); 70] = [
+pub(crate) static JIT_SHIM_TABLE: [(&str, ShimAddr); 71] = [
     (
         "neovm_jit_hof_length",
         ShimAddr(super::hof_runtime::neovm_jit_hof_length as *const ()),
@@ -1042,6 +1042,10 @@ pub(crate) static JIT_SHIM_TABLE: [(&str, ShimAddr); 70] = [
     (
         "neovm_jit_direct_framed",
         ShimAddr(super::direct_call::neovm_jit_direct_framed as *const ()),
+    ),
+    (
+        "neovm_jit_t2_record_array_use",
+        ShimAddr(neovm_jit_t2_record_array_use as *const ()),
     ),
 ];
 
@@ -1317,3 +1321,6 @@ pub extern "C" fn neovm_jit_unbind(ctx: *mut u8, n: i64) -> i64 {
         }
     }
 }
+
+// Selected array observer; no change to main exports or registration order.
+pub use super::array_profile::neovm_jit_t2_record_array_use;

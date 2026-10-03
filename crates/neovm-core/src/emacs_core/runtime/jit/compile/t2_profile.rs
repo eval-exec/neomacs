@@ -260,7 +260,7 @@ fn credit_generic(
 /// The profiling shims receive a live, mutator-owned leaf observation.
 /// Closed windows inspect no Lisp values and immediately use the plain shim.
 #[inline]
-fn credit_window_open(obs: *const LeafObs) -> bool {
+pub(super) fn credit_window_open(obs: *const LeafObs) -> bool {
     // SAFETY: generated callers hold the containing leaf for the activation.
     let obs = unsafe { &*obs };
     obs.t2.state.get() == crate::emacs_core::jit::tier2::T2State::Idle

@@ -124,3 +124,49 @@ pub(crate) fn value_vec_slice_offsets() -> Option<(usize, usize)> {
 pub(crate) fn value_vec_owned_probe() -> Option<(usize, usize)> {
     crate::tagged::header::LispValueVec::jit_owned_probe()
 }
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PlainArrayOffsets {
+    pub(crate) type_tag: i32,
+    pub(crate) slots: i32,
+    pub(crate) length: i32,
+    pub(crate) element_shift: i64,
+}
+
+const _: () = {
+    use crate::tagged::header::{RecordObj, VectorObj};
+    assert!(offset_of!(VectorObj, header) == 0);
+    assert!(offset_of!(RecordObj, header) == 0);
+    assert!(offset_of!(VectorObj, data) == offset_of!(RecordObj, data));
+};
+
+/// Checked host-layout composition. LispValueVec's existing two-storage probe
+/// compares owned/mapped pointer and length positions. Offsets are relative to
+/// the actual VectorObj/RecordObj, whose repr(C) prefix is asserted above.
+///
+/// Valid storage supports &[TaggedValue]: byte extent <= isize::MAX for both
+/// owned Vec and the unsafe mapped-slice contract. Consequently length is
+/// <= isize::MAX / sizeof(TaggedValue), strictly within the fixnum domain on
+/// this admitted 64-bit one-word layout. Neither a mutable length nor backing
+/// pointer is treated as immutable; the emitter reloads them at each access.
+pub(crate) fn plain_array_offsets() -> Option<PlainArrayOffsets> {
+    use crate::tagged::{
+        header::{VecLikeHeader, VectorObj},
+        value::TaggedValue,
+    };
+    if size_of::<usize>() != 8 || size_of::<TaggedValue>() != 8 {
+        return None;
+    }
+    let maximum_length = isize::MAX as usize / size_of::<TaggedValue>();
+    if maximum_length > TaggedValue::MOST_POSITIVE_FIXNUM as usize {
+        return None;
+    }
+    let (pointer, length) = value_vec_slice_offsets()?;
+    let data = offset_of!(VectorObj, data);
+    Some(PlainArrayOffsets {
+        type_tag: i32::try_from(offset_of!(VecLikeHeader, type_tag)).ok()?,
+        slots: i32::try_from(data.checked_add(pointer)?).ok()?,
+        length: i32::try_from(data.checked_add(length)?).ok()?,
+        element_shift: i64::from(size_of::<TaggedValue>().trailing_zeros()),
+    })
+}

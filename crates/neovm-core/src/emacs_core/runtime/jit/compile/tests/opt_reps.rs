@@ -15,6 +15,10 @@ use crate::emacs_core::jit::opt::types::TypeSet;
 use crate::emacs_core::jit::opt::{build, eval, ir};
 use crate::emacs_core::print::print_value;
 
+#[cfg(test)]
+#[path = "opt_range_licm.rs"]
+mod range_licm_tests;
+
 struct Settings;
 impl Settings {
     fn enter() -> Self {
@@ -934,3 +938,7 @@ fn opt_reps_native_static_fixnum_untag_uses_immediate_payload() {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "opt_licm_positive.rs"]
+mod licm_positive_tests;

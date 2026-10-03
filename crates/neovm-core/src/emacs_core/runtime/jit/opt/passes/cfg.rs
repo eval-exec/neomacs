@@ -210,6 +210,20 @@ pub(crate) fn cleanup(func: &mut Func) -> Result<(), VerifyError> {
         }
     }
     let canonical = resolve_aliases(func)?;
+    // A proof is a compiler use, not a runtime root. Keep only reachable
+    // original read owners; every source/witness of a surviving owner must
+    // still have an attached live definition. Never reattach a detached pure
+    // instruction at an invented position to rescue stale metadata.
+    let live_array_reads = if func.array_reads.reads.is_empty() {
+        None
+    } else {
+        let mut proofs = func.array_reads.clone();
+        proofs
+            .reads
+            .retain(|owner, _| live_insts.get(owner.index()) == Some(&true));
+        validate_live_array_users(&proofs, &canonical, &live_values, &live_insts)?;
+        Some(proofs)
+    };
     let mut candidate = Func::new(func.consts.clone(), func.arity, func.dynamic_prefix);
     candidate.entry = mapped_block(func.entry, &block_map)?;
     candidate.osr = func
@@ -282,6 +296,12 @@ pub(crate) fn cleanup(func: &mut Func) -> Result<(), VerifyError> {
                 frame_roots.push(source.frame);
             }
         }
+    }
+    if let Some(proofs) = &live_array_reads {
+        // These exact source frames already belong to surviving read owners.
+        // Explicit metadata retention documents the cold replay dependency;
+        // it does not add to native root windows or alter SSA heap liveness.
+        frame_roots.extend(proofs.reads.values().map(|proof| proof.frame));
     }
     let mut frame_map = vec![None; func.frames.len()];
     for frame in ordered_frames(func, &frame_roots)? {
@@ -409,6 +429,9 @@ pub(crate) fn cleanup(func: &mut Func) -> Result<(), VerifyError> {
         bools: func.census.bools.clone(),
         reps: func.census.reps.clone(),
         gvn: func.census.gvn.clone(),
+        range: func.census.range.clone(),
+        licm: func.census.licm.clone(),
+        arrays: func.census.arrays.clone(),
         blocks: candidate.blocks.len(),
         insts: candidate.insts.len(),
         phis: candidate.blocks.iter().map(|b| b.params.len()).sum(),
@@ -421,9 +444,63 @@ pub(crate) fn cleanup(func: &mut Func) -> Result<(), VerifyError> {
         critical_edges,
         dead_leaders,
     };
+    if let Some(proofs) = &live_array_reads {
+        candidate.array_reads = proofs.remap(
+            |inst| mapped_inst(inst, &inst_map).ok(),
+            |value| mapped_value(value, &canonical, &value_map).ok(),
+            |frame| mapped_frame(frame, &frame_map).ok(),
+        )?;
+    }
     candidate.rebuild_frame_intern();
+    // Rebuilds final mutable epochs and validates remapped provenance via the
+    // Func-owned sidecar. An error leaves the original caller unchanged.
     candidate.verify()?;
     *func = candidate;
+    Ok(())
+}
+
+/// Compiler-only metadata users. Cleanup retains every attached executable
+/// instruction, including pure proof views; a future DCE must mark these users
+/// before detaching definitions. Missing live metadata is rejected atomically,
+/// rather than changing Lisp roots or weakening the numeric/layout certificate.
+fn validate_live_array_users(
+    proofs: &super::array_reads::ArrayReadProofs,
+    canonical: &[Value],
+    live_values: &[bool],
+    live_insts: &[bool],
+) -> Result<(), VerifyError> {
+    let mut missing = None;
+    proofs.visit_values(|value| {
+        if missing.is_none()
+            && canonical
+                .get(value.index())
+                .and_then(|root| live_values.get(root.index()))
+                != Some(&true)
+        {
+            missing = Some(VerifyError::InvalidValue(value));
+        }
+    });
+    if let Some(error) = missing {
+        return Err(error);
+    }
+    for (&owner, proof) in &proofs.reads {
+        for inst in [owner, proof.length_read, proof.bounds] {
+            if live_insts.get(inst.index()) != Some(&true) {
+                return Err(VerifyError::InvalidInst(inst));
+            }
+        }
+        if let super::array_reads::BoundsWitness::Elided(witness) = &proof.witness {
+            // These Inst dependencies need retention even if a witness value
+            // is absent from normal args/frames. A retained successful guard
+            // and its fresh load are the floor authority; an elided view is
+            // never substituted for them.
+            for inst in [witness.floor.guard, witness.floor.length_read] {
+                if live_insts.get(inst.index()) != Some(&true) {
+                    return Err(VerifyError::InvalidInst(inst));
+                }
+            }
+        }
+    }
     Ok(())
 }
 

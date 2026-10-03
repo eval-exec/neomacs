@@ -87,6 +87,9 @@ pub(crate) struct OptCensus {
     pub bools: Option<super::passes::bools::BoolStats>,
     pub reps: Option<RepsCensus>,
     pub gvn: Option<super::passes::gvn::GvnStats>,
+    pub range: Option<super::passes::range::RangeStats>,
+    pub licm: Option<super::passes::licm::LicmStats>,
+    pub arrays: Option<super::passes::array_reads::ArrayLiftStats>,
 }
 
 /// Immutable numeric pass counters. Threading: a compiler owns these scalar
@@ -113,6 +116,10 @@ pub(crate) struct Func {
     pub dynamic_prefix: usize,
     pub arity: ParamShape,
     pub census: OptCensus,
+    /// Exact original Aref guards and mutable-layout witnesses, owned by this
+    /// compilation. This sidecar contains IDs/scalars only and is immutable
+    /// when a backend worker receives the plan; it stores no Lisp pointers.
+    pub array_reads: super::passes::array_reads::ArrayReadProofs,
     /// Per-source-pc stacks for the shared baseline-emitter adapter.
     pub source_states: Vec<Option<SourceState>>,
     /// Full GNU stack at each block entry, including invariant non-phi values.
@@ -133,6 +140,7 @@ impl Func {
             dynamic_prefix,
             arity,
             census: OptCensus::default(),
+            array_reads: super::passes::array_reads::ArrayReadProofs::default(),
             source_states: Vec::new(),
             entry_stacks: Vec::new(),
             frame_intern: HashMap::new(),

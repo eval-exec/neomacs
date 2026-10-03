@@ -1,4 +1,4 @@
-//! Shared semantic emitter driver. Threading: all builder state belongs to
+//! Selected range/sink twin of the unchanged main semantic emitter driver. Threading: all builder state belongs to
 //! the active compiler; it is never shared with another mutator.
 
 use super::*;
@@ -22,7 +22,7 @@ use super::*;
 ///   * `finalize_definitions()` — AOT: `ObjectModule::finish()`.
 ///   * `get_finalized_function` — AOT: `dlsym` of the exported entry symbol.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn build_leaf_fn<S: LeafSink>(
+pub(super) fn build_selected_leaf_fn<S: LeafSink>(
     sink: &mut S,
     ops: &[Op],
     constants: &[Value],
@@ -134,8 +134,14 @@ pub(super) fn build_leaf_fn<S: LeafSink>(
                     body.v2.as_ref().is_some_and(|side| !side.hof_at.is_empty())
                 }),
             };
-            let refs = RtRefs::new(
-                sink.shim_ids(call_conv, ptr_ty, groups)?,
+            let groups = super::shim_refs::SelectedShimGroups {
+                main: groups,
+                array_profile: super::array_profile::selected(aot, emit.t2)
+                    && ops.iter().any(|op| *op == Op::Aref),
+                sink_versions: false,
+            };
+            let refs = RtRefs::new_selected(
+                sink.shim_ids_selected(call_conv, ptr_ty, groups)?,
                 groups,
                 fb.func,
                 call_conv,
@@ -492,6 +498,22 @@ pub(super) fn build_leaf_fn<S: LeafSink>(
         emit_pending_deopts(&mut fb, deopt_refs, &mut entry_deopts, None, abi);
 
         if let (Some(func), Some(values), Some(blocks)) = (opt, &opt_ssa, &opt_blocks) {
+            let verified_arrays = if !func.array_reads.reads.is_empty() {
+                if aot || !jit_opt_passes().range {
+                    return Err(CompileError::UnsupportedOp("opt-array:pass-off"));
+                }
+                func.verify()
+                    .map_err(|_| CompileError::UnsupportedOp("opt-array:ir"))?;
+                Some(
+                    crate::emacs_core::jit::opt::passes::array_reads::verify_reads(
+                        func,
+                        &func.array_reads,
+                    )
+                    .map_err(|_| CompileError::UnsupportedOp("opt-array:final-proof"))?,
+                )
+            } else {
+                None
+            };
             opt_emission::emit(opt_emission::EmitContext {
                 fb: &mut fb,
                 func,
@@ -519,7 +541,7 @@ pub(super) fn build_leaf_fn<S: LeafSink>(
                 consts_base,
                 ops,
                 known_fixnum_slots,
-                verified_arrays: None,
+                verified_arrays: verified_arrays.as_ref(),
             })?;
         } else {
             for (leader_index, &l) in cfg.leaders.iter().enumerate() {
@@ -1056,7 +1078,7 @@ pub(super) fn build_leaf_fn<S: LeafSink>(
                             .unwrap_or(0);
                             let residual: Vec<ClifValue> = stack.drain(..dead).collect();
                             let residual_reps: Vec<SlotRep> = reps.drain(..dead).collect();
-                            lower_simple_op(
+                            lowering::lower_simple_op_with_array_profile(
                                 &mut fb,
                                 i,
                                 &mut pending_deopt,
@@ -1170,4 +1192,44 @@ pub(super) fn build_leaf_fn<S: LeafSink>(
         func,
         super::super::stats::asm_dump::want_disasm(aot),
     )
+}
+
+/// Frontend-owned requirements, never runtime or mutator state. Threading:
+/// immutable scalar requirements belong to one compilation and are passed
+/// through the selected backend; workers use only their owned import list.
+pub(super) struct Selection {
+    pub(super) array_profile: bool,
+    pub(super) sink_versions: bool,
+    native_body: bool,
+}
+
+impl Selection {
+    pub(super) fn is_selected(&self) -> bool {
+        self.array_profile || self.sink_versions || self.native_body
+    }
+}
+
+/// Normal T1 observation requires Range plus an active Tier2 profile pointer.
+/// Selected native graphs still enter proof validation when supplied by an
+/// explicit override, so an unsupported graph cannot bypass pass-off checks.
+pub(super) fn requirements(
+    aot: bool,
+    t2: Option<crate::emacs_core::jit::tier2::T2Emit>,
+    ops: &[Op],
+    opt: Option<&crate::emacs_core::jit::opt::ir::Func>,
+) -> Selection {
+    let passes = jit_opt_passes();
+    let array_profile =
+        super::array_profile::selected(aot, t2) && ops.iter().any(|op| *op == Op::Aref);
+    let sink_versions = false;
+    let native_body = !aot
+        && opt.is_some_and(|func| {
+            (jit_opt_mode() == OptMode::Opt && (passes.range || passes.licm))
+                || !func.array_reads.reads.is_empty()
+        });
+    Selection {
+        array_profile,
+        sink_versions,
+        native_body,
+    }
 }

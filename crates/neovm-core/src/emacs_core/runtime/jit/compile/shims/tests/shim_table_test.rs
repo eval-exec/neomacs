@@ -59,7 +59,7 @@ fn runtime_shims_link_without_dynamic_exports_and_preserve_host_fallback() {
 /// call — or callable by the JIT but silently unexported for AOT.
 #[test]
 fn the_shim_table_and_the_exported_name_list_are_the_same_set() {
-    let names: std::collections::BTreeSet<&str> = crate::emacs_core::jit::aot::MIR_SHIM_NAMES
+    let names: std::collections::BTreeSet<&str> = crate::emacs_core::jit::aot::JIT_SHIM_NAMES
         .iter()
         .copied()
         .collect();
