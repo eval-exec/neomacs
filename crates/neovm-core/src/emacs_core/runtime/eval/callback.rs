@@ -6,13 +6,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 // Callback knobs, read once per process:
 // | Knob | Values | Default | Effect |
-// | NEOVM_CALLBACK_CACHE | off, on | off | Cache native callback bodies and arity within map/sort/hash/assoc activations; validate after funcall hooks; vm-profile retains legacy dispatch. |
+// | NEOVM_CALLBACK_CACHE | off, on | on | Cache native callback bodies and arity within map/sort/hash/assoc activations; validate after funcall hooks; vm-profile retains legacy dispatch. |
 
 /// Immutable process configuration contains no Lisp state; concurrent mutators
 /// may read it. Each callback capability stays with its creating activation.
 #[cfg(not(feature = "vm-profile"))]
 static CALLBACK_CACHE: LazyLock<bool> =
-    LazyLock::new(|| std::env::var("NEOVM_CALLBACK_CACHE").is_ok_and(|value| value == "on"));
+    LazyLock::new(|| !std::env::var("NEOVM_CALLBACK_CACHE").is_ok_and(|value| value == "off"));
 
 #[inline]
 pub(crate) fn native_callback_cache_enabled() -> bool {
