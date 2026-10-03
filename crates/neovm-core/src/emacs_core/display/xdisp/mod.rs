@@ -2014,13 +2014,31 @@ pub fn format_mode_line_for_display_with_sources(
     if eval.has_mode_line_display_flow() {
         return ModeLineDisplayOutput::from_root_string(Value::string(""));
     }
-    match try_format_mode_line_for_display_with_sources(
+    // GNU's enclosing window handler covers the safe evaluator's bindings
+    // and unwind as well as its body. Register it before dispatch, so an
+    // ordinary error cannot reach outer handler-bind callbacks or debugger.
+    let condition_stack_base = mode_line_flow_policy::enabled().then(|| {
+        let base = eval.condition_stack_len();
+        eval.push_condition_frame(super::eval::ConditionFrame::ConditionCase {
+            conditions: Value::symbol("error"),
+            resume: super::eval::ResumeTarget::InterpreterConditionCase {
+                handler_index: 0,
+                condition_stack_base: base,
+            },
+        });
+        base
+    });
+    let result = try_format_mode_line_for_display_with_sources(
         eval,
         format_val,
         window,
         buffer,
         target_cols,
-    ) {
+    );
+    if let Some(base) = condition_stack_base {
+        eval.truncate_condition_stack(base);
+    }
+    match result {
         Ok(output) => output,
         Err(flow) => {
             mode_line_flow_policy::handle_display_error(eval, flow);
@@ -9386,3 +9404,7 @@ mod mode_line_flow;
 #[cfg(test)]
 #[path = "tests/mode_line_outer_flow.rs"]
 mod mode_line_outer_flow;
+
+#[cfg(test)]
+#[path = "tests/mode_line_outer_handlers.rs"]
+mod mode_line_outer_handlers;
