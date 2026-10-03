@@ -114,6 +114,8 @@ pub(super) struct FormatSelection {
     point_marker: Option<(u64, Value)>,
     root_scope: crate::emacs_core::eval::SpecpdlRootScopeState,
     point_root: crate::emacs_core::eval::SpecpdlRootSlot,
+    selection_changed: bool,
+    evaluated: bool,
 }
 
 impl FormatSelection {
@@ -162,12 +164,15 @@ impl FormatSelection {
             point_marker: None,
             root_scope,
             point_root,
+            selection_changed: target != original_window,
+            evaluated: false,
         })
     }
 
     /// Pure elements cannot move point. Allocate GNU's saved-point marker only
     /// before the first Lisp evaluation, keeping non-evaluating walks cheap.
     pub(super) fn before_eval(&mut self, eval: &mut super::super::eval::Context) {
+        self.evaluated = true;
         if self.point_marker.is_some() {
             return;
         }
@@ -189,6 +194,12 @@ impl FormatSelection {
     }
 
     pub(super) fn restore(self, eval: &mut super::super::eval::Context) {
+        if !self.evaluated && !self.selection_changed {
+            // The pure walker cannot move selection or point. Its caller
+            // still restores the separately scoped current-buffer switch.
+            eval.restore_specpdl_roots(self.root_scope);
+            return;
+        }
         let frame_before = eval.frames.selected_frame().map(|frame| frame.id);
         eval.frames
             .restore_selected_window_for_mode_line(self.target_selection);
