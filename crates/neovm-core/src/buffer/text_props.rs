@@ -1475,7 +1475,12 @@ impl IntervalTree {
     /// advances with `next_id`.  Every covered target interval receives a fresh
     /// copy of the run's plist.  Balancing happens once, climbing from the
     /// deepest node the splits created.
-    fn graft_shifted_runs(&mut self, runs: &[IntervalRun], offset: CharLen) {
+    fn graft_shifted_runs(
+        &mut self,
+        runs: &[IntervalRun],
+        offset: CharLen,
+        mut new_root: impl FnMut(Value),
+    ) {
         let runs: Vec<&IntervalRun> = runs.iter().filter(|run| run.start() < run.end()).collect();
         let (Some(first), Some(last)) = (runs.first(), runs.last()) else {
             return;
@@ -1500,6 +1505,7 @@ impl IntervalTree {
             if !original.is_nil() {
                 // Same content, so the cached flags stay valid.
                 self.nodes[id.0].plist = copy_plist_value(original);
+                new_root(self.nodes[id.0].plist);
             }
             id = right_id;
             node_start = start;
@@ -1517,7 +1523,7 @@ impl IntervalTree {
             // property-change entry) mutated the value Lisp held: oracle
             // cases div_cx19/40/43/46 read `(face nil)' where GNU keeps
             // `(face bold)'.
-            self.rehome_predecessor_plist(start);
+            new_root(self.rehome_predecessor_plist(start));
         }
         let mut cursor = start;
         'runs: for run in runs {
@@ -1526,6 +1532,7 @@ impl IntervalTree {
             while cursor < run_end {
                 let node_end = self.interval_end(node_start, id);
                 let fresh = copy_plist_value(run.plist);
+                new_root(fresh);
                 if node_end > run_end {
                     let original = self.nodes[id.0].plist;
                     let right = self.node_shaped_like(id, original);
@@ -1729,20 +1736,21 @@ impl IntervalTree {
     /// in-place `put-text-property` cannot mutate the value held in Lisp.  Empty
     /// plists are left alone (GNU's `copy_properties` short-circuits on
     /// DEFAULT_INTERVAL_P).
-    fn rehome_predecessor_plist(&mut self, boundary: CharPos0) {
+    fn rehome_predecessor_plist(&mut self, boundary: CharPos0) -> Value {
         if boundary == CharPos0::ZERO {
-            return;
+            return Value::NIL;
         }
         let prev = CharPos0::new(boundary.get() - 1);
         let Some((_, id)) = self.find_id(prev) else {
-            return;
+            return Value::NIL;
         };
         let node = &self.nodes[id.0];
         if node.is_empty_plist() {
-            return;
+            return Value::NIL;
         }
         let fresh = copy_plist_value(node.plist);
         self.set_node_plist(id, fresh);
+        fresh
     }
 
     fn delete_node(&mut self, id: IntervalId) -> Option<IntervalId> {
@@ -4527,7 +4535,28 @@ impl TextPropertyTable {
         self.append_shifted_raw(other, CharLen::new(pos.get()));
     }
 
+    /// Publish each newly copied plist, including the re-homed predecessor,
+    /// without rewalking the destination interval tree. The callback cannot
+    /// run Lisp or collect while this graft is in progress.
+    pub(crate) fn append_shifted_at_char_offset_with_roots(
+        &mut self,
+        other: &TextPropertyTable,
+        offset: CharLen,
+        new_root: impl FnMut(Value),
+    ) {
+        self.append_shifted_raw_with_roots(other, offset, new_root);
+    }
+
     fn append_shifted_raw(&mut self, other: &TextPropertyTable, offset: CharLen) {
+        self.append_shifted_raw_with_roots(other, offset, |_| {});
+    }
+
+    fn append_shifted_raw_with_roots(
+        &mut self,
+        other: &TextPropertyTable,
+        offset: CharLen,
+        new_root: impl FnMut(Value),
+    ) {
         self.mutation_tick += 1;
         self.syntax_prop_tick += 1;
         if other.has_any_syntax_prop_interval() {
@@ -4565,7 +4594,7 @@ impl TextPropertyTable {
         for run in &runs {
             self.property_names.observe_plist(run.plist);
         }
-        self.intervals.graft_shifted_runs(&runs, offset);
+        self.intervals.graft_shifted_runs(&runs, offset, new_root);
     }
 
     /// The pre-graft algorithm (split, re-find and re-home per run), kept as

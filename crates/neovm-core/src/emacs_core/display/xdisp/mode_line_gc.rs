@@ -2,7 +2,7 @@
 
 use super::{ModeLineRendered, Value};
 use crate::emacs_core::eval::{
-    Context, push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
+    push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
 
 #[inline]
@@ -22,9 +22,63 @@ fn visit_rendered_roots(rendered: &ModeLineRendered, mut visit: impl FnMut(Value
     }
 }
 
+/// A short child usually retains only its source and copied interval plist.
+/// Keep those identities inline rather than allocating a hash table per child.
+/// Larger accumulators still deduplicate in constant time using tagged bits.
+#[derive(Clone)]
+pub(super) enum AccumulatorRoots {
+    Inline { bits: [usize; 2], len: usize },
+    Hashed(rustc_hash::FxHashSet<usize>),
+}
+
+impl Default for AccumulatorRoots {
+    fn default() -> Self {
+        Self::Inline {
+            bits: [0; 2],
+            len: 0,
+        }
+    }
+}
+
+impl AccumulatorRoots {
+    #[inline]
+    fn insert(&mut self, value: usize) -> bool {
+        match self {
+            Self::Inline { bits, len } => {
+                if bits[..*len].contains(&value) {
+                    return false;
+                }
+                if *len < bits.len() {
+                    bits[*len] = value;
+                    *len += 1;
+                } else {
+                    // A parent quickly collects several child plist heads.
+                    // Avoid repeatedly growing the smallest hash tables.
+                    let mut roots =
+                        rustc_hash::FxHashSet::with_capacity_and_hasher(16, Default::default());
+                    roots.extend(*bits);
+                    roots.insert(value);
+                    *self = Self::Hashed(roots);
+                }
+                true
+            }
+            Self::Hashed(roots) => roots.insert(value),
+        }
+    }
+}
+
 #[inline]
-pub(super) fn pin_rendered(eval: &mut Context, rendered: &ModeLineRendered) {
-    visit_rendered_roots(rendered, |value| eval.push_specpdl_root(value));
+pub(super) fn pin_accumulator_value(roots: &mut AccumulatorRoots, value: Value) {
+    if !value.is_nil() && roots.insert(value.bits()) {
+        push_scratch_gc_root(value);
+    }
+}
+
+#[inline]
+pub(super) fn pin_rendered_scratch(rendered: &ModeLineRendered) -> AccumulatorRoots {
+    let mut roots = AccumulatorRoots::default();
+    visit_rendered_roots(rendered, |value| pin_accumulator_value(&mut roots, value));
+    roots
 }
 
 /// Root scope for the split-state compatibility callback, which has no
@@ -46,11 +100,6 @@ impl ScratchRoots {
     #[inline]
     pub(super) fn pin(&self, value: Value) {
         push_scratch_gc_root(value);
-    }
-
-    #[inline]
-    pub(super) fn pin_rendered(&self, rendered: &ModeLineRendered) {
-        visit_rendered_roots(rendered, |value| self.pin(value));
     }
 }
 
