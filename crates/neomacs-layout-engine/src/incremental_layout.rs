@@ -1509,7 +1509,15 @@ impl RetainedWindowMatrix {
         if self.validity != MatrixValidity::Valid {
             return None;
         }
-        if !RetainedWindowKey::edit_eligible(&self.key, curr) || curr.vscroll != 0 {
+        if !RetainedWindowKey::edit_eligible(&self.key, curr)
+            || curr.vscroll != 0
+            || curr.display_line_numbers.point_motion_body_dependency()
+                == PointMotionBodyDependency::EntireWindow
+        {
+            // Relative/visual prefixes live in GlyphArea::Text and depend on
+            // point across the whole window. An edit can change point's line
+            // even at the same charpos; neither above nor below row cloning
+            // can preserve these numbers (GNU's try_window_id also declines).
             return None;
         }
         let mut body: Vec<(usize, &MatrixRow)> = Vec::new();
