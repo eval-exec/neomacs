@@ -174,3 +174,15 @@ threads-required = "num-test-threads"
 [[profile.default.overrides]]
 filter = 'test(~package_tui::)'
 threads-required = 4
+
+# Every daemon-lifecycle case is wall-clock sensitive: a readiness deadline,
+# a startup-lock wait, or a reply budget measured against real daemon and
+# client processes on the live socket/pty surface.  Run at the default budget
+# the whole suite missed those deadlines at once -- 29 of 33 cases failed at a
+# uniform 60s, all passing serially and in isolation on the same machine.  Run
+# it one case at a time.  This costs one bootstrap, not one per case: the
+# fixture provisions the shared runtime image itself (neomacs-infra), and
+# every later case reuses it.
+[[profile.default.overrides]]
+filter = 'binary_id(neomacs::daemon_lifecycle)'
+threads-required = "num-test-threads"

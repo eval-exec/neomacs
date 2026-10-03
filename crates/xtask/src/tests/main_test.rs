@@ -1,6 +1,5 @@
 use crate::production_capabilities::CargoCapability;
 use crate::*;
-use flate2::{Compression, write::GzEncoder};
 
 /// `perf` and `pin-reference` are launched, not linked, and the launch must
 /// not go through fresh-build's option parser (which would demand a profile).
@@ -2061,17 +2060,6 @@ fn resolve_program_on_path_uses_pathext_before_extensionless_files() {
         resolve_program_on_path("gunzip", Some(bin.as_os_str()), Path::new("/unused")).unwrap(),
         gunzip_exe
     );
-}
-
-#[test]
-fn read_gzip_file_decodes_charset_generation_inputs_without_external_tools() {
-    let tempdir = tempdir();
-    let gzip_path = tempdir.join("input.gz");
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(b"charset data\n").unwrap();
-    fs::write(&gzip_path, encoder.finish().unwrap()).unwrap();
-
-    assert_eq!(read_gzip_file(&gzip_path).unwrap(), b"charset data\n");
 }
 
 #[test]

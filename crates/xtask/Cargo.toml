@@ -7,7 +7,6 @@ license.workspace = true
 publish = false
 
 [dependencies]
-flate2.workspace = true
 rayon.workspace = true
 resvg.workspace = true
 sha2.workspace = true

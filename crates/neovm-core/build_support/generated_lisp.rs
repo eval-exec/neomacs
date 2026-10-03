@@ -62,10 +62,13 @@
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 /// GNU's `$(AWK)`.  `configure` refuses a tree without one, and so does this.
 pub const AWK_PROGRAM: &str = "awk";
+
+/// GNU's `gunzip`, which its one gzipped charset rule pipes into awk.
+pub const GUNZIP_PROGRAM: &str = "gunzip";
 
 /// GNU's directory of Unicode inputs and the awk scripts that read them.
 ///
@@ -115,7 +118,72 @@ pub const AWK_GENERATED_UNICODE_LISP: &[AwkGeneratedLisp] = &[
     },
 ];
 
-/// The two trees a recipe touches, named rather than implied.
+/// GNU's directory of charset translation awk scripts (`${srcdir}` in
+/// `admin/charsets/Makefile.in`).
+pub const GNU_CHARSETS_DIR: &str = "admin/charsets";
+
+/// GNU's `${charsetdir}`: the (committed) charset map data those scripts read.
+pub const ETC_CHARSETS_DIR: &str = "etc/charsets";
+
+/// Where a charset recipe's awk script reads its data.
+///
+/// The unidata rules hand awk their inputs as command-line arguments; GNU's
+/// charset rules redirect a file into awk's **stdin**, and one of them
+/// gunzips first (`admin/charsets/Makefile.in:213-217`).  A row cannot express
+/// one as the other, so the difference is part of the row.
+#[derive(Clone, Copy, Debug)]
+pub enum CharsetInput {
+    /// `${charsetdir}/<name>`, redirected into awk's stdin (`< $<`).
+    Map { name: &'static str },
+    /// `${GLIBC_CHARMAPS}/<name>` (under `admin/charsets/glibc/`), gunzipped
+    /// into awk's stdin (`gunzip -c $< | $(AWK) …`).
+    GzippedGlibcCharmap { name: &'static str },
+}
+
+/// One charset-translation Lisp file this build generates by running one of
+/// GNU's own `admin/charsets` awk scripts.  Same doctrine as
+/// [`AwkGeneratedLisp`]: every field is a path GNU already has, and there is
+/// no field for "produced some other way".
+pub struct CharsetTranslationLisp {
+    /// The generated file, relative to `lisp/` (`${lispintdir}`).
+    pub output: &'static str,
+    /// GNU's awk script, relative to [`GNU_CHARSETS_DIR`].
+    pub script: &'static str,
+    /// Where awk's stdin comes from.
+    pub input: CharsetInput,
+    /// The line in GNU's Makefile this row transcribes.
+    pub gnu_rule: &'static str,
+}
+
+/// The charset-translation recipes, in GNU's Makefile order.
+///
+/// These two files are why a checkout with no build output cannot bootstrap:
+/// `lisp/loadup.el` loads both with **no** noerror flag
+/// (`(load "international/cp51932")`, `(load "international/eucjp-ms")`,
+/// loadup.el:231-232), so a tree that lacks them fails `loadup` -- and with it
+/// every daemon-lifecycle test, whose fixture dumps its runtime image from
+/// exactly that loadup.  They are generated here, in the build, so that a
+/// fresh `cargo build` produces a bootable tree the way GNU's `make` does.
+pub const AWK_GENERATED_CHARSET_LISP: &[CharsetTranslationLisp] = &[
+    CharsetTranslationLisp {
+        output: "international/cp51932.el",
+        script: "cp51932.awk",
+        input: CharsetInput::Map {
+            name: "CP932-2BYTE.map",
+        },
+        gnu_rule: "admin/charsets/Makefile.in:213-214",
+    },
+    CharsetTranslationLisp {
+        output: "international/eucjp-ms.el",
+        script: "eucjp-ms.awk",
+        input: CharsetInput::GzippedGlibcCharmap {
+            name: "EUC-JP-MS.gz",
+        },
+        gnu_rule: "admin/charsets/Makefile.in:216-217",
+    },
+];
+
+/// The trees a recipe touches, named rather than implied.
 ///
 /// They are not always the same repository: `cargo xtask fresh-build` reads
 /// GNU's scripts and data from the checkout (`repo_root/admin/unidata`) but
@@ -126,24 +194,22 @@ pub const AWK_GENERATED_UNICODE_LISP: &[AwkGeneratedLisp] = &[
 pub struct GeneratedLispRoots {
     /// GNU's `admin/unidata`: the awk scripts and the Unicode data.
     pub unidata_dir: PathBuf,
+    /// GNU's `admin/charsets`: `cp51932.awk`, `eucjp-ms.awk`, `glibc/`.
+    pub charsets_dir: PathBuf,
+    /// GNU's `${charsetdir}`: the committed charset map data.
+    pub etc_charsets_dir: PathBuf,
     /// The `lisp/` tree the outputs belong in.
     pub lisp_root: PathBuf,
 }
 
 impl GeneratedLispRoots {
-    /// The ordinary case: both trees are this checkout.
+    /// The ordinary case: every tree is this checkout.
     pub fn of_project(project_root: &Path) -> Self {
         Self {
             unidata_dir: project_root.join(GNU_UNIDATA_DIR),
+            charsets_dir: project_root.join(GNU_CHARSETS_DIR),
+            etc_charsets_dir: project_root.join(ETC_CHARSETS_DIR),
             lisp_root: project_root.join(GENERATED_LISP_DIR),
-        }
-    }
-
-    /// A build that reads GNU's data from one tree and writes into another.
-    pub fn new(unidata_dir: impl Into<PathBuf>, lisp_root: impl Into<PathBuf>) -> Self {
-        Self {
-            unidata_dir: unidata_dir.into(),
-            lisp_root: lisp_root.into(),
         }
     }
 }
@@ -255,6 +321,153 @@ impl AwkGeneratedLisp {
     /// identical file would move its mtime past the `.elc` compiled from it,
     /// and ledger 202's refusal would -- correctly -- stop every in-process
     /// test in the tree.
+    pub fn regenerate(&self, roots: &GeneratedLispRoots) -> Result<Regenerated, String> {
+        let generated = self.generate(roots)?;
+        let output = self.output_path(roots);
+        if std::fs::read(&output).is_ok_and(|current| current == generated) {
+            return Ok(Regenerated::Unchanged);
+        }
+        if let Some(parent) = output.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|err| format!("create {}: {err}", parent.display()))?;
+        }
+        std::fs::write(&output, &generated)
+            .map_err(|err| format!("write {}: {err}", output.display()))?;
+        Ok(Regenerated::Written)
+    }
+}
+
+impl CharsetTranslationLisp {
+    /// The generated file's absolute path.
+    pub fn output_path(&self, roots: &GeneratedLispRoots) -> PathBuf {
+        roots.lisp_root.join(self.output)
+    }
+
+    /// GNU's awk script's absolute path.
+    pub fn script_path(&self, roots: &GeneratedLispRoots) -> PathBuf {
+        roots.charsets_dir.join(self.script)
+    }
+
+    /// The file awk's stdin comes from.
+    pub fn input_path(&self, roots: &GeneratedLispRoots) -> PathBuf {
+        match self.input {
+            CharsetInput::Map { name } => roots.etc_charsets_dir.join(name),
+            CharsetInput::GzippedGlibcCharmap { name } => {
+                roots.charsets_dir.join("glibc").join(name)
+            }
+        }
+    }
+
+    /// Every file the recipe reads: the script first, then its input.
+    pub fn dependencies(&self, roots: &GeneratedLispRoots) -> Vec<PathBuf> {
+        vec![self.script_path(roots), self.input_path(roots)]
+    }
+
+    /// The command line this recipe runs, for a build log or a `--dry-run`.
+    pub fn command_line(&self, roots: &GeneratedLispRoots) -> String {
+        let source = match self.input {
+            CharsetInput::Map { .. } => format!("< {}", self.input_path(roots).display()),
+            CharsetInput::GzippedGlibcCharmap { .. } => {
+                format!("{GUNZIP_PROGRAM} -c {} |", self.input_path(roots).display())
+            }
+        };
+        format!(
+            "{source} {AWK_PROGRAM} -f {} > {}",
+            self.script_path(roots).display(),
+            self.output_path(roots).display()
+        )
+    }
+
+    /// Run GNU's rule exactly as written, and return what its awk printed.
+    ///
+    /// The gzipped input is decompressed by GNU's own `gunzip -c`, spawned as
+    /// the first process of the pipeline GNU's rule spells; running the same
+    /// pipeline keeps the bytes a function of GNU's tools rather than of a
+    /// Rust decompressor's, which is the doctrine [`AwkGeneratedLisp`] records
+    /// one table up.
+    pub fn generate(&self, roots: &GeneratedLispRoots) -> Result<Vec<u8>, String> {
+        let script = self.script_path(roots);
+        let input = self.input_path(roots);
+        for path in [&script, &input] {
+            if !path.is_file() {
+                return Err(format!(
+                    "missing generator input {} (GNU {})",
+                    path.display(),
+                    self.gnu_rule
+                ));
+            }
+        }
+
+        let mut gunzip = match self.input {
+            CharsetInput::Map { .. } => None,
+            CharsetInput::GzippedGlibcCharmap { .. } => Some(
+                Command::new(GUNZIP_PROGRAM)
+                    .arg("-c")
+                    .arg(&input)
+                    .stdout(Stdio::piped())
+                    .spawn()
+                    .map_err(|err| {
+                        format!(
+                            "could not run `{GUNZIP_PROGRAM} -c` for {}: {err}.  GNU's rule \
+                             ({}) pipes gunzip into awk, so its build requires one too",
+                            self.output, self.gnu_rule,
+                        )
+                    })?,
+            ),
+        };
+
+        let mut command = Command::new(AWK_PROGRAM);
+        command.arg("-f").arg(&script).stdout(Stdio::piped());
+        match gunzip.as_mut().and_then(|child| child.stdout.take()) {
+            Some(decompressed) => {
+                command.stdin(Stdio::from(decompressed));
+            }
+            None => {
+                let file = std::fs::File::open(&input)
+                    .map_err(|err| format!("open {}: {err}", input.display()))?;
+                command.stdin(Stdio::from(file));
+            }
+        }
+
+        let output = command.output().map_err(|err| {
+            format!(
+                "could not run `{AWK_PROGRAM}` for {}: {err}.  GNU's build \
+                 requires awk too ({}); install one (gawk) and rebuild",
+                self.output, self.gnu_rule,
+            )
+        })?;
+        // awk's status first: when awk dies early, gunzip dies of the broken
+        // pipe behind it, and that SIGPIPE is a consequence, not the cause.
+        if !output.status.success() {
+            return Err(format!(
+                "`{AWK_PROGRAM} -f {}` exited {}: {}",
+                script.display(),
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim(),
+            ));
+        }
+        if let Some(mut child) = gunzip {
+            let status = child
+                .wait()
+                .map_err(|err| format!("waiting for {GUNZIP_PROGRAM}: {err}"))?;
+            if !status.success() {
+                return Err(format!(
+                    "`{GUNZIP_PROGRAM} -c {}` exited {status}",
+                    input.display()
+                ));
+            }
+        }
+        if output.stdout.is_empty() {
+            return Err(format!(
+                "`{AWK_PROGRAM} -f {}` printed nothing; {} would be empty",
+                script.display(),
+                self.output,
+            ));
+        }
+        Ok(output.stdout)
+    }
+
+    /// Generate, and write only if the bytes differ ([`AwkGeneratedLisp::regenerate`]).
     pub fn regenerate(&self, roots: &GeneratedLispRoots) -> Result<Regenerated, String> {
         let generated = self.generate(roots)?;
         let output = self.output_path(roots);

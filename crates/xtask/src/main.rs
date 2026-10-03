@@ -1,4 +1,3 @@
-mod daemon_lifecycle;
 mod dependency_coherence;
 mod gc_stress;
 mod production_capabilities;
@@ -23,7 +22,6 @@ mod generated_lisp;
 #[path = "../../neovm-core/build_support/compile_main_rule.rs"]
 mod compile_main_rule;
 
-use flate2::read::GzDecoder;
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -35,7 +33,7 @@ use std::fs;
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write as IoWrite};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{Command, ExitStatus};
 use std::time::Instant;
 
 use production_capabilities::ProductionCapabilities;
@@ -438,13 +436,6 @@ fn try_main() -> Result<()> {
 
 fn run_xtask(repo_root: PathBuf, args: impl IntoIterator<Item = OsString>) -> Result<()> {
     let mut args = args.into_iter().peekable();
-    if matches!(
-        args.peek().and_then(|arg| arg.to_str()),
-        Some("test-daemon-lifecycle")
-    ) {
-        args.next();
-        return daemon_lifecycle::run(repo_root, args);
-    }
     if matches!(
         args.peek().and_then(|arg| arg.to_str()),
         Some("check-dependency-coherence")
@@ -1547,36 +1538,36 @@ fn run_charset_translation_generation(
     options: &FreshBuildOptions,
     paths: &PipelinePaths,
 ) -> Result<()> {
-    let mut generated = 0usize;
+    let roots = charset_lisp_roots(paths);
+    let mut announced = false;
 
-    let cp51932_output = paths.lisp_root.join("international/cp51932.el");
-    let cp51932_script = paths.admin_charsets_root.join("cp51932.awk");
-    let cp932_map = paths.etc_root.join("charsets/CP932-2BYTE.map");
-    let cp51932_deps = vec![cp51932_script.clone(), cp932_map.clone()];
-    ensure_generation_input(&cp51932_script)?;
-    ensure_generation_input(&cp932_map)?;
-    if generated_file_needs_rebuild(&cp51932_output, &cp51932_deps) {
-        if generated == 0 {
+    // The mtime gate this loop used to carry is gone for the same reason the
+    // unidata one is: `neovm-core/build.rs` now runs these recipes too, and a
+    // gate that asks "is the output newer than the inputs" lets whichever
+    // producer ran first win.  Running GNU's awk unconditionally and writing
+    // only when the bytes differ is strictly stronger.
+    for recipe in generated_lisp::AWK_GENERATED_CHARSET_LISP {
+        ensure_generation_inputs(&recipe.dependencies(&roots))?;
+        if !announced {
             print_synthetic_step("generate charset translation Lisp (GNU src/admin charsets)");
+            announced = true;
         }
-        run_awk_stdin_to_output(options, &cp51932_script, &cp932_map, &cp51932_output)?;
-        generated += 1;
-    }
-
-    let eucjp_output = paths.lisp_root.join("international/eucjp-ms.el");
-    let eucjp_script = paths.admin_charsets_root.join("eucjp-ms.awk");
-    let eucjp_charmap = paths.admin_charsets_root.join("glibc/EUC-JP-MS.gz");
-    let eucjp_deps = vec![eucjp_script.clone(), eucjp_charmap.clone()];
-    ensure_generation_input(&eucjp_script)?;
-    ensure_generation_input(&eucjp_charmap)?;
-    if generated_file_needs_rebuild(&eucjp_output, &eucjp_deps) {
-        if generated == 0 {
-            print_synthetic_step("generate charset translation Lisp (GNU src/admin charsets)");
+        println!("  + {}", recipe.command_line(&roots));
+        if options.dry_run {
+            continue;
         }
-        run_gunzip_awk_to_output(options, &eucjp_script, &eucjp_charmap, &eucjp_output)?;
+        recipe.regenerate(&roots)?;
     }
-
     Ok(())
+}
+
+fn charset_lisp_roots(paths: &PipelinePaths) -> generated_lisp::GeneratedLispRoots {
+    generated_lisp::GeneratedLispRoots {
+        unidata_dir: paths.admin_unidata_root.clone(),
+        charsets_dir: paths.admin_charsets_root.clone(),
+        etc_charsets_dir: paths.etc_root.join("charsets"),
+        lisp_root: paths.lisp_root.clone(),
+    }
 }
 
 /// Run GNU's awk-generated Lisp recipes, from the one table
@@ -1597,10 +1588,12 @@ fn run_charset_translation_generation(
 /// an mtime comparison: an identical rewrite would move the `.el` past the
 /// `.elc` compiled from it, which is the staleness this whole family is about.
 fn run_unidata_awk_generation(options: &FreshBuildOptions, paths: &PipelinePaths) -> Result<()> {
-    let roots = generated_lisp::GeneratedLispRoots::new(
-        paths.admin_unidata_root.clone(),
-        paths.lisp_root.clone(),
-    );
+    let roots = generated_lisp::GeneratedLispRoots {
+        unidata_dir: paths.admin_unidata_root.clone(),
+        charsets_dir: paths.admin_charsets_root.clone(),
+        etc_charsets_dir: paths.etc_root.join("charsets"),
+        lisp_root: paths.lisp_root.clone(),
+    };
     let mut announced = false;
 
     for recipe in generated_lisp::AWK_GENERATED_UNICODE_LISP {
@@ -2534,76 +2527,6 @@ fn make_output_writable(options: &FreshBuildOptions, output: &Path) -> Result<()
     Ok(())
 }
 
-fn run_awk_stdin_to_output(
-    options: &FreshBuildOptions,
-    script: &Path,
-    input: &Path,
-    output: &Path,
-) -> Result<()> {
-    ensure_output_parent(options, output)?;
-    make_output_writable(options, output)?;
-    let awk = tool_program("awk");
-    let args = vec![OsString::from("-f"), script.as_os_str().to_os_string()];
-    print_redirected_command(awk.as_os_str(), &args, Some(input), output);
-    if options.dry_run {
-        return Ok(());
-    }
-
-    let input_file = fs::File::open(input)?;
-    let output_file = fs::File::create(output)?;
-    let status = Command::new(&awk)
-        .args(args.iter().map(OsString::as_os_str))
-        .stdin(input_file)
-        .stdout(output_file)
-        .status()?;
-    if !status.success() {
-        return Err(redirected_command_failure(&awk, &args, Some(input), output, status).into());
-    }
-    Ok(())
-}
-
-fn run_gunzip_awk_to_output(
-    options: &FreshBuildOptions,
-    script: &Path,
-    input: &Path,
-    output: &Path,
-) -> Result<()> {
-    ensure_output_parent(options, output)?;
-    make_output_writable(options, output)?;
-    let awk = tool_program("awk");
-    print_gzip_decompress_command(input);
-    let awk_args = vec![OsString::from("-f"), script.as_os_str().to_os_string()];
-    print_redirected_command(awk.as_os_str(), &awk_args, None, output);
-    if options.dry_run {
-        return Ok(());
-    }
-
-    let decoded = read_gzip_file(input)?;
-
-    let output_file = fs::File::create(output)?;
-    let mut child = Command::new(&awk)
-        .args(awk_args.iter().map(OsString::as_os_str))
-        .stdin(Stdio::piped())
-        .stdout(output_file)
-        .spawn()?;
-    child
-        .stdin
-        .take()
-        .expect("awk child stdin should be piped")
-        .write_all(&decoded)?;
-    let status = child.wait()?;
-    if !status.success() {
-        return Err(redirected_command_failure(&awk, &awk_args, None, output, status).into());
-    }
-    Ok(())
-}
-
-fn read_gzip_file(path: &Path) -> Result<Vec<u8>> {
-    let mut decoded = Vec::new();
-    GzDecoder::new(fs::File::open(path)?).read_to_end(&mut decoded)?;
-    Ok(decoded)
-}
-
 fn run_sed_unicode_data_to_output(
     options: &FreshBuildOptions,
     input: &Path,
@@ -3509,10 +3432,6 @@ fn print_command(program: &OsStr, args: &[OsString]) {
         rendered.push_str(&shell_quote(arg.as_os_str()));
     }
     println!("{rendered}");
-}
-
-fn print_gzip_decompress_command(input: &Path) {
-    println!("+ decompress gzip {}", shell_quote(input.as_os_str()));
 }
 
 fn print_redirected_command(
@@ -4655,7 +4574,6 @@ fn print_usage() {
 fn usage_text() -> &'static str {
     "\
 Usage: cargo xtask [fresh-build] (--release | --profile NAME) [--bin-dir DIR] [--runtime-root DIR] [--dry-run] [--low-memory|--jobs N] [--native-comp|--no-native-comp] [--skip-build] [--no-byte-compile] [--aot-preload|--no-aot-preload]
-       cargo xtask test-daemon-lifecycle
        cargo xtask check-dependency-coherence
        cargo xtask render-window-icon --out-dir DIR [--source PATH]
        cargo xtask perf list
