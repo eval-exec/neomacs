@@ -83,6 +83,7 @@ pub(crate) struct OptCensus {
     pub dead_leaders: usize,
     pub critical_edges: usize,
     pub refinements: usize,
+    pub fold: Option<super::passes::fold::FoldStats>,
 }
 
 /// One owned function. Constants carry source-pool indices in `Const` and
@@ -315,6 +316,7 @@ pub(crate) enum Opcode {
     EnvConst(u32),
     Arg(u16),
     OsrSlot(u16),
+    BoolConst(bool),
     TagFix,
     UntagFix,
     UnboxF64,
@@ -502,6 +504,9 @@ impl fmt::Display for Func {
             "func {:?} entry={} prefix={} osr={:?}",
             self.arity, self.entry, self.dynamic_prefix, self.osr
         )?;
+        if let Some(fold) = &self.census.fold {
+            writeln!(f, "  fold {fold:?}")?;
+        }
         for (i, constant) in self.consts.iter().enumerate() {
             writeln!(f, "  const{k} = 0x{bits:016x}", k = i, bits = constant.0)?;
         }

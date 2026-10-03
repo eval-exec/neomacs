@@ -327,6 +327,8 @@ pub(crate) struct LeafRow {
     pub(crate) regalloc: RegallocChoice,
     pub(crate) clif_insts: u32,
     pub(crate) obs: LeafObsSnapshot,
+    /// Immutable compiler census, copied only while collecting exit rows.
+    pub(crate) opt: super::compile::opt_census::OptStats,
 }
 
 impl LeafRow {
@@ -339,6 +341,11 @@ impl LeafRow {
             regalloc: leaf.regalloc,
             clif_insts: leaf.clif_insts,
             obs: leaf.obs.snapshot(),
+            opt: if leaf.tier() == LeafTier::Opt {
+                super::compile::opt_census::snapshot(&leaf.obs)
+            } else {
+                super::compile::opt_census::OptStats::default()
+            },
         }
     }
 }

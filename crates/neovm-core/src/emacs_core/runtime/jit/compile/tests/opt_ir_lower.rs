@@ -154,6 +154,169 @@ fn clif_fields(expression: &str) -> Vec<&str> {
         .collect()
 }
 
+#[test]
+fn opt_ir_lower_proven_cons_read_keeps_exact_failed_guard_frame() {
+    let _settings = Settings::enter();
+    force_opt_passes_for_test(Some(OptPasses {
+        fold: true,
+        ..OptPasses::default()
+    }));
+    let mut ctx = Context::new();
+    for (op, direct) in [
+        (Op::Car, ir::Opcode::LoadCar),
+        (Op::Cdr, ir::Opcode::LoadCdr),
+    ] {
+        let f = function(vec![Op::StackRef(0), op.clone(), Op::Return], vec![], 1);
+        let mut rewritten = plan(&f);
+        let read = opaque(&rewritten, &op);
+        let checked = rewritten.insts[read].args[0];
+        let ir::ValueDef::Inst(check) = rewritten.values[checked.index()].def else {
+            panic!("checked input")
+        };
+        rewritten.insts[check.index()].op = ir::Opcode::CheckType(TypeSet::CONS);
+        rewritten.values[checked.index()].ty = TypeSet::CONS;
+        rewritten.insts[read].op = direct;
+        rewritten.insts[read].eff = crate::emacs_core::jit::opt::mem::Effects::READ_HEAP;
+        let leaf = lower(&f, &rewritten);
+        let cell = Value::cons(Value::fixnum(17), Value::fixnum(29));
+        let _roots = Roots::new(&[cell]);
+        let expected = tier0(&mut ctx, &f, &[cell]);
+        assert_eq!(native(&mut ctx, &leaf, &[cell]), expected);
+        for wrong in [Value::NIL, Value::fixnum(3)] {
+            let NativeRun::DeoptAt(frame) =
+                leaf.call(&mut ctx as *mut Context as *mut u8, &[wrong])
+            else {
+                panic!("failed CONS speculation must deopt")
+            };
+            assert_eq!(frame.pc, 1);
+            assert_eq!(frame.stack.len(), 2);
+            assert!(frame.stack.iter().all(|value| *value == wrong));
+        }
+    }
+}
+
+#[test]
+fn opt_ir_lower_typed_cons_read_roots_compiler_only_result_through_gc() {
+    let _settings = Settings::enter();
+    force_opt_passes_for_test(Some(OptPasses {
+        fold: true,
+        ..OptPasses::default()
+    }));
+    let mut ctx = Context::new();
+    for (read, direct, mut ops) in [
+        (
+            Op::Car,
+            ir::Opcode::LoadCar,
+            vec![
+                Op::Constant(0),
+                Op::Constant(1),
+                Op::Cons,
+                Op::Nil,
+                Op::Cons,
+            ],
+        ),
+        (
+            Op::Cdr,
+            ir::Opcode::LoadCdr,
+            vec![
+                Op::Nil,
+                Op::Constant(0),
+                Op::Constant(1),
+                Op::Cons,
+                Op::Cons,
+            ],
+        ),
+    ] {
+        ops.extend([
+            read.clone(),
+            Op::Pop,
+            Op::Constant(2),
+            Op::Call(0),
+            Op::Pop,
+            Op::Nil,
+            Op::Return,
+        ]);
+        let f = function(
+            ops,
+            vec![
+                Value::fixnum(7),
+                Value::fixnum(9),
+                Value::symbol("garbage-collect"),
+            ],
+            0,
+        );
+        let mut changed = plan(&f);
+        let index = opaque(&changed, &read);
+        let loaded = changed.insts[index].result.unwrap();
+        let checked = changed.insts[index].args[0];
+        let ir::ValueDef::Inst(check) = changed.values[checked.index()].def else {
+            panic!("checked cons")
+        };
+        changed.insts[check.index()].op = ir::Opcode::CheckType(TypeSet::CONS);
+        changed.values[checked.index()].ty = TypeSet::CONS;
+        changed.insts[index].op = direct;
+        changed.insts[index].eff = crate::emacs_core::jit::opt::mem::Effects::READ_HEAP;
+        changed
+            .blocks
+            .iter_mut()
+            .find(|b| matches!(b.term, ir::Term::Return(_)))
+            .unwrap()
+            .term = ir::Term::Return(loaded);
+        let expected = crate::emacs_core::print::print_value(&reference(&mut ctx, &changed, &[]));
+        let leaf = lower(&f, &changed);
+        let collections = ctx.tagged_heap.gc_collections();
+        let actual = native(&mut ctx, &leaf, &[]);
+        assert_eq!(crate::emacs_core::print::print_value(&actual), expected);
+        assert!(ctx.tagged_heap.gc_collections() > collections);
+        assert_eq!(ctx.jit_root_stack_top, 0);
+    }
+}
+
+#[test]
+fn opt_ir_lower_bool_constant_materializes_gnu_t_nil_before_return() {
+    let _settings = Settings::enter();
+    force_opt_passes_for_test(Some(OptPasses {
+        fold: true,
+        ..OptPasses::default()
+    }));
+    let mut ctx = Context::new();
+    let f = function(vec![Op::True, Op::Return], vec![], 0);
+    for flag in [false, true] {
+        let mut changed = plan(&f);
+        let index = changed
+            .insts
+            .iter()
+            .position(|i| matches!(i.op, ir::Opcode::Const(_)))
+            .unwrap();
+        let tagged_result = changed.insts[index].result.unwrap();
+        let boolean = ir::Value(changed.values.len() as u32);
+        changed.values.push(ir::ValueData {
+            ty: TypeSet::BOOLEAN,
+            rep: ir::Rep::Bool,
+            def: ir::ValueDef::Inst(ir::Inst(index as u32)),
+        });
+        changed.insts[index].op = ir::Opcode::BoolConst(flag);
+        changed.insts[index].result = Some(boolean);
+        let conversion = ir::Inst(changed.insts.len() as u32);
+        changed.values[tagged_result.index()].def = ir::ValueDef::Inst(conversion);
+        changed.values[tagged_result.index()].ty = if flag { TypeSet::T } else { TypeSet::NIL };
+        let mut inst = changed.insts[index].clone();
+        inst.op = ir::Opcode::BoolToLisp;
+        inst.args = vec![boolean];
+        inst.result = Some(tagged_result);
+        changed.insts.push(inst);
+        for block in &mut changed.blocks {
+            if let Some(position) = block.insts.iter().position(|id| id.index() == index) {
+                block.insts.insert(position + 1, conversion);
+                break;
+            }
+        }
+        let expected = reference(&mut ctx, &changed, &[]);
+        assert_eq!(native(&mut ctx, &lower(&f, &changed), &[]), expected);
+        assert!(expected.is_nil() || expected.is_t());
+    }
+}
+
 // Require the nil test to consume the retagged arithmetic result itself. A
 // mere count of arithmetic/retag operations could pass on cold-frame spills
 // while the successful arithmetic result was still dead before its branch.

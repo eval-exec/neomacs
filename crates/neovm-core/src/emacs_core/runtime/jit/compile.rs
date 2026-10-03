@@ -3543,6 +3543,9 @@ fn lower_leaf_full_osr_with_plan_impl(
     // the address of `obs.entries`, and a profiling leaf's code the address
     // of its countdown (`tier2`; an OSR leaf never profiles).
     let mut obs = LeafObs::new(super::stats::entry_counting_enabled());
+    if let Some(func) = opt.as_ref() {
+        opt_census::attach(&obs, &func.census);
+    }
     if osr_pc.is_none() {
         obs.t2 = super::tier2::cells_for_build();
     }
@@ -3795,6 +3798,7 @@ pub(crate) fn build_baseline_leaf_object<S: LeafSink>(
 
 mod leaf_builder;
 pub(crate) mod opt_backend;
+pub(crate) mod opt_census;
 mod opt_emission;
 use leaf_builder::build_leaf_fn;
 
@@ -3995,6 +3999,10 @@ mod opt_admission_tests;
 #[cfg(test)]
 #[path = "compile/tests/opt_ir_lower.rs"]
 mod opt_ir_lower_tests;
+
+#[cfg(test)]
+#[path = "compile/tests/opt_fold_select.rs"]
+mod opt_fold_select_tests;
 
 #[cfg(test)]
 #[path = "compile/tests/opt_passes.rs"]

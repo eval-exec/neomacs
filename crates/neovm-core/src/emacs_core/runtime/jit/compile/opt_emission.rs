@@ -6,6 +6,9 @@
 use super::*;
 use crate::emacs_core::jit::opt::{ir, types::TypeSet};
 
+#[path = "opt_pass_emission.rs"]
+mod pass_emission;
+
 type RuntimeValue = (ClifValue, SlotRep);
 type LocalValues = HashMap<ir::Value, RuntimeValue>;
 
@@ -515,7 +518,9 @@ fn guard_condition(
     }
     if ty.contains(TypeKind::Fixnum) {
         let mut test = lowering::fixnum_tag_test(ctx.fb, word);
-        if let Some(range) = ty.range() {
+        if let Some(range) = ty.range()
+            && !(jit_opt_passes().fold && range == crate::emacs_core::jit::opt::types::Range::FULL)
+        {
             let raw = lowering::sshr_imm_p(ctx.fb, word, FIXNUM_SHIFT as i64);
             let lo = lowering::icmp_imm_p(ctx.fb, IntCC::SignedGreaterThanOrEqual, raw, range.lo);
             let hi = lowering::icmp_imm_p(ctx.fb, IntCC::SignedLessThanOrEqual, raw, range.hi);
@@ -842,6 +847,16 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
                         &mut pending,
                         &constants,
                     )?
+                }
+                ir::Opcode::BoolConst(_)
+                | ir::Opcode::BoolToLisp
+                | ir::Opcode::TypeTest(_)
+                | ir::Opcode::Select
+                | ir::Opcode::LoadCar
+                | ir::Opcode::LoadCdr
+                    if jit_opt_passes().fold =>
+                {
+                    pass_emission::emit(&mut ctx, &mut local, inst)?
                 }
                 ir::Opcode::Opaque(op) => {
                     if matches!(

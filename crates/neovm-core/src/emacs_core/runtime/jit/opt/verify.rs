@@ -451,6 +451,10 @@ fn validate_inst(func: &Func, inst: Inst, data: &InstData) -> Result<(), VerifyE
         }
     };
     match &data.op {
+        Opcode::BoolConst(_) => {
+            args(0)?;
+            result_rep(Rep::Bool)?;
+        }
         Opcode::Const(index) | Opcode::EnvConst(index) => {
             args(0)?;
             if *index as usize >= func.consts.len()

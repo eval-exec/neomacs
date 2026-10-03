@@ -405,6 +405,7 @@ impl Evaluator<'_, '_> {
             .map(|&v| self.lisp(v))
             .collect::<Result<Vec<_>, _>>()?;
         let cell = match &inst.op {
+            Opcode::BoolConst(value) => Some(Cell::Bool(*value)),
             Opcode::Const(index) => Some(Cell::Lisp(
                 *self
                     .func

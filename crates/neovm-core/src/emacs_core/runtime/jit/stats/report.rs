@@ -46,6 +46,8 @@ pub(crate) struct LeafReportRow {
     pub(crate) mir: Option<Box<str>>,
     /// The tier spine's view of the leaf (`tier2`).
     pub(crate) t2: crate::emacs_core::jit::tier2::T2Snapshot,
+    /// Compiler counters only; empty for baseline and passes-disabled opt.
+    pub(crate) opt_fold: Option<Box<crate::emacs_core::jit::opt::passes::fold::FoldStats>>,
 }
 
 impl LeafReportRow {
@@ -475,7 +477,26 @@ impl FinalReport {
                 r.t2.polls_at_request,
             )
         });
-        leaf_rows.chain(t2_rows).collect()
+        // Twelve columns, distinct from compile rows and joined by source id,
+        // name and OSR entry. Missing rows mean the pass was not selected.
+        let opt_rows = self.leaves.iter().filter_map(|r| {
+            let c = r.opt_fold.as_ref()?;
+            let osr = r.osr_pc.map_or_else(|| "-".to_owned(), |pc| pc.to_string());
+            Some(format!(
+                "#opt-fold,{},{},{osr},{},{},{},{},{},{},{},{}\n",
+                r.id,
+                csv_field(r.name.as_deref().unwrap_or("-")),
+                c.guards_folded,
+                c.guards_narrowed,
+                c.constants_folded,
+                c.branches_folded,
+                c.threaded_edges,
+                c.cons_loads,
+                c.deopts,
+                usize::from(c.analysis_bailed),
+            ))
+        });
+        leaf_rows.chain(t2_rows).chain(opt_rows).collect()
     }
 }
 

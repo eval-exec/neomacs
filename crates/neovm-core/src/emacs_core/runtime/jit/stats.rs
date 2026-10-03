@@ -1070,6 +1070,7 @@ fn leaf_report_rows(
                 compile_us: row.obs.compile_us,
                 mir: row.obs.mir_verdict,
                 t2: row.obs.t2,
+                opt_fold: row.opt.opt_fold,
             }
         })
         .collect();

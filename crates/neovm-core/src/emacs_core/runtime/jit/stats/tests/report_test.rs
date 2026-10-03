@@ -209,6 +209,7 @@ fn leaf_row(id: u64, deopt_at: u64, deopt_rerun: u64) -> LeafReportRow {
         compile_us: 0,
         mir: Some("taken".into()),
         t2: Default::default(),
+        opt_fold: None,
     }
 }
 

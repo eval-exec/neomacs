@@ -66,7 +66,7 @@ pub(super) fn build_plan(
         depth: cfg.entry_depth[&pc],
         header: ir::Block(0),
     });
-    let func = build::build(build::BuildInput {
+    let mut func = build::build(build::BuildInput {
         ops,
         constants: &bits,
         cfg,
@@ -77,6 +77,14 @@ pub(super) fn build_plan(
     })?;
     if func.insts.len() > 20_000 {
         return Err(CompileError::UnsupportedOp("opt-budget:instructions"));
+    }
+    if jit_opt_passes().fold {
+        let stats = crate::emacs_core::jit::opt::passes::fold::run(&mut func).map_err(|error| {
+            tracing::debug!(?error, "opt fold pass refused a compilation");
+            CompileError::UnsupportedOp("opt-fold:verify")
+        })?;
+        tracing::debug!(target: "neovm_jit::opt", ?stats, "opt fold census");
+        func.census.fold = Some(stats);
     }
     func.verify().map_err(|error| {
         tracing::debug!(?error, "opt IR verifier refused a compilation");
