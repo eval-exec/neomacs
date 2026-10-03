@@ -7,6 +7,8 @@
 //! A completed single predecessor supplies its stack without parameters. Lazy
 //! block parameters stand in for other stack-slot reads, whose inputs sealing
 //! resolves before recursively removing trivial loop-invariant parameters.
+//! Repeated nonallocating literals reuse an earlier dominating SSA definition;
+//! this preserves their identity through invariant stack-slot transport.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -16,6 +18,7 @@ use super::types::TypeSet;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::jit::compile::{Cfg, CompileError, simple_effect};
 use crate::emacs_core::jit::inline::FusedBody;
+use crate::tagged::value::{FIXNUM_CHECK_MASK, FIXNUM_CHECK_VALUE, TAG_MASK, TAG_SYMBOL};
 
 /// Borrowed, immutable compiler input. `cfg` must be analyzed with the source
 /// function's GNU offset map before capturing constants as `ValueBits`.
@@ -49,6 +52,8 @@ struct Builder<'a> {
     source_blocks: usize,
     cfg_predecessors: Vec<usize>,
     cfg_successors: Vec<usize>,
+    literal_values: HashMap<ValueBits, Vec<(Block, Value)>>,
+    literal_dominance: Option<LiteralDominance>,
 }
 
 impl<'a> Builder<'a> {
@@ -183,6 +188,8 @@ impl<'a> Builder<'a> {
             source_blocks,
             cfg_predecessors,
             cfg_successors,
+            literal_values: HashMap::new(),
+            literal_dominance: None,
         };
         let mut initial = Vec::with_capacity(root_depth);
         for slot in 0..root_depth {
@@ -305,6 +312,27 @@ impl<'a> Builder<'a> {
         mem: AliasClass,
         frame: Option<FrameId>,
     ) -> Option<Value> {
+        // GNU Bconstant copies the exact pool object without allocating. Only
+        // static immediate bits participate: EnvConst is an instance load,
+        // and heap constants retain separate source definitions. This is SSA
+        // identity construction; no predicate, guard or branch is folded.
+        let literal = match op {
+            Opcode::Const(index)
+                if block.index() < self.source_blocks
+                    && index as usize >= self.input.dynamic_prefix =>
+            {
+                let bits = self.func.consts[index as usize];
+                (bits.0 & FIXNUM_CHECK_MASK as u64 == FIXNUM_CHECK_VALUE as u64
+                    || bits.0 & TAG_MASK as u64 == TAG_SYMBOL as u64)
+                    .then_some(bits)
+            }
+            _ => None,
+        };
+        if let Some(bits) = literal
+            && let Some(value) = self.reuse_literal(block, bits)
+        {
+            return Some(value);
+        }
         let inst = Inst(self.func.insts.len() as u32);
         let result = ty.map(|ty| {
             let value = Value(self.func.values.len() as u32);
@@ -329,7 +357,45 @@ impl<'a> Builder<'a> {
             pc: pc as u32,
         });
         self.func.blocks[block.index()].insts.push(inst);
+        if let (Some(bits), Some(value)) = (literal, result) {
+            self.literal_values
+                .entry(bits)
+                .or_default()
+                .push((block, value));
+        }
         result
+    }
+
+    fn reuse_literal(&mut self, block: Block, bits: ValueBits) -> Option<Value> {
+        let definitions = self.literal_values.get(&bits)?;
+        if let Some(&(_, value)) = definitions.iter().find(|&&(owner, _)| owner == block) {
+            // The builder emits a source block in instruction order.
+            return Some(value);
+        }
+        if self.literal_dominance.is_none() {
+            // Most functions need no cross-block literal reuse. Build the
+            // source CFG proof lazily; splitting its edges preserves dominance.
+            let mut graph = vec![Vec::new(); self.source_blocks + 1];
+            let entry_pc = self
+                .input
+                .osr
+                .as_ref()
+                .map_or(0, |osr| osr.entry_pc as usize);
+            graph[self.func.entry.index()].push(self.block_for[&entry_pc]);
+            for &leader in &self.leaders {
+                let source = self.block_for[&leader];
+                graph[source.index()] = successors(&self.input, leader)
+                    .expect("previously validated source successors")
+                    .into_iter()
+                    .map(|target| self.block_for[&target])
+                    .collect();
+            }
+            self.literal_dominance = Some(LiteralDominance::new(self.func.entry, &graph));
+        }
+        let dominance = self.literal_dominance.as_ref().expect("literal dominance");
+        self.literal_values[&bits]
+            .iter()
+            .find_map(|&(owner, value)| dominance.dominates(owner, block).then_some(value))
     }
 
     fn entry_stack(&mut self, block: Block) -> Vec<Value> {
@@ -1037,6 +1103,113 @@ impl<'a> Builder<'a> {
         for state in self.func.source_states.iter_mut().flatten() {
             state.frame = remap[state.frame.index()];
         }
+    }
+}
+
+/// Source-CFG dominance for nonallocating literal identities. Cooper idoms
+/// and DFS intervals use linear storage without whole dominator sets.
+/// Threading: compiler-owned Rust metadata; no Lisp state or shared caches.
+struct LiteralDominance {
+    enter: Vec<usize>,
+    exit: Vec<usize>,
+}
+
+impl LiteralDominance {
+    fn new(entry: Block, graph: &[Vec<Block>]) -> Self {
+        let mut preds = vec![Vec::new(); graph.len()];
+        for (source, targets) in graph.iter().enumerate() {
+            for &target in targets {
+                preds[target.index()].push(Block(source as u32));
+            }
+        }
+        let mut visited = vec![false; graph.len()];
+        let mut post = Vec::new();
+        let mut walk = vec![(entry, false)];
+        while let Some((block, exiting)) = walk.pop() {
+            if exiting {
+                post.push(block);
+                continue;
+            }
+            if std::mem::replace(&mut visited[block.index()], true) {
+                continue;
+            }
+            walk.push((block, true));
+            for &target in graph[block.index()].iter().rev() {
+                if !visited[target.index()] {
+                    walk.push((target, false));
+                }
+            }
+        }
+        post.reverse();
+        let mut order = vec![usize::MAX; graph.len()];
+        for (index, &block) in post.iter().enumerate() {
+            order[block.index()] = index;
+        }
+        let mut idom = vec![None; graph.len()];
+        idom[entry.index()] = Some(entry);
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for &block in post.iter().skip(1) {
+                let mut incoming = preds[block.index()]
+                    .iter()
+                    .copied()
+                    .filter(|parent| idom[parent.index()].is_some());
+                let Some(mut parent) = incoming.next() else {
+                    continue;
+                };
+                for mut other in incoming {
+                    while parent != other {
+                        while order[parent.index()] > order[other.index()] {
+                            parent = idom[parent.index()].expect("known predecessor");
+                        }
+                        while order[other.index()] > order[parent.index()] {
+                            other = idom[other.index()].expect("known predecessor");
+                        }
+                    }
+                }
+                if idom[block.index()] != Some(parent) {
+                    idom[block.index()] = Some(parent);
+                    changed = true;
+                }
+            }
+        }
+        let mut children = vec![Vec::new(); graph.len()];
+        for (index, parent) in idom.iter().enumerate() {
+            let block = Block(index as u32);
+            if let Some(parent) = *parent
+                && parent != block
+            {
+                children[parent.index()].push(block);
+            }
+        }
+        let mut enter = vec![usize::MAX; graph.len()];
+        let mut exit = vec![usize::MAX; graph.len()];
+        let mut walk = vec![(entry, false)];
+        let mut clock = 0;
+        while let Some((block, exiting)) = walk.pop() {
+            if exiting {
+                exit[block.index()] = clock;
+            } else {
+                enter[block.index()] = clock;
+                walk.push((block, true));
+                walk.extend(
+                    children[block.index()]
+                        .iter()
+                        .rev()
+                        .map(|&child| (child, false)),
+                );
+            }
+            clock += 1;
+        }
+        Self { enter, exit }
+    }
+
+    fn dominates(&self, definition: Block, block: Block) -> bool {
+        definition == block
+            || self.enter[definition.index()] != usize::MAX
+                && self.enter[definition.index()] <= self.enter[block.index()]
+                && self.exit[block.index()] <= self.exit[definition.index()]
     }
 }
 

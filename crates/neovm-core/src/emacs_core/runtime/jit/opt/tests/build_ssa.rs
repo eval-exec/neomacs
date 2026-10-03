@@ -208,6 +208,187 @@ fn opt_ssa_loop_prunes_invariant_argument_phi() {
     assert!(func.source_states[9].is_none());
 }
 
+fn reloaded_nil_loop_ops() -> [Op; 9] {
+    [
+        Op::Nil,
+        Op::StackRef(1),
+        Op::GotoIfNil(8),
+        Op::Nil,
+        Op::StackSet(1),
+        Op::Goto(1),
+        Op::Return,
+        Op::Return,
+        Op::Return,
+    ]
+}
+
+#[test]
+fn opt_ssa_loop_reloaded_nil_reuses_dominating_literal() {
+    let func = make(&reloaded_nil_loop_ops(), &[], one_arg());
+    let nil = func.source_states[0].as_ref().unwrap().post[1];
+    let header = func.source_states[1].as_ref().unwrap().block;
+    assert_eq!(func.entry_stacks[header.index()][1], nil);
+    assert_eq!(func.census.phis, 0, "both GNU stack slots are invariant");
+    let reload = func.source_states[3].as_ref().unwrap();
+    assert_eq!(reload.post.as_ref(), &[reload.pre[0], nil, nil]);
+    assert_eq!(func.frames[reload.frame.index()].stack, reload.pre);
+    assert_eq!(
+        func.insts
+            .iter()
+            .filter(|inst| matches!(inst.op, Opcode::Const(_)))
+            .count(),
+        1,
+        "the back edge reuses the dominating nil definition"
+    );
+    assert_eq!(
+        func.insts
+            .iter()
+            .filter(|inst| matches!(inst.op, Opcode::Poll))
+            .count(),
+        1,
+        "literal identity leaves GNU quit polling intact"
+    );
+    assert!(matches!(
+        func.blocks[header.index()].term,
+        Term::Branch { .. }
+    ));
+}
+
+#[test]
+fn opt_ssa_literal_identity_reuse_requires_dominance() {
+    let ops = [
+        Op::Constant(0),
+        Op::Pop,
+        Op::Dup,
+        Op::GotoIfNil(10),
+        Op::Constant(0),
+        Op::Pop,
+        Op::Nil,
+        Op::Goto(13),
+        Op::Return,
+        Op::Return,
+        Op::Constant(0),
+        Op::Pop,
+        Op::Nil,
+        Op::Return,
+    ];
+    let func = make(&ops, &[LispValue::fixnum(7)], one_arg());
+    let initial = *func.source_states[0].as_ref().unwrap().post.last().unwrap();
+    for pc in [4, 10] {
+        assert_eq!(
+            *func.source_states[pc]
+                .as_ref()
+                .unwrap()
+                .post
+                .last()
+                .unwrap(),
+            initial,
+            "the original literal dominates both branch arms"
+        );
+    }
+    let left_nil = *func.source_states[6].as_ref().unwrap().post.last().unwrap();
+    let right_nil = *func.source_states[12]
+        .as_ref()
+        .unwrap()
+        .post
+        .last()
+        .unwrap();
+    assert_ne!(
+        left_nil, right_nil,
+        "neither sibling's nil definition dominates the other"
+    );
+    let join = func.source_states[13].as_ref().unwrap().block;
+    assert_eq!(
+        func.blocks[join.index()].params.len(),
+        1,
+        "passes-off construction does not fold the equal-literal join"
+    );
+    assert_eq!(
+        func.insts
+            .iter()
+            .filter(|inst| matches!(inst.op, Opcode::Const(0)))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn opt_ssa_osr_reloaded_nil_preserves_unknown_snapshot_seed() {
+    let func = make_with(
+        &reloaded_nil_loop_ops(),
+        &[],
+        one_arg(),
+        0,
+        None,
+        None,
+        Some(OsrEntry {
+            entry_pc: 1,
+            depth: 2,
+            header: Block(0),
+        }),
+    );
+    assert!(func.source_states[0].is_none());
+    let seed = func.entry_stacks[func.entry.index()][1];
+    assert_eq!(func.values[seed.index()].ty, TypeSet::TOP);
+    assert_eq!(func.values[seed.index()].rep, Rep::Tagged);
+    let header = func.osr.as_ref().unwrap().header;
+    let carried = func.entry_stacks[header.index()][1];
+    let literal = *func.source_states[3].as_ref().unwrap().post.last().unwrap();
+    assert_ne!(carried, seed);
+    assert_ne!(carried, literal);
+    assert_eq!(func.values[carried.index()].ty, TypeSet::TOP);
+    assert_eq!(func.values[carried.index()].rep, Rep::Tagged);
+    assert_eq!(func.blocks[header.index()].params.as_slice(), &[carried]);
+    let branch = func.source_states[2].as_ref().unwrap();
+    assert_eq!(branch.pre[1], carried);
+    assert_eq!(func.frames[branch.frame.index()].stack[1], carried);
+}
+
+#[test]
+fn opt_ssa_literal_identity_reuse_excludes_environment_and_heap_constants() {
+    let func = make_with(
+        &[
+            Op::Constant(0),
+            Op::Pop,
+            Op::Constant(0),
+            Op::Pop,
+            Op::Constant(1),
+            Op::Pop,
+            Op::Constant(1),
+            Op::Return,
+        ],
+        &[
+            LispValue::NIL,
+            LispValue::cons(LispValue::NIL, LispValue::NIL),
+        ],
+        ParamShape::default(),
+        1,
+        None,
+        None,
+        None,
+    );
+    for (first, second) in [(0, 2), (4, 6)] {
+        assert_ne!(
+            func.source_states[first].as_ref().unwrap().post[0],
+            func.source_states[second].as_ref().unwrap().post[0]
+        );
+    }
+    assert_eq!(
+        func.insts
+            .iter()
+            .filter(|inst| matches!(inst.op, Opcode::EnvConst(0)))
+            .count(),
+        2
+    );
+    assert_eq!(
+        func.insts
+            .iter()
+            .filter(|inst| matches!(inst.op, Opcode::Const(1)))
+            .count(),
+        2
+    );
+}
+
 #[test]
 fn opt_ssa_refined_loop_argument_keeps_its_original_global_identity() {
     let func = make(
