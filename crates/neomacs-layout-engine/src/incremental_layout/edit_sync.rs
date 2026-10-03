@@ -37,16 +37,46 @@
 //! | `NEOMACS_LAYOUT_EDIT_SYNC` | `prove` | `prove`, `sync` | Synchronize the edit walk with unchanged rows below it. |
 //! | `NEOMACS_EDIT_SYNC_STILL` | `off` | `off`, `on` | Transfer synchronized geometry without remapping when its placement and visibility are unchanged. |
 //! | `NEOMACS_EDIT_SYNC_PROVE_FIRST` | `off` | `off`, `on` | Prefer a completely admitted bounded prove producer inside GNU sync; rejected proofs still use general sync. |
+//! | `NEOMACS_EDIT_SYNC_LAZY_PROOF` | `off` | `off`, `on` | Defer source proof until bounded fallback is possible in general Sync with ProveFirst off. |
 //! | `NEOMACS_EDIT_SYNC_SHIFT_SKIP` | `off` | `off`, `on` | Avoid synchronized-row shift provenance allocations when no row moved vertically. |
 //! | `NEOMACS_LAYOUT_SCROLL_BACK` | `on` | `off`, `on` | Synchronize backward scrolls with the retained body. |
 
-use super::{EditDamage, RetainedWindowMatrix};
+use super::{EditDamage, EditReplayPositions, RetainedWindowMatrix};
 use crate::types::LayoutCharPos0;
 use neomacs_display_protocol::glyph_matrix::{
     GlyphPointerOccurrenceIdentity, GlyphPointerSourceKind, GlyphRow, MatrixRow,
 };
 use neovm_core::buffer::position::LispCharPos1;
 use neovm_core::window::{DisplayPointSnapshot, DisplayRowSnapshot};
+
+/// Pure process-selector parser: absent, empty, invalid and nonUnicode are
+/// OFF. It reads no Lisp state and does not depend on an active mutator.
+#[inline]
+fn parse_lazy_proof(value: Option<&std::ffi::OsStr>) -> bool {
+    value
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "on" | "true" | "yes"
+            )
+        })
+}
+
+/// Process-wide immutable selector, published after initialization by
+/// OnceLock. Independent Lisp mutators read the same initialized boolean;
+/// test overrides contain only thread-owned numeric policy, never Lisp state.
+#[inline]
+pub(crate) fn lazy_proof_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(value) = super::lazy_proof_test_support::forced() {
+        return value;
+    }
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        parse_lazy_proof(std::env::var_os("NEOMACS_EDIT_SYNC_LAZY_PROOF").as_deref())
+    })
+}
 
 /// `NEOMACS_LAYOUT_EDIT_SYNC`: how an edit replay may reuse the rows below
 /// the edit.
@@ -678,11 +708,23 @@ pub(crate) fn sync_allowed(
 ///
 /// `body` is the retained body rows in matrix order; rows `[..first_dirty]`
 /// are reused verbatim by the caller.
+#[inline]
 pub(crate) fn plan(
     prev: &RetainedWindowMatrix,
     body: &[(usize, &MatrixRow)],
     first_dirty: usize,
     damage: EditDamage,
+) -> Option<EditSyncPlan> {
+    plan_positions(prev, body, first_dirty, damage.into())
+}
+
+/// Position-only synchronization. All borrowed rows belong to the caller's
+/// immutable retained matrix; no source proof or mutator state is consumed.
+pub(crate) fn plan_positions(
+    prev: &RetainedWindowMatrix,
+    body: &[(usize, &MatrixRow)],
+    first_dirty: usize,
+    damage: EditReplayPositions,
 ) -> Option<EditSyncPlan> {
     let delta = damage.delta();
     let dirty_start = damage.start();
@@ -746,3 +788,7 @@ pub(crate) fn plan(
 #[cfg(test)]
 #[path = "tests/edit_sync_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/edit_sync_lazy_proof_selector_test.rs"]
+mod lazy_proof_selector_tests;

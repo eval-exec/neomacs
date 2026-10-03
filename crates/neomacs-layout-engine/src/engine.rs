@@ -4193,102 +4193,166 @@ impl LayoutEngine {
             return None;
         };
         let delta = curr_key.buffer_size - prev.key.buffer_size;
-        // Below-reuse SAFETY GATE, part 1: every char in the dirty span is
-        // printable ASCII (graphic or space) or a newline — combined with
-        // edit_replay's monospace + width check this proves each span line
-        // still occupies exactly one row (no wrap), which is what makes the
-        // rows-below reuse (shift charpos, keep pixel_y) sound. Newlines are
-        // allowed because the span relays WHOLE rows: an existing newline is
-        // a row boundary inside the span (jit-lock's line region includes the
-        // trailing newline), and an INSERTED newline — which does change the
-        // row structure — makes the bounded walk miss its expected_walk
-        // end-charpos contract and bail, the same runtime backstop deletes
-        // rely on. A tab or wide char escalates to above-only (the
-        // cols-times-char_width fit arithmetic would lie about them). With
-        // property changes feeding the accumulator, the span covers the
-        // jit-lock line region, so this also vets the line's existing content.
-        // A pure delete has an empty NEW span (its old extent is the deleted
-        // range) — vacuously ASCII-safe; edit_replay + the post-walk
-        // validation own the delete-specific safety.
-        let mut span_newlines = 0usize;
-        let simple_span = self.allow_below_reuse
-            && (dirty_start..dirty_end).all(|cp| {
-                let byte = buffer.char_pos_to_emacs_byte_pos_clamped(
-                    neovm_core::buffer::CharPos0::new(cp as usize),
-                );
-                match buffer.char_at_emacs_byte_pos(byte) {
-                    Some('\n') => {
-                        span_newlines += 1;
-                        true
-                    }
-                    Some(c) => c.is_ascii_graphic() || c == ' ',
-                    None => false,
-                }
-            });
-        // Part 2: no structure-affecting text property may cover the span.
-        // Face-class props (`face`, `font-lock-face`, `fontified`) only recolor
-        // glyphs; these change what the chars BECOME (replacement, hiding,
-        // prefixes, composition), which invalidates the one-line-one-row proof.
-        // GNU's try_window_id needs no such scan because its regenerated region
-        // re-syncs against the old matrix post-walk; here the post-walk
-        // `expected_walk` validation is the backstop and this scan keeps the
-        // replay from being built (and bailed) pointlessly.
-        let structure_range = neovm_core::buffer::CharRange::new(
-            neovm_core::buffer::CharPos0::new(dirty_start.max(0) as usize),
-            neovm_core::buffer::CharPos0::new(dirty_end.max(0) as usize),
-        );
-        let span_structure_safe = simple_span
-            && !buffer.has_any_non_nil_property_in_char_range(
-                structure_range,
-                EditReplayStructureProperty::symbols(),
-            );
-        let damage = EditDamage::new(dirty_start, dirty_end, delta, span_newlines);
-        // P3.5 G2: under NEOMACS_LAYOUT_EDIT_SYNC=sync the rows below the edit
-        // are reused by synchronizing the walk with them (GNU try_window_id),
-        // which needs none of the span proofs above; they remain the fallback
-        // when no row below can be synchronized with.
         use crate::incremental_layout::edit_sync::{self, BelowReuse, EditSyncMode};
-        let below = if self.allow_below_reuse
+        use crate::incremental_layout::{EditReplayPositions, EditReplaySourceProof};
+        let positions = EditReplayPositions::new(dirty_start, dirty_end, delta);
+        let (replay, span_newlines, span_structure_safe) = if edit_sync::lazy_proof_enabled()
+            && self.allow_below_reuse
             && edit_sync::edit_sync_mode() == EditSyncMode::Sync
+            && !edit_sync::prove_first_enabled()
             && edit_sync::sync_allowed(&curr_key, params.scroll_margin, buffer)
         {
-            BelowReuse::Sync {
-                prove_fallback: span_structure_safe,
-            }
-        } else if span_structure_safe {
-            BelowReuse::Prove
-        } else {
-            BelowReuse::Off
-        };
-        // GNU sync remains the semantic policy. Its general producer need
-        // not replace the already certified single-row producer: both are
-        // sealed by the existing post-walk contracts. A prove call may also
-        // return an ABOVE-ONLY replay; that is a rejected proof, never a win.
-        let replay = if matches!(
-            below,
-            BelowReuse::Sync {
-                prove_fallback: true
-            }
-        ) && edit_sync::prove_first_enabled()
-        {
-            match prev.edit_replay_with(&curr_key, damage, BelowReuse::Prove) {
-                Some(proved)
-                    if proved.bound_walk
-                        && proved.expected_walk.is_some()
-                        && prev.prove_span_matches_sync(damage, &proved) =>
-                {
+            #[cfg(test)]
+            crate::incremental_layout::lazy_proof_test_support::note_lazy_entry();
+            let mut observed_newlines = None;
+            let mut observed_safe = None;
+            let replay = prev.edit_replay_sync_lazy(&curr_key, positions, || {
+                #[cfg(test)]
+                crate::incremental_layout::lazy_proof_test_support::note_source_proof();
+                let mut newlines = 0usize;
+                let simple = (dirty_start..dirty_end).all(|cp| {
                     #[cfg(test)]
-                    edit_sync::note_prove_first_for_test(true);
+                    crate::incremental_layout::lazy_proof_test_support::note_char_query();
+                    let byte = buffer.char_pos_to_emacs_byte_pos_clamped(
+                        neovm_core::buffer::CharPos0::new(cp as usize),
+                    );
+                    match buffer.char_at_emacs_byte_pos(byte) {
+                        Some('\n') => {
+                            newlines += 1;
+                            true
+                        }
+                        Some(c) => c.is_ascii_graphic() || c == ' ',
+                        None => false,
+                    }
+                });
+                let structure_range = neovm_core::buffer::CharRange::new(
+                    neovm_core::buffer::CharPos0::new(dirty_start.max(0) as usize),
+                    neovm_core::buffer::CharPos0::new(dirty_end.max(0) as usize),
+                );
+                let safe = simple && {
+                    #[cfg(test)]
+                    crate::incremental_layout::lazy_proof_test_support::note_property_query();
+                    !buffer.has_any_non_nil_property_in_char_range(
+                        structure_range,
+                        EditReplayStructureProperty::symbols(),
+                    )
+                };
+                observed_newlines = Some(newlines);
+                observed_safe = Some(safe);
+                if safe {
+                    EditReplaySourceProof::Simple { newlines }
+                } else {
+                    EditReplaySourceProof::Rejected
+                }
+            });
+            (replay, observed_newlines, observed_safe)
+        } else {
+            // Below-reuse SAFETY GATE, part 1: every char in the dirty span is
+            // printable ASCII (graphic or space) or a newline — combined with
+            // edit_replay's monospace + width check this proves each span line
+            // still occupies exactly one row (no wrap), which is what makes the
+            // rows-below reuse (shift charpos, keep pixel_y) sound. Newlines are
+            // allowed because the span relays WHOLE rows: an existing newline is
+            // a row boundary inside the span (jit-lock's line region includes the
+            // trailing newline), and an INSERTED newline — which does change the
+            // row structure — makes the bounded walk miss its expected_walk
+            // end-charpos contract and bail, the same runtime backstop deletes
+            // rely on. A tab or wide char escalates to above-only (the
+            // cols-times-char_width fit arithmetic would lie about them). With
+            // property changes feeding the accumulator, the span covers the
+            // jit-lock line region, so this also vets the line's existing content.
+            // A pure delete has an empty NEW span (its old extent is the deleted
+            // range) — vacuously ASCII-safe; edit_replay + the post-walk
+            // validation own the delete-specific safety.
+            #[cfg(test)]
+            if self.allow_below_reuse {
+                crate::incremental_layout::lazy_proof_test_support::note_source_proof();
+            }
+            let mut span_newlines = 0usize;
+            let simple_span = self.allow_below_reuse
+                && (dirty_start..dirty_end).all(|cp| {
+                    #[cfg(test)]
+                    crate::incremental_layout::lazy_proof_test_support::note_char_query();
+                    let byte = buffer.char_pos_to_emacs_byte_pos_clamped(
+                        neovm_core::buffer::CharPos0::new(cp as usize),
+                    );
+                    match buffer.char_at_emacs_byte_pos(byte) {
+                        Some('\n') => {
+                            span_newlines += 1;
+                            true
+                        }
+                        Some(c) => c.is_ascii_graphic() || c == ' ',
+                        None => false,
+                    }
+                });
+            // Part 2: no structure-affecting text property may cover the span.
+            // Face-class props (`face`, `font-lock-face`, `fontified`) only recolor
+            // glyphs; these change what the chars BECOME (replacement, hiding,
+            // prefixes, composition), which invalidates the one-line-one-row proof.
+            // GNU's try_window_id needs no such scan because its regenerated region
+            // re-syncs against the old matrix post-walk; here the post-walk
+            // `expected_walk` validation is the backstop and this scan keeps the
+            // replay from being built (and bailed) pointlessly.
+            let structure_range = neovm_core::buffer::CharRange::new(
+                neovm_core::buffer::CharPos0::new(dirty_start.max(0) as usize),
+                neovm_core::buffer::CharPos0::new(dirty_end.max(0) as usize),
+            );
+            let span_structure_safe = simple_span && {
+                #[cfg(test)]
+                crate::incremental_layout::lazy_proof_test_support::note_property_query();
+                !buffer.has_any_non_nil_property_in_char_range(
+                    structure_range,
+                    EditReplayStructureProperty::symbols(),
+                )
+            };
+            let damage = EditDamage::new(dirty_start, dirty_end, delta, span_newlines);
+            // P3.5 G2: under NEOMACS_LAYOUT_EDIT_SYNC=sync the rows below the edit
+            // are reused by synchronizing the walk with them (GNU try_window_id),
+            // which needs none of the span proofs above; they remain the fallback
+            // when no row below can be synchronized with.
+            let below = if self.allow_below_reuse
+                && edit_sync::edit_sync_mode() == EditSyncMode::Sync
+                && edit_sync::sync_allowed(&curr_key, params.scroll_margin, buffer)
+            {
+                BelowReuse::Sync {
+                    prove_fallback: span_structure_safe,
+                }
+            } else if span_structure_safe {
+                BelowReuse::Prove
+            } else {
+                BelowReuse::Off
+            };
+            // GNU sync remains the semantic policy. Its general producer need
+            // not replace the already certified single-row producer: both are
+            // sealed by the existing post-walk contracts. A prove call may also
+            // return an ABOVE-ONLY replay; that is a rejected proof, never a win.
+            let replay = if matches!(
+                below,
+                BelowReuse::Sync {
+                    prove_fallback: true
+                }
+            ) && edit_sync::prove_first_enabled()
+            {
+                match prev.edit_replay_with(&curr_key, damage, BelowReuse::Prove) {
                     Some(proved)
+                        if proved.bound_walk
+                            && proved.expected_walk.is_some()
+                            && prev.prove_span_matches_sync(damage, &proved) =>
+                    {
+                        #[cfg(test)]
+                        edit_sync::note_prove_first_for_test(true);
+                        Some(proved)
+                    }
+                    _ => {
+                        #[cfg(test)]
+                        edit_sync::note_prove_first_for_test(false);
+                        prev.edit_replay_with(&curr_key, damage, below)
+                    }
                 }
-                _ => {
-                    #[cfg(test)]
-                    edit_sync::note_prove_first_for_test(false);
-                    prev.edit_replay_with(&curr_key, damage, below)
-                }
-            }
-        } else {
-            prev.edit_replay_with(&curr_key, damage, below)
+            } else {
+                prev.edit_replay_with(&curr_key, damage, below)
+            };
+            (replay, Some(span_newlines), Some(span_structure_safe))
         };
         let Some(mut replay) = replay else {
             if tracing::enabled!(tracing::Level::DEBUG) {
@@ -4307,8 +4371,8 @@ impl LayoutEngine {
                     dirty_start,
                     dirty_end,
                     delta,
-                    span_newlines,
-                    span_structure_safe,
+                    span_newlines = ?span_newlines,
+                    span_structure_safe = ?span_structure_safe,
                     body_rows = body.len(),
                     margin_rows = body
                         .iter()
@@ -4337,9 +4401,9 @@ impl LayoutEngine {
         };
         let keep_chrome = match crate::incremental_layout::mode_line_gate::mode_line_gate() {
             crate::incremental_layout::mode_line_gate::ModeLineGate::Legacy => prev
-                .chrome_reusable_after_edit(
+                .chrome_reusable_after_edit_positions(
                     &replay,
-                    damage,
+                    positions,
                     chrome_reuse_context(params, evaluator),
                     |from, to| {
                         (from.max(0)..to.max(0)).any(|cp| {

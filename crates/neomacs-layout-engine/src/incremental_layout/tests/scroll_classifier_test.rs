@@ -738,3 +738,7 @@ fn wrapped_projection_requires_the_same_source_origin_and_a_complete_join() {
     assert!(retained.prepared_projection_prefix(&moved, -4.0).is_none());
     assert!(retained.scroll_replay(&moved).is_none());
 }
+
+#[cfg(test)]
+#[path = "edit_sync_lazy_proof_planner_test.rs"]
+mod lazy_proof_tests;

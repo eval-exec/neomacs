@@ -868,6 +868,51 @@ impl EditDamage {
     }
 }
 
+/// Positions for one retained replay decision. Immutable numeric copies
+/// retain no Lisp state; independent mutators own separate synchronous attempts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct EditReplayPositions {
+    span_start: i64,
+    span_end_new: i64,
+    delta: i64,
+}
+impl EditReplayPositions {
+    #[inline]
+    pub(crate) fn new(span_start: i64, span_end_new: i64, delta: i64) -> Self {
+        Self {
+            span_start,
+            span_end_new,
+            delta,
+        }
+    }
+    #[inline]
+    fn start(self) -> i64 {
+        self.span_start
+    }
+    #[inline]
+    fn end_old(self) -> i64 {
+        self.span_end_new - self.delta
+    }
+    #[inline]
+    fn delta(self) -> i64 {
+        self.delta
+    }
+}
+impl From<EditDamage> for EditReplayPositions {
+    #[inline]
+    fn from(damage: EditDamage) -> Self {
+        Self::new(damage.start(), damage.end_new(), damage.delta())
+    }
+}
+
+/// An observed source proof under the caller's immutable Buffer borrow. This
+/// attempt-local result owns no Lisp value, shared cache, or mutator dependency.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EditReplaySourceProof {
+    Rejected,
+    Simple { newlines: usize },
+}
+
 /// What a bounded edit-replay walk must produce for the reused-below rows to
 /// remain valid. All values are in post-edit (NEW) coordinates.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1058,10 +1103,29 @@ impl RetainedWindowMatrix {
     /// `dvpos == 0` and an unchanged window-start states that in terms of what
     /// `%p` actually reads, rather than relying on the internal scroll path
     /// going through the `set-window-start` builtin that (a) wired.
+    #[inline]
     pub(crate) fn chrome_reusable_after_edit(
         &self,
         replay: &ScrollReplay,
         damage: EditDamage,
+        ctx: ChromeReuseContext,
+        region_contains_newline: impl Fn(i64, i64) -> bool,
+    ) -> bool {
+        self.chrome_reusable_after_edit_positions(
+            replay,
+            damage.into(),
+            ctx,
+            region_contains_newline,
+        )
+    }
+
+    /// Position-only chrome guard. The borrowed predicate is consumed during
+    /// this synchronous attempt and is never retained or published.
+    #[inline]
+    pub(crate) fn chrome_reusable_after_edit_positions(
+        &self,
+        replay: &ScrollReplay,
+        damage: EditReplayPositions,
         ctx: ChromeReuseContext,
         region_contains_newline: impl Fn(i64, i64) -> bool,
     ) -> bool {
@@ -1578,17 +1642,51 @@ impl RetainedWindowMatrix {
     /// [`edit_sync::BelowReuse::Sync`] synchronizes the walk with the first
     /// unchanged row the way GNU's `try_window_id` does instead of proving
     /// ahead that every changed line stays one row.
+    #[inline]
     pub(crate) fn edit_replay_with(
         &self,
         curr: &RetainedWindowKey,
         damage: EditDamage,
         below: edit_sync::BelowReuse,
     ) -> Option<ScrollReplay> {
+        self.edit_replay_with_source_proof(curr, damage.into(), below, || {
+            EditReplaySourceProof::Simple {
+                newlines: damage.span_newlines(),
+            }
+        })
+    }
+
+    /// General Sync with a bounded-proof fallback. The FnOnce borrows source
+    /// only for this synchronous decision; successful Sync never evaluates it.
+    /// The callback/result is not cached or published to another mutator.
+    #[inline]
+    pub(crate) fn edit_replay_sync_lazy(
+        &self,
+        curr: &RetainedWindowKey,
+        damage: EditReplayPositions,
+        source_proof: impl FnOnce() -> EditReplaySourceProof,
+    ) -> Option<ScrollReplay> {
+        self.edit_replay_with_source_proof(
+            curr,
+            damage,
+            edit_sync::BelowReuse::Sync {
+                prove_fallback: true,
+            },
+            source_proof,
+        )
+    }
+
+    fn edit_replay_with_source_proof(
+        &self,
+        curr: &RetainedWindowKey,
+        damage: EditReplayPositions,
+        below: edit_sync::BelowReuse,
+        source_proof: impl FnOnce() -> EditReplaySourceProof,
+    ) -> Option<ScrollReplay> {
         let allow_below_reuse = below.prove_allowed();
         let sync = matches!(below, edit_sync::BelowReuse::Sync { .. });
         let dirty_start = damage.start();
         let dirty_end_old = damage.end_old();
-        let span_newlines = damage.span_newlines();
         if self.validity != MatrixValidity::Valid {
             return None;
         }
@@ -1775,7 +1873,9 @@ impl RetainedWindowMatrix {
         // gate: it defaults to TRUE at every `LayoutEngine` construction site,
         // so below-reuse is the production path. Tests flip it off to isolate
         // above-only reuse.
-        if sync && let Some(plan) = edit_sync::plan(self, &body, first_dirty, damage) {
+        if sync && let Some(plan) = edit_sync::plan_positions(self, &body, first_dirty, damage) {
+            #[cfg(test)]
+            lazy_proof_test_support::note_sync_admission();
             return Some(ScrollReplay {
                 dvpos: 0.0,
                 reused_rows,
@@ -1810,10 +1910,9 @@ impl RetainedWindowMatrix {
             );
             // Every span row must be plain monospace text, and every span line
             // must PROVABLY still fit in one row after the insert (no wrap →
-            // the rows below keep their pixel_y). `allow_below_reuse` already
-            // guarantees the span chars are simple/char_width (the caller's
-            // ASCII + structure-props check), so `(cols + delta) * char_width`
-            // is exact. Applying `delta` to every span row is over-conservative
+            // the rows below keep their pixel_y). The source callback below
+            // certifies simple/char_width chars before bounded materialization,
+            // so `(cols + delta) * char_width` is exact once both gates pass. Applying `delta` to every span row is over-conservative
             // (the insert lands in exactly one of them) but always safe.
             let walk_rows = || body[first_dirty..=span_last].iter().map(|(_, row)| *row);
             let damage_rows = || {
@@ -1883,14 +1982,14 @@ impl RetainedWindowMatrix {
             let old_span_newlines = (damage_first_by_charpos..=damage_span_last)
                 .filter(|&index| row_extent_end(index) < dirty_end_old)
                 .count();
-            let line_structure_preserved = span_newlines == old_span_newlines;
             if !pointer_shrunk_prefix
                 && span_last + 1 < body.len()
-                && line_structure_preserved
                 && monospace
                 && stays_one_row
                 && below_pointers_shiftable
                 && (delta >= 0 || below_pointer_free())
+                && matches!(source_proof(),
+                    EditReplaySourceProof::Simple { newlines } if newlines == old_span_newlines)
             {
                 let shift = |p: LispCharPos1| {
                     LispCharPos1::from_one_based_usize(
@@ -2174,3 +2273,7 @@ impl LayoutStats {
 #[cfg(test)]
 #[path = "incremental_layout/tests/scroll_classifier_test.rs"]
 mod scroll_classifier_tests;
+
+#[cfg(test)]
+#[path = "incremental_layout/tests/edit_sync_lazy_proof_support.rs"]
+pub(crate) mod lazy_proof_test_support;

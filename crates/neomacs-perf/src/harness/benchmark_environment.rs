@@ -85,6 +85,8 @@ pub(super) const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOMACS_LAYOUT_EDIT_SYNC",
     // Cost-only synchronized geometry transfer (`off` default, `on`).
     "NEOMACS_EDIT_SYNC_STILL",
+    // Defer general Sync source proof with ProveFirst off (`off` default, `on`).
+    "NEOMACS_EDIT_SYNC_LAZY_PROOF",
     // Prefer certified bounded prove inside sync (`off` default, `on`).
     "NEOMACS_EDIT_SYNC_PROVE_FIRST",
     // Omit zero-dy synchronized-row shift ledgers (`off` default, `on`).

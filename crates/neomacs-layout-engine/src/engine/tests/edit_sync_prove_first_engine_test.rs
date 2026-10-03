@@ -120,7 +120,21 @@ fn run(
     point: usize,
     forms: &[&str],
 ) -> (Vec<String>, ProveFirstCounts, Vec<LayoutStats>) {
+    run_with_policy(enabled, EditSyncMode::Sync, true, text, point, forms)
+}
+
+/// The same exclusively owned Context/reference-render fixture with explicit
+/// producer policy. It returns only owned strings/numeric counts after Drop.
+fn run_with_policy(
+    enabled: bool,
+    mode: EditSyncMode,
+    allow_below_reuse: bool,
+    text: &str,
+    point: usize,
+    forms: &[&str],
+) -> (Vec<String>, ProveFirstCounts, Vec<LayoutStats>) {
     let _guard = ProducerGuard::set(enabled);
+    set_edit_sync_mode_for_test(Some(mode));
     let (mut eval, frame_id, _buffer, _window) = incr_editing_frame(text, 800, 600);
     eval.eval_str(&format!(
         "(progn (setq bidi-paragraph-direction 'left-to-right) \
@@ -132,6 +146,7 @@ fn run(
     ))
     .unwrap();
     let mut engine = LayoutEngine::new();
+    engine.allow_below_reuse = allow_below_reuse;
     engine.layout_frame_rust(&mut eval, frame_id);
     activate_last_engine_presentation(&mut eval, &engine, frame_id);
     let mut observations = Vec::new();
@@ -330,3 +345,7 @@ fn prove_first_preserves_sync_extra_reuse_at_a_line_start() {
     assert_eq!(on.2[0].relaid_body_rows, off.2[0].relaid_body_rows);
     assert_eq!(on.2[0].reused_rows, off.2[0].reused_rows);
 }
+
+#[cfg(test)]
+#[path = "edit_sync_lazy_proof_engine_test.rs"]
+mod lazy_proof_tests;
