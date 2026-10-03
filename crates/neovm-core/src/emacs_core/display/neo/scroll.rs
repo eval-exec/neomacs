@@ -325,12 +325,12 @@ mod tests {
                 .borrow_mut()
                 .push(eval.permits_compositor_pixel_scroll(window));
         }));
-        eval.redisplay();
-        eval.redisplay();
+        eval.redisplay().expect("redisplay");
+        eval.redisplay().expect("redisplay");
         assert_eq!(&*publications.borrow(), &[true]);
         eval.eval_str("(setq neomacs-compositor-scrolling nil)")
             .unwrap();
-        eval.redisplay();
+        eval.redisplay().expect("redisplay");
         assert_eq!(
             &*publications.borrow(),
             &[true, false],
@@ -338,7 +338,7 @@ mod tests {
         );
         eval.eval_str("(setq neomacs-compositor-scrolling t)")
             .unwrap();
-        eval.redisplay();
+        eval.redisplay().expect("redisplay");
         assert_eq!(&*publications.borrow(), &[true, false, true]);
         eval.eval_str("(define-key (current-global-map) [wheel-down] '(menu-item \"scroll\" pixel-scroll-precision :filter ignore))").unwrap();
         assert!(

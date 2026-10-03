@@ -35,8 +35,8 @@ fn idle_context() -> (Context, Rc<Cell<usize>>) {
             .unwrap()
             .reset_unchanged_region();
     }));
-    eval.redisplay_with_force(true);
-    eval.redisplay_with_force(true);
+    eval.redisplay_with_force(true).expect("redisplay");
+    eval.redisplay_with_force(true).expect("redisplay");
     assert_eq!(layouts.get(), 1, "the fixture must have an idle signature");
     (eval, layouts)
 }
@@ -48,9 +48,9 @@ fn redraw_frame_invalidates_idle_redisplay() {
     for form in ["(redraw-frame)", "(redraw-frame (selected-frame))"] {
         assert!(eval.eval_str(form).unwrap().is_nil());
         let before = layouts.get();
-        eval.redisplay_with_force(true);
+        eval.redisplay_with_force(true).expect("redisplay");
         assert_eq!(layouts.get(), before + 1, "{form} must schedule layout");
-        eval.redisplay_with_force(true);
+        eval.redisplay_with_force(true).expect("redisplay");
         assert_eq!(
             layouts.get(),
             before + 1,
@@ -64,9 +64,9 @@ fn redraw_display_invalidates_idle_redisplay() {
     let _idle_skip = IdleSkipOverride::enable();
     let (mut eval, layouts) = idle_context();
     assert!(eval.eval_str("(redraw-display)").unwrap().is_nil());
-    eval.redisplay_with_force(true);
+    eval.redisplay_with_force(true).expect("redisplay");
     assert_eq!(layouts.get(), 2, "redraw-display must schedule layout");
-    eval.redisplay_with_force(true);
+    eval.redisplay_with_force(true).expect("redisplay");
     assert_eq!(layouts.get(), 2, "unchanged redisplay remains idle");
 }
 
@@ -77,9 +77,9 @@ fn recenter_redraw_invalidates_unchanged_idle_redisplay() {
     // An empty buffer keeps point and window-start at the same positions.
     eval.eval_str("(let ((recenter-redisplay t)) (recenter nil t))")
         .unwrap();
-    eval.redisplay_with_force(true);
+    eval.redisplay_with_force(true).expect("redisplay");
     assert_eq!(layouts.get(), 2, "full-frame recenter must schedule layout");
-    eval.redisplay_with_force(true);
+    eval.redisplay_with_force(true).expect("redisplay");
     assert_eq!(layouts.get(), 2, "unchanged redisplay remains idle");
 }
 
@@ -93,9 +93,9 @@ fn force_window_update_invalidates_idle_redisplay() {
     ] {
         assert!(eval.eval_str(form).unwrap().is_truthy());
         let before = layouts.get();
-        eval.redisplay_with_force(true);
+        eval.redisplay_with_force(true).expect("redisplay");
         assert_eq!(layouts.get(), before + 1, "{form} must schedule layout");
-        eval.redisplay_with_force(true);
+        eval.redisplay_with_force(true).expect("redisplay");
         assert_eq!(
             layouts.get(),
             before + 1,
@@ -104,7 +104,7 @@ fn force_window_update_invalidates_idle_redisplay() {
     }
     let before = layouts.get();
     assert!(eval.eval_str("(force-window-update t)").unwrap().is_nil());
-    eval.redisplay_with_force(true);
+    eval.redisplay_with_force(true).expect("redisplay");
     assert_eq!(
         layouts.get(),
         before,

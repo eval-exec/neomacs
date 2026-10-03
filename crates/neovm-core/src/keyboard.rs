@@ -3828,7 +3828,7 @@ impl crate::emacs_core::eval::Context {
         scale_factor: f64,
         emacs_frame_id: u64,
         trigger_redisplay: bool,
-    ) {
+    ) -> Result<(), crate::emacs_core::error::Flow> {
         let trace_frame_geometry = std::env::var("NEOMACS_TRACE_FRAME_GEOMETRY")
             .ok()
             .is_some_and(|value| value == "1");
@@ -3886,8 +3886,9 @@ impl crate::emacs_core::eval::Context {
             }
         }
         if trigger_redisplay {
-            self.redisplay();
+            self.redisplay()?;
         }
+        Ok(())
     }
 
     pub(crate) fn sync_pending_resize_events(&mut self) -> bool {
@@ -4118,7 +4119,7 @@ impl crate::emacs_core::eval::Context {
                         scale_factor,
                         emacs_frame_id,
                         false,
-                    );
+                    )?;
                 }
                 InputEvent::MonitorsChanged { monitors } => {
                     outcome = outcome.merge(SpecialInputServiceOutcome::any_activity());
@@ -5193,8 +5194,8 @@ impl crate::emacs_core::eval::Context {
                 scale_factor,
                 emacs_frame_id,
             } => {
-                self.apply_resize_input_event(width, height, scale_factor, emacs_frame_id, true);
-                self.redisplay();
+                self.apply_resize_input_event(width, height, scale_factor, emacs_frame_id, true)?;
+                self.redisplay()?;
                 self.timer_resume_idle();
                 Ok(None)
             }
@@ -5203,13 +5204,13 @@ impl crate::emacs_core::eval::Context {
                 // idle. The reset handler busts the redisplay signature
                 // itself since no buffer/geometry state changed.
                 self.handle_display_reset_input_event();
-                self.redisplay();
+                self.redisplay()?;
                 self.timer_resume_idle();
                 Ok(None)
             }
             InputEvent::WebView(event) => {
                 if self.apply_xwidget_frontend_event(&event)? {
-                    self.redisplay();
+                    self.redisplay()?;
                 }
                 Ok(None)
             }
@@ -5220,7 +5221,7 @@ impl crate::emacs_core::eval::Context {
             InputEvent::FrameShaderFailed { error } => {
                 let effects = crate::frontend_events::report_frame_shader_failure(self, &error)?;
                 if effects.redisplay_needed {
-                    self.redisplay();
+                    self.redisplay()?;
                 }
                 Ok(None)
             }
@@ -5281,7 +5282,7 @@ impl crate::emacs_core::eval::Context {
             }
             InputEvent::SystemFontsChanged { fonts, display } => {
                 if self.handle_system_fonts_input_event(fonts, display)? {
-                    self.redisplay();
+                    self.redisplay()?;
                 }
                 Ok(None)
             }
@@ -5668,7 +5669,7 @@ impl crate::emacs_core::eval::Context {
             }
 
             if self.sync_pending_resize_events() {
-                self.redisplay();
+                self.redisplay()?;
             }
             if let Some(event) = self.drain_ready_input_event_for_read_char() {
                 if let Some(value) = self.handle_read_char_input_event(event, tty_input_decoding)? {
@@ -5688,7 +5689,7 @@ impl crate::emacs_core::eval::Context {
                 return Ok(None);
             }
 
-            self.redisplay_for_input_wait();
+            self.redisplay_for_input_wait()?;
             self.service_input_wait_with_redisplay()?;
 
             // GNU read_char re-checks Vunread_command_events after idle
@@ -5707,7 +5708,7 @@ impl crate::emacs_core::eval::Context {
             );
 
             if self.sync_pending_resize_events() {
-                self.redisplay();
+                self.redisplay()?;
             }
 
             if let Some(event) = self.drain_ready_input_event_for_read_char() {
@@ -5787,7 +5788,7 @@ impl crate::emacs_core::eval::Context {
                     .and_then(|delay| std::time::Instant::now().checked_add(delay));
             }
             let display_idle_deadline =
-                self.display_idle_maintenance_deadline(command_input, timeout.is_some());
+                self.display_idle_maintenance_deadline(command_input, timeout.is_some())?;
             let wait_deadline = [
                 deadline,
                 idle_auto_save_deadline,
@@ -5821,14 +5822,14 @@ impl crate::emacs_core::eval::Context {
                             let events = self.command_loop.read_command_keys().to_vec();
                             if !events.is_empty() {
                                 self.publish_key_echo_message(&events, None);
-                                self.redisplay();
+                                self.redisplay()?;
                             }
                         }
                     }
                     if idle_auto_save_deadline.is_some_and(|deadline| now >= deadline) {
                         idle_auto_save_deadline = None;
                         self.run_command_loop_auto_save("idle timeout");
-                        self.redisplay();
+                        self.redisplay()?;
                     }
                     continue;
                 }
@@ -5848,25 +5849,27 @@ impl crate::emacs_core::eval::Context {
         &mut self,
         command_input: bool,
         timed_read: bool,
-    ) -> Option<std::time::Instant> {
+    ) -> Result<Option<std::time::Instant>, crate::emacs_core::error::Flow> {
         if !command_input
             || timed_read
             || self.command_loop.keyboard.has_pending_low_level_input()
             || self.has_pending_command_input_for_query()
             || self.input_rx.as_ref().is_some_and(|rx| !rx.is_empty())
         {
-            return None;
+            return Ok(None);
         }
-        let mut maintenance = self.display_idle_maintenance_fn.take()?;
+        let Some(mut maintenance) = self.display_idle_maintenance_fn.take() else {
+            return Ok(None);
+        };
         let (next, publish) = maintenance(self);
         self.display_idle_maintenance_fn = Some(maintenance);
         if publish {
             // Drop the engine borrow before redisplay re-enters layout. This
             // publishes newly available coverage without changing the buffer.
             self.invalidate_redisplay();
-            self.redisplay();
+            self.redisplay()?;
         }
-        next.and_then(|delay| std::time::Instant::now().checked_add(delay))
+        Ok(next.and_then(|delay| std::time::Instant::now().checked_add(delay)))
     }
 
     /// GNU's buffer-size-scaled delay for `auto-save-timeout`.
@@ -6219,7 +6222,7 @@ impl crate::emacs_core::eval::Context {
             let _ = self.funcall_general(show_help_function, vec![help])?;
         } else if let Some(message) = help.as_lisp_string() {
             self.set_current_message(Some(message.clone()));
-            self.redisplay();
+            self.redisplay()?;
         } else {
             self.clear_current_message();
         }

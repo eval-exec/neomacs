@@ -42,7 +42,7 @@ impl crate::emacs_core::Context {
                 self.invalidate_redisplay();
             }
         }
-        self.redisplay_for_input_wait();
+        self.redisplay_for_input_wait()?;
         // Expensive layout must not make the next deadline overdue before
         // this service call even returns. Reserve at least an equal amount
         // of evaluator time for queued commands; cheap frames retain the

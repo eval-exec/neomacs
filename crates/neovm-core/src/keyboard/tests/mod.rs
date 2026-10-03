@@ -995,8 +995,8 @@ fn layout_invalidation_forces_redisplay_when_evaluator_signature_is_unchanged() 
     let mut eval = crate::emacs_core::Context::new();
     eval.redisplay_fn = Some(Box::new(move |_| observed.set(observed.get() + 1)));
 
-    eval.redisplay();
-    eval.redisplay();
+    eval.redisplay().expect("redisplay");
+    eval.redisplay().expect("redisplay");
     assert_eq!(redisplays.get(), 1, "unchanged redisplay should be skipped");
 
     eval.command_loop
@@ -1005,7 +1005,7 @@ fn layout_invalidation_forces_redisplay_when_evaluator_signature_is_unchanged() 
         .push_back(InputEvent::LayoutInvalidated);
     let effects = eval.service_leading_internal_frontend_events();
     assert!(effects.redisplay_needed);
-    eval.redisplay();
+    eval.redisplay().expect("redisplay");
     assert_eq!(redisplays.get(), 2);
 }
 
@@ -2277,12 +2277,18 @@ fn display_idle_maintenance_yields_to_input_and_avoids_nested_or_timed_reads() {
     }));
     assert!(
         eval.display_idle_maintenance_deadline(false, false)
+            .expect("untimed nested read")
             .is_none()
     );
-    assert!(eval.display_idle_maintenance_deadline(true, true).is_none());
+    assert!(
+        eval.display_idle_maintenance_deadline(true, true)
+            .expect("timed command read")
+            .is_none()
+    );
     assert_eq!(calls.get(), 0);
     assert!(
         eval.display_idle_maintenance_deadline(true, false)
+            .expect("idle command read")
             .is_some()
     );
     assert_eq!(calls.get(), 1);
@@ -2296,6 +2302,7 @@ fn display_idle_maintenance_yields_to_input_and_avoids_nested_or_timed_reads() {
         .unwrap();
     assert!(
         eval.display_idle_maintenance_deadline(true, false)
+            .expect("command read with pending input")
             .is_none()
     );
     assert_eq!(calls.get(), 1);

@@ -653,6 +653,9 @@ impl<'face, 'params> WindowChromeRowsRenderRequest<'face, 'params> {
                 target_cols,
             )
             .unwrap_or_else(|| ModeLineDisplayOutput::from_root_string(Value::string("")));
+            if state.evaluator.has_mode_line_display_flow() {
+                return WindowChromeRowsRenderOutcome::SourceInvalidated;
+            }
             let Some(face_scope) = state.face_scope_for_source(source) else {
                 return WindowChromeRowsRenderOutcome::SourceInvalidated;
             };
@@ -698,6 +701,9 @@ impl<'face, 'params> WindowChromeRowsRenderRequest<'face, 'params> {
                 target_cols,
             )
             .unwrap_or_else(|| ModeLineDisplayOutput::from_root_string(Value::string("")));
+            if state.evaluator.has_mode_line_display_flow() {
+                return WindowChromeRowsRenderOutcome::SourceInvalidated;
+            }
             let Some(face_scope) = state.face_scope_for_source(source) else {
                 return WindowChromeRowsRenderOutcome::SourceInvalidated;
             };
@@ -768,6 +774,9 @@ impl<'face, 'params> WindowChromeRowsRenderRequest<'face, 'params> {
                 );
                 result
             };
+            if state.evaluator.has_mode_line_display_flow() {
+                return WindowChromeRowsRenderOutcome::SourceInvalidated;
+            }
             let Some(face_scope) = state.face_scope_for_source(source) else {
                 return WindowChromeRowsRenderOutcome::SourceInvalidated;
             };

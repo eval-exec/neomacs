@@ -241,7 +241,7 @@ impl super::eval::Context {
         service_result?;
 
         if fired_any && redisplay {
-            self.redisplay();
+            self.redisplay()?;
         }
 
         Ok(fired_any)

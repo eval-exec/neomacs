@@ -2019,23 +2019,23 @@ fn redisplay_skips_callback_when_visible_state_is_unchanged() {
         *redisplay_count_in_cb.borrow_mut() += 1;
     }));
 
-    ev.redisplay();
-    ev.redisplay();
+    ev.redisplay().expect("redisplay");
+    ev.redisplay().expect("redisplay");
     assert_eq!(*redisplay_count.borrow(), 1);
 
     ev.set_current_message(Some(LispString::from_utf8("hello")));
-    ev.redisplay();
+    ev.redisplay().expect("redisplay");
     assert_eq!(*redisplay_count.borrow(), 2);
 
     ev.apply(Value::symbol("force-mode-line-update"), vec![])
         .expect("force-mode-line-update should be callable");
-    ev.redisplay();
+    ev.redisplay().expect("redisplay");
     assert_eq!(*redisplay_count.borrow(), 3);
 
     // Preserve this fixture's legacy forced-callback assertion. Explicit
     // OFF/ON idle behavior is covered by tests::idle_redisplay.
     crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(Some(false));
-    ev.redisplay_with_force(true);
+    ev.redisplay_with_force(true).expect("redisplay");
     crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(None);
     assert_eq!(*redisplay_count.borrow(), 4);
 }
@@ -2074,7 +2074,7 @@ fn redisplay_runs_resize_mini_frame_for_minibuffer_only_frame() {
     .expect("resize-mini-frame test setup should evaluate");
     ev.redisplay_fn = Some(Box::new(|_ev: &mut Context| {}));
 
-    ev.redisplay_with_force(true);
+    ev.redisplay_with_force(true).expect("redisplay");
 
     assert_eq!(
         ev.obarray().symbol_value("neo-resize-mini-frame-calls"),
@@ -2129,12 +2129,12 @@ fn redisplay_skips_callback_after_unwatched_symbol_value_change() {
         *redisplay_count_in_cb.borrow_mut() += 1;
     }));
 
-    ev.redisplay();
+    ev.redisplay().expect("redisplay");
     assert_eq!(*redisplay_count.borrow(), 1);
 
     ev.eval_str("(setq blink-cursor-blinks-done (1+ blink-cursor-blinks-done))")
         .expect("blink counter setq should evaluate");
-    ev.redisplay();
+    ev.redisplay().expect("redisplay");
     assert_eq!(*redisplay_count.borrow(), 1);
 }
 
@@ -2149,7 +2149,7 @@ fn set_buffer_redisplay_watcher_invalidates_redisplay() {
         *redisplay_count_in_cb.borrow_mut() += 1;
     }));
 
-    ev.redisplay();
+    ev.redisplay().expect("redisplay");
     assert_eq!(*redisplay_count.borrow(), 1);
 
     ev.eval_str(
@@ -2159,10 +2159,10 @@ fn set_buffer_redisplay_watcher_invalidates_redisplay() {
              (setq line-spacing 2))"#,
     )
     .expect("line-spacing watcher should evaluate");
-    ev.redisplay();
+    ev.redisplay().expect("redisplay");
     assert_eq!(*redisplay_count.borrow(), 2);
 
-    ev.redisplay();
+    ev.redisplay().expect("redisplay");
     assert_eq!(*redisplay_count.borrow(), 2);
 }
 
@@ -2190,7 +2190,7 @@ fn setq_display_var_invalidates_redisplay_without_watcher() {
             *redisplay_count_in_cb.borrow_mut() += 1;
         }));
 
-        ev.redisplay();
+        ev.redisplay().expect("redisplay");
         assert_eq!(
             *redisplay_count.borrow(),
             1,
@@ -2199,7 +2199,7 @@ fn setq_display_var_invalidates_redisplay_without_watcher() {
 
         ev.eval_str(form)
             .unwrap_or_else(|e| panic!("{form} should evaluate: {e:?}"));
-        ev.redisplay();
+        ev.redisplay().expect("redisplay");
         assert_eq!(
             *redisplay_count.borrow(),
             2,
@@ -2207,7 +2207,7 @@ fn setq_display_var_invalidates_redisplay_without_watcher() {
         );
 
         // Idempotent: a second redisplay with no further change is a no-op.
-        ev.redisplay();
+        ev.redisplay().expect("redisplay");
         assert_eq!(
             *redisplay_count.borrow(),
             2,
@@ -2233,12 +2233,12 @@ fn setq_non_display_var_does_not_invalidate_redisplay() {
         *redisplay_count_in_cb.borrow_mut() += 1;
     }));
 
-    ev.redisplay();
+    ev.redisplay().expect("redisplay");
     assert_eq!(*redisplay_count.borrow(), 1);
 
     ev.eval_str("(setq neo-test-counter 99)")
         .expect("plain setq should evaluate");
-    ev.redisplay();
+    ev.redisplay().expect("redisplay");
     assert_eq!(
         *redisplay_count.borrow(),
         1,
@@ -2259,12 +2259,12 @@ fn set_default_display_var_invalidates_redisplay() {
         *redisplay_count_in_cb.borrow_mut() += 1;
     }));
 
-    ev.redisplay();
+    ev.redisplay().expect("redisplay");
     assert_eq!(*redisplay_count.borrow(), 1);
 
     ev.eval_str("(set-default 'truncate-lines t)")
         .expect("set-default should evaluate");
-    ev.redisplay();
+    ev.redisplay().expect("redisplay");
     assert_eq!(
         *redisplay_count.borrow(),
         2,
@@ -2387,7 +2387,7 @@ fn redisplay_applies_pending_resize_before_callback() {
     })
     .unwrap();
 
-    ev.redisplay();
+    ev.redisplay().expect("redisplay");
 
     assert_eq!(*redisplay_calls.borrow(), vec![(700, 800)]);
 }
@@ -2420,7 +2420,7 @@ fn redisplay_syncs_opening_gui_frame_size_from_display_host() {
         1500, 1900,
     )));
 
-    ev.redisplay();
+    ev.redisplay().expect("redisplay");
 
     assert_eq!(*redisplay_calls.borrow(), vec![(1500, 1900)]);
 }
@@ -3126,7 +3126,7 @@ fn redisplay_applies_resize_already_queued_behind_focus_event() {
             emacs_frame_id: 0,
         });
 
-    ev.redisplay();
+    ev.redisplay().expect("redisplay");
 
     assert_eq!(*redisplay_calls.borrow(), vec![(700, 800)]);
     assert!(matches!(
@@ -5479,7 +5479,7 @@ fn redisplay_preserves_non_resize_input_for_read_char() {
     ))
     .unwrap();
 
-    ev.redisplay();
+    ev.redisplay().expect("redisplay");
 
     let event = ev
         .read_char()
@@ -6864,7 +6864,7 @@ fn redisplay_restores_current_innermost_labeled_restriction_after_callback_mutat
         ));
     }));
 
-    eval.redisplay();
+    eval.redisplay().expect("redisplay");
 
     assert_eq!(*observed.borrow(), vec![(0, 6), (1, 5)]);
     let buf = eval.buffers.get(buffer_id).expect("buffer after redisplay");
@@ -13505,7 +13505,7 @@ fn redisplay_does_not_copy_unrelated_current_buffer_point_into_selected_window()
         .expect("move current buffer point");
 
     ev.redisplay_fn = Some(Box::new(|_| {}));
-    ev.redisplay();
+    ev.redisplay().expect("redisplay");
 
     let selected_window_point = ev
         .frames
@@ -13561,7 +13561,7 @@ fn save_window_excursion_defers_restore_redisplay_until_the_next_cycle() {
     // it.  The configuration never recorded point in the buffer that was
     // current when it was saved, so the restore leaves the live point at 10
     // (`src/window.c:7692-7733,7978-7984`).
-    ev.redisplay();
+    ev.redisplay().expect("redisplay");
     assert_eq!(*redisplayed_points.borrow(), vec![10, 10]);
 }
 
@@ -26070,13 +26070,13 @@ fn a_buffer_change_during_redisplay_is_not_recorded_as_already_displayed() {
         );
     }));
 
-    ev.redisplay();
+    ev.redisplay().expect("redisplay");
     let after_first = painted.borrow().len();
     assert_eq!(after_first, 1, "first redisplay should paint");
 
     // The text inserted during the paint was never on screen, so the next
     // redisplay must run rather than conclude nothing changed.
-    ev.redisplay();
+    ev.redisplay().expect("redisplay");
     assert_eq!(
         painted.borrow().len(),
         2,
@@ -27999,18 +27999,18 @@ fn fontset_changes_invalidate_redisplay_skip_signature() {
     ev.redisplay_fn = Some(Box::new(move |_ev: &mut Context| {
         *observed.borrow_mut() += 1;
     }));
-    ev.redisplay();
-    ev.redisplay();
+    ev.redisplay().expect("redisplay");
+    ev.redisplay().expect("redisplay");
     assert_eq!(*calls.borrow(), 1);
     ev.eval_str("(set-fontset-font t #x25cb '(nil . \"iso10646-1\"))")
         .unwrap();
-    ev.redisplay();
+    ev.redisplay().expect("redisplay");
     assert_eq!(
         *calls.borrow(),
         2,
         "a font-rule change must schedule fresh layout"
     );
-    ev.redisplay();
+    ev.redisplay().expect("redisplay");
     assert_eq!(
         *calls.borrow(),
         2,

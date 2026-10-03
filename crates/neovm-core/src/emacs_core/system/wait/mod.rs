@@ -1141,12 +1141,12 @@ impl super::eval::Context {
         {
             outcome.record_command_input_pending();
             if request.needs_redisplay_after_command_input(special_input) {
-                self.redisplay();
+                self.redisplay()?;
             }
             return Ok(outcome);
         }
         if request.needs_redisplay_after_service(special_input, outcome) {
-            self.redisplay();
+            self.redisplay()?;
         }
         Ok(outcome)
     }

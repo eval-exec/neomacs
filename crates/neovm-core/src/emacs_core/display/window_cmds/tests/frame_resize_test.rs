@@ -71,7 +71,8 @@ fn overlapping_native_observations_keep_the_latest_requested_grid_for_font_chang
         "the newest requested grid must survive an older allocation and a geometry query"
     );
     for observed in [&b, &b, &c] {
-        eval.apply_resize_input_event(observed.width, observed.height, 1.0, fid.0, false);
+        eval.apply_resize_input_event(observed.width, observed.height, 1.0, fid.0, false)
+            .expect("resize redisplay");
         assert_eq!(
             eval.eval_str("(frame-native-width)").unwrap().as_int(),
             Some(observed.width as i64)
@@ -81,7 +82,8 @@ fn overlapping_native_observations_keep_the_latest_requested_grid_for_font_chang
         eval.frames.get(fid).unwrap().pending_gui_resize.is_none(),
         "attaining the target releases pending intent"
     );
-    eval.apply_resize_input_event(84 * 16, c.height, 1.0, fid.0, false);
+    eval.apply_resize_input_event(84 * 16, c.height, 1.0, fid.0, false)
+        .expect("resize redisplay");
     assert_eq!(
         eval.eval_str("(frame-text-cols)").unwrap().as_int(),
         Some(84),
@@ -157,7 +159,8 @@ fn native_resize_counts_the_entire_grown_minibuffer_in_frame_height() {
         48.0
     );
     eval.set_display_host(Box::new(RecordingDisplayHost::new()));
-    eval.apply_resize_input_event(720, 384, 1.0, fid.0, false);
+    eval.apply_resize_input_event(720, 384, 1.0, fid.0, false)
+        .expect("resize redisplay");
     assert_eq!(
         eval.eval_str("(frame-text-lines)").unwrap().as_int(),
         Some(24)
@@ -351,7 +354,8 @@ fn width_only_gui_resize_keeps_exact_native_height_with_chrome_and_partial_row()
     // GNU frame.c:Fset_frame_width passes FRAME_TEXT_HEIGHT unchanged,
     // preserving both chrome and any fractional character-row remainder.
     assert_eq!((request.width, request.height), (844, 688));
-    eval.apply_resize_input_event(request.width, request.height, 1.0, frame_id.0, false);
+    eval.apply_resize_input_event(request.width, request.height, 1.0, frame_id.0, false)
+        .expect("resize redisplay");
     assert_eq!(
         eval.eval_str("(frame-text-cols)").unwrap().as_int(),
         Some(91)
@@ -386,7 +390,8 @@ fn rejected_and_duplicate_native_resize_completions_preserve_actual_geometry() {
     // A compositor can refuse the request and return the old size immediately;
     // a later configure event may repeat that same completion.
     for _ in 0..2 {
-        eval.apply_resize_input_event(745, 688, 2.0, frame_id.0, false);
+        eval.apply_resize_input_event(745, 688, 2.0, frame_id.0, false)
+            .expect("resize redisplay");
         let actual = eval.eval_str("(list (frame-native-width) (frame-native-height) (frame-text-cols) (frame-text-lines))").unwrap();
         assert!(crate::emacs_core::value::equal_value(&actual, &original, 0));
     }

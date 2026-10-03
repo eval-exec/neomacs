@@ -44,19 +44,19 @@ fn resumed_tty_invalidates_idle_redisplay() {
             .unwrap()
             .reset_unchanged_region();
     }));
-    eval.redisplay_with_force(true);
-    eval.redisplay_with_force(true);
+    eval.redisplay_with_force(true).expect("redisplay");
+    eval.redisplay_with_force(true).expect("redisplay");
     assert_eq!(layouts.get(), 1, "unchanged terminal must skip layout");
     builtin_suspend_tty(&mut eval, vec![]).unwrap();
     builtin_resume_tty(&mut eval, vec![]).unwrap();
     assert_eq!(log.borrow().as_slice(), &["suspend", "resume"]);
-    eval.redisplay_with_force(true);
+    eval.redisplay_with_force(true).expect("redisplay");
     assert_eq!(
         layouts.get(),
         2,
         "resume must consume the host's repaint request"
     );
     builtin_resume_tty(&mut eval, vec![]).unwrap();
-    eval.redisplay_with_force(true);
+    eval.redisplay_with_force(true).expect("redisplay");
     assert_eq!(layouts.get(), 2, "resuming an active terminal is a no-op");
 }

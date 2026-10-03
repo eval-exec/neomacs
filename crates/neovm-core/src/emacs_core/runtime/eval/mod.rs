@@ -3313,6 +3313,11 @@ pub struct Context {
     #[allow(clippy::type_complexity)]
     // frontend callback seam avoids a core/layout dependency cycle
     pub redisplay_fn: Option<Box<dyn FnMut(&mut Self)>>,
+    /// First non-local mode-line exit deferred across the frontend's void
+    /// redisplay callback. Each Context belongs to one mutator at a time;
+    /// independent mutators own independent slots. Flow owns its payload's
+    /// GC pins until redisplay restores its state and returns the exit.
+    pub(crate) mode_line_display_flow: Option<Flow>,
     /// Frontend-installed font-shaping driver (GNU `font->driver->shape`).
     /// The gstring contract lives in src/font.c's `Ffont_shape_gstring`; the
     /// shaping engine lives in the display layer, so the frontend installs
@@ -7738,6 +7743,11 @@ mod attention_word_tests;
 #[cfg(test)]
 #[path = "tests/idle_redisplay.rs"]
 mod idle_redisplay_tests;
+
+#[cfg(test)]
+#[path = "tests/redisplay_mode_line_flow.rs"]
+mod redisplay_mode_line_flow_tests;
+
 // The debug leaf guard: GC safe points, Lisp entries and binding pushes
 // refuse to run under a leaf builtin, and leaves leave state untouched.
 #[cfg(all(test, debug_assertions))]

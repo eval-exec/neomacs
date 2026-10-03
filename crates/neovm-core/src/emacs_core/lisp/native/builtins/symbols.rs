@@ -2077,7 +2077,7 @@ pub(crate) fn builtin_redisplay(
         return Ok(Value::NIL);
     }
     let force = args.first().is_some_and(|value| value.is_truthy());
-    eval.redisplay_with_force(force);
+    eval.redisplay_with_force(force)?;
     Ok(Value::T)
 }
 

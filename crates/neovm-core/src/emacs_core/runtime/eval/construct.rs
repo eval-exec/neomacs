@@ -86,6 +86,7 @@ impl Context {
         ev.input_rx = None;
         ev.eval_task_rx = None;
         ev.redisplay_fn = None;
+        ev.mode_line_display_flow = None;
         ev.display_idle_maintenance_fn = None;
         ev.scroll_preview_fn = None;
         ev.frame_snapshot_fn = None;
@@ -2246,6 +2247,7 @@ impl Context {
             eval_task_rx: None,
             quit_requested: QuitRequest::new(),
             redisplay_fn: None,
+            mode_line_display_flow: None,
             font_shape_fn: None,
             gstring_shape_cache: HashMap::new(),
             display_idle_maintenance_fn: None,

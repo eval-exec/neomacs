@@ -15,6 +15,13 @@
 //! - `line-number-display-width` — get line number display width
 //! - `long-line-optimizations-p` — check if long-line optimizations are enabled
 
+#[path = "mode_line_flow.rs"]
+mod mode_line_flow_policy;
+
+#[inline]
+pub(crate) fn mode_line_flow_enabled() -> bool {
+    mode_line_flow_policy::enabled()
+}
 mod mode_line_gc;
 pub(crate) mod motion;
 
@@ -1981,9 +1988,9 @@ pub(crate) fn builtin_format_mode_line_ctx(
 /// - `buffer`: target buffer (for buffer-local percent specs).
 /// - `target_cols`: the row width in character cells. `%-` fills to this width.
 ///
-/// Returns the fully rendered mode-line as a propertized string. On
-/// any evaluator error the function returns an empty string; callers
-/// that need to distinguish failure from empty should check `as_str`.
+/// Returns the rendered string. The compatibility entry defers nonlocal exits
+/// to Context's redisplay driver and returns an empty string for this row.
+/// Use [`try_format_mode_line_for_display_with_sources`] to handle Flow directly.
 pub fn format_mode_line_for_display(
     eval: &mut super::eval::Context,
     format_val: Value,
@@ -2004,25 +2011,99 @@ pub fn format_mode_line_for_display_with_sources(
     buffer: Value,
     target_cols: usize,
 ) -> ModeLineDisplayOutput {
+    if eval.has_mode_line_display_flow() {
+        return ModeLineDisplayOutput::from_root_string(Value::string(""));
+    }
+    match try_format_mode_line_for_display_with_sources(
+        eval,
+        format_val,
+        window,
+        buffer,
+        target_cols,
+    ) {
+        Ok(output) => output,
+        Err(flow) => {
+            if !flow.is_signal() && mode_line_flow_policy::enabled() {
+                eval.defer_mode_line_display_flow(flow);
+            } else {
+                tracing::debug!("mode-line display failed: {flow:?}");
+            }
+            ModeLineDisplayOutput::from_root_string(Value::string(""))
+        }
+    }
+}
+
+/// Fallible redisplay seam. Signals in `:eval` are logged and contribute nil;
+/// throws and other nonlocal exits return only after all display scopes restore.
+/// The compatibility adapter defers these exits to Context's redisplay driver.
+pub fn try_format_mode_line_for_display_with_sources(
+    eval: &mut super::eval::Context,
+    format_val: Value,
+    window: Value,
+    buffer: Value,
+    target_cols: usize,
+) -> Result<ModeLineDisplayOutput, Flow> {
+    try_format_mode_line_display(eval, format_val, window, buffer, target_cols, true)
+}
+
+/// Frame-title evaluation uses the same safe evaluator, but unlike actual
+/// mode/header/tab lines GNU does not save match data around the title walker.
+pub fn try_format_frame_title_for_display(
+    eval: &mut super::eval::Context,
+    format_val: Value,
+    window: Value,
+    buffer: Value,
+    target_cols: usize,
+) -> EvalResult {
+    try_format_mode_line_display(eval, format_val, window, buffer, target_cols, false)
+        .map(ModeLineDisplayOutput::into_value)
+}
+
+fn try_format_mode_line_display(
+    eval: &mut super::eval::Context,
+    format_val: Value,
+    window: Value,
+    buffer: Value,
+    target_cols: usize,
+    save_match_data: bool,
+) -> Result<ModeLineDisplayOutput, Flow> {
     let args = [format_val, Value::NIL, window, buffer];
-    if validate_optional_window_designator(
+    validate_optional_window_designator(
         eval,
         args.get(2),
         crate::emacs_core::window_cmds::WindowDomain::Any,
-    )
-    .is_err()
-    {
-        return ModeLineDisplayOutput::from_root_string(Value::string(""));
-    }
-    if validate_optional_buffer_designator(eval, args.get(3)).is_err() {
-        return ModeLineDisplayOutput::from_root_string(Value::string(""));
-    }
-    let target_buffer = resolve_mode_line_buffer(eval, args.get(2), args.get(3));
+    )?;
+    validate_optional_buffer_designator(eval, args.get(3))?;
     let saved_buffer = eval.buffers.current_buffer_id();
-    if let Some(buffer_id) = target_buffer
-        && eval.set_current_buffer_unrecorded(buffer_id).is_err()
+    let mut title_selection = if !save_match_data && mode_line_flow_policy::enabled() {
+        Some(mode_line_flow_policy::FormatSelection::enter(
+            eval,
+            Some(&window),
+        )?)
+    } else {
+        None
+    };
+    let target_buffer = resolve_mode_line_buffer(eval, args.get(2), args.get(3));
+    if let Some(buffer_id) = target_buffer {
+        if let Err(flow) = eval.set_current_buffer_unrecorded(buffer_id) {
+            if let Some(selection) = title_selection {
+                selection.restore(eval);
+            }
+            if let Some(buffer_id) = saved_buffer {
+                eval.restore_current_buffer_if_live(buffer_id);
+            }
+            return Err(flow);
+        }
+    }
+    let saved_match_data =
+        (save_match_data && mode_line_flow_policy::enabled()).then(|| eval.match_data.clone());
+    let match_roots = mode_line_gc::ScratchRoots::new();
+    if let Some(crate::emacs_core::regex::SearchedString::Heap(searched)) = saved_match_data
+        .as_ref()
+        .and_then(Option::as_ref)
+        .and_then(crate::emacs_core::regex::MatchData::searched_string)
     {
-        return ModeLineDisplayOutput::from_root_string(Value::string(""));
+        match_roots.pin(*searched);
     }
 
     // GNU `display_mode_lines` (xdisp.c) makes the window being redisplayed the
@@ -2063,7 +2144,7 @@ pub fn format_mode_line_for_display_with_sources(
     });
 
     let result_value = if format_val.is_nil() {
-        ModeLineDisplayOutput::from_root_string(Value::string(""))
+        Ok(ModeLineDisplayOutput::from_root_string(Value::string("")))
     } else {
         let face_spec = resolve_mode_line_face_spec(&args);
         let mut pctx = build_mode_line_percent_context(
@@ -2089,8 +2170,16 @@ pub fn format_mode_line_for_display_with_sources(
             {
                 eval.push_specpdl_root(value);
             }
-            format_mode_line_recursive(eval, &pctx, &format_val, &mut rendered, 0, false);
-            let output = rendered.into_display_output(face_spec);
+            let output = format_mode_line_recursive(
+                eval,
+                &pctx,
+                &format_val,
+                &mut rendered,
+                0,
+                false,
+                title_selection.as_mut(),
+            )
+            .map(|()| rendered.into_display_output(face_spec));
             eval.restore_specpdl_roots(pctx_root_scope);
             output
         }
@@ -2104,8 +2193,14 @@ pub fn format_mode_line_for_display_with_sources(
     if let Some(saved) = saved_window_selection {
         eval.frames.restore_selected_window_for_mode_line(saved);
     }
+    if let Some(selection) = title_selection {
+        selection.restore(eval);
+    }
     if let Some(buffer_id) = saved_buffer {
         eval.restore_current_buffer_if_live(buffer_id);
+    }
+    if let Some(match_data) = saved_match_data {
+        eval.match_data = match_data;
     }
     result_value
 }
@@ -2122,48 +2217,70 @@ pub(crate) fn finish_format_mode_line_in_eval(
     )?;
     validate_optional_buffer_designator(eval, args.get(3))?;
 
-    let target_buffer = resolve_mode_line_buffer(eval, args.get(2), args.get(3));
     let saved_buffer = eval.buffers.current_buffer_id();
-    if let Some(buffer_id) = target_buffer {
-        eval.set_current_buffer_unrecorded(buffer_id)?;
-    }
-
-    let result = if args[0].is_nil() || eval.noninteractive() {
-        Value::string("")
-    } else {
-        let format_val = args[0];
-        let face_spec = resolve_mode_line_face_spec(args);
-        let pctx = build_mode_line_percent_context(
-            &eval.frames,
-            &eval.buffers,
-            Some(&eval.coding_systems),
-            &eval.obarray,
-            args.get(2),
-        );
-        let mut result = ModeLineRendered::default();
-        {
-            // pctx caches heap Values (frame name, eol indicator) captured
-            // before the walk; an :eval that renames the frame would orphan
-            // them mid-walk. Root them for the walk's span.
-            let _accumulator_roots = mode_line_gc::ScratchRoots::new();
-            let pctx_root_scope = eval.save_specpdl_roots();
-            for value in [pctx.frame_name, pctx.eol_indicator, face_spec.face]
-                .into_iter()
-                .flatten()
-            {
-                eval.push_specpdl_root(value);
-            }
-            format_mode_line_recursive(eval, &pctx, &format_val, &mut result, 0, false);
-            let output = result.into_value(face_spec);
-            eval.restore_specpdl_roots(pctx_root_scope);
-            output
+    let mut selection =
+        if mode_line_flow_policy::enabled() && !args[0].is_nil() && !eval.noninteractive() {
+            Some(mode_line_flow_policy::FormatSelection::enter(
+                eval,
+                args.get(2),
+            )?)
+        } else {
+            None
+        };
+    let result = (|| {
+        let target_buffer = resolve_mode_line_buffer(eval, args.get(2), args.get(3));
+        if let Some(buffer_id) = target_buffer {
+            eval.set_current_buffer_unrecorded(buffer_id)?;
         }
-    };
+        let result = if args[0].is_nil() || eval.noninteractive() {
+            Ok(Value::string(""))
+        } else {
+            let format_val = args[0];
+            let face_spec = resolve_mode_line_face_spec(args);
+            let pctx = build_mode_line_percent_context(
+                &eval.frames,
+                &eval.buffers,
+                Some(&eval.coding_systems),
+                &eval.obarray,
+                args.get(2),
+            );
+            let mut result = ModeLineRendered::default();
+            {
+                // pctx caches heap Values (frame name, eol indicator) captured
+                // before the walk; an :eval that renames the frame would orphan
+                // them mid-walk. Root them for the walk's span.
+                let _accumulator_roots = mode_line_gc::ScratchRoots::new();
+                let pctx_root_scope = eval.save_specpdl_roots();
+                for value in [pctx.frame_name, pctx.eol_indicator, face_spec.face]
+                    .into_iter()
+                    .flatten()
+                {
+                    eval.push_specpdl_root(value);
+                }
+                let output = format_mode_line_recursive(
+                    eval,
+                    &pctx,
+                    &format_val,
+                    &mut result,
+                    0,
+                    false,
+                    selection.as_mut(),
+                )
+                .map(|()| result.into_value(face_spec));
+                eval.restore_specpdl_roots(pctx_root_scope);
+                output
+            }
+        };
 
+        result
+    })();
+    if let Some(selection) = selection {
+        selection.restore(eval);
+    }
     if let Some(buffer_id) = saved_buffer {
         eval.restore_current_buffer_if_live(buffer_id);
     }
-    Ok(result)
+    result
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -2197,7 +2314,7 @@ pub(crate) fn finish_format_mode_line_in_state_with_eval(
     }
 
     let result = if args[0].is_nil() {
-        Value::string("")
+        Ok(Value::string(""))
     } else {
         let format_val = args[0];
         let face_spec = resolve_mode_line_face_spec(args);
@@ -2221,14 +2338,14 @@ pub(crate) fn finish_format_mode_line_in_state_with_eval(
             false,
             &mut eval_form,
             &roots,
-        )?;
-        result.into_value(face_spec)
+        )
+        .map(|()| result.into_value(face_spec))
     };
 
     if let Some(buffer_id) = saved_buffer {
         buffers.switch_current_unrecorded(buffer_id);
     }
-    Ok(result)
+    result
 }
 
 fn mode_line_symbol_value_in_state(
@@ -3557,9 +3674,10 @@ fn format_mode_line_recursive(
     result: &mut ModeLineRendered,
     depth: usize,
     risky: bool,
-) {
+    selection: Option<&mut mode_line_flow_policy::FormatSelection>,
+) -> Result<(), Flow> {
     if depth > 20 {
-        return; // Guard against infinite recursion
+        return Ok(()); // Guard against infinite recursion
     }
 
     // Formats have a per-element scope; accumulator mutations publish roots
@@ -3567,8 +3685,10 @@ fn format_mode_line_recursive(
     let root_scope = eval.save_specpdl_roots();
     eval.push_specpdl_root(*format);
     result.root_for_walk();
-    format_mode_line_recursive_rooted(eval, pctx, format, result, depth, risky);
+    let output =
+        format_mode_line_recursive_rooted(eval, pctx, format, result, depth, risky, selection);
     eval.restore_specpdl_roots(root_scope);
+    output
 }
 
 fn format_mode_line_recursive_rooted(
@@ -3578,7 +3698,8 @@ fn format_mode_line_recursive_rooted(
     result: &mut ModeLineRendered,
     depth: usize,
     risky: bool,
-) {
+    mut selection: Option<&mut mode_line_flow_policy::FormatSelection>,
+) -> Result<(), Flow> {
     match format.kind() {
         ValueKind::Nil => {}
 
@@ -3632,7 +3753,8 @@ fn format_mode_line_recursive_rooted(
                         result,
                         depth + 1,
                         risky || !mode_line_symbol_is_risky(&eval.obarray, name),
-                    );
+                        selection.as_deref_mut(),
+                    )?;
                 }
             }
         }
@@ -3646,44 +3768,70 @@ fn format_mode_line_recursive_rooted(
 
             if car.is_symbol_named(":eval") {
                 if risky {
-                    return;
+                    return Ok(());
                 }
                 if cdr.is_cons() {
                     let form_val = cdr.cons_car();
                     eval.push_specpdl_root(form_val);
-                    if let Ok(val) = eval.eval_value(&form_val) {
-                        // The recursive entry roots the fresh return value
-                        // before a nested element can run Lisp again.
-                        format_mode_line_recursive(eval, pctx, &val, result, depth + 1, risky);
+                    if let Some(selection) = selection.as_deref_mut() {
+                        selection.before_eval(eval);
                     }
+                    let val = mode_line_flow_policy::eval_form(eval, &form_val)?;
+                    // The recursive entry roots the fresh return value before
+                    // a nested element can run Lisp again.
+                    format_mode_line_recursive(
+                        eval,
+                        pctx,
+                        &val,
+                        result,
+                        depth + 1,
+                        risky,
+                        selection.as_deref_mut(),
+                    )?;
                 }
-                return;
+                return Ok(());
             }
 
             if car.is_symbol_named(":propertize") {
                 if risky {
-                    return;
+                    return Ok(());
                 }
                 if cdr.is_cons() {
                     let elt = cdr.cons_car();
                     let mut nested = ModeLineRendered::default();
-                    format_mode_line_recursive(eval, pctx, &elt, &mut nested, depth + 1, risky);
+                    format_mode_line_recursive(
+                        eval,
+                        pctx,
+                        &elt,
+                        &mut nested,
+                        depth + 1,
+                        risky,
+                        selection.as_deref_mut(),
+                    )?;
                     nested.apply_propertize_properties(cdr.cons_cdr(), pctx.target);
                     result.append_rendered(&nested);
                 }
-                return;
+                return Ok(());
             }
 
             if let Some(lim) = car.as_fixnum() {
                 let mut nested = ModeLineRendered::default();
-                format_mode_line_recursive(eval, pctx, &cdr, &mut nested, depth + 1, risky);
+                format_mode_line_recursive(
+                    eval,
+                    pctx,
+                    &cdr,
+                    &mut nested,
+                    depth + 1,
+                    risky,
+                    selection.as_deref_mut(),
+                )?;
                 append_mode_line_rendered_segment(
                     result,
                     &nested,
                     if lim > 0 { lim } else { 0 },
                     if lim < 0 { -lim } else { 0 },
                 );
-                return;
+                return Ok(());
             }
 
             if car.is_symbol() && !car.is_symbol_named("t") {
@@ -3692,11 +3840,27 @@ fn format_mode_line_recursive_rooted(
                         .is_some_and(|value| value.is_truthy())
                     && let Some(branch) = mode_line_conditional_branch(cdr, true)
                 {
-                    format_mode_line_recursive(eval, pctx, &branch, result, depth + 1, risky);
+                    format_mode_line_recursive(
+                        eval,
+                        pctx,
+                        &branch,
+                        result,
+                        depth + 1,
+                        risky,
+                        selection.as_deref_mut(),
+                    )?;
                 } else if let Some(branch) = mode_line_conditional_branch(cdr, false) {
-                    format_mode_line_recursive(eval, pctx, &branch, result, depth + 1, risky);
+                    format_mode_line_recursive(
+                        eval,
+                        pctx,
+                        &branch,
+                        result,
+                        depth + 1,
+                        risky,
+                        selection.as_deref_mut(),
+                    )?;
                 }
-                return;
+                return Ok(());
             }
 
             // GNU FOR_EACH_TAIL_SAFE reads XCDR after rendering each element:
@@ -3707,7 +3871,15 @@ fn format_mode_line_recursive_rooted(
             let mut cycle = ModeLineTailCycle::new(tail);
             while tail.is_cons() {
                 let element = tail.cons_car();
-                format_mode_line_recursive(eval, pctx, &element, result, depth + 1, risky);
+                format_mode_line_recursive(
+                    eval,
+                    pctx,
+                    &element,
+                    result,
+                    depth + 1,
+                    risky,
+                    selection.as_deref_mut(),
+                )?;
                 tail = tail.cons_cdr();
                 eval.set_specpdl_root_slot(&tail_root, tail);
                 if cycle.step(tail, |checkpoint| {
@@ -3722,6 +3894,7 @@ fn format_mode_line_recursive_rooted(
             result.append_string_value_preserving_props(format);
         }
     }
+    Ok(())
 }
 
 #[allow(dead_code, clippy::too_many_arguments)] // split-state mode-line compatibility seam
@@ -3966,7 +4139,10 @@ fn format_mode_line_recursive_in_state_with_eval_rooted(
                 if cdr.is_cons() {
                     let form_val = cdr.cons_car();
                     roots.pin(form_val);
-                    let val = eval_form(&form_val, buffers)?;
+                    let val = mode_line_flow_policy::split_eval_result(
+                        &form_val,
+                        eval_form(&form_val, buffers),
+                    )?;
                     format_mode_line_recursive_in_state_with_eval_rooted(
                         obarray,
                         dynamic,
@@ -8955,7 +9131,7 @@ fn run_frame_snapshot(
     eval: &mut super::eval::Context,
     request: &SnapshotRequest,
 ) -> Result<String, Flow> {
-    eval.redisplay_with_force(true);
+    eval.redisplay_with_force(true)?;
     let Some(mut hook) = eval.frame_snapshot_fn.take() else {
         return Err(signal(
             "error",
@@ -8966,6 +9142,9 @@ fn run_frame_snapshot(
     };
     let result = hook(eval, request);
     eval.frame_snapshot_fn = Some(hook);
+    if let Some(flow) = eval.take_mode_line_display_flow() {
+        return Err(flow);
+    }
     result.map_err(|message| signal("error", vec![Value::string(message)]))
 }
 
@@ -9188,3 +9367,7 @@ mod mode_line_incremental_roots;
 #[cfg(test)]
 #[path = "tests/mode_line_live_spine.rs"]
 mod mode_line_live_spine;
+
+#[cfg(test)]
+#[path = "tests/mode_line_flow.rs"]
+mod mode_line_flow;

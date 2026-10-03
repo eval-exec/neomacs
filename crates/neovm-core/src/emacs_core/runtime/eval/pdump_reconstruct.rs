@@ -148,6 +148,7 @@ impl Context {
             eval_task_rx: None,
             quit_requested: QuitRequest::new(),
             redisplay_fn: None,
+            mode_line_display_flow: None,
             font_shape_fn: None,
             gstring_shape_cache: HashMap::new(),
             display_idle_maintenance_fn: None,

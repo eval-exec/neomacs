@@ -1635,6 +1635,10 @@ impl LayoutEngine {
     ) -> FrameLayoutAttempt {
         debug_assert!(purpose.query_window().is_none());
         self.layout_frame_rust_for_purpose_inner(evaluator, frame_id, purpose);
+        if evaluator.has_mode_line_display_flow() {
+            self.last_frame_display_state = None;
+            return FrameLayoutAttempt::Aborted;
+        }
         self.report_image_failures(evaluator);
         self.last_frame_display_state
             .take()
@@ -2643,6 +2647,9 @@ impl LayoutEngine {
                             viewport_retry_phase = ViewportResolutionPhase::Resolve;
                         }
                         LeafLayoutAttempt::LogicalInputsChanged => {
+                            if evaluator.has_mode_line_display_flow() {
+                                return None;
+                            }
                             let request = FrameRelayoutRequest::LogicalInputsChanged {
                                 window_id: DisplayWindowId::new(live_inputs.window.window_id),
                             };
@@ -4866,3 +4873,7 @@ impl LayoutEngine {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "engine/tests/mode_line_flow_test.rs"]
+mod mode_line_flow_test;

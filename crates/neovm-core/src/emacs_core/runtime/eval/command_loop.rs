@@ -1371,12 +1371,35 @@ impl Context {
     ///
     /// Mirrors GNU Emacs `redisplay()` (dispnew.c:5259).
     /// In batch mode (no callback), this is a no-op.
-    pub(crate) fn redisplay(&mut self) {
-        self.redisplay_with_force(false);
+    pub(crate) fn redisplay(&mut self) -> Result<(), Flow> {
+        self.redisplay_with_force(false)
     }
 
-    pub(crate) fn redisplay_for_input_wait(&mut self) {
-        self.redisplay_with_force(false);
+    pub(crate) fn redisplay_for_input_wait(&mut self) -> Result<(), Flow> {
+        self.redisplay_with_force(false)
+    }
+
+    /// Preserve the first mode-line non-local exit across a frontend callback.
+    /// This slot is Context-owned: one mutator uses a Context at a time, and
+    /// the Flow keeps its Lisp payload pinned until it is taken or dropped.
+    #[cold]
+    #[inline(never)]
+    pub fn defer_mode_line_display_flow(&mut self, flow: Flow) {
+        if self.mode_line_display_flow.is_none() {
+            self.mode_line_display_flow = Some(flow);
+        }
+    }
+
+    /// Whether layout must stop before evaluating or publishing another row.
+    #[inline]
+    pub fn has_mode_line_display_flow(&self) -> bool {
+        self.mode_line_display_flow.is_some()
+    }
+
+    /// Return the deferred mode-line exit after restoring redisplay state.
+    #[inline]
+    pub fn take_mode_line_display_flow(&mut self) -> Option<Flow> {
+        self.mode_line_display_flow.take()
     }
 
     /// Generation of asynchronously decoded media state; see
@@ -1557,19 +1580,24 @@ impl Context {
         }
     }
 
-    pub(crate) fn redisplay_with_force(&mut self, force: bool) {
+    pub(crate) fn redisplay_with_force(&mut self, force: bool) -> Result<(), Flow> {
+        if let Some(flow) = self.take_mode_line_display_flow() {
+            return Err(flow);
+        }
         // Mirrors GNU `redisplay_internal` (xdisp.c:17242-17245): bail out
         // when `inhibit-redisplay` is non-nil. `run_window_change_functions`
         // (window.c:4116) specbinds this to t so any nested redisplay
         // triggered by a window-change hook is a no-op. Without this check
         // a hook that indirectly calls `redisplay` infinitely recurses.
         let inhibit_redisplay = self.obarray.symbol_value("inhibit-redisplay");
-        if !force && inhibit_redisplay.as_ref().is_some_and(|v| v.is_truthy()) {
+        if (!force || crate::emacs_core::xdisp::mode_line_flow_enabled())
+            && inhibit_redisplay.as_ref().is_some_and(|v| v.is_truthy())
+        {
             tracing::debug!(
                 "redisplay inhibited by inhibit-redisplay={}",
                 inhibit_redisplay.as_ref().unwrap()
             );
-            return;
+            return Ok(());
         }
         self.sync_pending_resize_events();
         // Sync window position caches from markers.  After text edits,
@@ -1660,7 +1688,7 @@ impl Context {
             && !(force && self.displayed_buffer_changes_unacknowledged())
         {
             tracing::debug!("redisplay skipped: visible state unchanged");
-            return;
+            return Ok(());
         }
         self.resize_minibuffer_only_frames();
         // GNU `redisplay_internal` calls `hscroll_window_tree` (src/xdisp.c)
@@ -1681,6 +1709,11 @@ impl Context {
             // shrinking a freshly grown message — GNU only resizes exactly at
             // the command boundary, not on every `redisplay_window`.
             self.echo_area_resize_exact_pending = false;
+            if let Some(flow) = self.take_mode_line_display_flow() {
+                self.buffers.restore_outermost_restrictions(saved);
+                self.redisplay_fn = Some(f);
+                return Err(flow);
+            }
             let _ = super::super::builtins::run_redisplay_window_change_hooks(self);
             self.buffers.restore_outermost_restrictions(saved);
             self.redisplay_fn = Some(f);
@@ -1689,6 +1722,7 @@ impl Context {
             let _ = super::super::builtins::run_redisplay_window_change_hooks(self);
         }
         self.last_redisplay_signature = Some(self.redisplay_signature());
+        Ok(())
     }
 
     /// Run `pre-redisplay-function` (the driver of the `pre-redisplay-functions`

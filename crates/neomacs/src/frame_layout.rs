@@ -79,9 +79,14 @@ pub fn collect_snapshot_states(
         if !keep {
             continue;
         }
-        let Some(prepared) =
-            layout_frame_display_state(evaluator, node.frame_id, FrameLayoutPurpose::Snapshot)
-        else {
+        let prepared =
+            layout_frame_display_state(evaluator, node.frame_id, FrameLayoutPurpose::Snapshot);
+        if evaluator.has_mode_line_display_flow() {
+            // This callback carries String errors. Keep the original Flow in
+            // Context for run_frame_snapshot to return after reinstalling it.
+            return Err("frame snapshot: mode-line evaluation exited nonlocally".to_string());
+        }
+        let Some(prepared) = prepared else {
             continue;
         };
         states.push(prepared.discard(evaluator));
@@ -91,10 +96,16 @@ pub fn collect_snapshot_states(
     // frame): lay it out directly with its canonical root placement.
     if states.is_empty()
         && let SnapshotTarget::Frame(id) = target
-        && let Some(prepared) =
-            layout_frame_display_state(evaluator, FrameId(*id), FrameLayoutPurpose::Snapshot)
     {
-        states.push(prepared.discard(evaluator));
+        let prepared =
+            layout_frame_display_state(evaluator, FrameId(*id), FrameLayoutPurpose::Snapshot);
+        if evaluator.has_mode_line_display_flow() {
+            // The core drains the Context-owned Flow after this callback.
+            return Err("frame snapshot: mode-line evaluation exited nonlocally".to_string());
+        }
+        if let Some(prepared) = prepared {
+            states.push(prepared.discard(evaluator));
+        }
     }
 
     if states.is_empty() {
@@ -219,9 +230,14 @@ pub fn run_tty_layout_tree(
         if frame_id == root_id {
             continue;
         }
-        let Some(prepared) =
-            layout_frame_display_state(evaluator, frame_id, FrameLayoutPurpose::Redisplay)
-        else {
+        let prepared =
+            layout_frame_display_state(evaluator, frame_id, FrameLayoutPurpose::Redisplay);
+        if evaluator.has_mode_line_display_flow() {
+            // The redisplay driver returns the Context-owned exit. Neither
+            // primary nor auxiliary TTY may rasterize a partial frame tree.
+            return None;
+        }
+        let Some(prepared) = prepared else {
             continue;
         };
         let Ok(state) = prepared.activate(evaluator) else {

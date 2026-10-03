@@ -1875,8 +1875,9 @@ impl NativePopupSession<'_> {
         // tty_menu_activate restores screen_behind on exit; invalidate here
         // so unchanged visible state cannot skip the host's deferred redraw.
         ctx.invalidate_redisplay();
-        ctx.redisplay_with_force(true);
+        let redisplay_result = ctx.redisplay_with_force(true);
         ctx.restore_vm_roots(result_root_scope);
+        redisplay_result?;
         result
     }
 }

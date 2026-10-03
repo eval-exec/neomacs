@@ -2913,14 +2913,20 @@ fn frame_host_title(eval: &mut Context, frame_id: FrameId) -> LispString {
         return fallback_title;
     }
 
-    let rendered = neovm_core::emacs_core::xdisp::format_mode_line_for_display(
+    let rendered = neovm_core::emacs_core::xdisp::try_format_frame_title_for_display(
         eval,
         format,
         Value::make_window(selected_window_id.0),
         buffer_id.map(Value::make_buffer).unwrap_or(Value::NIL),
         target_cols,
     );
-    rendered.as_lisp_string().cloned().unwrap_or(fallback_title)
+    match rendered {
+        Ok(rendered) => rendered.as_lisp_string().cloned().unwrap_or(fallback_title),
+        Err(flow) => {
+            eval.defer_mode_line_display_flow(flow);
+            fallback_title
+        }
+    }
 }
 
 fn adopt_existing_primary_gui_frame(eval: &mut Context) -> Result<(), String> {
@@ -2972,6 +2978,9 @@ fn sync_live_gui_frame_titles(eval: &mut Context) {
             continue;
         }
         let title = frame_host_title(eval, frame_id);
+        if eval.has_mode_line_display_flow() {
+            return;
+        }
         if let Some(host) = eval.display_host.as_mut() {
             let _ = host.set_gui_frame_title(frame_id, title);
         }
@@ -5673,11 +5682,17 @@ fn publish_gui_frame(
     frame_tx: &neomacs_display_runtime::thread_comm::FrameSender,
     render_waker: Option<&GuiEventLoopWaker>,
 ) {
+    if evaluator.has_mode_line_display_flow() {
+        return;
+    }
     evaluator.setup_thread_locals();
     sync_selected_gui_chrome_state(evaluator);
     if !throw_on_input_active(evaluator) {
         // Title formatting may evaluate Lisp mode-line forms too.
         sync_live_gui_frame_titles(evaluator);
+    }
+    if evaluator.has_mode_line_display_flow() {
+        return;
     }
 
     let forest = evaluator.frame_manager().render_frame_forest(
@@ -5695,6 +5710,9 @@ fn publish_gui_frame(
             node.frame_id,
             frame_layout::FrameLayoutPurpose::Redisplay,
         );
+        if evaluator.has_mode_line_display_flow() {
+            return;
+        }
         let Some(prepared) = prepared else {
             continue;
         };

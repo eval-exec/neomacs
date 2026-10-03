@@ -116,7 +116,7 @@ pub(crate) const ABI_TAG: u32 = compute_abi_tag();
 // v24: static closure and list-HOF chains add six gated mapping shims and activation metadata.
 // v25: AOT re-tier adds monotone shared-source exclusion and salts its runtime layout.
 // v26: generational JIT cons stores read the shared cons-block unlogged bitmap.
-const ABI_TAG_VERSION: u32 = 26;
+const ABI_TAG_VERSION: u32 = 27;
 
 /// Format version of the AOT descriptor spec-section + the runtime spec ABI
 /// (`SpecSlot`/`spec_expected` sidecar bases, the loader re-classify+arm protocol).

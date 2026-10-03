@@ -172,7 +172,7 @@ fn maybe_redisplay_sync_output(
     display: bool,
 ) -> Result<(), Flow> {
     if display && destination_writes_to_buffer_in_state(&eval.buffers, destination)? {
-        eval.redisplay();
+        eval.redisplay()?;
     }
     Ok(())
 }
