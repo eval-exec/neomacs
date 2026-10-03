@@ -23,6 +23,7 @@
 //! | `NEOMACS_MODE_LINE_PROP_SLICE` | `off` | `off`; `on`/`1`/`true`/`yes` | Clip and graft literal source intervals with one plist copy |
 //! | `NEOMACS_MODE_LINE_PROP_BORROW` | `off` | `off`; `on`/`1`/`true`/`yes` | Borrow source string intervals during synchronous mode-line property reads |
 //! | `NEOMACS_MODE_LINE_PLAIN_FIELD` | `off` | `off`; `on`/`1`/`true`/`yes` | Append property-free percent text directly to the mode-line output |
+//! | `NEOMACS_MODE_LINE_NUMERIC_PADDING` | `off` | `off`; `on`/`1`/`true`/`yes` | Keep numeric-wrapper padding independent of inherited mode-line properties |
 
 #[path = "mode_line_flow.rs"]
 mod mode_line_flow_policy;
@@ -32,6 +33,7 @@ pub fn mode_line_flow_enabled() -> bool {
     mode_line_flow_policy::enabled()
 }
 mod mode_line_gc;
+mod mode_line_numeric_padding;
 pub(crate) mod motion;
 
 use self::motion::MotionEngine;
@@ -3091,6 +3093,7 @@ struct ModeLineRendered {
     /// The enclosing walk owns the scratch-root scope. Mutations publish new
     /// Lisp values there before any later element can evaluate Lisp.
     gc_roots: Option<mode_line_gc::AccumulatorRoots>,
+    numeric_padding: mode_line_numeric_padding::PaddingRanges,
 }
 
 /// One `display (min-width WIDTH-SPEC)` run in GNU's direct mode-line
@@ -3215,12 +3218,15 @@ impl ModeLineRendered {
             source_spans: Vec::new(),
             min_width_transitions: Vec::new(),
             gc_roots: None,
+            numeric_padding: Default::default(),
         }
     }
 
     fn append_rendered(&mut self, other: &Self) {
         let char_offset = self.char_len();
         self.multibyte |= other.multibyte;
+        self.numeric_padding
+            .append_shifted(&other.numeric_padding, char_offset);
         self.text.extend_from_slice(&other.text);
         self.append_properties(&other.text_props, char_offset);
         for span in &other.source_spans {
@@ -3385,6 +3391,7 @@ impl ModeLineRendered {
             // A truncation, not a re-derivation: keep the source identity,
             // like GNU `substring'.
             multibyte: self.multibyte,
+            numeric_padding: self.numeric_padding.clipped(precision),
             text: self.text.iter().take(precision).copied().collect(),
             text_props: self
                 .text_props
@@ -3434,6 +3441,31 @@ impl ModeLineRendered {
             return;
         }
 
+        if mode_line_numeric_padding::enabled() {
+            self.min_width_transitions.clear();
+            let text_props = &self.text_props;
+            let transitions = &mut self.min_width_transitions;
+            let roots = &mut self.gc_roots;
+            self.numeric_padding
+                .for_each_unmarked_range(self.text.len(), |range| {
+                    let mut next_run = run.clone();
+                    next_run.padding_properties =
+                        text_props.get_properties_at_char_pos(CharPos0::new(range.start));
+                    if let Some(roots) = roots.as_mut() {
+                        mode_line_gc::pin_accumulator_value(roots, next_run.width_spec);
+                        for (&name, &value) in &next_run.padding_properties {
+                            mode_line_gc::pin_accumulator_value(roots, name);
+                            mode_line_gc::pin_accumulator_value(roots, value);
+                        }
+                    }
+                    transitions.push(ModeLineMinWidthTransition {
+                        output_start: range.start,
+                        run: next_run,
+                    });
+                });
+            return;
+        }
+
         // The outer :propertize owns the resulting display property over this
         // entire subtree, so any nested min-width markers it overwrote are no
         // longer observable by GNU's iterator.
@@ -3463,14 +3495,20 @@ impl ModeLineRendered {
         }
     }
 
-    /// Reproduce GNU `display_min_width`: an active run is closed only when a
-    /// different min-width identity starts.  Ordinary following strings and
-    /// the end of the flattened mode line do not themselves flush it.
+    /// Reproduce GNU `display_min_width`: changing min-width identity closes
+    /// an active run. With numeric provenance enabled, the next ordinary Lisp
+    /// string also closes it; synthetic numeric padding and end of stream do
+    /// not. GNU's display_string uses a null object for numeric field padding.
     fn realize_display_min_width_transitions(&mut self) {
         let transitions = std::mem::take(&mut self.min_width_transitions);
         let Some(first) = transitions.first().cloned() else {
             return;
         };
+
+        if mode_line_numeric_padding::enabled() {
+            self.realize_display_min_width_string_boundaries(transitions);
+            return;
+        }
 
         let mut active = first;
         let mut inserted = 0usize;
@@ -3494,6 +3532,61 @@ impl ModeLineRendered {
         }
     }
 
+    fn realize_display_min_width_string_boundaries(
+        &mut self,
+        transitions: Vec<ModeLineMinWidthTransition>,
+    ) {
+        // Source spans identify actual display_string Lisp-string boundaries.
+        // Numeric field-width spaces have no source span, so they must keep an
+        // inherited min-width run active until the next string is encountered.
+        let mut events: Vec<(usize, Option<ModeLineMinWidthRun>)> = transitions
+            .into_iter()
+            .map(|transition| (transition.output_start, Some(transition.run)))
+            .collect();
+        for span in &self.source_spans {
+            let has_min_width = self
+                .text_props
+                .get_property_at_char_pos(
+                    CharPos0::new(span.output_start),
+                    Value::symbol("display"),
+                )
+                .and_then(mode_line_display_spec_min_width)
+                .is_some();
+            if !has_min_width {
+                events.push((span.output_start, None));
+            }
+        }
+        events.sort_by_key(|(start, _)| *start);
+
+        let mut active: Option<ModeLineMinWidthTransition> = None;
+        let mut inserted = 0usize;
+        for (start, run) in events {
+            if let (Some(previous), Some(next)) = (&active, &run)
+                && previous.run.width_spec.bits() == next.width_spec.bits()
+            {
+                continue;
+            }
+            let mut next_start = start.saturating_add(inserted);
+            if let Some(previous) = active.take() {
+                let run_width = next_start.saturating_sub(previous.output_start);
+                if run_width < previous.run.columns {
+                    let padding = previous.run.columns - run_width;
+                    self.insert_min_width_padding(
+                        next_start,
+                        padding,
+                        &previous.run.padding_properties,
+                    );
+                    inserted = inserted.saturating_add(padding);
+                    next_start = next_start.saturating_add(padding);
+                }
+            }
+            active = run.map(|run| ModeLineMinWidthTransition {
+                output_start: next_start,
+                run,
+            });
+        }
+    }
+
     fn insert_min_width_padding(
         &mut self,
         at: usize,
@@ -3504,6 +3597,7 @@ impl ModeLineRendered {
             return;
         }
         let at = at.min(self.text.len());
+        self.numeric_padding.insert_unmarked(at, columns);
         self.text
             .splice(at..at, std::iter::repeat_n(' ' as u32, columns));
         self.text_props
@@ -3557,11 +3651,14 @@ impl ModeLineRendered {
             if chunk.len() != 2 {
                 continue;
             }
-            self.text_props.put_property_in_char_range(
-                display_char_range(0, self.char_len()),
-                chunk[0],
-                chunk[1],
-            );
+            let end = self.char_len();
+            self.numeric_padding.for_each_unmarked_range(end, |range| {
+                self.text_props.put_property_in_char_range(
+                    display_char_range(range.start, range.end),
+                    chunk[0],
+                    chunk[1],
+                );
+            });
         }
         self.pin_properties();
     }
@@ -3711,6 +3808,32 @@ fn resolve_mode_line_face_spec(args: &[Value]) -> ModeLineFaceSpec {
         Some(face)
     };
     ModeLineFaceSpec { no_props, face }
+}
+
+/// GNU xdisp.c display_mode_element's final field-width padding has no
+/// inherited :propertize properties. Percent fields still use the original
+/// helper because their store_mode_line_string padding inherits source props.
+fn append_mode_line_numeric_segment(
+    result: &mut ModeLineRendered,
+    rendered: &ModeLineRendered,
+    field_width: i64,
+    precision: i64,
+) {
+    if !mode_line_numeric_padding::enabled() {
+        append_mode_line_rendered_segment(result, rendered, field_width, precision);
+        return;
+    }
+    let mut segment = if precision > 0 {
+        rendered.slice_chars(precision as usize)
+    } else {
+        rendered.clone()
+    };
+    let start = segment.char_len();
+    if field_width > 0 && (start as i64) < field_width {
+        segment.pad_plain_spaces((field_width - start as i64) as usize);
+        segment.numeric_padding.mark(start..segment.char_len());
+    }
+    result.append_rendered(&segment);
 }
 
 fn append_mode_line_rendered_segment(
@@ -4060,7 +4183,7 @@ fn format_mode_line_recursive_rooted(
                     risky,
                     selection.as_deref_mut(),
                 )?;
-                append_mode_line_rendered_segment(
+                append_mode_line_numeric_segment(
                     result,
                     &nested,
                     if lim > 0 { lim } else { 0 },
@@ -4235,7 +4358,7 @@ fn format_mode_line_recursive_in_state(
                     depth + 1,
                     risky,
                 );
-                append_mode_line_rendered_segment(
+                append_mode_line_numeric_segment(
                     result,
                     &nested,
                     if lim > 0 { lim } else { 0 },
@@ -4436,7 +4559,7 @@ fn format_mode_line_recursive_in_state_with_eval_rooted(
                     eval_form,
                     roots,
                 )?;
-                append_mode_line_rendered_segment(
+                append_mode_line_numeric_segment(
                     result,
                     &nested,
                     if lim > 0 { lim } else { 0 },

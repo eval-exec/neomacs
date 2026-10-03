@@ -73,6 +73,12 @@ mod minibuffer_line;
 mod minor_mode_order_repro;
 #[path = "mode_line_eval_count_oracle.rs"]
 mod mode_line_eval_count_oracle;
+#[cfg(test)]
+#[path = "mode_line_gc_lifetime_oracle.rs"]
+mod mode_line_gc_lifetime_oracle;
+#[cfg(test)]
+#[path = "mode_line_numeric_padding_oracle.rs"]
+mod mode_line_numeric_padding_oracle;
 #[path = "modes.rs"]
 mod modes;
 #[path = "org.rs"]

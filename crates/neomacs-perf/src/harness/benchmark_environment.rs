@@ -97,6 +97,8 @@ pub(super) const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOMACS_MODE_LINE_PROP_SLICE",
     // Direct property-free percent fields (`off` default, `on`).
     "NEOMACS_MODE_LINE_PLAIN_FIELD",
+    // Preserve partial mode-line owners across Lisp/GC (`off` default, `on`).
+    "NEOMACS_MODE_LINE_NUMERIC_PADDING",
     // Bounded watched-property demand loop (`off` default, `on`).
     "NEOMACS_WATCHED_PROP_DEMAND",
     // A window whose start moved back reuses its old rows: `on`.
