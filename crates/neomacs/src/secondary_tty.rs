@@ -169,6 +169,9 @@ impl TtyFrameHostFactory for SecondaryTtyFactory {
                 self.quit_requested.clone(),
             )?;
             let terminal_id = request.terminal_id();
+            // Read the terminal's ERASE byte before the session moves into the
+            // registry; the evaluator publishes it for this frame.
+            let erase_char = session.erase_char();
             let mut sessions = self
                 .registry
                 .sessions
@@ -182,6 +185,7 @@ impl TtyFrameHostFactory for SecondaryTtyFactory {
             Ok(OpenedTtyFrameHost::new(
                 size,
                 attributes,
+                erase_char,
                 Box::new(SecondaryTtyHost {
                     registry: self.registry.clone(),
                     terminal_id,
@@ -235,6 +239,9 @@ struct SecondaryTtySession {
 struct TtyDevice {
     file: std::fs::File,
     original_termios: libc::termios,
+    /// `c_cc[VERASE]` from the modes saved before raw mode, which is what GNU
+    /// publishes as `tty-erase-char` for this terminal (src/sysdep.c:1130).
+    erase_char: u8,
     active: bool,
     capabilities: super::tty_output::Capabilities,
 }
@@ -261,6 +268,7 @@ impl TtyDevice {
                 std::io::Error::last_os_error()
             ));
         }
+        let erase_char = original_termios.c_cc[libc::VERASE];
         set_raw_mode(file.as_raw_fd(), &original_termios)?;
 
         // From this point onward every `?` drops an active TtyDevice and thus
@@ -268,6 +276,7 @@ impl TtyDevice {
         let mut device = Self {
             file,
             original_termios,
+            erase_char,
             active: true,
             capabilities,
         };
@@ -340,6 +349,11 @@ impl Drop for TtyDevice {
 
 #[cfg(unix)]
 impl SecondaryTtySession {
+    /// This terminal's ERASE byte, as read from the modes saved at open.
+    fn erase_char(&self) -> u8 {
+        self.device.erase_char
+    }
+
     fn open(
         request: &TtyFrameOpenRequest,
         input_tx: crossbeam_channel::Sender<InputEvent>,

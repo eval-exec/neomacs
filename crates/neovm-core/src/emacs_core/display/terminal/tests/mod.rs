@@ -27,6 +27,9 @@ impl TtyFrameHostFactory for RecordingTtyFrameHostFactory {
         Ok(OpenedTtyFrameHost::new(
             TtyFrameSize::new(132, 43).expect("non-zero test dimensions"),
             neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(256),
+            // 127 (DEL) is the common PTY default; the frame-creation path only
+            // needs *an* answer to publish.
+            127,
             Box::new(RecordingTerminalHost {
                 log: Rc::clone(&self.lifecycle),
             }),
@@ -737,6 +740,16 @@ fn make_terminal_frame_opens_and_owns_an_explicit_secondary_tty() {
         .expect("make-terminal-frame should open the requested tty");
     let frame_id = crate::window::FrameId(frame.as_frame_id().expect("frame id"));
     let terminal_id = eval.frames.get(frame_id).expect("frame").terminal_id;
+
+    // GNU `init_sys_modes` publishes each initialized terminal's ERASE byte as
+    // `tty-erase-char` (src/sysdep.c:1130); the recording host reports 127.
+    // A fresh Context never seeded the variable, so this fails if the frame
+    // creation path forgets to publish the attaching terminal's answer.
+    assert_eq!(
+        eval.obarray.symbol_value("tty-erase-char").copied(),
+        Some(Value::fixnum(127)),
+        "creating a tty frame must publish that terminal's ERASE byte"
+    );
 
     assert_ne!(
         terminal_id, TERMINAL_ID,

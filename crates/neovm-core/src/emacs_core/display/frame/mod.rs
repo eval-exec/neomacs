@@ -1066,6 +1066,15 @@ pub(crate) fn builtin_make_terminal_frame(
                 return Err(signal("error", vec![Value::string(message)]));
             }
         };
+        // GNU `init_sys_modes` publishes each initialized terminal's ERASE byte
+        // (src/sysdep.c:1130); `normal-erase-is-backspace-setup-frame`
+        // (lisp/simple.el) reads it to decide whether Backspace deletes or
+        // opens the help prefix.  A daemon has no terminal of its own, so the
+        // attaching client's answer must replace whatever startup left.
+        eval.set_variable(
+            "tty-erase-char",
+            Value::fixnum(i64::from(opened.erase_char())),
+        );
         let size = super::terminal::pure::install_opened_tty(&request, opened);
         let displays_chrome = !eval.noninteractive();
         let (frames, buffers) = (&mut eval.frames, &eval.buffers);
