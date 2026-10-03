@@ -23,7 +23,7 @@ impl Context {
             Some(syms) => syms,
             None => self.resolve_user_test_gc_setting_syms(),
         };
-        let mut accounting = HashTestGcInhibitAccounting {
+        HashTestGcInhibitAccounting {
             bytes_at_start: self.tagged_heap.bytes_since_gc_exact(),
             charged_bytes_at_start: self.tagged_heap.bytes_since_gc(),
             collector_threshold_at_start: self.tagged_heap.gc_threshold(),
@@ -36,16 +36,7 @@ impl Context {
                 .obarray
                 .symbol_value_id_or_nil(syms.startup_ceiling)
                 .is_nil(),
-        };
-        if (accounting.startup_ceiling
-            && accounting.collector_threshold_at_start > GC_STARTUP_THRESHOLD_CEILING_BYTES)
-            || (!accounting.startup_ceiling
-                && accounting.collector_threshold_at_start == GC_STARTUP_THRESHOLD_CEILING_BYTES)
-        {
-            self.sync_gc_threshold_from_runtime_settings();
-            accounting.collector_threshold_at_start = self.tagged_heap.gc_threshold();
         }
-        accounting
     }
 
     #[cold]
