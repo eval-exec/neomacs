@@ -1010,6 +1010,25 @@ pub(crate) fn jit_direct_profile_on() -> bool {
 std::thread_local! {
     // Compiler configuration only; no Lisp values or mutator runtime state.
     static DIRECT_SELF_HEAT_TEST_OVERRIDE: std::cell::Cell<Option<super::direct_call::DirectSelfHeat>> = const { std::cell::Cell::new(None) };
+    static DIRECT_SELF_KERNEL_TEST_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn force_direct_self_kernel_for_test(on: Option<bool>) {
+    DIRECT_SELF_KERNEL_TEST_OVERRIDE.with(|current| current.set(on));
+}
+
+/// Admit self sites and their implicit register entry only when the existing
+/// profitability classifier does not find more calls than arithmetic.
+/// Default off. Threading: immutable process configuration, compiler-only;
+/// the test override is a scalar and never holds Lisp or mutator state.
+pub(crate) fn jit_direct_self_kernel_on() -> bool {
+    #[cfg(test)]
+    if let Some(on) = DIRECT_SELF_KERNEL_TEST_OVERRIDE.with(core::cell::Cell::get) {
+        return on;
+    }
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| knob_on("NEOVM_JIT_DIRECT_SELF_KERNEL"))
 }
 
 #[cfg(test)]

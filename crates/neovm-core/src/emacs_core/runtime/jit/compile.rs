@@ -856,7 +856,7 @@ pub fn compile_bytecode_function_requested(
     );
     // The self policy scopes only an immutable compiler-source token; its
     // selected site maps below provide the actual self-call proof.
-    let _self_source = direct_call::SelfSourceScope::enter_for(f, self_recursive);
+    let _self_source = direct_call::SelfSourceScope::enter_for(f, self_recursive, call_heavy);
     let outer = (
         BYPASS_PROFIT_GATE.with(|b| b.replace(request.bypass_profit_gate)),
         ACTIVE_CALL_HEAVY.with(|b| b.replace(call_heavy)),

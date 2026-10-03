@@ -25,9 +25,10 @@ pub(crate) fn self_only_on() -> bool {
 pub(crate) struct SelfSourceScope(Option<usize>);
 
 impl SelfSourceScope {
-    pub(crate) fn enter_for(f: &ByteCodeFunction, may_call_self: bool) -> Self {
+    pub(crate) fn enter_for(f: &ByteCodeFunction, may_call_self: bool, call_heavy: bool) -> Self {
         let source = (self_only_on()
             && may_call_self
+            && (!jit_direct_self_kernel_on() || !call_heavy)
             && match jit_direct_self_heat() {
                 DirectSelfHeat::Off => true,
                 mode => mode.allows(
