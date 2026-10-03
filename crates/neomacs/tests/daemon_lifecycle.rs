@@ -1,5 +1,7 @@
-//! Real display-free editor/client lifecycle regressions. No mock server or
-//! installed runtime: Cargo's matching binaries run on disposable HOME/XDG data.
+//! Real display-free editor/client lifecycle regressions. No mock server and
+//! no installed runtime: Cargo's matching binaries run on disposable HOME/XDG
+//! data, and the bootstrap runtime image they boot from is provisioned beside
+//! the editor binary on first use (see [`ensure_bootstrap_runtime_image`]).
 #![cfg(target_os = "linux")]
 
 use std::fs;
@@ -8,10 +10,66 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::{
-    Arc,
+    Arc, OnceLock,
     atomic::{AtomicBool, Ordering},
 };
 use std::time::{Duration, Instant};
+
+/// Provision the bootstrap runtime image the daemon boots from, once per
+/// test process.
+///
+/// The editor loads `RuntimeImageRole::Bootstrap` from beside its own binary
+/// and never builds that image itself.  Without it the daemon bootstraps from
+/// Lisp sources instead — minutes of loading, then a hard failure — which the
+/// fixture's readiness deadline reports as the unhelpful "daemon never became
+/// ready".  The image must land where the loader searches, so every name here
+/// comes from the editor's own loader API rather than a literal that could
+/// drift from the layout it looks in.
+fn ensure_bootstrap_runtime_image() {
+    use neovm_core::emacs_core::load::{
+        RuntimeImageRole, TEMACS_ROLE_BINARY_NAME, fingerprinted_runtime_image_path_for_executable,
+        runtime_image_path_for_executable,
+    };
+
+    static PROVISIONED: OnceLock<Result<(), String>> = OnceLock::new();
+    let provisioned = PROVISIONED.get_or_init(|| {
+        let editor = PathBuf::from(env!("CARGO_BIN_EXE_neomacs"));
+        // A final image beside the binaries wins over the bootstrap image at
+        // load time (the daemon prefers it), so a stale one would run old
+        // code against these tests.  Repairing it is a full build, not
+        // something a test may do -- but it must not be silent.
+        for stale_candidate in [
+            runtime_image_path_for_executable(&editor, RuntimeImageRole::Final),
+            fingerprinted_runtime_image_path_for_executable(&editor, RuntimeImageRole::Final),
+        ] {
+            if stale_candidate.is_file()
+                && neomacs_infra::runtime_image::image_is_older_than(&stale_candidate, &editor)
+            {
+                return Err(format!(
+                    "{} is older than {}; the daemon would load that final image in \
+                     preference to the bootstrap image and run stale code. Remove it or \
+                     point CARGO_TARGET_DIR at a clean directory",
+                    stale_candidate.display(),
+                    editor.display(),
+                ));
+            }
+        }
+        let plan = neomacs_infra::runtime_image::BootstrapImagePlan {
+            loader_image: fingerprinted_runtime_image_path_for_executable(
+                &editor,
+                RuntimeImageRole::Bootstrap,
+            ),
+            canonical_image_name: RuntimeImageRole::Bootstrap.image_file_name().to_string(),
+            editor,
+            runtime_root: neomacs_infra::workspace_root(),
+            role_binary_name: TEMACS_ROLE_BINARY_NAME.to_string(),
+        };
+        neomacs_infra::runtime_image::provision_bootstrap_image(&plan).map(|_| ())
+    });
+    if let Err(error) = provisioned {
+        panic!("preparing the daemon test runtime image failed: {error}");
+    }
+}
 
 // Background daemons are not children of this runner. Capture kernel pidfds
 // while their isolated HOME is still verifiable; never signal a PID from a
@@ -104,6 +162,7 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        ensure_bootstrap_runtime_image();
         let root = tempfile::Builder::new()
             .prefix("neomacs-daemon-")
             .tempdir()
