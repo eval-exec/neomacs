@@ -23,10 +23,14 @@ filters and repeated client evaluations continue to work. `(daemonp)` returns
 the supplied name, or t for an unnamed daemon. `daemon-initialized` retains GNU's
 one-shot, after-init contract; it is normally called by `startup.el`, not by user
 configuration. `kill-emacs` runs the usual exit hooks and removes the server
-socket. `(kill-emacs nil t)` closes owned processes and re-execs the daemon with
-the original arguments and PID. SIGTERM and SIGHUP also run `kill-emacs` with
-the signal number as the exit status (15 and 1 respectively), including when the
-daemon is idle or waiting in synchronous `call-process` or `call-process-region`.
+socket. `(kill-emacs nil t)` closes owned processes and re-execs the daemon in
+place: same PID, and the daemon stays attached to the process that started it.
+Unlike GNU Emacs, a background daemon is restarted as a **foreground** one
+rather than re-daemonizing, so the PID is preserved instead of changing.
+SIGINT, SIGTERM and SIGHUP also run `kill-emacs` with
+the signal number as the exit status (2, 15 and 1 respectively, matching GNU's
+`maybe_fatal_sig` set), including when the daemon is idle or waiting in
+synchronous `call-process` or `call-process-region`.
 Exit hooks run on the evaluator thread; host cleanup restores attached client
 terminals and closes owned listeners and subprocesses. Host shutdown removes a
 Unix listener's filesystem node only if it still matches the identity captured
