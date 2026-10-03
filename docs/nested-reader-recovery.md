@@ -29,9 +29,9 @@ gzip -dc admin/charsets/glibc/EUC-JP-MS.gz \
   | awk -f admin/charsets/eucjp-ms.awk > lisp/international/eucjp-ms.el
 emacs -Q --batch -l lisp/emacs-lisp/loaddefs-gen.el \
   --eval '(loaddefs-generate "lisp/emacs-lisp" "lisp/emacs-lisp/.loaddefs-test.el")'
-cargo nextest run --locked -p neovm-core --lib --test-threads 1 -E 'test(keyboard::tests::timer_reader)'
-cargo nextest run --locked -p neovm-core --lib --test-threads 1 -E 'test(emacs_core::timer::tests::unlet_inhibition) or test(emacs_core::timer::tests::watcher_boundary)'
-cargo nextest run --locked -p neovm-core --lib --test-threads 1 -E 'test(quit_recovery)'
+cargo nextest run --locked -p neovm-core --lib -E 'test(keyboard::tests::timer_reader)'
+cargo nextest run --locked -p neovm-core --lib -E 'test(emacs_core::timer::tests::unlet_inhibition) or test(emacs_core::timer::tests::watcher_boundary)'
+cargo nextest run --locked -p neovm-core --lib -E 'test(quit_recovery)'
 ```
 
 These tests use the repository's native runtime-startup helper. They exercise
