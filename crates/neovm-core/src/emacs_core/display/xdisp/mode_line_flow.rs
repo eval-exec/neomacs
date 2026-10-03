@@ -2,7 +2,7 @@
 //!
 //! | Knob | Default | Effect |
 //! | --- | --- | --- |
-//! | `NEOVM_MODE_LINE_FLOW` | off | Catch/log signals inside safe `:eval`, propagate other exits after restoring display scopes. Graduate after active GNU parity and instruction gates. |
+//! | `NEOVM_MODE_LINE_FLOW` | on | Catch/log signals inside safe `:eval`, propagate other exits after restoring display scopes (GNU `dsafe_eval`). `=off` restores the old swallow-every-exit walk. |
 
 use super::*;
 use crate::emacs_core::error::{FlowKind, FlowResultExt};
@@ -13,10 +13,10 @@ use crate::emacs_core::eval::{ConditionFrame, ResumeTarget};
 pub(super) fn enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| {
-        std::env::var("NEOVM_MODE_LINE_FLOW").is_ok_and(|value| {
+        !std::env::var("NEOVM_MODE_LINE_FLOW").is_ok_and(|value| {
             matches!(
                 value.trim().to_ascii_lowercase().as_str(),
-                "1" | "on" | "true" | "yes"
+                "0" | "off" | "false" | "no"
             )
         })
     })
