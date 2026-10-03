@@ -18,6 +18,23 @@ fn settled_point(
 }
 
 use super::*;
+
+#[test]
+fn gnu_frame_alpha_survives_display_snapshot_materialization() {
+    let mut glyphs = FrameGlyphBuffer::with_size(640.0, 480.0);
+    glyphs.background_alpha = 0.25;
+    glyphs.frame_alpha = [0.8, -1.0];
+    let state = FrameDisplayState::from_frame_glyph_buffer(&glyphs);
+    assert_eq!(state.background_alpha, 0.25);
+    assert_eq!(state.frame_alpha, [0.8, -1.0]);
+    let materialized = state.materialize();
+    assert_eq!(materialized.background_alpha, 0.25);
+    assert_eq!(materialized.frame_alpha, [0.8, -1.0]);
+    assert_eq!(
+        FrameDisplayState::new(80, 25, 8.0, 16.0).frame_alpha,
+        [-1.0; 2]
+    );
+}
 use crate::DisplayFrameId;
 
 mod row_appearance_test;

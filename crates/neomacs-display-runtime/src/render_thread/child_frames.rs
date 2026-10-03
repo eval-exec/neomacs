@@ -68,6 +68,8 @@ impl EntryAnimation {
 pub(crate) struct ChildFrameEntry {
     pub frame_id: u64,
     pub frame: FrameGlyphBuffer,
+    /// Last applied native opacity; GNU nil retains this across payloads.
+    pub applied_frame_alpha: f32,
     /// Computed absolute position on screen (from parent_x/parent_y)
     pub abs_x: f32,
     pub abs_y: f32,
@@ -409,6 +411,25 @@ impl ChildFrameManager {
         before != after
     }
 
+    /// Reclaim time-expired composition ownership before mandatory admission.
+    /// Sampling expiry is pure: do not advance drift, placement or the submitted
+    /// interaction projection when a frame might still be refused.
+    pub fn reclaim_finished_composition(&mut self, sample: FrameSample) -> bool {
+        let mut changed = self.prune_crossfades(sample);
+        changed |= self.prune_dying(sample);
+        for entry in self.frames.values_mut() {
+            if entry
+                .animation
+                .as_ref()
+                .is_some_and(|animation| animation.motion.sample(sample).finished)
+            {
+                entry.animation = None;
+                changed = true;
+            }
+        }
+        changed
+    }
+
     /// Drop every crossfade, returning their leases to the pool. The
     /// device-loss path calls this: the leased textures died with the
     /// device.
@@ -562,11 +583,16 @@ impl ChildFrameManager {
             "child_frame_lifecycle: render_thread_child_buffer"
         );
 
+        let applied_frame_alpha = self
+            .frames
+            .get(&frame_id.get())
+            .map_or(1.0, |entry| entry.applied_frame_alpha);
         self.frames.insert(
             frame_id.get(),
             ChildFrameEntry {
                 frame_id: frame_id.get(),
                 frame: buf,
+                applied_frame_alpha,
                 abs_x: placed.root_relative().x(),
                 abs_y: placed.root_relative().y(),
                 clip_in_root: placed.clip_in_root(),

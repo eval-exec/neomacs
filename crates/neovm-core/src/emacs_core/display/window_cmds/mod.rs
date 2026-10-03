@@ -4932,6 +4932,7 @@ pub(crate) fn select_window(
         )
     };
     if frame_changed {
+        super::frame::sync_gui_frame_focus_redirects(eval)?;
         eval.sync_keyboard_terminal_owner();
     }
     if selection_changed {
@@ -6881,6 +6882,17 @@ pub(crate) fn builtin_x_create_frame(
     expect_args("x-create-frame", &args, 1)?;
     // GNU gui_display_get_arg resolves frame alist, default-frame-alist,
     // then the display resource. Keep explicit nil distinct from absence.
+    let explicit = parse_gui_frame_params(args.first());
+    let defaults = eval.eval_symbol_by_id(intern("default-frame-alist")).ok();
+    let defaults = parse_gui_frame_params(defaults.as_ref());
+    for name in ["alpha", "alpha-background"] {
+        let key = intern(name);
+        if !explicit.all.contains_key(&key)
+            && let Some(value) = defaults.all.get(&key)
+        {
+            args[0] = Value::cons(Value::cons(Value::symbol(name), *value), args[0]);
+        }
+    }
     let font_key = intern("font");
     if !parse_gui_frame_params(args.first())
         .all
@@ -6921,6 +6933,12 @@ pub(crate) fn builtin_x_create_frame(
         args,
     );
     eval.sync_keyboard_terminal_owner();
+    if let Ok(value) = &result
+        && let Some(id) = value.as_frame_id()
+    {
+        super::frame::sync_gui_frame_alpha(eval, FrameId(id))?;
+        super::frame::sync_gui_frame_focus_redirects(eval)?;
+    }
     result
 }
 
@@ -6933,6 +6951,17 @@ pub(crate) fn x_create_frame_impl(
     expect_args("x-create-frame", &args, 1)?;
 
     let parsed = parse_gui_frame_params(args.first());
+    for (key, value) in &parsed.all {
+        match FrameParamKey::from_symbol_id(*key) {
+            FrameParamKey::Known(FrameParam::Alpha) => {
+                crate::window::frame_alpha::pair(*value)?;
+            }
+            FrameParamKey::Known(FrameParam::AlphaBackground) => {
+                crate::window::frame_alpha::component(*value, 1.0)?;
+            }
+            _ => {}
+        }
+    }
     tracing::debug!(
         "x_create_frame_impl: display_host_available={} params={:?}",
         display_host.is_some(),
@@ -7354,6 +7383,7 @@ pub(crate) fn delete_frame_owned(
             sync_selected_window_buffer_in_state(&eval.frames, &mut eval.buffers, replacement);
         }
     }
+    super::frame::sync_gui_frame_focus_redirects(eval)?;
     match eval.frames.delete_frame(fid) {
         FrameDeletion::NotFound => {
             return Err(signal("error", vec![Value::string("Cannot delete frame")]));
@@ -7371,6 +7401,8 @@ pub(crate) fn delete_frame_owned(
         } => {}
     }
     if let Some(host) = eval.display_host.as_mut() {
+        host.retire_gui_frame_alpha(fid)
+            .map_err(|message| signal("error", vec![Value::string(message)]))?;
         if was_gui_child_frame {
             tracing::info!(
                 frame_id = fid.0,
