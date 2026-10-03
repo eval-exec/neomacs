@@ -1191,6 +1191,8 @@ pub struct FrameGlyphBuffer {
     pub outer_border_color: Color,
     /// Background opacity (1.0 = opaque, 0.0 = transparent)
     pub background_alpha: f32,
+    /// GNU whole-frame active/inactive opacity; negative means leave unchanged.
+    pub frame_alpha: [f32; 2],
     /// Whether this frame should not accept keyboard focus
     pub no_accept_focus: bool,
 
@@ -1565,6 +1567,7 @@ impl FrameGlyphBuffer {
             outer_border_width: 0.0,
             outer_border_color: Color::BLACK,
             background_alpha: 1.0,
+            frame_alpha: [-1.0; 2],
             no_accept_focus: false,
             glyphs: Vec::with_capacity(10000),
             frame_chrome: crate::frame_chrome::FrameChrome::default(),

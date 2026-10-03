@@ -2094,6 +2094,7 @@ fn install_core_eval_symbols(obarray: &mut Obarray, reset_runtime_values: bool) 
         print_symbols_bare_symbol,
         max_lisp_eval_depth_symbol(),
         buffer_undo_list_symbol(),
+        intern("frame-alpha-lower-limit"),
     ] {
         obarray.mark_runtime_projected_id(projected);
     }
@@ -4618,6 +4619,11 @@ impl Context {
             self.symbols_with_pos_enabled = value.is_truthy();
         } else if sym_id == self.print_symbols_bare_symbol {
             self.print_symbols_bare = value.is_truthy();
+        } else if sym_id == intern("frame-alpha-lower-limit") {
+            let limit = crate::window::frame_alpha::lower_limit(value);
+            if let Some(host) = self.display_host.as_mut() {
+                host.set_gui_frame_alpha_lower_limit(limit);
+            }
         } else if sym_id == max_lisp_eval_depth_symbol()
             && let Some(depth) = value.as_fixnum()
         {

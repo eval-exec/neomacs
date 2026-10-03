@@ -18,6 +18,7 @@ use super::webview_cache::WgpuWebViewCache;
 
 mod box_tessellation;
 mod child_frames;
+pub use child_frames::ChildResizePicture;
 mod composition_ring;
 pub use composition_ring::CompositionRing;
 mod content;
@@ -156,6 +157,28 @@ fn create_bi_planar_video_copy_pipeline(
         cache: None,
         multiview_mask: None,
     })
+}
+
+/// Background fills replace alpha rather than accumulating it over the clear
+/// and over one another. Constant alpha supplies the frame opacity; source
+/// alpha still carries geometry coverage (including rounded corners).
+fn background_blend(premultiplied: bool) -> wgpu::BlendState {
+    wgpu::BlendState {
+        color: wgpu::BlendComponent {
+            src_factor: if premultiplied {
+                wgpu::BlendFactor::One
+            } else {
+                wgpu::BlendFactor::SrcAlpha
+            },
+            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+            operation: wgpu::BlendOperation::Add,
+        },
+        alpha: wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::Constant,
+            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+            operation: wgpu::BlendOperation::Add,
+        },
+    }
 }
 
 /// GPU-accelerated renderer using wgpu.
@@ -348,67 +371,22 @@ impl WgpuRenderer {
         let target_format = surface_format.unwrap_or(wgpu::TextureFormat::Bgra8UnormSrgb);
 
         // Create rect pipeline
-        let rect_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Rect Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &rect_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[Some(RectVertex::desc())],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &rect_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: target_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState {
-                count: 1,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            cache: None,
-            multiview_mask: None,
-        });
-
-        // Load rounded rect shader (SDF-based rounded borders)
-        let rounded_rect_shader_source = include_str!("../shaders/rounded_rect.wgsl");
-        let rounded_rect_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Rounded Rect Shader"),
-            source: wgpu::ShaderSource::Wgsl(rounded_rect_shader_source.into()),
-        });
-
-        let rounded_rect_pipeline =
+        let make_rect_pipeline = |label, blend, depth_stencil| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Rounded Rect Pipeline"),
+                label: Some(label),
                 layout: Some(&pipeline_layout),
                 vertex: wgpu::VertexState {
-                    module: &rounded_rect_shader,
+                    module: &rect_shader,
                     entry_point: Some("vs_main"),
-                    buffers: &[Some(RoundedRectVertex::desc())],
+                    buffers: &[Some(RectVertex::desc())],
                     compilation_options: Default::default(),
                 },
                 fragment: Some(wgpu::FragmentState {
-                    module: &rounded_rect_shader,
+                    module: &rect_shader,
                     entry_point: Some("fs_main"),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: target_format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        blend: Some(blend),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                     compilation_options: Default::default(),
@@ -422,7 +400,7 @@ impl WgpuRenderer {
                     unclipped_depth: false,
                     conservative: false,
                 },
-                depth_stencil: None,
+                depth_stencil,
                 multisample: wgpu::MultisampleState {
                     count: 1,
                     mask: !0,
@@ -430,7 +408,68 @@ impl WgpuRenderer {
                 },
                 cache: None,
                 multiview_mask: None,
-            });
+            })
+        };
+        let rect_pipeline = make_rect_pipeline("rect", wgpu::BlendState::ALPHA_BLENDING, None);
+        let background_rect_pipeline =
+            make_rect_pipeline("background_rect", background_blend(false), None);
+
+        // Load rounded rect shader (SDF-based rounded borders)
+        let rounded_rect_shader_source = include_str!("../shaders/rounded_rect.wgsl");
+        let rounded_rect_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Rounded Rect Shader"),
+            source: wgpu::ShaderSource::Wgsl(rounded_rect_shader_source.into()),
+        });
+
+        let make_rounded_pipeline = |label, blend, depth_stencil| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &rounded_rect_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[Some(RoundedRectVertex::desc())],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &rounded_rect_shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: target_format,
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil,
+                multisample: wgpu::MultisampleState {
+                    count: 1,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                cache: None,
+                multiview_mask: None,
+            })
+        };
+        let rounded_rect_pipeline =
+            make_rounded_pipeline("rounded_rect", wgpu::BlendState::ALPHA_BLENDING, None);
+        // SDF fills emit premultiplied RGB; leave border blending unchanged.
+        let rounded_fill_pipeline = make_rounded_pipeline(
+            "rounded_fill",
+            wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+            None,
+        );
+        let background_rounded_rect_pipeline =
+            make_rounded_pipeline("background_rounded_rect", background_blend(true), None);
 
         // Corner mask pipeline: uses the same SDF rounded rect shader but with
         // a blend mode that multiplies the destination by the source alpha.
@@ -568,48 +607,55 @@ impl WgpuRenderer {
             multiview_mask: None,
         });
 
-        let coverage_pipeline =
-            |mask: GlyphCoverageMask, stencil: Option<wgpu::DepthStencilState>| {
-                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: Some("Coverage Glyph Pipeline"),
-                    layout: Some(&glyph_pipeline_layout),
-                    vertex: wgpu::VertexState {
-                        module: &coverage_glyph_shader,
-                        entry_point: Some("vs_main"),
-                        buffers: &[Some(CoverageGlyphVertex::desc())],
-                        compilation_options: Default::default(),
-                    },
-                    fragment: Some(wgpu::FragmentState {
-                        module: &coverage_glyph_shader,
-                        entry_point: Some(mask.fragment_entry_point()),
-                        targets: &[Some(wgpu::ColorTargetState {
-                            format: target_format,
-                            blend: None,
-                            write_mask: wgpu::ColorWrites::ALL,
-                        })],
-                        compilation_options: Default::default(),
+        let coverage_pipeline = |mask: GlyphCoverageMask,
+                                 stencil: Option<wgpu::DepthStencilState>,
+                                 transparent: bool| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Coverage Glyph Pipeline"),
+                layout: Some(&glyph_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &coverage_glyph_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[Some(CoverageGlyphVertex::desc())],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &coverage_glyph_shader,
+                    entry_point: Some(if transparent {
+                        "fs_transparent"
+                    } else {
+                        mask.fragment_entry_point()
                     }),
-                    primitive: wgpu::PrimitiveState {
-                        topology: wgpu::PrimitiveTopology::TriangleList,
-                        strip_index_format: None,
-                        front_face: wgpu::FrontFace::Ccw,
-                        cull_mode: None,
-                        polygon_mode: wgpu::PolygonMode::Fill,
-                        unclipped_depth: false,
-                        conservative: false,
-                    },
-                    depth_stencil: stencil,
-                    multisample: wgpu::MultisampleState {
-                        count: 1,
-                        mask: !0,
-                        alpha_to_coverage_enabled: false,
-                    },
-                    cache: None,
-                    multiview_mask: None,
-                })
-            };
-        let grayscale_glyph_pipeline = coverage_pipeline(GlyphCoverageMask::Grayscale, None);
-        let subpixel_glyph_pipeline = coverage_pipeline(GlyphCoverageMask::Subpixel, None);
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: target_format,
+                        blend: transparent.then_some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: stencil,
+                multisample: wgpu::MultisampleState {
+                    count: 1,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                cache: None,
+                multiview_mask: None,
+            })
+        };
+        let grayscale_glyph_pipeline = coverage_pipeline(GlyphCoverageMask::Grayscale, None, false);
+        let transparent_glyph_pipeline =
+            coverage_pipeline(GlyphCoverageMask::Grayscale, None, true);
+        let subpixel_glyph_pipeline = coverage_pipeline(GlyphCoverageMask::Subpixel, None, false);
 
         // Create image cache (also creates its bind group layout)
         let image_cache = ImageCache::new(&device);
@@ -655,7 +701,7 @@ impl WgpuRenderer {
             });
 
         // Create image pipeline (similar to glyph but for RGBA textures)
-        let make_image_pipeline = |blend| {
+        let make_image_pipeline = |blend, entry_point| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("Image Pipeline"),
                 layout: Some(&image_pipeline_layout),
@@ -667,7 +713,7 @@ impl WgpuRenderer {
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &image_shader,
-                    entry_point: Some("fs_main"),
+                    entry_point: Some(entry_point),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: target_format,
                         blend,
@@ -695,8 +741,51 @@ impl WgpuRenderer {
             })
         };
 
-        let image_pipeline = make_image_pipeline(Some(wgpu::BlendState::ALPHA_BLENDING));
-        let surface_copy_pipeline = make_image_pipeline(None);
+        let image_pipeline = make_image_pipeline(Some(wgpu::BlendState::ALPHA_BLENDING), "fs_main");
+        let surface_copy_pipeline = make_image_pipeline(None, "fs_copy");
+        let native_copy_pipeline = make_image_pipeline(
+            None,
+            if target_format.is_srgb() {
+                "fs_native"
+            } else {
+                "fs_copy"
+            },
+        );
+
+        let composition_pipeline = make_image_pipeline(
+            Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+            "fs_copy",
+        );
+        // Crossfades are a weighted sum of two complete premultiplied pictures,
+        // not source-over layers (which would change their background opacity).
+        let additive_component = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        };
+        let crossfade_add_pipeline = make_image_pipeline(
+            Some(wgpu::BlendState {
+                color: additive_component,
+                alpha: additive_component,
+            }),
+            "fs_copy",
+        );
+
+        // A pane patch replaces a fraction of the already placed destination
+        // with the same fraction of its old picture. The destination weight
+        // comes from the pane's fade, never from the old texture's pixel alpha.
+        let interpolate_component = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::OneMinusConstant,
+            operation: wgpu::BlendOperation::Add,
+        };
+        let picture_interpolate_pipeline = make_image_pipeline(
+            Some(wgpu::BlendState {
+                color: interpolate_component,
+                alpha: interpolate_component,
+            }),
+            "fs_copy",
+        );
 
         #[cfg(feature = "video")]
         let bi_planar_video_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -795,94 +884,45 @@ impl WgpuRenderer {
             bias: wgpu::DepthBiasState::default(),
         };
 
+        let stencil_background_rect_pipeline = make_rect_pipeline(
+            "Stencil background_rect",
+            background_blend(false),
+            Some(stencil_read_state.clone()),
+        );
+        let stencil_background_rounded_rect_pipeline = make_rounded_pipeline(
+            "Stencil background_rounded_rect",
+            background_blend(true),
+            Some(stencil_read_state.clone()),
+        );
+        let stencil_transparent_glyph_pipeline = coverage_pipeline(
+            GlyphCoverageMask::Grayscale,
+            Some(stencil_read_state.clone()),
+            true,
+        );
         // Stencil-read rect pipeline
-        let stencil_rect_pipeline =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Stencil Rect Pipeline"),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &rect_shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[Some(RectVertex::desc())],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &rect_shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: target_format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: None,
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    unclipped_depth: false,
-                    conservative: false,
-                },
-                depth_stencil: Some(stencil_read_state.clone()),
-                multisample: wgpu::MultisampleState {
-                    count: 1,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                cache: None,
-                multiview_mask: None,
-            });
+        let stencil_rect_pipeline = make_rect_pipeline(
+            "Stencil rect",
+            wgpu::BlendState::ALPHA_BLENDING,
+            Some(stencil_read_state.clone()),
+        );
 
         // Stencil-read rounded rect pipeline
-        let stencil_rounded_rect_pipeline =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Stencil Rounded Rect Pipeline"),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &rounded_rect_shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[Some(RoundedRectVertex::desc())],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &rounded_rect_shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: target_format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: None,
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    unclipped_depth: false,
-                    conservative: false,
-                },
-                depth_stencil: Some(stencil_read_state.clone()),
-                multisample: wgpu::MultisampleState {
-                    count: 1,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                cache: None,
-                multiview_mask: None,
-            });
+        let stencil_rounded_rect_pipeline = make_rounded_pipeline(
+            "Stencil rounded_rect",
+            wgpu::BlendState::ALPHA_BLENDING,
+            Some(stencil_read_state.clone()),
+        );
 
         // Stencil-read glyph pipeline
         let stencil_grayscale_glyph_pipeline = coverage_pipeline(
             GlyphCoverageMask::Grayscale,
             Some(stencil_read_state.clone()),
+            false,
         );
         let stencil_subpixel_glyph_pipeline = coverage_pipeline(
             GlyphCoverageMask::Subpixel,
             Some(stencil_read_state.clone()),
+            false,
         );
 
         let stencil_image_pipeline =
@@ -1063,18 +1103,29 @@ impl WgpuRenderer {
             surface_format: target_format,
             pipelines: Pipelines {
                 rect: rect_pipeline,
+                background_rect: background_rect_pipeline,
+                background_rounded_rect: background_rounded_rect_pipeline,
                 rounded_rect: rounded_rect_pipeline,
+                rounded_fill: rounded_fill_pipeline,
                 corner_mask: corner_mask_pipeline,
                 glyph: glyph_pipeline,
                 grayscale_glyph: grayscale_glyph_pipeline,
+                transparent_glyph: transparent_glyph_pipeline,
                 subpixel_glyph: subpixel_glyph_pipeline,
                 image: image_pipeline,
                 surface_copy: surface_copy_pipeline,
+                native_copy: native_copy_pipeline,
+                composition: composition_pipeline,
+                crossfade_add: crossfade_add_pipeline,
+                picture_interpolate: picture_interpolate_pipeline,
                 #[cfg(feature = "video")]
                 bi_planar_video: bi_planar_video_pipeline,
                 #[cfg(feature = "video")]
                 bi_planar_video_copy: bi_planar_video_copy_pipeline,
                 opaque_image: opaque_image_pipeline,
+                stencil_background_rect: stencil_background_rect_pipeline,
+                stencil_background_rounded_rect: stencil_background_rounded_rect_pipeline,
+                stencil_transparent_glyph: stencil_transparent_glyph_pipeline,
                 stencil_rect: stencil_rect_pipeline,
                 stencil_rounded_rect: stencil_rounded_rect_pipeline,
                 stencil_subpixel_glyph: stencil_subpixel_glyph_pipeline,

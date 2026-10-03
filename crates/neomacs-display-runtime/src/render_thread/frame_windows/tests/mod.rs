@@ -73,6 +73,115 @@ fn option_none_policy_leaves_option_composing_characters() {
 
 use neomacs_display_protocol::ModifierPolicy;
 
+#[test]
+fn child_focus_opacity_invalidates_retained_scene_without_new_payload() {
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
+    let root = make_frame(0x42, 0);
+    render.set_current_frame(Some(root), None, Default::default(), Default::default());
+    let mut child = FrameGlyphBuffer::with_size(96.0, 64.0);
+    child.set_frame_identity(
+        neomacs_display_protocol::DisplayFrameId::new(0x43),
+        neomacs_display_protocol::DisplayFrameId::new(0x42),
+        0.0,
+        0.0,
+        1,
+        false,
+        0.0,
+        Color::BLACK,
+        false,
+        1.0,
+    );
+    child.frame_alpha = [0.8, 0.4];
+    let mut controls = crate::thread_comm::FrameOpacityState::default();
+    controls.accept(0x42, [-1.0; 2], 0.2);
+    controls.accept(0x43, [0.8, 0.4], 0.2);
+    controls.set_redirects(vec![(0x42, Some(0x43))]);
+    assert!(render.compositor.child_frames.update_frame(child));
+    controls.focus(0x42, true);
+    render.apply_frame_opacity(&controls);
+    assert_eq!(
+        render.compositor.child_frames.frames[&0x43].applied_frame_alpha,
+        0.8
+    );
+    let cached_active_generation = render.compositor.current_scene_generation;
+    controls.focus(0x42, false);
+    render.apply_frame_opacity(&controls);
+    assert_eq!(
+        render.compositor.child_frames.frames[&0x43].applied_frame_alpha,
+        0.4
+    );
+    assert_ne!(
+        render.compositor.current_scene_generation,
+        cached_active_generation
+    );
+    let inactive_generation = render.compositor.current_scene_generation;
+    // The first full repaint and the following compositor-only repaint call
+    // the same selector, without replacing the evaluator payload. Neither can
+    // validate a retained texture carrying the old active generation.
+    controls.focus(0x42, false);
+    render.apply_frame_opacity(&controls);
+    controls.focus(0x42, false);
+    render.apply_frame_opacity(&controls);
+    assert_eq!(
+        render.compositor.current_scene_generation,
+        inactive_generation
+    );
+    assert_ne!(
+        render.compositor.current_scene_generation,
+        cached_active_generation
+    );
+    controls.focus(0x42, true);
+    render.apply_frame_opacity(&controls);
+    assert_eq!(
+        render.compositor.child_frames.frames[&0x43].applied_frame_alpha,
+        0.8
+    );
+    assert_ne!(
+        render.compositor.current_scene_generation,
+        inactive_generation
+    );
+    controls.accept(0x43, [-1.0; 2], 0.2);
+    let last = render.compositor.current_scene_generation;
+    controls.focus(0x42, false);
+    render.apply_frame_opacity(&controls);
+    controls.focus(0x42, true);
+    render.apply_frame_opacity(&controls);
+    assert_eq!(
+        render.compositor.child_frames.frames[&0x43].applied_frame_alpha,
+        0.8
+    );
+    assert_eq!(render.compositor.current_scene_generation, last);
+}
+
+#[test]
+fn gnu_frame_alpha_focus_and_nil_retains_last_native_opacity() {
+    let mut render = GuiFrameRenderState::new_without_device(
+        0x42,
+        false,
+        neomacs_display_protocol::frame_time::observe_platform_now(),
+    );
+    let mut controls = crate::thread_comm::FrameOpacityState::default();
+    controls.accept(0x42, [0.8, 0.4], 0.2);
+    controls.focus(0x42, true);
+    render.apply_frame_opacity(&controls);
+    assert_eq!(render.applied_frame_alpha, 0.8);
+    controls.focus(0x42, false);
+    render.apply_frame_opacity(&controls);
+    assert_eq!(render.applied_frame_alpha, 0.4);
+    controls.accept(0x42, [-1.0; 2], 0.2);
+    controls.focus(0x42, true);
+    render.apply_frame_opacity(&controls);
+    assert_eq!(render.applied_frame_alpha, 0.4);
+    controls.accept(0x42, [1.0; 2], 0.2);
+    controls.focus(0x42, false);
+    render.apply_frame_opacity(&controls);
+    assert_eq!(render.applied_frame_alpha, 1.0);
+}
+
 #[cfg(feature = "neo-term")]
 #[test]
 fn terminal_expansion_replacement_is_atomic_and_invalidates_the_scene() {

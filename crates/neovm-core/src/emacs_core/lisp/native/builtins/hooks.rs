@@ -106,7 +106,7 @@ fn select_frame_window_for_hook_context(
     eval: &mut super::eval::Context,
     frame_id: crate::window::FrameId,
     window_id: crate::window::WindowId,
-) {
+) -> EvalResult {
     let _ = eval.frames.select_frame(frame_id);
     eval.sync_keyboard_terminal_owner();
     if let Some(frame) = eval.frames.get_mut(frame_id) {
@@ -115,9 +115,13 @@ fn select_frame_window_for_hook_context(
     if let Some(buffer_id) = window_buffer_id_in_state(eval, frame_id, window_id) {
         let _ = eval.switch_current_buffer(buffer_id);
     }
+    crate::emacs_core::frame::sync_gui_frame_focus_redirects(eval)
 }
 
-fn restore_hook_caller_context(eval: &mut super::eval::Context, saved: HookCallerContextState) {
+fn restore_hook_caller_context(
+    eval: &mut super::eval::Context,
+    saved: HookCallerContextState,
+) -> EvalResult {
     if let Some(frame_id) = saved
         .selected_frame_id
         .filter(|frame_id| eval.frames.get(*frame_id).is_some())
@@ -133,6 +137,7 @@ fn restore_hook_caller_context(eval: &mut super::eval::Context, saved: HookCalle
     if let Some(buffer_id) = saved.current_buffer_id {
         eval.restore_current_buffer_if_live(buffer_id);
     }
+    crate::emacs_core::frame::sync_gui_frame_focus_redirects(eval)
 }
 
 #[derive(Clone, Copy)]
@@ -245,7 +250,7 @@ fn run_window_local_hook_values(
             if !has_local_hook {
                 continue;
             }
-            select_frame_window_for_hook_context(eval, frame_id, *window_id);
+            select_frame_window_for_hook_context(eval, frame_id, *window_id)?;
             let Some(local_hook_value) = eval
                 .buffers
                 .current_buffer()
@@ -263,8 +268,9 @@ fn run_window_local_hook_values(
         }
         Ok(Value::NIL)
     })();
-    restore_hook_caller_context(eval, saved);
-    result
+    let restore_result = restore_hook_caller_context(eval, saved);
+    result?;
+    restore_result
 }
 
 fn run_window_default_hook_value(
@@ -289,10 +295,11 @@ fn run_window_default_hook_value(
     let result = (|| -> EvalResult {
         let selected_window = eval.frames.get(frame_id).map(|frame| frame.selected_window);
         if let Some(selected_window) = selected_window {
-            select_frame_window_for_hook_context(eval, frame_id, selected_window);
+            select_frame_window_for_hook_context(eval, frame_id, selected_window)?;
         } else {
             let _ = eval.frames.select_frame(frame_id);
             eval.sync_keyboard_terminal_owner();
+            crate::emacs_core::frame::sync_gui_frame_focus_redirects(eval)?;
         }
         let _ = hook_runtime::safe_run_hook_value(
             eval,
@@ -303,8 +310,9 @@ fn run_window_default_hook_value(
         )?;
         Ok(Value::NIL)
     })();
-    restore_hook_caller_context(eval, saved);
-    result
+    let restore_result = restore_hook_caller_context(eval, saved);
+    result?;
+    restore_result
 }
 
 pub(crate) fn run_redisplay_window_change_hooks(eval: &mut super::eval::Context) -> EvalResult {
@@ -1867,6 +1875,7 @@ pub(crate) fn set_window_configuration_with_options(
         if let Some(frame_id) = frame_to_select {
             let _ = eval.frames.select_frame(frame_id);
         }
+        crate::emacs_core::frame::sync_gui_frame_focus_redirects(eval)?;
     }
 
     // GNU `Fset_window_configuration` marks the frame for redisplay with
@@ -1938,7 +1947,7 @@ pub(crate) fn builtin_run_window_configuration_change_hook(
     eval.push_specpdl_root(global_hook_value);
 
     let result = (|| -> EvalResult {
-        select_frame_window_for_hook_context(eval, frame_id, selected_window);
+        select_frame_window_for_hook_context(eval, frame_id, selected_window)?;
         for window_id in &window_ids {
             let Some(buffer_id) = window_buffer_id_in_state(eval, frame_id, *window_id) else {
                 continue;
@@ -1951,7 +1960,7 @@ pub(crate) fn builtin_run_window_configuration_change_hook(
             if !has_local_hook {
                 continue;
             }
-            select_frame_window_for_hook_context(eval, frame_id, *window_id);
+            select_frame_window_for_hook_context(eval, frame_id, *window_id)?;
             let Some(local_hook_value) = eval
                 .buffers
                 .current_buffer()
@@ -1960,15 +1969,16 @@ pub(crate) fn builtin_run_window_configuration_change_hook(
                 continue;
             };
             let _ = hook_runtime::run_hook_value(eval, hook_sym, local_hook_value, &[], false)?;
-            select_frame_window_for_hook_context(eval, frame_id, selected_window);
+            select_frame_window_for_hook_context(eval, frame_id, selected_window)?;
         }
         let _ = hook_runtime::run_hook_value(eval, hook_sym, global_hook_value, &[], false)?;
         Ok(Value::NIL)
     })();
 
     eval.restore_specpdl_roots(root_scope);
-    restore_hook_caller_context(eval, saved);
-    result
+    let restore_result = restore_hook_caller_context(eval, saved);
+    result?;
+    restore_result
 }
 
 pub(crate) fn run_gnu_committed_scroll_functions(

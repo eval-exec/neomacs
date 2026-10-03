@@ -943,6 +943,7 @@ pub(crate) fn unwind_minibuffer_session(
             window_restore: MinibufferWindowRestoreEffect::NoBufferRestored,
         }
     };
+    let redirect_result = super::frame::sync_gui_frame_focus_redirects(shared);
     teardown_outcome.window_restore.apply(shared);
     let inactive_mode_result = teardown_outcome.inactive_mode_result;
 
@@ -953,14 +954,16 @@ pub(crate) fn unwind_minibuffer_session(
     }
     // A sizing/inactive-mode transfer skips the remaining read_minibuf_unwind
     // statements. Separate configuration and minibuffer restoration still run.
-    let selection_record_result =
-        if super::eval::gnu_redisplay_hooks_enabled() && inactive_mode_result.is_err() {
-            Ok(Value::NIL)
-        } else {
-            restored_calling_selection
-                .map(|active| record_restored_calling_window_selection(shared, active))
-                .unwrap_or(Ok(Value::NIL))
-        };
+    // A failed focus-redirect sync likewise skips the selection record.
+    let selection_record_result = if redirect_result.is_err()
+        || (super::eval::gnu_redisplay_hooks_enabled() && inactive_mode_result.is_err())
+    {
+        Ok(Value::NIL)
+    } else {
+        restored_calling_selection
+            .map(|active| record_restored_calling_window_selection(shared, active))
+            .unwrap_or(Ok(Value::NIL))
+    };
     shared.obarray.set_symbol_value(
         "minibuffer-depth",
         Value::fixnum(shared.minibuffers.depth() as i64),
@@ -991,6 +994,7 @@ pub(crate) fn unwind_minibuffer_session(
 
     exit_hook_result?;
     inactive_mode_result?;
+    redirect_result?;
     selection_record_result?;
     Ok(Value::NIL)
 }
@@ -1842,7 +1846,7 @@ impl MinibufferInvocationRestoration {
         self.windows.record(eval);
     }
 
-    fn select_calling_frame(&self, eval: &mut super::eval::Context) {
+    fn select_calling_frame(&self, eval: &mut super::eval::Context) -> EvalResult {
         // GNU `read_minibuf` explicitly reselects the invoking frame after
         // `unbind_to` has restored the owner/caller configuration stack.  The
         // restore options intentionally keep the then-current selected frame,
@@ -1853,6 +1857,7 @@ impl MinibufferInvocationRestoration {
             minibuffer_redisplay::publish_frame_switch(eval, calling_frame.0);
             let _ = eval.frames.select_frame(calling_frame.0);
         }
+        super::frame::sync_gui_frame_focus_redirects(eval)
     }
 }
 
@@ -2260,6 +2265,7 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
             state: Box::new(session_unwind),
         },
     );
+    super::frame::sync_gui_frame_focus_redirects(shared)?;
     if let Some(active_window_state) = active_window_state {
         record_active_minibuffer_selection(shared, active_window_state, minibuf_id)?;
     }
@@ -2388,11 +2394,12 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
         // This is deliberately between the inner lifecycle scope and history:
         // GNU restores both configurations, then reselects the caller, then
         // calls `add-to-history` in the restored buffer-local environment.
-        restoration.select_calling_frame(shared);
+        let redirect_result = restoration.select_calling_frame(shared);
         // `with_unwind_scope` roots the tagged result while exit hooks and
         // window restoration allocate, so string properties cannot retain
         // otherwise-unreachable Lisp objects through an untraced Rust value.
         let result_value = lifecycle_result?;
+        redirect_result?;
         let result_text = result_value
             .as_lisp_string()
             .expect("an accepted minibuffer command must return its contents")

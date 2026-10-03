@@ -60,7 +60,7 @@ pub(super) fn render_frame_window_overlays_with_toolbar_resources(
     // this one; moving the call up to them is a change to those two files.
     super::scene::render_frame_content_overlays(
         renderer,
-        native,
+        native.content_size(),
         render,
         surface_view,
         frame,

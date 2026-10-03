@@ -278,11 +278,14 @@ fn builder_preserves_negative_child_frame_origin_for_parent_clipping() {
         Color::BLACK,
         0.0,
         Color::BLACK,
-        1.0,
+        0.5,
+        [0.8, 0.4],
         true,
     );
 
     let state = builder.finish(80, 24, 1.0, 1.0);
+    assert_eq!(state.background_alpha, 0.5);
+    assert_eq!(state.frame_alpha, [0.8, 0.4]);
     let placement = state.frame_placement;
 
     assert_eq!(placement.parent(), Some(DisplayFrameId::new(1)));

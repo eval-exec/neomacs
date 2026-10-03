@@ -228,6 +228,7 @@ impl WgpuRenderer {
         //   5. Inline media (images, videos, webkit)
         //   6. Cursors, borders, scroll bars (on top)
         let mut bg_vertices: Vec<RectVertex> = Vec::new();
+        let mut stipple_vertices: Vec<RectVertex> = Vec::new();
         let mut cursor_bg_vertices: Vec<RectVertex> = Vec::new();
         let mut cursor_vertices: Vec<RectVertex> = Vec::new();
         let mut cursor_inverse_video = None;
@@ -298,7 +299,7 @@ impl WgpuRenderer {
                         {
                             let fg = frame.resolved_face(face_id).fg;
                             self.add_stipple_paint(
-                                &mut bg_vertices,
+                                &mut stipple_vertices,
                                 &fg,
                                 pat,
                                 paint,
@@ -362,7 +363,7 @@ impl WgpuRenderer {
                         {
                             let fg = frame.resolved_face(face_id).fg;
                             self.add_stipple_paint(
-                                &mut bg_vertices,
+                                &mut stipple_vertices,
                                 &fg,
                                 pat,
                                 paint,
@@ -613,7 +614,7 @@ impl WgpuRenderer {
         let mut mask_data: Vec<(AnyAtlasEntry, [CoverageGlyphVertex; 6])> = Vec::new();
         let mut subpixel_data: Vec<(AnyAtlasEntry, [CoverageGlyphVertex; 6])> = Vec::new();
         let mut color_data: Vec<(AnyAtlasEntry, [GlyphVertex; 6])> = Vec::new();
-        let enable_subpixel = glyph_atlas.subpixel_enabled();
+        let enable_subpixel = glyph_atlas.subpixel_enabled() && frame.background_alpha == 1.0;
 
         let mut text_face_cache: Option<(FaceId, MaterializedFaceData)> = None;
         for (glyph_index, glyph) in frame.glyphs.iter().enumerate() {
@@ -1223,7 +1224,33 @@ impl WgpuRenderer {
         } else {
             &self.pipelines.rounded_rect
         };
-        let glyph_pl = if use_stencil {
+        let background_pl = match (use_stencil, frame.background_alpha == 1.0) {
+            (true, false) => &self.pipelines.stencil_background_rect,
+            (false, false) => &self.pipelines.background_rect,
+            _ => rect_pl,
+        };
+        let background_rounded_pl = match (use_stencil, frame.background_alpha == 1.0) {
+            (true, false) => &self.pipelines.stencil_background_rounded_rect,
+            (false, false) => &self.pipelines.background_rounded_rect,
+            _ => rounded_rect_pl,
+        };
+        for vertex in &mut bg_vertices {
+            for channel in &mut vertex.color[..3] {
+                *channel *= frame.background_alpha;
+            }
+        }
+        for vertex in &mut rounded_fill_vertices {
+            for channel in &mut vertex.color[..3] {
+                *channel *= frame.background_alpha;
+            }
+        }
+        let glyph_pl = if frame.background_alpha != 1.0 {
+            if use_stencil {
+                &self.pipelines.stencil_transparent_glyph
+            } else {
+                &self.pipelines.transparent_glyph
+            }
+        } else if use_stencil {
             &self.pipelines.stencil_grayscale_glyph
         } else {
             &self.pipelines.grayscale_glyph
@@ -1293,16 +1320,35 @@ impl WgpuRenderer {
                 pass.set_stencil_reference(1);
             }
 
+            pass.set_blend_constant(wgpu::Color {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: frame.background_alpha as f64,
+            });
             // --- Draw backgrounds ---
             if let Some(upload) = self
                 .arenas
                 .rect
                 .upload(&self.device, &self.queue, &bg_vertices)
             {
-                pass.set_pipeline(rect_pl);
+                pass.set_pipeline(background_pl);
                 pass.set_bind_group(0, draw.binding(), &[]);
                 pass.set_vertex_buffer(0, upload.buffer_slice());
                 pass.draw(0..bg_vertices.len() as u32, 0..1);
+            }
+
+            // Stipple 1-bits are foreground, with the same stencil and
+            // pre-text draw order as root stipples, unaffected by background alpha.
+            if let Some(upload) =
+                self.arenas
+                    .rect
+                    .upload(&self.device, &self.queue, &stipple_vertices)
+            {
+                pass.set_pipeline(rect_pl);
+                pass.set_bind_group(0, draw.binding(), &[]);
+                pass.set_vertex_buffer(0, upload.buffer_slice());
+                pass.draw(0..stipple_vertices.len() as u32, 0..1);
             }
 
             // --- Draw fringe bitmaps (own column, above backgrounds, below
@@ -1337,7 +1383,7 @@ impl WgpuRenderer {
                     .rounded
                     .upload(&self.device, &self.queue, &rounded_fill_vertices)
             {
-                pass.set_pipeline(rounded_rect_pl);
+                pass.set_pipeline(background_rounded_pl);
                 pass.set_bind_group(0, draw.binding(), &[]);
                 pass.set_vertex_buffer(0, upload.buffer_slice());
                 pass.draw(0..rounded_fill_vertices.len() as u32, 0..1);

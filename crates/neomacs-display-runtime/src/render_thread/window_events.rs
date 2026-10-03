@@ -277,6 +277,14 @@ impl RenderApp {
                         })
                         .unwrap_or_default()
                 };
+                // GNU whole-frame active/inactive alpha follows native focus,
+                // including a loss with no evaluator content change.
+                self.comms
+                    .frame_opacity
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .focus(emacs_fid, focused);
+                self.refresh_frame_opacity();
                 self.comms.send_input(InputEvent::WindowFocus {
                     focused,
                     emacs_frame_id: emacs_fid,

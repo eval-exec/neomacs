@@ -1637,6 +1637,154 @@ fn read_from_minibuffer_restores_calling_frame_after_frame_switch() {
     );
 }
 
+type FocusProjection = Vec<(crate::window::FrameId, Option<crate::window::FrameId>)>;
+
+#[derive(Clone, Default)]
+struct MinibufferFocusHost {
+    redirects: Arc<Mutex<Vec<FocusProjection>>>,
+}
+
+impl DisplayHost for MinibufferFocusHost {
+    fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn set_gui_frame_focus_redirects(
+        &mut self,
+        redirects: Vec<(crate::window::FrameId, Option<crate::window::FrameId>)>,
+    ) -> Result<(), String> {
+        self.redirects.lock().unwrap().push(redirects);
+        Ok(())
+    }
+}
+
+#[test]
+fn shared_child_minibuffer_publishes_focus_on_entry_and_unwind() {
+    for abort in [false, true] {
+        let mut ev = Context::new();
+        let native = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut ev);
+        ev.frames
+            .get_mut(native)
+            .unwrap()
+            .set_window_system(Some(Value::symbol("neo")));
+        let host = MinibufferFocusHost::default();
+        let projections = host.redirects.clone();
+        ev.set_display_host(Box::new(host));
+        let setup = ev.eval_str_each(
+            r#"(setq test-owner (x-create-frame '((alpha . (90 30)))))
+            (setq test-child (x-create-frame
+              (list (cons 'parent-frame test-owner)
+                    (cons 'minibuffer (minibuffer-window test-owner))
+                    '(alpha . (80 40)))))
+            (select-frame test-child)"#,
+        );
+        // Explicit IDs below avoid relying on frame-list ordering.
+        assert!(setup.iter().all(Result::is_ok), "{setup:?}");
+        let owner = crate::window::FrameId(
+            ev.obarray
+                .symbol_value("test-owner")
+                .unwrap()
+                .as_frame_id()
+                .unwrap(),
+        );
+        let child = crate::window::FrameId(
+            ev.obarray
+                .symbol_value("test-child")
+                .unwrap()
+                .as_frame_id()
+                .unwrap(),
+        );
+        crate::emacs_core::frame::builtin_redirect_frame_focus(
+            &mut ev,
+            vec![Value::make_frame(native.0), Value::make_frame(child.0)],
+        )
+        .unwrap();
+        assert_eq!(
+            ev.frames
+                .find_window_frame_id(ev.frames.get(child).unwrap().minibuffer_window.unwrap()),
+            Some(owner)
+        );
+        let (tx, rx) = crossbeam_channel::unbounded();
+        tx.send(crate::keyboard::InputEvent::key_press(
+            crate::keyboard::KeyEvent::char('\r'),
+        ))
+        .unwrap();
+        ev.input_rx = Some(rx);
+        // Bare Context has no simple.el command dispatcher. Keep the real
+        // reader/command loop and substitute only its Lisp dispatch boundary.
+        ev.eval_str(
+            "(fset 'command-execute (lambda (command &rest ignored) (call-interactively command)))",
+        )
+        .unwrap();
+        let source = "(progn (setq minibuffer-setup-hook nil minibuffer-exit-hook nil) (setq test-read-map (make-sparse-keymap)) (define-key test-read-map \"\\r\" (lambda () (interactive) (throw 'exit nil))))";
+        ev.eval_str(source).unwrap();
+        let mut entered = false;
+        let map = *ev.obarray.symbol_value("test-read-map").unwrap();
+        let result = finish_read_from_minibuffer_in_eval_with_setup(
+            &mut ev,
+            &[Value::string("Prompt: "), Value::NIL, map],
+            |eval| {
+                entered = true;
+                assert_eq!(eval.frames.selected_frame().unwrap().id, owner);
+                let published = projections.lock().unwrap();
+                let highlight = published
+                    .last()
+                    .unwrap()
+                    .iter()
+                    .find(|(id, _)| *id == native)
+                    .unwrap()
+                    .1;
+                assert_eq!(highlight, Some(owner), "native redirect must precede setup");
+                // At the DisplayHost boundary native focus remains A: the projected
+                // target selects active C and inactive B, not keyboard focus moves.
+                assert_eq!(
+                    eval.frames.get(owner).unwrap().frame_alpha
+                        [usize::from(highlight != Some(owner))],
+                    0.9
+                );
+                assert_eq!(
+                    eval.frames.get(child).unwrap().frame_alpha
+                        [usize::from(highlight != Some(child))],
+                    0.4
+                );
+                if abort {
+                    Err(signal("error", vec![Value::string("setup abort")]))
+                } else {
+                    Ok(Value::NIL)
+                }
+            },
+        );
+        assert!(entered);
+        assert_eq!(result.is_err(), abort, "{result:?}");
+        assert_eq!(ev.frames.selected_frame().unwrap().id, child);
+        let published = projections.lock().unwrap();
+        let highlight = published
+            .last()
+            .unwrap()
+            .iter()
+            .find(|(id, _)| *id == native)
+            .unwrap()
+            .1;
+        assert_eq!(
+            highlight,
+            Some(child),
+            "native redirect must be restored even on abort"
+        );
+        assert_eq!(
+            ev.frames.get(owner).unwrap().frame_alpha[usize::from(highlight != Some(owner))],
+            0.3
+        );
+        assert_eq!(
+            ev.frames.get(child).unwrap().frame_alpha[usize::from(highlight != Some(child))],
+            0.8
+        );
+    }
+}
+
 #[test]
 fn read_from_minibuffer_uses_and_restores_a_separate_minibuffer_owner_frame() {
     crate::test_utils::init_test_tracing();

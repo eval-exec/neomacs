@@ -385,6 +385,27 @@ pub trait DisplayHost {
     ) -> Result<(), String> {
         Ok(())
     }
+    /// Apply each accepted legacy alpha operation synchronously, independently
+    /// of replaceable scene transport. Negative components mean retain.
+    fn set_gui_frame_alpha(
+        &mut self,
+        _frame: crate::window::FrameId,
+        _alpha: [f32; 2],
+        _limit: f32,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    fn set_gui_frame_focus_redirects(
+        &mut self,
+        _redirects: Vec<(crate::window::FrameId, Option<crate::window::FrameId>)>,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    fn retire_gui_frame_alpha(&mut self, _frame: crate::window::FrameId) -> Result<(), String> {
+        Ok(())
+    }
+    fn set_gui_frame_alpha_lower_limit(&mut self, _limit: f32) {}
+
     fn opening_gui_frame_pending(&self) -> bool {
         false
     }
