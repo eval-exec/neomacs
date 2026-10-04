@@ -902,6 +902,7 @@ pub(crate) fn naming_enabled() -> bool {
 /// interning, no Lisp allocation, no safepoint.
 pub fn report_at_exit(ctx: &crate::emacs_core::eval::Context) {
     front_diag::flush_at_exit();
+    super::compile::opt_report::report_at_exit();
     inline_census::report_at_exit(ctx);
     if !report_requested() {
         return;

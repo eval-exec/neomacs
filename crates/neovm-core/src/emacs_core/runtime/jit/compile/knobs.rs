@@ -1899,3 +1899,17 @@ pub(crate) fn force_opt_early_for_test(value: Option<OptEarlyMode>) {
 pub(crate) fn force_opt_max_ops_for_test(value: Option<usize>) {
     OPT_MAX_OPS_TEST_OVERRIDE.with(|mode| mode.set(value));
 }
+
+/// Independent cold-only opt construction report. Threading: safely published
+/// immutable process path; it does not enable report_requested, native entry
+/// counters, leaf naming, feedback or source identity assignment. Absent/off
+/// disables it; no file is opened during compilation.
+pub(crate) fn jit_opt_report_path() -> Option<&'static std::path::Path> {
+    static PATH: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| {
+        std::env::var_os("NEOVM_JIT_OPT_REPORT_FILE")
+            .filter(|value| !value.is_empty() && value.as_os_str() != std::ffi::OsStr::new("off"))
+            .map(std::path::PathBuf::from)
+    })
+    .as_deref()
+}

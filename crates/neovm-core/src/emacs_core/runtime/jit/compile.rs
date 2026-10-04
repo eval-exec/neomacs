@@ -3581,6 +3581,14 @@ fn lower_leaf_full_osr_with_plan_impl(
     opt_override: Option<&super::opt::ir::Func>,
     opt_request: Option<CompileRequest>,
 ) -> Result<CompiledLeaf, CompileError> {
+    // Count actual opt construction at this single normal/OSR seam. This
+    // cold report never enables runtime observation, naming or source heat.
+    let opt_attempt = opt_report::Attempt::begin(
+        opt_params.is_some() || opt_override.is_some(),
+        osr_pc,
+        opt_request,
+        ops.len(),
+    );
     // Every analysis and the reloc collection below see the MASKED view; only
     // the emitter's `Op::Constant` arm knows the prefix (it loads those slots
     // through the callee at run time).
@@ -3890,6 +3898,9 @@ fn lower_leaf_full_osr_with_plan_impl(
         clif_insts: clif_size_now().0,
     });
     obs.label = label.map(String::into_boxed_str);
+    if let Some(attempt) = opt_attempt {
+        attempt.constructed(entry.is_null());
+    }
     Ok(CompiledLeaf {
         tier: LeafTier::Baseline,
         regalloc: lowering::active_regalloc_choice(),
@@ -4060,6 +4071,7 @@ pub(crate) mod opt_backend;
 pub(crate) mod opt_census;
 mod opt_emission;
 pub(crate) mod opt_profit;
+pub(crate) mod opt_report;
 mod sink_cold_snapshot;
 mod sqrt_binding;
 mod sqrt_snapshot;
