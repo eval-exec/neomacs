@@ -7,7 +7,6 @@
 //! The opt-in arm (`:animation t` materializing frames) is exercised by the
 //! renderer engine tests in `neomacs-renderer-wgpu/src/svg_animation`.
 
-use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
 /// An SMIL spinner-class document: `values`/`dur`/`repeatCount` on a
@@ -29,11 +28,13 @@ const ANIMATED_SVG: &str = concat!(
 fn divergence_animated_svg_static_by_default_matches_gnu() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    // Both renderers must report a single frame: GNU because librsvg has
-    // no animation, neomacs because the policy is off. The frame count is
-    // what `image-multi-frame-p` reads, so pinning it pins the
-    // default-path divergence gate.
-    assert_oracle_parity(&format!(
-        r#"(image-multi-frame-p (list 'image :type 'svg :data {ANIMATED_SVG:?}))"#
-    ));
+    // Both renderers must report NO animation — GNU because librsvg has
+    // no document clock, neomacs because the policy is off. Agreement
+    // alone would also pass if both materialized frames; the expectation
+    // pins the value, so the default-path divergence gate has teeth.
+    let expect = expect_test::expect![[r#""OK (nil)""#]];
+    crate::common::assert_oracle_parity_expect(
+        &format!(r#"(image-multi-frame-p (list 'image :type 'svg :data {ANIMATED_SVG:?}))"#),
+        expect,
+    );
 }

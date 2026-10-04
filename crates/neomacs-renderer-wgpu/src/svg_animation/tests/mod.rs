@@ -314,3 +314,70 @@ fn sampling_quantizes_a_loop_into_distinct_frames() {
     // slot 0 and from the extreme slot.
     assert_ne!(animation.frames[1].rgba, animation.frames[2].rgba);
 }
+
+/// PR review round 3: two absent-attribute animations on different
+/// elements must both survive compilation — the dedup key is the whole
+/// site, and the insertion position is what identifies the element.
+#[test]
+fn dedup_keeps_same_attribute_rules_on_distinct_elements() {
+    let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+  <circle cx="3" cy="5" r="1"><animate attributeName="opacity" from="1" to="0" dur="1s" repeatCount="indefinite"/></circle>
+  <circle cx="7" cy="5" r="1"><animate attributeName="opacity" from="0" to="1" dur="1s" repeatCount="indefinite"/></circle>
+</svg>"##;
+    let animation = compile(source);
+    assert_eq!(animation.rules.len(), 2, "both dots animate");
+    let positions: Vec<usize> = animation
+        .rules
+        .iter()
+        .map(|rule| rule.site.insert_pos)
+        .collect();
+    assert_ne!(
+        positions[0], positions[1],
+        "sites target different elements"
+    );
+}
+
+/// PR review round 3: `begin` is part of the timing, not an invisible
+/// offset — a delayed finite rule's animation must fall inside the
+/// sampled loop, and a looping plan's grid starts at its steady state.
+#[test]
+fn loop_period_and_origin_respect_begin() {
+    let delayed_finite = r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+  <circle r="1"><animate attributeName="r" from="1" to="5" begin="1s" dur="1s" repeatCount="indefinite"/></circle>
+</svg>"##;
+    let animation = compile(delayed_finite);
+    // Looping plan: the grid is the steady cycle, offset past the intro.
+    assert_eq!(
+        AnimatedVisual::period(&animation),
+        Some(Duration::from_secs(1))
+    );
+    assert_eq!(animation.intro_end(), Duration::from_secs(1));
+    // At document time 0.5s — inside the intro — the base value shows.
+    assert!(eval::evaluate(&animation, Duration::from_millis(500)).is_empty());
+    // At 1.5s the rule is mid-cycle.
+    assert_eq!(
+        one_override(&animation, Duration::from_millis(1500)),
+        ("r".into(), "3".into())
+    );
+
+    let finite_only = r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+  <circle r="1"><animate attributeName="r" from="1" to="5" begin="1s" dur="1s"/></circle>
+</svg>"##;
+    let animation = compile(finite_only);
+    // Finite plan: begin + active is the replayed span.
+    assert_eq!(animation.loop_period(), Some(Duration::from_secs(2)));
+}
+
+/// PR review round 3: a scheduler must not be woken by keyframe
+/// boundaries of cycles that precede the rule's activation.
+#[test]
+fn next_event_never_precedes_begin() {
+    let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+  <circle r="1"><animate attributeName="r" from="1" to="5" begin="10s" dur="1s" repeatCount="indefinite"/></circle>
+</svg>"##;
+    let animation = compile(source);
+    assert_eq!(
+        AnimatedVisual::next_event(&animation, Duration::ZERO),
+        Some(Duration::from_secs(10))
+    );
+}

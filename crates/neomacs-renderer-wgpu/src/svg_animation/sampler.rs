@@ -65,11 +65,20 @@ pub(crate) fn sample(
     let period = animation.loop_period()?;
     let grid = SampleGrid::new(period, policy.fps().unwrap_or(SampleGrid::DEFAULT_FPS))?;
     let delay = grid.slot_delay()?;
+    // A looping plan samples its steady state: the introduction before the
+    // last `begin` happens once and must not replay every cycle (a
+    // staggered spinner would reset to base values on every wrap). A
+    // finite plan replays from zero, introduction included.
+    let origin = if animation.has_indefinite() {
+        animation.intro_end()
+    } else {
+        std::time::Duration::ZERO
+    };
 
     let mut frames: Vec<SampledFrame> = Vec::with_capacity(grid.slot_count() as usize);
     let mut total_bytes = 0_usize;
     for slot in 0..grid.slot_count() {
-        let doc_time = grid.slot_start(slot)?;
+        let doc_time = origin.checked_add(grid.slot_start(slot)?)?;
         // Slot zero samples document time zero — the SMIL start state, not
         // the static base state. GNU renders the base; the difference is
         // the documented divergence the policy opts into.

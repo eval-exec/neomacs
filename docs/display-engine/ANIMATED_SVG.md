@@ -93,8 +93,8 @@ the policy, the decode pool materializes frames. In this increment frame
 *advancement* is driven by `image-animate`'s timer walking `:index` —
 GNU's own mechanism, and what neomacs uses for GIF today.
 
-**The follow-up increment** moves advancement to the render thread: a per
--sequence `MediaClock` (epoch at first presentation, paused while
+**The follow-up increment** moves advancement to the render thread: a
+per-sequence `MediaClock` (epoch at first presentation, paused while
 unpresented), frame indices derived from presentation time on the
 scheduler's phase-anchored grid, and a new `DemandReason` cadence
 (`AnimatedImage`) declaring `Cadence::At`/`MaxRate` from the plan's
