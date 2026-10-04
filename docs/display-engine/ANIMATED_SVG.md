@@ -72,6 +72,19 @@ load.
 - Sampling happens on the background decode pool, like every other
   decode.
 
+### Sharing rules
+
+Sequence identity follows the resolve source, and cache entries carry
+their producer kind (`AuthoredRaster` vs `ComputedSvg`), so a policy-off
+request can never be served frames a policy-on request materialized —
+cold or warm. Within the computed kind, the **first enabled request for
+a source fixes its grid**: a later enabled request for the same bytes
+with a different fps ceiling is served the already-materialized slots
+and delays (valid samples of the same timeline, at the first requester's
+cadence) until the sequence retires. Preferring a fresh grid per ceiling
+would thrash the cache under alternating requests; v1 treats the first
+requester as the owner.
+
 ## Threading
 
 The evaluator (elisp VM) thread participates only at image load and
