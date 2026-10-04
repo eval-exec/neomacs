@@ -7504,6 +7504,8 @@ impl crate::emacs_core::eval::Context {
         self.command_loop
             .start_kbd_macro_with_initial(initial_events, append);
         self.sync_keyboard_macro_runtime_vars();
+        // GNU macros.c raises update_mode_lines at successful recording entry.
+        self.request_mode_line_update(crate::emacs_core::eval::ModeLineUpdateTarget::AllBuffers);
         Ok(())
     }
 
@@ -7537,6 +7539,8 @@ impl crate::emacs_core::eval::Context {
             self.kmacro.macro_ring.push(previous);
         }
         self.sync_keyboard_macro_runtime_vars();
+        // GNU end_kbd_macro removes the recording indicator on the next display.
+        self.request_mode_line_update(crate::emacs_core::eval::ModeLineUpdateTarget::AllBuffers);
         Ok(recorded)
     }
 

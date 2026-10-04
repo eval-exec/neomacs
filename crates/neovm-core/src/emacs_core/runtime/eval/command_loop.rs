@@ -148,6 +148,8 @@ impl Context {
 
         if increment_depth {
             self.command_loop.recursive_depth += 1;
+            // GNU Frecursive_edit raises update_mode_lines after entering.
+            self.request_mode_line_update(ModeLineUpdateTarget::AllBuffers);
         }
 
         // GNU `recursive_edit_1` owns these bindings around the entire
@@ -215,6 +217,8 @@ impl Context {
         })();
         if increment_depth {
             self.command_loop.recursive_depth -= 1;
+            // The unwind boundary removes %[ / %] even after a non-local exit.
+            self.request_mode_line_update(ModeLineUpdateTarget::AllBuffers);
         }
         if !saved_running {
             self.command_loop.running = false;
@@ -3295,3 +3299,7 @@ impl Context {
 #[cfg(debug_assertions)]
 #[path = "tests/gc_heap_mut_closure.rs"]
 mod gc_heap_mut_closure_tests;
+
+#[cfg(test)]
+#[path = "tests/chrome_transitions.rs"]
+mod chrome_transition_tests;
