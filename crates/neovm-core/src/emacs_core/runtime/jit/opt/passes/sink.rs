@@ -48,9 +48,40 @@ pub(crate) fn run_with_sqrt_sites(
     feedback: &[NumericFeedback],
     sqrt_sites: &HashSet<u32>,
 ) -> Result<SinkStats, VerifyError> {
+    run_with_fast(
+        func,
+        feedback,
+        sqrt_sites,
+        super::super::pass_fast::enabled(),
+    )
+}
+
+/// The immutable discovery source and candidate belong to this invocation.
+/// No discovery hint replaces ordinary input or independent recipe validation.
+fn run_with_fast(
+    func: &mut Func,
+    feedback: &[NumericFeedback],
+    sqrt_sites: &HashSet<u32>,
+    fast: bool,
+) -> Result<SinkStats, VerifyError> {
     func.verify()?;
     if !func.sink_recipes.owners.is_empty() || func.osr.is_some() {
         return Ok(SinkStats::default());
+    }
+    if fast {
+        return match transform_fast(func, feedback, sqrt_sites) {
+            Ok(Some((candidate, stats))) => {
+                *func = candidate;
+                Ok(stats)
+            }
+            Ok(None) => Ok(SinkStats::default()),
+            Err(PassError::AnalysisLimit) => Ok(SinkStats {
+                analysis_bailed: 1,
+                ..Default::default()
+            }),
+            Err(PassError::Decline) => Ok(SinkStats::default()),
+            Err(PassError::Invalid(error)) => Err(error),
+        };
     }
     let mut candidate = func.clone();
     match transform(&mut candidate, feedback, sqrt_sites) {
@@ -89,6 +120,52 @@ fn transform(
     if selection.numeric.is_empty() && selection.sqrt.is_empty() && selection.cons.is_empty() {
         return Ok((SinkRecipes::default(), SinkStats::default()));
     }
+    transform_selected(func, &original, &dom, &blocks, &incoming, &selection)
+}
+
+/// FAST discovers on the already verified immutable source before allocating
+/// any candidate. Selected work uses one candidate and the identical shared
+/// transformation, then retains the complete independent publication verifier.
+/// The borrow cannot escape this compiler invocation or overlap source mutation.
+fn transform_fast(
+    original: &Func,
+    feedback: &[NumericFeedback],
+    sqrt_sites: &HashSet<u32>,
+) -> Result<Option<(Func, SinkStats)>, PassError> {
+    let dom = Dominance::new(original)?;
+    let incoming = incoming_edges(original);
+    if !incoming[original.entry.index()].is_empty() {
+        return Err(PassError::Decline);
+    }
+    let selection = discover(original, feedback, sqrt_sites, &dom)?;
+    if selection.numeric.is_empty() && selection.sqrt.is_empty() && selection.cons.is_empty() {
+        return Ok(None);
+    }
+    let blocks = instruction_blocks(original);
+    let mut candidate = original.clone();
+    let (table, stats) = transform_selected(
+        &mut candidate,
+        original,
+        &dom,
+        &blocks,
+        &incoming,
+        &selection,
+    )?;
+    candidate.sink_recipes = table;
+    candidate.verify()?;
+    Ok(Some((candidate, stats)))
+}
+
+/// Source, proof scratch and mutable candidate remain exclusively owned by one
+/// compilation. Both policies share the exact transform order and SSA IDs.
+fn transform_selected(
+    func: &mut Func,
+    original: &Func,
+    dom: &Dominance,
+    blocks: &[Block],
+    incoming: &[Vec<(Block, usize)>],
+    selection: &Selection,
+) -> Result<(SinkRecipes, SinkStats), PassError> {
     let mut table = SinkRecipes::default();
     let mut stats = SinkStats::default();
     let mut templates = vec![Vec::new(); func.blocks.len()];
@@ -128,7 +205,7 @@ fn transform(
         }
         templates[block.index()] = order;
     }
-    let aliases = alias_groups(&original, &selection, &incoming)?;
+    let aliases = alias_groups(original, selection, incoming)?;
     let mut versions = Versions {
         current: HashMap::new(),
         aliases,
@@ -141,7 +218,7 @@ fn transform(
     let mut cache_phis = vec![Vec::<(Value, RecipeVersionId)>::new(); func.blocks.len()];
     let mut owner_list = table.owners.keys().copied().collect::<Vec<_>>();
     owner_list.sort_unstable();
-    let future_uses = live_owner_blocks(&original, &selection, &dom)?;
+    let future_uses = live_owner_blocks(original, selection, dom)?;
 
     // Live dominating numeric owners get explicit cache-only params at joins.
     // This is a bounded static SSA algorithm, not a backend mutable Variable.
@@ -151,7 +228,7 @@ fn transform(
         }
         for &owner in &owner_list {
             versions.spend(1)?;
-            let definition = definition_block(&original, &blocks, owner)?;
+            let definition = definition_block(original, blocks, owner)?;
             if definition == block
                 || !dom.dominates(definition, block)
                 || !future_uses[block.index()].contains(&owner)
@@ -192,7 +269,7 @@ fn transform(
             // Unchanged dominating definitions only; a changed cache requires
             // the preallocated phi above. Independent verifier checks all cuts.
             for &owner in &owner_list {
-                let definition = definition_block(&original, &blocks, owner)?;
+                let definition = definition_block(original, blocks, owner)?;
                 if definition != block
                     && dom.dominates(definition, block)
                     && future_uses[block.index()].contains(&owner)
@@ -336,8 +413,8 @@ fn transform(
         }
         rewrite_term(
             func,
-            &original,
-            &selection,
+            original,
+            selection,
             &mut table,
             &mut versions,
             block,
@@ -1478,4 +1555,13 @@ fn derive_source_views(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn run_fast_for_test(
+    func: &mut Func,
+    feedback: &[NumericFeedback],
+    fast: bool,
+) -> Result<SinkStats, VerifyError> {
+    run_with_fast(func, feedback, &HashSet::new(), fast)
 }

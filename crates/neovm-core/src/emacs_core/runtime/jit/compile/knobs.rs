@@ -1796,3 +1796,10 @@ thread_local! {
 pub(crate) fn force_opt_passes_for_test(passes: Option<OptPasses>) {
     OPT_PASSES_TEST_OVERRIDE.with(|v| v.set(passes));
 }
+
+/// Default-OFF compile-time pass work elision. Threading: immutable process
+/// configuration only, never Lisp state, mutator pointers or compiler scratch.
+pub(crate) fn jit_opt_fast() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("NEOVM_JIT_OPT_FAST").as_deref() == Ok("on"))
+}

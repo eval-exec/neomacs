@@ -28,6 +28,12 @@ pub(crate) struct LicmStats {
 /// in the preheader frame. No block splitting, value/frame compaction or Poll
 /// motion occurs. Unsupported/multi-entry/OSR/overlapping loops are unchanged.
 pub(crate) fn run(func: &mut Func) -> Result<LicmStats, VerifyError> {
+    run_with_fast(func, super::super::pass_fast::enabled())
+}
+
+/// Invocation-owned discovery proves the empty-loop case before any candidate
+/// clone. The original input verifier and selected publication verifier remain.
+fn run_with_fast(func: &mut Func, fast: bool) -> Result<LicmStats, VerifyError> {
     func.verify()?;
     if func.osr.is_some() {
         return Ok(LicmStats::default());
@@ -36,6 +42,9 @@ pub(crate) fn run(func: &mut Func) -> Result<LicmStats, VerifyError> {
     let Some(loops) = natural_loops(func, &dom) else {
         return Ok(LicmStats::default());
     };
+    if fast && loops.is_empty() {
+        return Ok(LicmStats::default());
+    }
     let mut candidate = func.clone();
     let mut stats = LicmStats::default();
     for natural in loops {
@@ -467,3 +476,8 @@ fn replace(func: &mut Func, id: Inst, moved: Value) {
 #[cfg(test)]
 #[path = "tests/licm_test.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) fn run_fast_for_test(func: &mut Func, fast: bool) -> Result<LicmStats, VerifyError> {
+    run_with_fast(func, fast)
+}
