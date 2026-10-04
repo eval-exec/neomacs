@@ -279,12 +279,12 @@ misses, cache misses, L1 data-cache load misses, and data-TLB load misses, plus
 the raw `hardware-counters.csv`. If perf omits or cannot support any requested
 event, the run is an infrastructure failure rather than a zero-valued sample.
 
-The shared editor-workload fixture has an optional diagnostic for GC parity
+The editor-workload, Rust typing and scrolling fixtures have an optional diagnostic for GC parity
 inside an acknowledged edit-loop counter window:
 
 | Knob | Values and default | Behavior |
 | --- | --- | --- |
-| `NEOMACS_PERF_GC_WINDOW_FILE` | Absolute output path; unset by default | Writes a separate JSON file with editor PID, scenario, iteration count, four `gcs-done` snapshots and enable/disable acknowledgements after sampling stops. Requires the acknowledged sampling gate. |
+| `NEOMACS_PERF_GC_WINDOW_FILE` | Absolute output path; unset by default | Writes a separate JSON file with editor PID, scenario, iteration count, four `gcs-done` snapshots and enable/disable acknowledgements after sampling stops. Requires the acknowledged sampling gate; preserves visible sustained editing when enabled. |
 
 The GC delta is `before_disable - after_enable` only when both acknowledgements
 are true, `before_enable == after_enable`, and
