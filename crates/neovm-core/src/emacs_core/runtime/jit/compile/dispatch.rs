@@ -671,12 +671,16 @@ fn list_slow(ctx: *mut u8, builtin: JitBuiltin2Pure, a: Value, b_: Value) -> i64
 /// [`builtin_aset_args`](b::builtin_aset_args) then handles (or signals).
 /// Must agree with it wherever it stores.
 #[inline(always)]
-fn aset_fast(array: Value, index: Value, value: Value) -> bool {
+fn aset_fast(ctx: &Context, array: Value, index: Value, value: Value) -> bool {
+    use crate::tagged::collection_reads::{CompiledJournalMode, compiled_journal_mode};
     let Some(idx) = index.as_fixnum().and_then(|i| usize::try_from(i).ok()) else {
         return false;
     };
-    if jit_gen0_collection_journal_on()
-        && let Some(stored) = aset_journaled_vector(array, idx, value)
+    // No callback or safe point can change this process-immutable policy.
+    // Reuse it in the outlined store instead of reading the OnceLock twice.
+    let journal = compiled_journal_mode();
+    if journal != CompiledJournalMode::Off
+        && let Some(stored) = aset_journaled_vector(ctx, array, idx, value, journal)
     {
         return stored;
     }
@@ -751,7 +755,13 @@ fn aset_fast(array: Value, index: Value, value: Value) -> bool {
 /// existing collection journal and heap barrier; the slot store remains
 /// atomic for the concurrent collector, as in the ordinary fast path.
 #[inline]
-fn aset_journaled_vector(array: Value, idx: usize, value: Value) -> Option<bool> {
+fn aset_journaled_vector(
+    ctx: &Context,
+    array: Value,
+    idx: usize,
+    value: Value,
+    journal: crate::tagged::collection_reads::CompiledJournalMode,
+) -> Option<bool> {
     if !array.is_veclike() {
         return None;
     }
@@ -772,10 +782,14 @@ fn aset_journaled_vector(array: Value, idx: usize, value: Value) -> Option<bool>
     if !data.is_owned() || idx >= data.as_slice().len() {
         return Some(false);
     }
-    if jit_gen0_collection_journal_eager()
-        || crate::tagged::gc::current_heap_generational_enabled()
+    if journal == crate::tagged::collection_reads::CompiledJournalMode::Eager
+        // The shim's installed Context already supplies the executing heap.
+        // Its generation mode is immutable; avoid resolving that heap again
+        // through TLS before the ordinary collector barrier resolves it.
+        || ctx.tagged_heap.generational_enabled()
         || crate::tagged::gc::current_write_tracking_enabled()
-        || crate::tagged::collection_reads::is_observed(array.bits())
+        // The subtype guard above already established this live header.
+        || unsafe { (*header).gc.collection_observed() }
     {
         crate::tagged::gc::TaggedHeap::record_compiled_collection_write(array.bits());
     }
@@ -798,15 +812,16 @@ pub extern "C" fn neovm_jit_aset(ctx: *mut u8, array: i64, index: i64, value: i6
     let array = Value::from_bits(array as usize);
     let index = Value::from_bits(index as usize);
     let value = Value::from_bits(value as usize);
-    {
+    let ctx_ref = {
         // SAFETY: seam-provided dormant Context; only the epoch cell is written.
         let ctx = unsafe { &*(ctx as *const Context) };
         let epoch = ctx.obarray.function_epoch();
         if ctx.aset_fast_path_epoch.get() != epoch && !aset_regate(ctx, epoch) {
             return VALUE_SHIM_NEED_GENERIC;
         }
-    }
-    if aset_fast(array, index, value) {
+        ctx
+    };
+    if aset_fast(ctx_ref, array, index, value) {
         return value.bits() as i64;
     }
     aset_slow(ctx, array, index, value)
