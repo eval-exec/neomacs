@@ -1852,6 +1852,7 @@ pub(crate) enum OptProfitMode {
     Off,
     Loops,
     Lists,
+    PrimitiveLists,
     Kernels,
 }
 impl OptProfitMode {
@@ -1859,6 +1860,7 @@ impl OptProfitMode {
         match value.map(str::trim) {
             Some("loops") => Self::Loops,
             Some("lists") => Self::Lists,
+            Some("primitive-lists") => Self::PrimitiveLists,
             Some("kernels") => Self::Kernels,
             _ => Self::Off,
         }
@@ -1891,6 +1893,54 @@ thread_local! {
 #[cfg(test)]
 pub(crate) fn force_opt_profit_for_test(mode: Option<OptProfitMode>) {
     OPT_PROFIT_TEST_OVERRIDE.with(|value| value.set(mode));
+}
+
+/// Default-OFF normal-entry prerequisite. Threading: process configuration
+/// is an immutable scalar; test overrides belong only to the current compiler
+/// invocation, with no Lisp state, cache entries or runtime recording.
+pub(crate) fn jit_opt_require_osr() -> bool {
+    #[cfg(test)]
+    if let Some(value) = OPT_REQUIRE_OSR_TEST_OVERRIDE.with(std::cell::Cell::get) {
+        return value;
+    }
+    #[cfg(test)]
+    if let Some(defaults) = super::opt_profile::test_defaults() {
+        return defaults.require_osr;
+    }
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        super::opt_profile::resolve(
+            std::env::var("NEOVM_JIT_OPT_REQUIRE_OSR").as_deref(),
+            || super::opt_profile::selected().require_osr,
+            |value| value == Some("on"),
+        )
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-thread scalar compiler configuration only, never Lisp/mutator state.
+    static OPT_REQUIRE_OSR_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn force_opt_require_osr_for_test(value: Option<bool>) {
+    OPT_REQUIRE_OSR_TEST_OVERRIDE.with(|setting| setting.set(value));
+}
+
+/// Test-owned scalar selection. Threading: restores the exact previous override
+/// for this compiler thread, retaining no Lisp value or cache ownership.
+#[cfg(test)]
+pub(crate) fn opt_require_osr_scope_for_test(value: bool) -> impl Drop {
+    /// Compiler-local scalar override; no mutator/Lisp state is stored here.
+    struct Scope(Option<bool>);
+    impl Drop for Scope {
+        fn drop(&mut self) {
+            OPT_REQUIRE_OSR_TEST_OVERRIDE.with(|setting| setting.set(self.0));
+        }
+    }
+    Scope(OPT_REQUIRE_OSR_TEST_OVERRIDE.with(|setting| setting.replace(Some(value))))
 }
 
 /// Compile-time early-loop policy. Threading: immutable configuration, never

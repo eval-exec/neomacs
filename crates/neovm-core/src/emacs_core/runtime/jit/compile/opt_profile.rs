@@ -15,6 +15,7 @@ pub(super) enum Profile {
     Lists20,
     Lists32,
     Lists48,
+    Lists48Osr,
     Lists64,
 }
 
@@ -29,6 +30,7 @@ pub(super) struct Defaults {
     pub(super) early: OptEarlyMode,
     pub(super) max_ops: usize,
     pub(super) fast: bool,
+    pub(super) require_osr: bool,
 }
 
 impl Profile {
@@ -37,6 +39,7 @@ impl Profile {
             Some("lists20") => Self::Lists20,
             Some("lists32") => Self::Lists32,
             Some("lists48") => Self::Lists48,
+            Some("lists48-osr") => Self::Lists48Osr,
             Some("lists64") => Self::Lists64,
             _ => Self::Off,
         }
@@ -47,7 +50,7 @@ impl Profile {
             Self::Off => return Defaults::default(),
             Self::Lists20 => 20,
             Self::Lists32 => 32,
-            Self::Lists48 => 48,
+            Self::Lists48 | Self::Lists48Osr => 48,
             Self::Lists64 => 64,
         };
         Defaults {
@@ -59,10 +62,15 @@ impl Profile {
                 reps: true,
                 ..OptPasses::default()
             },
-            profit: OptProfitMode::Lists,
+            profit: if self == Self::Lists48Osr {
+                OptProfitMode::PrimitiveLists
+            } else {
+                OptProfitMode::Lists
+            },
             early: OptEarlyMode::Hot,
             max_ops,
             fast: true,
+            require_osr: self == Self::Lists48Osr,
         }
     }
 }
@@ -124,3 +132,7 @@ mod precedence_tests;
 #[cfg(test)]
 #[path = "opt_profile/tests/frontend_test.rs"]
 mod frontend_tests;
+
+#[cfg(test)]
+#[path = "opt_profile/tests/ready_osr_profile_test.rs"]
+mod ready_osr_tests;

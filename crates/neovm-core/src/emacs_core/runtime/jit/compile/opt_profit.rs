@@ -29,6 +29,7 @@ struct Work {
     backedge: bool,
     list_backedge: bool,
     unsupported_control: bool,
+    bytecode_calls: bool,
 }
 
 impl Work {
@@ -37,6 +38,9 @@ impl Work {
         let mut last_list_pc = None;
         for (pc, op) in ops.iter().enumerate() {
             match op {
+                Op::Call(_) | Op::Apply(_) | Op::CallBuiltin(..) | Op::CallBuiltinSym(..) => {
+                    work.bytecode_calls = true
+                }
                 // build::Builder::new refuses these reachable operations:
                 // handler edges need push-time stacks that opt does not model.
                 // Avoid a CFG build here and conservatively reject dead copies
@@ -113,11 +117,17 @@ pub(crate) fn body_admitted(
         return false;
     }
     let work = Work::read(ops);
-    if work.unsupported_control {
+    if work.unsupported_control
+        || (mode == super::OptProfitMode::PrimitiveLists && work.bytecode_calls)
+    {
         return false;
     }
     if work.backedge {
-        return work.useful > 0 && (mode != super::OptProfitMode::Lists || work.list_backedge);
+        return work.useful > 0
+            && (!matches!(
+                mode,
+                super::OptProfitMode::Lists | super::OptProfitMode::PrimitiveLists
+            ) || work.list_backedge);
     }
     mode == super::OptProfitMode::Kernels && hot && ops.len() <= 64 && work.useful >= 2
 }
@@ -140,6 +150,7 @@ pub(super) fn front(
         let mode = super::jit_opt_early();
         let early_profit = match jit_opt_profit() {
             super::OptProfitMode::Lists => super::OptProfitMode::Lists,
+            super::OptProfitMode::PrimitiveLists => super::OptProfitMode::PrimitiveLists,
             _ => super::OptProfitMode::Loops,
         };
         if mode == super::OptEarlyMode::Off
@@ -169,6 +180,77 @@ pub(super) fn front(
     } else {
         FrontChoice::Legacy
     }
+}
+
+/// Require installed Opt OSR evidence only for a selected normal frontend.
+/// Threading: borrowed source facts and the owning mutator's existing cache are
+/// read only. No Lisp handle, new runtime state or observation counter escapes.
+/// A rejection keeps the original MIR/static-fuser frontend before SSA starts.
+#[cold]
+#[inline(never)]
+pub(super) fn ready_osr_front(
+    front: FrontChoice,
+    source: &super::ByteCodeFunction,
+    obarray: Option<&super::Obarray>,
+) -> FrontChoice {
+    if !matches!(front, FrontChoice::Selected | FrontChoice::SelectedAfterMir)
+        || !super::jit_opt_require_osr()
+    {
+        return front;
+    }
+    let lists = matches!(
+        jit_opt_profit(),
+        super::OptProfitMode::Lists | super::OptProfitMode::PrimitiveLists
+    );
+    let mut last_list_pc = None;
+    // Query exact original source headers, not fused PCs or the entire cache.
+    // Lists requires evidence at a list-containing backedge; a separate hot
+    // numeric loop must not qualify a cold list loop in the same source.
+    let headers = source
+        .executable_ops()
+        .iter()
+        .enumerate()
+        .filter_map(|(pc, op)| match op {
+            Op::Car | Op::Cdr | Op::CarSafe | Op::CdrSafe | Op::Setcar | Op::Setcdr => {
+                last_list_pc = Some(pc);
+                None
+            }
+            Op::Goto(target)
+            | Op::GotoIfNil(target)
+            | Op::GotoIfNotNil(target)
+            | Op::GotoIfNilElsePop(target)
+            | Op::GotoIfNotNilElsePop(target) => {
+                let target = *target as usize;
+                (target <= pc && (!lists || last_list_pc.is_some_and(|list_pc| list_pc >= target)))
+                    .then_some(target)
+            }
+            _ => None,
+        });
+    if crate::emacs_core::jit::cache::has_ready_opt_osr(
+        source.jit_runtime(),
+        obarray.map(super::Obarray::generation),
+        headers,
+    ) {
+        front
+    } else {
+        FrontChoice::Legacy
+    }
+}
+
+/// Preserve original-call evidence even when the OSR fuser removes a call.
+/// Threading: immutable source/configuration reads at the cold cache compile
+/// seam. No source state, Lisp handle or runtime observation is recorded.
+/// Other modes return before scanning, retaining their existing OSR policy.
+#[cold]
+#[inline(never)]
+pub(crate) fn primitive_osr_source_admitted(source_ops: &[Op]) -> bool {
+    jit_opt_profit() != super::OptProfitMode::PrimitiveLists
+        || !source_ops.iter().any(|op| {
+            matches!(
+                op,
+                Op::Call(_) | Op::Apply(_) | Op::CallBuiltin(..) | Op::CallBuiltinSym(..)
+            )
+        })
 }
 
 /// OSR already proves loop heat and is a cold compile seam. Off returns before
@@ -230,3 +312,11 @@ mod lists_frontend_tests;
 #[cfg(test)]
 #[path = "opt_profit/tests/lists_osr_test.rs"]
 mod lists_osr_tests;
+
+#[cfg(test)]
+#[path = "opt_profit/tests/ready_osr_test.rs"]
+mod ready_osr_tests;
+
+#[cfg(test)]
+#[path = "opt_profit/tests/primitive_lists_test.rs"]
+mod primitive_lists_tests;

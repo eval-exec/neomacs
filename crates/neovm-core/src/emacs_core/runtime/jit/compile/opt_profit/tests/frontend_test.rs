@@ -20,6 +20,7 @@ impl Settings {
     pub(super) fn enter() -> Self {
         force_opt_for_test(Some(OptMode::Opt), Some(OptAdmit::ALL));
         force_opt_profit_for_test(Some(OptProfitMode::Loops));
+        super::super::force_opt_require_osr_for_test(Some(false));
         super::super::force_opt_early_for_test(Some(super::super::OptEarlyMode::Off));
         super::super::force_opt_max_ops_for_test(Some(0));
         force_inline2_for_test(Some(super::super::Inline2Mode::Off));
@@ -35,6 +36,7 @@ impl Drop for Settings {
     fn drop(&mut self) {
         force_opt_for_test(None, None);
         force_opt_profit_for_test(None);
+        super::super::force_opt_require_osr_for_test(None);
         super::super::force_opt_early_for_test(None);
         super::super::force_opt_max_ops_for_test(None);
         force_inline2_for_test(None);

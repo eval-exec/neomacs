@@ -886,6 +886,7 @@ pub fn compile_bytecode_function_requested(
     super::stats::verdict::begin();
     let named_t2 = inline_planning::named_tier_eligible(f, request, self_recursive);
     let front = opt_profit::front(request, f.executable_ops(), call_heavy, f.jit_runtime());
+    let front = opt_profit::ready_osr_front(front, f, obarray);
     let opt_request = (jit_opt_mode() == OptMode::Opt && front != opt_profit::FrontChoice::Legacy)
         .then_some(request);
     let mut selected_declined = false;

@@ -37,6 +37,9 @@ use crate::emacs_core::intern::SymId;
 use crate::emacs_core::symbol::Obarray;
 use crate::emacs_core::value::Value;
 
+mod opt_evidence;
+pub(crate) use opt_evidence::has_ready_opt_osr;
+
 /// Why a body is interpreted for now although it is hot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DeferReason {
@@ -727,6 +730,7 @@ fn compile_osr_leaf_timed(
     let lower_phase = stats::enter_phase(stats::CompilePhase::Lower);
     let opt_params = (super::compile::jit_opt_mode() == super::compile::OptMode::Opt
         && func.jit_runtime().reopt_level() < ReoptLevel::BaselineOnly
+        && super::compile::opt_profit::primitive_osr_source_admitted(func.executable_ops())
         && super::compile::opt_profit::osr_admitted(ops, constants, func.executable_ops().len()))
     .then_some(super::opt::ir::ParamShape {
         required: params.required(),
