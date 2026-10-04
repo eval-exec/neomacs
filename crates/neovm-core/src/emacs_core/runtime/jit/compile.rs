@@ -3590,6 +3590,10 @@ fn lower_leaf_full_osr_with_plan_impl(
         opt_request,
         ops.len(),
     );
+    let exit_attempt = super::stats::exit_snapshot::Attempt::begin(
+        opt_params.is_some() || opt_override.is_some(),
+        osr_pc.is_some(),
+    );
     // Every analysis and the reloc collection below see the MASKED view; only
     // the emitter's `Op::Constant` arm knows the prefix (it loads those slots
     // through the callee at run time).
@@ -3900,6 +3904,9 @@ fn lower_leaf_full_osr_with_plan_impl(
     });
     obs.label = label.map(String::into_boxed_str);
     if let Some(attempt) = opt_attempt {
+        attempt.constructed(entry.is_null());
+    }
+    if let Some(attempt) = exit_attempt {
         attempt.constructed(entry.is_null());
     }
     Ok(CompiledLeaf {

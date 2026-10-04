@@ -2033,3 +2033,15 @@ pub(crate) fn jit_opt_report_path() -> Option<&'static std::path::Path> {
     })
     .as_deref()
 }
+
+/// Exit-only scalar evidence. Threading: immutable process path is safely
+/// published once; no Lisp state, native counter or phase clock is enabled.
+pub(crate) fn jit_exit_path() -> Option<&'static std::path::Path> {
+    static PATH: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| {
+        std::env::var_os("NEOVM_JIT_EXIT_FILE")
+            .filter(|value| !value.is_empty() && value.as_os_str() != std::ffi::OsStr::new("off"))
+            .map(std::path::PathBuf::from)
+    })
+    .as_deref()
+}
