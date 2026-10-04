@@ -93,6 +93,8 @@ mod saving_insert;
 mod scroll_bar_tty;
 #[path = "search.rs"]
 mod search;
+#[path = "send_string_to_terminal.rs"]
+mod send_string_to_terminal;
 #[path = "shell_compile.rs"]
 mod shell_compile;
 #[path = "source_navigation.rs"]
