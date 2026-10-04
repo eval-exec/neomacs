@@ -15,8 +15,7 @@ use neovm_core::emacs_core::image::{
 };
 use neovm_core::emacs_core::image_catalog::{
     AxisSize, ImageAnimationPolicy, ImageColorContext, ImageFrameIndex, ImageLoadIdentity,
-    ImageMaskPolicy,
-    ImageResolveRequest, ImageResolveSource, ImageRotation, ImageScaleEnvironment,
+    ImageMaskPolicy, ImageResolveRequest, ImageResolveSource, ImageRotation, ImageScaleEnvironment,
     ImageScalePolicy, ImageSizeSpec, ImageSpecIdentity, numeric_image_scale,
 };
 use neovm_core::emacs_core::value::{ValueKind, list_to_vec};

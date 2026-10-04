@@ -38,7 +38,8 @@ pub(crate) use sampler::sample_shared as sample_svg_sequence;
 pub(crate) fn may_contain_animation(data: &[u8]) -> bool {
     // `animate`, `animateTransform`, `animateMotion`, `animateColor` all
     // share the `<animate` byte prefix.
-    data.windows(b"<animate".len()).any(|window| window == b"<animate")
+    data.windows(b"<animate".len())
+        .any(|window| window == b"<animate")
         || data.windows(b"<set".len()).any(|window| window == b"<set")
 }
 

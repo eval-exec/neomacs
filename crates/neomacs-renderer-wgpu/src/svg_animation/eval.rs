@@ -32,10 +32,7 @@ pub(crate) fn evaluate(plan: &AnimationPlan, doc_time: Duration) -> Vec<Attribut
     let mut overrides = Vec::new();
     for (index, rule) in plan.rules.iter().enumerate() {
         if let Some(value) = evaluate_rule(rule, doc_time) {
-            overrides.push(AttributeOverride {
-                rule: index,
-                value,
-            });
+            overrides.push(AttributeOverride { rule: index, value });
         }
     }
     overrides
@@ -151,7 +148,11 @@ fn interpolate_value(timeline: &super::plan::Timeline, cycle: f64) -> Option<Ani
                 .zip(to.iter())
                 .map(|(from, to)| from + (to - from) * progress)
                 .collect::<Vec<_>>();
-            Some(AnimatedValue::Color([channels[0], channels[1], channels[2]]))
+            Some(AnimatedValue::Color([
+                channels[0],
+                channels[1],
+                channels[2],
+            ]))
         }
         // Mixed representations cannot blend; hold the segment's start.
         _ => Some(from.clone()),

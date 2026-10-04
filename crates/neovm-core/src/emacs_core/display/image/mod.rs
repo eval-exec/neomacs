@@ -19,11 +19,10 @@ use crate::emacs_core::error::{expect_args, expect_args_range, expect_max_args, 
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::image_catalog::{
     AxisSize, EncodedBytes, ImageAnimationInvalidation, ImageAnimationPolicy, ImageColorContext,
-    ImageDataSource,
-    ImageFrameIndex, ImageHeuristicMask, ImageInvalidation, ImageLoadIdentity, ImageMaskKind,
-    ImageMaskPolicy, ImageResolveRequest, ImageResolveSource, ImageRotation, ImageScaleEnvironment,
-    ImageScalePolicy, ImageSizeSpec, ImageSpecIdentity, image_scale_environment,
-    numeric_image_scale,
+    ImageDataSource, ImageFrameIndex, ImageHeuristicMask, ImageInvalidation, ImageLoadIdentity,
+    ImageMaskKind, ImageMaskPolicy, ImageResolveRequest, ImageResolveSource, ImageRotation,
+    ImageScaleEnvironment, ImageScalePolicy, ImageSizeSpec, ImageSpecIdentity,
+    image_scale_environment, numeric_image_scale,
 };
 use crate::window::FRAME_ID_BASE;
 use neomacs_display_protocol::image_diagnostic::{ImageDiagnosticSubject, ImageFormatName};

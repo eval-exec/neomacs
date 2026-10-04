@@ -15,8 +15,8 @@
 
 use std::time::Duration;
 
-use resvg::usvg;
 use neomacs_display_protocol::animated_visual::AnimatedVisual;
+use resvg::usvg;
 
 /// A compiled document timeline.
 #[derive(Clone, Debug, Default)]
@@ -154,8 +154,7 @@ impl AnimationPlan {
         for rule in &self.rules {
             // An indefinite rule contributes its cycle length; the loop at
             // least covers every rule's own cycle.
-            let duration =
-                Self::rule_active_duration(rule).unwrap_or(rule.timeline.dur);
+            let duration = Self::rule_active_duration(rule).unwrap_or(rule.timeline.dur);
             period = period.max(duration);
         }
         (period > Duration::ZERO).then_some(period)
@@ -240,7 +239,10 @@ pub(crate) fn compile(data: &[u8]) -> Option<AnimationPlan> {
         if !node.is_element() {
             continue;
         }
-        if !matches!(node.tag_name().name(), "animate" | "animateTransform" | "set") {
+        if !matches!(
+            node.tag_name().name(),
+            "animate" | "animateTransform" | "set"
+        ) {
             continue;
         }
         if let Some(rule) = compile_rule(data, node) {
@@ -279,7 +281,9 @@ fn compile_rule(data: &[u8], node: usvg::roxmltree::Node<'_, '_>) -> Option<Anim
         .map(str::to_owned)
         .or_else(|| transform.is_some().then(|| "transform".to_owned()))?;
     if node.attribute("repeatDur").is_some()
-        || node.attribute("additive").is_some_and(|value| value == "sum")
+        || node
+            .attribute("additive")
+            .is_some_and(|value| value == "sum")
     {
         // Composing onto base values needs the base value at evaluation
         // time; v1 declines rather than approximating silently.
@@ -429,7 +433,11 @@ fn parse_color(raw: &str) -> Option<[f64; 3]> {
     let hex = raw.strip_prefix('#')?;
     let octet = |slice: &str| u8::from_str_radix(slice, 16).ok();
     let (r, g, b) = match hex.len() {
-        3 => (octet(&hex[0..1])? * 17, octet(&hex[1..2])? * 17, octet(&hex[2..3])? * 17),
+        3 => (
+            octet(&hex[0..1])? * 17,
+            octet(&hex[1..2])? * 17,
+            octet(&hex[2..3])? * 17,
+        ),
         6 => (octet(&hex[0..2])?, octet(&hex[2..4])?, octet(&hex[4..6])?),
         _ => return None,
     };

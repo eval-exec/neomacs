@@ -22,7 +22,9 @@ fn slot_count_follows_rate_up_to_the_cap() {
     assert_eq!(SampleGrid::new(seconds(2), 1).unwrap().slot_count(), 2);
     // A fraction of a second still produces one slot, never zero.
     assert_eq!(
-        SampleGrid::new(Duration::from_millis(10), 30).unwrap().slot_count(),
+        SampleGrid::new(Duration::from_millis(10), 30)
+            .unwrap()
+            .slot_count(),
         1
     );
     // 60s at 30fps wants 1800 slots; the cap wins.

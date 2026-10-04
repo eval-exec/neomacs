@@ -5,9 +5,9 @@ use super::WgpuRenderer;
 #[cfg(feature = "video")]
 use neomacs_display_protocol::VideoId;
 use neomacs_display_protocol::{
-    ImageAnimationPolicy,
-    ImageColorContext, ImageFrameIndex, ImageId, ImageLoadToken, ImageMaskPolicy, ImageRealization,
-    ImageRotation, ImageSequenceId, ImageSequenceRetirement, ImageSizeSpec,
+    ImageAnimationPolicy, ImageColorContext, ImageFrameIndex, ImageId, ImageLoadToken,
+    ImageMaskPolicy, ImageRealization, ImageRotation, ImageSequenceId, ImageSequenceRetirement,
+    ImageSizeSpec,
 };
 #[cfg(feature = "video")]
 use neomacs_video::{PlaybackAction, VideoOpenRequest};
