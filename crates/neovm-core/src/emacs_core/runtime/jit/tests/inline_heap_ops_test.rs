@@ -267,10 +267,12 @@ fn opt_cons_store_proofs_keep_deopt_and_barrier_paths() {
     impl Drop for Settings {
         fn drop(&mut self) {
             force_opt_for_test(None, None);
+            force_opt_passes_for_test(None);
             force_deopt_for_test(false);
         }
     }
     let _settings = Settings;
+    force_opt_passes_for_test(Some(OptPasses::default()));
     force_deopt_for_test(false);
     let lower = |f: &ByteCodeFunction| {
         lower_leaf_full_osr_with_opt(

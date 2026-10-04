@@ -1803,3 +1803,99 @@ pub(crate) fn jit_opt_fast() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var("NEOVM_JIT_OPT_FAST").as_deref() == Ok("on"))
 }
+
+/// Compile-only profitability policy. Threading: immutable process configuration;
+/// test overrides hold only the scalar policy, never Lisp or mutator state.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum OptProfitMode {
+    #[default]
+    Off,
+    Loops,
+    Kernels,
+}
+impl OptProfitMode {
+    pub(crate) fn parse(value: Option<&str>) -> Self {
+        match value.map(str::trim) {
+            Some("loops") => Self::Loops,
+            Some("kernels") => Self::Kernels,
+            _ => Self::Off,
+        }
+    }
+}
+pub(crate) fn jit_opt_profit() -> OptProfitMode {
+    #[cfg(test)]
+    if let Some(mode) = OPT_PROFIT_TEST_OVERRIDE.with(std::cell::Cell::get) {
+        return mode;
+    }
+    static MODE: std::sync::OnceLock<OptProfitMode> = std::sync::OnceLock::new();
+    *MODE
+        .get_or_init(|| OptProfitMode::parse(std::env::var("NEOVM_JIT_OPT_PROFIT").ok().as_deref()))
+}
+#[cfg(test)]
+thread_local! {
+    /// Compiler configuration only, never Lisp state or runtime feedback.
+    static OPT_PROFIT_TEST_OVERRIDE: std::cell::Cell<Option<OptProfitMode>> =
+        const { std::cell::Cell::new(None) };
+}
+#[cfg(test)]
+pub(crate) fn force_opt_profit_for_test(mode: Option<OptProfitMode>) {
+    OPT_PROFIT_TEST_OVERRIDE.with(|value| value.set(mode));
+}
+
+/// Compile-time early-loop policy. Threading: immutable configuration, never
+/// runtime recording or mutator state. Off keeps the original profit policy.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum OptEarlyMode {
+    #[default]
+    Off,
+    Hot,
+    On,
+}
+impl OptEarlyMode {
+    pub(crate) fn parse(value: Option<&str>) -> Self {
+        match value.map(str::trim) {
+            Some("hot") => Self::Hot,
+            Some("on") => Self::On,
+            _ => Self::Off,
+        }
+    }
+}
+pub(crate) fn jit_opt_early() -> OptEarlyMode {
+    #[cfg(test)]
+    if let Some(value) = OPT_EARLY_TEST_OVERRIDE.with(std::cell::Cell::get) {
+        return value;
+    }
+    static MODE: std::sync::OnceLock<OptEarlyMode> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| OptEarlyMode::parse(std::env::var("NEOVM_JIT_OPT_EARLY").ok().as_deref()))
+}
+/// Optional original/final selected-front size bound; zero is disabled.
+/// Threading: immutable compiler configuration only. The builder retains its
+/// independent 1000-op hard ceiling.
+pub(crate) fn jit_opt_max_ops() -> usize {
+    #[cfg(test)]
+    if let Some(value) = OPT_MAX_OPS_TEST_OVERRIDE.with(std::cell::Cell::get) {
+        return value;
+    }
+    static MAX: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *MAX.get_or_init(|| {
+        std::env::var("NEOVM_JIT_OPT_MAX_OPS")
+            .ok()
+            .and_then(|value| value.trim().parse().ok())
+            .unwrap_or(0)
+    })
+}
+#[cfg(test)]
+thread_local! {
+    /// Scalar compiler configuration only; never Lisp/runtime state.
+    static OPT_EARLY_TEST_OVERRIDE: std::cell::Cell<Option<OptEarlyMode>> = const { std::cell::Cell::new(None) };
+    /// Scalar compiler configuration only; never Lisp/runtime state.
+    static OPT_MAX_OPS_TEST_OVERRIDE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+#[cfg(test)]
+pub(crate) fn force_opt_early_for_test(value: Option<OptEarlyMode>) {
+    OPT_EARLY_TEST_OVERRIDE.with(|mode| mode.set(value));
+}
+#[cfg(test)]
+pub(crate) fn force_opt_max_ops_for_test(value: Option<usize>) {
+    OPT_MAX_OPS_TEST_OVERRIDE.with(|mode| mode.set(value));
+}

@@ -726,12 +726,13 @@ fn compile_osr_leaf_timed(
     drop(gate_phase);
     let lower_phase = stats::enter_phase(stats::CompilePhase::Lower);
     let opt_params = (super::compile::jit_opt_mode() == super::compile::OptMode::Opt
-        && func.jit_runtime().reopt_level() < ReoptLevel::BaselineOnly)
-        .then_some(super::opt::ir::ParamShape {
-            required: params.required(),
-            optional,
-            has_rest: params.rest().is_present(),
-        });
+        && func.jit_runtime().reopt_level() < ReoptLevel::BaselineOnly
+        && super::compile::opt_profit::osr_admitted(ops, constants, func.executable_ops().len()))
+    .then_some(super::opt::ir::ParamShape {
+        required: params.required(),
+        optional,
+        has_rest: params.rest().is_present(),
+    });
     let mut leaf = match super::compile::opt_backend::lower_best(
         ops,
         constants,

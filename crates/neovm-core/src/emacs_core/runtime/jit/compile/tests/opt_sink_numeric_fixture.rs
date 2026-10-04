@@ -18,6 +18,7 @@ pub(super) struct Settings;
 impl Settings {
     pub(super) fn enter() -> Self {
         force_opt_for_test(Some(OptMode::Opt), Some(OptAdmit::ALL));
+        force_opt_profit_for_test(Some(OptProfitMode::Off));
         force_flonum_mode_for_test(Some(FlonumMode::Resident));
         force_opt_passes_for_test(Some(OptPasses::default()));
         crate::emacs_core::jit::inline::force_inline_for_test(Some(false));
@@ -28,6 +29,7 @@ impl Settings {
 impl Drop for Settings {
     fn drop(&mut self) {
         force_opt_for_test(None, None);
+        force_opt_profit_for_test(None);
         force_opt_passes_for_test(None);
         force_flonum_mode_for_test(None);
         crate::emacs_core::jit::inline::force_inline_for_test(None);

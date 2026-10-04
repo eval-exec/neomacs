@@ -329,6 +329,42 @@ pub(super) fn lower_best_requested(
     lower_leaf_full_osr(ops, constants, arity, offset_map, obarray, osr_pc, prefix)
 }
 
+/// A selected attempt never generates baseline code on failure: its source
+/// owner re-enters the legacy MIR frontend. Threading: request and parameters
+/// are compiler-owned scalars; no runtime or mutator storage is introduced.
+#[cold]
+#[inline(never)]
+pub(super) fn lower_selected_requested(
+    ops: &[Op],
+    constants: &[Value],
+    arity: usize,
+    offset_map: Option<&[GnuByteOffsetMapEntry]>,
+    obarray: Option<&Obarray>,
+    osr_pc: Option<usize>,
+    prefix: usize,
+    params: ir::ParamShape,
+    request: CompileRequest,
+) -> Result<CompiledLeaf, CompileError> {
+    lowering::rootwin_counters_reset();
+    lower_leaf_full_osr_with_plan_impl(
+        ops,
+        constants,
+        arity,
+        offset_map,
+        obarray,
+        osr_pc,
+        prefix,
+        Some(params),
+        None,
+        Some(request),
+    )
+    .inspect_err(|error| {
+        record(None, &format!("opt-bail:{error:?}"), ops.len(), 0);
+        tracing::debug!(target: "neovm_jit::opt", ?error,
+            "selected opt backend declined; restoring legacy frontend");
+    })
+}
+
 fn census_path() -> Option<&'static std::path::Path> {
     static PATH: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
     PATH.get_or_init(|| {

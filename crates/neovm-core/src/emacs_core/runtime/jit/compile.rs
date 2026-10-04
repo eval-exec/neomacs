@@ -885,9 +885,33 @@ pub fn compile_bytecode_function_requested(
     let started = std::time::Instant::now();
     super::stats::verdict::begin();
     let named_t2 = inline_planning::named_tier_eligible(f, request, self_recursive);
-    let opt_request = (jit_opt_mode() == OptMode::Opt).then_some(request);
-    let mut result =
-        compile_bytecode_function_inner(f, obarray, named_t2, request.tier, opt_request);
+    let front = opt_profit::front(request, f.executable_ops(), call_heavy, f.jit_runtime());
+    let opt_request = (jit_opt_mode() == OptMode::Opt && front != opt_profit::FrontChoice::Legacy)
+        .then_some(request);
+    let mut selected_declined = false;
+    let mut result = compile_bytecode_function_inner(
+        f,
+        obarray,
+        named_t2,
+        request.tier,
+        opt_request,
+        front,
+        &mut selected_declined,
+    );
+    if selected_declined {
+        // A refused SSA attempt returns to the original MIR frontend before
+        // any baseline code generation. Existing compile-owned scopes remain
+        // live; the failed inner attempt has already dropped its local scopes.
+        result = compile_bytecode_function_inner(
+            f,
+            obarray,
+            false,
+            request.tier,
+            None,
+            opt_profit::FrontChoice::Legacy,
+            &mut selected_declined,
+        );
+    }
     if jit_opt_mode() == OptMode::Opt {
         super::stats::inline_census::note_selected_compile_outcome(f, &result);
     } else {
@@ -1049,6 +1073,8 @@ fn compile_bytecode_function_inner(
     named_t2: bool,
     tier: super::tier2::CompileTier,
     opt_request: Option<CompileRequest>,
+    front: opt_profit::FrontChoice,
+    selected_declined: &mut bool,
 ) -> Result<CompiledLeaf, CompileError> {
     use super::stats::{CompilePhase, enter_phase};
     let gate_phase = enter_phase(CompilePhase::Gate);
@@ -1088,8 +1114,20 @@ fn compile_bytecode_function_inner(
     // cannot preserve the v2 annotations, so a fused-v2 body stays on the
     // baseline until the opt builder consumes its frame states. Off keeps
     // the original MIR-first, late-fuser path below.
-    let inline2 = jit_inline2_mode();
-    let early_fused = inline_planning::early_fused(f, constants, obarray, native_arity, named_t2);
+    let inline2 = if matches!(
+        front,
+        opt_profit::FrontChoice::Legacy | opt_profit::FrontChoice::SelectedAfterMir
+    ) {
+        Inline2Mode::Off
+    } else {
+        jit_inline2_mode()
+    };
+    let early_fused = (!matches!(
+        front,
+        opt_profit::FrontChoice::Legacy | opt_profit::FrontChoice::SelectedAfterMir
+    ))
+    .then(|| inline_planning::early_fused(f, constants, obarray, native_arity, named_t2))
+    .flatten();
     opt_backend::build_census(f, early_fused.as_deref());
     let fused_v2 = early_fused.as_ref().is_some_and(|body| body.is_v2());
     let (ops, constants) = early_fused.as_ref().map_or((ops, constants), |body| {
@@ -1122,7 +1160,11 @@ fn compile_bytecode_function_inner(
     }
     drop(gate_phase);
     let mir_phase = enter_phase(CompilePhase::MirBuild);
-    let mir_built = (jit_opt_mode() == OptMode::Legacy
+    let mir_built = ((jit_opt_mode() == OptMode::Legacy
+        || matches!(
+            front,
+            opt_profit::FrontChoice::Legacy | opt_profit::FrontChoice::SelectedAfterMir
+        ))
         && !has_rest
         && optional == 0
         && dynamic_prefix == 0
@@ -1281,6 +1323,11 @@ fn compile_bytecode_function_inner(
         None => (ops, constants),
     };
     drop(fuse_phase);
+    // A selected source can grow during static fusion. Check the final slice
+    // before SSA and emit the existing baseline once when it exceeds the bound;
+    // returning Err here would repeat MIR and fusion in the outer retry.
+    let selected_final_size = opt_profit::final_size_admitted(front, ops.len());
+    let opt_request = opt_request.filter(|_| selected_final_size);
     // The MIR tier above already claimed any body its inlining/unboxing makes
     // worthwhile. What's left goes to the baseline, whose per-op call shims aren't
     // worth it for a call-dominated body — keep those on the interpreter.
@@ -1298,17 +1345,43 @@ fn compile_bytecode_function_inner(
         .as_ref()
         .map(|fused| publish_numeric_feedback_vec(fused.feedback.clone()));
     let opt_params = (jit_opt_mode() == OptMode::Opt
-        && matches!(
+        && front != opt_profit::FrontChoice::Legacy
+        && selected_final_size
+        && (matches!(
+            front,
+            opt_profit::FrontChoice::Selected | opt_profit::FrontChoice::SelectedAfterMir
+        ) || matches!(
             tier,
             super::tier2::CompileTier::Upgrade(super::tier2::T2Upgrade::Feedback)
-        )
+        ))
         && !reopt_gate)
         .then_some(super::opt::ir::ParamShape {
             required,
             optional: nonrest - required,
             has_rest,
         });
-    let mut leaf = if let Some(request) = opt_request {
+    let mut leaf = if matches!(
+        front,
+        opt_profit::FrontChoice::Selected | opt_profit::FrontChoice::SelectedAfterMir
+    ) && !reopt_gate
+        && selected_final_size
+    {
+        opt_backend::lower_selected_requested(
+            ops,
+            constants,
+            native_arity,
+            match &fused {
+                Some(fused) => fused.offset_map.as_deref(),
+                None => f.executable_gnu_byte_offset_map(),
+            },
+            obarray,
+            None,
+            dynamic_prefix,
+            opt_params.expect("selected opt parameters"),
+            opt_request.expect("selected compiler request"),
+        )
+        .inspect_err(|_| *selected_declined = true)?
+    } else if let Some(request) = opt_request {
         opt_backend::lower_best_requested(
             ops,
             constants,
@@ -3986,6 +4059,7 @@ mod numeric_carrier;
 pub(crate) mod opt_backend;
 pub(crate) mod opt_census;
 mod opt_emission;
+pub(crate) mod opt_profit;
 mod sink_cold_snapshot;
 mod sqrt_binding;
 mod sqrt_snapshot;
