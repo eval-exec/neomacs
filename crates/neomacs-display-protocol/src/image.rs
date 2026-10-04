@@ -638,6 +638,65 @@ impl ImageCacheUsage {
     }
 }
 
+/// Whether the renderer may materialize animation a source computes itself.
+///
+/// GNU rasterizes an SVG through librsvg, which renders one static frame and
+/// has no document clock, so GNU reports no animation for SVG at all. A
+/// port that synthesizes frames from an SMIL timeline therefore changes
+/// observable behavior (`image-multi-frame-p`, `:index` walking) and must be
+/// opt-in: the default stays the GNU-compatible static frame, and enabling
+/// the policy is the documented divergence point.
+///
+/// The optional `fps` is a sampling ceiling that doubles as the memory
+/// bound — it caps the distinct frames one loop can produce
+/// ([`crate::animated_visual::SampleGrid`]).
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ImageAnimationPolicy {
+    enabled: bool,
+    fps: Option<u32>,
+}
+
+impl ImageAnimationPolicy {
+    /// The GNU-compatible default: animation is not materialized.
+    #[must_use]
+    pub const fn disabled() -> Self {
+        Self {
+            enabled: false,
+            fps: None,
+        }
+    }
+
+    /// Enable computed animation, optionally capping the sampling rate.
+    ///
+    /// A zero or negative rate cap is meaningless; it is dropped rather than
+    /// carried, so the renderer's default ceiling applies.
+    #[must_use]
+    pub const fn enabled(fps: Option<u32>) -> Self {
+        match fps {
+            Some(fps) if fps > 0 => Self {
+                enabled: true,
+                fps: Some(fps),
+            },
+            _ => Self {
+                enabled: true,
+                fps: None,
+            },
+        }
+    }
+
+    /// Whether computed animation may run for this source.
+    #[must_use]
+    pub const fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// The sampling ceiling, when one was stated.
+    #[must_use]
+    pub const fn fps(&self) -> Option<u32> {
+        self.fps
+    }
+}
+
 /// GNU-compatible delay for the currently decoded animation frame.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ImageFrameDelay {
