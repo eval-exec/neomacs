@@ -665,6 +665,7 @@ struct DecodeRequest {
     /// Resolved face colors used by face-sensitive formats and cache identity.
     colors: ImageColorContext,
     mask: ImageMaskPolicy,
+    animation: ImageAnimationPolicy,
     frame: ImageFrameIndex,
     /// What GNU calls this source when the decode fails.  It travels with the
     /// job because the failure is worded by the loader's own rules (`Not a PNG
@@ -933,6 +934,7 @@ impl ImageCache {
                         realization,
                         colors,
                         mask,
+                        animation,
                         frame,
                         identity,
                     } = request;
@@ -964,6 +966,7 @@ impl ImageCache {
                             colors,
                             realization,
                             mask,
+                            animation,
                             frame,
                             &sequence_cache,
                             sequence,
@@ -980,6 +983,7 @@ impl ImageCache {
                             colors,
                             realization,
                             mask,
+                            animation,
                             frame,
                             resources,
                             &sequence_cache,
@@ -1040,6 +1044,7 @@ impl ImageCache {
     }
 
     /// Decode image file with size constraints
+    #[allow(clippy::too_many_arguments)]
     fn decode_file(
         path: &str,
         size: ImageSizeSpec,
@@ -1047,6 +1052,7 @@ impl ImageCache {
         colors: ImageColorContext,
         realization: ImageRealization,
         mask: ImageMaskPolicy,
+        animation: ImageAnimationPolicy,
         frame: ImageFrameIndex,
         sequence_cache: &ImageSequenceCache,
         sequence: ImageSequenceId,
@@ -1110,6 +1116,7 @@ impl ImageCache {
     }
 
     /// Decode image data with size constraints
+    #[allow(clippy::too_many_arguments)]
     fn decode_data(
         data: EncodedBytes,
         size: ImageSizeSpec,
@@ -1117,6 +1124,7 @@ impl ImageCache {
         colors: ImageColorContext,
         realization: ImageRealization,
         mask: ImageMaskPolicy,
+        animation: ImageAnimationPolicy,
         frame: ImageFrameIndex,
         resources: crate::svg::SvgResourceContext,
         sequence_cache: &ImageSequenceCache,
@@ -1153,7 +1161,7 @@ impl ImageCache {
                 colors,
                 mask,
                 &resources,
-                ImageAnimationPolicy::disabled(),
+                animation,
             )
         {
             return Some(pixels);
@@ -1389,6 +1397,7 @@ impl ImageCache {
             ImageColorContext::default(),
             ImageRealization::default(),
             ImageMaskPolicy::Preserve,
+            ImageAnimationPolicy::disabled(),
             frame,
             crate::svg::SvgResourceContext::Isolated,
             &ImageSequenceCache::new(),
@@ -1456,6 +1465,7 @@ impl ImageCache {
             ImageColorContext::from_pixels(fg_bg.0, fg_bg.1),
             realization,
             ImageMaskPolicy::Preserve,
+            ImageAnimationPolicy::disabled(),
             ImageFrameIndex::default(),
             crate::svg::SvgResourceContext::Isolated,
             &ImageSequenceCache::new(),
@@ -1742,6 +1752,7 @@ impl ImageCache {
             ImageRealization::with_device_scale(1.0, raster_scale),
             colors,
             ImageMaskPolicy::default(),
+            ImageAnimationPolicy::disabled(),
             ImageFrameIndex::default(),
             ImageSequenceId::new(u64::from(image.get()))
                 .expect("allocated image identity is non-zero"),
@@ -1755,6 +1766,7 @@ impl ImageCache {
     /// The bytes arrive as the handle the request already holds, and are moved
     /// into the decode queue: the caller's buffer is the decode's buffer, which
     /// is what the catalog's own key to the same request points at too.
+    #[allow(clippy::too_many_arguments)]
     pub fn load_data_with_id(
         &mut self,
         load: ImageLoadToken,
@@ -1764,6 +1776,7 @@ impl ImageCache {
         realization: ImageRealization,
         colors: ImageColorContext,
         mask: ImageMaskPolicy,
+        animation: ImageAnimationPolicy,
         frame: ImageFrameIndex,
         sequence: ImageSequenceId,
         resources: crate::svg::SvgResourceContext,
@@ -1793,6 +1806,7 @@ impl ImageCache {
             realization,
             colors,
             mask,
+            animation,
             frame,
             identity,
         });
@@ -1800,6 +1814,7 @@ impl ImageCache {
 
     /// Load image from file with a pre-allocated ID (for threaded mode)
     /// This allows the calling code to allocate the ID before sending a command.
+    #[allow(clippy::too_many_arguments)]
     pub fn load_file_with_id(
         &mut self,
         load: ImageLoadToken,
@@ -1809,6 +1824,7 @@ impl ImageCache {
         realization: ImageRealization,
         colors: ImageColorContext,
         mask: ImageMaskPolicy,
+        animation: ImageAnimationPolicy,
         frame: ImageFrameIndex,
         sequence: ImageSequenceId,
         identity: ImageLoadIdentity,
@@ -1836,6 +1852,7 @@ impl ImageCache {
             realization,
             colors,
             mask,
+            animation,
             frame,
             identity,
         });
@@ -1897,6 +1914,7 @@ impl ImageCache {
             realization,
             colors,
             mask: ImageMaskPolicy::Preserve,
+            animation: ImageAnimationPolicy::disabled(),
             frame: ImageFrameIndex::default(),
             identity: ImageLoadIdentity::unspecified(),
         });
@@ -1943,6 +1961,7 @@ impl ImageCache {
             realization,
             colors: ImageColorContext::default(),
             mask: ImageMaskPolicy::default(),
+            animation: ImageAnimationPolicy::disabled(),
             frame: ImageFrameIndex::default(),
             identity: ImageLoadIdentity::unspecified(),
         });
@@ -1989,6 +2008,7 @@ impl ImageCache {
             realization,
             colors: ImageColorContext::default(),
             mask: ImageMaskPolicy::default(),
+            animation: ImageAnimationPolicy::disabled(),
             frame: ImageFrameIndex::default(),
             identity: ImageLoadIdentity::unspecified(),
         });
@@ -2023,6 +2043,7 @@ impl ImageCache {
             realization: ImageRealization::default(),
             colors: ImageColorContext::default(),
             mask: ImageMaskPolicy::default(),
+            animation: ImageAnimationPolicy::disabled(),
             frame: ImageFrameIndex::default(),
             identity: ImageLoadIdentity::unspecified(),
         });
@@ -2055,6 +2076,7 @@ impl ImageCache {
             realization: ImageRealization::default(),
             colors: ImageColorContext::default(),
             mask: ImageMaskPolicy::default(),
+            animation: ImageAnimationPolicy::disabled(),
             frame: ImageFrameIndex::default(),
             identity: ImageLoadIdentity::unspecified(),
         });

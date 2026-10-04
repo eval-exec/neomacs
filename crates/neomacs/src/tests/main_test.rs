@@ -59,7 +59,8 @@ use neovm_core::emacs_core::eval::{
 use neovm_core::emacs_core::image_catalog::{AxisSize, ImageRotation, ImageSizeSpec};
 use neovm_core::emacs_core::image_catalog::{
     EncodedBytes, ImageAnimationInvalidation, ImageCatalog, ImageColorContext, ImageDataSource,
-    ImageFrameIndex, ImageId, ImageLoadAttempt, ImageLoadIdentity, ImageLoadToken, ImageLookup,
+    ImageAnimationPolicy, ImageFrameIndex, ImageId, ImageLoadAttempt, ImageLoadIdentity,
+    ImageLoadToken, ImageLookup,
     ImageResolveRequest, ImageResolveSource, ImageSizeLimit, ImageSpecIdentity,
     ResolvedImageMetadata,
 };
@@ -2629,6 +2630,7 @@ fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_threa
         colors: ImageColorContext::default(),
         mask: Default::default(),
         frame: ImageFrameIndex::new(3),
+        animation: ImageAnimationPolicy::disabled(),
         realization: Default::default(),
     };
 
@@ -2707,6 +2709,7 @@ fn animation_frames_share_sequence_identity_and_retirement_advances_generation()
         colors: ImageColorContext::default(),
         mask: Default::default(),
         frame: ImageFrameIndex::new(0),
+        animation: ImageAnimationPolicy::disabled(),
         realization: Default::default(),
     };
 
@@ -2756,6 +2759,7 @@ fn primary_image_catalog_does_not_block_on_render_command_backpressure() {
         rotation: ImageRotation::None,
         colors: ImageColorContext::default(),
         mask: Default::default(),
+        animation: ImageAnimationPolicy::disabled(),
         frame: Default::default(),
         realization: Default::default(),
     };
@@ -2858,6 +2862,7 @@ fn primary_image_catalog_does_not_wait_for_renderer_metadata_lock() {
         rotation: ImageRotation::None,
         colors: ImageColorContext::default(),
         mask: Default::default(),
+        animation: ImageAnimationPolicy::disabled(),
         frame: Default::default(),
         realization: Default::default(),
     };
@@ -2923,6 +2928,7 @@ fn primary_display_host_expands_tilde_in_image_file_before_render_command() {
         rotation: ImageRotation::None,
         colors: ImageColorContext::default(),
         mask: Default::default(),
+        animation: ImageAnimationPolicy::disabled(),
         frame: Default::default(),
         realization: Default::default(),
     };
@@ -3016,6 +3022,7 @@ fn primary_display_host_resolve_image_sync_returns_cached_decode_failure_promptl
         rotation: ImageRotation::None,
         colors: ImageColorContext::default(),
         mask: Default::default(),
+        animation: ImageAnimationPolicy::disabled(),
         frame: Default::default(),
         realization: Default::default(),
     };

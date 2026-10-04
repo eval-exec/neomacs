@@ -147,6 +147,7 @@ mod hash_sort_obarray_runtime;
 mod hash_struct_records;
 mod help_apropos_completion;
 mod image_operations;
+mod image_svg_animation;
 mod image_svg_deep;
 mod image_widget_display;
 mod input_validation_runtime;

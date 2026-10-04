@@ -149,5 +149,50 @@ Returns the image ID on success."
                  neomacs-image--cache)
         (message "Resized image %d to %dx%d" image-id width height)))))
 
+;;; Computed SVG animation (Neomacs extension).
+
+;; GNU renders SVG through librsvg, which has no document clock, so an
+;; animated SVG is a static frame there and `image-multi-frame-p' returns
+;; nil.  Neomacs can materialize the frames an SVG's SMIL timeline computes
+;; and expose them exactly like a GIF's: `image-multi-frame-p' reports the
+;; frame count and delay, `image-animate' walks them, `:index' selects one.
+;; Because that changes observable behavior, it is strictly opt-in per
+;; image spec.
+
+(defcustom neomacs-svg-animation nil
+  "Default value for the `:animation' image property on SVG specs.
+nil keeps GNU behavior: one static frame regardless of SMIL content.
+t enables computed animation at the default sampling ceiling (30 fps);
+an integer enables it with that ceiling, which also bounds how many
+distinct frames one loop materializes.
+
+Individual image specs override this default through their own
+`:animation' property.  See docs/display-engine/ANIMATED_SVG.md."
+  :type '(choice (const :tag "Static (GNU-compatible)" nil)
+                 (const :tag "Animate at the default ceiling" t)
+                 (integer :tag "Animate with an fps ceiling"))
+  :group 'image
+  :version "31.1")
+
+(defun neomacs-image-spec-add-animation (spec)
+  "Return SPEC with the `:animation' policy from `neomacs-svg-animation'.
+Packages building SVG image specs can spread this in so the gate
+follows the user's defcustom instead of hard-coding either behavior."
+  (if (and neomacs-svg-animation
+           (not (plist-get (cdr spec) :animation)))
+      (append spec (list :animation neomacs-svg-animation))
+    spec))
+
+(defun neomacs-image-animate-svg (spec &optional limit)
+  "Animate the SVG image SPEC if it carries SMIL animation.
+Adds the `:animation' property (see `neomacs-svg-animation') and hands
+the image to `image-animate'.  Returns whatever `image-animate'
+returns: nil when the document has no materializable animation, so
+callers can fall back to a static display.  LIMIT is passed through
+to `image-animate'."
+  (let ((animated (copy-tree spec)))
+    (setq animated (neomacs-image-spec-add-animation animated))
+    (image-animate animated nil limit)))
+
 (provide 'neomacs-image)
 ;;; neomacs-image.el ends here
