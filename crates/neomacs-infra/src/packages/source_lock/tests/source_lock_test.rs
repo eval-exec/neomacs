@@ -402,3 +402,42 @@ fn concurrent_source_build_callers_share_one_failed_preparation() {
         "concurrent callers retried a known source build failure"
     );
 }
+
+/// The account-free Telega GUI fixture mounts the real Telega Lisp frontend
+/// from a pinned MELPA source.  The lock row must therefore carry the exact
+/// upstream revision and the full dependency closure Telega's
+/// `Package-Requires' names, so an offline scenario never resolves a branch,
+/// the user's package directory, or an unpinned dependency.
+#[test]
+fn telega_frontend_pin_resolves_to_the_pinned_source_and_dependency_closure() {
+    let pin = crate::packages::TELEGA_PIN;
+    let source = crate::packages::locked_melpa_source(pin)
+        .expect("telega has a revision-pinned source lock");
+    assert_eq!(
+        source.upstream_repository(),
+        "https://github.com/zevlg/telega.el"
+    );
+    assert_eq!(
+        source.upstream_revision(),
+        "a6abce419828fc63c7698c7d4951614e8d12d2ff"
+    );
+    assert_eq!(source.build(), SourceBuild::MelpaRecipe);
+
+    let plan =
+        crate::packages::locked_melpa_install_plan(pin).expect("telega install plan resolves");
+    let names = plan
+        .iter()
+        .map(|locked| locked.package().0)
+        .collect::<Vec<_>>();
+    for dependency in ["telega", "transient", "visual-fill-column"] {
+        assert!(
+            names.contains(&dependency),
+            "telega install plan is missing {dependency}: {names:?}"
+        );
+    }
+    assert_eq!(
+        names.last(),
+        Some(&"telega"),
+        "the install plan must end with the root package: {names:?}"
+    );
+}
