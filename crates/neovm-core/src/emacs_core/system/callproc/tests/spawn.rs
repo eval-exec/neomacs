@@ -173,6 +173,51 @@ fn interruptible_output_reaps_the_exact_child_even_without_open_output_pipes() {
     }
 }
 
+/// The synchronous wait wakes on the child's exit, not on a timer: a fixed
+/// nap after the pipes closed charged every `call-process` its full length
+/// (magit-status ran ~23 of them per refresh, 10 ms each).
+#[test]
+#[cfg(target_os = "linux")]
+fn exit_wake_fd_becomes_readable_when_the_child_exits() {
+    use std::os::fd::AsRawFd;
+
+    let poll = |fd: libc::c_int, timeout: libc::c_int| {
+        let mut pfd = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one initialized pollfd.
+        unsafe { libc::poll(&mut pfd, 1, timeout) }
+    };
+    let mut child = ChildCommand::new("cat")
+        .stdin(ChildStdio::Piped)
+        .stdout(ChildStdio::Null)
+        .stderr(ChildStdio::Null)
+        .spawn()
+        .expect("spawn cat");
+    assert!(child.try_wait().expect("try_wait").is_none());
+    let exit = child.exit_wake_fd().expect("pidfd for an unreaped child");
+    assert_eq!(poll(exit.as_raw_fd(), 0), 0, "cat is still running");
+    drop(child.stdin.take());
+    assert_eq!(poll(exit.as_raw_fd(), 10_000), 1, "exit wakes the poll");
+    assert!(child.try_wait().expect("try_wait").unwrap().success());
+}
+
+#[test]
+#[cfg(unix)]
+fn interruptible_output_collects_a_child_that_outlives_its_pipes() {
+    let child = sh("exec 1>&- 2>&-; sleep 0.2; exit 7")
+        .stdin(ChildStdio::Null)
+        .stdout(ChildStdio::Piped)
+        .stderr(ChildStdio::Piped)
+        .spawn()
+        .unwrap();
+    let output = child.wait_with_output_interruptible(|| Ok(())).unwrap();
+    assert_eq!(output.status.code(), Some(7));
+    assert!(output.stdout.is_empty() && output.stderr.is_empty());
+}
+
 #[test]
 fn output_defaults_stdin_to_closed() {
     // `cat` sees immediate EOF on a closed stdin instead of blocking.

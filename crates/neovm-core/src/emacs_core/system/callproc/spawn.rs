@@ -477,21 +477,36 @@ impl SpawnedChild {
     ) -> io::Result<Output> {
         drop(self.stdin.take());
         let result = (|| {
+            let wake = crate::emacs_core::os_signal::install().self_pipe_read_fd();
             let (stdout, stderr) = drain_pipes_with_attention(
                 self.stdout.take(),
                 self.stderr.take(),
-                crate::emacs_core::os_signal::install().self_pipe_read_fd(),
+                wake,
                 50,
                 &mut attention,
             )?;
+            // The child can close both pipes before exiting, and even a child
+            // that exits normally closes them a moment before it becomes
+            // waitable. Do not then fall back to an uninterruptible waitpid,
+            // but do wake on the exit itself: GNU blocks in waitpid
+            // (sysdep.c get_child_status), and a fixed nap here charged every
+            // synchronous call-process its full length.
+            let mut exit = None;
+            let mut nap = 1;
             let status = loop {
                 attention()?;
                 if let Some(status) = self.try_wait()? {
                     break status;
                 }
-                // The child can close both pipes before exiting. Do not then
-                // fall back to an uninterruptible waitpid.
-                std::thread::sleep(std::time::Duration::from_millis(10));
+                let exit = exit.get_or_insert_with(|| self.exit_wake_fd());
+                let timeout = if exit.is_some() {
+                    50
+                } else {
+                    let timeout = nap;
+                    nap = (nap * 2).min(10);
+                    timeout
+                };
+                wait_for_exit_or_wake(exit.as_ref(), wake, timeout)?;
             };
             Ok(Output {
                 status,
@@ -505,6 +520,28 @@ impl SpawnedChild {
             }
         }
         result
+    }
+
+    /// A descriptor that becomes readable when this child exits. Opened only
+    /// after a WNOHANG probe found the child unreaped, so the PID still names
+    /// it; `None` (no pidfd support, or ownership already lost) makes the
+    /// caller fall back to short naps.
+    #[cfg(target_os = "linux")]
+    fn exit_wake_fd(&self) -> Option<std::os::fd::OwnedFd> {
+        use std::os::fd::FromRawFd;
+
+        if !self.signal_authority {
+            return None;
+        }
+        // SAFETY: pidfd_open has no pointer arguments.
+        let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, self.pid as libc::pid_t, 0) };
+        // SAFETY: a non-negative return is a fresh descriptor owned here.
+        (fd >= 0).then(|| unsafe { std::os::fd::OwnedFd::from_raw_fd(fd as libc::c_int) })
+    }
+
+    #[cfg(all(unix, not(target_os = "linux")))]
+    fn exit_wake_fd(&self) -> Option<std::os::fd::OwnedFd> {
+        None
     }
 
     /// Close stdin, drain stdout and stderr to completion, then wait.
@@ -600,6 +637,42 @@ fn drain_pipes_with_attention(
         }
     }
     Ok((out, err))
+}
+
+/// Block until the child's exit descriptor or the evaluator's signal wake is
+/// readable, or `timeout` milliseconds pass. An interrupted poll returns so
+/// the caller re-services attention.
+#[cfg(unix)]
+fn wait_for_exit_or_wake(
+    exit: Option<&std::os::fd::OwnedFd>,
+    wake: Option<libc::c_int>,
+    timeout: libc::c_int,
+) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    let mut fds: Vec<libc::pollfd> = exit
+        .map(AsRawFd::as_raw_fd)
+        .into_iter()
+        .chain(wake)
+        .map(|fd| libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        })
+        .collect();
+    // SAFETY: initialized pollfd array with its exact length.
+    if unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout) } < 0 {
+        let error = io::Error::last_os_error();
+        if error.kind() == io::ErrorKind::Interrupted {
+            return Ok(());
+        }
+        return Err(error);
+    }
+    if let Some(fd) = wake
+        && fds.iter().any(|p| p.fd == fd && p.revents != 0)
+    {
+        crate::emacs_core::os_signal::drain_wake_pipe(fd);
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
