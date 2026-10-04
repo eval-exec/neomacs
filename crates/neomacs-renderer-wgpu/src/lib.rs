@@ -23,6 +23,7 @@ pub mod renderer;
 pub mod shader_surface;
 pub mod shader_surface_cache;
 mod svg;
+mod svg_animation;
 #[cfg(test)]
 #[path = "tests/texture_discipline_test.rs"]
 mod texture_discipline_test;

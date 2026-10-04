@@ -1,7 +1,8 @@
 use image::AnimationDecoder;
 use neomacs_display_protocol::{
-    ImageEmbeddedMetadata, ImageFrameDelay, ImageFrameIndex, ImageSequenceId,
-    ImageSequenceRetirement,
+    ImageAnimationPolicy, ImageColorContext, ImageEmbeddedMetadata, ImageFrameDelay,
+    ImageFrameIndex, ImageRealization, ImageRotation, ImageSequenceId, ImageSequenceRetirement,
+    ImageSizeSpec,
 };
 use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
@@ -24,6 +25,35 @@ struct DecodedSequenceFrame {
 }
 
 impl DecodedImageSequence {
+    /// Assemble a sequence from already-decoded frames.
+    ///
+    /// Computed animation (the SVG sampler) produces frames the same shape
+    /// the raster decoders do; this is the one door those producers use
+    /// into the cache, so budget accounting stays centralized.
+    pub(crate) fn from_frames(
+        frames: Vec<(u32, u32, Vec<u8>)>,
+        delay: ImageFrameDelay,
+    ) -> Arc<Self> {
+        let mut memory_size = 0_usize;
+        let frames = frames
+            .into_iter()
+            .map(|(width, height, rgba)| {
+                memory_size = memory_size.saturating_add(rgba.len());
+                let rgba: Arc<[u8]> = rgba.into();
+                DecodedSequenceFrame {
+                    width,
+                    height,
+                    rgba,
+                    delay,
+                }
+            })
+            .collect();
+        Arc::new(Self {
+            frames,
+            memory_size,
+        })
+    }
+
     fn frame(&self, index: ImageFrameIndex) -> Option<ImageSequenceFrame> {
         let index = usize::try_from(index.get()).ok()?;
         let frame = self.frames.get(index)?;
@@ -211,6 +241,60 @@ impl ImageSequenceCache {
         }
 
         let Some(decoded) = decode_sequence(data) else {
+            self.finish_decode(sequence);
+            return if frame.is_first() {
+                ImageSequenceResolution::NotAnimated
+            } else {
+                ImageSequenceResolution::MissingFrame
+            };
+        };
+        let result = decoded
+            .frame(frame)
+            .map(ImageSequenceResolution::Frame)
+            .unwrap_or(ImageSequenceResolution::MissingFrame);
+        self.publish_decoded(sequence, decoded);
+        result
+    }
+
+    /// Resolve one frame of a computed animation (an SVG document sampled
+    /// on its grid).
+    ///
+    /// Mirrors [`Self::resolve`]: a hit is served from the resident entry,
+    /// a miss samples under the policy and publishes through the same
+    /// budget/retirement path, and concurrent misses may sample redundantly
+    /// rather than holding the mutex across decoder work.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn resolve_svg(
+        &self,
+        sequence: ImageSequenceId,
+        data: &[u8],
+        frame: ImageFrameIndex,
+        size: ImageSizeSpec,
+        rotation: ImageRotation,
+        realization: ImageRealization,
+        colors: ImageColorContext,
+        resources: &crate::svg::SvgResourceContext,
+        policy: ImageAnimationPolicy,
+    ) -> ImageSequenceResolution {
+        {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            let stamp = state.next_access();
+            if state.entries.contains_key(&sequence) {
+                state.hits = state.hits.saturating_add(1);
+                let entry = state
+                    .entries
+                    .get_mut(&sequence)
+                    .expect("entry was observed above");
+                entry.touch(stamp);
+                return entry.resolve(frame);
+            }
+            state.misses = state.misses.saturating_add(1);
+            state.begin_decode(sequence);
+        }
+
+        let Some(decoded) = crate::svg_animation::sample_svg_sequence(
+            data, size, rotation, realization, colors, resources, policy,
+        ) else {
             self.finish_decode(sequence);
             return if frame.is_first() {
                 ImageSequenceResolution::NotAnimated

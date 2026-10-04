@@ -9,7 +9,8 @@
 use neomacs_display_protocol::image::EncodedBytes;
 use neomacs_display_protocol::image_diagnostic::{ImageDiagnostic, ImageLoadIdentity};
 use neomacs_display_protocol::{
-    ImageCacheUsage, ImageColorContext, ImageEmbeddedMetadata, ImageFrameIndex, ImageHeuristicMask,
+    ImageAnimationPolicy, ImageCacheUsage, ImageColorContext, ImageEmbeddedMetadata, ImageFrameIndex,
+    ImageHeuristicMask,
     ImageId, ImageIntrinsicExtent, ImageLayoutExtent, ImageLoadAttempt, ImageLoadToken,
     ImageMaskKind, ImageMaskPolicy, ImageNativeExtent, ImageRasterExtent, ImageRealization,
     ImageReportedExtent, ImageRotation, ImageSequenceId, ImageSequenceRetirement, ImageSizeSpec,
@@ -1135,6 +1136,28 @@ impl ImageCache {
         ) {
             return Some(pixels);
         }
+        // Computed animation: an SVG document under an enabled policy
+        // materializes its frames on the sample grid, and `frame` selects
+        // the slot exactly as `:index` selects a GIF frame. The disabled
+        // policy is the GNU-compatible static path and never reaches the
+        // sampler.
+        if crate::svg_animation::may_contain_animation(&data)
+            && let Some(pixels) = Self::decode_computed_sequence_data(
+                data.clone(),
+                frame,
+                sequence_cache,
+                sequence,
+                size,
+                rotation,
+                realization,
+                colors,
+                mask,
+                &resources,
+                ImageAnimationPolicy::disabled(),
+            )
+        {
+            return Some(pixels);
+        }
         if !frame.is_first() {
             return None;
         }
@@ -1194,6 +1217,43 @@ impl ImageCache {
             ImageSequenceResolution::NotAnimated => {
                 Self::decode_still_image(data, size, rotation, realization, mask_policy, sink)
             }
+        }
+    }
+
+    /// Decode one frame of a computed animation through the sequence cache.
+    ///
+    /// The SVG sampler answers "not animated" for every document the
+    /// policy does not materialize (disabled policy, no plan, no loop), so
+    /// this arm falling through is the ordinary static path, and the
+    /// fallback ladder still ends at GNU's single-frame behavior.
+    #[allow(clippy::too_many_arguments)]
+    fn decode_computed_sequence_data(
+        data: EncodedBytes,
+        frame: ImageFrameIndex,
+        sequence_cache: &ImageSequenceCache,
+        sequence: ImageSequenceId,
+        size: ImageSizeSpec,
+        rotation: ImageRotation,
+        realization: ImageRealization,
+        colors: ImageColorContext,
+        mask: ImageMaskPolicy,
+        resources: &crate::svg::SvgResourceContext,
+        policy: ImageAnimationPolicy,
+    ) -> Option<DecodedPixels> {
+        match sequence_cache.resolve_svg(
+            sequence, &data, frame, size, rotation, realization, colors, resources, policy,
+        ) {
+            ImageSequenceResolution::Frame(frame) => {
+                let (width, height) = frame.dimensions();
+                let (rgba, embedded) = frame.into_parts();
+                NativePixels {
+                    extent: ImageNativeExtent::new(width, height),
+                    rgba,
+                    embedded,
+                }
+                .realize_bitmap(size, rotation, realization, mask)
+            }
+            ImageSequenceResolution::MissingFrame | ImageSequenceResolution::NotAnimated => None,
         }
     }
 
