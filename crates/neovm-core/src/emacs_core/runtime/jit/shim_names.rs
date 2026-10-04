@@ -16,7 +16,6 @@
 // bare `const` keeps this usable both as a crate item (aot.rs) and as a local
 // const inside each build.rs `main` (no module/use context required).
 const NEOVM_JIT_SHIM_NAMES: &[&str] = &[
-    "neovm_jit_string_collection_write",
     "neovm_jit_hof_length",
     "neovm_jit_hof_start",
     "neovm_jit_hof_store",
@@ -115,10 +114,12 @@ const NEOVM_JIT_SHIM_NAMES: &[&str] = &[
     // Optional Opt-only exports; excluded from the frozen AOT ABI prefix.
     "neovm_jit_t2_record_array_use",
     "neovm_jit_sqrt_binding_valid",
+    // JIT-only collection journaling; preserve every name in the AOT prefix.
+    "neovm_jit_string_collection_write",
 ];
 
 // ABI26's existing shim prefix remains the complete AOT import/salt set.
-// Selected Opt array/sqrt shims are an additive JIT-only exported suffix;
+// Selected Opt array/sqrt and collection shims form a JIT-only exported suffix;
 // emitting one into AOT must fail closed instead of producing an unsalted ABI.
 // Keep this boundary in the same single source as the exported names.
 #[allow(dead_code)] // this file is also included by build scripts

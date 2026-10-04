@@ -329,13 +329,29 @@ impl SharedJit {
 
     /// Make sure `choice`'s module exists and has room, creating it (or
     /// replacing a full one) under the ISA of the compile in progress.
-    /// Profiling imports are appended only when a frontend or payload needs
-    /// them, preserving every knob-off declaration id. The module belongs
-    /// to this compiler thread; no mutator shares its declaration table.
+    /// Optional imports are appended only when a frontend needs them,
+    /// preserving every knob-off declaration id. The collection policy is
+    /// immutable process configuration; tests override only this scalar.
+    /// The module belongs to this compiler thread, not a shared mutator cache.
     fn ensure_module(
         &mut self,
         choice: RegallocChoice,
         tier2_profile: bool,
+    ) -> Result<(), CompileError> {
+        self.ensure_module_with_collection_journal(
+            choice,
+            tier2_profile,
+            super::jit_gen0_collection_journal_on(),
+        )
+    }
+
+    /// Backend requirements are immutable owned frontend/payload facts. This
+    /// seam reads no knobs, so a worker needs no frontend scalar overrides.
+    fn ensure_module_with_collection_journal(
+        &mut self,
+        choice: RegallocChoice,
+        tier2_profile: bool,
+        collection_journal: bool,
     ) -> Result<(), CompileError> {
         let slot = &mut self.modules[choice.index()];
         if slot
@@ -348,10 +364,12 @@ impl SharedJit {
             bump_stats(|s| s.modules_retired += 1);
         }
         if let Some(shared) = slot.as_mut() {
-            // Test overrides can enable profiling after this module was
-            // created without it. Redeclaration is idempotent: existing ids
-            // stay fixed, and only the absent group is appended.
-            if tier2_profile && shared.shims.get(Shim::TierRequest).is_none() {
+            // Scalar test overrides or owned payload requirements may add an
+            // optional group later. Keep every previously declared main group;
+            // redeclaration appends only absent names and preserves their IDs.
+            let has_profile = shared.shims.get(Shim::TierRequest).is_some();
+            let has_journal = shared.shims.get(Shim::StringCollectionWrite).is_some();
+            if (tier2_profile && !has_profile) || (collection_journal && !has_journal) {
                 let config = shared.module.target_config();
                 shared.shims = ShimIds::declare(
                     &mut shared.module,
@@ -360,12 +378,12 @@ impl SharedJit {
                     ShimGroups {
                         subr_spec: true,
                         cbsym_spec: true,
-                        tier2_profile: true,
+                        tier2_profile: tier2_profile || has_profile,
                         direct_shapes: true,
                         call_census: true,
                         direct_framed: true,
                         hof: true,
-                        collection_journal: true,
+                        collection_journal: collection_journal || has_journal,
                     },
                 )?;
             }
@@ -389,7 +407,7 @@ impl SharedJit {
                 call_census: true,
                 direct_framed: true,
                 hof: true,
-                collection_journal: true,
+                collection_journal,
             },
         )?;
         *slot = Some(SharedModule {
@@ -670,7 +688,26 @@ impl SharedJit {
         array_profile: bool,
         sink_versions: bool,
     ) -> Result<(), CompileError> {
-        self.ensure_module(choice, tier2_profile)?;
+        self.ensure_module_selected_with_collection_journal(
+            choice,
+            tier2_profile,
+            array_profile,
+            sink_versions,
+            super::jit_gen0_collection_journal_on(),
+        )
+    }
+
+    /// The selected worker passes the same owned import requirements as the
+    /// ordinary backend; optional suffix recovery never renumbers old IDs.
+    fn ensure_module_selected_with_collection_journal(
+        &mut self,
+        choice: RegallocChoice,
+        tier2_profile: bool,
+        array_profile: bool,
+        sink_versions: bool,
+        collection_journal: bool,
+    ) -> Result<(), CompileError> {
+        self.ensure_module_with_collection_journal(choice, tier2_profile, collection_journal)?;
         let shared = self.modules[choice.index()]
             .as_mut()
             .expect("ensure_module installed it");
@@ -688,6 +725,7 @@ impl SharedJit {
                     direct_shapes: true,
                     call_census: true,
                     direct_framed: true,
+                    collection_journal,
                     hof: true,
                 },
                 array_profile,
@@ -758,3 +796,7 @@ impl WorkerBackend {
     }
 }
 // END T35 SELECTED SHIM BACKEND
+
+#[cfg(test)]
+#[path = "shared/tests/collection_journal.rs"]
+mod collection_journal_tests;

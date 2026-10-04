@@ -179,7 +179,15 @@ impl SharedJit {
             .imports
             .iter()
             .any(|(_, shim)| shim.group() == ShimGroup::Tier2Profile);
-        self.ensure_module(payload.regalloc, tier2_profile)?;
+        let collection_journal = payload
+            .imports
+            .iter()
+            .any(|(_, shim)| shim.group() == ShimGroup::CollectionJournal);
+        self.ensure_module_with_collection_journal(
+            payload.regalloc,
+            tier2_profile,
+            collection_journal,
+        )?;
         drop(setup_phase);
         let SharedJit { modules, ctx, .. } = self;
         let shared = modules[payload.regalloc.index()]
@@ -341,11 +349,16 @@ impl SharedJit {
             .imports
             .iter()
             .any(|(_, shim)| shim.group() == ShimGroup::Tier2Profile);
-        self.ensure_module_selected(
+        let collection_journal = payload
+            .imports
+            .iter()
+            .any(|(_, shim)| shim.group() == ShimGroup::CollectionJournal);
+        self.ensure_module_selected_with_collection_journal(
             payload.regalloc,
             tier2_profile,
             array_profile,
             sink_versions,
+            collection_journal,
         )?;
         drop(setup_phase);
         let SharedJit { modules, ctx, .. } = self;

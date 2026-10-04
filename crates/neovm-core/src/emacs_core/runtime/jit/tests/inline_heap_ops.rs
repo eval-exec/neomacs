@@ -179,6 +179,7 @@ fn cons_store_clif(
         direct_shapes: false,
         call_census: false,
         direct_framed: false,
+        collection_journal: false,
         hof: false,
     };
     let ids = ShimIds::declare(&mut module, config.default_call_conv, types::I64, groups).unwrap();
