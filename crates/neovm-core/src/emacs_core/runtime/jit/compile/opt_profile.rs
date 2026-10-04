@@ -1,4 +1,4 @@
-//! Optional single-variable opt configuration presets.
+//! Single-variable opt configuration, defaulting to qualified list-loop SSA.
 //!
 //! Threading: the process publishes one immutable scalar enum through OnceLock.
 //! Presets only supply compile-time defaults, with no Lisp handles, feedback,
@@ -34,6 +34,12 @@ pub(super) struct Defaults {
 }
 
 impl Profile {
+    /// Resolve process configuration without mutating the environment.
+    /// Threading: borrowed scalar input; the caller publishes the result once.
+    pub(super) fn from_env(value: Result<&str, &std::env::VarError>) -> Self {
+        resolve(value, || Self::Lists48Osr, Self::parse)
+    }
+
     pub(super) fn parse(value: Option<&str>) -> Self {
         match value.map(str::trim) {
             Some("lists20") => Self::Lists20,
@@ -95,7 +101,7 @@ pub(super) fn resolve<T>(
 pub(super) fn selected() -> Defaults {
     static PROFILE: std::sync::OnceLock<Profile> = std::sync::OnceLock::new();
     PROFILE
-        .get_or_init(|| Profile::parse(std::env::var("NEOVM_JIT_OPT_PROFILE").ok().as_deref()))
+        .get_or_init(|| Profile::from_env(std::env::var("NEOVM_JIT_OPT_PROFILE").as_deref()))
         .defaults()
 }
 
@@ -137,3 +143,7 @@ mod frontend_tests;
 #[cfg(test)]
 #[path = "opt_profile/tests/ready_osr_profile_test.rs"]
 mod ready_osr_tests;
+
+#[cfg(test)]
+#[path = "opt_profile/tests/default_test.rs"]
+mod default_tests;

@@ -1630,7 +1630,7 @@ pub(crate) fn jit_call_census_on() -> bool {
 
 /// Mid-end selection, independent of the T2 countdown trigger. Threading:
 /// immutable process configuration; test overrides contain configuration only.
-/// Legacy is the default, so the new backend is off and existing CLIF is kept.
+/// Legacy is the parser fallback; the default profile selects bounded opt.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum OptMode {
     #[default]
@@ -1828,7 +1828,8 @@ pub(crate) fn force_opt_passes_for_test(passes: Option<OptPasses>) {
     OPT_PASSES_TEST_OVERRIDE.with(|v| v.set(passes));
 }
 
-/// Default-OFF compile-time pass work elision. Threading: immutable process
+/// Profile-controlled compile-time work elision, on in lists48-osr, off with
+/// PROFILE=off. Threading: immutable process
 /// configuration only, never Lisp state, mutator pointers or compiler scratch.
 pub(crate) fn jit_opt_fast() -> bool {
     #[cfg(test)]
@@ -1896,7 +1897,8 @@ pub(crate) fn force_opt_profit_for_test(mode: Option<OptProfitMode>) {
     OPT_PROFIT_TEST_OVERRIDE.with(|value| value.set(mode));
 }
 
-/// Default-OFF normal-entry prerequisite. Threading: process configuration
+/// Profile-controlled normal-entry prerequisite, on in lists48-osr, off with
+/// PROFILE=off. Threading: process configuration
 /// is an immutable scalar; test overrides belong only to the current compiler
 /// invocation, with no Lisp state, cache entries or runtime recording.
 pub(crate) fn jit_opt_require_osr() -> bool {
