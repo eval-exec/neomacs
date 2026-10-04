@@ -3912,6 +3912,7 @@ fn append_mode_line_percent_string_spec(
         // Extend the final buffer directly, avoiding its temporary String,
         // character-code Vec, and second copy. This field has no source or
         // min-width sidecar to append.
+        result.multibyte |= spec.chars().any(|ch| !ch.is_ascii());
         result.text.extend(spec.chars().map(|ch| ch as u32));
         let rendered_len = (result.char_len() - char_offset) as i64;
         if field_width > 0 && rendered_len < field_width {

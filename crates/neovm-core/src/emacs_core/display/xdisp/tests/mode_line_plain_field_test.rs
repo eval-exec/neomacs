@@ -252,6 +252,35 @@ fn rendered_trace(rendered: &ModeLineRendered) -> RenderedTrace {
 }
 
 #[test]
+fn plain_percent_fields_preserve_multibyte_identity_like_temporary_segments() {
+    crate::test_utils::init_test_tracing();
+    let properties = std::collections::HashMap::new();
+    for (spec, width, precision) in [
+        ("·", 0, None),
+        ("AB·", 7, Some(2)),
+        ("A", 4, None),
+        ("", 3, None),
+    ] {
+        let mut identities = Vec::new();
+        for enabled in [false, true] {
+            let _guard = PlainFieldGuard::set(enabled, false);
+            let mut rendered = ModeLineRendered::default();
+            append_mode_line_percent_string_spec(&mut rendered, spec, &properties, width);
+            if let Some(precision) = precision {
+                rendered = rendered.slice_chars(precision);
+            }
+            let value = rendered.into_value(ModeLineFaceSpec {
+                no_props: true,
+                face: None,
+            });
+            let string = value.as_lisp_string().expect("percent field string");
+            identities.push((string.is_multibyte(), string.as_bytes().to_vec()));
+        }
+        assert_eq!(identities[1], identities[0], "spec={spec:?}");
+    }
+}
+
+#[test]
 fn empty_fields_preserve_ticks_intervals_sources_and_min_width_transitions() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
