@@ -313,6 +313,322 @@ fn force_window_update_live_window_returns_t() {
     assert_eq!(result, Value::T);
 }
 
+/// Two displayed windows showing different buffers: the initial frame's
+/// selected window (`window_a`/`buffer_a`) and a second frame's selected
+/// window (`window_b`/`buffer_b`), for body-redisplay scope assertions.
+struct ForceWindowUpdateFixture {
+    window_a: Value,
+    window_a_id: crate::window::WindowId,
+    buffer_a: crate::buffer::BufferId,
+    window_b: Value,
+    window_b_id: crate::window::WindowId,
+    buffer_b: crate::buffer::BufferId,
+}
+
+fn force_window_update_fixture(eval: &mut crate::emacs_core::Context) -> ForceWindowUpdateFixture {
+    let window_a = crate::emacs_core::window_cmds::builtin_selected_window(eval, vec![]).unwrap();
+    let window_a_id = crate::window::WindowId(window_a.as_window_id().expect("window value"));
+    let buffer_a = eval
+        .frames
+        .window_buffer_id(window_a_id)
+        .expect("selected window displays a buffer");
+    let buffer_b = eval.buffer_manager_mut().create_buffer("neo-fwu-other");
+    let frame_b = eval
+        .frame_manager_mut()
+        .create_frame("neo-fwu-frame2", 80, 25, buffer_b);
+    let window_b_id = eval
+        .frame_manager()
+        .get(frame_b)
+        .expect("created frame")
+        .selected_window;
+    ForceWindowUpdateFixture {
+        window_a,
+        window_a_id,
+        buffer_a,
+        window_b: Value::make_window(window_b_id.0),
+        window_b_id,
+        buffer_b,
+    }
+}
+
+#[test]
+fn force_window_update_all_marks_every_window_body() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::Context::new();
+    let fx = force_window_update_fixture(&mut eval);
+    let before_a = eval.body_redisplay_revision(fx.window_a_id, fx.buffer_a);
+    let before_b = eval.body_redisplay_revision(fx.window_b_id, fx.buffer_b);
+    let result =
+        crate::emacs_core::window_cmds::builtin_force_window_update(&mut eval, vec![Value::NIL])
+            .unwrap();
+    assert_eq!(result, Value::T);
+    assert_ne!(
+        eval.body_redisplay_revision(fx.window_a_id, fx.buffer_a),
+        before_a,
+        "nil OBJECT must mark the first window's body"
+    );
+    assert_ne!(
+        eval.body_redisplay_revision(fx.window_b_id, fx.buffer_b),
+        before_b,
+        "nil OBJECT must mark the second window's body"
+    );
+}
+
+#[test]
+fn force_window_update_live_window_marks_only_that_window_and_buffer() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::Context::new();
+    let fx = force_window_update_fixture(&mut eval);
+    let before_a = eval.body_redisplay_revision(fx.window_a_id, fx.buffer_a);
+    let before_unrelated = eval.body_redisplay_revision(fx.window_b_id, fx.buffer_b);
+    let result =
+        crate::emacs_core::window_cmds::builtin_force_window_update(&mut eval, vec![fx.window_a])
+            .unwrap();
+    assert_eq!(result, Value::T);
+    assert_ne!(
+        eval.body_redisplay_revision(fx.window_a_id, fx.buffer_a),
+        before_a,
+        "the targeted window's body must be marked"
+    );
+    assert_eq!(
+        eval.body_redisplay_revision(fx.window_b_id, fx.buffer_b),
+        before_unrelated,
+        "an unrelated window showing another buffer must stay reusable"
+    );
+}
+
+#[test]
+fn force_window_update_displayed_buffer_marks_all_its_windows() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::Context::new();
+    let fx = force_window_update_fixture(&mut eval);
+    // Show the SAME buffer in the second frame as well.
+    let buffer_a_value =
+        crate::emacs_core::window_cmds::builtin_window_buffer(&mut eval, vec![fx.window_a])
+            .unwrap();
+    crate::emacs_core::window_cmds::builtin_set_window_buffer(
+        &mut eval,
+        vec![fx.window_b, buffer_a_value],
+    )
+    .unwrap();
+    let before_a = eval.body_redisplay_revision(fx.window_a_id, fx.buffer_a);
+    let before_b = eval.body_redisplay_revision(fx.window_b_id, fx.buffer_a);
+    let result = crate::emacs_core::window_cmds::builtin_force_window_update(
+        &mut eval,
+        vec![buffer_a_value],
+    )
+    .unwrap();
+    assert_eq!(result, Value::T);
+    assert_ne!(
+        eval.body_redisplay_revision(fx.window_a_id, fx.buffer_a),
+        before_a,
+        "every window displaying the buffer is marked"
+    );
+    assert_ne!(
+        eval.body_redisplay_revision(fx.window_b_id, fx.buffer_a),
+        before_b,
+        "a window in another frame displaying the same buffer is marked"
+    );
+}
+
+#[test]
+fn force_window_update_buffer_name_reports_shown_and_unknown_names_stay_nil() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::Context::new();
+    let shown = crate::emacs_core::buffer::builtin_get_buffer_create(
+        &mut eval,
+        vec![Value::string("neo-fwu-shown")],
+    )
+    .unwrap();
+    let w1_value =
+        crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, vec![]).unwrap();
+    crate::emacs_core::window_cmds::builtin_set_window_buffer(&mut eval, vec![w1_value, shown])
+        .unwrap();
+    let result = crate::emacs_core::window_cmds::builtin_force_window_update(
+        &mut eval,
+        vec![Value::string("neo-fwu-shown")],
+    )
+    .unwrap();
+    assert_eq!(
+        result,
+        Value::T,
+        "a buffer name naming a displayed buffer returns t"
+    );
+    let result = crate::emacs_core::window_cmds::builtin_force_window_update(
+        &mut eval,
+        vec![Value::string("neo-fwu-absent")],
+    )
+    .unwrap();
+    assert!(
+        result.is_nil(),
+        "a name with no buffer returns nil without signaling"
+    );
+}
+
+#[test]
+fn force_window_update_undisplayed_buffer_or_dead_window_marks_nothing() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::Context::new();
+    let fx = force_window_update_fixture(&mut eval);
+    let hidden = crate::emacs_core::buffer::builtin_get_buffer_create(
+        &mut eval,
+        vec![Value::string("neo-fwu-hidden")],
+    )
+    .unwrap();
+    let before = eval.body_redisplay_revision(fx.window_a_id, fx.buffer_a);
+    let result =
+        crate::emacs_core::window_cmds::builtin_force_window_update(&mut eval, vec![hidden])
+            .unwrap();
+    assert!(
+        result.is_nil(),
+        "an undisplayed buffer returns nil (GNU BUFFER_LIVE_P && buffer_window_count)"
+    );
+    let result = crate::emacs_core::window_cmds::builtin_force_window_update(
+        &mut eval,
+        vec![Value::make_window(9_999_999)],
+    )
+    .unwrap();
+    assert!(result.is_nil(), "a dead window returns nil");
+    assert_eq!(
+        eval.body_redisplay_revision(fx.window_a_id, fx.buffer_a),
+        before,
+        "neither request may mark a body"
+    );
+}
+
+#[test]
+fn presentation_only_invalidation_does_not_mark_body_redisplay() {
+    // The parent contract: chrome/menu/mode-line invalidation moves
+    // `redisplay_generation` but must NOT force body text to relayout.
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::Context::new();
+    let fx = force_window_update_fixture(&mut eval);
+    let before_a = eval.body_redisplay_revision(fx.window_a_id, fx.buffer_a);
+    let before_b = eval.body_redisplay_revision(fx.window_b_id, fx.buffer_b);
+    let generation_before = eval.redisplay_generation();
+    eval.mark_chrome_dirty_all();
+    eval.invalidate_redisplay();
+    assert!(
+        eval.redisplay_generation() > generation_before,
+        "generic redisplay invalidation still moves"
+    );
+    assert_eq!(
+        eval.body_redisplay_revision(fx.window_a_id, fx.buffer_a),
+        before_a,
+        "chrome/menu invalidation must not relayout body text"
+    );
+    assert_eq!(
+        eval.body_redisplay_revision(fx.window_b_id, fx.buffer_b),
+        before_b
+    );
+}
+
+#[test]
+fn force_window_update_buffer_on_hidden_frame_marks_nothing() {
+    for visibility in [
+        crate::window::FrameVisibility::Invisible,
+        crate::window::FrameVisibility::Iconified,
+    ] {
+        let mut eval = crate::emacs_core::Context::new();
+        let fx = force_window_update_fixture(&mut eval);
+        let frame = eval.frames.find_window_frame_id(fx.window_b_id).unwrap();
+        eval.frames.get_mut(frame).unwrap().visibility = visibility;
+        let before = eval.body_redisplay_revision(fx.window_b_id, fx.buffer_b);
+        let result = crate::emacs_core::window_cmds::builtin_force_window_update(
+            &mut eval,
+            vec![Value::make_buffer(fx.buffer_b)],
+        )
+        .unwrap();
+        assert!(
+            result.is_nil(),
+            "GNU searches visible frames for a buffer force"
+        );
+        assert_eq!(
+            eval.body_redisplay_revision(fx.window_b_id, fx.buffer_b),
+            before
+        );
+    }
+}
+
+#[test]
+fn force_window_update_buffer_shown_only_in_active_minibuffer_marks_nothing() {
+    let mut eval = crate::emacs_core::Context::new();
+    let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
+    let frame = eval.frames.get(frame_id).unwrap();
+    let window = frame.minibuffer_window.expect("minibuffer window");
+    let buffer = frame.find_window(window).unwrap().buffer_id().unwrap();
+    eval.minibuffers
+        .read_from_minibuffer(buffer, "M-x ", None, None)
+        .expect("activate the minibuffer");
+    let before = eval.body_redisplay_revision(window, buffer);
+    let result = crate::emacs_core::window_cmds::builtin_force_window_update(
+        &mut eval,
+        vec![Value::make_buffer(buffer)],
+    )
+    .unwrap();
+    assert!(
+        result.is_nil(),
+        "GNU's buffer walk excludes even active minibuffers"
+    );
+    assert_eq!(eval.body_redisplay_revision(window, buffer), before);
+
+    // The explicit live-window branch has no minibuffer exclusion.
+    let result = crate::emacs_core::window_cmds::builtin_force_window_update(
+        &mut eval,
+        vec![Value::make_window(window.0)],
+    )
+    .unwrap();
+    assert!(result.is_truthy());
+    assert_ne!(eval.body_redisplay_revision(window, buffer), before);
+}
+
+#[test]
+fn force_window_update_undisplayed_indirect_buffer_marks_nothing() {
+    let mut eval = crate::emacs_core::Context::new();
+    let fx = force_window_update_fixture(&mut eval);
+    let indirect = eval
+        .eval_str("(make-indirect-buffer (window-buffer (selected-window)) \"neo-fwu-indirect\")")
+        .unwrap();
+    let before = eval.body_redisplay_revision(fx.window_a_id, fx.buffer_a);
+    let result =
+        crate::emacs_core::window_cmds::builtin_force_window_update(&mut eval, vec![indirect])
+            .unwrap();
+    assert!(
+        result.is_nil(),
+        "showing the base buffer does not show this indirect buffer"
+    );
+    assert_eq!(
+        eval.body_redisplay_revision(fx.window_a_id, fx.buffer_a),
+        before
+    );
+}
+
+#[test]
+fn force_window_update_requests_mode_lines_for_each_successful_scope() {
+    // GNU raises update_mode_lines for nil, a live window, and each
+    // REDISPLAY_BUFFER_WINDOWS match. A force must refresh chrome as well
+    // as body rows, while keeping the body scope targeted.
+    for scope in 0..3 {
+        let mut eval = crate::emacs_core::Context::new();
+        let fx = force_window_update_fixture(&mut eval);
+        eval.note_chrome_generated(fx.window_a_id);
+        eval.note_chrome_generated(fx.window_b_id);
+        let before = eval.menu_bar_rebuild_generation();
+        let target = match scope {
+            0 => Value::NIL,
+            1 => fx.window_a,
+            _ => {
+                crate::emacs_core::window_cmds::builtin_window_buffer(&mut eval, vec![fx.window_a])
+                    .unwrap()
+            }
+        };
+        crate::emacs_core::window_cmds::builtin_force_window_update(&mut eval, vec![target])
+            .unwrap();
+        assert_ne!(eval.menu_bar_rebuild_generation(), before);
+        assert!(eval.chrome_dirty().is_dirty(fx.window_a_id));
+    }
+}
+
 #[test]
 fn eval_internal_show_cursor_per_window_state() {
     crate::test_utils::init_test_tracing();

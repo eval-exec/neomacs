@@ -98,6 +98,9 @@ impl Context {
         ev.face_change_count = 0;
         ev.display_var_change_count = 0;
         ev.redisplay_generation = 0;
+        ev.body_redisplay_all = 0;
+        ev.body_redisplay_by_window.clear();
+        ev.body_redisplay_by_buffer.clear();
         ev.menu_bar_rebuild_generation = 0;
         ev.media_generation = 0;
         ev.last_redisplay_signature = None;
@@ -2268,6 +2271,9 @@ impl Context {
             display_var_change_count: 0,
             input_progress: Default::default(),
             redisplay_generation: 0,
+            body_redisplay_all: 0,
+            body_redisplay_by_window: FxHashMap::default(),
+            body_redisplay_by_buffer: FxHashMap::default(),
             menu_bar_rebuild_generation: 0,
             chrome_dirty: Default::default(),
             context_instance_id: next_context_instance_id(),

@@ -546,6 +546,121 @@ fn retained_geometry_rejects_mutation_late_in_long_image_spec() {
 }
 
 #[test]
+fn forced_window_update_rebuilds_a_mutated_buffer_image_spec() {
+    assert_layout_mutation_with_host(
+        r#"(setq mutable-avatar (list 'image :type 'png :file "avatar.png" :width 20 :height 24))
+           (put-text-property 1 2 'display mutable-avatar)"#,
+        r#"(setcdr mutable-avatar (list :type 'png :file "delivered-avatar.png" :width 60 :height 24))
+           (image-flush mutable-avatar t)
+           (force-window-update)"#,
+        true,
+        Some(Box::new(ExplicitExtentImageHost)),
+    );
+}
+
+/// A presentation-only redisplay invalidation (`redisplay_generation` moves:
+/// messages, chrome, mode lines) must NOT relayout body text.  If retained
+/// bodies were keyed on the generic generation this window would rebuild.
+#[test]
+fn presentation_only_redisplay_invalidation_retains_body_rows() {
+    let mut eval = Context::new();
+    let buffer = eval.buffer_manager().current_buffer().unwrap().id();
+    eval.buffer_manager_mut()
+        .get_mut(buffer)
+        .unwrap()
+        .insert(&"abcdefghij".repeat(20));
+    let frame = eval
+        .frame_manager_mut()
+        .create_frame("presentation-only", 160, 160, buffer);
+    let window = eval.frame_manager().get(frame).unwrap().selected_window;
+    let mut engine = LayoutEngine::new_without_font_metrics();
+    engine.layout_frame_rust(&mut eval, frame);
+    let original = eval
+        .fresh_window_display_snapshot(frame, window, buffer)
+        .unwrap()
+        .iter_points()
+        .collect::<Vec<_>>();
+    engine.layout_frame_rust(&mut eval, frame);
+    assert!(
+        engine.last_layout_stats().reused_rows > 0,
+        "unchanged inputs retain row reuse"
+    );
+
+    let generation_before = eval.redisplay_generation();
+    // A real public presentation-only entry point: GNU's global
+    // `force-mode-line-update` raises update_mode_lines and rebuilds chrome,
+    // moving the generic redisplay generation without touching body inputs.
+    eval.eval_str("(force-mode-line-update t)")
+        .expect("force-mode-line-update");
+    assert!(
+        eval.redisplay_generation() > generation_before,
+        "the generic redisplay generation moves"
+    );
+    engine.layout_frame_rust(&mut eval, frame);
+    assert!(
+        engine.last_layout_stats().reused_rows > 0,
+        "a presentation-only invalidation must not relayout body text"
+    );
+    let after = eval
+        .fresh_window_display_snapshot(frame, window, buffer)
+        .unwrap()
+        .iter_points()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        original, after,
+        "presentation-only invalidation keeps geometry"
+    );
+}
+
+/// A forced body redisplay names exactly one window: the other frame's window
+/// keeps reusing its retained rows, and only the targeted window escalates to
+/// a full rebuild (GNU `Fforce_window_update`, src/window.c:4492).
+#[test]
+fn forced_body_redisplay_rebuilds_only_the_targeted_window() {
+    use neovm_core::window::ForcedBodyRedisplay;
+
+    let mut eval = Context::new();
+    let buffer_a = eval.buffer_manager().current_buffer().unwrap().id();
+    eval.buffer_manager_mut()
+        .get_mut(buffer_a)
+        .unwrap()
+        .insert(&"a-line\n".repeat(40));
+    let frame_a = eval
+        .frame_manager_mut()
+        .create_frame("forced-a", 160, 160, buffer_a);
+    let buffer_b = eval.buffer_manager_mut().create_buffer("forced-b");
+    eval.buffer_manager_mut()
+        .get_mut(buffer_b)
+        .unwrap()
+        .insert(&"b-line\n".repeat(40));
+    let frame_b = eval
+        .frame_manager_mut()
+        .create_frame("forced-b-frame", 160, 160, buffer_b);
+    let window_a = eval.frame_manager().get(frame_a).unwrap().selected_window;
+
+    let mut engine = LayoutEngine::new_without_font_metrics();
+    engine.layout_frame_rust(&mut eval, frame_a);
+    engine.layout_frame_rust(&mut eval, frame_b);
+    engine.layout_frame_rust(&mut eval, frame_b);
+    assert!(
+        engine.last_layout_stats().reused_rows > 0,
+        "the unchanged second frame reuses its body rows"
+    );
+
+    eval.force_body_redisplay(ForcedBodyRedisplay::Window(window_a));
+    engine.layout_frame_rust(&mut eval, frame_b);
+    assert!(
+        engine.last_layout_stats().reused_rows > 0,
+        "forcing another window's body must not relayout this window"
+    );
+    engine.layout_frame_rust(&mut eval, frame_a);
+    assert!(
+        engine.last_layout_stats().full_windows > 0,
+        "the targeted window must rebuild its body"
+    );
+}
+
+#[test]
 fn retained_presentation_rejects_mutated_prefix_stipple_bytes() {
     assert_decoration_mutation_invalidates_presentation(
         r##"(setq bitmap-data (copy-sequence "A"))
