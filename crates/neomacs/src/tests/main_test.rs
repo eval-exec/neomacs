@@ -58,11 +58,10 @@ use neovm_core::emacs_core::eval::{
 };
 use neovm_core::emacs_core::image_catalog::{AxisSize, ImageRotation, ImageSizeSpec};
 use neovm_core::emacs_core::image_catalog::{
-    EncodedBytes, ImageAnimationInvalidation, ImageCatalog, ImageColorContext, ImageDataSource,
-    ImageAnimationPolicy, ImageFrameIndex, ImageId, ImageLoadAttempt, ImageLoadIdentity,
-    ImageLoadToken, ImageLookup,
-    ImageResolveRequest, ImageResolveSource, ImageSizeLimit, ImageSpecIdentity,
-    ResolvedImageMetadata,
+    EncodedBytes, ImageAnimationInvalidation, ImageAnimationPolicy, ImageCatalog,
+    ImageColorContext, ImageDataSource, ImageFrameIndex, ImageId, ImageLoadAttempt,
+    ImageLoadIdentity, ImageLoadToken, ImageLookup, ImageResolveRequest, ImageResolveSource,
+    ImageSizeLimit, ImageSpecIdentity, ResolvedImageMetadata,
 };
 use neovm_core::emacs_core::intern::intern;
 use neovm_core::emacs_core::load::{

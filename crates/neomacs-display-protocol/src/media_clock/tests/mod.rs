@@ -15,7 +15,10 @@ fn fresh_clock_reads_zero_and_is_paused() {
     let start = anchor();
     let mut clock = MediaClock::new();
     assert!(clock.is_paused());
-    assert_eq!(clock.document_time(start.plus(Duration::from_secs(10))), Duration::ZERO);
+    assert_eq!(
+        clock.document_time(start.plus(Duration::from_secs(10))),
+        Duration::ZERO
+    );
 }
 
 #[test]
@@ -87,5 +90,8 @@ fn repeated_resume_does_not_reanchor() {
 #[test]
 fn default_matches_new() {
     let start = anchor();
-    assert_eq!(MediaClock::default().document_time(start), MediaClock::new().document_time(start));
+    assert_eq!(
+        MediaClock::default().document_time(start),
+        MediaClock::new().document_time(start)
+    );
 }

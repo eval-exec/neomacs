@@ -650,7 +650,9 @@ impl ImageCacheUsage {
 /// The optional `fps` is a sampling ceiling that doubles as the memory
 /// bound — it caps the distinct frames one loop can produce
 /// ([`crate::animated_visual::SampleGrid`]).
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Hash, PartialEq, serde::Serialize, serde::Deserialize,
+)]
 pub struct ImageAnimationPolicy {
     enabled: bool,
     fps: Option<u32>,

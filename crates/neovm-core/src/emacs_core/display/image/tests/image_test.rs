@@ -2214,28 +2214,19 @@ fn image_spec_animation_policy_parses_the_neomacs_extension() {
         .expect("spec without :animation resolves");
     assert_eq!(absent.animation, ImageAnimationPolicy::disabled());
 
-    let enabled = image_resolve_request_from_spec(
-        &spec(Some(Value::symbol("t"))),
-        environment,
-        colors,
-    )
-    .expect(":animation t resolves");
+    let enabled =
+        image_resolve_request_from_spec(&spec(Some(Value::symbol("t"))), environment, colors)
+            .expect(":animation t resolves");
     assert_eq!(enabled.animation, ImageAnimationPolicy::enabled(None));
     assert_eq!(enabled.animation.fps(), None);
 
-    let capped = image_resolve_request_from_spec(
-        &spec(Some(Value::fixnum(12))),
-        environment,
-        colors,
-    )
-    .expect(":animation 12 resolves");
+    let capped =
+        image_resolve_request_from_spec(&spec(Some(Value::fixnum(12))), environment, colors)
+            .expect(":animation 12 resolves");
     assert_eq!(capped.animation, ImageAnimationPolicy::enabled(Some(12)));
 
-    let rejected = image_resolve_request_from_spec(
-        &spec(Some(Value::fixnum(0))),
-        environment,
-        colors,
-    )
-    .expect(":animation 0 resolves");
+    let rejected =
+        image_resolve_request_from_spec(&spec(Some(Value::fixnum(0))), environment, colors)
+            .expect(":animation 0 resolves");
     assert_eq!(rejected.animation, ImageAnimationPolicy::disabled());
 }

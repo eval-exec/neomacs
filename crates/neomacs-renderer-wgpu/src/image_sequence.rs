@@ -293,7 +293,13 @@ impl ImageSequenceCache {
         }
 
         let Some(decoded) = crate::svg_animation::sample_svg_sequence(
-            data, size, rotation, realization, colors, resources, policy,
+            data,
+            size,
+            rotation,
+            realization,
+            colors,
+            resources,
+            policy,
         ) else {
             self.finish_decode(sequence);
             return if frame.is_first() {

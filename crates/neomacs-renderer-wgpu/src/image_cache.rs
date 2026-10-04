@@ -9,12 +9,11 @@
 use neomacs_display_protocol::image::EncodedBytes;
 use neomacs_display_protocol::image_diagnostic::{ImageDiagnostic, ImageLoadIdentity};
 use neomacs_display_protocol::{
-    ImageAnimationPolicy, ImageCacheUsage, ImageColorContext, ImageEmbeddedMetadata, ImageFrameIndex,
-    ImageHeuristicMask,
-    ImageId, ImageIntrinsicExtent, ImageLayoutExtent, ImageLoadAttempt, ImageLoadToken,
-    ImageMaskKind, ImageMaskPolicy, ImageNativeExtent, ImageRasterExtent, ImageRealization,
-    ImageReportedExtent, ImageRotation, ImageSequenceId, ImageSequenceRetirement, ImageSizeSpec,
-    ResolvedImageGeometry, RetainedImageSet,
+    ImageAnimationPolicy, ImageCacheUsage, ImageColorContext, ImageEmbeddedMetadata,
+    ImageFrameIndex, ImageHeuristicMask, ImageId, ImageIntrinsicExtent, ImageLayoutExtent,
+    ImageLoadAttempt, ImageLoadToken, ImageMaskKind, ImageMaskPolicy, ImageNativeExtent,
+    ImageRasterExtent, ImageRealization, ImageReportedExtent, ImageRotation, ImageSequenceId,
+    ImageSequenceRetirement, ImageSizeSpec, ResolvedImageGeometry, RetainedImageSet,
 };
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
@@ -1249,7 +1248,15 @@ impl ImageCache {
         policy: ImageAnimationPolicy,
     ) -> Option<DecodedPixels> {
         match sequence_cache.resolve_svg(
-            sequence, &data, frame, size, rotation, realization, colors, resources, policy,
+            sequence,
+            &data,
+            frame,
+            size,
+            rotation,
+            realization,
+            colors,
+            resources,
+            policy,
         ) {
             ImageSequenceResolution::Frame(frame) => {
                 let (width, height) = frame.dimensions();

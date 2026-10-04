@@ -66,7 +66,10 @@ fn plan_reads_timing_values_and_site() {
 #[test]
 fn plan_answers_the_scheduler_questions() {
     let animation = compile(PULSING_CIRCLE);
-    assert_eq!(AnimatedVisual::period(&animation), Some(Duration::from_secs(2)));
+    assert_eq!(
+        AnimatedVisual::period(&animation),
+        Some(Duration::from_secs(2))
+    );
     assert!(AnimatedVisual::is_continuous(&animation));
     // Uniform thirds put a keyframe boundary at the half-second marks.
     assert_eq!(
@@ -118,8 +121,14 @@ fn animate_motion_prefix_still_scans_but_never_compiles() {
 fn linear_interpolation_hits_keyframes_and_midpoints() {
     let animation = compile(PULSING_CIRCLE);
     // Keyframe values hold at their times: t=0 → 10, t=1s → 40.
-    assert_eq!(one_override(&animation, Duration::ZERO), ("r".into(), "10".into()));
-    assert_eq!(one_override(&animation, Duration::from_secs(1)), ("r".into(), "40".into()));
+    assert_eq!(
+        one_override(&animation, Duration::ZERO),
+        ("r".into(), "10".into())
+    );
+    assert_eq!(
+        one_override(&animation, Duration::from_secs(1)),
+        ("r".into(), "40".into())
+    );
     // Quarter into the second segment: 40 → 10 at half progress is 25.
     assert_eq!(
         one_override(&animation, Duration::from_millis(1500)),
@@ -140,9 +149,18 @@ fn discrete_values_step() {
 </svg>"##;
     let animation = compile(source);
     // Colors are opaque values: they step, never blend.
-    assert_eq!(one_override(&animation, Duration::ZERO), ("fill".into(), "red".into()));
-    assert_eq!(one_override(&animation, Duration::from_secs(1)), ("fill".into(), "green".into()));
-    assert_eq!(one_override(&animation, Duration::from_millis(2500)), ("fill".into(), "blue".into()));
+    assert_eq!(
+        one_override(&animation, Duration::ZERO),
+        ("fill".into(), "red".into())
+    );
+    assert_eq!(
+        one_override(&animation, Duration::from_secs(1)),
+        ("fill".into(), "green".into())
+    );
+    assert_eq!(
+        one_override(&animation, Duration::from_millis(2500)),
+        ("fill".into(), "blue".into())
+    );
 }
 
 #[test]
@@ -214,7 +232,10 @@ fn key_timesreshape_segments() {
     // The last segment spans 75% of the cycle: at 2s, 10 -> 20 at 1/3.
     let (_, value) = one_override(&animation, Duration::from_secs(2));
     let radius: f64 = value.parse().expect("numeric");
-    assert!((radius - (10.0 + 10.0 / 3.0)).abs() < 1e-9, "radius: {radius}");
+    assert!(
+        (radius - (10.0 + 10.0 / 3.0)).abs() < 1e-9,
+        "radius: {radius}"
+    );
 }
 
 #[test]
@@ -238,37 +259,44 @@ fn patch_inserts_absent_attributes() {
     let text = String::from_utf8(patched).expect("utf-8");
     assert!(text.contains("opacity=\"0.5\""), "patched text: {text}");
     // Inserted into the rect's start tag, not the root's.
-    let rect = text.split('<').find(|tag| tag.starts_with("rect")).expect("rect");
+    let rect = text
+        .split('<')
+        .find(|tag| tag.starts_with("rect"))
+        .expect("rect");
     assert!(rect.contains("opacity="), "rect tag: {rect}");
 }
 
 #[test]
 fn sampling_disabled_policy_stays_static() {
-    assert!(sampler::sample(
-        PULSING_CIRCLE.as_bytes(),
-        ImageSizeSpec::default(),
-        ImageRotation::None,
-        ImageRealization::default(),
-        ImageColorContext::default(),
-        &super::super::svg::SvgResourceContext::Isolated,
-        ImageAnimationPolicy::disabled(),
-    )
-    .is_none());
+    assert!(
+        sampler::sample(
+            PULSING_CIRCLE.as_bytes(),
+            ImageSizeSpec::default(),
+            ImageRotation::None,
+            ImageRealization::default(),
+            ImageColorContext::default(),
+            &super::super::svg::SvgResourceContext::Isolated,
+            ImageAnimationPolicy::disabled(),
+        )
+        .is_none()
+    );
 }
 
 #[test]
 fn sampling_static_document_has_no_frames() {
     let static_document = r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><circle cx="5" cy="5" r="4"/></svg>"##;
-    assert!(sampler::sample(
-        static_document.as_bytes(),
-        ImageSizeSpec::default(),
-        ImageRotation::None,
-        ImageRealization::default(),
-        ImageColorContext::default(),
-        &super::super::svg::SvgResourceContext::Isolated,
-        ImageAnimationPolicy::enabled(None),
-    )
-    .is_none());
+    assert!(
+        sampler::sample(
+            static_document.as_bytes(),
+            ImageSizeSpec::default(),
+            ImageRotation::None,
+            ImageRealization::default(),
+            ImageColorContext::default(),
+            &super::super::svg::SvgResourceContext::Isolated,
+            ImageAnimationPolicy::enabled(None),
+        )
+        .is_none()
+    );
 }
 
 #[test]
