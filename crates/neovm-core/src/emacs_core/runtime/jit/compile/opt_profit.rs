@@ -38,9 +38,14 @@ impl Work {
         let mut last_list_pc = None;
         for (pc, op) in ops.iter().enumerate() {
             match op {
-                Op::Call(_) | Op::Apply(_) | Op::CallBuiltin(..) | Op::CallBuiltinSym(..) => {
-                    work.bytecode_calls = true
-                }
+                // Aset's live function-cell fallback can run arbitrary Lisp
+                // and return a different value from its stored operand. Keep
+                // it outside PrimitiveLists until that contract is modeled.
+                Op::Aset
+                | Op::Call(_)
+                | Op::Apply(_)
+                | Op::CallBuiltin(..)
+                | Op::CallBuiltinSym(..) => work.bytecode_calls = true,
                 // build::Builder::new refuses these reachable operations:
                 // handler edges need push-time stacks that opt does not model.
                 // Avoid a CFG build here and conservatively reject dead copies
@@ -237,7 +242,7 @@ pub(super) fn ready_osr_front(
     }
 }
 
-/// Preserve original-call evidence even when the OSR fuser removes a call.
+/// Preserve original callback evidence even when the OSR slice/fuser omits it.
 /// Threading: immutable source/configuration reads at the cold cache compile
 /// seam. No source state, Lisp handle or runtime observation is recorded.
 /// Other modes return before scanning, retaining their existing OSR policy.
@@ -248,7 +253,11 @@ pub(crate) fn primitive_osr_source_admitted(source_ops: &[Op]) -> bool {
         || !source_ops.iter().any(|op| {
             matches!(
                 op,
-                Op::Call(_) | Op::Apply(_) | Op::CallBuiltin(..) | Op::CallBuiltinSym(..)
+                Op::Aset
+                    | Op::Call(_)
+                    | Op::Apply(_)
+                    | Op::CallBuiltin(..)
+                    | Op::CallBuiltinSym(..)
             )
         })
 }
@@ -320,3 +329,7 @@ mod ready_osr_tests;
 #[cfg(test)]
 #[path = "opt_profit/tests/primitive_lists_test.rs"]
 mod primitive_lists_tests;
+
+#[cfg(test)]
+#[path = "opt_profit/tests/advised_opaque_test.rs"]
+mod advised_opaque_tests;
