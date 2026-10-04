@@ -1573,3 +1573,6 @@ mod retained_face_gather_environment_test;
 
 #[cfg(test)]
 mod property_keys_environment_test;
+
+#[cfg(test)]
+mod edit_sync_dense_index_environment_test;

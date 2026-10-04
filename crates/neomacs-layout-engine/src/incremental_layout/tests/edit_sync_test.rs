@@ -392,3 +392,7 @@ fn nonzero_dy_shift_ledger_retains_every_kept_row_index() {
         vec![6, 7]
     );
 }
+
+#[cfg(test)]
+#[path = "edit_sync_dense_index_install_test.rs"]
+mod dense_index_install_tests;

@@ -35,11 +35,14 @@
 //! | Knob | Default | Values | Gate |
 //! | --- | --- | --- | --- |
 //! | `NEOMACS_LAYOUT_EDIT_SYNC` | `prove` | `prove`, `sync` | Synchronize the edit walk with unchanged rows below it. |
+//! | `NEOMACS_EDIT_SYNC_DENSE_INDEX` | `off` | `off`, `on` | Use proved consecutive row indexes for edit-plan membership and surviving-row remapping; every unproved case keeps the original hash path. |
 //! | `NEOMACS_EDIT_SYNC_STILL` | `off` | `off`, `on` | Transfer synchronized geometry without remapping when its placement and visibility are unchanged. |
 //! | `NEOMACS_EDIT_SYNC_PROVE_FIRST` | `off` | `off`, `on` | Prefer a completely admitted bounded prove producer inside GNU sync; rejected proofs still use general sync. |
 //! | `NEOMACS_EDIT_SYNC_LAZY_PROOF` | `off` | `off`, `on` | Defer source proof until bounded fallback is possible in general Sync with ProveFirst off. |
 //! | `NEOMACS_EDIT_SYNC_SHIFT_SKIP` | `off` | `off`, `on` | Avoid synchronized-row shift provenance allocations when no row moved vertically. |
 //! | `NEOMACS_LAYOUT_SCROLL_BACK` | `on` | `off`, `on` | Synchronize backward scrolls with the retained body. |
+
+mod dense_index;
 
 use super::{EditDamage, EditReplayPositions, RetainedWindowMatrix};
 use crate::types::LayoutCharPos0;
@@ -461,6 +464,51 @@ impl EditSyncInstall {
 }
 
 impl EditSyncPlan {
+    /// Cost-only numeric indexing for edit synchronization. Off and every
+    /// unproved mapping call the original installer; backward scroll callers
+    /// retain `install`. Plans are attempt-owned, never shared mutable state.
+    #[inline]
+    pub(crate) fn install_edit(
+        self,
+        reached: EditSyncReached,
+        bottom_y: f32,
+        index_limit: usize,
+    ) -> EditSyncInstall {
+        if !dense_index::enabled() {
+            return self.install(reached, bottom_y, index_limit);
+        }
+        let Some(dvpos) = i64::try_from(reached.display_row_index)
+            .ok()
+            .and_then(|reached| {
+                i64::try_from(self.first_unchanged_index)
+                    .ok()
+                    .and_then(|first| reached.checked_sub(first))
+            })
+        else {
+            return self.install(reached, bottom_y, index_limit);
+        };
+        let dy = reached.y - self.first_unchanged_y;
+        let shift_y = dy.abs() >= 0.5;
+        // Existing Still transfer keeps precedence, including its original
+        // vector-storage/Arc identity and original visibility predicates.
+        if edit_sync_still_enabled()
+            && dvpos == 0
+            && !shift_y
+            && self
+                .rows
+                .iter()
+                .all(|(index, row)| row.pixel_y < bottom_y - 0.5 && *index < index_limit)
+        {
+            return self.install(reached, bottom_y, index_limit);
+        }
+        let Some(kept) =
+            dense_index::installation_map(&self.rows, dvpos, dy, shift_y, bottom_y, index_limit)
+        else {
+            return self.install(reached, bottom_y, index_limit);
+        };
+        dense_index::install(self, kept, dvpos, dy, shift_y, bottom_y, index_limit)
+    }
+
     /// Place the candidates after a walk that synchronized at `reached`:
     /// every row moves by the same `dvpos`/`dy`, and rows pushed to or past
     /// the window-relative `bottom_y`, or to a matrix index at or past
@@ -471,6 +519,8 @@ impl EditSyncPlan {
         bottom_y: f32,
         index_limit: usize,
     ) -> EditSyncInstall {
+        #[cfg(test)]
+        dense_index_test_support::note_legacy_install();
         let dvpos = reached.display_row_index as i64 - self.first_unchanged_index as i64;
         let dy = reached.y - self.first_unchanged_y;
         let shift_y = dy.abs() >= 0.5;
@@ -506,6 +556,8 @@ impl EditSyncPlan {
                 continue;
             }
             kept.insert(old_index as i64, new_index as i64);
+            #[cfg(test)]
+            dense_index_test_support::note_install_insertion();
             let row = if shift_y {
                 // A shift changes the row's placement, so the reuse is a copy
                 // (the scroll replay pays the same; `RowPlacement` removes it).
@@ -775,11 +827,20 @@ pub(crate) fn plan_positions(
     let (first_index, first_row) = candidates[0];
     let stop_charpos = first_row.start_charpos as i64 + delta;
     let stop_charpos = usize::try_from(stop_charpos).ok()?;
+    if dense_index::enabled()
+        && let Some(plan) = dense_index::plan(prev, candidates, dirty_start, delta, stop_charpos)
+    {
+        return Some(plan);
+    }
+    #[cfg(test)]
+    dense_index_test_support::note_legacy_plan();
     let mut indices = rustc_hash::FxHashSet::default();
     let rows = candidates
         .iter()
         .map(|&(index, row)| {
             indices.insert(index as i64);
+            #[cfg(test)]
+            dense_index_test_support::note_plan_insertion();
             (index, shift_row_positions(row, dirty_start, delta))
         })
         .collect();
@@ -810,3 +871,7 @@ mod lazy_proof_selector_tests;
 #[cfg(test)]
 #[path = "tests/edit_sync_policy_aliases.rs"]
 mod edit_sync_policy_aliases_tests;
+
+#[cfg(test)]
+#[path = "tests/edit_sync_dense_index_support.rs"]
+pub(crate) mod dense_index_test_support;

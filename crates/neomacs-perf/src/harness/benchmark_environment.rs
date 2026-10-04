@@ -93,6 +93,8 @@ pub(super) const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOMACS_LAYOUT_PROPERTY_KEYS_INLINE",
     // Prefer certified bounded prove inside sync (`off` default, `on`).
     "NEOMACS_EDIT_SYNC_PROVE_FIRST",
+    // Proved consecutive edit row indexes only (`off` default, `on`).
+    "NEOMACS_EDIT_SYNC_DENSE_INDEX",
     // Omit zero-dy synchronized-row shift ledgers (`off` default, `on`).
     "NEOMACS_EDIT_SYNC_SHIFT_SKIP",
     // Sync source-copy horizon with one local full retry (`off` default, `on`).

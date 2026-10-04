@@ -153,3 +153,7 @@ fn positions_and_eager_plan_preserve_coordinate_conversion() {
         )
     );
 }
+
+#[cfg(test)]
+#[path = "edit_sync_dense_index_plan_test.rs"]
+mod dense_index_plan_tests;

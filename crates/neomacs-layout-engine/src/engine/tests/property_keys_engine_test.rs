@@ -265,3 +265,7 @@ fn accepted_sync_inlines_canonical_keys_after_complete_output_and_callbacks() {
     );
     assert!(on.3.inline_constructions > 0);
 }
+
+#[cfg(test)]
+#[path = "edit_sync_dense_index_engine_test.rs"]
+mod dense_index_tests;

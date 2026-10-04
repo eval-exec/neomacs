@@ -1126,7 +1126,11 @@ impl BufferSourceOutputSetup {
                 && let Some(reached) = edit_sync_reached
             {
                 synced_stop = Some(plan.stop_charpos as i64);
-                let placed = plan.install(reached, visible_bottom, geometry.mode_line_display_row);
+                let placed = if scroll.edit {
+                    plan.install_edit(reached, visible_bottom, geometry.mode_line_display_row)
+                } else {
+                    plan.install(reached, visible_bottom, geometry.mode_line_display_row)
+                };
                 edit_sync_shift = placed.shift_ledger();
                 scroll.reused_rows.extend(placed.rows);
                 scroll.reused_row_snapshots.extend(placed.row_snapshots);
