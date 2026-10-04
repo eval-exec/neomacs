@@ -2958,6 +2958,12 @@ struct ModeLineRendered {
     /// them, and the legacy storage-String round-trip that used to bridge the
     /// gap has been retired (issue #131).
     text: Vec<u32>,
+    /// GNU string identity: multibyte iff any FORMAT INPUT was multibyte (the
+    /// `concat' rule), never derived from the accumulated content.  Deriving
+    /// it from the codes instead re-encoded every U+0080..U+00FF character
+    /// whose code fits in a byte as a unibyte raw byte, which then displays
+    /// as the octal escape `\NNN` -- issue #470's "dot turns into `\267`".
+    multibyte: bool,
     text_props: TextPropertyTable,
     source_spans: Vec<ModeLineDisplaySourceSpan>,
     min_width_transitions: Vec<ModeLineMinWidthTransition>,
@@ -2984,7 +2990,11 @@ struct ModeLineMinWidthTransition {
 
 /// Decode a `LispString` into its sequence of Emacs character codes. Multibyte
 /// strings are scanned one Emacs character at a time (eight-bit characters
-/// surface as `0x3FFF00+`); unibyte strings yield one code per raw byte.
+/// surface as `0x3FFF00+`); a unibyte string's high byte IS a raw byte, so it
+/// surfaces as its byte8 character (`0x3FFF00+`), never as a plain Unicode
+/// code -- GNU's `BYTE8_TO_CHAR` (src/character.h).  Byte identity then
+/// survives any later multibyte promotion, exactly as GNU's `concat` keeps a
+/// unibyte operand's raw bytes raw (`str_to_multibyte`).
 fn mode_line_string_char_codes(string: &crate::heap_types::LispString) -> Vec<u32> {
     let bytes = string.as_bytes();
     if string.is_multibyte() {
@@ -2997,13 +3007,18 @@ fn mode_line_string_char_codes(string: &crate::heap_types::LispString) -> Vec<u3
         }
         codes
     } else {
-        bytes.iter().map(|&b| u32::from(b)).collect()
+        bytes
+            .iter()
+            .map(|&b| crate::emacs_core::emacs_char::unibyte_to_char(b))
+            .collect()
     }
 }
 
 /// Build the final mode-line `LispString` from accumulated character codes: a
-/// multibyte result encodes each code via `char_string`, a unibyte result maps
-/// each code straight to a byte.
+/// multibyte result encodes each code via `char_string` (byte8 characters take
+/// GNU's overlong raw-byte form), a unibyte result maps each code straight to
+/// a byte -- the low byte of a byte8 code IS its raw byte, so the `as u8` is
+/// GNU's `CHAR_TO_BYTE8`.
 fn mode_line_lisp_string_from_codes(
     codes: &[u32],
     multibyte: bool,
@@ -3070,8 +3085,11 @@ impl ModeLineRendered {
     }
 
     fn plain(text: impl Into<String>) -> Self {
+        let text = text.into();
+        let multibyte = text.chars().any(|c| !c.is_ascii());
         Self {
-            text: text.into().chars().map(|c| c as u32).collect(),
+            text: text.chars().map(|c| c as u32).collect(),
+            multibyte,
             text_props: TextPropertyTable::new(),
             source_spans: Vec::new(),
             min_width_transitions: Vec::new(),
@@ -3081,6 +3099,7 @@ impl ModeLineRendered {
 
     fn append_rendered(&mut self, other: &Self) {
         let char_offset = self.char_len();
+        self.multibyte |= other.multibyte;
         self.text.extend_from_slice(&other.text);
         self.append_properties(&other.text_props, char_offset);
         for span in &other.source_spans {
@@ -3147,6 +3166,7 @@ impl ModeLineRendered {
         match value.as_lisp_string() {
             Some(string) => {
                 let char_offset = self.char_len();
+                self.multibyte |= string.is_multibyte();
                 self.text.extend(mode_line_string_char_codes(string));
                 self.record_source_span(char_offset, self.char_len(), *value, 0);
                 if let Some(props) = get_string_text_properties_table_for_value(*value) {
@@ -3158,6 +3178,7 @@ impl ModeLineRendered {
                     return;
                 };
                 let char_offset = self.char_len();
+                self.multibyte |= text.chars().any(|c| !c.is_ascii());
                 self.text.extend(text.chars().map(|c| c as u32));
                 self.record_source_span(char_offset, self.char_len(), *value, 0);
             }
@@ -3168,6 +3189,7 @@ impl ModeLineRendered {
         if value.is_string() {
             self.append_string_value_preserving_props(value);
         } else if let Some(ch) = value.as_char() {
+            self.multibyte |= !ch.is_ascii();
             self.text.push(ch as u32);
         }
     }
@@ -3184,6 +3206,10 @@ impl ModeLineRendered {
         match value.as_lisp_string() {
             Some(string) => {
                 let char_offset = self.char_len();
+                // GNU `substring' semantics: the slice keeps the SOURCE
+                // string's multibyte flag even when the taken range is pure
+                // ASCII.
+                self.multibyte |= string.is_multibyte();
                 self.text.extend(
                     mode_line_string_char_codes(string)
                         .into_iter()
@@ -3203,6 +3229,7 @@ impl ModeLineRendered {
                     return;
                 };
                 let char_offset = self.char_len();
+                self.multibyte |= text.chars().any(|c| !c.is_ascii());
                 self.text.extend(
                     text.chars()
                         .skip(start_char)
@@ -3223,6 +3250,7 @@ impl ModeLineRendered {
     }
 
     fn push_plain_char(&mut self, ch: char) {
+        self.multibyte |= !ch.is_ascii();
         self.text.push(ch as u32);
     }
 
@@ -3233,6 +3261,9 @@ impl ModeLineRendered {
     fn slice_chars(&self, precision: usize) -> Self {
         Self {
             gc_roots: None,
+            // A truncation, not a re-derivation: keep the source identity,
+            // like GNU `substring'.
+            multibyte: self.multibyte,
             text: self.text.iter().take(precision).copied().collect(),
             text_props: self
                 .text_props
@@ -3480,10 +3511,14 @@ impl ModeLineRendered {
 
     fn into_display_output(mut self, face_spec: ModeLineFaceSpec) -> ModeLineDisplayOutput {
         self.realize_display_min_width_transitions();
-        // A multibyte result iff any accumulated character exceeds a single
-        // byte; otherwise every code fits in a unibyte byte. Mirrors the old
-        // storage path's `decode_storage_char_codes_auto(..).any(> 0xFF)`.
-        let multibyte = self.text.iter().any(|&code| code > 0xFF);
+        // GNU string identity follows the format INPUTS (the `concat' rule:
+        // multibyte iff any argument is multibyte), never the content.  The
+        // old content heuristic (`any(code > 0xFF)`) re-encoded every
+        // U+0080..U+00FF character -- whose code fits in one byte -- as a
+        // unibyte raw byte, and a raw byte displays as the octal escape
+        // `\NNN' (src/xdisp.c:8649-8662): issue #470's "dot turns into
+        // `\267`" between mode-line re-evaluations.
+        let multibyte = self.multibyte;
         if face_spec.no_props {
             return ModeLineDisplayOutput {
                 value: Value::heap_string(mode_line_lisp_string_from_codes(&self.text, multibyte)),
@@ -9388,6 +9423,10 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/mode_line_gc_roots.rs"]
 mod mode_line_gc_roots;
+
+#[cfg(test)]
+#[path = "tests/mode_line_multibyte_identity.rs"]
+mod mode_line_multibyte_identity;
 
 #[cfg(test)]
 #[path = "tests/mode_line_incremental_roots.rs"]
