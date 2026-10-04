@@ -39,10 +39,11 @@ pub trait AnimatedVisual {
     fn period(&self) -> Option<Duration>;
 }
 
-/// Nanosecond magnitude of a duration, saturating rather than truncating.
+/// Nanosecond magnitude of a duration, widened for the products below.
 fn nanos(duration: Duration) -> u128 {
-    // A Duration is internally u64-bounded; the u128 widening is for the
-    // multiply-then-divide products below, not because time can exceed it.
+    // `as_nanos` is exact — a Duration is internally u64-bounded — so the
+    // u128 widening exists for the multiply-then-divide products below,
+    // not because time can exceed it.
     duration.as_nanos()
 }
 
