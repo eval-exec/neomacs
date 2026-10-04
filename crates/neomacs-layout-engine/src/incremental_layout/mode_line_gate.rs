@@ -26,7 +26,7 @@
 
 //! | Knob | Default | Values | Gate |
 //! | --- | --- | --- | --- |
-//! | `NEOMACS_MODE_LINE_GATE` | `gnu` | `legacy`, `off`; `gnu`/`on`/`1` | GNU optimization-1 selects retained chrome; only absence selects the default, malformed values retain legacy. |
+//! | `NEOMACS_MODE_LINE_GATE` | `gnu` | `legacy`, `off`; `gnu`/`on`/`1`/`true`/`yes` | GNU optimization-1 selects retained chrome; only absence selects the default, malformed values retain legacy. |
 
 use neomacs_display_protocol::glyph_matrix::GlyphRow;
 
@@ -63,7 +63,7 @@ fn parse_mode_line_gate(value: Option<&std::ffi::OsStr>) -> ModeLineGate {
         .map(|value| value.trim().to_ascii_lowercase())
         .as_deref()
     {
-        Some("gnu" | "on" | "1") => ModeLineGate::Gnu,
+        Some("gnu" | "on" | "1" | "true" | "yes") => ModeLineGate::Gnu,
         _ => ModeLineGate::Legacy,
     }
 }

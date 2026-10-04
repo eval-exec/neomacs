@@ -34,7 +34,7 @@
 //!
 //! | Knob | Default | Values | Gate |
 //! | --- | --- | --- | --- |
-//! | `NEOMACS_LAYOUT_EDIT_SYNC` | `sync` | `prove`, `sync` | Synchronize the edit walk with unchanged rows below it. |
+//! | `NEOMACS_LAYOUT_EDIT_SYNC` | `sync` | `prove`; `sync`/`on`/`1`/`true`/`yes` | Synchronize the edit walk with unchanged rows below it. |
 //! | `NEOMACS_EDIT_SYNC_DENSE_INDEX` | `on` | `off`, `on` | Use proved consecutive row indexes for edit-plan membership and surviving-row remapping; every unproved case keeps the original hash path. |
 //! | `NEOMACS_EDIT_SYNC_FONTIFY_COVERAGE` | `on` | `off`; `on`/`1`/`true`/`yes` | Prove that an admitted edit-Sync attempt has no uncovered point query using current immutable row extrema; unknown or intersecting ranges retain the full iterator. |
 //! | `NEOMACS_EDIT_SYNC_STILL` | `off` | `off`, `on` | Transfer synchronized geometry without remapping when its placement and visibility are unchanged. |
@@ -120,7 +120,7 @@ fn parse_edit_sync_mode(value: Option<&std::ffi::OsStr>) -> EditSyncMode {
         .map(|value| value.trim().to_ascii_lowercase())
         .as_deref()
     {
-        Some("sync" | "on" | "1") => EditSyncMode::Sync,
+        Some("sync" | "on" | "1" | "true" | "yes") => EditSyncMode::Sync,
         _ => EditSyncMode::Prove,
     }
 }

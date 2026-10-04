@@ -9,7 +9,7 @@
 //!
 //! | Knob | Default | Values | Effect |
 //! |---|---|---|---|
-//! | `NEOMACS_WATCHED_PROP_DEMAND` | `on` | `off`, `on` | Advance bounded watched-property scans only after another interval is needed; generic cursors remain eager. |
+//! | `NEOMACS_WATCHED_PROP_DEMAND` | `on` | `off`; `on`/`1`/`true`/`yes` | Advance bounded watched-property scans only after another interval is needed; generic cursors remain eager. |
 
 use crate::emacs_core::intern::SymId;
 use std::collections::HashMap;
@@ -739,7 +739,12 @@ enum WatchedPropDemandMode {
 }
 
 fn parse_watched_prop_demand_mode(value: Option<&str>) -> WatchedPropDemandMode {
-    if value.is_none_or(|value| value.trim().eq_ignore_ascii_case("on")) {
+    if value.is_none_or(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "on" | "1" | "true" | "yes"
+        )
+    }) {
         WatchedPropDemandMode::On
     } else {
         WatchedPropDemandMode::Off

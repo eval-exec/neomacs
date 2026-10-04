@@ -5,7 +5,9 @@ use std::ffi::OsStr;
 
 #[test]
 fn explicit_edit_sync_policy_preserves_aliases_and_invalid_values() {
-    for value in ["sync", "on", "1", " SYNC ", "On"] {
+    for value in [
+        "sync", "on", "1", "true", "yes", " SYNC ", "On", " YES ", "True",
+    ] {
         assert_eq!(
             parse_edit_sync_mode(Some(OsStr::new(value))),
             EditSyncMode::Sync,
@@ -14,7 +16,7 @@ fn explicit_edit_sync_policy_preserves_aliases_and_invalid_values() {
     }
     for value in [
         "off", "0", "false", "no", "legacy", "prove", "", "  ", "unknown", "enabled", "同期",
-        "onx", "true", "yes", "gnu",
+        "onx", "gnu",
     ] {
         assert_eq!(
             parse_edit_sync_mode(Some(OsStr::new(value))),

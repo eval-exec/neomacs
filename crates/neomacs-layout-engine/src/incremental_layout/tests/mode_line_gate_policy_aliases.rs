@@ -5,7 +5,9 @@ use std::ffi::OsStr;
 
 #[test]
 fn explicit_mode_line_gate_policy_preserves_aliases_and_invalid_values() {
-    for value in ["gnu", "on", "1", " GNU ", "On"] {
+    for value in [
+        "gnu", "on", "1", "true", "yes", " GNU ", "On", " YES ", "True",
+    ] {
         assert_eq!(
             parse_mode_line_gate(Some(OsStr::new(value))),
             ModeLineGate::Gnu,
@@ -14,7 +16,7 @@ fn explicit_mode_line_gate_policy_preserves_aliases_and_invalid_values() {
     }
     for value in [
         "off", "0", "false", "no", "legacy", "prove", "", "  ", "unknown", "enabled", "同期",
-        "onx", "true", "yes", "sync",
+        "onx", "sync",
     ] {
         assert_eq!(
             parse_mode_line_gate(Some(OsStr::new(value))),

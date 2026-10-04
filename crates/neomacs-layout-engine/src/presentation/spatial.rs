@@ -408,7 +408,7 @@ pub(crate) fn set_chrome_position_source_for_test(source: Option<ChromePositionS
     CHROME_POSITION_SOURCE_OVERRIDE.with(|cell| cell.set(source));
 }
 
-/// The knob, read once per process: `rows` selects [`ChromePositionSource::Rows`];
+/// The knob, read once per process: `rows`/`on`/`1`/`true`/`yes` select rows;
 /// unset selects rows; explicit off or any other value keeps [`ChromePositionSource::Frame`].
 fn chrome_position_source() -> ChromePositionSource {
     #[cfg(test)]
@@ -417,16 +417,24 @@ fn chrome_position_source() -> ChromePositionSource {
     }
     static SOURCE: std::sync::OnceLock<ChromePositionSource> = std::sync::OnceLock::new();
     *SOURCE.get_or_init(|| {
-        match std::env::var("NEOMACS_PRESENT_CHROME_POS")
-            .ok()
-            .map(|value| value.trim().to_ascii_lowercase())
-            .as_deref()
-        {
-            None | Some("rows" | "on" | "1") => ChromePositionSource::Rows,
-            _ => ChromePositionSource::Frame,
-        }
+        parse_chrome_position_source(std::env::var("NEOMACS_PRESENT_CHROME_POS").ok().as_deref())
     })
 }
+
+/// Pure numeric policy; concurrent callers retain no Lisp or mutable state.
+fn parse_chrome_position_source(value: Option<&str>) -> ChromePositionSource {
+    match value
+        .map(|value| value.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        None | Some("rows" | "on" | "1" | "true" | "yes") => ChromePositionSource::Rows,
+        _ => ChromePositionSource::Frame,
+    }
+}
+
+#[cfg(test)]
+#[path = "tests/spatial_boolean_policy_test.rs"]
+mod boolean_policy_tests;
 
 pub(crate) fn window_chrome_string_positions(
     state: &FrameDisplayState,
@@ -537,7 +545,7 @@ pub(crate) fn set_presented_text_positions_mode_for_test(mode: Option<PresentedT
     TEXT_POSITIONS_MODE_OVERRIDE.with(|cell| cell.set(mode));
 }
 
-/// The knob, read once per process: `lazy` selects
+/// The knob, read once per process: `lazy`/`rows`/`on`/`1`/`true`/`yes` select
 /// [`PresentedTextPositionsMode::Lazy`], as does unset; explicit off or any
 /// other value keeps [`PresentedTextPositionsMode::Eager`].
 fn presented_text_positions_mode() -> PresentedTextPositionsMode {
@@ -547,15 +555,21 @@ fn presented_text_positions_mode() -> PresentedTextPositionsMode {
     }
     static MODE: std::sync::OnceLock<PresentedTextPositionsMode> = std::sync::OnceLock::new();
     *MODE.get_or_init(|| {
-        match std::env::var("NEOMACS_PRESENT_HIT")
-            .ok()
-            .map(|value| value.trim().to_ascii_lowercase())
-            .as_deref()
-        {
-            None | Some("lazy" | "rows" | "on" | "1") => PresentedTextPositionsMode::Lazy,
-            _ => PresentedTextPositionsMode::Eager,
-        }
+        parse_presented_text_positions_mode(std::env::var("NEOMACS_PRESENT_HIT").ok().as_deref())
     })
+}
+
+/// Pure numeric policy; concurrent callers retain no Lisp or mutable state.
+fn parse_presented_text_positions_mode(value: Option<&str>) -> PresentedTextPositionsMode {
+    match value
+        .map(|value| value.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        None | Some("lazy" | "rows" | "on" | "1" | "true" | "yes") => {
+            PresentedTextPositionsMode::Lazy
+        }
+        _ => PresentedTextPositionsMode::Eager,
+    }
 }
 
 /// One window's input to its text hit positions.

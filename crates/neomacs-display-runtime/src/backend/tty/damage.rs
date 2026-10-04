@@ -55,6 +55,7 @@
 //! | `NEOMACS_TTY_DAMAGE` | `on` | `off` |
 //! | `NEOMACS_TTY_ROW_IDENTITY` | `appearance` | `address` or `off` |
 //!
+//! `on`/`1`/`true`/`yes` select the enabled path for each knob.
 //! Empty or unknown settings retain each knob's explicit baseline.
 
 use super::*;
@@ -138,13 +139,13 @@ pub enum TtyRowIdentity {
     Appearance,
 }
 
-/// The identity a value of `NEOMACS_TTY_ROW_IDENTITY` selects; unset defaults to `appearance`.
+/// The identity a value of `NEOMACS_TTY_ROW_IDENTITY` selects; unset defaults to `appearance`; `on`/`1`/`true`/`yes` select it too.
 pub fn parse_tty_row_identity_knob(value: Option<&str>) -> TtyRowIdentity {
     match value
         .map(|value| value.trim().to_ascii_lowercase())
         .as_deref()
     {
-        Some("appearance" | "on" | "1") => TtyRowIdentity::Appearance,
+        Some("appearance" | "on" | "1" | "true" | "yes") => TtyRowIdentity::Appearance,
         None => TtyRowIdentity::Appearance,
         Some("" | "address" | "off" | "0") => TtyRowIdentity::Address,
         Some(other) => {

@@ -7,7 +7,9 @@ fn watched_prop_demand_os_knob_defaults_on_only_when_absent_and_preserves_explic
         parse_watched_prop_demand_os_mode(None),
         WatchedPropDemandMode::On
     );
-    for value in ["on", " ON ", "\tOn\n", " on "] {
+    for value in [
+        "on", "1", "true", "yes", " ON ", "\tOn\n", " on ", " YES ", "True",
+    ] {
         assert_eq!(
             parse_watched_prop_demand_os_mode(Some(OsStr::new(value))),
             WatchedPropDemandMode::On,
@@ -15,8 +17,7 @@ fn watched_prop_demand_os_knob_defaults_on_only_when_absent_and_preserves_explic
         );
     }
     for value in [
-        "", " ", "off", "OFF", "0", "false", "no", "unknown", "onward", "on off", "été", "1",
-        "true", "yes",
+        "", " ", "off", "OFF", "0", "false", "no", "unknown", "onward", "on off", "été",
     ] {
         assert_eq!(
             parse_watched_prop_demand_os_mode(Some(OsStr::new(value))),
