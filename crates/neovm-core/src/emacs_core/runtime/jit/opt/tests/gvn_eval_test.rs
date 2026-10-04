@@ -160,14 +160,22 @@ fn plan(source: &ByteCodeFunction, cons_args: &[usize]) -> Func {
             break;
         }
     }
-    // Expose the already-declared cons fields without changing ordered effects
-    // or frame identities. Inputs in these typed fixtures are actual conses.
+    // Expose field reads after the retained LIST guard, as production Fold/GVN
+    // does. A successful LIST read is total (nil returns nil), so its load has
+    // no signal effect; the preceding CheckType keeps the ordered deopt/frame.
     for inst in &mut func.insts {
-        inst.op = match &inst.op {
-            Opcode::Opaque(Op::Car) => Opcode::LoadCar,
-            Opcode::Opaque(Op::Cdr) => Opcode::LoadCdr,
-            other => other.clone(),
+        let load = match &inst.op {
+            Opcode::Opaque(Op::Car) => Some(Opcode::LoadCar),
+            Opcode::Opaque(Op::Cdr) => Some(Opcode::LoadCdr),
+            _ => None,
         };
+        if let Some(load) = load {
+            let input = &func.values[inst.args[0].index()];
+            assert!(!input.ty.is_bottom() && input.ty.is_subset(TypeSet::LIST));
+            assert_eq!(input.rep, Rep::Tagged);
+            inst.op = load;
+            inst.eff = Effects::READ_HEAP;
+        }
     }
     func.verify()
         .expect("declared typed/opaque fixture verifies");
@@ -1430,6 +1438,7 @@ fn opt_gvn_reference_guarded_list_read_between_cons_cdr_retains_nil_and_error_or
         // Retain the builder's opaque LIST read, conservative exact effect
         // hint and real unknown-input LIST guard. Only arg0 is contracted CONS.
         original.insts[read.index()].op = Opcode::Opaque(middle.clone());
+        original.insts[read.index()].eff = super::build::op_effects(&middle).0;
         assert_eq!(
             original.insts[read.index()].eff,
             super::build::op_effects(&middle).0
@@ -1576,6 +1585,7 @@ fn opt_gvn_reference_guarded_list_read_between_cons_cdr_retains_nil_and_error_or
                 .unwrap() as u32,
         );
         original.insts[middle.index()].op = Opcode::Opaque(Op::Car);
+        original.insts[middle.index()].eff = super::build::op_effects(&Op::Car).0;
         original.verify().unwrap();
         let store = original
             .insts
