@@ -765,3 +765,7 @@ mod source_budget_consumers;
 #[cfg(test)]
 #[path = "edit_sync_source_budget_replay_retry.rs"]
 mod source_budget_replay_retry;
+
+#[cfg(test)]
+#[path = "edit_sync_line_number_replay_test.rs"]
+mod line_number_replay;

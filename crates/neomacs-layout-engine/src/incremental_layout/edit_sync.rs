@@ -754,15 +754,20 @@ pub(crate) fn row_has_boxed_glyph(row: &GlyphRow) -> bool {
 /// (xdisp.c:22630-22700): `word-wrap` (21), bidi reordering with an
 /// automatic paragraph direction (22) -- an edit can flip the direction of
 /// the rest of its paragraph --, `line-spacing` (23), `show-trailing-whitespace`
-/// (11) and a horizontal scroll (7). A scroll margin is refused too: a row
-/// pushed into it would make the full layout scroll, which a replay never
-/// does.
+/// (11) and a horizontal scroll (7). Numbered gutters (24) are declined too:
+/// the retained key has no proof that normal/current-line faces are equal,
+/// and a position shift cannot regenerate absolute, relative or visual
+/// prefixes. The existing Prove path remains available where its newline-
+/// equality guard proves that these row positions have not changed. A scroll
+/// margin is refused too: a row pushed into it would make the full layout
+/// scroll, which a replay never does.
 pub(crate) fn sync_allowed(
     curr: &super::RetainedWindowKey,
     scroll_margin: i64,
     buffer: &neovm_core::buffer::Buffer,
 ) -> bool {
     !curr.word_wrap
+        && !curr.display_line_numbers.enabled()
         && curr.extra_line_spacing == 0.0
         && !curr.show_trailing_whitespace
         && curr.hscroll == 0
