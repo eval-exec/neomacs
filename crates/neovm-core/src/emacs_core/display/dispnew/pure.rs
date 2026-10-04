@@ -99,15 +99,12 @@ pub(crate) fn builtin_redraw_frame(
     }
     // GNU `redraw_frame` clears the current matrices and marks every window
     // inaccurate, even when the Lisp-visible display state did not change.
-    eval.request_menu_bar_rebuild(crate::emacs_core::eval::MenuBarRebuildReason::FullFrameRedraw);
-    if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
-        let frame = crate::emacs_core::window_cmds::resolve_frame_id(
-            eval,
-            args.first(),
-            crate::emacs_core::window_cmds::FrameDomain::Live,
-        )?;
-        publish_gnu_frame_redraw(eval, frame);
-    }
+    let frame = crate::emacs_core::window_cmds::resolve_frame_id(
+        eval,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
+    publish_gnu_frame_redraw(eval, frame);
     Ok(Value::NIL)
 }
 
@@ -121,8 +118,8 @@ pub(crate) fn builtin_redraw_display(
     Ok(Value::NIL)
 }
 
-/// Context dispatch for GNU redraw-display. The baseline pure entry and its
-/// argument/error behavior stay available when the policy is disabled.
+/// Context dispatch preserves the common argument/error boundary and sends
+/// explicit redraws to every GNU frame_redisplay_p target under either policy.
 #[cold]
 #[inline(never)]
 pub(crate) fn builtin_redraw_display_in_context(
@@ -130,15 +127,13 @@ pub(crate) fn builtin_redraw_display_in_context(
     args: Vec<Value>,
 ) -> EvalResult {
     let result = builtin_redraw_display(eval, args)?;
-    if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
-        crate::emacs_core::window_cmds::ensure_selected_frame_id(eval);
-        let mut frames = eval.frames.frame_list();
-        // GNU frame creation conses onto Vframe_list. IDs increase at creation.
-        frames.sort_unstable_by_key(|frame| std::cmp::Reverse(frame.0));
-        for frame in frames {
-            if gnu_frame_redisplay_p(&eval.frames, frame) {
-                publish_gnu_frame_redraw(eval, frame);
-            }
+    crate::emacs_core::window_cmds::ensure_selected_frame_id(eval);
+    let mut frames = eval.frames.frame_list();
+    // GNU frame creation conses onto Vframe_list. IDs increase at creation.
+    frames.sort_unstable_by_key(|frame| std::cmp::Reverse(frame.0));
+    for frame in frames {
+        if gnu_frame_redisplay_p(&eval.frames, frame) {
+            publish_gnu_frame_redraw(eval, frame);
         }
     }
     Ok(result)
@@ -181,17 +176,15 @@ fn gnu_frame_redisplay_p(
 }
 
 /// Publish one actual GNU redraw (dispnew.c:3213-3241), including the terminal
-/// repaint obligation. IDs belong to this exclusive Context; no Lisp values,
-/// thread-local cache, or process-shared mutable state is introduced here.
+/// repaint obligation under either hook policy. GNU hook scopes remain opt-in.
+/// IDs belong to this exclusive Context; no Lisp values, thread-local cache,
+/// or process-shared mutable state is introduced here.
 #[cold]
 #[inline(never)]
 pub(crate) fn publish_gnu_frame_redraw(
     eval: &mut crate::emacs_core::eval::Context,
     frame: crate::window::FrameId,
 ) {
-    if !crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
-        return;
-    }
     let Some((windows, is_tty)) = eval.frames.get(frame).map(|target| {
         let windows = target
             .window_list()
@@ -212,9 +205,10 @@ pub(crate) fn publish_gnu_frame_redraw(
     // frame-window-change merely because every glyph must be repainted.
     eval.gnu_mark_frame_redisplay(frame);
     for window in windows {
-        // GNU marks every live leaf inaccurate and must_be_updated. A general
-        // redisplay generation drops retained-body reuse; chrome is targeted
-        // at these leaves without inventing update_mode_lines ALL.
+        // Advance the existing retained-body revision for each live target:
+        // general presentation invalidation alone may retain stale bodies.
+        // Chrome is targeted without inventing update_mode_lines ALL.
+        eval.force_body_redisplay(crate::window::ForcedBodyRedisplay::Window(window));
         eval.gnu_mark_window_redisplay(window);
         eval.mark_chrome_dirty_window(window);
     }
@@ -323,3 +317,7 @@ pub(crate) fn builtin_frame_z_order_lessp(args: Vec<Value>) -> EvalResult {
     expect_args("frame--z-order-lessp", &args, 2)?;
     Ok(Value::NIL)
 }
+
+#[cfg(test)]
+#[path = "tests/explicit_redraw.rs"]
+mod explicit_redraw_tests;

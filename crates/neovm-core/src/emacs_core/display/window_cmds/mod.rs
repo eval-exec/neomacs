@@ -6382,8 +6382,7 @@ pub(crate) fn builtin_recenter(eval: &mut super::eval::Context, args: Vec<Value>
         return Ok(Value::NIL);
     };
 
-    if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() && redraw == RecenterRedraw::FullFrame
-    {
+    if redraw == RecenterRedraw::FullFrame {
         // GNU redraws before display motion; a callback/error must already
         // observe the frame/window marks (window.c:7265-7272).
         crate::emacs_core::dispnew::pure::publish_gnu_frame_redraw(eval, fid);
@@ -6435,9 +6434,7 @@ pub(crate) fn builtin_recenter(eval: &mut super::eval::Context, args: Vec<Value>
     eval.gnu_mark_window_redisplay(wid);
     match redraw {
         RecenterRedraw::Window => eval.invalidate_redisplay(),
-        RecenterRedraw::FullFrame => {
-            eval.request_menu_bar_rebuild(super::eval::MenuBarRebuildReason::FullFrameRedraw)
-        }
+        RecenterRedraw::FullFrame => {}
     }
     Ok(Value::NIL)
 }

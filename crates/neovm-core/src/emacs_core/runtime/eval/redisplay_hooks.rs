@@ -194,7 +194,11 @@ impl RedisplayHookOwnership {
     fn request_physical_redraw(&mut self, frame: FrameId) {
         self.physical_redraw_frames.insert(frame);
     }
+    #[inline]
     fn take_physical_redraw(&mut self, frame: FrameId) -> bool {
+        if self.physical_redraw_frames.is_empty() {
+            return false;
+        }
         self.physical_redraw_frames.remove(&frame)
     }
     fn acknowledge_frame_target(&mut self, frame: FrameId) {
@@ -537,14 +541,14 @@ impl Context {
 
     /// Physical terminal damage is owned until the matching prepared frame is
     /// actually rendered. Hook recording/display acceptance cannot consume it.
+    /// Explicit repaint is independent of the experimental hook scope policy.
     pub fn gnu_request_frame_redraw(&mut self, frame: FrameId) {
-        if gnu_redisplay_hooks_enabled() {
-            self.gnu_redisplay_hooks.request_physical_redraw(frame);
-        }
+        self.gnu_redisplay_hooks.request_physical_redraw(frame);
     }
 
+    #[inline]
     pub fn gnu_take_tty_frame_redraw(&mut self, frame: FrameId) -> bool {
-        gnu_redisplay_hooks_enabled() && self.gnu_redisplay_hooks.take_physical_redraw(frame)
+        self.gnu_redisplay_hooks.take_physical_redraw(frame)
     }
 
     pub fn gnu_redisplay_hooks_policy_enabled(&self) -> bool {
