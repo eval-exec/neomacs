@@ -48,3 +48,34 @@ therefore in-repo, in `neomacs-renderer-wgpu/src/svg_animation/`.
 - Full affected-crate suites: only pre-existing environmental failures
   (missing imgmsg fixtures; GUI/daemon tests requiring a display) —
   verified identical on main.
+
+## Review round 2 (codex, gpt-6.1-sol high — full text in the companion file)
+
+4×P1 + 12×P2 found. Fixed in this round:
+
+- P1 budget-after-allocation → admission during sampling
+  (`MAX_COMPUTED_SEQUENCE_BYTES`, exact projection after slot 0).
+- P1 double realize → sampler decodes at intrinsic extent; bitmap
+  realization applies size/rotation/scale exactly once, like GIF frames.
+- P1 realization-blind cache key → entries record the baked face colors;
+  a color change replaces the entry instead of serving stale pixels.
+- P1 file-backed policy ignored → `decode_file` gains the gated computed
+  arm with the file's resource context.
+- P2 unicode hex panic → ASCII validation before octet slicing.
+- P2 plist-get vs plist-member in `neomacs-image-spec-add-animation`.
+- P2 vacuous oracle test → document embedded as a quoted Elisp string;
+  the `:index`-on-static arm was dropped (its GNU-ignored claim was
+  untested commentary, and main already rejects static `:index > 0`).
+
+Tracked for the render-paced increment (not v1 blockers, all in the
+enabled-policy path): zero-width keyTimes selection, discrete keyTimes
+last<1, fractional repeatCount, single-quote/entity-safe value
+serialization, dedup key includes target (two absent-attribute rules on
+distinct elements), SMIL sandwich ordering instead of last-wins, begin
+offsets in the loop period, finite freeze/remove endpoint sampling,
+SVGZ/namespaced prefilter, concurrent-miss grid coherence, in_flight
+RAII on panic.
+
+Section 2 (design) to be weighed against this plan's deferred list —
+its MediaAsset/Playback/View/SampleKey identity split is the stronger
+long-term shape and supersedes "one clock per source".

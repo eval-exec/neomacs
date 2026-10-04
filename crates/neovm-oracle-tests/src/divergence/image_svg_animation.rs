@@ -13,8 +13,11 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 /// An SMIL spinner-class document: `values`/`dur`/`repeatCount` on a
 /// parent-targeted rule — the exact subset the engine materializes.
 ///
-/// Rust's `{:?}` escaping of this ASCII document (`\"`, `\\`) is also valid
-/// Elisp string syntax, so the literal can be embedded in a form directly.
+/// The document must be embedded as an Elisp *string*: Rust's `{:?}`
+/// escaping of this ASCII document (`\"`, `\\`) is valid Elisp string
+/// syntax. Interpolating it bare evaluates an unbound `<svg` symbol in
+/// both emacsen, and a parity helper that accepts matching errors would
+/// pass without ever loading an image.
 const ANIMATED_SVG: &str = concat!(
     "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"100\" ",
     "viewBox=\"0 0 100 100\"><circle id=\"dot\" cx=\"50\" cy=\"50\" r=\"10\" ",
@@ -28,12 +31,9 @@ fn divergence_animated_svg_static_by_default_matches_gnu() {
 
     // Both renderers must report a single frame: GNU because librsvg has
     // no animation, neomacs because the policy is off. The frame count is
-    // what `image-multi-frame-p` reads, so pinning it pins the default-path
-    // divergence gate. `:index` on a static SVG is GNU-ignored and must
-    // stay that way rather than becoming a load failure.
+    // what `image-multi-frame-p` reads, so pinning it pins the
+    // default-path divergence gate.
     assert_oracle_parity(&format!(
-        r#"(list
-  (image-multi-frame-p (list 'image :type 'svg :data {ANIMATED_SVG}))
-  (image-multi-frame-p (list 'image :type 'svg :data {ANIMATED_SVG} :index 3)))"#
+        r#"(image-multi-frame-p (list 'image :type 'svg :data {ANIMATED_SVG:?}))"#
     ));
 }

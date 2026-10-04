@@ -1,5 +1,5 @@
-use super::*;
 use super::SequenceKind;
+use super::*;
 use neomacs_display_protocol::{ImageFrameIndex, ImageSequenceId, ImageSequenceRetirement};
 
 fn sequence(id: u64) -> ImageSequenceId {
@@ -59,8 +59,18 @@ fn retirement_prevents_a_late_decode_from_repopulating_stale_identity() {
 
     cache.mark_in_flight(old);
     cache.retire(ImageSequenceRetirement::AllocatedThrough(old));
-    cache.publish_decoded(old, decoded.clone(), SequenceKind::AuthoredRaster);
-    cache.publish_decoded(future, decoded, SequenceKind::AuthoredRaster);
+    cache.publish_decoded(
+        old,
+        decoded.clone(),
+        SequenceKind::AuthoredRaster,
+        ImageColorContext::default(),
+    );
+    cache.publish_decoded(
+        future,
+        decoded,
+        SequenceKind::AuthoredRaster,
+        ImageColorContext::default(),
+    );
 
     assert!(!cache.contains(old));
     assert!(cache.contains(future));
