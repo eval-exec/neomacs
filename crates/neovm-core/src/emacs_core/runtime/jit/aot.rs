@@ -123,7 +123,9 @@ pub(crate) const ABI_TAG: u32 = compute_abi_tag();
 // v30: GEN0 observed windows may wrap around a certificate-free interval; a
 // cold native refinement shim republishes it, and remembered BLV proofs read
 // a permanent atomic observation-bitmap word.
-const ABI_TAG_VERSION: u32 = 30;
+// v31: retained redisplay state (GNU mode-line gate, edit Sync) adds Context fields;
+// existing AOT images are invalidated.
+const ABI_TAG_VERSION: u32 = 31;
 
 /// Format version of the AOT descriptor spec-section + the runtime spec ABI
 /// (`SpecSlot`/`spec_expected` sidecar bases, the loader re-classify+arm protocol).
