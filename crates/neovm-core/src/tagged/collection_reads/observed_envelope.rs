@@ -99,6 +99,17 @@ impl ObservedEnvelope {
         true
     }
 
+    /// A completed local publication remains valid throughout a stable
+    /// reclamation epoch. The ledger is changed only under State's exclusive
+    /// borrow, and its insertion/mark/gate publication contains no Lisp call
+    /// or safepoint. Another read cannot see the insertion before completion.
+    /// Shared marks clear only on death, followed by Release epoch advancement
+    /// before reuse/resumption; this Acquire check rejects every such change.
+    #[inline]
+    pub(super) fn already_published(&self, bits: usize) -> bool {
+        self.epoch == Some(collection_observation_epoch()) && self.owners.contains(&bits)
+    }
+
     pub(super) fn full_bounds(&self) -> (usize, usize) {
         self.full
     }

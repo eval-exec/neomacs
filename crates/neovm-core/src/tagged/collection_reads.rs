@@ -594,8 +594,13 @@ fn publish_observed_owner_in_state(state: &mut State, bits: usize) -> bool {
     if compiled_journal_mode() != CompiledJournalMode::Observed {
         return false;
     }
-    #[cfg(test)]
-    OBSERVED_OWNER_PUBLICATIONS.with(|count| count.set(count.get() + 1));
+    // RECENT collisions and later scopes still record their own dependency,
+    // but a same-epoch local owner has already completed its sticky publication.
+    // Context/dump changes republish through the existing heap installation and
+    // barrier publisher; they do not require another shared owner mark.
+    if state.observed.already_published(bits) {
+        return false;
+    }
     let dump = super::gc::current_collection_dump_window();
     let refreshed = state.observed.refresh(dump);
     let tag = bits & super::value::TAG_MASK;
@@ -607,7 +612,15 @@ fn publish_observed_owner_in_state(state: &mut State, bits: usize) -> bool {
         // Another mutator may have published the shared mark first. Its mark
         // does not insert this identity into our private journal envelope.
         let changed = state.observed.insert(bits);
-        let newly = super::gc::mark_collection_observed(bits);
+        let newly = if changed {
+            #[cfg(test)]
+            OBSERVED_OWNER_PUBLICATIONS.with(|count| count.set(count.get() + 1));
+            super::gc::mark_collection_observed(bits)
+        } else {
+            // Epoch refresh retained this identity only after its exact metadata
+            // mark was found. Its live publication needs no second radix query.
+            false
+        };
         if refreshed || changed {
             super::gc::publish_collection_observation_window(state.observed.gate());
         }
@@ -672,3 +685,7 @@ mod observed_epoch_tests;
 #[cfg(all(test, feature = "jit"))]
 #[path = "collection_reads/tests/observed_gap.rs"]
 mod observed_gap_tests;
+
+#[cfg(all(test, feature = "jit"))]
+#[path = "collection_reads/tests/observed_collisions.rs"]
+mod observed_collisions_tests;
