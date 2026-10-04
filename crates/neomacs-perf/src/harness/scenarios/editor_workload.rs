@@ -7,6 +7,7 @@
 //! | Knob | Default | Values | Effect |
 //! | --- | --- | --- | --- |
 //! | `NEOMACS_PERF_SUSTAINED_VISIBLE` | `off` | `off`, `on` | Display sustained-editing's temporary buffer; warm EOB before the counter gate, restore windows before killing it, and emit an ON-only visibility proof sidecar. |
+//! | `NEOMACS_PERF_SUSTAINED_EDIT_CASE` | `off` | `off`, `join`, `text-scale-join`, `text-scale-typing` | Select review-only visible sustained cycles before sampling; newline joins preserve their boundary and text-scale cases call the actual text-scale command. |
 
 use std::collections::BTreeMap;
 use std::fs;

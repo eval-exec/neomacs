@@ -5,6 +5,7 @@
 const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     // Independent redisplay controls; preserve upstream policy forwarding.
     "NEOMACS_PERF_SUSTAINED_VISIBLE",
+    "NEOMACS_PERF_SUSTAINED_EDIT_CASE",
     "NEOMACS_EDIT_SYNC_STILL",
     "NEOMACS_EDIT_SYNC_LAZY_PROOF",
     "NEOMACS_RETAINED_FACE_GATHER",
@@ -69,7 +70,7 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     // P3.5 redisplay knobs (same-binary A/B; explicit off retains baseline arms).
     // Buffer-text snapshots: `copy` or `share` (default, copy-on-write).
     "NEOMACS_TEXT_SNAPSHOT",
-    // TTY silent frames: `off` (default) or `on`.
+    // TTY silent frames: `off` or `on` (default).
     "NEOMACS_TTY_SILENT",
     // TTY damage-proportional repaint: `off`, `verify` or `on` (default), and
     // the per-frame verify report.
@@ -96,10 +97,10 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     // The visible automatic-composition scan's ASCII fast path and memo: `on`.
     "NEOMACS_COMPOSITION_FASTPATH",
     // P3.5 U3.7. An edit frame's mode line by GNU's optimization-1 guard:
-    // `legacy` (default) or `gnu`.
+    // `legacy` or `gnu` (default); on/1/true/yes select GNU.
     "NEOMACS_MODE_LINE_GATE",
     // Edit replays synchronize with the rows below the edit (GNU
-    // try_window_id): `prove` (default) or `sync`.
+    // try_window_id): `prove` or `sync` (default); on/1/true/yes select Sync.
     "NEOMACS_LAYOUT_EDIT_SYNC",
     // A window whose start moved back reuses its old rows: `on`.
     "NEOMACS_LAYOUT_SCROLL_BACK",

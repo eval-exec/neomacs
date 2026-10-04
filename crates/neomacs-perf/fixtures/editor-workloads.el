@@ -111,6 +111,46 @@ first suspect and deserves to be confirmed or cleared by number."
   (delete-char -1)
   (redisplay t))
 
+;; Review-only workload variants. Resolve the selector and replace the cycle
+;; before the sampling gate; the ordinary edit loop has no diagnostic branch.
+(defvar neomacs-perf-workload--sustained-edit-case
+  (and (equal (getenv "NEOMACS_PERF_WORKLOAD") "sustained-editing")
+       (let ((value (getenv "NEOMACS_PERF_SUSTAINED_EDIT_CASE")))
+         (and (member value '("join" "text-scale-join" "text-scale-typing"))
+              value))))
+
+(when (member neomacs-perf-workload--sustained-edit-case
+              '("join" "text-scale-join"))
+  (defun neomacs-perf-workload--single-edit-cycle ()
+    ;; A newline deletion near the lower visible rows, followed by its exact
+    ;; inverse, with an accepted display after each edit.
+    (end-of-line)
+    (unless (eq (char-after) ?\n)
+      (error "join review fixture lacks a line boundary"))
+    (delete-char 1)
+    (redisplay t)
+    (insert "\n")
+    (redisplay t)))
+
+(defun neomacs-perf-workload--warm-sustained-visible ()
+  "Settle the selected review workload before instruction sampling."
+  (when (member neomacs-perf-workload--sustained-edit-case
+                '("text-scale-join" "text-scale-typing"))
+    (require 'face-remap)
+    (text-scale-set 1))
+  (if (member neomacs-perf-workload--sustained-edit-case
+              '("join" "text-scale-join"))
+      (progn
+        ;; Keep this damage a pure deletion: fontification's widened property
+        ;; spans are a separate conservative horizon-retry case.
+        (font-lock-mode -1)
+        (goto-char (point-min))
+        (forward-line 24)
+        (end-of-line)
+        (set-window-start (selected-window) (point-min)))
+    (goto-char (point-max)))
+  (redisplay t))
+
 (defun neomacs-perf-workload--type-phase ()
   (goto-char (point-max))
   (dolist (line '("(defun sim--generated (x y)"
@@ -680,13 +720,14 @@ mutator.  A capture has one owner of its existing sampling gate."
                     (save-window-excursion
                       (with-current-buffer visible-buffer
                         (neomacs-perf-workload--prepare-buffer scenario)
-                        ;; Display the edited buffer and settle the EOB viewport before
+                        ;; Display the edited buffer and settle the selected viewport before
                         ;; collection or counters begin. This setup is specific to ON.
                         (set-window-buffer visible-window (current-buffer))
-                        (goto-char (point-max))
-                        (redisplay t)
+                        (neomacs-perf-workload--warm-sustained-visible)
                         (setq sustained-visible-proof
-                              `((window_live_before . ,(if (window-live-p visible-window) t :json-false))
+                              `((review_edit_case . ,(or neomacs-perf-workload--sustained-edit-case "off"))
+                                (text_scale_amount . ,(if (boundp 'text-scale-mode-amount) text-scale-mode-amount 0))
+                                (window_live_before . ,(if (window-live-p visible-window) t :json-false))
                                 (selected_window_before . ,(if (eq visible-window (selected-window)) t :json-false))
                                 (window_buffer_matches_before . ,(if (eq (window-buffer visible-window) (current-buffer)) t :json-false))
                                 (point_visible_before . ,(if (pos-visible-in-window-p (point) visible-window) t :json-false))
@@ -852,13 +893,14 @@ mutator.  A capture has one owner of its existing sampling gate."
                     (save-window-excursion
                       (with-current-buffer visible-buffer
                         (neomacs-perf-workload--prepare-buffer scenario)
-                        ;; Display the edited buffer and settle the EOB viewport before
+                        ;; Display the edited buffer and settle the selected viewport before
                         ;; collection or counters begin. This setup is specific to ON.
                         (set-window-buffer visible-window (current-buffer))
-                        (goto-char (point-max))
-                        (redisplay t)
+                        (neomacs-perf-workload--warm-sustained-visible)
                         (setq sustained-visible-proof
-                              `((window_live_before . ,(if (window-live-p visible-window) t :json-false))
+                              `((review_edit_case . ,(or neomacs-perf-workload--sustained-edit-case "off"))
+                                (text_scale_amount . ,(if (boundp 'text-scale-mode-amount) text-scale-mode-amount 0))
+                                (window_live_before . ,(if (window-live-p visible-window) t :json-false))
                                 (selected_window_before . ,(if (eq visible-window (selected-window)) t :json-false))
                                 (window_buffer_matches_before . ,(if (eq (window-buffer visible-window) (current-buffer)) t :json-false))
                                 (point_visible_before . ,(if (pos-visible-in-window-p (point) visible-window) t :json-false))
