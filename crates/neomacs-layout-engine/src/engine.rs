@@ -4762,6 +4762,12 @@ impl LayoutEngine {
         let buffer_name = buffer.name().to_owned();
         let mut window_end_attempt =
             evaluator.begin_redisplay_window_end_attempt(frame_id, window_id, buf_id);
+        // Pure attempt-local admission captured after conditional replay refusal.
+        // No plan, snapshot or Lisp owner is retained by this numeric decision.
+        let admitted_edit_sync_fontify_attempt = is_edit
+            && scroll_replay
+                .as_ref()
+                .is_some_and(|replay| replay.edit && replay.sync.is_some());
         let render_outcome = BufferWindowRenderRequest::new(
             frame_id,
             window_id,
@@ -4849,10 +4855,11 @@ impl LayoutEngine {
                 .map(WindowPresentationSnapshot::display_snapshot)
                 .find(|snapshot| snapshot.window_id == window_id)
                 .map(|snapshot| {
-                    VisibleFontificationCoverage::inspect(
+                    VisibleFontificationCoverage::inspect_for_edit_sync(
                         buffer,
                         snapshot,
                         neovm_core::buffer::CharPos0::new(fontify_end.max(0) as usize),
+                        admitted_edit_sync_fontify_attempt,
                     )
                 })
                 .unwrap_or(VisibleFontificationCoverage::Complete);

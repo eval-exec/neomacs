@@ -95,6 +95,8 @@ pub(super) const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOMACS_EDIT_SYNC_PROVE_FIRST",
     // Proved consecutive edit row indexes only (`off` default, `on`).
     "NEOMACS_EDIT_SYNC_DENSE_INDEX",
+    // Immutable admitted edit-Sync zero-query coverage (`off` default, `on`).
+    "NEOMACS_EDIT_SYNC_FONTIFY_COVERAGE",
     // Omit zero-dy synchronized-row shift ledgers (`off` default, `on`).
     "NEOMACS_EDIT_SYNC_SHIFT_SKIP",
     // Sync source-copy horizon with one local full retry (`off` default, `on`).

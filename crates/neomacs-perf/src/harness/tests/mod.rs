@@ -1576,3 +1576,6 @@ mod property_keys_environment_test;
 
 #[cfg(test)]
 mod edit_sync_dense_index_environment_test;
+
+#[cfg(test)]
+mod edit_sync_fontify_coverage_environment_test;

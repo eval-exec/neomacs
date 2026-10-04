@@ -36,6 +36,7 @@
 //! | --- | --- | --- | --- |
 //! | `NEOMACS_LAYOUT_EDIT_SYNC` | `prove` | `prove`, `sync` | Synchronize the edit walk with unchanged rows below it. |
 //! | `NEOMACS_EDIT_SYNC_DENSE_INDEX` | `off` | `off`, `on` | Use proved consecutive row indexes for edit-plan membership and surviving-row remapping; every unproved case keeps the original hash path. |
+//! | `NEOMACS_EDIT_SYNC_FONTIFY_COVERAGE` | `off` | `off`; `on`/`1`/`true`/`yes` | Prove that an admitted edit-Sync attempt has no uncovered point query using current immutable row extrema; unknown or intersecting ranges retain the full iterator. |
 //! | `NEOMACS_EDIT_SYNC_STILL` | `off` | `off`, `on` | Transfer synchronized geometry without remapping when its placement and visibility are unchanged. |
 //! | `NEOMACS_EDIT_SYNC_PROVE_FIRST` | `off` | `off`, `on` | Prefer a completely admitted bounded prove producer inside GNU sync; rejected proofs still use general sync. |
 //! | `NEOMACS_EDIT_SYNC_LAZY_PROOF` | `off` | `off`, `on` | Defer source proof until bounded fallback is possible in general Sync with ProveFirst off. |
@@ -875,3 +876,7 @@ mod edit_sync_policy_aliases_tests;
 #[cfg(test)]
 #[path = "tests/edit_sync_dense_index_support.rs"]
 pub(crate) mod dense_index_test_support;
+
+#[cfg(test)]
+#[path = "tests/edit_sync_fontify_coverage_support.rs"]
+pub(crate) mod fontify_coverage_test_support;

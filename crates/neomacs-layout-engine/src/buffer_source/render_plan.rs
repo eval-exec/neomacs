@@ -1466,6 +1466,12 @@ impl BufferSourceOutputSetup {
                 measured_chrome_heights,
                 window_snapshots,
             );
+            #[cfg(test)]
+            if scroll.edit && synced_stop.is_some() {
+                // The stop was reached, install_edit ran, all cursor/replay and
+                // chrome checks passed, and this real producer returns Finished.
+                crate::incremental_layout::edit_sync::fontify_coverage_test_support::note_completed_sync_install();
+            }
             return BufferSourceRenderAttemptOutcome::Finished {
                 redisplay_positions,
                 query_restart_rows: Vec::new(),
