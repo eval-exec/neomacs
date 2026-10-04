@@ -10,6 +10,7 @@
 //! compares the live counts.
 
 use super::*;
+use crate::incremental_layout::edit_sync::{EditSyncMode, set_edit_sync_mode_for_test};
 use crate::incremental_layout::mode_line_gate::{ModeLineGate, set_mode_line_gate_for_test};
 
 struct GateGuard;
@@ -24,6 +25,23 @@ impl GateGuard {
 impl Drop for GateGuard {
     fn drop(&mut self) {
         set_mode_line_gate_for_test(None);
+    }
+}
+
+/// Numeric test override confined to this thread; independent mutators keep
+/// their own policy. The guard cannot move to a different thread before Drop.
+struct LegacyProveGuard(std::marker::PhantomData<std::rc::Rc<()>>);
+
+impl LegacyProveGuard {
+    fn set() -> Self {
+        set_edit_sync_mode_for_test(Some(EditSyncMode::Prove));
+        Self(std::marker::PhantomData)
+    }
+}
+
+impl Drop for LegacyProveGuard {
+    fn drop(&mut self) {
+        set_edit_sync_mode_for_test(None);
     }
 }
 
@@ -89,6 +107,8 @@ fn the_legacy_gate_evaluates_where_gnu_does_not() {
     // The divergence the gate exists for: the box-topology lookbehind pulls
     // the row above an edit on an empty line into the walk, and the legacy
     // rule then refuses the skip.
+    // The historical prove producer keeps that plain predecessor lookbehind.
+    let _prove = LegacyProveGuard::set();
     let _gate = GateGuard::set(ModeLineGate::Legacy);
     let (mut eval, frame_id, _buf, _window, mut engine) = settled_frame("ML", end_of_buffer());
     eval.eval_str("(insert \"x\")").expect("insert");

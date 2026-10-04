@@ -35278,6 +35278,8 @@ fn p52_in_line_edit_reuses_chrome_only_after_the_modified_star_has_settled() {
     {
         let buf = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
         buf.set_buffer_local("mode-line-format", Value::string("ML"));
+        // GNU's one-line optimization requires a fixed paragraph direction.
+        buf.set_buffer_local("bidi-paragraph-direction", Value::symbol("left-to-right"));
         // Point must already sit on the row about to be edited BEFORE the
         // warm-up layout. Otherwise the first edit is refused by the
         // cursor-row clause rather than by the star, and the star precondition
