@@ -61,6 +61,8 @@ mod issue_445;
 mod issue_445_ibuffer_filter_groups;
 #[path = "issue_446_align_to_hscroll.rs"]
 mod issue_446_align_to_hscroll;
+#[path = "issue_470.rs"]
+mod issue_470;
 #[path = "mark_region_fill.rs"]
 mod mark_region_fill;
 #[path = "menu_bar.rs"]
