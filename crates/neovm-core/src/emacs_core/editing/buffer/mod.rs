@@ -5260,7 +5260,7 @@ pub(crate) fn builtin_delete_overlay(
     Ok(result)
 }
 
-#[inline]
+#[inline(always)]
 pub(crate) fn builtin_delete_overlay_in_buffers(
     buffers: &mut BufferManager,
     args: Vec<Value>,
@@ -5297,7 +5297,7 @@ pub(crate) fn builtin_overlay_put(eval: &mut super::eval::Context, args: Vec<Val
     Ok(result)
 }
 
-#[inline]
+#[inline(always)]
 pub(crate) fn builtin_overlay_put_in_buffers(
     buffers: &mut BufferManager,
     args: Vec<Value>,
@@ -5513,7 +5513,7 @@ pub(crate) fn builtin_move_overlay(
     Ok(result)
 }
 
-#[inline]
+#[inline(always)]
 pub(crate) fn builtin_move_overlay_in_buffers(
     buffers: &mut BufferManager,
     args: Vec<Value>,

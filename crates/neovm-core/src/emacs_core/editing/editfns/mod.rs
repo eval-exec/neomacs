@@ -351,7 +351,7 @@ enum BufferChangeKind {
 
 /// Verify intervals at the preparation seam. This only reads the owning
 /// Context and publishes no process-global or thread-local state.
-#[inline]
+#[inline(always)]
 fn verify_change_text_read_only(
     ctx: &crate::emacs_core::eval::Context,
     byte_range: EmacsByteRange,
