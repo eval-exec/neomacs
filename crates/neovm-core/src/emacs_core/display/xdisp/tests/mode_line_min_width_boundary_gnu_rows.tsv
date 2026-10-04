@@ -1,0 +1,6 @@
+mode-name	ABMODE    |
+frame-name	ABD5-F    |
+eol-indicator	ABUUUEOL  |
+other-source-literal	AB1 rest  |
+same-source-predecessor	ABMODE     rest|
+other-identity-predecessor	ABMODE rest|

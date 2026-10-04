@@ -143,3 +143,7 @@ mod gnu_redisplay_mutation_oracle;
 #[cfg(test)]
 #[path = "redisplay_mini_source_start_oracle.rs"]
 mod redisplay_mini_source_start_oracle;
+
+#[cfg(test)]
+#[path = "mode_line_min_width_boundary_oracle.rs"]
+mod mode_line_min_width_boundary_oracle;

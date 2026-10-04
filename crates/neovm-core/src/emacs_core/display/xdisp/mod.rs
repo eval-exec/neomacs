@@ -2894,6 +2894,15 @@ pub struct ModeLineDisplaySourceSpan {
     output_end: usize,
     source: Value,
     source_start: usize,
+    boundary: ModeLineStringBoundary,
+}
+
+/// Property-stop provenance owned by one formatter accumulator. Mutators keep
+/// independent accumulators; this metadata is immutable in published output.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ModeLineStringBoundary {
+    Literal,
+    DecodedPercent,
 }
 
 impl ModeLineDisplaySourceSpan {
@@ -2903,6 +2912,7 @@ impl ModeLineDisplaySourceSpan {
             output_end,
             source,
             source_start,
+            boundary: ModeLineStringBoundary::Literal,
         }
     }
 
@@ -2933,12 +2943,11 @@ impl ModeLineDisplaySourceSpan {
     }
 
     fn shifted_output(self, offset: usize) -> Self {
-        Self::new(
-            self.output_start.saturating_add(offset),
-            self.output_end.saturating_add(offset),
-            self.source,
-            self.source_start,
-        )
+        Self {
+            output_start: self.output_start.saturating_add(offset),
+            output_end: self.output_end.saturating_add(offset),
+            ..self
+        }
     }
 }
 
@@ -3126,6 +3135,13 @@ struct ModeLineMinWidthTransition {
     run: ModeLineMinWidthRun,
 }
 
+/// Temporary iterator events owned by the current formatter call, not a cache
+/// of Lisp state shared by mutators. Source values retain the existing roots.
+enum ModeLineMinWidthEvent {
+    Run(ModeLineMinWidthRun),
+    StringBoundary(ModeLineDisplaySourceSpan),
+}
+
 /// Decode a `LispString` into its sequence of Emacs character codes. Multibyte
 /// strings are scanned one Emacs character at a time (eight-bit characters
 /// surface as `0x3FFF00+`); a unibyte string's high byte IS a raw byte, so it
@@ -3285,6 +3301,7 @@ impl ModeLineRendered {
         }
         if let Some(previous) = self.source_spans.last_mut()
             && previous.source == source
+            && previous.boundary == ModeLineStringBoundary::Literal
             && previous.output_end == output_start
             && previous
                 .source_start
@@ -3332,6 +3349,17 @@ impl ModeLineRendered {
         } else if let Some(ch) = value.as_char() {
             self.multibyte |= !ch.is_ascii();
             self.text.push(ch as u32);
+        }
+    }
+
+    fn append_decoded_string_or_char_value_preserving_props(&mut self, value: &Value) {
+        let first_span = self.source_spans.len();
+        self.append_string_or_char_value_preserving_props(value);
+        // GNU display_string bypasses property stops for a decoded Lisp string
+        // (%m). Decoded C strings (%F/%Z) also do not reseat a Lisp-string stop;
+        // retain their source identity without inventing such a boundary.
+        for span in &mut self.source_spans[first_span..] {
+            span.boundary = ModeLineStringBoundary::DecodedPercent;
         }
     }
 
@@ -3510,9 +3538,9 @@ impl ModeLineRendered {
     }
 
     /// Reproduce GNU `display_min_width`: changing min-width identity closes
-    /// an active run. With numeric provenance enabled, the next ordinary Lisp
-    /// string also closes it; synthetic numeric padding and end of stream do
-    /// not. GNU's display_string uses a null object for numeric field padding.
+    /// an active run. With numeric provenance enabled, ordinary Lisp-string
+    /// stops follow the source-position/EQ closing rule; decoded percent text,
+    /// synthetic numeric padding and end of stream do not invent a stop.
     fn realize_display_min_width_transitions(&mut self) {
         let transitions = std::mem::take(&mut self.min_width_transitions);
         let Some(first) = transitions.first().cloned() else {
@@ -3553,11 +3581,19 @@ impl ModeLineRendered {
         // Source spans identify actual display_string Lisp-string boundaries.
         // Numeric field-width spaces have no source span, so they must keep an
         // inherited min-width run active until the next string is encountered.
-        let mut events: Vec<(usize, Option<ModeLineMinWidthRun>)> = transitions
+        let mut events: Vec<(usize, ModeLineMinWidthEvent)> = transitions
             .into_iter()
-            .map(|transition| (transition.output_start, Some(transition.run)))
+            .map(|transition| {
+                (
+                    transition.output_start,
+                    ModeLineMinWidthEvent::Run(transition.run),
+                )
+            })
             .collect();
         for span in &self.source_spans {
+            if span.boundary == ModeLineStringBoundary::DecodedPercent {
+                continue;
+            }
             let has_min_width = self
                 .text_props
                 .get_property_at_char_pos(
@@ -3567,14 +3603,38 @@ impl ModeLineRendered {
                 .and_then(mode_line_display_spec_min_width)
                 .is_some();
             if !has_min_width {
-                events.push((span.output_start, None));
+                events.push((
+                    span.output_start,
+                    ModeLineMinWidthEvent::StringBoundary(*span),
+                ));
             }
         }
         events.sort_by_key(|(start, _)| *start);
 
         let mut active: Option<ModeLineMinWidthTransition> = None;
         let mut inserted = 0usize;
-        for (start, run) in events {
+        for (start, event) in events {
+            let run = match event {
+                ModeLineMinWidthEvent::Run(run) => Some(run),
+                ModeLineMinWidthEvent::StringBoundary(span) => {
+                    if span.source_start > 0 {
+                        let predecessor = with_mode_line_string_properties(span.source, |props| {
+                            props.get_property_at_char_pos(
+                                CharPos0::new(span.source_start - 1),
+                                Value::symbol("display"),
+                            )
+                        })
+                        .flatten()
+                        .and_then(mode_line_display_spec_min_width);
+                        if !matches!((&active, predecessor), (Some(previous), Some(width))
+                            if previous.run.width_spec.bits() == width.width_spec.bits())
+                        {
+                            continue;
+                        }
+                    }
+                    None
+                }
+            };
             if let (Some(previous), Some(next)) = (&active, &run)
                 && previous.run.width_spec.bits() == next.width_spec.bits()
             {
@@ -3957,7 +4017,7 @@ fn append_mode_line_percent_lisp_text_spec(
     field_width: i64,
 ) {
     let mut segment = ModeLineRendered::default();
-    segment.append_string_or_char_value_preserving_props(value);
+    segment.append_decoded_string_or_char_value_preserving_props(value);
     append_mode_line_percent_segment(result, segment, props_at_percent, field_width);
 }
 
@@ -5103,7 +5163,7 @@ fn expand_mode_line_percent_in_state(
                     pctx.buffer_coding.with_frame(pctx.frame_coding_mnemonics),
                 );
                 if let Some(eol_indicator) = pctx.eol_indicator {
-                    segment.append_string_or_char_value_preserving_props(&eol_indicator);
+                    segment.append_decoded_string_or_char_value_preserving_props(&eol_indicator);
                 } else {
                     segment.push_plain_char(':');
                 }

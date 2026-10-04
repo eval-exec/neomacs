@@ -7643,3 +7643,6 @@ fn window_text_pixel_size_reports_gnus_negative_width_for_a_retracted_from_row()
         "GNU: (-36 . 20)"
     );
 }
+
+#[cfg(test)]
+mod mode_line_min_width_boundary_test;
