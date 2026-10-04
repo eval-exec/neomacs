@@ -195,6 +195,51 @@ fn observed_repeated_cons_reads_publish_owner_once_per_capture() {
 }
 
 #[test]
+fn recent_read_reclamation_acknowledges_epoch_in_every_journal_mode() {
+    struct RestoreMode;
+    impl Drop for RestoreMode {
+        fn drop(&mut self) {
+            force_compiled_journal_for_test(None);
+        }
+    }
+    crate::test_utils::init_test_tracing();
+    let _restore = RestoreMode;
+    let mut heap = heap_with_generation(false);
+    set_tagged_heap(&mut heap);
+    for mode in [
+        CompiledJournalMode::Observed,
+        CompiledJournalMode::Off,
+        CompiledJournalMode::Eager,
+    ] {
+        // Reclaim an actually observed, unrooted cell so the sweep must
+        // publish a new epoch even when the measured policy is Off/Eager.
+        force_compiled_journal_for_test(Some(CompiledJournalMode::Observed));
+        let garbage = OwnerKind::Cons.allocate(&mut heap);
+        capture(|| garbage.cons_car());
+        force_compiled_journal_for_test(Some(mode));
+        let owner = OwnerKind::Cons.allocate(&mut heap);
+        capture(|| {
+            owner.cons_car();
+            let before = super::super::gc::collection_observation_epoch();
+            heap.collect_exact(std::iter::once(owner));
+            let after = super::super::gc::collection_observation_epoch();
+            assert_ne!(before, after, "a real sweep must publish reclamation");
+            assert_eq!(
+                recently_observed(owner.bits()),
+                mode != CompiledJournalMode::Observed,
+                "Observed must reject a stale hit; Off/Eager retain legacy deduplication"
+            );
+            assert_eq!(
+                RECENT_READS.with(|recent| recent.epoch.get()),
+                after,
+                "the cold reclamation edge must acknowledge every mode"
+            );
+            assert!(recently_observed(owner.bits()), "same-epoch second hit");
+        });
+    }
+}
+
+#[test]
 fn observed_repeated_vector_reads_publish_owner_once_per_capture() {
     repeated_real_reads(OwnerKind::Vector);
 }

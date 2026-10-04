@@ -416,7 +416,7 @@ fn recently_observed(bits: usize) -> bool {
         // the Off/Eager identity-only cache. Neither arm trusts a replacement
         // owner before the Observed cache has been cleared.
         let epoch = super::gc::collection_observation_epoch();
-        if recent.epoch.get() != epoch && recent.observed.get() {
+        if recent.epoch.get() != epoch {
             clear_recent_after_reclamation(recent, epoch);
         }
         let slot = &recent.words[((bits >> 3) ^ (bits >> 11)) & 255];
@@ -430,7 +430,14 @@ fn recently_observed(bits: usize) -> bool {
 #[cold]
 #[inline(never)]
 fn clear_recent_after_reclamation(recent: &RecentReads, epoch: u64) {
-    recent.clear(epoch);
+    // Keep the immutable policy branch entirely on the reclamation edge.
+    // Off/Eager retain their identity-only words, but acknowledge this epoch
+    // so subsequent reads do not enter the cold helper again.
+    if recent.observed.get() {
+        recent.clear(epoch);
+    } else {
+        recent.epoch.set(epoch);
+    }
 }
 
 #[cold]
