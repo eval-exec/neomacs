@@ -10,6 +10,7 @@ use crate::heap_types::LispString;
 use crate::window::Frame;
 pub use neomacs_display_protocol::ImageRealization as ResolvedImageRealization;
 pub use neomacs_display_protocol::image::EncodedBytes;
+pub use neomacs_display_protocol::ImageAnimationPolicy;
 use neomacs_display_protocol::image_diagnostic::ImageDiagnostic;
 pub use neomacs_display_protocol::image_diagnostic::ImageLoadIdentity;
 pub use neomacs_display_protocol::image_diagnostic::{ImageDiagnosticSubject, ImageFormatName};
@@ -311,6 +312,10 @@ pub struct ImageResolveRequest {
     pub mask: ImageMaskPolicy,
     /// Zero-based GNU `:index` selected from a multi-frame source.
     pub frame: ImageFrameIndex,
+    /// Neomacs `:animation` policy: whether computed animation (SVG SMIL)
+    /// may materialize. Distinct specs already differ in `spec` identity,
+    /// so this field is a materialization recipe, not a second key.
+    pub animation: ImageAnimationPolicy,
     pub realization: ResolvedImageRealization,
     /// The type and subject GNU's loaders word their diagnostics with.
     ///

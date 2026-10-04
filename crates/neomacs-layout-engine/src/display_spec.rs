@@ -14,7 +14,8 @@ use neovm_core::emacs_core::image::{
     image_resolve_source_from_items,
 };
 use neovm_core::emacs_core::image_catalog::{
-    AxisSize, ImageColorContext, ImageFrameIndex, ImageLoadIdentity, ImageMaskPolicy,
+    AxisSize, ImageAnimationPolicy, ImageColorContext, ImageFrameIndex, ImageLoadIdentity,
+    ImageMaskPolicy,
     ImageResolveRequest, ImageResolveSource, ImageRotation, ImageScaleEnvironment,
     ImageScalePolicy, ImageSizeSpec, ImageSpecIdentity, numeric_image_scale,
 };
@@ -87,6 +88,7 @@ struct UnresolvedDisplayImageRequest {
     rotation: ImageRotation,
     colors: ImageColorContext,
     mask: ImageMaskPolicy,
+    animation: ImageAnimationPolicy,
     frame: ImageFrameIndex,
     /// What GNU calls this image in a failure diagnostic.  The layout engine
     /// parses the same specification the evaluator does and must not name it
@@ -349,6 +351,7 @@ impl DisplayImageLayout {
             rotation: self.request.rotation,
             colors: self.request.colors,
             mask: self.request.mask,
+            animation: self.request.animation,
             frame: self.request.frame,
             realization: environment.resolve(self.scale),
             identity: self.request.identity,
@@ -492,6 +495,7 @@ pub(crate) fn parse_display_image_layout(
     let (mut height, mut max_height) = (None, None);
     let mut rotation = ImageRotation::None;
     let mut frame = ImageFrameIndex::default();
+    let mut animation = ImageAnimationPolicy::disabled();
     // Absent `:scale` is NOT `:scale default` — see ImageScalePolicy.
     let mut scale = ImageScalePolicy::Unspecified;
     let mut ascent = DisplayImageAscentPolicy::default();
@@ -514,6 +518,20 @@ pub(crate) fn parse_display_image_layout(
                 if let Some(index) = image_frame_index_from_lisp(value) {
                     frame = index;
                 }
+            }
+            Some(ImageSpecKey::Animation) => {
+                // Same domain the evaluator parses: t enables at the
+                // default sampling ceiling, a positive integer sets the
+                // ceiling, anything else stays GNU-static.
+                animation = if value.is_symbol_named("t") {
+                    ImageAnimationPolicy::enabled(None)
+                } else if let Some(fps) = value.as_int()
+                    && u32::try_from(fps).is_ok_and(|fps| fps > 0)
+                {
+                    ImageAnimationPolicy::enabled(u32::try_from(fps).ok())
+                } else {
+                    ImageAnimationPolicy::disabled()
+                };
             }
             Some(ImageSpecKey::Width) => width = DisplayImageDimension::from_lisp(value).or(width),
             Some(ImageSpecKey::MaxWidth) => {
@@ -558,6 +576,7 @@ pub(crate) fn parse_display_image_layout(
             rotation,
             colors: ImageColorContext::from_pixels(fg_color, bg_color),
             mask: image_mask_policy_from_items(&items),
+            animation,
             frame,
             identity,
         },

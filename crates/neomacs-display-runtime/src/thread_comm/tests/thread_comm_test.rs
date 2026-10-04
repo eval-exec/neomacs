@@ -819,6 +819,7 @@ fn render_command_image_load_file() {
         realization: neomacs_display_protocol::ImageRealization::default(),
         colors: neomacs_display_protocol::ImageColorContext::default(),
         mask: neomacs_display_protocol::ImageMaskPolicy::default(),
+        animation: neomacs_display_protocol::ImageAnimationPolicy::disabled(),
         frame: neomacs_display_protocol::ImageFrameIndex::new(3),
         sequence: neomacs_display_protocol::ImageSequenceId::new(11)
             .expect("non-zero test sequence"),
@@ -834,12 +835,17 @@ fn render_command_image_load_file() {
             realization,
             colors,
             mask,
+            animation,
             frame,
             sequence,
             limit,
             identity: _,
         }) => {
             assert_eq!(actual_load, load);
+            assert_eq!(
+                animation,
+                neomacs_display_protocol::ImageAnimationPolicy::disabled()
+            );
             assert_eq!(path, "/home/user/photo.png");
             assert_eq!(
                 size,

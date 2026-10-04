@@ -197,6 +197,7 @@ fn image_spec_key_domain_matches_gnu_image_keywords() {
         (":animate-buffer", ImageSpecKey::AnimateBuffer),
         (":animate-tardiness", ImageSpecKey::AnimateTardiness),
         (":animate-position", ImageSpecKey::AnimatePosition),
+        (":animation", ImageSpecKey::Animation),
         (":format", ImageSpecKey::Format),
     ] {
         assert_eq!(
@@ -2182,4 +2183,59 @@ fn a_data_image_is_named_by_its_princ_printed_specification() {
         identity.wrong_format().message(),
         "Not a PNG image: `(image :type png :data definitely not an image :scale default)'"
     );
+}
+
+#[test]
+fn image_spec_animation_policy_parses_the_neomacs_extension() {
+    // The domain is deliberately narrow: `t` opts in at the default
+    // sampling ceiling, a positive fixnum sets the ceiling, and anything
+    // else (absent, nil, zero, symbols) is the GNU-compatible static
+    // frame.
+    let data_svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\">\
+<circle r=\"1\"/></svg>";
+    let spec = |animation: Option<Value>| {
+        let mut items = vec![
+            Value::symbol("image"),
+            Value::keyword(":type"),
+            Value::symbol("svg"),
+            Value::keyword(":data"),
+            Value::string(data_svg),
+        ];
+        if let Some(value) = animation {
+            items.push(Value::keyword(":animation"));
+            items.push(value);
+        }
+        Value::list(items)
+    };
+    let environment = ImageScaleEnvironment::default();
+    let colors = (0x000000, 0xffffff);
+
+    let absent = image_resolve_request_from_spec(&spec(None), environment, colors)
+        .expect("spec without :animation resolves");
+    assert_eq!(absent.animation, ImageAnimationPolicy::disabled());
+
+    let enabled = image_resolve_request_from_spec(
+        &spec(Some(Value::symbol("t"))),
+        environment,
+        colors,
+    )
+    .expect(":animation t resolves");
+    assert_eq!(enabled.animation, ImageAnimationPolicy::enabled(None));
+    assert_eq!(enabled.animation.fps(), None);
+
+    let capped = image_resolve_request_from_spec(
+        &spec(Some(Value::fixnum(12))),
+        environment,
+        colors,
+    )
+    .expect(":animation 12 resolves");
+    assert_eq!(capped.animation, ImageAnimationPolicy::enabled(Some(12)));
+
+    let rejected = image_resolve_request_from_spec(
+        &spec(Some(Value::fixnum(0))),
+        environment,
+        colors,
+    )
+    .expect(":animation 0 resolves");
+    assert_eq!(rejected.animation, ImageAnimationPolicy::disabled());
 }

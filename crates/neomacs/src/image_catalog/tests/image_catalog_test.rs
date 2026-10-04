@@ -17,6 +17,8 @@ thread_local! {
     static IMAGE_SPEC_TEST_CONTEXT: Context = Context::new();
 }
 
+use neomacs_display_protocol::ImageAnimationPolicy;
+
 fn file_request(path: &str) -> ImageResolveRequest {
     let spec = IMAGE_SPEC_TEST_CONTEXT.with(|_| {
         Value::list(vec![
@@ -36,6 +38,7 @@ fn file_request(path: &str) -> ImageResolveRequest {
         rotation: Default::default(),
         colors: ImageColorContext::default(),
         mask: Default::default(),
+        animation: ImageAnimationPolicy::disabled(),
         frame: Default::default(),
         realization: Default::default(),
     }
