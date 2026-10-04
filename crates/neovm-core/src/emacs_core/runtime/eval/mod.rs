@@ -631,9 +631,8 @@ static BUILTIN_SYM_BITS: [std::sync::atomic::AtomicU64; BUILTIN_SYM_BITS_WORDS] 
 /// `neovm_jit_cbsym_read`'s only DYNAMIC arming test is this bitmap read
 /// (the arity check and the harness override are both compile-time under
 /// JIT), so a site that inlines the read has to reproduce exactly this and
-/// nothing else -- it makes the inline answer sensitive to native builtin
-/// registration in the same way as the shim. Primitive opcodes bypass advice
-/// and fset changes to the Lisp function cell.
+/// nothing else -- native registration sensitivity matches the shim.
+/// Primitive opcodes bypass advice and fset changes to the function cell.
 ///
 /// `None` for a symbol beyond the bitmap, whose answer lives in a
 /// `RefCell`-guarded table that generated code must not touch; the caller

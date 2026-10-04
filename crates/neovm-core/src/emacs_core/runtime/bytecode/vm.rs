@@ -5643,6 +5643,10 @@ impl<'a> Vm<'a> {
                     // direct cons field access, nil passthrough, error on wrong type.
                     Op::Car => {
                         let top = stk!().last_mut().unwrap();
+                        if !observe_collections && top.is_cons() {
+                            *top = top.cons_car_unobserved();
+                            continue;
+                        }
                         if top.is_cons() {
                             *top = if observe_collections {
                                 top.cons_car()
@@ -5661,6 +5665,10 @@ impl<'a> Vm<'a> {
                     }
                     Op::Cdr => {
                         let top = stk!().last_mut().unwrap();
+                        if !observe_collections && top.is_cons() {
+                            *top = top.cons_cdr_unobserved();
+                            continue;
+                        }
                         if top.is_cons() {
                             *top = if observe_collections {
                                 top.cons_cdr()
