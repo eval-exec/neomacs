@@ -74,10 +74,11 @@ fn colliding_live_traversals(kind: OwnerKind) {
 
     // A real traversal with more distinct owners than the recent-read table
     // evicts its shortcut entries. Keep every object live and perform no GC:
-    // repeated misses may record reads, but cannot require another shared
-    // mark publication for an already retained local identity.
+    // repeated misses must retain the first dependency entry without another
+    // shared mark publication or duplicate dependency recording.
     let (sum, certificate) = capture(|| {
         OBSERVED_OWNER_PUBLICATIONS.with(|count| count.set(0));
+        OBSERVATION_STATE_ACCESSES.with(|count| count.set(0));
         let mut sum = 0_i64;
         for _ in 0..TRAVERSALS {
             for &owner in &owners {
@@ -89,6 +90,11 @@ fn colliding_live_traversals(kind: OwnerKind) {
             OWNER_COUNT,
             "colliding reads must publish each live owner once: {kind:?}",
         );
+        assert_eq!(
+            OBSERVATION_STATE_ACCESSES.with(Cell::get),
+            OWNER_COUNT,
+            "colliding reads must record each scope dependency once: {kind:?}",
+        );
         sum
     });
     assert_eq!(sum, (OWNER_COUNT * TRAVERSALS * 97) as i64);
@@ -99,10 +105,14 @@ fn colliding_live_traversals(kind: OwnerKind) {
     // actual read dependencies in its own certificate.
     let (_, next_certificate) = capture(|| {
         OBSERVED_OWNER_PUBLICATIONS.with(|count| count.set(0));
-        for &owner in &owners {
-            assert_eq!(kind.read(owner), TaggedValue::make_int(97));
+        OBSERVATION_STATE_ACCESSES.with(|count| count.set(0));
+        for _ in 0..TRAVERSALS {
+            for &owner in &owners {
+                assert_eq!(kind.read(owner), TaggedValue::make_int(97));
+            }
         }
         assert_eq!(OBSERVED_OWNER_PUBLICATIONS.with(Cell::get), 0);
+        assert_eq!(OBSERVATION_STATE_ACCESSES.with(Cell::get), OWNER_COUNT);
     });
     let next_certificate = next_certificate.expect("later reads remain coherent");
     assert!(next_certificate.unchanged());
@@ -128,4 +138,58 @@ fn observed_colliding_vector_traversals_publish_each_live_owner_once() {
 #[test]
 fn observed_colliding_string_traversals_publish_each_live_owner_once() {
     colliding_live_traversals(OwnerKind::String);
+}
+
+#[test]
+fn observed_off_certificate_replay_does_not_hide_first_real_owner_read() {
+    crate::test_utils::init_test_tracing();
+    let _mode = ObservedMode::begin();
+    let mut heap = Box::new(TaggedHeap::new());
+    set_tagged_heap(&mut heap);
+    let owner = OwnerKind::Cons.allocate(&mut heap);
+
+    force_compiled_journal_for_test(Some(CompiledJournalMode::Off));
+    let (_, old_certificate) = capture(|| owner.cons_car());
+    let old_certificate = old_certificate.expect("coherent Off-mode read");
+    assert!(!is_observed(owner.bits()));
+
+    force_compiled_journal_for_test(Some(CompiledJournalMode::Observed));
+    let (value, certificate) = capture(|| {
+        assert!(old_certificate.unchanged_and_observe());
+        // Replaying identities cannot dereference their old headers. The
+        // following actual owner read must still publish before its snapshot.
+        assert!(!is_observed(owner.bits()));
+        let value = owner.cons_car();
+        assert!(
+            is_observed(owner.bits()),
+            "an Off-mode replay must not hide the first real Observed read",
+        );
+        value
+    });
+    assert_eq!(value, TaggedValue::make_int(97));
+    let certificate = certificate.expect("replay and real read remain coherent");
+    owner.set_car(TaggedValue::make_int(122));
+    assert!(!certificate.unchanged());
+}
+
+#[test]
+fn observed_mode_change_inside_capture_still_publishes_unmarked_owner() {
+    crate::test_utils::init_test_tracing();
+    let _mode = ObservedMode::begin();
+    let mut heap = Box::new(TaggedHeap::new());
+    set_tagged_heap(&mut heap);
+    let owner = OwnerKind::Cons.allocate(&mut heap);
+    let (value, certificate) = capture(|| {
+        force_compiled_journal_for_test(Some(CompiledJournalMode::Off));
+        assert_eq!(owner.cons_car(), TaggedValue::make_int(97));
+        assert!(!is_observed(owner.bits()));
+        force_compiled_journal_for_test(Some(CompiledJournalMode::Observed));
+        let value = owner.cons_car();
+        assert!(is_observed(owner.bits()));
+        value
+    });
+    assert_eq!(value, TaggedValue::make_int(97));
+    let certificate = certificate.expect("policy changes retain the first read");
+    owner.set_car(TaggedValue::make_int(122));
+    assert!(!certificate.unchanged());
 }

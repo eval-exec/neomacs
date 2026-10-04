@@ -110,6 +110,12 @@ impl ObservedEnvelope {
         self.epoch == Some(collection_observation_epoch()) && self.owners.contains(&bits)
     }
 
+    /// Compare with an epoch already acquired by the current pointer read.
+    /// That read contains no callback or safepoint before its State borrow.
+    pub(super) fn was_refreshed_at(&self, epoch: u64) -> bool {
+        self.epoch == Some(epoch)
+    }
+
     pub(super) fn full_bounds(&self) -> (usize, usize) {
         self.full
     }

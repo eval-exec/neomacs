@@ -117,6 +117,10 @@ thread_local! {
 /// publication makes a same-address replacement miss this cache; live-owner
 /// hits need neither a header publication nor the mutable capture journal.
 struct RecentReads {
+    // Immutable process policy, or this mutator's scalar test override. Scope
+    // and policy changes refresh it before any pointer read; no Lisp state is
+    // cached by this field and other mutators cannot change its value.
+    observed: Cell<bool>,
     epoch: Cell<u64>,
     words: [Cell<usize>; 256],
 }
@@ -124,6 +128,7 @@ struct RecentReads {
 impl RecentReads {
     const fn new() -> Self {
         Self {
+            observed: Cell::new(false),
             epoch: Cell::new(0),
             words: [const { Cell::new(0) }; 256],
         }
@@ -134,6 +139,13 @@ impl RecentReads {
             word.set(0);
         }
         self.epoch.set(epoch);
+    }
+
+    fn forget(&self, bits: usize) {
+        let slot = &self.words[((bits >> 3) ^ (bits >> 11)) & 255];
+        if slot.get() == bits {
+            slot.set(0);
+        }
     }
 }
 
@@ -182,6 +194,11 @@ struct Capture {
     reads: FxHashMap<usize, LispCollectionRevision>,
     started: LispCollectionRevision,
     overflow: bool,
+    // Every entry originated in a real Observed-mode projection under this
+    // epoch, which completed its eligible mark before recording the read.
+    // Transitive replay, another epoch or a non-Observed read clears this
+    // scalar proof. It caches no identity beyond the existing dependency map.
+    publication_epoch: Option<u64>,
 }
 
 /// Exact mutable collection reads made by one completed observation.
@@ -263,6 +280,7 @@ impl CollectionReadScope {
                 reads: FxHashMap::default(),
                 started: LispCollectionRevision::current(),
                 overflow,
+                publication_epoch: recent_publication_epoch(),
             });
             true
         });
@@ -367,8 +385,15 @@ fn observe_active(bits: usize) {
 
 fn clear_recent_reads() {
     RECENT_READS.with(|recent| {
+        recent
+            .observed
+            .set(compiled_journal_mode() == CompiledJournalMode::Observed);
         recent.clear(super::gc::collection_observation_epoch());
     });
+}
+
+fn recent_publication_epoch() -> Option<u64> {
+    RECENT_READS.with(|recent| recent.observed.get().then(|| recent.epoch.get()))
 }
 
 #[inline]
@@ -388,7 +413,7 @@ fn observe_bits(bits: usize) {
 #[inline]
 fn recently_observed(bits: usize) -> bool {
     RECENT_READS.with(|recent| {
-        if compiled_journal_mode() == CompiledJournalMode::Observed {
+        if recent.observed.get() {
             let epoch = super::gc::collection_observation_epoch();
             if recent.epoch.get() != epoch {
                 clear_recent_after_reclamation(recent, epoch);
@@ -411,10 +436,33 @@ fn clear_recent_after_reclamation(recent: &RecentReads, epoch: u64) {
 #[cold]
 #[inline(never)]
 fn observe_new_owner(bits: usize) {
+    // recently_observed acquired this epoch before entering this cold path;
+    // no callback or safepoint intervenes. A real owner remains live while
+    // its pointer projection executes, even if unrelated reclamation advances
+    // the global epoch concurrently.
+    let publication_epoch = recent_publication_epoch();
     STATE.with(|state| {
         let mut state = state.borrow_mut();
+        if let Some(epoch) = publication_epoch
+            && state.observed.was_refreshed_at(epoch)
+            && state.captures.last().is_some_and(|capture| {
+                !capture.overflow
+                    && capture.publication_epoch == Some(epoch)
+                    && capture.reads.contains_key(&bits)
+            })
+        {
+            // First insertion recorded every active outer scope too. Keep
+            // each scope's original revision; a subsequent write still makes
+            // the certificate incoherent. A new nested scope starts empty.
+            return;
+        }
         publish_observed_owner_in_state(&mut state, bits);
-        record_observation(&mut state, bits, LispCollectionRevision::current());
+        record_observation(
+            &mut state,
+            bits,
+            LispCollectionRevision::current(),
+            publication_epoch,
+        );
     });
 }
 
@@ -426,7 +474,13 @@ fn observe_uncached(bits: usize) {
         // A transitive cache hit must never dereference its old owner words.
         // Safe metadata filtering still refreshes its mutator's live bounds.
         refresh_observed_envelope(&mut state);
-        record_observation(&mut state, bits, LispCollectionRevision::current());
+        if recent_publication_epoch().is_some() && !state.observed.already_published(bits) {
+            // Off-mode certificates may contain an identity which was never
+            // marked. Replay must not make its next real projection a RECENT
+            // hit: that read alone can safely publish the live owner.
+            RECENT_READS.with(|recent| recent.forget(bits));
+        }
+        record_observation(&mut state, bits, LispCollectionRevision::current(), None);
     });
 }
 
@@ -435,10 +489,18 @@ fn observe_uncached(bits: usize) {
 // permitted here. An existing entry retains its first-read revision.
 #[cold]
 #[inline(never)]
-fn record_observation(state: &mut State, bits: usize, revision: LispCollectionRevision) {
+fn record_observation(
+    state: &mut State,
+    bits: usize,
+    revision: LispCollectionRevision,
+    publication_epoch: Option<u64>,
+) {
     #[cfg(test)]
     OBSERVATION_STATE_ACCESSES.with(|count| count.set(count.get() + 1));
     for capture in &mut state.captures {
+        if capture.publication_epoch != publication_epoch {
+            capture.publication_epoch = None;
+        }
         if capture.overflow {
             continue;
         }
@@ -498,7 +560,12 @@ pub(super) fn record_projected_write(value: TaggedValue, projection: WriteProjec
         let revision = LispCollectionRevision::advance();
         state.writes[revision.sequence() as usize % JOURNAL_SIZE] = value.bits();
         if observe && projected && !recent {
-            record_observation(&mut state, value.bits(), revision);
+            record_observation(
+                &mut state,
+                value.bits(),
+                revision,
+                recent_publication_epoch(),
+            );
         }
     });
     projected

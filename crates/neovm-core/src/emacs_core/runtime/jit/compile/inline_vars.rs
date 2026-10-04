@@ -685,21 +685,12 @@ fn window_is(fb: &mut FunctionBuilder, cell: ClifValue, redirect: SymbolRedirect
 struct Window {
     heap: ClifValue,
     len: ClifValue,
-    // Calls can refine the native window. Keep a coherent pre-call pair for
-    // every cons check in this operation, including multi-entry unbinding.
-    lo: Option<ClifValue>,
 }
 
-fn barrier_window(fb: &mut FunctionBuilder, rt: &RtCtx, cons_geometry: bool) -> Window {
+fn barrier_window(fb: &mut FunctionBuilder, rt: &RtCtx) -> Window {
     let heap = super::heap_inline::heap_ptr(fb, rt);
     let len = load_word(fb, heap, HEAP_JIT_BARRIER_LEN);
-    let lo = (cons_geometry
-        && rt
-            .refs
-            .group_enabled(super::shim_refs::ShimGroup::CollectionObservationGate)
-        && !rt.generational_enabled())
-    .then(|| load_word(fb, heap, HEAP_JIT_BARRIER_LO));
-    Window { heap, len, lo }
+    Window { heap, len }
 }
 
 /// The window is not ALL: no concurrent mark and no owner tracking, so a
@@ -726,9 +717,7 @@ fn cons_store_ok(
     {
         return observed_remembered_cons_store_ok(fb, rt, window, cons, bits);
     }
-    let lo = window
-        .lo
-        .unwrap_or_else(|| load_word(fb, window.heap, HEAP_JIT_BARRIER_LO));
+    let lo = load_word(fb, window.heap, HEAP_JIT_BARRIER_LO);
     let owner = iadd_imm_p(fb, cons, -(TAG_CONS as i64));
     let offset = fb.ins().isub(owner, lo);
     let outside = fb
@@ -777,9 +766,7 @@ fn observed_remembered_cons_store_ok(
     let marked = band_imm_p(fb, marked, mask as i64);
     let unobserved = eq_imm(fb, marked, 0);
     let skip = fb.ins().band(proof, unobserved);
-    let lo = window
-        .lo
-        .unwrap_or_else(|| load_word(fb, window.heap, HEAP_JIT_BARRIER_LO));
+    let lo = load_word(fb, window.heap, HEAP_JIT_BARRIER_LO);
     let owner = iadd_imm_p(fb, cons, -(TAG_CONS as i64));
     let offset = fb.ins().isub(owner, lo);
     let outside = fb
@@ -789,7 +776,9 @@ fn observed_remembered_cons_store_ok(
 }
 
 /// One actually selected GEN0 cons restore and its raw inline predicate.
-/// Computed against a single pre-call LO/LEN pair for the whole operation.
+/// All raw predicates are computed before any refinement call. The installed
+/// mutator alone publishes LO/LEN, and no callback or safepoint intervenes,
+/// including between the raw predicates of a multi-entry unbinding.
 #[derive(Clone, Copy)]
 struct ObservedConsGuard {
     cons: ClifValue,
@@ -814,7 +803,10 @@ fn guard_observed_cons_stores(
 ) {
     debug_assert!(!shape_conds.is_empty());
     debug_assert!(!stores.is_empty());
-    let mut conds: SmallVec<[ClifValue; 16]> = shape_conds.iter().copied().collect();
+    // Retain only the complete shape predicate on the failure edge. Keeping
+    // every constituent live for a cold recomputation spills hot loop values.
+    let shapes = all(fb, shape_conds);
+    let mut conds: SmallVec<[ClifValue; 16]> = smallvec::smallvec![shapes];
     conds.extend(stores.iter().map(|store| store.plain));
     let ok = all(fb, &conds);
     let next = fb.create_block();
@@ -826,12 +818,21 @@ fn guard_observed_cons_stores(
     fb.seal_block(failed);
     // This conjunction is emitted only on the failure edge. Invalid symbols,
     // cache shapes, binding headers or integer values never call refinement.
-    let shapes = all(fb, shape_conds);
     let valid = fb.create_block();
     fb.set_cold_block(valid);
     fb.ins().brif(shapes, valid, &[], slow, &[]);
     fb.switch_to_block(valid);
     fb.seal_block(valid);
+    if let [store] = stores {
+        // The complete guard failed and its shape predicate is true, so this
+        // single raw owner predicate must be false. Rechecking it would keep
+        // its offset and window operands live across the original hot guard.
+        let allowed = super::heap_inline::emit_unobserved_collection_owner(fb, rt, store.cons);
+        fb.ins().brif(allowed, next, &[], slow, &[]);
+        fb.switch_to_block(next);
+        fb.seal_block(next);
+        return;
+    }
     for store in stores {
         let checked = fb.create_block();
         let refine = fb.create_block();
@@ -1031,7 +1032,7 @@ fn emit_varset_fast(
     match site.shape {
         VarShape::Plain => {
             let writable = window_is(fb, cell, SymbolRedirect::Plainval);
-            let window = barrier_window(fb, rt, false);
+            let window = barrier_window(fb, rt);
             let open = not_marking(fb, window);
             let ok = fb.ins().band(writable, open);
             guard(fb, ok, slow);
@@ -1062,7 +1063,7 @@ fn emit_varset_fast(
             let default_loaded = eq(fb, valcell, defcell);
             let to_default = fb.ins().band(neither, default_loaded);
             let own_cell = fb.ins().bor(found, to_default);
-            let window = barrier_window(fb, rt, true);
+            let window = barrier_window(fb, rt);
             let plain_store = (!rt.generational_enabled())
                 .then(|| cons_store_ok(fb, rt, window, valcell, remembered_defcell));
             let (rule_ok, stored) = blv_rule(fb, rule, val);
@@ -1105,7 +1106,7 @@ fn emit_varset_fast(
             let word = load_word(fb, cell, LISP_SYMBOL_VAL_OFFSET);
             let desc = baked(fb, desc);
             let same = eq(fb, word, desc);
-            let window = barrier_window(fb, rt, false);
+            let window = barrier_window(fb, rt);
             let open = not_marking(fb, window);
             let mut conds: SmallVec<[ClifValue; 4]> = smallvec::smallvec![writable, same, open];
             if kind == FwdKind::Int {
@@ -1275,7 +1276,7 @@ fn emit_varbind_fast(
     match site.shape {
         VarShape::Plain => {
             let writable = window_is(fb, cell, SymbolRedirect::Plainval);
-            let window = barrier_window(fb, rt, false);
+            let window = barrier_window(fb, rt);
             let open = not_marking(fb, window);
             let ok = all(fb, &[room, writable, open]);
             guard(fb, ok, slow);
@@ -1289,7 +1290,7 @@ fn emit_varbind_fast(
             let word = load_word(fb, cell, LISP_SYMBOL_VAL_OFFSET);
             let desc = baked(fb, desc);
             let same = eq(fb, word, desc);
-            let window = barrier_window(fb, rt, false);
+            let window = barrier_window(fb, rt);
             let open = not_marking(fb, window);
             let old = fwd_load(fb, desc, kind);
             let mut conds: SmallVec<[ClifValue; 6]> =
@@ -1334,7 +1335,7 @@ fn emit_varbind_fast(
             let own_cell = fb.ins().bor(found, default_loaded);
             let old = load_word(fb, valcell, TAGGED_CONS_CDR);
             let bound = ne_imm(fb, old, Value::UNBOUND.bits() as i64);
-            let window = barrier_window(fb, rt, true);
+            let window = barrier_window(fb, rt);
             let plain_store = (!rt.generational_enabled())
                 .then(|| cons_store_ok(fb, rt, window, valcell, remembered_defcell));
             let (rule_ok, stored) = blv_rule(fb, rule, val);
@@ -1602,13 +1603,13 @@ fn unbind_entry_observed(
         .uload8(types::I64, trusted(), blv, BLV_FOUND_OFFSET as i32);
     let found = ne_imm(fb, found, 0);
     let local_ok = all(fb, &[is_local, here, hit, found]);
-    let local_plain = cons_store_ok(fb, rt, window, valcell, None);
     if site.projected {
         // A projected default must keep the original republishing unwinder.
         conds.push(local_ok);
+        let plain = cons_store_ok(fb, rt, window, valcell, None);
         stores.push(ObservedConsGuard {
             cons: valcell,
-            plain: local_plain,
+            plain,
         });
         return Restore::Cons {
             cons: valcell,
@@ -1623,12 +1624,13 @@ fn unbind_entry_observed(
     let mut default_conds: SmallVec<[ClifValue; 4]> = smallvec::smallvec![is_default, fwd_same];
     default_conds.extend(rule_ok);
     let default_ok = all(fb, &default_conds);
-    let default_plain = cons_store_ok(fb, rt, window, defcell, remembered_defcell);
     conds.push(fb.ins().bor(local_ok, default_ok));
     // LetLocal/LetDefault headers are disjoint. After shape validation this
-    // selects precisely the arm the old conjunction would have accepted.
+    // selects precisely the owner the old conjunction would have accepted.
+    // Check this selected owner once rather than materializing both raw
+    // predicates and selecting another live boolean for the cold guard.
     let cons = fb.ins().select(is_local, valcell, defcell);
-    let plain = fb.ins().select(is_local, local_plain, default_plain);
+    let plain = cons_store_ok(fb, rt, window, cons, remembered_defcell);
     stores.push(ObservedConsGuard { cons, plain });
     let value = fb.ins().select(is_local, old, ruled);
     Restore::Cons { cons, value }
@@ -1673,10 +1675,7 @@ fn emit_unbind_fast(
     }
     let consecutive = all(fb, &conds);
     guard(fb, consecutive, slow);
-    let has_cons = sites
-        .iter()
-        .any(|site| matches!(site.shape, VarShape::Localized { .. }));
-    let window = barrier_window(fb, rt, has_cons);
+    let window = barrier_window(fb, rt);
     let cur = sites
         .iter()
         .any(|site| matches!(site.shape, VarShape::Localized { .. }))
@@ -1691,7 +1690,7 @@ fn emit_unbind_fast(
     {
         conds.push(not_marking(fb, window));
     }
-    let observed = has_cons
+    let observed = cur.is_some()
         && !generational
         && rt
             .refs
