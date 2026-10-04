@@ -32,6 +32,9 @@ use crate::emacs_core::symbol::{
 };
 use std::sync::atomic::{AtomicU8, Ordering};
 
+#[cfg(feature = "jit")]
+mod compiled;
+
 // ---------------------------------------------------------------------------
 // Knob
 // ---------------------------------------------------------------------------
@@ -385,6 +388,11 @@ impl Context {
     /// tier is off.
     #[inline(never)]
     pub(crate) fn try_set_var_cached(&mut self, id: SymId, value: Value) -> bool {
+        self.try_set_var_cached_impl::<false>(id, value)
+    }
+
+    #[inline(always)]
+    fn try_set_var_cached_impl<const COMPILED: bool>(&mut self, id: SymId, value: Value) -> bool {
         if !var_cache_tier_on(VarCacheTier::Set) {
             return false;
         }
@@ -393,7 +401,7 @@ impl Context {
         };
         let window = sym.write_window() & SYMCELL_INLINE_WRITE_MASK;
         let stored = if window == symcell_inline_write_value(SymbolRedirect::Localized) {
-            self.set_localized_cached(sym, id, value)
+            self.set_localized_cached::<COMPILED>(sym, id, value)
         } else if window == symcell_inline_write_value(SymbolRedirect::Forwarded) {
             self.set_forwarded_cached(sym, id, value)
         } else {
@@ -406,7 +414,12 @@ impl Context {
     }
 
     #[inline(always)]
-    fn set_localized_cached(&self, sym: &LispSymbol, id: SymId, value: Value) -> bool {
+    fn set_localized_cached<const COMPILED: bool>(
+        &self,
+        sym: &LispSymbol,
+        id: SymId,
+        value: Value,
+    ) -> bool {
         // `assign_var_id` publishes the write to the host projections.
         if self.runtime_binding_has_projection(id) {
             return false;
@@ -430,7 +443,7 @@ impl Context {
             // `let` shadows the buffer -- a specpdl walk and a cons.
             return false;
         };
-        cell.set_cdr(stored);
+        store_cached_cons_cdr::<COMPILED>(cell, stored);
         note(event);
         true
     }
@@ -484,6 +497,11 @@ impl Context {
     /// signals after its push) -- and when the `bind` tier is off.
     #[inline(never)]
     pub(crate) fn specbind_cached(&mut self, id: SymId, value: Value) -> bool {
+        self.specbind_cached_impl::<false>(id, value)
+    }
+
+    #[inline(always)]
+    fn specbind_cached_impl<const COMPILED: bool>(&mut self, id: SymId, value: Value) -> bool {
         if !var_cache_tier_on(VarCacheTier::Bind) {
             return false;
         }
@@ -496,7 +514,7 @@ impl Context {
         let bound = if window == symcell_inline_write_value(SymbolRedirect::Localized) {
             match self.buffers.current_buffer().map(|buf| buf.id) {
                 Some(buffer_id) => match sym.blv_cache_hit(buffer_id) {
-                    Some(hit) => self.specbind_localized_hit(id, buffer_id, hit, value),
+                    Some(hit) => self.specbind_localized_hit::<COMPILED>(id, buffer_id, hit, value),
                     None => false,
                 },
                 None => false,
@@ -516,14 +534,14 @@ impl Context {
     }
 
     #[inline(always)]
-    fn specbind_localized_hit(
+    fn specbind_localized_hit<const COMPILED: bool>(
         &mut self,
         id: SymId,
         buffer_id: crate::buffer::BufferId,
         hit: BlvCacheHit,
         value: Value,
     ) -> bool {
-        let old = hit.valcell.cons_cdr();
+        let old = read_cached_binding_old::<COMPILED>(hit.valcell);
         if old.is_unbound() {
             return false;
         }
@@ -547,7 +565,7 @@ impl Context {
         } else {
             return false;
         }
-        hit.valcell.set_cdr(stored);
+        store_cached_cons_cdr::<COMPILED>(hit.valcell, stored);
         true
     }
 
@@ -666,6 +684,16 @@ impl Context {
         old: Value,
         buffer_id: crate::buffer::BufferId,
     ) -> bool {
+        self.pop_let_local_cached_impl::<false>(id, old, buffer_id)
+    }
+
+    #[inline(always)]
+    fn pop_let_local_cached_impl<const COMPILED: bool>(
+        &mut self,
+        id: SymId,
+        old: Value,
+        buffer_id: crate::buffer::BufferId,
+    ) -> bool {
         if !var_cache_tier_on(VarCacheTier::Unbind) {
             return false;
         }
@@ -681,7 +709,7 @@ impl Context {
             Some(hit)
                 if hit.found && !old.is_unbound() && self.buffers.get(buffer_id).is_some() =>
             {
-                hit.valcell.set_cdr(old);
+                store_cached_cons_cdr::<COMPILED>(hit.valcell, old);
                 self.retire_top_let_entry();
                 true
             }
@@ -708,6 +736,15 @@ impl Context {
     /// the `unbind` tier is off.
     #[inline(never)]
     pub(super) fn pop_let_default_cached(&mut self, id: SymId, old: SavedBindingValue) -> bool {
+        self.pop_let_default_cached_impl::<false>(id, old)
+    }
+
+    #[inline(always)]
+    fn pop_let_default_cached_impl<const COMPILED: bool>(
+        &mut self,
+        id: SymId,
+        old: SavedBindingValue,
+    ) -> bool {
         if !var_cache_tier_on(VarCacheTier::Unbind) {
             return false;
         }
@@ -726,7 +763,7 @@ impl Context {
                         // `valcell` is the same cons when the default is
                         // loaded, so this one store is both of
                         // `set_symbol_value_id`'s.
-                        cells.defcell.set_cdr(stored);
+                        store_cached_cons_cdr::<COMPILED>(cells.defcell, stored);
                         self.retire_top_let_entry();
                         true
                     }
@@ -742,6 +779,27 @@ impl Context {
         });
         popped
     }
+}
+
+/// Interpreter callers preserve setter projection and old-value observation;
+/// only the compiled cached bodies select their native bookkeeping contract.
+#[inline(always)]
+fn store_cached_cons_cdr<const COMPILED: bool>(cell: Value, value: Value) {
+    #[cfg(feature = "jit")]
+    if COMPILED {
+        assert!(crate::tagged::mutate::set_compiled_cons_cdr(cell, value));
+        return;
+    }
+    cell.set_cdr(value);
+}
+
+#[inline(always)]
+fn read_cached_binding_old<const COMPILED: bool>(cell: Value) -> Value {
+    #[cfg(feature = "jit")]
+    if COMPILED {
+        return compiled::read_saved_binding_cdr(cell);
+    }
+    cell.cons_cdr()
 }
 
 /// `store_symval_forwarding`'s type rule for a store governed by FWD, as

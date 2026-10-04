@@ -133,6 +133,8 @@ fn gen0_multi_blv_unbind_keeps_coherent_window_after_first_refinement() {
     );
     let binds = super::super::shims::VARBIND_SHIM_CALLS.with(|count| count.get());
     let unbinds = super::super::shims::UNBIND_SHIM_CALLS.with(|count| count.get());
+    let specpdl_depth = context.specpdl.len();
+    let bind_depth = context.jit_bind_stack.len();
     let revision = LispCollectionRevision::current();
     let (result, reads) = capture(|| native(&mut context, &leaf, &[]));
     assert_eq!(result, Value::make_int(31));
@@ -145,11 +147,18 @@ fn gen0_multi_blv_unbind_keeps_coherent_window_after_first_refinement() {
         1
     );
     // The observed refusal falls back before either restore is written. The
-    // unchanged interpreter suffix then journals each of its two restores.
+    // compiled suffix restores both owners, journaling the observed one only.
     assert_eq!(
         LispCollectionRevision::current().steps_since_for_test(revision),
-        2
+        1
     );
+    assert!(is_observed(lower.bits()));
+    assert!(
+        !is_observed(target.bits()),
+        "an internal restore is not a read"
+    );
+    assert_eq!(context.specpdl.len(), specpdl_depth);
+    assert_eq!(context.jit_bind_stack.len(), bind_depth);
     assert_eq!(lower.cons_cdr(), old_lower);
     assert_eq!(target.cons_cdr(), old_target);
     assert!(

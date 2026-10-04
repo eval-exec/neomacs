@@ -137,6 +137,44 @@ pub fn set_cons_cdr(cell: TaggedValue, value: TaggedValue) -> bool {
     true
 }
 
+/// Complete a cached native BLV store without turning its implementation
+/// access into a Lisp collection read. The caller has validated its variable
+/// shape and executes under this Context's exclusive mutator installation;
+/// this path allocates no Lisp object, calls no Lisp and has no safe point.
+///
+/// Certificates, revisions and the observation envelope remain mutator-local.
+/// Exact marks use shared atomic lifetime metadata, but do not supply a
+/// cross-mutator journal. Ordinary tracking and GEN1 retain the full setter.
+#[cfg(feature = "jit")]
+#[inline]
+pub(crate) fn set_compiled_cons_cdr(cell: TaggedValue, value: TaggedValue) -> bool {
+    use super::collection_reads::{CompiledJournalMode, compiled_journal_mode, is_observed};
+    if compiled_journal_mode() != CompiledJournalMode::Observed
+        || super::gc::current_heap_generational_enabled()
+        || super::gc::current_write_tracking_enabled()
+    {
+        return set_cons_cdr(cell, value);
+    }
+    if !cell.is_cons() {
+        return false;
+    }
+    let address = cell.bits() & !TAG_MASK;
+    let (lo, hi) = super::collection_reads::compiled_observation_window();
+    if lo <= address && address < hi && is_observed(cell.bits()) {
+        super::gc::TaggedHeap::record_compiled_collection_write(cell.bits());
+    } else {
+        // A refusal into the original BLV shim learns the same empty gap as
+        // the native cons guard. Its return does not rejoin a pre-store block,
+        // so unobserved BLV loops keep their original register allocation.
+        super::gc::neovm_jit_unobserved_collection_owner(cell.bits() as i64);
+    }
+    note_heap_slot_write(cell, HeapWriteKind::ConsCdr, 1, value);
+    // SAFETY: the Cons tag names a live validated BLV owner. The barrier has
+    // completed, and no callback or collection intervenes before this store.
+    unsafe { (*((cell.bits() & !TAG_MASK) as *mut ConsCell)).set_cdr(value) };
+    true
+}
+
 #[inline]
 pub fn with_vector_data_mut<R>(
     value: TaggedValue,

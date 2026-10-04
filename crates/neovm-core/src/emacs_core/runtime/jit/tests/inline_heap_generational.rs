@@ -531,3 +531,7 @@ mod string_observed_capacity;
 #[cfg(test)]
 #[path = "gen0_observed_multi_unbind.rs"]
 mod gen0_observed_multi_unbind;
+
+#[cfg(test)]
+#[path = "gen0_observed_blv_cold_capture.rs"]
+mod gen0_observed_blv_cold_capture;

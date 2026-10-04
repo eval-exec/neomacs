@@ -727,8 +727,8 @@ fn cons_store_ok(
         .refs
         .group_enabled(super::shim_refs::ShimGroup::CollectionObservationGate)
     {
-        // The complete operation guard owns the cold refusal edge. Returning
-        // a raw predicate here keeps the accepted path free of a boolean phi.
+        // The complete operation guard owns the original shim refusal edge;
+        // that shim refines unobserved holes without a native boolean phi.
         return outside;
     }
     match remembered {
@@ -773,82 +773,6 @@ fn observed_remembered_cons_store_ok(
         .ins()
         .icmp(IntCC::UnsignedGreaterThanOrEqual, offset, window.len);
     fb.ins().bor(outside, skip)
-}
-
-/// One actually selected GEN0 cons restore and its raw inline predicate.
-/// All raw predicates are computed before any refinement call. The installed
-/// mutator alone publishes LO/LEN, and no callback or safepoint intervenes,
-/// including between the raw predicates of a multi-entry unbinding.
-#[derive(Clone, Copy)]
-struct ObservedConsGuard {
-    cons: ClifValue,
-    plain: ClifValue,
-}
-
-/// Preserve the complete raw guard's direct success edge. Only its failure
-/// enters protocol refinement, after every non-barrier shape/type condition
-/// has passed. A true raw owner predicate never calls the helper, including
-/// a proved unmarked remembered default cell.
-///
-/// The helper runs no Lisp, allocates no Lisp object and reaches no GC safe point.
-/// All selected owners are checked before entering NEXT, so multi-unbind
-/// cannot write a prefix before a later refusal. The cold calls do not journal
-/// a write; a refusal still reaches the original shim with unchanged state.
-fn guard_observed_cons_stores(
-    fb: &mut FunctionBuilder,
-    rt: &RtCtx,
-    shape_conds: &[ClifValue],
-    stores: &[ObservedConsGuard],
-    slow: Block,
-) {
-    debug_assert!(!shape_conds.is_empty());
-    debug_assert!(!stores.is_empty());
-    // Retain only the complete shape predicate on the failure edge. Keeping
-    // every constituent live for a cold recomputation spills hot loop values.
-    let shapes = all(fb, shape_conds);
-    let mut conds: SmallVec<[ClifValue; 16]> = smallvec::smallvec![shapes];
-    conds.extend(stores.iter().map(|store| store.plain));
-    let ok = all(fb, &conds);
-    let next = fb.create_block();
-    let failed = fb.create_block();
-    fb.set_cold_block(failed);
-    fb.ins().brif(ok, next, &[], failed, &[]);
-
-    fb.switch_to_block(failed);
-    fb.seal_block(failed);
-    // This conjunction is emitted only on the failure edge. Invalid symbols,
-    // cache shapes, binding headers or integer values never call refinement.
-    let valid = fb.create_block();
-    fb.set_cold_block(valid);
-    fb.ins().brif(shapes, valid, &[], slow, &[]);
-    fb.switch_to_block(valid);
-    fb.seal_block(valid);
-    if let [store] = stores {
-        // The complete guard failed and its shape predicate is true, so this
-        // single raw owner predicate must be false. Rechecking it would keep
-        // its offset and window operands live across the original hot guard.
-        let allowed = super::heap_inline::emit_unobserved_collection_owner(fb, rt, store.cons);
-        fb.ins().brif(allowed, next, &[], slow, &[]);
-        fb.switch_to_block(next);
-        fb.seal_block(next);
-        return;
-    }
-    for store in stores {
-        let checked = fb.create_block();
-        let refine = fb.create_block();
-        fb.set_cold_block(checked);
-        fb.set_cold_block(refine);
-        fb.ins().brif(store.plain, checked, &[], refine, &[]);
-        fb.switch_to_block(refine);
-        fb.seal_block(refine);
-        let allowed = super::heap_inline::emit_unobserved_collection_owner(fb, rt, store.cons);
-        fb.ins().brif(allowed, checked, &[], slow, &[]);
-        fb.switch_to_block(checked);
-        fb.seal_block(checked);
-    }
-    fb.ins().jump(next, &[]);
-    fb.switch_to_block(next);
-    fb.seal_block(next);
 }
 
 /// The current buffer's raw id (0 for none).
@@ -1069,29 +993,13 @@ fn emit_varset_fast(
             let (rule_ok, stored) = blv_rule(fb, rule, val);
             let mut conds: SmallVec<[ClifValue; 8]> =
                 smallvec::smallvec![writable, same, hit, fwd_same, own_cell];
-            if let Some(plain) = plain_store
-                && rt
-                    .refs
-                    .group_enabled(super::shim_refs::ShimGroup::CollectionObservationGate)
-            {
-                conds.extend(rule_ok);
-                guard_observed_cons_stores(
-                    fb,
-                    rt,
-                    &conds,
-                    &[ObservedConsGuard {
-                        cons: valcell,
-                        plain,
-                    }],
-                    slow,
-                );
-            } else {
-                // GEN1, Eager and Off retain the original emission order.
-                conds.extend(plain_store);
-                conds.extend(rule_ok);
-                let ok = all(fb, &conds);
-                guard(fb, ok, slow);
-            }
+            // Keep the original complete guard and its one slow edge. The
+            // compiled cached shim refines unobserved holes after selecting
+            // the actual owner; no returning helper keeps hot SSA values live.
+            conds.extend(plain_store);
+            conds.extend(rule_ok);
+            let ok = all(fb, &conds);
+            guard(fb, ok, slow);
             if rt.generational_enabled() {
                 let owner = iadd_imm_p(fb, valcell, -(TAG_CONS as i64));
                 super::heap_inline::emit_cons_store_barrier(fb, rt, owner, stored, slow);
@@ -1340,29 +1248,13 @@ fn emit_varbind_fast(
                 .then(|| cons_store_ok(fb, rt, window, valcell, remembered_defcell));
             let (rule_ok, stored) = blv_rule(fb, rule, val);
             let mut conds: SmallVec<[ClifValue; 5]> = smallvec::smallvec![own_cell, bound];
-            if let Some(plain) = plain_store
-                && rt
-                    .refs
-                    .group_enabled(super::shim_refs::ShimGroup::CollectionObservationGate)
-            {
-                conds.extend(rule_ok);
-                guard_observed_cons_stores(
-                    fb,
-                    rt,
-                    &conds,
-                    &[ObservedConsGuard {
-                        cons: valcell,
-                        plain,
-                    }],
-                    slow,
-                );
-            } else {
-                // GEN1, Eager and Off retain the original emission order.
-                conds.extend(plain_store);
-                conds.extend(rule_ok);
-                let ok = all(fb, &conds);
-                guard(fb, ok, slow);
-            }
+            // Keep the original complete guard and its one slow edge. The
+            // compiled cached shim refines unobserved holes after selecting
+            // the actual owner; no returning helper keeps hot SSA values live.
+            conds.extend(plain_store);
+            conds.extend(rule_ok);
+            let ok = all(fb, &conds);
+            guard(fb, ok, slow);
             if rt.generational_enabled() {
                 let owner = iadd_imm_p(fb, valcell, -(TAG_CONS as i64));
                 super::heap_inline::emit_cons_store_barrier(fb, rt, owner, stored, slow);
@@ -1554,88 +1446,6 @@ fn unbind_entry(
     }
 }
 
-/// GEN0 Observed's entry checks, separating non-barrier shape validation
-/// from the predicate of the actually selected cons restore. This path is
-/// selected only by the Observed frontend; the original entry emitter serves
-/// GEN1, Eager and Off without any changed CLIF.
-#[allow(clippy::too_many_arguments)]
-fn unbind_entry_observed(
-    fb: &mut FunctionBuilder,
-    rt: &RtCtx,
-    lets: &LetLayout,
-    site: &VarSite,
-    entry: ClifValue,
-    cur: Option<ClifValue>,
-    window: Window,
-    conds: &mut SmallVec<[ClifValue; 16]>,
-    stores: &mut SmallVec<[ObservedConsGuard; MAX_UNBIND]>,
-) -> Restore {
-    let VarShape::Localized {
-        blv,
-        fwd,
-        rule,
-        remembered_defcell,
-    } = site.shape
-    else {
-        return unbind_entry(fb, rt, lets, site, entry, cur, window, conds, false);
-    };
-    let cur = cur.expect("loaded for a buffer-local binding");
-    let cell = baked(fb, site.cell);
-    let sym = site.sym;
-    let is_entry = |fb: &mut FunctionBuilder, template: &EntryTemplate, header: ClifValue| {
-        let masked = band_imm_p(fb, header, template.header_mask as i64);
-        eq_imm(fb, masked, template.header_with(sym) as i64)
-    };
-    let header = load_word(fb, entry, lets.let_local.header_offset as usize);
-    let is_local = is_entry(fb, &lets.let_local, header);
-    conds.push(window_is(fb, cell, SymbolRedirect::Localized));
-    let word = load_word(fb, cell, LISP_SYMBOL_VAL_OFFSET);
-    let blv = baked(fb, blv);
-    conds.push(eq(fb, word, blv));
-    let old = load_word(fb, entry, lets.let_local.field(0) as usize);
-    conds.push(ne_imm(fb, old, Value::UNBOUND.bits() as i64));
-    let valcell = load_word(fb, blv, BLV_VALCELL_OFFSET);
-    let buffer = load_word(fb, entry, lets.let_local.field(1) as usize);
-    let here = eq(fb, buffer, cur);
-    let hit = blv_hit(fb, blv, cur);
-    let found = fb
-        .ins()
-        .uload8(types::I64, trusted(), blv, BLV_FOUND_OFFSET as i32);
-    let found = ne_imm(fb, found, 0);
-    let local_ok = all(fb, &[is_local, here, hit, found]);
-    if site.projected {
-        // A projected default must keep the original republishing unwinder.
-        conds.push(local_ok);
-        let plain = cons_store_ok(fb, rt, window, valcell, None);
-        stores.push(ObservedConsGuard {
-            cons: valcell,
-            plain,
-        });
-        return Restore::Cons {
-            cons: valcell,
-            value: old,
-        };
-    }
-    let is_default = is_entry(fb, &lets.let_default, header);
-    let defcell = load_word(fb, blv, BLV_DEFCELL_OFFSET);
-    let fwd_word = load_word(fb, blv, BLV_FWD_OFFSET);
-    let fwd_same = eq_imm(fb, fwd_word, fwd as i64);
-    let (rule_ok, ruled) = blv_rule(fb, rule, old);
-    let mut default_conds: SmallVec<[ClifValue; 4]> = smallvec::smallvec![is_default, fwd_same];
-    default_conds.extend(rule_ok);
-    let default_ok = all(fb, &default_conds);
-    conds.push(fb.ins().bor(local_ok, default_ok));
-    // LetLocal/LetDefault headers are disjoint. After shape validation this
-    // selects precisely the owner the old conjunction would have accepted.
-    // Check this selected owner once rather than materializing both raw
-    // predicates and selecting another live boolean for the cold guard.
-    let cons = fb.ins().select(is_local, valcell, defcell);
-    let plain = cons_store_ok(fb, rt, window, cons, remembered_defcell);
-    stores.push(ObservedConsGuard { cons, plain });
-    let value = fb.ins().select(is_local, old, ruled);
-    Restore::Cons { cons, value }
-}
-
 /// `unbind N` inline -- GNU `Bunbind`'s `unbind_to`, the
 /// `neovm_jit_unbind` shim's pop of `pop_simple_specpdl_suffix` arms: when
 /// the bind stack's top N depths are consecutive and exactly N entries sit
@@ -1690,50 +1500,26 @@ fn emit_unbind_fast(
     {
         conds.push(not_marking(fb, window));
     }
-    let observed = cur.is_some()
-        && !generational
-        && rt
-            .refs
-            .group_enabled(super::shim_refs::ShimGroup::CollectionObservationGate);
-    let mut stores: SmallVec<[ObservedConsGuard; MAX_UNBIND]> = SmallVec::new();
     let mut restores: SmallVec<[Restore; MAX_UNBIND]> = SmallVec::new();
     for (site, &depth) in sites.iter().zip(&depths) {
         let entry = entry_at(fb, rt, layout, depth);
-        let restore = if observed {
-            unbind_entry_observed(
-                fb,
-                rt,
-                &layout.lets,
-                site,
-                entry,
-                cur,
-                window,
-                &mut conds,
-                &mut stores,
-            )
-        } else {
-            unbind_entry(
-                fb,
-                rt,
-                &layout.lets,
-                site,
-                entry,
-                cur,
-                window,
-                &mut conds,
-                generational,
-            )
-        };
-        restores.push(restore);
+        restores.push(unbind_entry(
+            fb,
+            rt,
+            &layout.lets,
+            site,
+            entry,
+            cur,
+            window,
+            &mut conds,
+            generational,
+        ));
     }
-    if observed {
-        // All entry shapes and all actual owners are approved before any
-        // restore, specpdl truncation, bind-stack update or journal call.
-        guard_observed_cons_stores(fb, rt, &conds, &stores, slow);
-    } else {
-        let ok = all(fb, &conds);
-        guard(fb, ok, slow);
-    }
+    // Every shape and raw owner predicate is checked before any restore or
+    // truncation. A refusal reaches the unchanged unbind call, whose compiled
+    // cached arms select and refine each actual owner without native live-through.
+    let ok = all(fb, &conds);
+    guard(fb, ok, slow);
     if generational {
         // All shapes are valid before touching a trailer, and every selected
         // restore is checked before any write. A later refusal cannot leave
