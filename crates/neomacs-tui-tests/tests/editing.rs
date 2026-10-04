@@ -215,3 +215,25 @@ fn delete_char_via_cd_removes_character_after_point() {
         &neo,
     );
 }
+
+/// Issue #458: UTF-8 terminal input already carries character identity.
+/// Protect it while changing the GUI keyboard transport.
+#[test]
+fn fullwidth_punctuation_self_inserts_like_gnu() {
+    let (mut gnu, mut neo) = boot_pair("");
+    open_home_file(&mut gnu, &mut neo, "fullwidth.txt", "", "C-x C-f");
+    let expected = "，（）；－ｦￊ中あ한\n";
+    gnu.send(expected.as_bytes());
+    neo.send(expected.as_bytes());
+    wait_for_both(&mut gnu, &mut neo, Duration::from_secs(8), |grid| {
+        grid.iter().any(|row| row.contains(expected.trim_end()))
+    });
+    save_current_file_and_assert_contents(
+        "fullwidth_punctuation_self_inserts_like_gnu",
+        &mut gnu,
+        &mut neo,
+        "fullwidth.txt",
+        expected,
+    );
+    assert_pair_exact_display("fullwidth_punctuation_self_inserts_like_gnu", &gnu, &neo);
+}

@@ -96,34 +96,35 @@ fn map_key_event(event: KeyEvent) -> Option<InputEvent> {
 
     let mut modifiers = map_modifiers(event.modifiers);
 
-    let keysym = match event.code {
+    let native = |keysym| Some(neovm_core::keyboard::FrontendKey::Keysym(keysym));
+    let key = match event.code {
         KeyCode::Char(c)
             if event.modifiers.contains(KeyModifiers::CONTROL)
                 && tty_control_char_keysym(c).is_some() =>
         {
             modifiers = without_control(modifiers);
-            tty_control_char_keysym(c)
+            tty_control_char_keysym(c).map(neovm_core::keyboard::FrontendKey::Keysym)
         }
-        KeyCode::Char(c) => Some(c as u32),
+        KeyCode::Char(c) => Some(neovm_core::keyboard::FrontendKey::Character(c)),
         KeyCode::F(n) if (1..=12).contains(&n) => {
-            Some(0xffbe + (n as u32 - 1)) // F1=0xffbe … F12=0xffc9
+            native(0xffbe + (n as u32 - 1)) // F1=0xffbe … F12=0xffc9
         }
         KeyCode::F(_) => None, // unsupported function key
-        KeyCode::Esc => Some(XK_ESCAPE),
-        KeyCode::Enter => Some(XK_RETURN),
-        KeyCode::Tab => Some(XK_TAB),
-        KeyCode::Backspace => Some(0x7f),
-        KeyCode::Delete => Some(0xffff),
-        KeyCode::Insert => Some(0xff63),
-        KeyCode::Home => Some(0xff50),
-        KeyCode::End => Some(0xff57),
-        KeyCode::PageUp => Some(0xff55),
-        KeyCode::PageDown => Some(0xff56),
-        KeyCode::Left => Some(XK_LEFT),
-        KeyCode::Up => Some(XK_UP),
-        KeyCode::Right => Some(XK_RIGHT),
-        KeyCode::Down => Some(XK_DOWN),
-        KeyCode::Null => Some(0x00),
+        KeyCode::Esc => native(XK_ESCAPE),
+        KeyCode::Enter => native(XK_RETURN),
+        KeyCode::Tab => native(XK_TAB),
+        KeyCode::Backspace => native(0x7f),
+        KeyCode::Delete => native(0xffff),
+        KeyCode::Insert => native(0xff63),
+        KeyCode::Home => native(0xff50),
+        KeyCode::End => native(0xff57),
+        KeyCode::PageUp => native(0xff55),
+        KeyCode::PageDown => native(0xff56),
+        KeyCode::Left => native(XK_LEFT),
+        KeyCode::Up => native(XK_UP),
+        KeyCode::Right => native(XK_RIGHT),
+        KeyCode::Down => native(XK_DOWN),
+        KeyCode::Null => native(0x00),
         KeyCode::CapsLock
         | KeyCode::ScrollLock
         | KeyCode::NumLock
@@ -133,13 +134,13 @@ fn map_key_event(event: KeyEvent) -> Option<InputEvent> {
         | KeyCode::KeypadBegin
         | KeyCode::Media(_)
         | KeyCode::Modifier(_) => None, // suppress bare modifier/media keys
-        KeyCode::BackTab => Some(0xff09), // same as Tab, but with shift modifier
+        KeyCode::BackTab => native(0xff09), // same as Tab, but with shift modifier
     };
 
-    let keysym = keysym?;
+    let key = key?;
 
     Some(InputEvent::Key {
-        keysym,
+        key,
         modifiers,
         pressed: event.kind == KeyEventKind::Press,
         emacs_frame_id: 0,

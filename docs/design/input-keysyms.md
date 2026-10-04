@@ -19,6 +19,16 @@ every `NamedKey` winit's xkb keymap can produce.
 
 ## Keysym is not character
 
+The frontend preserves this distinction with `FrontendKey::Character(char)`
+and `FrontendKey::Keysym(u32)` inside `InputEvent::Key`. IME commits,
+keyboard committed text, logical character keys, and crossterm characters
+carry the character variant. Only actual key identities enter the keysym
+classifier. This is GNU GTK's `xg_im_context_commit` separation between
+decoded character events and function-key events, and prevents issue #458:
+fullwidth punctuation must not become Backspace, Return, F13, or `key-N`
+merely because its Unicode scalar has the same number as a keysym. See the
+[investigation and test commands](../research/issue-458-text-and-keysym-identity.md).
+
 The X11 keysym space is not the Unicode space, and the two overlap by number:
 `XK_F13` is 0xffca and U+FFCA is a halfwidth hangul letter; `XK_Redo` is
 0xff66 and U+FF66 is a halfwidth katakana letter. A pipeline that decides "is

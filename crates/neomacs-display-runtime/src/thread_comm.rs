@@ -129,7 +129,7 @@ pub enum InputEvent {
         emacs_frame_id: u64,
     },
     Key {
-        keysym: u32,
+        key: neovm_core::keyboard::FrontendKey,
         modifiers: u32,
         pressed: bool,
         /// Emacs frame_id of the window that produced the key event
@@ -1054,7 +1054,7 @@ impl RenderComms {
         if neomacs_display_protocol::input_latency::enabled() {
             let target = match &event {
                 InputEvent::Key {
-                    keysym: 0xff55 | 0xff56,
+                    key: neovm_core::keyboard::FrontendKey::Keysym(0xff55 | 0xff56),
                     pressed: true,
                     emacs_frame_id,
                     ..
@@ -1192,7 +1192,7 @@ impl RenderComms {
         let receipt = if matches!(
             &event,
             InputEvent::Key {
-                keysym: 0xff55 | 0xff56,
+                key: neovm_core::keyboard::FrontendKey::Keysym(0xff55 | 0xff56),
                 pressed: true,
                 ..
             } | InputEvent::PositionedPointer(PositionedPointerInput {

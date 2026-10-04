@@ -346,3 +346,20 @@ fn oracle_prop_kbd_event_modifiers_and_basic_type() {
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
+
+/// The Lisp-visible contract for issue #458: these are self-inserting
+/// character events, distinct from the function keys with the same number.
+#[test]
+fn oracle_prop_kbd_event_fullwidth_punctuation_character_identity() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_oracle_parity(
+        r#"(let ((text "，（）；－ｦￊ中あ한"))
+      (list (string-to-list (kbd text))
+            (mapcar (lambda (c) (list (event-basic-type c)
+                                     (event-modifiers c)
+                                     (key-binding (vector c))))
+                    (string-to-list text))
+            (equal (kbd "ￊ") (kbd "<f13>"))
+            (key-description (vector 'backspace 'tab 'return 'escape 'f13))))"#,
+    );
+}

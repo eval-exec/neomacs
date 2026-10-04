@@ -1777,7 +1777,9 @@ fn render_modifiers_helper_matches_transport_bit_layout() {
 #[test]
 fn render_key_transport_drops_key_releases() {
     crate::test_utils::init_test_tracing();
-    assert!(render_key_transport_to_input_event(XK_RETURN, 0, false, 0).is_none());
+    assert!(
+        render_key_transport_to_input_event(FrontendKey::Keysym(XK_RETURN), 0, false, 0).is_none()
+    );
 }
 
 #[test]
@@ -2307,4 +2309,43 @@ fn display_idle_maintenance_yields_to_input_and_avoids_nested_or_timed_reads() {
     );
     assert_eq!(calls.get(), 1);
     assert!(eval.display_idle_maintenance_fn.is_some());
+}
+
+/// Issue #458: text retains its domain even where its number names a key.
+#[test]
+fn character_transport_preserves_fullwidth_and_halfwidth_text() {
+    for character in "，（）；－ｦￊ\u{fd0e}中あ한😀".chars() {
+        let event =
+            render_key_transport_to_input_event(FrontendKey::Character(character), 0, true, 42)
+                .unwrap();
+        assert!(
+            matches!(event, InputEvent::KeyPress { key, emacs_frame_id: 42 }
+            if key == KeyEvent::char(character)),
+            "{character:?}"
+        );
+    }
+    assert!(
+        render_key_transport_to_input_event(FrontendKey::Character('，'), 0, false, 42,).is_none()
+    );
+}
+
+#[test]
+fn character_and_keysym_transport_keep_colliding_values_distinct() {
+    for (character, keysym, expected) in [
+        ('（', XK_BACKSPACE, Key::Named(NamedKey::Backspace)),
+        ('）', XK_TAB, Key::Named(NamedKey::Tab)),
+        ('－', XK_RETURN, Key::Named(NamedKey::Return)),
+        ('；', XK_ESCAPE, Key::Named(NamedKey::Escape)),
+        ('ￊ', 0xffca, Key::Named(NamedKey::F(13))),
+        ('ｦ', 0xff66, Key::Function("redo".into())),
+        ('\u{fd0e}', 0xfd0e, Key::Function("3270_Attn".into())),
+    ] {
+        assert!(matches!(render_key_transport_to_input_event(
+            FrontendKey::Keysym(keysym), 0, true, 7,
+        ), Some(InputEvent::KeyPress { key, emacs_frame_id: 7 }) if key.key == expected));
+        assert!(matches!(render_key_transport_to_input_event(
+            FrontendKey::Character(character), RENDER_META_MASK, true, 7,
+        ), Some(InputEvent::KeyPress { key, emacs_frame_id: 7 })
+            if key == KeyEvent::char_with_mods(character, Modifiers::meta())));
+    }
 }

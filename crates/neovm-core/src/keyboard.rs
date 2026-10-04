@@ -1112,12 +1112,20 @@ pub fn render_modifiers_to_modifiers(bits: u32) -> Modifiers {
     }
 }
 
-/// Convert frontend key transport facts into the core input event model.
-///
-/// Key releases are ignored here so the command loop only sees the GNU-like
-/// cooked keypress stream.
+/// Toolkit input identity. Text and keysyms overlap numerically, so their
+/// provenance must survive transport (U+FF0D is text; XK_Return is a key).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrontendKey {
+    /// A Unicode scalar supplied as text by the toolkit or input method.
+    Character(char),
+    /// A key identity in the X11/native keysym domain, not a code point.
+    Keysym(u32),
+}
+
+/// Cook frontend input without interpreting text as a keysym.
+/// Key releases are ignored; frame identity and command modifiers are retained.
 pub fn render_key_transport_to_input_event(
-    keysym: u32,
+    key: FrontendKey,
     modifiers: u32,
     pressed: bool,
     emacs_frame_id: u64,
@@ -1126,7 +1134,13 @@ pub fn render_key_transport_to_input_event(
         return None;
     }
 
-    let key_event = keysym_to_key_event(keysym, modifiers)?;
+    let key_event = match key {
+        FrontendKey::Character(character) => {
+            FrontendCharacterInput::classify(character, render_modifiers_to_modifiers(modifiers))
+                .into_key_event()
+        }
+        FrontendKey::Keysym(keysym) => keysym_to_key_event(keysym, modifiers)?,
+    };
     Some(InputEvent::key_press_in_frame(key_event, emacs_frame_id))
 }
 

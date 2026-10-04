@@ -351,19 +351,19 @@ fn convert_single_display_event(event: &DisplayEvent) -> Option<KbInputEvent> {
             KbInputEvent::raw_tty_bytes(bytes.clone(), *emacs_frame_id)
         }),
         DisplayEvent::Key {
-            keysym,
+            key,
             modifiers,
             pressed,
             emacs_frame_id,
         } => {
             tracing::debug!(
-                "input_bridge: key keysym=0x{:04x} mods=0x{:x} pressed={}",
-                *keysym,
+                "input_bridge: key={:?} mods=0x{:x} pressed={}",
+                *key,
                 *modifiers,
                 *pressed
             );
             let event = keyboard::render_key_transport_to_input_event(
-                *keysym,
+                *key,
                 *modifiers,
                 *pressed,
                 *emacs_frame_id,

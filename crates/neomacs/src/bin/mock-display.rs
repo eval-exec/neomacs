@@ -229,8 +229,12 @@ fn run_gui(demo: &str) {
     loop {
         std::thread::sleep(Duration::from_millis(100));
         while let Ok(event) = emacs_comms.input_rx.try_recv() {
-            if let InputEvent::Key { keysym, .. } = event
-                && (keysym == b'q' as u32 || keysym == 0xff1b)
+            if let InputEvent::Key { key, .. } = event
+                && matches!(
+                    key,
+                    neovm_core::keyboard::FrontendKey::Character('q')
+                        | neovm_core::keyboard::FrontendKey::Keysym(0xff1b)
+                )
             {
                 let _ = emacs_comms
                     .cmd_tx

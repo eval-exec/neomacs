@@ -243,3 +243,6 @@ fn xdotool(env: &[(String, String)], args: &[&str]) -> Result<String, String> {
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
+
+#[path = "native_frame_focus/ime.rs"]
+mod ime;

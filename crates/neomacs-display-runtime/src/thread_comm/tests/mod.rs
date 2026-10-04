@@ -152,7 +152,7 @@ fn thread_comms_input_channel_roundtrip() {
     let comms = ThreadComms::new();
 
     let event = InputEvent::Key {
-        keysym: 65, // 'A'
+        key: neovm_core::keyboard::FrontendKey::Keysym(65), // 'A'
         modifiers: 0,
         pressed: true,
         emacs_frame_id: 0,
@@ -163,12 +163,12 @@ fn thread_comms_input_channel_roundtrip() {
     let received = comms.input_rx.try_recv().unwrap();
     match received {
         InputEvent::Key {
-            keysym,
+            key,
             modifiers,
             pressed,
             emacs_frame_id,
         } => {
-            assert_eq!(keysym, 65);
+            assert_eq!(key, neovm_core::keyboard::FrontendKey::Keysym(65));
             assert_eq!(modifiers, 0);
             assert!(pressed);
             assert_eq!(emacs_frame_id, 0);
@@ -301,7 +301,7 @@ fn thread_comms_input_channel_bounded_capacity() {
     // Fill up the input channel to capacity
     for _ in 0..INPUT_CHANNEL_CAPACITY {
         let event = InputEvent::Key {
-            keysym: 0,
+            key: neovm_core::keyboard::FrontendKey::Keysym(0),
             modifiers: 0,
             pressed: false,
             emacs_frame_id: 0,
@@ -311,7 +311,7 @@ fn thread_comms_input_channel_bounded_capacity() {
 
     // Next try_send should fail (channel full)
     let result = comms.input_tx.try_send(InputEvent::Key {
-        keysym: 0,
+        key: neovm_core::keyboard::FrontendKey::Keysym(0),
         modifiers: 0,
         pressed: false,
         emacs_frame_id: 0,
@@ -434,19 +434,19 @@ fn render_comms_send_input_delivers_event() {
 #[test]
 fn input_event_key_construction() {
     let event = InputEvent::Key {
-        keysym: 0xFF0D, // Return
-        modifiers: 4,   // Ctrl
+        key: neovm_core::keyboard::FrontendKey::Keysym(0xFF0D), // Return
+        modifiers: 4,                                           // Ctrl
         pressed: true,
         emacs_frame_id: 0,
     };
     match event {
         InputEvent::Key {
-            keysym,
+            key,
             modifiers,
             pressed,
             emacs_frame_id,
         } => {
-            assert_eq!(keysym, 0xFF0D);
+            assert_eq!(key, neovm_core::keyboard::FrontendKey::Keysym(0xFF0D));
             assert_eq!(modifiers, 4);
             assert!(pressed);
             assert_eq!(emacs_frame_id, 0);
@@ -683,7 +683,7 @@ fn a_file_drop_reports_the_dropped_paths_and_nothing_that_stands_in_for_a_posn()
 #[test]
 fn input_event_clone() {
     let original = InputEvent::Key {
-        keysym: 42,
+        key: neovm_core::keyboard::FrontendKey::Keysym(42),
         modifiers: 8,
         pressed: false,
         emacs_frame_id: 0,
@@ -691,12 +691,12 @@ fn input_event_clone() {
     let cloned = original.clone();
     match cloned {
         InputEvent::Key {
-            keysym,
+            key,
             modifiers,
             pressed,
             emacs_frame_id,
         } => {
-            assert_eq!(keysym, 42);
+            assert_eq!(key, neovm_core::keyboard::FrontendKey::Keysym(42));
             assert_eq!(modifiers, 8);
             assert!(!pressed);
             assert_eq!(emacs_frame_id, 0);
@@ -708,7 +708,7 @@ fn input_event_clone() {
 #[test]
 fn input_event_debug() {
     let event = InputEvent::Key {
-        keysym: 65,
+        key: neovm_core::keyboard::FrontendKey::Keysym(65),
         modifiers: 0,
         pressed: true,
         emacs_frame_id: 0,
@@ -1539,19 +1539,19 @@ fn channel_sends_multiple_input_events_in_order() {
 
     let events = vec![
         InputEvent::Key {
-            keysym: 1,
+            key: neovm_core::keyboard::FrontendKey::Keysym(1),
             modifiers: 0,
             pressed: true,
             emacs_frame_id: 0,
         },
         InputEvent::Key {
-            keysym: 2,
+            key: neovm_core::keyboard::FrontendKey::Keysym(2),
             modifiers: 0,
             pressed: true,
             emacs_frame_id: 0,
         },
         InputEvent::Key {
-            keysym: 3,
+            key: neovm_core::keyboard::FrontendKey::Keysym(3),
             modifiers: 0,
             pressed: true,
             emacs_frame_id: 0,
@@ -1641,7 +1641,7 @@ fn cross_thread_input_event_delivery() {
 
     let handle = std::thread::spawn(move || {
         render.send_input(InputEvent::Key {
-            keysym: 0x61, // 'a'
+            key: neovm_core::keyboard::FrontendKey::Keysym(0x61), // 'a'
             modifiers: 0,
             pressed: true,
             emacs_frame_id: 0,
@@ -1659,7 +1659,9 @@ fn cross_thread_input_event_delivery() {
     // Both events should be receivable on the Emacs side
     let evt1 = emacs.input_rx.try_recv().unwrap();
     match evt1 {
-        InputEvent::Key { keysym, .. } => assert_eq!(keysym, 0x61),
+        InputEvent::Key { key, .. } => {
+            assert_eq!(key, neovm_core::keyboard::FrontendKey::Keysym(0x61))
+        }
         other => panic!("Expected Key, got {:?}", other),
     }
 

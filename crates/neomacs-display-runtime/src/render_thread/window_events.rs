@@ -3,6 +3,7 @@ use super::modifier_sides::{TrackedModifier, TrackedSide};
 use super::state::effective_window_scale_factor;
 use crate::thread_comm::InputEvent;
 use neomacs_display_protocol::{ModifierEventKind, TransportModifierBits};
+use neovm_core::keyboard::FrontendKey;
 use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::PhysicalKey;
@@ -319,7 +320,14 @@ impl RenderApp {
                 if let Some(target) = self.focused_webview {
                     use winit::platform::scancode::PhysicalKeyExtScancode;
 
-                    let key_value = Self::translate_key(&logical_key);
+                    // The external WebView API has its own numeric key-value
+                    // contract. Keep this conversion at that boundary; the
+                    // editor transport retains the typed identity below.
+                    let key_value = match Self::translate_key_input(&logical_key) {
+                        Some(FrontendKey::Character(character)) => character as u32,
+                        Some(FrontendKey::Keysym(keysym)) => keysym,
+                        None => 0,
+                    };
                     if key_value != 0
                         && let Some(system) = self.webview_system.as_mut()
                     {
@@ -386,7 +394,7 @@ impl RenderApp {
                                 ordinary_modifiers
                             );
                             self.comms.send_input(InputEvent::Key {
-                                keysym: control_keysym,
+                                key: FrontendKey::Keysym(control_keysym),
                                 modifiers: ordinary_modifiers,
                                 pressed: true,
                                 emacs_frame_id: self.emacs_frame_for_window_event(window_id),
@@ -394,23 +402,23 @@ impl RenderApp {
                             self.record_idle_dim_activity(window_id);
                             self.record_typing_speed_keypress(window_id);
                             handled_via_text = true;
-                        } else if let Some(keysyms) =
+                        } else if let Some(keys) =
                             Self::translate_committed_text(s, ordinary_modifiers)
                         {
                             tracing::debug!(
-                                "KeyboardInput committed text path: text={:?} keysyms={:?} mods=0x{:x}",
+                                "KeyboardInput committed text path: text={:?} keys={:?} mods=0x{:x}",
                                 s,
-                                keysyms,
+                                keys,
                                 ordinary_modifiers
                             );
-                            for keysym in keysyms {
+                            for key in keys {
                                 tracing::debug!(
-                                    "Queueing text key event: keysym=0x{:04x} mods=0x{:x}",
-                                    keysym,
+                                    "Queueing text key event: key={:?} mods=0x{:x}",
+                                    key,
                                     ordinary_modifiers
                                 );
                                 self.comms.send_input(InputEvent::Key {
-                                    keysym,
+                                    key,
                                     modifiers: ordinary_modifiers,
                                     pressed: true,
                                     emacs_frame_id: self.emacs_frame_for_window_event(window_id),
@@ -429,32 +437,19 @@ impl RenderApp {
                         // another character first, and the frame window asks
                         // it not to (`apply_option_key_policy`), so no
                         // per-event substitution is needed here.
-                        let mut keysym = Self::translate_key(&logical_key);
-                        // Shift-only chords still reach the keystroke path
-                        // the way GNU keeps them ordinary keys; the
-                        // space-fallback gate below now includes the
-                        // policy-cooked alt/hyper bits.
-                        let mut key_modifiers = if keysym != 0 {
-                            self.cooked_key_modifiers(keysym)
-                        } else {
-                            0
-                        };
-                        if keysym == 0 && key_modifiers != 0 {
-                            use winit::keyboard::KeyCode;
-                            keysym = match physical_key {
-                                PhysicalKey::Code(KeyCode::Space) => 0x20,
-                                _ => 0,
+                        let key = Self::translate_key_input(&logical_key);
+                        if let Some(key) = key {
+                            let key_modifiers = match key {
+                                FrontendKey::Character(_) => {
+                                    self.cook_modifiers(ModifierEventKind::Ordinary).bits()
+                                }
+                                FrontendKey::Keysym(keysym) => self.cooked_key_modifiers(keysym),
                             };
-                            if keysym != 0 {
-                                key_modifiers = self.cooked_key_modifiers(keysym);
-                            }
-                        }
-                        if keysym != 0 {
                             tracing::debug!(
-                                "KeyboardInput translated path: logical_key={:?} physical_key={:?} keysym=0x{:04x} mods=0x{:x} pressed={}",
+                                "KeyboardInput translated path: logical_key={:?} physical_key={:?} key={:?} mods=0x{:x} pressed={}",
                                 logical_key,
                                 physical_key,
-                                keysym,
+                                key,
                                 key_modifiers,
                                 state == ElementState::Pressed
                             );
@@ -472,7 +467,7 @@ impl RenderApp {
                             }
                             let (receipt, token) =
                                 self.comms.send_input_with_receipt(InputEvent::Key {
-                                    keysym,
+                                    key,
                                     modifiers: key_modifiers,
                                     pressed: state == ElementState::Pressed,
                                     emacs_frame_id: self.emacs_frame_for_window_event(window_id),
@@ -695,10 +690,9 @@ impl RenderApp {
                         ws.render.clear_ime_preedit()
                     };
                     for ch in text.chars() {
-                        let keysym = ch as u32;
-                        if keysym != 0 {
+                        if ch != '\0' {
                             self.comms.send_input(InputEvent::Key {
-                                keysym,
+                                key: FrontendKey::Character(ch),
                                 modifiers: 0,
                                 pressed: true,
                                 emacs_frame_id: self.emacs_frame_for_window_event(window_id),
