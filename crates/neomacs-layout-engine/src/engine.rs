@@ -954,9 +954,9 @@ pub struct LayoutEngine {
     /// changes counted one char early (textprop.c:87). Only the mode-line
     /// gate (`NEOMACS_MODE_LINE_GATE=gnu`) reads it.
     pre_fontify_gnu_beg_unchanged: rustc_hash::FxHashMap<u64, i64>,
-    /// GNU `consider_all_windows_p` as `bset_redisplay` raises it for this
-    /// frame: a buffer changed that a non-selected window shows, or that two
-    /// windows show (xdisp.c:886-898). Computed in Phase A.
+    /// GNU `consider_all_windows_p` as `bset_redisplay` raises it across all
+    /// frames: a buffer changed that a non-selected window shows, or that two
+    /// windows show (xdisp.c:886-898). Computed before fontification in Phase A.
     frame_other_windows_changed: bool,
     /// Phase 3 below-reuse switch (default true). The localized edit fast path
     /// reuses the rows BELOW the dirty span too (charpos-shifted, same pixel_y),
@@ -2111,24 +2111,9 @@ impl LayoutEngine {
             // `windows_or_buffers_changed`, which disables GNU's one-line
             // optimization for the whole redisplay. The mini-window is left
             // out: echo-area text reaches it through `echo_area_display`.
-            self.frame_other_windows_changed = window_params_list
-                .iter()
-                .filter(|params| !params.is_minibuffer())
-                .any(|params| {
-                    let dirty = self
-                        .pre_fontify_dirty_spans
-                        .get(&params.buffer_id)
-                        .is_some_and(Option::is_some);
-                    dirty
-                        && (!params.selected
-                            || window_params_list
-                                .iter()
-                                .filter(|other| {
-                                    !other.is_minibuffer() && other.buffer_id == params.buffer_id
-                                })
-                                .count()
-                                > 1)
-                });
+            self.frame_other_windows_changed = evaluator
+                .frame_manager()
+                .other_window_buffer_changed(evaluator.buffer_manager());
 
             self.reset_frame_attempt_state();
             let mut face_attempt = committed_face_arena.begin_attempt();

@@ -13,6 +13,10 @@ use super::*;
 use crate::incremental_layout::edit_sync::{EditSyncMode, set_edit_sync_mode_for_test};
 use crate::incremental_layout::mode_line_gate::{ModeLineGate, set_mode_line_gate_for_test};
 
+#[cfg(test)]
+#[path = "mode_line_gate_cross_frame_test.rs"]
+mod cross_frame;
+
 struct GateGuard;
 
 impl GateGuard {
@@ -244,3 +248,7 @@ fn a_buffer_with_an_automatic_paragraph_direction_always_evaluates() {
     eval.eval_str("(insert \"x\")").expect("insert");
     assert_eq!(redisplay(&mut eval, &mut engine, frame_id), 1);
 }
+
+#[cfg(test)]
+#[path = "mode_line_gate_indirect_frame_test.rs"]
+mod indirect_frame;

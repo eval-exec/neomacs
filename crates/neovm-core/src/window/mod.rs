@@ -6550,6 +6550,53 @@ impl FrameManager {
             .sum()
     }
 
+    /// GNU's `bset_redisplay` observes ordinary windows on every frame.
+    /// Read only the live tree and completed display identities; detached
+    /// windows and the inactive minibuffer cannot raise this predicate.
+    /// The owning Context's mutator borrows these inputs; no state is cached
+    /// or shared between mutators, and the walk allocates no window list.
+    pub fn other_window_buffer_changed(&self, buffers: &BufferManager) -> bool {
+        fn changed(
+            frame: &Frame,
+            id: WindowId,
+            selected: Option<WindowId>,
+            buffers: &BufferManager,
+        ) -> bool {
+            let Some(window) = frame.tree.find(id) else {
+                return false;
+            };
+            if !window.children().is_empty() {
+                return window
+                    .children()
+                    .iter()
+                    .any(|id| changed(frame, *id, selected, buffers));
+            }
+            if Some(id) == selected {
+                return false;
+            }
+            let Some(buffer) = window.buffer_id().and_then(|id| buffers.get(id)) else {
+                return false;
+            };
+            if buffer.changed_char_range().is_some() {
+                return true;
+            }
+            frame.redisplay_snapshot(id).is_some_and(|snapshot| {
+                snapshot
+                    .buffer_modiff
+                    .is_some_and(|tick| tick != buffer.modified_tick())
+                    || snapshot.layout_freshness.as_ref().is_some_and(|freshness| {
+                        freshness.buffer.id != buffer.id()
+                            || freshness.buffer.overlay_modified_tick
+                                != buffer.overlay_modified_tick()
+                    })
+            })
+        }
+        let selected = self.selected_frame().map(|frame| frame.selected_window);
+        self.frames
+            .values()
+            .any(|frame| changed(frame, frame.tree.root_id(), selected, buffers))
+    }
+
     /// Get the selected frame.
     pub fn selected_frame(&self) -> Option<&Frame> {
         self.selected.and_then(|id| self.frames.get(&id))

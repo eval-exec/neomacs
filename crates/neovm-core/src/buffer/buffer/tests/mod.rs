@@ -6,6 +6,9 @@ use crate::heap_types::{LispString, OverlayData};
 
 mod gnu_beg_unchanged_test;
 
+#[cfg(test)]
+mod shared_overlay_modiff_test;
+
 #[test]
 fn forwarded_slot_predicates_are_closed_typed_contracts() {
     use BufferSlotPredicate::{

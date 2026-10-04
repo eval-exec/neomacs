@@ -6513,19 +6513,51 @@ impl BufferManager {
         Some(point)
     }
 
+    /// Publish an actual overlay modification to the owner's shared text group.
+    /// GNU's `BUF_OVERLAY_MODIFF` lives in shared buffer text, while our existing
+    /// overlay counters and lists live on each Buffer. Only the mutator with
+    /// exclusive access to this BufferManager updates the live sibling counters;
+    /// the overlay lists and their property values remain private to each owner.
+    /// No Lisp state or group membership is cached here.
+    #[inline]
+    pub(crate) fn note_overlay_modification(&mut self, id: BufferId) -> Option<()> {
+        if !self.buffers.any_indirect() {
+            self.buffers.get_mut(&id)?.increment_overlay_modified_tick();
+            return Some(());
+        }
+        let root = self.shared_text_root_id(id)?;
+        for buffer in self.buffers.values_mut() {
+            if buffer.base_buffer.unwrap_or(buffer.id) == root {
+                buffer.increment_overlay_modified_tick();
+            }
+        }
+        Some(())
+    }
+
     pub fn delete_all_buffer_overlays(&mut self, id: BufferId) -> Option<()> {
-        let buf = self.buffers.get_mut(&id)?;
-        if !buf.overlays.is_empty() {
-            buf.overlays.delete_all_overlays();
-            buf.increment_overlay_modified_tick();
+        let changed = {
+            let buf = self.buffers.get_mut(&id)?;
+            if buf.overlays.is_empty() {
+                false
+            } else {
+                buf.overlays.delete_all_overlays();
+                true
+            }
+        };
+        if changed {
+            self.note_overlay_modification(id)?;
         }
         Some(())
     }
 
     pub fn delete_buffer_overlay(&mut self, id: BufferId, overlay_id: Value) -> Option<()> {
-        let buf = self.buffers.get_mut(&id)?;
-        if buf.overlays.delete_overlay(overlay_id) {
-            buf.increment_overlay_modified_tick();
+        let changed = self
+            .buffers
+            .get_mut(&id)?
+            .overlays
+            .delete_overlay(overlay_id);
+        if changed {
+            self.note_overlay_modification(id)?;
         }
         Some(())
     }
@@ -6537,13 +6569,20 @@ impl BufferManager {
         name: Value,
         value: Value,
     ) -> Option<()> {
-        let buf = self.buffers.get_mut(&id)?;
-        buf.overlays.overlay_put(overlay_id, name, value).ok()?;
-        // An overlay property change (face/display/before-string/invisible/...) can
-        // alter layout with no buffer-text edit; bump the overlay tick so the
-        // incremental fast paths re-lay instead of reusing stale rows (GNU bumps
-        // the overlay modiff on any overlay change).
-        buf.increment_overlay_modified_tick();
+        let changed = self
+            .buffers
+            .get_mut(&id)?
+            .overlays
+            .overlay_put(overlay_id, name, value)
+            .ok()?;
+        // Actual face/display/before-string/invisible changes affect GNU's
+        // shared overlay modiff without modifying buffer text. Keep this API's
+        // older owner-only no-op invalidation without extending it to siblings.
+        if changed {
+            self.note_overlay_modification(id)?;
+        } else {
+            self.buffers.get_mut(&id)?.increment_overlay_modified_tick();
+        }
         Some(())
     }
 
@@ -6895,13 +6934,20 @@ impl BufferManager {
         overlay_id: Value,
         range: EmacsByteRange,
     ) -> Option<()> {
-        let buf = self.buffers.get_mut(&id)?;
-        buf.overlays
-            .move_overlay_to_emacs_byte_range(overlay_id, range);
-        // Moving an overlay (e.g. hl-line following the cursor) changes which
-        // lines it covers with no buffer-text edit; bump the overlay tick so the
-        // cursor-only / scroll fast paths re-lay the affected rows.
-        buf.increment_overlay_modified_tick();
+        let present = {
+            let buf = self.buffers.get_mut(&id)?;
+            let present = buf.overlays.get(overlay_id).is_some();
+            buf.overlays
+                .move_overlay_to_emacs_byte_range(overlay_id, range);
+            present
+        };
+        // GNU modifies the overlay even when endpoints are unchanged. An absent
+        // overlay retains this API's older owner-only invalidation behavior.
+        if present {
+            self.note_overlay_modification(id)?;
+        } else {
+            self.buffers.get_mut(&id)?.increment_overlay_modified_tick();
+        }
         Some(())
     }
 

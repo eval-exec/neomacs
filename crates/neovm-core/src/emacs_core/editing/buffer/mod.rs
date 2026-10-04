@@ -5323,9 +5323,7 @@ pub(crate) fn builtin_overlay_put_in_buffers(
     if let Some(buf_id) = resolve_overlay_buffer_id(overlay)
         && changed
     {
-        if let Some(buf) = buffers.get_mut(buf_id) {
-            buf.increment_overlay_modified_tick();
-        }
+        let _ = buffers.note_overlay_modification(buf_id);
         let evaporate = args[1].is_symbol_named("evaporate") && val.is_truthy();
         let is_empty = buffers
             .get(buf_id)
@@ -5540,42 +5538,50 @@ pub(crate) fn builtin_move_overlay_in_buffers(
     let end = expect_integer_or_marker_in_buffers(buffers, &args[2])?;
 
     if old_buf_id == Some(new_buf_id) {
-        // Same buffer: just move within the buffer.
-        let buf = buffers
-            .get_mut(new_buf_id)
-            .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
-        let byte_range = elisp_range_to_byte_clipped_full(buf, beg, end);
-        buf.overlays
-            .move_overlay_to_emacs_byte_range(overlay, byte_range);
-        buf.increment_overlay_modified_tick();
+        // Same buffer: release the owner borrow before publishing to siblings.
+        {
+            let buf = buffers
+                .get_mut(new_buf_id)
+                .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
+            let byte_range = elisp_range_to_byte_clipped_full(buf, beg, end);
+            buf.overlays
+                .move_overlay_to_emacs_byte_range(overlay, byte_range);
+        }
+        let _ = buffers.note_overlay_modification(new_buf_id);
         Ok(args[0])
     } else {
-        if let Some(old_buf_id) = old_buf_id
-            && let Some(buf) = buffers.get_mut(old_buf_id)
-            && buf.overlays.detach_overlay(overlay)
-        {
-            buf.increment_overlay_modified_tick();
+        if let Some(old_buf_id) = old_buf_id {
+            let detached = buffers
+                .get_mut(old_buf_id)
+                .is_some_and(|buf| buf.overlays.detach_overlay(overlay));
+            if detached {
+                let _ = buffers.note_overlay_modification(old_buf_id);
+            }
         }
 
-        let new_buf = buffers
-            .get_mut(new_buf_id)
-            .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
-        let byte_range = elisp_range_to_byte_clipped_full(new_buf, beg, end);
-        let _ = overlay.with_overlay_data_mut(|object| {
-            object.buffer = Some(new_buf_id);
-            object.start = byte_range.start().get();
-            object.end = byte_range.end().get();
-        });
-        new_buf.overlays.insert_overlay(overlay);
-        new_buf.increment_overlay_modified_tick();
-        if byte_range.is_empty()
-            && new_buf
-                .overlays
-                .overlay_get_named(overlay, Value::symbol("evaporate"))
-                .is_some_and(|value| value.is_truthy())
-            && new_buf.overlays.delete_overlay(overlay)
-        {
-            new_buf.increment_overlay_modified_tick();
+        let evaporated = {
+            let new_buf = buffers
+                .get_mut(new_buf_id)
+                .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
+            let byte_range = elisp_range_to_byte_clipped_full(new_buf, beg, end);
+            let _ = overlay.with_overlay_data_mut(|object| {
+                object.buffer = Some(new_buf_id);
+                object.start = byte_range.start().get();
+                object.end = byte_range.end().get();
+            });
+            new_buf.overlays.insert_overlay(overlay);
+            byte_range.is_empty()
+                && new_buf
+                    .overlays
+                    .overlay_get_named(overlay, Value::symbol("evaporate"))
+                    .is_some_and(|value| value.is_truthy())
+                && new_buf.overlays.delete_overlay(overlay)
+        };
+        // No Lisp code runs between insertion and evaporation. Publish their
+        // original separate modification events after releasing the owner.
+        let _ = buffers.note_overlay_modification(new_buf_id);
+        if evaporated {
+            let _ = buffers.note_overlay_modification(new_buf_id);
         }
         Ok(args[0])
     }
