@@ -183,16 +183,21 @@ follows the user's defcustom instead of hard-coding either behavior."
       (append spec (list :animation neomacs-svg-animation))
     spec))
 
-(defun neomacs-image-animate-svg (spec &optional limit)
-  "Animate the SVG image SPEC if it carries SMIL animation.
-Adds the `:animation' property (see `neomacs-svg-animation') and hands
-the image to `image-animate'.  Returns whatever `image-animate'
-returns: nil when the document has no materializable animation, so
-callers can fall back to a static display.  LIMIT is passed through
-to `image-animate'."
-  (let ((animated (copy-tree spec)))
-    (setq animated (neomacs-image-spec-add-animation animated))
-    (image-animate animated nil limit)))
+(defun neomacs-image-animate-svg (image &optional limit)
+  "Animate the SVG image IMAGE, in place, if it carries SMIL animation.
+IMAGE is an image spec as displayed in a buffer (`image-at-point' gives
+you one).  `image-animate' advances frames by mutating the very list it
+is handed — its timer `plist-put's `:index' on IMAGE — so IMAGE is
+modified in place rather than copied: the frames walked are the frames
+the window shows.  The `:animation' property is added from
+`neomacs-svg-animation' only when the spec does not carry its own.
+Returns whatever `image-animate' returns: nil when the image has no
+materializable animation, so callers can fall back to a static display.
+LIMIT is passed through to `image-animate'."
+  (when (and neomacs-svg-animation
+             (not (plist-member (cdr image) :animation)))
+    (setcdr image (plist-put (cdr image) :animation neomacs-svg-animation)))
+  (image-animate image nil limit))
 
 (provide 'neomacs-image)
 ;;; neomacs-image.el ends here

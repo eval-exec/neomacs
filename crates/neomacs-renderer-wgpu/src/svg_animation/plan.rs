@@ -140,21 +140,48 @@ impl AnimationPlan {
         }
     }
 
-    /// The document's loop period: the total active duration of its rules.
+    /// Whether any rule repeats indefinitely.
+    pub(crate) fn has_indefinite(&self) -> bool {
+        self.rules
+            .iter()
+            .any(|rule| rule.timeline.repeat == Repeat::Indefinite)
+    }
+
+    /// Document time the last rule activates at.
     ///
-    /// A plan of finite rules has a finite end and replays from there; a
-    /// plan with an indefinite rule loops forever, and its period is the
-    /// longest total active duration among its rules. (Rules with different
-    /// `dur`s would strictly need an LCM; the sampler quantizes on one
-    /// grid, so the maximum keeps every rule's keyframes expressible while
-    /// staying honest that the composite loop is no shorter than its
-    /// slowest rule.)
+    /// The sampler starts a looping plan's grid here: everything before is
+    /// introductory state, and a loop restarting the introduction every
+    /// cycle would insert a base-value gap SMIL does not have.
+    pub(crate) fn intro_end(&self) -> Duration {
+        self.rules
+            .iter()
+            .map(|rule| rule.timeline.begin)
+            .max()
+            .unwrap_or_default()
+    }
+
+    /// The document's loop period.
+    ///
+    /// A looping (indefinite) plan's period is its steady-state cycle: the
+    /// longest `dur` among indefinite rules, measured from
+    /// [`Self::intro_end`]. A plan of only finite rules has a finite span
+    /// and replays from zero; its period includes each rule's `begin`
+    /// (`begin + active`), so a delayed rule's animation is inside the
+    /// loop instead of never sampled. (Rules with different `dur`s would
+    /// strictly need an LCM; the sampler quantizes on one grid, so the
+    /// maximum keeps every rule's keyframes expressible while staying
+    /// honest that the composite loop is no shorter than its slowest
+    /// rule.)
     pub(crate) fn loop_period(&self) -> Option<Duration> {
         let mut period = Duration::ZERO;
         for rule in &self.rules {
-            // An indefinite rule contributes its cycle length; the loop at
-            // least covers every rule's own cycle.
-            let duration = Self::rule_active_duration(rule).unwrap_or(rule.timeline.dur);
+            let timeline = &rule.timeline;
+            let duration = match timeline.repeat {
+                Repeat::Indefinite => timeline.dur,
+                Repeat::Count(count) => timeline
+                    .begin
+                    .checked_add(timeline.dur.checked_mul(count)?)?,
+            };
             period = period.max(duration);
         }
         (period > Duration::ZERO).then_some(period)
@@ -180,10 +207,11 @@ impl AnimatedVisual for AnimationPlan {
                 .key_times
                 .clone()
                 .unwrap_or_else(|| uniform_fractions(timeline.values.len()));
-            // The cycle the query falls in — possibly one before
-            // activation — and its two successors are the only cycles that
-            // can hold the next boundary.
-            let cycle = ((now - begin) / dur).floor();
+            // The cycle holding the next boundary, measured in the
+            // rule's own cycles: clamped at zero so a query far before
+            // activation still reaches the `begin` boundary instead of
+            // windowing pre-activation cycles that hold no events.
+            let cycle = (((now - begin) / dur).floor()).max(0.0);
             for step in [-1.0, 0.0, 1.0] {
                 let cycle_start = begin + (cycle + step) * dur;
                 if cycle_start >= end {
@@ -191,7 +219,9 @@ impl AnimatedVisual for AnimationPlan {
                 }
                 for fraction in &fractions {
                     let event = cycle_start + fraction * dur;
-                    if event > now && event < end {
+                    // Boundaries of pre-activation cycles are not events:
+                    // the rule holds the base value until `begin`.
+                    if event > now && event >= begin && event < end {
                         next = Some(next.map_or(event, |current: f64| current.min(event)));
                     }
                 }
@@ -246,15 +276,13 @@ pub(crate) fn compile(data: &[u8]) -> Option<AnimationPlan> {
             continue;
         }
         if let Some(rule) = compile_rule(data, node) {
-            // Two rules on one attribute cannot both splice it; document
-            // order decides, last wins, matching the SMIL sandwich's
-            // later-document priority for the common non-additive case.
-            // The attribute name is part of the key: two absent attributes
-            // of one element share an insert position but not a target.
-            plan.rules.retain(|existing| {
-                existing.site.attribute != rule.site.attribute
-                    || existing.site.value_range != rule.site.value_range
-            });
+            // Two rules on one element attribute cannot both splice it;
+            // document order decides, last wins, matching the SMIL
+            // sandwich's later-document priority for the common
+            // non-additive case. The whole site is the key — the
+            // insertion position identifies the target element, so two
+            // absent attributes on different elements never collide.
+            plan.rules.retain(|existing| existing.site != rule.site);
             plan.rules.push(rule);
         }
     }
