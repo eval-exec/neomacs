@@ -27,6 +27,9 @@ mod mode_line_plain_field_test;
 mod mode_line_numeric_padding_test;
 
 #[cfg(test)]
+mod mode_line_incremental_lifetimes;
+
+#[cfg(test)]
 mod posn_extent_fixture_test;
 
 #[cfg(test)]
