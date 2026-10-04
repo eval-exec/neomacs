@@ -3,7 +3,7 @@
 //! first dirty row until the walk reaches the first unchanged row's start,
 //! with no prediction of how many rows the changed lines now take.
 //!
-//! The `prove` path (the default) reuses the rows below an edit only when it
+//! The `prove` path reuses the rows below an edit only when it
 //! can PROVE AHEAD that every changed line still occupies exactly one row:
 //! printable-ASCII text, no structure properties, monospace glyphs, a width
 //! that still fits. A tab, a CJK character, a `display` string or an
@@ -11,7 +11,7 @@
 //! below the edit is laid out again -- 20 rows per keystroke on the P3.5
 //! `typemid` fixture, the common case when editing tab-indented Lisp.
 //!
-//! The `sync` path ports GNU's synchronization instead (xdisp.c:22561-23300):
+//! The `sync` path (the unset default) ports GNU's synchronization instead (xdisp.c:22561-23300):
 //!
 //! 1. `first_unchanged_at_end` is the first old row that starts at or after
 //!    `Z - END_UNCHANGED + 1` in old coordinates (the `+ 1` keeps the
@@ -34,12 +34,12 @@
 //!
 //! | Knob | Default | Values | Gate |
 //! | --- | --- | --- | --- |
-//! | `NEOMACS_LAYOUT_EDIT_SYNC` | `prove` | `prove`, `sync` | Synchronize the edit walk with unchanged rows below it. |
-//! | `NEOMACS_EDIT_SYNC_DENSE_INDEX` | `off` | `off`, `on` | Use proved consecutive row indexes for edit-plan membership and surviving-row remapping; every unproved case keeps the original hash path. |
-//! | `NEOMACS_EDIT_SYNC_FONTIFY_COVERAGE` | `off` | `off`; `on`/`1`/`true`/`yes` | Prove that an admitted edit-Sync attempt has no uncovered point query using current immutable row extrema; unknown or intersecting ranges retain the full iterator. |
+//! | `NEOMACS_LAYOUT_EDIT_SYNC` | `sync` | `prove`, `sync` | Synchronize the edit walk with unchanged rows below it. |
+//! | `NEOMACS_EDIT_SYNC_DENSE_INDEX` | `on` | `off`, `on` | Use proved consecutive row indexes for edit-plan membership and surviving-row remapping; every unproved case keeps the original hash path. |
+//! | `NEOMACS_EDIT_SYNC_FONTIFY_COVERAGE` | `on` | `off`; `on`/`1`/`true`/`yes` | Prove that an admitted edit-Sync attempt has no uncovered point query using current immutable row extrema; unknown or intersecting ranges retain the full iterator. |
 //! | `NEOMACS_EDIT_SYNC_STILL` | `off` | `off`, `on` | Transfer synchronized geometry without remapping when its placement and visibility are unchanged. |
 //! | `NEOMACS_EDIT_SYNC_PROVE_FIRST` | `off` | `off`, `on` | Prefer a completely admitted bounded prove producer inside GNU sync; rejected proofs still use general sync. |
-//! | `NEOMACS_EDIT_SYNC_LAZY_PROOF` | `off` | `off`, `on` | Defer source proof until bounded fallback is possible in general Sync with ProveFirst off. |
+//! | `NEOMACS_EDIT_SYNC_LAZY_PROOF` | `on` | `off`, `on` | Defer source proof until bounded fallback is possible in general Sync with ProveFirst off. |
 //! | `NEOMACS_EDIT_SYNC_SHIFT_SKIP` | `off` | `off`, `on` | Avoid synchronized-row shift provenance allocations when no row moved vertically. |
 //! | `NEOMACS_LAYOUT_SCROLL_BACK` | `on` | `off`, `on` | Synchronize backward scrolls with the retained body. |
 
@@ -53,10 +53,14 @@ use neomacs_display_protocol::glyph_matrix::{
 use neovm_core::buffer::position::LispCharPos1;
 use neovm_core::window::{DisplayPointSnapshot, DisplayRowSnapshot};
 
-/// Pure process-selector parser: absent, empty, invalid and nonUnicode are
-/// OFF. It reads no Lisp state and does not depend on an active mutator.
+/// Pure process-selector parser: absence selects ON; explicit empty, invalid
+/// and nonUnicode values select OFF. It reads no Lisp state and does not
+/// depend on an active mutator.
 #[inline]
 fn parse_lazy_proof(value: Option<&std::ffi::OsStr>) -> bool {
+    if value.is_none() {
+        return true;
+    }
     value
         .and_then(std::ffi::OsStr::to_str)
         .is_some_and(|value| {
@@ -86,7 +90,7 @@ pub(crate) fn lazy_proof_enabled() -> bool {
 /// the edit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum EditSyncMode {
-    /// Prove ahead that each changed line stays one row (default).
+    /// Prove ahead that each changed line stays one row.
     Prove,
     /// Walk until the first unchanged row's start (GNU `try_window_id`).
     Sync,
@@ -109,7 +113,7 @@ pub(crate) fn set_edit_sync_mode_for_test(mode: Option<EditSyncMode>) {
 /// mutators may call it concurrently; the existing OnceLock publishes policy.
 fn parse_edit_sync_mode(value: Option<&std::ffi::OsStr>) -> EditSyncMode {
     let Some(value) = value else {
-        return EditSyncMode::Prove;
+        return EditSyncMode::Sync;
     };
     match value
         .to_str()
@@ -121,7 +125,7 @@ fn parse_edit_sync_mode(value: Option<&std::ffi::OsStr>) -> EditSyncMode {
     }
 }
 
-/// The mode in effect. Read once per process; default `prove`.
+/// The mode in effect. Read once per process; unset default `sync`.
 pub(crate) fn edit_sync_mode() -> EditSyncMode {
     #[cfg(test)]
     if let Some(mode) = MODE_OVERRIDE.with(std::cell::Cell::get) {
@@ -872,6 +876,14 @@ mod lazy_proof_selector_tests;
 #[cfg(test)]
 #[path = "tests/edit_sync_policy_aliases.rs"]
 mod edit_sync_policy_aliases_tests;
+
+#[cfg(test)]
+#[path = "tests/edit_sync_default_policy.rs"]
+mod edit_sync_default_policy_tests;
+
+#[cfg(test)]
+#[path = "tests/edit_sync_lazy_proof_policy_absence.rs"]
+mod lazy_proof_policy_absence;
 
 #[cfg(test)]
 #[path = "tests/edit_sync_dense_index_support.rs"]

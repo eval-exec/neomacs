@@ -1611,6 +1611,8 @@ fn mode_line_display_does_not_flush_a_terminal_min_width_run() {
 
 #[test]
 fn mode_line_display_closes_a_min_width_run_when_another_one_starts() {
+    // This historical flattening expectation exercises explicit OFF.
+    let _legacy_padding = mode_line_numeric_padding_test::PaddingPolicyGuard::set(false);
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
     let buffer_id = eval.buffers.current_buffer().expect("current buffer").id;

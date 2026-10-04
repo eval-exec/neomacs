@@ -105,9 +105,12 @@ fn capture_heap_order<B: LayoutBufferView + ?Sized>(buffer: &B, property: Value)
     lookup_order
 }
 
-/// Pure numeric parser; explicit invalid/empty/nonUnicode input remains OFF.
+/// Absence alone selects ON; explicit invalid/empty/nonUnicode input remains OFF.
 #[inline]
 fn parse(value: Option<&std::ffi::OsStr>) -> bool {
+    if value.is_none() {
+        return true;
+    }
     value
         .and_then(std::ffi::OsStr::to_str)
         .is_some_and(|value| {

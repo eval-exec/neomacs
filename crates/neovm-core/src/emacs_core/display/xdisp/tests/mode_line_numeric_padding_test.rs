@@ -11,8 +11,7 @@ fn unmarked(ranges: &PaddingRanges, end: usize) -> Vec<std::ops::Range<usize>> {
 }
 
 #[test]
-fn mode_line_numeric_padding_selector_defaults_off() {
-    assert!(!mode_line_numeric_padding::parse(None));
+fn mode_line_numeric_padding_selector_preserves_explicit_values() {
     for v in ["", "off", "0", "false", "no", "unknown"] {
         assert!(!mode_line_numeric_padding::parse(Some(OsStr::new(v))));
     }
@@ -53,9 +52,9 @@ fn mode_line_numeric_padding_stretch_insertion_remains_unmarked() {
     assert_eq!(unmarked(&ranges, 17), vec![0..4, 6..8, 11..13, 15..17]);
 }
 
-struct PaddingPolicyGuard(Option<bool>);
+pub(super) struct PaddingPolicyGuard(Option<bool>);
 impl PaddingPolicyGuard {
-    fn set(value: bool) -> Self {
+    pub(super) fn set(value: bool) -> Self {
         Self(mode_line_numeric_padding::force_for_test(Some(value)))
     }
 }

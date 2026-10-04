@@ -1,9 +1,8 @@
 use super::*;
 
 #[test]
-fn property_keys_parser_defaults_off_and_preserves_explicit_inputs() {
+fn property_keys_parser_preserves_explicit_inputs() {
     use std::ffi::OsStr;
-    assert!(!parse(None));
     for value in [
         "", " ", "off", "0", "false", "no", "invalid", "verify", "only",
     ] {

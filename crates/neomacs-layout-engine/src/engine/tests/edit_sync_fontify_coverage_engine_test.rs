@@ -463,3 +463,7 @@ fn coverage_numeric_scope_restores_unwind_and_independent_mutator_ownership() {
         initial
     );
 }
+
+#[cfg(test)]
+#[path = "edit_sync_fontify_coverage_default_startup_test.rs"]
+mod default_startup_tests;

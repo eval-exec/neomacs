@@ -146,11 +146,23 @@ fn observed_sync(
     Counts,
     crate::incremental_layout::lazy_proof_test_support::Counts,
 ) {
+    observed_sync_with_policy(Some(enabled))
+}
+
+fn observed_sync_with_policy(
+    enabled: Option<bool>,
+) -> (
+    FrameObservation,
+    String,
+    LayoutStats,
+    Counts,
+    crate::incremental_layout::lazy_proof_test_support::Counts,
+) {
     let _policy = ProducerGuard::set(false);
     let _sync = SyncGuard::set(true);
-    let _keys = Guard::set(enabled);
+    let _keys = enabled.map(Guard::set);
     let _budget = SourceBudgetGuard::set(true);
-    assert_eq!(probes::forced(), Some(enabled));
+    assert_eq!(probes::forced(), enabled);
     let text = source();
     let (mut eval, frame_id, _buffer, _window) = incr_editing_frame(&text, 800, 600);
     prepare_faces(&mut eval, &text);
@@ -265,6 +277,10 @@ fn accepted_sync_inlines_canonical_keys_after_complete_output_and_callbacks() {
     );
     assert!(on.3.inline_constructions > 0);
 }
+
+#[cfg(test)]
+#[path = "property_keys_default_startup_test.rs"]
+mod default_startup_tests;
 
 #[cfg(test)]
 #[path = "edit_sync_dense_index_engine_test.rs"]

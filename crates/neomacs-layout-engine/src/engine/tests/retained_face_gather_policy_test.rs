@@ -1,9 +1,8 @@
 use super::*;
 
 #[test]
-fn face_gather_parser_is_default_off_and_scoped_policy_is_numeric() {
+fn face_gather_parser_preserves_explicit_values_and_scoped_numeric_policy() {
     use std::ffi::OsStr;
-    assert!(!parse(None));
     for value in [
         "", " ", "off", "0", "false", "no", "invalid", "verify", "only",
     ] {

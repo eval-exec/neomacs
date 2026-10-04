@@ -23,7 +23,7 @@
 //! | `NEOMACS_MODE_LINE_PROP_SLICE` | `off` | `off`; `on`/`1`/`true`/`yes` | Clip and graft literal source intervals with one plist copy |
 //! | `NEOMACS_MODE_LINE_PROP_BORROW` | `off` | `off`; `on`/`1`/`true`/`yes` | Borrow source string intervals during synchronous mode-line property reads |
 //! | `NEOMACS_MODE_LINE_PLAIN_FIELD` | `off` | `off`; `on`/`1`/`true`/`yes` | Append property-free percent text directly to the mode-line output |
-//! | `NEOMACS_MODE_LINE_NUMERIC_PADDING` | `off` | `off`; `on`/`1`/`true`/`yes` | Keep numeric-wrapper padding independent of inherited mode-line properties |
+//! | `NEOMACS_MODE_LINE_NUMERIC_PADDING` | `on` | `off`; `on`/`1`/`true`/`yes` | Keep numeric-wrapper padding independent of inherited mode-line properties |
 //! | `NEOMACS_REDISPLAY_GNU_HOOKS` | `off` | `off`; `on`/`1`/`true`/`yes` | GNU redisplay transaction, owned pre targets, live hook order and core configuration-hook default; selected-mini preparation; renderer-inert snapshot positions |
 
 #[path = "mode_line_flow.rs"]

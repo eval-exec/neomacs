@@ -2,8 +2,7 @@
 use super::parse;
 use std::ffi::OsStr;
 #[test]
-fn coverage_policy_retains_default_off_and_explicit_input_aliases() {
-    assert!(!parse(None));
+fn explicit_policy_preserves_aliases_empty_invalid_and_nonunicode_inputs() {
     for value in [
         "off", "false", "0", "no", "legacy", "prove", "", " ", "invalid",
     ] {

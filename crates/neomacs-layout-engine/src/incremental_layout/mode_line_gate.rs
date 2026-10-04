@@ -5,7 +5,7 @@
 //! or do not -- so it must be GNU's decision, clause for clause, and not a
 //! structural approximation of it.
 //!
-//! * `legacy` (the default) keeps the P5.2 rule: an edit replay keeps its
+//! * `legacy` keeps the P5.2 rule: an edit replay keeps its
 //!   chrome only when the walk regenerates exactly the cursor's row. That rule
 //!   is stricter than GNU in two common cases: the box-topology lookbehind
 //!   pulls the row ABOVE the edit into the walk whenever the damage starts at
@@ -13,7 +13,7 @@
 //!   line jit-lock marks from its start), and it never looks at WHY the rest
 //!   of the line is unchanged. Measured with a counting `:eval` over 20
 //!   typing cycles at the end of a buffer: GNU 20, neomacs 40.
-//! * `gnu` ports GNU's optimization-1 guard (`redisplay_internal`,
+//! * `gnu` (the unset default) ports GNU's optimization-1 guard (`redisplay_internal`,
 //!   xdisp.c:17596-17720) as one [`ModeLineDecision`] per window: the dirty
 //!   flags, the modified star, `consider_all_windows_p` from `bset_redisplay`,
 //!   the recorded cursor line, `text_outside_line_unchanged_p` with GNU's
@@ -24,12 +24,16 @@
 //! GNU positions are 1-based and the retained rows are 0-based; every
 //! conversion is spelled out where it happens.
 
+//! | Knob | Default | Values | Gate |
+//! | --- | --- | --- | --- |
+//! | `NEOMACS_MODE_LINE_GATE` | `gnu` | `legacy`, `off`; `gnu`/`on`/`1` | GNU optimization-1 selects retained chrome; only absence selects the default, malformed values retain legacy. |
+
 use neomacs_display_protocol::glyph_matrix::GlyphRow;
 
 /// `NEOMACS_MODE_LINE_GATE`: which rule decides a replay's chrome.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ModeLineGate {
-    /// The P5.2 structural rule (default).
+    /// The P5.2 structural rule.
     Legacy,
     /// GNU's optimization-1 guard, clause by clause.
     Gnu,
@@ -52,7 +56,7 @@ pub(crate) fn set_mode_line_gate_for_test(gate: Option<ModeLineGate>) {
 /// mutators may call it concurrently; the existing OnceLock publishes policy.
 fn parse_mode_line_gate(value: Option<&std::ffi::OsStr>) -> ModeLineGate {
     let Some(value) = value else {
-        return ModeLineGate::Legacy;
+        return ModeLineGate::Gnu;
     };
     match value
         .to_str()
@@ -64,7 +68,7 @@ fn parse_mode_line_gate(value: Option<&std::ffi::OsStr>) -> ModeLineGate {
     }
 }
 
-/// The gate in effect. Read once per process; default `legacy`.
+/// The gate in effect. Read once per process; unset default `gnu`.
 pub(crate) fn mode_line_gate() -> ModeLineGate {
     #[cfg(test)]
     if let Some(gate) = GATE_OVERRIDE.with(std::cell::Cell::get) {
@@ -445,3 +449,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/mode_line_gate_policy_aliases.rs"]
 mod mode_line_gate_policy_aliases_tests;
+
+#[cfg(test)]
+#[path = "tests/mode_line_gate_default_policy.rs"]
+mod mode_line_gate_default_policy_tests;

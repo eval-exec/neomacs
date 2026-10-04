@@ -16,6 +16,9 @@ pub(super) fn enabled() -> bool {
 }
 
 pub(super) fn parse(value: Option<&OsStr>) -> bool {
+    if value.is_none() {
+        return true;
+    }
     matches!(
         value
             .and_then(OsStr::to_str)
@@ -106,3 +109,7 @@ impl PaddingRanges {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/numeric_padding_default_policy.rs"]
+mod numeric_padding_default_policy_tests;

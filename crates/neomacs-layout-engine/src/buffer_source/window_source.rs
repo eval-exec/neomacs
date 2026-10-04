@@ -2,7 +2,7 @@
 //!
 //! | Knob | Default | Values | Gate |
 //! | --- | --- | --- | --- |
-//! | `NEOMACS_EDIT_SYNC_SOURCE_BUDGET` | `off` | `off`, `on` | Copy through a known sync stop with real source lookahead, retrying locally if the walk cannot synchronize. |
+//! | `NEOMACS_EDIT_SYNC_SOURCE_BUDGET` | `on` | `off`, `on` | Copy through a known sync stop with real source lookahead, retrying locally if the walk cannot synchronize. |
 
 use crate::neovm_bridge::{ForwardScrollMeasurement, LayoutBufferView, RustBufferAccess};
 use crate::scroll_policy::{
@@ -102,7 +102,7 @@ pub(crate) fn sync_source_budget_horizon_reads_for_test() -> u64 {
 /// mutators may call it concurrently; the existing OnceLock publishes policy.
 fn parse_sync_source_budget(value: Option<&std::ffi::OsStr>) -> bool {
     let Some(value) = value else {
-        return false;
+        return true;
     };
     value.to_str().is_some_and(|value| {
         matches!(
@@ -668,3 +668,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/source_budget_policy_aliases.rs"]
 mod source_budget_policy_aliases_tests;
+
+#[cfg(test)]
+#[path = "tests/source_budget_default_policy.rs"]
+mod source_budget_default_policy_tests;

@@ -2,8 +2,8 @@ use super::parse_lazy_proof;
 use std::ffi::{OsStr, OsString};
 
 #[test]
-fn lazy_proof_selector_defaults_off_and_accepts_only_explicit_aliases() {
-    assert!(!parse_lazy_proof(None));
+fn lazy_proof_selector_defaults_on_only_when_absent_and_accepts_explicit_aliases() {
+    assert!(parse_lazy_proof(None));
     for value in ["", " ", "off", "0", "false", "no", "invalid", "sync", "gnu"] {
         assert!(!parse_lazy_proof(Some(OsStr::new(value))), "{value:?}");
     }

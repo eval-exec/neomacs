@@ -6,11 +6,14 @@ use neovm_core::buffer::CharPos0;
 use neovm_core::window::WindowDisplaySnapshot;
 use std::ffi::OsStr;
 
-/// Pure startup parser. Only explicit ON aliases enable this default-OFF flag.
+/// Pure startup parser. Absence or explicit ON aliases enable this numeric flag.
 /// No Lisp or mutable per-buffer state is read, retained or published.
 #[cold]
 #[inline(never)]
 fn parse(value: Option<&OsStr>) -> bool {
+    if value.is_none() {
+        return true;
+    }
     value.and_then(OsStr::to_str).is_some_and(|value| {
         matches!(
             value.trim().to_ascii_lowercase().as_str(),

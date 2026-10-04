@@ -5,10 +5,13 @@
 use super::{EditSyncInstall, EditSyncPlan, MatrixRow, RetainedWindowMatrix};
 use neovm_core::buffer::position::LispCharPos1;
 
-/// Pure startup selector parser; every absent/empty/invalid/nonUnicode value is OFF.
+/// Absence alone selects ON; explicit empty/invalid/nonUnicode input stays OFF.
 #[cold]
 #[inline(never)]
 fn parse(value: Option<&std::ffi::OsStr>) -> bool {
+    if value.is_none() {
+        return true;
+    }
     value
         .and_then(std::ffi::OsStr::to_str)
         .is_some_and(|value| {

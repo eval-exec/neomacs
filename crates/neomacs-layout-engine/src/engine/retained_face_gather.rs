@@ -2,12 +2,15 @@
 //!
 //! | Knob | Default | Values | Gate |
 //! | --- | --- | --- | --- |
-//! | `NEOMACS_RETAINED_FACE_GATHER` | `off` | `off`, `on` | Gather ordinary retained row dependencies directly into the frame sorted set; prepared admission is unchanged. |
+//! | `NEOMACS_RETAINED_FACE_GATHER` | `on` | `off`, `on` | Gather ordinary retained row dependencies directly into the frame sorted set; prepared admission is unchanged. |
 
-/// Pure numeric parser. Absent, empty, invalid and nonUnicode values are OFF;
+/// Pure numeric parser. Absence is ON; empty, invalid and nonUnicode values are OFF;
 /// concurrent callers read no Lisp state or mutable runtime ownership.
 #[inline]
 fn parse(value: Option<&std::ffi::OsStr>) -> bool {
+    if value.is_none() {
+        return true;
+    }
     value
         .and_then(std::ffi::OsStr::to_str)
         .is_some_and(|value| {
@@ -34,3 +37,7 @@ pub(super) fn enabled() -> bool {
 #[cfg(test)]
 #[path = "tests/retained_face_gather_policy_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/retained_face_gather_absence_policy_test.rs"]
+mod absence_policy;

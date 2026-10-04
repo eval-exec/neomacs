@@ -6,7 +6,7 @@
 //! | Knob | Default | Values | Gate |
 //! | --- | --- | --- | --- |
 //! | `NEOMACS_LAYOUT_LINE_COUNT` | `on` | `off`, `on`, `verify` | Count source newlines with `memchr` over the same backend chunks; verify compares with the scalar scan. |
-//! | `NEOMACS_LAYOUT_PROPERTY_KEYS_INLINE` | `off` | `off`; `on`/`1`/`true`/`yes` | Store a canonical-only prepared property key inline; aliases retain ordered heap storage. |
+//! | `NEOMACS_LAYOUT_PROPERTY_KEYS_INLINE` | `on` | `off`; `on`/`1`/`true`/`yes` | Store a canonical-only prepared property key inline; aliases retain ordered heap storage. |
 //! The numeric mode is read once per process. Indexed counts and byte-range
 //! clamping precede the fallback scan in every mode. Concurrent readers share
 //! only the initialized numeric mode; each scan borrows its own backend view

@@ -74,6 +74,23 @@ pub(crate) struct Guard {
     _thread: PhantomData<Rc<()>>,
 }
 impl Guard {
+    /// Observe the actual startup policy without writing the Dense override.
+    /// This exclusively owned test-thread scope resets numeric witnesses and
+    /// selects competing Still OFF, restoring both and the original None policy
+    /// on unwind. No Lisp state or production selector state is stored here.
+    pub(crate) fn observe_default() -> Self {
+        let prior = FORCED.with(Cell::get);
+        assert_eq!(prior, None, "actual Dense default must not be forced");
+        let counts = COUNTS.with(|cell| cell.replace(Counts::default()));
+        let still = super::STILL_OVERRIDE.with(|cell| cell.replace(Some(false)));
+        Self {
+            prior,
+            counts,
+            still,
+            _thread: PhantomData,
+        }
+    }
+
     pub(crate) fn set(enabled: bool) -> Self {
         let prior = FORCED.with(|cell| cell.replace(Some(enabled)));
         let counts = COUNTS.with(|cell| cell.replace(Counts::default()));

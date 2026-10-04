@@ -128,3 +128,7 @@ fn dense_index_keeps_newline_wrap_callbacks_and_source_horizon_outputs() {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "edit_sync_dense_index_default_startup_test.rs"]
+mod default_startup_tests;

@@ -2,8 +2,7 @@ use super::*;
 use std::ffi::OsStr;
 
 #[test]
-fn selector_is_default_off_and_preserves_explicit_invalid_empty_and_nonunicode_inputs() {
-    assert!(!parse(None));
+fn selector_preserves_explicit_invalid_empty_and_nonunicode_inputs() {
     for value in [
         "", " ", "off", "false", "0", "no", "legacy", "prove", "sync", "invalid",
     ] {
