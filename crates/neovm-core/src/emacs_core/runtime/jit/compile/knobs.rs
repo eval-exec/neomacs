@@ -1652,8 +1652,18 @@ pub(crate) fn jit_opt_mode() -> OptMode {
     if let Some(mode) = OPT_TEST_OVERRIDE.with(|v| v.get()) {
         return mode;
     }
+    #[cfg(test)]
+    if let Some(defaults) = super::opt_profile::test_defaults() {
+        return defaults.mode;
+    }
     static MODE: std::sync::OnceLock<OptMode> = std::sync::OnceLock::new();
-    *MODE.get_or_init(|| OptMode::parse(std::env::var("NEOVM_JIT_OPT").ok().as_deref()))
+    *MODE.get_or_init(|| {
+        super::opt_profile::resolve(
+            std::env::var("NEOVM_JIT_OPT").as_deref(),
+            || super::opt_profile::selected().mode,
+            OptMode::parse,
+        )
+    })
 }
 
 /// Reach admissions for the new backend. Threading: an immutable scalar mask,
@@ -1698,8 +1708,18 @@ pub(crate) fn jit_opt_admit() -> OptAdmit {
     if let Some(bits) = OPT_ADMIT_TEST_OVERRIDE.with(|v| v.get()) {
         return bits;
     }
+    #[cfg(test)]
+    if let Some(defaults) = super::opt_profile::test_defaults() {
+        return defaults.admit;
+    }
     static BITS: std::sync::OnceLock<OptAdmit> = std::sync::OnceLock::new();
-    *BITS.get_or_init(|| OptAdmit::parse(std::env::var("NEOVM_JIT_OPT_ADMIT").ok().as_deref()))
+    *BITS.get_or_init(|| {
+        super::opt_profile::resolve(
+            std::env::var("NEOVM_JIT_OPT_ADMIT").as_deref(),
+            || super::opt_profile::selected().admit,
+            OptAdmit::parse,
+        )
+    })
 }
 #[cfg(test)]
 thread_local! {
@@ -1782,8 +1802,18 @@ pub(crate) fn jit_opt_passes() -> OptPasses {
     if let Some(passes) = OPT_PASSES_TEST_OVERRIDE.with(|v| v.get()) {
         return passes;
     }
+    #[cfg(test)]
+    if let Some(defaults) = super::opt_profile::test_defaults() {
+        return defaults.passes;
+    }
     static PASSES: std::sync::OnceLock<OptPasses> = std::sync::OnceLock::new();
-    *PASSES.get_or_init(|| OptPasses::parse(std::env::var("NEOVM_JIT_OPT_PASSES").ok().as_deref()))
+    *PASSES.get_or_init(|| {
+        super::opt_profile::resolve(
+            std::env::var("NEOVM_JIT_OPT_PASSES").as_deref(),
+            || super::opt_profile::selected().passes,
+            OptPasses::parse,
+        )
+    })
 }
 
 #[cfg(test)]
@@ -1800,8 +1830,18 @@ pub(crate) fn force_opt_passes_for_test(passes: Option<OptPasses>) {
 /// Default-OFF compile-time pass work elision. Threading: immutable process
 /// configuration only, never Lisp state, mutator pointers or compiler scratch.
 pub(crate) fn jit_opt_fast() -> bool {
+    #[cfg(test)]
+    if let Some(defaults) = super::opt_profile::test_defaults() {
+        return defaults.fast;
+    }
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var("NEOVM_JIT_OPT_FAST").as_deref() == Ok("on"))
+    *ENABLED.get_or_init(|| {
+        super::opt_profile::resolve(
+            std::env::var("NEOVM_JIT_OPT_FAST").as_deref(),
+            || super::opt_profile::selected().fast,
+            |value| value == Some("on"),
+        )
+    })
 }
 
 /// Compile-only profitability policy. Threading: immutable process configuration;
@@ -1829,9 +1869,18 @@ pub(crate) fn jit_opt_profit() -> OptProfitMode {
     if let Some(mode) = OPT_PROFIT_TEST_OVERRIDE.with(std::cell::Cell::get) {
         return mode;
     }
+    #[cfg(test)]
+    if let Some(defaults) = super::opt_profile::test_defaults() {
+        return defaults.profit;
+    }
     static MODE: std::sync::OnceLock<OptProfitMode> = std::sync::OnceLock::new();
-    *MODE
-        .get_or_init(|| OptProfitMode::parse(std::env::var("NEOVM_JIT_OPT_PROFIT").ok().as_deref()))
+    *MODE.get_or_init(|| {
+        super::opt_profile::resolve(
+            std::env::var("NEOVM_JIT_OPT_PROFIT").as_deref(),
+            || super::opt_profile::selected().profit,
+            OptProfitMode::parse,
+        )
+    })
 }
 #[cfg(test)]
 thread_local! {
@@ -1867,8 +1916,18 @@ pub(crate) fn jit_opt_early() -> OptEarlyMode {
     if let Some(value) = OPT_EARLY_TEST_OVERRIDE.with(std::cell::Cell::get) {
         return value;
     }
+    #[cfg(test)]
+    if let Some(defaults) = super::opt_profile::test_defaults() {
+        return defaults.early;
+    }
     static MODE: std::sync::OnceLock<OptEarlyMode> = std::sync::OnceLock::new();
-    *MODE.get_or_init(|| OptEarlyMode::parse(std::env::var("NEOVM_JIT_OPT_EARLY").ok().as_deref()))
+    *MODE.get_or_init(|| {
+        super::opt_profile::resolve(
+            std::env::var("NEOVM_JIT_OPT_EARLY").as_deref(),
+            || super::opt_profile::selected().early,
+            OptEarlyMode::parse,
+        )
+    })
 }
 /// Optional original/final selected-front size bound; zero is disabled.
 /// Threading: immutable compiler configuration only. The builder retains its
@@ -1878,12 +1937,21 @@ pub(crate) fn jit_opt_max_ops() -> usize {
     if let Some(value) = OPT_MAX_OPS_TEST_OVERRIDE.with(std::cell::Cell::get) {
         return value;
     }
+    #[cfg(test)]
+    if let Some(defaults) = super::opt_profile::test_defaults() {
+        return defaults.max_ops;
+    }
     static MAX: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *MAX.get_or_init(|| {
-        std::env::var("NEOVM_JIT_OPT_MAX_OPS")
-            .ok()
-            .and_then(|value| value.trim().parse().ok())
-            .unwrap_or(0)
+        super::opt_profile::resolve(
+            std::env::var("NEOVM_JIT_OPT_MAX_OPS").as_deref(),
+            || super::opt_profile::selected().max_ops,
+            |value| {
+                value
+                    .and_then(|value| value.trim().parse().ok())
+                    .unwrap_or(0)
+            },
+        )
     })
 }
 #[cfg(test)]

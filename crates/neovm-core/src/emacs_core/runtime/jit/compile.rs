@@ -4070,6 +4070,7 @@ mod numeric_carrier;
 pub(crate) mod opt_backend;
 pub(crate) mod opt_census;
 mod opt_emission;
+mod opt_profile;
 pub(crate) mod opt_profit;
 pub(crate) mod opt_report;
 mod sink_cold_snapshot;
