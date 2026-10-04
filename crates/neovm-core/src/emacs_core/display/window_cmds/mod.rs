@@ -8006,99 +8006,33 @@ pub(crate) fn builtin_force_window_update(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("force-window-update", &args, 1)?;
-    if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
-        let Some(object) = args.first().filter(|value| !value.is_nil()) else {
-            eval.gnu_mark_windows_all();
-            eval.request_mode_line_update(
-                crate::emacs_core::eval::ModeLineUpdateTarget::AllBuffers,
-            );
-            return Ok(Value::T);
-        };
-        if let Some(id) = object.as_window_id()
-            && eval.frames.is_live_window_id(WindowId(id))
-        {
-            eval.gnu_mark_window_redisplay(WindowId(id));
-            eval.request_mode_line_update(
-                crate::emacs_core::eval::ModeLineUpdateTarget::AllBuffers,
-            );
-            return Ok(Value::T);
-        }
-        let target = if object.as_buffer_id().is_some() {
-            object.as_buffer_id()
-        } else if object.is_string() {
-            find_buffer_by_name_arg(&eval.buffers, object)?
-        } else {
-            None
-        };
-        let Some(buffer) = target.filter(|id| eval.buffers.get(*id).is_some()) else {
-            return Ok(Value::NIL);
-        };
-        ensure_selected_frame_id(eval);
-        let mut windows = Vec::new();
-        for fid in eval.frames.frame_list() {
-            if let Some(frame) = eval.frames.get(fid) {
-                // GNU force-window-update's buffer window_loop uses Qvisible
-                // and excludes mini windows (window.c:4525,3260).
-                if !frame.visibility.is_visible() {
-                    continue;
-                }
-                for wid in frame.window_list() {
-                    if frame.minibuffer_window != Some(wid)
-                        && frame.find_window(wid).and_then(Window::buffer_id) == Some(buffer)
-                    {
-                        windows.push(wid);
-                    }
-                }
+    let target = if let Some(object) = args.first().filter(|value| !value.is_nil()) {
+        if let Some(id) = object.as_window_id() {
+            let window = WindowId(id);
+            if !eval.frames.is_live_window_id(window) {
+                return Ok(Value::NIL);
             }
-        }
-        if windows.is_empty() {
-            return Ok(Value::NIL);
-        }
-        for wid in windows {
-            eval.gnu_mark_window_redisplay(wid);
-        }
-        eval.request_mode_line_update(crate::emacs_core::eval::ModeLineUpdateTarget::AllBuffers);
-        return Ok(Value::T);
-    }
-    let Some(object) = args.first().filter(|v| !v.is_nil()) else {
-        // nil OBJECT: force all windows.
-        eval.force_body_redisplay(ForcedBodyRedisplay::AllWindows);
-        eval.request_global_mode_line_update();
-        return Ok(Value::T);
-    };
-
-    // A live window forces just that window (and its displayed buffer).
-    if let Some(id) = object.as_window_id() {
-        let window = WindowId(id);
-        if eval.frames.is_live_window_id(window) {
-            eval.force_body_redisplay(ForcedBodyRedisplay::Window(window));
-            eval.request_global_mode_line_update();
-            return Ok(Value::T);
-        }
-        // A dead window vector is not an error in GNU; it just does nothing.
-        return Ok(Value::NIL);
-    }
-
-    // A buffer vector or buffer name.  Unlike buffer-designator resolution for
-    // editing primitives, an unknown name or a killed buffer must NOT signal.
-    let buffer = match object.kind() {
-        ValueKind::Veclike(VecLikeType::Buffer) => object
-            .as_buffer_id()
-            .filter(|id| eval.buffers.get(*id).is_some()),
-        ValueKind::String => find_buffer_by_name_arg(&eval.buffers, object)?,
-        _ => None,
-    };
-    let Some(buffer) = buffer else {
-        return Ok(Value::NIL);
-    };
-    // GNU's preliminary buffer_window_count includes indirect buffers and
-    // hidden frames. Its actual REDISPLAY_BUFFER_WINDOWS walk then requires
-    // exact contents on a visible frame. window_loop's mini=false excludes
-    // minibuffer windows even while active; explicit window forcing above
-    // still accepts a live minibuffer window.
-    let base_frame = ensure_selected_frame_id(eval);
-    let displayed =
-        frame_ids_for_all_frames_scope(&eval.frames, base_frame, AllFramesScope::VisibleFrames)
+            ForcedBodyRedisplay::Window(window)
+        } else {
+            // Unknown names and killed buffers do not signal. GNU's buffer
+            // walk requires exact contents on a visible frame and excludes
+            // minibuffers; explicit window forcing still accepts a live mini.
+            let buffer = match object.kind() {
+                ValueKind::Veclike(VecLikeType::Buffer) => object
+                    .as_buffer_id()
+                    .filter(|id| eval.buffers.get(*id).is_some()),
+                ValueKind::String => find_buffer_by_name_arg(&eval.buffers, object)?,
+                _ => None,
+            };
+            let Some(buffer) = buffer else {
+                return Ok(Value::NIL);
+            };
+            let base_frame = ensure_selected_frame_id(eval);
+            let displayed = frame_ids_for_all_frames_scope(
+                &eval.frames,
+                base_frame,
+                AllFramesScope::VisibleFrames,
+            )
             .into_iter()
             .filter_map(|id| eval.frames.get(id))
             .any(|frame| {
@@ -8106,11 +8040,43 @@ pub(crate) fn builtin_force_window_update(
                     frame.find_window(window).and_then(Window::buffer_id) == Some(buffer)
                 })
             });
-    if !displayed {
-        return Ok(Value::NIL);
+            if !displayed {
+                return Ok(Value::NIL);
+            }
+            ForcedBodyRedisplay::Buffer(buffer)
+        }
+    } else {
+        ForcedBodyRedisplay::AllWindows
+    };
+
+    // Explicit forcing always moves the retained-body revision, independently
+    // of the optional GNU hook owner. Both policies use this one body request.
+    eval.force_body_redisplay(target);
+    if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+        match target {
+            ForcedBodyRedisplay::AllWindows => eval.gnu_mark_windows_all(),
+            ForcedBodyRedisplay::Window(window) => eval.gnu_mark_window_redisplay(window),
+            ForcedBodyRedisplay::Buffer(buffer) => {
+                let mut windows = Vec::new();
+                for fid in eval.frames.frame_list() {
+                    if let Some(frame) = eval.frames.get(fid)
+                        && frame.visibility.is_visible()
+                    {
+                        for window in frame.window_list() {
+                            if frame.find_window(window).and_then(Window::buffer_id) == Some(buffer)
+                            {
+                                windows.push(window);
+                            }
+                        }
+                    }
+                }
+                for window in windows {
+                    eval.gnu_mark_window_redisplay(window);
+                }
+            }
+        }
     }
-    eval.force_body_redisplay(ForcedBodyRedisplay::Buffer(buffer));
-    eval.request_global_mode_line_update();
+    eval.request_mode_line_update(crate::emacs_core::eval::ModeLineUpdateTarget::AllBuffers);
     Ok(Value::T)
 }
 
