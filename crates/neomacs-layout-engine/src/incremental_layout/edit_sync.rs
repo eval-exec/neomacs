@@ -800,6 +800,32 @@ pub(crate) fn plan_positions(
 ) -> Option<EditSyncPlan> {
     let delta = damage.delta();
     let dirty_start = damage.start();
+    // GNU handles upward row shifts with a second walk at the window bottom
+    // (xdisp.c:23237-23284). We have no such walk: a capped Sync attempt after
+    // a proved removed line boundary ordinarily exhausts its horizon and
+    // retries. Decline that plan before allocating candidates/checkpoints;
+    // the existing newline proof then keeps the unchanged prefix and walks
+    // the rest once. Replacements and widened/unknown property damage retain
+    // the ordinary exact Sync/retry path: a negative net delta alone cannot
+    // prove that a line boundary was removed.
+    if delta < 0
+        && damage.end_old().checked_add(delta) == Some(dirty_start)
+        && prev.key.display_table.is_unset()
+        && body
+            .windows(2)
+            .skip(first_dirty)
+            .filter(|pair| {
+                !pair[0].1.continued
+                    && pair[0].1.string_sources().is_empty()
+                    && pair[0].1.pointer_appearances().is_empty()
+                    && pair[0].1.end_charpos.checked_add(1) == Some(pair[1].1.start_charpos)
+            })
+            .map(|pair| pair[0].1.end_charpos as i64)
+            .find(|end| *end >= dirty_start)
+            .is_some_and(|end| end < damage.end_old())
+    {
+        return None;
+    }
     // `last_unchanged_pos_old` in 0-based terms: the first old position whose
     // character AND predecessor are both outside the change.
     let min_start = damage.end_old() + 1;

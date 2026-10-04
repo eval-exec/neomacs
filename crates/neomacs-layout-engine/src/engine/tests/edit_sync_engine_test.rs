@@ -7,6 +7,14 @@
 //! walked (gate F3: at most 2 for a tab, CJK, `display` or newline edit).
 
 use super::*;
+
+#[cfg(test)]
+#[path = "edit_sync_line_number_replay_test.rs"]
+mod line_number_replay;
+
+#[cfg(test)]
+#[path = "edit_sync_join_budget_test.rs"]
+mod join_budget;
 use crate::incremental_layout::edit_sync::{
     EditSyncMode, set_edit_sync_mode_for_test, set_prove_first_for_test, set_shift_skip_for_test,
 };
@@ -601,7 +609,7 @@ fn source_budget_retry_does_not_repeat_unmarking_fontification_callbacks() {
                           (list (lambda (_position) \
                                   (setq sync-budget-fontify-count \
                                         (1+ sync-budget-fontify-count))))) \
-                    (delete-region (point) (1+ (point))))",
+                    (put-text-property (point) (1+ (point)) 'invisible t))",
             )
             .unwrap();
         frame
@@ -674,11 +682,12 @@ fn source_budget_retry_restores_remapped_background_frame_artifacts() {
         .engine
         .layout_frame_rust(&mut frame.eval, frame.frame_id);
     crate::buffer_source::window_source::reset_sync_source_budget_retries_for_test();
-    // Joining the next physical line drives this sync candidate past its old
-    // stop. The capped attempt must fail and restore its unpublished face fill.
+    // Hiding a source newline without deleting it moves the rendered suffix
+    // upward. This unknown/non-pure damage must still exhaust the cap and
+    // restore its unpublished remapped face fill before the exact retry.
     frame
         .eval
-        .eval_str("(delete-region (point) (1+ (point)))")
+        .eval_str("(put-text-property (point) (1+ (point)) 'invisible t)")
         .unwrap();
     frame
         .engine
@@ -765,7 +774,3 @@ mod source_budget_consumers;
 #[cfg(test)]
 #[path = "edit_sync_source_budget_replay_retry.rs"]
 mod source_budget_replay_retry;
-
-#[cfg(test)]
-#[path = "edit_sync_line_number_replay_test.rs"]
-mod line_number_replay;

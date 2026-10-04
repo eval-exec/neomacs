@@ -22,6 +22,14 @@ enum GlyphInput {
 }
 
 impl LayoutDisplayTableInput {
+    /// Whether this immutable snapshot has no effective display table.
+    /// This borrows only captured numeric state; independent mutators may
+    /// inspect their snapshots concurrently without reading Lisp objects.
+    #[inline]
+    pub fn is_unset(&self) -> bool {
+        self.table == 0
+    }
+
     pub(super) fn capture(table: Value) -> Self {
         if !chartable::is_char_table(&table) {
             return Self::default();

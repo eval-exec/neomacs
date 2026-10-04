@@ -190,8 +190,9 @@ fn source_budget_newline_remapping_display_table_retries_before_semantic_eob() {
     let _budget = SourceBudgetGuard::set(true);
     // GNU whitespace-mode's supported shape displays an arrow before each
     // real source newline. Keep genuine line boundaries for sync admission;
-    // deleting that source newline then makes the converged suffix rise one
-    // row, which the existing negative-dy gate refuses, exhausting the cap.
+    // hiding that newline without deleting it makes the converged suffix rise
+    // one row. The negative-dy gate refuses it, exhausting the cap; the new
+    // pure-deletion witness cannot reject property-only damage.
     let text = tabbed_source(80);
     let mut frame = SyncFrame::new(&text, end_of_line(&text, 15));
     let table = Value::make_char_table(Value::symbol("display-table"), Value::NIL, 6);
@@ -244,7 +245,11 @@ fn source_budget_newline_remapping_display_table_retries_before_semantic_eob() {
             > 20,
         "fixture must retain many genuine text rows, rather than wrapping one joined line"
     );
-    budget_consumer_step(&mut frame, "(delete-region (point) (1+ (point)))", Some(1));
+    budget_consumer_step(
+        &mut frame,
+        "(put-text-property (point) (1+ (point)) 'invisible t)",
+        Some(1),
+    );
 }
 
 #[test]

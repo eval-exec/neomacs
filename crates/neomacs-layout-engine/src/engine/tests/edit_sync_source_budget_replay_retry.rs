@@ -1,5 +1,5 @@
-//! Artificial source exhaustion must preserve the already admitted edit
-//! replay, not turn a joined line into a full-window classification.
+//! A proved joined line must preserve the admitted edit prefix without
+//! arming an artificial source horizon that cannot synchronize upward.
 use super::*;
 
 #[test]
@@ -21,7 +21,10 @@ fn source_budget_joined_line_retry_preserves_edit_classification_and_prefix() {
     let (off, off_retries) = run(false);
     let (on, on_retries) = run(true);
     assert_eq!(off_retries, 0);
-    assert_eq!(on_retries, 1, "must exercise artificial horizon exhaustion");
+    assert_eq!(
+        on_retries, 0,
+        "a proved join must skip the artificial horizon"
+    );
     assert_eq!(off.edit_windows, 1, "{off:?}");
     assert_eq!(on.edit_windows, 1, "{on:?}");
     assert_eq!(on.full_windows, off.full_windows);
