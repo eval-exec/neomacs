@@ -614,12 +614,20 @@ fn compiled_cons_store(cell: Value, value: Value, cdr: bool) -> bool {
     }
     let address = cell.bits() & !TAG_MASK;
     let (lo, hi) = crate::tagged::collection_reads::compiled_observation_window();
-    if lo <= address && address < hi {
+    let observed = if lo <= address && address < hi {
         #[cfg(test)]
         CONS_OBSERVATION_QUERIES.with(|count| count.set(count.get() + 1));
-        if is_observed(cell.bits()) {
-            crate::tagged::gc::TaggedHeap::record_compiled_collection_write(cell.bits());
-        }
+        is_observed(cell.bits())
+    } else {
+        false
+    };
+    if observed {
+        crate::tagged::gc::TaggedHeap::record_compiled_collection_write(cell.bits());
+    } else {
+        // Complete the first refused store here, then publish its proven
+        // empty gap for later native stores. Ordinary dump, tracking and
+        // concurrent-GC requirements remain authoritative in this helper.
+        crate::tagged::gc::neovm_jit_unobserved_collection_owner(cell.bits() as i64);
     }
     let kind = if cdr {
         crate::tagged::gc::HeapWriteKind::ConsCdr

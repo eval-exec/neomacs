@@ -102,10 +102,8 @@ pub(crate) fn heap_ptr(fb: &mut FunctionBuilder, rt: &RtCtx) -> ClifValue {
 /// shim or safe point between two sites may have changed it.
 fn emit_barrier_window_check(
     fb: &mut FunctionBuilder,
-    rt: &RtCtx,
     heap: ClifValue,
     owner: ClifValue,
-    cons: bool,
     slow: Block,
 ) {
     let lo = fb.ins().load(
@@ -123,47 +121,12 @@ fn emit_barrier_window_check(
     let offset = fb.ins().isub(owner, lo);
     let inside = fb.ins().icmp(IntCC::UnsignedLessThan, offset, len);
     let outside = fb.create_block();
-    if cons
-        && rt
-            .refs
-            .group_enabled(super::shim_refs::ShimGroup::CollectionObservationGate)
-        && !rt.generational_enabled()
-    {
-        // Keep the original outside-window edge. Only a refused owner pays
-        // for exact eligibility and learns an empty gap for subsequent stores.
-        let refine = fb.create_block();
-        fb.set_cold_block(refine);
-        fb.ins().brif(inside, refine, &[], outside, &[]);
-        fb.switch_to_block(refine);
-        fb.seal_block(refine);
-        let tagged = iadd_imm_p(fb, owner, TAG_CONS as i64);
-        let unobserved = emit_unobserved_collection_owner(fb, rt, tagged);
-        fb.ins().brif(unobserved, outside, &[], slow, &[]);
-    } else {
-        fb.ins().brif(inside, slow, &[], outside, &[]);
-    }
+    // Refine an unobserved hole in the completed-store shim, exactly as for
+    // BLVs. A returning helper before the native store changes register
+    // allocation even when never called; keep this original window CFG.
+    fb.ins().brif(inside, slow, &[], outside, &[]);
     fb.switch_to_block(outside);
     fb.seal_block(outside);
-}
-
-/// The rare GEN0 observed-window query. The owner is a shape-guarded tagged
-/// cons; the shim checks independent GC requirements before permitting a
-/// native store. It publishes only compiler/runtime protocol metadata, with
-/// no Lisp allocation, callback or safe point. The caller must select this
-/// optional group for Observed JIT, and emit this call only at GEN0. Workers
-/// carry that selection in their immutable payload rather than rereading
-/// mutator configuration.
-pub(crate) fn emit_unobserved_collection_owner(
-    fb: &mut FunctionBuilder,
-    rt: &RtCtx,
-    tagged_owner: ClifValue,
-) -> ClifValue {
-    let query = rt
-        .refs
-        .try_get(fb.func, Shim::UnobservedCollectionOwner)
-        .expect("GEN0 observed stores declare the observation-gate shim");
-    let call = fb.ins().call(query, &[tagged_owner]);
-    fb.inst_results(call)[0]
 }
 
 /// Record an accepted Cons or VecLike store with the existing GEN1 helper.
@@ -211,7 +174,7 @@ pub(crate) fn emit_cons_store_barrier(
     // entry check as ordinary inline cons stores. This is compiler metadata.
     note_inline_site();
     let heap = heap_ptr(fb, rt);
-    emit_barrier_window_check(fb, rt, heap, owner, true, slow);
+    emit_barrier_window_check(fb, heap, owner, slow);
     if !rt.generational_enabled() {
         if jit_gen0_collection_journal_eager() {
             emit_collection_write(fb, rt, owner, TAG_CONS);
@@ -272,7 +235,7 @@ fn emit_slot_store_barrier(
 ) {
     use super::jit_layout::heap::GC_HEADER_TENURED_OFFSET;
     use crate::tagged::header::GcHeader;
-    emit_barrier_window_check(fb, rt, heap, owner, false, slow);
+    emit_barrier_window_check(fb, heap, owner, slow);
     if rt.generational_enabled() && super::lowering::is_known_fixnum(fb, value) {
         emit_collection_write(fb, rt, owner, crate::tagged::value::TAG_VECLIKE);
         return;

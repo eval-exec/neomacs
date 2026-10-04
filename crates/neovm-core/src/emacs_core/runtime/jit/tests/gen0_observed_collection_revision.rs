@@ -638,8 +638,8 @@ fn gen0_native_refined_gap_closes_when_owner_is_read_after_store() {
         assert_eq!(LispCollectionRevision::current(), before);
         assert_eq!(
             cons_shims(),
-            shims,
-            "the cold refinement keeps stores inline"
+            shims + 1,
+            "the first refusal completes in the shim; later stores stay inline"
         );
         assert!(endpoints.unchanged());
         let address = target.bits() & !crate::tagged::value::TAG_MASK;
@@ -665,7 +665,7 @@ fn gen0_native_refined_gap_closes_when_owner_is_read_after_store() {
             LispCollectionRevision::current().steps_since_for_test(before),
             1
         );
-        assert_eq!(cons_shims(), shims + 1);
+        assert_eq!(cons_shims(), shims + 2);
         assert!(
             !reads.unchanged(),
             "the same leaf journals the newly observed owner"
