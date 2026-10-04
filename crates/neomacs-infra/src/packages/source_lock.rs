@@ -15,6 +15,11 @@ use crate::workspace_root;
 const LOCKED_PACKAGE_MANIFEST: &str = include_str!("melpa-package-lock.tsv");
 static LOCKED_PACKAGE_CATALOG: OnceLock<Result<LockedPackageCatalog, String>> = OnceLock::new();
 
+/// The pinned Telega frontend the account-free GUI fixture mounts.  Tests and
+/// the fixture harness must use this pin instead of a literal so the lock row
+/// and its consumers cannot drift apart.
+pub const TELEGA_PIN: (&str, &str) = ("telega", "20261002.1709");
+
 const MELPA_RECIPE_REPOSITORY: &str = "https://github.com/melpa/melpa";
 const MELPA_RECIPE_REVISION: &str = "517749e477c16c0437cae029be71e672061a6c19";
 const PACKAGE_BUILD_REPOSITORY: &str = "https://github.com/melpa/package-build";
