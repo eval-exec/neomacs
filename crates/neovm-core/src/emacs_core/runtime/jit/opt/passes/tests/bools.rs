@@ -668,5 +668,7 @@ fn opt_bools_verifier_requires_whitelisted_arity_and_tagged_operands() {
         })
     );
     assert!(Opcode::OpaqueBool(Op::Null).requires_frame(Effects::PURE));
-    assert!(Opcode::OpaqueBool(Op::Null).is_safepoint(Effects::PURE));
+    assert!(!Opcode::OpaqueBool(Op::Null).is_safepoint(Effects::PURE));
+    assert!(Opcode::OpaqueBool(Op::Null).is_safepoint(Effects::MAY_GC));
+    assert!(Opcode::OpaqueBool(Op::Null).is_safepoint(Effects::MAY_REENTER));
 }
