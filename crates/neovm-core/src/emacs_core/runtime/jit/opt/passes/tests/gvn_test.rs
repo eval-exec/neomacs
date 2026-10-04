@@ -1026,6 +1026,7 @@ fn list_checked(func: &mut Func, input: Value, pc: u32) -> Value {
 }
 
 fn list_opaque(func: &mut Func, block: Block, pc: u32, op: Op, base: Value) -> Value {
+    let effects = super::super::super::build::op_effects(&op).0;
     let alias = match op {
         Op::Car | Op::CarSafe => AliasClass::ConsCar,
         Op::Cdr | Op::CdrSafe => AliasClass::ConsCdr,
@@ -1040,13 +1041,7 @@ fn list_opaque(func: &mut Func, block: Block, pc: u32, op: Op, base: Value) -> V
         TypeSet::TOP,
         Rep::Tagged,
     );
-    ordered(
-        func,
-        result,
-        Effects::READ_HEAP.with(Effects::MAY_DEOPT),
-        alias,
-        &[base],
-    );
+    ordered(func, result, effects, alias, &[base]);
     result
 }
 

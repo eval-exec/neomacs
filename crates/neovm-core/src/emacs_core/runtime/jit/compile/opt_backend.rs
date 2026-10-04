@@ -6,6 +6,10 @@
 use super::*;
 use crate::emacs_core::jit::opt::{build, ir};
 
+#[cfg(test)]
+#[path = "tests/opt_opcode_transport_effects.rs"]
+mod opcode_transport_effects_tests;
+
 /// Honor a Feedback request's explicit Full policy when the verified opt plan
 /// transports at least two parameters simultaneously at an actual join. Entry
 /// parameters and serial single-parameter joins retain the outer allocator
@@ -89,6 +93,24 @@ pub(super) fn build_plan(
     )
 }
 
+/// Add effects of the selected shared-emitter transport before any pass can
+/// move values or discard memory facts. The arithmetic primitive body is
+/// GC-free, but feedback-selected generic dispatch runs signal hooks/debugger
+/// callbacks before returning an error to native code. Other primitive shims
+/// stash their signal and exit before dispatch. Threading: this reads only
+/// this compilation's copied numeric feedback, never mutable Lisp state.
+fn annotate_opcode_transport_effects(func: &mut ir::Func) {
+    use crate::emacs_core::jit::opt::mem::Effects;
+    for inst in &mut func.insts {
+        let (ir::Opcode::Opaque(op) | ir::Opcode::OpaqueBool(op)) = &inst.op else {
+            continue;
+        };
+        if arith_site_takes_generic(op, inst.pc as usize) {
+            inst.eff = inst.eff.with(Effects::MAY_REENTER).with(Effects::MAY_GC);
+        }
+    }
+}
+
 /// Scalar source-PC witnesses are captured by the synchronous mutator front;
 /// the worker never performs a Lisp function lookup. Native lowering separately
 /// checks the actual immutable callee/builtin witness. Sink off follows the
@@ -129,6 +151,7 @@ pub(super) fn build_plan_with_sqrt_sites(
         fused: fused.as_deref(),
         osr,
     })?;
+    annotate_opcode_transport_effects(&mut func);
     if func.insts.len() > 20_000 {
         return Err(CompileError::UnsupportedOp("opt-budget:instructions"));
     }

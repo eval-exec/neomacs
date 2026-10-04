@@ -460,12 +460,12 @@ impl Opcode {
             )
     }
 
+    /// Allocation and an undispatched signal do not collect. An opaque
+    /// primitive needs roots only when its body may collect or run Lisp;
+    /// genuine calls and polls retain their unconditional runtime protocol.
     pub(crate) fn is_safepoint(&self, effects: Effects) -> bool {
         effects.intersects(Effects::MAY_GC.with(Effects::MAY_REENTER))
-            || matches!(
-                self,
-                Self::Call { .. } | Self::Opaque(_) | Self::OpaqueBool(_) | Self::Poll
-            )
+            || matches!(self, Self::Call { .. } | Self::Poll)
     }
 }
 

@@ -42,7 +42,7 @@ pub(crate) mod vm_profile {
     /// from: `Op::Call` (generic funcall — the `find_spec_sites` speculation
     /// path from round 1) vs `Op::CallBuiltinSym` (buffer/point ops, the
     /// `neovm_jit_named_builtin` lowering that would need a NEW spec-site
-    /// extension) vs `Op::CallBuiltin` (name-based, override-aware).
+    /// extension) vs `Op::CallBuiltin` (constant-pool primitive name).
     pub(crate) const ENTRY_CALL: u8 = 1;
     pub(crate) const ENTRY_CALLBUILTINSYM: u8 = 2;
     pub(crate) const ENTRY_CALLBUILTIN: u8 = 3;
@@ -2245,7 +2245,6 @@ static MIN_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // 'min'
 static MINUS_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '-'
 static MODULO_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '%'
 static NUMEQ_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '='
-static ASET_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // 'aset'
 static APPLY_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // 'apply'
 
 #[cfg(test)]
@@ -2274,11 +2273,10 @@ pub(crate) enum CalleeFrameArgs {
     Local,
 }
 
-/// Whether an opcode may run builtin `id` inline: no compiler function
-/// overrides are active and `id`'s function cell is still that builtin (or
-/// empty) — not a redefinition or advice, which the opcode must dispatch
-/// through. Reads only, so JIT shims that must not reach a safe point can ask
-/// it with a shared borrow.
+/// Whether a genuine symbol call may bypass resolution and run builtin `id`.
+/// Compiler overrides, redefinition and advice must still invalidate that call
+/// fast path, as GNU's Bcall/Ffuncall does. Primitive opcodes never use this
+/// predicate: GNU's dedicated bytecode cases call their primitives directly.
 pub(crate) fn named_builtin_fast_path_allowed_in(
     ctx: &crate::emacs_core::eval::Context,
     id: SymId,
@@ -5928,30 +5926,12 @@ impl<'a> Vm<'a> {
                         stk!().pop();
                     }
                     Op::Aset => {
-                        let val = stk!().pop().unwrap_or(Value::NIL);
-                        let idx_val = stk!().pop().unwrap_or(Value::fixnum(0));
-                        let vec_val = stk!().pop().unwrap_or(Value::NIL);
-                        let mut call_args = LispArgVec::new();
-                        call_args.push(vec_val);
-                        call_args.push(idx_val);
-                        call_args.push(val);
-                        let result = if let Some(result) =
-                            vm_try!(self.maybe_call_named_function_cell(
-                                func,
-                                Self::cached_builtin_id("aset", &ASET_ID),
-                                &call_args,
-                            )) {
-                            result
-                        } else {
-                            vm_try!(builtins::builtin_aset_args(&call_args))
-                        };
-                        let root_scope = self.ctx.save_vm_roots();
-                        self.push_dynamic_vm_root(result);
-                        for value in call_args.iter().copied() {
-                            self.push_dynamic_vm_root(value);
-                        }
-                        self.maybe_writeback_mutating_first_arg("aset", None, &call_args, &result);
-                        self.ctx.restore_vm_roots(root_scope);
+                        // GNU bytecode.c:Baset runs Faset directly, regardless
+                        // of advice or the symbol's function cell. The primitive
+                        // may allocate or signal, but cannot run Lisp or collect.
+                        let start = stk!().len().saturating_sub(3);
+                        let result = vm_try_pure!(builtins::builtin_aset_args(&stk!()[start..]));
+                        stk!().truncate(start);
                         stk_push!(result);
                     }
 
@@ -6109,21 +6089,12 @@ impl<'a> Vm<'a> {
                             .is_some_and(|value| value.is_string())
                             && Self::mutates_first_arg_sym(name_id))
                         .then(|| stk!()[args_start..].iter().copied().collect::<LispArgVec>());
-                        let result = if self.named_builtin_fast_path_allowed_id(name_id) {
-                            vm_try!(
-                                self.dispatch_vm_builtin_by_id_from_stack(
-                                    func, name_id, args_start, n
-                                )
-                            )
-                        } else {
-                            let args: LispArgVec = stk!()[args_start..].iter().copied().collect();
-                            let func_val = Value::from_sym_id(name_id);
-                            vm_try!(
-                                self.with_frame_call_roots(func, func_val, args, |vm, args| {
-                                    vm.call_function(func_val, args)
-                                })
-                            )
-                        };
+                        // This is the internal representation of a primitive
+                        // opcode, never a Bcall specialization. GNU calls the
+                        // primitive directly; genuine calls remain Op::Call.
+                        let result = vm_try!(
+                            self.dispatch_vm_builtin_by_id_from_stack(func, name_id, args_start, n)
+                        );
                         if let Some(writeback_args) = writeback_args.as_ref() {
                             let root_scope = self.ctx.save_vm_roots();
                             self.push_dynamic_vm_root(result);
@@ -6241,43 +6212,8 @@ impl<'a> Vm<'a> {
         lookup_interned(name).unwrap_or_else(|| intern(name))
     }
 
-    fn named_builtin_fast_path_allowed_id(&self, id: SymId) -> bool {
-        named_builtin_fast_path_allowed_in(self.ctx, id)
-    }
-
-    /// The symbol `aset`, interned once.
-    pub(crate) fn aset_builtin_id() -> SymId {
-        Self::cached_builtin_id("aset", &ASET_ID)
-    }
-
     pub(crate) fn apply_builtin_id() -> SymId {
         Self::cached_builtin_id("apply", &APPLY_ID)
-    }
-
-    /// `Some(result)` when `id`'s live function cell is NOT the plain builtin
-    /// the opcode would inline — a redefinition or advice — so the opcode must
-    /// dispatch through it; `None` to take the inline builtin.
-    ///
-    /// Takes the SymId, not a name: this used to resolve a `&str` through
-    /// `builtin_name_id` on EVERY call, which on `nbody` was an interner
-    /// lookup per `Op::Aset` (450K calls, 101 Ir each). The arguments come by
-    /// reference and are cloned only on the rare branch that actually calls,
-    /// instead of the caller cloning its vector for every opcode.
-    fn maybe_call_named_function_cell(
-        &mut self,
-        func: &ByteCodeFunction,
-        id: SymId,
-        args: &LispArgVec,
-    ) -> Result<Option<Value>, Flow> {
-        if self.named_builtin_fast_path_allowed_id(id) {
-            return Ok(None);
-        }
-
-        let func_val = Value::from_sym_id(id);
-        self.with_frame_call_roots(func, func_val, args.clone(), |vm, args| {
-            vm.call_function(func_val, args)
-        })
-        .map(Some)
     }
 
     /// Patch every reference to a string that a mutating builtin REPLACED
@@ -7139,82 +7075,11 @@ impl<'a> Vm<'a> {
         self.assign_var_id(name_id, value)
     }
 
-    /// One bytecode-level `apply` with the interpreter's `Op::Apply` semantics:
-    /// spread the last argument as a list, writeback detection + after-call
-    /// writeback, and the plain traced `call_function` path (`Op::Apply` has no
-    /// nesting-depth guard — mirror that exactly). Used by the JIT apply shim;
-    /// keep in sync with the `Op::Apply` arm of `run_loop`. The caller polls
-    /// `maybe_quit` first and roots `func_val` + `raw_args` (the spread values
-    /// stay reachable through the rooted list).
-    #[cfg(feature = "jit")]
-    /// `Op::Aset` for JIT code — the interpreter arm minus the bc-frame
-    /// rooting (the JIT shim scratch-roots the operands; nested calls root
-    /// their own frames): override-aware named dispatch when `aset`'s
-    /// function cell was redefined, the shared `builtin_aset` otherwise, then
-    /// the unconditional string-writeback pass.
-    pub(crate) fn aset_for_jit(
-        &mut self,
-        vec_val: Value,
-        idx_val: Value,
-        val: Value,
-    ) -> EvalResult {
-        // A plain array, not a `LispArgVec`: `builtin_aset_args` and the
-        // writeback both read a SLICE, and the smallvec was most of this
-        // shim's cost — `dhrystone` is essentially all `Op::Aset` from JIT'd
-        // code, and building one here (on top of the one the shim already
-        // built) came to 141 Ir/call of the 481.
-        let call_args = [vec_val, idx_val, val];
-        // `builtin_name_id` is `lookup_interned(name).unwrap_or_else(|| intern(name))`
-        // -- a global-interner `RwLock` and a string hash. The name here is a
-        // LITERAL, so that was paid on every `aset` from JIT'd code for an id
-        // that never changes. `dhrystone` is string-mutation heavy and spent
-        // ~11% of its run in `lookup_interned` because of this.
-        let id = Self::cached_builtin_id("aset", &ASET_ID);
-        // No writeback at all: `aset` mutates its array in place and returns
-        // the same object, so no reference to it can have gone stale. See
-        // `maybe_writeback_mutating_first_arg`.
-        if self.named_builtin_fast_path_allowed_id(id) {
-            builtins::builtin_aset_args(&call_args)
-        } else {
-            let func_val = Value::from_sym_id(id);
-            self.call_function(func_val, LispArgVec::from_slice(&call_args))
-        }
-    }
-
-    /// `Op::CallBuiltin` for JIT code — the interpreter arm minus the
-    /// bc-frame rooting: named fast path when the symbol's function cell is
-    /// unmodified, full `call_function` (override/advice) otherwise, the
-    /// mutating-first-arg string writeback, and the arm's trailing quit poll.
+    /// `Op::CallBuiltin` for JIT code: direct primitive dispatch, mutating
+    /// string writeback and a quit poll. Symbol calls use `call_for_jit` and
+    /// retain function-cell/override resolution.
     pub(crate) fn callbuiltin_for_jit(&mut self, name_id: SymId, args: LispArgVec) -> EvalResult {
-        // Everything below is keyed on the ID. Resolving the name up front, as
-        // this used to, cost a `SymId -> &str -> SymId` round trip through the
-        // global interner on EVERY builtin call from JIT'd code; the name is
-        // now resolved only on the rare writeback path that compares it.
-        let writeback_args = (args.first().is_some_and(|value| value.is_string())
-            && Self::mutates_first_arg_sym(name_id))
-        .then(|| args.clone());
-        let result = if self.named_builtin_fast_path_allowed_id(name_id) {
-            self.dispatch_vm_builtin_id(name_id, args)?
-        } else {
-            let func_val = Value::from_sym_id(name_id);
-            self.call_function(func_val, args)?
-        };
-        if let Some(writeback_args) = writeback_args.as_ref() {
-            let root_scope = self.ctx.save_vm_roots();
-            self.push_dynamic_vm_root(result);
-            for value in writeback_args.iter().copied() {
-                self.push_dynamic_vm_root(value);
-            }
-            self.maybe_writeback_mutating_first_arg(
-                resolve_sym(name_id),
-                None,
-                writeback_args,
-                &result,
-            );
-            self.ctx.restore_vm_roots(root_scope);
-        }
-        self.ctx.maybe_quit()?;
-        Ok(result)
+        self.callbuiltinsym_for_jit(name_id, args)
     }
 
     /// `Op::CallBuiltinSym` for JIT code — ALWAYS the direct named dispatch,
@@ -7245,6 +7110,13 @@ impl<'a> Vm<'a> {
         Ok(result)
     }
 
+    /// One bytecode-level `apply` with the interpreter's `Op::Apply` semantics:
+    /// spread the last argument as a list, writeback detection + after-call
+    /// writeback, and the plain traced `call_function` path (`Op::Apply` has no
+    /// nesting-depth guard — mirror that exactly). Used by the JIT apply shim;
+    /// keep in sync with the `Op::Apply` arm of `run_loop`. The caller polls
+    /// `maybe_quit` first and roots `func_val` + `raw_args` (the spread values
+    /// stay reachable through the rooted list).
     pub(crate) fn apply_for_jit(
         &mut self,
         func_val: Value,
@@ -9205,18 +9077,6 @@ impl<'a> Vm<'a> {
         }
     }
 
-    fn dispatch_vm_builtin_with_frame(
-        &mut self,
-        func: &ByteCodeFunction,
-        name: &str,
-        args: impl Into<LispArgVec>,
-    ) -> EvalResult {
-        let args = args.into();
-        self.with_frame_arg_roots(func, args, |vm, args| {
-            vm.dispatch_vm_builtin_unrooted(name, args)
-        })
-    }
-
     /// `dispatch_vm_builtin` keyed by SYMBOL ID.
     ///
     /// The by-name sibling ends in `builtin_name_id(name)`, which is
@@ -9258,13 +9118,10 @@ impl<'a> Vm<'a> {
         IDS.get_or_init(|| crate::emacs_core::eval::VM_SPECIAL_BUILTIN_NAMES.map(intern))
     }
 
-    /// `CallBuiltin`/`CallBuiltinSym` with the arguments still on the operand
-    /// stack (`bc_buf[args_start..args_start + nargs]`): GNU's `Bcall` on a
-    /// subr symbol — the backtrace record points at the stack, the subr is
-    /// dispatched arity-checked straight from it (`call_spec_subr_stack`, the
-    /// same lean route the JIT's subr speculation uses). No `LispArgVec` copy,
-    /// no generic `funcall_general` walk, no frame arg copy. The VM-level
-    /// special cases keep the by-name route.
+    /// Primitive opcode dispatch with operands still on the bytecode stack.
+    /// Unlike the Bcall specialization helper, this never arms a debugger call
+    /// or resolves the primitive's symbol through its function cell. GNU's
+    /// dedicated cases call C primitives directly even after advice or fset.
     fn dispatch_vm_builtin_by_id_from_stack(
         &mut self,
         func: &ByteCodeFunction,
@@ -9272,15 +9129,14 @@ impl<'a> Vm<'a> {
         args_start: usize,
         nargs: usize,
     ) -> EvalResult {
-        if Self::vm_special_builtin_ids().contains(&sym) {
-            let args: LispArgVec = self.ctx.bc_buf[args_start..args_start + nargs]
-                .iter()
-                .copied()
-                .collect();
-            return self.dispatch_vm_builtin_with_frame(func, resolve_sym(sym), args);
+        if let Some(function) = Self::inline_builtin_function(sym) {
+            return self.call_inline_builtin(function, args_start, nargs);
         }
-        let subr = Value::subr_from_sym_id(sym);
-        self.call_spec_subr_stack_with_frame(sym, subr, subr, args_start, nargs)
+        let args: LispArgVec = self.ctx.bc_buf[args_start..args_start + nargs]
+            .iter()
+            .copied()
+            .collect();
+        self.with_frame_arg_roots(func, args, |vm, args| vm.dispatch_vm_builtin_id(sym, args))
     }
 
     /// Dispatch to builtin functions from the VM.

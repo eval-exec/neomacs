@@ -180,8 +180,9 @@ pub enum Op {
     MakeClosure(u16),
 
     // -- Misc -----------------------------------------------------------------
-    /// Call a named builtin (constant pool index for name) with N args.
-    /// This is the escape hatch for builtins not covered by dedicated opcodes.
+    /// Run a primitive directly (constant pool index for its name) with N args.
+    /// Internal/manual counterpart of `CallBuiltinSym`; it never represents a
+    /// genuine symbol call. Bcall decodes as `Call` and honors function cells.
     CallBuiltin(u16, u8),
     /// Call a named builtin by direct symbol reference, with N args.
     ///

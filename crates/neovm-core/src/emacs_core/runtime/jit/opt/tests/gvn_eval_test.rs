@@ -1432,7 +1432,7 @@ fn opt_gvn_reference_guarded_list_read_between_cons_cdr_retains_nil_and_error_or
         original.insts[read.index()].op = Opcode::Opaque(middle.clone());
         assert_eq!(
             original.insts[read.index()].eff,
-            Effects::READ_HEAP.with(Effects::MAY_DEOPT)
+            super::build::op_effects(&middle).0
         );
         let checked = original.insts[read.index()].args[0];
         assert_eq!(original.values[checked.index()].ty, TypeSet::LIST);

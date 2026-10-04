@@ -407,9 +407,10 @@ fn precise_store(inst: &InstData) -> Option<Field> {
         _ => return None,
     };
     let allowed = Effects::WRITE_HEAP.with(Effects::MAY_DEOPT);
+    let signaling = allowed.with(Effects::MAY_SIGNAL);
     (inst.args.len() == 2
         && inst.mem == field.alias()
-        && (inst.eff == Effects::WRITE_HEAP || inst.eff == allowed))
+        && (inst.eff == Effects::WRITE_HEAP || inst.eff == allowed || inst.eff == signaling))
         .then_some(field)
 }
 
@@ -417,15 +418,16 @@ fn precise_store(inst: &InstData) -> Option<Field> {
 /// generic Opaque/OpaqueBool still clears availability even with small hints.
 /// No unchecked TOP operand or extra GC/reentry/effect declaration qualifies.
 fn lift_list_read(func: &Func, inst: &InstData, canonical: &[Value]) -> Option<Field> {
-    let field = match inst.op {
-        Opcode::Opaque(Op::Car | Op::CarSafe) => Field::Car,
-        Opcode::Opaque(Op::Cdr | Op::CdrSafe) => Field::Cdr,
+    let (field, expected) = match &inst.op {
+        Opcode::Opaque(op @ (Op::Car | Op::CarSafe)) => {
+            (Field::Car, super::super::build::op_effects(op).0)
+        }
+        Opcode::Opaque(op @ (Op::Cdr | Op::CdrSafe)) => {
+            (Field::Cdr, super::super::build::op_effects(op).0)
+        }
         _ => return None,
     };
-    if inst.args.len() != 1
-        || inst.eff != Effects::READ_HEAP.with(Effects::MAY_DEOPT)
-        || inst.mem != field.alias()
-    {
+    if inst.args.len() != 1 || inst.eff != expected || inst.mem != field.alias() {
         return None;
     }
     let result = inst.result?;

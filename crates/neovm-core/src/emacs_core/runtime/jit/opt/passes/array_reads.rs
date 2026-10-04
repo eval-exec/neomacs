@@ -238,7 +238,7 @@ pub(crate) fn lift(
                 && old.args.len() == 2
                 && old.result.is_some()
                 && old.frame.is_some()
-                && old.eff == Effects::READ_HEAP.with(Effects::MAY_DEOPT)
+                && old.eff == super::super::build::op_effects(&Op::Aref).0
                 && old.mem == AliasClass::VecElem
                 && old
                     .args
@@ -550,7 +550,7 @@ fn shape_guarded(func: &Func, mut value: Value) -> bool {
 pub(crate) fn layout_barrier(inst: &InstData, has_array_proof: bool) -> bool {
     if has_array_proof
         && inst.op == Opcode::Opaque(Op::Aref)
-        && inst.eff == Effects::READ_HEAP.with(Effects::MAY_DEOPT)
+        && inst.eff == super::super::build::op_effects(&Op::Aref).0
         && inst.mem == AliasClass::VecElem
     {
         return false;
@@ -842,7 +842,7 @@ fn verify_reads_with_context(
             .flatten()
             .ok_or_else(|| fail("detached-check"))?;
         if inst.op != Opcode::Opaque(Op::Aref)
-            || inst.eff != Effects::READ_HEAP.with(Effects::MAY_DEOPT)
+            || inst.eff != super::super::build::op_effects(&Op::Aref).0
             || inst.mem != AliasClass::VecElem
             || inst.frame != Some(proof.frame)
             || inst.pc != proof.pc

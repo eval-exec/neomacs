@@ -1357,36 +1357,76 @@ fn result_type(op: &Op) -> TypeSet {
     }
 }
 
-fn op_effects(op: &Op) -> (Effects, AliasClass) {
+/// Effects of the primitive body, before operand refinements remove possible
+/// signals. GNU primitive opcodes bypass advice and the function cell. Signal
+/// values leave native code before hooks or the debugger run; allocating a
+/// value in these bodies does not itself collect. Threading: immutable
+/// compiler facts, independent of any mutator's obarray or function epoch.
+pub(crate) fn op_effects(op: &Op) -> (Effects, AliasClass) {
+    let reads = Effects::READ_HEAP.with(Effects::MAY_SIGNAL);
+    let writes = Effects::WRITE_HEAP.with(Effects::MAY_SIGNAL);
     match op {
-        Op::Car | Op::CarSafe => (
+        Op::Car => (reads.with(Effects::MAY_DEOPT), AliasClass::ConsCar),
+        Op::CarSafe => (
             Effects::READ_HEAP.with(Effects::MAY_DEOPT),
             AliasClass::ConsCar,
         ),
-        Op::Cdr | Op::CdrSafe => (
+        Op::Cdr => (reads.with(Effects::MAY_DEOPT), AliasClass::ConsCdr),
+        Op::CdrSafe => (
             Effects::READ_HEAP.with(Effects::MAY_DEOPT),
             AliasClass::ConsCdr,
         ),
-        Op::Setcar => (
-            Effects::WRITE_HEAP.with(Effects::MAY_DEOPT),
-            AliasClass::ConsCar,
-        ),
-        Op::Setcdr => (
-            Effects::WRITE_HEAP.with(Effects::MAY_DEOPT),
-            AliasClass::ConsCdr,
-        ),
+        Op::Setcar => (writes.with(Effects::MAY_DEOPT), AliasClass::ConsCar),
+        Op::Setcdr => (writes.with(Effects::MAY_DEOPT), AliasClass::ConsCdr),
+        // Char-table lookup can uncompress a subtable, and closure slot reads
+        // can allocate the exposed argument list. Neither runs Lisp or GC.
         Op::Aref => (
-            Effects::READ_HEAP.with(Effects::MAY_DEOPT),
+            reads.with(Effects::ALLOCATES).with(Effects::MAY_DEOPT),
             AliasClass::VecElem,
         ),
+        // Vector, record, bool-vector and string stores are direct writes.
+        // A char-table store may allocate subtables, without Lisp or GC.
         Op::Aset => (
-            Effects::WRITE_HEAP.with(Effects::MAY_DEOPT),
+            writes.with(Effects::ALLOCATES).with(Effects::MAY_DEOPT),
             AliasClass::VecElem,
         ),
         Op::Cons | Op::List(_) => (Effects::ALLOCATES, AliasClass::None),
+        Op::Length | Op::Nth | Op::Nthcdr => (reads, AliasClass::Unknown),
+        Op::Elt => (reads.with(Effects::ALLOCATES), AliasClass::Unknown),
+        Op::Memq | Op::Member | Op::Assq | Op::Equal => {
+            (reads.with(Effects::READ_BINDINGS), AliasClass::Unknown)
+        }
+        Op::StringEqual | Op::StringLessp => (reads, AliasClass::StrData),
+        // Substring copies string properties as data, without buffer access
+        // hooks or property callbacks. Concat likewise copies property data.
+        Op::Substring | Op::Concat(_) => (reads.with(Effects::ALLOCATES), AliasClass::Unknown),
+        Op::Nconc => (reads.with(Effects::WRITE_HEAP), AliasClass::ConsCdr),
+        Op::Nreverse => (
+            reads.with(Effects::WRITE_HEAP).with(Effects::ALLOCATES),
+            AliasClass::Unknown,
+        ),
+        Op::Get => (reads.with(Effects::READ_BINDINGS), AliasClass::Unknown),
+        Op::SymbolValue => (
+            reads
+                .with(Effects::READ_BINDINGS)
+                .with(Effects::READ_BUFFER),
+            AliasClass::Bindings,
+        ),
+        Op::SymbolFunction => (
+            Effects::READ_BINDINGS.with(Effects::MAY_SIGNAL),
+            AliasClass::Bindings,
+        ),
+        Op::Fset | Op::Put => (
+            reads
+                .with(Effects::WRITE_BINDINGS)
+                .with(Effects::WRITE_HEAP)
+                .with(Effects::ALLOCATES),
+            AliasClass::Unknown,
+        ),
         Op::VarRef(_) => (
             Effects::READ_BINDINGS
                 .with(Effects::READ_BUFFER)
+                .with(Effects::MAY_SIGNAL)
                 .with(Effects::MAY_DEOPT),
             AliasClass::Bindings,
         ),
@@ -1415,12 +1455,15 @@ fn op_effects(op: &Op) -> (Effects, AliasClass) {
         | Op::Negate
         | Op::Max
         | Op::Min => (
-            Effects::ALLOCATES.with(Effects::MAY_DEOPT),
+            Effects::ALLOCATES
+                .with(Effects::MAY_SIGNAL)
+                .with(Effects::MAY_DEOPT),
             AliasClass::None,
         ),
-        Op::Eqlsign | Op::Lss | Op::Gtr | Op::Leq | Op::Geq => {
-            (Effects::MAY_DEOPT, AliasClass::None)
-        }
+        Op::Eqlsign | Op::Lss | Op::Gtr | Op::Leq | Op::Geq => (
+            Effects::MAY_SIGNAL.with(Effects::MAY_DEOPT),
+            AliasClass::None,
+        ),
         Op::Null | Op::Not | Op::Consp | Op::Stringp | Op::Listp => {
             (Effects::PURE, AliasClass::None)
         }
@@ -1430,6 +1473,10 @@ fn op_effects(op: &Op) -> (Effects, AliasClass) {
             Effects::READ_HEAP.with(Effects::READ_BINDINGS),
             AliasClass::Unknown,
         ),
+        // Genuine calls remain arbitrary Lisp. Named primitive buffer
+        // opcodes also keep conservative effects: insert/delete and buffer
+        // access can run hooks. Set runs variable watchers; unwind restores
+        // can execute cleanups. Direct dispatch does not make these leaves.
         _ => (Effects::UNKNOWN, AliasClass::Unknown),
     }
 }
@@ -1437,3 +1484,7 @@ fn op_effects(op: &Op) -> (Effects, AliasClass) {
 #[cfg(test)]
 #[path = "tests/build_ssa.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/primitive_effects.rs"]
+mod primitive_effects_tests;

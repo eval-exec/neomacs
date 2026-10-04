@@ -59,6 +59,14 @@ pub(crate) fn named_builtin_call(op: &Op) -> Option<NamedBuiltinCall> {
 /// Intrinsic prefixes (`intrinsics`) only read, so they add nothing.
 pub(crate) fn opcode_site_effects(op: &Op, aot: bool) -> Effects {
     use crate::emacs_core::subr::leaf::LeafId;
+    // GNU Baset calls the primitive directly. Its char-table branch can
+    // allocate subtables and every representation may signal, but neither
+    // the body nor its error-stashing shim calls Lisp or collects.
+    if matches!(op, Op::Aset) {
+        return Effects::WRITE_HEAP
+            .with(Effects::ALLOCATES)
+            .with(Effects::MAY_SIGNAL);
+    }
     if let Some(id) = super::leaf_abi::opcode_leaf_site(op, aot) {
         return id.spec().effects;
     }

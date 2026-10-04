@@ -125,7 +125,9 @@ pub(crate) const ABI_TAG: u32 = compute_abi_tag();
 // a permanent atomic observation-bitmap word.
 // v31: retained redisplay state (GNU mode-line gate, edit Sync) adds Context fields;
 // existing AOT images are invalidated.
-const ABI_TAG_VERSION: u32 = 31;
+// v32: primitive opcodes bypass function cells; `aset` has a signal-only
+// value-shim contract and no NamedBuiltin variant-2 fallback or epoch guard.
+const ABI_TAG_VERSION: u32 = 32;
 
 /// Format version of the AOT descriptor spec-section + the runtime spec ABI
 /// (`SpecSlot`/`spec_expected` sidecar bases, the loader re-classify+arm protocol).

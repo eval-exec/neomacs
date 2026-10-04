@@ -631,8 +631,9 @@ static BUILTIN_SYM_BITS: [std::sync::atomic::AtomicU64; BUILTIN_SYM_BITS_WORDS] 
 /// `neovm_jit_cbsym_read`'s only DYNAMIC arming test is this bitmap read
 /// (the arity check and the harness override are both compile-time under
 /// JIT), so a site that inlines the read has to reproduce exactly this and
-/// nothing else -- it is what makes the inline answer advice- and
-/// fset-sensitive in the same way the shim is.
+/// nothing else -- it makes the inline answer sensitive to native builtin
+/// registration in the same way as the shim. Primitive opcodes bypass advice
+/// and fset changes to the Lisp function cell.
 ///
 /// `None` for a symbol beyond the bitmap, whose answer lives in a
 /// `RefCell`-guarded table that generated code must not touch; the caller
@@ -3575,7 +3576,7 @@ pub struct Context {
     ///
     /// GNU's hot evaluator path reads the function cell directly. Neomacs only
     /// needs the override alist during compiler/macro machinery, so keep the
-    /// nil/common case as a cached flag and refresh it through the same runtime
+    /// nil/common case as a cached flag for genuine calls and refresh it through the same runtime
     /// binding paths that already maintain `quit-flag` and `noninteractive`.
     compiler_function_overrides_symbol: SymId,
     compiler_function_overrides_active: bool,
@@ -3592,13 +3593,14 @@ pub struct Context {
     /// thread-local's lookup plus RefCell borrow ran on every bind, unbind
     /// and native entry.
     pub(crate) jit_bind_stack: Vec<usize>,
-    /// The `function_epoch` at which compiled code last found `aset`'s
-    /// function cell still the builtin (and no compiler overrides active),
-    /// so `Op::Aset` shims ask the obarray only after a function cell changes
-    /// (every change, and an overrides toggle, advances the epoch). `u64::MAX`
-    /// is never a live epoch.
-    pub(crate) aset_fast_path_epoch: std::cell::Cell<u64>,
-    /// The same record for `apply` (`Vm::call_apply_native`).
+    /// Reserved former opcode epoch word. Primitive opcodes never consult it;
+    /// keeping its storage preserves Context offsets used by protected call
+    /// paths while the obsolete Aset guards are removed. Threading: this word
+    /// is never read or published and contains no Lisp or mutator state.
+    _reserved_opcode_epoch: std::cell::Cell<u64>,
+    /// The function epoch at which `apply` was last found to be the builtin
+    /// with compiler overrides inactive (`Vm::call_apply_native`). Genuine
+    /// calls must recheck after advice, redefinition or an overrides toggle.
     pub(crate) apply_fast_path_epoch: std::cell::Cell<u64>,
     /// Hot cache for named callable resolution in `funcall`/`apply`.
     /// Keyed by symbol id; entries are validated against the obarray's

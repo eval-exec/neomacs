@@ -373,11 +373,7 @@ pub(crate) fn emit_inline_cons_store_with_proof(
 /// `slow`, where the caller emits the unchanged shim call (strings, signals,
 /// mapped storage, the barrier's slow path).
 ///
-/// neomacs's `Op::Aset` honours a redefined or advised `aset` (GNU `Baset`
-/// never reads the function cell; a pre-existing deviation kept for tier
-/// parity), so the site first compares the context's `aset` epoch cell with
-/// the obarray's function epoch — the shim's own test, bit for bit — and a
-/// mismatch takes the shim, which re-validates and re-arms the cell.
+/// Like GNU `Baset`, this opcode never consults `aset`'s function cell.
 ///
 /// Returns `false`, emitting nothing, when a layout probe fails
 /// (`LispValueVec::jit_slice_offsets` / `jit_owned_probe`).
@@ -392,31 +388,12 @@ pub(crate) fn emit_inline_aset(
     cont: Block,
 ) -> bool {
     use super::jit_layout::heap::{value_vec_owned_probe, value_vec_slice_offsets};
-    use super::jit_layout::{CONTEXT_ASET_EPOCH_OFFSET, OBARRAY_FUNCTION_EPOCH_OFFSET};
     if value_vec_slice_offsets().is_none() {
         return false;
     }
     let Some(owned_probe) = value_vec_owned_probe() else {
         return false;
     };
-    let vmctx = fb.use_var(rt.vmctx_var);
-    let armed = fb.ins().load(
-        types::I64,
-        MemFlagsData::trusted(),
-        vmctx,
-        CONTEXT_ASET_EPOCH_OFFSET as i32,
-    );
-    let epoch = fb.ins().load(
-        types::I64,
-        MemFlagsData::trusted(),
-        vmctx,
-        (super::jit_layout::CONTEXT_OBARRAY_OFFSET + OBARRAY_FUNCTION_EPOCH_OFFSET) as i32,
-    );
-    let stale = fb.ins().icmp(IntCC::NotEqual, armed, epoch);
-    let armed_block = fb.create_block();
-    fb.ins().brif(stale, slow, &[], armed_block, &[]);
-    fb.switch_to_block(armed_block);
-    fb.seal_block(armed_block);
     let Some(super::lowering::PlainSlot { object, slot }) =
         emit_plain_slot_address(fb, array, index, slow, Some(owned_probe))
     else {

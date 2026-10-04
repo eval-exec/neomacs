@@ -645,7 +645,7 @@ fn plain_vector_and_record_stores_stay_inline() {
         ("(cons 1 2)", "0", "'z", false),
         ("nil", "0", "'z", false),
     ];
-    // The first call arms the context's `aset` epoch cell through the shim.
+    // Perform one primitive store before measuring each shape.
     let warm = keep(&mut eval, &["(vector 0)"])[0];
     native(
         ctx_ptr,
@@ -727,7 +727,7 @@ fn a_string_store_still_reaches_the_string_inline_behind_the_vector_store() {
         ("(cons 1 2)", "0", "'z", false),
         ("(vector 1 2 3)", "3", "'z", false),
     ];
-    // The first call arms the context's `aset` epoch cell through the shim.
+    // Perform one primitive store before measuring each shape.
     let warm = keep(&mut eval, &["(vector 0)"])[0];
     native(
         ctx_ptr,
@@ -760,12 +760,10 @@ fn a_string_store_still_reaches_the_string_inline_behind_the_vector_store() {
     }
 }
 
-/// A stale `aset` epoch (a function-cell write since the cell was armed)
-/// sends the next store to the shim, which re-arms the cell; the store
-/// after it is inline again. A redefined `aset` keeps every store in the
-/// shim, which answers the general call.
+/// Baset stores inline without a function-epoch gate. Unrelated function-cell
+/// writes and replacing aset itself leave the primitive opcode unchanged.
 #[test]
-fn a_function_cell_write_sends_the_next_aset_to_the_shim() {
+fn function_cell_writes_do_not_regate_inline_aset() {
     let mut eval = legacy_context();
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let leaf = compile_bytecode_function(&aset_fn()).expect("aset compiles");
@@ -790,10 +788,14 @@ fn a_function_cell_write_sends_the_next_aset_to_the_shim() {
         .expect("fset");
     let before = aset_shim_calls();
     store(&mut eval, 3);
-    assert_eq!(aset_shim_calls() - before, 1, "a moved epoch re-validates");
+    assert_eq!(
+        aset_shim_calls(),
+        before,
+        "a moved function epoch leaves Baset inline"
+    );
     let before = aset_shim_calls();
     store(&mut eval, 4);
-    assert_eq!(aset_shim_calls(), before, "re-armed");
+    assert_eq!(aset_shim_calls(), before, "still inline");
     assert_eq!(print_value(&v), "[0 4]");
 
     eval.eval_str(
@@ -805,12 +807,12 @@ fn a_function_cell_write_sends_the_next_aset_to_the_shim() {
         let before = aset_shim_calls();
         store(&mut eval, n);
         assert_eq!(
-            aset_shim_calls() - before,
-            1,
-            "a redefined aset never inlines"
+            aset_shim_calls(),
+            before,
+            "Baset remains inline when aset is redefined"
         );
     }
-    assert_eq!(print_value(&v), "[0 (7)]");
+    assert_eq!(print_value(&v), "[0 7]");
     eval.eval_str("(fset 'aset aset-orig)").expect("restore");
 }
 
@@ -838,7 +840,7 @@ fn tenured_owners_store_inline_once_remembered() {
     let b = eval.eval_str("aset-old-b").expect("b");
     assert!(eval.tagged_heap.is_tenured_for_test(a));
     assert!(eval.tagged_heap.is_tenured_for_test(b));
-    // Arm the context's `aset` epoch cell.
+    // Perform an initial primitive store before measuring the barriers.
     let young = keep(&mut eval, &["(vector 0)"])[0];
     native(
         ctx_ptr,
@@ -1183,7 +1185,7 @@ fn inline_aref_and_aset_have_no_slot0_test() {
         ],
     );
     let (vector, record, tag_vector) = (args[0], args[1], args[2]);
-    // The first `aset` arms the context's epoch cell through the shim.
+    // Perform an initial primitive store before measuring the inline sites.
     native(
         ctx_ptr,
         &aset,

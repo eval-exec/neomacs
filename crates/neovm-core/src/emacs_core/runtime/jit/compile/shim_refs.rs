@@ -94,7 +94,7 @@ pub(crate) enum Shim {
     Builtin3,
     /// `Op::Aref`: the element's bits or `VALUE_SHIM_SIGNAL`.
     Aref,
-    /// `Op::Aset`: the value's bits or a `VALUE_SHIM_*` word.
+    /// `Op::Aset`: the value's bits or `VALUE_SHIM_SIGNAL`.
     Aset,
     /// `Op::Memq`: the tail's bits or `VALUE_SHIM_SIGNAL`.
     Memq,
@@ -398,7 +398,7 @@ impl Shim {
             Shim::Aref | Shim::Memq | Shim::Assq | Shim::Setcar | Shim::Setcdr => {
                 (&[Ptr, I64, I64], true)
             }
-            // (vmctx, array, index, value) -> bits | VALUE_SHIM_*
+            // (vmctx, array, index, value) -> bits | VALUE_SHIM_SIGNAL
             Shim::Aset => (&[Ptr, I64, I64, I64], true),
             // (vmctx, target, stack_len) -> ()
             Shim::PushCc => (&[Ptr, I64, I64], false),

@@ -907,10 +907,10 @@ fn shared_operation(
         reps.drain(..dead);
         base -= dead;
     }
-    if inst.eff.intersects(
-        crate::emacs_core::jit::opt::mem::Effects::MAY_GC
-            .with(crate::emacs_core::jit::opt::mem::Effects::MAY_REENTER),
-    ) {
+    // Direct primitive opcodes such as Aset can allocate or return a signal
+    // without collecting or entering Lisp. Only actual safepoints require
+    // compiler-only roots; signal dispatch uses the separate exact frame.
+    if inst.op.is_safepoint(inst.eff) {
         // Rewritten operands can differ from the original frame's tail. Both
         // the full GNU frame and live compiler-only heap identities stay live.
         let mut roots = ctx.func.frames[frame.index()].stack[dead.unwrap_or(0)..].to_vec();

@@ -3439,14 +3439,12 @@ fn compiled_aset_matches_the_builtin() {
     }
 }
 
-/// A REDEFINED `aset` still runs from compiled code, through the rooted
-/// fallback: the fast shim bounces it, and the fallback roots the residual
-/// across a redefinition that collects exactly and reallocates. `h` lives
-/// only in the residual.
+/// Baset cannot call an aset replacement that collects and reallocates. The
+/// primitive writes the vector and leaves the residual h intact.
 ///
 ///     (lambda (v) (let ((h (cons 1 2))) (aset v 0 9) h))
 #[test]
-fn redefined_aset_takes_the_rooted_fallback() {
+fn redefined_aset_cannot_reenter_through_an_opcode() {
     use crate::emacs_core::eval::Context;
     let mut ev = Context::new();
     let ctx = &mut ev as *mut Context as *mut u8;
@@ -3476,28 +3474,31 @@ fn redefined_aset_takes_the_rooted_fallback() {
     let h = Value::from_bits(bits);
     assert_eq!(h.cons_car(), Value::make_int(1));
     assert_eq!(crate::emacs_core::print::print_value(&v), "[9 0]");
-    // Redefined: it collects and reallocates; `h` must survive, the vector
-    // is untouched.
-    ev.eval_str("(fset 'aset (lambda (a i x) (garbage-collect) (make-list 4096 0) 'redefined))")
+    // The collecting replacement must never run from this opcode.
+    ev.eval_str("(progn (defvar opcode-aset-calls 0) (fset 'aset (lambda (a i x) (setq opcode-aset-calls (1+ opcode-aset-calls)) (garbage-collect) (make-list 4096 0) 'redefined)))")
         .expect("fset");
     for _ in 0..3 {
         let v = ev.eval_str("(vector 0 0)").expect("v");
         let NativeRun::Ok(bits) = leaf.call(ctx, &[v]) else {
-            panic!("redefined aset must still run");
+            panic!("Baset must still run");
         };
         let h = Value::from_bits(bits);
         assert!(
             h.is_cons(),
-            "h survived the redefinition's collection (got {h:?})"
+            "h remains intact across the primitive (got {h:?})"
         );
         assert_eq!(h.cons_car(), Value::make_int(1), "car intact");
         assert_eq!(h.cons_cdr(), Value::make_int(2), "cdr intact");
         assert_eq!(
             crate::emacs_core::print::print_value(&v),
-            "[0 0]",
-            "the redefinition ran instead of the builtin"
+            "[9 0]",
+            "the opcode ran the primitive"
         );
     }
+    assert_eq!(
+        ev.eval_str("opcode-aset-calls").expect("calls"),
+        Value::make_int(0)
+    );
 }
 
 /// The tier gate, through the production compile path. A loop with a

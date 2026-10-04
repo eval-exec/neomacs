@@ -188,7 +188,7 @@ pub(crate) fn validate_inst(
                 return Err(VerifyError::TypeMismatch(result()?.0));
             }
             effects(
-                Effects::ALLOCATES.with(Effects::MAY_DEOPT),
+                super::build::op_effects(&Op::Add).0,
                 AliasClass::None,
                 false,
             )?;

@@ -31,7 +31,12 @@ use crate::emacs_core::subr::leaf::{
 /// A leaf trampoline's signal word: the flow is stashed.
 pub(crate) const LEAF_SIGNAL: i64 = VALUE_SHIM_SIGNAL;
 /// A leaf trampoline's decline word: run the reference for this shape.
-pub(crate) const LEAF_NEED_GENERIC: i64 = VALUE_SHIM_NEED_GENERIC;
+pub(crate) const LEAF_NEED_GENERIC: i64 = 0b1001;
+
+const _: () = {
+    assert!(LEAF_SIGNAL & TAG_MASK as i64 == LEAF_NEED_GENERIC & TAG_MASK as i64);
+    assert!(LEAF_SIGNAL != LEAF_NEED_GENERIC);
+};
 
 // ---------------------------------------------------------------------------
 // Counters.

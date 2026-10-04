@@ -928,7 +928,9 @@ fn list_read_plan_for_native(source: &ByteCodeFunction) -> ir::Func {
         assert_eq!(inst.mem, field);
         assert_eq!(
             inst.eff,
-            mem::Effects::READ_HEAP.with(mem::Effects::MAY_DEOPT)
+            mem::Effects::READ_HEAP
+                .with(mem::Effects::MAY_SIGNAL)
+                .with(mem::Effects::MAY_DEOPT)
         );
         inst.op = opcode;
         inst.eff = mem::Effects::READ_HEAP;
@@ -1225,7 +1227,9 @@ fn coemit_typed_target(before: &ir::Func, pc: usize, cdr: bool) -> ir::Func {
     assert_eq!(guard.pc, inst.pc);
     assert_eq!(
         inst.eff,
-        mem::Effects::READ_HEAP.with(mem::Effects::MAY_DEOPT)
+        mem::Effects::READ_HEAP
+            .with(mem::Effects::MAY_SIGNAL)
+            .with(mem::Effects::MAY_DEOPT)
     );
     after.insts[id.index()].op = if cdr {
         ir::Opcode::LoadCdr

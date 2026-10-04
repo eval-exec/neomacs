@@ -460,7 +460,7 @@ fn discover(
                 Opcode::Opaque(Op::Add | Op::Sub | Op::Mul | Op::Div)
             ) && inst.args.len() == 2
                 && inst.frame.is_some()
-                && inst.eff == Effects::ALLOCATES.with(Effects::MAY_DEOPT)
+                && inst.eff == super::super::build::op_effects(&Op::Add).0
                 && inst.mem == AliasClass::None
                 && data.rep.is_tagged()
                 && !data.ty.meet(TypeSet::FLOAT).is_bottom()
@@ -998,7 +998,8 @@ fn try_cons_read(
     if old.args.len() != 1
         || old.result.is_none()
         || !(old.eff == Effects::READ_HEAP
-            || old.eff == Effects::READ_HEAP.with(Effects::MAY_DEOPT))
+            || old.eff == Effects::READ_HEAP.with(Effects::MAY_DEOPT)
+            || old.eff == super::super::build::op_effects(&Op::Car).0)
         || old.mem
             != if field == 0 {
                 AliasClass::ConsCar

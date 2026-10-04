@@ -252,10 +252,10 @@ fn indexing_loops_stay_on_the_fast_path() {
     assert_eq!(ARRAY_SHIM_SLOW_CALLS.with(|c| c.get()), 2);
 }
 
-/// A redefined `aset` runs, from compiled code, exactly when the interpreter
-/// runs it: the shim answers NEED_GENERIC before storing anything.
+/// GNU Baset invokes the primitive even when the aset function cell contains
+/// a wrapper or a signalling replacement. Both VM and native code store.
 #[test]
-fn a_redefined_aset_runs_from_compiled_code() {
+fn a_redefined_aset_is_ignored_by_compiled_opcodes() {
     let mut eval = Context::new();
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let aset = aset_fn();
@@ -280,16 +280,16 @@ fn a_redefined_aset_runs_from_compiled_code() {
         ctx_ptr,
         &aset_leaf,
         &[v2, Value::make_int(1), Value::make_int(5)],
-        "redefined aset",
+        "aset opcode after redefinition",
     );
     assert_eq!(got, want);
     assert_eq!(print_value(&v2), print_value(&v1));
-    assert_eq!(print_value(&v2), "[0 (wrapped 5)]");
+    assert_eq!(print_value(&v2), "[0 5]");
     assert_eq!(
         print_value(&eval.eval_str("ashim-calls").expect("calls")),
-        "2"
+        "0"
     );
-    // A signal from the redefinition propagates from the general call.
+    // A signal in the replacement cannot affect the primitive opcode.
     eval.eval_str("(fset 'aset (lambda (_a _i _v) (signal 'wrong-type-argument '(no-aset))))")
         .expect("redefine");
     let v3 = eval.eval_str("(vector 0 0)").expect("v");
@@ -298,10 +298,11 @@ fn a_redefined_aset_runs_from_compiled_code() {
             ctx_ptr,
             &aset_leaf,
             &[v3, Value::make_int(0), Value::make_int(1)],
-            "signalling aset"
+            "aset opcode with signalling replacement"
         ),
-        "signal wrong-type-argument [\"no-aset\"]"
+        "1"
     );
+    assert_eq!(print_value(&v3), "[1 0]");
     eval.eval_str("(fset 'aset ashim-orig)").expect("restore");
 }
 
@@ -350,9 +351,8 @@ fn array_signals_are_caught_by_a_leaf_local_handler() {
     }
 }
 
-/// Live values below an array site survive what its edges can run: a
-/// `signal-hook-function` that collects on the signal edge, and a redefined
-/// `aset` that collects on the general-call edge.
+/// Live values below an array site survive a `signal-hook-function` that
+/// collects on the signal edge. A redefined aset has no opcode call edge.
 ///
 ///     (lambda (a i) (let ((h (cons 1 2))) (condition-case nil (OP a i ...) (error h))))
 #[test]
@@ -405,7 +405,9 @@ fn array_site_edges_keep_the_residual_alive() {
             eval.eval_str(
                 "(progn
                    (defvar ashim-orig2 (symbol-function 'aset))
+                   (defvar ashim-calls2 0)
                    (fset 'aset (lambda (a i v)
+                                 (setq ashim-calls2 (1+ ashim-calls2))
                                  (garbage-collect)
                                  (make-list 4096 (cons 0 0))
                                  (funcall ashim-orig2 a i v))))",
@@ -414,11 +416,15 @@ fn array_site_edges_keep_the_residual_alive() {
             for _ in 0..3 {
                 let v = eval.eval_str("(vector 0 0)").expect("v");
                 match leaf.call(ctx_ptr, &[v, Value::make_int(1)]) {
-                    NativeRun::Ok(bits) => check(bits, "Aset general-call edge"),
-                    other => panic!("general call must run natively, got {other:?}"),
+                    NativeRun::Ok(bits) => check(bits, "Aset ignores collecting replacement"),
+                    other => panic!("primitive opcode must run natively, got {other:?}"),
                 }
                 assert_eq!(print_value(&v), "[0 1]");
             }
+            assert_eq!(
+                eval.eval_str("ashim-calls2").expect("calls"),
+                Value::make_int(0)
+            );
             eval.eval_str("(fset 'aset ashim-orig2)").expect("restore");
         }
     }
@@ -636,11 +642,10 @@ fn a_later_call_site_roots_what_only_the_aset_fallback_stored() {
     }
 }
 
-/// The aset shim asks the obarray whether `aset` is still the builtin once per
-/// function epoch. Warmed up on the builtin, a compiled `aset` must still see
-/// a redefinition made afterwards, and the builtin again once it is restored.
+/// A warmed Baset opcode keeps storing through the primitive across function
+/// cell replacement and restoration, matching GNU bytecode.c.
 #[test]
-fn a_warmed_aset_sees_a_later_redefinition_and_its_undoing() {
+fn a_warmed_aset_ignores_a_later_redefinition_and_its_undoing() {
     let mut eval = Context::new();
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let aset_leaf = compile_bytecode_function(&aset_fn()).expect("aset compiles");
@@ -662,8 +667,8 @@ fn a_warmed_aset_sees_a_later_redefinition_and_its_undoing() {
            (fset 'aset (lambda (a i v) (funcall ashim-warm-orig a i (list 'wrapped v)))))",
     )
     .expect("redefine");
-    assert_eq!(run(v, 3), "(wrapped 3)");
-    assert_eq!(print_value(&v), "[0 (wrapped 3)]");
+    assert_eq!(run(v, 3), "3");
+    assert_eq!(print_value(&v), "[0 3]");
     eval.eval_str("(fset 'aset ashim-warm-orig)")
         .expect("restore");
     assert_eq!(run(v, 4), "4");
@@ -1031,8 +1036,7 @@ fn string_intrinsics_stay_off_the_shims() {
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let aref_leaf = compile_string_knob(&aref_fn());
     let aset_leaf = compile_string_knob(&aset_fn());
-    // The `aset` gate is armed per function epoch by the shim's first call
-    // (`aset_regate`), as for the vector fast path.
+    // Perform one primitive store before measuring the inline shapes.
     let warm = eval.eval_str("(make-string 1 ?a)").expect("warm-up string");
     crate::emacs_core::eval::push_scratch_gc_root(warm);
     let _ = native(
@@ -1100,10 +1104,10 @@ fn string_intrinsics_stay_off_the_shims() {
     );
 }
 
-/// A redefined `aset` runs from an inline string site exactly when the
-/// interpreter runs it: the inline path checks the shim's own gate.
+/// String Baset stores inline across function-cell replacement. The primitive
+/// opcode neither calls the replacement nor regates through the shim.
 #[test]
-fn a_redefined_aset_runs_from_an_inline_string_site() {
+fn a_redefined_aset_is_ignored_by_an_inline_string_site() {
     use super::dispatch::ASET_SHIM_CALLS;
     let mut eval = Context::new();
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
@@ -1137,17 +1141,17 @@ fn a_redefined_aset_runs_from_an_inline_string_site() {
             &[s, Value::fixnum(1), Value::fixnum(66)],
             "aset"
         ),
-        "67"
+        "66"
     );
     assert_eq!(
         ASET_SHIM_CALLS.with(|c| c.get()),
-        1,
-        "the gate sent it to the shim"
+        0,
+        "function-cell replacement does not send an opcode to the shim"
     );
-    assert_eq!(print_value(&s), "\"BC\"");
+    assert_eq!(print_value(&s), "\"BB\"");
     assert_eq!(
         print_value(&eval.eval_str("strshim-calls").expect("calls")),
-        "1"
+        "0"
     );
     eval.eval_str("(fset 'aset strshim-orig)").expect("restore");
 }

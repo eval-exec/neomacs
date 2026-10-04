@@ -725,7 +725,7 @@ impl<'a> Check<'a> {
             Op::Cons | Op::List(1) => (Effects::ALLOCATES, AliasClass::None),
             Op::Call(1) => (Effects::UNKNOWN, AliasClass::Unknown),
             _ => (
-                Effects::ALLOCATES.with(Effects::MAY_DEOPT),
+                super::super::build::op_effects(&Op::Add).0,
                 AliasClass::None,
             ),
         };

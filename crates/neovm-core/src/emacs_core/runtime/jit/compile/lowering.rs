@@ -1170,9 +1170,7 @@ fn emit_inline_string_aref(
 /// first), an in-range fixnum index, and a fixnum VALUE that is a byte
 /// (0..=255) for a normally allocated unibyte string or ASCII (0..=127) for
 /// an all-ASCII multibyte one. A non-string leaves after the tag test
-/// alone; a string is then guarded by the shim's own `aset` redefinition
-/// gate (`Context::aset_fast_path_epoch` equal to the obarray's function
-/// epoch): a miss calls the shim, which re-validates.
+/// alone. Like GNU `Baset`, it never consults `aset`'s function cell.
 /// No write barrier: string bytes hold no references. Branches to `slow`
 /// on any miss; on success defines `res` as VALUE and jumps to `merge`.
 fn emit_inline_string_aset(
@@ -1183,7 +1181,6 @@ fn emit_inline_string_aset(
     res: Variable,
     merge: Block,
 ) -> bool {
-    use super::jit_layout::OBARRAY_FUNCTION_EPOCH_OFFSET;
     use crate::heap_types::LispString;
     use crate::tagged::header::StringObj;
     let [array, index, value] = operands;
@@ -1199,27 +1196,11 @@ fn emit_inline_string_aset(
     fb.ins().brif(is_string, string_block, &[], slow, &[]);
     fb.switch_to_block(string_block);
     fb.seal_block(string_block);
-    let vmctx = fb.use_var(rt.vmctx_var);
-    let epoch = fb.ins().load(
-        types::I64,
-        flags,
-        vmctx,
-        (super::jit_layout::CONTEXT_OBARRAY_OFFSET + OBARRAY_FUNCTION_EPOCH_OFFSET) as i32,
-    );
-    // `Cell<u64>` is `repr(transparent)` over the word.
-    let gate = fb.ins().load(
-        types::I64,
-        flags,
-        vmctx,
-        core::mem::offset_of!(Context, aset_fast_path_epoch) as i32,
-    );
-    let gated = fb.ins().icmp(IntCC::Equal, epoch, gate);
     let index_tag = band_imm_p(fb, index, FIXNUM_CHECK_MASK as i64);
     let index_fixnum = icmp_imm_p(fb, IntCC::Equal, index_tag, FIXNUM_CHECK_VALUE as i64);
     let value_tag = band_imm_p(fb, value, FIXNUM_CHECK_MASK as i64);
     let value_fixnum = icmp_imm_p(fb, IntCC::Equal, value_tag, FIXNUM_CHECK_VALUE as i64);
     let shapes = fb.ins().band(index_fixnum, value_fixnum);
-    let shapes = fb.ins().band(shapes, gated);
     let typed = fb.create_block();
     fb.ins().brif(shapes, typed, &[], slow, &[]);
     fb.switch_to_block(typed);
@@ -8063,12 +8044,10 @@ fn lower_simple_op_arms(
         Op::Aset => {
             // `neovm_jit_aset` answers VALUE's bits for every `aset` it can run
             // itself — the vector, record and same-width string stores, and
-            // `builtin_aset_args` for the other shapes — or a `VALUE_SHIM_*`
-            // word (tag 0b001, never a Lisp value). None of that reaches a safe
-            // point, so the call roots nothing. A redefined or advised `aset`
-            // runs Lisp: the shim answers NEED_GENERIC before storing anything
-            // and the site takes the rooted general call (named builtin,
-            // variant 2).
+            // `builtin_aset_args` for the other shapes — or `VALUE_SHIM_SIGNAL`
+            // (tag 0b001, never a Lisp value). None of that reaches a safe
+            // point, so the call roots nothing. Like GNU `Baset`, this runs the
+            // primitive directly even when `aset` is redefined or advised.
             let rt = rt.ok_or(CompileError::UnsupportedOp("builtin"))?;
             if stack.len() < 3 {
                 return Err(CompileError::StackUnderflow);
@@ -8081,8 +8060,7 @@ fn lower_simple_op_arms(
             // need not see stores inline (`heap_inline::emit_inline_aset`)
             // and jumps to `cont`, created here for it (else below, where
             // the shim-only lowering creates it: the same CLIF with the knob
-            // off). The inline path stores nothing in the root window, so
-            // the general call's carry meet below stays exact.
+            // off). The inline path stores nothing in the root window.
             let early_cont = (!aot && jit_inline_heap_write_on()).then(|| fb.create_block());
             let inline_vector_slow = if let Some(cont) = early_cont {
                 let slow = fb.create_block();
@@ -8105,9 +8083,8 @@ fn lower_simple_op_arms(
                 None
             };
             // `NEOVM_JIT_LEAF=string` (I2): a same-width byte store into a
-            // string's owned storage, inline, behind the shim's own `aset`
-            // redefinition gate; everything else calls the shim. It runs
-            // where the vector store declined, so a vector store never pays
+            // string's owned storage, inline; everything else calls the shim.
+            // It runs where the vector store declined, so a vector store never pays
             // its string test.
             let inline_string = if !aot && super::jit_leaf_knob().string {
                 let merge = fb.create_block();
@@ -8135,62 +8112,9 @@ fn lower_simple_op_arms(
             let word = fb.inst_results(call)[0];
             fb.def_var(res, word);
             let cont = early_cont.unwrap_or_else(|| fb.create_block());
-            let sentinel = fb.create_block();
-            let tag = band_imm_p(fb, word, TAG_MASK as i64);
-            let is_sentinel = icmp_imm_p(
-                fb,
-                IntCC::Equal,
-                tag,
-                dispatch::VALUE_SHIM_SIGNAL & TAG_MASK as i64,
-            );
-            fb.ins().brif(is_sentinel, sentinel, &[], cont, &[]);
-
-            fb.switch_to_block(sentinel);
-            fb.seal_block(sentinel);
             let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack, reps);
-            let gen_block = fb.create_block();
-            let need_gen = icmp_imm_p(fb, IntCC::Equal, word, dispatch::VALUE_SHIM_NEED_GENERIC);
-            fb.ins().brif(need_gen, gen_block, &[], se, &[]);
-
-            // The general call. The shim stored nothing on this edge, so the
-            // continuation meets the fast path's store record with this one.
-            fb.switch_to_block(gen_block);
-            fb.seal_block(gen_block);
-            let carry_fast = rootwin_carry_snapshot();
-            for (i, &v) in operands.iter().enumerate() {
-                fb.ins()
-                    .stack_store(rt.ptr_ty, v, rt.call_args_slot, (i * 8) as i32);
-            }
-            let saved_gen = if stack.is_empty() {
-                CondRoots::NONE
-            } else {
-                emit_model_roots_pre(fb, rt, stack, reps)
-            };
-            let vmctx_gen = fb.use_var(rt.vmctx_var);
-            let variant_gen = fb.ins().iconst(types::I64, 2);
-            let sym_gen = fb.ins().iconst(types::I64, 0);
-            let args_addr = fb.ins().stack_addr(rt.ptr_ty, rt.call_args_slot, 0);
-            let n_val = fb.ins().iconst(types::I64, 3);
-            let out_addr = fb.ins().stack_addr(rt.ptr_ty, rt.call_result_slot, 0);
-            let named_builtin = rt.refs.get(fb.func, Shim::NamedBuiltin);
-            let call_gen = fb.ins().call(
-                named_builtin,
-                &[vmctx_gen, variant_gen, sym_gen, args_addr, n_val, out_addr],
-            );
-            let status_gen = fb.inst_results(call_gen)[0];
-            emit_cond_residual_roots_post(fb, rt, saved_gen);
-            rootwin_carry_meet(&carry_fast);
-            let se_gen = signal_target_for_site(fb, signal_exit, handlers, pending, stack, reps);
-            let gen_ok = fb.create_block();
-            let ok_gen = icmp_imm_p(fb, IntCC::Equal, status_gen, STATUS_OK);
-            fb.ins().brif(ok_gen, gen_ok, &[], se_gen, &[]);
-            fb.switch_to_block(gen_ok);
-            fb.seal_block(gen_ok);
-            let gen_result = fb
-                .ins()
-                .stack_load(rt.ptr_ty, types::I64, rt.call_result_slot, 0);
-            fb.def_var(res, gen_result);
-            fb.ins().jump(cont, &[]);
+            let is_signal = icmp_imm_p(fb, IntCC::Equal, word, dispatch::VALUE_SHIM_SIGNAL);
+            fb.ins().brif(is_signal, se, &[], cont, &[]);
 
             fb.switch_to_block(cont);
             fb.seal_block(cont);
@@ -8205,9 +8129,8 @@ fn lower_simple_op_arms(
             stack.push(fb.use_var(res));
         }
         Op::CallBuiltin(..) | Op::CallBuiltinSym(..) => {
-            // Named-builtin escape hatch: route through the Vm::*_for_jit
-            // helpers mirroring the interpreter arms (override-aware /
-            // advice-bypassing / writeback / quit poll).
+            // Primitive opcode escape hatch: the Vm::*_for_jit helpers
+            // mirror GNU's direct primitive dispatch, writeback and quit poll.
             let rt = rt.ok_or(CompileError::UnsupportedOp("builtin"))?;
             let (variant, sym, nargs): (i64, u32, usize) = match op {
                 Op::CallBuiltin(name_idx, n) => {

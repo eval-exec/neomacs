@@ -131,8 +131,7 @@ pub(crate) const CONTEXT_OBARRAY_OFFSET: usize = offset_of!(Context, obarray);
 /// `Context::jit_stack_limit`, the native stack guard's floor.
 pub(crate) const CONTEXT_JIT_STACK_LIMIT_OFFSET: usize = offset_of!(Context, jit_stack_limit);
 pub(crate) use crate::emacs_core::eval::runtime_projection::{
-    CONTEXT_ASET_EPOCH_OFFSET, CONTEXT_ATTENTION_OFFSET, CONTEXT_BUFFERS_OFFSET,
-    CONTEXT_TAGGED_HEAP_OFFSET,
+    CONTEXT_ATTENTION_OFFSET, CONTEXT_BUFFERS_OFFSET, CONTEXT_TAGGED_HEAP_OFFSET,
 };
 
 const _: () = {

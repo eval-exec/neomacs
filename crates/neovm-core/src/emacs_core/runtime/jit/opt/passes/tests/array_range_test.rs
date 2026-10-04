@@ -130,7 +130,7 @@ fn read(func: &mut Func, block: Block, pc: u32, base: Value, index: Value) -> (I
         func,
         id,
         &[base, index],
-        Effects::READ_HEAP.with(Effects::MAY_DEOPT),
+        super::super::super::build::op_effects(&Op::Aref).0,
         AliasClass::VecElem,
     );
     func.source_states.resize_with(pc as usize + 1, || None);

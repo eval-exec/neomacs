@@ -10,6 +10,10 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::rc::Rc;
 
+#[cfg(test)]
+#[path = "primitive_opcode_cells.rs"]
+mod primitive_opcode_cells;
+
 fn new_vm(eval: &mut Context) -> Vm<'_> {
     Vm::from_context(eval)
 }
