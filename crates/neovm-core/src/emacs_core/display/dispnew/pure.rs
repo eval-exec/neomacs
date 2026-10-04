@@ -8,6 +8,7 @@ use crate::emacs_core::display::live_frame_designator_p;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{EvalResult, Flow, signal};
 use crate::emacs_core::error::{expect_args, expect_args_range};
+use crate::emacs_core::terminal::pure::decode_terminal_id_eval;
 use crate::emacs_core::terminal::pure::expect_terminal_designator_eval;
 use crate::emacs_core::value::ValueKind;
 use crate::emacs_core::value::*;
@@ -137,18 +138,34 @@ pub(crate) fn builtin_send_string_to_terminal(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("send-string-to-terminal", &args, 1, 2)?;
-    match args[0].kind() {
-        ValueKind::String => {
-            if let Some(terminal) = args.get(1) {
-                expect_terminal_designator_eval(eval, terminal)?;
-            }
-            Ok(Value::NIL)
+    // GNU writes SBYTES raw, "without alteration" -- internal encoding bytes,
+    // never a lossy UTF-8 re-encoding (src/dispnew.c:6820-6821).
+    let string = match args[0].kind() {
+        ValueKind::String => args[0]
+            .as_lisp_string()
+            .expect("ValueKind::String must carry LispString payload"),
+        _other => {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("stringp"), args[0]],
+            ));
         }
-        _other => Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("stringp"), args[0]],
-        )),
+    };
+    if let Some(terminal) = args.get(1) {
+        expect_terminal_designator_eval(eval, terminal)?;
     }
+    // GNU `decode_live_terminal': nil is the selected frame's terminal
+    // (src/terminal.c:238-245); a garbage or deleted designator already
+    // failed `terminal-live-p' above.
+    let designator = args.get(1).copied().unwrap_or(Value::NIL);
+    let Some(terminal_id) = decode_terminal_id_eval(eval, &designator) else {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("terminal-live-p"), designator],
+        ));
+    };
+    crate::emacs_core::terminal::pure::write_bytes_to_terminal(terminal_id, string.as_bytes())?;
+    Ok(Value::NIL)
 }
 
 /// Context-aware variant of `internal-show-cursor`.
