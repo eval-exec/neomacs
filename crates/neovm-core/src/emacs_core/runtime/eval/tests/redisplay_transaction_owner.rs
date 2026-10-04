@@ -121,7 +121,6 @@ fn transaction_owner_excludes_standalone_scroll_and_restores_nested_and_unwound_
     tracing::info!(target: "d5::owner_layout", field = "context.attention", offset = std::mem::offset_of!(Context, attention), "owner layout metric");
     tracing::info!(target: "d5::owner_layout", field = "context.buffers", offset = std::mem::offset_of!(Context, buffers), "owner layout metric");
     tracing::info!(target: "d5::owner_layout", field = "context.tagged_heap", offset = std::mem::offset_of!(Context, tagged_heap), "owner layout metric");
-    tracing::info!(target: "d5::owner_layout", field = "context.aset_fast_path_epoch", offset = std::mem::offset_of!(Context, aset_fast_path_epoch), "owner layout metric");
     let mut eval = Context::new();
     assert!(!actual_transaction_active(&eval));
     eval.redisplay_fn = Some(Box::new(|_| {
