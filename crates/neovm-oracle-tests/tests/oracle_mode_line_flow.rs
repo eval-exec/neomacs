@@ -94,6 +94,38 @@ fn format_mode_line_eval_throw_reaches_outer_catch() {
 }
 
 #[test]
+fn format_mode_line_multibyte_identity_follows_inputs() {
+    // Issue #470: a mode line whose non-ASCII content lives entirely in
+    // U+0080..U+00FF (code fits in one byte) must still produce a MULTIBYTE
+    // result string, because GNU string identity follows the inputs (the
+    // `concat' rule), not the content.  Deriving the flag from the codes
+    // re-encodes the dot as a unibyte raw byte, which GNU's redisplay then
+    // shows as the octal escape `\267` (src/xdisp.c:8649-8662).
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_active_mode_line_parity(
+        r#"(let ((noninteractive nil))
+             (let ((result (format-mode-line '("A" "·" "B") 0)))
+               (list (multibyte-string-p result) result)))"#,
+        expect_test::expect![[r#""OK (t \"A·B\")""#]],
+    );
+}
+
+#[test]
+fn format_mode_line_multibyte_identity_survives_re_derivation() {
+    // The issue's observed transition: a LATER mode-line evaluation must not
+    // change the identity the first one produced.  Feed the rendered string
+    // back in as a mode-line element and require multibyte identity again.
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_active_mode_line_parity(
+        r#"(let ((noninteractive nil))
+             (let* ((first (format-mode-line '("A" "·" "B") 0))
+                    (second (format-mode-line (list first) 0)))
+               (list (multibyte-string-p second) second)))"#,
+        expect_test::expect![[r#""OK (t \"A·B\")""#]],
+    );
+}
+
+#[test]
 fn format_mode_line_eval_signal_is_logged_inside_outer_condition_case() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     assert_active_mode_line_parity(
