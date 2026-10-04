@@ -26,7 +26,18 @@ fn tty_posn_split_without_local_output_reads_the_accepted_frame_pool() {
         frame.char_height = 1.0;
         frame.font_pixel_size = 1.0;
         frame.set_window_system(None);
+        // Realize GNU's one-line TTY minibuffer before allocating frame rows.
+        let mini = frame.minibuffer_leaf.as_mut().expect("minibuffer");
+        let mut mini_bounds = *mini.bounds();
+        mini_bounds.height = frame.char_height;
+        mini.set_bounds(mini_bounds);
         frame.set_window_layout_text_size(12, 8);
+        assert_eq!(
+            frame.root_window().bounds().height
+                + frame.minibuffer_leaf.as_ref().unwrap().bounds().height,
+            8.0,
+            "window allocation matches the accepted frame pool height"
+        );
     }
     let bounds = *eval
         .frames
