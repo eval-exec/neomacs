@@ -215,7 +215,10 @@ fn parity_two_cycle_symbol_with_pos_survival_and_reclaim_verified() {
 /// `other` drain bucket (marking unchanged by paging).
 fn deferred_symbol_with_pos_resolves_at_termination_body(verify: bool) {
     crate::test_utils::init_test_tracing();
+    // Preserve the legacy deferral regression under knob-on suite runs.
+    knobs::set_concurrent_claims_for_test(Some(false));
     let mut heap = TaggedHeap::new();
+    knobs::set_concurrent_claims_for_test(None);
     set_tagged_heap(&mut heap);
     if verify {
         arm_partition(&mut heap, true);

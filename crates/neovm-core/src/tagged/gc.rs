@@ -776,6 +776,10 @@ pub struct TaggedHeap {
     /// in-flight cycle (see `ConcurrentClaimJob::bc_claimed`) + fold.
     concurrent_bc_claimed: std::sync::Arc<AtomicUsize>,
     last_concurrent_bc_claimed: usize,
+    /// U3.5 counter exists only when its frozen policy is enabled. Every
+    /// successful marker/bignum/symbol-with-pos claim uses an atomic RMW.
+    concurrent_leaf_claimed: Option<std::sync::Arc<AtomicUsize>>,
+    last_concurrent_leaf_claimed: usize,
     /// CONCURRENT STRING MARKING: per-cycle dedup for the ENFORCED in-mutator
     /// string interval SATB barrier (`note_string_interval_preimage`), keyed by
     /// `LispString` address — stable for the whole cycle because nothing is
@@ -908,6 +912,8 @@ pub struct TaggedHeap {
     /// read once, here at construction): the Tier-B snapshot (the default),
     /// or, for the F-G measurement only, deferral to the termination.
     vec_scan: knobs::VecScanMode,
+    /// Default-off U3.5 policy, immutable for this heap's lifetime.
+    concurrent_claims: bool,
     /// The generation census (`census.rs`), present only under
     /// `NEOVM_GC_CENSUS` / `NEOVM_GC_CENSUS_REMSET` (read once, here at
     /// construction). Trace-only: it never changes what is marked or freed.
@@ -956,6 +962,7 @@ impl TaggedHeap {
     pub fn new() -> Self {
         super::collection_reads::initialize();
         let chunk_map = knobs::chunk_map_on().then(|| std::sync::Arc::new(ChunkMap::new()));
+        let concurrent_claims = knobs::concurrent_claims_on();
         let heap = Self {
             generational: generational::GenState::new(
                 std::env::var("NEOVM_GC_GENERATIONAL").as_deref() == Ok("1"),
@@ -1060,6 +1067,9 @@ impl TaggedHeap {
             last_concurrent_vec_claimed: 0,
             concurrent_bc_claimed: std::sync::Arc::new(AtomicUsize::new(0)),
             last_concurrent_bc_claimed: 0,
+            concurrent_leaf_claimed: concurrent_claims
+                .then(|| std::sync::Arc::new(AtomicUsize::new(0))),
+            last_concurrent_leaf_claimed: 0,
             satb_string_preimage_addrs: FxHashSet::default(),
             gc_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             gc_wake: std::sync::Arc::new((std::sync::Mutex::new(()), std::sync::Condvar::new())),
@@ -1120,6 +1130,7 @@ impl TaggedHeap {
             dump_addr_lo: usize::MAX,
             dump_addr_hi: 0,
             vec_scan: knobs::vec_scan_mode(),
+            concurrent_claims,
             census: GenCensus::from_knob(),
         };
         // The census's remembered-set probe widens the window compiled code
@@ -1278,6 +1289,7 @@ impl TaggedHeap {
             last_concurrent_subr_dropped: self.last_concurrent_subr_dropped,
             last_concurrent_vec_claimed: self.last_concurrent_vec_claimed,
             last_concurrent_bc_claimed: self.last_concurrent_bc_claimed,
+            last_concurrent_leaf_claimed: self.last_concurrent_leaf_claimed,
             last_termination_fold_us: self.last_termination_fold_us,
             termination_count: self.termination_count,
             mark_us: self.sweep_mark_us,

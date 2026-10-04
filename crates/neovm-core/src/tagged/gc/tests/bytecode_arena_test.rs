@@ -447,6 +447,7 @@ fn concurrent_claim_arm_defers_mid_cycle_bytecode_pages() {
     // before launching, so claim at the flipped value).
     let job = ConcurrentClaimJob {
         major: false,
+        concurrent_claims: false,
         parity: heap.mark_parity.flip(),
         pages: PageSnapshot::BaseSets {
             cons: rustc_hash::FxHashSet::default(),
@@ -454,6 +455,9 @@ fn concurrent_claim_arm_defers_mid_cycle_bytecode_pages() {
             float: rustc_hash::FxHashSet::default(),
             vector: rustc_hash::FxHashSet::default(),
             bytecode: snap,
+            marker: rustc_hash::FxHashSet::default(),
+            bignum: rustc_hash::FxHashSet::default(),
+            symbol_with_pos: rustc_hash::FxHashSet::default(),
         },
         dump_lo: usize::MAX,
         dump_hi: 0,
@@ -463,6 +467,7 @@ fn concurrent_claim_arm_defers_mid_cycle_bytecode_pages() {
         subr_dropped: std::sync::Arc::new(AtomicUsize::new(0)),
         vec_claimed: std::sync::Arc::new(AtomicUsize::new(0)),
         bc_claimed: std::sync::Arc::new(AtomicUsize::new(0)),
+        leaf_claimed: None,
     };
     let mut gray = Vec::new();
     assert!(

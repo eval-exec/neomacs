@@ -284,8 +284,9 @@ impl Drop for ChunkMap {
 }
 
 /// The GC thread's ownership snapshot for one concurrent mark: which cons
-/// blocks and which string, float, vector and byte-code pages existed at
-/// the world-stopped start handshake. A value in one of them is an owned
+/// blocks and which claimable arena pages existed at the world-stopped
+/// start handshake. The U3.5 leaf classes are included only with their
+/// frozen policy enabled. A value in one of them is an owned
 /// object of that class the marker may mark or claim; anything else (a
 /// block or page created since, the image, a boxed object) defers to the
 /// termination.
@@ -299,6 +300,9 @@ pub(super) enum PageSnapshot {
         float: FxHashSet<usize>,
         vector: FxHashSet<usize>,
         bytecode: FxHashSet<usize>,
+        marker: FxHashSet<usize>,
+        bignum: FxHashSet<usize>,
+        symbol_with_pos: FxHashSet<usize>,
     },
     /// The live chunk map, plus each class's block or page count at the
     /// handshake: a granule is in the snapshot iff its class matches and its
@@ -310,6 +314,44 @@ pub(super) enum PageSnapshot {
 }
 
 impl PageSnapshot {
+    /// Classify a U3.5 leaf with one chunk-map lookup. This also proves its
+    /// page existed at the stopped-world start; misses need no header read.
+    #[inline(always)]
+    pub(super) fn leaf_class(&self, addr: usize) -> Option<ChunkClass> {
+        match self {
+            PageSnapshot::ChunkMap { map, start_count } => {
+                let entry = map.get(addr);
+                let class = entry.class();
+                if matches!(
+                    class,
+                    ChunkClass::Marker | ChunkClass::Bignum | ChunkClass::SymbolWithPos
+                ) && entry.index() < start_count[class as usize]
+                {
+                    Some(class)
+                } else {
+                    None
+                }
+            }
+            PageSnapshot::BaseSets {
+                marker,
+                bignum,
+                symbol_with_pos,
+                ..
+            } => {
+                let base = addr & !(OBJECT_PAGE_ALIGN - 1);
+                if marker.contains(&base) {
+                    Some(ChunkClass::Marker)
+                } else if bignum.contains(&base) {
+                    Some(ChunkClass::Bignum)
+                } else if symbol_with_pos.contains(&base) {
+                    Some(ChunkClass::SymbolWithPos)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
     /// Is `addr` inside a snapshot block or page of `class`?
     #[inline(always)]
     pub(super) fn contains(&self, class: ChunkClass, addr: usize) -> bool {
@@ -320,6 +362,9 @@ impl PageSnapshot {
                 float,
                 vector,
                 bytecode,
+                marker,
+                bignum,
+                symbol_with_pos,
             } => {
                 let base = addr & !(OBJECT_PAGE_ALIGN - 1);
                 match class {
@@ -328,6 +373,9 @@ impl PageSnapshot {
                     ChunkClass::Float => float.contains(&base),
                     ChunkClass::Vector => vector.contains(&base),
                     ChunkClass::ByteCode => bytecode.contains(&base),
+                    ChunkClass::Marker => marker.contains(&base),
+                    ChunkClass::Bignum => bignum.contains(&base),
+                    ChunkClass::SymbolWithPos => symbol_with_pos.contains(&base),
                     _ => false,
                 }
             }

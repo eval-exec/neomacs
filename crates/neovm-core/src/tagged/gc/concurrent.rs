@@ -329,6 +329,9 @@ impl TaggedHeap {
         self.concurrent_subr_dropped.store(0, Ordering::Relaxed);
         self.concurrent_vec_claimed.store(0, Ordering::Relaxed);
         self.concurrent_bc_claimed.store(0, Ordering::Relaxed);
+        if let Some(claimed) = &self.concurrent_leaf_claimed {
+            claimed.store(0, Ordering::Relaxed);
+        }
         self.gc_stop
             .store(false, std::sync::atomic::Ordering::Release);
         self.gc_exited = Some(exited_rx);
@@ -347,6 +350,7 @@ impl TaggedHeap {
                 // Mandated carry: the GC thread claims at THIS cycle's parity.
                 parity: self.mark_parity,
                 major: self.generational.major_in_progress,
+                concurrent_claims: self.concurrent_claims,
                 pages,
                 dump_lo: self.dump_addr_lo,
                 dump_hi: self.dump_addr_hi,
@@ -356,6 +360,7 @@ impl TaggedHeap {
                 subr_dropped: self.concurrent_subr_dropped.clone(),
                 vec_claimed: self.concurrent_vec_claimed.clone(),
                 bc_claimed: self.concurrent_bc_claimed.clone(),
+                leaf_claimed: self.concurrent_leaf_claimed.clone(),
             },
             satb: self.satb_shared.clone(),
             deferred: self.deferred_veclikes.clone(),
@@ -383,9 +388,9 @@ impl TaggedHeap {
 
     /// The ownership snapshot a concurrent mark starting now hands the GC
     /// thread (`chunk_map::PageSnapshot`). Without the chunk map: the base
-    /// addresses of every cons block and string, float, vector and bytecode
-    /// page, each class timed into its handshake slot. With it: the map and
-    /// each class's count, O(1).
+    /// addresses of every cons block and claimable arena page, with the
+    /// marker/bignum/symbol-with-pos classes gated by their frozen policy.
+    /// With the map: each class's start count, O(1).
     pub(super) fn page_snapshot_for_mark(&mut self) -> PageSnapshot {
         if let Some(map) = self.chunk_map.as_ref() {
             let mut start_count = [0usize; CHUNK_CLASS_COUNT];
@@ -397,6 +402,12 @@ impl TaggedHeap {
                 knobs::VecScanMode::Defer => 0,
             };
             start_count[ChunkClass::ByteCode as usize] = self.bytecode_arena.pages.len();
+            if self.concurrent_claims {
+                start_count[ChunkClass::Marker as usize] = self.marker_arena.pages.len();
+                start_count[ChunkClass::Bignum as usize] = self.bignum_arena.pages.len();
+                start_count[ChunkClass::SymbolWithPos as usize] =
+                    self.symbol_with_pos_arena.pages.len();
+            }
             self.handshake.last_start_conssnap_us = 0;
             self.handshake.last_start_floatsnap_us = 0;
             self.handshake.last_start_vecbasesnap_us = 0;
@@ -436,12 +447,28 @@ impl TaggedHeap {
         let bcsnap_t0 = std::time::Instant::now();
         let bytecode = bases(&self.bytecode_arena);
         self.handshake.last_start_bcsnap_us = bcsnap_t0.elapsed().as_micros() as u64;
+        let (marker, bignum, symbol_with_pos) = if self.concurrent_claims {
+            (
+                bases(&self.marker_arena),
+                bases(&self.bignum_arena),
+                bases(&self.symbol_with_pos_arena),
+            )
+        } else {
+            (
+                FxHashSet::default(),
+                FxHashSet::default(),
+                FxHashSet::default(),
+            )
+        };
         PageSnapshot::BaseSets {
             cons,
             string,
             float,
             vector,
             bytecode,
+            marker,
+            bignum,
+            symbol_with_pos,
         }
     }
 
@@ -508,10 +535,13 @@ impl TaggedHeap {
         self.publish_barrier_window();
         #[cfg(feature = "gc-memory-telemetry")]
         memory_telemetry::observe(self, memory_telemetry::Phase::ConcurrentJoined);
+        // New snapshot kinds hand bare symbols back in legacy full cycles
+        // too: weak-symbol liveness still consults mutator-side mark_symbol.
+        // Existing knob-off legacy scans produce no symbol result.
+        for id in result.symbols {
+            self.mark_symbol(id);
+        }
         if self.generational.enabled {
-            for id in result.symbols {
-                self.mark_symbol(id);
-            }
             let mut symbols = Vec::new();
             for mutator in self.mutators_mut() {
                 symbols.append(&mut mutator.major_symbol_preimages);
@@ -558,6 +588,10 @@ impl TaggedHeap {
         self.last_concurrent_subr_dropped = self.concurrent_subr_dropped.load(Ordering::Relaxed);
         self.last_concurrent_vec_claimed = self.concurrent_vec_claimed.load(Ordering::Relaxed);
         self.last_concurrent_bc_claimed = self.concurrent_bc_claimed.load(Ordering::Relaxed);
+        self.last_concurrent_leaf_claimed = self
+            .concurrent_leaf_claimed
+            .as_ref()
+            .map_or(0, |claimed| claimed.load(Ordering::Relaxed));
         // Task 01 INSERTION-COVERAGE RE-TRACE (the load-bearing companion of
         // the vector-header claims): re-gray the CURRENT children of every
         // multi-child owner mutated this cycle (`satb_snapshotted_owners` —

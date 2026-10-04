@@ -504,13 +504,16 @@ fn concurrent_termination_classifies_deferred_kinds() {
         "no vector may remain parked on a bare page-only heap (vec={})",
         kinds.vector,
     );
-    // Page bignums are not claimed on the GC thread (P0.11 §3.6: childless,
-    // and too few deferrals to pay for a snapshot); they park in `other`.
-    assert!(
-        kinds.other >= N_BIG,
-        "arena bignums stay parked in the other bucket (other={})",
-        kinds.other,
-    );
+    if heap.concurrent_claims {
+        assert!(stats.last_concurrent_leaf_claimed >= N_BIG);
+        assert_eq!(kinds.other, 0, "page leaves leave the parked buffer");
+    } else {
+        assert!(
+            kinds.other >= N_BIG,
+            "arena bignums stay parked with U3.5 off (other={})",
+            kinds.other,
+        );
+    }
     assert_eq!(
         kinds.total(),
         stats.last_termination_deferred,

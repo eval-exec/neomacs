@@ -86,6 +86,7 @@ fn set_age(value: TaggedValue, age: Age) {
 fn claim_job(heap: &TaggedHeap, major: bool) -> ConcurrentClaimJob {
     ConcurrentClaimJob {
         major,
+        concurrent_claims: false,
         parity: heap.mark_parity.flip(),
         pages: PageSnapshot::BaseSets {
             cons: heap.cons_blocks.iter().map(ConsBlock::base_addr).collect(),
@@ -113,6 +114,9 @@ fn claim_job(heap: &TaggedHeap, major: bool) -> ConcurrentClaimJob {
                 .iter()
                 .map(|page| page.base_addr())
                 .collect(),
+            marker: FxHashSet::default(),
+            bignum: FxHashSet::default(),
+            symbol_with_pos: FxHashSet::default(),
         },
         dump_lo: heap.dump_addr_lo,
         dump_hi: heap.dump_addr_hi,
@@ -121,6 +125,7 @@ fn claim_job(heap: &TaggedHeap, major: bool) -> ConcurrentClaimJob {
         float_claimed: Arc::new(AtomicUsize::new(0)),
         vec_claimed: Arc::new(AtomicUsize::new(0)),
         bc_claimed: Arc::new(AtomicUsize::new(0)),
+        leaf_claimed: None,
         subr_dropped: Arc::new(AtomicUsize::new(0)),
     }
 }
@@ -370,6 +375,9 @@ fn generational_worker_snapshot_misses_never_claim_or_promote_any_header_class()
         float: FxHashSet::default(),
         vector: FxHashSet::default(),
         bytecode: FxHashSet::default(),
+        marker: FxHashSet::default(),
+        bignum: FxHashSet::default(),
+        symbol_with_pos: FxHashSet::default(),
     };
     let mut gray = Vec::new();
     let mut logs = WorkerMarkLogs::default();

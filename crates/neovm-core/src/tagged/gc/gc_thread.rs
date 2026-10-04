@@ -96,9 +96,12 @@ pub(super) struct ConcurrentClaimJob {
     /// First-partition jobs also carry true; their non-cons promo addresses
     /// are discarded by the coordinator before legacy permanent promotion.
     pub(super) major: bool,
+    /// Frozen, default-off U3.5 policy captured at launch.
+    pub(super) concurrent_claims: bool,
     /// OWNERSHIP SNAPSHOT (`chunk_map::PageSnapshot`): the cons blocks and
-    /// the STRING, FLOAT, VECTOR and BYTECODE arena pages that existed at the
-    /// world-stopped start handshake (retired pages included — their tenured
+    /// claimable arena pages that existed at the world-stopped start
+    /// handshake (the U3.5 leaf classes only with their policy enabled;
+    /// retired pages included — their tenured
     /// objects short-circuit to drop at the arms). A HIT both proves
     /// ownership and classifies the value (a block or page owns its whole
     /// 64 KiB granule and is homogeneous), without reading any header. MISS ⇒
@@ -147,6 +150,8 @@ pub(super) struct ConcurrentClaimJob {
     /// CONCURRENT BYTECODE CLAIMS: same pattern — owned young page bytecode
     /// this cycle's GC thread claimed (and gray-pushed the children of).
     pub(super) bc_claimed: std::sync::Arc<AtomicUsize>,
+    /// Successful U3.5 leaf claims. No counter allocation with policy off.
+    pub(super) leaf_claimed: Option<std::sync::Arc<AtomicUsize>>,
     /// SUBR RECOGNIZE-AND-DROP: how many times the GC thread dropped a
     /// leaked-static subr from the defer path this cycle. Counts drop
     /// EVENTS, not unique subrs (dropping is stateless, so a subr
@@ -212,6 +217,16 @@ impl WorkerMarkLogs {
             return;
         }
         if value.is_heap_object() {
+            gray.push(value);
+        }
+    }
+
+    /// New snapshot kinds must preserve bare symbols under both generation
+    /// policies. Their old mutator trace marked those symbols even in a
+    /// legacy full cycle, where weak tables consult the same side marks.
+    #[inline]
+    fn queue_snapshot_child(&mut self, value: TaggedValue, gray: &mut Vec<TaggedValue>) {
+        if !self.note_symbol(value) && value.is_heap_object() {
             gray.push(value);
         }
     }
@@ -708,6 +723,42 @@ fn concurrent_try_mark_owned_logged<const MAJOR: bool>(
             // Already marked (lost race, earlier edge, or born-at-parity —
             // coverage leg (c)): equally handled, nothing further owed.
             return true;
+        }
+        if job.concurrent_claims {
+            // A class page hit is both the ownership and subtype proof.
+            // Never inspect a live allocator bitmap or a payload on a miss.
+            if let Some(class) = job.pages.leaf_class(addr) {
+                let stride = match class {
+                    ChunkClass::Marker => <MarkerObj as PagedObject>::SLOT_BYTES,
+                    ChunkClass::Bignum => <BignumObj as PagedObject>::SLOT_BYTES,
+                    ChunkClass::SymbolWithPos => <SymbolWithPosObj as PagedObject>::SLOT_BYTES,
+                    _ => unreachable!("leaf snapshot returned a non-leaf class"),
+                };
+                debug_assert_eq!((addr - base) % stride, 0, "misaligned leaf page value");
+                if unsafe { (*ptr).gc.black_by_generation(job.scope()) } {
+                    return true;
+                }
+                if unsafe { (*ptr).gc.mark_claim_at(job.parity) } {
+                    job.leaf_claimed
+                        .as_ref()
+                        .expect("enabled leaf claims require a cycle counter")
+                        .fetch_add(1, Ordering::Relaxed);
+                    logs.note_promotion::<MAJOR>(ptr.cast());
+                    if class == ChunkClass::SymbolWithPos {
+                        // These fields have no post-publication setter. A
+                        // fresh claim excludes births at this cycle parity:
+                        // construction happened before the start handshake
+                        // and channel publication. Failed claims never read
+                        // payloads, including reused slots born black.
+                        let object = ptr as *const SymbolWithPosObj;
+                        logs.queue_snapshot_child(unsafe { (*object).sym }, gray);
+                        logs.queue_snapshot_child(unsafe { (*object).pos }, gray);
+                    }
+                    // Marker chains and bignum limb buffers are mutable host
+                    // state, with no Lisp children: do not read either here.
+                }
+                return true;
+            }
         }
         // MAPPED (pdump) veclikes mark via the heap's side table
         // (`mapped_veclike_objects[..].marked`), which only the mutator may
@@ -1576,3 +1627,7 @@ pub(crate) fn note_string_interval_preimage(
 #[cfg(test)]
 #[path = "tests/concurrent_major_worker_test.rs"]
 mod concurrent_major_worker_tests;
+
+#[cfg(test)]
+#[path = "tests/concurrent_leaf_claim_tests.rs"]
+mod concurrent_leaf_claim_tests;

@@ -10,6 +10,7 @@
 //! | `NEOVM_GC_MEMORY_TELEMETRY=1` | off | stopped-world retained/live inventory (requires `gc-memory-telemetry` feature) |
 //! | `NEOVM_GC_MEMORY_FILE=<path>` | unset | append memory snapshots as JSONL when telemetry or GC trace is enabled |
 //! | `NEOVM_GC_CHUNK_MAP` | on (`=0` disables) | page and block ownership through the chunk map (`chunk_map.rs`), on the mutator and on the GC thread |
+//! | `NEOVM_GC_CONCURRENT_CLAIMS=1` | off | concurrent marker/bignum/symbol-with-pos claims and Tier-H hash tracing |
 //! | `NEOVM_GC_MAJOR_GROWTH_PERCENT` | `15` | major growth limit, with an 8 MiB floor; generational only |
 //! | `NEOVM_GC_MAJOR_MAX_MINORS` | `64` | maximum completed minors between majors; generational only |
 //! | `NEOVM_GC_STRESS_MAJOR_EVERY` | `8` | stressed cycle stride, normalized to at least one; generational only |
@@ -64,6 +65,7 @@ thread_local! {
     static CENSUS_OVERRIDE: std::cell::Cell<Option<CensusMode>> = const { std::cell::Cell::new(None) };
     static CHUNK_MAP_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
     static VEC_SCAN_OVERRIDE: std::cell::Cell<Option<VecScanMode>> = const { std::cell::Cell::new(None) };
+    static CONCURRENT_CLAIMS_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
 /// `NEOVM_GC_CENSUS` / `NEOVM_GC_CENSUS_REMSET`.
@@ -124,6 +126,29 @@ pub(crate) fn vec_scan_mode() -> VecScanMode {
             _ => VecScanMode::Snapshot,
         },
     )
+}
+
+/// Frozen process policy for U3.5. Capture once in the heap and mark job,
+/// rather than reading the environment on an edge or a mutation.
+pub(crate) fn concurrent_claims_on() -> bool {
+    #[cfg(test)]
+    if let Some(on) = CONCURRENT_CLAIMS_OVERRIDE.with(|c| c.get()) {
+        return on;
+    }
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        let on = env_is_on("NEOVM_GC_CONCURRENT_CLAIMS");
+        if on {
+            note_knob("NEOVM_GC_CONCURRENT_CLAIMS", "1");
+        }
+        on
+    })
+}
+
+/// Test hook for heaps created on this thread; no process environment race.
+#[cfg(test)]
+pub(crate) fn set_concurrent_claims_for_test(on: Option<bool>) {
+    CONCURRENT_CLAIMS_OVERRIDE.with(|c| c.set(on));
 }
 
 /// Test hook: the census mode heaps created on this thread use (`None`
