@@ -67,14 +67,19 @@ therefore in-repo, in `neomacs-renderer-wgpu/src/svg_animation/`.
   the `:index`-on-static arm was dropped (its GNU-ignored claim was
   untested commentary, and main already rejects static `:index > 0`).
 
-Tracked for the render-paced increment (not v1 blockers, all in the
-enabled-policy path): zero-width keyTimes selection, discrete keyTimes
-last<1, fractional repeatCount, single-quote/entity-safe value
-serialization, dedup key includes target (two absent-attribute rules on
-distinct elements), SMIL sandwich ordering instead of last-wins, begin
-offsets in the loop period, finite freeze/remove endpoint sampling,
-SVGZ/namespaced prefilter, concurrent-miss grid coherence, in_flight
-RAII on panic.
+Review round 3 (coderabbit + Copilot, fixed in 229aeab9e6): dedup key
+now includes the target element; loop periods are begin-aware with
+steady-state sampling for looping plans; next_event never reports
+pre-activation boundaries; neomacs-image-animate-svg mutates the
+displayed spec in place; the parity test pins the value, not just
+agreement.
+
+Still tracked for the render-paced increment (not v1 blockers, all in
+the enabled-policy path): zero-width keyTimes selection, discrete
+keyTimes last<1, fractional repeatCount, single-quote/entity-safe value
+serialization, SMIL sandwich ordering instead of last-wins, finite
+freeze/remove endpoint sampling, SVGZ/namespaced prefilter,
+concurrent-miss grid coherence, in_flight RAII on panic.
 
 Section 2 (design) to be weighed against this plan's deferred list —
 its MediaAsset/Playback/View/SampleKey identity split is the stronger
