@@ -67,10 +67,7 @@ impl JitHeapState {
     /// The window compiled code currently tests.
     #[cfg(test)]
     pub(crate) fn barrier_window(&self) -> BarrierWindow {
-        BarrierWindow::span(
-            self.barrier_lo.get(),
-            self.barrier_lo.get().wrapping_add(self.barrier_len.get()),
-        )
+        BarrierWindow::from_lo_len(self.barrier_lo.get(), self.barrier_len.get())
     }
 }
 

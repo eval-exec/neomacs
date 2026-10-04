@@ -612,10 +612,14 @@ fn compiled_cons_store(cell: Value, value: Value, cdr: bool) -> bool {
     if !cell.is_cons() {
         return false;
     }
-    #[cfg(test)]
-    CONS_OBSERVATION_QUERIES.with(|count| count.set(count.get() + 1));
-    if is_observed(cell.bits()) {
-        crate::tagged::gc::TaggedHeap::record_compiled_collection_write(cell.bits());
+    let address = cell.bits() & !TAG_MASK;
+    let (lo, hi) = crate::tagged::collection_reads::compiled_observation_window();
+    if lo <= address && address < hi {
+        #[cfg(test)]
+        CONS_OBSERVATION_QUERIES.with(|count| count.set(count.get() + 1));
+        if is_observed(cell.bits()) {
+            crate::tagged::gc::TaggedHeap::record_compiled_collection_write(cell.bits());
+        }
     }
     let kind = if cdr {
         crate::tagged::gc::HeapWriteKind::ConsCdr
@@ -623,7 +627,7 @@ fn compiled_cons_store(cell: Value, value: Value, cdr: bool) -> bool {
         crate::tagged::gc::HeapWriteKind::ConsCar
     };
     crate::tagged::gc::note_heap_slot_write(cell, kind, usize::from(cdr), value);
-    let owner = (cell.bits() & !TAG_MASK) as *mut crate::tagged::header::ConsCell;
+    let owner = address as *mut crate::tagged::header::ConsCell;
     // SAFETY: the Cons tag names a live cell, and the GC barrier completed.
     unsafe {
         if cdr {

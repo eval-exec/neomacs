@@ -3315,6 +3315,8 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
                 call_census: !aot && jit_call_census_on(),
                 direct_framed: !aot && shapes.framed,
                 collection_journal: !aot && jit_gen0_collection_journal_on(),
+                collection_observation_gate: !aot
+                    && super::shim_refs::collection_observation_gate_enabled(),
                 hof: false,
             };
             let refs = super::RtRefs::new(

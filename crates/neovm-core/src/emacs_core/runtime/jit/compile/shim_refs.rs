@@ -59,6 +59,8 @@ pub(crate) enum ShimGroup {
     OptSink,
     /// String collection journaling, selected only by its compile-time knob.
     CollectionJournal,
+    /// Cold GEN0 observed-window refinement; declared only in Observed JIT.
+    CollectionObservationGate,
 }
 
 /// Every runtime shim generated code calls, in declaration order.
@@ -160,6 +162,8 @@ pub(crate) enum Shim {
     SqrtBindingValid,
     /// A guarded string byte store; no Lisp allocation, callback or safe point.
     StringCollectionWrite,
+    /// Cold exact-owner eligibility and empty-gap publication; no safe point.
+    UnobservedCollectionOwner,
 }
 
 /// The parameter shapes of the shim signatures.
@@ -243,6 +247,7 @@ impl Shim {
             Shim::HofFinish => "neovm_jit_hof_finish",
             Shim::HofAbort => "neovm_jit_hof_abort",
             Shim::StringCollectionWrite => "neovm_jit_string_collection_write",
+            Shim::UnobservedCollectionOwner => "neovm_jit_unobserved_collection_owner",
         }
     }
 
@@ -252,6 +257,7 @@ impl Shim {
             Shim::SqrtBindingValid => ShimGroup::OptSink,
             Shim::T2RecordArrayUse => ShimGroup::Tier2ArrayProfile,
             Shim::StringCollectionWrite => ShimGroup::CollectionJournal,
+            Shim::UnobservedCollectionOwner => ShimGroup::CollectionObservationGate,
             Shim::CallSubrSpec | Shim::PredSpec | Shim::EqInclPropsSpec | Shim::ArithSpec => {
                 ShimGroup::SubrSpec
             }
@@ -318,13 +324,15 @@ impl Shim {
         }
     }
 
-    /// `(params, returns an i64 status/value word)`.
+    /// `(params, returns a status/value word)`. The cold observation gate
+    /// returns an I8 predicate; every other non-void result is I64.
     fn shape(self) -> (&'static [P], bool) {
         use P::{F64, I64, Ptr};
         match self {
             Shim::SqrtBindingValid => (&[Ptr, I64, I64, I64], true),
             Shim::T2RecordArrayUse => (&[Ptr, I64, Ptr], false),
             Shim::StringCollectionWrite => (&[I64], false),
+            Shim::UnobservedCollectionOwner => (&[I64], true),
             // (leaf_obs) -> ()
             Shim::TierRequest => (&[Ptr], false),
             // Generic call's ABI plus the leaf's observation pointer.
@@ -436,7 +444,12 @@ impl Shim {
             }));
         }
         if returns {
-            sig.returns.push(AbiParam::new(types::I64));
+            let result = if self == Shim::UnobservedCollectionOwner {
+                types::I8
+            } else {
+                types::I64
+            };
+            sig.returns.push(AbiParam::new(result));
         }
         sig
     }
@@ -458,6 +471,15 @@ pub(crate) struct ShimGroups {
     pub(crate) direct_framed: bool,
     pub(crate) hof: bool,
     pub(crate) collection_journal: bool,
+    pub(crate) collection_observation_gate: bool,
+}
+
+/// Scalar frontend selection. Workers obtain this requirement from their
+/// immutable imported-symbol payload; pure compilation never reads a heap.
+/// GEN1 may declare the optional suffix but emits no refinement call.
+pub(crate) fn collection_observation_gate_enabled() -> bool {
+    crate::tagged::collection_reads::compiled_journal_mode()
+        == crate::tagged::collection_reads::CompiledJournalMode::Observed
 }
 
 impl ShimGroups {
@@ -474,6 +496,7 @@ impl ShimGroups {
             ShimGroup::DirectFramed => self.direct_framed,
             ShimGroup::Hof => self.hof,
             ShimGroup::CollectionJournal => self.collection_journal,
+            ShimGroup::CollectionObservationGate => self.collection_observation_gate,
         }
     }
 }
@@ -559,6 +582,12 @@ impl RtRefs {
             }
         }
         refs
+    }
+
+    /// Compile-local group selection without importing a signature. This
+    /// keeps AOT and scalar-policy-off emitters on their original paths.
+    pub(crate) fn group_enabled(&self, group: ShimGroup) -> bool {
+        self.groups.contains(group)
     }
 
     /// The callable ref of a base shim (always declared).

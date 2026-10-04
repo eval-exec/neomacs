@@ -183,10 +183,15 @@ impl SharedJit {
             .imports
             .iter()
             .any(|(_, shim)| shim.group() == ShimGroup::CollectionJournal);
+        let collection_observation_gate = payload
+            .imports
+            .iter()
+            .any(|(_, shim)| shim.group() == ShimGroup::CollectionObservationGate);
         self.ensure_module_with_collection_journal(
             payload.regalloc,
             tier2_profile,
             collection_journal,
+            collection_observation_gate,
         )?;
         drop(setup_phase);
         let SharedJit { modules, ctx, .. } = self;
@@ -353,12 +358,17 @@ impl SharedJit {
             .imports
             .iter()
             .any(|(_, shim)| shim.group() == ShimGroup::CollectionJournal);
+        let collection_observation_gate = payload
+            .imports
+            .iter()
+            .any(|(_, shim)| shim.group() == ShimGroup::CollectionObservationGate);
         self.ensure_module_selected_with_collection_journal(
             payload.regalloc,
             tier2_profile,
             array_profile,
             sink_versions,
             collection_journal,
+            collection_observation_gate,
         )?;
         drop(setup_phase);
         let SharedJit { modules, ctx, .. } = self;

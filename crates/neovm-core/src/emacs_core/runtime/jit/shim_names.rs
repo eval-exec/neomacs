@@ -116,6 +116,8 @@ const NEOVM_JIT_SHIM_NAMES: &[&str] = &[
     "neovm_jit_sqrt_binding_valid",
     // JIT-only collection journaling; preserve every name in the AOT prefix.
     "neovm_jit_string_collection_write",
+    // Cold GEN0 observation refinement, never an AOT import.
+    "neovm_jit_unobserved_collection_owner",
 ];
 
 // ABI26's existing shim prefix remains the complete AOT import/salt set.

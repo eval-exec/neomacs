@@ -104,12 +104,37 @@ const MAX_DEPTH: usize = 8;
 
 thread_local! {
     static ACTIVE: Cell<bool> = const { Cell::new(false) };
-    static RECENT_READS: [Cell<usize>; 256] = const { [const { Cell::new(0) }; 256] };
+    static RECENT_READS: RecentReads = const { RecentReads::new() };
     static STATE: RefCell<State> = RefCell::new(State::default());
     #[cfg(test)]
     static OBSERVATION_STATE_ACCESSES: Cell<usize> = const { Cell::new(0) };
     #[cfg(test)]
     static OBSERVED_OWNER_PUBLICATIONS: Cell<usize> = const { Cell::new(0) };
+}
+
+/// The existing mutator-local read deduplication, qualified by reclamation.
+/// The shared epoch contains no Lisp state. A clear-before-resume collector
+/// publication makes a same-address replacement miss this cache; live-owner
+/// hits need neither a header publication nor the mutable capture journal.
+struct RecentReads {
+    epoch: Cell<u64>,
+    words: [Cell<usize>; 256],
+}
+
+impl RecentReads {
+    const fn new() -> Self {
+        Self {
+            epoch: Cell::new(0),
+            words: [const { Cell::new(0) }; 256],
+        }
+    }
+
+    fn clear(&self, epoch: u64) {
+        for word in &self.words {
+            word.set(0);
+        }
+        self.epoch.set(epoch);
+    }
 }
 
 /// This mutator's journal policy mirrors its private capture stack. It caches
@@ -127,11 +152,10 @@ struct State {
     writes: Box<[usize; JOURNAL_SIZE]>,
     captures: Vec<Capture>,
     journal_policy: JournalPolicy,
-    // A conservative envelope of this mutator's sticky observed owners. It
-    // lives with the existing journal, not a Context, and never resets while
-    // certificates can survive. Holes are filtered by exact object marks.
-    observed_lo: usize,
-    observed_hi: usize,
+    // Exact identities and conservative bounds live in the existing mutator
+    // journal. Reclamation prunes dead identities without dereferencing them;
+    // Context/dump changes reclassify the surviving owner ranges.
+    observed: observed_envelope::ObservedEnvelope,
 }
 
 impl Default for State {
@@ -149,8 +173,7 @@ impl Default for State {
             } else {
                 JournalPolicy::BeforeFirstCapture
             },
-            observed_lo: usize::MAX,
-            observed_hi: 0,
+            observed: observed_envelope::ObservedEnvelope::new(),
         }
     }
 }
@@ -344,9 +367,7 @@ fn observe_active(bits: usize) {
 
 fn clear_recent_reads() {
     RECENT_READS.with(|recent| {
-        for slot in recent {
-            slot.set(0);
-        }
+        recent.clear(super::gc::collection_observation_epoch());
     });
 }
 
@@ -356,21 +377,45 @@ fn observe_bits(bits: usize) {
     // cons/vector access can inline this check without entering the slow
     // dependency recorder. Scope changes clear it so every active scope
     // still observes nested reads; collisions only cause another lookup.
-    // Mark before the revision snapshot and before the read-cache shortcut:
-    // GC may have recycled this address since its prior observation.
-    let newly_observed = publish_observed_owner(bits);
-    let recent = recently_observed(bits);
-    if newly_observed || !recent {
-        observe_uncached(bits);
+    // Same-epoch hits already published before their first revision/data
+    // read. A reclamation epoch change clears the shortcut before any reused
+    // address can be accepted, so only misses need owner publication.
+    if !recently_observed(bits) {
+        observe_new_owner(bits);
     }
 }
 
 #[inline]
 fn recently_observed(bits: usize) -> bool {
     RECENT_READS.with(|recent| {
-        let slot = &recent[((bits >> 3) ^ (bits >> 11)) & 255];
+        if compiled_journal_mode() == CompiledJournalMode::Observed {
+            let epoch = super::gc::collection_observation_epoch();
+            if recent.epoch.get() != epoch {
+                clear_recent_after_reclamation(recent, epoch);
+            }
+        }
+        let slot = &recent.words[((bits >> 3) ^ (bits >> 11)) & 255];
         bits != 0 && slot.replace(bits) == bits
     })
+}
+
+// This deliberately does not borrow STATE: fused setter projection already
+// owns its mutable borrow. Each miss refreshes the ledger in its cold recorder
+// before publishing the compiled gate or snapshotting a dependency.
+#[cold]
+#[inline(never)]
+fn clear_recent_after_reclamation(recent: &RecentReads, epoch: u64) {
+    recent.clear(epoch);
+}
+
+#[cold]
+#[inline(never)]
+fn observe_new_owner(bits: usize) {
+    STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        publish_observed_owner_in_state(&mut state, bits);
+        record_observation(&mut state, bits, LispCollectionRevision::current());
+    });
 }
 
 #[cold]
@@ -378,6 +423,9 @@ fn recently_observed(bits: usize) -> bool {
 fn observe_uncached(bits: usize) {
     STATE.with(|state| {
         let mut state = state.borrow_mut();
+        // A transitive cache hit must never dereference its old owner words.
+        // Safe metadata filtering still refreshes its mutator's live bounds.
+        refresh_observed_envelope(&mut state);
         record_observation(&mut state, bits, LispCollectionRevision::current());
     });
 }
@@ -443,12 +491,13 @@ pub(super) fn record_projected_write(value: TaggedValue, projection: WriteProjec
                 false
             }
         };
-        if observe && projected {
+        let recent = observe && projected && recently_observed(value.bits());
+        if observe && projected && !recent {
             publish_observed_owner_in_state(&mut state, value.bits());
         }
         let revision = LispCollectionRevision::advance();
         state.writes[revision.sequence() as usize % JOURNAL_SIZE] = value.bits();
-        if observe && projected && !recently_observed(value.bits()) {
+        if observe && projected && !recent {
             record_observation(&mut state, value.bits(), revision);
         }
     });
@@ -456,6 +505,7 @@ pub(super) fn record_projected_write(value: TaggedValue, projection: WriteProjec
 }
 
 mod compiled_journal;
+mod observed_envelope;
 #[cfg(test)]
 pub(crate) use compiled_journal::force_compiled_journal_for_test;
 pub(crate) use compiled_journal::{CompiledJournalMode, compiled_journal_mode, is_observed};
@@ -469,48 +519,105 @@ pub(crate) fn compiled_observation_window() -> (usize, usize) {
         return (usize::MAX, 0);
     }
     STATE.with(|state| {
-        let state = state.borrow();
-        (state.observed_lo, state.observed_hi)
+        let mut state = state.borrow_mut();
+        refresh_observed_envelope(&mut state);
+        state.observed.full_bounds()
+    })
+}
+
+/// Non-dump owner ranges and an exact empty gap for this actual heap's dump
+/// span. Callers pass the new span explicitly when installing or republishing
+/// a heap; the ordinary TLS barrier mirror may still describe its prior state.
+pub(crate) fn compiled_observation_gate(
+    dump: super::gc::BarrierWindow,
+) -> super::gc::CompiledObservationGate {
+    if compiled_journal_mode() != CompiledJournalMode::Observed
+        || !super::gc::has_collection_observations()
+    {
+        return super::gc::CompiledObservationGate::NONE;
+    }
+    STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        state.observed.refresh(dump);
+        state.observed.gate()
+    })
+}
+
+/// A native false-positive window hit can exclude its whole empty interval.
+/// This is cold protocol refinement, not a last-owner cache: every local
+/// observed address, including vectors and strings, bounds the chosen gap.
+/// The caller has already rejected ordinary GC/dump barrier eligibility.
+#[cold]
+#[inline(never)]
+pub(crate) fn exclude_unobserved_compiled_cons(bits: usize) -> bool {
+    if compiled_journal_mode() != CompiledJournalMode::Observed
+        || bits & super::value::TAG_MASK != super::value::TAG_CONS
+        || bits & !super::value::TAG_MASK == 0
+    {
+        return false;
+    }
+    let dump = super::gc::current_collection_dump_window();
+    STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        let refreshed = state.observed.refresh(dump);
+        let excluded = state.observed.exclude_unobserved(bits);
+        if refreshed || excluded {
+            super::gc::publish_collection_observation_window(state.observed.gate());
+        }
+        excluded
     })
 }
 
 fn publish_compiled_observation_window() {
-    let (lo, hi) = compiled_observation_window();
-    super::gc::publish_collection_observation_window(lo, hi);
+    let dump = super::gc::current_collection_dump_window();
+    let gate = compiled_observation_gate(dump);
+    super::gc::publish_collection_observation_window(gate);
 }
 
 #[cold]
-fn publish_observed_owner(bits: usize) -> bool {
+#[inline(never)]
+fn refresh_observed_envelope(state: &mut State) {
     if compiled_journal_mode() != CompiledJournalMode::Observed {
-        return false;
+        return;
     }
-    STATE.with(|state| publish_observed_owner_in_state(&mut state.borrow_mut(), bits))
+    let dump = super::gc::current_collection_dump_window();
+    if state.observed.refresh(dump) {
+        // The heap-side publisher accepts a prepared gate and does not call
+        // back into STATE, whose borrow is already held here.
+        super::gc::publish_collection_observation_window(state.observed.gate());
+    }
 }
 
+#[cold]
+#[inline(never)]
 fn publish_observed_owner_in_state(state: &mut State, bits: usize) -> bool {
     if compiled_journal_mode() != CompiledJournalMode::Observed {
         return false;
     }
     #[cfg(test)]
     OBSERVED_OWNER_PUBLICATIONS.with(|count| count.set(count.get() + 1));
-    let newly = super::gc::mark_collection_observed(bits);
+    let dump = super::gc::current_collection_dump_window();
+    let refreshed = state.observed.refresh(dump);
     let tag = bits & super::value::TAG_MASK;
     if matches!(
         tag,
         super::value::TAG_CONS | super::value::TAG_STRING | super::value::TAG_VECLIKE
     ) && bits & !super::value::TAG_MASK != 0
     {
-        let address = bits & !super::value::TAG_MASK;
-        let lo = state.observed_lo.min(address);
-        let hi = state.observed_hi.max(address + 1);
-        if lo != state.observed_lo || hi != state.observed_hi {
-            state.observed_lo = lo;
-            state.observed_hi = hi;
-            // No callback or STATE reborrow occurs in the heap-side publisher.
-            super::gc::publish_collection_observation_window(lo, hi);
+        // Another mutator may have published the shared mark first. Its mark
+        // does not insert this identity into our private journal envelope.
+        let changed = state.observed.insert(bits);
+        let newly = super::gc::mark_collection_observed(bits);
+        if refreshed || changed {
+            super::gc::publish_collection_observation_window(state.observed.gate());
         }
+        newly
+    } else if refreshed {
+        super::gc::publish_collection_observation_window(state.observed.gate());
+        false
+    } else {
+        false
     }
-    newly
 }
 
 /// Observe reads made by `read`, rejecting reuse if its dependency budget or
@@ -561,3 +668,7 @@ mod lazy_window_tests;
 #[cfg(all(test, feature = "jit"))]
 #[path = "collection_reads/tests/observed_epoch.rs"]
 mod observed_epoch_tests;
+
+#[cfg(all(test, feature = "jit"))]
+#[path = "collection_reads/tests/observed_gap.rs"]
+mod observed_gap_tests;

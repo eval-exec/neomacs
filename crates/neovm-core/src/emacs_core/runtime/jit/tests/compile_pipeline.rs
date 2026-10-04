@@ -428,6 +428,7 @@ fn jit_pipeline_optional_shim_groups_follow_the_leaf_not_the_module() {
         direct_framed: true,
         hof: true,
         collection_journal: true,
+        collection_observation_gate: true,
     };
     let ids = ShimIds::declare(&mut module, CallConv::SystemV, types::I64, every).expect("ids");
     let again = ShimIds::declare(&mut module, CallConv::SystemV, types::I64, every).expect("ids");
@@ -448,6 +449,7 @@ fn jit_pipeline_optional_shim_groups_follow_the_leaf_not_the_module() {
         direct_framed: false,
         hof: false,
         collection_journal: false,
+        collection_observation_gate: false,
     };
     let refs = RtRefs::new(ids, base_only, &mut func, CallConv::SystemV, types::I64);
     assert_eq!(
@@ -466,6 +468,15 @@ fn jit_pipeline_optional_shim_groups_follow_the_leaf_not_the_module() {
         refs.try_get(&mut func, Shim::StringCollectionWrite)
             .is_none()
     );
+    assert!(
+        refs.try_get(&mut func, Shim::UnobservedCollectionOwner)
+            .is_none()
+    );
+    let gate_signature = Shim::UnobservedCollectionOwner.signature(CallConv::SystemV, types::I64);
+    assert_eq!(gate_signature.params.len(), 1);
+    assert_eq!(gate_signature.params[0].value_type, types::I64);
+    assert_eq!(gate_signature.returns.len(), 1);
+    assert_eq!(gate_signature.returns[0].value_type, types::I8);
     let cons = refs.get(&mut func, Shim::Cons);
     assert_eq!(refs.get(&mut func, Shim::Cons), cons, "imported once");
     assert_eq!(func.dfg.ext_funcs.len(), 1);
@@ -497,6 +508,7 @@ fn jit_pipeline_optional_shim_groups_follow_the_leaf_not_the_module() {
         Shim::CallSpecCensus,
         Shim::DirectFramed,
         Shim::StringCollectionWrite,
+        Shim::UnobservedCollectionOwner,
     ] {
         let id = ids.get(shim).expect("backend declares every group");
         assert!(

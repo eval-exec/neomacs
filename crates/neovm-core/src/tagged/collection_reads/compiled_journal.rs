@@ -44,6 +44,9 @@ thread_local! {
 #[cfg(test)]
 pub(crate) fn force_compiled_journal_for_test(mode: Option<CompiledJournalMode>) {
     TEST_MODE.with(|setting| setting.set(mode));
+    // An Off capture may populate RECENT without publishing a sticky mark.
+    // Scalar test-policy changes cannot retain those hits in Observed mode.
+    super::clear_recent_reads();
     super::publish_compiled_observation_window();
 }
 

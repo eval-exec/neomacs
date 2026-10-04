@@ -132,6 +132,8 @@ pub(super) fn build_selected_leaf_fn<S: LeafSink>(
                 call_census: !aot && jit_call_census_on(),
                 direct_framed: !aot && shapes.framed,
                 collection_journal: !aot && jit_gen0_collection_journal_on(),
+                collection_observation_gate: !aot
+                    && super::shim_refs::collection_observation_gate_enabled(),
                 hof: inline::active_fused().is_some_and(|body| {
                     body.v2.as_ref().is_some_and(|side| !side.hof_at.is_empty())
                 }),

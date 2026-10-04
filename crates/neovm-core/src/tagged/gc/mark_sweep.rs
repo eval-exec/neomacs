@@ -1986,6 +1986,11 @@ impl TaggedHeap {
         // collector starts from. Dump-less heaps run concurrent marking from
         // the next safe-point collection on (`should_run_concurrent`).
         self.bootstrap_collected = true;
+        if has_collection_observations() {
+            // Reclamation already published its epoch after clearing marks.
+            // Narrow this mutator's native envelope before stores can resume.
+            self.publish_barrier_window();
+        }
     }
 
     /// Drain the gray queue, marking and tracing all reachable objects.

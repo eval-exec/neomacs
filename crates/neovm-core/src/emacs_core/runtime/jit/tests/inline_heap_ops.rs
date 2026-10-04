@@ -180,6 +180,7 @@ fn cons_store_clif(
         call_census: false,
         direct_framed: false,
         collection_journal: false,
+        collection_observation_gate: false,
         hof: false,
     };
     let ids = ShimIds::declare(&mut module, config.default_call_conv, types::I64, groups).unwrap();

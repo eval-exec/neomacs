@@ -58,12 +58,12 @@ impl Drop for EightAlignedConses {
         // the cell lifetimes and clears only its exact metadata addresses;
         // other tests may own cons cells in the same allocator granule.
         for index in 0..self.cells.len() {
-            let (base, word, mask) = cons_address_bit(self.bits(index) & !TAG_MASK);
-            let registry = CONS_OBSERVED
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            if let Some(bitmap) = registry.get(&base) {
-                bitmap.words[word].fetch_and(!mask, Ordering::Release);
+            let address = self.bits(index) & !TAG_MASK;
+            let (_, word, mask) = cons_address_bit(address);
+            if let Some(bitmap) = observation_radix::lookup(address) {
+                if bitmap.cons[word].fetch_and(!mask, Ordering::Release) & mask != 0 {
+                    advance_collection_observation_epoch();
+                }
             }
         }
     }

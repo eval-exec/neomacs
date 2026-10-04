@@ -683,14 +683,21 @@ fn window_is(fb: &mut FunctionBuilder, cell: ClifValue, redirect: SymbolRedirect
 struct Window {
     heap: ClifValue,
     len: ClifValue,
+    // Calls can refine the native window. Keep a coherent pre-call pair for
+    // every cons check in this operation, including multi-entry unbinding.
+    lo: Option<ClifValue>,
 }
 
-fn barrier_window(fb: &mut FunctionBuilder, rt: &RtCtx) -> Window {
+fn barrier_window(fb: &mut FunctionBuilder, rt: &RtCtx, cons_geometry: bool) -> Window {
     let heap = super::heap_inline::heap_ptr(fb, rt);
-    Window {
-        heap,
-        len: load_word(fb, heap, HEAP_JIT_BARRIER_LEN),
-    }
+    let len = load_word(fb, heap, HEAP_JIT_BARRIER_LEN);
+    let lo = (cons_geometry
+        && rt
+            .refs
+            .group_enabled(super::shim_refs::ShimGroup::CollectionObservationGate)
+        && !rt.generational_enabled())
+    .then(|| load_word(fb, heap, HEAP_JIT_BARRIER_LO));
+    Window { heap, len, lo }
 }
 
 /// The window is not ALL: no concurrent mark and no owner tracking, so a
@@ -702,27 +709,35 @@ fn not_marking(fb: &mut FunctionBuilder, window: Window) -> ClifValue {
 /// A plain store into the tagged cons CONS needs no barrier: its owner lies
 /// outside the window, or it is REMEMBERED (a dumped cell already in the
 /// remembered set) and the window is not ALL.
+/// Callers select this predicate only for GEN0; GEN1 uses its cons barrier.
 fn cons_store_ok(
     fb: &mut FunctionBuilder,
+    rt: &RtCtx,
     window: Window,
     cons: ClifValue,
     remembered: Option<usize>,
 ) -> ClifValue {
-    let lo = load_word(fb, window.heap, HEAP_JIT_BARRIER_LO);
+    if let Some(bits) = remembered
+        && rt
+            .refs
+            .group_enabled(super::shim_refs::ShimGroup::CollectionObservationGate)
+    {
+        return observed_remembered_cons_store_ok(fb, rt, window, cons, bits);
+    }
+    let lo = window
+        .lo
+        .unwrap_or_else(|| load_word(fb, window.heap, HEAP_JIT_BARRIER_LO));
     let owner = iadd_imm_p(fb, cons, -(TAG_CONS as i64));
     let offset = fb.ins().isub(owner, lo);
     let outside = fb
         .ins()
         .icmp(IntCC::UnsignedGreaterThanOrEqual, offset, window.len);
-    // An observed dumped BLV must still reach its journaling setter, even
-    // when the GC remembered-set proof would allow a plain store.
-    let remembered = if crate::tagged::collection_reads::compiled_journal_mode()
-        == crate::tagged::collection_reads::CompiledJournalMode::Observed
+    if rt
+        .refs
+        .group_enabled(super::shim_refs::ShimGroup::CollectionObservationGate)
     {
-        None
-    } else {
-        remembered
-    };
+        return observed_cons_store_refinement(fb, rt, outside, cons);
+    }
     match remembered {
         None => outside,
         Some(bits) => {
@@ -732,6 +747,85 @@ fn cons_store_ok(
             fb.ins().bor(outside, skip)
         }
     }
+}
+
+/// Keep the remembered-cell proof and check its exact sticky bit. The mapped
+/// cell and permanent bitmap word both outlive the leaf. Test this proof first:
+/// the usual unobserved default cell skips the coarse address-window work.
+/// Off mode retains the original branchless emitter above, byte for byte.
+fn observed_remembered_cons_store_ok(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    window: Window,
+    cons: ClifValue,
+    remembered: usize,
+) -> ClifValue {
+    let proof = eq_imm(fb, cons, remembered as i64);
+    let open = not_marking(fb, window);
+    let proof = fb.ins().band(proof, open);
+    let exact = fb.create_block();
+    let outside = fb.create_block();
+    let merge = fb.create_block();
+    fb.append_block_param(merge, types::I8);
+    fb.ins().brif(proof, exact, &[], outside, &[]);
+
+    fb.switch_to_block(exact);
+    fb.seal_block(exact);
+    let (word, mask) = crate::tagged::gc::cons_collection_observed_word(remembered);
+    let address = baked(fb, word as *const std::sync::atomic::AtomicU64 as usize);
+    // Full-width atomic load matches the shared RMW representation. On the
+    // x86-64 JIT target it is an Acquire MOV; no registry query is emitted.
+    let marked = fb.ins().atomic_load(types::I64, trusted(), address);
+    let marked = band_imm_p(fb, marked, mask as i64);
+    let unobserved = eq_imm(fb, marked, 0);
+    fb.ins().jump(merge, &[unobserved.into()]);
+
+    fb.switch_to_block(outside);
+    fb.seal_block(outside);
+    let lo = window
+        .lo
+        .unwrap_or_else(|| load_word(fb, window.heap, HEAP_JIT_BARRIER_LO));
+    let owner = iadd_imm_p(fb, cons, -(TAG_CONS as i64));
+    let offset = fb.ins().isub(owner, lo);
+    let outside = fb
+        .ins()
+        .icmp(IntCC::UnsignedGreaterThanOrEqual, offset, window.len);
+    let outside = observed_cons_store_refinement(fb, rt, outside, cons);
+    fb.ins().jump(merge, &[outside.into()]);
+
+    fb.switch_to_block(merge);
+    fb.seal_block(merge);
+    fb.block_params(merge)[0]
+}
+
+/// Keep the ordinary inline predicate's true path. Only a coarse false
+/// positive calls into local protocol refinement, without a Lisp safe point.
+/// The permanent empty interval is invalidated before a new read snapshot.
+fn observed_cons_store_refinement(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    outside: ClifValue,
+    cons: ClifValue,
+) -> ClifValue {
+    let fast = fb.create_block();
+    let refine = fb.create_block();
+    let merge = fb.create_block();
+    fb.append_block_param(merge, types::I8);
+    fb.ins().brif(outside, fast, &[], refine, &[]);
+
+    fb.switch_to_block(fast);
+    fb.seal_block(fast);
+    let allowed = fb.ins().iconst(types::I8, 1);
+    fb.ins().jump(merge, &[allowed.into()]);
+
+    fb.switch_to_block(refine);
+    fb.seal_block(refine);
+    let allowed = super::heap_inline::emit_unobserved_collection_owner(fb, rt, cons);
+    fb.ins().jump(merge, &[allowed.into()]);
+
+    fb.switch_to_block(merge);
+    fb.seal_block(merge);
+    fb.block_params(merge)[0]
 }
 
 /// The current buffer's raw id (0 for none).
@@ -915,7 +1009,7 @@ fn emit_varset_fast(
     match site.shape {
         VarShape::Plain => {
             let writable = window_is(fb, cell, SymbolRedirect::Plainval);
-            let window = barrier_window(fb, rt);
+            let window = barrier_window(fb, rt, false);
             let open = not_marking(fb, window);
             let ok = fb.ins().band(writable, open);
             guard(fb, ok, slow);
@@ -946,9 +1040,9 @@ fn emit_varset_fast(
             let default_loaded = eq(fb, valcell, defcell);
             let to_default = fb.ins().band(neither, default_loaded);
             let own_cell = fb.ins().bor(found, to_default);
-            let window = barrier_window(fb, rt);
+            let window = barrier_window(fb, rt, true);
             let plain_store = (!rt.generational_enabled())
-                .then(|| cons_store_ok(fb, window, valcell, remembered_defcell));
+                .then(|| cons_store_ok(fb, rt, window, valcell, remembered_defcell));
             let (rule_ok, stored) = blv_rule(fb, rule, val);
             let mut conds: SmallVec<[ClifValue; 8]> =
                 smallvec::smallvec![writable, same, hit, fwd_same, own_cell];
@@ -970,7 +1064,7 @@ fn emit_varset_fast(
             let word = load_word(fb, cell, LISP_SYMBOL_VAL_OFFSET);
             let desc = baked(fb, desc);
             let same = eq(fb, word, desc);
-            let window = barrier_window(fb, rt);
+            let window = barrier_window(fb, rt, false);
             let open = not_marking(fb, window);
             let mut conds: SmallVec<[ClifValue; 4]> = smallvec::smallvec![writable, same, open];
             if kind == FwdKind::Int {
@@ -1140,7 +1234,7 @@ fn emit_varbind_fast(
     match site.shape {
         VarShape::Plain => {
             let writable = window_is(fb, cell, SymbolRedirect::Plainval);
-            let window = barrier_window(fb, rt);
+            let window = barrier_window(fb, rt, false);
             let open = not_marking(fb, window);
             let ok = all(fb, &[room, writable, open]);
             guard(fb, ok, slow);
@@ -1154,7 +1248,7 @@ fn emit_varbind_fast(
             let word = load_word(fb, cell, LISP_SYMBOL_VAL_OFFSET);
             let desc = baked(fb, desc);
             let same = eq(fb, word, desc);
-            let window = barrier_window(fb, rt);
+            let window = barrier_window(fb, rt, false);
             let open = not_marking(fb, window);
             let old = fwd_load(fb, desc, kind);
             let mut conds: SmallVec<[ClifValue; 6]> =
@@ -1199,9 +1293,9 @@ fn emit_varbind_fast(
             let own_cell = fb.ins().bor(found, default_loaded);
             let old = load_word(fb, valcell, TAGGED_CONS_CDR);
             let bound = ne_imm(fb, old, Value::UNBOUND.bits() as i64);
-            let window = barrier_window(fb, rt);
+            let window = barrier_window(fb, rt, true);
             let plain_store = (!rt.generational_enabled())
-                .then(|| cons_store_ok(fb, window, valcell, remembered_defcell));
+                .then(|| cons_store_ok(fb, rt, window, valcell, remembered_defcell));
             let (rule_ok, stored) = blv_rule(fb, rule, val);
             let mut conds: SmallVec<[ClifValue; 5]> = smallvec::smallvec![own_cell, bound];
             conds.extend(plain_store);
@@ -1302,6 +1396,7 @@ enum Restore {
 #[allow(clippy::too_many_arguments)]
 fn unbind_entry(
     fb: &mut FunctionBuilder,
+    rt: &RtCtx,
     lets: &LetLayout,
     site: &VarSite,
     entry: ClifValue,
@@ -1364,7 +1459,7 @@ fn unbind_entry(
                 .ins()
                 .uload8(types::I64, trusted(), blv, BLV_FOUND_OFFSET as i32);
             let found = ne_imm(fb, found, 0);
-            let local_store = (!generational).then(|| cons_store_ok(fb, window, valcell, None));
+            let local_store = (!generational).then(|| cons_store_ok(fb, rt, window, valcell, None));
             let mut local_conds: SmallVec<[ClifValue; 5]> =
                 smallvec::smallvec![is_local, here, hit, found];
             local_conds.extend(local_store);
@@ -1384,7 +1479,7 @@ fn unbind_entry(
             let fwd_same = eq_imm(fb, fwd_word, fwd as i64);
             let (rule_ok, ruled) = blv_rule(fb, rule, old);
             let default_store =
-                (!generational).then(|| cons_store_ok(fb, window, defcell, remembered_defcell));
+                (!generational).then(|| cons_store_ok(fb, rt, window, defcell, remembered_defcell));
             let mut default_conds: SmallVec<[ClifValue; 4]> =
                 smallvec::smallvec![is_default, fwd_same];
             default_conds.extend(default_store);
@@ -1437,7 +1532,10 @@ fn emit_unbind_fast(
     }
     let consecutive = all(fb, &conds);
     guard(fb, consecutive, slow);
-    let window = barrier_window(fb, rt);
+    let has_cons = sites
+        .iter()
+        .any(|site| matches!(site.shape, VarShape::Localized { .. }));
+    let window = barrier_window(fb, rt, has_cons);
     let cur = sites
         .iter()
         .any(|site| matches!(site.shape, VarShape::Localized { .. }))
@@ -1457,6 +1555,7 @@ fn emit_unbind_fast(
         let entry = entry_at(fb, rt, layout, depth);
         restores.push(unbind_entry(
             fb,
+            rt,
             &layout.lets,
             site,
             entry,

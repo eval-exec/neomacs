@@ -387,6 +387,11 @@ impl TaggedHeap {
         if done {
             self.finish_incremental_sweep();
         }
+        if has_collection_observations() {
+            // A slice can free/reuse slots before the entire sweep completes.
+            // Its cleared marks and epoch are visible before this publication.
+            self.publish_barrier_window();
+        }
         done
     }
 

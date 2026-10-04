@@ -35,6 +35,7 @@ fn groups(collection_journal: bool, tier2_profile: bool) -> ShimGroups {
         direct_framed: true,
         hof: true,
         collection_journal,
+        collection_observation_gate: collection_journal,
     }
 }
 
@@ -87,6 +88,7 @@ fn shared_journal_off_preserves_selected_ids_and_on_appends_without_reordering()
         );
     }
     assert!(shared.shims.get(Shim::StringCollectionWrite).is_none());
+    assert!(shared.shims.get(Shim::UnobservedCollectionOwner).is_none());
     let original = shared.shims;
 
     force_compiled_journal_for_test(Some(CompiledJournalMode::Observed));
@@ -98,6 +100,13 @@ fn shared_journal_off_preserves_selected_ids_and_on_appends_without_reordering()
         .get(Shim::StringCollectionWrite)
         .expect("an ON test override appends the missing journal import");
     assert!(journal.as_u32() > original.get(Shim::SqrtBindingValid).unwrap().as_u32());
+    let gate = backend.modules[choice.index()]
+        .as_ref()
+        .unwrap()
+        .shims
+        .get(Shim::UnobservedCollectionOwner)
+        .expect("an Observed override appends the missing gate import");
+    assert!(gate.as_u32() > journal.as_u32());
 
     // A main-only profiling redeclaration can hide optional IDs in its returned
     // table. The selected backend must recover both IDs by their existing names.
@@ -110,6 +119,10 @@ fn shared_journal_off_preserves_selected_ids_and_on_appends_without_reordering()
     assert_eq!(
         after_profile.shims.get(Shim::StringCollectionWrite),
         Some(journal)
+    );
+    assert_eq!(
+        after_profile.shims.get(Shim::UnobservedCollectionOwner),
+        Some(gate)
     );
     for shim in [
         Shim::Cons,
@@ -148,6 +161,10 @@ fn shared_journal_off_preserves_selected_ids_and_on_appends_without_reordering()
             refs.try_get(&mut func, Shim::StringCollectionWrite)
                 .is_none()
         );
+        assert!(
+            refs.try_get(&mut func, Shim::UnobservedCollectionOwner)
+                .is_none()
+        );
         assert!(refs.try_get(&mut func, Shim::T2RecordArrayUse).is_some());
         assert!(refs.try_get(&mut func, Shim::SqrtBindingValid).is_some());
     }
@@ -159,6 +176,10 @@ fn shared_journal_off_preserves_selected_ids_and_on_appends_without_reordering()
     let shared = backend.modules[choice.index()].as_ref().unwrap();
     assert_eq!(shared.shims.get(Shim::StringCollectionWrite), Some(journal));
     assert_eq!(
+        shared.shims.get(Shim::UnobservedCollectionOwner),
+        Some(gate)
+    );
+    assert_eq!(
         shared.shims.get(Shim::T2RecordArrayUse),
         original.get(Shim::T2RecordArrayUse)
     );
@@ -168,16 +189,18 @@ fn shared_journal_off_preserves_selected_ids_and_on_appends_without_reordering()
     );
 }
 
-/// An owned frontend payload declares the string call while its backend's
-/// scalar policy is OFF. No generated function is called: dummy argument bits
-/// verify declaration/remapping and linking, without invoking a Lisp setter.
-fn journal_payload(array_profile: bool) -> split::JobPayload {
+/// An owned frontend payload declares a string journal or observation gate
+/// while its backend's scalar policy is OFF. No generated function is called:
+/// dummy bits verify declaration/remapping and linking without Lisp mutation.
+fn journal_payload(array_profile: bool, observation_gate: bool) -> split::JobPayload {
     let choice = RegallocChoice::Full;
     let builder = JITBuilder::with_isa(jit_isa_for(choice).unwrap(), default_libcall_names());
     let mut module = JITModule::new(builder);
     let config = module.target_config();
+    let mut main = groups(!observation_gate, false);
+    main.collection_observation_gate = observation_gate;
     let selected = SelectedShimGroups {
-        main: groups(true, false),
+        main,
         array_profile,
         sink_versions: false,
     };
@@ -206,7 +229,12 @@ fn journal_payload(array_profile: bool) -> split::JobPayload {
         let block = fb.create_block();
         fb.switch_to_block(block);
         fb.seal_block(block);
-        let record = refs.try_get(fb.func, Shim::StringCollectionWrite).unwrap();
+        let shim = if observation_gate {
+            Shim::UnobservedCollectionOwner
+        } else {
+            Shim::StringCollectionWrite
+        };
+        let record = refs.try_get(fb.func, shim).unwrap();
         let dummy = fb.ins().iconst(types::I64, 0);
         fb.ins().call(record, &[dummy]);
         let result = fb.ins().iconst(types::I64, 1);
@@ -218,10 +246,14 @@ fn journal_payload(array_profile: bool) -> split::JobPayload {
         .user_named_funcs()
         .iter()
         .map(|(reference, name)| {
-            let shim = [Shim::StringCollectionWrite, Shim::T2RecordArrayUse]
-                .into_iter()
-                .find(|&shim| ids.get(shim).is_some_and(|id| id.as_u32() == name.index))
-                .expect("every payload import is owned and named");
+            let shim = [
+                Shim::StringCollectionWrite,
+                Shim::UnobservedCollectionOwner,
+                Shim::T2RecordArrayUse,
+            ]
+            .into_iter()
+            .find(|&shim| ids.get(shim).is_some_and(|id| id.as_u32() == name.index))
+            .expect("every payload import is owned and named");
             (reference, shim)
         })
         .collect::<Vec<_>>();
@@ -241,14 +273,23 @@ fn journal_payload(array_profile: bool) -> split::JobPayload {
 fn shared_journal_worker_declares_owned_payload_imports_under_off_policy() {
     let _settings = Settings::off();
     force_lazy_shims_for_test(true);
-    for array_profile in [false, true] {
+    for (array_profile, observation_gate) in
+        [(false, false), (true, false), (false, true), (true, true)]
+    {
         let mut backend = WorkerBackend::new();
-        let payload = journal_payload(array_profile);
+        let payload = journal_payload(array_profile, observation_gate);
         backend.define_with_groups(payload).unwrap();
         let shared = backend.0.modules[RegallocChoice::Full.index()]
             .as_ref()
             .unwrap();
-        assert!(shared.shims.get(Shim::StringCollectionWrite).is_some());
+        assert_eq!(
+            shared.shims.get(Shim::StringCollectionWrite).is_some(),
+            !observation_gate
+        );
+        assert_eq!(
+            shared.shims.get(Shim::UnobservedCollectionOwner).is_some(),
+            observation_gate
+        );
         assert_eq!(
             shared.shims.get(Shim::T2RecordArrayUse).is_some(),
             array_profile

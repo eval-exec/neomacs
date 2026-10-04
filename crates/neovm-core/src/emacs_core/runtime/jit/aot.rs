@@ -120,7 +120,10 @@ pub(crate) const ABI_TAG: u32 = compute_abi_tag();
 // v28: collection-aware stores add a string-journal shim and consume header byte 7
 // as a sticky observed mark; GEN0 JitHeapState windows also include observed owners.
 // v29: observed GEN0 string stores read the sticky high bit in owned capacity.
-const ABI_TAG_VERSION: u32 = 29;
+// v30: GEN0 observed windows may wrap around a certificate-free interval; a
+// cold native refinement shim republishes it, and remembered BLV proofs read
+// a permanent atomic observation-bitmap word.
+const ABI_TAG_VERSION: u32 = 30;
 
 /// Format version of the AOT descriptor spec-section + the runtime spec ABI
 /// (`SpecSlot`/`spec_expected` sidecar bases, the loader re-classify+arm protocol).

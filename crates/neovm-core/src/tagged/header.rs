@@ -421,8 +421,17 @@ impl GcHeader {
     /// observation or collection write to this object may still be in flight.
     #[inline]
     pub(crate) fn clear_collection_observed(&self) {
+        let cleared = self.collection_observed()
+            && crate::tagged::gc::clear_noncons_collection_observed_metadata(
+                self as *const Self as usize,
+            );
         self.collection_observed
             .store(CollectionObservedState::Unobserved as u8, Ordering::Release);
+        if cleared {
+            // Clear both representations before publishing reclamation to
+            // other mutators' recent-read probes and before freeing/reuse.
+            crate::tagged::gc::advance_collection_observation_epoch();
+        }
     }
 
     /// A header of `kind` born marked at `parity`.

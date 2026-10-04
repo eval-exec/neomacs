@@ -626,6 +626,73 @@ fn gen0_observed_certificate_survives_context_switch_until_its_owner_is_stored()
     assert_eq!(owner.cons_car(), Value::make_int(65));
 }
 
+#[test]
+fn gen0_native_refined_gap_closes_when_owner_is_read_after_store() {
+    let _journal = JournalMode::observed();
+    for (op, kind) in [
+        (Op::Setcar, StoreKind::Setcar),
+        (Op::Setcdr, StoreKind::Setcdr),
+    ] {
+        let mut context = context(false);
+        let leaf = compile_bytecode_function(&store_function(op)).expect("native cons setter");
+        let mut owners = std::array::from_fn::<_, 3, _>(|_| {
+            context.tagged_heap.alloc_cons(Value::NIL, Value::NIL)
+        });
+        owners.sort_unstable_by_key(|owner| owner.bits());
+        let [first, target, last] = owners;
+        for owner in owners {
+            context.push_specpdl_root(owner);
+        }
+        let (_, endpoints) = capture(|| (first.cons_car(), last.cons_car()));
+        let endpoints = endpoints.expect("the endpoints bound a real empty interval");
+        let before = LispCollectionRevision::current();
+        let shims = cons_shims();
+        for value in [12, 23, 34] {
+            native(
+                &mut context,
+                &leaf,
+                &kind.args(target, Value::make_int(value)),
+            );
+        }
+        assert_eq!(LispCollectionRevision::current(), before);
+        assert_eq!(
+            cons_shims(),
+            shims,
+            "the cold refinement keeps stores inline"
+        );
+        assert!(endpoints.unchanged());
+        let address = target.bits() & !crate::tagged::value::TAG_MASK;
+        assert!(
+            !context
+                .tagged_heap
+                .jit_barrier_window_for_test()
+                .covers(address)
+        );
+
+        let (value, reads) = capture(|| kind.read(target));
+        assert_eq!(value, Value::make_int(34));
+        let reads = reads.expect("a certificate taken after the inline mutation");
+        assert!(reads.unchanged());
+        assert!(
+            context
+                .tagged_heap
+                .jit_barrier_window_for_test()
+                .covers(address)
+        );
+        native(&mut context, &leaf, &kind.args(target, Value::make_int(45)));
+        assert_eq!(
+            LispCollectionRevision::current().steps_since_for_test(before),
+            1
+        );
+        assert_eq!(cons_shims(), shims + 1);
+        assert!(
+            !reads.unchanged(),
+            "the same leaf journals the newly observed owner"
+        );
+        assert!(endpoints.unchanged());
+    }
+}
+
 fn standalone_heap() -> TaggedHeap {
     struct Restore(Option<std::ffi::OsString>);
     impl Drop for Restore {

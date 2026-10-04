@@ -1141,9 +1141,10 @@ pub fn set_tagged_heap(heap: &mut TaggedHeap) {
     // The barrier window is re-derived, not restored: this is its
     // panic-recovery point, as for the concurrent flag above.
     let window = heap.barrier_window();
-    let (lo, hi) = super::super::collection_reads::compiled_observation_window();
+    let observed =
+        super::super::collection_reads::compiled_observation_gate(heap.collection_dump_window());
     heap.jit
-        .set_barrier_window(heap.compiled_barrier_window(window, lo, hi));
+        .set_barrier_window(heap.compiled_barrier_window(window, observed));
     TAGGED_HEAP_BARRIER_WINDOW.with(|w| w.set(window));
     TAGGED_HEAP_CONS_BARRIER_WINDOW.with(|w| w.set(heap.cons_barrier_window(window)));
     // The remembered cache belongs to this heap's mutator. Reinstallation

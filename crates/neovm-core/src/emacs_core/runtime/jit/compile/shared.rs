@@ -342,6 +342,7 @@ impl SharedJit {
             choice,
             tier2_profile,
             super::jit_gen0_collection_journal_on(),
+            super::shim_refs::collection_observation_gate_enabled(),
         )
     }
 
@@ -352,6 +353,7 @@ impl SharedJit {
         choice: RegallocChoice,
         tier2_profile: bool,
         collection_journal: bool,
+        collection_observation_gate: bool,
     ) -> Result<(), CompileError> {
         let slot = &mut self.modules[choice.index()];
         if slot
@@ -369,7 +371,11 @@ impl SharedJit {
             // redeclaration appends only absent names and preserves their IDs.
             let has_profile = shared.shims.get(Shim::TierRequest).is_some();
             let has_journal = shared.shims.get(Shim::StringCollectionWrite).is_some();
-            if (tier2_profile && !has_profile) || (collection_journal && !has_journal) {
+            let has_observation_gate = shared.shims.get(Shim::UnobservedCollectionOwner).is_some();
+            if (tier2_profile && !has_profile)
+                || (collection_journal && !has_journal)
+                || (collection_observation_gate && !has_observation_gate)
+            {
                 let config = shared.module.target_config();
                 shared.shims = ShimIds::declare(
                     &mut shared.module,
@@ -384,6 +390,8 @@ impl SharedJit {
                         direct_framed: true,
                         hof: true,
                         collection_journal: collection_journal || has_journal,
+                        collection_observation_gate: collection_observation_gate
+                            || has_observation_gate,
                     },
                 )?;
             }
@@ -408,6 +416,7 @@ impl SharedJit {
                 direct_framed: true,
                 hof: true,
                 collection_journal,
+                collection_observation_gate,
             },
         )?;
         *slot = Some(SharedModule {
@@ -694,6 +703,7 @@ impl SharedJit {
             array_profile,
             sink_versions,
             super::jit_gen0_collection_journal_on(),
+            super::shim_refs::collection_observation_gate_enabled(),
         )
     }
 
@@ -706,8 +716,14 @@ impl SharedJit {
         array_profile: bool,
         sink_versions: bool,
         collection_journal: bool,
+        collection_observation_gate: bool,
     ) -> Result<(), CompileError> {
-        self.ensure_module_with_collection_journal(choice, tier2_profile, collection_journal)?;
+        self.ensure_module_with_collection_journal(
+            choice,
+            tier2_profile,
+            collection_journal,
+            collection_observation_gate,
+        )?;
         let shared = self.modules[choice.index()]
             .as_mut()
             .expect("ensure_module installed it");
@@ -726,6 +742,7 @@ impl SharedJit {
                     call_census: true,
                     direct_framed: true,
                     collection_journal,
+                    collection_observation_gate,
                     hof: true,
                 },
                 array_profile,
