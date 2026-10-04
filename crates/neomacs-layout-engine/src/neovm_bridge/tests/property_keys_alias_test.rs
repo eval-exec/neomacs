@@ -33,7 +33,7 @@ fn property_key_aliases_keep_first_matching_order_duplicates_and_heap_fallback()
     let observe = |enabled| {
         let _scope = Guard::set(enabled);
         let lookup = LayoutCharPropertyLookup::new(buffer, face);
-        let keys = lookup.lookup_order.as_slice().to_vec();
+        let keys = lookup.lookup_order.ordered().collect::<Vec<_>>();
         let values: Vec<_> = (0..5)
             .map(|pos| {
                 lookup
@@ -120,7 +120,7 @@ fn duplicate_canonical_aliases_stay_inline_after_complete_effective_extent_looku
     let observe = |enabled| {
         let _scope = Guard::set(enabled);
         let lookup = LayoutCharPropertyLookup::new(buffer, face);
-        let keys = lookup.lookup_order.as_slice().to_vec();
+        let keys = lookup.lookup_order.ordered().collect::<Vec<_>>();
         let values: Vec<_> = (0..7)
             .map(|pos| {
                 lookup

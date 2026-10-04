@@ -6,7 +6,7 @@
 //! | Knob | Default | Values | Gate |
 //! | --- | --- | --- | --- |
 //! | `NEOMACS_LAYOUT_LINE_COUNT` | `on` | `off`, `on`, `verify` | Count source newlines with `memchr` over the same backend chunks; verify compares with the scalar scan. |
-//! | `NEOMACS_LAYOUT_PROPERTY_KEYS_INLINE` | `on` | `off`; `on`/`1`/`true`/`yes` | Store a canonical-only prepared property key inline; aliases retain ordered heap storage. |
+//! | `NEOMACS_LAYOUT_PROPERTY_KEYS_INLINE` | `on` | `off`; `on`/`1`/`true`/`yes` | Store the canonical key directly; canonical-only ON avoids allocation, and aliases retain ordered heap storage. |
 //! The numeric mode is read once per process. Indexed counts and byte-range
 //! clamping precede the fallback scan in every mode. Concurrent readers share
 //! only the initialized numeric mode; each scan borrows its own backend view
@@ -2374,14 +2374,14 @@ impl LayoutCharPropertyLookup {
         buffer: &B,
         bytepos: EmacsBytePos,
     ) -> Option<Value> {
-        let (canonical, aliases) = self.lookup_order.as_slice().split_first()?;
+        let (canonical, aliases) = self.lookup_order.canonical_and_aliases();
         resolve_effective_char_property(
             DirectCharProperties::from_getter(
                 |property| buffer.layout_text_prop_at_emacs_byte_pos(bytepos, property),
-                *canonical,
+                canonical,
             ),
             |category, property| buffer.layout_category_symbol_property(category, property),
-            *canonical,
+            canonical,
             aliases.iter().copied(),
             |property| buffer.layout_text_prop_at_emacs_byte_pos(bytepos, property),
             self.default,
@@ -2403,7 +2403,7 @@ impl LayoutCharPropertyLookup {
         let target = self
             .text_value_at(buffer, bytepos)
             .filter(|value| !value.is_nil())?;
-        let mut watched = self.lookup_order.as_slice().to_vec();
+        let mut watched: Vec<_> = self.lookup_order.ordered().collect();
         let category = Value::symbol("category");
         if !watched
             .iter()
@@ -2475,15 +2475,15 @@ impl LayoutCharPropertyLookup {
         buffer: &B,
         overlay: Value,
     ) -> Option<Value> {
-        let (canonical, aliases) = self.lookup_order.as_slice().split_first()?;
+        let (canonical, aliases) = self.lookup_order.canonical_and_aliases();
         let overlays = buffer.layout_overlays();
         resolve_effective_char_property(
             DirectCharProperties::from_getter(
                 |property| overlays.overlay_get_named(overlay, property),
-                *canonical,
+                canonical,
             ),
             |category, property| buffer.layout_category_symbol_property(category, property),
-            *canonical,
+            canonical,
             aliases.iter().copied(),
             |property| overlays.overlay_get_named(overlay, property),
             None,
@@ -2498,9 +2498,7 @@ impl LayoutCharPropertyLookup {
     pub(crate) fn overlay_endpoint_filter(&self) -> OverlayPropertyFilter {
         OverlayPropertyFilter::for_properties(
             self.lookup_order
-                .as_slice()
-                .iter()
-                .copied()
+                .ordered()
                 .chain(std::iter::once(Value::symbol("category"))),
         )
     }
@@ -2565,9 +2563,7 @@ impl LayoutCharPropertyLookup {
         bytepos: EmacsBytePos,
         current_window_id: Option<u64>,
     ) -> Vec<Value> {
-        let Some((canonical, aliases)) = self.lookup_order.as_slice().split_first() else {
-            return Vec::new();
-        };
+        let (canonical, aliases) = self.lookup_order.canonical_and_aliases();
         let overlays = buffer.layout_overlays();
         let mut overlay_ids = overlays.overlays_at_emacs_byte_pos(bytepos);
         // GNU's `sort_overlays' reads `priority' through `Foverlay_get', so an
@@ -2592,10 +2588,10 @@ impl LayoutCharPropertyLookup {
                 resolve_effective_char_property(
                     DirectCharProperties::from_getter(
                         |property| overlays.overlay_get_named(overlay, property),
-                        *canonical,
+                        canonical,
                     ),
                     |category, property| buffer.layout_category_symbol_property(category, property),
-                    *canonical,
+                    canonical,
                     aliases.iter().copied(),
                     |property| overlays.overlay_get_named(overlay, property),
                     None,

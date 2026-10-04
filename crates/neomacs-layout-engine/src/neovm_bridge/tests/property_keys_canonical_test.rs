@@ -22,7 +22,7 @@ fn canonical_property_key_inline_skips_heap_after_effective_lookup_and_extent() 
     let observe = |enabled| {
         let _scope = Guard::set(enabled);
         let lookup = LayoutCharPropertyLookup::new(buffer, Value::symbol("face"));
-        let keys = lookup.lookup_order.as_slice().to_vec();
+        let keys = lookup.lookup_order.ordered().collect::<Vec<_>>();
         let values: Vec<_> = (0..8)
             .map(|pos| {
                 lookup
@@ -70,7 +70,10 @@ fn unknown_property_key_keeps_default_and_explicit_nil_semantics() {
     for enabled in [false, true] {
         let _scope = Guard::set(enabled);
         let lookup = LayoutCharPropertyLookup::new(buffer, property);
-        assert_eq!(lookup.lookup_order.as_slice(), &[property]);
+        assert_eq!(
+            lookup.lookup_order.ordered().collect::<Vec<_>>(),
+            vec![property]
+        );
         assert_eq!(
             lookup.text_value_at(buffer, EmacsBytePos::ZERO),
             Some(Value::NIL)

@@ -6,20 +6,24 @@ use super::{LayoutBufferView, LayoutVar, Value};
 /// lifetime boundary. Independent attempts/mutators own distinct containers,
 /// with no shared Lisp cache, Context pointer or cross-attempt publication.
 #[derive(Clone, Debug)]
-pub(super) enum PropertyKeyOrder {
-    Inline([Value; 1]),
-    Heap(Vec<Value>),
+pub(super) struct PropertyKeyOrder {
+    canonical: Value,
+    aliases: Vec<Value>,
 }
 
 impl PropertyKeyOrder {
     #[inline]
     pub(super) fn capture<B: LayoutBufferView + ?Sized>(buffer: &B, property: Value) -> Self {
         if !enabled() {
-            return Self::Heap(capture_heap_order(buffer, property));
+            // Keep the literal legacy allocation and alias-growth sequence.
+            // Extract the canonical once, so queries need no storage tag.
+            let mut aliases = capture_heap_order(buffer, property);
+            let canonical = aliases.remove(0);
+            return Self { canonical, aliases };
         }
         #[cfg(test)]
         super::property_keys_test_support::note_inline_construction();
-        let mut lookup_order = Self::Inline([property]);
+        let mut lookup_order = Vec::new();
         if let Some(mut alist) = buffer.layout_buffer_local_value(LayoutVar::CharPropertyAliasAlist)
         {
             while alist.is_cons() {
@@ -31,51 +35,54 @@ impl PropertyKeyOrder {
                 let mut aliases = entry.cons_cdr();
                 while aliases.is_cons() {
                     let alias = aliases.cons_car();
-                    if !lookup_order
-                        .as_slice()
-                        .iter()
-                        .any(|existing| existing.bits() == alias.bits())
+                    if alias.bits() != property.bits()
+                        && !lookup_order
+                            .iter()
+                            .any(|existing: &Value| existing.bits() == alias.bits())
                     {
-                        lookup_order.push_alias(alias);
+                        if lookup_order.is_empty() {
+                            #[cfg(test)]
+                            super::property_keys_test_support::note_heap_materialization();
+                            // Preserve the original first-distinct-alias upgrade
+                            // and subsequent capacity growth before extracting
+                            // the canonical from the completed ordered vector.
+                            lookup_order = vec![property];
+                            #[cfg(test)]
+                            super::property_keys_test_support::note_alias_upgrade();
+                        }
+                        lookup_order.push(alias);
                     }
                     aliases = aliases.cons_cdr();
                 }
                 break;
             }
         }
-        lookup_order
-    }
-
-    /// Borrow the same canonical-first keys; no Value escapes the owning view.
-    #[inline]
-    pub(super) fn as_slice(&self) -> &[Value] {
-        match self {
-            Self::Inline(keys) => keys,
-            Self::Heap(keys) => keys,
+        if !lookup_order.is_empty() {
+            lookup_order.remove(0);
+        }
+        Self {
+            canonical: property,
+            aliases: lookup_order,
         }
     }
 
-    /// A distinct alias upgrades with the original vec![canonical] then push
-    /// sequence, preserving content, alias order and heap capacity growth.
+    /// The constructor always owns a canonical key, including nil. Borrowed
+    /// aliases retain their first-match order and never contain that key.
     #[inline]
-    fn push_alias(&mut self, alias: Value) {
-        match self {
-            Self::Heap(keys) => keys.push(alias),
-            Self::Inline([canonical]) => {
-                #[cfg(test)]
-                super::property_keys_test_support::note_heap_materialization();
-                let mut keys = vec![*canonical];
-                keys.push(alias);
-                #[cfg(test)]
-                super::property_keys_test_support::note_alias_upgrade();
-                *self = Self::Heap(keys);
-            }
-        }
+    pub(super) fn canonical_and_aliases(&self) -> (Value, &[Value]) {
+        (self.canonical, &self.aliases)
+    }
+
+    /// Reconstruct the same ordered keys for extent watches and endpoint
+    /// signatures. No Value escapes the owning synchronous layout view.
+    #[inline]
+    pub(super) fn ordered(&self) -> impl Iterator<Item = Value> + '_ {
+        std::iter::once(self.canonical).chain(self.aliases.iter().copied())
     }
 }
 
 /// Literal legacy construction and alias control flow. This remains the OFF
-/// branch; only the caller wraps the resulting owned vector in Heap.
+/// branch; the caller extracts its canonical once after capture completes.
 #[inline]
 fn capture_heap_order<B: LayoutBufferView + ?Sized>(buffer: &B, property: Value) -> Vec<Value> {
     #[cfg(test)]
