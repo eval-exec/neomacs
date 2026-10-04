@@ -6,6 +6,7 @@
 // `too_many_arguments` is allowed crate-wide rather than at each of the ~15 sites.
 #![allow(clippy::too_many_arguments)]
 
+pub mod animated_visual;
 pub mod child_frame_animation;
 pub mod clipboard;
 pub mod cursor;
@@ -26,6 +27,7 @@ pub mod image;
 pub mod image_diagnostic;
 pub mod input_progress;
 pub mod interaction_projection;
+pub mod media_clock;
 pub mod menu;
 pub mod modifier_policy;
 pub mod motion_spec;
