@@ -371,15 +371,13 @@ pub(crate) fn observe(value: TaggedValue) {
     observe_active(value.bits());
 }
 
-// Inactive pointer reads return at the inline membership check. Keep active
-// dependency recording cold and retain its existing private membership guard;
-// neither gate runs a callback or can change this mutator's capture stack.
+// Its sole caller just checked this mutator's active membership and the process
+// gate. No callback or safepoint intervenes, so the private cold helper need not
+// repeat that membership load. Scope changes still clear RECENT before reads.
 #[cold]
 #[inline(never)]
 fn observe_active(bits: usize) {
-    if !ACTIVE.with(Cell::get) {
-        return;
-    }
+    debug_assert!(ACTIVE.with(Cell::get));
     observe_bits(bits);
 }
 
@@ -413,11 +411,13 @@ fn observe_bits(bits: usize) {
 #[inline]
 fn recently_observed(bits: usize) -> bool {
     RECENT_READS.with(|recent| {
-        if recent.observed.get() {
-            let epoch = super::gc::collection_observation_epoch();
-            if recent.epoch.get() != epoch {
-                clear_recent_after_reclamation(recent, epoch);
-            }
+        // Acquire first: the common same-epoch captured read needs no policy
+        // test. Only reclamation needs to distinguish observation marks from
+        // the Off/Eager identity-only cache. Neither arm trusts a replacement
+        // owner before the Observed cache has been cleared.
+        let epoch = super::gc::collection_observation_epoch();
+        if recent.epoch.get() != epoch && recent.observed.get() {
+            clear_recent_after_reclamation(recent, epoch);
         }
         let slot = &recent.words[((bits >> 3) ^ (bits >> 11)) & 255];
         bits != 0 && slot.replace(bits) == bits
