@@ -57,6 +57,16 @@ static CONS_OBSERVED: LazyLock<Mutex<FxHashMap<usize, Arc<ConsObservedBits>>>> =
 static HAS_CONS_MARKS: AtomicBool = AtomicBool::new(false);
 static HAS_NONCONS_MARKS: AtomicBool = AtomicBool::new(false);
 
+/// Avoid initializing an otherwise unused mutator journal on heap installation.
+/// These process flags contain no Lisp identities and never reset. Release
+/// publication completes before the marking mutator snapshots a read or
+/// publishes its envelope; its subsequent Acquire query cannot miss that mark.
+/// Another mutator's true result only causes a conservative local lookup.
+#[inline]
+pub(crate) fn has_collection_observations() -> bool {
+    HAS_CONS_MARKS.load(Ordering::Acquire) || HAS_NONCONS_MARKS.load(Ordering::Acquire)
+}
+
 /// Select observation-aware destruction once per arena sweep, preserving its
 /// ordinary inner loop until any process mutator has observed a non-cons.
 #[inline]

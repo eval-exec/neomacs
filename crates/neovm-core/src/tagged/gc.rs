@@ -2663,7 +2663,9 @@ mod collection_observed;
 use collection_observed::{
     clear_cons_observed_block, clear_cons_observed_dead, has_noncons_collection_observations,
 };
-pub(crate) use collection_observed::{collection_observed, mark_collection_observed};
+pub(crate) use collection_observed::{
+    collection_observed, has_collection_observations, mark_collection_observed,
+};
 mod cons_blocks;
 /// The cons-block trailer's shape, for `jit_layout::heap`.
 #[cfg_attr(not(feature = "jit"), allow(unused_imports))]

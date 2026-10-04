@@ -47,6 +47,9 @@ static CAPTURE_SCOPES: AtomicUsize = AtomicUsize::new(POLICY_MASK);
 /// Never reset this gate on scope exit. No Lisp state is shared by this flag.
 static HISTORY_REQUIRED: AtomicBool = AtomicBool::new(true);
 
+#[cfg(test)]
+static STATE_INITIALIZATIONS: AtomicUsize = AtomicUsize::new(0);
+
 static CONFIG: LazyLock<()> = LazyLock::new(|| {
     if std::env::var("NEOVM_COLLECTION_READ_GLOBAL").as_deref() != Ok("off") {
         CAPTURE_SCOPES.fetch_and(!(ReadPolicyBit::LegacyObserve as usize), Ordering::Relaxed);
@@ -131,6 +134,8 @@ struct State {
 
 impl Default for State {
     fn default() -> Self {
+        #[cfg(test)]
+        STATE_INITIALIZATIONS.fetch_add(1, Ordering::Relaxed);
         // CONFIG cannot touch STATE or call Lisp. Force it before remembering
         // history permanently: WRITE_LAZY may clear the conservative initial flag.
         initialize();
@@ -456,7 +461,9 @@ pub(crate) use compiled_journal::{CompiledJournalMode, compiled_journal_mode, is
 /// Snapshot only the current mutator's existing journal metadata. Installation
 /// of a Context is exclusive on that mutator and republishes this envelope.
 pub(crate) fn compiled_observation_window() -> (usize, usize) {
-    if compiled_journal_mode() != CompiledJournalMode::Observed {
+    if compiled_journal_mode() != CompiledJournalMode::Observed
+        || !super::gc::has_collection_observations()
+    {
         return (usize::MAX, 0);
     }
     STATE.with(|state| {
@@ -542,3 +549,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/write_fusion.rs"]
 mod write_fusion_tests;
+
+#[cfg(all(test, feature = "jit"))]
+#[path = "collection_reads/tests/lazy_window.rs"]
+mod lazy_window_tests;
