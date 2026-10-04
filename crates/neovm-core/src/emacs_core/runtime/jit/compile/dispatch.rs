@@ -589,7 +589,8 @@ pub extern "C" fn neovm_jit_setcdr(ctx: *mut u8, cell: i64, new_cdr: i64) -> i64
 
 /// A window hit can be an unobserved hole in the observation envelope.
 /// Keep the GC barrier on every accepted store, but journal only an exact
-/// observed owner in GEN0 observed mode. No callback or safe point intervenes.
+/// observed owner in GEN0 observed mode unless explicit write tracking requires
+/// the interpreter's full setter bookkeeping. No safe point intervenes.
 #[inline]
 fn compiled_cons_store(cell: Value, value: Value, cdr: bool) -> bool {
     use crate::tagged::collection_reads::{
@@ -597,6 +598,7 @@ fn compiled_cons_store(cell: Value, value: Value, cdr: bool) -> bool {
     };
     if compiled_journal_mode() != CompiledJournalMode::Observed
         || crate::tagged::gc::current_heap_generational_enabled()
+        || crate::tagged::gc::current_write_tracking_enabled()
     {
         return if cdr {
             crate::tagged::mutate::set_cons_cdr(cell, value)
@@ -755,6 +757,7 @@ fn aset_journaled_vector(array: Value, idx: usize, value: Value) -> Option<bool>
     }
     if jit_gen0_collection_journal_eager()
         || crate::tagged::gc::current_heap_generational_enabled()
+        || crate::tagged::gc::current_write_tracking_enabled()
         || crate::tagged::collection_reads::is_observed(array.bits())
     {
         crate::tagged::gc::TaggedHeap::record_compiled_collection_write(array.bits());

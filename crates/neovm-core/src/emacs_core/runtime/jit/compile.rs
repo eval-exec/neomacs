@@ -4115,6 +4115,9 @@ pub(crate) mod heap_inline;
 mod inline_heap_ops_tests;
 
 #[cfg(test)]
+#[path = "tests/gen0_tracked_collection_revision.rs"]
+mod gen0_tracked_collection_revision_tests;
+#[cfg(test)]
 #[path = "tests/inline_heap_generational.rs"]
 mod inline_heap_generational_tests;
 #[cfg(test)]

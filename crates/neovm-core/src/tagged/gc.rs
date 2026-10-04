@@ -226,6 +226,15 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
+/// Query the installed mutator's existing write-tracking protocol mirror.
+/// Context installation and mode changes refresh this scalar; no heap pointer
+/// or Lisp identity is cached or dereferenced, and each mutator owns its mode.
+#[cfg(feature = "jit")]
+#[inline]
+pub(crate) fn current_write_tracking_enabled() -> bool {
+    TAGGED_HEAP_WRITE_TRACKING_MODE.with(|mode| mode.get() != WriteTrackingMode::Disabled)
+}
+
 const BARRIER_CACHE_SLOTS: usize = 64;
 
 #[cfg(test)]
