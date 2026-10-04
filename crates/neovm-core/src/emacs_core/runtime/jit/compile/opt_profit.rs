@@ -27,12 +27,14 @@ pub(super) enum FrontChoice {
 struct Work {
     useful: usize,
     backedge: bool,
+    list_backedge: bool,
     unsupported_control: bool,
 }
 
 impl Work {
     fn read(ops: &[Op]) -> Self {
         let mut work = Self::default();
+        let mut last_list_pc = None;
         for (pc, op) in ops.iter().enumerate() {
             match op {
                 // build::Builder::new refuses these reachable operations:
@@ -49,7 +51,19 @@ impl Work {
                 | Op::GotoIfNotNil(target)
                 | Op::GotoIfNilElsePop(target)
                 | Op::GotoIfNotNilElsePop(target) => {
-                    work.backedge |= (*target as usize) <= pc;
+                    if (*target as usize) <= pc {
+                        work.backedge = true;
+                        // Bound the list evidence to a backedge's lexical
+                        // body; a list operation in a numeric loop's prefix
+                        // or suffix must not qualify that loop. No CFG or
+                        // reachability analysis is needed for this filter.
+                        work.list_backedge |=
+                            last_list_pc.is_some_and(|list_pc| list_pc >= *target as usize);
+                    }
+                }
+                Op::Car | Op::Cdr | Op::CarSafe | Op::CdrSafe | Op::Setcar | Op::Setcdr => {
+                    work.useful += 1;
+                    last_list_pc = Some(pc);
                 }
                 Op::Add
                 | Op::Sub
@@ -72,12 +86,6 @@ impl Work {
                 | Op::Listp
                 | Op::Integerp
                 | Op::Numberp
-                | Op::Car
-                | Op::Cdr
-                | Op::CarSafe
-                | Op::CdrSafe
-                | Op::Setcar
-                | Op::Setcdr
                 | Op::Cons => work.useful += 1,
                 _ => {}
             }
@@ -109,7 +117,7 @@ pub(crate) fn body_admitted(
         return false;
     }
     if work.backedge {
-        return work.useful > 0;
+        return work.useful > 0 && (mode != super::OptProfitMode::Lists || work.list_backedge);
     }
     mode == super::OptProfitMode::Kernels && hot && ops.len() <= 64 && work.useful >= 2
 }
@@ -130,9 +138,13 @@ pub(super) fn front(
     }
     if !matches!(request.tier, CompileTier::Upgrade(_)) {
         let mode = super::jit_opt_early();
+        let early_profit = match jit_opt_profit() {
+            super::OptProfitMode::Lists => super::OptProfitMode::Lists,
+            _ => super::OptProfitMode::Loops,
+        };
         if mode == super::OptEarlyMode::Off
             || request.tier != CompileTier::T1
-            || !body_admitted(super::OptProfitMode::Loops, ops, call_heavy, false)
+            || !body_admitted(early_profit, ops, call_heavy, false)
         {
             return FrontChoice::Legacy;
         }
@@ -206,3 +218,15 @@ mod final_size_tests;
 #[cfg(test)]
 #[path = "opt_profit/tests/final_size_native_test.rs"]
 mod final_size_native_tests;
+
+#[cfg(test)]
+#[path = "opt_profit/tests/lists_policy_test.rs"]
+mod lists_policy_tests;
+
+#[cfg(test)]
+#[path = "opt_profit/tests/lists_frontend_test.rs"]
+mod lists_frontend_tests;
+
+#[cfg(test)]
+#[path = "opt_profit/tests/lists_osr_test.rs"]
+mod lists_osr_tests;

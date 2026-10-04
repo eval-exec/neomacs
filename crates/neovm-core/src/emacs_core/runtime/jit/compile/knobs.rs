@@ -1811,12 +1811,14 @@ pub(crate) enum OptProfitMode {
     #[default]
     Off,
     Loops,
+    Lists,
     Kernels,
 }
 impl OptProfitMode {
     pub(crate) fn parse(value: Option<&str>) -> Self {
         match value.map(str::trim) {
             Some("loops") => Self::Loops,
+            Some("lists") => Self::Lists,
             Some("kernels") => Self::Kernels,
             _ => Self::Off,
         }
