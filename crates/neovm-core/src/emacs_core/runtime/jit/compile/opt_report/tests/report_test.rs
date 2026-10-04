@@ -17,10 +17,13 @@ use crate::emacs_core::jit::stats::{self, CompileOrigin, ObserveOverride};
 use crate::emacs_core::jit::tier2::{CompileTier, T2Upgrade};
 
 /// Threading: invocation-owned scalar compiler overrides, restored on drop;
-/// no Lisp cache or process-global environment mutation is introduced.
+/// no Lisp cache or process-global environment mutation is introduced. The
+/// returned prerequisite guard restores the enclosing scalar override; these
+/// constructor/report tests intentionally admit normal Opt without prior OSR.
 struct Settings;
 impl Settings {
-    fn enter() -> Self {
+    fn enter() -> (Self, impl Drop) {
+        let prerequisite = opt_require_osr_scope_for_test(false);
         force_opt_for_test(Some(OptMode::Opt), Some(OptAdmit::ALL));
         force_opt_passes_for_test(Some(OptPasses::default()));
         force_opt_profit_for_test(Some(OptProfitMode::Loops));
@@ -33,7 +36,7 @@ impl Settings {
             crate::emacs_core::jit::bg::BgMode::Legacy,
         ));
         stats::force_observe_for_test(ObserveOverride::default());
-        Self
+        (Self, prerequisite)
     }
 }
 impl Drop for Settings {

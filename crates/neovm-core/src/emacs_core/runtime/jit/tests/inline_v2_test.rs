@@ -38,15 +38,19 @@ fn caller(callee: ByteCodeFunction) -> ByteCodeFunction {
     )
 }
 
+/// Threading: scalar inline configuration belongs to this fixture's compiler
+/// thread; no Lisp state or mutator cache is stored. The returned backend guard
+/// restores the enclosing mode while keeping the legacy v2 producer selected.
 struct Knobs;
 impl Knobs {
-    fn enter(mode: Inline2Mode) -> Self {
+    fn enter(mode: Inline2Mode) -> (Self, impl Drop) {
+        let backend = compile::opt_mode_scope_for_test(compile::OptMode::Legacy);
         force_inline_for_test(Some(true));
         force_inline2_for_test(Some(mode));
         compile::force_profit_gate_for_test(false);
         compile::force_deopt_for_test(false);
         crate::emacs_core::jit::stats::force_observe_for_test(Default::default());
-        Self
+        (Self, backend)
     }
 }
 impl Drop for Knobs {
