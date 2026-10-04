@@ -108,6 +108,8 @@ thread_local! {
     static STATE: RefCell<State> = RefCell::new(State::default());
     #[cfg(test)]
     static OBSERVATION_STATE_ACCESSES: Cell<usize> = const { Cell::new(0) };
+    #[cfg(test)]
+    static OBSERVED_OWNER_PUBLICATIONS: Cell<usize> = const { Cell::new(0) };
 }
 
 /// This mutator's journal policy mirrors its private capture stack. It caches
@@ -489,6 +491,8 @@ fn publish_observed_owner_in_state(state: &mut State, bits: usize) -> bool {
     if compiled_journal_mode() != CompiledJournalMode::Observed {
         return false;
     }
+    #[cfg(test)]
+    OBSERVED_OWNER_PUBLICATIONS.with(|count| count.set(count.get() + 1));
     let newly = super::gc::mark_collection_observed(bits);
     let tag = bits & super::value::TAG_MASK;
     if matches!(
@@ -553,3 +557,7 @@ mod write_fusion_tests;
 #[cfg(all(test, feature = "jit"))]
 #[path = "collection_reads/tests/lazy_window.rs"]
 mod lazy_window_tests;
+
+#[cfg(all(test, feature = "jit"))]
+#[path = "collection_reads/tests/observed_epoch.rs"]
+mod observed_epoch_tests;

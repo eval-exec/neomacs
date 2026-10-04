@@ -404,6 +404,9 @@ thread_local! {
     /// `neovm_jit_setcdr` (a store its inline path left to the shim).
     pub(crate) static LIST_STORE_SHIM_CALLS: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
+    /// Test hook: exact observation queries after a compiled Cons window hit.
+    pub(crate) static CONS_OBSERVATION_QUERIES: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -609,6 +612,8 @@ fn compiled_cons_store(cell: Value, value: Value, cdr: bool) -> bool {
     if !cell.is_cons() {
         return false;
     }
+    #[cfg(test)]
+    CONS_OBSERVATION_QUERIES.with(|count| count.set(count.get() + 1));
     if is_observed(cell.bits()) {
         crate::tagged::gc::TaggedHeap::record_compiled_collection_write(cell.bits());
     }

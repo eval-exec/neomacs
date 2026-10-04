@@ -115,6 +115,162 @@ const STORE_KINDS: [StoreKind; 9] = [
     StoreKind::BlvLocal,
 ];
 
+#[test]
+fn gen0_cons_shim_rejects_outside_mutator_observations_before_exact_query() {
+    let _journal = JournalMode::observed();
+    let mut context = context(false);
+    let observed = context
+        .tagged_heap
+        .alloc_cons(Value::make_int(1), Value::NIL);
+    let old_child = context
+        .tagged_heap
+        .alloc_cons(Value::make_int(2), Value::NIL);
+    let target = context.tagged_heap.alloc_cons(old_child, old_child);
+    for owner in [observed, old_child, target] {
+        context.push_specpdl_root(owner);
+    }
+    let (_, certificate) = capture(|| observed.cons_car());
+    let certificate = certificate.expect("one retained observation");
+    let (lo, hi) = crate::tagged::collection_reads::compiled_observation_window();
+    let address = target.bits() & !crate::tagged::value::TAG_MASK;
+    assert!(address < lo || address >= hi);
+    assert!(!is_observed(target.bits()));
+    // A concurrent mark still makes the ordinary native gate ALL. Its SATB
+    // work must run even when this mutator's read envelope rejects the owner.
+    context.tagged_heap.set_concurrent_active_for_test(true);
+    let queries = super::super::dispatch::CONS_OBSERVATION_QUERIES.with(|count| count.get());
+    let revision = LispCollectionRevision::current();
+    let vmctx = (&mut context as *mut Context).cast::<u8>();
+    assert_eq!(
+        super::super::dispatch::neovm_jit_setcar(
+            vmctx,
+            target.bits() as i64,
+            Value::NIL.bits() as i64
+        ),
+        Value::NIL.bits() as i64,
+    );
+    assert_eq!(
+        super::super::dispatch::neovm_jit_setcdr(
+            vmctx,
+            target.bits() as i64,
+            Value::NIL.bits() as i64
+        ),
+        Value::NIL.bits() as i64,
+    );
+    assert!(
+        context
+            .tagged_heap
+            .take_satb_shared_for_test()
+            .contains(&old_child),
+        "the ordinary SATB barrier retains the overwritten child",
+    );
+    context.tagged_heap.set_concurrent_active_for_test(false);
+    assert_eq!(
+        LispCollectionRevision::current().steps_since_for_test(revision),
+        0
+    );
+    assert!(certificate.unchanged());
+    assert_eq!(target.cons_car(), Value::NIL);
+    assert_eq!(target.cons_cdr(), Value::NIL);
+    assert_eq!(
+        super::super::dispatch::CONS_OBSERVATION_QUERIES.with(|count| count.get()) - queries,
+        0,
+        "ordinary GC hits outside local read owners skip exact metadata",
+    );
+}
+
+#[test]
+fn gen0_mapped_blv_keeps_remembered_proof_until_its_default_cell_is_observed() {
+    let _journal = JournalMode::observed();
+    let mut source = blv_context(false);
+    let source_owner = blv_cell(&source, false);
+    source
+        .obarray_mut()
+        .set_symbol_value("fx1-mapped-default-owner", source_owner);
+    let directory = tempfile::tempdir().expect("private dump fixture");
+    let image = directory.path().join("mapped-blv.pdump");
+    crate::emacs_core::pdump::dump_to_file(&source, &image).expect("dump the localized symbol");
+    drop(source);
+    let mut context = crate::test_utils::with_legacy_gc(|| {
+        crate::emacs_core::pdump::load_from_dump(&image).expect("map the localized symbol")
+    });
+    set_tagged_heap(&mut context.tagged_heap);
+    context.specpdl.reserve(16);
+    context.jit_bind_stack.reserve(16);
+    let owner = *context
+        .obarray()
+        .symbol_value("fx1-mapped-default-owner")
+        .expect("mapped owner root");
+    let symbol = context
+        .obarray()
+        .get_by_id(intern("u34-inline-blv"))
+        .expect("dumped BLV");
+    assert_eq!(
+        symbol.redirect(),
+        crate::emacs_core::symbol::SymbolRedirect::Localized
+    );
+    // The image reconstructs ordinary BLV records with fresh defcells. Install
+    // the same coherent (SYMBOL . DEFAULT) pair retained explicitly in this
+    // image, so the remembered mapped-cell proof is exercised rather than
+    // silently testing a newly allocated owner outside the dump window.
+    // SAFETY: this exclusive Context owns the checked BLV record; both cells
+    // are live and have identical symbol/default contents.
+    let blv = unsafe { &mut *symbol.val.blv };
+    if blv.valcell == blv.defcell {
+        blv.valcell = owner;
+    }
+    blv.defcell = owner;
+    assert!(
+        context
+            .tagged_heap
+            .remember_mapped_cons_ahead_of_writes(owner)
+    );
+    assert!(!is_observed(owner.bits()));
+    let leaf = compile_blv(
+        &context,
+        &[
+            Op::StackRef(0),
+            Op::VarBind(0),
+            Op::Unbind(1),
+            Op::StackRef(0),
+            Op::Return,
+        ],
+        &[Value::symbol("u34-inline-blv")],
+        1,
+    );
+    for _ in 0..3 {
+        assert_eq!(native(&mut context, &leaf, &[Value::T]), Value::T);
+    }
+    let binds = super::super::shims::VARBIND_SHIM_CALLS.with(|count| count.get());
+    let unbinds = super::super::shims::UNBIND_SHIM_CALLS.with(|count| count.get());
+    assert_eq!(native(&mut context, &leaf, &[Value::T]), Value::T);
+    assert_eq!(
+        super::super::shims::VARBIND_SHIM_CALLS.with(|count| count.get()) - binds,
+        0,
+        "an unobserved remembered dump cell keeps its inline binding proof",
+    );
+    assert_eq!(
+        super::super::shims::UNBIND_SHIM_CALLS.with(|count| count.get()) - unbinds,
+        0
+    );
+    assert!(
+        !is_observed(owner.bits()),
+        "plain stores do not publish reads"
+    );
+    let (_, reads) = capture(|| owner.cons_cdr());
+    let reads = reads.expect("retained default-cell read");
+    let revision = LispCollectionRevision::current();
+    assert_eq!(native(&mut context, &leaf, &[Value::T]), Value::T);
+    assert_eq!(
+        LispCollectionRevision::current().steps_since_for_test(revision),
+        2
+    );
+    assert!(
+        !reads.unchanged(),
+        "bind and restore each journal their observed cell"
+    );
+}
+
 fn blv_context(local: bool) -> Context {
     let mut context = context(false);
     context.specpdl.reserve(16);

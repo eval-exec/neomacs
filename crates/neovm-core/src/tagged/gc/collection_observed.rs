@@ -257,5 +257,17 @@ fn clear_cons_observed_block_slow(base: usize) {
 }
 
 #[cfg(test)]
+fn with_collection_observed_registry_locked<R>(f: impl FnOnce() -> R) -> R {
+    let _registry = CONS_OBSERVED
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    f()
+}
+
+#[cfg(test)]
 #[path = "tests/collection_observed_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/collection_observed_registry_tests.rs"]
+mod registry_tests;
