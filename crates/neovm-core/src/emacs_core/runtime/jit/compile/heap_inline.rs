@@ -132,6 +132,7 @@ fn emit_barrier_window_check(
         // Keep the original outside-window edge. Only a refused owner pays
         // for exact eligibility and learns an empty gap for subsequent stores.
         let refine = fb.create_block();
+        fb.set_cold_block(refine);
         fb.ins().brif(inside, refine, &[], outside, &[]);
         fb.switch_to_block(refine);
         fb.seal_block(refine);
