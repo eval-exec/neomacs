@@ -3,6 +3,24 @@
 //! harness engine so new runtime knobs do not grow `harness.rs`.
 
 const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
+    // Independent redisplay controls; preserve upstream policy forwarding.
+    "NEOMACS_PERF_SUSTAINED_VISIBLE",
+    "NEOMACS_EDIT_SYNC_STILL",
+    "NEOMACS_EDIT_SYNC_LAZY_PROOF",
+    "NEOMACS_RETAINED_FACE_GATHER",
+    "NEOMACS_LAYOUT_PROPERTY_KEYS_INLINE",
+    "NEOMACS_EDIT_SYNC_PROVE_FIRST",
+    "NEOMACS_EDIT_SYNC_DENSE_INDEX",
+    "NEOMACS_EDIT_SYNC_FONTIFY_COVERAGE",
+    "NEOMACS_EDIT_SYNC_SHIFT_SKIP",
+    "NEOMACS_EDIT_SYNC_SOURCE_BUDGET",
+    "NEOMACS_MODE_LINE_PROP_BORROW",
+    "NEOMACS_MODE_LINE_PROP_SLICE",
+    "NEOMACS_MODE_LINE_PLAIN_FIELD",
+    "NEOMACS_MODE_LINE_NUMERIC_PADDING",
+    "NEOMACS_REDISPLAY_GNU_HOOKS",
+    "NEOMACS_WATCHED_PROP_DEMAND",
+    "NEOMACS_POSN_OBJECT_EXTENT",
     "PATH",
     "LD_LIBRARY_PATH",
     "DYLD_LIBRARY_PATH",
@@ -172,10 +190,7 @@ pub(crate) fn passthrough_from(
         .filter_map(|(name, value)| {
             let name = name.into_string().ok()?;
             let forwarded = BENCHMARK_PASSTHROUGH_ENVIRONMENT.contains(&name.as_str())
-                || super::benchmark_environment::BENCHMARK_PASSTHROUGH_ENVIRONMENT
-                    .contains(&name.as_str())
-                || name.starts_with(BENCHMARK_PASSTHROUGH_PREFIX)
-                || name.starts_with(super::benchmark_environment::BENCHMARK_PASSTHROUGH_PREFIX);
+                || name.starts_with(BENCHMARK_PASSTHROUGH_PREFIX);
             forwarded.then_some((name, value))
         })
         .collect()

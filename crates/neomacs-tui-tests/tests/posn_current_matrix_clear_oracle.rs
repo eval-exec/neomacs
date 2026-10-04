@@ -71,7 +71,6 @@ fn capture(program: PathBuf, gnu: bool, case: &str) -> String {
         .env("NEOMACS_MATRIX_CLEAR_DONE", &done)
         .env("NEOMACS_POSN_OBJECT_EXTENT", "on")
         .env("NEOMACS_POSN_BOUNDED_TEXT", "off")
-        .env("NEOMACS_MODE_LINE_ACCUM_ROOTS", "on")
         .env("NEOMACS_REDISPLAY_GNU_HOOKS", "on")
         .env("NEOMACS_MODE_LINE_NUMERIC_PADDING", "on");
     let mut session = TuiSession::spawn_launch_on_terminal(

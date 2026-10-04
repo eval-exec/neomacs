@@ -60,7 +60,6 @@ fn run_probe(name: &str, program: PathBuf, kind: &str, gnu: bool) -> String {
         .env("NEOMACS_NUMERIC_PADDING_READY", &ready)
         .env("NEOMACS_NUMERIC_PADDING_RELEASE", &release)
         .env("NEOMACS_NUMERIC_PADDING_CASE", kind)
-        .env("NEOMACS_MODE_LINE_ACCUM_ROOTS", "on")
         .env("NEOMACS_MODE_LINE_NUMERIC_PADDING", "on")
         .env("NEOMACS_MODE_LINE_GATE", "gnu");
     let mut session = TuiSession::spawn_launch_on_terminal(

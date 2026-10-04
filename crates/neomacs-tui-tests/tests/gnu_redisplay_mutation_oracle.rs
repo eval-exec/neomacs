@@ -246,7 +246,6 @@ fn run_probe(name: &str, program: PathBuf, scenario: Scenario, extra: &[&str]) -
     if name == "Neomacs" {
         launch = launch
             .env("NEOMACS_REDISPLAY_GNU_HOOKS", "on")
-            .env("NEOMACS_MODE_LINE_ACCUM_ROOTS", "on")
             .env("NEOMACS_POSN_OBJECT_EXTENT", "on")
             .env("NEOMACS_MODE_LINE_GATE", "gnu");
     }

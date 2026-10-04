@@ -256,8 +256,7 @@ fn run_probe(program: PathBuf, case: &str, gnu: bool, setting: &str) -> ProbeCap
         .env("NEOMACS_POSN_EXTENT_ORACLE_CONTRACT", &contract)
         .env("NEOMACS_POSN_EXTENT_ORACLE_RESIDUAL", &residual)
         .env("NEOMACS_POSN_EXTENT_ORACLE_READY", &ready)
-        .env("NEOMACS_POSN_OBJECT_EXTENT", setting)
-        .env("NEOMACS_MODE_LINE_ACCUM_ROOTS", "on");
+        .env("NEOMACS_POSN_OBJECT_EXTENT", setting);
     let mut session = TuiSession::spawn_launch_on_terminal(
         launch,
         if gnu { "GNU" } else { "Neomacs" },

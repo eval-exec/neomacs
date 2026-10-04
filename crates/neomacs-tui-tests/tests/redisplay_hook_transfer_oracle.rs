@@ -268,9 +268,7 @@ fn run_probe(name: &str, program: PathBuf, scenario: &str, gnu: bool) -> String 
         launch = launch.arg("-no-comp-spawn")
             .arg("--eval=(progn(set'native-comp-jit-compilation())(set'native-comp-async-report-warnings-errors'silent))");
     } else {
-        launch = launch
-            .env("NEOMACS_REDISPLAY_GNU_HOOKS", "on")
-            .env("NEOMACS_MODE_LINE_ACCUM_ROOTS", "on");
+        launch = launch.env("NEOMACS_REDISPLAY_GNU_HOOKS", "on");
     }
     launch = launch
         .arg("--load")
