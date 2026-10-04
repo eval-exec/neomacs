@@ -2757,6 +2757,12 @@ pub struct WindowDisplaySnapshot {
     /// publication authority. Immutable Arc data is safe for concurrent readers.
     pub posn_matrix:
         Option<std::sync::Arc<neomacs_display_protocol::posn_object_extent::PosnMatrixSnapshot>>,
+    /// Test-only numeric policy captured by the snapshot's exclusive producer.
+    /// Published snapshots retain immutable copies; independent mutators share
+    /// no selector, Lisp value, or TLS state. Absent from shipping layouts.
+    #[cfg(any(test, feature = "redisplay-test-policy"))]
+    #[doc(hidden)]
+    pub test_posn_object_extent_mode: Option<PosnObjectExtentMode>,
     /// Exact end record produced by the same row walk as this snapshot.
     pub window_end_record: Option<WindowEndRecord>,
 }
@@ -3250,7 +3256,7 @@ impl WindowDisplaySnapshot {
             return Some(point);
         }
         Some(DisplayPointSnapshot {
-            role: if posn_object_extent_mode().enabled() {
+            role: if self.posn_object_extent_mode().enabled() {
                 DisplayPointRole::SyntheticBoundary
             } else {
                 DisplayPointRole::Glyph
@@ -3299,7 +3305,7 @@ impl WindowDisplaySnapshot {
         });
         let Some(mut last) = row_points.next() else {
             return row.start_buffer_pos.map(|buffer_pos| DisplayPointSnapshot {
-                role: if posn_object_extent_mode().enabled() {
+                role: if self.posn_object_extent_mode().enabled() {
                     DisplayPointRole::SyntheticBoundary
                 } else {
                     DisplayPointRole::Glyph
@@ -3461,6 +3467,10 @@ pub struct ChromeLineHit {
 
 impl PartialEq for WindowDisplaySnapshot {
     fn eq(&self, other: &Self) -> bool {
+        #[cfg(any(test, feature = "redisplay-test-policy"))]
+        if self.posn_object_extent_mode() != other.posn_object_extent_mode() {
+            return false;
+        }
         self.window_id == other.window_id
             && self.cell_origin == other.cell_origin
             && self.regions == other.regions
@@ -3503,6 +3513,8 @@ impl Default for WindowDisplaySnapshot {
             buffer_modiff: None,
             layout_freshness: None,
             posn_matrix: None,
+            #[cfg(any(test, feature = "redisplay-test-policy"))]
+            test_posn_object_extent_mode: None,
             window_end_record: None,
         }
     }
@@ -4132,6 +4144,11 @@ pub struct Frame {
     tty_posn_pool: Option<Arc<tty_posn_current::TtyPosnCurrentOwner>>,
     /// GNU preserves pool-backed topology only when the accepted tree has no margins.
     tty_posn_pool_can_repartition: bool,
+    /// Test-only numeric policy owned by this Frame's exclusive mutator.
+    /// Independent contexts and frames never share mutable selectors; readers
+    /// borrow immutable state. No Lisp values, TLS, or shipping fields exist.
+    #[cfg(any(test, feature = "redisplay-test-policy"))]
+    test_posn_object_extent_mode: Option<PosnObjectExtentMode>,
     /// Last recorded redisplay state for GNU window change hooks.
     pub(crate) window_hook_record: FrameWindowHookRecord,
     /// GNU `frame-window-state-change` flag.
@@ -4284,6 +4301,8 @@ impl Frame {
             redisplay_cache: HashMap::default(),
             tty_posn_pool: None,
             tty_posn_pool_can_repartition: false,
+            #[cfg(any(test, feature = "redisplay-test-policy"))]
+            test_posn_object_extent_mode: None,
             window_hook_record: FrameWindowHookRecord::default(),
             window_state_change: false,
             face_hash_table: Value::hash_table(HashTableTest::Eq),
@@ -4819,7 +4838,7 @@ impl Frame {
         let top_margin = self.frame_top_margin();
         let minibuffer_lines = i64::from(self.minibuffer_leaf.is_some());
         let root_lines = (text_lines - minibuffer_lines).max(1);
-        if posn_object_extent_mode().enabled()
+        if self.posn_object_extent_mode().enabled()
             && ((self.root_window().bounds().width / char_width).round() as i64 != cols.max(1)
                 || (self.root_window().bounds().height / char_height).round() as i64 != root_lines)
         {
@@ -5279,7 +5298,7 @@ impl Frame {
                 presentation,
             ));
         }
-        if posn_object_extent_mode().enabled() && self.effective_window_system().is_none() {
+        if self.posn_object_extent_mode().enabled() && self.effective_window_system().is_none() {
             self.note_tty_current_matrix_publication(&prepared.publications, pool);
         }
         self.commit_completed_window_output(presentation, &prepared.publications);
@@ -5687,7 +5706,9 @@ impl Frame {
 
     /// Resize the frame and window tree to new pixel dimensions.
     pub fn resize_pixelwise(&mut self, width: u32, height: u32) {
-        if posn_object_extent_mode().enabled() && (self.width != width || self.height != height) {
+        if self.posn_object_extent_mode().enabled()
+            && (self.width != width || self.height != height)
+        {
             self.tty_posn_pool = None;
             self.tty_posn_pool_can_repartition = false;
         }

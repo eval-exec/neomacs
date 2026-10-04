@@ -129,6 +129,8 @@ windows-version = "0.1.7"
 windows-sys = { workspace = true, features = ["Win32_System_Environment", "Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
+neomacs-layout-engine = { workspace = true, features = ["redisplay-test-policy"] }
+neovm-core = { workspace = true, features = ["redisplay-test-policy"] }
 neomacs-infra.workspace = true
 tempfile.workspace = true
 stacker.workspace = true

@@ -3241,7 +3241,12 @@ impl LayoutEngine {
             );
         }
 
-        if window_system.is_none() && neovm_core::window::posn_object_extent_mode().enabled() {
+        if window_system.is_none()
+            && evaluator
+                .frame_manager()
+                .posn_object_extent_mode(frame_id)
+                .enabled()
+        {
             posn_object_extent::capture_terminal_object_extents(
                 &frame_display_state,
                 &mut self.window_snapshots,
@@ -3700,30 +3705,34 @@ impl LayoutEngine {
 
         // The sealed producer contains final New/Reused/Shifted row operations,
         // including the final chrome adjustments. Queries never reach this seam.
-        let accepted_tty_posn_pool =
-            if window_system.is_none() && neovm_core::window::posn_object_extent_mode().enabled() {
-                let previous = evaluator
-                    .frame_manager()
-                    .get(frame_id)
-                    .and_then(|frame| frame.tty_posn_pool());
-                let captured =
-                    neomacs_display_protocol::posn_frame_pool::PosnFramePool::from_terminal_frame(
-                        self.last_frame_display_state
-                            .as_ref()
-                            .expect("accepted sealed state")
-                            .state(),
-                        previous.map(|pool| &**pool),
-                        neovm_core::encoding::char_width,
-                    );
-                Some(
-                    match previous.filter(|pool| captured.retains_same_observations(pool)) {
-                        Some(pool) => std::sync::Arc::clone(pool),
-                        None => std::sync::Arc::new(captured),
-                    },
-                )
-            } else {
-                None
-            };
+        let accepted_tty_posn_pool = if window_system.is_none()
+            && evaluator
+                .frame_manager()
+                .posn_object_extent_mode(frame_id)
+                .enabled()
+        {
+            let previous = evaluator
+                .frame_manager()
+                .get(frame_id)
+                .and_then(|frame| frame.tty_posn_pool());
+            let captured =
+                neomacs_display_protocol::posn_frame_pool::PosnFramePool::from_terminal_frame(
+                    self.last_frame_display_state
+                        .as_ref()
+                        .expect("accepted sealed state")
+                        .state(),
+                    previous.map(|pool| &**pool),
+                    neovm_core::encoding::char_width,
+                );
+            Some(
+                match previous.filter(|pool| captured.retains_same_observations(pool)) {
+                    Some(pool) => std::sync::Arc::clone(pool),
+                    None => std::sync::Arc::new(captured),
+                },
+            )
+        } else {
+            None
+        };
         let snapshots = std::mem::take(&mut self.window_snapshots);
         if let Some(frame) = evaluator.frame_manager_mut().get_mut(frame_id) {
             frame

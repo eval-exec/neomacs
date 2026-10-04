@@ -1,6 +1,6 @@
 //! Existing accepted renderer -> live allocation/margin change -> split/query
-//! controls. One Context owns each complete fixture. Isolated startup pins the
-//! extent policy ON; helpers never mutate environment, TLS or a pool object.
+//! controls. One Context owns each complete fixture and explicit Frame policy;
+//! helpers never mutate environment, TLS or a pool object.
 //! GNU31.1 owned-PTY probes in tmp/d5-r1-posn-pool-gnu-swap-r2 confirm
 //! Undrawn for both changed-allocation cases; source fields are compared to
 //! this same producer under the corresponding unchanged topology control.
@@ -10,11 +10,10 @@ use neovm_core::window::{
 };
 
 fn accepted_empty_frame() -> (Context, FrameId, BufferId, WindowId, LayoutEngine) {
-    assert!(
-        neovm_core::window::posn_object_extent_mode().enabled(),
-        "isolate with NEOMACS_POSN_OBJECT_EXTENT=on before process startup"
-    );
     let (mut eval, frame_id, buffer_id, window) = incr_editing_frame("", 120, 40);
+    let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+    frame.set_posn_object_extent_mode_for_test(Some(neovm_core::window::PosnObjectExtentMode::On));
+    assert!(frame.posn_object_extent_mode().enabled());
     eval.set_variable("noninteractive", Value::NIL);
     {
         let buffer = eval

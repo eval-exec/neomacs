@@ -1,5 +1,5 @@
 //! Row-lazy hits retain the canonical source roles used by eager publication.
-//! Isolate with NEOMACS_POSN_OBJECT_EXTENT=on before process startup.
+//! Each immutable fixture owns its numeric extent policy.
 
 use super::RowWindowText;
 use neomacs_display_protocol::{DisplayWindowId, Rect};
@@ -12,10 +12,6 @@ use std::sync::Arc;
 
 #[test]
 fn indexed_row_hits_preserve_eager_canonical_point_roles() {
-    assert!(
-        neovm_core::window::posn_object_extent_mode().enabled(),
-        "isolate with NEOMACS_POSN_OBJECT_EXTENT=on before child startup"
-    );
     let roles = [
         DisplayPointRole::Glyph,
         DisplayPointRole::InsertionBoundary,
@@ -36,7 +32,7 @@ fn indexed_row_hits_preserve_eager_canonical_point_roles() {
             col: column as i64,
         })
         .collect();
-    let snapshot = WindowDisplaySnapshot {
+    let mut snapshot = WindowDisplaySnapshot {
         points: points.clone(),
         point_rows: Some(DisplayPointRows::from_points(points)),
         rows: vec![DisplayRowSnapshot {
@@ -54,6 +50,9 @@ fn indexed_row_hits_preserve_eager_canonical_point_roles() {
         }],
         ..Default::default()
     };
+    snapshot
+        .set_posn_object_extent_mode_for_test(Some(neovm_core::window::PosnObjectExtentMode::On));
+    assert!(snapshot.posn_object_extent_mode().enabled());
     let body = Rect::new(0.0, 0.0, 4.0, 1.0);
     let mut flat = snapshot.clone();
     flat.point_rows = None;

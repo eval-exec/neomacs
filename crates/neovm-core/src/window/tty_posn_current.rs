@@ -208,7 +208,7 @@ impl Frame {
     /// before any eager Lisp callback. KEEP-MARGINS true never calls this.
     #[inline]
     pub(crate) fn tty_posn_apply_window_adjustment(&mut self, window: WindowId) {
-        if !posn_object_extent_mode().enabled() || self.effective_window_system().is_some() {
+        if !self.posn_object_extent_mode().enabled() || self.effective_window_system().is_some() {
             return;
         }
         self.tty_posn_clear_current_window(window);
@@ -237,7 +237,7 @@ impl Frame {
     /// allocation, or event on another Frame can reactivate disabled rows.
     #[inline]
     pub(crate) fn tty_posn_adjust_current_matrices(&mut self) {
-        if !posn_object_extent_mode().enabled()
+        if !self.posn_object_extent_mode().enabled()
             || self.effective_window_system().is_some()
             || self.tty_posn_pool.is_none()
         {

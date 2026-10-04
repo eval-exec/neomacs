@@ -1,14 +1,14 @@
 //! Real GNU transaction, pre-hook mini producer and accepted frame producer.
-//! Each test process selects GNU policy before OnceLock initialization. Every
+//! A scoped numeric guard selects GNU policy on the owning test thread. Every
 //! Context and producer is exclusively owned; no Lisp or environment cache is
-//! shared across mutator threads. This uses existing APIs on the unfixed tree.
+//! shared across mutator threads.
 use super::super::{FrameLayoutAttempt, LayoutEngine};
 use neovm_core::emacs_core::Value;
 use neovm_core::heap_types::LispString;
 use std::cell::Cell;
 use std::rc::Rc;
 
-/// Exact frozen GNU fixture shapes; each process owns its Context and both
+/// Exact frozen GNU fixture shapes; each test owns its Context and both
 /// producers, without sharing Lisp state or changing startup policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MiniScrollCase {
@@ -18,6 +18,7 @@ enum MiniScrollCase {
 }
 
 fn real_mini_scroll_log(case: MiniScrollCase) -> String {
+    let _policy = neovm_core::emacs_core::eval::RedisplayHookPolicyGuard::gnu();
     let mut eval = neovm_core::emacs_core::load::create_runtime_startup_evaluator_cached()
         .expect("real runtime startup includes GNU window sizing Lisp");
     // Exercise the live display entry, not native test batch suppression.
@@ -25,10 +26,7 @@ fn real_mini_scroll_log(case: MiniScrollCase) -> String {
         .set_symbol_value("noninteractive", Value::NIL);
     eval.obarray_mut()
         .set_symbol_value("inhibit-redisplay", Value::NIL);
-    assert!(
-        eval.gnu_redisplay_hooks_policy_enabled(),
-        "select GNU hooks ON before test startup"
-    );
+    assert!(eval.gnu_redisplay_hooks_policy_enabled());
     let root = eval
         .buffer_manager()
         .current_buffer()

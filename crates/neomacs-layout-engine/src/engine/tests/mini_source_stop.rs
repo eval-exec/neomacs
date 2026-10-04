@@ -1,7 +1,7 @@
 //! Exercise the real mini source producer. Each probe exclusively owns its
 //! Context until it returns numeric observations; no Lisp value survives that
-//! owner's drop. Each isolated process pins GNU hooks ON before its OnceLock
-//! is initialized. The tests never change process environment or shared TLS.
+//! owner's drop. A scoped numeric guard selects GNU hooks on the owning test
+//! thread and restores its prior policy without changing process environment.
 use super::super::{LayoutEngine, LayoutPurpose};
 use neovm_core::buffer::{EmacsBytePos, EmacsByteRange, LispCharPos1};
 use neovm_core::emacs_core::{Context, Value};
@@ -22,11 +22,9 @@ fn measure(
     transform_newline: bool,
     query_presentation: bool,
 ) -> Measurement {
+    let _policy = neovm_core::emacs_core::eval::RedisplayHookPolicyGuard::gnu();
     let mut eval = Context::new();
-    assert!(
-        eval.gnu_redisplay_hooks_policy_enabled(),
-        "run this isolate with NEOMACS_REDISPLAY_GNU_HOOKS=on"
-    );
+    assert!(eval.gnu_redisplay_hooks_policy_enabled());
     eval.obarray_mut()
         .set_symbol_value("resize-mini-windows", Value::T);
     eval.obarray_mut()

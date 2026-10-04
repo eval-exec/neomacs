@@ -1718,6 +1718,14 @@ impl WindowOutputEmitter {
         );
     }
 
+    #[cfg(any(test, feature = "redisplay-test-policy"))]
+    pub(crate) fn set_posn_object_extent_mode_for_test(
+        &mut self,
+        mode: neovm_core::window::PosnObjectExtentMode,
+    ) {
+        self.geometry.test_posn_object_extent_mode = Some(mode);
+    }
+
     pub(crate) fn begin_update(&self, evaluator: &mut Context) {
         let _ = self.with_live_update(evaluator, |update| update.begin_update());
     }
@@ -1846,6 +1854,10 @@ impl WindowOutputEmitter {
             evaluator.window_display_snapshot_freshness(frame_id, window_id, buffer_id)
         });
         let snapshot = WindowDisplaySnapshot {
+            #[cfg(any(test, feature = "redisplay-test-policy"))]
+            test_posn_object_extent_mode: Some(
+                evaluator.frame_manager().posn_object_extent_mode(frame_id),
+            ),
             posn_matrix: None,
             window_id,
             cell_origin,
@@ -1865,6 +1877,7 @@ impl WindowOutputEmitter {
             buffer_modiff,
             layout_freshness,
             window_end_record: None,
+            ..Default::default()
         };
         if self.publish_live
             && let Some(frame) = evaluator.frame_manager_mut().get_mut(frame_id)

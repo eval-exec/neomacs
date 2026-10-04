@@ -1,17 +1,20 @@
 //! Real accepted TTY rows, Lisp buffer setters, and cold current-matrix queries.
-//! Every fixture has one exclusive Context/Frame mutator. Startup selects the
-//! extent policy; no test changes the environment or a process OnceLock.
+//! Every fixture has one exclusive Context/Frame mutator. Its numeric extent
+//! policy is injected locally; no test changes environment or process policy.
 use super::*;
 use neovm_core::window::{FrameId, SplitDirection, SplitPlacement, WindowId};
 
 fn accepted_ascii_frame(enabled: bool) -> (Context, FrameId, BufferId, WindowId, LayoutEngine) {
-    assert_eq!(
-        neovm_core::window::posn_object_extent_mode().enabled(),
-        enabled,
-        "isolate with the inventory's NEOMACS_POSN_OBJECT_EXTENT startup value"
-    );
     let text = format!("{}\n", "a".repeat(80)).repeat(100);
     let (mut eval, frame_id, buffer_id, window) = incr_editing_frame(&text, 120, 40);
+    let mode = if enabled {
+        neovm_core::window::PosnObjectExtentMode::On
+    } else {
+        neovm_core::window::PosnObjectExtentMode::Off
+    };
+    let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+    frame.set_posn_object_extent_mode_for_test(Some(mode));
+    assert_eq!(frame.posn_object_extent_mode().enabled(), enabled);
     eval.set_variable("noninteractive", Value::NIL);
     {
         let buffer = eval

@@ -46,6 +46,65 @@ pub fn posn_object_extent_mode() -> PosnObjectExtentMode {
     })
 }
 
+impl super::Frame {
+    /// Read this owner's numeric fixture policy, or the immutable process
+    /// policy. Shipping builds have no override field or additional branch.
+    #[inline]
+    pub fn posn_object_extent_mode(&self) -> PosnObjectExtentMode {
+        #[cfg(any(test, feature = "redisplay-test-policy"))]
+        if let Some(mode) = self.test_posn_object_extent_mode {
+            return mode;
+        }
+        posn_object_extent_mode()
+    }
+
+    /// Pin a fixture's policy before its first layout. Exclusive Frame
+    /// ownership isolates independent mutators; no environment, process cache,
+    /// TLS, or Lisp state changes. None restores the process default.
+    #[cfg(any(test, feature = "redisplay-test-policy"))]
+    pub fn set_posn_object_extent_mode_for_test(&mut self, mode: Option<PosnObjectExtentMode>) {
+        self.test_posn_object_extent_mode = mode;
+    }
+}
+
+impl super::FrameManager {
+    /// Resolve a fixture's frame policy. Ordinary builds return the process
+    /// policy directly, without looking up a frame or retaining extra state.
+    #[inline]
+    pub fn posn_object_extent_mode(&self, _frame_id: super::FrameId) -> PosnObjectExtentMode {
+        #[cfg(any(test, feature = "redisplay-test-policy"))]
+        {
+            return self.get(_frame_id).map_or_else(
+                posn_object_extent_mode,
+                super::Frame::posn_object_extent_mode,
+            );
+        }
+        #[cfg(not(any(test, feature = "redisplay-test-policy")))]
+        posn_object_extent_mode()
+    }
+}
+
+impl WindowDisplaySnapshot {
+    /// Keep a fixture producer's policy with its immutable numeric snapshot.
+    /// The override and its branch are absent from shipping builds.
+    #[inline]
+    pub fn posn_object_extent_mode(&self) -> PosnObjectExtentMode {
+        #[cfg(any(test, feature = "redisplay-test-policy"))]
+        if let Some(mode) = self.test_posn_object_extent_mode {
+            return mode;
+        }
+        posn_object_extent_mode()
+    }
+
+    /// Set numeric fixture policy before publication. Readers retain their
+    /// immutable snapshot copies; this requires the producer's exclusive
+    /// borrow and changes no global selector or Lisp state.
+    #[cfg(any(test, feature = "redisplay-test-policy"))]
+    pub fn set_posn_object_extent_mode_for_test(&mut self, mode: Option<PosnObjectExtentMode>) {
+        self.test_posn_object_extent_mode = mode;
+    }
+}
+
 #[cfg(test)]
 thread_local! {
     /// A test-local numeric selector override, never compiled into production.
@@ -83,3 +142,7 @@ pub fn retained_posn_extent(
 #[cfg(test)]
 #[path = "tests/posn_object_extent_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/posn_policy_injection_test.rs"]
+mod injection_tests;

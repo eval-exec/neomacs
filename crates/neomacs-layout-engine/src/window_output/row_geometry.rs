@@ -33,6 +33,10 @@ enum PointLookupGroup {
 }
 
 pub(super) struct WindowRowGeometry {
+    /// Numeric fixture policy, copied from the exclusively owned Frame.
+    /// Production has neither this override nor an extra selector read.
+    #[cfg(any(test, feature = "redisplay-test-policy"))]
+    pub(super) test_posn_object_extent_mode: Option<neovm_core::window::PosnObjectExtentMode>,
     pub(super) text_row_base: i64,
     pub(super) text_x: f32,
     pub(super) window_top: f32,
@@ -57,6 +61,8 @@ pub(super) struct WindowRowGeometry {
 impl WindowRowGeometry {
     pub(super) fn new(text_row_base: usize, text_x: f32, window_top: f32) -> Self {
         Self {
+            #[cfg(any(test, feature = "redisplay-test-policy"))]
+            test_posn_object_extent_mode: None,
             text_row_base: text_row_base as i64,
             text_x,
             window_top,
@@ -74,6 +80,15 @@ impl WindowRowGeometry {
             current_row_terminator: None,
             current_row_progress: None,
         }
+    }
+
+    #[inline]
+    fn posn_object_extent_mode(&self) -> neovm_core::window::PosnObjectExtentMode {
+        #[cfg(any(test, feature = "redisplay-test-policy"))]
+        if let Some(mode) = self.test_posn_object_extent_mode {
+            return mode;
+        }
+        neovm_core::window::posn_object_extent_mode()
     }
 
     // Integers in this conservative range remain exact through the nominal
@@ -474,7 +489,7 @@ impl WindowRowGeometry {
             return;
         }
         self.points.push(DisplayPointSnapshot {
-            role: if neovm_core::window::posn_object_extent_mode().enabled() {
+            role: if self.posn_object_extent_mode().enabled() {
                 neovm_core::window::DisplayPointRole::InsertionBoundary
             } else {
                 neovm_core::window::DisplayPointRole::Glyph
@@ -575,7 +590,7 @@ impl WindowRowGeometry {
         col: usize,
     ) {
         self.push_text_display_point(buffer_pos, x, y, width, height, row, col);
-        if neovm_core::window::posn_object_extent_mode().enabled()
+        if self.posn_object_extent_mode().enabled()
             && let Some(point) = self.points.last_mut()
         {
             point.role = neovm_core::window::DisplayPointRole::InsertionBoundary;

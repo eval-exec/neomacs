@@ -10,6 +10,8 @@ description = "Rust layout engine crate for Neomacs"
 [features]
 default = []
 neo-term = ["neomacs-display-protocol/neo-term"]
+# Numeric fixture policy propagation in unit/dependent-crate tests only.
+redisplay-test-policy = ["neovm-core/redisplay-test-policy"]
 freetype-bundled = [
     "freetype-rs/bundled",
     "neomacs-font-materializer/freetype-bundled",
@@ -50,7 +52,7 @@ wio.workspace = true
 
 [dev-dependencies]
 neomacs-test-fonts.workspace = true
-neovm-core = { workspace = true, features = ["jit"] }
+neovm-core = { workspace = true, features = ["jit", "redisplay-test-policy"] }
 serde_json.workspace = true
 tracing-test.workspace = true
 

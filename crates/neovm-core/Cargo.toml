@@ -142,6 +142,9 @@ desktop-font-settings = []
 # to skip -- so it must not tax ordinary debug/test builds. Enable it in a
 # dedicated validation run.
 display-stop-validate = []
+# Numeric redisplay policy injection for dependent crate fixtures only.
+# Dev-dependencies opt in; shipping builds retain process-once selectors.
+redisplay-test-policy = []
 # Tiered JIT execution subsystem (src/emacs_core/runtime/jit/ +
 # runtime/bytecode/ELISP_VM_MODERNIZATION.md). DEFAULT-ON (see `default` above): the
 # baseline JIT ships enabled. Toggle it at runtime with `NEOVM_JIT=0` (no

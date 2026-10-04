@@ -55,7 +55,7 @@ pub(super) fn parse_redisplay_hooks(value: Option<&OsStr>) -> RedisplayHookPolic
 
 #[inline]
 pub(crate) fn gnu_redisplay_hooks_enabled() -> bool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "redisplay-test-policy"))]
     if let Some(policy) = TEST_REDISPLAY_HOOK_POLICY.with(std::cell::Cell::get) {
         return policy == RedisplayHookPolicy::Gnu;
     }
@@ -65,11 +65,11 @@ pub(crate) fn gnu_redisplay_hooks_enabled() -> bool {
     }) == RedisplayHookPolicy::Gnu
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "redisplay-test-policy"))]
 thread_local! {
     /// Numeric test policy only, independently owned by each test thread. It
     /// holds no Lisp values, caches or runtime state and does not exist in
-    /// production or alter the process-once production policy lookup.
+    /// builds without the test feature or alter the process-once policy lookup.
     static TEST_REDISPLAY_HOOK_POLICY: std::cell::Cell<Option<RedisplayHookPolicy>> = const {
         std::cell::Cell::new(None)
     };
@@ -78,19 +78,19 @@ thread_local! {
 /// Restore a numeric fixture selector on normal return and Rust unwinding.
 /// The !Send/!Sync marker keeps this guard on its owning test mutator thread;
 /// independent test threads share no mutable selector or Lisp state.
-#[cfg(test)]
-pub(crate) struct RedisplayHookPolicyGuard {
+#[cfg(any(test, feature = "redisplay-test-policy"))]
+pub struct RedisplayHookPolicyGuard {
     previous: Option<RedisplayHookPolicy>,
     _same_thread: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "redisplay-test-policy"))]
 impl RedisplayHookPolicyGuard {
-    pub(crate) fn legacy() -> Self {
+    pub fn legacy() -> Self {
         Self::set(RedisplayHookPolicy::Legacy)
     }
 
-    pub(crate) fn gnu() -> Self {
+    pub fn gnu() -> Self {
         Self::set(RedisplayHookPolicy::Gnu)
     }
 
@@ -102,7 +102,7 @@ impl RedisplayHookPolicyGuard {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "redisplay-test-policy"))]
 impl Drop for RedisplayHookPolicyGuard {
     fn drop(&mut self) {
         TEST_REDISPLAY_HOOK_POLICY.with(|slot| slot.set(self.previous));

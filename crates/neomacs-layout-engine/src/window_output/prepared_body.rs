@@ -28,8 +28,14 @@ pub(crate) fn position_buffer_rows(
     window_id: u64,
     window_bounds: neomacs_display_protocol::types::Rect,
     matrix_ncols: usize,
+    #[cfg(any(test, feature = "redisplay-test-policy"))]
+    mode: neovm_core::window::PosnObjectExtentMode,
 ) -> Result<PreparedBody, RowProgramError> {
     let mut geometry = WindowRowGeometry::new(text_row_base, text_x, window_top);
+    #[cfg(any(test, feature = "redisplay-test-policy"))]
+    {
+        geometry.test_posn_object_extent_mode = Some(mode);
+    }
     let mut glyph_rows = Vec::with_capacity(computed.len());
     let mut y = body_y;
     for (index, mut computed) in computed.into_iter().enumerate() {

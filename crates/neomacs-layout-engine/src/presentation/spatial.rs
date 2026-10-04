@@ -743,6 +743,8 @@ fn push_one_row_fallback_positions(
                 buffer_position,
                 body_row,
                 column,
+                #[cfg(any(test, feature = "redisplay-test-policy"))]
+                snapshot.posn_object_extent_mode(),
             )?;
         }
         covered_right = covered_right.max(point_right);
@@ -764,6 +766,8 @@ fn push_one_row_fallback_positions(
             buffer_position,
             body_row,
             column,
+            #[cfg(any(test, feature = "redisplay-test-policy"))]
+            snapshot.posn_object_extent_mode(),
         )?;
     }
     Ok(())
@@ -780,15 +784,27 @@ fn push_text_position_span(
     buffer_position: i64,
     row: i64,
     column: i64,
+    #[cfg(any(test, feature = "redisplay-test-policy"))]
+    test_mode: neovm_core::window::PosnObjectExtentMode,
 ) -> Result<(), PresentedHitError> {
     if width <= 0.0 || height <= 0.0 {
         return Ok(());
     }
     let bounds = FrameRect::new(x, y, width, height)
         .map_err(|_| PresentedHitError::InvalidTextPositionGeometry)?;
+    let mode = {
+        #[cfg(any(test, feature = "redisplay-test-policy"))]
+        {
+            test_mode
+        }
+        #[cfg(not(any(test, feature = "redisplay-test-policy")))]
+        {
+            neovm_core::window::posn_object_extent_mode()
+        }
+    };
     positions.push(
         PresentedTextPosition::new(window, bounds, buffer_position, row, column).with_point_role(
-            if neovm_core::window::posn_object_extent_mode().enabled() {
+            if mode.enabled() {
                 neomacs_display_protocol::posn_object_extent::PosnPointRole::SyntheticBoundary
             } else {
                 neomacs_display_protocol::posn_object_extent::PosnPointRole::Glyph
@@ -860,13 +876,11 @@ pub(crate) fn body_text_positions(
                 body_row.body_row,
                 point.col,
             )
-            .with_point_role(
-                if neovm_core::window::posn_object_extent_mode().enabled() {
-                    point.role
-                } else {
-                    neomacs_display_protocol::posn_object_extent::PosnPointRole::Glyph
-                },
-            ),
+            .with_point_role(if snapshot.posn_object_extent_mode().enabled() {
+                point.role
+            } else {
+                neomacs_display_protocol::posn_object_extent::PosnPointRole::Glyph
+            }),
         );
     }
     push_row_fallback_positions(&mut positions, window, snapshot, text_body)?;

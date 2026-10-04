@@ -1,17 +1,15 @@
 //! Accepted layout, live split, and Lisp query share GNU's numeric frame pool.
-//! Run in a fresh nextest child with NEOMACS_POSN_OBJECT_EXTENT=on. The policy
-//! belongs to process startup; this test never mutates environment or OnceLock.
+//! Each fixture owns an explicit Frame policy; process startup is irrelevant.
 
 use super::*;
 use neovm_core::window::{SplitDirection, SplitPlacement, WindowLayoutQueryOutcome};
 
 #[test]
 fn accepted_terminal_frame_pool_answers_a_split_child_before_redisplay() {
-    assert!(
-        neovm_core::window::posn_object_extent_mode().enabled(),
-        "isolate this test with NEOMACS_POSN_OBJECT_EXTENT=on before child startup"
-    );
     let (mut eval, frame_id, buffer_id, old_window) = incr_editing_frame("", 80, 24);
+    let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+    frame.set_posn_object_extent_mode_for_test(Some(neovm_core::window::PosnObjectExtentMode::On));
+    assert!(frame.posn_object_extent_mode().enabled());
     eval.set_variable("noninteractive", Value::NIL);
     {
         let buffer = eval.buffer_manager_mut().get_mut(buffer_id).unwrap();
@@ -126,11 +124,10 @@ fn accepted_terminal_frame_pool_answers_a_split_child_before_redisplay() {
 
 #[test]
 fn accepted_terminal_frame_pool_fallback_reads_eob_iterator_cell_before_reported_columns() {
-    assert!(
-        neovm_core::window::posn_object_extent_mode().enabled(),
-        "isolate this test with NEOMACS_POSN_OBJECT_EXTENT=on before child startup"
-    );
     let (mut eval, frame_id, buffer_id, old_window) = incr_editing_frame("", 80, 24);
+    let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
+    frame.set_posn_object_extent_mode_for_test(Some(neovm_core::window::PosnObjectExtentMode::On));
+    assert!(frame.posn_object_extent_mode().enabled());
     eval.set_variable("noninteractive", Value::NIL);
     {
         let buffer = eval.buffer_manager_mut().get_mut(buffer_id).unwrap();

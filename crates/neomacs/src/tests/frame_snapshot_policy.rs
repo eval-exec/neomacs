@@ -1,23 +1,26 @@
-//! Real public snapshot ownership regressions. Each nextest child pins only
-//! its immutable numeric hook policy before Context creation; these helpers
-//! never change the process environment or share Lisp state across mutators.
+//! Real public snapshot ownership regressions. Each fixture owns a scoped
+//! numeric hook policy before Context creation and until that Context drops.
+//! No process environment or Lisp state is shared across mutators.
 
 use super::super::super::frame_layout::{
     REDISPLAY_RUNTIME, install_frame_snapshot_fn, run_tty_layout_tree,
 };
 use super::initialized_redisplay_test_frame;
 use neovm_core::buffer::LispCharPos1;
+use neovm_core::emacs_core::eval::RedisplayHookPolicyGuard;
 use neovm_core::emacs_core::{Context, Value};
 use neovm_core::heap_types::LispString;
 use neovm_core::window::{FrameId, FrameVisibility, Window, WindowEndState, WindowId};
 
 /// One test exclusively owns this Context and numeric frame/window IDs.
-/// The helper shares no Lisp owner or mutable cache with another mutator.
+/// The numeric policy guard stays on the owning test thread and drops after
+/// the Context. No Lisp owner or mutable cache is shared with another mutator.
 struct SnapshotFixture {
     eval: Context,
     visible_frame: FrameId,
     hidden_frame: FrameId,
     hidden_window: WindowId,
+    _policy: RedisplayHookPolicyGuard,
 }
 
 /// Numeric observations copied while the fixture Context is exclusively
@@ -54,12 +57,11 @@ fn window_positions(eval: &Context, frame: FrameId, window: WindowId) -> WindowP
 }
 
 fn fixture(gnu: bool) -> SnapshotFixture {
-    let expected = if gnu { "on" } else { "off" };
-    assert_eq!(
-        std::env::var("NEOMACS_REDISPLAY_GNU_HOOKS").as_deref(),
-        Ok(expected),
-        "nextest must pin the independent child policy before Context creation"
-    );
+    let policy = if gnu {
+        RedisplayHookPolicyGuard::gnu()
+    } else {
+        RedisplayHookPolicyGuard::legacy()
+    };
     REDISPLAY_RUNTIME.with(|runtime| runtime.disable_cosmic_metrics());
     let (mut eval, _visible_buffer, visible_frame, visible_window) =
         initialized_redisplay_test_frame(
@@ -137,6 +139,7 @@ fn fixture(gnu: bool) -> SnapshotFixture {
         visible_frame,
         hidden_frame,
         hidden_window,
+        _policy: policy,
     }
 }
 

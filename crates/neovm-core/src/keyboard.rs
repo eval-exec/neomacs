@@ -7011,7 +7011,7 @@ impl crate::emacs_core::eval::Context {
                 {
                     let (object_width, object_height) = if part == crate::window::WindowPart::Text
                         && frame.effective_window_system().is_none()
-                        && crate::window::posn_object_extent_mode().enabled()
+                        && frame.posn_object_extent_mode().enabled()
                     {
                         crate::window::retained_posn_extent(
                             Some(snapshot),
@@ -7179,7 +7179,7 @@ impl crate::emacs_core::eval::Context {
                 );
                 if region.kind() == neomacs_display_protocol::PresentedRegionKind::TextBody
                     && frame.effective_window_system().is_none()
-                    && crate::window::posn_object_extent_mode().enabled()
+                    && frame.posn_object_extent_mode().enabled()
                 {
                     let snapshot = frame
                         .active_window_presentation(window_id)?
@@ -7220,7 +7220,7 @@ impl crate::emacs_core::eval::Context {
             (crate::window::WindowPresentationSnapshot::LiveWindow(snapshot), None)
                 if region.kind() == neomacs_display_protocol::PresentedRegionKind::TextBody
                     && frame.effective_window_system().is_none()
-                    && crate::window::posn_object_extent_mode().enabled() =>
+                    && frame.posn_object_extent_mode().enabled() =>
             {
                 let extent = crate::window::WindowPart::Text
                     .text_area_coordinate(

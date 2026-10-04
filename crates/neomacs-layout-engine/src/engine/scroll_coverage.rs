@@ -290,6 +290,11 @@ impl ScrollCoverage {
             admission.window.get() as u64,
             regions.outer,
             admission.retained.matrix.ncols,
+            #[cfg(any(test, feature = "redisplay-test-policy"))]
+            admission
+                .retained
+                .display_snapshot
+                .posn_object_extent_mode(),
         )?;
         let mut rows = body.glyph_rows.into_iter();
         for (index, row) in admission.retained.matrix.rows.iter_mut().enumerate() {

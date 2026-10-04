@@ -549,6 +549,12 @@ impl TextWindowBeginRequest {
             self.text_area_left,
             self.window_top,
         );
+        #[cfg(any(test, feature = "redisplay-test-policy"))]
+        output_emitter.set_posn_object_extent_mode_for_test(
+            evaluator
+                .frame_manager()
+                .posn_object_extent_mode(self.frame_id),
+        );
         output_emitter.begin_update(evaluator);
         begin_text_window_output_and_row(
             output,

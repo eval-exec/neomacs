@@ -7936,7 +7936,21 @@ fn with_tty_posn_extent(
     window: WindowId,
     point: &crate::window::DisplayPointSnapshot,
 ) -> ExactVisibleMetrics {
-    if terminal && crate::window::posn_object_extent_mode().enabled() {
+    if terminal && {
+        #[cfg(any(test, feature = "redisplay-test-policy"))]
+        {
+            frame.map_or_else(
+                crate::window::posn_object_extent_mode,
+                crate::window::Frame::posn_object_extent_mode,
+            )
+        }
+        #[cfg(not(any(test, feature = "redisplay-test-policy")))]
+        {
+            crate::window::posn_object_extent_mode()
+        }
+    }
+    .enabled()
+    {
         metrics.object_extent = Some(frame.map_or(
             neomacs_display_protocol::posn_object_extent::PosnObjectExtent::Undrawn,
             |frame| frame.retained_tty_posn_extent(window, point.row, point.col),
@@ -9245,7 +9259,7 @@ fn posn_at_x_y_impl(
                         click.apply(exact_metrics_from_redisplay_point(snapshot, &point), &point);
                     if part == crate::window::WindowPart::Text
                         && frame.effective_window_system().is_none()
-                        && crate::window::posn_object_extent_mode().enabled()
+                        && frame.posn_object_extent_mode().enabled()
                     {
                         let first_visible_x = frame.find_window(hit.window).map_or(0, |window| {
                             let at_eob = window
@@ -9317,7 +9331,7 @@ fn posn_at_x_y_impl(
                 TextAreaClick::new(report_x, report_y, column_width).apply_to_metrics(metrics);
             if part == crate::window::WindowPart::Text
                 && frame.effective_window_system().is_none()
-                && crate::window::posn_object_extent_mode().enabled()
+                && frame.posn_object_extent_mode().enabled()
             {
                 metrics.object_extent =
                     Some(frame.retained_tty_posn_extent(hit.window, matrix_row, matrix_column));

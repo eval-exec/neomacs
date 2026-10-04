@@ -141,6 +141,7 @@ fn unseen_row_worker_glyphs_match_canonical_window_body() {
         .unwrap();
     let window_bounds = retained.display_snapshot.regions.outer;
     let ncols = retained.matrix.ncols;
+    let mode = retained.display_snapshot.posn_object_extent_mode();
     let actual = std::thread::spawn(move || {
         let row = program.compute(|| false)?;
         crate::window_output::prepared_body::position_buffer_rows(
@@ -152,6 +153,7 @@ fn unseen_row_worker_glyphs_match_canonical_window_body() {
             window.0,
             window_bounds,
             ncols,
+            mode,
         )
     })
     .join()

@@ -7706,8 +7706,8 @@ mod sort_predicate;
 mod command_loop;
 
 pub(crate) mod redisplay_hooks;
-#[cfg(test)]
-pub(crate) use redisplay_hooks::RedisplayHookPolicyGuard;
+#[cfg(any(test, feature = "redisplay-test-policy"))]
+pub use redisplay_hooks::RedisplayHookPolicyGuard;
 pub(crate) use redisplay_hooks::gnu_redisplay_hooks_enabled;
 pub use redisplay_hooks::{
     RedisplayMiniGeometryRequest, RedisplayMiniGeometrySource, RedisplayMiniPreparationFailure,

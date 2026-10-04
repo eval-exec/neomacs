@@ -277,7 +277,7 @@ impl RowWindowText {
                             point.col,
                         )
                         .with_point_role(
-                            if neovm_core::window::posn_object_extent_mode().enabled() {
+                            if self.snapshot.posn_object_extent_mode().enabled() {
                                 point.role
                             } else {
                                 neomacs_display_protocol::posn_object_extent::PosnPointRole::Glyph
