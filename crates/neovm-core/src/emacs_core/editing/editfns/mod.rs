@@ -351,6 +351,7 @@ enum BufferChangeKind {
 
 /// Verify intervals at the preparation seam. This only reads the owning
 /// Context and publishes no process-global or thread-local state.
+#[inline]
 fn verify_change_text_read_only(
     ctx: &crate::emacs_core::eval::Context,
     byte_range: EmacsByteRange,
@@ -419,8 +420,8 @@ fn prepare_buffer_change(
     };
     // GNU insdel.c:2145 publishes after undoable-change and before any
     // interval callback, including the inhibited-modification-hooks arm.
-    ctx.gnu_mark_buffer_redisplay(current_id);
     if gnu_hooks {
+        ctx.gnu_mark_buffer_redisplay(current_id);
         verify_change_text_read_only(ctx, byte_range)?;
     }
     let beg = byte_range.start();
