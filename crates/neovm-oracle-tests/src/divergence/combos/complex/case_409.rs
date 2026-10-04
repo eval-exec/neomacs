@@ -333,6 +333,35 @@ fn div_cx409_force_window_update() {
     );
 }
 
+/// force-window-update: the GNU object contract (src/window.c:4492).
+///
+/// nil marks every window, a live window marks that window, a displayed
+/// buffer (or its name) is reported as shown, and an undisplayed buffer or
+/// unknown name returns nil without signaling.
+#[test]
+fn div_cx409_force_window_update_object_contract() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[r#""OK (t t t t nil nil nil)""#]];
+    crate::common::assert_oracle_parity_expect(
+        r##"
+(let* ((shown (window-buffer (selected-window)))
+       (hidden (generate-new-buffer "neo-fwu-hidden"))
+       (indirect (make-indirect-buffer shown "neo-fwu-indirect")))
+  (unwind-protect
+      (list (force-window-update)
+            (force-window-update (selected-window))
+            (force-window-update shown)
+            (force-window-update (buffer-name shown))
+            (force-window-update hidden)
+            (force-window-update indirect)
+            (force-window-update "neo-fwu-no-such-buffer"))
+    (kill-buffer indirect)
+    (kill-buffer hidden)))
+"##,
+        expect,
+    );
+}
+
 /// translation-table / set-translation-table:
 /// character translation tables.
 #[test]

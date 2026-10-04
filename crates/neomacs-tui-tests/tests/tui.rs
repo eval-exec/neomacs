@@ -37,6 +37,8 @@ mod face_color_test;
 mod face_parity;
 #[path = "files_dired.rs"]
 mod files_dired;
+#[path = "force_window_update.rs"]
+mod force_window_update;
 #[path = "frame_visibility.rs"]
 mod frame_visibility;
 #[path = "help_describe.rs"]

@@ -2759,6 +2759,61 @@ pub struct WindowDisplaySnapshot {
     pub window_end_record: Option<WindowEndRecord>,
 }
 
+/// Which window bodies an explicit `force-window-update` invalidated.
+///
+/// Mirrors the three branches of GNU `Fforce_window_update`
+/// (`src/window.c:4492`):
+///
+/// - `AllWindows` — nil OBJECT: `windows_or_buffers_changed = 29`.
+/// - `Window(W)` — a live window: W is marked inaccurate and W's buffer gets
+///   `prevent_redisplay_optimizations_p`, so every window showing that buffer
+///   also loses reuse.
+/// - `Buffer(B)` — a displayed buffer (or its name): every window displaying B
+///   is forced.
+///
+/// The target is a closed sum type so a call site cannot smuggle an unrelated
+/// boolean (or a naked counter) into a decision about *which* bodies must be
+/// rebuilt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ForcedBodyRedisplay {
+    AllWindows,
+    Window(WindowId),
+    Buffer(BufferId),
+}
+
+/// Monotonic body-redisplay revisions consulted when a window may reuse
+/// retained body rows.
+///
+/// This is deliberately separate from `Context::redisplay_generation`: that
+/// counter also moves for presentation-only work (mode-line/chrome/menu
+/// updates) which must NOT relayout body text. Only an explicit body
+/// invalidation — today GNU `force-window-update` — moves these counters, and
+/// the three scopes below keep a targeted request from escalating unrelated
+/// windows:
+///
+/// - `all`    — every window (nil OBJECT),
+/// - `window` — one live window (and, through `buffer`, its displayed buffer),
+/// - `buffer` — every window displaying that buffer.
+///
+/// Equality is the reuse predicate: any move for this window/buffer pair makes
+/// the retained key differ, which escalates to a full rebuild.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BodyRedisplayRevision {
+    all: u64,
+    window: u64,
+    buffer: u64,
+}
+
+impl BodyRedisplayRevision {
+    pub(crate) const fn new(all: u64, window: u64, buffer: u64) -> Self {
+        Self {
+            all,
+            window,
+            buffer,
+        }
+    }
+}
+
 /// Opaque identity of every mutable input used to lay out one live window.
 ///
 /// Construction and comparison live on `Context`; keeping these fields opaque
@@ -2775,6 +2830,10 @@ pub struct WindowDisplaySnapshotFreshness {
     pub(crate) face_change_count: u64,
     pub(crate) display_var_change_count: u64,
     pub(crate) redisplay_generation: u64,
+    /// Body-only invalidation; see [`BodyRedisplayRevision`]. Unlike
+    /// `redisplay_generation` this is NOT aligned away by scroll-surface
+    /// compatibility, so a forced body redisplay also refuses scroll reuse.
+    pub(crate) body_redisplay: BodyRedisplayRevision,
     pub(crate) media_generation: u64,
     pub(crate) function_epoch: u64,
     pub(crate) symbol_property_revision: crate::emacs_core::symbol::SymbolPropertyRevision,
@@ -2840,6 +2899,12 @@ pub struct WindowLayoutAttemptFreshness {
     selection: WindowLayoutSelectionState,
     face_change_count: u64,
     media_generation: u64,
+    /// Body-only invalidation for this window and its displayed buffer; see
+    /// [`BodyRedisplayRevision`]. A `force-window-update` issued while body
+    /// Lisp is running must not let that attempt publish rows produced from
+    /// the pre-invalidation inputs, and unlike `media_generation` it does not
+    /// depend on `image-flush` having actually changed a catalog entry.
+    body_redisplay: BodyRedisplayRevision,
     function_epoch: u64,
 }
 
@@ -7219,6 +7284,17 @@ impl FrameManager {
         self.frames.iter().find_map(|(frame_id, frame)| {
             frame.find_window(window_id)?.is_leaf().then_some(*frame_id)
         })
+    }
+
+    /// Buffer displayed by WINDOW_ID, if it is a live leaf window.
+    ///
+    /// Mirrors reading `XWINDOW (w)->contents`: GNU's `Fforce_window_update`
+    /// uses it to mark the displayed buffer (`prevent_redisplay_optimizations_p`)
+    /// in addition to the window itself.
+    pub fn window_buffer_id(&self, window_id: WindowId) -> Option<BufferId> {
+        self.frames
+            .values()
+            .find_map(|frame| frame.find_window(window_id).and_then(Window::buffer_id))
     }
 
     /// Return true if WINDOW_ID is the minibuffer window of any live frame.

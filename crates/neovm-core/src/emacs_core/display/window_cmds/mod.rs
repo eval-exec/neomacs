@@ -21,11 +21,11 @@ use crate::emacs_core::xdisp::motion::MotionEngine;
 use crate::window::WindowChromeLine;
 use crate::window::body::{WindowBodyAxis, WindowBodyCellSize, WindowBodyUnit};
 use crate::window::{
-    CombinationLimit, CursorTypeSymbol, DeleteResize, FrameDeletion, FrameDeletionSelectionPolicy,
-    FrameDivider, FrameFocusTracking, FrameFullscreen, FrameId, FrameManager, FrameParam,
-    FrameParamKey, FrameVisibility, Rect, SelectedFrameAfterDeletion, SplitDirection,
-    SplitPlacement, Window, WindowBufferDisplayDefaults, WindowFringeDefaults, WindowId,
-    WindowMargins, WindowScrollBarDefaults, is_valid_horizontal_scroll_bar_value,
+    CombinationLimit, CursorTypeSymbol, DeleteResize, ForcedBodyRedisplay, FrameDeletion,
+    FrameDeletionSelectionPolicy, FrameDivider, FrameFocusTracking, FrameFullscreen, FrameId,
+    FrameManager, FrameParam, FrameParamKey, FrameVisibility, Rect, SelectedFrameAfterDeletion,
+    SplitDirection, SplitPlacement, Window, WindowBufferDisplayDefaults, WindowFringeDefaults,
+    WindowId, WindowMargins, WindowScrollBarDefaults, is_valid_horizontal_scroll_bar_value,
     is_valid_vertical_scroll_bar_value, window_first_child_id, window_next_sibling_id,
     window_parent_id, window_prev_sibling_id,
 };
@@ -7782,15 +7782,22 @@ pub(crate) fn builtin_window_resize_apply_total(
 
 /// (force-window-update &optional OBJECT) -> t/nil
 ///
-/// GNU `Fforce_window_update` (`src/window.c:4488`):
+/// GNU `Fforce_window_update` (`src/window.c:4492`):
 ///
-/// - nil OBJECT: mark everything for redisplay, return t.
-/// - a live WINDOW: mark that window, return t.
-/// - a buffer/string: return t iff that buffer is shown in some window.
+/// - nil OBJECT: mark every window (`windows_or_buffers_changed`), return t.
+/// - a live WINDOW: mark that window's body and its displayed buffer, return t.
+/// - a buffer or buffer name: return t iff that live buffer is shown in some
+///   window, marking every window displaying it.
+/// - anything else (a dead window, an undisplayed or dead buffer, a string
+///   naming no buffer, an arbitrary object): return nil without signaling.
 ///
-/// Explicit force requests invalidate the redisplay signature even when the
-/// visible window state is unchanged. A live window also yields t (oracle
-/// test cx409), as GNU does.
+/// Body invalidation travels through [`ForcedBodyRedisplay`] so it is explicit
+/// and typed, and never through the generic redisplay generation: a
+/// presentation-only redisplay request must not relayout body text.
+///
+/// Each successful branch also raises GNU's global `update_mode_lines`
+/// trigger through the existing chrome/menu boundary. This does not widen
+/// the independently scoped body invalidation.
 pub(crate) fn builtin_force_window_update(
     eval: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
@@ -7798,22 +7805,56 @@ pub(crate) fn builtin_force_window_update(
     expect_max_args("force-window-update", &args, 1)?;
     let Some(object) = args.first().filter(|v| !v.is_nil()) else {
         // nil OBJECT: force all windows.
-        eval.invalidate_redisplay();
+        eval.force_body_redisplay(ForcedBodyRedisplay::AllWindows);
+        eval.request_global_mode_line_update();
         return Ok(Value::T);
     };
 
-    // A live window forces just that window and returns t.
-    if let Some(id) = object.as_window_id()
-        && eval.frames.is_live_window_id(WindowId(id))
-    {
-        eval.invalidate_redisplay();
-        return Ok(Value::T);
+    // A live window forces just that window (and its displayed buffer).
+    if let Some(id) = object.as_window_id() {
+        let window = WindowId(id);
+        if eval.frames.is_live_window_id(window) {
+            eval.force_body_redisplay(ForcedBodyRedisplay::Window(window));
+            eval.request_global_mode_line_update();
+            return Ok(Value::T);
+        }
+        // A dead window vector is not an error in GNU; it just does nothing.
+        return Ok(Value::NIL);
     }
 
-    // A buffer (or buffer name) shown in at least one window also returns t in
-    // GNU; otherwise (dead window, unshown buffer, anything else) the value is
-    // nil -- the safe default neomacs already produced for those cases.
-    Ok(Value::NIL)
+    // A buffer vector or buffer name.  Unlike buffer-designator resolution for
+    // editing primitives, an unknown name or a killed buffer must NOT signal.
+    let buffer = match object.kind() {
+        ValueKind::Veclike(VecLikeType::Buffer) => object
+            .as_buffer_id()
+            .filter(|id| eval.buffers.get(*id).is_some()),
+        ValueKind::String => find_buffer_by_name_arg(&eval.buffers, object)?,
+        _ => None,
+    };
+    let Some(buffer) = buffer else {
+        return Ok(Value::NIL);
+    };
+    // GNU's preliminary buffer_window_count includes indirect buffers and
+    // hidden frames. Its actual REDISPLAY_BUFFER_WINDOWS walk then requires
+    // exact contents on a visible frame. window_loop's mini=false excludes
+    // minibuffer windows even while active; explicit window forcing above
+    // still accepts a live minibuffer window.
+    let base_frame = ensure_selected_frame_id(eval);
+    let displayed =
+        frame_ids_for_all_frames_scope(&eval.frames, base_frame, AllFramesScope::VisibleFrames)
+            .into_iter()
+            .filter_map(|id| eval.frames.get(id))
+            .any(|frame| {
+                frame.window_list().into_iter().any(|window| {
+                    frame.find_window(window).and_then(Window::buffer_id) == Some(buffer)
+                })
+            });
+    if !displayed {
+        return Ok(Value::NIL);
+    }
+    eval.force_body_redisplay(ForcedBodyRedisplay::Buffer(buffer));
+    eval.request_global_mode_line_update();
+    Ok(Value::T)
 }
 
 // ===========================================================================

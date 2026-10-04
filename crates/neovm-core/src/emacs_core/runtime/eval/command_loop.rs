@@ -1486,6 +1486,60 @@ impl Context {
         self.last_redisplay_signature = None;
     }
 
+    /// Record an explicit body redisplay request (GNU `Fforce_window_update`,
+    /// `src/window.c:4492`).
+    ///
+    /// Unlike [`Self::invalidate_redisplay`] this only moves the scopes the
+    /// request names, so a chrome/mode-line invalidation cannot relayout body
+    /// text and a targeted force cannot rebuild unrelated windows:
+    ///
+    /// - `AllWindows` — every window (nil OBJECT).
+    /// - `Window(W)` — live window W, and (mirroring GNU's
+    ///   `prevent_redisplay_optimizations_p` on `w->contents`) the buffer it
+    ///   displays, so every other window showing that buffer also rebuilds.
+    /// - `Buffer(B)` — every window displaying B.
+    pub fn force_body_redisplay(&mut self, target: ForcedBodyRedisplay) {
+        match target {
+            ForcedBodyRedisplay::AllWindows => {
+                self.body_redisplay_all = self.body_redisplay_all.wrapping_add(1);
+            }
+            ForcedBodyRedisplay::Window(window) => {
+                let counter = self.body_redisplay_by_window.entry(window).or_insert(0);
+                *counter = counter.wrapping_add(1);
+                if let Some(buffer) = self.frames.window_buffer_id(window) {
+                    self.mark_buffer_body_redisplay(buffer);
+                }
+            }
+            ForcedBodyRedisplay::Buffer(buffer) => self.mark_buffer_body_redisplay(buffer),
+        }
+        self.invalidate_redisplay();
+    }
+
+    fn mark_buffer_body_redisplay(&mut self, buffer: BufferId) {
+        let counter = self.body_redisplay_by_buffer.entry(buffer).or_insert(0);
+        *counter = counter.wrapping_add(1);
+    }
+
+    /// The body-redisplay revision that any retained layout of BUFFER inside
+    /// WINDOW must satisfy; see [`BodyRedisplayRevision`].
+    pub fn body_redisplay_revision(
+        &self,
+        window: WindowId,
+        buffer: BufferId,
+    ) -> BodyRedisplayRevision {
+        BodyRedisplayRevision::new(
+            self.body_redisplay_all,
+            self.body_redisplay_by_window
+                .get(&window)
+                .copied()
+                .unwrap_or(0),
+            self.body_redisplay_by_buffer
+                .get(&buffer)
+                .copied()
+                .unwrap_or(0),
+        )
+    }
+
     /// Cross GNU `update_menu_bar`'s rebuild boundary and schedule redisplay.
     pub(crate) fn request_menu_bar_rebuild(&mut self, reason: MenuBarRebuildReason) {
         tracing::debug!(?reason, "request menu-bar rebuild");

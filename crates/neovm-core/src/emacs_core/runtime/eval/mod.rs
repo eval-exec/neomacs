@@ -52,7 +52,10 @@ use crate::gc_trace::GcTrace;
 use crate::tagged::header::{
     CLOSURE_ARGLIST, SubrDispatchKind, SubrFn, SubrInteractivity, SubrObj,
 };
-use crate::window::{FrameFullscreen, FrameManager, WindowId, WindowLayoutQueryAdapter};
+use crate::window::{
+    BodyRedisplayRevision, ForcedBodyRedisplay, FrameFullscreen, FrameManager, WindowId,
+    WindowLayoutQueryAdapter,
+};
 
 mod callback;
 pub(crate) use callback::{CheckedNativeCallback, native_callback_cache_enabled};
@@ -3416,7 +3419,17 @@ pub struct Context {
     pub input_progress: neomacs_display_protocol::input_progress::InputProgress,
     /// Explicit redisplay invalidation generation, used for state that GNU
     /// marks with update_mode_lines/window redisplay flags.
+    ///
+    /// This counter also moves for presentation-only work (chrome, menu,
+    /// mode-line), so it must NOT be the reason a window relayouts its body
+    /// text; retained bodies key on [`BodyRedisplayRevision`] instead.
     redisplay_generation: u64,
+    /// Body-only redisplay revisions for `(force-window-update)`; see
+    /// [`BodyRedisplayRevision`]. Kept per window and per buffer so a targeted
+    /// force does not rebuild unrelated windows.
+    body_redisplay_all: u64,
+    body_redisplay_by_window: FxHashMap<WindowId, u64>,
+    body_redisplay_by_buffer: FxHashMap<BufferId, u64>,
     /// GNU `update_menu_bar` invalidation boundary.  This is narrower than
     /// `redisplay_generation`; see [`MenuBarRebuildGeneration`].
     menu_bar_rebuild_generation: u64,

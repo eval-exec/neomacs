@@ -11,6 +11,7 @@ fn synthetic_key(window_start: i64, point: i64) -> RetainedWindowKey {
         symbol_property_revision: Default::default(),
         display_table: Default::default(),
         media_generation: 0,
+        body_redisplay: Default::default(),
         buffer_id: 1,
         window_start,
         point,

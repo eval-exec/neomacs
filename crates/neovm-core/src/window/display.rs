@@ -564,6 +564,7 @@ impl crate::emacs_core::eval::Context {
             },
             face_change_count: self.face_change_count,
             media_generation: self.media_generation(),
+            body_redisplay: self.body_redisplay_revision(window_id, live_buffer_id),
             function_epoch: self.obarray.function_epoch(),
         })
     }
@@ -860,6 +861,7 @@ impl crate::emacs_core::eval::Context {
             face_change_count: self.face_change_count,
             display_var_change_count: self.display_var_change_count,
             redisplay_generation: self.redisplay_generation(),
+            body_redisplay: self.body_redisplay_revision(window_id, buffer_id),
             media_generation: self.media_generation(),
             function_epoch: self.obarray().function_epoch(),
             symbol_property_revision: crate::emacs_core::symbol::SymbolPropertyRevision::current(),

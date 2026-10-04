@@ -170,6 +170,18 @@ pub struct RetainedWindowKey {
     /// window kept reusing the matrix that captured the image's 1x1 `Pending`
     /// placeholder and every async-decoded buffer image stayed one pixel.
     pub media_generation: u64,
+    /// Explicit body-redisplay revision for this window and its buffer
+    /// (`force-window-update`, see `neovm_core::window::BodyRedisplayRevision`).
+    ///
+    /// A Lisp caller can mutate an image/display spec in place and then ask for
+    /// a forced redisplay; no buffer tick, face counter, or media generation
+    /// moves (GNU's `image-flush` of a freshly mutated spec need not invalidate
+    /// the catalog entry for the *old* source), so without this term the
+    /// retained key matched and the stale body rows were reused. Kept separate
+    /// from `media_generation` (async decode) and from the generic
+    /// `redisplay_generation` (which also moves for chrome/menu-only work and
+    /// must not relayout text).
+    pub body_redisplay: neovm_core::window::BodyRedisplayRevision,
     pub buffer_id: u64,
     pub window_start: i64,
     pub point: i64,
@@ -294,6 +306,10 @@ impl RetainedWindowKey {
         Self {
             fontset_generation: neovm_core::emacs_core::fontset::fontset_generation(),
             media_generation: evaluator.media_generation(),
+            body_redisplay: evaluator.body_redisplay_revision(
+                neovm_core::window::WindowId(p.window_id as u64),
+                neovm_core::buffer::BufferId(p.buffer_id),
+            ),
             char_table_revision: neovm_core::window::CharTableLayoutRevision::current(),
             symbol_property_revision:
                 neovm_core::emacs_core::symbol::SymbolPropertyRevision::current(),
