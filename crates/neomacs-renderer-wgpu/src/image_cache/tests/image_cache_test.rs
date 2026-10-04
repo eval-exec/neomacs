@@ -2668,3 +2668,46 @@ fn test_load_identity() -> neomacs_display_protocol::image_diagnostic::ImageLoad
         ImageDiagnosticSubject::File(String::new()),
     )
 }
+
+/// REGRESSION (PR #474 review): sequence identity follows the resolve
+/// source, not the animation policy, so an entry an earlier `:animation`
+/// load warmed would serve animated pixels to a later policy-off request
+/// on a cache hit — an order-dependent break of the GNU-compatible
+/// default. The decode gate must consult the policy before the cache.
+#[test]
+fn disabled_animation_policy_never_serves_a_warmed_computed_sequence() {
+    // Base `r="0"` draws nothing; the t=0 sample (r=4) draws the circle,
+    // so animated-vs-static is directly observable in the pixels.
+    let animated = br##"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="0" fill="#ffffff"><animate attributeName="r" values="4;1" dur="1s" repeatCount="indefinite"/></circle></svg>"##;
+    let decode = |cache: &ImageSequenceCache, policy| {
+        ImageCache::decode_data(
+            EncodedBytes::copy_of(animated),
+            ImageSizeSpec::default(),
+            ImageRotation::None,
+            ImageColorContext::default(),
+            ImageRealization::default(),
+            ImageMaskPolicy::Preserve,
+            policy,
+            ImageFrameIndex::default(),
+            crate::svg::SvgResourceContext::Isolated,
+            cache,
+            ImageSequenceId::new(914).expect("non-zero test sequence"),
+            None,
+        )
+        .expect("decode animated SVG")
+    };
+
+    // Warm the sequence with an enabled request, then ask for the same
+    // source under the disabled policy: it must get the static base, not
+    // the warmed t=0 slot — and exactly what a cold cache would produce.
+    let warmed = decode(
+        &ImageSequenceCache::new(),
+        ImageAnimationPolicy::enabled(Some(4)),
+    );
+    let shared = ImageSequenceCache::new();
+    let _ = decode(&shared, ImageAnimationPolicy::enabled(Some(4)));
+    let disabled_after = decode(&shared, ImageAnimationPolicy::disabled());
+    let cold_disabled = decode(&ImageSequenceCache::new(), ImageAnimationPolicy::disabled());
+    assert_ne!(warmed.rgba, disabled_after.rgba);
+    assert_eq!(cold_disabled.rgba, disabled_after.rgba);
+}

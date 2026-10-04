@@ -219,7 +219,7 @@ fn transforms_serialize_with_their_function() {
 }
 
 #[test]
-fn key_timesreshape_segments() {
+fn key_times_reshape_segments() {
     let source = r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
   <circle r="1"><animate attributeName="r" values="0;10;20" keyTimes="0;0.25;1" dur="4s" repeatCount="indefinite"/></circle>
 </svg>"##;

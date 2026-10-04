@@ -1145,10 +1145,16 @@ impl ImageCache {
         }
         // Computed animation: an SVG document under an enabled policy
         // materializes its frames on the sample grid, and `frame` selects
-        // the slot exactly as `:index` selects a GIF frame. The disabled
-        // policy is the GNU-compatible static path and never reaches the
-        // sampler.
-        if crate::svg_animation::may_contain_animation(&data)
+        // the slot exactly as `:index` selects a GIF frame.
+        //
+        // The policy gate is load-bearing, not an optimization: sequence
+        // identity follows the resolve source, not the policy, so an entry
+        // a previous `:animation` load warmed serves *animated* pixels on a
+        // cache hit. A disabled request must take the static path below
+        // unconditionally — cold or warm — or the GNU-compatible default
+        // would depend on load order.
+        if animation.is_enabled()
+            && crate::svg_animation::may_contain_animation(&data)
             && let Some(pixels) = Self::decode_computed_sequence_data(
                 data.clone(),
                 frame,

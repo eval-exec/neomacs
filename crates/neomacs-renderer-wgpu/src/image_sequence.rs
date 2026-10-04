@@ -109,9 +109,25 @@ impl ImageSequenceResolution {
     }
 }
 
+/// Which decode path produced an entry.
+///
+/// Sequence identity follows the resolve source, but the two producers
+/// answer to different gates: an authored raster sequence (GIF, WebP,
+/// APNG) is always live, while a computed SVG sequence exists only under
+/// an enabled `:animation` policy. One id can therefore name either kind
+/// across the lifetime of a source, and a hit is only a hit for the path
+/// asking for its own kind — the raster resolve must never serve frames
+/// a policy-off request never asked to materialize.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SequenceKind {
+    AuthoredRaster,
+    ComputedSvg,
+}
+
 enum SequenceCacheEntry {
     Animated {
         sequence: Arc<DecodedImageSequence>,
+        kind: SequenceKind,
         last_access: u64,
     },
 }
@@ -126,6 +142,12 @@ impl SequenceCacheEntry {
     fn memory_size(&self) -> usize {
         match self {
             Self::Animated { sequence, .. } => sequence.memory_size,
+        }
+    }
+
+    fn kind(&self) -> SequenceKind {
+        match self {
+            Self::Animated { kind, .. } => *kind,
         }
     }
 
@@ -169,6 +191,34 @@ impl ImageSequenceCacheState {
         self.retired_through
             .is_some_and(|retired_through| sequence <= retired_through)
             || self.individually_retired.contains(&sequence)
+    }
+
+    /// The resident entry for `sequence` when it was produced by `kind`.
+    ///
+    /// An entry of the other kind is not a hit: the caller proceeds down
+    /// its own miss path, and publication below replaces the mismatched
+    /// entry rather than being fenced out by first-wins.
+    fn entry_of_kind(
+        &mut self,
+        sequence: ImageSequenceId,
+        kind: SequenceKind,
+    ) -> Option<&mut SequenceCacheEntry> {
+        let stamp = self.next_access();
+        let hit = self
+            .entries
+            .get_mut(&sequence)
+            .filter(|entry| entry.kind() == kind);
+        match hit {
+            Some(entry) => {
+                self.hits = self.hits.saturating_add(1);
+                entry.touch(stamp);
+                Some(entry)
+            }
+            None => {
+                self.misses = self.misses.saturating_add(1);
+                None
+            }
+        }
     }
 
     fn remove(&mut self, sequence: ImageSequenceId) {
@@ -226,17 +276,9 @@ impl ImageSequenceCache {
     ) -> ImageSequenceResolution {
         {
             let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-            let stamp = state.next_access();
-            if state.entries.contains_key(&sequence) {
-                state.hits = state.hits.saturating_add(1);
-                let entry = state
-                    .entries
-                    .get_mut(&sequence)
-                    .expect("entry was observed above");
-                entry.touch(stamp);
+            if let Some(entry) = state.entry_of_kind(sequence, SequenceKind::AuthoredRaster) {
                 return entry.resolve(frame);
             }
-            state.misses = state.misses.saturating_add(1);
             state.begin_decode(sequence);
         }
 
@@ -252,7 +294,7 @@ impl ImageSequenceCache {
             .frame(frame)
             .map(ImageSequenceResolution::Frame)
             .unwrap_or(ImageSequenceResolution::MissingFrame);
-        self.publish_decoded(sequence, decoded);
+        self.publish_decoded(sequence, decoded, SequenceKind::AuthoredRaster);
         result
     }
 
@@ -278,17 +320,9 @@ impl ImageSequenceCache {
     ) -> ImageSequenceResolution {
         {
             let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-            let stamp = state.next_access();
-            if state.entries.contains_key(&sequence) {
-                state.hits = state.hits.saturating_add(1);
-                let entry = state
-                    .entries
-                    .get_mut(&sequence)
-                    .expect("entry was observed above");
-                entry.touch(stamp);
+            if let Some(entry) = state.entry_of_kind(sequence, SequenceKind::ComputedSvg) {
                 return entry.resolve(frame);
             }
-            state.misses = state.misses.saturating_add(1);
             state.begin_decode(sequence);
         }
 
@@ -312,7 +346,7 @@ impl ImageSequenceCache {
             .frame(frame)
             .map(ImageSequenceResolution::Frame)
             .unwrap_or(ImageSequenceResolution::MissingFrame);
-        self.publish_decoded(sequence, decoded);
+        self.publish_decoded(sequence, decoded, SequenceKind::ComputedSvg);
         result
     }
 
@@ -321,12 +355,30 @@ impl ImageSequenceCache {
         state.finish_decode(sequence);
     }
 
-    fn publish_decoded(&self, sequence: ImageSequenceId, decoded: Arc<DecodedImageSequence>) {
+    fn publish_decoded(
+        &self,
+        sequence: ImageSequenceId,
+        decoded: Arc<DecodedImageSequence>,
+        kind: SequenceKind,
+    ) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        if state.is_retired(sequence) || state.entries.contains_key(&sequence) {
+        if state.is_retired(sequence) {
             state.finish_decode(sequence);
             return;
         }
+        if state
+            .entries
+            .get(&sequence)
+            .is_some_and(|entry| entry.kind() == kind)
+        {
+            // First publication of a kind wins: a concurrent duplicate
+            // decode of the same source coalesces into the resident entry.
+            state.finish_decode(sequence);
+            return;
+        }
+        // An entry of the other kind is stale for the asking path — the
+        // source changed which decode owns it — so it is replaced.
+        state.remove(sequence);
         let memory_size = decoded.memory_size;
         if memory_size > self.max_bytes {
             state.finish_decode(sequence);
@@ -350,6 +402,7 @@ impl ImageSequenceCache {
             sequence,
             SequenceCacheEntry::Animated {
                 sequence: decoded,
+                kind,
                 last_access: stamp,
             },
         );
