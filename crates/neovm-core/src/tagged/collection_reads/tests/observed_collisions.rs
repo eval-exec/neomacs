@@ -193,3 +193,53 @@ fn observed_mode_change_inside_capture_still_publishes_unmarked_owner() {
     owner.set_car(TaggedValue::make_int(122));
     assert!(!certificate.unchanged());
 }
+
+#[test]
+fn observed_certificate_replay_records_colliding_live_dependencies_once() {
+    crate::test_utils::init_test_tracing();
+    let _mode = ObservedMode::begin();
+    let mut heap = Box::new(TaggedHeap::new());
+    set_tagged_heap(&mut heap);
+    let owners: Vec<_> = (0..OWNER_COUNT)
+        .map(|_| OwnerKind::Cons.allocate(&mut heap))
+        .collect();
+    let (_, original) = capture(|| {
+        for &owner in &owners {
+            assert_eq!(owner.cons_car(), TaggedValue::make_int(97));
+        }
+    });
+    let original = original.expect("all original live reads are coherent");
+
+    // Layout and scroll captures replay an earlier cache certificate before
+    // reading its live dependencies again. More owners than RECENT slots
+    // makes real repeated traversals miss that shortcut without any mutation.
+    let (sum, replayed) = capture(|| {
+        OBSERVED_OWNER_PUBLICATIONS.with(|count| count.set(0));
+        OBSERVATION_STATE_ACCESSES.with(|count| count.set(0));
+        assert!(original.unchanged_and_observe());
+        assert_eq!(OBSERVATION_STATE_ACCESSES.with(Cell::get), OWNER_COUNT);
+        assert_eq!(OBSERVED_OWNER_PUBLICATIONS.with(Cell::get), 0);
+        let mut sum = 0_i64;
+        for _ in 0..TRAVERSALS {
+            for &owner in &owners {
+                sum += owner.cons_car().as_int().expect("live Cons value");
+            }
+        }
+        assert_eq!(OBSERVED_OWNER_PUBLICATIONS.with(Cell::get), 0);
+        assert_eq!(
+            OBSERVATION_STATE_ACCESSES.with(Cell::get),
+            OWNER_COUNT,
+            "a valid replay must retain its one dependency record across colliding real reads",
+        );
+        sum
+    });
+    assert_eq!(sum, (OWNER_COUNT * TRAVERSALS * 97) as i64);
+    let replayed = replayed.expect("replayed and real reads remain coherent");
+    assert!(original.unchanged());
+    assert!(replayed.unchanged());
+    let changed = owners[OWNER_COUNT / 2];
+    changed.set_car(TaggedValue::make_int(122));
+    assert_eq!(changed.cons_car(), TaggedValue::make_int(122));
+    assert!(!original.unchanged());
+    assert!(!replayed.unchanged());
+}

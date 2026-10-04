@@ -194,10 +194,10 @@ struct Capture {
     reads: FxHashMap<usize, LispCollectionRevision>,
     started: LispCollectionRevision,
     overflow: bool,
-    // Every entry originated in a real Observed-mode projection under this
-    // epoch, which completed its eligible mark before recording the read.
-    // Transitive replay, another epoch or a non-Observed read clears this
-    // scalar proof. It caches no identity beyond the existing dependency map.
+    // Each entry has a completed Observed-mode projection or a validated
+    // current-epoch local publication during transitive replay. Unknown replay,
+    // another epoch or a non-Observed read clears this scalar proof. It caches
+    // no identity beyond the existing dependency map.
     publication_epoch: Option<u64>,
 }
 
@@ -474,13 +474,22 @@ fn observe_uncached(bits: usize) {
         // A transitive cache hit must never dereference its old owner words.
         // Safe metadata filtering still refreshes its mutator's live bounds.
         refresh_observed_envelope(&mut state);
-        if recent_publication_epoch().is_some() && !state.observed.already_published(bits) {
+        let recent_epoch = recent_publication_epoch();
+        let publication_epoch = recent_epoch.filter(|&epoch| {
+            state.observed.was_refreshed_at(epoch) && state.observed.already_published(bits)
+        });
+        if recent_epoch.is_some() && publication_epoch.is_none() {
             // Off-mode certificates may contain an identity which was never
             // marked. Replay must not make its next real projection a RECENT
             // hit: that read alone can safely publish the live owner.
             RECENT_READS.with(|recent| recent.forget(bits));
         }
-        record_observation(&mut state, bits, LispCollectionRevision::current(), None);
+        record_observation(
+            &mut state,
+            bits,
+            LispCollectionRevision::current(),
+            publication_epoch,
+        );
     });
 }
 
