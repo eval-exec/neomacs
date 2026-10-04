@@ -527,3 +527,7 @@ mod gen0_observed_collection_revision;
 #[cfg(test)]
 #[path = "string_observed_capacity.rs"]
 mod string_observed_capacity;
+
+#[cfg(test)]
+#[path = "gen0_observed_multi_unbind.rs"]
+mod gen0_observed_multi_unbind;
