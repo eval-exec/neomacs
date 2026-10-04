@@ -116,6 +116,7 @@ pub(super) fn test_defaults() -> Option<Defaults> {
 /// on this compiler thread; it neither reads nor retains any Lisp state.
 #[cfg(test)]
 pub(super) fn scope_for_test(profile: Profile) -> impl Drop {
+    /// Threading: scalar override owned and restored on this test's compiler thread.
     struct Scope(Option<Profile>);
     impl Drop for Scope {
         fn drop(&mut self) {

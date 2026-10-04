@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use super::CompileStats;
 use crate::emacs_core::jit::bg;
 
+/// Threading: immutable compiler-route tag; no Lisp or mutator identity.
 #[derive(Clone, Copy)]
 enum Route {
     Normal,
@@ -36,6 +37,7 @@ impl Route {
     }
 }
 
+/// Threading: immutable scalar outcome, published through process atomics.
 #[derive(Clone, Copy)]
 enum Outcome {
     Refused,
@@ -43,6 +45,9 @@ enum Outcome {
     Deferred,
 }
 
+/// Per-route process counters. Threading: concurrent compilers update only
+/// SeqCst atomics; outcomes publish before the active reservation is released.
+/// Component loads are checked for conservation when sealing.
 struct RouteCounters {
     attempts: AtomicU64,
     refused: AtomicU64,
@@ -133,6 +138,9 @@ impl Counters {
     }
 }
 
+/// Owned scalar counter sample. Threading: component loads need not form an
+/// atomic snapshot; active/conservation checks and seal invalidation govern
+/// completeness. It retains no Lisp or mutator state.
 #[derive(Clone, Copy, Debug, Default)]
 struct RouteSnapshot {
     attempts: u64,
@@ -155,6 +163,8 @@ impl RouteSnapshot {
     }
 }
 
+/// Owned exit sample. Threading: completeness assumes stopped mutators and a
+/// synchronous backend; overlapping or later construction invalidates evidence.
 struct Snapshot {
     routes: [RouteSnapshot; 2],
     late: u64,

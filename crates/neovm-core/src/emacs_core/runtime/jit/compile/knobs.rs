@@ -1739,6 +1739,7 @@ pub(crate) fn force_opt_for_test(mode: Option<OptMode>, admit: Option<OptAdmit>)
 /// scopes restore the exact previous override, including its absence.
 #[cfg(test)]
 pub(crate) fn opt_mode_scope_for_test(mode: OptMode) -> impl Drop {
+    /// Threading: scalar override owned and restored on this test's compiler thread.
     struct Scope(Option<OptMode>);
     impl Drop for Scope {
         fn drop(&mut self) {

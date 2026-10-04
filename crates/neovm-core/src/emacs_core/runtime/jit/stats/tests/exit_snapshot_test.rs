@@ -243,6 +243,7 @@ fn jit_exit_snapshot_parallel_scalar_constructors_publish_complete_totals() {
 
 #[test]
 fn jit_exit_snapshot_io_failure_is_explicit_and_records_are_append_only() {
+    /// Threading: invocation-owned failing writer; no shared or Lisp state.
     struct Reject;
     impl Write for Reject {
         fn write(&mut self, _: &[u8]) -> io::Result<usize> {
