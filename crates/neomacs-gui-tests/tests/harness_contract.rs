@@ -297,6 +297,24 @@ fn x11_session_owns_authenticated_tcp_display_below_artifact_root() {
     assert!(display.starts_with("127.0.0.1:"), "DISPLAY was {display}");
     assert!(authority.starts_with(&root));
     assert!(authority.is_file());
+    for name in ["WAYLAND_DISPLAY", "WAYLAND_SOCKET"] {
+        assert_eq!(
+            session
+                .env()
+                .iter()
+                .find_map(|(key, value)| (key == name).then_some(value.as_str())),
+            Some(""),
+            "Xvfb clients must not inherit the user's Wayland connection"
+        );
+    }
+    assert_eq!(
+        session
+            .env()
+            .iter()
+            .find_map(|(key, value)| (key == "GDK_BACKEND").then_some(value.as_str())),
+        Some("x11"),
+        "GTK clients must use the owned X11 display"
+    );
     let owned_session_root = authority
         .parent()
         .expect("Xauthority is below an owned session root")

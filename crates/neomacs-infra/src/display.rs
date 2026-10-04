@@ -547,6 +547,12 @@ fn start_xvfb_on(
         return Ok(pending.into_session(vec![
             ("DISPLAY".to_string(), display),
             ("XAUTHORITY".to_string(), path_to_string(&authority_path)),
+            // Winit 0.31 chooses Wayland before X11 and no longer reads
+            // WINIT_UNIX_BACKEND. An inherited desktop socket must never
+            // route private Xvfb tests onto the user's display.
+            ("WAYLAND_DISPLAY".to_string(), String::new()),
+            ("WAYLAND_SOCKET".to_string(), String::new()),
+            ("GDK_BACKEND".to_string(), "x11".to_string()),
             locale_pin(),
         ]));
     }

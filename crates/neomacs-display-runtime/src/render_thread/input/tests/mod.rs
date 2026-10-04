@@ -2009,7 +2009,7 @@ fn translate_key_f1_through_f12() {
     ];
     for (named, keysym) in expected {
         assert_eq!(
-            RenderApp::translate_key(&Key::Named(named)),
+            RenderApp::translate_keysym(&Key::Named(named)),
             keysym,
             "F-key mismatch for {:?}",
             named
@@ -2037,7 +2037,7 @@ fn translate_key_navigation_keys() {
     ];
     for (named, keysym) in cases {
         assert_eq!(
-            RenderApp::translate_key(&Key::Named(named)),
+            RenderApp::translate_keysym(&Key::Named(named)),
             keysym,
             "Navigation key mismatch for {:?}",
             named
@@ -2052,19 +2052,19 @@ fn translate_key_navigation_keys() {
 #[test]
 fn translate_key_arrow_keys() {
     assert_eq!(
-        RenderApp::translate_key(&Key::Named(NamedKey::ArrowLeft)),
+        RenderApp::translate_keysym(&Key::Named(NamedKey::ArrowLeft)),
         0xff51
     );
     assert_eq!(
-        RenderApp::translate_key(&Key::Named(NamedKey::ArrowUp)),
+        RenderApp::translate_keysym(&Key::Named(NamedKey::ArrowUp)),
         0xff52
     );
     assert_eq!(
-        RenderApp::translate_key(&Key::Named(NamedKey::ArrowRight)),
+        RenderApp::translate_keysym(&Key::Named(NamedKey::ArrowRight)),
         0xff53
     );
     assert_eq!(
-        RenderApp::translate_key(&Key::Named(NamedKey::ArrowDown)),
+        RenderApp::translate_keysym(&Key::Named(NamedKey::ArrowDown)),
         0xff54
     );
 }
@@ -2075,7 +2075,10 @@ fn translate_key_arrow_keys() {
 
 #[test]
 fn translate_key_space() {
-    assert_eq!(RenderApp::translate_key(&Key::Character(" ".into())), 0x20);
+    assert_eq!(
+        RenderApp::translate_key_input(&Key::Character(" ".into())),
+        Some(FrontendKey::Character(' '))
+    );
 }
 
 // ===================================================================
@@ -2085,15 +2088,15 @@ fn translate_key_space() {
 #[test]
 fn translate_key_other_named() {
     assert_eq!(
-        RenderApp::translate_key(&Key::Named(NamedKey::PrintScreen)),
+        RenderApp::translate_keysym(&Key::Named(NamedKey::PrintScreen)),
         0xff61
     );
     assert_eq!(
-        RenderApp::translate_key(&Key::Named(NamedKey::ScrollLock)),
+        RenderApp::translate_keysym(&Key::Named(NamedKey::ScrollLock)),
         0xff14
     );
     assert_eq!(
-        RenderApp::translate_key(&Key::Named(NamedKey::Pause)),
+        RenderApp::translate_keysym(&Key::Named(NamedKey::Pause)),
         0xff13
     );
 }
@@ -2114,7 +2117,7 @@ fn translate_key_modifier_keys_suppressed() {
     ];
     for named in modifiers {
         assert_eq!(
-            RenderApp::translate_key(&Key::Named(named)),
+            RenderApp::translate_keysym(&Key::Named(named)),
             0,
             "Modifier {:?} should be suppressed (return 0)",
             named
@@ -2131,8 +2134,8 @@ fn translate_key_ascii_characters() {
     for ch in 'a'..='z' {
         let key = Key::Character(SmolStr::new(ch.to_string()));
         assert_eq!(
-            RenderApp::translate_key(&key),
-            ch as u32,
+            RenderApp::translate_key_input(&key),
+            Some(FrontendKey::Character(ch)),
             "Character key mismatch for '{}'",
             ch
         );
@@ -2144,8 +2147,8 @@ fn translate_key_digit_characters() {
     for ch in '0'..='9' {
         let key = Key::Character(SmolStr::new(ch.to_string()));
         assert_eq!(
-            RenderApp::translate_key(&key),
-            ch as u32,
+            RenderApp::translate_key_input(&key),
+            Some(FrontendKey::Character(ch)),
             "Digit key mismatch for '{}'",
             ch
         );
@@ -2154,23 +2157,11 @@ fn translate_key_digit_characters() {
 
 #[test]
 fn translate_key_special_characters() {
-    let specials = vec![
-        ('!', 0x21),
-        ('@', 0x40),
-        ('#', 0x23),
-        ('/', 0x2f),
-        ('-', 0x2d),
-        ('=', 0x3d),
-        ('[', 0x5b),
-        (']', 0x5d),
-        (';', 0x3b),
-        ('\'', 0x27),
-    ];
-    for (ch, code) in specials {
+    for ch in ['!', '@', '#', '/', '-', '=', '[', ']', ';', '\''] {
         let key = Key::Character(SmolStr::new(ch.to_string()));
         assert_eq!(
-            RenderApp::translate_key(&key),
-            code,
+            RenderApp::translate_key_input(&key),
+            Some(FrontendKey::Character(ch)),
             "Special char mismatch for '{}'",
             ch
         );
@@ -2179,18 +2170,24 @@ fn translate_key_special_characters() {
 
 #[test]
 fn translate_key_unicode_character() {
-    // Multi-byte Unicode characters should return the Unicode code point
+    // The toolkit's Unicode scalar must retain character identity.
     let key = Key::Character(SmolStr::new("\u{00e9}")); // e-acute
-    assert_eq!(RenderApp::translate_key(&key), 0xe9);
+    assert_eq!(
+        RenderApp::translate_key_input(&key),
+        Some(FrontendKey::Character('é'))
+    );
 
     let key = Key::Character(SmolStr::new("\u{4e2d}")); // CJK character
-    assert_eq!(RenderApp::translate_key(&key), 0x4e2d);
+    assert_eq!(
+        RenderApp::translate_key_input(&key),
+        Some(FrontendKey::Character('中'))
+    );
 }
 
 #[test]
 fn translate_key_empty_character_string() {
     let key = Key::Character(SmolStr::new(""));
-    assert_eq!(RenderApp::translate_key(&key), 0);
+    assert_eq!(RenderApp::translate_key_input(&key), None);
 }
 
 // ===================================================================
@@ -2200,20 +2197,45 @@ fn translate_key_empty_character_string() {
 #[test]
 fn translate_key_dead_returns_zero() {
     let key = Key::Dead(None);
-    assert_eq!(RenderApp::translate_key(&key), 0);
+    assert_eq!(RenderApp::translate_keysym(&key), 0);
 }
 
 #[test]
 fn translate_key_unidentified_returns_zero() {
     let key = Key::Unidentified(winit::keyboard::NativeKey::Unidentified);
-    assert_eq!(RenderApp::translate_key(&key), 0);
+    assert_eq!(RenderApp::translate_keysym(&key), 0);
+}
+
+#[test]
+fn fullwidth_committed_text_reaches_core_as_a_character() {
+    let transported = RenderApp::translate_committed_text("，", 0).unwrap();
+    let event =
+        neovm_core::keyboard::render_key_transport_to_input_event(transported[0], 0, true, 42)
+            .unwrap();
+    assert!(
+        matches!(event, neovm_core::keyboard::InputEvent::KeyPress { key, emacs_frame_id: 42 } if key.key == neovm_core::keyboard::Key::Char('，'))
+    );
+}
+
+#[test]
+fn fullwidth_logical_keys_reach_core_as_characters() {
+    for character in "，（）；－ｦￊ".chars() {
+        let toolkit_key = Key::Character(character.to_string().into());
+        let key = RenderApp::translate_key_input(&toolkit_key).unwrap();
+        let event =
+            neovm_core::keyboard::render_key_transport_to_input_event(key, 0, true, 42).unwrap();
+        assert!(
+            matches!(event, neovm_core::keyboard::InputEvent::KeyPress { key, emacs_frame_id: 42 }
+            if key.key == neovm_core::keyboard::Key::Char(character))
+        );
+    }
 }
 
 #[test]
 fn translate_committed_text_prefers_uppercase_ascii_without_command_modifiers() {
     assert_eq!(
         RenderApp::translate_committed_text("A", 0),
-        Some(vec!['A' as u32])
+        Some(vec![FrontendKey::Character('A')])
     );
 }
 
@@ -2221,7 +2243,7 @@ fn translate_committed_text_prefers_uppercase_ascii_without_command_modifiers() 
 fn translate_committed_text_prefers_shifted_punctuation_without_command_modifiers() {
     assert_eq!(
         RenderApp::translate_committed_text("!", 0),
-        Some(vec!['!' as u32])
+        Some(vec![FrontendKey::Character('!')])
     );
 }
 
@@ -2859,7 +2881,7 @@ fn translate_key_f13_through_f35() {
     ];
     for (named, keysym) in expected {
         assert_eq!(
-            RenderApp::translate_key(&Key::Named(named)),
+            RenderApp::translate_keysym(&Key::Named(named)),
             keysym,
             "{named:?}"
         );
@@ -2879,7 +2901,7 @@ fn translate_key_misc_function_band() {
     ];
     for (named, keysym) in expected {
         assert_eq!(
-            RenderApp::translate_key(&Key::Named(named)),
+            RenderApp::translate_keysym(&Key::Named(named)),
             keysym,
             "{named:?}"
         );
@@ -2899,7 +2921,7 @@ fn translate_key_xf86_band() {
     ];
     for (named, keysym) in expected {
         assert_eq!(
-            RenderApp::translate_key(&Key::Named(named)),
+            RenderApp::translate_keysym(&Key::Named(named)),
             keysym,
             "{named:?}"
         );
@@ -2912,20 +2934,20 @@ fn translate_key_xf86_band() {
 #[test]
 fn translate_key_keeps_unmapped_native_keys() {
     assert_eq!(
-        RenderApp::translate_key(&Key::Unidentified(NativeKey::Xkb(0x1008ff50))),
+        RenderApp::translate_keysym(&Key::Unidentified(NativeKey::Xkb(0x1008ff50))),
         0x1008ff50,
         "the raw keysym is the identity"
     );
     assert_eq!(
-        RenderApp::translate_key(&Key::Unidentified(NativeKey::MacOS(0x24))),
+        RenderApp::translate_keysym(&Key::Unidentified(NativeKey::MacOS(0x24))),
         neovm_core::keyboard::native_key_macos(0x24),
     );
     assert_eq!(
-        RenderApp::translate_key(&Key::Unidentified(NativeKey::Windows(0x5d))),
+        RenderApp::translate_keysym(&Key::Unidentified(NativeKey::Windows(0x5d))),
         neovm_core::keyboard::native_key_windows(0x5d),
     );
     assert_eq!(
-        RenderApp::translate_key(&Key::Unidentified(NativeKey::Android(4))),
+        RenderApp::translate_keysym(&Key::Unidentified(NativeKey::Android(4))),
         neovm_core::keyboard::native_key_android(4),
     );
 }
@@ -2946,7 +2968,7 @@ fn translate_key_suppresses_modifiers() {
         NamedKey::Hyper,
     ] {
         assert_eq!(
-            RenderApp::translate_key(&Key::Named(modifier)),
+            RenderApp::translate_keysym(&Key::Named(modifier)),
             0,
             "{modifier:?}"
         );
@@ -3044,7 +3066,7 @@ fn translate_key_names_the_media_launch_and_ime_families() {
         (NamedKey::ZoomOut, 0x1008ff8c),             // XF86ZoomOut
     ] {
         assert_eq!(
-            RenderApp::translate_key(&Key::Named(key)),
+            RenderApp::translate_keysym(&Key::Named(key)),
             expected,
             "{key:?}"
         );

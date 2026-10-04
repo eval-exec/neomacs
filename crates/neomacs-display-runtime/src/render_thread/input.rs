@@ -3,6 +3,7 @@
 use crate::backend::wgpu::{
     NEOMACS_ALT_MASK, NEOMACS_CTRL_MASK, NEOMACS_HYPER_MASK, NEOMACS_META_MASK, NEOMACS_SUPER_MASK,
 };
+use neovm_core::keyboard::FrontendKey;
 use winit::keyboard::{Key, NamedKey, NativeKey};
 
 use super::RenderApp;
@@ -42,15 +43,27 @@ pub(super) struct MenuBarHit {
 }
 
 impl RenderApp {
-    /// Translate winit key to X11 keysym.
+    /// Preserve the toolkit's distinction between text and key identities.
+    pub(super) fn translate_key_input(key: &Key) -> Option<FrontendKey> {
+        match key {
+            Key::Character(text) => text.chars().next().map(FrontendKey::Character),
+            _ => {
+                let keysym = Self::translate_keysym(key);
+                (keysym != 0).then_some(FrontendKey::Keysym(keysym))
+            }
+        }
+    }
+
+    /// Translate named and unidentified toolkit keys to X11/native keysyms.
     ///
-    /// Every key gets an identity here, the way GNU's backends hand
+    /// Text is handled by `translate_key_input`; dead keys are compose state.
+    /// Named keys get an identity here, the way GNU's backends hand
     /// `keyboard.c` whatever the toolkit reported and let `modify_event_symbol`
     /// name it.  Only a modifier is not a keystroke at all — those arrive
     /// through `ModifiersChanged` — and a key this table does not spell yet is
     /// logged rather than dropped in silence, so the gap is visible instead of
     /// looking like "unsupported".
-    pub(super) fn translate_key(key: &Key) -> u32 {
+    pub(super) fn translate_keysym(key: &Key) -> u32 {
         match key {
             Key::Named(named) => match named {
                 // Function keys.  The X11 block is contiguous from XK_F1
@@ -248,7 +261,8 @@ impl RenderApp {
                     0
                 }
             },
-            Key::Character(c) => c.chars().next().map(|ch| ch as u32).unwrap_or(0),
+            // Text is handled by translate_key_input, never interpreted as a keysym.
+            Key::Character(_) => 0,
             // A key winit could not name at all.  X11 and Wayland hand over
             // the raw keysym, which is already this port's identity; the
             // platforms whose native key is a scancode or a virtual-key code
@@ -284,7 +298,7 @@ impl RenderApp {
     /// includes the policy-cooked `A-' and `H-' bits — GNU cooks
     /// `parse_solitary_modifier("alt")` to a distinct modifier bit
     /// (`src/keyboard.c:7941`).
-    pub(super) fn translate_committed_text(text: &str, modifiers: u32) -> Option<Vec<u32>> {
+    pub(super) fn translate_committed_text(text: &str, modifiers: u32) -> Option<Vec<FrontendKey>> {
         let command_modifiers_active = modifiers
             & (NEOMACS_CTRL_MASK
                 | NEOMACS_META_MASK
@@ -296,18 +310,13 @@ impl RenderApp {
             return None;
         }
 
-        let keysyms: Vec<u32> = text
+        let keys: Vec<FrontendKey> = text
             .chars()
             .filter(|ch| !ch.is_control())
-            .map(|ch| ch as u32)
-            .filter(|keysym| *keysym != 0)
+            .map(FrontendKey::Character)
             .collect();
 
-        if keysyms.is_empty() {
-            None
-        } else {
-            Some(keysyms)
-        }
+        if keys.is_empty() { None } else { Some(keys) }
     }
 
     /// Return whether a `KeyboardInput` event should use its committed-text
