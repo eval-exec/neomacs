@@ -179,7 +179,7 @@ Individual image specs override this default through their own
 Packages building SVG image specs can spread this in so the gate
 follows the user's defcustom instead of hard-coding either behavior."
   (if (and neomacs-svg-animation
-           (not (plist-get (cdr spec) :animation)))
+           (not (plist-member (cdr spec) :animation)))
       (append spec (list :animation neomacs-svg-animation))
     spec))
 

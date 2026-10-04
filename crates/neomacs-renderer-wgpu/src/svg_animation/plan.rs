@@ -431,6 +431,11 @@ fn parse_value(raw: &str) -> AnimatedValue {
 fn parse_color(raw: &str) -> Option<[f64; 3]> {
     let raw = raw.trim();
     let hex = raw.strip_prefix('#')?;
+    // Hex digits are ASCII; anything multi-byte is not a color and slicing
+    // it as octets would panic. Reject before slicing.
+    if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
     let octet = |slice: &str| u8::from_str_radix(slice, 16).ok();
     let (r, g, b) = match hex.len() {
         3 => (

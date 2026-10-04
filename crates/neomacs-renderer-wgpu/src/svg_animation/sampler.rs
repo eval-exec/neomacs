@@ -40,11 +40,16 @@ pub(crate) struct SampledFrame {
 /// loop period, or a grid the policy's rate cannot quantize. The caller
 /// falls back to the static single-frame decode — the fallback ladder ends
 /// at GNU's behavior, never at a failed load.
+///
+/// Frames decode at the document's intrinsic extent — not the request's
+/// size, rotation, or realization — exactly like authored raster frames:
+/// the bitmap realization downstream applies those once. Baking them here
+/// would have them applied twice (and make the cache entry specific to a
+/// realization the sequence key does not carry). Face colors *are* baked
+/// (`currentColor`, the background rect), which is why the cache entry
+/// records them and a color change replaces the entry.
 pub(crate) fn sample(
     data: &[u8],
-    size: ImageSizeSpec,
-    rotation: ImageRotation,
-    realization: ImageRealization,
     colors: ImageColorContext,
     resources: &crate::svg::SvgResourceContext,
     policy: ImageAnimationPolicy,
@@ -62,6 +67,7 @@ pub(crate) fn sample(
     let delay = grid.slot_delay()?;
 
     let mut frames: Vec<SampledFrame> = Vec::with_capacity(grid.slot_count() as usize);
+    let mut total_bytes = 0_usize;
     for slot in 0..grid.slot_count() {
         let doc_time = grid.slot_start(slot)?;
         // Slot zero samples document time zero — the SMIL start state, not
@@ -71,9 +77,9 @@ pub(crate) fn sample(
         let patched = patch::apply(&animation, bounded.as_ref(), &overrides)?;
         let decoded = crate::svg::decode(
             &patched,
-            size,
-            rotation,
-            realization,
+            ImageSizeSpec::default(),
+            ImageRotation::None,
+            ImageRealization::default(),
             colors,
             resources.clone(),
         )?;
@@ -85,6 +91,20 @@ pub(crate) fn sample(
             // cannot be a frame sequence; it stays a static image.
             return None;
         }
+        // Admission during sampling, not after: the sequence budget must
+        // never be learned by first materializing the bytes it rejects.
+        // One slot's extent bounds every other slot's (checked above), so
+        // the projection after slot zero is exact.
+        total_bytes = total_bytes.checked_add(decoded.rgba.len())?;
+        let projected = total_bytes.checked_add(
+            decoded
+                .rgba
+                .len()
+                .checked_mul((grid.slot_count() as usize).checked_sub(frames.len() + 1)?)?,
+        )?;
+        if projected > MAX_COMPUTED_SEQUENCE_BYTES {
+            return None;
+        }
         frames.push(SampledFrame {
             width,
             height,
@@ -94,18 +114,21 @@ pub(crate) fn sample(
     (frames.len() > 1).then_some(SampledAnimation { frames, delay })
 }
 
+/// Aggregate ceiling for one computed sequence, matching the sequence
+/// cache's residency budget: a document whose loop would exceed it at the
+/// requested sampling density stays a static image rather than being
+/// materialized and rejected.
+const MAX_COMPUTED_SEQUENCE_BYTES: usize = 64 * 1024 * 1024;
+
 /// Sample and box frames as shared buffers, in the shape the sequence cache
 /// publishes.
 pub(crate) fn sample_shared(
     data: &[u8],
-    size: ImageSizeSpec,
-    rotation: ImageRotation,
-    realization: ImageRealization,
     colors: ImageColorContext,
     resources: &crate::svg::SvgResourceContext,
     policy: ImageAnimationPolicy,
 ) -> Option<Arc<crate::image_sequence::DecodedImageSequence>> {
-    let animation = sample(data, size, rotation, realization, colors, resources, policy)?;
+    let animation = sample(data, colors, resources, policy)?;
     let frames = animation
         .frames
         .into_iter()

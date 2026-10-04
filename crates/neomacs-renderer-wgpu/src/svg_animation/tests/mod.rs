@@ -5,9 +5,7 @@ use super::patch;
 use super::plan;
 use super::sampler;
 use neomacs_display_protocol::animated_visual::AnimatedVisual;
-use neomacs_display_protocol::{
-    ImageAnimationPolicy, ImageColorContext, ImageRealization, ImageRotation, ImageSizeSpec,
-};
+use neomacs_display_protocol::{ImageAnimationPolicy, ImageColorContext};
 use std::time::Duration;
 
 /// A spinner-class document: one parent-targeted rule, numeric values,
@@ -271,9 +269,6 @@ fn sampling_disabled_policy_stays_static() {
     assert!(
         sampler::sample(
             PULSING_CIRCLE.as_bytes(),
-            ImageSizeSpec::default(),
-            ImageRotation::None,
-            ImageRealization::default(),
             ImageColorContext::default(),
             &super::super::svg::SvgResourceContext::Isolated,
             ImageAnimationPolicy::disabled(),
@@ -288,9 +283,6 @@ fn sampling_static_document_has_no_frames() {
     assert!(
         sampler::sample(
             static_document.as_bytes(),
-            ImageSizeSpec::default(),
-            ImageRotation::None,
-            ImageRealization::default(),
             ImageColorContext::default(),
             &super::super::svg::SvgResourceContext::Isolated,
             ImageAnimationPolicy::enabled(None),
@@ -304,9 +296,6 @@ fn sampling_quantizes_a_loop_into_distinct_frames() {
     // fps 4 over the 2s loop: eight 250ms slots.
     let animation = sampler::sample(
         PULSING_CIRCLE.as_bytes(),
-        ImageSizeSpec::default(),
-        ImageRotation::None,
-        ImageRealization::default(),
         ImageColorContext::default(),
         &super::super::svg::SvgResourceContext::Isolated,
         ImageAnimationPolicy::enabled(Some(4)),

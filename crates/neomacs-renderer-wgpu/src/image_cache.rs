@@ -1078,6 +1078,28 @@ impl ImageCache {
         }) {
             return Some(pixels);
         }
+        // Computed animation, file-backed arm: same gate and same sequence
+        // machinery as the data arm, with the file's own resource context
+        // so relative references resolve as the static path does.
+        if animation.is_enabled()
+            && let Some(data) = encoded.as_ref()
+            && crate::svg_animation::may_contain_animation(data)
+            && let Some(pixels) = Self::decode_computed_sequence_data(
+                data.clone(),
+                frame,
+                sequence_cache,
+                sequence,
+                size,
+                rotation,
+                realization,
+                colors,
+                mask,
+                &crate::svg::SvgResourceContext::BaseUri(path.to_owned()),
+                animation,
+            )
+        {
+            return Some(pixels);
+        }
         if !frame.is_first() {
             return None;
         }
@@ -1239,7 +1261,6 @@ impl ImageCache {
     /// policy does not materialize (disabled policy, no plan, no loop), so
     /// this arm falling through is the ordinary static path, and the
     /// fallback ladder still ends at GNU's single-frame behavior.
-    #[allow(clippy::too_many_arguments)]
     fn decode_computed_sequence_data(
         data: EncodedBytes,
         frame: ImageFrameIndex,
@@ -1253,17 +1274,7 @@ impl ImageCache {
         resources: &crate::svg::SvgResourceContext,
         policy: ImageAnimationPolicy,
     ) -> Option<DecodedPixels> {
-        match sequence_cache.resolve_svg(
-            sequence,
-            &data,
-            frame,
-            size,
-            rotation,
-            realization,
-            colors,
-            resources,
-            policy,
-        ) {
+        match sequence_cache.resolve_svg(sequence, &data, frame, colors, resources, policy) {
             ImageSequenceResolution::Frame(frame) => {
                 let (width, height) = frame.dimensions();
                 let (rgba, embedded) = frame.into_parts();

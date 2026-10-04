@@ -128,6 +128,11 @@ enum SequenceCacheEntry {
     Animated {
         sequence: Arc<DecodedImageSequence>,
         kind: SequenceKind,
+        /// The face colors computed frames were baked with
+        /// (`currentColor`, the background rect). Authored raster frames
+        /// ignore it; for computed frames a different color context is a
+        /// different materialization and must not be served.
+        colors: ImageColorContext,
         last_access: u64,
     },
 }
@@ -148,6 +153,19 @@ impl SequenceCacheEntry {
     fn kind(&self) -> SequenceKind {
         match self {
             Self::Animated { kind, .. } => *kind,
+        }
+    }
+
+    fn matches(&self, kind: SequenceKind, colors: ImageColorContext) -> bool {
+        match self {
+            Self::Animated {
+                kind: entry_kind,
+                colors: entry_colors,
+                ..
+            } => {
+                *entry_kind == kind
+                    && (kind == SequenceKind::AuthoredRaster || *entry_colors == colors)
+            }
         }
     }
 
@@ -202,12 +220,13 @@ impl ImageSequenceCacheState {
         &mut self,
         sequence: ImageSequenceId,
         kind: SequenceKind,
+        colors: ImageColorContext,
     ) -> Option<&mut SequenceCacheEntry> {
         let stamp = self.next_access();
         let hit = self
             .entries
             .get_mut(&sequence)
-            .filter(|entry| entry.kind() == kind);
+            .filter(|entry| entry.matches(kind, colors));
         match hit {
             Some(entry) => {
                 self.hits = self.hits.saturating_add(1);
@@ -276,7 +295,11 @@ impl ImageSequenceCache {
     ) -> ImageSequenceResolution {
         {
             let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-            if let Some(entry) = state.entry_of_kind(sequence, SequenceKind::AuthoredRaster) {
+            if let Some(entry) = state.entry_of_kind(
+                sequence,
+                SequenceKind::AuthoredRaster,
+                ImageColorContext::default(),
+            ) {
                 return entry.resolve(frame);
             }
             state.begin_decode(sequence);
@@ -294,7 +317,12 @@ impl ImageSequenceCache {
             .frame(frame)
             .map(ImageSequenceResolution::Frame)
             .unwrap_or(ImageSequenceResolution::MissingFrame);
-        self.publish_decoded(sequence, decoded, SequenceKind::AuthoredRaster);
+        self.publish_decoded(
+            sequence,
+            decoded,
+            SequenceKind::AuthoredRaster,
+            ImageColorContext::default(),
+        );
         result
     }
 
@@ -311,30 +339,21 @@ impl ImageSequenceCache {
         sequence: ImageSequenceId,
         data: &[u8],
         frame: ImageFrameIndex,
-        size: ImageSizeSpec,
-        rotation: ImageRotation,
-        realization: ImageRealization,
         colors: ImageColorContext,
         resources: &crate::svg::SvgResourceContext,
         policy: ImageAnimationPolicy,
     ) -> ImageSequenceResolution {
         {
             let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-            if let Some(entry) = state.entry_of_kind(sequence, SequenceKind::ComputedSvg) {
+            if let Some(entry) = state.entry_of_kind(sequence, SequenceKind::ComputedSvg, colors) {
                 return entry.resolve(frame);
             }
             state.begin_decode(sequence);
         }
 
-        let Some(decoded) = crate::svg_animation::sample_svg_sequence(
-            data,
-            size,
-            rotation,
-            realization,
-            colors,
-            resources,
-            policy,
-        ) else {
+        let Some(decoded) =
+            crate::svg_animation::sample_svg_sequence(data, colors, resources, policy)
+        else {
             self.finish_decode(sequence);
             return if frame.is_first() {
                 ImageSequenceResolution::NotAnimated
@@ -346,7 +365,7 @@ impl ImageSequenceCache {
             .frame(frame)
             .map(ImageSequenceResolution::Frame)
             .unwrap_or(ImageSequenceResolution::MissingFrame);
-        self.publish_decoded(sequence, decoded, SequenceKind::ComputedSvg);
+        self.publish_decoded(sequence, decoded, SequenceKind::ComputedSvg, colors);
         result
     }
 
@@ -360,6 +379,7 @@ impl ImageSequenceCache {
         sequence: ImageSequenceId,
         decoded: Arc<DecodedImageSequence>,
         kind: SequenceKind,
+        colors: ImageColorContext,
     ) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if state.is_retired(sequence) {
@@ -369,15 +389,16 @@ impl ImageSequenceCache {
         if state
             .entries
             .get(&sequence)
-            .is_some_and(|entry| entry.kind() == kind)
+            .is_some_and(|entry| entry.matches(kind, colors))
         {
             // First publication of a kind wins: a concurrent duplicate
             // decode of the same source coalesces into the resident entry.
             state.finish_decode(sequence);
             return;
         }
-        // An entry of the other kind is stale for the asking path — the
-        // source changed which decode owns it — so it is replaced.
+        // An entry the asking path would not serve (other kind, or computed
+        // frames baked for other colors) is stale for it — the source
+        // changed which materialization owns it — so it is replaced.
         state.remove(sequence);
         let memory_size = decoded.memory_size;
         if memory_size > self.max_bytes {
@@ -403,6 +424,7 @@ impl ImageSequenceCache {
             SequenceCacheEntry::Animated {
                 sequence: decoded,
                 kind,
+                colors,
                 last_access: stamp,
             },
         );
