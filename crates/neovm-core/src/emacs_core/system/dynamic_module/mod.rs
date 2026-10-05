@@ -305,6 +305,38 @@ pub struct emacs_env_private {
 // Global module state
 // ============================================================================
 
+/// A module's native code remains mapped for the process lifetime, including
+/// failed initialization, just as GNU never calls dynlib_close on a module.
+/// Only shared references escape `open`; no safe owner can unload the library.
+/// This immutable loader handle is shared across mutators and contains no Lisp
+/// state. The loader supplies synchronization for symbol lookup.
+#[derive(Debug)]
+struct ModuleLibrary {
+    #[expect(dead_code, reason = "staged before the baseline performance capture")]
+    library: Library,
+}
+
+static_assertions::assert_impl_all!(ModuleLibrary: Send, Sync);
+
+#[derive(Debug, thiserror::Error)]
+enum ModuleOpenError {
+    #[error(transparent)]
+    Loader(#[from] libloading::Error),
+}
+
+#[expect(dead_code, reason = "staged before the baseline performance capture")]
+impl ModuleLibrary {
+    #[cold]
+    #[inline(never)]
+    fn open(path: &std::path::Path) -> Result<&'static Self, ModuleOpenError> {
+        // SAFETY: native modules follow GNU's module-load contract: their
+        // constructors and exported entry points implement the Emacs module
+        // ABI. The handle is retained before any exported code is called.
+        let library = unsafe { Library::new(path) }?;
+        Ok(Box::leak(Box::new(Self { library })))
+    }
+}
+
 /// A loaded module's shared library, kept mapped until the process exits or
 /// the same path loads again.
 ///
