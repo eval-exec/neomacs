@@ -182,6 +182,16 @@ fn mapcar1_with_callee(
     callee: &MapCallee,
     checked_epoch: u64,
 ) -> Result<usize, Flow> {
+    // A copied bytecode callee has no per-element designator resolution.
+    // Select its callback body once in both tiers. The existing apply entry
+    // owns the JIT-disabled fallback, prologue, tier/retier and root protocol;
+    // this activation needs neither an enum check per item nor a new knob read.
+    #[cfg(feature = "jit")]
+    if let MapCallee::UnobservedByteCode(function) = *callee {
+        return mapcar1_eval(eval, len, values, sequence, |eval, item| {
+            eval.apply1_bytecode_unobserved(function, item)
+        });
+    }
     if let MapCallee::Subr {
         designator, subr, ..
     } = *callee
@@ -1864,3 +1874,7 @@ fn merge_hi(
 #[cfg(feature = "jit")]
 #[path = "tests/higher_order_callback_policy.rs"]
 mod higher_order_callback_policy;
+
+#[cfg(all(test, feature = "jit"))]
+#[path = "tests/mapcar_activation.rs"]
+mod mapcar_activation;
