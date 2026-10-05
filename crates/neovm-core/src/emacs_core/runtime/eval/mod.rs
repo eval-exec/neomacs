@@ -2024,10 +2024,6 @@ fn install_core_eval_symbols(obarray: &mut Obarray, reset_runtime_values: bool) 
     }
 }
 
-fn is_runtime_dynamically_special(obarray: &Obarray, sym_id: SymId) -> bool {
-    obarray.is_special_id(sym_id) && !obarray.is_constant_id(sym_id)
-}
-
 /// The name `(let ((SYM VALUE)) ...)` must report as `(setting-constant SYM)`,
 /// or `None` when the binding is one GNU performs.
 ///
