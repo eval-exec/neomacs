@@ -98,6 +98,32 @@ fn char_table_extras_narrow_at_the_gnu_c_int_boundary() {
 }
 
 #[test]
+fn computed_integer_constructor_preserves_i64_domain() {
+    let expected = oracle(
+        "'(9223372036854775807 -9223372036854775808)",
+        include_str!("boundary_numbers/computed_integer_constructor_preserves_i64_domain.expect"),
+    );
+    let value = crate::emacs_core::value::Value::list(vec![
+        crate::emacs_core::value::Value::fixnum(i64::MAX),
+        crate::emacs_core::value::Value::fixnum(i64::MIN),
+    ]);
+    assert_eq!(crate::emacs_core::format_eval_result(&Ok(value)), expected);
+}
+
+#[test]
+fn random_keeps_gnu_signed_fixnum_payload() {
+    let form = r#"(progn (random "tsb-numeric-boundary")
+      (let ((all-fixnums t))
+        (dotimes (_ 1000) (unless (fixnump (random)) (setq all-fixnums nil)))
+        all-fixnums))"#;
+    let expected = oracle(
+        form,
+        include_str!("boundary_numbers/random_keeps_gnu_signed_fixnum_payload.expect"),
+    );
+    assert_eq!(runtime_startup_eval_one(form), expected);
+}
+
+#[test]
 fn hash_table_invalid_weakness_precedes_capacity_failure() {
     let form = r#"(condition-case e
       (make-hash-table :size most-positive-fixnum :weakness 'tsb-invalid-weakness)

@@ -2578,7 +2578,9 @@ pub(crate) fn builtin_random(args: Vec<Value>) -> EvalResult {
         }
     }
 
-    Ok(Value::fixnum(emacs_get_random()))
+    Ok(Value::from_fixnum(
+        crate::tagged::value::Fixnum::from_payload_bits(emacs_get_random() as u64),
+    ))
 }
 
 fn emacs_random_lock() -> &'static Mutex<()> {

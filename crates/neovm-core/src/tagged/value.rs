@@ -369,15 +369,14 @@ impl TaggedValue {
 
     // -- Fixnum --
 
-    /// Create a fixnum (62-bit signed integer, no heap allocation).
+    /// Create a Lisp integer, promoting computed values outside the fixnum range.
+    /// Proven immediate values may use `from_fixnum` to avoid another range check.
     #[inline(always)]
     pub fn fixnum(n: i64) -> Self {
-        // Encode: (n << 2) | 2. The low 2 bits are `10`, matching GNU's
-        // fixnum tags 010 and 110.
-        Self(
-            ((n as usize) << FIXNUM_SHIFT) | FIXNUM_CHECK_VALUE,
-            PhantomData,
-        )
+        match Fixnum::try_from(n) {
+            Ok(value) => Self::from_fixnum(value),
+            Err(FixnumRangeError::OutOfRange(_)) => Self::make_int(n),
+        }
     }
 
     /// Encode a validated immediate integer without an additional range check.

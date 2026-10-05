@@ -2505,10 +2505,11 @@ impl TaggedValue {
     /// the value is outside the fixnum range.
     #[inline]
     pub fn make_int(value: i64) -> Self {
-        if (Self::MOST_NEGATIVE_FIXNUM..=Self::MOST_POSITIVE_FIXNUM).contains(&value) {
-            Self::fixnum(value)
-        } else {
-            Self::bignum_from_i64(value)
+        match crate::tagged::value::Fixnum::try_from(value) {
+            Ok(value) => Self::from_fixnum(value),
+            Err(crate::tagged::value::FixnumRangeError::OutOfRange(_)) => {
+                Self::bignum_from_i64(value)
+            }
         }
     }
 
