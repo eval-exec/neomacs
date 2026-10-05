@@ -1968,10 +1968,9 @@ fn compare_overlay_precedence_keys(
     } else if eq_value(&left, &right) {
         Ordering::Equal
     } else if left_key.identity < right_key.identity {
-        // GNU `compare_overlays` uses raw Lisp object identity as the final
-        // stable tiebreaker for otherwise equal overlays.  Neomacs stores an
-        // overlay allocation serial because Rust heap addresses are not
-        // monotonic like GNU's Lisp object representation in this path.
+        // GNU buffer.c:3281 compares XLI(overlay), not allocation order.
+        // The stored identity preserves that original raw object key when
+        // an immutable observer copies an overlay.
         Ordering::Less
     } else {
         Ordering::Greater

@@ -844,10 +844,20 @@ impl TaggedHeap {
             data,
         });
         let ptr = Box::into_raw(obj);
+        let value = unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) };
+        // GNU compare_overlays uses raw object identity, which need not follow
+        // allocation order. Initialize before linking/publishing the new
+        // object; explicit identities are retained for snapshot observers.
+        // This write is local to the owning mutator's fresh allocation.
+        unsafe {
+            if (*ptr).data.serial == 0 {
+                (*ptr).data.serial = value.bits() as u64;
+            }
+        }
         self.link_veclike(ptr as *mut VecLikeHeader);
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<OverlayObj>());
-        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+        value
     }
 
     /// Allocate a marker.

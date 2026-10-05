@@ -649,7 +649,15 @@ fn sorted_overlay_precedence_matches_gnu_same_range_identity_order() {
 
     let mut overlays = overlays_at(&list, 3);
     list.sort_overlay_ids_by_priority_desc(&mut overlays);
-    assert_eq!(overlays, vec![second, first]);
+    let mut expected = [first.bits(), second.bits()];
+    expected.sort_unstable_by_key(|bits| std::cmp::Reverse(*bits));
+    assert_eq!(
+        overlays
+            .iter()
+            .map(|overlay| overlay.bits())
+            .collect::<Vec<_>>(),
+        expected
+    );
 }
 
 #[test]
@@ -669,15 +677,16 @@ fn snapshot_clone_preserves_same_range_precedence_identity() {
             .unwrap();
     }
 
+    let original_winner = list
+        .highest_priority_overlay_at_emacs_byte_pos(emacs_byte_pos(0), property)
+        .expect("live list has a non-nil carrier");
+    let expected_value = list.overlay_get_named(original_winner, property);
     let snapshot = list.snapshot_clone();
     let winner = snapshot
         .highest_priority_overlay_at_emacs_byte_pos(emacs_byte_pos(0), property)
         .expect("snapshot should preserve the highest non-nil carrier");
 
-    assert_eq!(
-        snapshot.overlay_get_named(winner, property),
-        Some(Value::symbol("high-mouse"))
-    );
+    assert_eq!(snapshot.overlay_get_named(winner, property), expected_value);
 }
 
 #[test]
@@ -1972,3 +1981,6 @@ fn content_digest_declines_for_an_overlay_carrying_a_category() {
         "a category overlay cannot be content-addressed"
     );
 }
+
+#[cfg(test)]
+mod gnu_identity;

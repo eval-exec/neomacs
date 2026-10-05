@@ -27,5 +27,9 @@ mod nontransitive_sorted_queries;
 mod collapsed_start_query_order;
 
 #[cfg(test)]
+#[path = "gd_e_overlay_seams/nil_priority_identity_invariants.rs"]
+mod nil_priority_identity_invariants;
+
+#[cfg(test)]
 #[path = "gd_e_overlay_seams/sorted_category_and_window.rs"]
 mod sorted_category_and_window;

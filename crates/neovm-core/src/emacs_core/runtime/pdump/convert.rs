@@ -1815,8 +1815,11 @@ impl<'a> LoadDecoder<'a> {
                 value
             }
             DumpHeapObject::Overlay(overlay) => {
-                let data = crate::heap_types::OverlayData {
-                    serial: overlay.serial,
+                // A restored live object compares by its relocated identity,
+                // not the identity saved by a former process. Observer-only
+                // snapshot clones preserve their source key separately.
+                let mut data = crate::heap_types::OverlayData {
+                    serial: 0,
                     plist: Value::NIL,
                     buffer: overlay.buffer.map(|id| BufferId(id.0)),
                     start: overlay.start,
@@ -1825,11 +1828,14 @@ impl<'a> LoadDecoder<'a> {
                     front_advance: overlay.front_advance,
                     rear_advance: overlay.rear_advance,
                 };
-                crate::heap_types::observe_overlay_serial(data.serial);
                 if let Some(ptr) =
                     self.mapped_typed_object_for_object::<OverlayObj>(id, "overlay")?
                 {
                     unsafe {
+                        let value = Value::from_veclike_ptr(ptr.cast::<VecLikeHeader>());
+                        // Initialize before the decoder publishes this fresh
+                        // live object to its exclusively owned restoring heap.
+                        data.serial = value.bits() as u64;
                         std::ptr::write(
                             ptr,
                             OverlayObj {
@@ -1837,7 +1843,7 @@ impl<'a> LoadDecoder<'a> {
                                 data,
                             },
                         );
-                        Value::from_veclike_ptr(ptr.cast::<VecLikeHeader>())
+                        value
                     }
                 } else {
                     Value::make_overlay(data)
@@ -5696,7 +5702,7 @@ fn load_buffer(
                 .iter()
                 .map(|d| {
                     Value::make_overlay(crate::heap_types::OverlayData {
-                        serial: d.serial,
+                        serial: 0,
                         plist: decoder.load_value(&d.plist),
                         buffer: d.buffer.map(|id| BufferId(id.0)),
                         start: d.start,

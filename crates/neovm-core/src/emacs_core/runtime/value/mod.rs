@@ -2706,13 +2706,7 @@ impl TaggedValue {
 
     /// Allocate an overlay.
     pub fn make_overlay(data: impl Into<crate::heap_types::OverlayData>) -> Self {
-        let mut data = data.into();
-        if data.serial == 0 {
-            data.serial = crate::heap_types::next_overlay_serial();
-        } else {
-            crate::heap_types::observe_overlay_serial(data.serial);
-        }
-        with_tagged_heap(|h| h.alloc_overlay(data))
+        with_tagged_heap(|h| h.alloc_overlay(data.into()))
     }
 
     /// Allocate a buffer reference.

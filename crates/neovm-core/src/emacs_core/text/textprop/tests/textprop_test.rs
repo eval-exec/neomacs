@@ -643,12 +643,23 @@ fn get_char_property_same_range_overlays_use_gnu_identity_tiebreaker() {
     let raw = builtin_overlays_at(&mut eval, vec![Value::fixnum(2)]).unwrap();
     assert_eq!(list_to_vec(&raw).unwrap(), vec![second, first]);
     let sorted = builtin_overlays_at(&mut eval, vec![Value::fixnum(2), Value::T]).unwrap();
-    assert_eq!(list_to_vec(&sorted).unwrap(), vec![second, first]);
+    // GNU buffer.c:3281 uses raw tagged object identity, whose order is
+    // allocator-dependent rather than creation-dependent.
+    let winner = if first.bits() > second.bits() {
+        first
+    } else {
+        second
+    };
+    let loser = if winner == first { second } else { first };
+    assert_eq!(list_to_vec(&sorted).unwrap(), vec![winner, loser]);
 
     let result =
         builtin_get_char_property(&mut eval, vec![Value::fixnum(2), Value::symbol("face")])
             .unwrap();
-    assert_eq!(result.as_symbol_name(), Some("second"));
+    assert_eq!(
+        result.as_symbol_name(),
+        Some(if winner == first { "first" } else { "second" })
+    );
 }
 
 #[test]
