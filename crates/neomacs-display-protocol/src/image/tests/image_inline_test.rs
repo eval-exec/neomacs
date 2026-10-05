@@ -13,6 +13,73 @@ fn intrinsic_extent_rejects_invalid_dimensions_without_rounding_valid_ones() {
     assert_eq!(extent.dimensions(), (52.91, 17.75));
 }
 
+/// The invariant a reserved slot rests on: a spec that pins both axes reserves
+/// the extent it will resolve to. The native size cannot enter that answer, so
+/// the check runs over several natives, scales and rotations — and it is the
+/// case an animated icon lives in, where a mismatch moves layout on every swap.
+#[test]
+fn provisional_extent_equals_resolved_geometry_when_both_axes_are_pinned() {
+    use super::{ImageNativeExtent, SlotChange};
+
+    let sizes = [
+        ImageSizeSpec::new(AxisSize::Exact(24), AxisSize::Exact(24)),
+        ImageSizeSpec::new(AxisSize::Exact(25), AxisSize::Exact(25)),
+        ImageSizeSpec::new(AxisSize::Exact(30), AxisSize::Exact(18)),
+    ];
+    let scales = [1.0_f32, 0.8, 1.30 / 1.75, 1.25];
+    let rotations = [
+        ImageRotation::None,
+        ImageRotation::Quarter,
+        ImageRotation::Half,
+        ImageRotation::ThreeQuarter,
+    ];
+    for size in sizes {
+        for scale in scales {
+            let realization = ImageRealization::new(scale, 1.0, 1.0);
+            for rotation in rotations {
+                for native in [(96, 96), (100, 200), (3, 7)] {
+                    let provisional = realization.resolve_provisional(size, rotation);
+                    let resolved = realization
+                        .resolve_geometry(size, ImageNativeExtent::new(native.0, native.1), rotation)
+                        .layout();
+                    assert_eq!(
+                        provisional.finalize(resolved),
+                        SlotChange::Unchanged,
+                        "{size:?} at scale {scale} {rotation:?} over {native:?} must reserve what it resolves to"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// The other half of the invariant: when an axis is left to the native size,
+/// the reservation legitimately moves once the header supplies the aspect
+/// ratio — and that is the only case where a move is allowed.
+#[test]
+fn provisional_extent_moves_only_where_the_native_aspect_is_unknown() {
+    use super::ImageNativeExtent;
+
+    let realization = ImageRealization::default();
+    let size = ImageSizeSpec::new(AxisSize::Native, AxisSize::Exact(24));
+    let provisional = realization
+        .resolve_provisional(size, ImageRotation::None)
+        .layout();
+    let resolved = realization
+        .resolve_geometry(size, ImageNativeExtent::new(100, 200), ImageRotation::None)
+        .layout();
+    assert_eq!(
+        provisional.dimensions(),
+        (24, 24),
+        "the reservation is a square of the pinned height"
+    );
+    assert_eq!(
+        resolved.dimensions(),
+        (12, 24),
+        "100x200 pinned to a height of 24 is 12x24"
+    );
+}
+
 #[test]
 fn fractional_intrinsic_extent_keeps_the_ratio_through_geometry_resolution() {
     use super::ImageIntrinsicExtent;
