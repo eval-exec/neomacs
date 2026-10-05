@@ -24,10 +24,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 mod calendar;
 use calendar::{CalendarFieldOverflow, CalendarTime};
 mod time_zone_spec;
-#[cfg_attr(
-    not(test),
-    expect(unused_imports, reason = "Timezone guards migrate in the next change")
-)]
 use time_zone_spec::TimeZoneSpec;
 mod unix_timestamp;
 #[cfg_attr(
@@ -1265,6 +1261,8 @@ fn refresh_tz_env() {
     unsafe extern "C" {
         fn tzset();
     }
+    // SAFETY: tzset has no pointer arguments. Timezone mutations using this
+    // helper are serialized by ScopedTzEnv's process-wide lock.
     unsafe {
         tzset();
     }
@@ -1273,26 +1271,72 @@ fn refresh_tz_env() {
 #[cfg(not(unix))]
 fn refresh_tz_env() {}
 
-struct ScopedTzEnv {
-    previous: Option<OsString>,
+/// Serializes local libc timezone reads with temporary timezone writers.
+/// This lock-only guard preserves the process TZ and stays on its mutator thread.
+#[cfg(unix)]
+#[must_use = "dropping the guard permits temporary timezone writers"]
+#[derive(Debug)]
+struct LocalTzReadGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
+#[cfg(unix)]
+static_assertions::assert_not_impl_any!(LocalTzReadGuard: Send, Sync);
+
+#[cfg(unix)]
+impl LocalTzReadGuard {
+    fn new() -> Self {
+        Self {
+            _lock: tz_env_lock()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()),
+            _thread: std::marker::PhantomData,
+        }
+    }
+}
+
+/// Restores the process timezone while retaining the serialization lock.
+/// The owned lock and thread marker keep the guard confined to its creating thread.
+#[must_use = "dropping the guard restores the previous timezone"]
+#[derive(Debug)]
+struct ScopedTzEnv {
+    previous: Option<OsString>,
+    _lock: std::sync::MutexGuard<'static, ()>,
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+static_assertions::assert_not_impl_any!(ScopedTzEnv: Send, Sync);
+
 impl ScopedTzEnv {
-    fn new(spec: Option<&str>) -> Self {
+    fn new(spec: Option<TimeZoneSpec<'_>>) -> Self {
+        let lock = tz_env_lock()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let previous = std::env::var_os("TZ");
         match spec {
-            Some(v) => unsafe { std::env::set_var("TZ", v) },
+            // SAFETY: the guard owns the timezone serialization lock, and
+            // TimeZoneSpec guarantees there is no embedded NUL.
+            Some(v) => unsafe { std::env::set_var("TZ", v.as_ref()) },
+            // SAFETY: the guard owns the timezone serialization lock.
             None => unsafe { std::env::remove_var("TZ") },
         }
         refresh_tz_env();
-        Self { previous }
+        Self {
+            previous,
+            _lock: lock,
+            _thread: std::marker::PhantomData,
+        }
     }
 }
 
 impl Drop for ScopedTzEnv {
     fn drop(&mut self) {
         match &self.previous {
+            // SAFETY: the serialization lock is still held, and an OS
+            // environment value contains no embedded NUL.
             Some(v) => unsafe { std::env::set_var("TZ", v) },
+            // SAFETY: the serialization lock is still held.
             None => unsafe { std::env::remove_var("TZ") },
         }
         refresh_tz_env();
@@ -1300,8 +1344,7 @@ impl Drop for ScopedTzEnv {
 }
 
 fn with_tz_env<T>(spec: Option<&str>, f: impl FnOnce() -> T) -> T {
-    let _lock = tz_env_lock().lock().expect("time zone env lock poisoned");
-    let _guard = ScopedTzEnv::new(spec);
+    let _guard = ScopedTzEnv::new(spec.map(TimeZoneSpec::from));
     f()
 }
 
@@ -1357,7 +1400,10 @@ fn effective_zone_rule(zone: Option<&Value>) -> Result<ZoneRule, Flow> {
 #[cfg(unix)]
 fn zone_rule_to_offset_name(rule: &ZoneRule, epoch_secs: i64) -> (i64, String) {
     match rule {
-        ZoneRule::Local => local_offset_name_at_epoch(epoch_secs),
+        ZoneRule::Local => {
+            let _guard = LocalTzReadGuard::new();
+            local_offset_name_at_epoch(epoch_secs)
+        }
         ZoneRule::Utc => (0, "GMT".to_string()),
         // GNU `tzlookup` builds a POSIX TZ string and hands it to libc
         // `tzalloc`; the resulting offset is therefore clamped to +/-24h and a
@@ -1416,7 +1462,11 @@ pub(crate) fn zone_offset_name_for_time(
 
 fn decode_time_for_zone(rule: &ZoneRule, epoch_secs: i64) -> Result<ZonedDecodedTime, Flow> {
     match rule {
-        ZoneRule::Local => local_decoded_time_at_epoch(epoch_secs),
+        ZoneRule::Local => {
+            #[cfg(unix)]
+            let _guard = LocalTzReadGuard::new();
+            local_decoded_time_at_epoch(epoch_secs)
+        }
         ZoneRule::Utc => Ok(ZonedDecodedTime {
             time: decode_epoch_secs(epoch_secs)?,
             dst: Value::NIL,
@@ -1699,7 +1749,11 @@ fn encode_time_to_epoch(calendar: CalendarTime, zone: &Value, isdst: TmIsDst) ->
     let rule = effective_zone_rule(Some(zone))?;
 
     match rule {
-        ZoneRule::Local => mktime_with_isdst(calendar, isdst),
+        ZoneRule::Local => {
+            #[cfg(unix)]
+            let _guard = LocalTzReadGuard::new();
+            mktime_with_isdst(calendar, isdst)
+        }
         ZoneRule::TzString(spec) => with_tz_env(Some(&spec), || mktime_with_isdst(calendar, isdst)),
         ZoneRule::Utc => calendar.epoch_seconds(),
         ZoneRule::FixedOffset(offset) => encode_calendar_numeric_zone(calendar, offset),

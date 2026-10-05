@@ -39,6 +39,43 @@ fn gnu_expectation(name: &str, form: &str) -> String {
 }
 
 #[test]
+fn nul_time_zone_matches_gnu() {
+    let expected = gnu_expectation(
+        "nul-time-zone",
+        r#"(list (decode-time 0 "UTC\0junk") (format-time-string "%Z %H" 0 "EST5\0x") (current-time-zone 0 "JST-9\0") (decode-time 0 '(3600 "AB\0C")) (encode-time 0 0 0 1 1 1970 "UTC\0junk") (current-time-string 0 "UTC\0junk"))"#,
+    );
+    let _lock = tz_test_lock();
+    reset_tz_rule();
+    let zero = Value::fixnum(0);
+    let values = vec![
+        builtin_decode_time(vec![zero, Value::string("UTC\0junk")]).unwrap(),
+        builtin_format_time_string(vec![Value::string("%Z %H"), zero, Value::string("EST5\0x")])
+            .unwrap(),
+        builtin_current_time_zone(vec![zero, Value::string("JST-9\0")]).unwrap(),
+        builtin_decode_time(vec![
+            zero,
+            Value::list(vec![Value::fixnum(3600), Value::string("AB\0C")]),
+        ])
+        .unwrap(),
+        builtin_encode_time(vec![
+            zero,
+            zero,
+            zero,
+            Value::fixnum(1),
+            Value::fixnum(1),
+            Value::fixnum(1970),
+            Value::string("UTC\0junk"),
+        ])
+        .unwrap(),
+        builtin_current_time_string(vec![zero, Value::string("UTC\0junk")]).unwrap(),
+    ];
+    assert_eq!(
+        crate::emacs_core::print::print_value(&Value::list(values)),
+        expected
+    );
+}
+
+#[test]
 fn calendar_field_overflow_matches_gnu() {
     let expected = gnu_expectation(
         "calendar-field-overflow",

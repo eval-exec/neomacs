@@ -1868,3 +1868,7 @@ mod unix_timestamp;
 
 #[cfg(unix)]
 mod cpu_soft_limit;
+
+#[cfg(test)]
+#[cfg(target_os = "linux")]
+mod local_reader_concurrency;
