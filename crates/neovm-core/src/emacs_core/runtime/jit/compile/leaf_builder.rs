@@ -70,6 +70,7 @@ pub(super) fn build_leaf_fn<S: LeafSink>(
     opt: Option<&crate::emacs_core::jit::opt::ir::Func>,
     chains: &mut Vec<super::super::vframe::DeoptChain>,
 ) -> Result<cranelift_module::FuncId, CompileError> {
+    let rootwin_census = lowering::RootWinCounterScope::enter();
     debug_assert!(
         abi == LeafAbi::Memory || (!aot && osr_pc.is_none()),
         "AOT and OSR entries keep the memory ABI"
@@ -1164,7 +1165,9 @@ pub(super) fn build_leaf_fn<S: LeafSink>(
     });
 
     note_clif_size(&func);
-    let (rw_emitted, rw_elided) = lowering::rootwin_counters();
+    let rootwin_counts = rootwin_census.snapshot();
+    let rw_emitted = rootwin_counts.emitted();
+    let rw_elided = rootwin_counts.elided();
     lowering::dump_clif(
         &func,
         &format!(
@@ -1172,7 +1175,7 @@ pub(super) fn build_leaf_fn<S: LeafSink>(
             ops.len()
         ),
     );
-    sink.define_leaf(
+    let id = sink.define_leaf(
         LeafEntry {
             name: entry_name,
             linkage: entry_linkage,
@@ -1180,5 +1183,7 @@ pub(super) fn build_leaf_fn<S: LeafSink>(
         },
         func,
         super::super::stats::asm_dump::want_disasm(aot),
-    )
+    )?;
+    rootwin_census.finish();
+    Ok(id)
 }

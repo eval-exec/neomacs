@@ -14,6 +14,15 @@ pub(crate) use opt_sink_deopt::emit_pending_deopts_with_sink;
 mod array_profile_selected;
 pub(crate) use array_profile_selected::lower_simple_op_with_array_profile;
 
+#[path = "lowering/rootwin_census.rs"]
+mod rootwin_census;
+pub(crate) use rootwin_census::RootWinCounterScope;
+use rootwin_census::RootWinCounts;
+
+#[cfg(test)]
+#[path = "tests/rootwin_census_scope.rs"]
+mod rootwin_census_scope_tests;
+
 /// Emit a speculation guard.
 ///
 /// If `cond` (an `i8` boolean from `icmp`) is false, branch to the shared deopt
@@ -1834,11 +1843,12 @@ pub(crate) fn emit_root_window_stores(
         }
         // Which slots already hold their value (see `RootWinCarry`).
         let (ptr, slot0) = ROOTWIN_CARRY.with(|c| {
-            let mut c = c.borrow_mut();
+            let mut stored = c.stored.borrow_mut();
+            let mut counts = c.counts.get();
             let needs_store = to_root
                 .iter()
                 .enumerate()
-                .any(|(i, &v)| c.stored.get(i).copied().flatten() != Some(v));
+                .any(|(i, &v)| stored.get(i).copied().flatten() != Some(v));
             let addr = needs_store.then(|| {
                 let ptr = fb
                     .ins()
@@ -1846,22 +1856,23 @@ pub(crate) fn emit_root_window_stores(
                 (ptr, fb.ins().iadd(ptr, h.byte_off))
             });
             for (i, &v) in to_root.iter().enumerate() {
-                if c.stored.get(i).copied().flatten() == Some(v) {
-                    c.elided += 1;
+                if stored.get(i).copied().flatten() == Some(v) {
+                    counts.note_elided();
                     continue;
                 }
                 let (_, slot0) = addr.expect("a differing slot implies the address");
                 fb.ins()
                     .store(MemFlagsData::trusted(), v, slot0, (i * 8) as i32);
-                c.emitted += 1;
-                if c.stored.len() <= i {
-                    c.stored.resize(i + 1, None);
+                counts.note_emitted();
+                if stored.len() <= i {
+                    stored.resize(i + 1, None);
                 }
-                c.stored[i] = Some(v);
+                stored[i] = Some(v);
             }
             // Slots at or above this site's count may be clobbered by the
             // nested activation during the call.
-            c.stored.truncate(to_root.len());
+            stored.truncate(to_root.len());
+            c.counts.set(counts);
             addr.unwrap_or((vmctx, vmctx))
         });
         let _ = (ptr, slot0);
@@ -3223,13 +3234,14 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
     // eligible JIT body when the knob is on.
     abi: super::LeafAbi,
 ) -> Result<cranelift_module::FuncId, CompileError> {
+    let rootwin_census = RootWinCounterScope::enter();
     debug_assert!(
         abi == super::LeafAbi::Memory || !aot,
         "AOT entries keep the memory ABI"
     );
     imm_pool_reset();
     guards_emitted_reset();
-    rootwin_counters_reset();
+    rootwin_carry_reset();
     super::cold_exits::begin_function();
     use mir::{BinKind, CmpKind, MirOp, MirTerm, PredKind as MP, UnaryKind as MU};
 
@@ -4145,7 +4157,9 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
             slots,
         ));
     });
-    let (rw_stores, rw_elided) = rootwin_counters();
+    let rootwin_counts = rootwin_census.snapshot();
+    let rw_stores = rootwin_counts.emitted();
+    let rw_elided = rootwin_counts.elided();
     dump_clif(
         &func,
         &format!(
@@ -4158,7 +4172,7 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
     );
 
     super::note_clif_size(&func);
-    sink.define_leaf(
+    let id = sink.define_leaf(
         super::LeafEntry {
             name: entry_name,
             linkage: entry_linkage,
@@ -4166,7 +4180,9 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
         },
         func,
         super::super::stats::asm_dump::want_disasm(aot),
-    )
+    )?;
+    rootwin_census.finish();
+    Ok(id)
 }
 
 /// Per-function runtime-call machinery: shim references plus the vmctx variable
@@ -4254,8 +4270,13 @@ thread_local! {
     /// Which root-window slots the hoisted sites of the function being
     /// lowered have already stored (see [`RootWinCarry`]). Reset per
     /// function and at every bytecode basic-block leader.
-    static ROOTWIN_CARRY: std::cell::RefCell<RootWinCarry> =
-        const { std::cell::RefCell::new(RootWinCarry { stored: Vec::new(), emitted: 0, elided: 0 }) };
+    static ROOTWIN_CARRY: RootWinCarry = const {
+        RootWinCarry {
+            stored: std::cell::RefCell::new(Vec::new()),
+            counts: std::cell::Cell::new(RootWinCounts::ZERO),
+            _thread: std::marker::PhantomData,
+        }
+    };
 }
 
 /// The per-window-index SSA value the last hoisted site stored.
@@ -4290,12 +4311,18 @@ thread_local! {
 ///    bytecode block but entered from one earlier site's signal edge), and a
 ///    back-edge poll block (a Switch compare chain emits one per backward
 ///    target, as sibling paths) — the record is dropped there.
+/// Threading: compile-thread SSA history only, never Lisp/mutator state. The
+/// vector retains its allocation across compilations. Separate scalar cells
+/// let a diagnostic scope restore its enclosing census without borrowing the
+/// vector, including during unwinding through a live vector borrow.
+#[derive(Debug)]
 struct RootWinCarry {
-    stored: Vec<Option<ClifValue>>,
-    /// Diagnostics: root-window stores emitted / elided in this function.
-    emitted: u32,
-    elided: u32,
+    stored: std::cell::RefCell<Vec<Option<ClifValue>>>,
+    counts: std::cell::Cell<RootWinCounts>,
+    _thread: std::marker::PhantomData<*const ()>,
 }
+
+static_assertions::assert_not_impl_any!(RootWinCarry: Send, Sync);
 
 #[cfg(test)]
 thread_local! {
@@ -4312,13 +4339,13 @@ pub(crate) fn force_spec_guard_miss_for_test(on: bool) {
 /// Forget the carried record: a new function, a bytecode leader, a MIR block
 /// head, or a site that runs a nested activation without storing anything.
 pub(crate) fn rootwin_carry_reset() {
-    ROOTWIN_CARRY.with(|c| c.borrow_mut().stored.clear());
+    ROOTWIN_CARRY.with(|c| c.stored.borrow_mut().clear());
 }
 
 /// The carried record as it stands — taken just before a conditional
 /// fallback roots, i.e. the record on the path that skips the fallback.
 pub(crate) fn rootwin_carry_snapshot() -> Vec<Option<ClifValue>> {
-    ROOTWIN_CARRY.with(|c| c.borrow().stored.clone())
+    ROOTWIN_CARRY.with(|c| c.stored.borrow().clone())
 }
 
 /// Merge a conditional fallback's store history with the path that skipped
@@ -4326,10 +4353,10 @@ pub(crate) fn rootwin_carry_snapshot() -> Vec<Option<ClifValue>> {
 /// in the slot (rule 2 on [`RootWinCarry`]).
 pub(crate) fn rootwin_carry_meet(snapshot: &[Option<ClifValue>]) {
     ROOTWIN_CARRY.with(|c| {
-        let mut c = c.borrow_mut();
-        let n = c.stored.len().min(snapshot.len());
-        c.stored.truncate(n);
-        for (slot, &other) in c.stored.iter_mut().zip(snapshot) {
+        let mut stored = c.stored.borrow_mut();
+        let n = stored.len().min(snapshot.len());
+        stored.truncate(n);
+        for (slot, &other) in stored.iter_mut().zip(snapshot) {
             if *slot != other {
                 *slot = None;
             }
@@ -4341,28 +4368,17 @@ pub(crate) fn rootwin_carry_meet(snapshot: &[Option<ClifValue>]) {
 /// only predecessor had that store history starts from it exactly.
 pub(crate) fn rootwin_carry_restore(snapshot: &[Option<ClifValue>]) {
     ROOTWIN_CARRY.with(|c| {
-        let mut c = c.borrow_mut();
-        c.stored.clear();
-        c.stored.extend_from_slice(snapshot);
+        let mut stored = c.stored.borrow_mut();
+        stored.clear();
+        stored.extend_from_slice(snapshot);
     });
 }
 
-/// Zero the per-function elision counters (at the hoisted prologue).
-pub(crate) fn rootwin_counters_reset() {
-    ROOTWIN_CARRY.with(|c| {
-        let mut c = c.borrow_mut();
-        c.stored.clear();
-        c.emitted = 0;
-        c.elided = 0;
-    });
-}
-
-/// `(root-window stores emitted, elided)` for the function just lowered.
+/// Test observer: `(stores emitted, elided)` for the last successfully defined
+/// leaf. Production headers read their compilation scope's typed snapshot.
+#[cfg(test)]
 pub(crate) fn rootwin_counters() -> (u32, u32) {
-    ROOTWIN_CARRY.with(|c| {
-        let c = c.borrow();
-        (c.emitted, c.elided)
-    })
+    rootwin_census::last_completed_counts().into()
 }
 
 thread_local! {
@@ -4539,7 +4555,7 @@ pub(crate) fn emit_hoisted_root_window_prologue(
     vmctx: ClifValue,
     max_slots: usize,
 ) {
-    rootwin_counters_reset();
+    rootwin_carry_reset();
     let (_off_ptr, off_top, off_cap) = ctx_rootwin_offsets();
     let base = fb
         .ins()
