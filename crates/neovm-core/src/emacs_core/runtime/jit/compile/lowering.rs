@@ -4311,6 +4311,7 @@ thread_local! {
 ///    bytecode block but entered from one earlier site's signal edge), and a
 ///    back-edge poll block (a Switch compare chain emits one per backward
 ///    target, as sibling paths) — the record is dropped there.
+///
 /// Threading: compile-thread SSA history only, never Lisp/mutator state. The
 /// vector retains its allocation across compilations. Separate scalar cells
 /// let a diagnostic scope restore its enclosing census without borrowing the
