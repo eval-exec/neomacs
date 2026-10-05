@@ -224,6 +224,23 @@ pub enum DumpError {
     InvalidSymbolInterned(
         #[from] num_enum::TryFromPrimitiveError<crate::emacs_core::symbol::SymbolInterned>,
     ),
+    #[error("obarray row range overflows: offset {offset}, count {count}")]
+    InvalidObarrayRowRange { offset: u64, count: u64 },
+    #[error("mapped heap section is shorter than one value word")]
+    MappedHeapTooShort,
+    #[error("invalid symbol redirect code: {0}")]
+    InvalidSymbolRedirect(
+        #[from] num_enum::TryFromPrimitiveError<crate::emacs_core::symbol::SymbolRedirect>,
+    ),
+    #[error("symbol redirect {found:?} does not match its value descriptor {expected:?}")]
+    SymbolRedirectMismatch {
+        expected: crate::emacs_core::symbol::SymbolRedirect,
+        found: crate::emacs_core::symbol::SymbolRedirect,
+    },
+    #[error("invalid obarray row redirect {0:?}: only plain and alias rows are permitted")]
+    InvalidObarrayRowRedirect(crate::emacs_core::symbol::SymbolRedirect),
+    #[error("invalid obarray declared-special byte {0}: expected 0 or 1")]
+    InvalidObarrayDeclaredSpecial(u8),
     #[error("invalid dump section kind: {0}")]
     InvalidSectionKind(#[from] num_enum::TryFromPrimitiveError<DumpSectionKind>),
     #[error("invalid mapped vectorlike type: {0}")]

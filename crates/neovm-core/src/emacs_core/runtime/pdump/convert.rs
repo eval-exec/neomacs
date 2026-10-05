@@ -4938,12 +4938,30 @@ pub(crate) fn finish_load_interner() {
 
 // --- Symbol / Obarray ---
 
+#[deny(clippy::wildcard_enum_match_arm)]
 pub(crate) fn load_symbol_data(
     decoder: &mut LoadDecoder,
     sym_id: SymId,
     sd: &DumpSymbolData,
 ) -> Result<LispSymbol, DumpError> {
     use crate::emacs_core::symbol::{SymbolInterned, SymbolRedirect, SymbolVal};
+    let redirect = SymbolRedirect::try_from(sd.redirect)?;
+    let expected = match &sd.val {
+        DumpSymbolVal::Plain(_) => SymbolRedirect::Plainval,
+        DumpSymbolVal::Alias(_) => SymbolRedirect::Varalias,
+        DumpSymbolVal::Localized { .. } => SymbolRedirect::Localized,
+        DumpSymbolVal::Forwarded
+        | DumpSymbolVal::BoolForwarded(_)
+        | DumpSymbolVal::IntForwarded(_)
+        | DumpSymbolVal::ObjForwarded(_)
+        | DumpSymbolVal::KboardForwarded(_) => SymbolRedirect::Forwarded,
+    };
+    if redirect != expected {
+        return Err(DumpError::SymbolRedirectMismatch {
+            expected,
+            found: redirect,
+        });
+    }
     let mut symbol = LispSymbol::new(sym_id);
 
     // The writer stores each enum in its own byte; no other flags share
@@ -5011,6 +5029,7 @@ pub(crate) fn load_symbol_data(
     Ok(symbol)
 }
 
+#[deny(clippy::wildcard_enum_match_arm)]
 pub(crate) fn load_obarray(
     decoder: &mut LoadDecoder,
     dob: &DumpObarray,
@@ -5064,7 +5083,7 @@ pub(crate) fn load_obarray(
     // each row is a header unpack plus three word reads - no DumpValue
     // decode. See `DumpObarray::plain_rows` for the layout.
     if let Some((rows_offset, rows_count)) = dob.plain_rows {
-        use crate::emacs_core::symbol::{SymbolInterned, SymbolRedirect, SymbolVal};
+        use crate::emacs_core::symbol::{SymbolRedirect, SymbolVal};
         let mapped_heap = decoder.state.mapped_heap.ok_or_else(|| {
             DumpError::ImageFormatError("obarray symbol rows require a mapped heap image".into())
         })?;
@@ -5073,26 +5092,49 @@ pub(crate) fn load_obarray(
         // limits), then three raw word reads - read_value_word re-ran the
         // full validation for every word of every row.
         let batch = mapped_heap.value_word_batch()?;
+        if rows_count > 0 {
+            let row_end = rows_count
+                .checked_mul(row_size)
+                .and_then(|len| rows_offset.checked_add(len))
+                .ok_or(DumpError::InvalidObarrayRowRange {
+                    offset: rows_offset,
+                    count: rows_count,
+                })?;
+            // Validate the entire row range before reserving storage or reading
+            // its first header. The checked endpoint also proves that all
+            // loop offset arithmetic below fits in u64.
+            let _ = batch.word_ptr(rows_offset)?;
+            let _ = batch.word_ptr(row_end - std::mem::size_of::<usize>() as u64)?;
+        }
         symbols.reserve(rows_count as usize);
         for i in 0..rows_count {
             let base = rows_offset + i * row_size;
             let row = batch.word_ptr(base)?;
-            debug_assert_eq!(row_size, 32);
-            let head = unsafe { row.read_unaligned() } as u64;
-            let dump_id = (head & 0xFFFF_FFFF) as u32;
-            let redirect = ((head >> 32) & 0xFF) as u8;
-            let trapped_write = ((head >> 40) & 0xFF) as u8;
-            let interned = ((head >> 48) & 0xFF) as u8;
-            let declared_special = ((head >> 56) & 0xFF) != 0;
+            // SAFETY: word_ptr validated this complete eight-byte header.
+            // ObarrayRowHead is Pod, aligned to one, and decodes the id as LE.
+            let head = unsafe {
+                row.cast::<super::mapped_heap::ObarrayRowHead>()
+                    .read_unaligned()
+            };
+            let redirect = head.redirect()?;
+            let trapped_write = head.trapped_write()?;
+            let interned = head.interned()?;
+            let declared_special = head.declared_special()?;
             // The row is 32 bytes and `base` was validated against the word
             // limit; validate the LAST word so the three trailing reads are
             // covered, then read raw.
             let _ = batch.word_ptr(base + 24)?;
-            let val_word = unsafe { row.add(1).read_unaligned() };
-            let function = unsafe { row.add(2).read_unaligned() };
-            let plist = unsafe { row.add(3).read_unaligned() };
+            // SAFETY: the first and last word checks above cover the
+            // contiguous row, including all three trailing value words.
+            let (val_word, function, plist) = unsafe {
+                (
+                    row.add(1).read_unaligned(),
+                    row.add(2).read_unaligned(),
+                    row.add(3).read_unaligned(),
+                )
+            };
 
-            let sym_id = load_sym_id(&DumpSymId(dump_id));
+            let sym_id = load_sym_id(&head.symbol_id());
             #[cfg(debug_assertions)]
             if !seen_symbol_ids.insert(sym_id) {
                 return Err(DumpError::DeserializationError(format!(
@@ -5101,14 +5143,12 @@ pub(crate) fn load_obarray(
                 )));
             }
             let mut symbol = crate::emacs_core::symbol::LispSymbol::new(sym_id);
-            let trapped_write = SymbolTrappedWrite::try_from(trapped_write)?;
-            let interned = SymbolInterned::try_from(interned)?;
             symbol.flags.set_trapped_write(trapped_write);
             symbol.flags.set_interned(interned);
             symbol.flags.set_declared_special(declared_special);
             let val = crate::tagged::value::TaggedValue::from_bits(val_word);
             match redirect {
-                1 => {
+                SymbolRedirect::Varalias => {
                     let target = val.as_symbol_id().ok_or_else(|| {
                         DumpError::DeserializationError(format!(
                             "obarray alias row {} target is not a symbol",
@@ -5117,9 +5157,12 @@ pub(crate) fn load_obarray(
                     })?;
                     symbol.set_alias_target(target);
                 }
-                _ => {
+                SymbolRedirect::Plainval => {
                     symbol.flags.set_redirect(SymbolRedirect::Plainval);
                     symbol.val = SymbolVal { plain: val };
+                }
+                SymbolRedirect::Localized | SymbolRedirect::Forwarded => {
+                    return Err(DumpError::InvalidObarrayRowRedirect(redirect));
                 }
             }
             symbol.function = crate::tagged::value::TaggedValue::from_bits(function);

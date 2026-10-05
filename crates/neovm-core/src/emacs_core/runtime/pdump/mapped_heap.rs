@@ -78,21 +78,30 @@ pub(crate) struct MappedHeapView {
 }
 
 /// See [`MappedHeapView::value_word_batch`].
+///
+/// `max` is the last complete value word's offset, or None when the view
+/// contains no complete word. Raw pointers confine this view to its loading
+/// thread; it cannot be sent to or shared with another mutator.
+#[derive(Debug)]
 pub(crate) struct ValueWordBatch {
     ptr: *mut u8,
-    max: usize,
+    max: Option<usize>,
 }
+static_assertions::assert_not_impl_any!(ValueWordBatch: Send, Sync);
 
 impl ValueWordBatch {
+    /// Return a complete value-word pointer at an aligned offset. Reject short views and
+    /// offsets outside the mapped range before doing pointer arithmetic.
     #[inline]
     pub(crate) fn word_ptr(&self, offset: u64) -> Result<*mut usize, DumpError> {
         let start = usize::try_from(offset).map_err(|_| {
             DumpError::ImageFormatError("mapped value fixup offset overflows usize".into())
         })?;
-        if start > self.max {
+        let max = self.max.ok_or(DumpError::MappedHeapTooShort)?;
+        if start > max {
             return Err(DumpError::ImageFormatError(format!(
                 "mapped value fixup at {start} exceeds heap word limit {}",
-                self.max
+                max
             )));
         }
         if start % std::mem::align_of::<TaggedValue>() != 0 {
@@ -101,6 +110,8 @@ impl ValueWordBatch {
                 std::mem::align_of::<TaggedValue>()
             )));
         }
+        // SAFETY: the checked maximum covers a complete value word in the
+        // live mapped view. Readers and writers use unaligned word access.
         Ok(unsafe { self.ptr.add(start).cast::<usize>() })
     }
 }
@@ -450,7 +461,7 @@ impl MappedHeapView {
         }
         Ok(ValueWordBatch {
             ptr: self.ptr,
-            max: self.len.saturating_sub(std::mem::size_of::<TaggedValue>()),
+            max: self.len.checked_sub(std::mem::size_of::<TaggedValue>()),
         })
     }
 
@@ -463,7 +474,11 @@ impl MappedHeapView {
         let start = usize::try_from(offset).map_err(|_| {
             DumpError::ImageFormatError("mapped value fixup offset overflows usize".into())
         })?;
-        if start > self.len.saturating_sub(std::mem::size_of::<TaggedValue>()) {
+        let max = self
+            .len
+            .checked_sub(std::mem::size_of::<TaggedValue>())
+            .ok_or(DumpError::MappedHeapTooShort)?;
+        if start > max {
             return Err(DumpError::ImageFormatError(format!(
                 "mapped value fixup at {start} exceeds heap section length {}",
                 self.len
@@ -475,6 +490,8 @@ impl MappedHeapView {
                 std::mem::align_of::<TaggedValue>()
             )));
         }
+        // SAFETY: the checked maximum covers a complete value word in the
+        // live mapped view. Readers and writers use unaligned word access.
         Ok(unsafe { self.ptr.add(start).cast::<usize>() })
     }
 }
@@ -737,8 +754,78 @@ pub(crate) fn bytecode_extras_len(function: &super::types::DumpByteCodeFunction)
     std::mem::size_of::<BytecodeExtras>() + ids_bytes + function.extra_slots.len() * 8 + doc_bytes
 }
 
+/// Wire header shared by obarray row writer and reader.
+///
+/// The symbol id is always little endian; the other fields occupy separate
+/// bytes. This immutable, pointer-free descriptor can be shared by mutators;
+/// decoding never depends on native integer byte order. Flag and redirect
+/// accessors reject invalid wire codes before constructing runtime enum values.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct ObarrayRowHead {
+    symbol_id_le: [u8; 4],
+    redirect: u8,
+    trapped_write: u8,
+    interned: u8,
+    declared_special: u8,
+}
+
+const _: () = {
+    assert!(std::mem::size_of::<ObarrayRowHead>() == 8);
+    assert!(std::mem::align_of::<ObarrayRowHead>() == 1);
+    assert!(std::mem::offset_of!(ObarrayRowHead, symbol_id_le) == 0);
+    assert!(std::mem::offset_of!(ObarrayRowHead, redirect) == 4);
+    assert!(std::mem::offset_of!(ObarrayRowHead, trapped_write) == 5);
+    assert!(std::mem::offset_of!(ObarrayRowHead, interned) == 6);
+    assert!(std::mem::offset_of!(ObarrayRowHead, declared_special) == 7);
+};
+static_assertions::assert_impl_all!(ObarrayRowHead: Send, Sync);
+
+impl ObarrayRowHead {
+    pub(crate) fn new(id: super::types::DumpSymId, data: &super::types::DumpSymbolData) -> Self {
+        Self {
+            symbol_id_le: id.0.to_le_bytes(),
+            redirect: data.redirect,
+            trapped_write: data.trapped_write,
+            interned: data.interned,
+            declared_special: u8::from(data.declared_special),
+        }
+    }
+
+    pub(crate) fn symbol_id(self) -> super::types::DumpSymId {
+        super::types::DumpSymId(u32::from_le_bytes(self.symbol_id_le))
+    }
+
+    pub(crate) fn redirect(self) -> Result<crate::emacs_core::symbol::SymbolRedirect, DumpError> {
+        crate::emacs_core::symbol::SymbolRedirect::try_from(self.redirect).map_err(DumpError::from)
+    }
+
+    pub(crate) fn trapped_write(
+        self,
+    ) -> Result<crate::emacs_core::symbol::SymbolTrappedWrite, DumpError> {
+        crate::emacs_core::symbol::SymbolTrappedWrite::try_from(self.trapped_write)
+            .map_err(DumpError::from)
+    }
+
+    pub(crate) fn interned(self) -> Result<crate::emacs_core::symbol::SymbolInterned, DumpError> {
+        crate::emacs_core::symbol::SymbolInterned::try_from(self.interned).map_err(DumpError::from)
+    }
+
+    pub(crate) fn declared_special(self) -> Result<bool, DumpError> {
+        match self.declared_special {
+            0 => Ok(false),
+            1 => Ok(true),
+            value => Err(DumpError::InvalidObarrayDeclaredSpecial(value)),
+        }
+    }
+}
+
 /// One fixed obarray symbol row (see `DumpObarray::plain_rows`).
 pub(crate) const OBARRAY_ROW_SIZE: usize = 32;
+const _: () = assert!(
+    OBARRAY_ROW_SIZE
+        == std::mem::size_of::<ObarrayRowHead>() + 3 * std::mem::size_of::<TaggedValue>()
+);
 
 /// The canonical bytes of a pdump stub `ByteCodeFunction` whose extras
 /// region holds `extras_len` slots (`ByteCodeFunction::is_pdump_stub`), built
@@ -1152,6 +1239,7 @@ impl MappedHeapBuilder {
 
     /// Write the obarray symbol rows (see `DumpObarray::plain_rows`). Runs
     /// after `populate_raw_heap_payloads` so `self.bytes` is fully sized.
+    #[deny(clippy::wildcard_enum_match_arm)]
     fn populate_obarray_rows(
         &mut self,
         base: usize,
@@ -1161,17 +1249,19 @@ impl MappedHeapBuilder {
         use super::types::{DumpSymbolVal, DumpValue};
         for (i, (sym, data)) in rows.iter().enumerate() {
             let offset = base + i * OBARRAY_ROW_SIZE;
-            let mut head = [0u8; 8];
-            head[..4].copy_from_slice(&sym.0.to_le_bytes());
-            head[4] = data.redirect;
-            head[5] = data.trapped_write;
-            head[6] = data.interned;
-            head[7] = u8::from(data.declared_special);
-            self.write_bytes(offset, &head);
+            let head = ObarrayRowHead::new(*sym, data);
+            self.write_bytes(offset, bytemuck::bytes_of(&head));
             let val = match &data.val {
                 DumpSymbolVal::Plain(v) => v.clone(),
                 DumpSymbolVal::Alias(target) => DumpValue::Symbol(*target),
-                _ => unreachable!("row partition admits only Plain and Alias"),
+                DumpSymbolVal::Localized { .. }
+                | DumpSymbolVal::Forwarded
+                | DumpSymbolVal::BoolForwarded(_)
+                | DumpSymbolVal::IntForwarded(_)
+                | DumpSymbolVal::ObjForwarded(_)
+                | DumpSymbolVal::KboardForwarded(_) => {
+                    unreachable!("row partition admits only Plain and Alias")
+                }
             };
             self.write_dump_value_word(offset + 8, &val, heap);
             self.write_dump_value_word(offset + 16, &data.function, heap);
