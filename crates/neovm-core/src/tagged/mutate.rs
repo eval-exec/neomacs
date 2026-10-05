@@ -397,48 +397,79 @@ pub fn with_hash_table_mut<R>(
     value: TaggedValue,
     f: impl FnOnce(&mut LispHashTable) -> R,
 ) -> Option<R> {
-    if value.veclike_type()? != VecLikeType::HashTable {
-        return None;
-    }
     if super::gc::concurrent_hash_mutation_active() {
         return with_hash_table_mut_concurrent(value, f);
     }
-    with_hash_table_mut_body(value, f, || {})
+    // SAFETY: this mutation contains no collector transition. The caller's
+    // closure obeys the ordinary heap-mutation contract, which forbids GC.
+    unsafe { with_hash_table_mut_inactive(value, f) }
 }
 
-/// Keep the snapshot, mutation lease and their unwind/drop paths outside the
-/// inline inactive accessor. The lease must cover preimage enumeration as well
-/// as the caller's mutable borrow, so its owning Arc stays in this activation.
-#[cold]
-#[inline(never)]
-fn with_hash_table_mut_concurrent<R>(
+/// Base mutation body for a caller that has already rejected Tier-H activation.
+///
+/// # Safety
+/// The installed mutator's Tier-H snapshot must stay inactive from the caller's
+/// mode check until this accessor returns. Do not carry that decision across a
+/// Lisp callback or GC safepoint. The closure must not invoke Lisp or collect.
+#[inline]
+pub(crate) unsafe fn with_hash_table_mut_inactive<R>(
     value: TaggedValue,
     f: impl FnOnce(&mut LispHashTable) -> R,
 ) -> Option<R> {
-    // Keep the shared snapshot alive while borrowing its entry. The same-table
-    // guard precedes even preimage enumeration, which reads the live slots.
+    debug_assert!(!super::gc::concurrent_hash_mutation_active());
+    LispCollectionRevision::changed(value);
+    if value.veclike_type()? != VecLikeType::HashTable {
+        return None;
+    }
+    note_heap_write(value, HeapWriteKind::HashTableData);
+    let ptr = value.as_veclike_ptr().unwrap() as *mut HashTableObj;
+    unsafe {
+        // Lazy dump hydration before the caller sees the table (see
+        // `Value::as_hash_table`).
+        if (*ptr).table.needs_hydration() {
+            (*ptr).table.hydrate_pending();
+        }
+        // Whatever `f` does to the table, a `switch` plan compiled from its
+        // keys no longer describes it. A wholesale replacement (`*table =
+        // other`) installs a table whose cache starts empty.
+        (*ptr).table.data.switch_plan.invalidate();
+    }
+    // Nor does JIT code that answers it inline behind its epoch. The new
+    // epoch is stored before `f`, so even a mutation `f` abandons half way
+    // is covered, and again after it: a wholesale replacement installs
+    // another table's epoch (a fresh table's 0, a copy's), which could
+    // equal one compiled against this object.
+    let epoch = unsafe { (*ptr).table.data.switch_epoch.wrapping_add(1) };
+    unsafe { (*ptr).table.data.switch_epoch = epoch };
+    #[cfg(debug_assertions)]
+    let _guard = HeapMutClosureGuard::enter();
+    let result = f(unsafe { &mut (*ptr).table });
+    unsafe { (*ptr).table.data.switch_epoch = epoch };
+    Some(result)
+}
+
+/// Keep the snapshot, mutation lease and unwind/drop paths in the active clone.
+/// The caller has already selected an active Tier-H snapshot. The lease covers
+/// preimage enumeration and the mutable borrow, and its Arc lives throughout.
+#[cold]
+#[inline(never)]
+pub(crate) fn with_hash_table_mut_concurrent<R>(
+    value: TaggedValue,
+    f: impl FnOnce(&mut LispHashTable) -> R,
+) -> Option<R> {
+    if value.veclike_type()? != VecLikeType::HashTable {
+        return None;
+    }
     let snapshot = super::gc::concurrent_hash_snapshot(value);
     let mut mutation = snapshot
         .as_ref()
         .and_then(|snapshot| snapshot.lock_mutation(value.as_veclike_ptr().unwrap() as usize));
-    with_hash_table_mut_body(value, f, || {
-        if let Some(guard) = mutation.as_mut() {
-            super::gc::prepare_concurrent_hash_write(value, guard);
-        }
-    })
-}
-
-/// The inactive specialization has no snapshot or guard to construct/drop.
-/// Both specializations retain the journal/barrier before policy preparation.
-#[inline(always)]
-fn with_hash_table_mut_body<R>(
-    value: TaggedValue,
-    f: impl FnOnce(&mut LispHashTable) -> R,
-    prepare: impl FnOnce(),
-) -> Option<R> {
+    // The shared entry mutex must precede even journal/SATB preimage reads.
     LispCollectionRevision::changed(value);
     note_heap_write(value, HeapWriteKind::HashTableData);
-    prepare();
+    if let Some(guard) = mutation.as_mut() {
+        super::gc::prepare_concurrent_hash_write(value, guard);
+    }
     let ptr = value.as_veclike_ptr().unwrap() as *mut HashTableObj;
     unsafe {
         // Lazy dump hydration before the caller sees the table (see

@@ -3924,6 +3924,29 @@ impl TaggedValue {
         mutate::with_hash_table_mut(self, f)
     }
 
+    /// Base mutation accessor after an immediate inactive Tier-H dispatch.
+    ///
+    /// # Safety
+    /// Tier-H must stay inactive until return. The closure must not invoke
+    /// Lisp or collect, and the mode decision must not span a GC safepoint.
+    #[inline]
+    pub(crate) unsafe fn with_hash_table_mut_inactive<R>(
+        self,
+        f: impl FnOnce(&mut LispHashTable) -> R,
+    ) -> Option<R> {
+        // SAFETY: the caller supplies the same inactive-mutation contract.
+        unsafe { mutate::with_hash_table_mut_inactive(self, f) }
+    }
+
+    /// Active mutation accessor for a caller that has already dispatched.
+    #[inline]
+    pub(crate) fn with_hash_table_mut_concurrent<R>(
+        self,
+        f: impl FnOnce(&mut LispHashTable) -> R,
+    ) -> Option<R> {
+        mutate::with_hash_table_mut_concurrent(self, f)
+    }
+
     /// Replace the entire contents of a hash table value.
     pub fn replace_hash_table(self, table: LispHashTable) -> bool {
         self.with_hash_table_mut(|current| *current = table)
