@@ -281,6 +281,45 @@ where
         paths.into_iter().map(|(_, identity)| identity).collect()
     }
 
+    /// Order a selected set by GNU's structural in-order traversal.
+    ///
+    /// A deletion can collapse different starts without reinserting their
+    /// nodes (GNU itree.c:1173). Attachment serials then cease to describe
+    /// equal-start query order. Paths belong solely to this call under the
+    /// owning buffer's exclusive access and contain no shared Lisp state.
+    pub(super) fn subset_inorder(&self, identities: &[I]) -> Vec<I> {
+        let mut paths: Vec<_> = identities
+            .iter()
+            .copied()
+            .map(|identity| {
+                let id = *self
+                    .by_identity
+                    .get(&identity)
+                    .expect("indexed overlay missing from GNU order mirror");
+                (self.path_from_root(id), identity)
+            })
+            .collect();
+        paths.sort_unstable_by(|(left, _), (right, _)| {
+            for (left, right) in left.iter().zip(right) {
+                if left != right {
+                    return left.cmp(right);
+                }
+            }
+            match left.len().cmp(&right.len()) {
+                Ordering::Less => match right[left.len()] {
+                    Descent::Left => Ordering::Greater,
+                    Descent::Right => Ordering::Less,
+                },
+                Ordering::Greater => match left[right.len()] {
+                    Descent::Left => Ordering::Less,
+                    Descent::Right => Ordering::Greater,
+                },
+                Ordering::Equal => Ordering::Equal,
+            }
+        });
+        paths.into_iter().map(|(_, identity)| identity).collect()
+    }
+
     fn path_from_root(&self, mut node: OrderNodeId) -> Vec<Descent> {
         let mut reversed = Vec::new();
         while let Some(parent) = self.node(node).parent {

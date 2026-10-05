@@ -14,6 +14,7 @@ use std::sync::{Arc, OnceLock, Weak};
 
 use parking_lot::{RwLock, RwLockReadGuard};
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 
 use super::overlay_bplus::{
     OrderedFilterMask, OrderedRecordRelocation, OrderedShiftRecord, OrderedShiftTree,
@@ -1034,6 +1035,9 @@ impl OverlayIndex {
             endpoints.shift_at_or_after(range.end(), true, delta);
         }
 
+        // Deletion shifts the suffix beginning exactly at END to START as
+        // well. The topology itself stays fixed, so all resulting START ties
+        // must preserve its structural order rather than attachment serials.
         let mut effects = shrunk_effects;
         effects.reserve(detached.len());
         let mut evaporated = Vec::new();
@@ -1061,13 +1065,7 @@ impl OverlayIndex {
                         .is_some_and(|value| value.is_truthy())
                 });
             if evaporates {
-                evaporated.push((
-                    IntervalKey {
-                        start: new_range.start(),
-                        attachment_order,
-                    },
-                    OverlayIdentity::of(overlay),
-                ));
+                evaporated.push(OverlayIdentity::of(overlay));
                 materialize_overlay_position(overlay, new_range);
                 effects.push(OverlayEditEffect::Evaporated {
                     overlay,
@@ -1090,14 +1088,46 @@ impl OverlayIndex {
         // GNU discovers evaporated overlays in ascending itree order, conses
         // them, then deletes the resulting reversed list.  Preserve that
         // removal order because red-black topology affects later insertion.
-        evaporated.sort_unstable_by_key(|(key, _)| *key);
-        for (_, identity) in evaporated.into_iter().rev() {
+        let evaporated = self.gnu_order.subset_inorder(&evaporated);
+        for identity in evaporated.into_iter().rev() {
             assert!(
                 self.gnu_order.remove(identity),
                 "evaporated overlay missing from GNU order mirror"
             );
         }
+        self.restore_contracted_start_order(range.start());
         effects
+    }
+
+    /// GNU itree_delete_gap updates begins in place (itree.c:1173) and leaves
+    /// in-order traversal unchanged. Re-key only the newly tied start group;
+    /// ordinary queries keep using the B+ iterator with no extra sorting.
+    /// All scratch identities and keys are local to the owning buffer's
+    /// exclusive mutation; readers see the already protected completed index.
+    fn restore_contracted_start_order(&mut self, position: EmacsBytePos) {
+        let mut intervals = self.intervals.write();
+        let mut tied = SmallVec::<[OverlayIdentity; 4]>::new();
+        intervals
+            .records
+            .for_each_match(IntervalStartQuery(position), |record| {
+                tied.push(OverlayIdentity::of(record.overlay));
+            });
+        if tied.len() < 2 {
+            return;
+        }
+        let structural = self.gnu_order.subset_inorder(&tied);
+        if tied.as_slice() == structural.as_slice() {
+            return;
+        }
+        // Newer B+ attachment keys sort first. Reinsert in the opposite order
+        // without changing the GNU topology or overlay position authority.
+        for identity in structural.into_iter().rev() {
+            let overlay = Value::from_bits(identity.0);
+            let (range, _) = intervals
+                .take(overlay)
+                .expect("contracted overlay remains indexed");
+            assert!(intervals.insert(overlay, range));
+        }
     }
 
     fn deletion_exceptions(&self, range: EmacsByteRange) -> Vec<Value> {
@@ -1410,6 +1440,32 @@ impl OrderedShiftRecord for IntervalRecord {
     fn shifted_key(mut key: Self::Key, delta: EmacsByteDelta) -> Self::Key {
         key.start = delta.apply_to_pos(key.start);
         key
+    }
+}
+
+/// Start-only query used when a text deletion contracts starts to one point.
+/// Its coordinate is call-local under the buffer owner's exclusive mutation;
+/// no Lisp state or query result is shared with another mutator. Separate from
+/// ordinary point coverage so the common overlay-query code remains unchanged.
+#[derive(Clone, Copy)]
+struct IntervalStartQuery(EmacsBytePos);
+
+impl OrderedTreeQuery<IntervalRecord> for IntervalStartQuery {
+    fn subtree_may_match(
+        self,
+        minimum: EmacsBytePos,
+        maximum: EmacsBytePos,
+        _maximum_end: EmacsBytePos,
+    ) -> bool {
+        minimum <= self.0 && self.0 <= maximum
+    }
+
+    fn record_matches(self, record: IntervalRecord) -> bool {
+        record.range.start() == self.0
+    }
+
+    fn minimum_start_is_too_large(self, minimum_start: EmacsBytePos) -> bool {
+        minimum_start > self.0
     }
 }
 
