@@ -66,34 +66,24 @@ struct PendingGnuTimer {
 }
 
 fn pending_gnu_timer(timer: Value) -> Option<PendingGnuTimer> {
-    let slots = timer.as_vector_data()?.clone();
+    let slots = timer.as_vector_data()?;
     if slots.len() != 10 || !slots[0].is_nil() || !slots[7].is_nil() {
         return None;
     }
 
     Some(PendingGnuTimer {
-        when: GnuTimerTimestamp {
-            high_seconds: slots[1].as_int()?,
-            low_seconds: slots[2].as_int()?,
-            usecs: slots[3].as_int()?,
-            psecs: slots.get(8).and_then(|value| value.as_int()).unwrap_or(0),
-        },
+        when: GnuTimerTimestamp::from_components(slots[1], slots[2], slots[3], slots[8])?,
     })
 }
 
 fn pending_gnu_idle_timer(timer: Value) -> Option<PendingGnuTimer> {
-    let slots = timer.as_vector_data()?.clone();
+    let slots = timer.as_vector_data()?;
     if slots.len() != 10 || !slots[0].is_nil() || slots[7].is_nil() {
         return None;
     }
 
     Some(PendingGnuTimer {
-        when: GnuTimerTimestamp {
-            high_seconds: slots[1].as_int()?,
-            low_seconds: slots[2].as_int()?,
-            usecs: slots[3].as_int()?,
-            psecs: slots.get(8).and_then(|value| value.as_int()).unwrap_or(0),
-        },
+        when: GnuTimerTimestamp::from_components(slots[1], slots[2], slots[3], slots[8])?,
     })
 }
 

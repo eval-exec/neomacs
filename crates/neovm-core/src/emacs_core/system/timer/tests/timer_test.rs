@@ -10,6 +10,9 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[cfg(test)]
+mod numeric_boundaries;
+
 fn eval_first_form_after_marker(eval: &mut Context, source: &str, marker: &str) {
     let start = source
         .find(marker)
