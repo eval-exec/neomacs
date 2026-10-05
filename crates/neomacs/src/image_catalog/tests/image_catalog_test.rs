@@ -1,5 +1,5 @@
 use super::*;
-use neomacs_display_protocol::ImageRealization;
+use neomacs_display_protocol::{ImageFrameIndex, ImageRealization};
 use neomacs_display_protocol::image_diagnostic::ImageDiagnostic;
 use neomacs_display_runtime::render_thread::ImageRenderState;
 use neomacs_display_runtime::render_thread::{ImageProbeSource, probe_image_layout};
@@ -524,6 +524,63 @@ fn placeholder_extent_matches_the_probed_layout_for_a_scaled_spec() {
         placeholder_image_extent(&request),
         probed,
         "the reserved slot must not move when the header lands"
+    );
+}
+
+/// A frame that swaps in later must reserve the geometry an earlier frame
+/// already resolved. The probe's answer cannot depend on the selected frame —
+/// raster frames composite onto the canvas the header names — so re-deriving it
+/// per frame is pure cost, and while the reservation was provisional rather
+/// than shared, pure layout movement at animation rates.
+#[test]
+fn a_later_frame_reserves_the_geometry_an_earlier_frame_resolved() {
+    let (cmd_tx, _cmd_rx) = crossbeam_channel::unbounded();
+    let metadata = Arc::new(ImageRenderState::default());
+    let catalog = AsyncImageCatalog::new(cmd_tx, None, Arc::clone(&metadata), None);
+    let fixture = neomacs_infra::workspace_root().join("test/data/image/blank-100x200.png");
+    let mut request = file_request(fixture.to_str().expect("utf8 fixture path"));
+    // Height pinned, width left to the native aspect ratio: the reservation is
+    // a square of the pinned height and the resolved extent is not, which is
+    // what makes the sharing observable at all.
+    request.size = ImageSizeSpec::new(AxisSize::Native, AxisSize::Exact(24));
+
+    let ImageLookup::Pending(first) = lookup(&catalog, request.clone()) else {
+        panic!("a new image lookup begins pending");
+    };
+    let load = first.load();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while catalog.header_layout(&request, load).is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "the header probe never resolved this image's geometry"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    let refined = lookup(&catalog, request.clone());
+    assert_eq!(
+        (refined.placement().width(), refined.placement().height()),
+        (12, 24),
+        "100x200 pinned to a height of 24 resolves to 12x24"
+    );
+    assert_eq!(
+        catalog.slot_moves(),
+        1,
+        "the first reservation moved once, when the aspect ratio arrived"
+    );
+
+    let mut later = request.clone();
+    later.frame = ImageFrameIndex::new(1);
+    let shared = lookup(&catalog, later);
+    assert_eq!(
+        (shared.placement().width(), shared.placement().height()),
+        (12, 24),
+        "a later frame must reserve the resolved geometry, not a fresh square"
+    );
+    assert_eq!(
+        catalog.slot_moves(),
+        1,
+        "sharing a resolved answer is not a move: the later frame was never provisional"
     );
 }
 

@@ -147,6 +147,21 @@ pub(super) struct AsyncImageCatalog {
     /// Woken once per header probe that produced geometry.
     redisplay_waker: Option<RedisplayWaker>,
     entries: RefCell<HashMap<ImageResolveRequest, CatalogEntry>>,
+    /// Resolved geometry keyed by everything the header probe reads *except*
+    /// the animation frame (see [`geometry_key`]).
+    ///
+    /// A raster source's frames composite onto one canvas, so the probe's
+    /// answer cannot depend on which frame is selected. Keying without the
+    /// frame lets frame N+1 of an animation start life already resolved instead
+    /// of reserving a provisional extent and moving when its own probe lands —
+    /// which, at animation rates, is a layout shift the user sees.
+    geometry_layouts: Mutex<HashMap<ImageResolveRequest, ImageLayoutExtent>>,
+    /// Slots that moved when resolved geometry landed (see [`SlotChange`]).
+    ///
+    /// The invariant is zero for a spec that pins both axes: the reservation is
+    /// computed by the same resolution the header and the decoder use. Anything
+    /// else is a geometry disagreement being paid for by a frame.
+    slot_moves: Cell<u64>,
     sequence_ids: RefCell<HashMap<ImageResolveSource, ImageSequenceId>>,
     next_load_attempt: Cell<u64>,
     next_sequence_id: Cell<u64>,
@@ -198,6 +213,8 @@ impl AsyncImageCatalog {
             header_layouts: Arc::new(Mutex::new(HashMap::new())),
             redisplay_waker,
             entries: RefCell::new(HashMap::new()),
+            geometry_layouts: Mutex::new(HashMap::new()),
+            slot_moves: Cell::new(0),
             sequence_ids: RefCell::new(HashMap::new()),
             next_load_attempt: Cell::new(0),
             next_sequence_id: Cell::new(0),
@@ -415,7 +432,11 @@ impl AsyncImageCatalog {
         if !entries.contains_key(&request) {
             let image_id = next_host_image_id();
             let load = self.next_load(image_id);
-            let layout = placeholder_image_extent(&request);
+            // Another frame of the same image may already have resolved this
+            // geometry: reserving the resolved extent means this slot never
+            // moves, and the probe below has nothing left to learn.
+            let known = self.known_geometry(&request);
+            let layout = known.unwrap_or_else(|| placeholder_image_extent(&request));
             let pending = PendingImage::new(load, layout);
             let command =
                 image_load_command(&request, load, self.sequence_id(&request.source), limit);
@@ -435,7 +456,9 @@ impl AsyncImageCatalog {
                 }
             };
             entries.insert(request.clone(), state);
-            self.schedule_header_probe(&request, resolution.as_ref(), load);
+            if known.is_none() {
+                self.schedule_header_probe(&request, resolution.as_ref(), load);
+            }
         }
 
         let state = entries
@@ -472,10 +495,20 @@ impl AsyncImageCatalog {
         // Header geometry may have landed since the slot was reserved: adopt it
         // by narrowing the slot in place. The identity is unchanged, so glyphs
         // already published against this image keep pointing at it.
-        if let Some(layout) = self.header_layout(&request, load)
-            && layout != pending.placement().layout()
-        {
-            *pending = PendingImage::new(load, layout);
+        //
+        // This is the only place a reserved slot may move, and the move is
+        // classified and counted here rather than left to be inferred from a
+        // frame that shifted. A slot that already holds resolved geometry
+        // (renewed from a known layout, or reserved from another frame's
+        // answer) finalizes as Unchanged, so a move is counted once per
+        // reservation, not once per lookup.
+        if let Some(layout) = self.header_layout(&request, load) {
+            let settled = ProvisionalExtent::new(pending.placement().layout()).finalize(layout);
+            if let SlotChange::Moved { from, to } = settled {
+                self.record_slot_move(&request, from, to);
+                *pending = PendingImage::new(load, layout);
+            }
+            self.remember_geometry(&request, layout);
         }
         let terminal = match self.image_metadata.try_terminal(load) {
             ImageTerminalProbe::Busy => {
@@ -531,6 +564,16 @@ impl AsyncImageCatalog {
             for request in &invalidated {
                 layouts.remove(request);
             }
+        }
+        // Stale geometry is stale for every frame, including frames whose
+        // requests were never looked up: prune by the same predicate the slots
+        // were dropped by, so a shared answer cannot outlive its source.
+        if let Ok(mut geometry) = self.geometry_layouts.try_lock() {
+            geometry.retain(|request, _| match &target {
+                ImageInvalidation::Spec { spec } => request.spec != *spec,
+                ImageInvalidation::Dependency(source) => request.source != *source,
+                ImageInvalidation::All => false,
+            });
         }
 
         let result = if removed.is_empty() {
@@ -637,6 +680,57 @@ impl AsyncImageCatalog {
                 probed_layout(&poisoned.into_inner(), request, load)
             }
         }
+    }
+
+    /// Geometry already resolved for this image by any of its frames.
+    ///
+    /// Never waits, for the same reason [`Self::header_layout`] never does: a
+    /// concurrent writer leaves this lookup on its placeholder, exactly like a
+    /// probe still in flight, and the next lookup finds the answer.
+    fn known_geometry(&self, request: &ImageResolveRequest) -> Option<ImageLayoutExtent> {
+        let key = geometry_key(request);
+        match self.geometry_layouts.try_lock() {
+            Ok(layouts) => layouts.get(&key).copied(),
+            Err(TryLockError::WouldBlock) => None,
+            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner().get(&key).copied(),
+        }
+    }
+
+    /// Share a resolved geometry with every other frame of the same image.
+    ///
+    /// Best effort: contention only means a later frame pays for a probe it
+    /// could have been spared, never that a slot reserves something wrong.
+    fn remember_geometry(&self, request: &ImageResolveRequest, layout: ImageLayoutExtent) {
+        if let Ok(mut layouts) = self.geometry_layouts.try_lock() {
+            layouts.insert(geometry_key(request), layout);
+        }
+    }
+
+    /// Count a reserved slot moving when resolved geometry landed.
+    ///
+    /// Nothing here stops the frame from moving — the geometry is what it is —
+    /// but a move outside the aspect case is a disagreement, and a counter is
+    /// how it gets noticed instead of being paid for at animation rates.
+    fn record_slot_move(
+        &self,
+        request: &ImageResolveRequest,
+        from: ImageLayoutExtent,
+        to: ImageLayoutExtent,
+    ) {
+        self.slot_moves.set(self.slot_moves.get() + 1);
+        tracing::debug!(
+            size = ?request.size,
+            rotation = ?request.rotation,
+            ?from,
+            ?to,
+            "image slot moved when resolved geometry landed"
+        );
+    }
+
+    /// Slots that moved when resolved geometry landed, for tests.
+    #[cfg(test)]
+    fn slot_moves(&self) -> u64 {
+        self.slot_moves.get()
     }
 
     /// Carry a known header layout over to a replacement load of the same
