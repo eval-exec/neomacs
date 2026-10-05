@@ -33,6 +33,18 @@ fn obarray_hint_rejects_unrepresentable_bucket_bits() {
 }
 
 #[test]
+fn expt_rejects_gnu_limb_limit_before_computation() {
+    let form = r#"(list (expt 7 50)
+      (condition-case e (expt 7 (ash 1 34)) (error e))
+      (expt -1 (ash 1 34)) (expt 0 (ash 1 34)))"#;
+    let expected = oracle(
+        form,
+        include_str!("boundary_numbers/expt_rejects_gnu_limb_limit_before_computation.expect"),
+    );
+    assert_eq!(runtime_startup_eval_one(form), expected);
+}
+
+#[test]
 fn repeated_insertion_rejects_buffer_length_overflow() {
     let form = r#"(with-temp-buffer
       (list (condition-case e (insert-char ?a most-positive-fixnum) (error e))

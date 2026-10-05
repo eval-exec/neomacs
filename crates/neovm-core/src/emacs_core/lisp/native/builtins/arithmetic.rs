@@ -3,7 +3,7 @@ use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
 use crate::emacs_core::forward::LispIntFwd;
 use crate::emacs_core::intern::{SymId, intern};
 use crate::emacs_core::symbol::Obarray;
-use malachite::base::num::arithmetic::traits::{Abs, DivRound, Pow};
+use malachite::base::num::arithmetic::traits::{Abs, DivRound};
 use malachite::base::num::conversion::traits::RoundingFrom;
 use malachite::base::num::logic::traits::SignificantBits;
 use malachite::base::rounding_modes::RoundingMode;
@@ -1738,7 +1738,6 @@ const GMP_NLIMBS_MAX: u64 = i32::MAX as u64;
 const MUL_2EXP_EXTRA_LIMBS: u64 = 1;
 
 /// GNU `pow_ui_extra_limbs` fudge factor (`src/bignum.c:385`).
-const POW_UI_EXTRA_LIMBS: u64 = 5;
 
 /// Number of 64-bit GMP limbs needed to represent |value|, matching
 /// GNU's `emacs_mpz_size` / `mpz_size` (0 for a zero magnitude).
@@ -2538,23 +2537,25 @@ pub(crate) fn builtin_expt(args: Vec<Value>) -> EvalResult {
         _ => unreachable!("non-int exponent handled above"),
     };
 
+    // GNU expt_integer always computes through mpz; a power that fits i64 is
+    // the same exact integer without a bignum or the limb-limit check.
+    if let Some(base) = base_val.as_fixnum()
+        && let Ok(exp) = u32::try_from(exp_u64)
+        && let Some(power) = base.checked_pow(exp)
+    {
+        return Ok(Value::make_int(power));
+    }
+
     let base_big = bignum_or_int_to_integer(base_val)?;
-    // GNU `emacs_mpz_pow_ui` (`src/bignum.c:381`): a result GMP could not
-    // hold signals before it is computed.
-    let pow_limbs = mpz_limb_count(&base_big).checked_mul(exp_u64);
-    if pow_limbs.is_none_or(|n| n > GMP_NLIMBS_MAX - POW_UI_EXTRA_LIMBS) {
+    let power = bounded_power::BoundedPower::try_from((base_big, exp_u64)).map_err(
+        |bounded_power::PowerError::Overflow| signal(LispCondition::OverflowError, vec![]),
+    )?;
+    // The limb witness also bounds this lower-width calculation. Keep GNU's
+    // integer-width admission before computing a potentially enormous result.
+    if bignum_bits_overflow(power.minimum_bits()) {
         return Err(overflow_error());
     }
-    // GNU computes the power and then refuses it in `make_bignum_bits` when
-    // it is wider than `integer-width`. |BASE| >= 2^(b-1) makes the power at
-    // least (b-1)*EXP + 1 bits wide; when that is already too wide the
-    // answer is the same `overflow-error`, so give it without first
-    // computing a number of up to 2^31 limbs.
-    let min_bits = (base_big.significant_bits() - 1) * exp_u64 + 1;
-    if bignum_bits_overflow(min_bits) {
-        return Err(overflow_error());
-    }
-    make_integer_checked(base_big.pow(exp_u64))
+    make_integer_checked(Integer::from(power))
 }
 
 pub(crate) fn builtin_random(args: Vec<Value>) -> EvalResult {

@@ -40,6 +40,20 @@ impl From<BoundedPower> for Integer {
     }
 }
 
+impl BoundedPower {
+    /// A lower bound on the result width, safe after limb-growth admission.
+    /// GNU's limb limit bounds the product below 2^37 on this 64-bit target.
+    #[inline]
+    pub(super) fn minimum_bits(&self) -> u64 {
+        let bits = self.base.significant_bits();
+        if bits == 0 && self.exponent != 0 {
+            0
+        } else {
+            bits.saturating_sub(1) * self.exponent + 1
+        }
+    }
+}
+
 static_assertions::assert_impl_all!(BoundedPower: Send, Sync);
 
 #[cfg(test)]
