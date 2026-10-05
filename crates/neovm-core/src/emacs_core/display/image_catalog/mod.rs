@@ -408,10 +408,7 @@ impl ResolvedImageMetadata {
     ) -> Self {
         Self {
             layout,
-            reported: ImageReportedExtent::new(
-                realization.image_pixel_dimension(layout.width()),
-                realization.image_pixel_dimension(layout.height()),
-            ),
+            reported: realization.report_extent(layout),
             background,
             background_transparent,
             mask,

@@ -1121,16 +1121,23 @@ impl ImageRealization {
     }
 
     /// Convert a GNU image dimension to integer logical layout pixels.
-    #[must_use]
-    pub fn layout_dimension(self, dimension: u32) -> u32 {
+    ///
+    /// Private on purpose. Four coordinate spaces meet here — native/spec, GNU
+    /// image-pixel, logical layout and device/raster — and every conversion
+    /// between them is `u32 -> u32`, so choosing the wrong one is a silent
+    /// one-pixel drift with nothing in the signature to catch it. That is
+    /// exactly how a reservation came to be computed with an image-pixel
+    /// conversion applied to a size-spec value. Callers use the typed
+    /// conversions instead: [`Self::layout_extent`], [`Self::report_extent`],
+    /// [`Self::raster_extent`].
+    fn layout_dimension(self, dimension: u32) -> u32 {
         ((f64::from(dimension) * f64::from(self.layout_scale()))
             .round()
             .max(1.0)) as u32
     }
 
     /// Convert an integer logical extent to physical texture pixels.
-    #[must_use]
-    pub fn raster_dimension(self, layout_dimension: u32) -> u32 {
+    fn raster_dimension(self, layout_dimension: u32) -> u32 {
         ((f64::from(layout_dimension) * f64::from(self.device_scale()))
             .ceil()
             .max(1.0)) as u32
@@ -1140,13 +1147,38 @@ impl ImageRealization {
     ///
     /// Prefer re-running `ImageSizeSpec::desired` at [`Self::image_pixel_scale`]
     /// when the native size is still known — `ceil` is not invertible.
-    #[must_use]
-    pub fn image_pixel_dimension(self, layout_dimension: u32) -> u32 {
+    fn image_pixel_dimension(self, layout_dimension: u32) -> u32 {
         ((f64::from(layout_dimension) * f64::from(self.report_scale()))
             .ceil()
             .max(1.0)) as u32
     }
 
+    /// Physical texture extent for a resolved logical layout extent.
+    #[must_use]
+    pub fn raster_extent(self, layout: ImageLayoutExtent) -> ImageRasterExtent {
+        ImageRasterExtent::new(
+            self.raster_dimension(layout.width()),
+            self.raster_dimension(layout.height()),
+        )
+    }
+
+    /// GNU `Fimage_size` extent for a resolved logical layout extent.
+    #[must_use]
+    pub fn report_extent(self, layout: ImageLayoutExtent) -> ImageReportedExtent {
+        ImageReportedExtent::new(
+            self.image_pixel_dimension(layout.width()),
+            self.image_pixel_dimension(layout.height()),
+        )
+    }
+
+    /// Logical layout extent for an extent in GNU's image-pixel space.
+    #[must_use]
+    pub fn layout_extent(self, reported: ImageReportedExtent) -> ImageLayoutExtent {
+        ImageLayoutExtent::new(
+            self.layout_dimension(reported.width()),
+            self.layout_dimension(reported.height()),
+        )
+    }
 
     /// Scale factor for GNU `compute_image_size` / Fimage_size pixel space.
     ///
