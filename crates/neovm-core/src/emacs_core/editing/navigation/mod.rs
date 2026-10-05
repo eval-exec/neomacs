@@ -960,23 +960,42 @@ pub(crate) fn builtin_end_of_line_1(eval: &mut super::eval::Context, n: Value) -
 /// `BEGV` / `ZV` (the narrowing region), not the absolute buffer
 /// extents — `forward-char` must clamp to and signal against those
 /// fields, otherwise narrowing is silently ignored (audit §7.1).
-pub(crate) fn builtin_forward_char(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    crate::emacs_core::error::expect_args_range("forward-char", &args, 0, 1)?;
-    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
-    builtin_forward_char_1(eval, arg(0))
-}
-/// `forward-char` as registered: fixed arity 1, called straight off the bytecode
-/// stack like GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
-/// The `Vec` entry point above serves Rust callers.
+///
+/// Registered with fixed arity 1, called straight off the bytecode stack like
+/// GNU `funcall_subr`'s `a1` case (absent optionals arrive as nil).
 pub(crate) fn builtin_forward_char_1(eval: &mut super::eval::Context, n: Value) -> EvalResult {
-    let args: [Value; 1] = [n];
-    let n = if args.is_empty() || args[0].is_nil() {
+    move_characters(eval, n, CharacterMotion::Forward)
+}
+
+/// Direction of a character-count request. Counts remain integers through
+/// movement: negating the most-negative Lisp fixnum never re-tags it.
+/// This scalar request has no mutable state or mutator affinity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CharacterMotion {
+    Forward,
+    Backward,
+}
+
+static_assertions::assert_impl_all!(CharacterMotion: Send, Sync);
+
+fn move_characters(
+    eval: &mut super::eval::Context,
+    count: Value,
+    motion: CharacterMotion,
+) -> EvalResult {
+    let count = crate::tagged::value::Fixnum::try_from(if count.is_nil() {
         1
     } else {
-        expect_fixnum(&args[0])?
+        expect_fixnum(&count)?
+    })
+    .map_err(|error| match error {
+        crate::tagged::value::FixnumRangeError::OutOfRange(_) => {
+            signal(LispCondition::OverflowError, vec![])
+        }
+    })?;
+    let displacement = match motion {
+        CharacterMotion::Forward => i64::from(count),
+        CharacterMotion::Backward => -i64::from(count),
     };
     let current_id = eval.buffers.current_buffer_id().ok_or_else(no_buffer)?;
     let (old_byte, cur_char, begv_char, zv_char, new_byte) = {
@@ -985,7 +1004,7 @@ pub(crate) fn builtin_forward_char_1(eval: &mut super::eval::Context, n: Value) 
         let cur_char = buf.point_char_pos().get();
         let begv_char = buf.point_min_char_pos().get();
         let zv_char = buf.point_max_char_pos().get();
-        let desired = cur_char as i64 + n;
+        let desired = cur_char as i64 + displacement;
         let clamped_char = desired.clamp(begv_char as i64, zv_char as i64) as usize;
         (
             old_byte,
@@ -995,14 +1014,14 @@ pub(crate) fn builtin_forward_char_1(eval: &mut super::eval::Context, n: Value) 
             buf.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(clamped_char)),
         )
     };
-    let direction = if n >= 0 { 1 } else { -1 };
+    let direction = if displacement >= 0 { 1 } else { -1 };
     let adjusted = adjust_for_intangible(eval, new_byte, direction);
     let _ = eval
         .buffers
         .goto_buffer_emacs_byte_pos(current_id, adjusted);
     // GNU `move_point`: signal beginning-of-buffer / end-of-buffer when
     // the requested position falls outside the accessible portion.
-    let desired = cur_char as i64 + n;
+    let desired = cur_char as i64 + displacement;
     if desired < begv_char as i64 {
         return Err(signal(LispCondition::BeginningOfBuffer, vec![]));
     }
@@ -1018,13 +1037,12 @@ pub(crate) fn builtin_backward_char(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let n = if args.is_empty() || args[0].is_nil() {
-        1
-    } else {
-        expect_fixnum(&args[0])?
-    };
-    // backward-char N == forward-char (- N)
-    builtin_forward_char(eval, vec![Value::fixnum(-n)])
+    crate::emacs_core::error::expect_args_range("backward-char", &args, 0, 1)?;
+    move_characters(
+        eval,
+        args.first().copied().unwrap_or(Value::NIL),
+        CharacterMotion::Backward,
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, strum::EnumString, IntoPrimitive, TryFromPrimitive)]
