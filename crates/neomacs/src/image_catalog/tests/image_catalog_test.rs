@@ -1,6 +1,8 @@
 use super::*;
+use neomacs_display_protocol::ImageRealization;
 use neomacs_display_protocol::image_diagnostic::ImageDiagnostic;
 use neomacs_display_runtime::render_thread::ImageRenderState;
+use neomacs_display_runtime::render_thread::{ImageProbeSource, probe_image_layout};
 use neovm_core::emacs_core::Context;
 use neovm_core::emacs_core::Value;
 use neovm_core::emacs_core::image::image_load_identity;
@@ -490,6 +492,38 @@ fn pending_geometry_resolves_from_the_header_before_any_pixel_exists() {
             Ok(neovm_core::keyboard::InputEvent::LayoutInvalidated)
         ),
         "resolved geometry must ask the evaluator to republish layout"
+    );
+}
+
+/// The slot reserved before the header lands must be the slot the header
+/// reports. An animated source resolves a *fresh* request for every frame, so
+/// a one-pixel disagreement between the two re-runs on every frame swap: the
+/// tab bar this was found on moved everything after its leftmost icon left and
+/// right at the animation rate.
+///
+/// Both axes are pinned here so the native aspect cannot account for a
+/// difference — `24 * 0.8 = 19.2` is exactly the fractional product that the
+/// placeholder's `round` (19) and the probe's `ceil` (20) used to split.
+#[test]
+fn placeholder_extent_matches_the_probed_layout_for_a_scaled_spec() {
+    let fixture = neomacs_infra::workspace_root().join("test/data/image/blank-100x200.png");
+    let path = fixture.to_str().expect("utf8 fixture path");
+    let mut request = file_request(path);
+    request.size = ImageSizeSpec::new(AxisSize::Exact(24), AxisSize::Exact(24));
+    request.realization = ImageRealization::new(0.8, 1.0, 1.0);
+
+    let probed = probe_image_layout(
+        ImageProbeSource::File(path),
+        request.size,
+        request.rotation,
+        request.realization,
+    )
+    .expect("the fixture's header must be readable");
+
+    assert_eq!(
+        placeholder_image_extent(&request),
+        probed,
+        "the reserved slot must not move when the header lands"
     );
 }
 

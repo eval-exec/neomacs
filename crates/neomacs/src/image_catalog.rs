@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex, OnceLock, TryLockError};
 use std::time::Duration;
 
 use neomacs_display_protocol::image_diagnostic::ImageDiagnostic;
-use neomacs_display_protocol::{ImageSequenceId, ImageSequenceRetirement};
+use neomacs_display_protocol::{ImageNativeExtent, ImageSequenceId, ImageSequenceRetirement};
 use neomacs_display_runtime::render_thread::{
     ImageDecodeTerminal, ImageProbeSource, ImageTerminalProbe, SharedImageRenderState,
     probe_image_layout,
@@ -964,10 +964,22 @@ fn image_load_command(
 
 fn placeholder_image_extent(request: &ImageResolveRequest) -> ImageLayoutExtent {
     let (width, height) = request.size.placeholder_extent().unwrap_or((1, 1));
-    ImageLayoutExtent::new(
-        request.realization.layout_dimension(width),
-        request.realization.layout_dimension(height),
-    )
+    // Resolve through the same geometry call the header probe and the decoder
+    // use, so the slot reserved here cannot move by a pixel when the pixels
+    // land. Converting the pinned size with `ImageRealization::layout_dimension`
+    // rounded where `resolve_geometry` ceils: a square `:width 24 :height 24`
+    // icon at layout scale 0.8 reserved 19x19 and became 20x20 once the header
+    // resolved. An animated source re-runs that resolution for every frame, so
+    // the disagreement showed up as a one-pixel jitter of everything laid out
+    // after the image (the tab bar this was found on).
+    request
+        .realization
+        .resolve_geometry(
+            request.size,
+            ImageNativeExtent::new(width, height),
+            request.rotation,
+        )
+        .layout()
 }
 
 fn home_directory_from_environment() -> Option<String> {
