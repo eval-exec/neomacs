@@ -4194,6 +4194,8 @@ fn split_window_internal_validates_core_argument_types() {
     // `(split-window-internal (selected-window) nil nil nil)` signals
     // `fixnump`.  This assertion used to pass Value::NIL and expect a window
     // back, which pinned the divergence as though it were the contract.
+    eval.eval_str("(set-window-new-pixel nil (- (window-pixel-height) 12))")
+        .expect("stage the old window before a valid primitive split");
     let split = builtin_split_window_internal(
         &mut eval,
         vec![
@@ -4282,11 +4284,23 @@ fn split_window_internal_validates_core_argument_types() {
     //   (split-window-internal (selected-window) 10 "x" 0.5) => geometry error
     //   (split-window-internal (selected-window) 10 nil 0.5) => geometry error
     // (all three fail identically, on the resize step, as does SIDE `below').
+    // The first split left the selected window 12 lines tall, so this one
+    // stages and requests 6 lines: an unstaged or oversized request fails
+    // GNU's resize check before SIDE matters.
+    eval.eval_str("(set-window-new-pixel nil (- (window-pixel-height) 6))")
+        .expect("stage the old window before a valid primitive split");
     let side_not_checked = builtin_split_window_internal(
         &mut eval,
-        vec![Value::NIL, Value::fixnum(12), Value::fixnum(9), Value::NIL],
+        vec![Value::NIL, Value::fixnum(6), Value::fixnum(9), Value::NIL],
     )
-    .expect("split-window-internal must not type-check SIDE");
+    .unwrap_or_else(|flow| {
+        panic!(
+            "split-window-internal must not type-check SIDE: {}",
+            crate::emacs_core::error::format_eval_result(&Err(crate::emacs_core::error::map_flow(
+                flow
+            )))
+        )
+    });
     assert!(side_not_checked.is_window());
 }
 
@@ -15511,7 +15525,7 @@ fn internal_save_selected_window_helpers_restore_selected_window() {
     let result = eval
         .eval_str(
             r#"(let* ((orig (selected-window))
-                  (new (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
+                  (new ((lambda (old size side normal) (set-window-new-pixel old (- (if (memq side '(t left right)) (window-pixel-width old) (window-pixel-height old)) size)) (split-window-internal old size side normal)) (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
              (select-window new)
              (save-selected-window
                (select-window orig)

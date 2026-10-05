@@ -638,6 +638,10 @@ fn eval_internal_show_cursor_per_window_state() {
     let _ = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let selected =
         crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, vec![]).unwrap();
+    // GNU's `split-window` stages the old window's new size before calling
+    // the primitive, which rejects an unstaged split.
+    eval.eval_str("(set-window-new-pixel nil (- (window-pixel-height) 12))")
+        .expect("stage the old window before a valid primitive split");
     let other = crate::emacs_core::builtins::dispatch_builtin(
         &mut eval,
         "split-window-internal",

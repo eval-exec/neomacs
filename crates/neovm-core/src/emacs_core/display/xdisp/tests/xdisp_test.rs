@@ -4807,14 +4807,14 @@ fn posn_at_x_y_decodes_frame_or_window_the_way_gnu_dispatches_it() {
     let mut eval = interactive_context();
     let out = eval
         .eval_str_each(
-            "(progn (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil) t)
+            "(progn ((lambda (old size side normal) (set-window-new-pixel old (- (if (memq side '(t left right)) (window-pixel-width old) (window-pixel-height old)) size)) (split-window-internal old size side normal)) (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil) t)
          (if (consp (posn-at-x-y 0 0 nil)) 'cons 'other)
          (if (consp (posn-at-x-y 0 0 (selected-window))) 'cons 'other)
          (if (consp (posn-at-x-y 0 0 (minibuffer-window))) 'cons 'other)
          (if (consp (posn-at-x-y 0 0 (selected-frame))) 'cons 'other)
          (condition-case err (posn-at-x-y 0 0 (window-parent (selected-window)))
            (error (car (cdr err))))
-         (let ((doomed (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
+         (let ((doomed ((lambda (old size side normal) (set-window-new-pixel old (- (if (memq side '(t left right)) (window-pixel-width old) (window-pixel-height old)) size)) (split-window-internal old size side normal)) (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
            (delete-window-internal doomed)
            (condition-case err (posn-at-x-y 0 0 doomed) (error (car (cdr err)))))
          (condition-case err (posn-at-x-y 0 0 'foo) (error (car (cdr err))))

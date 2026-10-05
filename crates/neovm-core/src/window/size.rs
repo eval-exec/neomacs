@@ -68,6 +68,14 @@ impl WindowTotal {
     }
 }
 
+/// GNU `set-window-new-total`'s ADD argument: replace the staged total or add
+/// the new size to it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NewTotalUpdate {
+    Replace,
+    Add,
+}
+
 impl From<WindowTotal> for i64 {
     fn from(value: WindowTotal) -> Self {
         i64::from(value.0)
@@ -119,14 +127,14 @@ impl SplitSizes {
         if old < 1 {
             return Err(SplitSizeError::OldTooSmall);
         }
-        let old = i64::try_from(old)
-            .ok()
-            .and_then(|old| WindowPixels::try_from(old).ok())
-            .ok_or(SplitSizeError::OldTooSmall)?;
-        let new = i64::try_from(new)
-            .ok()
-            .and_then(|new| WindowPixels::try_from(new).ok())
-            .ok_or(SplitSizeError::OldTooSmall)?;
+        let old = i64::try_from(old).map_err(|_| SplitSizeError::OldTooSmall)?;
+        let old = WindowPixels::try_from(old).map_err(|error| match error {
+            WindowSizeError::OutOfRange => SplitSizeError::OldTooSmall,
+        })?;
+        let new = i64::try_from(new).map_err(|_| SplitSizeError::OldTooSmall)?;
+        let new = WindowPixels::try_from(new).map_err(|error| match error {
+            WindowSizeError::OutOfRange => SplitSizeError::OldTooSmall,
+        })?;
         Ok(Self { old, new })
     }
 
@@ -213,8 +221,9 @@ impl TryFrom<(i64, WindowPixelOperation)> for WindowPixelStage {
             return Err(WindowSizeError::OutOfRange);
         }
         let stored = match operation {
-            WindowPixelOperation::Set => crate::tagged::value::Fixnum::try_from(request)
-                .map_err(|_| WindowSizeError::OutOfRange)?,
+            WindowPixelOperation::Set => crate::tagged::value::Fixnum::try_from(request).map_err(
+                |crate::tagged::value::FixnumRangeError::OutOfRange(_)| WindowSizeError::OutOfRange,
+            )?,
             WindowPixelOperation::Add(base) => {
                 // GNU window.c Fset_window_new_pixel stores check_integer_range
                 // in a C int, AFTER checking the requested integer range.

@@ -1,0 +1,1 @@
+((wrong-type-argument window-valid-p bogus) (wrong-type-argument fixnump bad-size) (error "Attempt to split minibuffer window") (error "Attempt to split minibuffer window") t)

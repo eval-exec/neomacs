@@ -7,6 +7,9 @@
 //! handles, while legacy integer designators are still accepted in resolver
 //! paths for compatibility.
 
+mod split_request;
+pub(crate) use split_request::SiblingResize;
+
 use super::error::{EvalResult, Flow, signal};
 use super::intern::{SymId, intern, resolve_sym};
 use super::minibuffer::MinibufferManager;
@@ -561,10 +564,51 @@ pub(crate) fn builtin_set_window_new_pixel(
     expect_min_args("set-window-new-pixel", &args, 2)?;
     expect_max_args("set-window-new-pixel", &args, 3)?;
     let window = decode_valid_window_id(eval, args.first())?;
-    let size = expect_int(&args[1])?;
     let add = args.get(2).is_some_and(|value| value.is_truthy());
-    Ok(Value::fixnum(
-        eval.frames.set_window_new_pixel(window, size, add),
+    let operation = if add {
+        crate::window::WindowPixelOperation::Add(
+            crate::tagged::value::Fixnum::try_from(
+                eval.frames.window_new_pixel(window).unwrap_or(0),
+            )
+            .map_err(|error| match error {
+                crate::tagged::value::FixnumRangeError::OutOfRange(_) => {
+                    signal(LispCondition::OverflowError, vec![])
+                }
+            })?,
+        )
+    } else {
+        crate::window::WindowPixelOperation::Set
+    };
+    let (size_min, size_max) = operation.bounds();
+    if !args[1].is_integer() {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("integerp"), args[1]],
+        ));
+    }
+    let integer = args[1].as_fixnum().or_else(|| {
+        args[1]
+            .as_bignum()
+            .and_then(|integer| i64::try_from(integer).ok())
+    });
+    let out_of_range = || {
+        signal(
+            LispCondition::ArgsOutOfRange,
+            vec![
+                args[1],
+                Value::make_int(size_min),
+                Value::make_int(size_max),
+            ],
+        )
+    };
+    let integer = integer.ok_or_else(out_of_range)?;
+    let size = crate::window::WindowPixelStage::try_from((integer, operation)).map_err(
+        |error| match error {
+            crate::window::WindowSizeError::OutOfRange => out_of_range(),
+        },
+    )?;
+    Ok(Value::from_fixnum(
+        eval.frames.set_window_new_pixel(window, size).into(),
     ))
 }
 
@@ -576,11 +620,28 @@ pub(crate) fn builtin_set_window_new_total(
     expect_min_args("set-window-new-total", &args, 2)?;
     expect_max_args("set-window-new-total", &args, 3)?;
     let window = decode_valid_window_id(eval, args.first())?;
-    let size = expect_fixnum(&args[1])?;
-    let add = args.get(2).is_some_and(|value| value.is_truthy());
-    Ok(Value::fixnum(
-        eval.frames.set_window_new_total(window, size, add),
-    ))
+    let size =
+        crate::window::WindowTotal::try_from(expect_fixnum(&args[1])?).map_err(
+            |error| match error {
+                crate::tagged::value::FixnumRangeError::OutOfRange(_) => {
+                    signal(LispCondition::OverflowError, vec![])
+                }
+            },
+        )?;
+    let update = if args.get(2).is_some_and(|value| value.is_truthy()) {
+        crate::window::NewTotalUpdate::Add
+    } else {
+        crate::window::NewTotalUpdate::Replace
+    };
+    let stored = eval
+        .frames
+        .set_window_new_total(window, size, update)
+        .map_err(|error| match error {
+            crate::tagged::value::FixnumRangeError::OutOfRange(_) => {
+                signal(LispCondition::OverflowError, vec![])
+            }
+        })?;
+    Ok(Value::from_fixnum(stored.into()))
 }
 
 /// `(set-window-new-normal WINDOW &optional SIZE)` -> SIZE.
@@ -4589,14 +4650,10 @@ pub(crate) fn split_window_internal_impl_in_state_with_normal(
     side: Value,
     normal_size: Value,
     combination_limit: CombinationLimit,
+    sibling_resize: SiblingResize,
 ) -> EvalResult {
     let target = decode_valid_window_in_state(frames, buffers, Some(&window))?;
     let (fid, wid) = (target.frame(), target.window());
-
-    // GNU's `window_point` reads the selected window's live buffer point.  Keep
-    // the leaf cache in sync before cloning the window tree so a same-buffer
-    // split inherits that effective point, not a stale marker value.
-    remember_selected_window_point_in_state(frames, buffers, fid);
 
     // GNU `Fsplit_window_internal` treats SIDE t as `right`, and every value
     // it does not recognise -- nil, `below', an unrelated symbol, a fixnum,
@@ -4612,12 +4669,56 @@ pub(crate) fn split_window_internal_impl_in_state_with_normal(
         SplitWindowSide::Below | SplitWindowSide::Right => SplitPlacement::AfterTarget,
     };
 
-    // Parse SIZE: positive means new window gets SIZE units, negative means
-    // old window keeps |SIZE| units, nil/0 means 50/50.
-    let size_opt: Option<i64> = match size.kind() {
-        ValueKind::Fixnum(n) if n != 0 => Some(n),
-        _ => None,
-    };
+    // Unlike the high-level `split-window` command, GNU's primitive takes
+    // a positive new-window pixel size. Validate before mutating either tree.
+    let size = expect_fixnum(&size)?;
+    if is_minibuffer_window(frames, fid, wid) {
+        return Err(signal(
+            LispCondition::Error,
+            vec![Value::string("Attempt to split minibuffer window")],
+        ));
+    }
+    let frame = frames.get(fid).ok_or_else(|| {
+        signal(
+            LispCondition::Error,
+            vec![Value::string("Cannot split window")],
+        )
+    })?;
+    let request = split_request::SplitRequest::try_from(split_request::SplitRequestInput {
+        frame,
+        old: wid,
+        size,
+        direction,
+        limit: combination_limit,
+        sibling_resize,
+    })
+    .map_err(|error| {
+        // GNU temporarily reduces this staging slot while validating siblings.
+        // A rejected plan changes this slot but never changes physical geometry.
+        match error {
+            split_request::SplitRequestError::NewTooSmall => {}
+            split_request::SplitRequestError::OldResizeFailed => {}
+            split_request::SplitRequestError::SumDoesNotFit => {}
+            split_request::SplitRequestError::ParentResizeFailed { parent, pending } => {
+                if let Some(parent) = frames
+                    .get_mut(fid)
+                    .and_then(|frame| frame.find_window_mut(parent))
+                {
+                    parent.set_new_pixel(Some(i64::from(pending)));
+                }
+            }
+        }
+        signal(LispCondition::Error, vec![Value::string(error.to_string())])
+    })?;
+    if let Some(frame) = frames.get_mut(fid) {
+        request.prepare_tree_split(frame);
+    }
+    let size_opt = Some(request.size());
+
+    // GNU's `window_point` reads the selected window's live buffer point.  Keep
+    // the leaf cache in sync before cloning the window tree so a same-buffer
+    // split inherits that effective point, not a stale marker value.
+    remember_selected_window_point_in_state(frames, buffers, fid);
 
     // Use the same buffer as the window being split.
     let buf_id = {
@@ -4658,7 +4759,7 @@ pub(crate) fn split_window_internal_impl_in_state_with_normal(
     // sibling, not just the split target, and `window.el' has already staged
     // each sibling's share -- so the primitive must apply that plan instead of
     // computing a layout of its own.
-    frames.apply_staged_split_sizes(fid, new_wid, size_opt, normal_size, direction);
+    frames.apply_staged_split_sizes(fid, new_wid, Some(request.size()), normal_size, direction);
 
     // GNU allocates independent start/point/old-point markers for the new
     // live leaf.  `FrameManager::split_window` intentionally clears marker IDs

@@ -2430,6 +2430,13 @@ pub(crate) fn builtin_split_window_internal(
         )
         .is_some_and(|value| value.is_t()),
     );
+    let sibling_resize = super::window_cmds::SiblingResize::from(
+        super::builtins::misc_eval::dynamic_or_global_symbol_value(
+            eval,
+            "window-combination-resize",
+        )
+        .unwrap_or(Value::NIL),
+    );
     let result = super::window_cmds::split_window_internal_impl_in_state_with_normal(
         &mut eval.frames,
         &mut eval.buffers,
@@ -2438,6 +2445,7 @@ pub(crate) fn builtin_split_window_internal(
         args[2],
         args[3],
         combination_limit,
+        sibling_resize,
     )?;
     if crate::emacs_core::eval::gnu_redisplay_hooks_enabled()
         && let Some(window) = result.as_window_id().map(crate::window::WindowId)

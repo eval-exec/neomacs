@@ -11414,7 +11414,7 @@ fn run_window_scroll_functions_uses_scrolled_window_buffer_context() {
                   (buf2 (get-buffer-create \"scroll-b\")))
              (set-buffer buf1)
              (set-window-buffer (selected-window) buf1)
-             (let ((w2 (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
+             (let ((w2 ((lambda (old size side normal) (set-window-new-pixel old (- (if (memq side '(t left right)) (window-pixel-width old) (window-pixel-height old)) size)) (split-window-internal old size side normal)) (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
                (set-window-buffer w2 buf2)
                (set-buffer buf2)
                (setq window-scroll-functions
@@ -11437,7 +11437,7 @@ fn run_window_scroll_functions_reads_displayed_buffer_local_hook() {
                   (buf2 (get-buffer-create \"scroll-local-b\")))
              (set-buffer buf1)
                (set-window-buffer (selected-window) buf1)
-               (let ((w2 (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
+               (let ((w2 ((lambda (old size side normal) (set-window-new-pixel old (- (if (memq side '(t left right)) (window-pixel-width old) (window-pixel-height old)) size)) (split-window-internal old size side normal)) (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
                  (set-window-buffer w2 buf2)
                (let ((orig (current-buffer)))
                  (set-buffer buf2)
@@ -11604,7 +11604,7 @@ fn run_window_configuration_change_hook_uses_window_buffer_context() {
     )
     .expect("selected window buffer");
     let split_window = ev
-        .eval_str("(split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)")
+        .eval_str("((lambda (old size side normal) (set-window-new-pixel old (- (if (memq side '(t left right)) (window-pixel-width old) (window-pixel-height old)) size)) (split-window-internal old size side normal)) (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)")
         .expect("split window");
     crate::emacs_core::window_cmds::builtin_set_window_buffer(
         &mut ev,
@@ -11719,7 +11719,7 @@ fn redisplay_runs_window_change_functions_with_selected_frame_context() {
            (let* ((buf1 (get-buffer-create \"wcf-a\"))
                   (buf2 (get-buffer-create \"wcf-b\")))
              (set-window-buffer (selected-window) buf1)
-             (let ((w2 (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
+             (let ((w2 ((lambda (old size side normal) (set-window-new-pixel old (- (if (memq side '(t left right)) (window-pixel-width old) (window-pixel-height old)) size)) (split-window-internal old size side normal)) (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
                (set-window-buffer w2 buf2)
                (setq window-size-change-functions
                      (list (lambda (frame)
@@ -13299,7 +13299,7 @@ fn save_window_excursion_restores_window_layout_after_split() {
             (let ((wconfig (current-window-configuration)))
               (unwind-protect
                   (progn
-                    (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)
+                    ((lambda (old size side normal) (set-window-new-pixel old (- (if (memq side '(t left right)) (window-pixel-width old) (window-pixel-height old)) size)) (split-window-internal old size side normal)) (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)
                     (length (window-list)))
                 (set-window-configuration wconfig)))
             (length (window-list))
@@ -13359,7 +13359,7 @@ fn set_window_configuration_reconciles_restored_batch_frame_geometry() {
                               (pw61-pixel-edges (frame-root-window)))))
                    (let ((configuration (current-window-configuration)))
                      (unwind-protect
-                         (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)
+                         ((lambda (old size side normal) (set-window-new-pixel old (- (if (memq side '(t left right)) (window-pixel-width old) (window-pixel-height old)) size)) (split-window-internal old size side normal)) (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)
                        (set-window-configuration configuration)))
                    (list before
                          (window-total-height (frame-root-window))
@@ -13649,7 +13649,7 @@ fn set_window_configuration_commits_point_from_a_disconnected_nonselected_window
                          (set-buffer original-buffer)
                          (let ((configuration (current-window-configuration))
                                (extra-window
-                                (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
+                                ((lambda (old size side normal) (set-window-new-pixel old (- (if (memq side '(t left right)) (window-pixel-width old) (window-pixel-height old)) size)) (split-window-internal old size side normal)) (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
                            (set-window-buffer extra-window extra-buffer)
                            (set-window-point extra-window 7)
                            (set-buffer extra-buffer)
@@ -13708,7 +13708,7 @@ fn current_window_configuration_owns_independent_window_point_markers() {
                          (insert "abcdefghij")
                          (set-buffer original-buffer)
                          (let ((window
-                                (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
+                                ((lambda (old size side normal) (set-window-new-pixel old (- (if (memq side '(t left right)) (window-pixel-width old) (window-pixel-height old)) size)) (split-window-internal old size side normal)) (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
                            (set-window-buffer window buffer)
                            (set-window-point window 3)
                            (let ((configuration
@@ -23956,16 +23956,23 @@ fn command_loop_dispatches_select_window_before_following_key() {
         SubrArity::new(0, Some(0)),
     ));
 
+    // The 80x24-pixel test frame is shorter than two 16-pixel lines, so a
+    // GNU-checked vertical split is too small; split it side by side.
     let target_window = ev
         .eval_str(
             r#"(let* ((w1 (selected-window))
                       (buf (get-buffer-create "select-window-command-loop-target"))
-                      (w2 (split-window-internal w1 (/ (window-pixel-height w1) 2) nil nil)))
+                      (w2 ((lambda (old size side normal) (set-window-new-pixel old (- (if (memq side '(t left right)) (window-pixel-width old) (window-pixel-height old)) size)) (split-window-internal old size side normal)) w1 (/ (window-pixel-width w1) 2) 'right nil)))
                  (set-window-buffer w2 buf)
                  (setq neo-select-window-target w2)
                  w2)"#,
         )
-        .expect("create second window");
+        .unwrap_or_else(|error| {
+            panic!(
+                "create second window: {}",
+                crate::emacs_core::error::format_eval_result(&Err(error))
+            )
+        });
     let target_window_id = target_window
         .as_window_id()
         .expect("target value should be a window");
