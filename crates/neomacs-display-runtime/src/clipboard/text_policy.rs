@@ -43,6 +43,10 @@ pub(super) enum TextAbsence {
     /// No selection owner.
     NoSelection,
     /// An owner exists, but it offers none of the text MIMEs this backend reads.
+    ///
+    /// Only a Wayland backend can tell this apart from `NoSelection`, so the
+    /// variant exists only on a platform that has one.
+    #[cfg(target_os = "linux")]
     TargetUnavailable,
     /// The backend cannot tell those two apart: it reports one error for both
     /// an empty clipboard and contents in a format it cannot read (arboard's
@@ -55,6 +59,7 @@ impl From<TextAbsence> for TextRead {
     fn from(absence: TextAbsence) -> Self {
         match absence {
             TextAbsence::NoSelection => Self::NoSelection,
+            #[cfg(target_os = "linux")]
             TextAbsence::TargetUnavailable => Self::TargetUnavailable,
             TextAbsence::Indeterminate => Self::Indeterminate,
         }
@@ -68,7 +73,9 @@ pub(super) enum TextRead {
     Text(String),
     /// No selection owner.
     NoSelection,
-    /// An owner exists, but it offers none of the text MIMEs we read.
+    /// An owner exists, but it offers none of the text MIMEs we read; see
+    /// `TextAbsence::TargetUnavailable` for why this is Linux-only.
+    #[cfg(target_os = "linux")]
     TargetUnavailable,
     /// The backend cannot tell "no owner" from "unreadable contents"; see
     /// `TextAbsence::Indeterminate`.
@@ -83,7 +90,9 @@ impl TextRead {
     pub(super) fn into_option(self) -> Option<String> {
         match self {
             Self::Text(text) => Some(text),
-            Self::NoSelection | Self::TargetUnavailable | Self::Indeterminate => None,
+            Self::NoSelection | Self::Indeterminate => None,
+            #[cfg(target_os = "linux")]
+            Self::TargetUnavailable => None,
         }
     }
 }

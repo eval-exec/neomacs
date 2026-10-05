@@ -296,16 +296,22 @@ fn mutation_that_expires_behind_a_slow_read_is_never_executed() {
 #[test]
 fn private_selection_round_trips_owned_and_vacant_states() {
     let mut selection = PrivateSelection::default();
-    assert_eq!(selection.load(), None);
+    assert_eq!(selection.load(), text_policy::TextRead::NoSelection);
 
     selection.store(Some("selected"));
-    assert_eq!(selection.load(), Some("selected".to_owned()));
+    assert_eq!(
+        selection.load(),
+        text_policy::TextRead::Text("selected".to_owned())
+    );
 
     selection.store(Some("reselected"));
-    assert_eq!(selection.load(), Some("reselected".to_owned()));
+    assert_eq!(
+        selection.load(),
+        text_policy::TextRead::Text("reselected".to_owned())
+    );
 
     selection.store(None);
-    assert_eq!(selection.load(), None);
+    assert_eq!(selection.load(), text_policy::TextRead::NoSelection);
 }
 
 /// GNU's NS port keeps PRIMARY in a private pasteboard instead of

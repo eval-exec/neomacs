@@ -262,10 +262,12 @@ impl PrivateSelection {
         };
     }
 
-    fn load(&self) -> Option<String> {
+    /// The stored text, or the absence a vacant selection reports; going
+    /// through the policy keeps every "no owner" answer one vocabulary.
+    fn load(&self) -> text_policy::TextRead {
         match self {
-            Self::Owned(text) => Some(text.clone()),
-            Self::Vacant => None,
+            Self::Owned(text) => text_policy::TextRead::Text(text.clone()),
+            Self::Vacant => text_policy::TextAbsence::NoSelection.into(),
         }
     }
 
@@ -360,10 +362,7 @@ impl ClipboardBackend for ArboardClipboard {
             _ => {
                 match selection {
                     ClipboardSelection::Clipboard => Self::text_result(self.clipboard.get_text()),
-                    ClipboardSelection::Primary => Ok(match self.primary.load() {
-                        Some(text) => text_policy::TextRead::Text(text),
-                        None => text_policy::TextRead::NoSelection,
-                    }),
+                    ClipboardSelection::Primary => Ok(self.primary.load()),
                 }
             }
         }
