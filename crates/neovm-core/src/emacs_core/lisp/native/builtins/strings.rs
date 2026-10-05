@@ -12,6 +12,7 @@ use crate::emacs_core::value::{
 use malachite::base::num::arithmetic::traits::Abs;
 use malachite::base::num::basic::traits::Zero;
 use malachite::base::num::conversion::traits::{FromStringBase, RoundingFrom, ToStringBase};
+use malachite::base::num::logic::traits::SignificantBits;
 use malachite::base::rounding_modes::RoundingMode;
 use malachite::integer::Integer;
 use native_regex::Regex as NativeRegex;
@@ -383,6 +384,10 @@ mod width_policy_tests;
 #[cfg(test)]
 #[path = "tests/gdh_format_width_scan_test.rs"]
 mod gdh_format_width_scan_tests;
+
+#[cfg(test)]
+#[path = "tests/format_float_gnu.rs"]
+mod format_float_gnu;
 
 pub(crate) fn builtin_substring(args: Vec<Value>) -> EvalResult {
     builtin_substring_slice(&args)
@@ -1247,16 +1252,72 @@ fn format_char_argument(n: i64) -> Result<FormatCharArgument, Flow> {
     })
 }
 
+/// A field width accepted by GNU styled_format (editfns.c:3632-3634).
+/// Immutable numeric metadata, independent of any mutator or Lisp heap.
+#[derive(Clone, Copy, Debug)]
+struct FormatWidth(usize);
+
+impl TryFrom<usize> for FormatWidth {
+    type Error = Flow;
+
+    fn try_from(width: usize) -> Result<Self, Self::Error> {
+        if width <= Value::MOST_POSITIVE_FIXNUM as usize {
+            Ok(Self(width))
+        } else {
+            Err(format_string_overflow_error())
+        }
+    }
+}
+
+impl FormatWidth {
+    fn get(self) -> usize {
+        self.0
+    }
+}
+
+/// Validated byte extent of a complete formatted field, including padding.
+/// This count is independent of Lisp state and may be shared across mutators.
+#[derive(Clone, Copy, Debug)]
+struct FormatOutputBytes(usize);
+
+impl TryFrom<usize> for FormatOutputBytes {
+    type Error = Flow;
+
+    fn try_from(bytes: usize) -> Result<Self, Self::Error> {
+        if bytes <= Value::MOST_POSITIVE_FIXNUM as usize {
+            Ok(Self(bytes))
+        } else {
+            Err(format_string_overflow_error())
+        }
+    }
+}
+
+impl FormatOutputBytes {
+    fn get(self) -> usize {
+        self.0
+    }
+}
+
+/// GNU printf flags. A compact set cannot contain duplicate modes; parsing
+/// resolves sign/alignment precedence before a field reaches its renderer.
+/// Immutable, per-invocation metadata; no mutator state is shared.
+#[enumflags2::bitflags]
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FormatFlag {
+    LeftAlign,
+    AlwaysSign,
+    SignSpace,
+    ZeroPadding,
+    Alternate,
+}
+
 /// Parsed format specification: %[flags][width][.precision]conversion
 #[derive(Clone, Debug)]
 struct FormatSpec {
     field_number: Option<usize>,
-    minus: bool,
-    plus: bool,
-    space: bool,
-    zero: bool,
-    sharp: bool,
-    width: Option<usize>,
+    flags: enumflags2::BitFlags<FormatFlag>,
+    width: Option<FormatWidth>,
     precision: Option<usize>,
     conversion: char,
 }
@@ -1268,7 +1329,10 @@ struct ParsedFormatSpec {
 }
 
 fn format_string_overflow_error() -> Flow {
-    signal("error", vec![Value::string("Maximum string size exceeded")])
+    signal(
+        LispCondition::Error,
+        vec![Value::string("Maximum string size exceeded")],
+    )
 }
 
 /// Parse a format spec from the format string's Emacs character codes, with
@@ -1288,32 +1352,28 @@ fn parse_format_spec(bytes: &[u8], pos: &mut usize) -> Result<ParsedFormatSpec, 
     let start = *pos;
     let mut spec = FormatSpec {
         field_number: None,
-        minus: false,
-        plus: false,
-        space: false,
-        zero: false,
-        sharp: false,
+        flags: enumflags2::BitFlags::empty(),
         width: None,
         precision: None,
         conversion: '\0',
     };
 
-    // Digit-run accumulator; `None` on usize overflow (the caller-visible
-    // behavior of the old String `.parse()` failing).
-    fn digits(bytes: &[u8], pos: &mut usize) -> (bool, Option<usize>) {
-        let mut any = false;
-        let mut value: Option<usize> = Some(0);
+    // GNU str2num saturates at PTRDIFF_MAX (editfns.c:3332-3340).
+    // Overflow must not turn a present field number into an absent one.
+    fn digits(bytes: &[u8], pos: &mut usize) -> Option<usize> {
+        let start = *pos;
+        let mut value = 0usize;
         while let Some(&byte) = bytes.get(*pos) {
             if !byte.is_ascii_digit() {
                 break;
             }
-            any = true;
             value = value
-                .and_then(|v| v.checked_mul(10))
-                .and_then(|v| v.checked_add((byte - b'0') as usize));
+                .saturating_mul(10)
+                .saturating_add((byte - b'0') as usize)
+                .min(isize::MAX as usize);
             *pos += 1;
         }
-        (any, value)
+        (*pos != start).then_some(value)
     }
 
     // GNU `styled_format` first looks for [0-9]+ followed by a literal
@@ -1321,8 +1381,8 @@ fn parse_format_spec(bytes: &[u8], pos: &mut usize) -> Result<ParsedFormatSpec, 
     // parser, so `%05d` still means zero-padded width 5 rather than
     // field 5.
     let mut look = *pos;
-    let (has_field_digits, field_value) = digits(bytes, &mut look);
-    if has_field_digits && bytes.get(look) == Some(&b'$') {
+    let field_value = digits(bytes, &mut look);
+    if field_value.is_some() && bytes.get(look) == Some(&b'$') {
         *pos = look + 1;
         spec.field_number = field_value;
     }
@@ -1330,39 +1390,29 @@ fn parse_format_spec(bytes: &[u8], pos: &mut usize) -> Result<ParsedFormatSpec, 
     // Parse flags
     while let Some(&byte) = bytes.get(*pos) {
         match byte {
-            b'-' => spec.minus = true,
-            b'+' => spec.plus = true,
-            b' ' => spec.space = true,
-            b'0' => spec.zero = true,
-            b'#' => spec.sharp = true,
+            b'-' => spec.flags.insert(FormatFlag::LeftAlign),
+            b'+' => spec.flags.insert(FormatFlag::AlwaysSign),
+            b' ' => spec.flags.insert(FormatFlag::SignSpace),
+            b'0' => spec.flags.insert(FormatFlag::ZeroPadding),
+            b'#' => spec.flags.insert(FormatFlag::Alternate),
             _ => break,
         }
         *pos += 1;
     }
 
     // Ignore flags when sprintf ignores them
-    if spec.plus {
-        spec.space = false;
+    if spec.flags.contains(FormatFlag::AlwaysSign) {
+        spec.flags.remove(FormatFlag::SignSpace);
     }
-    if spec.minus {
-        spec.zero = false;
-    }
-
-    // Parse width
-    let (has_width, width_value) = digits(bytes, pos);
-    if has_width {
-        spec.width = Some(width_value.ok_or_else(format_string_overflow_error)?);
+    if spec.flags.contains(FormatFlag::LeftAlign) {
+        spec.flags.remove(FormatFlag::ZeroPadding);
     }
 
-    // Parse precision
+    // Width bounds output size, whereas precision only limits %s input.
+    spec.width = digits(bytes, pos).map(FormatWidth::try_from).transpose()?;
     if bytes.get(*pos) == Some(&b'.') {
         *pos += 1;
-        let (has_prec, prec_value) = digits(bytes, pos);
-        spec.precision = Some(if has_prec {
-            prec_value.ok_or_else(format_string_overflow_error)?
-        } else {
-            0
-        });
+        spec.precision = Some(digits(bytes, pos).unwrap_or(0));
     }
 
     // Parse conversion character (the one spec position that may be a
@@ -1386,90 +1436,145 @@ fn parse_format_spec(bytes: &[u8], pos: &mut usize) -> Result<ParsedFormatSpec, 
     })
 }
 
-/// Apply width/alignment padding to a formatted string.
-fn apply_width(s: &str, spec: &FormatSpec) -> String {
-    let w = match spec.width {
-        Some(w) if w > s.chars().count() => w,
-        _ => return s.to_string(),
-    };
-    let _pad_char = if spec.zero && !spec.minus { '0' } else { ' ' };
-    if spec.minus {
-        format!("{:<width$}", s, width = w)
-    } else if spec.zero && !spec.minus {
-        // For zero-padding, handle negative numbers specially
-        if let Some(unsigned) = s.strip_prefix('-') {
-            format!("-{unsigned:0>width$}", width = w - 1)
-        } else if let Some(unsigned) = s.strip_prefix('+') {
-            format!("+{unsigned:0>width$}", width = w - 1)
-        } else {
-            format!("{:0>width$}", s, width = w)
-        }
-    } else {
-        format!("{:>width$}", s, width = w)
-    }
+/// Reserve a complete formatted field before writing padding. GNU checks
+/// the string bound before allocation (editfns.c:4085-4092); allocation
+/// failure is a Lisp memory-full signal, never an allocator abort.
+fn reserve_format_output(
+    bytes: &mut Vec<u8>,
+    total: usize,
+) -> Result<(), crate::emacs_core::alloc::AllocationFailure> {
+    FormatOutputBytes::try_from(total)?;
+    bytes
+        .try_reserve_exact(total.saturating_sub(bytes.len()))
+        .map_err(crate::emacs_core::alloc::AllocationFailure::from)
 }
 
-fn apply_integer_width(sign: &str, prefix: &str, digits: &str, spec: &FormatSpec) -> String {
-    let content_len = sign.len() + prefix.len() + digits.len();
-    let width = spec.width.unwrap_or(0);
-    if width <= content_len {
-        return format!("{sign}{prefix}{digits}");
-    }
+fn format_padding(
+    byte: u8,
+    count: usize,
+) -> Result<String, crate::emacs_core::alloc::AllocationFailure> {
+    let mut bytes = Vec::new();
+    reserve_format_output(&mut bytes, count)?;
+    bytes.resize(count, byte);
+    // SAFETY: callers supply ASCII padding bytes, so the entire buffer is UTF-8.
+    Ok(unsafe { String::from_utf8_unchecked(bytes) })
+}
 
-    let padding = width - content_len;
-    if spec.minus {
-        return format!("{sign}{prefix}{digits}{}", " ".repeat(padding));
+fn apply_integer_width(
+    sign: &str,
+    prefix: &str,
+    digits: &str,
+    spec: &FormatSpec,
+) -> Result<String, crate::emacs_core::alloc::AllocationFailure> {
+    let content_len = sign
+        .len()
+        .checked_add(prefix.len())
+        .and_then(|n| n.checked_add(digits.len()))
+        .ok_or_else(format_string_overflow_error)?;
+    let width = spec.width.map(FormatWidth::get).unwrap_or(0);
+    let mut bytes = Vec::new();
+    reserve_format_output(&mut bytes, content_len.max(width))?;
+    let padding = width.saturating_sub(content_len);
+    let zero_padding = spec.flags.contains(FormatFlag::ZeroPadding) && spec.precision.is_none();
+    if !spec.flags.contains(FormatFlag::LeftAlign) && !zero_padding {
+        bytes.resize(padding, b' ');
     }
-
-    if spec.zero && spec.precision.is_none() {
-        return format!("{sign}{prefix}{}{digits}", "0".repeat(padding));
+    bytes.extend_from_slice(sign.as_bytes());
+    bytes.extend_from_slice(prefix.as_bytes());
+    if !spec.flags.contains(FormatFlag::LeftAlign) && zero_padding {
+        bytes.resize(bytes.len() + padding, b'0');
     }
+    bytes.extend_from_slice(digits.as_bytes());
+    if spec.flags.contains(FormatFlag::LeftAlign) {
+        bytes.resize(bytes.len() + padding, b' ');
+    }
+    // SAFETY: all components are UTF-8 strings and padding is ASCII.
+    Ok(unsafe { String::from_utf8_unchecked(bytes) })
+}
 
-    format!("{}{sign}{prefix}{digits}", " ".repeat(padding))
+/// Disjoint integer magnitude classes: zero can never carry a negative sign.
+/// This value is invocation-local numeric metadata, independent of mutators.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IntegerMagnitude {
+    Negative,
+    Zero,
+    Positive,
+}
+
+impl From<std::cmp::Ordering> for IntegerMagnitude {
+    fn from(ordering: std::cmp::Ordering) -> Self {
+        match ordering {
+            std::cmp::Ordering::Less => Self::Negative,
+            std::cmp::Ordering::Equal => Self::Zero,
+            std::cmp::Ordering::Greater => Self::Positive,
+        }
+    }
 }
 
 fn format_integer_digits(
     mut digits: String,
-    negative: bool,
-    zero_value: bool,
+    magnitude: IntegerMagnitude,
     spec: &FormatSpec,
-) -> String {
+) -> Result<String, crate::emacs_core::alloc::AllocationFailure> {
+    let negative = magnitude == IntegerMagnitude::Negative;
+    let zero_value = magnitude == IntegerMagnitude::Zero;
     if spec.precision == Some(0) && zero_value {
         digits.clear();
     }
 
     let sign = if negative {
         "-"
-    } else if spec.plus {
+    } else if spec.flags.contains(FormatFlag::AlwaysSign) {
         "+"
-    } else if spec.space {
+    } else if spec.flags.contains(FormatFlag::SignSpace) {
         " "
     } else {
         ""
     };
 
     let prefix = match spec.conversion {
-        'b' if spec.sharp && !zero_value => "0b",
-        'B' if spec.sharp && !zero_value => "0B",
-        'x' if spec.sharp && !zero_value => "0x",
-        'X' if spec.sharp && !zero_value => "0X",
+        'b' if spec.flags.contains(FormatFlag::Alternate) && !zero_value => "0b",
+        'B' if spec.flags.contains(FormatFlag::Alternate) && !zero_value => "0B",
+        'x' if spec.flags.contains(FormatFlag::Alternate) && !zero_value => "0x",
+        'X' if spec.flags.contains(FormatFlag::Alternate) && !zero_value => "0X",
         _ => "",
     };
 
-    if spec.conversion == 'o' && spec.sharp && digits.is_empty() {
+    if spec.conversion == 'o' && spec.flags.contains(FormatFlag::Alternate) && digits.is_empty() {
         digits.push('0');
     }
 
     if let Some(precision) = spec.precision {
-        if spec.conversion == 'o' && spec.sharp && !digits.starts_with('0') {
+        let digit_width = if spec.conversion == 'o'
+            && spec.flags.contains(FormatFlag::Alternate)
+            && !digits.starts_with('0')
+        {
+            precision.max(digits.len() + 1)
+        } else {
+            precision.max(digits.len())
+        };
+        let total = digit_width
+            .checked_add(sign.len() + prefix.len())
+            .ok_or_else(format_string_overflow_error)?;
+        FormatOutputBytes::try_from(total)?;
+        if spec.conversion == 'o'
+            && spec.flags.contains(FormatFlag::Alternate)
+            && !digits.starts_with('0')
+        {
             let desired = precision.max(digits.len() + 1);
             if desired > digits.len() {
-                digits = format!("{}{digits}", "0".repeat(desired - digits.len()));
+                digits = format!("{}{digits}", format_padding(b'0', desired - digits.len())?);
             }
         } else if digits.len() < precision {
-            digits = format!("{}{digits}", "0".repeat(precision - digits.len()));
+            digits = format!(
+                "{}{digits}",
+                format_padding(b'0', precision - digits.len())?
+            );
         }
-    } else if spec.conversion == 'o' && spec.sharp && !digits.starts_with('0') {
+    } else if spec.conversion == 'o'
+        && spec.flags.contains(FormatFlag::Alternate)
+        && !digits.starts_with('0')
+    {
         digits = format!("0{digits}");
     }
 
@@ -1500,7 +1605,10 @@ fn push_i64_decimal(out: &mut Vec<u8>, n: i64) {
 }
 
 /// Format an integer with the given spec.
-fn format_int_spec(n: i64, spec: &FormatSpec) -> String {
+fn format_int_spec(
+    n: i64,
+    spec: &FormatSpec,
+) -> Result<String, crate::emacs_core::alloc::AllocationFailure> {
     // Fast path for a plain `%d`/`%i`: one backward stack-buffer digit
     // pass and one allocation. The general path below runs 128-bit
     // `core::fmt` digit rendering plus two more String-building passes
@@ -1509,11 +1617,7 @@ fn format_int_spec(n: i64, spec: &FormatSpec) -> String {
     if matches!(spec.conversion, 'd' | 'i')
         && spec.width.is_none()
         && spec.precision.is_none()
-        && !spec.minus
-        && !spec.plus
-        && !spec.space
-        && !spec.zero
-        && !spec.sharp
+        && spec.flags.is_empty()
     {
         // i64::MIN-safe: widen before unsigned_abs; the magnitude fits u64.
         let mut val = (n as i128).unsigned_abs() as u64;
@@ -1531,10 +1635,9 @@ fn format_int_spec(n: i64, spec: &FormatSpec) -> String {
             pos -= 1;
             buf[pos] = b'-';
         }
-        // Digits and '-' only — always valid UTF-8.
-        return unsafe { std::str::from_utf8_unchecked(&buf[pos..]) }.to_owned();
+        // SAFETY: the buffer contains ASCII digits and an optional '-'.
+        return Ok(unsafe { std::str::from_utf8_unchecked(&buf[pos..]) }.to_owned());
     }
-    let negative = n < 0;
     let abs_val = (n as i128).unsigned_abs();
     let digits = match spec.conversion {
         'b' | 'B' => format!("{abs_val:b}"),
@@ -1543,14 +1646,17 @@ fn format_int_spec(n: i64, spec: &FormatSpec) -> String {
         'X' => format!("{abs_val:X}"),
         _ => abs_val.to_string(),
     };
-    format_integer_digits(digits, negative, n == 0, spec)
+    format_integer_digits(digits, IntegerMagnitude::from(n.cmp(&0)), spec)
 }
 
 /// Format a bignum for `%d` / `%o` / `%x` / `%X` specs. Mirrors the
 /// `format_int_spec` fixnum path but uses `malachite::Integer`'s
 /// `ToStringBase` trait for the underlying numeric conversion. The
 /// flag/width/precision handling is identical.
-fn format_bignum_spec(n: &Integer, spec: &FormatSpec) -> String {
+fn format_bignum_spec(
+    n: &Integer,
+    spec: &FormatSpec,
+) -> Result<String, crate::emacs_core::alloc::AllocationFailure> {
     let negative = *n < 0;
     let abs = n.clone().abs();
     let mut digits = match spec.conversion {
@@ -1562,162 +1668,383 @@ fn format_bignum_spec(n: &Integer, spec: &FormatSpec) -> String {
     if spec.conversion == 'X' {
         digits.make_ascii_uppercase();
     }
-    format_integer_digits(digits, negative, *n == Integer::ZERO, spec)
+    // GNU bignum_to_c_string includes '-' in sprintf_bytes when computing
+    // precision (editfns.c:3971), unlike the fixnum printf path.
+    let mut adjusted = spec.clone();
+    adjusted.precision = spec
+        .precision
+        .map(|precision| precision.saturating_sub(usize::from(negative)));
+    format_integer_digits(
+        digits,
+        IntegerMagnitude::from(n.cmp(&Integer::ZERO)),
+        &adjusted,
+    )
 }
 
-fn format_integer_float_spec(f: f64, spec: &FormatSpec) -> Result<String, Flow> {
-    if !f.is_finite() && matches!(spec.conversion, 'd' | 'i') {
-        let text = if f.is_nan() {
-            "nan"
-        } else if f.is_sign_negative() {
-            "-inf"
+/// A truncated float accepted by GNU's double_to_integer (bignum.c:79-84).
+/// This value has no interpreter state and can be shared between mutators.
+#[derive(Clone, Copy, Debug)]
+struct FiniteTruncatedFloat(f64);
+
+impl TryFrom<f64> for FiniteTruncatedFloat {
+    type Error = Flow;
+
+    fn try_from(value: f64) -> Result<Self, Self::Error> {
+        if value.is_finite() {
+            Ok(Self(value.trunc()))
         } else {
-            "inf"
+            Err(signal(LispCondition::OverflowError, vec![]))
+        }
+    }
+}
+
+impl From<FiniteTruncatedFloat> for Integer {
+    fn from(value: FiniteTruncatedFloat) -> Self {
+        Integer::rounding_from(value.0, RoundingMode::Down).0
+    }
+}
+
+fn format_integer_float_spec(
+    ctx: &super::eval::Context,
+    f: f64,
+    spec: &FormatSpec,
+) -> Result<String, crate::emacs_core::alloc::AllocationFailure> {
+    if matches!(spec.conversion, 'd' | 'i') {
+        // GNU uses %.0f on the truncated double, canonicalizing both zero
+        // signs (editfns.c:3990-4002). Integer precision is added afterward;
+        // the integer %.0d zero-suppression rule does not apply to floats.
+        let truncated = f.trunc();
+        let truncated = if truncated == 0.0 { 0.0 } else { truncated };
+        let mut native = spec.clone();
+        native.conversion = 'f';
+        native.flags.remove(FormatFlag::Alternate);
+        native.width = None;
+        native.precision = Some(0);
+        native.flags.remove(FormatFlag::ZeroPadding);
+        let text = format_float_spec(FloatFormatArgument::Double(truncated), &native)?;
+        let counted_sign = usize::from(!text.as_bytes()[0].is_ascii_digit());
+        let native_precision = text.len().saturating_sub(counted_sign);
+        let excess = spec.precision.unwrap_or(0).saturating_sub(native_precision);
+        let sign_len = usize::from(matches!(text.as_bytes()[0], b'-' | b'+' | b' '));
+        let (sign, body) = text.split_at(sign_len);
+        let digits = if excess == 0 {
+            body.to_owned()
+        } else {
+            format!("{}{body}", format_padding(b'0', excess)?)
         };
-        return Ok(apply_width(text, spec));
+        let mut padded = spec.clone();
+        // GNU zero padding is enabled only for a numeric first digit,
+        // never for the i/n in inf/nan (editfns.c:4108-4112).
+        if !body.as_bytes()[0].is_ascii_hexdigit() {
+            padded.flags.remove(FormatFlag::ZeroPadding);
+        }
+        return apply_integer_width(sign, "", &digits, &padded);
     }
 
-    let big = Integer::rounding_from(f.trunc(), RoundingMode::Down).0;
-    Ok(format_bignum_spec(&big, spec))
-}
-
-/// Normalize Rust scientific notation to match C printf: sign always
-/// present, at least two exponent digits (e.g. `e0` -> `e+00`).
-fn normalize_exp_notation(s: &str) -> String {
-    if let Some(e_pos) = s.rfind('e').or_else(|| s.rfind('E')) {
-        let (mantissa, exp_part) = s.split_at(e_pos);
-        let e_char = &exp_part[..1];
-        let rest = &exp_part[1..];
-        let (sign, digits) = if rest.starts_with('+') || rest.starts_with('-') {
-            (&rest[..1], &rest[1..])
-        } else {
-            ("+", rest)
+    let finite = FiniteTruncatedFloat::try_from(f)?;
+    let big = Integer::from(finite);
+    if f.abs() < (u64::MAX as f64) + 1.0 {
+        let abs = big.clone().abs();
+        let mut digits = match spec.conversion {
+            'b' | 'B' => abs.to_string_base(2),
+            'o' => abs.to_string_base(8),
+            'x' | 'X' => abs.to_string_base(16),
+            _ => return Err(format_spec_type_mismatch_error().into()),
         };
-        let padded = if digits.len() < 2 {
-            format!("{:0>2}", digits)
-        } else {
-            digits.to_string()
-        };
-        format!("{}{}{}{}", mantissa, e_char, sign, padded)
+        if spec.conversion == 'X' {
+            digits.make_ascii_uppercase();
+        }
+        format_integer_digits(
+            digits,
+            IntegerMagnitude::from(big.cmp(&Integer::ZERO)),
+            spec,
+        )
     } else {
-        s.to_string()
+        super::validate_integer_bits(ctx, big.significant_bits())?;
+        format_bignum_spec(&big, spec)
     }
 }
 
-fn ensure_float_alternate_decimal(mut s: String) -> String {
-    let mantissa_end = s.find(['e', 'E']).unwrap_or(s.len());
-    if !s[..mantissa_end].contains('.') {
-        s.insert(mantissa_end, '.');
-    }
-    s
+/// Snapshot of a numeric formatting argument. The integer alternatives retain
+/// the exact intmax/uintmax domain through the native long-double conversion.
+/// This immutable value carries no Lisp state and is safe across mutators.
+#[derive(Clone, Copy, Debug)]
+enum FloatFormatArgument {
+    Double(f64),
+    Signed(i64),
+    Unsigned(u64),
 }
 
-/// Format a float with the given spec.
-fn format_float_spec(f: f64, spec: &FormatSpec) -> String {
-    // C printf spells non-finite values nan/inf (NAN/INF for the uppercase
-    // conversions), with the sign bit preserved (e.g. 0.0/0.0 -> "-nan").
-    if !f.is_finite() {
-        let upper = matches!(spec.conversion, 'E' | 'G' | 'F');
-        let body = if f.is_nan() {
-            if upper { "NAN" } else { "nan" }
-        } else if upper {
-            "INF"
-        } else {
-            "inf"
-        };
-        let sign = if f.is_sign_negative() { "-" } else { "" };
-        return apply_width(&format!("{sign}{body}"), spec);
+impl TryFrom<Value> for FloatFormatArgument {
+    type Error = Flow;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value.kind() {
+            ValueKind::Fixnum(integer) => Ok(Self::Signed(integer)),
+            ValueKind::Float => Ok(Self::Double(value.xfloat())),
+            ValueKind::Veclike(VecLikeType::Bignum) => {
+                let integer = value
+                    .as_bignum()
+                    .ok_or_else(format_spec_type_mismatch_error)?;
+                if let Ok(signed) = i64::try_from(integer) {
+                    Ok(Self::Signed(signed))
+                } else if let Ok(unsigned) = u64::try_from(integer) {
+                    Ok(Self::Unsigned(unsigned))
+                } else {
+                    Ok(Self::Double(
+                        f64::rounding_from(integer, RoundingMode::Nearest).0,
+                    ))
+                }
+            }
+            _ => Err(format_spec_type_mismatch_error()),
+        }
     }
-    let prec = spec.precision.unwrap_or(6);
-    let alternate = spec.sharp && f.is_finite();
-    let s = match spec.conversion {
-        'f' => {
-            let s = format!("{:.prec$}", f, prec = prec);
-            if alternate {
-                ensure_float_alternate_decimal(s)
-            } else {
-                s
+}
+
+/// Closed conversion set accepted by the numeric C bridge. In particular, no
+/// Lisp-controlled length modifier or conversion can reach a variadic ABI.
+/// This immutable metadata is independent of the Lisp mutator.
+#[derive(Clone, Copy, Debug)]
+enum FloatConversion {
+    Fixed,
+    Scientific,
+    General,
+}
+
+impl TryFrom<char> for FloatConversion {
+    type Error = Flow;
+
+    fn try_from(conversion: char) -> Result<Self, Self::Error> {
+        match conversion {
+            'f' => Ok(Self::Fixed),
+            'e' => Ok(Self::Scientific),
+            'g' => Ok(Self::General),
+            invalid => Err(signal(
+                "error",
+                vec![Value::string(format!(
+                    "Invalid format operation %{invalid}"
+                ))],
+            )),
+        }
+    }
+}
+
+impl From<FloatConversion> for u8 {
+    fn from(value: FloatConversion) -> Self {
+        match value {
+            FloatConversion::Fixed => b'f',
+            FloatConversion::Scientific => b'e',
+            FloatConversion::General => b'g',
+        }
+    }
+}
+
+unsafe extern "C" {
+    fn neovm_float_useful_precision() -> libc::c_int;
+    fn neovm_float_format_signed(
+        buffer: *mut libc::c_char,
+        capacity: usize,
+        format: *const libc::c_char,
+        precision: libc::c_int,
+        value: i64,
+    ) -> libc::c_int;
+    fn neovm_float_format_unsigned(
+        buffer: *mut libc::c_char,
+        capacity: usize,
+        format: *const libc::c_char,
+        precision: libc::c_int,
+        value: u64,
+    ) -> libc::c_int;
+}
+
+/// The native precision is bounded by the platform's useful precision limit;
+/// excess requested digits are represented separately and cannot reach printf.
+/// This immutable, invocation-local count is safe for parallel mutators.
+#[derive(Clone, Copy, Debug)]
+struct FloatPrecision {
+    native: libc::c_int,
+    excess: usize,
+}
+
+impl FloatPrecision {
+    fn new(requested: Option<usize>) -> Self {
+        // SAFETY: the bridge reads compile-time float constants; no pointers or state.
+        let limit = unsafe { neovm_float_useful_precision() } as usize;
+        match requested {
+            Some(requested) => Self {
+                native: requested.min(limit) as libc::c_int,
+                excess: requested.saturating_sub(limit),
+            },
+            None => Self {
+                native: -1,
+                excess: 0,
+            },
+        }
+    }
+}
+
+/// A validated, null-terminated printf format. Its closed conversion and
+/// fixed ".*" precision guarantee the exact variadic argument types used by
+/// both libc and the long-double bridge. It contains no field-width padding.
+/// Its owned bytes have no mutator state and can be shared across threads.
+#[derive(Clone, Copy, Debug)]
+struct NativeFloatFormat([u8; 10]);
+
+impl NativeFloatFormat {
+    fn new(spec: &FormatSpec, conversion: FloatConversion) -> Self {
+        let mut bytes = [0; 10];
+        bytes[0] = b'%';
+        let mut position = 1;
+        for (flag, enabled) in [
+            (b'+', spec.flags.contains(FormatFlag::AlwaysSign)),
+            (b' ', spec.flags.contains(FormatFlag::SignSpace)),
+            (b'#', spec.flags.contains(FormatFlag::Alternate)),
+        ] {
+            if enabled {
+                bytes[position] = flag;
+                position += 1;
             }
         }
-        'e' => {
-            let s = normalize_exp_notation(&format!("{:.prec$e}", f, prec = prec));
-            if alternate {
-                ensure_float_alternate_decimal(s)
-            } else {
-                s
+        bytes[position] = b'.';
+        bytes[position + 1] = b'*';
+        bytes[position + 2] = conversion.into();
+        Self(bytes)
+    }
+
+    fn render(
+        &self,
+        argument: FloatFormatArgument,
+        precision: FloatPrecision,
+    ) -> Result<String, crate::emacs_core::alloc::AllocationFailure> {
+        let mut buffer = vec![0u8; 128];
+        loop {
+            // SAFETY: self contains a terminated format with exactly one int
+            // precision followed by one double. The integer bridge receives
+            // typed integers and selects double/long double itself. The buffer
+            // is initialized, writable for capacity bytes, and never retained.
+            let length = unsafe {
+                let pointer = buffer.as_mut_ptr().cast();
+                let format = self.0.as_ptr().cast();
+                match argument {
+                    FloatFormatArgument::Double(value) => {
+                        libc::snprintf(pointer, buffer.len(), format, precision.native, value)
+                    }
+                    FloatFormatArgument::Signed(value) => neovm_float_format_signed(
+                        pointer,
+                        buffer.len(),
+                        format,
+                        precision.native,
+                        value,
+                    ),
+                    FloatFormatArgument::Unsigned(value) => neovm_float_format_unsigned(
+                        pointer,
+                        buffer.len(),
+                        format,
+                        precision.native,
+                        value,
+                    ),
+                }
+            };
+            let length = usize::try_from(length).map_err(|_| format_string_overflow_error())?;
+            if length < buffer.len() {
+                buffer.truncate(length);
+                return String::from_utf8(buffer)
+                    .map_err(|_| format_string_overflow_error().into());
             }
+            let capacity = length
+                .checked_add(1)
+                .ok_or_else(format_string_overflow_error)?;
+            buffer
+                .try_reserve(capacity - buffer.len())
+                .map_err(crate::emacs_core::alloc::AllocationFailure::from)?;
+            buffer.resize(capacity, 0);
         }
-        'E' => {
-            let s = normalize_exp_notation(&format!("{:.prec$E}", f, prec = prec));
-            if alternate {
-                ensure_float_alternate_decimal(s)
-            } else {
-                s
-            }
-        }
-        'g' | 'G' => {
-            let p = if prec == 0 { 1 } else { prec };
-            // %g uses %e if exponent < -4 or >= precision, else %f
-            let exp_fmt = format!("{:.prec$e}", f, prec = p.saturating_sub(1));
-            // Parse the exponent
-            let exp_val = exp_fmt
-                .rfind('e')
-                .and_then(|i| exp_fmt[i + 1..].parse::<i32>().ok())
-                .unwrap_or(0);
-            if exp_val < -4 || exp_val >= p as i32 {
-                // Use %e style, strip trailing zeros
-                let mut s = format!("{:.prec$e}", f, prec = p.saturating_sub(1));
-                // Strip trailing zeros before 'e'
-                if !alternate && let Some(e_pos) = s.rfind('e') {
-                    let mantissa = &s[..e_pos];
-                    let exp_part = &s[e_pos..];
-                    let trimmed = mantissa.trim_end_matches('0');
-                    let trimmed = trimmed.trim_end_matches('.');
-                    s = format!("{}{}", trimmed, exp_part);
-                }
-                s = normalize_exp_notation(&s);
-                if spec.conversion == 'G' {
-                    s = s.replace('e', "E");
-                }
-                if alternate {
-                    s = ensure_float_alternate_decimal(s);
-                }
-                s
-            } else {
-                // Use %f style with appropriate decimals
-                let decimal_places = (p as i32 - exp_val - 1).max(0) as usize;
-                let mut s = format!("{:.prec$}", f, prec = decimal_places);
-                // Strip trailing zeros after decimal point
-                if !alternate && s.contains('.') {
-                    s = s.trim_end_matches('0').to_string();
-                    s = s.trim_end_matches('.').to_string();
-                }
-                if alternate {
-                    s = ensure_float_alternate_decimal(s);
-                }
-                s
-            }
-        }
-        _ => format!("{:.prec$}", f, prec = prec),
-    };
-    let s = if spec.plus && f >= 0.0 && !f.is_nan() {
-        format!("+{}", s)
-    } else if spec.space && f >= 0.0 && !f.is_nan() {
-        format!(" {}", s)
+    }
+}
+
+/// Format numeric f/e/g exactly as GNU's styled_format does. C formatting is
+/// capped at USEFUL_PRECISION_MAX; the requested excess becomes trailing zeros
+/// before an exponent, except for unadorned %g and nonfinite values. All state
+/// is local to this invocation; no mutator or locale cache is introduced.
+fn format_float_spec(
+    argument: FloatFormatArgument,
+    spec: &FormatSpec,
+) -> Result<String, crate::emacs_core::alloc::AllocationFailure> {
+    let conversion = FloatConversion::try_from(spec.conversion)?;
+    let precision = FloatPrecision::new(spec.precision);
+    let rendered = NativeFloatFormat::new(spec, conversion).render(argument, precision)?;
+    let trailing_zeros = if rendered.as_bytes().last().is_some_and(u8::is_ascii_digit)
+        && (!matches!(conversion, FloatConversion::General)
+            || (spec.flags.contains(FormatFlag::Alternate) && rendered.contains('.')))
+    {
+        precision.excess
     } else {
-        s
+        0
     };
-    apply_width(&s, spec)
+    let length = rendered
+        .len()
+        .checked_add(trailing_zeros)
+        .ok_or_else(format_string_overflow_error)?;
+    let width = spec.width.map(FormatWidth::get).unwrap_or(0);
+    // GNU lisp.h:1621 and editfns.c:4085-4092 check the complete field's
+    // string-size domain before allocating any excess-precision padding.
+    let total = FormatOutputBytes::try_from(length.max(width))?.get();
+    let padding = total - length;
+    if trailing_zeros == 0 && padding == 0 {
+        return Ok(rendered);
+    }
+    let mut output = String::new();
+    output
+        .try_reserve(total)
+        .map_err(crate::emacs_core::alloc::AllocationFailure::from)?;
+    let sign_length = usize::from(rendered.starts_with(['-', '+', ' ']));
+    let zero_padding = spec.flags.contains(FormatFlag::ZeroPadding)
+        && !spec.flags.contains(FormatFlag::LeftAlign)
+        && rendered
+            .as_bytes()
+            .get(sign_length)
+            .is_some_and(u8::is_ascii_hexdigit);
+    if !spec.flags.contains(FormatFlag::LeftAlign) && !zero_padding {
+        output.extend(std::iter::repeat_n(' ', padding));
+    }
+    output.push_str(&rendered[..sign_length]);
+    if zero_padding {
+        output.extend(std::iter::repeat_n('0', padding));
+    }
+    let exponent = if matches!(
+        conversion,
+        FloatConversion::Scientific | FloatConversion::General
+    ) {
+        rendered.find('e').unwrap_or(rendered.len())
+    } else {
+        rendered.len()
+    };
+    output.push_str(&rendered[sign_length..exponent]);
+    output.extend(std::iter::repeat_n('0', trailing_zeros));
+    output.push_str(&rendered[exponent..]);
+    if spec.flags.contains(FormatFlag::LeftAlign) {
+        output.extend(std::iter::repeat_n(' ', padding));
+    }
+    Ok(output)
+}
+
+/// Source encoding carried through decoding, display width and promotion.
+/// No caller can omit the unibyte/multibyte choice. Immutable scalar metadata
+/// safe to share across mutators; source bytes remain borrowed by the renderer.
+#[derive(Clone, Copy, Debug)]
+enum FormatStringEncoding {
+    Unibyte,
+    Multibyte,
 }
 
 /// Format a string (%s) with width and precision.
 fn format_string_spec(
     data: &[u8],
-    is_multibyte: bool,
+    encoding: FormatStringEncoding,
     spec: &FormatSpec,
     ctx: &super::eval::Context,
-) -> Vec<u8> {
-    format_string_spec_tracked(data, is_multibyte, spec, ctx).0
+) -> Result<Vec<u8>, crate::emacs_core::alloc::AllocationFailure> {
+    Ok(format_string_spec_tracked(data, encoding, spec, ctx)?.0)
 }
 
 /// Like `format_string_spec` but also returns the byte range in the output bytes
@@ -1728,25 +2055,28 @@ fn format_string_spec(
 /// `styled_format` (editfns.c:3651-3806).
 ///
 /// Issue #131: `data` is the argument's Emacs internal-encoding bytes, measured
-/// with its own `is_multibyte` flag. Unibyte C1 bytes and multibyte eight-bit
-/// characters occupy four columns; unibyte bytes 0xA0..0xFF occupy one.
+/// with its own encoding. CharacterWidthPolicy uses the invoking context's
+/// installed width/display tables and control-character settings.
 /// The returned content is canonical multibyte (unibyte content promoted), so the caller can splice it
 /// into the byte result; padding is always ASCII spaces.
 fn format_string_spec_tracked(
     data: &[u8],
-    is_multibyte: bool,
+    encoding: FormatStringEncoding,
     spec: &FormatSpec,
     ctx: &super::eval::Context,
-) -> (Vec<u8>, usize, usize) {
+) -> Result<(Vec<u8>, usize, usize), crate::emacs_core::alloc::AllocationFailure> {
     let mut content_width = 0usize;
     let mut truncated_end = data.len();
     let mut saw_limit = spec.precision.is_none();
-    if spec.precision.is_some() || spec.width.is_some() {
+    if spec.precision == Some(0) {
+        truncated_end = 0;
+        saw_limit = true;
+    } else if spec.precision.is_some() || spec.width.is_some() {
         let policy = crate::encoding::CharacterWidthPolicy::from_context(ctx);
         truncated_end = 0;
         let mut pos = 0usize;
         let width_only_limit = if spec.precision.is_none() {
-            spec.width
+            spec.width.map(FormatWidth::get)
         } else {
             None
         };
@@ -1758,7 +2088,7 @@ fn format_string_spec_tracked(
                 truncated_end = data.len();
                 break;
             }
-            let (code, len) = next_format_unit(data, pos, is_multibyte);
+            let (code, len) = next_format_unit(data, pos, encoding);
             let display_width = policy.width(code);
             if let Some(prec) = spec.precision
                 && content_width + display_width > prec
@@ -1777,31 +2107,39 @@ fn format_string_spec_tracked(
     let truncated = &data[..truncated_end];
     // Promote unibyte content to canonical multibyte so it can be spliced into
     // the byte result; multibyte content is already canonical.
-    let content: Vec<u8> = if is_multibyte {
-        truncated.to_vec()
-    } else {
-        crate::emacs_core::emacs_char::str_to_multibyte(truncated)
+    let content: Vec<u8> = match encoding {
+        FormatStringEncoding::Multibyte => truncated.to_vec(),
+        FormatStringEncoding::Unibyte => crate::emacs_core::emacs_char::str_to_multibyte(truncated),
     };
     let content_bytes = content.len();
     if spec.width.is_none() && spec.precision.is_none() {
         content_width = emacs_chars_count(&content);
     }
-    let w = match spec.width {
+    let w = match spec.width.map(FormatWidth::get) {
         Some(w) if w > content_width => w,
-        _ => return (content, 0, content_bytes),
+        _ => return Ok((content, 0, content_bytes)),
     };
     let pad_chars = w - content_width;
     // Padding is always ASCII spaces. Each padding char is one byte.
-    if spec.minus {
+    if spec.flags.contains(FormatFlag::LeftAlign) {
         // Left-aligned: content first, then padding.
         let mut padded = content;
-        padded.resize(content_bytes + pad_chars, b' ');
-        (padded, 0, content_bytes)
+        let total = content_bytes
+            .checked_add(pad_chars)
+            .ok_or_else(format_string_overflow_error)?;
+        reserve_format_output(&mut padded, total)?;
+        padded.resize(total, b' ');
+        Ok((padded, 0, content_bytes))
     } else {
         // Right-aligned (default): padding first, then content.
-        let mut padded = vec![b' '; pad_chars];
+        let total = content_bytes
+            .checked_add(pad_chars)
+            .ok_or_else(format_string_overflow_error)?;
+        let mut padded = Vec::new();
+        reserve_format_output(&mut padded, total)?;
+        padded.resize(pad_chars, b' ');
         padded.extend_from_slice(&content);
-        (padded, pad_chars, pad_chars + content_bytes)
+        Ok((padded, pad_chars, total))
     }
 }
 
@@ -1939,11 +2277,10 @@ fn emacs_chars_count(data: &[u8]) -> usize {
 /// Next character unit `(code, byte_len)` at `pos`, honouring the source string's
 /// multibyteness: a unibyte string yields one raw byte per unit, a multibyte
 /// string yields one Emacs character per unit.
-fn next_format_unit(data: &[u8], pos: usize, is_multibyte: bool) -> (u32, usize) {
-    if is_multibyte {
-        crate::emacs_core::emacs_char::string_char(&data[pos..])
-    } else {
-        (data[pos] as u32, 1)
+fn next_format_unit(data: &[u8], pos: usize, encoding: FormatStringEncoding) -> (u32, usize) {
+    match encoding {
+        FormatStringEncoding::Multibyte => crate::emacs_core::emacs_char::string_char(&data[pos..]),
+        FormatStringEncoding::Unibyte => (data[pos] as u32, 1),
     }
 }
 
@@ -1998,11 +2335,11 @@ fn emacs_bytes_to_unibyte(data: &[u8]) -> Vec<u8> {
 // source spans, and multibyte state; naming its four parts occurs at the caller.
 #[allow(clippy::type_complexity)]
 fn do_format(
+    ctx: &super::eval::Context,
     args: &[Value],
     princ_fn: &dyn Fn(&Value) -> Vec<u8>,
     prin1_fn: &dyn Fn(&Value) -> Vec<u8>,
     quoting_style: FormatMessageQuotingStyle,
-    ctx: &super::eval::Context,
 ) -> Result<
     (
         Vec<u8>,
@@ -2011,7 +2348,7 @@ fn do_format(
         bool,
         bool,
     ),
-    Flow,
+    crate::emacs_core::alloc::AllocationFailure,
 > {
     // Issue #131: iterate the format string as its real Emacs characters and
     // build the result directly as canonical Emacs internal-encoding bytes —
@@ -2139,7 +2476,7 @@ fn do_format(
 
         let this_arg_idx = spec.field_number.unwrap_or(arg_idx);
         if this_arg_idx >= args.len() {
-            return Err(format_not_enough_args_error());
+            return Err(format_not_enough_args_error().into());
         }
 
         let formatted: Vec<u8> = match spec.conversion {
@@ -2166,11 +2503,7 @@ fn do_format(
                 if !track_props
                     && spec.width.is_none()
                     && spec.precision.is_none()
-                    && !spec.minus
-                    && !spec.plus
-                    && !spec.space
-                    && !spec.zero
-                    && !spec.sharp
+                    && spec.flags.is_empty()
                 {
                     let arg = super::misc_pure::symbol_name_string_for_format(args[this_arg_idx])
                         .unwrap_or(args[this_arg_idx]);
@@ -2190,12 +2523,19 @@ fn do_format(
                     .unwrap_or(args[this_arg_idx]);
                 let arg_is_string = arg.is_string();
                 let (s, src_multibyte) = if let Some(ls) = arg.as_lisp_string() {
-                    (ls.as_bytes().to_vec(), ls.is_multibyte())
+                    (
+                        ls.as_bytes().to_vec(),
+                        if ls.is_multibyte() {
+                            FormatStringEncoding::Multibyte
+                        } else {
+                            FormatStringEncoding::Unibyte
+                        },
+                    )
                 } else {
-                    (princ_fn(&arg), true)
+                    (princ_fn(&arg), FormatStringEncoding::Multibyte)
                 };
                 let (formatted, content_byte_start_in_formatted, content_byte_end_in_formatted) =
-                    format_string_spec_tracked(&s, src_multibyte, &spec, ctx);
+                    format_string_spec_tracked(&s, src_multibyte, &spec, ctx)?;
                 if track_props
                     && arg_is_string
                     && content_byte_start_in_formatted < content_byte_end_in_formatted
@@ -2226,7 +2566,7 @@ fn do_format(
             }
             'S' => {
                 let s = prin1_fn(&args[this_arg_idx]);
-                format_string_spec(&s, true, &spec, ctx)
+                format_string_spec(&s, FormatStringEncoding::Multibyte, &spec, ctx)?
             }
             'd' | 'i' | 'b' | 'B' | 'o' | 'x' | 'X' => {
                 // Plain `%d` on a fixnum with no property tracking: render the
@@ -2237,11 +2577,7 @@ fn do_format(
                     && matches!(spec.conversion, 'd' | 'i')
                     && spec.width.is_none()
                     && spec.precision.is_none()
-                    && !spec.minus
-                    && !spec.plus
-                    && !spec.space
-                    && !spec.zero
-                    && !spec.sharp
+                    && spec.flags.is_empty()
                     && let ValueKind::Fixnum(n) = args[this_arg_idx].kind()
                 {
                     push_i64_decimal(&mut result, n);
@@ -2249,15 +2585,15 @@ fn do_format(
                     continue;
                 }
                 let formatted = match args[this_arg_idx].kind() {
-                    ValueKind::Fixnum(i) => format_int_spec(i, &spec),
+                    ValueKind::Fixnum(i) => format_int_spec(i, &spec)?,
                     ValueKind::Float => {
-                        format_integer_float_spec(args[this_arg_idx].xfloat(), &spec)?
+                        format_integer_float_spec(ctx, args[this_arg_idx].xfloat(), &spec)?
                     }
                     ValueKind::Veclike(VecLikeType::Bignum) => {
-                        format_bignum_spec(args[this_arg_idx].as_bignum().unwrap(), &spec)
+                        format_bignum_spec(args[this_arg_idx].as_bignum().unwrap(), &spec)?
                     }
                     _ => {
-                        return Err(format_spec_type_mismatch_error());
+                        return Err(format_spec_type_mismatch_error().into());
                     }
                 };
                 formatted.into_bytes()
@@ -2266,25 +2602,30 @@ fn do_format(
             // E/G (like F/A) fall through to the "Invalid format operation"
             // error below, matching `float_conversion` in editfns.c.
             'f' | 'e' | 'g' => {
-                let f = expect_number(&args[this_arg_idx])
-                    .map_err(|_| format_spec_type_mismatch_error())?;
-                format_float_spec(f, &spec).into_bytes()
+                let argument = FloatFormatArgument::try_from(args[this_arg_idx])?;
+                format_float_spec(argument, &spec)?.into_bytes()
             }
             'c' => {
                 let n = expect_int(&args[this_arg_idx])
                     .map_err(|_| format_spec_type_mismatch_error())?;
                 let formatted_char = format_char_argument(n)?;
                 force_multibyte_result |= formatted_char.force_multibyte_result;
-                format_string_spec(&formatted_char.rendered, true, &spec, ctx)
+                format_string_spec(
+                    &formatted_char.rendered,
+                    FormatStringEncoding::Multibyte,
+                    &spec,
+                    ctx,
+                )?
             }
             _ => {
                 return Err(signal(
-                    "error",
+                    LispCondition::Error,
                     vec![Value::string(format!(
                         "Invalid format operation %{}",
                         spec.conversion
                     ))],
-                ));
+                )
+                .into());
             }
         };
         arg_idx = this_arg_idx + 1;
@@ -2392,12 +2733,13 @@ pub(crate) fn builtin_format_wrapper_strict_slice(
             return Ok(result);
         }
         let (bytes, spans, source_spans, force_multibyte_result, new_result) = do_format(
+            ctx,
             args,
             &|v| format_percent_s_in_state(ctx, v),
             &|v| super::error::print_value_bytes_escaped_with_eval(ctx, v),
             FormatMessageQuotingStyle::None,
-            ctx,
-        )?;
+        )
+        .map_err(|failure| failure.into_flow_in_context(ctx))?;
         // GNU `styled_format`: `if (! new_result) { val = args[0]; goto return_val; }`
         // (editfns.c:4289). Nothing was formatted, so GNU builds no new string and
         // copies no properties — the format string's own plist keeps its supplied
@@ -2572,12 +2914,13 @@ pub(crate) fn builtin_format_message_slice(
             .map(FormatMessageQuotingStyle::from_text_quoting_style)
             .expect("text-quoting-style builtin returns a GNU quoting style symbol");
         let (bytes, spans, source_spans, force_multibyte_result, new_result) = do_format(
+            ctx,
             args,
             &|v| format_percent_s_in_state(ctx, v),
             &|v| super::error::print_value_bytes_escaped_with_eval(ctx, v),
             quoting_style,
-            ctx,
-        )?;
+        )
+        .map_err(|failure| failure.into_flow_in_context(ctx))?;
         // GNU `styled_format`: `if (! new_result) { val = args[0]; goto return_val; }`
         // (editfns.c:4289). Nothing was formatted, so GNU builds no new string and
         // copies no properties — the format string's own plist keeps its supplied
@@ -2597,6 +2940,32 @@ pub(crate) fn builtin_format_message_slice(
 }
 
 pub(crate) fn builtin_make_string(args: Vec<Value>) -> EvalResult {
+    make_string(args).map_err(crate::emacs_core::alloc::AllocationFailure::into_flow)
+}
+
+pub(crate) fn builtin_make_string_in_context(
+    context: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    make_string(args).map_err(|failure| failure.into_flow_in_context(context))
+}
+
+/// A byte extent bounded by GNU STRING_BYTES_BOUND (lisp.h:1621-1622).
+/// It contains only a scalar count and can be shared between mutators.
+#[derive(Clone, Copy, Debug)]
+struct StringByteLength(usize);
+
+impl StringByteLength {
+    fn new(count: usize, bytes_per_character: usize) -> Result<Self, Flow> {
+        count
+            .checked_mul(bytes_per_character)
+            .filter(|bytes| *bytes <= Value::MOST_POSITIVE_FIXNUM as usize)
+            .map(Self)
+            .ok_or_else(format_string_overflow_error)
+    }
+}
+
+fn make_string(args: Vec<Value>) -> Result<Value, crate::emacs_core::alloc::AllocationFailure> {
     expect_min_args("make-string", &args, 2)?;
     expect_max_args("make-string", &args, 3)?;
     let count = expect_wholenump(&args[0])? as usize;
@@ -2607,7 +2976,8 @@ pub(crate) fn builtin_make_string(args: Vec<Value>) -> EvalResult {
                 return Err(signal(
                     LispCondition::WrongTypeArgument,
                     vec![Value::symbol("characterp"), args[1]],
-                ));
+                )
+                .into());
             }
             c as u32
         }
@@ -2615,7 +2985,8 @@ pub(crate) fn builtin_make_string(args: Vec<Value>) -> EvalResult {
             return Err(signal(
                 LispCondition::WrongTypeArgument,
                 vec![Value::symbol("characterp"), args[1]],
-            ));
+            )
+            .into());
         }
     };
 
@@ -2628,13 +2999,18 @@ pub(crate) fn builtin_make_string(args: Vec<Value>) -> EvalResult {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("characterp"), args[1]],
-        ));
+        )
+        .into());
     }
     if multibyte {
         let mut buf = [0u8; emacs_char::MAX_MULTIBYTE_LENGTH];
         let len = emacs_char::char_string(ch, &mut buf);
         let unit = &buf[..len];
-        let mut data = Vec::with_capacity(len * count);
+        // GNU alloc.c:2093-2095 and 1735-1752 distinguish string
+        // length overflow from failure to allocate a valid byte extent.
+        let bytes = StringByteLength::new(count, len)?;
+        let mut data = Vec::new();
+        data.try_reserve_exact(bytes.0)?;
         for _ in 0..count {
             data.extend_from_slice(unit);
         }
@@ -2646,9 +3022,13 @@ pub(crate) fn builtin_make_string(args: Vec<Value>) -> EvalResult {
             return Err(signal(
                 LispCondition::WrongTypeArgument,
                 vec![Value::symbol("characterp"), args[1]],
-            ));
+            )
+            .into());
         }
-        let data = vec![ch as u8; count];
+        let bytes = StringByteLength::new(count, 1)?;
+        let mut data = Vec::new();
+        data.try_reserve_exact(bytes.0)?;
+        data.resize(count, ch as u8);
         Ok(Value::heap_string(
             crate::heap_types::LispString::from_unibyte(data),
         ))

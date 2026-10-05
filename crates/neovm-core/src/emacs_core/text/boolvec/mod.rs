@@ -15,7 +15,6 @@ use super::value::*;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
 use crate::tagged::header::BoolVectorObj;
-use std::mem::size_of;
 
 // ---------------------------------------------------------------------------
 // Reading
@@ -236,17 +235,6 @@ pub(crate) fn copy_bool_vector(value: &Value) -> Option<Value> {
     ))
 }
 
-/// GNU's `memory_full` signal (`alloc.c:4104`): `memory-signal-data`'s
-/// `(error "Memory exhausted--...")`.
-fn memory_exhausted() -> Flow {
-    signal(
-        LispCondition::Error,
-        vec![Value::string(
-            "Memory exhausted--use M-x save-some-buffers then exit and restart Emacs",
-        )],
-    )
-}
-
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
@@ -294,15 +282,27 @@ fn optional_arg(args: &[Value], index: usize) -> Value {
 
 /// `(make-bool-vector LENGTH INIT)`.
 pub(crate) fn builtin_make_bool_vector(args: Vec<Value>) -> EvalResult {
+    make_bool_vector(args).map_err(crate::emacs_core::alloc::AllocationFailure::into_flow)
+}
+
+pub(crate) fn builtin_make_bool_vector_in_context(
+    context: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    make_bool_vector(args).map_err(|failure| failure.into_flow_in_context(context))
+}
+
+fn make_bool_vector(
+    args: Vec<Value>,
+) -> Result<Value, crate::emacs_core::alloc::AllocationFailure> {
     expect_args("make-bool-vector", &args, 2)?;
     let length = check_fixnat(&args[0])? as usize;
-    // GNU allows any fixnum length and reports `memory_full` when the
-    // allocation fails; a request whose byte size cannot even be named
-    // fails here the same way instead of aborting the process.
-    if BoolVectorObj::words_for(length) > isize::MAX as usize / size_of::<u64>() {
-        return Err(memory_exhausted());
-    }
-    Ok(make_bool_vector_filled(length, args[1].is_truthy()))
+    // GNU alloc.c:2183-2190: failed backing storage is memory_full.
+    let nwords = BoolVectorObj::words_for(length);
+    let mut words = Vec::new();
+    words.try_reserve_exact(nwords)?;
+    words.resize(nwords, if args[1].is_truthy() { u64::MAX } else { 0 });
+    Ok(make_bool_vector_from_words(length, words))
 }
 
 /// `(bool-vector &rest OBJECTS)`.

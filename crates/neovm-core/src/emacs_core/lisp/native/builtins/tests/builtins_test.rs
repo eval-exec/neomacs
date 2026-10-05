@@ -19489,3 +19489,6 @@ fn a_user_defined_hash_table_test_answers_like_gnu_through_the_bucket_index() {
         )
     );
 }
+
+#[cfg(test)]
+mod sequence_gnu;

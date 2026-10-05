@@ -12,9 +12,25 @@ use crate::emacs_core::value::{HashProbe, HashTableMakeKeyword, ValueKind, VecLi
 // ===========================================================================
 
 pub(crate) fn builtin_make_vector(args: Vec<Value>) -> EvalResult {
+    make_vector(args).map_err(crate::emacs_core::alloc::AllocationFailure::into_flow)
+}
+
+pub(crate) fn builtin_make_vector_in_context(
+    context: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    make_vector(args).map_err(|failure| failure.into_flow_in_context(context))
+}
+
+fn make_vector(args: Vec<Value>) -> Result<Value, crate::emacs_core::alloc::AllocationFailure> {
     expect_args("make-vector", &args, 2)?;
     let len = expect_wholenump(&args[0])? as usize;
-    Ok(Value::vector(vec![args[1]; len]))
+    // GNU alloc.c:3399-3400 rejects unrepresentable vector storage and
+    // lisp_malloc reports allocation failure as a Lisp condition.
+    let mut elements = Vec::new();
+    elements.try_reserve_exact(len)?;
+    elements.resize(len, args[1]);
+    Ok(Value::vector(elements))
 }
 
 pub(crate) fn builtin_vector_slice(_eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {

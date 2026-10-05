@@ -1,0 +1,1 @@
+OK ((wrong-type-argument listp (1 . 2)) (wrong-type-argument listp (1 2 3 . 4)) (wrong-type-argument listp 2) (1) (wrong-type-argument listp 5))

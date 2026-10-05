@@ -4274,6 +4274,7 @@ dependencies = [
  "bitflags 2.13.1",
  "bytemuck",
  "cbc",
+ "cc",
  "cranelift-codegen",
  "cranelift-frontend",
  "cranelift-jit",

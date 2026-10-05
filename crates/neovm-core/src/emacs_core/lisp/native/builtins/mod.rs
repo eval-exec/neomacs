@@ -1101,3 +1101,7 @@ fn neovm_internal_panic(_eval: &mut super::eval::Context, args: Vec<Value>) -> E
         .unwrap_or_else(|| "neovm--internal-panic".to_string());
     panic!("{message}");
 }
+
+#[cfg(test)]
+#[path = "tests/gdl_format.rs"]
+mod gdl_format;

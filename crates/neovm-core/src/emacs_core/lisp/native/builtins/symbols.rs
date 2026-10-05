@@ -3822,6 +3822,21 @@ fn compare_lisp_strings(
     super::strings::string_ordering(lhs, rhs)
 }
 
+/// GNU fns.c:3089-3105 compares in the integer domain when conversion
+/// rounds a fixnum to the same double. A fixnum's extra signed range bit
+/// guarantees that this equal double fits in i64.
+#[inline]
+fn compare_fixnum_float_for_value_lt(integer: i64, float: f64) -> std::cmp::Ordering {
+    let rounded = integer as f64;
+    if rounded == float {
+        integer.cmp(&(float as i64))
+    } else {
+        rounded
+            .partial_cmp(&float)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }
+}
+
 fn compare_number_values_for_value_lt(lhs: &Value, rhs: &Value) -> Option<std::cmp::Ordering> {
     use std::cmp::Ordering;
 
@@ -3850,17 +3865,20 @@ fn compare_number_values_for_value_lt(lhs: &Value, rhs: &Value) -> Option<std::c
                     .unwrap_or(Ordering::Equal),
             );
         }
-        let left = match lhs.kind() {
-            ValueKind::Fixnum(n) => n as f64,
-            ValueKind::Float => lhs.xfloat(),
-            _ => return None,
+        return match (lhs.kind(), rhs.kind()) {
+            (ValueKind::Fixnum(integer), ValueKind::Float) => {
+                Some(compare_fixnum_float_for_value_lt(integer, rhs.xfloat()))
+            }
+            (ValueKind::Float, ValueKind::Fixnum(integer)) => {
+                Some(compare_fixnum_float_for_value_lt(integer, lhs.xfloat()).reverse())
+            }
+            (ValueKind::Float, ValueKind::Float) => Some(
+                lhs.xfloat()
+                    .partial_cmp(&rhs.xfloat())
+                    .unwrap_or(Ordering::Equal),
+            ),
+            _other => None,
         };
-        let right = match rhs.kind() {
-            ValueKind::Fixnum(n) => n as f64,
-            ValueKind::Float => rhs.xfloat(),
-            _ => return None,
-        };
-        return Some(left.partial_cmp(&right).unwrap_or(Ordering::Equal));
     }
 
     if !lhs.is_bignum() && !rhs.is_bignum() {

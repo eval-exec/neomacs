@@ -38,6 +38,13 @@ fn main() {
         std::env::var("TARGET").expect("cargo sets TARGET for build scripts")
     );
 
+    // Rust has no C long-double ABI; this bridge retains GNU's exact integer
+    // float conversion instead of narrowing intmax/uintmax to double first.
+    println!("cargo:rerun-if-changed=build_support/float_format.c");
+    cc::Build::new()
+        .file(manifest_dir.join("build_support/float_format.c"))
+        .compile("neovm_float_format");
+
     detect_lcms2();
     detect_dbus();
     detect_wkwebview();

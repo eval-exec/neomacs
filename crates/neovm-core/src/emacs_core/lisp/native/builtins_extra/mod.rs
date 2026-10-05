@@ -203,13 +203,49 @@ pub(crate) fn remove_list_equal(args: Vec<Value>) -> EvalResult {
     Ok(Value::list(result))
 }
 
+/// Validated GNU `take`/`ntake` iteration limit (fns.c:1675-1687).
+/// Positive bignums denote all representable list elements; nonpositive
+/// integers denote an empty prefix. This scalar type has no mutator state.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum TakeCount {
+    Empty,
+    Positive(std::num::NonZeroUsize),
+}
+
+impl TryFrom<Value> for TakeCount {
+    type Error = Flow;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        let count = match value.kind() {
+            ValueKind::Fixnum(n) => n.max(0) as usize,
+            ValueKind::Veclike(crate::emacs_core::value::VecLikeType::Bignum) => {
+                let integer = value.as_bignum().expect("bignum kind");
+                if integer < &0 {
+                    0
+                } else {
+                    Value::MOST_POSITIVE_FIXNUM as usize
+                }
+            }
+            _other => {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("integerp"), value],
+                ));
+            }
+        };
+        Ok(match std::num::NonZeroUsize::new(count) {
+            Some(count) => Self::Positive(count),
+            None => Self::Empty,
+        })
+    }
+}
+
 /// `(take N LIST)` — first N elements.
 pub(crate) fn builtin_take(args: Vec<Value>) -> EvalResult {
     expect_args("take", &args, 2)?;
-    let n = expect_int(&args[0])?;
-    if n <= 0 {
+    let TakeCount::Positive(n) = TakeCount::try_from(args[0])? else {
         return Ok(Value::NIL);
-    }
+    };
     let list = &args[1];
     if !list.is_nil() && !list.is_cons() {
         return Err(signal(
@@ -220,7 +256,7 @@ pub(crate) fn builtin_take(args: Vec<Value>) -> EvalResult {
 
     let mut result = Vec::new();
     let mut cursor = *list;
-    for _ in 0..(n as usize) {
+    for _ in 0..n.get() {
         match cursor.kind() {
             ValueKind::Nil => break,
             ValueKind::Cons => {

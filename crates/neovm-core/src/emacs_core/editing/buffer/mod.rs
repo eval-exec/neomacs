@@ -1586,10 +1586,10 @@ pub(crate) fn builtin_kill_all_local_variables(
 /// `(ntake N LIST)` -> LIST
 pub(crate) fn builtin_ntake(args: Vec<Value>) -> EvalResult {
     expect_args("ntake", &args, 2)?;
-    let n = expect_int(&args[0])?;
-    if n <= 0 {
+    use crate::emacs_core::builtins_extra::TakeCount;
+    let TakeCount::Positive(n) = TakeCount::try_from(args[0])? else {
         return Ok(Value::NIL);
-    }
+    };
 
     let head = args[1];
     if head.is_nil() {
@@ -1603,7 +1603,7 @@ pub(crate) fn builtin_ntake(args: Vec<Value>) -> EvalResult {
     }
 
     let mut cursor = head;
-    for _ in 1..n {
+    for _ in 1..n.get() {
         match cursor.kind() {
             ValueKind::Cons => {
                 let next = cursor.cons_cdr();
@@ -1613,7 +1613,7 @@ pub(crate) fn builtin_ntake(args: Vec<Value>) -> EvalResult {
                     _other => {
                         return Err(signal(
                             LispCondition::WrongTypeArgument,
-                            vec![Value::symbol("listp"), next],
+                            vec![Value::symbol("listp"), head],
                         ));
                     }
                 }
@@ -1622,7 +1622,7 @@ pub(crate) fn builtin_ntake(args: Vec<Value>) -> EvalResult {
             _other => {
                 return Err(signal(
                     LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("listp"), cursor],
+                    vec![Value::symbol("listp"), head],
                 ));
             }
         }
@@ -1636,7 +1636,7 @@ pub(crate) fn builtin_ntake(args: Vec<Value>) -> EvalResult {
         ValueKind::Nil => Ok(head),
         _other => Err(signal(
             LispCondition::WrongTypeArgument,
-            vec![Value::symbol("listp"), cursor],
+            vec![Value::symbol("listp"), head],
         )),
     }
 }

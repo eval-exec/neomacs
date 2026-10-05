@@ -909,6 +909,18 @@ pub(crate) fn signal(symbol: impl IntoConditionSym, data: Vec<Value>) -> Flow {
     signal_internal_id(symbol.condition_sym(), data, None, false)
 }
 
+/// GNU alloc.c:7474-7477's bootstrap memory exhaustion condition.
+/// Context-aware allocation paths use the live `memory-signal-data` instead.
+#[cold]
+pub(crate) fn memory_exhausted_error() -> Flow {
+    signal(
+        LispCondition::Error,
+        vec![Value::string(
+            "Memory exhausted--use M-x save-some-buffers then exit and restart Emacs",
+        )],
+    )
+}
+
 /// Create a signal flow without running `signal-hook-function`.
 pub(crate) fn signal_suppressed(symbol: impl IntoConditionSym, data: Vec<Value>) -> Flow {
     signal_internal_id(symbol.condition_sym(), data, None, true)
