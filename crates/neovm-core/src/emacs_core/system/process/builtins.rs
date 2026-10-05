@@ -4593,7 +4593,11 @@ pub(super) fn accept_process_output_positive_timeout(args: &[Value]) -> Option<D
         return None;
     };
 
-    (total_seconds > 0.0).then(|| Duration::from_secs_f64(total_seconds))
+    match crate::emacs_core::timer::WaitTimeout::from(total_seconds) {
+        crate::emacs_core::timer::WaitTimeout::For(timeout) => Some(timeout),
+        crate::emacs_core::timer::WaitTimeout::Poll
+        | crate::emacs_core::timer::WaitTimeout::Forever => None,
+    }
 }
 
 /// Encode a subprocess write with the current evaluator's coding definitions.

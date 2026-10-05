@@ -1368,3 +1368,6 @@ fn threads_mutexes_and_condition_variables_are_opaque_objects_not_conses() {
         "(nil nil thread nil nil mutex nil nil condition-variable wrong-type-argument wrong-type-argument)"
     );
 }
+
+#[cfg(test)]
+mod numeric_boundaries;

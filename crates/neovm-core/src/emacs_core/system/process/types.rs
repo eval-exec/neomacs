@@ -1077,10 +1077,6 @@ impl From<Duration> for ProcessWaitDeadline {
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "staged before the baseline performance capture")
-)]
 impl ProcessWaitDeadline {
     #[inline]
     pub(super) fn remaining(self, now: Instant) -> Option<Duration> {
@@ -1188,16 +1184,12 @@ impl ProcessWaitBackend {
                 }
             }
 
-            let deadline = Instant::now() + timeout;
+            let deadline = ProcessWaitDeadline::from(timeout);
             loop {
                 let now = Instant::now();
-                let wait_time = if timeout.is_zero() {
-                    Duration::ZERO
-                } else {
-                    deadline.saturating_duration_since(now)
-                };
+                let wait_time = deadline.remaining(now);
                 let mut events = polling::Events::new();
-                match poller.wait(&mut events, Some(wait_time)) {
+                match poller.wait(&mut events, wait_time) {
                     Ok(_) => {
                         let mut notification_wakeup = interest.wants_notifications()
                             && self.notification_pending.swap(false, Ordering::AcqRel);
@@ -1249,8 +1241,7 @@ impl ProcessWaitBackend {
                         if backend.has_notification_wakeup()
                             || backend.has_ready_processes()
                             || backend.has_writable_processes()
-                            || timeout.is_zero()
-                            || Instant::now() >= deadline
+                            || deadline.is_expired(Instant::now())
                         {
                             return Some(backend);
                         }
@@ -1278,7 +1269,7 @@ impl ProcessWaitBackend {
                     // non-exhaustive and a future backend may surface it; what
                     // it must NOT be is a mechanism something else relies on.
                     Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {
-                        if timeout.is_zero() || Instant::now() >= deadline {
+                        if deadline.is_expired(Instant::now()) {
                             return Some(ProcessWaitEvents::from_sources_with_writable(
                                 false,
                                 Vec::new(),

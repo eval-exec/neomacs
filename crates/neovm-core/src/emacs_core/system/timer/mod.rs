@@ -332,17 +332,11 @@ fn expect_fixnum_like(value: &Value) -> Result<i64, Flow> {
 }
 
 fn gnu_sleep_duration_from_secs(seconds: f64) -> Duration {
-    let whole = seconds.trunc();
-    let frac = seconds - whole;
-    let mut secs = whole as u64;
-    let mut nanos = (frac * 1_000_000_000.0).ceil() as u32;
-
-    if nanos >= 1_000_000_000 {
-        secs += u64::from(nanos / 1_000_000_000);
-        nanos %= 1_000_000_000;
+    match WaitTimeout::from(seconds) {
+        WaitTimeout::Poll => Duration::ZERO,
+        WaitTimeout::For(duration) => duration,
+        WaitTimeout::Forever => Duration::MAX,
     }
-
-    Duration::new(secs, nanos)
 }
 
 /// `(sleep-for SECONDS &optional MILLISECONDS)` — GNU `Fsleep_for`

@@ -1,5 +1,9 @@
 use super::*;
 
+#[cfg(test)]
+#[path = "numeric_boundaries.rs"]
+mod numeric_boundaries;
+
 #[test]
 fn target_process_activity_implies_any_process_activity() {
     let mut process = ProcessOutputServiceOutcome::default();

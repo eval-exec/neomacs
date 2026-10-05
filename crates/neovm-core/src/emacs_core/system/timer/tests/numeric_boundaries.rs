@@ -28,6 +28,29 @@ fn timer_vectors_reject_seconds_outside_time_t() {
 }
 
 #[test]
+fn sleep_duration_saturates_before_timestamp_addition() {
+    let duration = gnu_sleep_duration_from_secs(1e300);
+    assert_eq!(duration, Duration::new(i64::MAX as u64, 999_999_999));
+    let now = GnuTimerTimestamp::now();
+    assert!(now.add_duration(duration) > now);
+}
+
+#[test]
+fn typed_wait_timeout_matches_gnu_dtotimespec() {
+    assert_eq!(WaitTimeout::from(None), WaitTimeout::Forever);
+    assert_eq!(WaitTimeout::from(0.0), WaitTimeout::Poll);
+    assert_eq!(WaitTimeout::from(f64::NAN), WaitTimeout::Poll);
+    assert_eq!(
+        WaitTimeout::from(2.5),
+        WaitTimeout::For(Duration::from_millis(2500))
+    );
+    assert_eq!(
+        WaitTimeout::from(f64::INFINITY),
+        WaitTimeout::For(Duration::new(i64::MAX as u64, 999_999_999))
+    );
+}
+
+#[test]
 fn timer_duration_saturates_like_gnu_timespec_sub() {
     let mut slots = vec![Value::NIL; 10];
     slots[1] = Value::fixnum(-(1_i64 << 47));

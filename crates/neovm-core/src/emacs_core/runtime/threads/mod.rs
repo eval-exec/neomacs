@@ -67,12 +67,11 @@ fn sleep_duration_from_blocker(value: Value) -> Option<Duration> {
     if items.len() != 2 || !items[0].is_symbol_named(SLEEP_BLOCKER_MARKER) {
         return None;
     }
-    let seconds = items[1].xfloat();
-    seconds
-        .is_finite()
-        .then_some(seconds)
-        .filter(|seconds| *seconds > 0.0)
-        .map(Duration::from_secs_f64)
+    match crate::emacs_core::timer::WaitTimeout::from(items[1].xfloat()) {
+        crate::emacs_core::timer::WaitTimeout::Poll => None,
+        crate::emacs_core::timer::WaitTimeout::For(duration) => Some(duration),
+        crate::emacs_core::timer::WaitTimeout::Forever => Some(Duration::MAX),
+    }
 }
 
 // ---------------------------------------------------------------------------
