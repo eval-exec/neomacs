@@ -1052,6 +1052,55 @@ pub(crate) enum ProcessWaitBackendInterest {
     NotificationsAndProcesses,
 }
 
+/// A validated monotonic deadline. An overflowing duration denotes an
+/// indefinite wait, which still wakes for process or evaluator notifications.
+/// This immutable clock value contains no mutator-owned state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ProcessWaitDeadline {
+    Poll,
+    Until(Instant),
+    Forever,
+}
+
+static_assertions::assert_impl_all!(ProcessWaitDeadline: Send, Sync);
+
+impl From<Duration> for ProcessWaitDeadline {
+    #[inline]
+    fn from(timeout: Duration) -> Self {
+        if timeout.is_zero() {
+            Self::Poll
+        } else {
+            Instant::now()
+                .checked_add(timeout)
+                .map_or(Self::Forever, Self::Until)
+        }
+    }
+}
+
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "staged before the baseline performance capture")
+)]
+impl ProcessWaitDeadline {
+    #[inline]
+    pub(super) fn remaining(self, now: Instant) -> Option<Duration> {
+        match self {
+            Self::Poll => Some(Duration::ZERO),
+            Self::Until(deadline) => Some(deadline.saturating_duration_since(now)),
+            Self::Forever => None,
+        }
+    }
+
+    #[inline]
+    pub(super) fn is_expired(self, now: Instant) -> bool {
+        match self {
+            Self::Poll => true,
+            Self::Until(deadline) => now >= deadline,
+            Self::Forever => false,
+        }
+    }
+}
+
 impl ProcessWaitBackendInterest {
     pub(super) fn wants_notifications(self) -> bool {
         matches!(
