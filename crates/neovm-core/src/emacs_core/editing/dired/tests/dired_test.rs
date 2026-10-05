@@ -1405,4 +1405,7 @@ mod count_zero_open;
 mod directory_error_data;
 
 #[cfg(all(test, unix))]
+mod streaming_quit;
+
+#[cfg(all(test, unix))]
 mod readdir_order;

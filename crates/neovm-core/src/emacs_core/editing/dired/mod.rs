@@ -18,7 +18,6 @@ use std::collections::VecDeque;
 #[cfg(unix)]
 use std::ffi::CStr;
 use std::fs;
-use std::io::ErrorKind;
 
 mod file_identity;
 
@@ -111,65 +110,6 @@ fn concat_dir_entry_lisp(dir_with_slash: &LispString, name: &LispString) -> Lisp
     out.extend_from_slice(dir_with_slash.as_bytes());
     out.extend_from_slice(name.as_bytes());
     file_name_lisp_from_bytes(out)
-}
-
-fn file_error_symbol(kind: ErrorKind) -> &'static str {
-    match kind {
-        ErrorKind::NotFound => "file-missing",
-        ErrorKind::AlreadyExists => "file-already-exists",
-        ErrorKind::PermissionDenied => "permission-denied",
-        _ => "file-error",
-    }
-}
-
-fn signal_file_io(action: &str, path: &str, err: std::io::Error) -> Flow {
-    // GNU report_file_errno (fileio.c:264-289) keeps all three data slots.
-    super::fileio::signal_file_action_error_value(err, action, Value::string(path))
-}
-
-/// Read directory entry names byte-faithfully.  Public directory primitives
-/// decode these host bytes using GNU's DECODE_FILE rules before inspecting
-/// them. Native dot entries retain their positions in the directory stream.
-#[cfg(unix)]
-fn read_directory_names(dir: &LispString) -> Result<Vec<LispString>, Flow> {
-    super::fileio::directory_stream::read_names(&super::fileio::lisp_file_name_to_path_buf(dir))
-        .map_err(|error| {
-            let (action, err) = error.into_parts();
-            signal_file_io(
-                action,
-                &super::emacs_char::to_utf8_lossy(dir.as_bytes()),
-                err,
-            )
-        })
-}
-
-#[cfg(not(unix))]
-fn read_directory_names(dir: &LispString) -> Result<Vec<LispString>, Flow> {
-    let path = super::fileio::lisp_file_name_to_path_buf(dir);
-    let entries = fs::read_dir(&path).map_err(|e| {
-        signal_file_io(
-            "Opening directory",
-            &super::emacs_char::to_utf8_lossy(dir.as_bytes()),
-            e,
-        )
-    })?;
-    let mut names = vec![
-        LispString::from_unibyte(b".".to_vec()),
-        LispString::from_unibyte(b"..".to_vec()),
-    ];
-    for entry in entries {
-        let entry = entry.map_err(|e| {
-            signal_file_io(
-                "Reading directory entry",
-                &super::emacs_char::to_utf8_lossy(dir.as_bytes()),
-                e,
-            )
-        })?;
-        names.push(super::fileio::path_to_lisp_file_name(std::path::Path::new(
-            &entry.file_name(),
-        )));
-    }
-    Ok(names)
 }
 
 fn parse_wholenump_count(arg: Option<&Value>) -> Result<Option<usize>, Flow> {
@@ -519,25 +459,23 @@ pub(crate) fn builtin_directory_files_and_attributes(
     let time_output = LispTimeOutput::from_context(eval)?;
     let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
     directory_files_and_attributes_with_dir(
+        eval,
         &args,
         &dir,
         time_output,
         syntax,
-        &eval.obarray,
-        &eval.buffers,
-        |bytes| super::fileio::decode_file_name_lisp(eval, bytes),
+        super::fileio::decode_file_name_lisp,
     )
 }
 
 #[allow(clippy::too_many_arguments)] // match-time state stays explicit at the GNU-regexp boundary
 fn directory_files_and_attributes_with_dir(
+    ctx: &mut Context,
     args: &[Value],
     dir: &LispString,
     time_output: LispTimeOutput,
     syntax: super::builtins::search::FastStringMatchSyntax,
-    obarray: &super::symbol::Obarray,
-    buffers: &crate::buffer::BufferManager,
-    decode_name: impl Fn(&[u8]) -> LispString,
+    decode_name: impl Fn(&Context, &[u8]) -> LispString,
 ) -> EvalResult {
     let full_name = args.get(1).is_some_and(|v| v.is_truthy());
     let match_regexp = match args.get(2) {
@@ -548,19 +486,20 @@ fn directory_files_and_attributes_with_dir(
     // GNU Emacs: return string names unless ID-FORMAT is nil or 'integer.
     let id_format = FileIdFormat::from_id_format_arg(args.get(4));
     let count = parse_wholenump_count(args.get(5))?;
-    let names = read_directory_names(dir)?;
+    let mut names = super::fileio::DirectoryNameSource::open(dir)?;
 
     let dir_with_slash = ensure_trailing_slash_lisp(dir);
     // (DISPLAY-NAME, FULL-PATH) — both kept byte-faithfully as LispStrings.
     let mut items: VecDeque<(LispString, LispString)> = VecDeque::new();
     let mut remaining = count.unwrap_or(usize::MAX);
-    for raw_name in names {
-        let name = decode_name(raw_name.as_bytes());
+    while let Some(raw_name) = names.next_name(ctx)? {
+        let name = decode_name(ctx, raw_name.as_bytes());
+        ctx.maybe_quit()?;
         if let Some(pattern) = match_regexp.as_ref() {
             let matched = syntax
                 .search(
-                    obarray,
-                    buffers,
+                    &ctx.obarray,
+                    &ctx.buffers,
                     pattern,
                     &name,
                     super::regex::SearchedString::Owned(name.clone()),
@@ -591,9 +530,6 @@ fn directory_files_and_attributes_with_dir(
 
         if remaining != usize::MAX {
             remaining -= 1;
-            if remaining == 0 {
-                break;
-            }
         }
     }
 
@@ -650,14 +586,7 @@ pub(crate) fn builtin_file_name_completion(eval: &mut Context, args: Vec<Value>)
     {
         prepare_file_name_completion_with_case_table(eval, &args, syntax)?
     } else {
-        prepare_file_name_completion_in_state(
-            &eval.obarray,
-            &[],
-            &eval.buffers,
-            syntax,
-            &args,
-            |bytes| super::fileio::decode_file_name_lisp(eval, bytes),
-        )?
+        prepare_file_name_completion_in_state(eval, syntax, &args)?
     };
     let predicate = args.get(2);
     finish_file_name_completion_with_eval_predicate(
@@ -702,9 +631,14 @@ pub(crate) fn builtin_file_name_all_completions(
     let raw = if ignore_case && super::fns::compare_strings_parity_enabled() {
         collect_file_name_completions_with_parity(eval, &file, &directory, true, true)?
     } else {
-        collect_file_name_completions(&file, &directory, ignore_case, true, |bytes| {
-            super::fileio::decode_file_name_lisp(eval, bytes)
-        })?
+        collect_file_name_completions(
+            eval,
+            &file,
+            &directory,
+            ignore_case,
+            true,
+            super::fileio::decode_file_name_lisp,
+        )?
     };
     let completions = filter_by_completion_regexps(
         syntax,
@@ -775,23 +709,25 @@ fn byte_prefix_matches(name: &[u8], file: &[u8], ignore_case: bool) -> bool {
 }
 
 fn collect_file_name_completions(
+    ctx: &mut Context,
     file: &LispString,
     directory: &LispString,
     ignore_case: bool,
     reverse: bool,
-    decode_name: impl Fn(&[u8]) -> LispString,
+    decode_name: impl Fn(&Context, &[u8]) -> LispString,
 ) -> Result<Vec<LispString>, Flow> {
-    let names = read_directory_names(directory)?;
+    let mut names = super::fileio::DirectoryNameSource::open(directory)?;
     let dir_path = super::fileio::lisp_file_name_to_path_buf(directory);
     let mut completions = Vec::new();
 
-    for raw_name in names {
+    while let Some(raw_name) = names.next_name(ctx)? {
+        ctx.maybe_quit()?;
         if !byte_prefix_matches(raw_name.as_bytes(), file.as_bytes(), ignore_case) {
             continue;
         }
 
         let entry_path = dir_path.join(super::fileio::lisp_file_name_to_path_buf(&raw_name));
-        let name = decode_name(raw_name.as_bytes());
+        let name = decode_name(ctx, raw_name.as_bytes());
         let completion = if entry_path.is_dir() {
             ensure_trailing_slash_lisp(&name)
         } else {
@@ -815,14 +751,20 @@ fn collect_file_name_completions_with_parity(
     parity: bool,
 ) -> Result<Vec<LispString>, Flow> {
     if !parity {
-        return collect_file_name_completions(file, directory, true, reverse, |bytes| {
-            super::fileio::decode_file_name_lisp(ctx, bytes)
-        });
+        return collect_file_name_completions(
+            ctx,
+            file,
+            directory,
+            true,
+            reverse,
+            super::fileio::decode_file_name_lisp,
+        );
     }
-    let names = read_directory_names(directory)?;
+    let mut names = super::fileio::DirectoryNameSource::open(directory)?;
     let dir_path = super::fileio::lisp_file_name_to_path_buf(directory);
     let mut completions = Vec::new();
-    for raw_name in names {
+    while let Some(raw_name) = names.next_name(ctx)? {
+        ctx.maybe_quit()?;
         // GNU keeps the encoded byte-length eligibility check even when
         // differently-sized decoded characters would compare equal.
         if raw_name.as_bytes().len() < file.as_bytes().len() {
@@ -1137,31 +1079,45 @@ pub(crate) struct FileNameCompletionPlan {
 }
 
 pub(crate) fn prepare_file_name_completion_in_state(
-    obarray: &super::symbol::Obarray,
-    dynamic: &[OrderedRuntimeBindingMap],
-    buffers: &crate::buffer::BufferManager,
+    ctx: &mut Context,
     syntax: super::builtins::search::FastStringMatchSyntax,
     args: &[Value],
-    decode_name: impl Fn(&[u8]) -> LispString,
 ) -> Result<FileNameCompletionPlan, Flow> {
     expect_args_range("file-name-completion", args, 2, 3)?;
 
     let file = expect_lisp_string("file-name-completion", &args[0])?;
     let directory_arg = expect_lisp_string("file-name-completion", &args[1])?;
-    let directory =
-        super::fileio::resolve_filename_lisp_in_state(obarray, dynamic, buffers, &directory_arg);
-    let ignore_case = get_completion_ignore_case(obarray, buffers);
-    let ignored_extensions = get_ignored_extensions(obarray);
-    let regexps = super::minibuffer::completion_regexp_lisp_list_from_obarray(obarray);
+    let directory = super::fileio::resolve_filename_lisp_in_state(
+        &ctx.obarray,
+        &[],
+        &ctx.buffers,
+        &directory_arg,
+    );
+    let ignore_case = get_completion_ignore_case(&ctx.obarray, &ctx.buffers);
+    let ignored_extensions = get_ignored_extensions(&ctx.obarray);
+    let regexps = super::minibuffer::completion_regexp_lisp_list_from_obarray(&ctx.obarray);
     let completions = if file.as_bytes().contains(&b'/') {
         Vec::new()
     } else {
-        let raw =
-            collect_file_name_completions(&file, &directory, ignore_case, false, decode_name)?;
+        let raw = collect_file_name_completions(
+            ctx,
+            &file,
+            &directory,
+            ignore_case,
+            false,
+            super::fileio::decode_file_name_lisp,
+        )?;
         // Apply completion-ignored-extensions filtering for file-name-completion
         // (but not for file-name-all-completions, per GNU Emacs).
         let filtered = filter_by_ignored_extensions(&file, raw, &ignored_extensions, ignore_case);
-        filter_by_completion_regexps(syntax, obarray, buffers, filtered, &regexps, ignore_case)?
+        filter_by_completion_regexps(
+            syntax,
+            &ctx.obarray,
+            &ctx.buffers,
+            filtered,
+            &regexps,
+            ignore_case,
+        )?
     };
 
     Ok(FileNameCompletionPlan {

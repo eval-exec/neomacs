@@ -1465,18 +1465,6 @@ fn write_bytes_to_file_with_mode(
 // Directory operations
 // ===========================================================================
 
-/// Read host names byte-faithfully in native stream order, including dots.
-/// Callers apply GNU's decoding, filtering, COUNT, and list accumulation.
-#[cfg(unix)]
-fn read_directory_names_lisp(
-    dir: &crate::heap_types::LispString,
-) -> Result<Vec<crate::heap_types::LispString>, DirectoryFilesError> {
-    directory_stream::read_names(&lisp_file_name_to_path_buf(dir)).map_err(|error| {
-        let (action, err) = error.into_parts();
-        DirectoryFilesError::Io { action, err }
-    })
-}
-
 #[cfg(not(unix))]
 fn read_directory_names_lisp(
     dir: &crate::heap_types::LispString,
@@ -1502,8 +1490,67 @@ fn read_directory_names_lisp(
     Ok(names)
 }
 
+/// A directory scan owns its stream and filename for this invocation only.
+/// Unix keeps native dot positions; other platforms preserve their host reader.
+pub(crate) struct DirectoryNameSource {
+    directory: LispString,
+    #[cfg(unix)]
+    stream: directory_stream::DirectoryStream,
+    #[cfg(not(unix))]
+    names: std::vec::IntoIter<LispString>,
+}
+impl DirectoryNameSource {
+    pub(crate) fn open(directory: &LispString) -> Result<Self, Flow> {
+        #[cfg(unix)]
+        let stream =
+            directory_stream::DirectoryStream::open(&lisp_file_name_to_path_buf(directory))
+                .map_err(|error| {
+                    let (action, err) = error.into_parts();
+                    signal_file_action_error_value(
+                        err,
+                        action,
+                        Value::heap_string(directory.clone()),
+                    )
+                })?;
+        #[cfg(not(unix))]
+        let names = read_directory_names_lisp(directory)
+            .map_err(|err| signal_directory_files_error(err, directory))?
+            .into_iter();
+        Ok(Self {
+            directory: directory.clone(),
+            #[cfg(unix)]
+            stream,
+            #[cfg(not(unix))]
+            names,
+        })
+    }
+    pub(crate) fn next_name(&mut self, ctx: &mut Context) -> Result<Option<LispString>, Flow> {
+        #[cfg(unix)]
+        {
+            self.stream
+                .next_name(|| ctx.maybe_quit())
+                .map_err(|err| match err {
+                    directory_stream::DirectoryNextError::Quit(flow) => flow,
+                    directory_stream::DirectoryNextError::Io(err) => {
+                        signal_file_action_error_value(
+                            err,
+                            "Reading directory",
+                            Value::heap_string(self.directory.clone()),
+                        )
+                    }
+                })
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(self.names.next())
+        }
+    }
+}
+
 #[derive(Debug)]
 enum DirectoryFilesError {
+    Flow(Flow),
+    #[cfg(not(unix))]
     Io {
         action: &'static str,
         err: std::io::Error,
@@ -1519,34 +1566,32 @@ fn directory_files(
     nosort: bool,
     count: Option<usize>,
 ) -> Result<Vec<crate::heap_types::LispString>, DirectoryFilesError> {
-    let eval = super::eval::Context::new();
+    let mut eval = super::eval::Context::new();
     let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(&eval);
     directory_files_with_decoder(
+        &mut eval,
         dir,
         full,
         match_regex,
         nosort,
         count,
         syntax,
-        &eval.obarray,
-        &eval.buffers,
-        |bytes| crate::heap_types::LispString::from_unibyte(bytes.to_vec()),
+        |_, bytes| crate::heap_types::LispString::from_unibyte(bytes.to_vec()),
     )
 }
 
 #[allow(clippy::too_many_arguments)] // match-time state stays explicit at the GNU-regexp boundary
 fn directory_files_with_decoder(
+    ctx: &mut Context,
     dir: &crate::heap_types::LispString,
     full: bool,
     match_regex: Option<&crate::heap_types::LispString>,
     nosort: bool,
     count: Option<usize>,
     syntax: super::builtins::search::FastStringMatchSyntax,
-    obarray: &super::symbol::Obarray,
-    buffers: &crate::buffer::BufferManager,
-    decode_name: impl Fn(&[u8]) -> crate::heap_types::LispString,
+    decode_name: impl Fn(&Context, &[u8]) -> crate::heap_types::LispString,
 ) -> Result<Vec<crate::heap_types::LispString>, DirectoryFilesError> {
-    let names = read_directory_names_lisp(dir)?;
+    let mut names = DirectoryNameSource::open(dir).map_err(DirectoryFilesError::Flow)?;
 
     // Emacs builds this list via `cons` while scanning readdir output.
     // That makes NOSORT results reverse the traversal order and applies COUNT
@@ -1555,13 +1600,14 @@ fn directory_files_with_decoder(
     let mut remaining = count.unwrap_or(usize::MAX);
     let dir_with_slash = lisp_file_name_as_directory(dir);
 
-    for raw_name in names {
-        let name = decode_name(raw_name.as_bytes());
+    while let Some(raw_name) = names.next_name(ctx).map_err(DirectoryFilesError::Flow)? {
+        let name = decode_name(ctx, raw_name.as_bytes());
+        ctx.maybe_quit().map_err(DirectoryFilesError::Flow)?;
         if let Some(pattern) = match_regex {
             let matched = syntax
                 .search(
-                    obarray,
-                    buffers,
+                    &ctx.obarray,
+                    &ctx.buffers,
                     pattern,
                     &name,
                     super::regex::SearchedString::Owned(name.clone()),
@@ -1592,9 +1638,6 @@ fn directory_files_with_decoder(
 
         if remaining != usize::MAX {
             remaining -= 1;
-            if remaining == 0 {
-                break;
-            }
         }
     }
 
@@ -3166,9 +3209,11 @@ fn signal_directory_files_error(
     dir: &crate::heap_types::LispString,
 ) -> Flow {
     match err {
+        #[cfg(not(unix))]
         DirectoryFilesError::Io { action, err } => {
             signal_file_action_error_value(err, action, Value::heap_string(dir.clone()))
         }
+        DirectoryFilesError::Flow(flow) => flow,
         DirectoryFilesError::InvalidRegexp(msg) => {
             signal(LispCondition::InvalidRegexp, vec![Value::string(msg)])
         }
@@ -5092,15 +5137,14 @@ pub(crate) fn builtin_directory_files(eval: &mut Context, args: Vec<Value>) -> E
 
     let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
     let files = directory_files_with_decoder(
+        eval,
         &dir,
         full,
         match_pattern.as_ref(),
         nosort,
         count,
         syntax,
-        &eval.obarray,
-        &eval.buffers,
-        |bytes| decode_file_name_lisp(eval, bytes),
+        decode_file_name_lisp,
     )
     .map_err(|e| signal_directory_files_error(e, &dir))?;
     Ok(Value::list(
