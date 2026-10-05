@@ -32,17 +32,18 @@ fn gdl_integer_width_checks_new_results_and_large_requests() {
             result => panic!("expected overflow-error for {form}, got {result:?}"),
         }
     }
-    assert_eq!(
-        format_eval_result(&ctx.eval_str("(let ((integer-width 0)) (bignump (ash 1 127)))")),
-        "OK t"
-    );
+    let floor = ctx
+        .eval_str("(let ((integer-width 0)) (ash 1 127))")
+        .expect("128-bit floor permits this result");
+    assert!(floor.as_bignum().is_some());
     // GNU alloc.c:7506 and data.c:1475-1483 permit intmax_t-sized bignum
     // bindings; bignum.c:94-100 reads their full signed slot value.
     for form in [
-        "(let ((integer-width (1+ most-positive-fixnum))) (bignump (ash 1 70000)))",
-        "(let ((integer-width (1- most-negative-fixnum))) (bignump (ash 1 70000)))",
+        "(let ((integer-width (1+ most-positive-fixnum))) (ash 1 70000))",
+        "(let ((integer-width (1- most-negative-fixnum))) (ash 1 70000))",
     ] {
-        assert_eq!(format_eval_result(&ctx.eval_str(form)), "OK t", "{form}");
+        let result = ctx.eval_str(form).expect("intmax_t-sized width binding");
+        assert!(result.as_bignum().is_some(), "{form}");
     }
 }
 
