@@ -216,6 +216,32 @@ pub(super) fn resolve_signal_process_target_in_state(
     Ok(SignalProcessTarget::Process(id))
 }
 
+/// A signal code representable by the C signal API. Validation never truncates
+/// a Lisp integer; any C-int value remains valid, including zero and negatives,
+/// because GNU passes that domain to the OS. Immutable and mutator-independent.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct SignalNumber(i32);
+
+static_assertions::assert_impl_all!(SignalNumber: Send, Sync);
+const _: () = assert!(std::mem::size_of::<SignalNumber>() == std::mem::size_of::<i32>());
+
+impl TryFrom<i64> for SignalNumber {
+    type Error = std::num::TryFromIntError;
+
+    #[inline]
+    fn try_from(value: i64) -> Result<Self, Self::Error> {
+        i32::try_from(value).map(Self)
+    }
+}
+
+impl From<SignalNumber> for i32 {
+    #[inline]
+    fn from(value: SignalNumber) -> Self {
+        value.0
+    }
+}
+
 pub(super) fn parse_signal_number(value: &Value) -> Result<i32, Flow> {
     match value.kind() {
         ValueKind::Fixnum(n) => Ok(n as i32),
