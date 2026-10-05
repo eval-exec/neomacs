@@ -3166,11 +3166,9 @@ fn signal_directory_files_error(
     dir: &crate::heap_types::LispString,
 ) -> Flow {
     match err {
-        DirectoryFilesError::Io { action, err } => signal_file_io_path(
-            err,
-            action,
-            &crate::emacs_core::emacs_char::to_utf8_lossy(dir.as_bytes()),
-        ),
+        DirectoryFilesError::Io { action, err } => {
+            signal_file_action_error_value(err, action, Value::heap_string(dir.clone()))
+        }
         DirectoryFilesError::InvalidRegexp(msg) => {
             signal(LispCondition::InvalidRegexp, vec![Value::string(msg)])
         }

@@ -123,14 +123,8 @@ fn file_error_symbol(kind: ErrorKind) -> &'static str {
 }
 
 fn signal_file_io(action: &str, path: &str, err: std::io::Error) -> Flow {
-    signal(
-        file_error_symbol(err.kind()),
-        vec![
-            Value::string(action),
-            Value::string(err.to_string()),
-            Value::string(path),
-        ],
-    )
+    // GNU report_file_errno (fileio.c:264-289) keeps all three data slots.
+    super::fileio::signal_file_action_error_value(err, action, Value::string(path))
 }
 
 /// Read directory entry names byte-faithfully.  Public directory primitives

@@ -1402,4 +1402,7 @@ mod count_nil;
 mod count_zero_open;
 
 #[cfg(all(test, unix))]
+mod directory_error_data;
+
+#[cfg(all(test, unix))]
 mod readdir_order;
