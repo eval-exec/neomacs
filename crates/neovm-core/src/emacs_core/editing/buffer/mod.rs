@@ -3367,29 +3367,32 @@ fn build_multibyte_conversion_byte_map(
     old_bytes: &[u8],
     mode: BufferMultibyteConversionMode,
 ) -> Vec<usize> {
-    use crate::emacs_core::emacs_char::{bytes_by_char_head, char_byte8_head_p, multibyte_length};
+    use crate::emacs_core::emacs_char::{
+        bytes_by_char_head, char_byte8_head_p, str_as_multibyte_span,
+    };
     let mut map = Vec::with_capacity(old_bytes.len() + 1);
     let mut new_pos = 0usize;
     let mut p = 0usize;
     match mode {
-        // string-as-multibyte: a valid multibyte sequence is kept as-is (N bytes
-        // -> N bytes); an invalid (eight-bit) byte becomes a 2-byte char.
+        // string-as-multibyte (`character.c:543`): a valid non-eight-bit
+        // sequence is kept byte-for-byte. `allow_8bit` is false, so a
+        // `C0`/`C1` raw-byte pair is two eight-bit characters, not one.
+        // The same span drives the converted text (`str_as_multibyte`);
+        // point, markers, overlays and text properties must follow it.
         BufferMultibyteConversionMode::AsMultibyte => {
             while p < old_bytes.len() {
-                match multibyte_length(&old_bytes[p..], true) {
-                    Some(n) if n > 0 => {
-                        for i in 0..n {
-                            map.push(new_pos + i);
-                        }
-                        new_pos += n;
-                        p += n;
+                let (input_bytes, output_bytes) = str_as_multibyte_span(&old_bytes[p..]);
+                debug_assert!(input_bytes > 0);
+                if output_bytes == input_bytes {
+                    for i in 0..input_bytes {
+                        map.push(new_pos + i);
                     }
-                    _ => {
-                        map.push(new_pos);
-                        new_pos += 2;
-                        p += 1;
-                    }
+                    new_pos += input_bytes;
+                } else {
+                    map.push(new_pos);
+                    new_pos += output_bytes;
                 }
+                p += input_bytes;
             }
         }
         // string-to-multibyte: every byte becomes a character (1 byte ASCII, a

@@ -973,11 +973,38 @@ pub fn str_to_unibyte(src: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Parse unibyte text as a multibyte sequence: count characters and
-/// final byte size, treating valid multibyte sequences as already
-/// multibyte and lone high bytes as raw-byte chars (2 bytes each).
+/// One step of GNU `parse_str_as_multibyte` / `str_as_multibyte`.
 ///
-/// Mirrors GNU `parse_str_as_multibyte` (character.c:543).
+/// GNU calls `multibyte_length` with `allow_8bit` false
+/// (`character.c:555`, `character.c:565`, `character.c:599`,
+/// `character.c:607`, `character.c:628`, `character.c:645`). A `C0`/`C1`
+/// lead followed by a continuation is therefore not a character: the
+/// two-byte window starts at `0x2C2`, not `0x2C0` (`character.h:323`).
+/// Each byte of such a sequence becomes its own eight-bit character and
+/// occupies two output bytes. A valid non-eight-bit sequence is copied
+/// unchanged.
+///
+/// Pure: borrows only `src`. No mutator and no Lisp state, so any thread
+/// may call it.
+///
+/// Returns `(input_bytes, output_bytes)`. An empty slice returns `(0, 0)`.
+#[inline]
+pub fn str_as_multibyte_span(src: &[u8]) -> (usize, usize) {
+    if src.is_empty() {
+        return (0, 0);
+    }
+    match multibyte_length(src, false) {
+        Some(n) => (n, n),
+        None => (1, 2),
+    }
+}
+
+/// Parse unibyte text as a multibyte sequence: count characters and
+/// final byte size. Valid non-eight-bit sequences stay as they are.
+/// Each byte of a rejected sequence, including a `C0`/`C1` raw-byte
+/// pair, becomes one eight-bit character (2 bytes).
+///
+/// Mirrors GNU `parse_str_as_multibyte` (`character.c:543`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MultibyteParseMetrics {
     pub chars: usize,
@@ -989,45 +1016,39 @@ pub fn parse_str_as_multibyte(src: &[u8]) -> MultibyteParseMetrics {
     let mut nbytes = 0usize;
     let mut p = 0usize;
     while p < src.len() {
-        match multibyte_length(&src[p..], true) {
-            Some(n) => {
-                p += n;
-                nbytes += n;
-            }
-            None => {
-                p += 1;
-                nbytes += 2;
-            }
-        }
+        let (input_bytes, output_bytes) = str_as_multibyte_span(&src[p..]);
+        debug_assert!(input_bytes > 0);
+        p += input_bytes;
+        nbytes += output_bytes;
         chars += 1;
     }
     MultibyteParseMetrics { chars, nbytes }
 }
 
-/// Reinterpret unibyte text as multibyte, preserving valid multibyte
-/// sequences and converting lone high bytes to raw-byte characters.
+/// Reinterpret unibyte text as multibyte. Valid non-eight-bit sequences
+/// are copied. Each rejected byte, including either byte of a `C0`/`C1`
+/// raw-byte pair, becomes an eight-bit character via `BYTE8_TO_CHAR`
+/// (`character.c:623`).
 ///
-/// Mirrors GNU `str_as_multibyte` (character.c:586). The GNU version
+/// Mirrors GNU `str_as_multibyte` (`character.c:586`). The GNU version
 /// edits in place using a worst-case-sized buffer; here we return a
-/// freshly allocated `Vec<u8>` for safety.
+/// freshly allocated `Vec<u8>`.
 pub fn str_as_multibyte(src: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(count_size_as_multibyte(src));
     let mut p = 0usize;
     while p < src.len() {
-        match multibyte_length(&src[p..], true) {
-            Some(n) => {
-                out.extend_from_slice(&src[p..p + n]);
-                p += n;
-            }
-            None => {
-                let b = src[p];
-                p += 1;
-                let c = byte8_to_char(b);
-                let mut buf = [0u8; MAX_MULTIBYTE_LENGTH];
-                let n = char_string(c, &mut buf);
-                out.extend_from_slice(&buf[..n]);
-            }
+        let (input_bytes, output_bytes) = str_as_multibyte_span(&src[p..]);
+        debug_assert!(input_bytes > 0);
+        if output_bytes == input_bytes {
+            out.extend_from_slice(&src[p..p + input_bytes]);
+        } else {
+            let c = byte8_to_char(src[p]);
+            let mut buf = [0u8; MAX_MULTIBYTE_LENGTH];
+            let n = char_string(c, &mut buf);
+            debug_assert_eq!(n, output_bytes);
+            out.extend_from_slice(&buf[..n]);
         }
+        p += input_bytes;
     }
     out
 }

@@ -85,8 +85,9 @@ fn convert_unibyte_to_multibyte_bytes(src: &[u8]) -> Vec<u8> {
 
 /// Reinterpret unibyte bytes as an Emacs multibyte sequence.
 ///
-/// Valid multibyte sequences are preserved as-is; lone high bytes become
-/// raw-byte characters.
+/// Valid non-eight-bit sequences are preserved. Each byte of a rejected
+/// sequence, including a `C0`/`C1` raw-byte pair, becomes an eight-bit
+/// character (`str_as_multibyte`, GNU `character.c:586`).
 fn reinterpret_unibyte_as_multibyte_bytes(src: &[u8]) -> Vec<u8> {
     crate::emacs_core::emacs_char::str_as_multibyte(src)
 }

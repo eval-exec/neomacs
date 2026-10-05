@@ -1,6 +1,9 @@
 use crate::emacs_core::format_eval_result;
 use crate::emacs_core::value::Value;
 
+#[cfg(test)]
+mod set_buffer_multibyte_gnu;
+
 /// GNU `Fget_truename_buffer` (src/buffer.c:524-539) returns the live buffer
 /// whose `buffer-file-truename` is `string-equal` to FILENAME.  It used to be
 /// a stub returning nil here, which silently disabled the supersession check
