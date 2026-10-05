@@ -4,9 +4,9 @@
 //! The contract is deliberately about the *shape* of an answer, not about any
 //! one backend's mechanism:
 //!
-//! 1. an absent selection is an answer (`TextRead::NoSelection` /
-//!    `TextRead::TargetUnavailable`), never an `Err` — `Err` is reserved for
-//!    transport and worker failures;
+//! 1. an absent selection is an answer (`TextRead::NoSelection`,
+//!    `TextRead::TargetUnavailable`, or `TextRead::Indeterminate`), never an
+//!    `Err` — `Err` is reserved for transport and worker failures;
 //! 2. text round-trips where the backend can read the selection it set;
 //! 3. `Text("")` is text, not absence;
 //! 4. CLIPBOARD and PRIMARY never alias.

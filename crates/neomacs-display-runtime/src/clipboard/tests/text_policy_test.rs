@@ -99,10 +99,12 @@ fn smithay_failures_are_not_absences() {
 }
 
 #[test]
-fn arboard_content_not_available_is_the_only_absence() {
+fn arboard_content_not_available_is_an_indeterminate_absence() {
+    // arboard reports empty and unreadable-format with one error, so the
+    // policy must not claim to know which one it was.
     assert_eq!(
         classify_arboard(&arboard::Error::ContentNotAvailable),
-        Some(TextAbsence::NoSelection)
+        Some(TextAbsence::Indeterminate)
     );
     for err in [
         arboard::Error::ClipboardNotSupported,
@@ -221,4 +223,5 @@ fn only_text_reaches_the_evaluator_facing_wire() {
     );
     assert_eq!(TextRead::NoSelection.into_option(), None);
     assert_eq!(TextRead::TargetUnavailable.into_option(), None);
+    assert_eq!(TextRead::Indeterminate.into_option(), None);
 }
