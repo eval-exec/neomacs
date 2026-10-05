@@ -678,16 +678,15 @@ fn json_utf8_decode_error(start: usize, end: usize) -> Flow {
     )
 }
 
-// Keep the member key and write closure out of the inactive insertion clone.
+// Keep guarded mutation out of the inactive insertion clone.
 #[cold]
 #[inline(never)]
 fn insert_json_hash_member_concurrent(
     table_value: Value,
-    key: String,
+    hash_key: HashKey,
     key_value: Value,
     value: Value,
 ) {
-    let hash_key = HashKey::from_str(key);
     let _ = table_value.with_hash_table_mut_concurrent(|table| {
         table.insert(hash_key, key_value, value);
     });
@@ -1256,10 +1255,10 @@ impl<'a> JsonParser<'a> {
                 // A JSON member name becomes a Lisp STRING key, so it must
                 // be keyed the way any Lisp string is -- `HashKey::Text` is a
                 // runtime tag and a `gethash` probe would never match it.
+                let hash_key = HashKey::from_str(key);
                 if crate::tagged::gc::concurrent_hash_mutation_active() {
-                    insert_json_hash_member_concurrent(ht, key, key_val, val);
+                    insert_json_hash_member_concurrent(ht, hash_key, key_val, val);
                 } else {
-                    let hash_key = HashKey::from_str(key);
                     // SAFETY: this insertion follows an immediate inactive
                     // dispatch and calls neither Lisp nor a GC safepoint.
                     let _ = unsafe {

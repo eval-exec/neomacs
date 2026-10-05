@@ -1100,6 +1100,7 @@ impl HashTableStorage {
 
     /// `puthash`'s probe: where `value`'s entry is, or the hash a new entry
     /// for it is filed under ([`Self::insert_absent`]).
+    #[inline(always)]
     pub fn try_probe_for_insert(
         &self,
         value: Value,
@@ -1178,6 +1179,7 @@ impl HashTableStorage {
 
     /// [`Self::remove_by_value`] for `remhash`, which signals what the
     /// `equal` comparison signals.
+    #[inline(always)]
     pub fn try_remove_by_value(
         &mut self,
         value: Value,
