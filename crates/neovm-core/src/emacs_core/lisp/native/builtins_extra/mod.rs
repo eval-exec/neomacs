@@ -205,12 +205,15 @@ pub(crate) fn remove_list_equal(args: Vec<Value>) -> EvalResult {
 
 /// Validated GNU `take`/`ntake` iteration limit (fns.c:1675-1687).
 /// Positive bignums denote all representable list elements; nonpositive
-/// integers denote an empty prefix. This scalar type has no mutator state.
+/// integers denote an empty prefix. This scalar type has no mutator state
+/// or heap references and can be sent/shared between independent mutators.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum TakeCount {
     Empty,
     Positive(std::num::NonZeroUsize),
 }
+
+static_assertions::assert_impl_all!(TakeCount: Send, Sync);
 
 impl TryFrom<Value> for TakeCount {
     type Error = Flow;

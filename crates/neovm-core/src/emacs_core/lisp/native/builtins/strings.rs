@@ -1257,6 +1257,8 @@ fn format_char_argument(n: i64) -> Result<FormatCharArgument, Flow> {
 #[derive(Clone, Copy, Debug)]
 struct FormatWidth(usize);
 
+static_assertions::assert_impl_all!(FormatWidth: Send, Sync);
+
 impl TryFrom<usize> for FormatWidth {
     type Error = Flow;
 
@@ -1275,7 +1277,8 @@ impl FormatWidth {
     }
 }
 
-/// Validated byte extent of a complete formatted field, including padding.
+/// Validated actual GNU result-byte extent, including padding; canonical
+/// intermediate storage has a separate Rust allocation domain.
 /// This count is independent of Lisp state and may be shared across mutators.
 #[derive(Clone, Copy, Debug)]
 struct FormatOutputBytes(usize);
@@ -1293,6 +1296,33 @@ impl TryFrom<usize> for FormatOutputBytes {
 }
 
 impl FormatOutputBytes {
+    fn get(self) -> usize {
+        self.0
+    }
+}
+
+/// Rust Vec byte extent for canonical intermediate storage. This is not a GNU
+/// string-byte count: raw unibyte characters may occupy two canonical bytes.
+/// Scalar metadata has no Lisp state and can be shared between mutators.
+#[derive(Clone, Copy, Debug)]
+struct FormatStorageBytes(usize);
+
+static_assertions::assert_impl_all!(FormatStorageBytes: Send, Sync);
+static_assertions::assert_impl_all!(FormatOutputBytes: Send, Sync);
+
+impl TryFrom<usize> for FormatStorageBytes {
+    type Error = Flow;
+
+    fn try_from(bytes: usize) -> Result<Self, Self::Error> {
+        if bytes <= isize::MAX as usize {
+            Ok(Self(bytes))
+        } else {
+            Err(crate::emacs_core::error::memory_exhausted_error())
+        }
+    }
+}
+
+impl FormatStorageBytes {
     fn get(self) -> usize {
         self.0
     }
@@ -1327,7 +1357,10 @@ enum FormatFlag {
     Alternate,
 }
 
-/// Parsed format specification: %[flags][width][.precision]conversion
+static_assertions::assert_impl_all!(FormatFlag: Send, Sync);
+
+/// Parsed format specification. Invocation-local scalar metadata has no Lisp
+/// state and is safe to share across mutators. %[flags][width][.precision]conversion
 #[derive(Clone, Debug)]
 struct FormatSpec {
     field_number: Option<usize>,
@@ -1337,11 +1370,17 @@ struct FormatSpec {
     conversion: char,
 }
 
+static_assertions::assert_impl_all!(FormatSpec: Send, Sync);
+
+/// Parsed specification and consumed-character count. This immutable scalar
+/// metadata has no Lisp state and can be shared between mutators.
 #[derive(Clone, Debug)]
 struct ParsedFormatSpec {
     spec: FormatSpec,
     consumed_chars: usize,
 }
+
+static_assertions::assert_impl_all!(ParsedFormatSpec: Send, Sync);
 
 fn format_string_overflow_error() -> Flow {
     signal(
@@ -1451,46 +1490,77 @@ fn parse_format_spec(bytes: &[u8], pos: &mut usize) -> Result<ParsedFormatSpec, 
     })
 }
 
-/// Reserve a complete formatted field before writing padding. GNU checks
-/// the string bound before allocation (editfns.c:4085-4092); allocation
-/// failure is a Lisp memory-full signal, never an allocator abort.
+/// Reserve canonical storage fallibly; its extent may exceed GNU's actual
+/// unibyte string extent. Field/accumulator budgets validate GNU output before
+/// calling this helper. Allocation failure remains a Lisp memory-full signal.
 fn reserve_format_output(
     bytes: &mut Vec<u8>,
     total: usize,
 ) -> Result<(), crate::emacs_core::alloc::AllocationFailure> {
-    FormatOutputBytes::try_from(total)?;
+    FormatStorageBytes::try_from(total)?;
     bytes
         .try_reserve_exact(total.saturating_sub(bytes.len()))
         .map_err(crate::emacs_core::alloc::AllocationFailure::from)
 }
 
-/// The aggregate format output owns a validated byte extent. Every append
-/// reserves fallibly before writing, including literal and numeric fast paths.
-/// GNU editfns.c:4251-4263 checks the aggregate and signals on failed growth.
-/// This buffer belongs to one invocation and contains no shared mutator state.
+/// Aggregate canonical storage with GNU's actual result encoding. In-capacity
+/// writes below the GNU byte bound need no decode; larger extents validate the
+/// actual result before any growth (editfns.c:4251-4263). This owned buffer and
+/// scalar metadata belong to one invocation, without shared mutator state.
 #[derive(Debug)]
 struct FormatOutput {
     bytes: Vec<u8>,
-    writable_extent: FormatOutputBytes,
+    writable_extent: FormatStorageBytes,
+    encoding: FormatStringEncoding,
 }
 
+static_assertions::assert_impl_all!(FormatOutput: Send, Sync);
+
 impl FormatOutput {
-    fn new(capacity: usize) -> Result<Self, crate::emacs_core::alloc::AllocationFailure> {
-        let writable_extent = FormatOutputBytes::try_from(capacity)?;
+    fn new(
+        capacity: usize,
+        encoding: FormatStringEncoding,
+    ) -> Result<Self, crate::emacs_core::alloc::AllocationFailure> {
+        let writable_extent = FormatStorageBytes::try_from(capacity)?;
         let mut bytes = Vec::new();
         bytes.try_reserve_exact(writable_extent.get())?;
         Ok(Self {
             bytes,
             writable_extent,
+            encoding,
         })
     }
 
     #[inline]
+    fn promote_multibyte(&mut self) -> Result<(), Flow> {
+        // GNU retries preceding conversions after promotion. The canonical
+        // prefix is their exact multibyte extent, so validate before proceeding.
+        FormatOutputBytes::try_from(self.bytes.len())?;
+        self.encoding = FormatStringEncoding::Multibyte;
+        Ok(())
+    }
+
+    #[inline]
+    fn promote_printed(&mut self, printed: &[u8]) -> Result<(), Flow> {
+        match self.encoding {
+            FormatStringEncoding::Multibyte => Ok(()),
+            FormatStringEncoding::Unibyte => {
+                if !printed.is_ascii() && result_bytes_imply_multibyte(printed) {
+                    self.promote_multibyte()?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    #[inline]
     fn append(&mut self, bytes: &[u8]) -> Result<(), crate::emacs_core::alloc::AllocationFailure> {
-        // All capacity is in the validated string-byte domain. In-capacity
-        // writes cannot overflow that domain; only growth needs validation.
         if bytes.len() > self.writable_extent.get() - self.bytes.len() {
-            self.grow(bytes.len())?;
+            self.grow(bytes)?;
+        } else if self.writable_extent.get() > Value::MOST_POSITIVE_FIXNUM as usize {
+            // Spare canonical capacity above GNU's bound cannot prove that an
+            // append stays in the actual output domain, even without growth.
+            self.checked_append_extent(bytes)?;
         }
         self.bytes.extend_from_slice(bytes);
         Ok(())
@@ -1498,28 +1568,42 @@ impl FormatOutput {
 
     #[cold]
     #[inline(never)]
-    fn grow(
-        &mut self,
-        additional: usize,
-    ) -> Result<(), crate::emacs_core::alloc::AllocationFailure> {
+    fn checked_append_extent(&self, additional: &[u8]) -> Result<FormatStorageBytes, Flow> {
         let total = self
             .bytes
             .len()
-            .checked_add(additional)
+            .checked_add(additional.len())
             .ok_or_else(format_string_overflow_error)?;
-        let total = FormatOutputBytes::try_from(total)?.get();
-        // Match GNU's bounded geometric growth without allowing spare
-        // capacity beyond the byte domain (editfns.c:4258-4259).
+        if total > Value::MOST_POSITIVE_FIXNUM as usize {
+            let actual = match self.encoding {
+                FormatStringEncoding::Multibyte => total,
+                FormatStringEncoding::Unibyte => emacs_chars_count(&self.bytes)
+                    .checked_add(emacs_chars_count(additional))
+                    .ok_or_else(format_string_overflow_error)?,
+            };
+            FormatOutputBytes::try_from(actual)?;
+        }
+        FormatStorageBytes::try_from(total)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn grow(
+        &mut self,
+        additional: &[u8],
+    ) -> Result<(), crate::emacs_core::alloc::AllocationFailure> {
+        let total = self.checked_append_extent(additional)?.get();
+        // Geometric capacity is a storage unit, never an actual string length.
         let capacity = total.max(
             self.writable_extent
                 .get()
                 .saturating_mul(2)
-                .min(Value::MOST_POSITIVE_FIXNUM as usize),
+                .min(isize::MAX as usize),
         );
-        self.bytes.try_reserve_exact(capacity - self.bytes.len())?;
-        // Allocators may return extra capacity; only this proved extent is
-        // writable without another string-domain validation.
-        self.writable_extent = FormatOutputBytes::try_from(capacity)?;
+        let extent = FormatStorageBytes::try_from(capacity)?;
+        self.bytes
+            .try_reserve_exact(extent.get() - self.bytes.len())?;
+        self.writable_extent = extent;
         Ok(())
     }
 
@@ -1539,6 +1623,86 @@ impl FormatOutput {
 
     fn into_bytes(self) -> Vec<u8> {
         self.bytes
+    }
+}
+
+/// Remaining GNU result-byte domain for one field. The borrowed prefix keeps
+/// the accumulator immutable until rendering finishes. Encoding records GNU's
+/// upfront string decision and any promotion discovered by prior conversions.
+/// Only Rust-owned bytes and scalar metadata are borrowed; immutable snapshots
+/// are Send/Sync and contain no Lisp or mutator state.
+#[derive(Clone, Copy, Debug)]
+struct FormatRemainingOutput<'a> {
+    prefix: &'a [u8],
+    encoding: FormatStringEncoding,
+}
+
+static_assertions::assert_impl_all!(FormatRemainingOutput<'static>: Send, Sync);
+
+impl<'a> FormatRemainingOutput<'a> {
+    #[inline]
+    fn new(output: &'a FormatOutput) -> Self {
+        Self {
+            prefix: &output.bytes,
+            encoding: output.encoding,
+        }
+    }
+
+    #[inline]
+    fn ascii_field(self, bytes: usize) -> Result<FormatStorageBytes, Flow> {
+        self.field(bytes, bytes)
+    }
+
+    #[inline]
+    fn string_field(
+        self,
+        canonical_content: usize,
+        unibyte_content: usize,
+        padding: usize,
+    ) -> Result<FormatStorageBytes, Flow> {
+        let canonical = canonical_content
+            .checked_add(padding)
+            .ok_or_else(format_string_overflow_error)?;
+        let content = match self.encoding {
+            FormatStringEncoding::Multibyte => canonical_content,
+            FormatStringEncoding::Unibyte => unibyte_content,
+        };
+        let final_bytes = content
+            .checked_add(padding)
+            .ok_or_else(format_string_overflow_error)?;
+        self.field(canonical, final_bytes)
+    }
+
+    #[inline]
+    fn field(self, canonical: usize, final_bytes: usize) -> Result<FormatStorageBytes, Flow> {
+        // GNU final size is checked before canonical storage capacity.
+        FormatOutputBytes::try_from(final_bytes)?;
+        // Canonical storage is an upper bound on GNU's unibyte prefix extent.
+        // Ordinary fields therefore need neither a decode nor a new allocation.
+        if self.prefix.len() > Value::MOST_POSITIVE_FIXNUM as usize
+            || final_bytes > Value::MOST_POSITIVE_FIXNUM as usize - self.prefix.len()
+        {
+            self.check_exact_remaining(final_bytes)?;
+        }
+        FormatStorageBytes::try_from(canonical)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn check_exact_remaining(self, final_bytes: usize) -> Result<(), Flow> {
+        let used = match self.encoding {
+            FormatStringEncoding::Multibyte => self.prefix.len(),
+            // Unibyte result prefixes contain only ASCII/eight-bit characters;
+            // genuine multibyte content promotes the mode before this snapshot.
+            FormatStringEncoding::Unibyte => emacs_chars_count(self.prefix),
+        };
+        let remaining =
+            Value::MOST_POSITIVE_FIXNUM as usize - FormatOutputBytes::try_from(used)?.get();
+        if final_bytes > remaining {
+            Err(format_string_overflow_error())
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -1602,6 +1766,7 @@ fn apply_integer_width(
     prefix: &str,
     digits: &str,
     spec: &FormatSpec,
+    budget: FormatRemainingOutput<'_>,
 ) -> Result<String, crate::emacs_core::alloc::AllocationFailure> {
     let content_len = sign
         .len()
@@ -1610,7 +1775,8 @@ fn apply_integer_width(
         .ok_or_else(format_string_overflow_error)?;
     let width = spec.width.map(FormatWidth::get).unwrap_or(0);
     let mut bytes = Vec::new();
-    reserve_format_output(&mut bytes, content_len.max(width))?;
+    let extent = budget.ascii_field(content_len.max(width))?;
+    reserve_format_output(&mut bytes, extent.get())?;
     let padding = width.saturating_sub(content_len);
     let zero_padding = spec.flags.contains(FormatFlag::ZeroPadding) && spec.precision.is_none();
     if !spec.flags.contains(FormatFlag::LeftAlign) && !zero_padding {
@@ -1638,6 +1804,8 @@ enum IntegerMagnitude {
     Positive,
 }
 
+static_assertions::assert_impl_all!(IntegerMagnitude: Send, Sync);
+
 impl From<std::cmp::Ordering> for IntegerMagnitude {
     fn from(ordering: std::cmp::Ordering) -> Self {
         match ordering {
@@ -1652,6 +1820,7 @@ fn format_integer_digits(
     mut digits: String,
     magnitude: IntegerMagnitude,
     spec: &FormatSpec,
+    budget: FormatRemainingOutput<'_>,
 ) -> Result<String, crate::emacs_core::alloc::AllocationFailure> {
     let negative = magnitude == IntegerMagnitude::Negative;
     let zero_value = magnitude == IntegerMagnitude::Zero;
@@ -1693,7 +1862,7 @@ fn format_integer_digits(
         let total = digit_width
             .checked_add(sign.len() + prefix.len())
             .ok_or_else(format_string_overflow_error)?;
-        FormatOutputBytes::try_from(total)?;
+        budget.ascii_field(total.max(spec.width.map(FormatWidth::get).unwrap_or(0)))?;
         if spec.conversion == 'o'
             && spec.flags.contains(FormatFlag::Alternate)
             && !digits.starts_with('0')
@@ -1712,7 +1881,7 @@ fn format_integer_digits(
         digits = format!("0{digits}");
     }
 
-    apply_integer_width(sign, prefix, &digits, spec)
+    apply_integer_width(sign, prefix, &digits, spec, budget)
 }
 
 /// Render `n` as plain decimal digits appended to `out`, with no heap
@@ -1745,6 +1914,7 @@ fn push_i64_decimal(
 fn format_int_spec(
     n: i64,
     spec: &FormatSpec,
+    budget: FormatRemainingOutput<'_>,
 ) -> Result<String, crate::emacs_core::alloc::AllocationFailure> {
     // Fast path for a plain `%d`/`%i`: one backward stack-buffer digit
     // pass and one allocation. The general path below runs 128-bit
@@ -1783,7 +1953,7 @@ fn format_int_spec(
         'X' => format!("{abs_val:X}"),
         _ => abs_val.to_string(),
     };
-    format_integer_digits(digits, IntegerMagnitude::from(n.cmp(&0)), spec)
+    format_integer_digits(digits, IntegerMagnitude::from(n.cmp(&0)), spec, budget)
 }
 
 /// Format a bignum for `%d` / `%o` / `%x` / `%X` specs. Mirrors the
@@ -1793,6 +1963,7 @@ fn format_int_spec(
 fn format_bignum_spec(
     n: &Integer,
     spec: &FormatSpec,
+    budget: FormatRemainingOutput<'_>,
 ) -> Result<String, crate::emacs_core::alloc::AllocationFailure> {
     let negative = *n < 0;
     let abs = n.clone().abs();
@@ -1815,6 +1986,7 @@ fn format_bignum_spec(
         digits,
         IntegerMagnitude::from(n.cmp(&Integer::ZERO)),
         &adjusted,
+        budget,
     )
 }
 
@@ -1822,6 +1994,8 @@ fn format_bignum_spec(
 /// This value has no interpreter state and can be shared between mutators.
 #[derive(Clone, Copy, Debug)]
 struct FiniteTruncatedFloat(f64);
+
+static_assertions::assert_impl_all!(FiniteTruncatedFloat: Send, Sync);
 
 impl TryFrom<f64> for FiniteTruncatedFloat {
     type Error = Flow;
@@ -1845,6 +2019,7 @@ fn format_integer_float_spec(
     ctx: &super::eval::Context,
     f: f64,
     spec: &FormatSpec,
+    budget: FormatRemainingOutput<'_>,
 ) -> Result<String, crate::emacs_core::alloc::AllocationFailure> {
     if matches!(spec.conversion, 'd' | 'i') {
         // GNU uses %.0f on the truncated double, canonicalizing both zero
@@ -1858,12 +2033,17 @@ fn format_integer_float_spec(
         native.width = None;
         native.precision = Some(0);
         native.flags.remove(FormatFlag::ZeroPadding);
-        let text = format_float_spec(FloatFormatArgument::Double(truncated), &native)?;
+        let text = format_float_spec(FloatFormatArgument::Double(truncated), &native, budget)?;
         let counted_sign = usize::from(!text.as_bytes()[0].is_ascii_digit());
         let native_precision = text.len().saturating_sub(counted_sign);
         let excess = spec.precision.unwrap_or(0).saturating_sub(native_precision);
         let sign_len = usize::from(matches!(text.as_bytes()[0], b'-' | b'+' | b' '));
         let (sign, body) = text.split_at(sign_len);
+        let total = text
+            .len()
+            .checked_add(excess)
+            .ok_or_else(format_string_overflow_error)?;
+        budget.ascii_field(total.max(spec.width.map(FormatWidth::get).unwrap_or(0)))?;
         let digits = if excess == 0 {
             body.to_owned()
         } else {
@@ -1875,7 +2055,7 @@ fn format_integer_float_spec(
         if !body.as_bytes()[0].is_ascii_hexdigit() {
             padded.flags.remove(FormatFlag::ZeroPadding);
         }
-        return apply_integer_width(sign, "", &digits, &padded);
+        return apply_integer_width(sign, "", &digits, &padded, budget);
     }
 
     let finite = FiniteTruncatedFloat::try_from(f)?;
@@ -1895,10 +2075,11 @@ fn format_integer_float_spec(
             digits,
             IntegerMagnitude::from(big.cmp(&Integer::ZERO)),
             spec,
+            budget,
         )
     } else {
         super::validate_integer_bits(ctx, big.significant_bits())?;
-        format_bignum_spec(&big, spec)
+        format_bignum_spec(&big, spec, budget)
     }
 }
 
@@ -1911,6 +2092,8 @@ enum FloatFormatArgument {
     Signed(i64),
     Unsigned(u64),
 }
+
+static_assertions::assert_impl_all!(FloatFormatArgument: Send, Sync);
 
 impl TryFrom<Value> for FloatFormatArgument {
     type Error = Flow;
@@ -1950,6 +2133,8 @@ enum FloatConversion {
     #[strum(serialize = "g")]
     General,
 }
+
+static_assertions::assert_impl_all!(FloatConversion: Send, Sync);
 
 impl TryFrom<char> for FloatConversion {
     type Error = Flow;
@@ -2001,6 +2186,8 @@ struct FloatPrecision {
     excess: usize,
 }
 
+static_assertions::assert_impl_all!(FloatPrecision: Send, Sync);
+
 impl FloatPrecision {
     fn new(requested: Option<usize>) -> Self {
         // SAFETY: the bridge reads compile-time float constants; no pointers or state.
@@ -2024,6 +2211,8 @@ impl FloatPrecision {
 /// Its owned bytes have no mutator state and can be shared across threads.
 #[derive(Clone, Copy, Debug)]
 struct NativeFloatFormat([u8; NATIVE_FLOAT_FORMAT_CAPACITY]);
+
+static_assertions::assert_impl_all!(NativeFloatFormat: Send, Sync);
 
 const NATIVE_FLOAT_FORMAT_CAPACITY: usize = <FormatFlag as strum::EnumCount>::COUNT + 5;
 // The C bridge inserts one length modifier into its 16-byte local format.
@@ -2110,6 +2299,7 @@ impl NativeFloatFormat {
 fn format_float_spec(
     argument: FloatFormatArgument,
     spec: &FormatSpec,
+    budget: FormatRemainingOutput<'_>,
 ) -> Result<String, crate::emacs_core::alloc::AllocationFailure> {
     let conversion = FloatConversion::try_from(spec.conversion)?;
     let precision = FloatPrecision::new(spec.precision);
@@ -2129,7 +2319,7 @@ fn format_float_spec(
     let width = spec.width.map(FormatWidth::get).unwrap_or(0);
     // GNU lisp.h:1621 and editfns.c:4085-4092 check the complete field's
     // string-size domain before allocating any excess-precision padding.
-    let total = FormatOutputBytes::try_from(length.max(width))?.get();
+    let total = budget.ascii_field(length.max(width))?.get();
     let padding = total - length;
     if trailing_zeros == 0 && padding == 0 {
         return Ok(rendered);
@@ -2178,14 +2368,17 @@ enum FormatStringEncoding {
     Multibyte,
 }
 
+static_assertions::assert_impl_all!(FormatStringEncoding: Send, Sync);
+
 /// Format a string (%s) with width and precision.
 fn format_string_spec(
     data: &[u8],
     encoding: FormatStringEncoding,
     spec: &FormatSpec,
     ctx: &super::eval::Context,
+    budget: FormatRemainingOutput<'_>,
 ) -> Result<Vec<u8>, crate::emacs_core::alloc::AllocationFailure> {
-    Ok(format_string_spec_tracked(data, encoding, spec, ctx)?.0)
+    Ok(format_string_spec_tracked(data, encoding, spec, ctx, budget)?.0)
 }
 
 /// Like `format_string_spec` but also returns the byte range in the output bytes
@@ -2205,6 +2398,7 @@ fn format_string_spec_tracked(
     encoding: FormatStringEncoding,
     spec: &FormatSpec,
     ctx: &super::eval::Context,
+    budget: FormatRemainingOutput<'_>,
 ) -> Result<(Vec<u8>, usize, usize), crate::emacs_core::alloc::AllocationFailure> {
     let mut content_width = 0usize;
     let mut truncated_end = data.len();
@@ -2246,18 +2440,45 @@ fn format_string_spec_tracked(
         truncated_end = data.len();
     }
     let truncated = &data[..truncated_end];
-    // Promote unibyte content to canonical multibyte so it can be spliced into
-    // the byte result; multibyte content is already canonical.
-    let content = format_source_bytes(truncated, encoding)?;
-    let content_bytes = content.len();
-    if spec.width.is_none() && spec.precision.is_none() {
-        content_width = emacs_chars_count(&content);
-    }
-    let w = match spec.width.map(FormatWidth::get) {
-        Some(w) if w > content_width => w,
-        _ => return Ok((content, 0, content_bytes)),
+    let (content_bytes, unibyte_bytes) = match encoding {
+        FormatStringEncoding::Unibyte => {
+            let canonical = if truncated.is_ascii() {
+                truncated.len()
+            } else {
+                truncated
+                    .len()
+                    .checked_add(truncated.iter().filter(|&&byte| byte >= 0x80).count())
+                    .ok_or_else(format_string_overflow_error)?
+            };
+            (canonical, truncated.len())
+        }
+        FormatStringEncoding::Multibyte => (
+            truncated.len(),
+            if matches!(budget.encoding, FormatStringEncoding::Unibyte) {
+                emacs_chars_count(truncated)
+            } else {
+                truncated.len()
+            },
+        ),
     };
-    let pad_chars = w - content_width;
+    if spec.width.is_none() && spec.precision.is_none() {
+        content_width = match encoding {
+            FormatStringEncoding::Unibyte => truncated.len(),
+            FormatStringEncoding::Multibyte => emacs_chars_count(truncated),
+        };
+    }
+    let pad_chars = spec
+        .width
+        .map(FormatWidth::get)
+        .unwrap_or(0)
+        .saturating_sub(content_width);
+    budget.string_field(content_bytes, unibyte_bytes, pad_chars)?;
+    // Validate the complete field before promoting source bytes or allocating
+    // Lisp-controlled padding; GNU grows the aggregate at editfns.c:4245-4263.
+    let content = format_source_bytes(truncated, encoding)?;
+    if pad_chars == 0 {
+        return Ok((content, 0, content_bytes));
+    }
     // Padding is always ASCII spaces. Each padding char is one byte.
     if spec.flags.contains(FormatFlag::LeftAlign) {
         // Left-aligned: content first, then padding.
@@ -2360,6 +2581,7 @@ fn push_format_literal_code(
     const APOSTROPHE: u32 = '\'' as u32;
     Ok(match (quoting_style, code) {
         (FormatMessageQuotingStyle::Style(TextQuotingStyle::Curve), BACKTICK) => {
+            result.promote_multibyte()?;
             result.push_character('‘' as u32)?;
             FormatLiteralPush {
                 multibyte: true,
@@ -2367,6 +2589,7 @@ fn push_format_literal_code(
             }
         }
         (FormatMessageQuotingStyle::Style(TextQuotingStyle::Curve), APOSTROPHE) => {
+            result.promote_multibyte()?;
             result.push_character('’' as u32)?;
             FormatLiteralPush {
                 multibyte: true,
@@ -2523,10 +2746,14 @@ fn do_format(
         .len()
         .checked_add(32)
         .ok_or_else(format_string_overflow_error)?;
-    let mut result = FormatOutput::new(initial_capacity)?;
+    let encoding = if args.iter().any(|value| value.string_is_multibyte()) {
+        FormatStringEncoding::Multibyte
+    } else {
+        FormatStringEncoding::Unibyte
+    };
+    let mut result = FormatOutput::new(initial_capacity, encoding)?;
     let mut spans: Vec<FormatPropSpan> = Vec::new();
     let mut source_spans: Vec<FormatSourceSpan> = Vec::new();
-    let mut force_multibyte_result = false;
     // GNU `styled_format`'s `new_result`: set by a `%` conversion, `%%`, quote
     // translation, or a raw-byte conversion. While it stays false GNU returns
     // the format string ITSELF and copies no properties (editfns.c:4289).
@@ -2580,7 +2807,9 @@ fn do_format(
                     result.push(code as u8)?;
                 } else {
                     let pushed = push_format_literal_code(&mut result, code, quoting_style)?;
-                    force_multibyte_result |= pushed.multibyte;
+                    if pushed.multibyte {
+                        result.promote_multibyte()?;
+                    }
                     new_result |= pushed.translated;
                 }
                 if track_props {
@@ -2658,6 +2887,9 @@ fn do_format(
                     let arg = super::misc_pure::symbol_name_string_for_format(args[this_arg_idx])
                         .unwrap_or(args[this_arg_idx]);
                     if let Some(ls) = arg.as_lisp_string() {
+                        if ls.is_multibyte() {
+                            result.promote_multibyte()?;
+                        }
                         // Multibyte bytes are already canonical; ASCII unibyte
                         // promotes to itself. Raw 128-255 unibyte bytes need
                         // the general path's str_to_multibyte promotion
@@ -2672,6 +2904,9 @@ fn do_format(
                 let arg = super::misc_pure::symbol_name_string_for_format(args[this_arg_idx])
                     .unwrap_or(args[this_arg_idx]);
                 let arg_is_string = arg.is_string();
+                if arg.string_is_multibyte() {
+                    result.promote_multibyte()?;
+                }
                 let (s, src_multibyte): (std::borrow::Cow<'_, [u8]>, _) =
                     if let Some(ls) = arg.as_lisp_string() {
                         (
@@ -2688,8 +2923,12 @@ fn do_format(
                             FormatStringEncoding::Multibyte,
                         )
                     };
+                if !arg_is_string {
+                    result.promote_printed(&s)?;
+                }
+                let budget = FormatRemainingOutput::new(&result);
                 let (formatted, content_byte_start_in_formatted, content_byte_end_in_formatted) =
-                    format_string_spec_tracked(&s, src_multibyte, &spec, ctx)?;
+                    format_string_spec_tracked(&s, src_multibyte, &spec, ctx, budget)?;
                 if track_props
                     && arg_is_string
                     && content_byte_start_in_formatted < content_byte_end_in_formatted
@@ -2721,7 +2960,9 @@ fn do_format(
             }
             'S' => {
                 let s = prin1_fn(&args[this_arg_idx]);
-                format_string_spec(&s, FormatStringEncoding::Multibyte, &spec, ctx)?
+                result.promote_printed(&s)?;
+                let budget = FormatRemainingOutput::new(&result);
+                format_string_spec(&s, FormatStringEncoding::Multibyte, &spec, ctx, budget)?
             }
             'd' | 'i' | 'b' | 'B' | 'o' | 'x' | 'X' => {
                 // Plain `%d` on a fixnum with no property tracking: render the
@@ -2739,16 +2980,17 @@ fn do_format(
                     arg_idx = this_arg_idx + 1;
                     continue;
                 }
+                let budget = FormatRemainingOutput::new(&result);
                 let formatted = match args[this_arg_idx].kind() {
-                    ValueKind::Fixnum(i) => format_int_spec(i, &spec)?,
+                    ValueKind::Fixnum(i) => format_int_spec(i, &spec, budget)?,
                     ValueKind::Float => {
-                        format_integer_float_spec(ctx, args[this_arg_idx].xfloat(), &spec)?
+                        format_integer_float_spec(ctx, args[this_arg_idx].xfloat(), &spec, budget)?
                     }
                     ValueKind::Veclike(VecLikeType::Bignum) => {
                         let integer = args[this_arg_idx]
                             .as_bignum()
                             .ok_or_else(format_spec_type_mismatch_error)?;
-                        format_bignum_spec(integer, &spec)?
+                        format_bignum_spec(integer, &spec, budget)?
                     }
                     _ => {
                         return Err(format_spec_type_mismatch_error().into());
@@ -2761,18 +3003,23 @@ fn do_format(
             // error below, matching `float_conversion` in editfns.c.
             'f' | 'e' | 'g' => {
                 let argument = FloatFormatArgument::try_from(args[this_arg_idx])?;
-                format_float_spec(argument, &spec)?.into_bytes()
+                let budget = FormatRemainingOutput::new(&result);
+                format_float_spec(argument, &spec, budget)?.into_bytes()
             }
             'c' => {
                 let n = expect_int(&args[this_arg_idx])
                     .map_err(|_| format_spec_type_mismatch_error())?;
                 let formatted_char = format_char_argument(n)?;
-                force_multibyte_result |= formatted_char.force_multibyte_result;
+                if formatted_char.force_multibyte_result {
+                    result.promote_multibyte()?;
+                }
+                let budget = FormatRemainingOutput::new(&result);
                 format_string_spec(
                     &formatted_char.rendered,
                     FormatStringEncoding::Multibyte,
                     &spec,
                     ctx,
+                    budget,
                 )?
             }
             _ => {
@@ -2804,6 +3051,7 @@ fn do_format(
         result.append(&formatted)?;
     }
 
+    let force_multibyte_result = matches!(result.encoding, FormatStringEncoding::Multibyte);
     Ok((
         result.into_bytes(),
         spans,
@@ -2820,29 +3068,25 @@ fn build_format_result(
     source_spans: &[FormatSourceSpan],
     force_multibyte_result: bool,
 ) -> Result<Value, crate::emacs_core::alloc::AllocationFailure> {
-    // GNU `styled_format` decides multibyteness from the format/argument strings
-    // and from %c/%S/quoting that forces it; neomacs also inspects the result for
-    // a genuine (non eight-bit) multibyte character, since %S/printer output can
-    // introduce one without a multibyte argument string. Eight-bit raw bytes do
-    // NOT promote (issue #131: a raw unibyte byte stays unibyte).
-    // An all-ASCII result (the common case) needs neither the per-char
-    // multibyte probe nor the unibyte down-conversion — both were decoding
-    // every result character out of line on every `format` call.
-    let all_ascii = bytes.iter().all(|&byte| byte < 0x80);
-    let multibyte = force_multibyte_result
-        || args.iter().any(|value| value.string_is_multibyte())
-        || (!all_ascii && result_bytes_imply_multibyte(&bytes));
-    // `bytes` are canonical multibyte Emacs encoding. A unibyte result has no
-    // genuine multibyte character, so down-convert eight-bit chars back to raw
-    // bytes (preserving e.g. a raw unibyte payload passed through verbatim).
-    // LispString appends its terminator; reserve that slot fallibly first.
+    // The accumulator owns GNU's upfront/promotion decision. Its bytes remain
+    // canonical until this final unibyte conversion, performed in place.
+    let multibyte = force_multibyte_result;
+    if !multibyte && !bytes.is_ascii() {
+        bytes = emacs_bytes_to_unibyte(bytes);
+    }
+    FormatOutputBytes::try_from(bytes.len())?;
+    // LispString appends its terminator; this is storage capacity, not an
+    // additional GNU string byte. Reserve fallibly before handing it off.
+    let storage = bytes
+        .len()
+        .checked_add(1)
+        .ok_or_else(crate::emacs_core::error::memory_exhausted_error)?;
+    FormatStorageBytes::try_from(storage)?;
     bytes.try_reserve(1)?;
     let result = Value::heap_string(if multibyte {
         crate::heap_types::LispString::from_emacs_bytes(bytes)
-    } else if all_ascii {
-        crate::heap_types::LispString::from_unibyte(bytes)
     } else {
-        crate::heap_types::LispString::from_unibyte(emacs_bytes_to_unibyte(bytes))
+        crate::heap_types::LispString::from_unibyte(bytes)
     });
 
     // Copy text properties from the format string first, then from each

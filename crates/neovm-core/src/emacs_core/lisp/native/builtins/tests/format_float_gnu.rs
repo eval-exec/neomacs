@@ -3,7 +3,21 @@
 const CASES: &[(&str, &str, &str)] = &[
     (
         "precision",
-        r#"(list (length (format "%.65536f" 0.1)) (length (format "%.70000e" 0.1)) (length (format "%.70000g" 0.1)) (length (format "%.70000f" 5)) (length (format "%#.70000g" 1.0)) (length (format "%.70000f" 1.0e+INF)))"#,
+        r#"(list (list (length (format "%.65536f" 0.1)) (length (format "%.70000e" 0.1)) (length (format "%.70000g" 0.1)) (length (format "%.70000f" 5)) (length (format "%#.70000g" 1.0)) (length (format "%.70000f" 1.0e+INF)))
+(let* ((maximum most-positive-fixnum)
+       (width (number-to-string maximum))
+       (cases (list
+         (list (concat "a%" width "f") 1.0)
+         (list (concat "a%." (number-to-string (- maximum 2)) "f") 1.0)
+         (list (concat "a%." (number-to-string (- maximum 6)) "e") 1.0)
+         (list (concat "a%#." (number-to-string (1- maximum)) "g") 1.0)
+         (list (concat "a%" width "f") 1.0e+INF)
+         (list (concat "a%" width "f") 'bad)))
+       (out nil))
+  (dolist (call '(format format-message))
+    (dolist (case cases)
+      (push (condition-case e (funcall call (car case) (cadr case)) (error e)) out)))
+  (nreverse out)))"#,
         include_str!("format_float_gnu/precision.expect"),
     ),
     (
@@ -62,9 +76,10 @@ fn assert_case(index: usize) {
     crate::test_utils::init_test_tracing();
     let (name, form, frozen) = CASES[index];
     let expected = oracle(name, form, frozen);
-    let mut ctx = crate::emacs_core::eval::Context::new();
-    let value = ctx.eval_str(form).expect("format evaluation");
-    assert_eq!(crate::emacs_core::print::print_value(&value), expected);
+    assert_eq!(
+        crate::test_utils::runtime_startup_eval_one(form),
+        format!("OK {expected}")
+    );
 }
 
 #[test]

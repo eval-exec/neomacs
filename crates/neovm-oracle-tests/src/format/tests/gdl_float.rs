@@ -4,8 +4,37 @@ use crate::common::{assert_oracle_parity_expect, return_if_neovm_enable_oracle_p
 #[test]
 fn oracle_gdl_float_precision() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let form = r#"(list (length (format "%.65536f" 0.1)) (length (format "%.70000e" 0.1)) (length (format "%.70000g" 0.1)) (length (format "%.70000f" 5)) (length (format "%#.70000g" 1.0)) (length (format "%.70000f" 1.0e+INF)))"#;
-    let expect = expect_test::expect![[r#""OK (65538 70006 57 70002 70001 3)""#]];
+    let form = r#"(list (list (length (format "%.65536f" 0.1)) (length (format "%.70000e" 0.1)) (length (format "%.70000g" 0.1)) (length (format "%.70000f" 5)) (length (format "%#.70000g" 1.0)) (length (format "%.70000f" 1.0e+INF)))
+(list (let* ((maximum most-positive-fixnum)
+       (width (number-to-string maximum))
+       (cases (list
+         (list (concat "a%" width "f") 1.0)
+         (list (concat "a%." (number-to-string (- maximum 2)) "f") 1.0)
+         (list (concat "a%." (number-to-string (- maximum 6)) "e") 1.0)
+         (list (concat "a%#." (number-to-string (1- maximum)) "g") 1.0)
+         (list (concat "a%" width "f") 1.0e+INF)
+         (list (concat "a%" width "f") 'bad)))
+       (out nil))
+  (dolist (call '(format format-message))
+    (dolist (case cases)
+      (push (condition-case e (funcall call (car case) (cadr case)) (error e)) out)))
+  (nreverse out)) (progn (require 'bytecomp) (let ((run (lambda () (let* ((maximum most-positive-fixnum)
+       (width (number-to-string maximum))
+       (cases (list
+         (list (concat "a%" width "f") 1.0)
+         (list (concat "a%." (number-to-string (- maximum 2)) "f") 1.0)
+         (list (concat "a%." (number-to-string (- maximum 6)) "e") 1.0)
+         (list (concat "a%#." (number-to-string (1- maximum)) "g") 1.0)
+         (list (concat "a%" width "f") 1.0e+INF)
+         (list (concat "a%" width "f") 'bad)))
+       (out nil))
+  (dolist (call (list (byte-compile (lambda (control value) (format control value))) (byte-compile (lambda (control value) (format-message control value)))))
+    (dolist (case cases)
+      (push (condition-case e (funcall call (car case) (cadr case)) (error e)) out)))
+  (nreverse out))))) (list (funcall run) (funcall run))))))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((65538 70006 57 70002 70001 3) (((error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Format specifier doesn’t match argument type\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Format specifier doesn’t match argument type\")) (((error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Format specifier doesn’t match argument type\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Format specifier doesn’t match argument type\")) ((error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Format specifier doesn’t match argument type\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Format specifier doesn’t match argument type\")))))""#
+    ]];
     assert_oracle_parity_expect(form, expect);
 }
 

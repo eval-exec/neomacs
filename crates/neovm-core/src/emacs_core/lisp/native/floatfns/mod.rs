@@ -240,6 +240,8 @@ mod gdl_ldexp_ieee;
 #[derive(Clone, Copy, Debug)]
 struct LdexpExponent(libc::c_int);
 
+static_assertions::assert_impl_all!(LdexpExponent: Send, Sync);
+
 impl From<i64> for LdexpExponent {
     fn from(exponent: i64) -> Self {
         Self(

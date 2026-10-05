@@ -51,7 +51,48 @@ fn gdl_nonfinite_radix() {
 fn gdl_width_bound() {
     assert_gnu(
         "gdl_width_bound",
-        r#"(list (condition-case e (format "%2305843009213693952s" "a") (error e)) (condition-case e (format "%9223372036854775807d" 12) (error e)) (condition-case e (format "%99999999999999999999s" "a") (error e)))"#,
+        r#"(list (list (condition-case e (format "%2305843009213693952s" "a") (error e)) (condition-case e (format "%9223372036854775807d" 12) (error e)) (condition-case e (format "%99999999999999999999s" "a") (error e)))
+(let* ((maximum most-positive-fixnum)
+       (width (number-to-string maximum))
+       (lower (number-to-string (1- maximum)))
+       (big (expt 2 100))
+       (cases (list
+         (list (concat "a%" width "s") "a")
+         (list (concat "a%" width "s") (unibyte-string 255))
+         (list (concat "%" width "s") "é")
+         (list (concat "a%" width "s") "")
+         (list (concat "a%-" width "s") "a")
+         (list (concat "a%" width "S") "a")
+         (list (concat "a%" width "c") ?a)
+         (list (concat "a%" width "d") 1)
+         (list (concat "a%" width "i") -1)
+         (list (concat "a%." width "d") 1)
+         (list (concat "a%." width "d") big)
+         (list (concat "a%#." width "x") big)
+         (list (concat "é%" lower "s") "a")
+         (list (string-as-unibyte (concat (unibyte-string 255) "%" lower "s")) "é")
+         (list (string-as-unibyte (concat (unibyte-string 255) "%" lower ".1s")) (list "é"))
+         (list (string-as-unibyte (concat (unibyte-string 255) "%" lower ".1S")) (list "é"))
+         (list (propertize (concat "a%" width "s") 'face 'bold) "a")
+         (list (concat "a%" width "d") 'bad)
+         (list (concat "a%" width "c") big)
+         (list (concat "a%" width "q") 1)))
+       (out nil))
+  (dolist (call '(format format-message))
+    (dolist (case cases)
+      (push (condition-case e (funcall call (car case) (cadr case)) (error e)) out))
+    (push (condition-case e (funcall call (concat "%s%" lower "s") "aa" "a") (error e)) out)
+    (push (condition-case e (funcall call (concat "a%" width "d")) (error e)) out))
+  (list (nreverse out)
+        (let ((memory-signal-data '(error formatter-storage-exhausted)))
+          (list
+            (let (errors)
+              (dolist (call '(format format-message))
+                (push (condition-case e (funcall call (concat "%" width "s") (unibyte-string 255)) (error e)) errors))
+              (nreverse errors))
+            (condition-case e (format (concat "%" width "s") (string-to-multibyte (unibyte-string 255))) (error e))))
+        (condition-case e (format (concat "%" width "sa") "a") (error e))
+        (condition-case e (format (string-as-unibyte (concat (unibyte-string 255) "%" lower "s")) "a") (error e)))))"#,
         include_str!("gdl_format/gdl_width_bound.expect"),
     );
 }
@@ -78,7 +119,15 @@ fn gdl_bignum_precision() {
 fn gdl_decimal_float() {
     assert_gnu(
         "gdl_decimal_float",
-        r#"(list (format "%.0d" 0.5) (format "%.0d" -0.0) (format "%5.0d|" 0.3) (format "%+.0d" 0.3) (format "%.0i" 0.9) (format "%.0d" 0) (format "%+d" 1.0e+INF) (format "%05d" -1.0e+INF) (format "%d" -0.0e+NaN) (format "%.3d" 1.0e+INF) (format "%.4d" -0.0e+NaN) (format "%.5d" -12.9) (format "%08d" 0.5))"#,
+        r#"(list (list (format "%.0d" 0.5) (format "%.0d" -0.0) (format "%5.0d|" 0.3) (format "%+.0d" 0.3) (format "%.0i" 0.9) (format "%.0d" 0) (format "%+d" 1.0e+INF) (format "%05d" -1.0e+INF) (format "%d" -0.0e+NaN) (format "%.3d" 1.0e+INF) (format "%.4d" -0.0e+NaN) (format "%.5d" -12.9) (format "%08d" 0.5))
+(let ((out nil) (width (number-to-string most-positive-fixnum)))
+  (dolist (call '(format format-message))
+    (dolist (case (list (list (concat "a%" width "d") 1.0)
+                       (list (concat "a%." width "d") 1.0)
+                       (list (concat "a%" width "i") -1.0e+INF)
+                       (list (concat "a%" width "x") 1.0e+INF)))
+      (push (condition-case e (funcall call (car case) (cadr case)) (error e)) out)))
+  (nreverse out)))"#,
         include_str!("gdl_format/gdl_decimal_float.expect"),
     );
 }

@@ -29,18 +29,99 @@ fn gdl_nonfinite_radix() {
 #[test]
 fn gdl_width_bound() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let form = r#"
+    let form = r#"(list
 (progn (require 'bytecomp) (list
 (list (condition-case e (format "%2305843009213693952s" "a") (error e)) (condition-case e (format "%9223372036854775807d" 12) (error e)) (condition-case e (format "%99999999999999999999s" "a") (error e)))
 (let ((f (byte-compile (lambda (control value) (format control value)))))
                          (list (condition-case e (funcall f "%2305843009213693952s" "a") (error e))
                                (condition-case e (funcall f "%2305843009213693952s" "a") (error e))
                                (condition-case e (funcall f "%9223372036854775807d" 12) (error e))))))
-"#;
+
+(list (let* ((maximum most-positive-fixnum)
+       (width (number-to-string maximum))
+       (lower (number-to-string (1- maximum)))
+       (big (expt 2 100))
+       (cases (list
+         (list (concat "a%" width "s") "a")
+         (list (concat "a%" width "s") (unibyte-string 255))
+         (list (concat "%" width "s") "é")
+         (list (concat "a%" width "s") "")
+         (list (concat "a%-" width "s") "a")
+         (list (concat "a%" width "S") "a")
+         (list (concat "a%" width "c") ?a)
+         (list (concat "a%" width "d") 1)
+         (list (concat "a%" width "i") -1)
+         (list (concat "a%." width "d") 1)
+         (list (concat "a%." width "d") big)
+         (list (concat "a%#." width "x") big)
+         (list (concat "é%" lower "s") "a")
+         (list (string-as-unibyte (concat (unibyte-string 255) "%" lower "s")) "é")
+         (list (string-as-unibyte (concat (unibyte-string 255) "%" lower ".1s")) (list "é"))
+         (list (string-as-unibyte (concat (unibyte-string 255) "%" lower ".1S")) (list "é"))
+         (list (propertize (concat "a%" width "s") 'face 'bold) "a")
+         (list (concat "a%" width "d") 'bad)
+         (list (concat "a%" width "c") big)
+         (list (concat "a%" width "q") 1)))
+       (out nil))
+  (dolist (call '(format format-message))
+    (dolist (case cases)
+      (push (condition-case e (funcall call (car case) (cadr case)) (error e)) out))
+    (push (condition-case e (funcall call (concat "%s%" lower "s") "aa" "a") (error e)) out)
+    (push (condition-case e (funcall call (concat "a%" width "d")) (error e)) out))
+  (list (nreverse out)
+        (let ((memory-signal-data '(error formatter-storage-exhausted)))
+          (list
+            (let (errors)
+              (dolist (call '(format format-message))
+                (push (condition-case e (funcall call (concat "%" width "s") (unibyte-string 255)) (error e)) errors))
+              (nreverse errors))
+            (condition-case e (format (concat "%" width "s") (string-to-multibyte (unibyte-string 255))) (error e))))
+        (condition-case e (format (concat "%" width "sa") "a") (error e))
+        (condition-case e (format (string-as-unibyte (concat (unibyte-string 255) "%" lower "s")) "a") (error e)))) (progn (require 'bytecomp) (let ((run (lambda () (let* ((maximum most-positive-fixnum)
+       (width (number-to-string maximum))
+       (lower (number-to-string (1- maximum)))
+       (big (expt 2 100))
+       (cases (list
+         (list (concat "a%" width "s") "a")
+         (list (concat "a%" width "s") (unibyte-string 255))
+         (list (concat "%" width "s") "é")
+         (list (concat "a%" width "s") "")
+         (list (concat "a%-" width "s") "a")
+         (list (concat "a%" width "S") "a")
+         (list (concat "a%" width "c") ?a)
+         (list (concat "a%" width "d") 1)
+         (list (concat "a%" width "i") -1)
+         (list (concat "a%." width "d") 1)
+         (list (concat "a%." width "d") big)
+         (list (concat "a%#." width "x") big)
+         (list (concat "é%" lower "s") "a")
+         (list (string-as-unibyte (concat (unibyte-string 255) "%" lower "s")) "é")
+         (list (string-as-unibyte (concat (unibyte-string 255) "%" lower ".1s")) (list "é"))
+         (list (string-as-unibyte (concat (unibyte-string 255) "%" lower ".1S")) (list "é"))
+         (list (propertize (concat "a%" width "s") 'face 'bold) "a")
+         (list (concat "a%" width "d") 'bad)
+         (list (concat "a%" width "c") big)
+         (list (concat "a%" width "q") 1)))
+       (out nil))
+  (dolist (call (list (byte-compile (lambda (control &rest values) (apply #'format control values))) (byte-compile (lambda (control &rest values) (apply #'format-message control values)))))
+    (dolist (case cases)
+      (push (condition-case e (funcall call (car case) (cadr case)) (error e)) out))
+    (push (condition-case e (funcall call (concat "%s%" lower "s") "aa" "a") (error e)) out)
+    (push (condition-case e (funcall call (concat "a%" width "d")) (error e)) out))
+  (list (nreverse out)
+        (let ((memory-signal-data '(error formatter-storage-exhausted)))
+          (list
+            (let (errors)
+              (dolist (call (list (byte-compile (lambda (control &rest values) (apply #'format control values))) (byte-compile (lambda (control &rest values) (apply #'format-message control values)))))
+                (push (condition-case e (funcall call (concat "%" width "s") (unibyte-string 255)) (error e)) errors))
+              (nreverse errors))
+            (condition-case e (format (concat "%" width "s") (string-to-multibyte (unibyte-string 255))) (error e))))
+        (condition-case e (format (concat "%" width "sa") "a") (error e))
+        (condition-case e (format (string-as-unibyte (concat (unibyte-string 255) "%" lower "s")) "a") (error e))))))) (list (funcall run) (funcall run))))))"#;
     crate::common::assert_oracle_parity_expect(
         form,
         expect_test::expect![[
-            r#""OK (((error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\")) ((error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\")))""#
+            r#""OK ((((error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\")) ((error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\"))) ((((error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Format specifier doesn’t match argument type\") (error \"Format specifier doesn’t match argument type\") (error \"Invalid format operation %q\") (error \"Maximum string size exceeded\") (error \"Not enough arguments for format string\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Format specifier doesn’t match argument type\") (error \"Format specifier doesn’t match argument type\") (error \"Invalid format operation %q\") (error \"Maximum string size exceeded\") (error \"Not enough arguments for format string\")) (((error formatter-storage-exhausted) (error formatter-storage-exhausted)) (error formatter-storage-exhausted)) (error #(\"Memory exhausted--use C-x s then exit and restart Emacs\" 22 27 (font-lock-face help-key-binding face help-key-binding))) (error #(\"Memory exhausted--use C-x s then exit and restart Emacs\" 22 27 (font-lock-face help-key-binding face help-key-binding)))) ((((error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Format specifier doesn’t match argument type\") (error \"Format specifier doesn’t match argument type\") (error \"Invalid format operation %q\") (error \"Maximum string size exceeded\") (error \"Not enough arguments for format string\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Format specifier doesn’t match argument type\") (error \"Format specifier doesn’t match argument type\") (error \"Invalid format operation %q\") (error \"Maximum string size exceeded\") (error \"Not enough arguments for format string\")) (((error formatter-storage-exhausted) (error formatter-storage-exhausted)) (error formatter-storage-exhausted)) (error #(\"Memory exhausted--use C-x s then exit and restart Emacs\" 22 27 (font-lock-face help-key-binding face help-key-binding))) (error #(\"Memory exhausted--use C-x s then exit and restart Emacs\" 22 27 (font-lock-face help-key-binding face help-key-binding)))) (((error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Format specifier doesn’t match argument type\") (error \"Format specifier doesn’t match argument type\") (error \"Invalid format operation %q\") (error \"Maximum string size exceeded\") (error \"Not enough arguments for format string\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Format specifier doesn’t match argument type\") (error \"Format specifier doesn’t match argument type\") (error \"Invalid format operation %q\") (error \"Maximum string size exceeded\") (error \"Not enough arguments for format string\")) (((error formatter-storage-exhausted) (error formatter-storage-exhausted)) (error formatter-storage-exhausted)) (error #(\"Memory exhausted--use C-x s then exit and restart Emacs\" 22 27 (font-lock-face help-key-binding face help-key-binding))) (error #(\"Memory exhausted--use C-x s then exit and restart Emacs\" 22 27 (font-lock-face help-key-binding face help-key-binding)))))))""#
         ]],
     );
 }
@@ -89,7 +170,7 @@ fn gdl_bignum_precision() {
 #[test]
 fn gdl_decimal_float() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let form = r#"
+    let form = r#"(list
 (progn (require 'bytecomp) (list
 (list (format "%.0d" 0.5) (format "%.0d" -0.0) (format "%5.0d|" 0.3) (format "%+.0d" 0.3) (format "%.0i" 0.9) (format "%.0d" 0) (format "%+d" 1.0e+INF) (format "%05d" -1.0e+INF) (format "%d" -0.0e+NaN) (format "%.3d" 1.0e+INF) (format "%.4d" -0.0e+NaN) (format "%.5d" -12.9) (format "%08d" 0.5))
 (let ((f (byte-compile (lambda (control value) (format control value)))))
@@ -98,11 +179,26 @@ fn gdl_decimal_float() {
                                (funcall f "%+d" 1.0e+INF) (funcall f "%05d" -1.0e+INF)
                                (funcall f "%d" -0.0e+NaN) (funcall f "%.3d" 1.0e+INF)
                                (funcall f "%.4d" -0.0e+NaN) (funcall f "%08d" 0.5)))))
-"#;
+
+(list (let ((out nil) (width (number-to-string most-positive-fixnum)))
+  (dolist (call '(format format-message))
+    (dolist (case (list (list (concat "a%" width "d") 1.0)
+                       (list (concat "a%." width "d") 1.0)
+                       (list (concat "a%" width "i") -1.0e+INF)
+                       (list (concat "a%" width "x") 1.0e+INF)))
+      (push (condition-case e (funcall call (car case) (cadr case)) (error e)) out)))
+  (nreverse out)) (progn (require 'bytecomp) (let ((out nil) (width (number-to-string most-positive-fixnum)))
+  (dolist (call (list (byte-compile (lambda (control value) (format control value))) (byte-compile (lambda (control value) (format-message control value)))))
+    (dolist (case (list (list (concat "a%" width "d") 1.0)
+                       (list (concat "a%." width "d") 1.0)
+                       (list (concat "a%" width "i") -1.0e+INF)
+                       (list (concat "a%" width "x") 1.0e+INF)))
+      (push (condition-case e (funcall call (car case) (cadr case)) (error e)) out)))
+  (nreverse out)))))"#;
     crate::common::assert_oracle_parity_expect(
         form,
         expect_test::expect![[
-            r#""OK ((\"0\" \"0\" \"    0|\" \"+0\" \"0\" \"\" \"+inf\" \" -inf\" \"-nan\" \"0inf\" \"-0nan\" \"-00012\" \"00000000\") (\"0\" \"0\" \"    0|\" \"+0\" \"+inf\" \" -inf\" \"-nan\" \"0inf\" \"-0nan\" \"00000000\"))""#
+            r#""OK (((\"0\" \"0\" \"    0|\" \"+0\" \"0\" \"\" \"+inf\" \" -inf\" \"-nan\" \"0inf\" \"-0nan\" \"-00012\" \"00000000\") (\"0\" \"0\" \"    0|\" \"+0\" \"+inf\" \" -inf\" \"-nan\" \"0inf\" \"-0nan\" \"00000000\")) (((error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (overflow-error) (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (overflow-error)) ((error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (overflow-error) (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (overflow-error))))""#
         ]],
     );
 }

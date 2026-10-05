@@ -2607,10 +2607,12 @@ pub(crate) fn builtin_random(args: Vec<Value>) -> EvalResult {
 }
 
 /// A positive bignum magnitude, validated before random generation. This
-/// immutable borrow has no mutator-local cache and is safe across contexts;
-/// the process PRNG remains serialized by `emacs_random_lock`.
+/// borrow points into the creating mutator's Lisp heap and must remain on
+/// that mutator, even though Natural itself is Send/Sync. The process PRNG
+/// remains serialized by `emacs_random_lock`; its lock does not protect GC.
+/// No mutator-local cache is introduced.
 #[derive(Clone, Copy, Debug)]
-struct PositiveRandomLimit<'a>(&'a Natural);
+struct PositiveRandomLimit<'a>(&'a Natural, std::marker::PhantomData<*const ()>);
 
 impl<'a> TryFrom<&'a Value> for PositiveRandomLimit<'a> {
     type Error = Flow;
@@ -2625,7 +2627,7 @@ impl<'a> TryFrom<&'a Value> for PositiveRandomLimit<'a> {
         if *integer <= 0 {
             return Err(signal(LispCondition::ArgsOutOfRange, vec![*value]));
         }
-        Ok(Self(integer.unsigned_abs_ref()))
+        Ok(Self(integer.unsigned_abs_ref(), std::marker::PhantomData))
     }
 }
 
@@ -2636,6 +2638,8 @@ enum RandomPrefix {
     AtLimit,
     BelowLimit,
 }
+
+static_assertions::assert_impl_all!(RandomPrefix: Send, Sync);
 
 fn emacs_random_limb_unlocked() -> u64 {
     // GNU src/sysdep.c:2270-2276, get_random_ulong.
