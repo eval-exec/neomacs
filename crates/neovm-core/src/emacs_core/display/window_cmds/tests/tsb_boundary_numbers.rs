@@ -34,6 +34,21 @@ fn tsb_split_rejects_extreme_sizes_without_mutating_the_tree() {
 }
 
 #[test]
+fn tsb_scroll_results_saturate_at_the_fixnum_boundary() {
+    let form = r#"(list
+      (progn (set-window-hscroll nil most-positive-fixnum) (scroll-left 10))
+      (window-hscroll nil)
+      (progn (set-window-hscroll nil 0) (scroll-right most-negative-fixnum))
+      (window-hscroll nil)
+      (progn (set-window-hscroll nil 10) (scroll-left most-negative-fixnum))
+      (progn (set-window-hscroll nil 10) (scroll-right most-positive-fixnum)))"#;
+    assert_eq!(
+        runtime_startup_eval_one(form),
+        "OK ".to_owned() + include_str!("tsb-scroll.expect").trim_end()
+    );
+}
+
+#[test]
 fn tsb_window_total_addition_keeps_gnu_signed_fixnum_slots() {
     let form = r#"(list
       (set-window-new-total nil most-positive-fixnum)

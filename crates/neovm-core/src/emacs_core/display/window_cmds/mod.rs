@@ -3487,11 +3487,9 @@ pub(crate) fn builtin_scroll_left(eval: &mut super::eval::Context, args: Vec<Val
     } else {
         scroll_prefix_value(args.first().unwrap())
     };
-    let mut next = base as i128 + delta as i128;
-    if next < 0 {
-        next = 0;
-    }
-    let next = next.min(i64::MAX as i128) as i64;
+    let next = crate::window::HorizontalScroll::saturating(i128::from(base) + i128::from(delta));
+    let result = Value::from_fixnum(next.into());
+    let next = i64::from(next);
     // GNU `scroll-left` (src/window.c:7113): the optional second argument
     // SET-MINIMUM (non-nil in an interactive call via the `\np` spec) makes
     // the new scroll amount the lower bound for automatic hscrolling.
@@ -3517,7 +3515,7 @@ pub(crate) fn builtin_scroll_left(eval: &mut super::eval::Context, args: Vec<Val
     if next != base {
         eval.gnu_mark_window_redisplay(wid);
     }
-    Ok(Value::fixnum(next))
+    Ok(result)
 }
 /// `(scroll-right &optional SET-MINIMUM ARG)` -> new horizontal scroll amount.
 pub(crate) fn builtin_scroll_right(
@@ -3541,11 +3539,9 @@ pub(crate) fn builtin_scroll_right(
     } else {
         scroll_prefix_value(args.first().unwrap())
     };
-    let mut next = base as i128 - delta as i128;
-    if next < 0 {
-        next = 0;
-    }
-    let next = next.min(i64::MAX as i128) as i64;
+    let next = crate::window::HorizontalScroll::saturating(i128::from(base) - i128::from(delta));
+    let result = Value::from_fixnum(next.into());
+    let next = i64::from(next);
     // GNU `scroll-right` (src/window.c:7139): mirror of scroll-left.
     let set_minimum = args.get(1).is_some_and(|v| !v.is_nil());
     if let Some(Window::Leaf {
@@ -3567,7 +3563,7 @@ pub(crate) fn builtin_scroll_right(
     if next != base {
         eval.gnu_mark_window_redisplay(wid);
     }
-    Ok(Value::fixnum(next))
+    Ok(result)
 }
 /// `(window-vscroll &optional WINDOW PIXELWISE)` -> number.
 ///
