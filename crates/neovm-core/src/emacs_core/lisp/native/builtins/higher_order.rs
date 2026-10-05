@@ -1070,6 +1070,10 @@ pub(crate) fn stable_sort_values_with(
         })
         .collect();
 
+    if reverse {
+        items.reverse();
+    }
+
     if !key_fn.is_nil() {
         for item in &mut items {
             let key = runtime.call_sort_function1(key_fn, item.value)?;
@@ -1080,10 +1084,6 @@ pub(crate) fn stable_sort_values_with(
         for item in &mut items {
             item.key = item.value;
         }
-    }
-
-    if reverse {
-        items.reverse();
     }
 
     gnu_style_sort_items(runtime, &mut items, lessp_fn)?;

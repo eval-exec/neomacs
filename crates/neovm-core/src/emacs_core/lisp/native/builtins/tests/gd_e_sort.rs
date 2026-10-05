@@ -15,3 +15,16 @@ fn sort_key_is_captured_before_redefinition_and_collection() {
         format!("(let ((internal--compiler-function-overrides '((unused . identity)))) {form})");
     assert_eq!(format_eval_result(&eval.eval_str(&form)), "OK [1 2 3]");
 }
+
+#[test]
+fn sort_reverse_visits_keys_in_reversed_order() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::runtime_startup_context();
+    let form = r#"(let ((seen nil))
+      (list (sort [3 1 2] :reverse t :key (lambda (x) (push x seen) x))
+            (nreverse seen)))"#;
+    assert_eq!(
+        format_eval_result(&eval.eval_str(form)),
+        "OK ([3 2 1] (2 1 3))"
+    );
+}

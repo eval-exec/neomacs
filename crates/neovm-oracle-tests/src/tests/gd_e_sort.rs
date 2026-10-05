@@ -13,3 +13,7 @@ const ENVS: &[&[(&str, &str)]] = &[
 #[cfg(test)]
 #[path = "gd_e_sort/key_resolution_and_frames.rs"]
 mod key_resolution_and_frames;
+
+#[cfg(test)]
+#[path = "gd_e_sort/reverse_key_order_and_stability.rs"]
+mod reverse_key_order_and_stability;
