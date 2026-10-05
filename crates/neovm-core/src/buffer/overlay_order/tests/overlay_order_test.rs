@@ -45,3 +45,6 @@ fn mixed_insertions_and_removals_preserve_red_black_invariants() {
     }
     assert_eq!(order.len(), 0);
 }
+
+#[cfg(test)]
+mod reinsert;

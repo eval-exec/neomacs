@@ -425,3 +425,9 @@ fn every_insert_door_reads_the_string_after_the_change_hook_like_gnu() {
 #[cfg(test)]
 #[path = "gdn_primitives_test.rs"]
 mod gdn_primitives;
+
+#[cfg(test)]
+mod multibyte_overlay_order;
+
+#[cfg(test)]
+mod conversion_byte_boundary;

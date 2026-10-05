@@ -777,6 +777,57 @@ impl OverlayIndex {
         Some(old_range)
     }
 
+    /// GNU itree_node_set_region (itree.c:744-762) reinserts only when its
+    /// numeric begin changes. Conversion compares against the other nodes'
+    /// current numeric begins, which can be a mixture of old and new values;
+    /// byte coordinates cannot substitute for that temporary comparison space.
+    /// All remaps/maps are local under the owning buffer's exclusive mutation.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn remap_positions(&mut self, remaps: &[super::overlay::OverlayPositionRemap]) {
+        assert_eq!(
+            remaps.len(),
+            self.len(),
+            "conversion snapshot covers every overlay"
+        );
+        let mut ordered = Vec::with_capacity(remaps.len());
+        if remaps
+            .iter()
+            .all(|remap| remap.old_begin == remap.new_begin)
+        {
+            // GNU changes only end augmentation when every numeric begin is
+            // unchanged. The snapshot is already in the unchanged tree's
+            // ascending order; byte remapping preserves that order as well.
+            ordered.extend(remaps.iter().map(|remap| (remap.overlay, remap.range)));
+        } else {
+            // A single call-local map owns both the temporary numeric begins
+            // and the final byte ranges. Entries start at old numeric begins;
+            // only the current node changes before its GNU reinsertion.
+            let mut current: FxHashMap<_, _> = remaps
+                .iter()
+                .map(|remap| (OverlayIdentity::of(remap.overlay), (remap.old_begin, remap)))
+                .collect();
+            for remap in remaps {
+                if remap.old_begin != remap.new_begin {
+                    let identity = OverlayIdentity::of(remap.overlay);
+                    current.get_mut(&identity).expect("snapshot identity").0 = remap.new_begin;
+                    assert!(self.gnu_order.reinsert_by(identity, |existing| {
+                        remap.new_begin.cmp(&current[&existing].0)
+                    }));
+                }
+            }
+            self.gnu_order.for_each_inorder(|identity| {
+                let remap = current[&identity].1;
+                ordered.push((remap.overlay, remap.range));
+            });
+        }
+        // Keep the Arc, so existing live position handles retain their one
+        // authoritative index. Observer snapshots already own separate indexes.
+        *self.intervals.write() =
+            IntervalBPlusTree::from_entries(&ordered, OverlayBatchOrder::AscendingQueryOrder);
+        self.endpoints = OnceLock::new();
+    }
+
     /// Apply an edit in `O(log n + k log n)`, where `k` is the number of
     /// overlays whose ranges touch the edited boundary.
     ///

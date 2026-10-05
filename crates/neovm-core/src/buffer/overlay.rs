@@ -26,10 +26,23 @@ use super::overlay_index::{
     EndpointKind, OverlayBatchOrder, OverlayEditEffect, OverlayEndpoint, OverlayEndpointRecords,
     OverlayIdentity, OverlayIndex, OverlayTextEdit,
 };
-use super::position::{EmacsByteLen, EmacsBytePos, EmacsByteRange};
+use super::position::{CharPos0, EmacsByteLen, EmacsBytePos, EmacsByteRange};
 use super::text::{TextEditRange, TextInsertion, TextReplacement};
 
 pub type Overlay = OverlayData;
+
+/// A conversion snapshot owned by the buffer's exclusive mutator.
+/// Numeric begins are GNU's old/new character-space numbers, independently
+/// of the byte ranges authoritative in the interval index. No shared cache
+/// or mutable Lisp state is published by these call-local records.
+#[derive(Clone, Copy)]
+pub(crate) struct OverlayPositionRemap {
+    pub overlay: Value,
+    pub old_range: EmacsByteRange,
+    pub range: EmacsByteRange,
+    pub old_begin: CharPos0,
+    pub new_begin: CharPos0,
+}
 
 /// Caller-owned property semantics used by the core overlay precedence and
 /// sweep machinery.
@@ -1014,6 +1027,30 @@ impl OverlayList {
                 .is_some_and(|value| value.is_truthy())
         {
             let _ = self.delete_overlay(overlay);
+        }
+    }
+
+    /// GNU buffer.c:1031-1076 remaps an ascending snapshot using numeric begin
+    /// changes, not byte-start changes. The owning buffer holds exclusive
+    /// access for the complete conversion and publication.
+    pub(crate) fn remap_overlay_positions(&mut self, remaps: &[OverlayPositionRemap]) {
+        // GNU buffer.c:1033 skips ASCII overlay remapping. Numeric equality
+        // alone is insufficient: old/new byte ranges can differ after a text
+        // conversion whose numeric begins stay fixed. A true no-op retains
+        // the current interval tree, endpoint publication and observer cache.
+        if remaps.is_empty()
+            || remaps
+                .iter()
+                .all(|remap| remap.old_begin == remap.new_begin && remap.old_range == remap.range)
+        {
+            return;
+        }
+        self.index_mut().remap_positions(remaps);
+        for remap in remaps {
+            let _ = remap.overlay.with_overlay_data_mut(|data| {
+                data.start = remap.range.start().get();
+                data.end = remap.range.end().get();
+            });
         }
     }
 

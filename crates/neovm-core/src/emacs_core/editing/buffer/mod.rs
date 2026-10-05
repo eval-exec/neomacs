@@ -2101,6 +2101,7 @@ pub(crate) fn builtin_set_buffer_multibyte(
         overlay: Value,
         start_old_emacs_byte: EmacsBytePos,
         end_old_emacs_byte: EmacsBytePos,
+        old_begin: CharPos0,
     }
 
     struct BufferSnapshot {
@@ -2132,6 +2133,9 @@ pub(crate) fn builtin_set_buffer_multibyte(
                         overlay,
                         start_old_emacs_byte: EmacsBytePos::new(start).min(total_end),
                         end_old_emacs_byte: EmacsBytePos::new(end).min(total_end),
+                        old_begin: buffer.emacs_byte_pos_to_char_pos_clamped(
+                            EmacsBytePos::new(start).min(total_end),
+                        ),
                     })
                 })
                 .collect();
@@ -2278,15 +2282,45 @@ pub(crate) fn builtin_set_buffer_multibyte(
             )
             .ok_or_else(|| signal("error", vec![Value::string("Missing shared buffer")]))?;
 
-        for overlay in snapshot.overlays {
-            let start_byte = map_boundary(overlay.start_old_emacs_byte.get());
-            let end_byte = map_boundary(overlay.end_old_emacs_byte.get());
+        // GNU buffer.c:1044 visits an ascending snapshot, then itree.c:750
+        // compares numeric begins while nodes change coordinate spaces. Build
+        // the complete remap before publication, rather than moving by bytes.
+        let remap_buffer = eval
+            .buffers
+            .get(snapshot.id)
+            .ok_or_else(|| signal("error", vec![Value::string("Missing shared buffer")]))?;
+        let remaps: Vec<_> = snapshot
+            .overlays
+            .into_iter()
+            .map(|overlay| {
+                let start_byte = map_boundary(overlay.start_old_emacs_byte.get());
+                let end_byte = map_boundary(overlay.end_old_emacs_byte.get());
+                crate::buffer::overlay::OverlayPositionRemap {
+                    overlay: overlay.overlay,
+                    old_range: EmacsByteRange::new(
+                        overlay.start_old_emacs_byte,
+                        overlay.end_old_emacs_byte,
+                    ),
+                    range: EmacsByteRange::new(
+                        EmacsBytePos::new(start_byte),
+                        EmacsBytePos::new(end_byte),
+                    ),
+                    old_begin: overlay.old_begin,
+                    // Replaced buffer text owns indexed byte/character lookup;
+                    // rescanning a Lisp string prefix per overlay is quadratic.
+                    new_begin: remap_buffer
+                        .emacs_byte_pos_to_char_pos_clamped(EmacsBytePos::new(start_byte)),
+                }
+            })
+            .collect();
+        eval.buffers
+            .get_mut(snapshot.id)
+            .ok_or_else(|| signal("error", vec![Value::string("Missing shared buffer")]))?
+            .overlays
+            .remap_overlay_positions(&remaps);
+        for _ in &remaps {
             eval.buffers
-                .move_buffer_overlay_to_emacs_byte_range(
-                    snapshot.id,
-                    overlay.overlay,
-                    EmacsByteRange::new(EmacsBytePos::new(start_byte), EmacsBytePos::new(end_byte)),
-                )
+                .note_overlay_modification(snapshot.id)
                 .ok_or_else(|| signal("error", vec![Value::string("Missing shared buffer")]))?;
         }
 
@@ -3151,16 +3185,15 @@ fn lisp_string_advance_byte_to_boundary(
         return clamped;
     }
 
+    // These are valid Emacs internal multibyte bytes, including C0/C1 raw
+    // bytes and five-byte characters. GNU buffer.c:1057-1064 advances only
+    // across the current character's continuation bytes, never a prefix scan.
     let bytes = string.as_bytes();
-    let mut pos = 0usize;
-    while pos < clamped && pos < bytes.len() {
-        let (_, len) = crate::emacs_core::emacs_char::string_char(&bytes[pos..]);
-        if pos + len >= clamped {
-            return pos + len;
-        }
-        pos += len;
+    let mut pos = clamped;
+    while pos < bytes.len() && !crate::emacs_core::emacs_char::char_head_p(bytes[pos]) {
+        pos += 1;
     }
-    clamped
+    pos
 }
 
 fn remap_text_property_table(

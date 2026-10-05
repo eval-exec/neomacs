@@ -53,3 +53,15 @@ mod default_local_map_at_end;
 #[cfg(test)]
 #[path = "gd_e_overlay_seams/empty_narrowing.rs"]
 mod empty_narrowing;
+
+#[cfg(test)]
+#[path = "gd_e_overlay_seams/multibyte_numeric_begin_order.rs"]
+mod multibyte_numeric_begin_order;
+
+#[cfg(test)]
+#[path = "gd_e_overlay_seams/multibyte_after_contracted_starts.rs"]
+mod multibyte_after_contracted_starts;
+
+#[cfg(test)]
+#[path = "gd_e_overlay_seams/multibyte_extended_and_raw_boundaries.rs"]
+mod multibyte_extended_and_raw_boundaries;
