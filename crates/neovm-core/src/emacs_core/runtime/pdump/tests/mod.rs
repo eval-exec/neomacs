@@ -2306,3 +2306,6 @@ fn baked_stub_template_is_stack_state_independent() {
 
 mod bool_vectors;
 mod bytecode_slot_objects;
+
+#[cfg(test)]
+mod decode_hardening;

@@ -1125,8 +1125,7 @@ impl<'a> Cursor<'a> {
 
     fn read_hash_table_test(&mut self) -> Result<DumpHashTableTest, DumpError> {
         let tag = self.read_u8("hash table test")?;
-        DumpHashTableTest::try_from(tag)
-            .map_err(|_| DumpError::ImageFormatError(format!("unknown hash table test tag {tag}")))
+        DumpHashTableTest::try_from(tag).map_err(DumpError::from)
     }
 
     fn read_opt_hash_table_weakness(&mut self) -> Result<Option<DumpHashTableWeakness>, DumpError> {
@@ -1134,9 +1133,9 @@ impl<'a> Cursor<'a> {
             return Ok(None);
         }
         let tag = self.read_u8("hash table weakness")?;
-        DumpHashTableWeakness::try_from(tag).map(Some).map_err(|_| {
-            DumpError::ImageFormatError(format!("unknown hash table weakness tag {tag}"))
-        })
+        DumpHashTableWeakness::try_from(tag)
+            .map(Some)
+            .map_err(DumpError::from)
     }
 
     fn read_hash_key(&mut self) -> Result<DumpHashKey, DumpError> {
@@ -1618,3 +1617,7 @@ impl<'a> Cursor<'a> {
 #[cfg(test)]
 #[path = "object_value_codec/tests/object_value_codec_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "object_value_codec/tests/enum_decode_test.rs"]
+mod enum_decode_tests;

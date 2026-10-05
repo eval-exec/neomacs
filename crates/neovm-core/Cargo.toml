@@ -36,6 +36,7 @@ md-5.workspace = true
 getrandom.workspace = true
 base64.workspace = true
 num_enum.workspace = true
+thiserror.workspace = true
 strum.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
@@ -169,6 +170,7 @@ vm-profile = []
 fuzzing = []
 
 [dev-dependencies]
+static_assertions.workspace = true
 neomacs-infra.workspace = true
 criterion = { version = "0.8", default-features = false, features = ["plotters", "cargo_bench_support"] }
 proptest.workspace = true

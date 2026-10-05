@@ -262,9 +262,7 @@ fn read_buffer_text_backend_kind(
     cursor: &mut Cursor<'_>,
 ) -> Result<DumpBufferTextBackendKind, DumpError> {
     let tag = cursor.read_u8("buffer text backend kind")?;
-    DumpBufferTextBackendKind::try_from(tag).map_err(|_| {
-        DumpError::ImageFormatError(format!("invalid buffer text backend kind tag: {tag}"))
-    })
+    DumpBufferTextBackendKind::try_from(tag).map_err(DumpError::from)
 }
 
 fn write_text_property_table(
@@ -882,3 +880,7 @@ pub(crate) fn empty_buffer_manager() -> DumpBufferManager {
 #[cfg(test)]
 #[path = "buffer_image/tests/buffer_image_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "buffer_image/tests/enum_decode_test.rs"]
+mod enum_decode_tests;

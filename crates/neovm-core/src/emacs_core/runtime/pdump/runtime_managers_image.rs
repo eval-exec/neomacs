@@ -789,8 +789,7 @@ fn write_font_width(out: &mut Vec<u8>, width: DumpFontWidth) {
 
 fn read_font_width(cursor: &mut Cursor<'_>) -> Result<DumpFontWidth, DumpError> {
     let tag = cursor.read_u8("font width tag")?;
-    DumpFontWidth::try_from(tag)
-        .map_err(|_| DumpError::ImageFormatError(format!("unknown font width tag {tag}")))
+    DumpFontWidth::try_from(tag).map_err(DumpError::from)
 }
 
 fn write_opt_font_slant(out: &mut Vec<u8>, slant: Option<DumpFontSlant>) {
@@ -817,8 +816,7 @@ fn write_font_slant(out: &mut Vec<u8>, slant: DumpFontSlant) {
 
 fn read_font_slant(cursor: &mut Cursor<'_>) -> Result<DumpFontSlant, DumpError> {
     let tag = cursor.read_u8("font slant tag")?;
-    DumpFontSlant::try_from(tag)
-        .map_err(|_| DumpError::ImageFormatError(format!("unknown font slant tag {tag}")))
+    DumpFontSlant::try_from(tag).map_err(DumpError::from)
 }
 
 fn write_abbrev_manager(out: &mut Vec<u8>, manager: &DumpAbbrevManager) -> Result<(), DumpError> {
@@ -1436,3 +1434,7 @@ fn write_i64(out: &mut Vec<u8>, value: i64) {
 #[cfg(test)]
 #[path = "runtime_managers_image/tests/runtime_managers_image_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "runtime_managers_image/tests/enum_decode_test.rs"]
+mod enum_decode_tests;

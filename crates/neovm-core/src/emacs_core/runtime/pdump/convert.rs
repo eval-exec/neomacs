@@ -3362,9 +3362,9 @@ pub(crate) fn dump_symbol_data(
         }
     };
     DumpSymbolData {
-        redirect: redirect as u8,
-        trapped_write: sd.flags.trapped_write() as u8,
-        interned: sd.flags.interned() as u8,
+        redirect: redirect.into(),
+        trapped_write: sd.flags.trapped_write().into(),
+        interned: sd.flags.interned().into(),
         declared_special: sd.flags.declared_special(),
         val,
         function: encoder.dump_value(&sd.function),
@@ -4942,14 +4942,14 @@ pub(crate) fn load_symbol_data(
     decoder: &mut LoadDecoder,
     sym_id: SymId,
     sd: &DumpSymbolData,
-) -> LispSymbol {
+) -> Result<LispSymbol, DumpError> {
     use crate::emacs_core::symbol::{SymbolInterned, SymbolRedirect, SymbolVal};
     let mut symbol = LispSymbol::new(sym_id);
 
-    // Restore flag fields.  The `redirect` field is also encoded in `val`'s
-    // variant, but we set it here explicitly for clarity.
-    let trapped_write: SymbolTrappedWrite = unsafe { std::mem::transmute(sd.trapped_write & 0b11) };
-    let interned: SymbolInterned = unsafe { std::mem::transmute(sd.interned & 0b11) };
+    // The writer stores each enum in its own byte; no other flags share
+    // these bytes. Reject the full code before constructing runtime flags.
+    let trapped_write = SymbolTrappedWrite::try_from(sd.trapped_write)?;
+    let interned = SymbolInterned::try_from(sd.interned)?;
     symbol.flags.set_trapped_write(trapped_write);
     symbol.flags.set_interned(interned);
     symbol.flags.set_declared_special(sd.declared_special);
@@ -5008,7 +5008,7 @@ pub(crate) fn load_symbol_data(
 
     symbol.function = decoder.load_value(&sd.function);
     symbol.plist = decoder.load_value(&sd.plist);
-    symbol
+    Ok(symbol)
 }
 
 pub(crate) fn load_obarray(
@@ -5024,7 +5024,7 @@ pub(crate) fn load_obarray(
     #[cfg(debug_assertions)]
     let mut seen_symbol_ids = FxHashSet::default();
     // Collect (sym_id, dump_data) for a second pass over Localized symbols.
-    let mut localized_entries: Vec<(SymId, &DumpSymbolData)> = Vec::new();
+    let mut localized_entries = Vec::new();
     let mut bool_forwarded_entries: Vec<(SymId, bool)> = Vec::new();
     let mut int_forwarded_entries: Vec<(SymId, crate::emacs_core::value::Value)> = Vec::new();
     let mut obj_forwarded_entries: Vec<(SymId, crate::emacs_core::value::Value)> = Vec::new();
@@ -5039,8 +5039,10 @@ pub(crate) fn load_obarray(
                 sym_id.0
             )));
         }
+        let symbol = load_symbol_data(decoder, sym_id, sd)?;
         if matches!(sd.val, DumpSymbolVal::Localized { .. }) {
-            localized_entries.push((sym_id, sd));
+            // Carry already validated flags through BLV reconstruction.
+            localized_entries.push((sym_id, sd, symbol.flags));
         }
         if let DumpSymbolVal::BoolForwarded(value) = &sd.val {
             bool_forwarded_entries.push((sym_id, *value));
@@ -5054,7 +5056,7 @@ pub(crate) fn load_obarray(
         if let DumpSymbolVal::KboardForwarded(value) = &sd.val {
             kboard_forwarded_entries.push((sym_id, decoder.load_value(value)));
         }
-        symbols.push((sym_id, load_symbol_data(decoder, sym_id, sd)));
+        symbols.push((sym_id, symbol));
     }
 
     // Fixed symbol rows (Plain/Varalias): the value words were patched to
@@ -5099,9 +5101,8 @@ pub(crate) fn load_obarray(
                 )));
             }
             let mut symbol = crate::emacs_core::symbol::LispSymbol::new(sym_id);
-            let trapped_write: SymbolTrappedWrite =
-                unsafe { std::mem::transmute(trapped_write & 0b11) };
-            let interned: SymbolInterned = unsafe { std::mem::transmute(interned & 0b11) };
+            let trapped_write = SymbolTrappedWrite::try_from(trapped_write)?;
+            let interned = SymbolInterned::try_from(interned)?;
             symbol.flags.set_trapped_write(trapped_write);
             symbol.flags.set_interned(interned);
             symbol.flags.set_declared_special(declared_special);
@@ -5171,7 +5172,7 @@ pub(crate) fn load_obarray(
     // &mut Obarray.  Now that the obarray is built we can call
     // make_symbol_localized to allocate and install the real BLV, then
     // optionally set local_if_set.
-    for (sym_id, sd) in &localized_entries {
+    for (sym_id, sd, flags) in &localized_entries {
         if let DumpSymbolVal::Localized {
             default,
             local_if_set,
@@ -5196,13 +5197,9 @@ pub(crate) fn load_obarray(
             // Restore non-redirect flags from the dump — make_symbol_localized
             // only sets the redirect bit, leaving trapped_write / interned /
             // declared_special as defaults.  Re-apply them from the dump.
-            use crate::emacs_core::symbol::SymbolInterned;
             if let Some(sym) = obarray.get_mut_by_id(*sym_id) {
-                let trapped_write: SymbolTrappedWrite =
-                    unsafe { std::mem::transmute(sd.trapped_write & 0b11) };
-                let interned: SymbolInterned = unsafe { std::mem::transmute(sd.interned & 0b11) };
-                sym.flags.set_trapped_write(trapped_write);
-                sym.flags.set_interned(interned);
+                sym.flags.set_trapped_write(flags.trapped_write());
+                sym.flags.set_interned(flags.interned());
                 sym.flags.set_declared_special(sd.declared_special);
             }
         }

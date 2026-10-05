@@ -1814,9 +1814,7 @@ fn mapped_heap_ref_target(value: &DumpValue, heap: &DumpTaggedHeap) -> Option<(u
 }
 
 fn veclike_type_from_tag(tag: u8) -> Result<VecLikeType, DumpError> {
-    VecLikeType::try_from(tag).map_err(|_| {
-        DumpError::ImageFormatError(format!("unknown mapped vectorlike type tag {tag}"))
-    })
+    VecLikeType::try_from(tag).map_err(DumpError::from)
 }
 
 fn align_padding(value: usize, align: usize) -> usize {
