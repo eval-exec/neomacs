@@ -149,7 +149,13 @@ pub(crate) fn builtin_logb(args: Vec<Value>) -> EvalResult {
             i64::from(63 - n.unsigned_abs().leading_zeros())
         }
         ValueKind::Veclike(VecLikeType::Bignum) => {
-            let magnitude = value.as_bignum().unwrap().unsigned_abs_ref();
+            let integer = value.as_bignum().ok_or_else(|| {
+                signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("numberp"), value],
+                )
+            })?;
+            let magnitude = integer.unsigned_abs_ref();
             magnitude.significant_bits().saturating_sub(1) as i64
         }
         ValueKind::Float => {

@@ -219,7 +219,12 @@ impl TryFrom<Value> for TakeCount {
         let count = match value.kind() {
             ValueKind::Fixnum(n) => n.max(0) as usize,
             ValueKind::Veclike(crate::emacs_core::value::VecLikeType::Bignum) => {
-                let integer = value.as_bignum().expect("bignum kind");
+                let integer = value.as_bignum().ok_or_else(|| {
+                    signal(
+                        LispCondition::WrongTypeArgument,
+                        vec![Value::symbol("integerp"), value],
+                    )
+                })?;
                 if integer < &0 {
                     0
                 } else {

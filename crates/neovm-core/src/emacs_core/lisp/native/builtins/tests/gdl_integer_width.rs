@@ -21,6 +21,14 @@ fn gdl_integer_width_checks_new_results_and_large_requests() {
         format_eval_result(&ctx.eval_str("(let ((integer-width 0)) (logb (ash 1 127)))")),
         "OK 127"
     );
+    // GNU alloc.c:7506 and data.c:1475-1483 permit intmax_t-sized bignum
+    // bindings; bignum.c:94-100 reads their full signed slot value.
+    for form in [
+        "(let ((integer-width (1+ most-positive-fixnum))) (bignump (ash 1 70000)))",
+        "(let ((integer-width (1- most-negative-fixnum))) (bignump (ash 1 70000)))",
+    ] {
+        assert_eq!(format_eval_result(&ctx.eval_str(form)), "OK t", "{form}");
+    }
 }
 
 #[test]

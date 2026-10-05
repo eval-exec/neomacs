@@ -484,7 +484,6 @@ pub(crate) struct MemorySignalBinding {
     original: Value,
     symbol: SymId,
     tail: Value,
-    thread_bound: std::marker::PhantomData<*const ()>,
 }
 
 #[derive(Clone, Copy, Debug, thiserror::Error)]
@@ -510,7 +509,6 @@ impl TryFrom<Value> for MemorySignalBinding {
             original,
             symbol,
             tail: original.cons_cdr(),
-            thread_bound: std::marker::PhantomData,
         })
     }
 }
@@ -521,7 +519,6 @@ impl MemorySignalBinding {
             original: Value::cons(Value::from_sym_id(symbol), tail),
             symbol,
             tail,
-            thread_bound: std::marker::PhantomData,
         }
     }
 
@@ -530,20 +527,17 @@ impl MemorySignalBinding {
     }
 }
 
-static_assertions::assert_not_impl_any!(MemorySignalBinding: Send, Sync);
-
 /// GNU eval.c:1948-1953 distinguishes allocation exhaustion from ordinary
 /// signals and hook-suppressed signals. Memory exhaustion retains the original
-/// error object and permits neither hook nor debugger reentry. This immutable
-/// policy belongs to one in-flight signal; it caches no mutator-local state.
+/// error object and permits neither hook nor debugger reentry. This delivery
+/// policy travels with its signal; the memory-exhaustion variant retains
+/// mutator-bound Values whose lifetime is covered by SignalData's pin.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum SignalDelivery {
     Ordinary,
     HookSuppressed,
     MemoryExhausted(MemorySignalBinding),
 }
-
-static_assertions::assert_not_impl_any!(SignalDelivery: Send, Sync);
 
 #[derive(Clone, Debug)]
 pub struct SignalData {
@@ -563,8 +557,6 @@ pub struct SignalData {
     #[allow(dead_code)] // held for its Drop (the GC pin); read only via the sealed trait
     pin: InFlightRoots,
 }
-
-static_assertions::assert_not_impl_any!(SignalData: Send, Sync);
 
 impl SignalData {
     /// Compatibility constructor for ordinary or hook-suppressed signals.

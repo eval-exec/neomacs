@@ -2745,7 +2745,10 @@ fn do_format(
                         format_integer_float_spec(ctx, args[this_arg_idx].xfloat(), &spec)?
                     }
                     ValueKind::Veclike(VecLikeType::Bignum) => {
-                        format_bignum_spec(args[this_arg_idx].as_bignum().unwrap(), &spec)?
+                        let integer = args[this_arg_idx]
+                            .as_bignum()
+                            .ok_or_else(format_spec_type_mismatch_error)?;
+                        format_bignum_spec(integer, &spec)?
                     }
                     _ => {
                         return Err(format_spec_type_mismatch_error().into());

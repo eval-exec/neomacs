@@ -81,12 +81,15 @@ fn oracle_gdl_integer_width() {
         (condition-case e (funcall subtract x 1) (error e))
         (condition-case e (funcall negate x) (error e))
         (condition-case e (funcall negate x) (error e))))))
+(list 'bignum-width-bindings
+  (let ((integer-width (1+ most-positive-fixnum))) (bignump (ash 1 70000)))
+  (let ((integer-width (1- most-negative-fixnum))) (bignump (ash 1 70000))))
 ))
 "#;
     assert_oracle_parity_expect(
         form,
         expect_test::expect![[
-            r#""OK (((overflow-error) ((overflow-error) (overflow-error) (overflow-error) \"10000000000000000159028911097599180468360808563945281389781327557747838772170381060813469985856815104\" (overflow-error) (overflow-error) 127 t t t t t t (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error))) ((fresh (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error)) (identities t t t t t t t t t t t t t t t) (compiled (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error))))""#
+            r#""OK (((overflow-error) ((overflow-error) (overflow-error) (overflow-error) \"10000000000000000159028911097599180468360808563945281389781327557747838772170381060813469985856815104\" (overflow-error) (overflow-error) 127 t t t t t t (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error))) ((fresh (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error)) (identities t t t t t t t t t t t t t t t) (compiled (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error))) (bignum-width-bindings t t))""#
         ]],
     );
 }
