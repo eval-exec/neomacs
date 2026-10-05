@@ -503,11 +503,29 @@ impl LeafWitness {
 /// comment). Construct it with [`LeafActive::enter`] around exactly one leaf
 /// body and end it with [`LeafActive::exit`]; the count drops on unwind too.
 /// In release builds it is a zero-sized no-op.
+#[must_use = "the thread-local extent ends when this guard drops"]
 pub(crate) struct LeafActive {
     #[cfg(debug_assertions)]
     spec: &'static LeafSpec,
     #[cfg(debug_assertions)]
     before: LeafWitness,
+    #[cfg(debug_assertions)]
+    _scope: crate::tls_scope::TlsScope<u32, std::cell::Cell<u32>>,
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+static_assertions::assert_not_impl_any!(LeafActive: Send, Sync);
+
+impl std::fmt::Debug for LeafActive {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut guard = f.debug_struct("LeafActive");
+        guard.field("checked", &cfg!(debug_assertions));
+        #[cfg(debug_assertions)]
+        guard
+            .field("leaf", &self.spec.name)
+            .field("before", &self.before)
+            .field("scope", &self._scope);
+        guard.finish_non_exhaustive()
+    }
 }
 
 impl LeafActive {
@@ -515,16 +533,23 @@ impl LeafActive {
     pub(crate) fn enter(spec: &'static LeafSpec, ctx: &Context) -> Self {
         #[cfg(debug_assertions)]
         {
-            LEAF_ACTIVE.with(|c| c.set(c.get() + 1));
+            let scope = crate::tls_scope::TlsScope::restore(
+                &LEAF_ACTIVE,
+                LEAF_ACTIVE.with(|depth| depth.replace(depth.get().saturating_add(1))),
+            );
             Self {
                 spec,
                 before: LeafWitness::take(ctx),
+                _scope: scope,
+                _thread: std::marker::PhantomData,
             }
         }
         #[cfg(not(debug_assertions))]
         {
             let _ = (spec, ctx);
-            Self {}
+            Self {
+                _thread: std::marker::PhantomData,
+            }
         }
     }
 
@@ -562,14 +587,6 @@ impl LeafActive {
         }
         #[cfg(not(debug_assertions))]
         let _ = (ctx, outcome);
-    }
-}
-
-impl Drop for LeafActive {
-    #[inline(always)]
-    fn drop(&mut self) {
-        #[cfg(debug_assertions)]
-        LEAF_ACTIVE.with(|c| c.set(c.get() - 1));
     }
 }
 

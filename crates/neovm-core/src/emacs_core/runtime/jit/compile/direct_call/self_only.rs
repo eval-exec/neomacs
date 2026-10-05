@@ -22,7 +22,13 @@ pub(crate) fn self_only_on() -> bool {
 
 /// Restores the preceding compiler source token when dropped.
 /// Threading: compiler-thread scalar configuration only, as above.
-pub(crate) struct SelfSourceScope(Option<usize>);
+#[must_use = "the thread-local extent ends when this guard drops"]
+#[derive(Debug)]
+pub(crate) struct SelfSourceScope {
+    _scope: crate::tls_scope::TlsScope<Option<usize>, std::cell::Cell<Option<usize>>>,
+}
+
+static_assertions::assert_not_impl_any!(SelfSourceScope: Send, Sync);
 
 impl SelfSourceScope {
     pub(crate) fn enter_for(f: &ByteCodeFunction, may_call_self: bool, call_heavy: bool) -> Self {
@@ -37,13 +43,9 @@ impl SelfSourceScope {
                 ),
             })
         .then(|| runtime_identity_word(f.jit_runtime()));
-        Self(SELF_SOURCE.with(|current| current.replace(source)))
-    }
-}
-
-impl Drop for SelfSourceScope {
-    fn drop(&mut self) {
-        SELF_SOURCE.with(|current| current.set(self.0));
+        Self {
+            _scope: crate::tls_scope::TlsScope::new(&SELF_SOURCE, source),
+        }
     }
 }
 

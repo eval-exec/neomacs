@@ -552,32 +552,25 @@ pub(crate) fn collect_dynamic_module_gc_roots(roots: &mut Vec<Value>, heap_ident
     });
 }
 
+#[must_use = "the thread-local extent ends when this guard drops"]
+#[derive(Debug)]
 struct ActiveModuleEnv {
-    env_priv: *mut emacs_env_private,
+    _scope: crate::tls_scope::TlsStackScope<ActiveModuleEnvEntry>,
 }
+static_assertions::assert_not_impl_any!(ActiveModuleEnv: Send, Sync);
 
 impl ActiveModuleEnv {
     fn push(env_priv: *mut emacs_env_private) -> Self {
         let heap_identity = crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0);
-        ACTIVE_ENVS.with(|envs| {
-            envs.borrow_mut().push(ActiveModuleEnvEntry {
-                env_priv,
-                heap_identity,
-            })
-        });
-        Self { env_priv }
-    }
-}
-
-impl Drop for ActiveModuleEnv {
-    fn drop(&mut self) {
-        ACTIVE_ENVS.with(|envs| {
-            let mut envs = envs.borrow_mut();
-            let last = envs
-                .pop()
-                .expect("active module environment stack underflow");
-            debug_assert_eq!(last.env_priv, self.env_priv);
-        });
+        Self {
+            _scope: crate::tls_scope::TlsStackScope::push(
+                &ACTIVE_ENVS,
+                ActiveModuleEnvEntry {
+                    env_priv,
+                    heap_identity,
+                },
+            ),
+        }
     }
 }
 
@@ -2085,21 +2078,18 @@ thread_local! {
 /// returns, the outer call's context must come back, or the outer module
 /// function's next `env->funcall` finds no evaluator context. `Drop` also
 /// keeps the teardown coherent once panics become catchable.
+#[must_use = "the thread-local extent ends when this guard drops"]
+#[derive(Debug)]
 struct ModuleContextGuard {
-    prev: *mut Context,
+    _scope: crate::tls_scope::TlsScope<*mut Context, std::cell::Cell<*mut Context>>,
 }
+static_assertions::assert_not_impl_any!(ModuleContextGuard: Send, Sync);
 
 impl ModuleContextGuard {
     fn install(ctx: *mut Context) -> Self {
         Self {
-            prev: MODULE_CTX.with(|c| c.replace(ctx)),
+            _scope: crate::tls_scope::TlsScope::new(&MODULE_CTX, ctx),
         }
-    }
-}
-
-impl Drop for ModuleContextGuard {
-    fn drop(&mut self) {
-        MODULE_CTX.with(|c| c.set(self.prev));
     }
 }
 

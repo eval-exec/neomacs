@@ -5183,18 +5183,18 @@ thread_local! {
 /// non-obarray Context roots without the dominant per-symbol pass. `Drop` restores
 /// the full-scan default (panic-safe). MUST NOT wrap the start seed or the STW
 /// full-collection seeds, which require the complete obarray scan.
-pub(crate) struct ObarraySymbolCellSkipGuard;
+#[must_use = "the thread-local extent ends when this guard drops"]
+#[derive(Debug)]
+pub(crate) struct ObarraySymbolCellSkipGuard {
+    _scope: crate::tls_scope::TlsScope<bool, std::cell::Cell<bool>>,
+}
+static_assertions::assert_not_impl_any!(ObarraySymbolCellSkipGuard: Send, Sync);
 
 impl ObarraySymbolCellSkipGuard {
     pub(crate) fn new() -> Self {
-        SEED_SKIP_OBARRAY_SYMBOL_CELLS.with(|c| c.set(true));
-        Self
-    }
-}
-
-impl Drop for ObarraySymbolCellSkipGuard {
-    fn drop(&mut self) {
-        SEED_SKIP_OBARRAY_SYMBOL_CELLS.with(|c| c.set(false));
+        Self {
+            _scope: crate::tls_scope::TlsScope::new(&SEED_SKIP_OBARRAY_SYMBOL_CELLS, true),
+        }
     }
 }
 

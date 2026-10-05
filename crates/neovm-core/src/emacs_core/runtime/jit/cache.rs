@@ -525,22 +525,26 @@ pub(crate) fn native_depth() -> u32 {
 
 /// RAII marker for one native leaf execution (see `NATIVE_DEPTH`). Zero-sized
 /// and a no-op in release builds; unwind-safe (the decrement is in `Drop`).
-pub(crate) struct NativeDepthGuard(());
+#[must_use = "the thread-local extent ends when this guard drops"]
+#[derive(Debug)]
+pub(crate) struct NativeDepthGuard {
+    #[cfg(debug_assertions)]
+    _scope: crate::tls_scope::TlsScope<u32, std::cell::Cell<u32>>,
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+static_assertions::assert_not_impl_any!(NativeDepthGuard: Send, Sync);
 
 impl NativeDepthGuard {
     #[inline]
     pub(crate) fn enter() -> Self {
-        #[cfg(debug_assertions)]
-        NATIVE_DEPTH.with(|d| d.set(d.get() + 1));
-        Self(())
-    }
-}
-
-impl Drop for NativeDepthGuard {
-    #[inline]
-    fn drop(&mut self) {
-        #[cfg(debug_assertions)]
-        NATIVE_DEPTH.with(|d| d.set(d.get() - 1));
+        Self {
+            #[cfg(debug_assertions)]
+            _scope: crate::tls_scope::TlsScope::restore(
+                &NATIVE_DEPTH,
+                NATIVE_DEPTH.with(|depth| depth.replace(depth.get().saturating_add(1))),
+            ),
+            _thread: std::marker::PhantomData,
+        }
     }
 }
 

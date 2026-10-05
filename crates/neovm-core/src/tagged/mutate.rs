@@ -78,22 +78,21 @@ std::thread_local! {
 }
 
 #[cfg(debug_assertions)]
-pub(crate) struct HeapMutClosureGuard(bool);
+#[must_use = "the thread-local extent ends when this guard drops"]
+#[derive(Debug)]
+pub(crate) struct HeapMutClosureGuard {
+    _scope: crate::tls_scope::TlsScope<bool, std::cell::Cell<bool>>,
+}
+#[cfg(debug_assertions)]
+static_assertions::assert_not_impl_any!(HeapMutClosureGuard: Send, Sync);
 
 #[cfg(debug_assertions)]
 impl HeapMutClosureGuard {
     #[inline]
     pub(crate) fn enter() -> Self {
-        Self(IN_HEAP_MUT_CLOSURE.with(|active| active.replace(true)))
-    }
-}
-
-#[cfg(debug_assertions)]
-impl Drop for HeapMutClosureGuard {
-    #[inline]
-    fn drop(&mut self) {
-        // Restore the enclosing extent on both a normal return and unwind.
-        IN_HEAP_MUT_CLOSURE.with(|active| active.set(self.0));
+        Self {
+            _scope: crate::tls_scope::TlsScope::new(&IN_HEAP_MUT_CLOSURE, true),
+        }
     }
 }
 

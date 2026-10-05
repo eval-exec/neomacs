@@ -680,19 +680,27 @@ pub(crate) fn active_fused() -> Option<std::rc::Rc<FusedBody>> {
 }
 
 /// RAII scope publishing `fused` for the compile inside it.
-pub(crate) struct FusedScope(Option<std::rc::Rc<FusedBody>>);
+#[must_use = "the thread-local extent ends when this guard drops"]
+#[derive(Debug)]
+pub(crate) struct FusedScope {
+    _scope: crate::tls_scope::TlsScope<
+        Option<std::rc::Rc<FusedBody>>,
+        std::cell::RefCell<Option<std::rc::Rc<FusedBody>>>,
+    >,
+}
+static_assertions::assert_not_impl_any!(FusedScope: Send, Sync);
 
 impl FusedScope {
     pub(crate) fn enter(fused: std::rc::Rc<FusedBody>) -> Self {
-        Self(ACTIVE_FUSED.with(|f| f.borrow_mut().replace(fused)))
+        Self {
+            _scope: crate::tls_scope::TlsScope::new(&ACTIVE_FUSED, Some(fused)),
+        }
     }
 }
 
 impl Drop for FusedScope {
     fn drop(&mut self) {
-        let prev = self.0.take();
-        ACTIVE_FUSED.with(|f| *f.borrow_mut() = prev);
-        super::compile::lowering::set_active_region(None);
+        super::compile::lowering::clear_active_region_on_scope_drop();
     }
 }
 

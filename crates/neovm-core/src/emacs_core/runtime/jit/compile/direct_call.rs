@@ -100,17 +100,19 @@ pub(crate) fn unbounded_body() -> bool {
 /// `compile_bytecode_function_requested` sets it from the body's shape (a
 /// back edge, a call of itself) and the request (a re-tier of a leaf that
 /// proved hot); the previous one is restored on drop.
-pub(crate) struct UnboundedBodyScope(bool);
+#[must_use = "the thread-local extent ends when this guard drops"]
+#[derive(Debug)]
+pub(crate) struct UnboundedBodyScope {
+    _scope: crate::tls_scope::TlsScope<bool, std::cell::Cell<bool>>,
+}
+
+static_assertions::assert_not_impl_any!(UnboundedBodyScope: Send, Sync);
 
 impl UnboundedBodyScope {
     pub(crate) fn enter(unbounded: bool) -> Self {
-        Self(UNBOUNDED_BODY.with(|c| c.replace(unbounded)))
-    }
-}
-
-impl Drop for UnboundedBodyScope {
-    fn drop(&mut self) {
-        UNBOUNDED_BODY.with(|c| c.set(self.0));
+        Self {
+            _scope: crate::tls_scope::TlsScope::new(&UNBOUNDED_BODY, unbounded),
+        }
     }
 }
 

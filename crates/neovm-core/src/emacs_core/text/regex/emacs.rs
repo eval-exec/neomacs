@@ -1268,16 +1268,6 @@ fn force_pike() -> bool {
     false
 }
 
-#[cfg(any(test, feature = "fuzzing"))]
-struct RegexEngineOverrideGuard(RegexEngineOverride);
-
-#[cfg(any(test, feature = "fuzzing"))]
-impl Drop for RegexEngineOverrideGuard {
-    fn drop(&mut self) {
-        REGEX_ENGINE_OVERRIDE.with(|slot| slot.set(self.0));
-    }
-}
-
 /// Run `f` with one regex routing policy, restoring the previous policy even
 /// when `f` unwinds.
 #[cfg(any(test, feature = "fuzzing"))]
@@ -1285,8 +1275,7 @@ pub(crate) fn with_regex_engine_override<R>(
     engine: RegexEngineOverride,
     f: impl FnOnce() -> R,
 ) -> R {
-    let previous = REGEX_ENGINE_OVERRIDE.with(|slot| slot.replace(engine));
-    let _guard = RegexEngineOverrideGuard(previous);
+    let _guard = crate::tls_scope::TlsScope::new(&REGEX_ENGINE_OVERRIDE, engine);
     f()
 }
 
@@ -5240,31 +5229,91 @@ pub(crate) fn re_match(
 /// The per-thread `MatchScratch`, leased out of its cell for one search and
 /// returned by `Drop` (so early returns and `?` hand it back too). A
 /// re-entrant search finds the cell empty and works on a fresh one.
-struct MatchScratchLease(Option<Box<MatchScratch>>);
+#[must_use = "the thread-local extent ends when this guard drops"]
+struct MatchScratchLease {
+    scratch: std::mem::ManuallyDrop<Box<MatchScratch>>,
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+static_assertions::assert_not_impl_any!(MatchScratchLease: Send, Sync);
+
+impl std::fmt::Debug for MatchScratchLease {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MatchScratchLease")
+            .field("frame_capacity", &self.scratch.frames.capacity())
+            .field("undo_capacity", &self.scratch.undo.capacity())
+            .finish_non_exhaustive()
+    }
+}
 
 impl MatchScratchLease {
     fn take() -> Self {
-        Self(Some(MATCH_SCRATCH.with(
-            |cell| match cell.try_borrow_mut() {
-                Ok(mut cur) => cur.take().unwrap_or_default(),
-                Err(_) => Box::default(),
-            },
-        )))
+        Self {
+            scratch: std::mem::ManuallyDrop::new(MATCH_SCRATCH.with(|cell| {
+                match cell.try_borrow_mut() {
+                    Ok(mut cur) => cur.take().unwrap_or_default(),
+                    Err(_) => Box::default(),
+                }
+            })),
+            _thread: std::marker::PhantomData,
+        }
     }
     fn get(&mut self) -> &mut MatchScratch {
-        self.0
-            .as_deref_mut()
-            .expect("a lease holds its scratch until it is dropped")
+        &mut self.scratch
     }
 }
 
 impl Drop for MatchScratchLease {
     fn drop(&mut self) {
-        let scratch = self.0.take();
-        MATCH_SCRATCH.with(|cell| {
-            if let Ok(mut cur) = cell.try_borrow_mut() {
-                *cur = scratch;
-            }
+        // SAFETY: this private field is initialized by `take`, remains owned
+        // by the lease, and is extracted exactly once by its only destructor.
+        // `ManuallyDrop` prevents a second destruction after returning the box.
+        let scratch = unsafe { std::mem::ManuallyDrop::take(&mut self.scratch) };
+        drop(crate::tls_scope::TlsScope::restore(
+            &MATCH_SCRATCH,
+            Some(scratch),
+        ));
+    }
+}
+
+#[cfg(test)]
+mod tls_scratch_tests {
+    use super::*;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    #[test]
+    fn tls_scope_match_scratch_nested_leases_return_outer_box() {
+        let mut outer = MatchScratchLease::take();
+        let outer_ptr = std::ptr::from_mut(outer.get());
+        let mut inner = MatchScratchLease::take();
+        assert_ne!(std::ptr::from_mut(inner.get()), outer_ptr);
+        drop(inner);
+        drop(outer);
+        let mut reused = MatchScratchLease::take();
+        assert_eq!(std::ptr::from_mut(reused.get()), outer_ptr);
+    }
+
+    #[test]
+    fn tls_scope_match_scratch_returns_box_during_unwind() {
+        let mut lease = MatchScratchLease::take();
+        let scratch_ptr = std::ptr::from_mut(lease.get());
+        assert!(
+            catch_unwind(AssertUnwindSafe(move || {
+                let _lease = lease;
+                panic!("exercise scratch unwind restoration");
+            }))
+            .is_err()
+        );
+        let mut reused = MatchScratchLease::take();
+        assert_eq!(std::ptr::from_mut(reused.get()), scratch_ptr);
+    }
+
+    #[test]
+    fn tls_scope_match_scratch_borrowed_cache_drop_does_not_panic() {
+        let lease = MatchScratchLease::take();
+        MATCH_SCRATCH.with(|cache| {
+            let borrowed = cache.borrow();
+            assert!(catch_unwind(AssertUnwindSafe(|| drop(lease))).is_ok());
+            assert!(borrowed.is_none());
         });
     }
 }
@@ -8879,17 +8928,10 @@ fn fastmap_force_disabled() -> bool {
 /// changes match results. The previous policy is restored even if `f` unwinds.
 #[cfg(any(test, feature = "fuzzing"))]
 pub(crate) fn with_fastmap_disabled<R>(f: impl FnOnce() -> R) -> R {
-    struct Guard(SearchOptimizationOverride);
-
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            SEARCH_OPTIMIZATION_OVERRIDE.with(|slot| slot.set(self.0));
-        }
-    }
-
-    let previous = SEARCH_OPTIMIZATION_OVERRIDE
-        .with(|slot| slot.replace(SearchOptimizationOverride::Disabled));
-    let _guard = Guard(previous);
+    let _guard = crate::tls_scope::TlsScope::new(
+        &SEARCH_OPTIMIZATION_OVERRIDE,
+        SearchOptimizationOverride::Disabled,
+    );
     f()
 }
 
@@ -9083,13 +9125,7 @@ thread_local! {
 /// read when a pattern compiles, so compile inside `f`.
 #[cfg(any(test, feature = "fuzzing"))]
 pub(crate) fn with_anchor_alt<R>(on: bool, f: impl FnOnce() -> R) -> R {
-    struct Guard(Option<bool>);
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            ANCHOR_ALT_OVERRIDE.with(|slot| slot.set(self.0));
-        }
-    }
-    let _guard = Guard(ANCHOR_ALT_OVERRIDE.with(|slot| slot.replace(Some(on))));
+    let _guard = crate::tls_scope::TlsScope::new(&ANCHOR_ALT_OVERRIDE, Some(on));
     f()
 }
 

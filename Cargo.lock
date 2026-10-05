@@ -4322,6 +4322,7 @@ dependencies = [
  "tree-sitter",
  "tree-sitter-json",
  "tree-sitter-language",
+ "trybuild",
  "unicode-general-category",
  "unicode_names2",
  "webpki-roots",
@@ -6993,6 +6994,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
 
 [[package]]
+name = "target-tuple"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "876fef147edbcbddc8ac5cbbba92c7b86519e314e86638596c09673b2ed01e7f"
+
+[[package]]
 name = "teletypewriter"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7452,6 +7459,21 @@ name = "tree-sitter-language"
 version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ca0d1bf6fdd806e43ae5198f82f527056d359def39e54e67a0f478ac09dac081"
+
+[[package]]
+name = "trybuild"
+version = "1.0.121"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0cabaa10be1917331a313866bd94526343e03c77bcf69144b62b072ad35d47c"
+dependencies = [
+ "glob",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "target-tuple",
+ "termcolor",
+ "toml",
+]
 
 [[package]]
 name = "ttf-parser"

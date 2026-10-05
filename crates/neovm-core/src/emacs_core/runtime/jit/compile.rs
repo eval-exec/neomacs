@@ -867,19 +867,10 @@ pub fn compile_bytecode_function_requested(
     // The self policy scopes only an immutable compiler-source token; its
     // selected site maps below provide the actual self-call proof.
     let _self_source = direct_call::SelfSourceScope::enter_for(f, self_recursive, call_heavy);
-    let outer = (
-        BYPASS_PROFIT_GATE.with(|b| b.replace(request.bypass_profit_gate)),
-        ACTIVE_CALL_HEAVY.with(|b| b.replace(call_heavy)),
-    );
+    let _profit_gate =
+        crate::tls_scope::TlsScope::new(&BYPASS_PROFIT_GATE, request.bypass_profit_gate);
+    let _call_heavy = crate::tls_scope::TlsScope::new(&ACTIVE_CALL_HEAVY, call_heavy);
     drop(gate_phase);
-    struct Restore((bool, bool));
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            BYPASS_PROFIT_GATE.with(|b| b.set(self.0.0));
-            ACTIVE_CALL_HEAVY.with(|b| b.set(self.0.1));
-        }
-    }
-    let _restore = Restore(outer);
     let _t2 = super::tier2::BuildScope::enter_for(
         request.tier,
         f.jit_runtime(),

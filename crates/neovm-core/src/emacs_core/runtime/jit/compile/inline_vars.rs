@@ -112,16 +112,17 @@ thread_local! {
 /// projection mask (the JIT cache's compile entries hold one while they
 /// compile). Without one, nothing is inlined.
 #[must_use = "the environment lasts as long as the scope"]
+#[derive(Debug)]
 pub(crate) struct CompileEnvScope {
-    prev: Option<CompileEnv>,
+    _scope: crate::tls_scope::TlsScope<Option<CompileEnv>, Cell<Option<CompileEnv>>>,
 }
+static_assertions::assert_not_impl_any!(CompileEnvScope: Send, Sync);
 
 impl CompileEnvScope {
     /// Enter CTX's environment (nothing when CTX is null or the knob is off).
     /// CTX must stay alive and its obarray and mask unmoved while the scope
     /// lives: the dormant seam-provided context of a compile.
     pub(crate) fn enter(ctx: *const Context) -> Self {
-        let prev = ENV.with(Cell::get);
         let env = (!ctx.is_null() && jit_inline_vars().any()).then(|| {
             // SAFETY: the caller's contract above.
             let ctx = unsafe { &*ctx };
@@ -130,14 +131,9 @@ impl CompileEnvScope {
                 projection: std::ptr::from_ref(ctx.runtime_projection_mask()),
             }
         });
-        ENV.with(|e| e.set(env));
-        Self { prev }
-    }
-}
-
-impl Drop for CompileEnvScope {
-    fn drop(&mut self) {
-        ENV.with(|e| e.set(self.prev));
+        Self {
+            _scope: crate::tls_scope::TlsScope::new(&ENV, env),
+        }
     }
 }
 

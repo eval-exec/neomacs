@@ -937,17 +937,18 @@ pub(crate) fn drain_pending_ids(mut visit: impl FnMut(u64) -> bool) {
 /// Lets the compile inside it defer its backend under a class (see
 /// [`defer_route`]); restores the enclosing scope on drop.
 #[must_use = "the scope lasts until the guard drops"]
-pub(crate) struct DeferScope(Option<JobClass>);
+#[derive(Debug)]
+pub(crate) struct DeferScope {
+    _scope: crate::tls_scope::TlsScope<Option<JobClass>, std::cell::Cell<Option<JobClass>>>,
+}
+
+static_assertions::assert_not_impl_any!(DeferScope: Send, Sync);
 
 impl DeferScope {
     pub(crate) fn enter(class: Option<JobClass>) -> DeferScope {
-        DeferScope(DEFER_SCOPE.with(|c| c.replace(class)))
-    }
-}
-
-impl Drop for DeferScope {
-    fn drop(&mut self) {
-        DEFER_SCOPE.with(|c| c.set(self.0));
+        DeferScope {
+            _scope: crate::tls_scope::TlsScope::new(&DEFER_SCOPE, class),
+        }
     }
 }
 

@@ -774,13 +774,7 @@ fn with_watched_prop_demand_mode_for_test<T>(
     mode: WatchedPropDemandMode,
     body: impl FnOnce() -> T,
 ) -> T {
-    struct Restore(Option<WatchedPropDemandMode>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            WATCHED_PROP_DEMAND_OVERRIDE.with(|cell| cell.set(self.0));
-        }
-    }
-    let restore = Restore(WATCHED_PROP_DEMAND_OVERRIDE.with(|cell| cell.replace(Some(mode))));
+    let restore = crate::tls_scope::TlsScope::new(&WATCHED_PROP_DEMAND_OVERRIDE, Some(mode));
     let result = body();
     drop(restore);
     result

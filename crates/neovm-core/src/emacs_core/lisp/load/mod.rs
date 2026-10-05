@@ -1552,22 +1552,22 @@ pub(crate) fn eager_expansion_failure_policy() -> EagerExpansionFailure {
 /// Scope guard: [`EagerExpansionFailure::FallBackWhileBuildingImage`] for the
 /// duration of an image-constructing `loadup.el` load, restored on drop (and
 /// on unwind).
+#[must_use = "the thread-local extent ends when this guard drops"]
+#[derive(Debug)]
 pub(crate) struct ImageConstructionExpansionScope {
-    previous: EagerExpansionFailure,
+    _scope:
+        crate::tls_scope::TlsScope<EagerExpansionFailure, std::cell::Cell<EagerExpansionFailure>>,
 }
+static_assertions::assert_not_impl_any!(ImageConstructionExpansionScope: Send, Sync);
 
 impl ImageConstructionExpansionScope {
     pub(crate) fn enter() -> Self {
-        let previous = EAGER_EXPANSION_FAILURE
-            .with(|cell| cell.replace(EagerExpansionFailure::FallBackWhileBuildingImage));
-        Self { previous }
-    }
-}
-
-impl Drop for ImageConstructionExpansionScope {
-    fn drop(&mut self) {
-        let previous = self.previous;
-        EAGER_EXPANSION_FAILURE.with(|cell| cell.set(previous));
+        Self {
+            _scope: crate::tls_scope::TlsScope::new(
+                &EAGER_EXPANSION_FAILURE,
+                EagerExpansionFailure::FallBackWhileBuildingImage,
+            ),
+        }
     }
 }
 
