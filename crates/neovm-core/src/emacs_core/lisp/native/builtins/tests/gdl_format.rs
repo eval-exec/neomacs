@@ -30,10 +30,20 @@ fn assert_gnu(name: &str, form: &str, frozen: &str) {
     } else {
         frozen.to_owned()
     };
-    // GNU's dolist and width tables belong to the bootstrapped Lisp world.
-    // Evaluate through the same startup snapshot as sequence oracle pins.
+    // This fixture starts from a preload snapshot, not CLI normal-top-level.
+    // Supply GNU lisp/startup.el:1728-1730's command-line memory-message setup here;
+    // substitute-command-keys supplies the real key binding and text properties.
+    let mut context = crate::test_utils::runtime_startup_context();
+    context
+        .eval_str(
+            r#"(setq memory-signal-data
+                 (list 'error
+                       (substitute-command-keys "Memory exhausted--use \\[save-some-buffers] then exit and restart Emacs")))"#,
+        )
+        .expect("GNU command-line memory-signal-data initialization");
+    let actual = context.eval_str(form);
     assert_eq!(
-        crate::test_utils::runtime_startup_eval_one(form),
+        crate::emacs_core::format_eval_result(&actual),
         format!("OK {expected}")
     );
 }

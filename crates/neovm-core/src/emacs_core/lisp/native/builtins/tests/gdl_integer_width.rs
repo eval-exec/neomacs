@@ -11,15 +11,30 @@ fn gdl_integer_width_checks_new_results_and_large_requests() {
         "(let ((integer-width 128)) (* (ash 1 100) (ash 1 100)))",
         "(let ((integer-width 128)) (ash 1 4294967296))",
     ] {
-        assert_eq!(
-            format_eval_result(&ctx.eval_str(form)),
-            "ERR (overflow-error)",
-            "{form}"
-        );
+        match ctx.eval_str(form) {
+            Err(crate::emacs_core::error::EvalError::Signal {
+                symbol,
+                data,
+                raw_data,
+                ..
+            }) => {
+                assert_eq!(
+                    symbol,
+                    crate::emacs_core::intern::intern("overflow-error"),
+                    "{form}"
+                );
+                assert!(data.is_empty(), "overflow data must be nil: {form}");
+                assert!(
+                    raw_data.is_none_or(|raw| raw.is_nil()),
+                    "raw overflow data must be nil: {form}"
+                );
+            }
+            result => panic!("expected overflow-error for {form}, got {result:?}"),
+        }
     }
     assert_eq!(
-        format_eval_result(&ctx.eval_str("(let ((integer-width 0)) (logb (ash 1 127)))")),
-        "OK 127"
+        format_eval_result(&ctx.eval_str("(let ((integer-width 0)) (bignump (ash 1 127)))")),
+        "OK t"
     );
     // GNU alloc.c:7506 and data.c:1475-1483 permit intmax_t-sized bignum
     // bindings; bignum.c:94-100 reads their full signed slot value.
