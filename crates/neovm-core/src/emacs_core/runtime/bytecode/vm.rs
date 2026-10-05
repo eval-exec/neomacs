@@ -9130,6 +9130,10 @@ impl<'a> Vm<'a> {
     /// Unlike the Bcall specialization helper, this never arms a debugger call
     /// or resolves the primitive's symbol through its function cell. GNU's
     /// dedicated cases call C primitives directly even after advice or fset.
+    /// Keep its registry and rooted fallback outside the opcode dispatcher:
+    /// inlining them spills the unrelated hot Bcall frame-transition locals.
+    /// Primitive opcodes can be frequent, so this boundary is not cold.
+    #[inline(never)]
     fn dispatch_vm_builtin_by_id_from_stack(
         &mut self,
         func: &ByteCodeFunction,
