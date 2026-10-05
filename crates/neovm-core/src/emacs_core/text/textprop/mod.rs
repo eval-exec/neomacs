@@ -1926,14 +1926,14 @@ pub(crate) fn builtin_get_text_property_in_state(
     let pos = expect_integer_or_marker_in_buffers(buffers, &args[0])?;
     let prop = expect_property_key(&args[1])?;
 
+    // GNU textprop.c:604 calls textget on the empty end-position plist;
+    // intervals.c:1741 still supplies default-text-properties there. Route
+    // full-end positions through the same resolver as ordinary characters.
     if let Some(str_val) = is_string_object(args.get(2)) {
         let s = str_val
             .as_lisp_string()
             .expect("string object must carry LispString payload");
         let char_pos = validate_string_char_pos_raw(s, pos, args[0])?;
-        if char_pos.get() == s.schars() {
-            return Ok(Value::NIL);
-        }
         if let Some(table) = borrow_string_text_properties_table_for_value(str_val) {
             return Ok(lookup_string_text_property(
                 obarray,
@@ -1958,9 +1958,6 @@ pub(crate) fn builtin_get_text_property_in_state(
         .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
 
     let char_pos = validate_buffer_property_point_char_pos_raw(buf, pos, args[0])?;
-    if char_pos >= buf.total_char_end_pos() {
-        return Ok(Value::NIL);
-    }
     Ok(lookup_buffer_text_property_at_char_pos(
         obarray, buffers, buf, char_pos, prop,
     ))
@@ -2310,9 +2307,6 @@ pub(crate) fn buffer_char_property_at_full_lisp_pos(
 ) -> Value {
     debug_assert!(buf.full_lisp_char_region().contains(pos));
     let char_pos = pos.to_char_pos();
-    if char_pos >= buf.total_char_end_pos() {
-        return Value::NIL;
-    }
     if !buf.overlays.is_empty() {
         let byte_pos = buf.lisp_pos_to_emacs_byte_pos(pos);
         if let Some((value, _overlay_id)) =
@@ -2348,17 +2342,11 @@ pub(crate) fn builtin_get_char_property_with_frames(
     // `validate_buffer_property_point_char_pos_raw`).
     if buf.overlays.is_empty() {
         let char_pos = validate_buffer_point_char_pos_raw(buf, pos, args[0])?;
-        if char_pos >= buf.total_char_end_pos() {
-            return Ok(Value::NIL);
-        }
         return Ok(lookup_buffer_text_property_at_char_pos(
             obarray, buffers, buf, char_pos, prop,
         ));
     }
     let byte_pos = validate_buffer_point_emacs_byte_pos_raw(buf, pos, args[0])?;
-    if byte_pos == buffer_end_emacs_byte_pos(buf) {
-        return Ok(Value::NIL);
-    }
 
     if let Some((value, _overlay_id)) =
         buffer_overlay_property_at_byte_pos(obarray, buffers, buf, byte_pos.get(), prop, window_id)
@@ -3748,9 +3736,6 @@ fn builtin_get_char_property_and_overlay_with_frames(
 
     if let Some(buf) = buffers.get(buf_id) {
         let byte_pos = validate_buffer_point_emacs_byte_pos_raw(buf, pos, args[0])?;
-        if byte_pos == buffer_end_emacs_byte_pos(buf) {
-            return Ok(Value::cons(Value::NIL, Value::NIL));
-        }
         if let Some((value, ov_val)) = buffer_overlay_property_at_byte_pos(
             obarray,
             buffers,

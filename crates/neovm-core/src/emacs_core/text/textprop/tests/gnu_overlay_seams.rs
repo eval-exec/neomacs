@@ -71,6 +71,27 @@ fn gde_overlay_collapsed_start_query_order() {
 }
 
 #[test]
+fn gde_overlay_end_default_properties() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::runtime_startup_context();
+    eval.set_lexical_binding(true);
+    let result = eval.eval_str(
+        r#"(let ((default-text-properties '(probe fallback front-sticky t)))
+(list (let ((s "a")) (list (get-text-property 1 'probe s)
+(get-char-property 1 'probe s) (get-char-property-and-overlay 1 'probe s)))
+(with-temp-buffer (insert "ab")
+(list (get-text-property (point-max) 'probe) (get-char-property (point-max) 'probe)
+(get-char-property-and-overlay (point-max) 'probe)
+(progn (overlay-put (make-overlay 1 3) 'face 'bold)
+(list (get-char-property 3 'probe) (get-char-property-and-overlay 3 'probe)))
+(save-restriction (narrow-to-region 1 2) (get-char-property (point-max) 'probe))))))"#,
+    );
+    let actual = crate::emacs_core::format_eval_result_with_eval(&eval, &result);
+    let expected = r#"OK ((fallback fallback (fallback)) (fallback fallback (fallback) (fallback (fallback)) fallback))"#;
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn gde_overlay_sorted_category_and_window() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::runtime_startup_context();
@@ -95,4 +116,27 @@ fn gde_overlay_sorted_category_and_window() {
         actual,
         r#"OK ((window2 category plain) (category plain) (window2 plain))"#
     );
+}
+
+#[test]
+fn gde_overlay_default_local_map_at_end() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::runtime_startup_context();
+    eval.set_lexical_binding(true);
+    let result = eval.eval_str(
+        r#"(let ((property-map (make-sparse-keymap)) (buffer-map (make-sparse-keymap)))
+  (define-key property-map "x" #'ignore)
+  (define-key buffer-map "x" #'forward-char)
+  (with-temp-buffer
+    (insert "a")
+    (goto-char (point-max))
+    (use-local-map buffer-map)
+    (let ((default-text-properties (list 'local-map property-map 'rear-nonsticky t)))
+      (list (key-binding "x")
+            (not (null (memq property-map (current-active-maps))))
+            (null (get-pos-property (point-max) 'local-map))))))"#,
+    );
+    let actual = crate::emacs_core::format_eval_result_with_eval(&eval, &result);
+    // Generated from GNU 31.1; get_local_map tries the character property first.
+    assert_eq!(actual, r#"OK (ignore t t)"#);
 }

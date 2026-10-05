@@ -19,6 +19,10 @@ mod category_priority_alias_and_direct_nil;
 mod multibyte_unibyte_raw_byte_positions;
 
 #[cfg(test)]
+#[path = "gd_e_overlay_seams/missing_overlay_property_falls_back_to_text.rs"]
+mod missing_overlay_property_falls_back_to_text;
+
+#[cfg(test)]
 #[path = "gd_e_overlay_seams/nontransitive_sorted_queries.rs"]
 mod nontransitive_sorted_queries;
 
@@ -27,9 +31,21 @@ mod nontransitive_sorted_queries;
 mod collapsed_start_query_order;
 
 #[cfg(test)]
+#[path = "gd_e_overlay_seams/end_default_properties.rs"]
+mod end_default_properties;
+
+#[cfg(test)]
 #[path = "gd_e_overlay_seams/nil_priority_identity_invariants.rs"]
 mod nil_priority_identity_invariants;
 
 #[cfg(test)]
+#[path = "gd_e_overlay_seams/compiled_property_queries.rs"]
+mod compiled_property_queries;
+
+#[cfg(test)]
 #[path = "gd_e_overlay_seams/sorted_category_and_window.rs"]
 mod sorted_category_and_window;
+
+#[cfg(test)]
+#[path = "gd_e_overlay_seams/default_local_map_at_end.rs"]
+mod default_local_map_at_end;
