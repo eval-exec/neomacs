@@ -44,6 +44,11 @@ pub(super) enum TextAbsence {
     NoSelection,
     /// An owner exists, but it offers none of the text MIMEs this backend reads.
     TargetUnavailable,
+    /// The backend cannot tell those two apart: it reports one error for both
+    /// an empty clipboard and contents in a format it cannot read (arboard's
+    /// `ContentNotAvailable`).  Guessing either way would state a fact the
+    /// backend does not know.
+    Indeterminate,
 }
 
 impl From<TextAbsence> for TextRead {
@@ -51,6 +56,7 @@ impl From<TextAbsence> for TextRead {
         match absence {
             TextAbsence::NoSelection => Self::NoSelection,
             TextAbsence::TargetUnavailable => Self::TargetUnavailable,
+            TextAbsence::Indeterminate => Self::Indeterminate,
         }
     }
 }
@@ -64,17 +70,20 @@ pub(super) enum TextRead {
     NoSelection,
     /// An owner exists, but it offers none of the text MIMEs we read.
     TargetUnavailable,
+    /// The backend cannot tell "no owner" from "unreadable contents"; see
+    /// `TextAbsence::Indeterminate`.
+    Indeterminate,
 }
 
 impl TextRead {
-    /// The answer the evaluator-facing wire carries: text, or `None` for
-    /// either absence.  The two absences stay distinct inside the runtime so
+    /// The answer the evaluator-facing wire carries: text, or `None` for any
+    /// absence.  The absence reasons stay distinct inside the runtime so
     /// callers can tell "nothing is selected" from "something is selected that
-    /// we cannot read".
+    /// we cannot read", and can see when the backend does not know which.
     pub(super) fn into_option(self) -> Option<String> {
         match self {
             Self::Text(text) => Some(text),
-            Self::NoSelection | Self::TargetUnavailable => None,
+            Self::NoSelection | Self::TargetUnavailable | Self::Indeterminate => None,
         }
     }
 }
@@ -150,12 +159,12 @@ pub(super) fn classify_smithay(err: &std::io::Error) -> Option<TextAbsence> {
 ///
 /// arboard's `ContentNotAvailable` covers both "the clipboard is empty" and
 /// "the contents have an incompatible format" (`common.rs:19-24`), so it can
-/// never name a specific absence; the conservative answer is `NoSelection`.
-/// Every other variant is a real failure.  (`Error` is `#[non_exhaustive]`, so
-/// the catch-all is required.)
+/// never name a specific absence and maps to `Indeterminate`.  Every other
+/// variant is a real failure.  (`Error` is `#[non_exhaustive]`, so the
+/// catch-all is required.)
 pub(super) fn classify_arboard(err: &arboard::Error) -> Option<TextAbsence> {
     match err {
-        arboard::Error::ContentNotAvailable => Some(TextAbsence::NoSelection),
+        arboard::Error::ContentNotAvailable => Some(TextAbsence::Indeterminate),
         _ => None,
     }
 }
