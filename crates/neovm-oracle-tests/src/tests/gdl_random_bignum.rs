@@ -18,7 +18,7 @@ fn oracle_gdl_random_bignum_seeded_limb_sampling() {
     let form = r#"
 (progn
   (random "gdl-random")
-  (mapcar (lambda (lim) (list (random lim) (random lim) (random lim) (random lim)))
+  (mapcar (lambda (lim) (mapcar #'number-to-string (list (random lim) (random lim) (random lim) (random lim))))
           (list (expt 2 61) (expt 2 100) (* 3 (expt 2 64)) (1- (expt 2 128)))))
 "#;
     assert_oracle_parity_expect(

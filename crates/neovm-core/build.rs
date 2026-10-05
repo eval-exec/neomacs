@@ -1,4 +1,104 @@
 use std::path::{Path, PathBuf};
+use std::process::Command;
+
+/// Build-script-only toolchain metadata. Cargo runs one build script per
+/// target; no Lisp runtime or mutator state is retained here.
+#[derive(Clone, Copy, Debug)]
+enum NativeCompilerFamily {
+    Unix,
+    Msvc,
+}
+
+fn target_native_tool(variable: &str, fallback: &str) -> std::ffi::OsString {
+    let target = std::env::var("TARGET").expect("Cargo target");
+    for name in [
+        format!("{variable}_{target}"),
+        format!("{variable}_{}", target.replace('-', "_")),
+        format!("TARGET_{variable}"),
+        variable.to_owned(),
+    ] {
+        println!("cargo:rerun-if-env-changed={name}");
+        if let Some(tool) = std::env::var_os(&name) {
+            return tool;
+        }
+    }
+    fallback.into()
+}
+
+/// The bridge uses only standard C and the target C library. Compile with
+/// Cargo's target compiler/archiver, keeping the workspace dependency set
+/// unchanged. Integer promotion remains in C because Rust has no long-double ABI.
+fn compile_float_format(manifest: &Path) {
+    let family = if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        NativeCompilerFamily::Msvc
+    } else {
+        NativeCompilerFamily::Unix
+    };
+    let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("Cargo output directory"));
+    let source = manifest.join("build_support/float_format.c");
+    let optimization = std::env::var("OPT_LEVEL").expect("Cargo optimization level");
+    let (compiler, archiver, object, library) = match family {
+        NativeCompilerFamily::Unix => (
+            target_native_tool("CC", "cc"),
+            target_native_tool("AR", "ar"),
+            out.join("float_format.o"),
+            out.join("libneovm_float_format.a"),
+        ),
+        NativeCompilerFamily::Msvc => (
+            target_native_tool("CC", "cl"),
+            target_native_tool("AR", "lib"),
+            out.join("float_format.obj"),
+            out.join("neovm_float_format.lib"),
+        ),
+    };
+    let mut compile = Command::new(compiler);
+    match family {
+        NativeCompilerFamily::Unix => {
+            compile
+                .args(["-std=c11", "-fPIC", "-c"])
+                .arg(format!("-O{optimization}"))
+                .arg(&source)
+                .arg("-o")
+                .arg(&object);
+        }
+        NativeCompilerFamily::Msvc => {
+            let mut output = std::ffi::OsString::from("/Fo");
+            output.push(&object);
+            let target_features = std::env::var("CARGO_CFG_TARGET_FEATURE").unwrap_or_default();
+            let runtime = if target_features
+                .split(',')
+                .any(|feature| feature == "crt-static")
+            {
+                "/MT"
+            } else {
+                "/MD"
+            };
+            compile
+                .args(["/nologo", "/c"])
+                .arg(runtime)
+                .arg(if optimization == "0" { "/Od" } else { "/O2" })
+                .arg(output)
+                .arg(&source);
+        }
+    }
+    let status = compile.status().expect("run target C compiler");
+    assert!(status.success(), "target C compiler failed: {status}");
+    let mut archive = Command::new(archiver);
+    match family {
+        NativeCompilerFamily::Unix => {
+            archive.arg("crs").arg(&library).arg(&object);
+        }
+        NativeCompilerFamily::Msvc => {
+            let mut output = std::ffi::OsString::from("/OUT:");
+            output.push(&library);
+            archive.arg("/nologo").arg(output).arg(&object);
+        }
+    }
+    let status = archive.status().expect("run target archiver");
+    assert!(status.success(), "target archiver failed: {status}");
+    println!("cargo:rustc-link-search=native={}", out.display());
+    println!("cargo:rustc-link-lib=static=neovm_float_format");
+}
 
 // SINGLE SOURCE OF TRUTH (ledger 206): the recipe for every Lisp file this
 // build generates lives in `build_support/generated_lisp.rs` and is included
@@ -41,9 +141,7 @@ fn main() {
     // Rust has no C long-double ABI; this bridge retains GNU's exact integer
     // float conversion instead of narrowing intmax/uintmax to double first.
     println!("cargo:rerun-if-changed=build_support/float_format.c");
-    cc::Build::new()
-        .file(manifest_dir.join("build_support/float_format.c"))
-        .compile("neovm_float_format");
+    compile_float_format(&manifest_dir);
 
     detect_lcms2();
     detect_dbus();

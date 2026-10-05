@@ -342,8 +342,9 @@ impl AllocationFailure {
         match self {
             Self::Lisp(flow) => flow,
             Self::MemoryExhausted => context
-                .obarray
-                .symbol_value("memory-signal-data")
+                .special_variable_value_by_id(crate::emacs_core::symbol::intern(
+                    "memory-signal-data",
+                ))
                 .and_then(crate::emacs_core::error::signal_from_binding_value)
                 .unwrap_or_else(crate::emacs_core::error::memory_exhausted_error),
         }

@@ -186,7 +186,6 @@ syn = { version = "3.0.3", features = ["full", "visit"] }
 
 [build-dependencies]
 flate2.workspace = true
-cc = "1"
 pkg-config.workspace = true
 sha2.workspace = true
 

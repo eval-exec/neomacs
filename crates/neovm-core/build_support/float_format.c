@@ -6,6 +6,10 @@
 #include <stdio.h>
 #include <string.h>
 
+_Static_assert(FLT_RADIX == 2 || FLT_RADIX == 10 || FLT_RADIX == 16,
+               "GNU useful precision requires a supported float radix");
+_Static_assert(LDBL_MIN_EXP < 1, "GNU useful precision must be positive");
+
 int neovm_float_useful_precision(void)
 {
   return (1 - LDBL_MIN_EXP) * (FLT_RADIX == 2 || FLT_RADIX == 10 ? 1
