@@ -49,3 +49,7 @@ mod sorted_category_and_window;
 #[cfg(test)]
 #[path = "gd_e_overlay_seams/default_local_map_at_end.rs"]
 mod default_local_map_at_end;
+
+#[cfg(test)]
+#[path = "gd_e_overlay_seams/empty_narrowing.rs"]
+mod empty_narrowing;

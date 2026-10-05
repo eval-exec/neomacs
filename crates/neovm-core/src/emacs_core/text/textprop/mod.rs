@@ -704,11 +704,29 @@ fn lookup_buffer_text_property_at_char_pos(
     buf: &crate::buffer::buffer::Buffer,
     char_pos: CharPos0,
     prop: Value,
+    domain: BufferPropertyLookupDomain,
 ) -> Value {
+    // GNU textprop.c:161-163 makes an empty accessible region have no
+    // interval plist, even when a real character follows its sole position.
+    // The widened get_local_map lookup (intervals.c:2191-2200) uses FullBuffer.
+    let no_accessible_text = domain == BufferPropertyLookupDomain::Accessible
+        && buf.accessible_emacs_byte_region().range().is_empty();
     lookup_char_property_from_direct(
         obarray,
         buffers,
-        |name| buf.text_props_get_property_at_char_pos(char_pos, name),
+        |name| {
+            // A name no interval carries answers from the presence set
+            // without descending the interval tree, as the byte-position
+            // lookup below does.
+            if no_accessible_text
+                || buf.text_props_property_name_presence(name)
+                    == crate::buffer::text_props::PropertyNamePresence::DefinitelyAbsent
+            {
+                None
+            } else {
+                buf.text_props_get_property_at_char_pos(char_pos, name)
+            }
+        },
         prop,
         true,
     )
@@ -1959,7 +1977,12 @@ pub(crate) fn builtin_get_text_property_in_state(
 
     let char_pos = validate_buffer_property_point_char_pos_raw(buf, pos, args[0])?;
     Ok(lookup_buffer_text_property_at_char_pos(
-        obarray, buffers, buf, char_pos, prop,
+        obarray,
+        buffers,
+        buf,
+        char_pos,
+        prop,
+        BufferPropertyLookupDomain::Accessible,
     ))
 }
 
@@ -2110,6 +2133,7 @@ fn buffer_pos_property_in_domain(
             buf,
             LispCharPos1::new(pos),
             prop,
+            domain,
         )),
         PropertyStickiness::FromPreceding if pos > domain.beginning(buf).as_i64() => {
             Ok(text_property_value_at_char_pos(
@@ -2118,6 +2142,7 @@ fn buffer_pos_property_in_domain(
                 buf,
                 LispCharPos1::new(pos - 1),
                 prop,
+                domain,
             ))
         }
         PropertyStickiness::FromPreceding | PropertyStickiness::Neither => Ok(Value::NIL),
@@ -2209,7 +2234,7 @@ fn get_text_property_at_validated_char_pos(
         ));
     }
     Ok(text_property_value_at_char_pos(
-        obarray, buffers, buf, pos, prop,
+        obarray, buffers, buf, pos, prop, domain,
     ))
 }
 
@@ -2219,8 +2244,9 @@ fn text_property_value_at_char_pos(
     buf: &Buffer,
     pos: LispCharPos1,
     prop: Value,
+    domain: BufferPropertyLookupDomain,
 ) -> Value {
-    lookup_buffer_text_property_at_char_pos(obarray, buffers, buf, pos.to_char_pos(), prop)
+    lookup_buffer_text_property_at_char_pos(obarray, buffers, buf, pos.to_char_pos(), prop, domain)
 }
 
 fn front_sticky_matches(value: Value, prop: Value) -> bool {
@@ -2315,7 +2341,14 @@ pub(crate) fn buffer_char_property_at_full_lisp_pos(
             return value;
         }
     }
-    lookup_buffer_text_property_at_char_pos(obarray, buffers, buf, char_pos, prop)
+    lookup_buffer_text_property_at_char_pos(
+        obarray,
+        buffers,
+        buf,
+        char_pos,
+        prop,
+        BufferPropertyLookupDomain::FullBuffer,
+    )
 }
 
 pub(crate) fn builtin_get_char_property_with_frames(
@@ -2343,7 +2376,12 @@ pub(crate) fn builtin_get_char_property_with_frames(
     if buf.overlays.is_empty() {
         let char_pos = validate_buffer_point_char_pos_raw(buf, pos, args[0])?;
         return Ok(lookup_buffer_text_property_at_char_pos(
-            obarray, buffers, buf, char_pos, prop,
+            obarray,
+            buffers,
+            buf,
+            char_pos,
+            prop,
+            BufferPropertyLookupDomain::Accessible,
         ));
     }
     let byte_pos = validate_buffer_point_emacs_byte_pos_raw(buf, pos, args[0])?;
@@ -2354,12 +2392,13 @@ pub(crate) fn builtin_get_char_property_with_frames(
         return Ok(value);
     }
 
-    Ok(lookup_buffer_text_property(
+    Ok(lookup_buffer_text_property_at_char_pos(
         obarray,
         buffers,
         buf,
-        byte_pos.get(),
+        validated_lisp_char_pos(pos).to_char_pos(),
         prop,
+        BufferPropertyLookupDomain::Accessible,
     ))
 }
 
@@ -2994,7 +3033,9 @@ pub(crate) fn builtin_text_properties_at_in_buffers(
         .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
 
     let byte_pos = validate_buffer_property_point_emacs_byte_pos_raw(buf, pos, args[0])?;
-    if byte_pos == buffer_end_emacs_byte_pos(buf) {
+    if buf.accessible_emacs_byte_region().range().is_empty()
+        || byte_pos == buffer_end_emacs_byte_pos(buf)
+    {
         return Ok(Value::NIL);
     }
     Ok(buf.text_props_get_properties_plist_value_at_emacs_byte_pos(byte_pos))

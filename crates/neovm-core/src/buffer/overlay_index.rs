@@ -1240,6 +1240,19 @@ impl OverlayIndex {
         overlays
     }
 
+    /// Visit all point matches in the same ascending record order as
+    /// overlays_at_iter. The visitor owns no resumable traversal state; this
+    /// lookup keeps the owning buffer's read lock for its complete reduction.
+    #[inline]
+    pub(super) fn for_each_overlay_at(&self, pos: EmacsBytePos, mut visit: impl FnMut(Value)) {
+        let intervals = self.intervals.read();
+        intervals
+            .records
+            .for_each_match(IntervalBPlusQuery::Point(pos), |record| {
+                visit(record.overlay);
+            });
+    }
+
     pub(super) fn overlays_at_iter(&self, pos: EmacsBytePos) -> impl Iterator<Item = Value> + '_ {
         let records = RwLockReadGuard::map(self.intervals.read(), |tree| &tree.records);
         OrderedShiftTree::matches_owned(records, IntervalBPlusQuery::Point(pos))

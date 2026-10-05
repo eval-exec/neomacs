@@ -3224,3 +3224,6 @@ mod string_property_removal;
 
 #[cfg(test)]
 mod gnu_overlay_seams;
+
+#[cfg(test)]
+mod empty_narrowing;

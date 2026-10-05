@@ -1166,16 +1166,19 @@ impl OverlayList {
         let priority_of = |overlay| value_of(overlay, priority_value());
         let window_filter = window_id.map(|id| (id, Value::from_sym_id(winner_window_symbol_id())));
         let mut best: Option<(OverlayPropertyWinner, Option<OverlayPrecedence>)> = None;
-        for overlay in self.index.overlays_at_iter(pos) {
+        // Consume the complete ascending query directly. The index visitor
+        // preserves GNU's sequential comparison even for cyclic precedence,
+        // without constructing a resumable iterator for this single reduction.
+        self.index.for_each_overlay_at(pos, |overlay| {
             let Some(value) = value_of(overlay, property).and_then(NonNilPropertyValue::new) else {
-                continue;
+                return;
             };
             if let Some((window_id, window_property)) = window_filter
                 && value_of(overlay, window_property)
                     .and_then(Value::as_window_id)
                     .is_some_and(|overlay_window| overlay_window != window_id)
             {
-                continue;
+                return;
             }
             let key = overlay_precedence(overlay, &priority_of);
             if best.is_none_or(|(current, current_key)| {
@@ -1184,7 +1187,7 @@ impl OverlayList {
             }) {
                 best = Some((OverlayPropertyWinner::new(overlay, value), key));
             }
-        }
+        });
         best.map(|(winner, _)| winner)
     }
 
