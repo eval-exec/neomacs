@@ -3524,8 +3524,8 @@ fn display_update_for_mouse_movement_respects_help_echo_inhibit_substitution() {
     crate::emacs_core::textprop::builtin_put_text_property(
         &mut ev,
         vec![
+            Value::fixnum(0),
             Value::fixnum(1),
-            Value::fixnum(2),
             Value::symbol("help-echo-inhibit-substitution"),
             Value::T,
             help,

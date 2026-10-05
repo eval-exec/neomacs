@@ -2535,3 +2535,10 @@ fn timed_read_preserves_idle_epoch_during_preliminary_redisplay_service() {
     );
     assert_eq!(eval.command_loop.idle_start_time, epoch);
 }
+#[cfg(test)]
+#[path = "help_echo_substitution.rs"]
+mod help_echo_substitution;
+
+#[cfg(test)]
+#[path = "gnu_help_echo_direct_oracle.rs"]
+mod gnu_help_echo_direct_oracle;

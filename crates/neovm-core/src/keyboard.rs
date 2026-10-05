@@ -6426,17 +6426,24 @@ impl crate::emacs_core::eval::Context {
             return Ok(help);
         }
 
-        let inhibit = crate::emacs_core::textprop::builtin_get_text_property_in_state(
-            &self.obarray,
-            &self.buffers,
-            &[
-                Value::fixnum(1),
-                Value::symbol("help-echo-inhibit-substitution"),
-                help,
-            ],
-        )?;
-        if inhibit.is_truthy() {
-            return Ok(help);
+        // GNU keyboard.c:2221-2226 inspects only the first character,
+        // and skips the property lookup for an empty help string.
+        if help
+            .as_lisp_string()
+            .is_some_and(|string| string.schars() > 0)
+        {
+            let inhibit = crate::emacs_core::textprop::builtin_get_text_property_in_state(
+                &self.obarray,
+                &self.buffers,
+                &[
+                    Value::fixnum(0),
+                    Value::symbol("help-echo-inhibit-substitution"),
+                    help,
+                ],
+            )?;
+            if inhibit.is_truthy() {
+                return Ok(help);
+            }
         }
 
         match self.obarray.symbol_function("substitute-command-keys") {
