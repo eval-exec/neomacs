@@ -21,6 +21,16 @@ use std::ffi::{CStr, OsString};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod unix_timestamp;
+#[cfg_attr(
+    not(test),
+    expect(
+        unused_imports,
+        reason = "File-time callers migrate in the next change"
+    )
+)]
+pub(crate) use unix_timestamp::UnixTimestamp;
+
 mod time_zone_spec;
 #[cfg_attr(
     not(test),

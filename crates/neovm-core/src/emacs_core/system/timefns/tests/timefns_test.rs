@@ -1858,3 +1858,6 @@ fn current_cpu_time_is_cpu_not_wall_time() {
 
 #[cfg(test)]
 mod time_zone_spec;
+
+#[cfg(test)]
+mod unix_timestamp;
