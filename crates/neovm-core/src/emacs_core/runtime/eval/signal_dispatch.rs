@@ -241,11 +241,17 @@ impl Context {
                         self.push_specpdl_root(*raw);
                     }
 
+                    // GNU eval.c:2016-2030 borrows room while this handler
+                    // runs, and restores it before popping SKIP_CONDITIONS.
+                    let count = self.specpdl.len();
+                    self.ensure_lisp_eval_depth_room(200);
                     self.push_condition_frame(ConditionFrame::SkipConditions {
                         remaining: seen_condition_entries + mute_span,
                     });
 
                     let handler_result = self.apply(handler, vec![make_signal_binding_value(&sig)]);
+                    let handler_result = self.dispatch_signal_result_if_needed(handler_result);
+                    let handler_result = self.unbind_to_with_result(count, handler_result);
 
                     match handler_result.kinded() {
                         Ok(_) => {
@@ -341,14 +347,17 @@ impl Context {
             return Ok(());
         }
 
-        self.apply(
+        // GNU eval.c:1966-1976 reserves twenty evaluator frames for the hook.
+        let count = self.specpdl.len();
+        self.ensure_lisp_eval_depth_room(20);
+        let result = self.apply(
             hook,
             vec![
                 Value::from_sym_id(sig.symbol),
                 signal_hook_payload_value(sig),
             ],
-        )
-        .map(|_| ())
+        );
+        self.unbind_to_with_result(count, result).map(|_| ())
     }
 
     pub(super) fn canonicalize_signal_symbol(&self, sig: SignalData) -> SignalData {

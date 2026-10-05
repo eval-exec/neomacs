@@ -2399,7 +2399,9 @@ impl<'a> Vm<'a> {
         &mut self,
         f: impl FnOnce(&mut Self) -> Result<T, Flow>,
     ) -> Result<T, Flow> {
-        self.enter_bytecode_call_depth()?;
+        if let Err(flow) = self.enter_bytecode_call_depth() {
+            return Err(self.ctx.finish_lisp_depth_overflow(flow));
+        }
         let result = f(self);
         self.leave_bytecode_call_depth();
         result
@@ -2412,7 +2414,8 @@ impl<'a> Vm<'a> {
             // Cold: the floor-raise + error construction stay out of the hot
             // prologue's codegen; the common shallow call pays one compare.
             if let Err(flow) = self.bytecode_depth_exceeded() {
-                self.ctx.depth -= 1;
+                // The caller publishes its operand roots before dispatching
+                // this signal and retiring the rejected call's depth.
                 return Err(flow);
             }
         }
@@ -4964,6 +4967,7 @@ impl<'a> Vm<'a> {
                             // callee sealed and stack-verified.
                             if let Err(flow) = self.enter_bytecode_call_depth() {
                                 cursor.publish(self.ctx);
+                                let flow = self.ctx.finish_lisp_depth_overflow(flow);
                                 resume_flow!(flow)
                             }
                             let prepared = call.callee();
@@ -5020,6 +5024,7 @@ impl<'a> Vm<'a> {
                         } else {
                             cursor.publish(self.ctx);
                             if let Err(flow) = self.enter_bytecode_call_depth() {
+                                let flow = self.ctx.finish_lisp_depth_overflow(flow);
                                 resume_flow!(flow)
                             }
                             match self
@@ -7603,13 +7608,22 @@ impl<'a> Vm<'a> {
                 ctx.max_depth = 100;
             }
             if ctx.depth > ctx.max_depth {
-                ctx.depth -= 1;
-                let err = Err(signal(
-                    "error",
-                    vec![Value::string("Lisp nesting exceeds ‘max-lisp-eval-depth’")],
-                ));
-                let res = ctx.pop_bytecode_backtrace_frame_with_result(bt_count, err);
-                return Some(crate::emacs_core::jit::cache::NativeCallOutcome::from_result(res));
+                // GNU checks depth before recording the rejected callee's
+                // frame (bytecode.c:779-795). Only the calling frame is live
+                // when the signal hook runs.
+                let flow = ctx
+                    .pop_bytecode_backtrace_frame_with_result(
+                        bt_count,
+                        Err(signal(
+                            "error",
+                            vec![Value::string("Lisp nesting exceeds ‘max-lisp-eval-depth’")],
+                        )),
+                    )
+                    .expect_err("a rejected callee has no cleanup or result");
+                let flow = ctx.finish_lisp_depth_overflow(flow);
+                return Some(
+                    crate::emacs_core::jit::cache::NativeCallOutcome::from_result(Err(flow)),
+                );
             }
         }
         use crate::emacs_core::jit::cache::NativeCallOutcome;
@@ -8001,11 +8015,10 @@ impl<'a> Vm<'a> {
                 ctx.max_depth = 100;
             }
             if ctx.depth > ctx.max_depth {
-                ctx.depth -= 1;
-                return Some(Err(signal(
+                return Some(Err(ctx.finish_lisp_depth_overflow(signal(
                     "error",
                     vec![Value::string("Lisp nesting exceeds ‘max-lisp-eval-depth’")],
-                )));
+                ))));
             }
         }
         let result =
@@ -9667,8 +9680,7 @@ impl crate::emacs_core::eval::Context {
         if self.depth > self.max_depth
             && let Err(flow) = Vm::from_context(self).bytecode_depth_exceeded()
         {
-            self.depth -= 1;
-            return Err(flow);
+            return Err(self.finish_lisp_depth_overflow(flow));
         }
         let func_val = Value::from_sym_id(sym_id);
         let backtrace = self.push_backtrace_frame_from_bc_stack(func_val, args_start, nargs);

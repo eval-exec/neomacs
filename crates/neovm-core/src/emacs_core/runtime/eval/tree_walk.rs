@@ -159,11 +159,10 @@ impl Context {
         if let Some(buffer_limit) = self.current_max_lisp_eval_depth() {
             if self.depth > buffer_limit {
                 let overflow_depth = self.depth as i64;
-                self.depth -= 1;
-                return Err(signal(
+                return Err(self.finish_lisp_depth_overflow(signal(
                     "excessive-lisp-nesting",
                     vec![Value::fixnum(overflow_depth)],
-                ));
+                )));
             }
             return Ok(());
         }
@@ -184,11 +183,10 @@ impl Context {
         }
         if self.depth > self.max_depth {
             let overflow_depth = self.depth as i64;
-            self.depth -= 1;
-            return Err(signal(
+            return Err(self.finish_lisp_depth_overflow(signal(
                 "excessive-lisp-nesting",
                 vec![Value::fixnum(overflow_depth)],
-            ));
+            )));
         }
         Ok(())
     }

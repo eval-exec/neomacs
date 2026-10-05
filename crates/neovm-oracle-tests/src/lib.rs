@@ -155,6 +155,9 @@ mod function;
 #[cfg(test)]
 mod gc_generational;
 mod gc_scan_strict_edge_semantics;
+#[cfg(test)]
+#[path = "tests/gd_b_signal_room.rs"]
+mod gd_b_signal_room;
 mod gdh_coding_encode_semantics;
 mod gdh_strconv_semantics;
 mod generator_semantics;

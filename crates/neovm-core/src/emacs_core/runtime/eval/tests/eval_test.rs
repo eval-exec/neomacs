@@ -5,6 +5,10 @@ use super::*;
 mod input_wait;
 
 #[cfg(test)]
+#[path = "gd_b_signal_room.rs"]
+mod gd_b_signal_room;
+
+#[cfg(test)]
 #[path = "gc_generational_test.rs"]
 mod gc_generational;
 

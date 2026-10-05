@@ -1216,6 +1216,9 @@ impl SpecBinding {
 /// an untyped callback whose captures the GC cannot see.
 #[derive(Clone, Debug)]
 pub(crate) enum NativeUnwindAction {
+    /// Scalar reserve state owned by this Context's mutator; restored on its
+    /// own specpdl, without sharing a limit or a reserve between Contexts.
+    RestoreEvalDepth { old_limit: i64 },
     RestoreWindowConfiguration {
         configuration: super::builtins::SavedWindowConfiguration,
         options: super::builtins::WindowConfigurationRestoreOptions,
@@ -1231,6 +1234,7 @@ pub(crate) enum NativeUnwindAction {
 impl NativeUnwindAction {
     fn trace_roots(&self, visit: &mut dyn FnMut(Value)) {
         match self {
+            Self::RestoreEvalDepth { .. } => {}
             Self::RestoreWindowConfiguration { configuration, .. } => {
                 visit(configuration.trace_value())
             }
@@ -1245,6 +1249,10 @@ impl NativeUnwindAction {
         let root_scope = context.save_vm_roots();
         self.trace_roots(&mut |value| context.push_vm_frame_root(value));
         let result = match self {
+            Self::RestoreEvalDepth { old_limit } => {
+                context.restore_lisp_eval_depth_room(old_limit);
+                Ok(Value::NIL)
+            }
             Self::RestoreWindowConfiguration {
                 configuration,
                 options,
@@ -7445,6 +7453,7 @@ pub use redisplay_hooks::{
 mod vm_shared;
 
 mod signal_dispatch;
+mod signal_room;
 
 mod construct;
 mod form_head_cache;
