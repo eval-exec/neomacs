@@ -363,7 +363,12 @@ fn major_symbol_join_merges_worker_and_mutator_results_after_publication_stops()
             roots.keep(heap.alloc_symbol_with_pos(positioned_key, TaggedValue::fixnum(4)));
         let mut obarray = Obarray::new();
         obarray.set_symbol_value("major-preimage-worker-owner", worker);
-        heap.set_pending_obarray_scan(obarray.scan_snapshot());
+        let snapshot = {
+            // SAFETY: capture occurs on this test's sole heap/obarray writer.
+            let world = unsafe { scan_contract::SingleMutatorWorld::from_heap(&mut heap) };
+            obarray.scan_snapshot(&world)
+        };
+        heap.set_pending_obarray_scan(snapshot);
         let _phase = MarkPhase::worker(&mut heap, &[], false);
         note_root_overwrite(root);
         assert!(crate::tagged::mutate::set_cons_car(

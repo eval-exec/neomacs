@@ -1,0 +1,15 @@
+error[E0382]: borrow of moved value: `heap`
+ --> tests/thread_safety_ui/heap_shutdown_reuse.rs:6:5
+  |
+4 |     let mut heap = TaggedHeap::new();
+  |         -------- move occurs because `heap` has type `TaggedHeap`, which does not implement the `Copy` trait
+5 |     heap.shutdown().unwrap();
+  |          ---------- `heap` moved due to this method call
+6 |     heap.finish_concurrent_mark().unwrap();
+  |     ^^^^ value borrowed here after move
+  |
+note: `gc::concurrent::<impl TaggedHeap>::shutdown` takes ownership of the receiver `self`, which moves `heap`
+ --> src/tagged/gc/concurrent.rs
+  |
+  |     pub fn shutdown(mut self) -> Result<(), MarkFinishError> {
+  |                         ^^^^

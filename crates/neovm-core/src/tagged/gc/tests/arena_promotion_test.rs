@@ -308,13 +308,14 @@ fn payload_pages_freed_at_heap_drop_body(mid_mark: bool) {
         heap.assert_object_arenas_coherent();
 
         if mid_mark {
-            // Drop while the GC thread is concurrently marking: the heap
-            // Drop must join FIRST, then free pages (under TSAN/ASAN an
-            // early page free is a UAF on the GC thread).
+            // Orderly teardown explicitly completes the marker before it
+            // reclaims live and retired string/vector payload pages.
             heap.concurrent_begin();
             heap.seed_root(root);
             heap.launch_concurrent_mark();
             assert!(heap.concurrent_mark_running());
+            heap.finish_concurrent_mark()
+                .expect("finish marker before orderly teardown");
         }
         drop(heap);
     }

@@ -57,6 +57,10 @@ impl TaggedHeap {
         bytes_before: usize,
         _pause_t0: std::time::Instant,
     ) {
+        assert!(
+            !self.concurrent_mark_running,
+            "sweep publication requires an explicit successful marker finish"
+        );
         // Before anything else: the free list is reset below, and a
         // free-list region closed after that would push its cells onto the
         // list the sweep rebuilds, then the sweep would push them again (a
@@ -239,6 +243,10 @@ impl TaggedHeap {
     /// allocated meanwhile are born black (see `alloc_cons`), so an unswept
     /// block never reclaims a live new cell.
     pub(crate) fn incremental_sweep_slice(&mut self, budget: usize) -> bool {
+        assert!(
+            !self.concurrent_mark_running,
+            "sweeping requires an explicit successful marker finish"
+        );
         // Collector code never sees an open allocation region
         // (`alloc_region.rs`, invariant I2).
         self.close_alloc_regions();

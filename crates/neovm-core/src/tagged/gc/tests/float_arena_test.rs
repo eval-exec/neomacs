@@ -543,12 +543,9 @@ fn pages_freed_at_heap_drop_verified() {
     pages_freed_at_heap_drop_body(true);
 }
 
-/// (d, mid-mark variant) Dropping the heap while the GC thread is still
-/// concurrently marking must join the thread FIRST and then free the
-/// pages — the join runs in `TaggedHeap::drop`'s body, before the
-/// `Vec<ObjectPage<FloatObj>>` field drop. Under TSAN/ASAN a page freed early would
-/// be a use-after-free on the GC thread; the counter catches leaks and
-/// double-frees.
+/// (d, mid-mark variant) Explicitly completing the concurrent marker before
+/// orderly Drop permits page reclamation. The counter catches missing or
+/// repeated reclamation after that completion handoff.
 fn pages_freed_at_heap_drop_mid_concurrent_mark_body(verify: bool) {
     crate::test_utils::init_test_tracing();
     if verify {
@@ -570,11 +567,13 @@ fn pages_freed_at_heap_drop_mid_concurrent_mark_body(verify: bool) {
     heap.seed_root(list);
     heap.launch_concurrent_mark();
     assert!(heap.concurrent_mark_running());
-    drop(heap); // must join, then free 3 pages exactly once
+    heap.finish_concurrent_mark()
+        .expect("finish marker before orderly teardown");
+    drop(heap); // explicit finish proves all 3 pages can be freed
     assert_eq!(
         LIVE_FLOAT_PAGES.load(Ordering::Relaxed),
         before,
-        "mid-mark teardown must join the GC thread and free every page",
+        "explicit marker finish permits teardown to free every page",
     );
 }
 

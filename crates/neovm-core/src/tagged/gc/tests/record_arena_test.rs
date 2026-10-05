@@ -575,6 +575,8 @@ fn record_payload_pages_freed_at_heap_drop_body(mid_mark: bool) {
             heap.seed_root(root);
             heap.launch_concurrent_mark();
             assert!(heap.concurrent_mark_running());
+            heap.finish_concurrent_mark()
+                .expect("finish marker before orderly teardown");
         }
         drop(heap);
     }

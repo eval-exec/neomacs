@@ -170,10 +170,18 @@ impl WorkerHarness {
     }
 }
 
-fn snapshot(vector: TaggedValue) -> crate::tagged::header::VectorScanSnapshot {
+fn snapshot(
+    heap: &mut TaggedHeap,
+    vector: TaggedValue,
+) -> crate::tagged::header::VectorScanSnapshot {
+    // SAFETY: the test owns the live vector and admits its only heap writer.
     let object = unsafe { &*(vector.as_veclike_ptr().unwrap() as *const VectorObj) };
-    let mut snapshot = crate::tagged::header::VectorScanSnapshot::with_capacity(1);
-    snapshot.push(object.data.scan_entry());
+    // SAFETY: capture occurs before the test starts its marker job.
+    let world = unsafe { scan_contract::SingleMutatorWorld::from_heap(heap) };
+    let mut snapshot = crate::tagged::header::VectorScanSnapshot::with_capacity(1, &world);
+    // SAFETY: the test owns this vector in the admitted heap until its
+    // worker finishes; no backing mutation or replacement occurs.
+    unsafe { snapshot.push(object.data.scan_entry()) };
     snapshot
 }
 
@@ -442,8 +450,10 @@ fn generational_worker_vector_and_obarray_snapshots_deduplicate_bare_symbols() {
         obarray.set_symbol_plist_id(owner, symbols[2]);
         heap.close_alloc_regions();
         let mut harness = WorkerHarness::new(&heap, major);
-        harness.job.vectors = Some(snapshot(vector));
-        harness.job.obarray = Some(obarray.scan_snapshot());
+        harness.job.vectors = Some(snapshot(&mut heap, vector));
+        // SAFETY: the test owns the matching obarray and captures before launch.
+        let world = unsafe { scan_contract::SingleMutatorWorld::from_heap(&mut heap) };
+        harness.job.obarray = Some(obarray.scan_snapshot(&world));
         let (result, deferred) = harness.run();
         assert!(deferred.is_empty());
         if major {
@@ -527,7 +537,7 @@ fn generational_worker_early_cdr_stop_retains_initial_claims_symbols_and_tail() 
     heap.close_alloc_regions();
     let mut harness = WorkerHarness::new(&heap, true);
     harness.job.gray.push(spine);
-    harness.job.vectors = Some(snapshot(vector));
+    harness.job.vectors = Some(snapshot(&mut heap, vector));
     let parity = harness.job.claims.parity;
     let (result, deferred) = harness.run();
     assert_eq!(result.promo, [header(float) as usize]);

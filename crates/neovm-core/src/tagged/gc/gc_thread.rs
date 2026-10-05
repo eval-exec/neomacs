@@ -1169,17 +1169,22 @@ pub fn set_tagged_heap(heap: &mut TaggedHeap) {
 /// `set_tagged_heap` leaves the newer installation alone.
 pub fn clear_tagged_heap_if_installed(heap: &TaggedHeap) {
     let owned = heap as *const TaggedHeap as *mut TaggedHeap;
-    TAGGED_HEAP.with(|h| {
+    let _ = TAGGED_HEAP.try_with(|h| {
         if h.get() == owned {
             h.set(std::ptr::null_mut());
-            TAGGED_HEAP_ID.with(|identity| identity.set(None));
-            TAGGED_HEAP_WRITE_TRACKING_MODE.with(|mode| mode.set(WriteTrackingMode::Disabled));
-            TAGGED_HEAP_PARTITION_ACTIVE.with(|p| p.set(false));
-            TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(false));
-            TAGGED_HEAP_DUMP_SPAN.with(|s| s.set((usize::MAX, 0)));
-            TAGGED_HEAP_BARRIER_WINDOW.with(|w| w.set(BarrierWindow::NONE));
-            TAGGED_HEAP_CONS_BARRIER_WINDOW.with(|w| w.set(BarrierWindow::NONE));
-            clear_barrier_cache(&TAGGED_HEAP_SATB_CACHE);
+            let _ = TAGGED_HEAP_ID.try_with(|identity| identity.set(None));
+            let _ = TAGGED_HEAP_WRITE_TRACKING_MODE
+                .try_with(|mode| mode.set(WriteTrackingMode::Disabled));
+            let _ = TAGGED_HEAP_PARTITION_ACTIVE.try_with(|p| p.set(false));
+            let _ = TAGGED_HEAP_CONCURRENT_ACTIVE.try_with(|c| c.set(false));
+            let _ = TAGGED_HEAP_DUMP_SPAN.try_with(|s| s.set((usize::MAX, 0)));
+            let _ = TAGGED_HEAP_BARRIER_WINDOW.try_with(|w| w.set(BarrierWindow::NONE));
+            let _ = TAGGED_HEAP_CONS_BARRIER_WINDOW.try_with(|w| w.set(BarrierWindow::NONE));
+            let _ = TAGGED_HEAP_SATB_CACHE.try_with(|slots| {
+                for slot in slots {
+                    slot.set(0);
+                }
+            });
         }
     });
 }

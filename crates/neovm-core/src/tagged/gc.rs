@@ -950,6 +950,8 @@ pub(crate) fn set_verify_marked_objects_for_test(on: bool) {
     VERIFY_MARKED_OBJECTS.with(|flag| flag.set(on));
 }
 
+static_assertions::assert_not_impl_any!(TaggedHeap: Send, Sync);
+
 impl TaggedHeap {
     pub fn new() -> Self {
         super::collection_reads::initialize();
@@ -2477,14 +2479,13 @@ impl TaggedHeap {
 
 impl Drop for TaggedHeap {
     fn drop(&mut self) {
-        // A live concurrent mark holds start-of-cycle snapshots into this
-        // heap (cons blocks + their mark bitmaps, vector backings, the
-        // Context obarray) on the GC thread. Reclaim exclusive ownership
-        // BEFORE freeing anything it can still read. `tagged_heap` is the
-        // first `Context` field, so this join also runs before the obarray
-        // drops. No-op when no mark is in flight.
+        // Explicit finish is the only blocking completion handoff. Drop
+        // cannot establish exclusive ownership while a marker is active, so
+        // its fallback retains every marker-readable allocation and returns.
         if self.concurrent_mark_running {
-            self.join_concurrent_mark();
+            self.abandon_concurrent_mark();
+            crate::tagged::gc::clear_tagged_heap_if_installed(self);
+            return;
         }
         // Leave no dangling thread-local pointer behind: a heap installed with
         // `set_tagged_heap` and dropped by anything but a `Context` (a failed
@@ -2503,6 +2504,8 @@ impl Drop for TaggedHeap {
             self.sweep_noncons_pending,
         ] {
             while !current.is_null() {
+                // SAFETY: no concurrent mark is active; each intrusive list
+                // contains exclusively owned live allocations exactly once.
                 unsafe {
                     let next = (*current).next;
                     self.free_gc_object(current);
@@ -2515,6 +2518,8 @@ impl Drop for TaggedHeap {
             self.generational.old_sweep_pending,
         ] {
             while !old.is_null() {
+                // SAFETY: these old-generation lists own live allocations,
+                // and explicit finish established no remaining marker reads.
                 unsafe {
                     let next = (*old).gc_link();
                     self.free_gc_object(old);
@@ -2534,9 +2539,8 @@ impl Drop for TaggedHeap {
         // lambdas/macros/records their slot `Vec` + cached params; floats and
         // symbols-with-pos are POD and the walk compiles out) before releasing
         // the page storage —
-        // retired pages included. The concurrent-mark join at the top of this
-        // body has already reclaimed exclusive ownership, so the GC thread
-        // cannot still be reading a page.
+        // retired pages included. This path only runs without an active mark,
+        // so the GC thread cannot still be reading a page.
     }
 }
 
@@ -2663,6 +2667,11 @@ mod old_sweep;
 mod pacing;
 
 mod concurrent;
+pub use concurrent::MarkFinishError;
+pub(crate) mod scan_contract;
+#[cfg(test)]
+#[path = "gc/tests/shutdown_tests.rs"]
+mod shutdown_tests;
 
 mod incremental;
 

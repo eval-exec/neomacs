@@ -2429,6 +2429,9 @@ impl Context {
     ) {
         let start_t0 = std::time::Instant::now();
         let (obsnap_us, roots_breakdown, ob_slots, ob_chunks);
+        // SAFETY: heap_ptr is this Context's owned heap, exclusively admitted
+        // to the start handshake. No Lisp callback or allocation safepoint
+        // runs during capture, seeding or publication of the marker job.
         unsafe {
             (*heap_ptr).concurrent_begin();
             // CONCURRENT OBARRAY SCAN (Stage 1b). Capture the obarray chunk snapshot
@@ -2441,7 +2444,12 @@ impl Context {
             // symbol cells the GC thread now owns (the BLV pool + non-obarray roots
             // still seed normally).
             let obsnap_t0 = std::time::Instant::now();
-            let snap = self.obarray.scan_snapshot();
+            // SAFETY: start runs on the sole heap/obarray writer without Lisp
+            // callbacks. SATB, retirement and seqlock writes govern the cycle;
+            // explicit finish or abandonment retains the reader's storage.
+            let world =
+                crate::tagged::gc::scan_contract::SingleMutatorWorld::from_heap(&mut *heap_ptr);
+            let snap = self.obarray.scan_snapshot(&world);
             obsnap_us = obsnap_t0.elapsed().as_micros() as u64;
             ob_slots = snap.n_slots();
             ob_chunks = snap.n_chunks();

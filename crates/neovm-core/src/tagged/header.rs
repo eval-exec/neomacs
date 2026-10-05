@@ -1203,11 +1203,12 @@ impl LispValueVec {
 /// was `Mapped` (immutable pdump span) or `Owned` (a Rust `Vec` buffer kept alive +
 /// immutable for the cycle by the clone-on-write retire path). The scan reads both
 /// kinds identically (both are contiguous `TaggedValue` arrays).
+#[derive(Debug)]
 pub(crate) struct VectorScanEntry {
-    pub(crate) base: *const TaggedValue,
-    pub(crate) len: usize,
+    base: *const TaggedValue,
+    len: usize,
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    pub(crate) is_mapped: bool,
+    is_mapped: bool,
 }
 
 /// Start-of-cycle snapshot of every OWNED/Mapped vector backing for the Stage 2 Tier
@@ -1225,28 +1226,55 @@ pub(crate) struct VectorScanEntry {
 /// before any realloc/replace. Vectors allocated mid-cycle are absent (allocate-black).
 pub(crate) struct VectorScanSnapshot {
     entries: Vec<VectorScanEntry>,
+    heap_identity: usize,
+    _exclusive_reader: std::marker::PhantomData<std::cell::Cell<()>>,
 }
 
-// Safety: the snapshot holds raw base pointers into vector backings the heap keeps
-// alive for the whole GC cycle (Mapped = immutable dump; Owned = retired-on-write,
-// so the snapshot pointer always addresses a live, immutable buffer). The GC thread
-// only READS through them via relaxed atomic loads, coordinated with the single
-// mutator by the retire-before-replace clone-on-write hook, so handing the snapshot
-// to the GC thread is sound.
+// SAFETY: construction requires admission to the heap-identified serialized
+// writer protocol. Owned backings retire before replacement, and explicit
+// finish or heap abandonment retains every backing through the marker's last
+// read. The one owning marker reads slots with Acquire; it never mutates them.
 unsafe impl Send for VectorScanSnapshot {}
+static_assertions::assert_impl_all!(VectorScanSnapshot: Send, std::fmt::Debug);
+static_assertions::assert_not_impl_any!(VectorScanSnapshot: Sync);
+static_assertions::assert_not_impl_any!(VectorScanEntry: Send, Sync);
+
+impl std::fmt::Debug for VectorScanSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VectorScanSnapshot")
+            .field("heap_identity", &self.heap_identity)
+            .field("entries", &self.entries.len())
+            .finish()
+    }
+}
 
 impl VectorScanSnapshot {
     /// Build an empty snapshot; entries are pushed during the world-stopped capture.
     #[inline]
-    pub(crate) fn with_capacity(cap: usize) -> Self {
+    pub(crate) fn with_capacity(
+        cap: usize,
+        world: &crate::tagged::gc::scan_contract::SingleMutatorWorld<'_>,
+    ) -> Self {
         Self {
             entries: Vec::with_capacity(cap),
+            heap_identity: world.heap_identity(),
+            _exclusive_reader: std::marker::PhantomData,
         }
     }
 
-    /// Append one captured vector-backing entry.
+    pub(crate) fn heap_identity(&self) -> usize {
+        self.heap_identity
+    }
+
+    /// Append a captured backing after admitting its raw provenance.
+    ///
+    /// # Safety
+    /// The entry belongs to this snapshot's admitted heap. Its initialized
+    /// backing remains immutable or atomically published and retained until
+    /// the marker's last read, through retirement or owner abandonment.
+    /// A temporary or foreign heap backing does not satisfy this contract.
     #[inline]
-    pub(crate) fn push(&mut self, entry: VectorScanEntry) {
+    pub(crate) unsafe fn push(&mut self, entry: VectorScanEntry) {
         self.entries.push(entry);
     }
 
@@ -1268,6 +1296,7 @@ impl VectorScanSnapshot {
     /// must still address a live, immutable backing (guaranteed: Mapped = immutable
     /// dump; Owned = retired-before-replace by `with_vector_data_mut`).
     pub(crate) unsafe fn scan(&self, push: impl FnMut(TaggedValue)) {
+        // SAFETY: the caller supplies this cycle's retained-backing contract.
         unsafe { self.scan_children::<false>(push) };
     }
 
@@ -1277,15 +1306,19 @@ impl VectorScanSnapshot {
     /// # Safety
     /// The start snapshot and its retired backings remain live until join.
     pub(crate) unsafe fn scan_for_major(&self, push: impl FnMut(TaggedValue)) {
+        // SAFETY: the caller supplies the same retained-backing contract.
         unsafe { self.scan_children::<true>(push) };
     }
 
+    /// # Safety
+    /// The admitted cycle retains each backing and its initialized slots until
+    /// this reader finishes; publication follows the atomic slot protocol.
     unsafe fn scan_children<const MAJOR: bool>(&self, mut push: impl FnMut(TaggedValue)) {
         for entry in &self.entries {
             for i in 0..entry.len {
-                // Safety: `base` addresses a contiguous `[TaggedValue; len]` backing
+                // SAFETY: `base` addresses a contiguous `[TaggedValue; len]` backing
                 // kept alive + immutable for the cycle; `i < len` is in bounds. The
-                // read is a relaxed atomic load (pairs with the mutator's atomic slot
+                // read is an Acquire atomic load (pairs with the mutator's Release slot
                 // stores on the live, non-retired backing — never this retired one).
                 let slot = unsafe { &*entry.base.add(i) };
                 let child = load_value_atomic(slot);

@@ -1210,6 +1210,20 @@ struct SymbolChunks {
     spine_addr: usize,
 }
 
+impl Drop for SymbolChunks {
+    fn drop(&mut self) {
+        // A snapshot releases its lease only after its last raw-pointer read.
+        // An owner dropped first must retain both allocations, without waiting
+        // for the marker. A stale positive count only retains extra storage.
+        for (chunk, side) in self.chunks.drain(..).zip(self.sides.drain(..)) {
+            if side.scan_readers.load(Ordering::Acquire) != 0 {
+                std::mem::forget(chunk);
+                std::mem::forget(side);
+            }
+        }
+    }
+}
+
 /// Where compiled code finds a symbol's value cell from the `Obarray`:
 /// `len` at [`OBARRAY_JIT_LEN_OFFSET`] bounds the slot index, the spine at
 /// [`OBARRAY_JIT_SPINE_OFFSET`] holds one pointer per chunk, and slot `idx`
@@ -1478,19 +1492,19 @@ impl SymbolChunks {
     /// in scope.
     fn snapshot_parts(
         &self,
-    ) -> (
-        Vec<(*const LispSymbol, *const std::sync::atomic::AtomicU32)>,
-        usize,
-    ) {
+        world: &crate::tagged::gc::scan_contract::SingleMutatorWorld<'_>,
+    ) -> (Vec<ObarrayScanEntry>, usize) {
         let parts = self
             .chunks
             .iter()
             .zip(self.sides.iter())
-            .map(|(chunk, side)| {
-                (
-                    chunk.as_ptr(),
-                    &side.seq as *const std::sync::atomic::AtomicU32,
-                )
+            .map(|(chunk, side)| ObarrayScanEntry {
+                slots: chunk.as_ptr(),
+                seq: &side.seq,
+                _lease: crate::tagged::gc::scan_contract::ScanStorageLease::capture(
+                    &side.scan_readers,
+                    world,
+                ),
             })
             .collect();
         (parts, self.len)
@@ -1507,25 +1521,51 @@ impl SymbolChunks {
 /// allocate-black-equivalent in the obarray sense and are picked up by the
 /// termination re-seed of the new range.
 ///
-/// The raw pointers are valid for the whole cycle because chunk arrays + seq boxes
-/// never move (see [`SymbolChunks`]). Single mutator, single GC thread.
+/// Admission names the heap's serialized-writer protocol. Each entry leases its
+/// stable chunk and side box; dropping their owner with a live reader abandons
+/// those allocations instead of freeing storage the marker still reads.
+#[derive(Debug)]
+struct ObarrayScanEntry {
+    slots: *const LispSymbol,
+    seq: *const std::sync::atomic::AtomicU32,
+    _lease: crate::tagged::gc::scan_contract::ScanStorageLease,
+}
+
+static_assertions::assert_not_impl_any!(ObarrayScanEntry: Send, Sync);
+
 pub(crate) struct ObarrayScanSnapshot {
     /// (slots-array base ptr, chunk seqlock ptr) for each chunk present at start.
-    chunks: Vec<(*const LispSymbol, *const std::sync::atomic::AtomicU32)>,
+    chunks: Vec<ObarrayScanEntry>,
     /// Logical live-slot count at start (so the scan covers slots [0, n_slots)).
     n_slots: usize,
     /// Chunk count at start (chunks beyond this are interned mid-cycle).
     n_chunks: usize,
+    heap_identity: usize,
 }
 
-// Safety: the snapshot holds raw pointers into the obarray's non-moving chunk
-// arrays + seq boxes, which the obarray owns and keeps alive for the whole GC
-// cycle. The GC thread only READS through them (the seqlock protocol coordinates
-// with the single mutator's arm writes), so handing the snapshot to the GC thread
-// is sound.
+// SAFETY: construction requires the heap-identified serialized-writer admission.
+// Every raw chunk/side pointer has a storage lease: owner destruction retains
+// the allocations until the marker has finished reading. The one owning marker
+// uses atomic presence/slot loads and the admitted writer's seqlock protocol.
 unsafe impl Send for ObarrayScanSnapshot {}
+static_assertions::assert_impl_all!(ObarrayScanSnapshot: Send, std::fmt::Debug);
+static_assertions::assert_not_impl_any!(ObarrayScanSnapshot: Sync);
+
+impl std::fmt::Debug for ObarrayScanSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ObarrayScanSnapshot")
+            .field("heap_identity", &self.heap_identity)
+            .field("chunks", &self.n_chunks)
+            .field("slots", &self.n_slots)
+            .finish()
+    }
+}
 
 impl ObarrayScanSnapshot {
+    pub(crate) fn heap_identity(&self) -> usize {
+        self.heap_identity
+    }
+
     /// Chunk count captured at start. Symbols interned mid-cycle live in chunks
     /// `>= n_chunks` (slots `>= n_slots`) and are not covered by this scan; the
     /// termination re-seed covers that new range.
@@ -1551,9 +1591,10 @@ impl ObarrayScanSnapshot {
     /// # Safety
     /// Must run on the GC thread for a snapshot captured at the world-stopped start
     /// handshake of the CURRENTLY-RUNNING concurrent mark; the chunk + seq pointers
-    /// must still address the live, non-moving obarray storage (guaranteed because
-    /// chunk arrays + seq boxes never move, and the obarray outlives the cycle).
+    /// must still address live, non-moving storage. The entry's retention lease
+    /// keeps chunk and side allocations valid even if their owner is dropped.
     pub(crate) unsafe fn scan(&self, push: impl FnMut(Value)) {
+        // SAFETY: the caller supplies the admitted cycle's writer protocol.
         unsafe { self.scan_children::<false>(push) };
     }
 
@@ -1562,23 +1603,23 @@ impl ObarrayScanSnapshot {
     /// # Safety
     /// Same start-snapshot, presence and seqlock lifetime as `scan`.
     pub(crate) unsafe fn scan_for_major(&self, push: impl FnMut(Value)) {
+        // SAFETY: the caller supplies the same admitted writer protocol.
         unsafe { self.scan_children::<true>(push) };
     }
 
     unsafe fn scan_children<const MAJOR: bool>(&self, mut push: impl FnMut(Value)) {
         let mut global_idx = 0usize;
-        for &(slots_ptr, seq_ptr) in &self.chunks {
+        for entry in &self.chunks {
             if global_idx >= self.n_slots {
                 break;
             }
-            // Safety: seq_ptr addresses this chunk's boxed seqlock, which never
-            // moves; valid for the whole cycle.
-            let seq = unsafe { &*seq_ptr };
+            // SAFETY: entry's lease retains this stable side box through read.
+            let seq = unsafe { &*entry.seq };
             for offset in 0..OBARRAY_CHUNK {
                 if global_idx >= self.n_slots {
                     break;
                 }
-                // Safety: slots_ptr is this chunk's [LispSymbol; CHUNK] base;
+                // SAFETY: entry.slots is this chunk's [LispSymbol; CHUNK] base;
                 // `offset < OBARRAY_CHUNK` is in bounds; the chunk never moves.
                 // Every slot is a valid (possibly EMPTY) LispSymbol — there is no
                 // uninitialized memory to read. A concurrent mutator only either
@@ -1586,7 +1627,7 @@ impl ObarrayScanSnapshot {
                 // `name` after writing the arms, or (b) mutates an
                 // already-published slot's value-cell ARM under the seqlock;
                 // neither resizes or relocates the slot.
-                let slot = unsafe { &*slots_ptr.add(offset) };
+                let slot = unsafe { &*entry.slots.add(offset) };
                 // PRESENCE GATE — the ONLY cross-thread presence read. `Acquire`
                 // load of the write-once `name` cell, pairing with the fill's
                 // terminal `Release` (`publish_fill`): observing a non-sentinel
@@ -1916,13 +1957,17 @@ impl Obarray {
     /// point the cons-block snapshot is taken), so `n_slots`/`n_chunks` are a
     /// consistent picture of the obarray at start. Chunk arrays + seq boxes never
     /// move, so the captured raw pointers stay valid for the whole cycle.
-    pub(crate) fn scan_snapshot(&self) -> ObarrayScanSnapshot {
-        let (chunks, n_slots) = self.symbols.snapshot_parts();
+    pub(crate) fn scan_snapshot(
+        &self,
+        world: &crate::tagged::gc::scan_contract::SingleMutatorWorld<'_>,
+    ) -> ObarrayScanSnapshot {
+        let (chunks, n_slots) = self.symbols.snapshot_parts(world);
         let n_chunks = chunks.len();
         ObarrayScanSnapshot {
             chunks,
             n_slots,
             n_chunks,
+            heap_identity: world.heap_identity(),
         }
     }
 
