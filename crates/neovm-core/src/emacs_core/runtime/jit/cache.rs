@@ -3183,12 +3183,7 @@ pub(crate) fn direct_call_cold(
         if shim_panic_pending() {
             return NativeCallOutcome::FlowStashed;
         }
-        // Same panic-fold boundary as the wrapped path: take_pending_flow
-        // owns the panic-wins conversion; the flow goes straight back.
-        let flow =
-            take_pending_flow().expect("STATUS_SIGNAL from compiled code implies a stashed Flow");
-        stash_pending_flow(flow);
-        return NativeCallOutcome::FlowStashed;
+        return dispatch_raw_signal(ctx);
     }
     if status == STATUS_DEOPT_AT {
         // Precise deopt: no bind/cond frames exist on the direct path (the
@@ -3198,7 +3193,7 @@ pub(crate) fn direct_call_cold(
                 deopt_resume_outcome(ctx, func, func_value, leaf, *resume)
             }
             // deopt_at_outcome only degrades to plain Deopt with a null vmctx.
-            NativeRun::Signal => NativeCallOutcome::FlowStashed,
+            NativeRun::Signal => dispatch_raw_signal(ctx),
             _ => NativeCallOutcome::Fallback,
         };
     }
@@ -3208,6 +3203,22 @@ pub(crate) fn direct_call_cold(
     leaf.assert_rerunnable();
     super::reopt::note_deopt(ctx, func, leaf, LeafOrigin::Entry, DeoptEvent::Rerun);
     NativeCallOutcome::Fallback
+}
+
+/// GNU signal_or_quit runs the hook, handlers and debugger before unwinding
+/// the signalling activation (eval.c:1974-2066). A raw leaf bypasses
+/// invoke_native's frame exit, so dispatch while its callee frame and the
+/// caller's argument slot are live. Taking the flow first frees the pending
+/// slot for nested Lisp. The native runner supplies its mutator's Context;
+/// no Lisp state is shared or cached here.
+#[cold]
+#[inline(never)]
+fn dispatch_raw_signal(ctx: *mut Context) -> NativeCallOutcome {
+    let flow =
+        take_pending_flow().expect("STATUS_SIGNAL from compiled code implies a stashed Flow");
+    // SAFETY: the native call's dormant seam Context, as in the runner.
+    let ctx = unsafe { &mut *ctx };
+    NativeCallOutcome::from_result(ctx.dispatch_signal_flow_cold(flow))
 }
 
 /// Register-sized outcome of a native-to-native call: the hot chain never

@@ -412,10 +412,16 @@ fn inline_chain_deopt_invalid_site_signals_and_resets_before_single_frame() {
         leaf.call(&mut ctx as *mut Context as *mut u8, &[]),
         NativeRun::Signal
     );
+    // GNU signal_or_quit (eval.c:1978-1982) normalizes an undeclared
+    // condition to error. This minimal Context, like GNU -Q, has no
+    // error-conditions property for invalid-byte-code.
     let flow = compile::take_pending_flow().expect("invalid bytecode flow");
     assert!(
         if matches!(flow.kind(), crate::emacs_core::error::FlowRef::Signal(sig)
-        if sig.symbol == intern("invalid-byte-code"))
+        if sig.symbol == intern("error")
+            && sig.data.len() == 2
+            && sig.data[0].as_str_owned().as_deref() == Some("Invalid error symbol")
+            && sig.data[1] == Value::symbol("invalid-byte-code"))
         {
             drop(flow);
             true

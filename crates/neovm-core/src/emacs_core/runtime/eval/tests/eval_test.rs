@@ -5,8 +5,20 @@ use super::*;
 mod input_wait;
 
 #[cfg(test)]
+#[path = "gd_b_native.rs"]
+mod gd_b_native;
+
+#[cfg(test)]
+#[path = "gd_b_backtrace.rs"]
+mod gd_b_backtrace;
+
+#[cfg(test)]
 #[path = "gd_b_signal_room.rs"]
 mod gd_b_signal_room;
+
+#[cfg(test)]
+#[path = "gd_b_signals.rs"]
+mod gd_b_signals;
 
 #[cfg(test)]
 #[path = "gc_generational_test.rs"]
