@@ -1703,15 +1703,16 @@ fn encode_lisp_string_eol_spent(
     }
 
     let family = coding_system_family(coding_system);
-    if matches!(
-        family,
-        "utf-8" | "utf-8-emacs" | "undecided" | "prefer-utf-8"
-    ) || is_byte_preserving_coding_system(coding_system)
-    {
-        let mut out = lisp_string_coding_source_bytes(s);
-        // utf-8-with-signature / utf-8-auto prepend a BOM on encode (GNU
-        // `encode_coding_utf_8`).  Applied here so every caller (write-region,
-        // encode-coding-region, ...) gets it, not just the string codec.
+    // `utf-8` and `utf-8-emacs` (and `emacs-internal`, which is that family)
+    // are not raw-text.  GNU `consume_chars` therefore reads a unibyte source
+    // with `multibyte_length(src, src_end, true, true)` (src/coding.c:7666-7676)
+    // and `encode_coding_utf_8` writes each `CHAR_BYTE8_P` character as one raw
+    // byte (src/coding.c:1456-1459).  Copying the unibyte bytes verbatim left
+    // a `C0 80` pair as the two octets 192 128; GNU emits the single byte 128.
+    // `encode_utf8_plain` is that consume-and-write.  A signature system still
+    // prepends one BOM afterwards (`encode_coding_utf_8` at src/coding.c:1439).
+    if matches!(family, "utf-8" | "utf-8-emacs") {
+        let mut out = encode_utf8_plain(s);
         if coding_system_prepends_utf8_signature(coding_system)
             && !out.starts_with(&[0xEF, 0xBB, 0xBF])
         {
@@ -1720,6 +1721,13 @@ fn encode_lisp_string_eol_spent(
             out = with_bom;
         }
         return out;
+    }
+    // `prefer-utf-8` and `undecided` select `encode_coding_raw_text`
+    // (src/coding.c:5708-5712), which copies each unibyte octet unchanged.
+    if matches!(family, "undecided" | "prefer-utf-8")
+        || is_byte_preserving_coding_system(coding_system)
+    {
+        return lisp_string_coding_source_bytes(s);
     }
 
     if matches!(

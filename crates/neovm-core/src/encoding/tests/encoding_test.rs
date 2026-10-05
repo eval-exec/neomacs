@@ -2776,5 +2776,8 @@ fn iso_2022_honours_a_shift_only_when_its_flag_is_set_like_gnu() {
 }
 
 #[cfg(test)]
+#[path = "gdh_utf8_unibyte.rs"]
+mod gdh_utf8_unibyte;
+#[cfg(test)]
 #[path = "prepared_mule_test.rs"]
 mod prepared_mule;
