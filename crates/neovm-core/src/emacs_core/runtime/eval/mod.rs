@@ -2748,6 +2748,11 @@ pub(crate) enum ResumeTarget {
         handler_index: usize,
         condition_stack_base: usize,
     },
+    /// GNU safe_funcall's Qt barrier. The index identifies a live handler
+    /// on its owning Context's mutator; it is never shared across Contexts.
+    SafeFuncall {
+        condition_stack_base: usize,
+    },
     VmCatch {
         resume_id: u64,
         target: u32,

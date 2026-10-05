@@ -2017,23 +2017,36 @@ impl Context {
         A: Into<LispArgVec>,
     {
         let specpdl_count = self.specpdl.len();
-        let result = (|| {
-            self.try_specbind_or_unwind_to(specpdl_count, intern("inhibit-redisplay"), Value::T)?;
-            // GNU's catch-all internal condition handler prevents the debugger
-            // from running. Neomacs dispatches signals on function return, so
-            // an explicit binding provides the same boundary before we demote
-            // the resulting Flow::Signal below.
-            self.try_specbind_or_unwind_to(specpdl_count, intern("inhibit-debugger"), Value::T)?;
-            self.apply(function, args)
-        })();
-        let result = self.unbind_to_with_result(specpdl_count, result);
-        match result.kinded() {
-            Err(FlowKind::Signal(flow)) => {
+        self.try_specbind_or_unwind_to(specpdl_count, intern("inhibit-redisplay"), Value::T)?;
+        let condition_stack_base = self.condition_stack_len();
+        let resume = ResumeTarget::SafeFuncall {
+            condition_stack_base,
+        };
+        // GNU internal_condition_case_n installs Qt on the handler stack
+        // (eval.c:1782, 3239). This stops the search before outer handler-bind
+        // handlers and suppresses the ordinary signal debugger. The callback
+        // still observes its caller's inhibit-debugger binding, and GNU's
+        // debug-on-signal override remains effective (eval.c:2044).
+        // The barrier is owned by this Context's mutator, as is condition_stack;
+        // no Lisp state is shared with another concurrently executing Context.
+        self.push_condition_frame(ConditionFrame::ConditionCase {
+            conditions: Value::T,
+            resume: resume.clone(),
+        });
+        let result = self.apply(function, args);
+        let result = self.dispatch_signal_result_if_needed(result);
+        self.truncate_condition_stack(condition_stack_base);
+        let result = match result.kinded() {
+            Err(FlowKind::Signal(flow)) if flow.selected_resume.as_ref() == Some(&resume) => {
                 tracing::debug!(?flow, "error muted by safe_funcall");
                 Ok(Value::NIL)
             }
             other => other.map_err(Flow::from_kind),
-        }
+        };
+        // GNU removes the condition handler before the callback's error is
+        // muted and before safe_funcall restores inhibit-redisplay
+        // (eval.c:1787-1788, 1794, 3241). Errors from this restoration escape.
+        self.unbind_to_with_result(specpdl_count, result)
     }
 
     /// Apply from GNU's Lisp-visible `apply` / `funcall` subrs.

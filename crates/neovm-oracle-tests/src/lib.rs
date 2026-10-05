@@ -162,6 +162,9 @@ mod gd_b_backtrace;
 #[path = "tests/gd_b_backtrace_raw.rs"]
 mod gd_b_backtrace_raw;
 #[cfg(test)]
+#[path = "tests/gd_b_safe_call.rs"]
+mod gd_b_safe_call;
+#[cfg(test)]
 #[path = "tests/gd_b_signal_room.rs"]
 mod gd_b_signal_room;
 #[cfg(test)]
