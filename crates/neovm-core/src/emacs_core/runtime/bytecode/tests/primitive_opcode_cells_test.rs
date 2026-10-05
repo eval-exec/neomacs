@@ -669,12 +669,18 @@ fn assert_sink_only_cons_is_virtual_at_aset(
 #[cfg(feature = "jit")]
 fn sink_cannot_call_advised_aset(all_passes: bool) {
     use crate::emacs_core::jit::compile::opt_census::{SelectedTier, snapshot_leaf};
-    use crate::emacs_core::jit::compile::{self, NativeRun, OptAdmit, OptMode, OptPasses};
+    use crate::emacs_core::jit::compile::{
+        self, NativeRun, OptAdmit, OptEarlyMode, OptMode, OptPasses, OptProfitMode,
+    };
+    /// Scalar overrides belong to this test's compiler thread, with no Lisp state.
     struct Settings;
     impl Drop for Settings {
         fn drop(&mut self) {
             compile::force_opt_for_test(None, None);
             compile::force_opt_passes_for_test(None);
+            compile::force_opt_profit_for_test(None);
+            compile::force_opt_require_osr_for_test(None);
+            compile::force_opt_early_for_test(None);
             compile::force_profit_gate_for_test(true);
         }
     }
@@ -688,6 +694,11 @@ fn sink_cannot_call_advised_aset(all_passes: bool) {
             ..OptPasses::default()
         }
     }));
+    // This fixture verifies native Sink semantics through an explicit feedback
+    // upgrade, independently of the default list-loop admission policy.
+    compile::force_opt_profit_for_test(Some(OptProfitMode::Off));
+    compile::force_opt_require_osr_for_test(Some(false));
+    compile::force_opt_early_for_test(Some(OptEarlyMode::Off));
     compile::force_profit_gate_for_test(false);
     let expected = gnu_expect(
         "sink",
