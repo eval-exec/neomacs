@@ -1738,15 +1738,25 @@ pub(crate) fn force_opt_for_test(mode: Option<OptMode>, admit: Option<OptAdmit>)
 /// Threading: test-thread compiler configuration only, never Lisp state; nested
 /// scopes restore the exact previous override, including its absence.
 #[cfg(test)]
+#[must_use = "the backend override ends when the returned guard is dropped"]
 pub(crate) fn opt_mode_scope_for_test(mode: OptMode) -> impl Drop {
     /// Threading: scalar override owned and restored on this test's compiler thread.
-    struct Scope(Option<OptMode>);
+    #[derive(Debug)]
+    #[must_use = "dropping the guard restores the previous test backend"]
+    struct Scope {
+        previous: Option<OptMode>,
+        _thread: std::marker::PhantomData<*const ()>,
+    }
+    static_assertions::assert_not_impl_any!(Scope: Send, Sync);
     impl Drop for Scope {
         fn drop(&mut self) {
-            OPT_TEST_OVERRIDE.with(|value| value.set(self.0));
+            OPT_TEST_OVERRIDE.with(|value| value.set(self.previous));
         }
     }
-    Scope(OPT_TEST_OVERRIDE.with(|value| value.replace(Some(mode))))
+    Scope {
+        previous: OPT_TEST_OVERRIDE.with(|value| value.replace(Some(mode))),
+        _thread: std::marker::PhantomData,
+    }
 }
 
 /// Independently selected mid-end passes. Threading: immutable process-wide
@@ -1932,18 +1942,41 @@ pub(crate) fn force_opt_require_osr_for_test(value: Option<bool>) {
     OPT_REQUIRE_OSR_TEST_OVERRIDE.with(|setting| setting.set(value));
 }
 
-/// Test-owned scalar selection. Threading: restores the exact previous override
-/// for this compiler thread, retaining no Lisp value or cache ownership.
+/// Test-only normal Opt admission prerequisite. Threading: immutable compiler
+/// configuration, retaining no Lisp value or cache ownership.
 #[cfg(test)]
-pub(crate) fn opt_require_osr_scope_for_test(value: bool) -> impl Drop {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OptOsrRequirement {
+    Optional,
+    Required,
+}
+
+/// Test-owned scalar selection, restoring the exact previous override.
+/// Threading: the guard can only restore the current test compiler's override.
+#[cfg(test)]
+#[must_use = "the OSR prerequisite override ends when the returned guard is dropped"]
+pub(crate) fn opt_require_osr_scope_for_test(requirement: OptOsrRequirement) -> impl Drop {
     /// Compiler-local scalar override; no mutator/Lisp state is stored here.
-    struct Scope(Option<bool>);
+    #[derive(Debug)]
+    #[must_use = "dropping the guard restores the previous test OSR prerequisite"]
+    struct Scope {
+        previous: Option<bool>,
+        _thread: std::marker::PhantomData<*const ()>,
+    }
+    static_assertions::assert_not_impl_any!(Scope: Send, Sync);
     impl Drop for Scope {
         fn drop(&mut self) {
-            OPT_REQUIRE_OSR_TEST_OVERRIDE.with(|setting| setting.set(self.0));
+            OPT_REQUIRE_OSR_TEST_OVERRIDE.with(|setting| setting.set(self.previous));
         }
     }
-    Scope(OPT_REQUIRE_OSR_TEST_OVERRIDE.with(|setting| setting.replace(Some(value))))
+    let value = match requirement {
+        OptOsrRequirement::Optional => false,
+        OptOsrRequirement::Required => true,
+    };
+    Scope {
+        previous: OPT_REQUIRE_OSR_TEST_OVERRIDE.with(|setting| setting.replace(Some(value))),
+        _thread: std::marker::PhantomData,
+    }
 }
 
 /// Compile-time early-loop policy. Threading: immutable configuration, never

@@ -18,7 +18,10 @@ use crate::emacs_core::jit::tier2::CompileTier;
 /// This test owns these scalar settings for its compiler invocation; on drop it
 /// returns the surrounding test thread to process configuration. No Lisp cache
 /// or shared mutator assumption is introduced.
-struct Settings;
+#[derive(Debug)]
+#[must_use = "dropping the guard restores this test thread's compiler settings"]
+struct Settings(std::marker::PhantomData<*const ()>);
+static_assertions::assert_not_impl_any!(Settings: Send, Sync);
 impl Settings {
     fn enter() -> Self {
         force_inline2_for_test(Some(Inline2Mode::Off));
@@ -27,7 +30,7 @@ impl Settings {
         crate::emacs_core::jit::bg::force_mode_for_test(Some(
             crate::emacs_core::jit::bg::BgMode::Sync,
         ));
-        Self
+        Self(std::marker::PhantomData)
     }
 }
 impl Drop for Settings {

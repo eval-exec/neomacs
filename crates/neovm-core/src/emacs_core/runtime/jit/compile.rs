@@ -885,7 +885,12 @@ pub fn compile_bytecode_function_requested(
     let started = std::time::Instant::now();
     super::stats::verdict::begin();
     let named_t2 = inline_planning::named_tier_eligible(f, request, self_recursive);
-    let front = opt_profit::front(request, f.executable_ops(), call_heavy, f.jit_runtime());
+    let front = opt_profit::front(
+        request,
+        f.executable_ops(),
+        opt_profit::CallDensity::from(call_heavy),
+        f.jit_runtime(),
+    );
     let front = opt_profit::ready_osr_front(front, f, obarray);
     let opt_request = (jit_opt_mode() == OptMode::Opt && front != opt_profit::FrontChoice::Legacy)
         .then_some(request);
@@ -3584,16 +3589,16 @@ fn lower_leaf_full_osr_with_plan_impl(
 ) -> Result<CompiledLeaf, CompileError> {
     // Count actual opt construction at this single normal/OSR seam. This
     // cold report never enables runtime observation, naming or source heat.
-    let opt_attempt = opt_report::Attempt::begin(
-        opt_params.is_some() || opt_override.is_some(),
-        osr_pc,
-        opt_request,
-        ops.len(),
-    );
-    let exit_attempt = super::stats::exit_snapshot::Attempt::begin(
-        opt_params.is_some() || opt_override.is_some(),
-        osr_pc.is_some(),
-    );
+    let construction_site = if opt_params.is_some() || opt_override.is_some() {
+        match osr_pc {
+            None => opt_report::ConstructionSite::Normal,
+            Some(pc) => opt_report::ConstructionSite::Osr { pc },
+        }
+    } else {
+        opt_report::ConstructionSite::Unselected
+    };
+    let opt_attempt = opt_report::Attempt::begin(construction_site, opt_request, ops.len());
+    let exit_attempt = super::stats::exit_snapshot::Attempt::begin(construction_site);
     // Every analysis and the reloc collection below see the MASKED view; only
     // the emitter's `Op::Constant` arm knows the prefix (it loads those slots
     // through the callee at run time).
@@ -3903,11 +3908,16 @@ fn lower_leaf_full_osr_with_plan_impl(
         clif_insts: clif_size_now().0,
     });
     obs.label = label.map(String::into_boxed_str);
+    let constructed_state = if entry.is_null() {
+        opt_report::ConstructedState::Deferred
+    } else {
+        opt_report::ConstructedState::Ready
+    };
     if let Some(attempt) = opt_attempt {
-        attempt.constructed(entry.is_null());
+        attempt.constructed(constructed_state);
     }
     if let Some(attempt) = exit_attempt {
-        attempt.constructed(entry.is_null());
+        attempt.constructed(constructed_state);
     }
     Ok(CompiledLeaf {
         tier: LeafTier::Baseline,

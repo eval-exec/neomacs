@@ -80,20 +80,30 @@ fn opt_profit_lists_early_uses_list_policy_and_existing_source_heat() {
         tier: CompileTier::T1,
     };
     assert_eq!(
-        front(request, list.executable_ops(), false, list.jit_runtime()),
+        front(
+            request,
+            list.executable_ops(),
+            CallDensity::Sparse,
+            list.jit_runtime()
+        ),
         FrontChoice::Legacy
     );
     list.jit_runtime().set_hot_for_test();
     numeric.jit_runtime().set_hot_for_test();
     assert_eq!(
-        front(request, list.executable_ops(), false, list.jit_runtime()),
+        front(
+            request,
+            list.executable_ops(),
+            CallDensity::Sparse,
+            list.jit_runtime()
+        ),
         FrontChoice::SelectedAfterMir
     );
     assert_eq!(
         front(
             request,
             numeric.executable_ops(),
-            false,
+            CallDensity::Sparse,
             numeric.jit_runtime()
         ),
         FrontChoice::Legacy

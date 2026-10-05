@@ -92,7 +92,7 @@ fn opt_early_on_preserves_successful_numeric_mir() {
                 tier: CompileTier::T1,
             },
             f.executable_ops(),
-            false,
+            CallDensity::Sparse,
             f.jit_runtime()
         ),
         FrontChoice::SelectedAfterMir

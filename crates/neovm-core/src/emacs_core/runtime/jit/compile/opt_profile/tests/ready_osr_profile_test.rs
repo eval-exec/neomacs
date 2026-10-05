@@ -4,8 +4,9 @@
 
 use super::*;
 use crate::emacs_core::jit::compile::knobs::{
-    jit_opt_admit, jit_opt_early, jit_opt_fast, jit_opt_max_ops, jit_opt_mode, jit_opt_passes,
-    jit_opt_profit, jit_opt_require_osr, opt_mode_scope_for_test, opt_require_osr_scope_for_test,
+    OptOsrRequirement, jit_opt_admit, jit_opt_early, jit_opt_fast, jit_opt_max_ops, jit_opt_mode,
+    jit_opt_passes, jit_opt_profit, jit_opt_require_osr, opt_mode_scope_for_test,
+    opt_require_osr_scope_for_test,
 };
 
 #[test]
@@ -86,7 +87,7 @@ fn opt_profile_lists48_osr_actual_reader_restores_individual_override_and_legacy
         assert!(jit_opt_fast());
         assert!(jit_opt_require_osr());
         {
-            let _individual = opt_require_osr_scope_for_test(false);
+            let _individual = opt_require_osr_scope_for_test(OptOsrRequirement::Optional);
             assert!(!jit_opt_require_osr());
             assert_eq!(jit_opt_max_ops(), 48);
         }

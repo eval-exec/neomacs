@@ -19,7 +19,12 @@ use std::sync::Arc;
 /// Scalar overrides and existing-cache lifetime belong to this invocation.
 /// Threading: this scope stores no Lisp state and touches only this compiler's
 /// existing mutator-owned cache; it never assumes other mutators are absent.
-struct Settings;
+#[derive(Debug)]
+#[must_use = "dropping the guard restores this compiler thread's test state"]
+struct Settings(std::marker::PhantomData<*const ()>);
+
+static_assertions::assert_not_impl_any!(Settings: Send, Sync);
+const _: () = assert!(std::mem::size_of::<Settings>() == 0);
 impl Settings {
     fn enter() -> Self {
         clear();
@@ -32,7 +37,7 @@ impl Settings {
         compile::force_tier2_for_test(Some(compile::Tier2Knob::from_env(|_| None)));
         compile::force_deopt_for_test(false);
         bg::force_mode_for_test(Some(bg::BgMode::Sync));
-        Self
+        Self(std::marker::PhantomData)
     }
 }
 impl Drop for Settings {

@@ -16,10 +16,20 @@ fn opt_profit_refuses_unmodeled_handlers_and_throw_even_in_dead_source_ranges() 
         let loop_ops = [Op::Add1, unsupported.clone(), Op::Goto(0)];
         for mode in [OptProfitMode::Loops, OptProfitMode::Kernels] {
             for hot in [false, true] {
-                assert!(!body_admitted(mode, &loop_ops, false, hot));
+                assert!(!body_admitted(
+                    mode,
+                    &loop_ops,
+                    CallDensity::Sparse,
+                    KernelHeat::from(hot)
+                ));
             }
         }
-        assert!(body_admitted(OptProfitMode::Off, &loop_ops, true, false));
+        assert!(body_admitted(
+            OptProfitMode::Off,
+            &loop_ops,
+            CallDensity::Heavy,
+            KernelHeat::Cold
+        ));
 
         // Source scan deliberately avoids CFG work. Builder can discard this
         // unreachable operation, but the selective policy declines it cheaply.
@@ -30,15 +40,25 @@ fn opt_profit_refuses_unmodeled_handlers_and_throw_even_in_dead_source_ranges() 
             Op::Add1,
             Op::Goto(3),
         ];
-        assert!(!body_admitted(OptProfitMode::Loops, &dead_ops, false, true));
-        assert!(body_admitted(OptProfitMode::Off, &dead_ops, false, false));
+        assert!(!body_admitted(
+            OptProfitMode::Loops,
+            &dead_ops,
+            CallDensity::Sparse,
+            KernelHeat::Hot
+        ));
+        assert!(body_admitted(
+            OptProfitMode::Off,
+            &dead_ops,
+            CallDensity::Sparse,
+            KernelHeat::Cold
+        ));
 
         let helper_ops = [Op::Car, Op::Add1, unsupported, Op::Return];
         assert!(!body_admitted(
             OptProfitMode::Kernels,
             &helper_ops,
-            false,
-            true,
+            CallDensity::Sparse,
+            KernelHeat::Hot,
         ));
     }
 
@@ -47,7 +67,7 @@ fn opt_profit_refuses_unmodeled_handlers_and_throw_even_in_dead_source_ranges() 
     assert!(body_admitted(
         OptProfitMode::Loops,
         &[Op::UnwindProtectPop, Op::Add1, Op::Goto(0)],
-        false,
-        true,
+        CallDensity::Sparse,
+        KernelHeat::Hot,
     ));
 }

@@ -68,18 +68,23 @@ fn opt_profit_primitive_lists_aset_original_source_outside_fragment_is_admitted(
     assert!(body_admitted(
         OptProfitMode::PrimitiveLists,
         source.executable_ops(),
-        heavy,
-        true
+        CallDensity::from(heavy),
+        KernelHeat::Hot
     ));
 }
 
 /// Compiler-thread fuser scalar override only; no Lisp/cache state is held.
 /// Settings does not override this switch, so this invocation restores None.
-struct FuserScope;
+#[derive(Debug)]
+#[must_use = "dropping the guard restores this compiler thread's test state"]
+struct FuserScope(std::marker::PhantomData<*const ()>);
+
+static_assertions::assert_not_impl_any!(FuserScope: Send, Sync);
+const _: () = assert!(std::mem::size_of::<FuserScope>() == 0);
 impl FuserScope {
     fn enter() -> Self {
         inline::force_inline_for_test(Some(true));
-        Self
+        Self(std::marker::PhantomData)
     }
 }
 impl Drop for FuserScope {
@@ -146,7 +151,12 @@ fn opt_profit_primitive_lists_aset_post_fusion_slice_is_admitted_but_original_ca
     )));
     let heavy = super::super::body_is_call_heavy(&fused.ops, &fused.constants);
     assert!(!heavy);
-    assert!(body_admitted(OptProfitMode::Lists, &fused.ops, heavy, true));
+    assert!(body_admitted(
+        OptProfitMode::Lists,
+        &fused.ops,
+        CallDensity::from(heavy),
+        KernelHeat::Hot
+    ));
     assert!(osr_admitted(
         &fused.ops,
         &fused.constants,
@@ -180,15 +190,20 @@ fn opt_profit_primitive_lists_aset_dead_source_keeps_selected_frontier_and_other
         OptProfitMode::Kernels,
     ] {
         force_opt_profit_for_test(Some(mode));
-        assert!(body_admitted(mode, source.executable_ops(), heavy, true));
+        assert!(body_admitted(
+            mode,
+            source.executable_ops(),
+            CallDensity::from(heavy),
+            KernelHeat::Hot
+        ));
         assert!(primitive_osr_source_admitted(source.executable_ops()));
     }
     force_opt_profit_for_test(Some(OptProfitMode::Off));
     assert!(body_admitted(
         OptProfitMode::Off,
         source.executable_ops(),
-        true,
-        false
+        CallDensity::Heavy,
+        KernelHeat::Cold
     ));
     assert!(primitive_osr_source_admitted(source.executable_ops()));
     force_opt_profit_for_test(Some(OptProfitMode::PrimitiveLists));
@@ -202,7 +217,7 @@ fn opt_profit_primitive_lists_aset_dead_source_keeps_selected_frontier_and_other
         front(
             request,
             source.executable_ops(),
-            heavy,
+            CallDensity::from(heavy),
             source.jit_runtime()
         ),
         FrontChoice::SelectedAfterMir,
@@ -213,11 +228,16 @@ fn opt_profit_primitive_lists_aset_dead_source_keeps_selected_frontier_and_other
 
 /// Threading: this test owns its mutator cache; leaf inspection occurs only
 /// between native calls, with no shared Lisp state.
-struct CacheScope;
+#[derive(Debug)]
+#[must_use = "dropping the guard restores this compiler thread's test state"]
+struct CacheScope(std::marker::PhantomData<*const ()>);
+
+static_assertions::assert_not_impl_any!(CacheScope: Send, Sync);
+const _: () = assert!(std::mem::size_of::<CacheScope>() == 0);
 impl CacheScope {
     fn enter() -> Self {
         cache::clear();
-        Self
+        Self(std::marker::PhantomData)
     }
 }
 impl Drop for CacheScope {

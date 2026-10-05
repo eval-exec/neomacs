@@ -16,12 +16,17 @@ fn opt_profit_mode_is_default_off_and_explicit() {
 
 #[test]
 fn opt_profit_off_keeps_call_glue_and_empty_shapes() {
-    assert!(body_admitted(OptProfitMode::Off, &[], true, false));
+    assert!(body_admitted(
+        OptProfitMode::Off,
+        &[],
+        CallDensity::Heavy,
+        KernelHeat::Cold
+    ));
     assert!(body_admitted(
         OptProfitMode::Off,
         &[Op::Call(0)],
-        true,
-        false
+        CallDensity::Heavy,
+        KernelHeat::Cold
     ));
 }
 
@@ -31,8 +36,8 @@ fn opt_profit_loops_admit_numeric_list_and_predicate_work() {
         assert!(body_admitted(
             OptProfitMode::Loops,
             &[useful, Op::Goto(0)],
-            false,
-            false,
+            CallDensity::Sparse,
+            KernelHeat::Cold,
         ));
     }
 }
@@ -42,36 +47,51 @@ fn opt_profit_loop_glue_and_cached_call_heavy_verdict_are_rejected() {
     assert!(!body_admitted(
         OptProfitMode::Loops,
         &[Op::Nil, Op::Pop, Op::Goto(0)],
-        false,
-        true,
+        CallDensity::Sparse,
+        KernelHeat::Hot,
     ));
     assert!(!body_admitted(
         OptProfitMode::Kernels,
         &[Op::Add1, Op::Call(0), Op::Goto(0)],
-        true,
-        true,
+        CallDensity::Heavy,
+        KernelHeat::Hot,
     ));
 }
 
 #[test]
 fn opt_profit_helpers_need_kernel_mode_heat_and_multiple_useful_ops() {
     let helper = [Op::Car, Op::Add1, Op::Return];
-    assert!(!body_admitted(OptProfitMode::Loops, &helper, false, true));
+    assert!(!body_admitted(
+        OptProfitMode::Loops,
+        &helper,
+        CallDensity::Sparse,
+        KernelHeat::Hot
+    ));
     assert!(!body_admitted(
         OptProfitMode::Kernels,
         &helper,
-        false,
-        false
+        CallDensity::Sparse,
+        KernelHeat::Cold
     ));
-    assert!(body_admitted(OptProfitMode::Kernels, &helper, false, true));
+    assert!(body_admitted(
+        OptProfitMode::Kernels,
+        &helper,
+        CallDensity::Sparse,
+        KernelHeat::Hot
+    ));
     assert!(!body_admitted(
         OptProfitMode::Kernels,
         &[Op::Add1, Op::Return],
-        false,
-        true,
+        CallDensity::Sparse,
+        KernelHeat::Hot,
     ));
     let mut long = vec![Op::Nil; 65];
     long[0] = Op::Car;
     long[1] = Op::Add1;
-    assert!(!body_admitted(OptProfitMode::Kernels, &long, false, true));
+    assert!(!body_admitted(
+        OptProfitMode::Kernels,
+        &long,
+        CallDensity::Sparse,
+        KernelHeat::Hot
+    ));
 }

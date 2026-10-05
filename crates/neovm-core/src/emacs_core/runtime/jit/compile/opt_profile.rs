@@ -121,15 +121,25 @@ pub(super) fn test_defaults() -> Option<Defaults> {
 /// Test-owned scalar selection. Threading: restores the exact previous override
 /// on this compiler thread; it neither reads nor retains any Lisp state.
 #[cfg(test)]
+#[must_use = "the profile override ends when the returned guard is dropped"]
 pub(super) fn scope_for_test(profile: Profile) -> impl Drop {
     /// Threading: scalar override owned and restored on this test's compiler thread.
-    struct Scope(Option<Profile>);
+    #[derive(Debug)]
+    #[must_use = "dropping the guard restores the previous test profile"]
+    struct Scope {
+        previous: Option<Profile>,
+        _thread: std::marker::PhantomData<*const ()>,
+    }
+    static_assertions::assert_not_impl_any!(Scope: Send, Sync);
     impl Drop for Scope {
         fn drop(&mut self) {
-            TEST_PROFILE.with(|value| value.set(self.0));
+            TEST_PROFILE.with(|value| value.set(self.previous));
         }
     }
-    Scope(TEST_PROFILE.with(|value| value.replace(Some(profile))))
+    Scope {
+        previous: TEST_PROFILE.with(|value| value.replace(Some(profile))),
+        _thread: std::marker::PhantomData,
+    }
 }
 
 #[cfg(test)]

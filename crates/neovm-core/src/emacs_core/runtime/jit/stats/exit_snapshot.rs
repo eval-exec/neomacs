@@ -13,9 +13,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use super::CompileStats;
 use crate::emacs_core::jit::bg;
+use crate::emacs_core::jit::compile::opt_report::{ConstructedState, ConstructionSite};
 
 /// Threading: immutable compiler-route tag; no Lisp or mutator identity.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Route {
     Normal,
     Osr,
@@ -38,7 +39,7 @@ impl Route {
 }
 
 /// Threading: immutable scalar outcome, published through process atomics.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Outcome {
     Refused,
     Ready,
@@ -48,6 +49,7 @@ enum Outcome {
 /// Per-route process counters. Threading: concurrent compilers update only
 /// SeqCst atomics; outcomes publish before the active reservation is released.
 /// Component loads are checked for conservation when sealing.
+#[derive(Debug)]
 struct RouteCounters {
     attempts: AtomicU64,
     refused: AtomicU64,
@@ -82,6 +84,7 @@ impl RouteCounters {
 /// cannot miss both the exit snapshot and the post-seal invalidation check.
 /// Outcome publication precedes releasing the active reservation. Concurrent
 /// snapshots are conservative: arithmetic disagreement prevents completeness.
+#[derive(Debug)]
 struct Counters {
     routes: [RouteCounters; 2],
     sealed: AtomicBool,
@@ -208,6 +211,7 @@ fn append_or_abort(path: &Path, record: &str) {
 /// Invocation-owned compiler reservation. Threading: references only scalar
 /// process evidence and an immutable diagnostic path; no Lisp/native state.
 #[must_use = "dropping an unfinished opt attempt records refusal"]
+#[derive(Debug)]
 pub(crate) struct Attempt<'a> {
     counters: &'a Counters,
     route: Route,
@@ -215,21 +219,24 @@ pub(crate) struct Attempt<'a> {
     active: bool,
 }
 
+static_assertions::assert_impl_all!(Attempt<'static>: Send, Sync);
+
 impl Attempt<'static> {
     #[cold]
     #[inline(never)]
-    pub(crate) fn begin(selected: bool, osr: bool) -> Option<Self> {
-        if !selected {
-            return None;
-        }
+    pub(crate) fn begin(site: ConstructionSite) -> Option<Self> {
+        let route = match site {
+            ConstructionSite::Unselected => return None,
+            ConstructionSite::Normal => Route::Normal,
+            ConstructionSite::Osr { .. } => Route::Osr,
+        };
         let path = path()?;
-        Some(Self::begin_with(&COUNTERS, osr, path))
+        Some(Self::begin_with(&COUNTERS, route, path))
     }
 }
 
 impl<'a> Attempt<'a> {
-    fn begin_with(counters: &'a Counters, osr: bool, path: &'a Path) -> Self {
-        let route = if osr { Route::Osr } else { Route::Normal };
+    fn begin_with(counters: &'a Counters, route: Route, path: &'a Path) -> Self {
         counters.reserve(route);
         if let Some(record) = counters.late_record(std::process::id(), "begin") {
             append_or_abort(path, &record);
@@ -244,11 +251,10 @@ impl<'a> Attempt<'a> {
 
     #[cold]
     #[inline(never)]
-    pub(crate) fn constructed(mut self, deferred: bool) {
-        self.finish(if deferred {
-            Outcome::Deferred
-        } else {
-            Outcome::Ready
+    pub(crate) fn constructed(mut self, state: ConstructedState) {
+        self.finish(match state {
+            ConstructedState::Ready => Outcome::Ready,
+            ConstructedState::Deferred => Outcome::Deferred,
         });
     }
 

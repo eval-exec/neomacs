@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::super::*;
-use super::{Attempt, ROW_CAP, test_support::Scope};
+use super::{Attempt, ConstructionSite, ROW_CAP, test_support::Scope};
 use crate::emacs_core::jit::cache;
 use crate::emacs_core::jit::compile::compile_pipeline_tests::{
     captured_clif, function, mask_code_text,
@@ -20,10 +20,14 @@ use crate::emacs_core::jit::tier2::{CompileTier, T2Upgrade};
 /// no Lisp cache or process-global environment mutation is introduced. The
 /// returned prerequisite guard restores the enclosing scalar override; these
 /// constructor/report tests intentionally admit normal Opt without prior OSR.
-struct Settings;
+#[derive(Debug)]
+#[must_use = "dropping the guard restores this test thread's compiler settings"]
+struct Settings(std::marker::PhantomData<*const ()>);
+static_assertions::assert_not_impl_any!(Settings: Send, Sync);
 impl Settings {
+    #[must_use = "the compiler overrides end when the returned guards are dropped"]
     fn enter() -> (Self, impl Drop) {
-        let prerequisite = opt_require_osr_scope_for_test(false);
+        let prerequisite = opt_require_osr_scope_for_test(OptOsrRequirement::Optional);
         force_opt_for_test(Some(OptMode::Opt), Some(OptAdmit::ALL));
         force_opt_passes_for_test(Some(OptPasses::default()));
         force_opt_profit_for_test(Some(OptProfitMode::Loops));
@@ -36,7 +40,7 @@ impl Settings {
             crate::emacs_core::jit::bg::BgMode::Legacy,
         ));
         stats::force_observe_for_test(ObserveOverride::default());
-        (Self, prerequisite)
+        (Self(std::marker::PhantomData), prerequisite)
     }
 }
 impl Drop for Settings {
@@ -56,6 +60,8 @@ impl Drop for Settings {
 
 /// Threading: a unique invocation-owned tmp path, removed on drop. The counter
 /// is only a relaxed test filename sequence, with no Lisp/source identity.
+#[derive(Debug)]
+#[must_use = "dropping the guard removes its owned test report file"]
 struct FileScope(PathBuf);
 impl FileScope {
     fn new() -> Self {
@@ -86,11 +92,14 @@ impl Drop for FileScope {
 
 /// Threading: clears only this test mutator's pre-existing compiled cache;
 /// its owned Context/leaf state is never shared with another mutator.
-struct CacheScope;
+#[derive(Debug)]
+#[must_use = "dropping the guard clears this test mutator's compiled cache"]
+struct CacheScope(std::marker::PhantomData<*const ()>);
+static_assertions::assert_not_impl_any!(CacheScope: Send, Sync);
 impl CacheScope {
     fn enter() -> Self {
         cache::clear();
-        Self
+        Self(std::marker::PhantomData)
     }
 }
 impl Drop for CacheScope {
@@ -333,7 +342,7 @@ fn opt_report_seal_rejects_inflight_and_postseal_compilation() {
         let scope = Scope::enter(Some(inflight_file.0.clone()));
         // Hold the same invocation-owned guard used by the real constructor
         // while exit seals: this models a concurrent unfinished compilation.
-        let active = Attempt::begin(true, None, Some(request()), 10).unwrap();
+        let active = Attempt::begin(ConstructionSite::Normal, Some(request()), 10).unwrap();
         stats::report_at_exit(&context);
         let output = records(&inflight_file.text());
         let final_row = output.last().unwrap();

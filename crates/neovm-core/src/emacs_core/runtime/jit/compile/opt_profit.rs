@@ -21,6 +21,40 @@ pub(super) enum FrontChoice {
     SelectedAfterMir,
 }
 
+/// Existing j17 call-density evidence, never a request to run another analysis.
+/// Threading: immutable compiler-local scalar; no Lisp or mutator state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CallDensity {
+    Sparse,
+    Heavy,
+}
+
+impl From<bool> for CallDensity {
+    #[inline]
+    fn from(call_heavy: bool) -> Self {
+        if call_heavy {
+            Self::Heavy
+        } else {
+            Self::Sparse
+        }
+    }
+}
+
+/// Heat already established by the caller's compile route, not new recording.
+/// Threading: immutable compiler evidence; contains no source or cache handles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum KernelHeat {
+    Cold,
+    Hot,
+}
+
+impl From<bool> for KernelHeat {
+    #[inline]
+    fn from(hot: bool) -> Self {
+        if hot { Self::Hot } else { Self::Cold }
+    }
+}
+
 /// A bounded kernel's source operations. Threading: immutable compiler counts;
 /// they contain no Lisp values, per-site state or assumed mutator identity.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -109,12 +143,16 @@ impl Work {
 pub(crate) fn body_admitted(
     mode: super::OptProfitMode,
     ops: &[Op],
-    call_heavy: bool,
-    hot: bool,
+    call_density: CallDensity,
+    heat: KernelHeat,
 ) -> bool {
     if mode == super::OptProfitMode::Off {
         return true;
     }
+    let call_heavy = match call_density {
+        CallDensity::Sparse => false,
+        CallDensity::Heavy => true,
+    };
     if call_heavy || (super::jit_opt_max_ops() != 0 && ops.len() > super::jit_opt_max_ops()) {
         return false;
     }
@@ -131,6 +169,10 @@ pub(crate) fn body_admitted(
                 super::OptProfitMode::Lists | super::OptProfitMode::PrimitiveLists
             ) || work.list_backedge);
     }
+    let hot = match heat {
+        KernelHeat::Cold => false,
+        KernelHeat::Hot => true,
+    };
     mode == super::OptProfitMode::Kernels && hot && ops.len() <= 64 && work.useful >= 2
 }
 
@@ -142,7 +184,7 @@ pub(crate) fn body_admitted(
 pub(super) fn front(
     request: CompileRequest,
     ops: &[Op],
-    call_heavy: bool,
+    call_density: CallDensity,
     source: &crate::emacs_core::jit::RuntimeState,
 ) -> FrontChoice {
     if jit_opt_mode() != OptMode::Opt || jit_opt_profit() == super::OptProfitMode::Off {
@@ -153,11 +195,13 @@ pub(super) fn front(
         let early_profit = match jit_opt_profit() {
             super::OptProfitMode::Lists => super::OptProfitMode::Lists,
             super::OptProfitMode::PrimitiveLists => super::OptProfitMode::PrimitiveLists,
-            _ => super::OptProfitMode::Loops,
+            super::OptProfitMode::Off
+            | super::OptProfitMode::Loops
+            | super::OptProfitMode::Kernels => super::OptProfitMode::Loops,
         };
         if mode == super::OptEarlyMode::Off
             || request.tier != CompileTier::T1
-            || !body_admitted(early_profit, ops, call_heavy, false)
+            || !body_admitted(early_profit, ops, call_density, KernelHeat::Cold)
         {
             return FrontChoice::Legacy;
         }
@@ -177,7 +221,7 @@ pub(super) fn front(
         }
         return FrontChoice::Legacy;
     }
-    if body_admitted(jit_opt_profit(), ops, call_heavy, true) {
+    if body_admitted(jit_opt_profit(), ops, call_density, KernelHeat::Hot) {
         FrontChoice::Selected
     } else {
         FrontChoice::Legacy
@@ -264,7 +308,12 @@ pub(crate) fn osr_admitted(ops: &[Op], constants: &[super::Value], source_ops_le
     let mode = jit_opt_profit();
     mode == super::OptProfitMode::Off
         || (final_size_admitted(FrontChoice::Selected, source_ops_len)
-            && body_admitted(mode, ops, super::body_is_call_heavy(ops, constants), true))
+            && body_admitted(
+                mode,
+                ops,
+                CallDensity::from(super::body_is_call_heavy(ops, constants)),
+                KernelHeat::Hot,
+            ))
 }
 
 #[cfg(test)]

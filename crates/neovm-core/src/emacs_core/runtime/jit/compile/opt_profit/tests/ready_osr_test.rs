@@ -9,20 +9,26 @@ use crate::emacs_core::jit::cache;
 use crate::emacs_core::jit::compile::compile_pipeline_tests::{captured_clif, function};
 use crate::emacs_core::jit::compile::opt_census::SelectedTier;
 use crate::emacs_core::jit::compile::{
-    ByteCodeFunction, CompiledLeaf, Context, NativeRun, OptAdmit, OptEarlyMode, OptProfitMode,
-    RegallocPolicy, Value, compile_bytecode_function_requested, force_opt_early_for_test,
-    force_opt_for_test, force_opt_profit_for_test, opt_require_osr_scope_for_test,
+    ByteCodeFunction, CompiledLeaf, Context, NativeRun, OptAdmit, OptEarlyMode, OptOsrRequirement,
+    OptProfitMode, RegallocPolicy, Value, compile_bytecode_function_requested,
+    force_opt_early_for_test, force_opt_for_test, force_opt_profit_for_test,
+    opt_require_osr_scope_for_test,
 };
 use crate::emacs_core::jit::stats::CompileOrigin;
 use crate::emacs_core::jit::tier2::T2Upgrade;
 
 /// The existing cache alone is scoped here; no Lisp value or new mutator state
 /// is retained. Every test inspects leaves only outside native execution.
-struct CacheScope;
+#[derive(Debug)]
+#[must_use = "dropping the guard restores this compiler thread's test state"]
+struct CacheScope(std::marker::PhantomData<*const ()>);
+
+static_assertions::assert_not_impl_any!(CacheScope: Send, Sync);
+const _: () = assert!(std::mem::size_of::<CacheScope>() == 0);
 impl CacheScope {
     fn enter() -> Self {
         cache::clear();
-        Self
+        Self(std::marker::PhantomData)
     }
 }
 impl Drop for CacheScope {
@@ -54,7 +60,7 @@ fn pair() -> Value {
 #[test]
 fn opt_require_osr_normal_only_sources_keep_numeric_mir_and_list_legacy_clif() {
     let _settings = Settings::enter();
-    let _require = opt_require_osr_scope_for_test(true);
+    let _require = opt_require_osr_scope_for_test(OptOsrRequirement::Required);
     let mut ctx = Context::new();
     force_opt_profit_for_test(Some(OptProfitMode::Lists));
     force_opt_early_for_test(Some(OptEarlyMode::Hot));
@@ -111,7 +117,7 @@ fn opt_require_osr_normal_only_sources_keep_numeric_mir_and_list_legacy_clif() {
 #[test]
 fn opt_require_osr_ready_list_osr_then_normal_cache_selects_opt_and_runs_mutation() {
     let _settings = Settings::enter();
-    let _require = opt_require_osr_scope_for_test(true);
+    let _require = opt_require_osr_scope_for_test(OptOsrRequirement::Required);
     let _cache = CacheScope::enter();
     let mut ctx = Context::new();
     force_opt_profit_for_test(Some(OptProfitMode::PrimitiveLists));
@@ -185,7 +191,7 @@ fn numeric_then_list() -> ByteCodeFunction {
 #[test]
 fn opt_require_osr_numeric_header_cannot_qualify_separate_list_backedge() {
     let _settings = Settings::enter();
-    let _require = opt_require_osr_scope_for_test(true);
+    let _require = opt_require_osr_scope_for_test(OptOsrRequirement::Required);
     let _cache = CacheScope::enter();
     let mut ctx = Context::new();
     force_opt_profit_for_test(Some(OptProfitMode::Lists));
@@ -250,14 +256,14 @@ fn opt_require_osr_off_keeps_old_selection_and_legacy_ignores_on() {
     let source = list_loop();
     source.jit_runtime().set_hot_for_test();
     {
-        let _off = opt_require_osr_scope_for_test(false);
+        let _off = opt_require_osr_scope_for_test(OptOsrRequirement::Optional);
         assert_eq!(
             compile(&ctx, &source, CompileTier::T1).selected_tier(),
             SelectedTier::Opt
         );
     }
     {
-        let _on = opt_require_osr_scope_for_test(true);
+        let _on = opt_require_osr_scope_for_test(OptOsrRequirement::Required);
         assert_eq!(
             compile(&ctx, &source, CompileTier::T1).selected_tier(),
             SelectedTier::Baseline
@@ -272,7 +278,7 @@ fn opt_require_osr_off_keeps_old_selection_and_legacy_ignores_on() {
         compile(&ctx, &source, CompileTier::T1);
     });
     let required = {
-        let _on = opt_require_osr_scope_for_test(true);
+        let _on = opt_require_osr_scope_for_test(OptOsrRequirement::Required);
         captured_clif(|| {
             compile(&ctx, &source, CompileTier::T1);
         })

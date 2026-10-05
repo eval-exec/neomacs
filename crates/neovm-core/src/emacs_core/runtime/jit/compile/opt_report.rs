@@ -13,8 +13,25 @@ use crate::emacs_core::jit::{bg, stats::CompileOrigin};
 
 const ROW_CAP: usize = 128;
 
+/// Opt construction selection and its actual route. Threading: immutable
+/// compiler-owned metadata; an OSR selection always carries its real header.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ConstructionSite {
+    Unselected,
+    Normal,
+    Osr { pc: usize },
+}
+
+/// Successful construction state, before cache installation. Threading:
+/// immutable compiler-owned metadata, with no native or Lisp handles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ConstructedState {
+    Ready,
+    Deferred,
+}
+
 /// Compiler route, copied into report-owned counts. Threading: scalar only.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Route {
     Normal,
     Osr,
@@ -32,12 +49,17 @@ impl Route {
 
 /// Construction outcome; Ready does not promise later cache retention.
 /// Threading: diagnostic scalar only, never stored in a compiled leaf.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Outcome {
     Active,
+    Completed(CompletedOutcome),
+}
+
+/// A finished attempt cannot return to Active. Threading: scalar report data.
+#[derive(Clone, Copy, Debug)]
+enum CompletedOutcome {
     Refused,
-    Ready,
-    Deferred,
+    Constructed(ConstructedState),
 }
 
 impl Outcome {
@@ -45,15 +67,24 @@ impl Outcome {
     fn name(self) -> &'static str {
         match self {
             Self::Active => "active",
+            Self::Completed(outcome) => outcome.name(),
+        }
+    }
+}
+
+impl CompletedOutcome {
+    #[inline]
+    fn name(self) -> &'static str {
+        match self {
             Self::Refused => "refused",
-            Self::Ready => "ready",
-            Self::Deferred => "deferred",
+            Self::Constructed(ConstructedState::Ready) => "ready",
+            Self::Constructed(ConstructedState::Deferred) => "deferred",
         }
     }
 }
 
 /// Process-owned compilation totals. Threading: accessed under LEDGER only.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Totals {
     attempts: u64,
     refused: u64,
@@ -77,7 +108,7 @@ impl Totals {
 /// First ROW_CAP attempts, including refused/transient construction.
 /// Threading: owned scalar metadata; origin is absent for old unrequested
 /// entry routes. No source names or source identity assignments are performed.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Row {
     seq: u64,
     route: Route,
@@ -91,7 +122,7 @@ struct Row {
 /// all output; the fixed row budget cannot truncate aggregate totals. Seal
 /// completeness assumes all mutators have stopped compiling. Late events
 /// invalidate the certificate; threaded backends are conservatively incomplete.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Ledger {
     totals: [Totals; 2],
     rows: [Option<Row>; ROW_CAP],
@@ -160,6 +191,7 @@ fn lock(ledger: &Mutex<Ledger>) -> MutexGuard<'_, Ledger> {
 /// seam. Threading: invocation-owned scalar indices; completion publishes
 /// counters under the process mutex, without observing Lisp or native entry.
 #[must_use = "dropping an unfinished attempt records refusal"]
+#[derive(Debug)]
 pub(super) struct Attempt {
     route: Route,
     slot: Option<usize>,
@@ -168,18 +200,21 @@ pub(super) struct Attempt {
     local: Option<std::sync::Arc<test_support::Reporter>>,
 }
 
+static_assertions::assert_impl_all!(Attempt: Send, Sync);
+
 impl Attempt {
     #[cold]
     #[inline(never)]
     pub(super) fn begin(
-        opt_selected: bool,
-        osr_pc: Option<usize>,
+        site: ConstructionSite,
         request: Option<CompileRequest>,
         ops: usize,
     ) -> Option<Self> {
-        if !opt_selected {
-            return None;
-        }
+        let (route, osr_pc) = match site {
+            ConstructionSite::Unselected => return None,
+            ConstructionSite::Normal => (Route::Normal, None),
+            ConstructionSite::Osr { pc } => (Route::Osr, Some(pc)),
+        };
         #[cfg(test)]
         let local = test_support::current();
         #[cfg(test)]
@@ -197,11 +232,6 @@ impl Attempt {
         };
         #[cfg(not(test))]
         let ledger = &LEDGER;
-        let route = if osr_pc.is_some() {
-            Route::Osr
-        } else {
-            Route::Normal
-        };
         let mut state = lock(ledger);
         state.late_event("begin", path);
         let totals = &mut state.totals[route as usize];
@@ -237,17 +267,13 @@ impl Attempt {
     /// if a later worker refuses or a stale install cancels the leaf.
     #[cold]
     #[inline(never)]
-    pub(super) fn constructed(mut self, deferred: bool) {
-        self.finish(if deferred {
-            Outcome::Deferred
-        } else {
-            Outcome::Ready
-        });
+    pub(super) fn constructed(mut self, state: ConstructedState) {
+        self.finish(CompletedOutcome::Constructed(state));
     }
 
     #[cold]
     #[inline(never)]
-    fn finish(&mut self, outcome: Outcome) {
+    fn finish(&mut self, outcome: CompletedOutcome) {
         #[cfg(test)]
         let ledger = match self.local.as_ref() {
             Some(reporter) => &reporter.ledger,
@@ -270,22 +296,21 @@ impl Attempt {
         let totals = &mut state.totals[self.route as usize];
         totals.active -= 1;
         match outcome {
-            Outcome::Refused => totals.refused += 1,
-            Outcome::Ready => {
+            CompletedOutcome::Refused => totals.refused += 1,
+            CompletedOutcome::Constructed(ConstructedState::Ready) => {
                 totals.constructed += 1;
                 totals.ready += 1;
             }
-            Outcome::Deferred => {
+            CompletedOutcome::Constructed(ConstructedState::Deferred) => {
                 totals.constructed += 1;
                 totals.deferred += 1;
             }
-            Outcome::Active => unreachable!("only completed attempts reach finish"),
         }
         if let Some(slot) = self.slot {
             state.rows[slot]
                 .as_mut()
                 .expect("attempt owns its row")
-                .outcome = outcome;
+                .outcome = Outcome::Completed(outcome);
         }
         drop(state);
         self.active = false;
@@ -297,7 +322,7 @@ impl Drop for Attempt {
     #[inline(never)]
     fn drop(&mut self) {
         if self.active {
-            self.finish(Outcome::Refused);
+            self.finish(CompletedOutcome::Refused);
         }
     }
 }

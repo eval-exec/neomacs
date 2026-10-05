@@ -10,8 +10,7 @@ fn render(snapshot: &Snapshot, stats: &CompileStats, mode: bg::BgMode, pending: 
 fn jit_exit_snapshot_unselected_attempt_is_absent() {
     // No environment mutation or process-global counter reset: declining the
     // constructor must return before even consulting the cached path.
-    assert!(Attempt::begin(false, false).is_none());
-    assert!(Attempt::begin(false, true).is_none());
+    assert!(Attempt::begin(ConstructionSite::Unselected).is_none());
 }
 
 #[test]
@@ -32,11 +31,11 @@ fn jit_exit_snapshot_normal_and_osr_outcomes_cover_refused_and_transient() {
     let counters = Counters::new();
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("exit.txt");
-    Attempt::begin_with(&counters, false, &path).constructed(false);
-    Attempt::begin_with(&counters, false, &path).constructed(true);
-    drop(Attempt::begin_with(&counters, false, &path));
-    Attempt::begin_with(&counters, true, &path).constructed(false);
-    drop(Attempt::begin_with(&counters, true, &path));
+    Attempt::begin_with(&counters, Route::Normal, &path).constructed(ConstructedState::Ready);
+    Attempt::begin_with(&counters, Route::Normal, &path).constructed(ConstructedState::Deferred);
+    drop(Attempt::begin_with(&counters, Route::Normal, &path));
+    Attempt::begin_with(&counters, Route::Osr, &path).constructed(ConstructedState::Ready);
+    drop(Attempt::begin_with(&counters, Route::Osr, &path));
     assert!(
         !path.exists(),
         "compiler counters must not perform per-attempt IO"
@@ -67,7 +66,7 @@ fn jit_exit_snapshot_unwinding_attempt_is_refused() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("exit.txt");
     let result = std::panic::catch_unwind(|| {
-        let _attempt = Attempt::begin_with(&counters, true, &path);
+        let _attempt = Attempt::begin_with(&counters, Route::Osr, &path);
         panic!("contained compiler failure");
     });
     assert!(result.is_err());
@@ -89,13 +88,13 @@ fn jit_exit_snapshot_active_work_is_incomplete_and_late_finish_invalidates() {
     let counters = Counters::new();
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("exit.txt");
-    let attempt = Attempt::begin_with(&counters, false, &path);
+    let attempt = Attempt::begin_with(&counters, Route::Normal, &path);
     let snapshot = counters.seal().expect("seal");
     assert!(!snapshot.complete(bg::BgMode::Legacy, 0));
     assert!(
         render(&snapshot, &CompileStats::default(), bg::BgMode::Legacy, 0).contains(" complete=0 ")
     );
-    attempt.constructed(false);
+    attempt.constructed(ConstructedState::Ready);
     let late = std::fs::read_to_string(&path).expect("late invalidation");
     assert!(late.contains("[neovm-jit-exit-invalidated] v=1 "));
     assert!(late.ends_with("sealed=1 late=1 kind=finish\n"));
@@ -108,7 +107,7 @@ fn jit_exit_snapshot_begin_after_seal_invalidates_before_final_record() {
     let path = dir.path().join("exit.txt");
     let snapshot = counters.seal().expect("seal");
     assert!(snapshot.complete(bg::BgMode::Legacy, 0));
-    let attempt = Attempt::begin_with(&counters, true, &path);
+    let attempt = Attempt::begin_with(&counters, Route::Osr, &path);
     let late = std::fs::read_to_string(&path).expect("late begin");
     assert!(late.ends_with("sealed=1 late=1 kind=begin\n"));
     append(
@@ -214,10 +213,15 @@ fn jit_exit_snapshot_parallel_scalar_constructors_publish_complete_totals() {
             let path = &path;
             scope.spawn(move || {
                 for outcome in 0..30 {
-                    let attempt = Attempt::begin_with(counters, actor % 2 != 0, path);
+                    let route = if actor % 2 != 0 {
+                        Route::Osr
+                    } else {
+                        Route::Normal
+                    };
+                    let attempt = Attempt::begin_with(counters, route, path);
                     match outcome % 3 {
-                        0 => attempt.constructed(false),
-                        1 => attempt.constructed(true),
+                        0 => attempt.constructed(ConstructedState::Ready),
+                        1 => attempt.constructed(ConstructedState::Deferred),
                         _ => drop(attempt),
                     }
                 }

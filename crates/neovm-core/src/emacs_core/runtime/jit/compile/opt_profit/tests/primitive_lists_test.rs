@@ -18,7 +18,12 @@ use crate::emacs_core::value::Value;
 
 /// Test-owned scalar fuser/observer overrides and existing-cache lifetime.
 /// Threading: contains no Lisp state and clears only this mutator's cache.
-struct FixtureScopes;
+#[derive(Debug)]
+#[must_use = "dropping the guard restores this compiler thread's test state"]
+struct FixtureScopes(std::marker::PhantomData<*const ()>);
+
+static_assertions::assert_not_impl_any!(FixtureScopes: Send, Sync);
+const _: () = assert!(std::mem::size_of::<FixtureScopes>() == 0);
 impl FixtureScopes {
     fn enter() -> Self {
         cache::clear();
@@ -28,7 +33,7 @@ impl FixtureScopes {
             naming: false,
             entry_count: false,
         });
-        Self
+        Self(std::marker::PhantomData)
     }
 }
 impl Drop for FixtureScopes {
@@ -72,20 +77,30 @@ fn opt_profit_primitive_lists_rejects_all_explicit_call_forms_even_if_dead_or_pr
                 OptProfitMode::Loops,
                 OptProfitMode::Kernels,
             ] {
-                assert!(body_admitted(mode, &ops, heavy, true));
+                assert!(body_admitted(
+                    mode,
+                    &ops,
+                    CallDensity::from(heavy),
+                    KernelHeat::Hot
+                ));
                 force_opt_profit_for_test(Some(mode));
                 assert!(primitive_osr_source_admitted(&ops));
             }
             assert!(!body_admitted(
                 OptProfitMode::PrimitiveLists,
                 &ops,
-                heavy,
-                true
+                CallDensity::from(heavy),
+                KernelHeat::Hot
             ));
             force_opt_profit_for_test(Some(OptProfitMode::PrimitiveLists));
             assert!(!primitive_osr_source_admitted(&ops));
             assert!(!osr_admitted(&ops, &[], ops.len()));
-            assert!(body_admitted(OptProfitMode::Off, &ops, true, false));
+            assert!(body_admitted(
+                OptProfitMode::Off,
+                &ops,
+                CallDensity::Heavy,
+                KernelHeat::Cold
+            ));
         }
     }
 }
@@ -101,8 +116,8 @@ fn opt_profit_primitive_lists_retains_list_span_size_and_original_numeric_mir() 
     assert!(body_admitted(
         OptProfitMode::PrimitiveLists,
         list.executable_ops(),
-        false,
-        true
+        CallDensity::Sparse,
+        KernelHeat::Hot
     ));
     assert_eq!(
         compile(&list, CompileTier::T1).selected_tier(),
@@ -111,27 +126,27 @@ fn opt_profit_primitive_lists_retains_list_span_size_and_original_numeric_mir() 
     assert!(!body_admitted(
         OptProfitMode::PrimitiveLists,
         list.executable_ops(),
-        true,
-        true
+        CallDensity::Heavy,
+        KernelHeat::Hot
     ));
     assert!(!body_admitted(
         OptProfitMode::PrimitiveLists,
         &[Op::Setcar, Op::Throw, Op::Goto(0)],
-        false,
-        true
+        CallDensity::Sparse,
+        KernelHeat::Hot
     ));
     assert!(!body_admitted(
         OptProfitMode::PrimitiveLists,
         &[Op::Car, Op::Add1, Op::Goto(1)],
-        false,
-        true
+        CallDensity::Sparse,
+        KernelHeat::Hot
     ));
     force_opt_max_ops_for_test(Some(list.executable_ops().len() - 1));
     assert!(!body_admitted(
         OptProfitMode::PrimitiveLists,
         list.executable_ops(),
-        false,
-        true
+        CallDensity::Sparse,
+        KernelHeat::Hot
     ));
     force_opt_max_ops_for_test(Some(48));
     let numeric = count_loop(0);
@@ -210,8 +225,8 @@ fn opt_profit_primitive_lists_original_call_survives_real_fusion_and_uses_one_le
     assert!(body_admitted(
         OptProfitMode::Lists,
         source.executable_ops(),
-        false,
-        true
+        CallDensity::Sparse,
+        KernelHeat::Hot
     ));
     let feedback = vec![NumericFeedback::FixnumOnly; source.executable_ops().len()];
     let fused = inline::fuse_calls(

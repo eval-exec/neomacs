@@ -15,7 +15,12 @@ use crate::emacs_core::jit::stats::{self, CompileOrigin};
 
 /// Threading: scalar fuser/observer overrides belong to this test invocation
 /// and reset on drop; this scope contains no Lisp state or mutator cache.
-struct FixtureScopes;
+#[derive(Debug)]
+#[must_use = "dropping the guard restores this compiler thread's test state"]
+struct FixtureScopes(std::marker::PhantomData<*const ()>);
+
+static_assertions::assert_not_impl_any!(FixtureScopes: Send, Sync);
+const _: () = assert!(std::mem::size_of::<FixtureScopes>() == 0);
 impl FixtureScopes {
     fn enter() -> Self {
         crate::emacs_core::jit::inline::force_inline_for_test(Some(true));
@@ -24,7 +29,7 @@ impl FixtureScopes {
             naming: false,
             entry_count: false,
         });
-        Self
+        Self(std::marker::PhantomData)
     }
 }
 impl Drop for FixtureScopes {
@@ -109,7 +114,12 @@ fn opt_profit_final_fused_size_uses_one_legacy_baseline_and_preserves_native_res
         tier: CompileTier::T1,
     };
     assert_eq!(
-        front(request, f.executable_ops(), false, f.jit_runtime()),
+        front(
+            request,
+            f.executable_ops(),
+            CallDensity::Sparse,
+            f.jit_runtime()
+        ),
         FrontChoice::SelectedAfterMir,
     );
     let feedback =

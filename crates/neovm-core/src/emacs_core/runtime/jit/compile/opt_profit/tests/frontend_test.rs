@@ -15,7 +15,12 @@ use crate::emacs_core::jit::tier2::T2Upgrade;
 
 /// Threading: scalar compiler overrides belong to this test invocation and
 /// reset on drop; this scope contains no Lisp state or mutator cache.
-pub(super) struct Settings;
+#[derive(Debug)]
+#[must_use = "dropping the guard restores this compiler thread's test state"]
+pub(super) struct Settings(std::marker::PhantomData<*const ()>);
+
+static_assertions::assert_not_impl_any!(Settings: Send, Sync);
+const _: () = assert!(std::mem::size_of::<Settings>() == 0);
 impl Settings {
     pub(super) fn enter() -> Self {
         force_opt_for_test(Some(OptMode::Opt), Some(OptAdmit::ALL));
@@ -29,7 +34,7 @@ impl Settings {
         crate::emacs_core::jit::bg::force_mode_for_test(Some(
             crate::emacs_core::jit::bg::BgMode::Sync,
         ));
-        Self
+        Self(std::marker::PhantomData)
     }
 }
 impl Drop for Settings {
