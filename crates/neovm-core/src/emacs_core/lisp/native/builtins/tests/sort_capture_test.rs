@@ -69,7 +69,7 @@ fn sort_capture_keeps_void_and_autoload_symbols() {
 fn sort_capture_direct_numeric_subr_is_its_own_designator() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
-    let builtin = eval.obarray().symbol_function("<").expect("builtin cell");
+    let builtin = eval.obarray().symbol_function(">").expect("builtin cell");
     let Some(SortPredicate::Subr {
         designator, subr, ..
     }) = capture_sort_predicate(&mut eval, builtin)
@@ -77,5 +77,17 @@ fn sort_capture_direct_numeric_subr_is_its_own_designator() {
         panic!("a direct builtin object must engage subr dispatch");
     };
     assert_eq!(designator, builtin);
+    assert_eq!(subr, builtin);
+}
+
+#[test]
+fn sort_capture_direct_numeric_lessp_takes_the_numeric_path() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    let builtin = eval.obarray().symbol_function("<").expect("builtin cell");
+    let Some(SortPredicate::NumericLessp { subr, .. }) = capture_sort_predicate(&mut eval, builtin)
+    else {
+        panic!("a direct `<` builtin object must engage the numeric comparison path");
+    };
     assert_eq!(subr, builtin);
 }

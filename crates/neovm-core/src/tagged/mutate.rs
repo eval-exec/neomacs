@@ -201,6 +201,25 @@ pub fn with_vector_data_mut<R>(
     Some(f(unsafe { (*ptr).data.ensure_owned() }))
 }
 
+/// Bulk slot mutation without retaining a Rust reference to the Vec header
+/// or backing across reads of aliased Lisp values. The caller owns exclusive
+/// mutation of this vector; collector snapshots use the existing SATB/COW
+/// protocol. No shared state or assumption of a single global mutator is added.
+///
+/// # Safety
+/// The closure must not collect, replace/reallocate the backing, or retain the
+/// pointer after returning. It may only access slots within the supplied length.
+#[inline]
+pub(crate) unsafe fn with_vector_slots_mut<R>(
+    value: TaggedValue,
+    f: impl FnOnce(*mut TaggedValue, usize) -> R,
+) -> Option<R> {
+    let (slots, len) = with_vector_data_mut(value, |data| (data.as_mut_ptr(), data.len()))?;
+    #[cfg(debug_assertions)]
+    let _guard = HeapMutClosureGuard::enter();
+    Some(f(slots, len))
+}
+
 #[inline]
 pub fn replace_vector_data(value: TaggedValue, items: Vec<TaggedValue>) -> bool {
     with_vector_data_mut(value, |data| *data = items).is_some()

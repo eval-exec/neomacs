@@ -1,6 +1,6 @@
 //! GNU TimSort storage and merging. Vector sorts read and write the live
 //! Lisp vector, retaining no slice borrow across Lisp callbacks.
-use super::{Flow, SortItem, SortPredicate, SortRuntime, Value};
+use super::{Flow, SortItem, SortPredicate, SortRootBatch, SortRootSlot, SortRuntime, Value};
 use std::ops::Range;
 
 #[cfg(test)]
@@ -119,7 +119,7 @@ pub(super) struct VectorSortStorage {
     // GNU sort.c:175-182 keeps this array in the sort's stack frame. Its
     // previously written values remain visible to conservative C-stack GC,
     // including after a later merge switches to heap temporary storage.
-    stack_temporary_roots: Vec<crate::emacs_core::eval::SpecpdlRootSlot>,
+    stack_temporary_roots: Vec<SortRootSlot>,
     heap_temporary_allocated: bool,
 }
 impl VectorSortStorage {
@@ -705,12 +705,10 @@ fn merge_lo(
     let stack_temporary = items.retain_stack_temporary(runtime, &left);
     let scoped_value_roots = items.needs_value_roots() && !stack_temporary;
     let root_scope = scoped_value_roots.then(|| runtime.save_sort_roots());
-    let temp_roots: Vec<_> = if scoped_value_roots {
-        left.iter()
-            .map(|item| runtime.root_sort_slot(item.value))
-            .collect()
+    let temp_roots = if scoped_value_roots {
+        runtime.root_sort_batch(&left)
     } else {
-        Vec::new()
+        SortRootBatch::Slots(Vec::new())
     };
     let mut left_index = 0;
     let mut right_index = right_base;
@@ -759,7 +757,7 @@ fn merge_lo(
                     items.put(dest, left[left_index]);
                     dest += 1;
                     if scoped_value_roots {
-                        runtime.clear_sort_slot(&temp_roots[left_index]);
+                        runtime.clear_sort_batch(&temp_roots, left_index..left_index + 1);
                     }
                     left_index += 1;
                     left_len -= 1;
@@ -799,9 +797,7 @@ fn merge_lo(
                     items.copy_from(dest, &left[left_index..left_index + k]);
                     dest += k;
                     if scoped_value_roots {
-                        for slot in &temp_roots[left_index..left_index + k] {
-                            runtime.clear_sort_slot(slot);
-                        }
+                        runtime.clear_sort_batch(&temp_roots, left_index..left_index + k);
                     }
                     left_index += k;
                     left_len -= k;
@@ -854,7 +850,7 @@ fn merge_lo(
                 items.put(dest, left[left_index]);
                 dest += 1;
                 if scoped_value_roots {
-                    runtime.clear_sort_slot(&temp_roots[left_index]);
+                    runtime.clear_sort_batch(&temp_roots, left_index..left_index + 1);
                 }
                 left_index += 1;
                 left_len -= 1;
@@ -900,13 +896,10 @@ fn merge_hi(
     let stack_temporary = items.retain_stack_temporary(runtime, &right);
     let scoped_value_roots = items.needs_value_roots() && !stack_temporary;
     let root_scope = scoped_value_roots.then(|| runtime.save_sort_roots());
-    let temp_roots: Vec<_> = if scoped_value_roots {
-        right
-            .iter()
-            .map(|item| runtime.root_sort_slot(item.value))
-            .collect()
+    let temp_roots = if scoped_value_roots {
+        runtime.root_sort_batch(&right)
     } else {
-        Vec::new()
+        SortRootBatch::Slots(Vec::new())
     };
     let mut dest = (right_base + right_len - 1) as isize;
     let mut left_index = (left_base + left_len - 1) as isize;
@@ -969,7 +962,7 @@ fn merge_hi(
                     right_index -= 1;
                     right_len -= 1;
                     if scoped_value_roots {
-                        runtime.clear_sort_slot(&temp_roots[right_len]);
+                        runtime.clear_sort_batch(&temp_roots, right_len..right_len + 1);
                     }
                     bcount += 1;
                     acount = 0;
@@ -1031,7 +1024,7 @@ fn merge_hi(
                 right_index -= 1;
                 right_len -= 1;
                 if scoped_value_roots {
-                    runtime.clear_sort_slot(&temp_roots[right_len]);
+                    runtime.clear_sort_batch(&temp_roots, right_len..right_len + 1);
                 }
                 if right_len == 1 {
                     let dest_end = dest as usize;
@@ -1060,9 +1053,7 @@ fn merge_hi(
                     dest -= k as isize;
                     right_index -= k as isize;
                     if scoped_value_roots {
-                        for slot in &temp_roots[right_len - k..right_len] {
-                            runtime.clear_sort_slot(slot);
-                        }
+                        runtime.clear_sort_batch(&temp_roots, right_len - k..right_len);
                     }
                     right_len -= k;
                     if right_len == 1 {
@@ -1109,4 +1100,96 @@ fn merge_hi(
         runtime.restore_sort_roots(scope);
     }
     result
+}
+
+/// The default ordering cannot enter Lisp (compare_value_lt takes &Context).
+/// GNU sort.c permutes live vector slots. Vec::as_mut_ptr does not materialize
+/// a backing slice; short raw reads/writes permit recursive value< comparisons
+/// to inspect the same live vector. No heap reference spans a comparison, and
+/// the bulk mutation guard excludes collector safe points for this invocation.
+struct ValueLtStorage {
+    values: *mut Value,
+    len: usize,
+    heap_temporary: bool,
+}
+impl SortStorage for ValueLtStorage {
+    fn len(&self) -> usize {
+        self.len
+    }
+    fn item(&self, index: usize) -> SortItem {
+        assert!(index < self.len);
+        let value = unsafe { *self.values.add(index) };
+        SortItem { value, key: value }
+    }
+    fn put(&mut self, index: usize, item: SortItem) {
+        assert!(index < self.len);
+        unsafe {
+            *self.values.add(index) = item.value;
+        }
+    }
+    fn retain_stack_temporary(&mut self, _: &mut impl SortRuntime, source: &[SortItem]) -> bool {
+        if self.heap_temporary || source.len() > 256 {
+            self.heap_temporary = true;
+            false
+        } else {
+            true
+        }
+    }
+    fn has_merge_cleanup(&self) -> bool {
+        self.heap_temporary
+    }
+    fn reverse(&mut self, range: Range<usize>) {
+        assert!(range.end <= self.len);
+        for offset in 0..range.len() / 2 {
+            unsafe {
+                std::ptr::swap(
+                    self.values.add(range.start + offset),
+                    self.values.add(range.end - 1 - offset),
+                );
+            }
+        }
+    }
+    fn copy_within(&mut self, range: Range<usize>, dest: usize) {
+        assert!(range.end <= self.len && dest + range.len() <= self.len);
+        unsafe {
+            std::ptr::copy(
+                self.values.add(range.start),
+                self.values.add(dest),
+                range.len(),
+            );
+        }
+    }
+    fn copy_from(&mut self, dest: usize, source: &[SortItem]) {
+        assert!(dest + source.len() <= self.len);
+        for (index, item) in source.iter().enumerate() {
+            unsafe {
+                *self.values.add(dest + index) = item.value;
+            }
+        }
+    }
+}
+pub(super) fn sort_value_lt_vector(
+    runtime: &mut impl SortRuntime,
+    vector: Value,
+    reverse: bool,
+) -> Result<(), Flow> {
+    // SAFETY: value< is pure and cannot collect or reallocate the vector.
+    unsafe {
+        crate::tagged::mutate::with_vector_slots_mut(vector, |values, len| {
+            let mut storage = ValueLtStorage {
+                len,
+                values,
+                heap_temporary: false,
+            };
+            if reverse {
+                storage.reverse(0..storage.len);
+            }
+            let result = gnu_style_sort_items(runtime, &mut storage, SortPredicate::ValueLt);
+            if result.is_ok() && reverse {
+                storage.reverse(0..storage.len);
+            }
+            result
+        })
+        .unwrap()
+    }
 }

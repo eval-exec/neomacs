@@ -4,6 +4,7 @@ use crate::emacs_core::eval::{CheckedNativeCallback, LispArgVec, native_callback
 use smallvec::SmallVec;
 
 mod sort;
+mod sort_buffered;
 use sort::{SortStorage, VectorSortStorage, gnu_style_sort_items};
 
 type MapResultVec = SmallVec<[Value; 8]>;
@@ -11,6 +12,10 @@ type MapResultVec = SmallVec<[Value; 8]>;
 #[cfg(test)]
 #[path = "tests/gd_e_sort.rs"]
 mod gd_e_sort;
+
+#[cfg(test)]
+#[path = "tests/gd_e_sort_native_storage.rs"]
+mod gd_e_sort_native_storage;
 
 #[cfg(test)]
 #[path = "tests/higher_order_capture_test.rs"]
@@ -703,6 +708,10 @@ pub(crate) enum SortPredicate {
         proof: Option<CheckedNativeCallback>,
     },
     /// Identified from the captured implementation, never the symbol's name.
+    NumericLessp {
+        subr: Value,
+        epoch: u64,
+    },
     StringLessp {
         subr: Value,
         epoch: u64,
@@ -714,7 +723,9 @@ impl SortPredicate {
         match self {
             Self::ValueLt => None,
             Self::Generic(function) => Some(function),
-            Self::Subr { subr, .. } | Self::StringLessp { subr, .. } => Some(subr),
+            Self::Subr { subr, .. }
+            | Self::NumericLessp { subr, .. }
+            | Self::StringLessp { subr, .. } => Some(subr),
         }
     }
 }
@@ -742,6 +753,17 @@ pub(super) fn capture_sort_predicate(
             && std::ptr::fn_addr_eq(body, super::strings::builtin_string_lessp_2 as SubrFn2)
         {
             return Some(SortPredicate::StringLessp {
+                subr: function,
+                epoch,
+            });
+        }
+        if let Some(SubrFn::ManySlice(body)) = entry.function
+            && std::ptr::fn_addr_eq(
+                body,
+                super::arithmetic::builtin_num_lt_slice as crate::tagged::header::SubrFnManySlice,
+            )
+        {
+            return Some(SortPredicate::NumericLessp {
                 subr: function,
                 epoch,
             });
@@ -777,6 +799,35 @@ fn resolve_sort_function(eval: &super::eval::Context, function: Value) -> Value 
         .unwrap_or(function)
 }
 
+/// Root handles are owned by one sorting activation. Buffered native sorts
+/// defer publishing their local values until an actual Lisp/GC boundary.
+#[derive(Clone, Copy)]
+pub(crate) enum SortRootScope {
+    Runtime(crate::emacs_core::eval::SpecpdlRootScopeState),
+    Buffered(usize),
+}
+#[derive(Clone, Copy)]
+pub(crate) enum SortRootSlot {
+    Runtime(crate::emacs_core::eval::SpecpdlRootSlot),
+    Buffered(usize),
+}
+
+/// Roots for one merge's remaining temporary values. The range variant
+/// indexes a mutator-owned buffered arena; it never borrows heap backing or
+/// shares a root cache between sort activations or mutators.
+pub(crate) enum SortRootBatch {
+    Slots(Vec<SortRootSlot>),
+    Buffered(std::ops::Range<usize>),
+}
+
+/// A predicate frame remains live until the owning storage publishes its
+/// permutation and roots before an error can enter Lisp. Activation-local;
+/// no heap backing borrow or shared callback state is retained.
+pub(crate) struct NativeSortCall {
+    pub(crate) frame_base: usize,
+    pub(crate) result: EvalResult,
+}
+
 pub(crate) trait SortRuntime {
     fn resolve_sort_key(&mut self, key: Value) -> Value {
         key
@@ -789,11 +840,31 @@ pub(crate) trait SortRuntime {
         arg1: Value,
     ) -> Result<Value, Flow>;
     fn root_sort_value(&mut self, value: Value);
-    fn save_sort_roots(&self) -> crate::emacs_core::eval::SpecpdlRootScopeState;
-    fn restore_sort_roots(&mut self, scope: crate::emacs_core::eval::SpecpdlRootScopeState);
-    fn root_sort_slot(&mut self, value: Value) -> crate::emacs_core::eval::SpecpdlRootSlot;
-    fn clear_sort_slot(&mut self, slot: &crate::emacs_core::eval::SpecpdlRootSlot);
-    fn set_sort_slot(&mut self, slot: &crate::emacs_core::eval::SpecpdlRootSlot, value: Value);
+    fn save_sort_roots(&self) -> SortRootScope;
+    fn restore_sort_roots(&mut self, scope: SortRootScope);
+    fn root_sort_slot(&mut self, value: Value) -> SortRootSlot;
+    fn clear_sort_slot(&mut self, slot: &SortRootSlot);
+    fn set_sort_slot(&mut self, slot: &SortRootSlot, value: Value);
+    /// Root the merge's temporary values before any comparison can collect.
+    #[inline]
+    fn root_sort_batch(&mut self, items: &[SortItem]) -> SortRootBatch {
+        SortRootBatch::Slots(
+            items
+                .iter()
+                .map(|item| self.root_sort_slot(item.value))
+                .collect(),
+        )
+    }
+    /// Clear only consumed temporaries, retaining GNU's remaining-value roots.
+    #[inline]
+    fn clear_sort_batch(&mut self, batch: &SortRootBatch, range: std::ops::Range<usize>) {
+        let SortRootBatch::Slots(slots) = batch else {
+            unreachable!("ordinary sort roots use individual runtime slots")
+        };
+        for slot in &slots[range] {
+            self.clear_sort_slot(slot);
+        }
+    }
     /// Resolve the predicate once, before the first comparison.
     fn resolve_sort_predicate(&mut self, predicate: Value) -> SortPredicate {
         if predicate.is_nil() {
@@ -814,8 +885,21 @@ pub(crate) trait SortRuntime {
             SortPredicate::Subr { designator, .. } => {
                 self.call_sort_function2(designator, arg0, arg1)
             }
-            SortPredicate::StringLessp { subr, .. } => self.call_sort_function2(subr, arg0, arg1),
+            SortPredicate::NumericLessp { subr, .. } | SortPredicate::StringLessp { subr, .. } => {
+                self.call_sort_function2(subr, arg0, arg1)
+            }
         }
+    }
+    fn begin_native_sort_call(
+        &mut self,
+        _: SortPredicate,
+        _: Value,
+        _: Value,
+    ) -> Option<NativeSortCall> {
+        None
+    }
+    fn finish_native_sort_call(&mut self, call: NativeSortCall) -> EvalResult {
+        call.result
     }
     fn compare_sort_keys(
         &mut self,
@@ -825,19 +909,28 @@ pub(crate) trait SortRuntime {
 }
 
 impl SortRuntime for super::eval::Context {
-    fn save_sort_roots(&self) -> crate::emacs_core::eval::SpecpdlRootScopeState {
-        self.save_specpdl_roots()
+    fn save_sort_roots(&self) -> SortRootScope {
+        SortRootScope::Runtime(self.save_specpdl_roots())
     }
-    fn restore_sort_roots(&mut self, scope: crate::emacs_core::eval::SpecpdlRootScopeState) {
+    fn restore_sort_roots(&mut self, scope: SortRootScope) {
+        let SortRootScope::Runtime(scope) = scope else {
+            unreachable!()
+        };
         self.restore_specpdl_roots(scope);
     }
-    fn root_sort_slot(&mut self, value: Value) -> crate::emacs_core::eval::SpecpdlRootSlot {
-        self.push_specpdl_root_slot(value)
+    fn root_sort_slot(&mut self, value: Value) -> SortRootSlot {
+        SortRootSlot::Runtime(self.push_specpdl_root_slot(value))
     }
-    fn clear_sort_slot(&mut self, slot: &crate::emacs_core::eval::SpecpdlRootSlot) {
+    fn clear_sort_slot(&mut self, slot: &SortRootSlot) {
+        let SortRootSlot::Runtime(slot) = slot else {
+            unreachable!()
+        };
         self.set_specpdl_root_slot(slot, Value::NIL);
     }
-    fn set_sort_slot(&mut self, slot: &crate::emacs_core::eval::SpecpdlRootSlot, value: Value) {
+    fn set_sort_slot(&mut self, slot: &SortRootSlot, value: Value) {
+        let SortRootSlot::Runtime(slot) = slot else {
+            unreachable!()
+        };
         self.set_specpdl_root_slot(slot, value);
     }
     fn resolve_sort_key(&mut self, key: Value) -> Value {
@@ -910,10 +1003,25 @@ impl SortRuntime for super::eval::Context {
                 Some(proof) => self.apply2_checked_subr(designator, subr, epoch, proof, arg0, arg1),
                 None => self.apply2_resolved_subr(designator, subr, epoch, arg0, arg1),
             },
+            SortPredicate::NumericLessp { subr, epoch } => {
+                self.apply2_resolved_subr(subr, subr, epoch, arg0, arg1)
+            }
             SortPredicate::StringLessp { subr, epoch } => {
                 self.apply2_sort_string_lessp(subr, epoch, arg0, arg1)
             }
         }
+    }
+
+    fn begin_native_sort_call(
+        &mut self,
+        predicate: SortPredicate,
+        left: Value,
+        right: Value,
+    ) -> Option<NativeSortCall> {
+        self.begin_buffered_native_sort_call(predicate, left, right)
+    }
+    fn finish_native_sort_call(&mut self, call: NativeSortCall) -> EvalResult {
+        self.finish_buffered_native_sort_call(call)
     }
 
     fn compare_sort_keys(
@@ -1067,6 +1175,15 @@ fn sort_vector_values(
     let predicate = runtime.resolve_sort_predicate(lessp_fn);
     if let Some(callable) = predicate.callable() {
         runtime.root_sort_value(callable);
+    }
+    if key_fn.is_nil() {
+        match predicate {
+            SortPredicate::ValueLt => return sort::sort_value_lt_vector(runtime, vector, reverse),
+            SortPredicate::NumericLessp { .. } | SortPredicate::StringLessp { .. } => {
+                return sort_buffered::sort_native_vector(runtime, vector, predicate, reverse);
+            }
+            _ => {}
+        }
     }
     let mut storage = VectorSortStorage::new(vector);
     if reverse {

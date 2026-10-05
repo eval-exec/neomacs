@@ -9593,23 +9593,46 @@ impl<'a> crate::emacs_core::builtins::symbols::MacroexpandRuntime for Vm<'a> {
 }
 
 impl crate::emacs_core::builtins::higher_order::SortRuntime for Vm<'_> {
-    fn set_sort_slot(&mut self, slot: &crate::emacs_core::eval::SpecpdlRootSlot, value: Value) {
+    fn set_sort_slot(
+        &mut self,
+        slot: &crate::emacs_core::builtins::higher_order::SortRootSlot,
+        value: Value,
+    ) {
+        let crate::emacs_core::builtins::higher_order::SortRootSlot::Runtime(slot) = slot else {
+            unreachable!()
+        };
         self.ctx.set_specpdl_root_slot(slot, value);
     }
 
-    fn save_sort_roots(&self) -> crate::emacs_core::eval::SpecpdlRootScopeState {
-        self.ctx.save_specpdl_roots()
+    fn save_sort_roots(&self) -> crate::emacs_core::builtins::higher_order::SortRootScope {
+        crate::emacs_core::builtins::higher_order::SortRootScope::Runtime(
+            self.ctx.save_specpdl_roots(),
+        )
     }
 
-    fn restore_sort_roots(&mut self, scope: crate::emacs_core::eval::SpecpdlRootScopeState) {
+    fn restore_sort_roots(
+        &mut self,
+        scope: crate::emacs_core::builtins::higher_order::SortRootScope,
+    ) {
+        let crate::emacs_core::builtins::higher_order::SortRootScope::Runtime(scope) = scope else {
+            unreachable!()
+        };
         self.ctx.restore_specpdl_roots(scope);
     }
 
-    fn root_sort_slot(&mut self, value: Value) -> crate::emacs_core::eval::SpecpdlRootSlot {
-        self.ctx.push_specpdl_root_slot(value)
+    fn root_sort_slot(
+        &mut self,
+        value: Value,
+    ) -> crate::emacs_core::builtins::higher_order::SortRootSlot {
+        crate::emacs_core::builtins::higher_order::SortRootSlot::Runtime(
+            self.ctx.push_specpdl_root_slot(value),
+        )
     }
 
-    fn clear_sort_slot(&mut self, slot: &crate::emacs_core::eval::SpecpdlRootSlot) {
+    fn clear_sort_slot(&mut self, slot: &crate::emacs_core::builtins::higher_order::SortRootSlot) {
+        let crate::emacs_core::builtins::higher_order::SortRootSlot::Runtime(slot) = slot else {
+            unreachable!()
+        };
         self.ctx.set_specpdl_root_slot(slot, Value::NIL);
     }
 
