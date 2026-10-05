@@ -13,6 +13,10 @@ mod gd_b_native;
 mod gd_b_backtrace;
 
 #[cfg(test)]
+#[path = "gd_b_condition_var.rs"]
+mod gd_b_condition_var;
+
+#[cfg(test)]
 #[path = "gd_b_safe_call.rs"]
 mod gd_b_safe_call;
 

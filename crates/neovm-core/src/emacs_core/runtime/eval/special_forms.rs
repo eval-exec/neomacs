@@ -1097,14 +1097,11 @@ impl Context {
                 if let Some(idx) = success_handler_idx {
                     let handler = handlers_vec[idx];
                     let bind_var = !var.is_nil();
-                    // Mirror the error-handler arm: bind VAR lexically when
-                    // lexical binding is in effect and VAR is not special, else
-                    // dynamically (GNU condition-case binds the :success var the
-                    // same way it binds an error handler's var).
-                    let use_lexical_binding = bind_var
-                        && self.lexical_binding()
-                        && !is_runtime_dynamically_special(&self.obarray, var_id)
-                        && !self.lexenv_declares_special_cached_in(self.lexenv, var_id);
+                    // GNU eval.c:1676-1685 extends the lexical environment
+                    // directly for VAR, even when a special declaration would
+                    // make an ordinary let binding dynamic. Both handler kinds
+                    // use this same rule.
+                    let use_lexical_binding = bind_var && self.lexical_binding();
                     let specpdl_count = self.specpdl.len();
                     if use_lexical_binding {
                         let old_lexenv = self.lexenv;
@@ -1137,10 +1134,9 @@ impl Context {
                     let handler = handlers_vec[handler_index];
                     let bind_var = !var.is_nil();
                     let binding_value = make_signal_binding_value(&sig);
-                    let use_lexical_binding = bind_var
-                        && self.lexical_binding()
-                        && !is_runtime_dynamically_special(&self.obarray, var_id)
-                        && !self.lexenv_declares_special_cached_in(self.lexenv, var_id);
+                    // GNU binds a handler VAR lexically regardless of global
+                    // or local special declarations (eval.c:1676-1685).
+                    let use_lexical_binding = bind_var && self.lexical_binding();
 
                     let specpdl_count = self.specpdl.len();
                     if use_lexical_binding {
