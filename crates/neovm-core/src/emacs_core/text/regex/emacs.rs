@@ -59,7 +59,7 @@ type RegisterScratch = Vec<Option<usize>>;
 /// The one-byte form we emit via `<op> as u8` is the same as GNU's
 /// `BUF_COMPILED[pc++]` byte. **Do not reorder without updating the
 /// GNU reference at the top of this file.**
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::FromRepr, strum::VariantArray)]
 #[repr(u8)]
 pub(crate) enum RegexOp {
     /// No operation (padding/alignment). GNU `no_op` = 0.
@@ -213,13 +213,9 @@ pub(crate) enum RegexOp {
 
 impl RegexOp {
     /// Convert a byte to an opcode.  Returns None for invalid bytes.
+    #[inline]
     fn from_byte(b: u8) -> Option<Self> {
-        if b <= 34 {
-            // SAFETY: all values 0-33 are valid enum variants
-            Some(unsafe { std::mem::transmute::<u8, RegexOp>(b) })
-        } else {
-            None
-        }
+        Self::from_repr(b)
     }
 }
 
@@ -230,10 +226,15 @@ impl RegexOp {
 /// A compiled regex pattern — the output of `regex_compile()`.
 ///
 /// Mirrors GNU's `struct re_pattern_buffer` from regex-emacs.h.
+/// Bytecode and its seal are private to the compiler/matcher module: callers
+/// cannot modify the bytes or forge the seal. Matching borrows the bytes
+/// immutably; cloned patterns retain the same validated bytes and seal.
+/// Threading assumption: each evaluator owns its pattern cache; the existing
+/// interior-mutable search caches do not permit concurrent shared mutation.
 #[derive(Clone)]
 pub(crate) struct CompiledPattern {
     /// Bytecode buffer.
-    pub buffer: Vec<u8>,
+    buffer: Vec<u8>,
 
     /// Number of subexpressions (groups).
     pub re_nsub: usize,
@@ -355,7 +356,7 @@ pub(crate) struct CompiledPattern {
     /// boundary — the backtracker then dispatches with unchecked fetches
     /// (the seal-then-trust protocol the bytecode VM uses for `seal_ops`).
     /// False (e.g. a hand-assembled test buffer) keeps the checked loop.
-    pub buffer_sealed: bool,
+    buffer_sealed: bool,
 
     /// The rewind view of the bytecode, for the engines that step every
     /// thread one position at a time (the Pike VM, the existence DFA): see
@@ -404,6 +405,12 @@ pub(crate) struct CompiledPattern {
 const PREFILTER_MIN_BUILD_SPAN: usize = 256;
 
 impl CompiledPattern {
+    /// Inspect compiler output without allowing a caller to invalidate its seal.
+    #[cfg(test)]
+    pub(crate) fn bytecode(&self) -> &[u8] {
+        &self.buffer
+    }
+
     fn sparse_ascii_fastmap(&self) -> Option<SparseAsciiFastmap> {
         *self
             .sparse_ascii_fastmap
@@ -5677,9 +5684,18 @@ fn re_match_loop<const SEALED: bool>(
         // in-buffer op boundary carries a valid opcode byte, and runtime
         // `pc` values are closed over validated boundaries.
         let op = if SEALED {
+            // SAFETY: sealing proves that pc is an in-bounds op boundary,
+            // and the matcher advances only to validated op boundaries.
             let op_byte = unsafe { *bytecode.get_unchecked(pc) };
-            debug_assert!(RegexOp::from_byte(op_byte).is_some());
-            unsafe { std::mem::transmute::<u8, RegexOp>(op_byte) }
+            RegexOp::from_repr(op_byte).unwrap_or_else(|| {
+                debug_assert!(false, "sealed bytecode contains an invalid opcode");
+                // SAFETY: validate_sealed_buffer checked every opcode with
+                // the same derived decoder after all compiler rewrites;
+                // the sealed buffer is immutable during matching, and pc
+                // remains on those validated opcode boundaries. The private
+                // compiler also emits NoOp before Nastyloop retry markers.
+                unsafe { std::hint::unreachable_unchecked() }
+            })
         } else {
             let op_byte = bytecode[pc];
             let Some(op) = RegexOp::from_byte(op_byte) else {
@@ -9810,6 +9826,10 @@ mod short_literal_tests;
 #[cfg(test)]
 #[path = "tests/emacs.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/opcode_decode.rs"]
+mod opcode_decode_tests;
 
 #[cfg(test)]
 #[path = "tests/casefold_scan.rs"]

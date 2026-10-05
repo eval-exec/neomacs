@@ -3057,7 +3057,7 @@ fn regex_syntax_class_fusion() {
     ] {
         let cp = regex_bench_compile(pat, false);
         assert!(
-            cp.buffer.contains(&SYNTAX_SPEC_SET),
+            cp.bytecode().contains(&SYNTAX_SPEC_SET),
             "fusion must emit SyntaxSpecSet for {pat:?}"
         );
     }
@@ -3066,7 +3066,7 @@ fn regex_syntax_class_fusion() {
     // matches every char, so a "not in {word,symbol}" set would be wrong.
     let neg = regex_bench_compile(r"\(?:\Sw\|\S_\)+", false);
     assert!(
-        !neg.buffer.contains(&SYNTAX_SPEC_SET),
+        !neg.bytecode().contains(&SYNTAX_SPEC_SET),
         "negated syntax alternations must not fuse"
     );
 
@@ -3089,7 +3089,7 @@ fn regex_syntax_class_fusion() {
     // A single positive syntax branch stays a plain SyntaxSpec (nothing to
     // fuse) and still matches.
     let single = regex_bench_compile(r"\w+", false);
-    assert!(!single.buffer.contains(&SYNTAX_SPEC_SET));
+    assert!(!single.bytecode().contains(&SYNTAX_SPEC_SET));
     let got = regex_emacs::re_search(&single, b"abc!", 0, 4, &syn, 0)
         .map(|(_p, r)| (r.start[0], r.end[0]));
     assert_eq!(got, Some((0, 3)));
@@ -3122,7 +3122,7 @@ fn regex_bench_syntax_fusion_ab() {
         let cp_f = regex_bench_compile(pat, false);
         let cp_u = regex_emacs::with_syntax_fusion_disabled(|| regex_bench_compile(pat, false));
         assert!(
-            cp_f.buffer.contains(&33u8) && !cp_u.buffer.contains(&33u8),
+            cp_f.bytecode().contains(&33u8) && !cp_u.bytecode().contains(&33u8),
             "A/B setup: fused must contain SyntaxSpecSet, unfused must not ({name})"
         );
         let mc_f = regex_bench_engine_scan(&cp_f, bytes);
@@ -4020,12 +4020,12 @@ fn regex_smart_loop_resolution() {
     // `[ \t']*(` — the el-defs/catch-throw hot loop: exclusive.
     let cp = regex_bench_compile("[ \t']*(", false);
     assert!(
-        cp.buffer
+        cp.bytecode()
             .contains(&(regex_emacs::RegexOp::OnFailureKeepStringJump as u8)),
         "exclusive simple loop must resolve to on_failure_keep_string_jump"
     );
     assert!(
-        !cp.buffer
+        !cp.bytecode()
             .contains(&(regex_emacs::RegexOp::OnFailureJumpSmart as u8)),
         "no unresolved smart jump may survive compilation"
     );
@@ -4033,12 +4033,12 @@ fn regex_smart_loop_resolution() {
     // `a*a` — body overlaps continuation: must stay a backtracking loop.
     let cp2 = regex_bench_compile("a*a", false);
     assert!(
-        !cp2.buffer
+        !cp2.bytecode()
             .contains(&(regex_emacs::RegexOp::OnFailureKeepStringJump as u8)),
         "overlapping loop must NOT use the keep-string fast loop"
     );
     assert!(
-        !cp2.buffer
+        !cp2.bytecode()
             .contains(&(regex_emacs::RegexOp::OnFailureJumpSmart as u8))
     );
 
@@ -4058,7 +4058,7 @@ fn regex_smart_loop_resolution() {
     // `.*\n` — GNU's motivating example for keep-string loops.
     let cp5 = regex_bench_compile(".*\n", false);
     assert!(
-        cp5.buffer
+        cp5.bytecode()
             .contains(&(regex_emacs::RegexOp::OnFailureKeepStringJump as u8))
     );
     let (_pos, regs) = regex_emacs::re_search(&cp5, b"ab\ncd", 0, 5, &syn, 0).expect("matches");
