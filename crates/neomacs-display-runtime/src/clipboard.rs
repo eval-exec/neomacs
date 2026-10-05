@@ -11,6 +11,9 @@ use arboard::{ClearExtLinux, GetExtLinux, LinuxClipboardKind, SetExtLinux};
 #[cfg(target_os = "linux")]
 use raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
 
+#[cfg(target_os = "linux")]
+mod wayland_data_control;
+
 const WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(250);
 const REQUEST_QUEUE_CAPACITY: usize = 32;
 
@@ -55,10 +58,7 @@ impl ClipboardService {
                     let clipboard = unsafe {
                         smithay_clipboard::Clipboard::new(raw_display.display.as_ptr())
                     };
-                    return Self::start(WaylandClipboard {
-                        clipboard,
-                        _display_owner: display,
-                    });
+                    return Self::start(WaylandClipboard::new(clipboard, display));
                 }
             }
             _ => {
@@ -372,9 +372,89 @@ impl ClipboardBackend for ArboardClipboard {
 
 #[cfg(target_os = "linux")]
 struct WaylandClipboard {
-    // Field order is significant: drop the protocol worker before its display.
+    // Field order is significant: drop the protocol objects before their display.
     clipboard: smithay_clipboard::Clipboard,
+    data_control: DataControl,
     _display_owner: OwnedDisplayHandle,
+}
+
+/// Lazily bound fallback for CLIPBOARD reads; see `wayland_data_control`.
+#[cfg(target_os = "linux")]
+enum DataControl {
+    Unbound,
+    Unavailable,
+    Bound(wayland_data_control::DataControlReader),
+}
+
+#[cfg(target_os = "linux")]
+impl WaylandClipboard {
+    fn new(clipboard: smithay_clipboard::Clipboard, display: OwnedDisplayHandle) -> Self {
+        Self {
+            clipboard,
+            data_control: DataControl::Unbound,
+            _display_owner: display,
+        }
+    }
+
+    fn data_control_text(&mut self) -> Result<Option<String>, String> {
+        if let DataControl::Unbound = self.data_control {
+            self.data_control = match self.bind_data_control() {
+                Ok(Some(reader)) => DataControl::Bound(reader),
+                Ok(None) => DataControl::Unavailable,
+                Err(err) => {
+                    tracing::warn!("clipboard data-control fallback unavailable: {err}");
+                    DataControl::Unavailable
+                }
+            };
+        }
+        match &mut self.data_control {
+            DataControl::Bound(reader) => reader.read_text(),
+            DataControl::Unbound | DataControl::Unavailable => Ok(None),
+        }
+    }
+
+    fn bind_data_control(&self) -> Result<Option<wayland_data_control::DataControlReader>, String> {
+        let RawDisplayHandle::Wayland(raw_display) = self
+            ._display_owner
+            .display_handle()
+            .map_err(|err| format!("failed to access the native display: {err}"))?
+            .as_raw()
+        else {
+            return Ok(None);
+        };
+        // SAFETY: `_display_owner` keeps the display alive and is dropped
+        // after `data_control` (field order above).
+        unsafe { wayland_data_control::DataControlReader::connect(raw_display.display) }
+    }
+}
+
+/// Whether smithay-clipboard saw no usable selection offer.
+///
+/// smithay-clipboard reports a missing offer as the untyped error
+/// `selection is empty` and a missing text type as `NotFound`; both mean
+/// "nothing to paste" rather than failure.  Its other errors (no seat, no
+/// keyboard focus) are real failures.
+#[cfg(target_os = "linux")]
+fn smithay_saw_no_offer(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::NotFound || err.to_string() == "selection is empty"
+}
+
+/// Map a smithay-clipboard read result, consulting `fallback` only when it
+/// saw no usable selection offer.  A failed or timed-out fallback reads as
+/// an empty selection (nil), not an error.
+#[cfg(target_os = "linux")]
+fn smithay_text_or_fallback(
+    result: std::io::Result<String>,
+    fallback: impl FnOnce() -> Result<Option<String>, String>,
+) -> Result<Option<String>, String> {
+    match result {
+        Ok(text) => Ok(Some(text)),
+        Err(err) if smithay_saw_no_offer(&err) => fallback().or_else(|err| {
+            tracing::warn!("clipboard data-control read failed: {err}");
+            Ok(None)
+        }),
+        Err(err) => Err(err.to_string()),
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -400,21 +480,16 @@ impl ClipboardBackend for WaylandClipboard {
     }
 
     fn text(&mut self, selection: ClipboardSelection) -> Result<Option<String>, String> {
-        let result = match selection {
-            ClipboardSelection::Clipboard => self.clipboard.load(),
-            ClipboardSelection::Primary => self.clipboard.load_primary(),
-        };
-        match result {
-            Ok(text) => Ok(Some(text)),
-            // smithay-clipboard currently exposes an untyped io::Error for an
-            // unowned selection, including this stable error message.
-            Err(err)
-                if err.kind() == std::io::ErrorKind::NotFound
-                    || err.to_string() == "selection is empty" =>
-            {
-                Ok(None)
+        match selection {
+            ClipboardSelection::Clipboard => {
+                let result = self.clipboard.load();
+                smithay_text_or_fallback(result, || self.data_control_text())
             }
-            Err(err) => Err(err.to_string()),
+            // smithay-clipboard owns the only primary-selection device, so
+            // its result is complete.
+            ClipboardSelection::Primary => {
+                smithay_text_or_fallback(self.clipboard.load_primary(), || Ok(None))
+            }
         }
     }
 

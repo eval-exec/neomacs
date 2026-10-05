@@ -144,7 +144,7 @@ errno = "0.3"
 # `XKeysymToString` tier of `modify_event_symbol`, and this is that table
 # without an X11 or xkbcommon dependency, so it works on every platform.
 keysymdefs = "0.2"
-rustix = { version = "1", features = ["fs"] }
+rustix = { version = "1", features = ["event", "fs"] }
 inotify = "0.11"
 fs4 = { version = "1", features = ["sync"] }
 sysinfo = "0.39"
