@@ -1337,6 +1337,17 @@ impl OverlayIndex {
         .map(|record| record.overlay)
     }
 
+    pub(super) fn overlays_intersecting(&self, range: EmacsByteRange) -> Vec<Value> {
+        let intervals = self.intervals.read();
+        let mut overlays = Vec::with_capacity(intervals.len());
+        intervals
+            .records
+            .for_each_match(IntervalIntersectionQuery(range), |record| {
+                overlays.push(record.overlay);
+            });
+        overlays
+    }
+
     pub(super) fn overlays_in_region(
         &self,
         range: EmacsByteRange,
@@ -1530,6 +1541,33 @@ impl OrderedTreeQuery<IntervalRecord> for IntervalStartQuery {
 
     fn minimum_start_is_too_large(self, minimum_start: EmacsBytePos) -> bool {
         minimum_start > self.0
+    }
+}
+
+/// GNU itree.c:1200-1205 intersection, including empty records at BEGIN.
+/// Query coordinates/cursor are local to the owning buffer's read borrow;
+/// this independent query leaves ordinary point-coverage dispatch unchanged.
+#[derive(Clone, Copy)]
+struct IntervalIntersectionQuery(EmacsByteRange);
+
+impl OrderedTreeQuery<IntervalRecord> for IntervalIntersectionQuery {
+    fn subtree_may_match(
+        self,
+        minimum: EmacsBytePos,
+        _maximum: EmacsBytePos,
+        maximum_end: EmacsBytePos,
+    ) -> bool {
+        minimum <= self.0.end() && maximum_end >= self.0.start()
+    }
+    fn record_matches(self, record: IntervalRecord) -> bool {
+        (self.0.start() < record.range.end() && record.range.start() < self.0.end())
+            || (record.range.is_empty() && record.range.start() == self.0.start())
+    }
+    fn maximum_end_is_too_small(self, maximum_end: EmacsBytePos) -> bool {
+        maximum_end < self.0.start()
+    }
+    fn minimum_start_is_too_large(self, minimum_start: EmacsBytePos) -> bool {
+        minimum_start > self.0.end()
     }
 }
 

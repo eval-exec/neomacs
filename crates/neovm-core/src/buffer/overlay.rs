@@ -1070,14 +1070,16 @@ impl OverlayList {
         self.overlays_in_accessible_emacs_byte_range(range, range.end())
     }
 
-    /// Return every live overlay of this buffer in GNU's `overlay-lists` order.
-    ///
-    /// Mirrors `Foverlay_lists` (buffer.c): the buffer's interval tree is
-    /// walked `BEG..Z` descending and consed, producing all overlays in
-    /// ascending `begin` order. Used to build the `(BEFORE . AFTER)` pair that
-    /// `overlay-lists` returns; since Emacs 29.1 the "overlay center" is gone,
-    /// so every overlay lands in the `BEFORE` (car) list and the `AFTER` (cdr)
-    /// list is always empty.
+    /// GNU overlay-lists intersects the full BEG..Z interval, irrespective
+    /// of narrowing (buffer.c:4012; itree.c:1200-1205). Empty intervals at Z
+    /// are therefore omitted when BEG differs from Z.
+    pub(crate) fn overlays_in_gnu_full_region(&self, range: EmacsByteRange) -> Vec<Value> {
+        self.index.overlays_intersecting(range)
+    }
+
+    /// Enumerate every indexed overlay in structural ascending order.
+    /// Serialization and identity observers include empty end overlays too;
+    /// the Lisp overlay-lists builtin uses the full-region query above.
     pub fn overlays_in_gnu_lists_order(&self) -> Vec<Value> {
         self.index.all_ascending()
     }

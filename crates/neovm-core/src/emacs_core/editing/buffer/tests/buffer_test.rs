@@ -430,4 +430,7 @@ mod gdn_primitives;
 mod multibyte_overlay_order;
 
 #[cfg(test)]
+mod overlay_lists_intersection;
+
+#[cfg(test)]
 mod conversion_byte_boundary;

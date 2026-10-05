@@ -5614,7 +5614,8 @@ pub(crate) fn builtin_overlay_lists_in_buffers(
     let buf = buffers
         .get(buf_id)
         .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
-    let before = Value::list(buf.overlays.overlays_in_gnu_lists_order());
+    let full = EmacsByteRange::new(EmacsBytePos::new(0), buf.total_emacs_byte_end_pos());
+    let before = Value::list(buf.overlays.overlays_in_gnu_full_region(full));
     Ok(Value::cons(before, Value::NIL))
 }
 
