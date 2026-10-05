@@ -25,21 +25,32 @@
 //! decode path (the data-control reader) is the one this module fully owns; a
 //! backend that receives bytes routes them through `choose`/`decode` here
 //! rather than growing a fourth copy.
+//!
+//! Only the smithay-clipboard rows are Linux-gated.  `TextRead` and
+//! `classify_arboard` serve every platform, because arboard is the X11, macOS,
+//! and Windows backend alike and none of them needs a different text policy
+//! today.
 
-/// The absence half of a text read, before there is a payload.
+#[cfg(target_os = "linux")]
+use crate::thread_comm::ClipboardSelection;
+
+/// Why a text read produced no text: a recognized absence, not a failure.
+///
+/// The classifiers answer `Some` for these and `None` for a real error, so the
+/// name matches the side of the `Option` it appears on.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum TextReadFailure {
+pub(super) enum TextAbsence {
     /// No selection owner.
     NoSelection,
     /// An owner exists, but it offers none of the text MIMEs this backend reads.
     TargetUnavailable,
 }
 
-impl From<TextReadFailure> for TextRead {
-    fn from(failure: TextReadFailure) -> Self {
-        match failure {
-            TextReadFailure::NoSelection => Self::NoSelection,
-            TextReadFailure::TargetUnavailable => Self::TargetUnavailable,
+impl From<TextAbsence> for TextRead {
+    fn from(absence: TextAbsence) -> Self {
+        match absence {
+            TextAbsence::NoSelection => Self::NoSelection,
+            TextAbsence::TargetUnavailable => Self::TargetUnavailable,
         }
     }
 }
@@ -123,14 +134,14 @@ impl TextMime {
 /// found")` (`state.rs:149-186`).  Anything else — no keyboard focus, no seat,
 /// a dead worker — is a real failure and returns `None`.
 #[cfg(target_os = "linux")]
-pub(super) fn classify_smithay(err: &std::io::Error) -> Option<TextReadFailure> {
+pub(super) fn classify_smithay(err: &std::io::Error) -> Option<TextAbsence> {
     if err.kind() == std::io::ErrorKind::NotFound
         || err.to_string() == "supported mime-type is not found"
     {
-        return Some(TextReadFailure::TargetUnavailable);
+        return Some(TextAbsence::TargetUnavailable);
     }
     match err.to_string().as_str() {
-        "selection is empty" => Some(TextReadFailure::NoSelection),
+        "selection is empty" => Some(TextAbsence::NoSelection),
         _ => None,
     }
 }
@@ -142,9 +153,9 @@ pub(super) fn classify_smithay(err: &std::io::Error) -> Option<TextReadFailure> 
 /// never name a specific absence; the conservative answer is `NoSelection`.
 /// Every other variant is a real failure.  (`Error` is `#[non_exhaustive]`, so
 /// the catch-all is required.)
-pub(super) fn classify_arboard(err: &arboard::Error) -> Option<TextReadFailure> {
+pub(super) fn classify_arboard(err: &arboard::Error) -> Option<TextAbsence> {
     match err {
-        arboard::Error::ContentNotAvailable => Some(TextReadFailure::NoSelection),
+        arboard::Error::ContentNotAvailable => Some(TextAbsence::NoSelection),
         _ => None,
     }
 }
@@ -164,7 +175,7 @@ pub(super) fn text_or_fallback(
     let native = match result {
         Ok(text) => return Ok(TextRead::Text(text)),
         Err(err) => match classify_smithay(&err) {
-            Some(failure) => TextRead::from(failure),
+            Some(absence) => TextRead::from(absence),
             None => return Err(err.to_string()),
         },
     };
@@ -175,6 +186,25 @@ pub(super) fn text_or_fallback(
             tracing::warn!("clipboard data-control read failed: {err}");
             Ok(native)
         }
+    }
+}
+
+/// The Wayland read policy for one selection: consult the data-control
+/// fallback only for CLIPBOARD.
+///
+/// smithay-clipboard owns the only primary-selection device and the reader
+/// speaks CLIPBOARD only, so a PRIMARY absence is final.  The native result is
+/// passed in rather than read here so the routing is testable without a live
+/// display.
+#[cfg(target_os = "linux")]
+pub(super) fn wayland_read(
+    selection: ClipboardSelection,
+    native: std::io::Result<String>,
+    data_control: impl FnOnce() -> Result<Option<TextRead>, String>,
+) -> Result<TextRead, String> {
+    match selection {
+        ClipboardSelection::Clipboard => text_or_fallback(native, data_control),
+        ClipboardSelection::Primary => text_or_fallback(native, || Ok(None)),
     }
 }
 

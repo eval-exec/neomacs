@@ -469,21 +469,15 @@ impl ClipboardBackend for WaylandClipboard {
     }
 
     fn text(&mut self, selection: ClipboardSelection) -> Result<text_policy::TextRead, String> {
-        match selection {
-            ClipboardSelection::Clipboard => {
-                // Hyprland delivers the selection only to winit's data device,
-                // so smithay's device can report an absence while the
-                // compositor holds a selection; only an absence consults the
-                // data-control fallback (see `text_policy::text_or_fallback`).
-                let native = self.clipboard.load();
-                text_policy::text_or_fallback(native, || self.data_control_text())
-            }
-            // smithay-clipboard owns the only primary-selection device, so
-            // its result is complete.
-            ClipboardSelection::Primary => {
-                text_policy::text_or_fallback(self.clipboard.load_primary(), || Ok(None))
-            }
-        }
+        // Hyprland delivers the selection only to winit's data device, so
+        // smithay's device can report an absence while the compositor holds a
+        // selection.  Which selections may then consult the data-control
+        // fallback is `text_policy::wayland_read`'s business.
+        let native = match selection {
+            ClipboardSelection::Clipboard => self.clipboard.load(),
+            ClipboardSelection::Primary => self.clipboard.load_primary(),
+        };
+        text_policy::wayland_read(selection, native, || self.data_control_text())
     }
 
     fn owner(&mut self, _selection: ClipboardSelection) -> Result<SelectionOwner, String> {
