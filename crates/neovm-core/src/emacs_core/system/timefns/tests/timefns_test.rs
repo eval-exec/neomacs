@@ -1855,3 +1855,6 @@ fn current_cpu_time_is_cpu_not_wall_time() {
         after - before
     );
 }
+
+#[cfg(test)]
+mod time_zone_spec;

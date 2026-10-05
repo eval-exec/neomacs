@@ -21,6 +21,13 @@ use std::ffi::{CStr, OsString};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod time_zone_spec;
+#[cfg_attr(
+    not(test),
+    expect(unused_imports, reason = "Timezone guards migrate in the next change")
+)]
+use time_zone_spec::TimeZoneSpec;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::IntoStaticStr)]
 enum TimeConvertSymbolForm {
     #[strum(serialize = "integer")]
