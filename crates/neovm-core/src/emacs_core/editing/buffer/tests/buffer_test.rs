@@ -433,4 +433,7 @@ mod multibyte_overlay_order;
 mod overlay_lists_intersection;
 
 #[cfg(test)]
+mod overlay_deletion_bulk_order;
+
+#[cfg(test)]
 mod conversion_byte_boundary;

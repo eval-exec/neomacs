@@ -234,3 +234,7 @@ harness = false
 unused_imports = "warn"
 unused_variables = "warn"
 dead_code = "warn"
+
+[[test]]
+name = "gnu_overlay_deletion_allocations"
+path = "tests/gnu_overlay_deletion_allocations.rs"

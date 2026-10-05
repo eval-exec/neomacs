@@ -1035,20 +1035,21 @@ impl OverlayIndex {
         if range.is_empty() {
             return Vec::new();
         }
-        let mut exceptions = self.deletion_exceptions(range);
-        // As for an insertion: an overlay that strictly contains the whole
-        // deletion keeps its start and only pulls its end back, so it holds
-        // its place in the index. It cannot collapse either -- text remains
-        // on both sides of the deletion inside it -- so no evaporation can
-        // follow. Its end endpoint lies at or after the deletion's end and is
-        // moved by the shift below; only the interval record needs telling.
+        let (mut exceptions, starts_contract) = self.deletion_exceptions(range);
+        // A containing overlay with an unchanged start can update its end
+        // in place. An existing START tie also stays in place when no starts
+        // contract; otherwise it participates in the one ranked restore pass.
+        // Text remains after END, so these in-place cases cannot evaporate.
+        // The endpoint suffix shift below moves their end endpoints.
         let delta = EmacsByteDelta::deletion(range.len());
-        let mut shrunk_effects = Vec::new();
+        let mut shrunk_effects = SmallVec::<[(Value, EmacsByteRange); 4]>::new();
         exceptions.retain(|overlay| {
             let Some(old) = self.range(*overlay) else {
                 return true;
             };
-            if old.start() < range.start() && old.end() > range.end() {
+            if (old.start() < range.start() || (!starts_contract && old.start() == range.start()))
+                && old.end() > range.end()
+            {
                 shrunk_effects.push((*overlay, old));
                 false
             } else {
@@ -1064,15 +1065,15 @@ impl OverlayIndex {
                     .expect("overlay containing the deletion is indexed");
             }
         }
-        let shrunk_effects: Vec<OverlayEditEffect> = shrunk_effects
-            .into_iter()
-            .map(|(overlay, old)| OverlayEditEffect::Resized {
+        let mut effects = Vec::with_capacity(shrunk_effects.len() + exceptions.len());
+        effects.extend(shrunk_effects.into_iter().map(|(overlay, old)| {
+            OverlayEditEffect::Resized {
                 overlay,
                 range: EmacsByteRange::new(old.start(), delta.apply_to_pos(old.end())),
-            })
-            .collect();
+            }
+        }));
 
-        let mut detached = Vec::with_capacity(exceptions.len());
+        let mut detached = SmallVec::<[(Value, EmacsByteRange, u64); 8]>::new();
         for overlay in exceptions {
             if let Some((old_range, attachment_order)) = self.take_for_text_edit(overlay) {
                 detached.push((overlay, old_range, attachment_order));
@@ -1086,13 +1087,28 @@ impl OverlayIndex {
             endpoints.shift_at_or_after(range.end(), true, delta);
         }
 
-        // Deletion shifts the suffix beginning exactly at END to START as
-        // well. The topology itself stays fixed, so all resulting START ties
-        // must preserve its structural order rather than attachment serials.
-        let mut effects = shrunk_effects;
-        effects.reserve(detached.len());
-        let mut evaporated = Vec::new();
-        for (overlay, old_range, attachment_order) in detached {
+        // Candidates were captured in the original ascending query order,
+        // which equals GNU structural in-order. itree_delete_gap (itree.c:1173)
+        // preserves that order. Assign fresh descending B+ attachment keys
+        // during this one restore loop, only when distinct starts collapse.
+        // START and END boundary records are included in that same snapshot.
+        let collapsed_count = detached
+            .iter()
+            .filter(|(_, old, _)| old.start() >= range.start())
+            .count();
+        let mut collapsed_orders = starts_contract.then(|| {
+            self.intervals
+                .write()
+                .reserve_attachment_orders(collapsed_count)
+                .rev()
+        });
+        let mut evaporated = SmallVec::<[OverlayIdentity; 8]>::new();
+        for (overlay, old_range, mut attachment_order) in detached {
+            if old_range.start() >= range.start() {
+                if let Some(orders) = &mut collapsed_orders {
+                    attachment_order = orders.next().expect("reserved collapsed-start rank");
+                }
+            }
             #[cfg(test)]
             super::overlay::record_overlay_edit_candidate_inspection();
             let new_start = if old_range.start() >= range.end() {
@@ -1139,58 +1155,30 @@ impl OverlayIndex {
         // GNU discovers evaporated overlays in ascending itree order, conses
         // them, then deletes the resulting reversed list.  Preserve that
         // removal order because red-black topology affects later insertion.
-        let evaporated = self.gnu_order.subset_inorder(&evaporated);
         for identity in evaporated.into_iter().rev() {
             assert!(
                 self.gnu_order.remove(identity),
                 "evaporated overlay missing from GNU order mirror"
             );
         }
-        self.restore_contracted_start_order(range.start());
         effects
     }
 
-    /// GNU itree_delete_gap updates begins in place (itree.c:1173) and leaves
-    /// in-order traversal unchanged. Re-key only the newly tied start group;
-    /// ordinary queries keep using the B+ iterator with no extra sorting.
-    /// All scratch identities and keys are local to the owning buffer's
-    /// exclusive mutation; readers see the already protected completed index.
-    fn restore_contracted_start_order(&mut self, position: EmacsBytePos) {
-        let mut intervals = self.intervals.write();
-        let mut tied = SmallVec::<[OverlayIdentity; 4]>::new();
-        intervals
+    /// Capture deletion candidates in original structural order, including
+    /// overlays beginning exactly at END that contract into the START group.
+    /// Inline scratch is private to the owning buffer's exclusive mutation;
+    /// ordinary small deletions allocate no ordering/candidate scratch.
+    fn deletion_exceptions(&self, range: EmacsByteRange) -> (SmallVec<[Value; 8]>, bool) {
+        let mut exceptions = SmallVec::new();
+        let mut starts_contract = false;
+        self.intervals
+            .read()
             .records
-            .for_each_match(IntervalStartQuery(position), |record| {
-                tied.push(OverlayIdentity::of(record.overlay));
+            .for_each_match(IntervalDeletionQuery(range), |record| {
+                starts_contract |= record.range.start() > range.start();
+                exceptions.push(record.overlay);
             });
-        if tied.len() < 2 {
-            return;
-        }
-        let structural = self.gnu_order.subset_inorder(&tied);
-        if tied.as_slice() == structural.as_slice() {
-            return;
-        }
-        // Newer B+ attachment keys sort first. Reinsert in the opposite order
-        // without changing the GNU topology or overlay position authority.
-        for identity in structural.into_iter().rev() {
-            let overlay = Value::from_bits(identity.0);
-            let (range, _) = intervals
-                .take(overlay)
-                .expect("contracted overlay remains indexed");
-            assert!(intervals.insert(overlay, range));
-        }
-    }
-
-    fn deletion_exceptions(&self, range: EmacsByteRange) -> Vec<Value> {
-        let mut exceptions = self.overlays_touching(range.start());
-        // This is the same set the old endpoint walk produced: overlays
-        // touching the deletion start plus intervals with either endpoint
-        // strictly inside the deletion.  Passing a non-matching accessible
-        // end deliberately excludes an empty overlay exactly at `range.end`,
-        // which belongs to the lazily shifted suffix.
-        exceptions.extend(self.overlays_in_region_iter(range, EmacsBytePos::new(usize::MAX)));
-        sort_and_dedup_overlay_identities(&mut exceptions);
-        exceptions
+        (exceptions, starts_contract)
     }
 
     fn take_for_text_edit(&mut self, overlay: Value) -> Option<(EmacsByteRange, u64)> {
@@ -1518,29 +1506,29 @@ impl OrderedShiftRecord for IntervalRecord {
     }
 }
 
-/// Start-only query used when a text deletion contracts starts to one point.
-/// Its coordinate is call-local under the buffer owner's exclusive mutation;
-/// no Lisp state or query result is shared with another mutator. Separate from
-/// ordinary point coverage so the common overlay-query code remains unchanged.
+/// Closed deletion-boundary query. END-start records are included so their
+/// structural rank is assigned in the same restore pass as contracted starts.
+/// This call-local query remains separate from ordinary hot point coverage.
 #[derive(Clone, Copy)]
-struct IntervalStartQuery(EmacsBytePos);
+struct IntervalDeletionQuery(EmacsByteRange);
 
-impl OrderedTreeQuery<IntervalRecord> for IntervalStartQuery {
+impl OrderedTreeQuery<IntervalRecord> for IntervalDeletionQuery {
     fn subtree_may_match(
         self,
         minimum: EmacsBytePos,
-        maximum: EmacsBytePos,
-        _maximum_end: EmacsBytePos,
+        _maximum: EmacsBytePos,
+        maximum_end: EmacsBytePos,
     ) -> bool {
-        minimum <= self.0 && self.0 <= maximum
+        minimum <= self.0.end() && maximum_end >= self.0.start()
     }
-
     fn record_matches(self, record: IntervalRecord) -> bool {
-        record.range.start() == self.0
+        record.range.start() <= self.0.end() && record.range.end() >= self.0.start()
     }
-
+    fn maximum_end_is_too_small(self, maximum_end: EmacsBytePos) -> bool {
+        maximum_end < self.0.start()
+    }
     fn minimum_start_is_too_large(self, minimum_start: EmacsBytePos) -> bool {
-        minimum_start > self.0
+        minimum_start > self.0.end()
     }
 }
 
@@ -1678,6 +1666,17 @@ impl IntervalBPlusTree {
             records: OrderedShiftTree::from_records(records),
             next_attachment_order: entries.len() as u64,
         }
+    }
+
+    /// Reserve call-local ranks under the buffer owner's exclusive mutation.
+    /// Reversing this range preserves ascending structural order within new
+    /// equal-start groups, with no per-overlay path allocation or second move.
+    fn reserve_attachment_orders(&mut self, count: usize) -> std::ops::Range<u64> {
+        let first = self.next_attachment_order;
+        self.next_attachment_order = first
+            .checked_add(count as u64)
+            .expect("overlay attachment order exhausted");
+        first..self.next_attachment_order
     }
 
     fn insert(&mut self, overlay: Value, range: EmacsByteRange) -> bool {

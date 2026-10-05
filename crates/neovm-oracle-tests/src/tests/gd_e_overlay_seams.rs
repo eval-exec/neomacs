@@ -67,5 +67,9 @@ mod multibyte_after_contracted_starts;
 mod overlay_lists_full_region_intersection;
 
 #[cfg(test)]
+#[path = "gd_e_overlay_seams/deletion_bulk_and_middle_order.rs"]
+mod deletion_bulk_and_middle_order;
+
+#[cfg(test)]
 #[path = "gd_e_overlay_seams/multibyte_extended_and_raw_boundaries.rs"]
 mod multibyte_extended_and_raw_boundaries;
