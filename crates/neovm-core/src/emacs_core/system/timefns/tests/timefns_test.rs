@@ -1861,3 +1861,6 @@ mod time_zone_spec;
 
 #[cfg(test)]
 mod unix_timestamp;
+
+#[cfg(test)]
+mod calendar;
