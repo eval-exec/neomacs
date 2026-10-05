@@ -1396,4 +1396,7 @@ fn file_attributes_resolves_names_only_for_the_string_id_format_like_gnu() {
 mod compare_case_table;
 
 #[cfg(all(test, unix))]
+mod count_nil;
+
+#[cfg(all(test, unix))]
 mod readdir_order;

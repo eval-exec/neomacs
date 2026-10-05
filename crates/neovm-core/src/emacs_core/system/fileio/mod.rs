@@ -5079,6 +5079,7 @@ pub(crate) fn builtin_directory_files(eval: &mut Context, args: Vec<Value>) -> E
     let nosort = args.get(3).is_some_and(|v| v.is_truthy());
     let count = if let Some(val) = args.get(4) {
         match val.kind() {
+            ValueKind::Nil => None,
             ValueKind::Fixnum(n) if n >= 0 => Some(n as usize),
             _other => {
                 return Err(signal(
