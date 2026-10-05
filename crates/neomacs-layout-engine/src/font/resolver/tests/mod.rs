@@ -591,6 +591,67 @@ fn character_fallback_prefers_the_requested_face_width() {
     }
 }
 
+#[test]
+fn explicit_fontset_width_beats_the_face_width_on_live_and_frozen_paths() {
+    // The face width only fills an unset fontset width.  An explicit
+    // `:width' in the fontset spec still wins, on the live path and on the
+    // frozen worker path, both on a fresh lookup and on a cache hit.  The
+    // Normal face is discovered first, so only scoring can choose Expanded.
+    let collection_face = |index: u32, width: FontWidth| {
+        let mut face = candidate("Fixture Mono", 400, FontSlant::Normal, 100);
+        face.matched.metadata.width = Some(width);
+        replace_file_identity(
+            &mut face,
+            ResolvedFontIdentity::from_file("/fixture/FixtureMono.ttc", index, None),
+        );
+        face
+    };
+    let candidates = vec![
+        collection_face(0, FontWidth::Normal),
+        collection_face(3, FontWidth::Expanded),
+    ];
+    let mut eval = neovm_core::emacs_core::Context::new();
+    eval.eval_str(
+        "(let ((font-encoding-alist '((\".*\" unicode)))) \
+           (set-fontset-font t ?α (font-spec :family \"Fixture Mono\" :width 'expanded \
+                                             :registry \"iso10646-1\")))",
+    )
+    .unwrap();
+    let policies =
+        FrozenCharacterPolicies::capture(&[("Base Mono", 'α', 400, false, selection_size())], 4096)
+            .unwrap();
+    let selected_face = |resolver: &FontResolver| {
+        resolver
+            .resolve_for_char(
+                "Base Mono",
+                'α',
+                400,
+                FontSlant::Normal,
+                FontWidth::Normal,
+                selection_size(),
+            )
+            .map(|selected| (selected.metadata.width, selected.identity.file_face_index()))
+    };
+    let expanded = Some((Some(FontWidth::Expanded), 3));
+
+    let live = FontResolver::new(Box::new(CandidateBackend {
+        candidates: candidates.clone(),
+    }));
+    assert_eq!(selected_face(&live), expanded, "live lookup");
+    assert_eq!(selected_face(&live), expanded, "live cache hit");
+    drop(eval);
+
+    std::thread::spawn(move || {
+        let mut frozen = FontResolver::new(Box::new(CandidateBackend { candidates }));
+        frozen.install_worker_policy(Arc::new(policies));
+        assert_eq!(selected_face(&frozen), expanded, "frozen lookup");
+        assert_eq!(selected_face(&frozen), expanded, "frozen cache hit");
+        assert!(!frozen.worker_policy_missing());
+    })
+    .join()
+    .unwrap();
+}
+
 struct MetricBackend {
     candidates: Vec<FontCandidate>,
     probes: Arc<AtomicUsize>,
