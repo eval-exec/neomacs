@@ -244,14 +244,20 @@ loops retain their
 existing policy, with no new per-edge knob branch.
 
 Hash tables use exact owned Box addresses rather than page membership. The
-maintained-registry comparison visits every mutator's table registry with all
-mutators stopped. The default lazy discovery instead finds tables in the
-heap's existing exact live-Box inventory, which includes ordinary-old owners;
-it adds no hash registration on allocation or free. Both capture only hydrated,
+start handshake finds tables in the heap's existing exact live-Box inventory,
+which includes ordinary-old owners; it adds no hash registration on allocation
+or free. Capture includes only hydrated,
 nonweak, generation-relevant tables. Mapped and post-start owners miss the
 snapshot. Weak and pending tables refuse before the claim, preserving
 mutator-side weak registration and hydration. Capture does not root a table:
 the worker scans only eligible owners it reaches.
+
+Concurrent state is owned through the original `Option<Box<GenCensus>>` heap
+field. A claims-only carrier disables census measurement and remembered-set
+probes. A census moves only its measurement history, so the outer carrier,
+snapshot, counters and registered mutators' retained buffers stay owned until
+the cycle's joined termination releases them. With both facilities disabled,
+the pointer is absent and existing heap and mutator member offsets are unchanged.
 
 Capture records constant-sized metadata per table: `(slots.as_ptr(),
 slots.len())` and copied custom comparison/hash callbacks. It does not walk

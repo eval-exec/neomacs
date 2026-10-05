@@ -914,10 +914,10 @@ pub struct TaggedHeap {
     /// read once, here at construction): the Tier-B snapshot (the default),
     /// or, for the F-G measurement only, deferral to the termination.
     vec_scan: knobs::VecScanMode,
-    /// Optional collector cold state in the original census pointer carrier.
-    /// Census and U35 have independent lifetimes; no inline U35 state changes
-    /// allocation/barrier offsets while the default-off policy is disabled.
-    census: Option<Box<ColdGcState>>,
+    /// The original census pointer also carries optional U35 cold state.
+    /// A claims-only carrier has disabled measurement; the two facilities
+    /// retain independent history, snapshot and per-mutator log lifetimes.
+    census: Option<Box<GenCensus>>,
 }
 
 impl Default for TaggedHeap {
@@ -962,8 +962,7 @@ impl TaggedHeap {
     pub fn new() -> Self {
         super::collection_reads::initialize();
         let chunk_map = knobs::chunk_map_on().then(|| std::sync::Arc::new(ChunkMap::new()));
-        let concurrent_claims = knobs::concurrent_claims_on();
-        let heap = Self {
+        let mut heap = Self {
             generational: generational::GenState::new(
                 std::env::var("NEOVM_GC_GENERATIONAL").as_deref() == Ok("1"),
             ),
@@ -1127,8 +1126,11 @@ impl TaggedHeap {
             dump_addr_lo: usize::MAX,
             dump_addr_hi: 0,
             vec_scan: knobs::vec_scan_mode(),
-            census: ColdGcState::from_knobs(concurrent_claims),
+            census: GenCensus::from_knob(),
         };
+        if knobs::concurrent_claims_on() {
+            heap.install_concurrent_claims();
+        }
         // The census's remembered-set probe widens the window compiled code
         // tests from the start (the thread-local mirror follows when the heap
         // is installed, `set_tagged_heap`).
@@ -2708,9 +2710,8 @@ mod knobs;
 mod chunk_map;
 use chunk_map::{CHUNK_CLASS_COUNT, ChunkClass, ChunkEntry, ChunkMap, HeapChunkMap, PageSnapshot};
 
-mod cold_gc;
-use cold_gc::ColdGcState;
 mod census;
+mod cold_gc;
 #[cfg(test)]
 use census::CensusRecord;
 use census::{CensusCycleKind, GenCensus, census_remset_probe_on};

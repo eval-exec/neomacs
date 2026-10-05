@@ -1,4 +1,4 @@
-//! Optional collector cold state, carried in the existing census pointer slot.
+//! Optional concurrent state, owned by the original GenCensus pointer carrier.
 //! No U35 field widens the inline heap or mutator allocation/barrier state.
 
 use super::*;
@@ -97,51 +97,44 @@ impl ConcurrentClaimsState {
     }
 }
 
-/// Keeps the old optional-box pointer/niche carrier in TaggedHeap. Census
-/// take/restore affects only `census`, so active U35 state never disappears.
-pub(super) struct ColdGcState {
-    pub(super) census: Option<Box<GenCensus>>,
-    pub(super) concurrent: Option<ConcurrentClaimsState>,
-}
-
-impl ColdGcState {
-    pub(super) fn from_knobs(claims: bool) -> Option<Box<Self>> {
-        let census = GenCensus::from_knob();
-        if !claims && census.is_none() {
-            return None;
-        }
-        Some(Box::new(Self {
-            census,
-            concurrent: claims.then(ConcurrentClaimsState::new),
-        }))
-    }
-}
-
 impl TaggedHeap {
-    #[inline]
+    #[cfg(test)]
+    pub(crate) fn new_for_concurrent_hash_test(generational: bool) -> Self {
+        let mut heap = knobs::with_concurrent_claims_for_test(true, Self::new);
+        heap.generational = super::generational::GenState::new(generational);
+        heap
+    }
+
+    /// Construction-only: claims do not enable census measurement. Both
+    /// facilities disabled leave the original optional pointer absent.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn install_concurrent_claims(&mut self) {
+        let carrier = self
+            .census
+            .get_or_insert_with(|| Box::new(GenCensus::disabled()));
+        debug_assert!(carrier.concurrent.is_none());
+        carrier.concurrent = Some(Box::new(ConcurrentClaimsState::new()));
+    }
+
+    #[cfg(test)]
     pub(super) fn census_state(&self) -> Option<&GenCensus> {
         self.census
             .as_deref()
-            .and_then(|cold| cold.census.as_deref())
-    }
-
-    pub(super) fn census_state_mut(&mut self) -> Option<&mut GenCensus> {
-        self.census
-            .as_deref_mut()
-            .and_then(|cold| cold.census.as_deref_mut())
+            .filter(|census| census.measurement_enabled())
     }
 
     #[inline]
     pub(super) fn concurrent_claims_state(&self) -> Option<&ConcurrentClaimsState> {
         self.census
             .as_deref()
-            .and_then(|cold| cold.concurrent.as_ref())
+            .and_then(|census| census.concurrent.as_deref())
     }
 
     pub(super) fn concurrent_claims_state_mut(&mut self) -> Option<&mut ConcurrentClaimsState> {
         self.census
             .as_deref_mut()
-            .and_then(|cold| cold.concurrent.as_mut())
+            .and_then(|census| census.concurrent.as_deref_mut())
     }
 
     #[inline]
@@ -255,8 +248,48 @@ mod tests {
         assert!(census.concurrent_hash_mutators().next().is_none());
         let claims = heap(true, knobs::CensusMode::Off);
         assert!(claims.census_state().is_none());
+        assert!(claims.census.is_some());
         assert!(claims.concurrent_claims());
         assert!(claims.concurrent_hash_mutators().next().is_none());
+    }
+
+    #[test]
+    fn u35_claims_without_census_skip_measurement_across_collections() {
+        let mut heap = heap(true, knobs::CensusMode::Off);
+        let carrier = &**heap.census.as_ref().unwrap() as *const GenCensus;
+        let root = heap.alloc_cons(TaggedValue::fixnum(5), TaggedValue::NIL);
+        for _ in 0..2 {
+            heap.collect_exact(std::iter::once(root));
+            assert_eq!(heap.last_census_for_test(), None);
+            assert!(heap.census_state().is_none());
+            assert!(heap.concurrent_claims());
+            assert_eq!(
+                &**heap.census.as_ref().unwrap() as *const GenCensus,
+                carrier
+            );
+            assert_eq!(heap.barrier_window(), BarrierWindow::NONE);
+            assert_eq!(heap.jit_barrier_window_for_test(), BarrierWindow::NONE);
+        }
+    }
+
+    #[test]
+    fn u35_test_heap_scope_restores_claims_after_nested_construction_and_panic() {
+        knobs::with_concurrent_claims_for_test(false, || {
+            for generational in [false, true] {
+                let heap = TaggedHeap::new_for_concurrent_hash_test(generational);
+                assert!(heap.concurrent_claims());
+                assert_eq!(heap.generational_enabled(), generational);
+                assert!(!knobs::concurrent_claims_on());
+            }
+            let result = std::panic::catch_unwind(|| {
+                knobs::with_concurrent_claims_for_test(true, || {
+                    assert!(knobs::concurrent_claims_on());
+                    panic!("unwind the test policy scope");
+                });
+            });
+            assert!(result.is_err());
+            assert!(!knobs::concurrent_claims_on());
+        });
     }
 
     #[test]
@@ -288,15 +321,8 @@ mod tests {
                 0, 16, 32, 56, 80, 104, 128, 152, 184, 192, 248, 256, 264, 776
             ],
         );
-        assert_eq!(
-            size_of::<Option<Box<ColdGcState>>>(),
-            size_of::<Option<Box<GenCensus>>>()
-        );
-        assert_eq!(
-            align_of::<Option<Box<ColdGcState>>>(),
-            align_of::<Option<Box<GenCensus>>>()
-        );
-        assert_eq!(size_of::<Option<Box<ColdGcState>>>(), size_of::<usize>());
+        assert_eq!(size_of::<Option<Box<GenCensus>>>(), size_of::<usize>());
+        assert_eq!(align_of::<Option<Box<GenCensus>>>(), align_of::<usize>());
         assert_eq!(size_of::<JitHeapState>(), 48);
         let mut off = heap(false, knobs::CensusMode::Off);
         assert!(!off.concurrent_claims());
@@ -319,41 +345,69 @@ mod tests {
     }
 
     #[test]
-    fn u35_census_inner_take_restore_preserves_snapshot_counters_and_mutator_logs() {
-        let mut heap = heap(true, knobs::CensusMode::Survivors);
-        let snapshot = Arc::new(concurrent_hash::HashTableScanSnapshot::new());
-        heap.set_concurrent_hash_snapshot(Some(snapshot.clone()));
-        let entry = heap.current_concurrent_hash_mutator();
-        entry
-            .lock()
-            .unwrap()
-            .written_hash_owners
-            .push(TaggedValue::fixnum(3));
-        heap.concurrent_leaf_claimed()
-            .unwrap()
-            .store(7, Ordering::Relaxed);
-        let cold_address = &**heap.census.as_ref().unwrap() as *const ColdGcState;
-        heap.census_at_termination(CensusCycleKind::StopTheWorld, 0);
-        assert_eq!(
-            &**heap.census.as_ref().unwrap() as *const ColdGcState,
-            cold_address
-        );
-        assert!(heap.last_census_for_test().is_some());
-        assert!(Arc::ptr_eq(
-            heap.concurrent_hash_snapshot().unwrap(),
-            &snapshot
-        ));
-        assert_eq!(
+    fn u35_census_history_take_restore_preserves_snapshot_counters_and_mutator_logs() {
+        for mode in [
+            knobs::CensusMode::Survivors,
+            knobs::CensusMode::SurvivorsAndRemset,
+        ] {
+            let mut heap = heap(true, mode);
+            let snapshot = Arc::new(concurrent_hash::HashTableScanSnapshot::new());
+            heap.set_concurrent_hash_snapshot(Some(snapshot.clone()));
+            let entry = heap.current_concurrent_hash_mutator();
+            let retired = vec![Some(crate::emacs_core::value::HashTableEntry {
+                key: TaggedValue::fixnum(3),
+                value: TaggedValue::fixnum(9),
+            })];
+            let retired_address = retired.as_ptr();
+            {
+                let mut log = entry.lock().unwrap();
+                log.written_hash_owners.push(TaggedValue::fixnum(3));
+                log.retired_hash_buffers.push(retired);
+            }
             heap.concurrent_leaf_claimed()
                 .unwrap()
-                .load(Ordering::Relaxed),
-            7
-        );
-        assert!(Arc::ptr_eq(&heap.current_concurrent_hash_mutator(), &entry));
-        assert_eq!(
-            entry.lock().unwrap().written_hash_owners,
-            [TaggedValue::fixnum(3)]
-        );
+                .store(7, Ordering::Relaxed);
+            heap.concurrent_hash_claimed()
+                .unwrap()
+                .store(9, Ordering::Relaxed);
+            let cold_address = &**heap.census.as_ref().unwrap() as *const GenCensus;
+            let expected_window = heap.barrier_window();
+            for _ in 0..2 {
+                heap.census_at_termination(CensusCycleKind::StopTheWorld, 0);
+                assert_eq!(
+                    &**heap.census.as_ref().unwrap() as *const GenCensus,
+                    cold_address
+                );
+                assert!(heap.last_census_for_test().is_some());
+                assert!(heap.census_state().is_some());
+                assert_eq!(heap.barrier_window(), expected_window);
+                assert!(Arc::ptr_eq(
+                    heap.concurrent_hash_snapshot().unwrap(),
+                    &snapshot
+                ));
+                assert_eq!(
+                    heap.concurrent_leaf_claimed()
+                        .unwrap()
+                        .load(Ordering::Relaxed),
+                    7
+                );
+                assert_eq!(
+                    heap.concurrent_hash_claimed()
+                        .unwrap()
+                        .load(Ordering::Relaxed),
+                    9
+                );
+                assert!(Arc::ptr_eq(&heap.current_concurrent_hash_mutator(), &entry));
+                let log = entry.lock().unwrap();
+                assert_eq!(log.written_hash_owners, [TaggedValue::fixnum(3)]);
+                assert_eq!(log.retired_hash_buffers.len(), 1);
+                assert_eq!(log.retired_hash_buffers[0].as_ptr(), retired_address);
+                assert_eq!(
+                    log.retired_hash_buffers[0][0].unwrap().value,
+                    TaggedValue::fixnum(9)
+                );
+            }
+        }
     }
 
     #[test]

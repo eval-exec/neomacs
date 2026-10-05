@@ -168,6 +168,19 @@ pub(crate) fn set_concurrent_claims_for_test(on: Option<bool>) {
     CONCURRENT_CLAIMS_OVERRIDE.with(|c| c.set(on));
 }
 
+/// Nestable test scope; restore the prior thread-local policy on unwind too.
+#[cfg(test)]
+pub(crate) fn with_concurrent_claims_for_test<R>(on: bool, f: impl FnOnce() -> R) -> R {
+    struct RestoreClaims(Option<bool>);
+    impl Drop for RestoreClaims {
+        fn drop(&mut self) {
+            CONCURRENT_CLAIMS_OVERRIDE.with(|c| c.set(self.0));
+        }
+    }
+    let _restore = RestoreClaims(CONCURRENT_CLAIMS_OVERRIDE.with(|c| c.replace(Some(on))));
+    f()
+}
+
 /// Test hook: the census mode heaps created on this thread use (`None`
 /// restores the environment's).
 #[cfg(test)]

@@ -127,7 +127,7 @@ impl TaggedHeap {
     pub(crate) fn barrier_window(&self) -> BarrierWindow {
         if self.concurrent_mark_running
             || self.write_tracking_mode != WriteTrackingMode::Disabled
-            || self.census_state().is_some_and(GenCensus::remset_probe)
+            || self.census.as_deref().is_some_and(GenCensus::remset_probe)
         {
             BarrierWindow::ALL
         } else if self.partition_dump {

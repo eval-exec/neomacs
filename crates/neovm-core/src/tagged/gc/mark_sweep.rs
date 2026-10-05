@@ -1819,7 +1819,7 @@ impl TaggedHeap {
     ) {
         // The generation census reads the final marks before the sweep (no-op
         // unless `NEOVM_GC_CENSUS`).
-        if self.census_state().is_some() {
+        if self.census.is_some() {
             self.census_at_termination(CensusCycleKind::StopTheWorld, 0);
         }
         // Dump-partition safety gate: prove no live heap object reachable only

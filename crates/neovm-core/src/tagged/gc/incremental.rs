@@ -103,7 +103,7 @@ impl TaggedHeap {
         }
         // The generation census reads the final marks before the sweep
         // detaches the young list (no-op unless `NEOVM_GC_CENSUS`).
-        if self.census_state().is_some() {
+        if self.census.is_some() {
             let (kind, mark_window_alloc) = if self.is_minor_collection() {
                 (CensusCycleKind::StopTheWorld, 0)
             } else {
@@ -1156,10 +1156,7 @@ impl TaggedHeap {
                 // reachable from the allocator.
                 *cons_free_list = saved;
                 released += 1;
-                if let Some(census) = census
-                    .as_deref_mut()
-                    .and_then(|cold| cold.census.as_deref_mut())
-                {
+                if let Some(census) = census.as_deref_mut() {
                     census.forget_cons_block(block.base_addr());
                 }
                 if let Some(map) = chunk_map.as_deref() {
@@ -1232,7 +1229,7 @@ impl TaggedHeap {
 
         self.cons_free_list = std::ptr::null_mut();
         self.mark_cons_block_cache = None;
-        if self.census_state().is_some() || self.chunk_map.is_some() {
+        if self.census.is_some() || self.chunk_map.is_some() {
             let released: Vec<usize> = self
                 .cons_blocks
                 .iter()
