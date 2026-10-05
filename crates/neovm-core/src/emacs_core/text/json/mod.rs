@@ -1241,6 +1241,16 @@ impl<'a> JsonParser<'a> {
     }
 
     fn parse_object_hash_table(&mut self, mut c: u8) -> Result<Value, Flow> {
+        if crate::tagged::gc::concurrent_hash_mutation_active() {
+            return self.parse_object_hash_table_concurrent(c);
+        }
+        // The parser only scans bytes, allocates Values and constructs Flow
+        // errors. Allocation/refill never collects or runs Lisp, and signal()
+        // returns a pinned payload; signal hooks run after parsing returns.
+        // Neither recursion nor an error path can install a heap or change
+        // its Tier-H mode. Keep that contract enforced at GC entry in debug.
+        #[cfg(debug_assertions)]
+        let _guard = crate::tagged::mutate::HeapMutClosureGuard::enter();
         let ht = Value::hash_table(HashTableTest::Equal);
         if c == b'}' {
             return Ok(ht);
@@ -1256,17 +1266,53 @@ impl<'a> JsonParser<'a> {
                 // be keyed the way any Lisp string is -- `HashKey::Text` is a
                 // runtime tag and a `gethash` probe would never match it.
                 let hash_key = HashKey::from_str(key);
-                if crate::tagged::gc::concurrent_hash_mutation_active() {
-                    insert_json_hash_member_concurrent(ht, hash_key, key_val, val);
-                } else {
-                    // SAFETY: this insertion follows an immediate inactive
-                    // dispatch and calls neither Lisp nor a GC safepoint.
-                    let _ = unsafe {
-                        ht.with_hash_table_mut_inactive(|table| {
-                            table.insert(hash_key, key_val, val);
-                        })
-                    };
-                }
+                // SAFETY: the entry dispatch selected inactive Tier-H, and
+                // the entire parser extent above has no callback or GC safe
+                // point that could change that selection.
+                let _ = unsafe {
+                    ht.with_hash_table_mut_inactive(|table| {
+                        table.insert(hash_key, key_val, val);
+                    })
+                };
+            }
+
+            c = self.skip_ws_consume()?;
+            if c == b'}' {
+                self.leave_nesting();
+                break;
+            }
+            if c != b',' {
+                return Err(self.signal_at_pos(JsonError::Parse));
+            }
+            c = self.skip_ws_consume()?;
+        }
+
+        Ok(ht)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn parse_object_hash_table_concurrent(&mut self, mut c: u8) -> Result<Value, Flow> {
+        // The same parser mode-stability contract applies to this active
+        // clone. Each insertion keeps the normal snapshot/mutation lease.
+        #[cfg(debug_assertions)]
+        let _guard = crate::tagged::mutate::HeapMutClosureGuard::enter();
+        let ht = Value::hash_table(HashTableTest::Equal);
+        if c == b'}' {
+            return Ok(ht);
+        }
+        self.enter_nesting()?;
+
+        loop {
+            let (key, val) = self.parse_object_member(c)?;
+
+            {
+                let key_val = Value::string(&key);
+                // A JSON member name becomes a Lisp STRING key, so it must
+                // be keyed the way any Lisp string is -- `HashKey::Text` is a
+                // runtime tag and a `gethash` probe would never match it.
+                let hash_key = HashKey::from_str(key);
+                insert_json_hash_member_concurrent(ht, hash_key, key_val, val);
             }
 
             c = self.skip_ws_consume()?;

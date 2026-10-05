@@ -841,6 +841,155 @@ fn parse_nested() {
 }
 
 #[test]
+fn parse_nested_hash_tables_during_concurrent_gen1_mark() {
+    use crate::tagged::gc::{self, TaggedHeap};
+    use std::time::{Duration, Instant};
+
+    assert!(!gc::tagged_heap_is_installed());
+    let mut heap = Box::new(TaggedHeap::new_for_concurrent_hash_test(true));
+    gc::set_tagged_heap(&mut heap);
+    assert!(heap.generational_enabled());
+
+    // Only the holder is a root at mark start. The parser's custom null
+    // object is white until new, born-black JSON containers retain it.
+    let white_null = Value::string("json-null-before-major");
+    let holder = Value::hash_table(HashTableTest::Eq);
+    holder.with_hash_table_mut(|table| {
+        table.insert(HashKey::Int(1), Value::fixnum(1), Value::NIL);
+    });
+    heap.concurrent_begin();
+    heap.seed_root(holder);
+    heap.launch_concurrent_mark();
+    assert!(gc::concurrent_hash_mutation_active());
+    assert!(gc::concurrent_hash_snapshot(holder).is_some());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !heap.concurrent_mark_done() {
+        assert!(Instant::now() < deadline, "JSON mark worker did not finish");
+        std::thread::yield_now();
+    }
+
+    // A completed worker still holds the active cycle until join. Exercise
+    // nested objects, arrays, numeric allocation and replacement in that mode.
+    let opts = ParseOpts {
+        null_object: white_null,
+        ..ParseOpts::default()
+    };
+    let mut parser = JsonParser::new(
+        br#"{"nested":[{"keep":null,"drop":"old","drop":"replacement","number":9223372036854775808,"fraction":1.25},{}],"flag":false}"#,
+        false,
+        opts.clone(),
+    );
+    let parsed = parser.parse().unwrap();
+    assert_eq!(parser.depth, 0);
+    assert!(gc::concurrent_hash_mutation_active());
+    let member = |table: Value, key: &str| {
+        table
+            .as_hash_table()
+            .unwrap()
+            .data
+            .get(&HashKey::from_str(key))
+            .copied()
+            .unwrap()
+    };
+    let nested = member(parsed, "nested");
+    let objects = nested.as_vector_data().unwrap();
+    assert_eq!(objects.len(), 2);
+    let inner = objects[0];
+    let empty = objects[1];
+    let replacement = member(inner, "drop");
+    let number = member(inner, "number");
+    let fraction = member(inner, "fraction");
+    assert_eq!(member(inner, "keep"), white_null);
+    assert_eq!(replacement.as_utf8_str(), Some("replacement"));
+    assert_eq!(
+        number.as_bignum().unwrap().to_string(),
+        "9223372036854775808"
+    );
+    assert_eq!(fraction.as_float(), Some(1.25));
+    assert_eq!(inner.as_hash_table().unwrap().data.len(), 4);
+    assert_eq!(empty.as_hash_table().unwrap().data.len(), 0);
+
+    // An error under the outlined active loop returns a Flow; it must not
+    // dispatch a signal hook or leave a parser guard across collector entry.
+    let mut invalid = JsonParser::new(br#"{"nested":[{"bad":}]}"#, false, opts);
+    match invalid.parse().kinded() {
+        Err(FlowKind::Signal(signal)) => assert_eq!(signal.symbol_name(), "json-parse-error"),
+        _ => panic!("expected nested JSON parse error"),
+    }
+    assert!(gc::concurrent_hash_mutation_active());
+    holder.with_hash_table_mut(|table| {
+        table.insert(HashKey::Int(1), Value::fixnum(1), parsed);
+    });
+    heap.join_concurrent_mark();
+    heap.reseed_runtime_and_remembered_roots();
+    heap.seed_root(holder);
+    heap.incremental_drain_all();
+    heap.incremental_finish(heap.live_bytes(), Instant::now());
+    heap.finish_incremental_sweep_now();
+    assert!(!gc::concurrent_hash_mutation_active());
+
+    for value in [
+        parsed,
+        nested,
+        inner,
+        empty,
+        white_null,
+        replacement,
+        number,
+        fraction,
+    ] {
+        assert!(heap.owns_heap_value_for_test(value));
+        assert!(heap.value_is_old_for_test(value));
+    }
+    assert_eq!(
+        member(inner, "keep").as_utf8_str(),
+        Some("json-null-before-major")
+    );
+    assert_eq!(
+        holder
+            .as_hash_table()
+            .unwrap()
+            .data
+            .get(&HashKey::Int(1))
+            .copied(),
+        Some(parsed),
+    );
+
+    heap.collect(std::iter::empty());
+    for value in [
+        holder,
+        parsed,
+        nested,
+        inner,
+        empty,
+        white_null,
+        replacement,
+        number,
+        fraction,
+    ] {
+        assert!(!heap.owns_heap_value_for_test(value));
+    }
+}
+
+#[test]
+fn parse_nested_hash_error_releases_inactive_guard_before_collection() {
+    use crate::tagged::gc::{self, TaggedHeap};
+
+    assert!(!gc::tagged_heap_is_installed());
+    let mut heap = Box::new(TaggedHeap::new_for_concurrent_hash_test(true));
+    gc::set_tagged_heap(&mut heap);
+    assert!(!gc::concurrent_hash_mutation_active());
+    let mut parser = JsonParser::new(br#"{"nested":[{"bad":}]}"#, false, ParseOpts::default());
+    match parser.parse().kinded() {
+        Err(FlowKind::Signal(signal)) => assert_eq!(signal.symbol_name(), "json-parse-error"),
+        _ => panic!("expected nested JSON parse error"),
+    }
+    // This collector entry asserts that the complete inactive parser extent
+    // unwound its debug guard, including the recursively nested object.
+    heap.collect(std::iter::empty());
+}
+
+#[test]
 fn parse_custom_null_object() {
     crate::test_utils::init_test_tracing();
     let result = builtin_json_parse_string(vec![
