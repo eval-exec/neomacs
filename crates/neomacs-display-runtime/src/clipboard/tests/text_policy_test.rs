@@ -74,11 +74,11 @@ fn invalid_utf8_is_decoded_lossily() {
 fn smithay_absences_keep_their_two_reasons() {
     assert_eq!(
         classify_smithay(&no_offer().unwrap_err()),
-        Some(TextReadFailure::NoSelection)
+        Some(TextAbsence::NoSelection)
     );
     assert_eq!(
         classify_smithay(&no_text_mime().unwrap_err()),
-        Some(TextReadFailure::TargetUnavailable)
+        Some(TextAbsence::TargetUnavailable)
     );
 }
 
@@ -102,7 +102,7 @@ fn smithay_failures_are_not_absences() {
 fn arboard_content_not_available_is_the_only_absence() {
     assert_eq!(
         classify_arboard(&arboard::Error::ContentNotAvailable),
-        Some(TextReadFailure::NoSelection)
+        Some(TextAbsence::NoSelection)
     );
     for err in [
         arboard::Error::ClipboardNotSupported,
@@ -178,6 +178,35 @@ fn a_failed_fallback_keeps_smithays_absence() {
 fn a_compositor_without_data_control_keeps_smithays_absence() {
     let result = text_or_fallback(no_text_mime(), || Ok(None));
     assert_eq!(result, Ok(TextRead::TargetUnavailable));
+}
+
+#[test]
+fn a_clipboard_absence_may_be_answered_by_data_control() {
+    let consulted = Cell::new(false);
+    let result = wayland_read(ClipboardSelection::Clipboard, no_offer(), || {
+        consulted.set(true);
+        Ok(Some(TextRead::Text("foreign".to_owned())))
+    });
+    assert!(consulted.get(), "CLIPBOARD must consult the fallback");
+    assert_eq!(result, Ok(TextRead::Text("foreign".to_owned())));
+}
+
+#[test]
+fn a_primary_absence_never_consults_data_control() {
+    let result = wayland_read(ClipboardSelection::Primary, no_offer(), || {
+        panic!("PRIMARY must not consult the data-control fallback")
+    });
+    assert_eq!(result, Ok(TextRead::NoSelection));
+}
+
+#[test]
+fn primary_text_is_returned_without_consulting_data_control() {
+    let result = wayland_read(
+        ClipboardSelection::Primary,
+        Ok("selected".to_owned()),
+        || panic!("PRIMARY text must not consult the data-control fallback"),
+    );
+    assert_eq!(result, Ok(TextRead::Text("selected".to_owned())));
 }
 
 #[test]
