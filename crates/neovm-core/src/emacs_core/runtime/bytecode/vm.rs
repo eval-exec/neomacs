@@ -9593,6 +9593,26 @@ impl<'a> crate::emacs_core::builtins::symbols::MacroexpandRuntime for Vm<'a> {
 }
 
 impl crate::emacs_core::builtins::higher_order::SortRuntime for Vm<'_> {
+    fn set_sort_slot(&mut self, slot: &crate::emacs_core::eval::SpecpdlRootSlot, value: Value) {
+        self.ctx.set_specpdl_root_slot(slot, value);
+    }
+
+    fn save_sort_roots(&self) -> crate::emacs_core::eval::SpecpdlRootScopeState {
+        self.ctx.save_specpdl_roots()
+    }
+
+    fn restore_sort_roots(&mut self, scope: crate::emacs_core::eval::SpecpdlRootScopeState) {
+        self.ctx.restore_specpdl_roots(scope);
+    }
+
+    fn root_sort_slot(&mut self, value: Value) -> crate::emacs_core::eval::SpecpdlRootSlot {
+        self.ctx.push_specpdl_root_slot(value)
+    }
+
+    fn clear_sort_slot(&mut self, slot: &crate::emacs_core::eval::SpecpdlRootSlot) {
+        self.ctx.set_specpdl_root_slot(slot, Value::NIL);
+    }
+
     fn call_sort_function1(&mut self, function: Value, arg: Value) -> Result<Value, Flow> {
         self.with_vm_root_scope(|vm| {
             vm.push_dynamic_vm_root(arg);

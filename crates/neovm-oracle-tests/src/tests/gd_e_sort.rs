@@ -17,3 +17,19 @@ mod key_resolution_and_frames;
 #[cfg(test)]
 #[path = "gd_e_sort/reverse_key_order_and_stability.rs"]
 mod reverse_key_order_and_stability;
+
+#[cfg(test)]
+#[path = "gd_e_sort/in_place_signal_and_callback_visibility.rs"]
+mod in_place_signal_and_callback_visibility;
+
+#[cfg(test)]
+#[path = "gd_e_sort/vector_merge_unwind_and_live_key_reads.rs"]
+mod vector_merge_unwind_and_live_key_reads;
+
+#[cfg(test)]
+#[path = "gd_e_sort/vector_temporary_root_lifetimes.rs"]
+mod vector_temporary_root_lifetimes;
+
+#[cfg(test)]
+#[path = "gd_e_sort/vector_stack_temporary_root_lifetimes.rs"]
+mod vector_stack_temporary_root_lifetimes;
