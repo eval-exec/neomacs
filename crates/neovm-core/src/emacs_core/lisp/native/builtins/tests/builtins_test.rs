@@ -868,7 +868,7 @@ fn compiled_literal_reifier_preserves_ordinary_vectors() {
         Value::NIL,
     ]);
 
-    let converted = super::symbols::try_convert_nested_compiled_literal(closure_vec);
+    let converted = super::symbols::try_convert_nested_compiled_literal(closure_vec).unwrap();
     assert!(
         converted.is_vector(),
         "ordinary vectors are not reader closures"
@@ -884,7 +884,7 @@ fn compiled_literal_reifier_preserves_cperl_key_vector_shape() {
         Value::fixnum(70),
     ]);
 
-    let converted = super::symbols::try_convert_nested_compiled_literal(key_vec);
+    let converted = super::symbols::try_convert_nested_compiled_literal(key_vec).unwrap();
     assert!(
         converted.is_vector(),
         "key vectors must not become closures"

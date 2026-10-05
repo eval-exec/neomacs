@@ -1361,7 +1361,8 @@ impl Context {
         };
 
         for constant in &mut constants {
-            *constant = crate::emacs_core::builtins::try_convert_nested_compiled_literal(*constant);
+            *constant =
+                crate::emacs_core::builtins::try_convert_nested_compiled_literal(*constant)?;
         }
 
         let (ops, gnu_byte_offset_map) =

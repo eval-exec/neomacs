@@ -5956,7 +5956,7 @@ fn make_byte_code_from_parts_with_slots(
     // `#s(hash-table ...)` literals. Convert them into real runtime objects
     // before decoding/executing the bytecode.
     for constant in &mut constants {
-        *constant = try_convert_nested_compiled_literal(*constant);
+        *constant = try_convert_nested_compiled_literal(*constant)?;
     }
 
     // 4. Check the GNU bytecode. GNU's `Fmake_byte_code` never inspects
@@ -6166,15 +6166,26 @@ pub(crate) fn make_interpreted_closure_from_parts_unchecked(
 /// reader does.  Hash-table literals still arrive as
 /// `(make-hash-table-from-literal '(...))` forms, so this pass reifies those
 /// without guessing that ordinary vectors are closures.
-pub(crate) fn try_convert_nested_compiled_literal(val: Value) -> Value {
-    if let Some(table) = try_convert_hash_table_literal(val) {
-        return table;
-    }
-
-    val
+pub(crate) fn try_convert_nested_compiled_literal(val: Value) -> EvalResult {
+    Ok(try_convert_hash_table_literal(val)?.unwrap_or(val))
 }
 
-fn try_convert_hash_table_literal(val: Value) -> Option<Value> {
+/// Literal options parsed on the current mutator. Lisp handles remain local
+/// through conversion; this temporary plan cannot cross threads.
+#[derive(Debug)]
+struct CompiledHashLiteral {
+    test: HashTableTest,
+    test_name: Option<SymId>,
+    weakness: Option<HashTableWeakness>,
+    rehash_size: f64,
+    rehash_threshold: f64,
+    data_value: Option<Value>,
+    _mutator: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+static_assertions::assert_not_impl_any!(CompiledHashLiteral: Send, Sync);
+
+fn parse_compiled_hash_literal(val: Value) -> Option<CompiledHashLiteral> {
     // Every cons constant of every loaded function comes through here; only
     // a `(make-hash-table-from-literal ...)` form can convert, so reject any
     // other head before copying the list out.
@@ -6202,7 +6213,6 @@ fn try_convert_hash_table_literal(val: Value) -> Option<Value> {
 
     let mut test = HashTableTest::Eql;
     let mut test_name: Option<SymId> = None;
-    let mut size = 0_i64;
     let mut weakness: Option<HashTableWeakness> = None;
     let mut rehash_size = 1.5_f64;
     let mut rehash_threshold = 0.8125_f64;
@@ -6217,7 +6227,7 @@ fn try_convert_hash_table_literal(val: Value) -> Option<Value> {
             continue;
         };
         match key {
-            HashTableLiteralKey::Size => size = value.as_int()?,
+            HashTableLiteralKey::Size => {}
             HashTableLiteralKey::Test => {
                 let name = value.as_symbol_name()?;
                 test = HashTableTest::from_symbol_name(name)?;
@@ -6241,29 +6251,48 @@ fn try_convert_hash_table_literal(val: Value) -> Option<Value> {
         i += 2;
     }
 
-    let table_value =
-        Value::hash_table_with_options(test, size, weakness, rehash_size, rehash_threshold);
-    if !table_value.is_hash_table() {
-        return None;
+    Some(CompiledHashLiteral {
+        test,
+        test_name,
+        weakness,
+        rehash_size,
+        rehash_threshold,
+        data_value,
+        _mutator: std::marker::PhantomData,
+    })
+}
+
+fn try_convert_hash_table_literal(val: Value) -> Result<Option<Value>, Flow> {
+    let Some(literal) = parse_compiled_hash_literal(val) else {
+        return Ok(None);
     };
-
-    {
-        let _ = table_value.with_hash_table_mut(|table| {
-            table.test_name = test_name;
-            if let Some(data) = data_value.and_then(|value| list_to_vec(&value)) {
-                let mut idx = 0_usize;
-                while idx + 1 < data.len() {
-                    let key_value = try_convert_nested_compiled_literal(data[idx]);
-                    let val_value = try_convert_nested_compiled_literal(data[idx + 1]);
-                    let key = key_value.to_hash_key(&table.test);
-                    table.insert(key, key_value, val_value);
-                    idx += 2;
-                }
-            }
-        });
+    // GNU lread.c:hash_table_from_plist ignores printed SIZE and requests only
+    // the already collected DATA pair count. Hash allocation is fallible, and
+    // every caller now propagates a failure rather than preserving the wrapper.
+    let mut data = literal
+        .data_value
+        .and_then(|value| list_to_vec(&value))
+        .unwrap_or_default();
+    let pairs =
+        i64::try_from(data.len() / 2).map_err(|_| crate::emacs_core::alloc::memory_exhausted())?;
+    let size = crate::emacs_core::alloc::HashTableSize::try_from(Value::make_int(pairs))?;
+    // Convert nested pairs before borrowing the new table. Recursive allocation
+    // errors propagate, and no conversion runs inside its mutable heap borrow.
+    for pair in data.chunks_exact_mut(2) {
+        pair[0] = try_convert_nested_compiled_literal(pair[0])?;
+        pair[1] = try_convert_nested_compiled_literal(pair[1])?;
     }
-
-    Some(table_value)
+    let table_value = Value::try_hash_table_with_options(literal.test, size, literal.weakness)?;
+    let _ = table_value.with_hash_table_mut(|table| {
+        table.test_name = literal.test_name;
+        table.rehash_size = literal.rehash_size;
+        table.rehash_threshold = literal.rehash_threshold;
+        for pair in data.chunks_exact(2) {
+            let key = pair[0].to_hash_key(&table.test);
+            table.insert(key, pair[0], pair[1]);
+        }
+    });
+    Ok(Some(table_value))
 }
 
 fn quote_payload_value(value: Value) -> Option<Value> {

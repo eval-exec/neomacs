@@ -666,6 +666,9 @@ mod make_byte_code_literals_test;
 #[cfg(test)]
 #[path = "tests/make_closure_instance_test.rs"]
 mod make_closure_instance_test;
+#[cfg(test)]
+#[path = "tests/tsb_literal_size.rs"]
+mod tsb_literal_size_test;
 
 #[cfg(test)]
 #[path = "tests/obarray_growth_test.rs"]
