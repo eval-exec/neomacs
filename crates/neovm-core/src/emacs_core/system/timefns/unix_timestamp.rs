@@ -23,10 +23,6 @@ pub(crate) enum TimestampError {
 
 static_assertions::assert_impl_all!(UnixTimestamp: Send, Sync);
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "File-time callers migrate in the next change")
-)]
 impl UnixTimestamp {
     pub(crate) const fn seconds(self) -> i64 {
         self.seconds

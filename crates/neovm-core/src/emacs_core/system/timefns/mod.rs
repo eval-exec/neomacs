@@ -26,14 +26,7 @@ use calendar::{CalendarFieldOverflow, CalendarTime};
 mod time_zone_spec;
 use time_zone_spec::TimeZoneSpec;
 mod unix_timestamp;
-#[cfg_attr(
-    not(test),
-    expect(
-        unused_imports,
-        reason = "File-time callers migrate in the next change"
-    )
-)]
-pub(crate) use unix_timestamp::UnixTimestamp;
+pub(crate) use unix_timestamp::{TimestampError, UnixTimestamp};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::IntoStaticStr)]
 enum TimeConvertSymbolForm {
@@ -368,7 +361,7 @@ fn time_spec_invalid() -> Flow {
     signal("error", vec![Value::string("Invalid time specification")])
 }
 
-fn time_error_overflow() -> Flow {
+pub(crate) fn time_error_overflow() -> Flow {
     signal(
         LispCondition::Error,
         vec![Value::string("Specified time is not representable")],
