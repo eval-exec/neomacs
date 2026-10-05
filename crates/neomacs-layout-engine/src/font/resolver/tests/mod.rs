@@ -551,6 +551,46 @@ fn equal_score_entities_keep_their_own_discovery_order() {
     );
 }
 
+#[test]
+fn character_fallback_prefers_the_requested_face_width() {
+    // A collection such as Iosevka lists its Extended face (width 125) before
+    // the Regular one. GNU font_select_entity takes the preferred width from
+    // the face when the fontset spec leaves it unset, so the face width must
+    // decide, not discovery order.
+    let collection_face = |index: u32, width: FontWidth| {
+        let mut face = candidate("Fixture Mono", 400, FontSlant::Normal, 100);
+        face.matched.metadata.width = Some(width);
+        replace_file_identity(
+            &mut face,
+            ResolvedFontIdentity::from_file("/fixture/FixtureMono.ttc", index, None),
+        );
+        face
+    };
+    let resolver = FontResolver::new(Box::new(CandidateBackend {
+        candidates: vec![
+            collection_face(3, FontWidth::Expanded),
+            collection_face(0, FontWidth::Normal),
+        ],
+    }));
+    for (requested, expected_index) in [(FontWidth::Normal, 0), (FontWidth::Expanded, 3)] {
+        let selected = resolver
+            .resolve_for_char(
+                "Fixture Mono",
+                'α',
+                400,
+                FontSlant::Normal,
+                requested,
+                selection_size(),
+            )
+            .expect("covering collection face");
+        assert_eq!(
+            (selected.metadata.width, selected.identity.file_face_index()),
+            (Some(requested), expected_index),
+            "requested {requested:?}"
+        );
+    }
+}
+
 struct MetricBackend {
     candidates: Vec<FontCandidate>,
     probes: Arc<AtomicUsize>,
