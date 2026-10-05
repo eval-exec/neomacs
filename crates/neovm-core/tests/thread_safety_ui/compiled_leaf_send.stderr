@@ -1,182 +1,35 @@
-error[E0277]: `*const u8` cannot be sent between threads safely
- --> tests/thread_safety_ui/compiled_leaf_send.rs:6:25
-  |
-6 |     requires_contract::<CompiledLeaf>();
-  |                         ^^^^^^^^^^^^ `*const u8` cannot be sent between threads safely
-  |
-  = help: within `CompiledLeaf`, the trait `Send` is not implemented for `*const u8`
-note: required because it appears within the type `CompiledLeaf`
- --> src/emacs_core/runtime/jit/compile/leaf.rs
-  |
-  | pub struct CompiledLeaf {
-  |            ^^^^^^^^^^^^
-note: required by a bound in `requires_contract`
- --> tests/thread_safety_ui/compiled_leaf_send.rs:3:25
-  |
-3 | fn requires_contract<T: Send>() {}
-  |                         ^^^^ required by this bound in `requires_contract`
-
-error[E0277]: `Rc<CompiledLeaf>` cannot be sent between threads safely
- --> tests/thread_safety_ui/compiled_leaf_send.rs:6:25
-  |
-6 |     requires_contract::<CompiledLeaf>();
-  |                         ^^^^^^^^^^^^ `Rc<CompiledLeaf>` cannot be sent between threads safely
-  |
-  = help: within `Option<Rc<CompiledLeaf>>`, the trait `Send` is not implemented for `Rc<CompiledLeaf>`
-note: required because it appears within the type `Option<Rc<CompiledLeaf>>`
- --> $RUST/core/src/option.rs
-  |
-  | pub enum Option<T> {
-  |          ^^^^^^
-  = note: required for `RefCell<Option<Rc<CompiledLeaf>>>` to implement `Send`
-note: required because it appears within the type `CompiledLeaf`
- --> src/emacs_core/runtime/jit/compile/leaf.rs
-  |
-  | pub struct CompiledLeaf {
-  |            ^^^^^^^^^^^^
-note: required by a bound in `requires_contract`
- --> tests/thread_safety_ui/compiled_leaf_send.rs:3:25
-  |
-3 | fn requires_contract<T: Send>() {}
-  |                         ^^^^ required by this bound in `requires_contract`
-
-error[E0277]: `*const TaggedValue` cannot be sent between threads safely
- --> tests/thread_safety_ui/compiled_leaf_send.rs:6:25
-  |
-6 |     requires_contract::<CompiledLeaf>();
-  |                         ^^^^^^^^^^^^ `*const TaggedValue` cannot be sent between threads safely
-  |
-  = help: within `compile::leaf::LeafSidecar`, the trait `Send` is not implemented for `*const TaggedValue`
-note: required because it appears within the type `compile::leaf::LeafSidecar`
- --> src/emacs_core/runtime/jit/compile/leaf.rs
-  |
-  | pub(crate) struct LeafSidecar {
-  |                   ^^^^^^^^^^^
-  = note: required for `std::ptr::Unique<compile::leaf::LeafSidecar>` to implement `Send`
-note: required because it appears within the type `std::boxed::Box<compile::leaf::LeafSidecar>`
- --> $RUST/alloc/src/boxed.rs
-  |
-  | pub struct Box<
-  |            ^^^
-note: required because it appears within the type `Option<std::boxed::Box<compile::leaf::LeafSidecar>>`
- --> $RUST/core/src/option.rs
-  |
-  | pub enum Option<T> {
-  |          ^^^^^^
-note: required because it appears within the type `CompiledLeaf`
- --> src/emacs_core/runtime/jit/compile/leaf.rs
-  |
-  | pub struct CompiledLeaf {
-  |            ^^^^^^^^^^^^
-note: required by a bound in `requires_contract`
- --> tests/thread_safety_ui/compiled_leaf_send.rs:3:25
-  |
-3 | fn requires_contract<T: Send>() {}
-  |                         ^^^^ required by this bound in `requires_contract`
-
-error[E0277]: `*const Cell<i64>` cannot be sent between threads safely
- --> tests/thread_safety_ui/compiled_leaf_send.rs:6:25
-  |
-6 |     requires_contract::<CompiledLeaf>();
-  |                         ^^^^^^^^^^^^ `*const Cell<i64>` cannot be sent between threads safely
-  |
-  = help: within `compile::leaf::LeafSidecar`, the trait `Send` is not implemented for `*const Cell<i64>`
-help: the trait `Send` is implemented for `Cell<T>`
- --> $RUST/core/src/cell.rs
-  |
-  | unsafe impl<T: ?Sized> Send for Cell<T> where T: Send {}
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: required because it appears within the type `compile::leaf::LeafSidecar`
- --> src/emacs_core/runtime/jit/compile/leaf.rs
-  |
-  | pub(crate) struct LeafSidecar {
-  |                   ^^^^^^^^^^^
-  = note: required for `std::ptr::Unique<compile::leaf::LeafSidecar>` to implement `Send`
-note: required because it appears within the type `std::boxed::Box<compile::leaf::LeafSidecar>`
- --> $RUST/alloc/src/boxed.rs
-  |
-  | pub struct Box<
-  |            ^^^
-note: required because it appears within the type `Option<std::boxed::Box<compile::leaf::LeafSidecar>>`
- --> $RUST/core/src/option.rs
-  |
-  | pub enum Option<T> {
-  |          ^^^^^^
-note: required because it appears within the type `CompiledLeaf`
- --> src/emacs_core/runtime/jit/compile/leaf.rs
-  |
-  | pub struct CompiledLeaf {
-  |            ^^^^^^^^^^^^
-note: required by a bound in `requires_contract`
- --> tests/thread_safety_ui/compiled_leaf_send.rs:3:25
-  |
-3 | fn requires_contract<T: Send>() {}
-  |                         ^^^^ required by this bound in `requires_contract`
-
-error[E0277]: `*const compile::spec_slot::SpecSlot` cannot be sent between threads safely
- --> tests/thread_safety_ui/compiled_leaf_send.rs:6:25
-  |
-6 |     requires_contract::<CompiledLeaf>();
-  |                         ^^^^^^^^^^^^ `*const compile::spec_slot::SpecSlot` cannot be sent between threads safely
-  |
-  = help: within `compile::leaf::LeafSidecar`, the trait `Send` is not implemented for `*const compile::spec_slot::SpecSlot`
-note: required because it appears within the type `compile::leaf::LeafSidecar`
- --> src/emacs_core/runtime/jit/compile/leaf.rs
-  |
-  | pub(crate) struct LeafSidecar {
-  |                   ^^^^^^^^^^^
-  = note: required for `std::ptr::Unique<compile::leaf::LeafSidecar>` to implement `Send`
-note: required because it appears within the type `std::boxed::Box<compile::leaf::LeafSidecar>`
- --> $RUST/alloc/src/boxed.rs
-  |
-  | pub struct Box<
-  |            ^^^
-note: required because it appears within the type `Option<std::boxed::Box<compile::leaf::LeafSidecar>>`
- --> $RUST/core/src/option.rs
-  |
-  | pub enum Option<T> {
-  |          ^^^^^^
-note: required because it appears within the type `CompiledLeaf`
- --> src/emacs_core/runtime/jit/compile/leaf.rs
-  |
-  | pub struct CompiledLeaf {
-  |            ^^^^^^^^^^^^
-note: required by a bound in `requires_contract`
- --> tests/thread_safety_ui/compiled_leaf_send.rs:3:25
-  |
-3 | fn requires_contract<T: Send>() {}
-  |                         ^^^^ required by this bound in `requires_contract`
-
-error[E0277]: `*const u64` cannot be sent between threads safely
- --> tests/thread_safety_ui/compiled_leaf_send.rs:6:25
-  |
-6 |     requires_contract::<CompiledLeaf>();
-  |                         ^^^^^^^^^^^^ `*const u64` cannot be sent between threads safely
-  |
-  = help: within `compile::leaf::LeafSidecar`, the trait `Send` is not implemented for `*const u64`
-note: required because it appears within the type `compile::leaf::LeafSidecar`
- --> src/emacs_core/runtime/jit/compile/leaf.rs
-  |
-  | pub(crate) struct LeafSidecar {
-  |                   ^^^^^^^^^^^
-  = note: required for `std::ptr::Unique<compile::leaf::LeafSidecar>` to implement `Send`
-note: required because it appears within the type `std::boxed::Box<compile::leaf::LeafSidecar>`
- --> $RUST/alloc/src/boxed.rs
-  |
-  | pub struct Box<
-  |            ^^^
-note: required because it appears within the type `Option<std::boxed::Box<compile::leaf::LeafSidecar>>`
- --> $RUST/core/src/option.rs
-  |
-  | pub enum Option<T> {
-  |          ^^^^^^
-note: required because it appears within the type `CompiledLeaf`
- --> src/emacs_core/runtime/jit/compile/leaf.rs
-  |
-  | pub struct CompiledLeaf {
-  |            ^^^^^^^^^^^^
-note: required by a bound in `requires_contract`
- --> tests/thread_safety_ui/compiled_leaf_send.rs:3:25
-  |
-3 | fn requires_contract<T: Send>() {}
-  |                         ^^^^ required by this bound in `requires_contract`
+error[E0599]: the associated function or constant `transfer` exists for struct `ThreadTransfer<CompiledLeaf>`, but its trait bounds were not satisfied
+  --> tests/thread_safety_ui/compiled_leaf_send.rs:11:37
+   |
+ 4 |   struct ThreadTransfer<T>(PhantomData<T>);
+   |   ------------------------ associated function or constant `transfer` not found for this struct
+...
+11 |       ThreadTransfer::<CompiledLeaf>::transfer();
+   |                                       ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<CompiledLeaf>` due to unsatisfied trait bounds
+   |
+  ::: src/emacs_core/runtime/jit/compile/leaf.rs
+   |
+   |   pub struct CompiledLeaf {
+   |   ----------------------- doesn't satisfy `CompiledLeaf: Send`
+   |
+  ::: $RUST/alloc/src/rc.rs
+   |
+   | / pub struct Rc<
+   | |     T: ?Sized,
+   | |     #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global,
+   | | > {
+   | |_- doesn't satisfy `Rc<CompiledLeaf>: Send`
+   |
+   = note: the following trait bounds were not satisfied:
+           `*const u8: Send`
+           which is required by `CompiledLeaf: Send`
+           `Rc<CompiledLeaf>: Send`
+           which is required by `CompiledLeaf: Send`
+           `*const TaggedValue: Send`
+           which is required by `CompiledLeaf: Send`
+           `*const Cell<i64>: Send`
+           which is required by `CompiledLeaf: Send`
+           `*const compile::spec_slot::SpecSlot: Send`
+           which is required by `CompiledLeaf: Send`
+           `*const u64: Send`
+           which is required by `CompiledLeaf: Send`

@@ -1,7 +1,12 @@
 use neovm_core::emacs_core::jit::compile::CompiledLeaf;
+use std::marker::PhantomData;
 
-fn requires_contract<T: Send>() {}
+struct ThreadTransfer<T>(PhantomData<T>);
+
+impl<T: Send> ThreadTransfer<T> {
+    fn transfer() {}
+}
 
 fn main() {
-    requires_contract::<CompiledLeaf>();
+    ThreadTransfer::<CompiledLeaf>::transfer();
 }
