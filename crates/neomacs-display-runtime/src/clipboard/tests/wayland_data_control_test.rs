@@ -1,54 +1,7 @@
+//! Transfer-mechanics tests for the data-control reader.  The MIME policy it
+//! shares with the other backends is tested in `text_policy_test.rs`.
+
 use super::*;
-
-fn offered(mimes: &[&str]) -> Vec<String> {
-    mimes.iter().map(|mime| (*mime).to_owned()).collect()
-}
-
-#[test]
-fn utf8_types_win_in_offer_order_and_plain_text_is_a_fallback() {
-    assert_eq!(
-        TextMime::choose(&offered(&[
-            "text/plain",
-            "UTF8_STRING",
-            "text/plain;charset=utf-8"
-        ])),
-        Some(TextMime::Utf8String)
-    );
-    assert_eq!(
-        TextMime::choose(&offered(&["TEXT", "text/plain;charset=utf-8"])),
-        Some(TextMime::TextPlainUtf8)
-    );
-    assert_eq!(
-        TextMime::choose(&offered(&["image/png", "text/plain"])),
-        Some(TextMime::TextPlain)
-    );
-}
-
-#[test]
-fn offers_without_a_text_type_have_no_text() {
-    assert_eq!(TextMime::choose(&offered(&[])), None);
-    assert_eq!(
-        TextMime::choose(&offered(&[
-            "image/png",
-            "text/plain;charset=iso-8859-1",
-            "STRING"
-        ])),
-        None
-    );
-}
-
-#[test]
-fn plain_text_line_ends_are_normalized_like_smithay_clipboard() {
-    let bytes = b"a\r\nb\rc\n";
-    assert_eq!(TextMime::TextPlainUtf8.decode(bytes), "a\nb\nc\n");
-    assert_eq!(TextMime::TextPlain.decode(bytes), "a\nb\nc\n");
-    assert_eq!(TextMime::Utf8String.decode(bytes), "a\r\nb\rc\n");
-}
-
-#[test]
-fn invalid_utf8_is_decoded_lossily() {
-    assert_eq!(TextMime::Utf8String.decode(b"ok\xff"), "ok\u{fffd}");
-}
 
 #[test]
 fn transfer_reads_until_the_owner_closes_its_end() {

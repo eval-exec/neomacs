@@ -11,6 +11,8 @@ use arboard::{ClearExtLinux, GetExtLinux, LinuxClipboardKind, SetExtLinux};
 #[cfg(target_os = "linux")]
 use raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
 
+mod text_policy;
+
 #[cfg(target_os = "linux")]
 mod wayland_data_control;
 
@@ -21,7 +23,7 @@ trait ClipboardBackend: Send {
     fn set_text(&mut self, selection: ClipboardSelection, text: Option<&str>)
     -> Result<(), String>;
 
-    fn text(&mut self, selection: ClipboardSelection) -> Result<Option<String>, String>;
+    fn text(&mut self, selection: ClipboardSelection) -> Result<text_policy::TextRead, String>;
 
     fn owner(&mut self, selection: ClipboardSelection) -> Result<SelectionOwner, String>;
 }
@@ -186,7 +188,11 @@ fn execute_command(backend: &mut dyn ClipboardBackend, command: ClipboardCommand
         ClipboardCommand::GetText {
             selection, reply, ..
         } => {
-            let result = backend.text(selection);
+            // The evaluator-facing wire carries text or absence; the two
+            // absence reasons stay inside the runtime (see `text_policy`).
+            let result = backend
+                .text(selection)
+                .map(text_policy::TextRead::into_option);
             if let Err(err) = &result {
                 tracing::warn!(?selection, "clipboard read failed: {err}");
             }
@@ -289,11 +295,17 @@ impl ArboardClipboard {
             .map_err(|err| format!("failed to initialize the system clipboard: {err}"))
     }
 
-    fn text_result(result: Result<String, arboard::Error>) -> Result<Option<String>, String> {
+    /// Classify an arboard read into the clipboard's text vocabulary; this is
+    /// the adapter between arboard's error type and `text_policy`.
+    fn text_result(
+        result: Result<String, arboard::Error>,
+    ) -> Result<text_policy::TextRead, String> {
         match result {
-            Ok(text) => Ok(Some(text)),
-            Err(arboard::Error::ContentNotAvailable) => Ok(None),
-            Err(err) => Err(err.to_string()),
+            Ok(text) => Ok(text_policy::TextRead::Text(text)),
+            Err(err) => match text_policy::classify_arboard(&err) {
+                Some(failure) => Ok(text_policy::TextRead::from(failure)),
+                None => Err(err.to_string()),
+            },
         }
     }
 }
@@ -336,7 +348,7 @@ impl ClipboardBackend for ArboardClipboard {
         }
     }
 
-    fn text(&mut self, selection: ClipboardSelection) -> Result<Option<String>, String> {
+    fn text(&mut self, selection: ClipboardSelection) -> Result<text_policy::TextRead, String> {
         std::cfg_select! {
             target_os = "linux" => {
                 let selection = match selection {
@@ -348,7 +360,10 @@ impl ClipboardBackend for ArboardClipboard {
             _ => {
                 match selection {
                     ClipboardSelection::Clipboard => Self::text_result(self.clipboard.get_text()),
-                    ClipboardSelection::Primary => Ok(self.primary.load()),
+                    ClipboardSelection::Primary => Ok(match self.primary.load() {
+                        Some(text) => text_policy::TextRead::Text(text),
+                        None => text_policy::TextRead::NoSelection,
+                    }),
                 }
             }
         }
@@ -396,7 +411,10 @@ impl WaylandClipboard {
         }
     }
 
-    fn data_control_text(&mut self) -> Result<Option<String>, String> {
+    /// The fallback's answer, or `None` when this compositor has no
+    /// data-control (or the reader could not be bound); the caller keeps
+    /// smithay's classification in that case.
+    fn data_control_text(&mut self) -> Result<Option<text_policy::TextRead>, String> {
         if let DataControl::Unbound = self.data_control {
             self.data_control = match self.bind_data_control() {
                 Ok(Some(reader)) => DataControl::Bound(reader),
@@ -408,7 +426,7 @@ impl WaylandClipboard {
             };
         }
         match &mut self.data_control {
-            DataControl::Bound(reader) => reader.read_text(),
+            DataControl::Bound(reader) => Ok(Some(reader.read_text()?)),
             DataControl::Unbound | DataControl::Unavailable => Ok(None),
         }
     }
@@ -425,35 +443,6 @@ impl WaylandClipboard {
         // SAFETY: `_display_owner` keeps the display alive and is dropped
         // after `data_control` (field order above).
         unsafe { wayland_data_control::DataControlReader::connect(raw_display.display) }
-    }
-}
-
-/// Whether smithay-clipboard saw no usable selection offer.
-///
-/// smithay-clipboard reports a missing offer as the untyped error
-/// `selection is empty` and a missing text type as `NotFound`; both mean
-/// "nothing to paste" rather than failure.  Its other errors (no seat, no
-/// keyboard focus) are real failures.
-#[cfg(target_os = "linux")]
-fn smithay_saw_no_offer(err: &std::io::Error) -> bool {
-    err.kind() == std::io::ErrorKind::NotFound || err.to_string() == "selection is empty"
-}
-
-/// Map a smithay-clipboard read result, consulting `fallback` only when it
-/// saw no usable selection offer.  A failed or timed-out fallback reads as
-/// an empty selection (nil), not an error.
-#[cfg(target_os = "linux")]
-fn smithay_text_or_fallback(
-    result: std::io::Result<String>,
-    fallback: impl FnOnce() -> Result<Option<String>, String>,
-) -> Result<Option<String>, String> {
-    match result {
-        Ok(text) => Ok(Some(text)),
-        Err(err) if smithay_saw_no_offer(&err) => fallback().or_else(|err| {
-            tracing::warn!("clipboard data-control read failed: {err}");
-            Ok(None)
-        }),
-        Err(err) => Err(err.to_string()),
     }
 }
 
@@ -479,16 +468,20 @@ impl ClipboardBackend for WaylandClipboard {
         Ok(())
     }
 
-    fn text(&mut self, selection: ClipboardSelection) -> Result<Option<String>, String> {
+    fn text(&mut self, selection: ClipboardSelection) -> Result<text_policy::TextRead, String> {
         match selection {
             ClipboardSelection::Clipboard => {
-                let result = self.clipboard.load();
-                smithay_text_or_fallback(result, || self.data_control_text())
+                // Hyprland delivers the selection only to winit's data device,
+                // so smithay's device can report an absence while the
+                // compositor holds a selection; only an absence consults the
+                // data-control fallback (see `text_policy::text_or_fallback`).
+                let native = self.clipboard.load();
+                text_policy::text_or_fallback(native, || self.data_control_text())
             }
             // smithay-clipboard owns the only primary-selection device, so
             // its result is complete.
             ClipboardSelection::Primary => {
-                smithay_text_or_fallback(self.clipboard.load_primary(), || Ok(None))
+                text_policy::text_or_fallback(self.clipboard.load_primary(), || Ok(None))
             }
         }
     }
