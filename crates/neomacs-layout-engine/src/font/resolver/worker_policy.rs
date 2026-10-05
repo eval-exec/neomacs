@@ -152,7 +152,6 @@ impl CapturedCharacterPolicy {
                 .unwrap_or(weight),
             slant: spec.slant.unwrap_or(slant),
             width: spec.width.unwrap_or(FontWidth::Normal),
-            explicit_width: spec.width,
             size,
         })
     }

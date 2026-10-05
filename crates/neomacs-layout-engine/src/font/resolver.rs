@@ -678,7 +678,9 @@ impl FontResolver {
             let request = SelectionRequest {
                 weight: policy.weight,
                 slant: policy.slant,
-                width: policy.explicit_width,
+                // GNU font_select_entity prefers the face's width when the
+                // fontset spec leaves it unset, as for weight and slant.
+                width: Some(policy.width),
                 spacing: None,
                 prefer_monospace,
                 queried_family: family.as_deref(),
@@ -728,7 +730,6 @@ struct CapturedCharacterPolicy {
     weight: u16,
     slant: FontSlant,
     width: FontWidth,
-    explicit_width: Option<FontWidth>,
     size: FontSelectionSize,
 }
 
@@ -759,7 +760,6 @@ impl CapturedCharacterPolicy {
                 .unwrap_or(weight),
             slant: spec.slant.unwrap_or(slant),
             width: spec.width.unwrap_or(width),
-            explicit_width: spec.width,
             size,
         }
     }
