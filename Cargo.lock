@@ -3912,6 +3912,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "neomacs-mcp"
+version = "0.0.19"
+
+[[package]]
 name = "neomacs-melpa-test-support"
 version = "0.0.19"
 dependencies = [

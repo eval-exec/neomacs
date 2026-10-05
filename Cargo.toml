@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/neomacs",
+    "crates/neomacs-mcp",
     "crates/neomacs-terminfo",
     "crates/neomacs-allocator",
     "crates/neomacs-diagnostics",
@@ -29,6 +30,7 @@ members = [
 ]
 default-members = [
     "crates/neomacs",
+    "crates/neomacs-mcp",
     "crates/xtask",
 ]
 resolver = "2"

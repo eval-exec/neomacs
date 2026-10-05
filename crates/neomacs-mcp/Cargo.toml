@@ -1,0 +1,15 @@
+[package]
+name = "neomacs-mcp"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Stdio relay from MCP clients to the editor's local MCP socket"
+
+[[bin]]
+name = "neomacs-mcp"
+path = "src/main.rs"
+
+[lints]
+workspace = true
