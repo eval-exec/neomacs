@@ -476,48 +476,144 @@ impl InFlightPinned for ThreadBlockedData {
     }
 }
 
+/// A validated (SYMBOL . DATA) memory-signal-data object, retained unchanged
+/// through GNU's allocation-exhaustion delivery. This copied witness is
+/// confined to its mutator; SignalData pins the object while it is in flight.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct MemorySignalBinding {
+    original: Value,
+    symbol: SymId,
+    tail: Value,
+    thread_bound: std::marker::PhantomData<*const ()>,
+}
+
+#[derive(Clone, Copy, Debug, thiserror::Error)]
+pub(crate) enum MemorySignalBindingError {
+    #[error("memory-signal-data is not a cons")]
+    NotCons,
+    #[error("memory-signal-data has a non-symbol condition")]
+    NotSymbol,
+}
+
+impl TryFrom<Value> for MemorySignalBinding {
+    type Error = MemorySignalBindingError;
+
+    fn try_from(original: Value) -> Result<Self, Self::Error> {
+        if !original.is_cons() {
+            return Err(MemorySignalBindingError::NotCons);
+        }
+        let symbol = original
+            .cons_car()
+            .as_symbol_id()
+            .ok_or(MemorySignalBindingError::NotSymbol)?;
+        Ok(Self {
+            original,
+            symbol,
+            tail: original.cons_cdr(),
+            thread_bound: std::marker::PhantomData,
+        })
+    }
+}
+
+impl MemorySignalBinding {
+    fn from_signal_parts(symbol: SymId, tail: Value) -> Self {
+        Self {
+            original: Value::cons(Value::from_sym_id(symbol), tail),
+            symbol,
+            tail,
+            thread_bound: std::marker::PhantomData,
+        }
+    }
+
+    pub(crate) fn original(self) -> Value {
+        self.original
+    }
+}
+
+static_assertions::assert_not_impl_any!(MemorySignalBinding: Send, Sync);
+
+/// GNU eval.c:1948-1953 distinguishes allocation exhaustion from ordinary
+/// signals and hook-suppressed signals. Memory exhaustion retains the original
+/// error object and permits neither hook nor debugger reentry. This immutable
+/// policy belongs to one in-flight signal; it caches no mutator-local state.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum SignalDelivery {
+    Ordinary,
+    HookSuppressed,
+    MemoryExhausted(MemorySignalBinding),
+}
+
+static_assertions::assert_not_impl_any!(SignalDelivery: Send, Sync);
+
 #[derive(Clone, Debug)]
 pub struct SignalData {
     pub symbol: SymId,
     pub data: Vec<Value>,
     /// Original cdr payload when a signal uses non-list data.
     pub raw_data: Option<Value>,
-    pub(crate) suppress_signal_hook: bool,
+    delivery: SignalDelivery,
     pub(crate) selected_resume: Option<ResumeTarget>,
     pub(crate) search_complete: bool,
     /// Keeps `data` and `raw_data` reachable for the collector while this
     /// signal is in flight. PRIVATE on purpose: it is what makes an unrooted
     /// signal payload unrepresentable outside this module — a struct with a
     /// private field cannot be built from a literal elsewhere, so every
-    /// construction site has to go through [`SignalData::new`], which pins.
+    /// construction site has to go through the constructors below, which pin.
     /// See [`InFlightRoots`] for why the pin is needed at all.
     #[allow(dead_code)] // held for its Drop (the GC pin); read only via the sealed trait
     pin: InFlightRoots,
 }
 
+static_assertions::assert_not_impl_any!(SignalData: Send, Sync);
+
 impl SignalData {
-    /// The only way to build a signal payload: pins `data` and `raw_data` as
-    /// GC roots for as long as the returned value (or any clone of it) lives.
+    /// Compatibility constructor for ordinary or hook-suppressed signals.
+    /// Every constructor pins its payload for the lifetime of this value.
     pub(crate) fn new(
         symbol: SymId,
         data: Vec<Value>,
         raw_data: Option<Value>,
         suppress_signal_hook: bool,
     ) -> Self {
+        let delivery = if suppress_signal_hook {
+            SignalDelivery::HookSuppressed
+        } else {
+            SignalDelivery::Ordinary
+        };
+        Self::new_with_delivery(symbol, data, raw_data, delivery)
+    }
+
+    /// Build a signal with its typed delivery policy, pinning both the payload
+    /// and any original memory-exhaustion binding for the entire signal lifetime.
+    pub(crate) fn new_with_delivery(
+        symbol: SymId,
+        data: Vec<Value>,
+        raw_data: Option<Value>,
+        delivery: SignalDelivery,
+    ) -> Self {
+        let binding = match delivery {
+            SignalDelivery::Ordinary | SignalDelivery::HookSuppressed => None,
+            SignalDelivery::MemoryExhausted(binding) => Some(binding.original()),
+        };
         let pin = InFlightRoots::pin(
             std::iter::once(Value::from_sym_id(symbol))
                 .chain(data.iter().copied())
-                .chain(raw_data),
+                .chain(raw_data)
+                .chain(binding),
         );
         Self {
             symbol,
             data,
             raw_data,
-            suppress_signal_hook,
+            delivery,
             selected_resume: None,
             search_complete: false,
             pin,
         }
+    }
+
+    pub(crate) fn delivery(&self) -> SignalDelivery {
+        self.delivery
     }
 
     /// Resolve the signal symbol name via the interner.
@@ -913,12 +1009,18 @@ pub(crate) fn signal(symbol: impl IntoConditionSym, data: Vec<Value>) -> Flow {
 /// Context-aware allocation paths use the live `memory-signal-data` instead.
 #[cold]
 pub(crate) fn memory_exhausted_error() -> Flow {
-    signal(
-        LispCondition::Error,
-        vec![Value::string(
-            "Memory exhausted--use M-x save-some-buffers then exit and restart Emacs",
-        )],
-    )
+    let symbol = LispCondition::Error.condition_sym();
+    let data = vec![Value::string(
+        "Memory exhausted--use M-x save-some-buffers then exit and restart Emacs",
+    )];
+    let tail = Value::list_from_slice(&data);
+    let binding = MemorySignalBinding::from_signal_parts(symbol, tail);
+    Flow::signal_boxed(Box::new(SignalData::new_with_delivery(
+        symbol,
+        data,
+        Some(tail),
+        SignalDelivery::MemoryExhausted(binding),
+    )))
 }
 
 /// Create a signal flow without running `signal-hook-function`.
@@ -997,6 +1099,10 @@ pub fn map_flow(flow: Flow) -> EvalError {
 
 /// Build the binding value for condition-case variable: (symbol . data)
 pub(crate) fn make_signal_binding_value(sig: &SignalData) -> Value {
+    match sig.delivery {
+        SignalDelivery::MemoryExhausted(binding) => return binding.original(),
+        SignalDelivery::Ordinary | SignalDelivery::HookSuppressed => {}
+    }
     if let Some(raw) = &sig.raw_data {
         return Value::cons(Value::symbol(sig.symbol), *raw);
     }
@@ -1016,6 +1122,36 @@ pub(crate) fn signal_from_binding_value(value: Value) -> Option<Flow> {
     let tail = pair_cdr;
     let symbol_id = pair_car.as_symbol_id()?;
     Some(signal_with_data_id(symbol_id, tail))
+}
+
+/// Deliver GNU alloc.c:4142's live memory-signal-data, keeping its original
+/// error object (including a dotted cdr) and the OOM delivery policy together.
+#[cold]
+pub(crate) fn memory_signal_from_binding_value(value: Value) -> Flow {
+    let binding = match MemorySignalBinding::try_from(value) {
+        Ok(binding) => binding,
+        // Fsignal turns a nil error symbol and non-cons data into an
+        // ordinary error (GNU eval.c:1924-1925), preserving its raw cdr.
+        Err(MemorySignalBindingError::NotCons) => {
+            return signal_with_data(LispCondition::Error, value);
+        }
+        // For an OOM cons, Fget checks its actual condition designator
+        // (GNU eval.c:1978; fns.c:2653). Validation must not silently replace
+        // an invalid user binding with the bootstrap exhaustion descriptor.
+        Err(MemorySignalBindingError::NotSymbol) => {
+            return signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("symbolp"), value.cons_car()],
+            );
+        }
+    };
+    let data = super::value::list_to_vec(&binding.tail).unwrap_or_else(|| vec![binding.tail]);
+    Flow::signal_boxed(Box::new(SignalData::new_with_delivery(
+        binding.symbol,
+        data,
+        Some(binding.tail),
+        SignalDelivery::MemoryExhausted(binding),
+    )))
 }
 
 /// Format an eval result for the compat test harness (TSV output).

@@ -60,12 +60,50 @@ fn constructor_limits() {
   (setq memory-signal-data '(error "buffer-local exhausted"))
   (list (condition-case e (make-vector most-positive-fixnum 0) (error e))
         (condition-case e (make-string most-positive-fixnum ?a) (error e))
-        (condition-case e (make-bool-vector most-positive-fixnum t) (error e)))))
+        (condition-case e (make-bool-vector most-positive-fixnum t) (error e))))
+(let* ((memory-signal-data '(error . gdl-oom-tail))
+       (gdl-oom-hook-count 0)
+       (gdl-oom-debugger-count 0)
+       (debug-on-error t)
+       (debug-on-signal t)
+       (debugger (lambda (&rest _) (setq gdl-oom-debugger-count (1+ gdl-oom-debugger-count))))
+       (signal-hook-function (lambda (&rest _) (setq gdl-oom-hook-count (1+ gdl-oom-hook-count)))))
+   (list
+    (condition-case e (make-vector most-positive-fixnum 0)
+      (error (list e (eq e memory-signal-data))))
+    (condition-case e (make-string most-positive-fixnum ?a)
+      (error (list e (eq e memory-signal-data))))
+    (condition-case e (make-bool-vector most-positive-fixnum t)
+      (error (list e (eq e memory-signal-data))))
+    gdl-oom-hook-count gdl-oom-debugger-count
+    (condition-case e (signal 'error '(gdl-control)) (error e))
+    gdl-oom-hook-count gdl-oom-debugger-count))
+(let* ((memory-signal-data '(gdl-oom-undefined-condition . gdl-tail))
+       (gdl-oom-hooks 0)
+       (gdl-oom-debuggers 0)
+       (internal-when-entered-debugger -1)
+       (debug-on-error t)
+       (debug-on-signal t)
+       (debugger (lambda (&rest _) (setq gdl-oom-debuggers (1+ gdl-oom-debuggers))))
+       (signal-hook-function (lambda (&rest _) (setq gdl-oom-hooks (1+ gdl-oom-hooks)))))
+  (list (condition-case e (make-vector most-positive-fixnum nil)
+          (error (list e (eq e memory-signal-data))))
+        gdl-oom-hooks gdl-oom-debuggers))
+(let ((out nil))
+  (dolist (datum '(nil t "oom" (17 . gdl-tail)))
+    (let* ((memory-signal-data datum)
+           (gdl-malformed-hook-count 0)
+           (signal-hook-function
+            (lambda (&rest _) (setq gdl-malformed-hook-count (1+ gdl-malformed-hook-count)))))
+      (push (list datum (condition-case e (make-vector most-positive-fixnum nil) (error e))
+                  gdl-malformed-hook-count) out)))
+  (nreverse out))
+)
 "#;
     assert_oracle_parity_expect(
         form,
         expect_test::expect![[
-            r#""OK (((error \"allocation exhausted\") (error \"allocation exhausted\") (error \"Maximum string size exceeded\") (error \"allocation exhausted\") [] \"ééé\" 65) ((error \"buffer-local exhausted\") (error \"buffer-local exhausted\") (error \"buffer-local exhausted\")))""#
+            r#""OK (((error \"allocation exhausted\") (error \"allocation exhausted\") (error \"Maximum string size exceeded\") (error \"allocation exhausted\") [] \"ééé\" 65) ((error \"buffer-local exhausted\") (error \"buffer-local exhausted\") (error \"buffer-local exhausted\")) (((error . gdl-oom-tail) t) ((error . gdl-oom-tail) t) ((error . gdl-oom-tail) t) 0 0 (error gdl-control) 1 1) (((error \"Invalid error symbol\" gdl-oom-undefined-condition) nil) 1 1) ((nil (error) 1) (t (error . t) 1) (\"oom\" (error . \"oom\") 1) ((17 . gdl-tail) (wrong-type-argument symbolp 17) 1)))""#
         ]],
     );
 }

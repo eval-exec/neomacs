@@ -1434,7 +1434,7 @@ fn parse_format_spec(bytes: &[u8], pos: &mut usize) -> Result<ParsedFormatSpec, 
     // multibyte char — decode it whole).
     if *pos >= bytes.len() {
         return Err(signal(
-            "error",
+            LispCondition::Error,
             vec![Value::string(
                 "Format string ends in middle of format specifier",
             )],
