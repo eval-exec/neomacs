@@ -4356,6 +4356,8 @@ version = "0.0.19"
 dependencies = [
  "neovm-core",
  "neovm-host-abi",
+ "static_assertions",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
