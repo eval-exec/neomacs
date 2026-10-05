@@ -38,14 +38,11 @@ impl Work {
         let mut last_list_pc = None;
         for (pc, op) in ops.iter().enumerate() {
             match op {
-                // Aset's live function-cell fallback can run arbitrary Lisp
-                // and return a different value from its stored operand. Keep
-                // it outside PrimitiveLists until that contract is modeled.
-                Op::Aset
-                | Op::Call(_)
-                | Op::Apply(_)
-                | Op::CallBuiltin(..)
-                | Op::CallBuiltinSym(..) => work.bytecode_calls = true,
+                // GNU primitive opcodes, including Baset, bypass live
+                // function cells. Only genuine bytecode calls add callbacks.
+                Op::Call(_) | Op::Apply(_) | Op::CallBuiltin(..) | Op::CallBuiltinSym(..) => {
+                    work.bytecode_calls = true
+                }
                 // build::Builder::new refuses these reachable operations:
                 // handler edges need push-time stacks that opt does not model.
                 // Avoid a CFG build here and conservatively reject dead copies
@@ -253,11 +250,7 @@ pub(crate) fn primitive_osr_source_admitted(source_ops: &[Op]) -> bool {
         || !source_ops.iter().any(|op| {
             matches!(
                 op,
-                Op::Aset
-                    | Op::Call(_)
-                    | Op::Apply(_)
-                    | Op::CallBuiltin(..)
-                    | Op::CallBuiltinSym(..)
+                Op::Call(_) | Op::Apply(_) | Op::CallBuiltin(..) | Op::CallBuiltinSym(..)
             )
         })
 }
