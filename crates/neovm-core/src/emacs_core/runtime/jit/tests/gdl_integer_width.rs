@@ -34,7 +34,8 @@ fn gdl_integer_width_native_signal_roots_operands_through_collecting_hook() {
                  (when (eq symbol 'overflow-error)
                    (setq gdl-width-hook-count (1+ gdl-width-hook-count))
                    (garbage-collect)
-                   (dotimes (_ 64) (expt 3 60)))
+                   (let ((n 0))
+                     (while (< n 64) (expt 3 60) (setq n (1+ n)))))
                  nil))",
     )
     .expect("install collecting overflow hook");

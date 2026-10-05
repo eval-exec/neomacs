@@ -243,7 +243,7 @@ impl From<i64> for LdexpExponent {
 }
 
 mod c_math {
-    #[link(name = "m")]
+    #[cfg_attr(unix, link(name = "m"))]
     unsafe extern "C" {
         pub(super) fn ldexp(value: f64, exponent: libc::c_int) -> f64;
     }

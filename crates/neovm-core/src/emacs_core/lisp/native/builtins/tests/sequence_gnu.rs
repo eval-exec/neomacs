@@ -28,12 +28,13 @@ pub(super) fn assert_gnu(name: &str, form: &str, fixture: &str) {
                 .expect("GNU UTF-8")
                 .trim_end()
         );
-        std::fs::write(
-            root.join("src/emacs_core/lisp/native/builtins/tests/sequence_gnu")
-                .join(format!("{name}.expect")),
-            format!("{output}\n"),
-        )
-        .expect("GNU fixture");
+        let fixture = root
+            .join("src/emacs_core/lisp/native/builtins/tests/sequence_gnu")
+            .join(format!("{name}.expect"));
+        let stored = format!("{output}\n");
+        if std::fs::read_to_string(&fixture).ok().as_deref() != Some(stored.as_str()) {
+            std::fs::write(fixture, stored).expect("GNU fixture");
+        }
         output
     } else {
         fixture.trim_end().to_owned()

@@ -20,19 +20,22 @@ fn assert_gnu(name: &str, form: &str, frozen: &str) {
             String::from_utf8_lossy(&output.stderr)
         );
         let expected = String::from_utf8(output.stdout).expect("GNU UTF8");
-        std::fs::write(
-            root.join("src/emacs_core/lisp/native/builtins/tests/gdl_format")
-                .join(format!("{name}.expect")),
-            &expected,
-        )
-        .expect("GNU fixture");
+        let fixture = root
+            .join("src/emacs_core/lisp/native/builtins/tests/gdl_format")
+            .join(format!("{name}.expect"));
+        if std::fs::read_to_string(&fixture).ok().as_deref() != Some(expected.as_str()) {
+            std::fs::write(fixture, &expected).expect("GNU fixture");
+        }
         expected
     } else {
         frozen.to_owned()
     };
-    let mut ctx = crate::emacs_core::Context::new();
-    let value = ctx.eval_str(form).expect("format result");
-    assert_eq!(crate::emacs_core::print::print_value(&value), expected);
+    // GNU's dolist and width tables belong to the bootstrapped Lisp world.
+    // Evaluate through the same startup snapshot as sequence oracle pins.
+    assert_eq!(
+        crate::test_utils::runtime_startup_eval_one(form),
+        format!("OK {expected}")
+    );
 }
 
 #[test]
