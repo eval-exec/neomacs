@@ -2613,6 +2613,7 @@ impl Context {
             .unwrap_or(0);
         if std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1") {
             let stats = self.tagged_heap.sweep_stats();
+            let (leaf_claimed, hash_claimed) = self.tagged_heap.last_concurrent_claim_counts();
             let hs = self.tagged_heap.handshake_stats();
             eprintln!(
                 "NEOVM_GC concurrent_termination {}us [roots={roots_us}us drain={drain_us}us \
@@ -2629,8 +2630,8 @@ impl Context {
                 stats.last_concurrent_subr_dropped,
                 stats.last_concurrent_vec_claimed,
                 stats.last_concurrent_bc_claimed,
-                stats.last_concurrent_leaf_claimed,
-                stats.last_concurrent_hash_claimed,
+                leaf_claimed,
+                hash_claimed,
                 stats.last_termination_kinds,
                 hs.last_term_join_us,
                 hs.last_term_runtime_us,

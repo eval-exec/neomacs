@@ -1287,8 +1287,6 @@ impl TaggedHeap {
             last_concurrent_subr_dropped: self.last_concurrent_subr_dropped,
             last_concurrent_vec_claimed: self.last_concurrent_vec_claimed,
             last_concurrent_bc_claimed: self.last_concurrent_bc_claimed,
-            last_concurrent_leaf_claimed: self.last_concurrent_leaf_claimed(),
-            last_concurrent_hash_claimed: self.last_concurrent_hash_claimed(),
             last_termination_fold_us: self.last_termination_fold_us,
             termination_count: self.termination_count,
             mark_us: self.sweep_mark_us,

@@ -154,6 +154,7 @@ fn concurrent_leaf_claims_off_keeps_the_original_defer_path_and_allocates_no_cou
         let mut heap = heap(false, chunk_map, false);
         assert!(!heap.concurrent_claims());
         assert!(heap.concurrent_leaf_claimed().is_none());
+        assert_eq!(heap.last_concurrent_claim_counts(), (0, 0));
         let values: Vec<_> = Leaf::ALL.map(|kind| kind.allocate(&mut heap)).into();
         let job = job(&mut heap, false);
         for (kind, value) in Leaf::ALL.into_iter().zip(values) {
@@ -381,7 +382,7 @@ fn concurrent_leaf_claims_preserve_weak_symbol_liveness_and_reclaim_dead_objects
             let roots = [position, marker, bignum, weak];
             for _ in 0..2 {
                 concurrent_cycle(&mut heap, &roots);
-                assert_eq!(heap.sweep_stats().last_concurrent_leaf_claimed, 3);
+                assert_eq!(heap.last_concurrent_claim_counts().0, 3);
                 assert!(heap.is_value_marked(key));
                 assert_eq!(weak.as_hash_table().unwrap().data.len(), 1);
                 for value in [position, marker, bignum] {
@@ -424,7 +425,7 @@ fn concurrent_leaf_claims_do_not_read_marker_chain_payloads() {
         text.chain_splice_at_head(dead_ptr);
         unsafe { heap.set_marker_chain_head_slots(vec![text.markers_head_slot_raw()]) };
         concurrent_cycle(&mut heap, &[live]);
-        assert_eq!(heap.sweep_stats().last_concurrent_leaf_claimed, 1);
+        assert_eq!(heap.last_concurrent_claim_counts().0, 1);
         assert_eq!(text.chain_walk_collect(), [live_ptr]);
         assert!(!heap.marker_arena.owns(dead_ptr.cast()));
     }

@@ -512,7 +512,7 @@ fn tier_h_actual_worker_first_write_before_and_after_claim_preserves_both_child_
             }
             assert!(snapshot.get(owner_addr).unwrap().reader_done());
             heap.join_concurrent_mark();
-            assert_eq!(heap.sweep_stats().last_concurrent_hash_claimed, 1);
+            assert_eq!(heap.last_concurrent_claim_counts().1, 1);
             assert!(heap.concurrent_hash_snapshot().is_some());
             assert_eq!(
                 heap.current_concurrent_hash_mutator()
@@ -562,6 +562,7 @@ fn tier_h_actual_worker_first_write_before_and_after_claim_preserves_both_child_
             drop(snapshot);
             heap.incremental_finish(heap.live_bytes(), Instant::now());
             assert!(heap.concurrent_hash_snapshot().is_none());
+            assert_eq!(heap.last_concurrent_claim_counts().1, 1);
             assert!(
                 heap.current_concurrent_hash_mutator()
                     .lock()

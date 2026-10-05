@@ -486,7 +486,7 @@ fn concurrent_termination_classifies_deferred_kinds() {
         kinds.float,
     );
     if heap.concurrent_claims() {
-        assert!(stats.last_concurrent_hash_claimed >= N_HT);
+        assert!(heap.last_concurrent_claim_counts().1 >= N_HT);
         assert_eq!(
             kinds.hash_table, 0,
             "eligible hashes leave the parked buffer"
@@ -513,7 +513,7 @@ fn concurrent_termination_classifies_deferred_kinds() {
         kinds.vector,
     );
     if heap.concurrent_claims() {
-        assert!(stats.last_concurrent_leaf_claimed >= N_BIG);
+        assert!(heap.last_concurrent_claim_counts().0 >= N_BIG);
         assert_eq!(kinds.other, 0, "page leaves leave the parked buffer");
     } else {
         assert!(

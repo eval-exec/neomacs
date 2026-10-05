@@ -173,14 +173,14 @@ impl TaggedHeap {
             .map(|state| &state.hash_claimed)
     }
 
-    pub(super) fn last_concurrent_leaf_claimed(&self) -> usize {
-        self.concurrent_claims_state()
-            .map_or(0, |state| state.last_leaf_claimed)
-    }
-
-    pub(super) fn last_concurrent_hash_claimed(&self) -> usize {
-        self.concurrent_claims_state()
-            .map_or(0, |state| state.last_hash_claimed)
+    /// Last joined U35 leaf/hash claim counts; zero with claims disabled.
+    /// Kept outside SweepStats so ordinary stats retain their BASE layout.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn last_concurrent_claim_counts(&self) -> (usize, usize) {
+        self.concurrent_claims_state().map_or((0, 0), |state| {
+            (state.last_leaf_claimed, state.last_hash_claimed)
+        })
     }
 }
 
