@@ -327,3 +327,74 @@ fn arboard_backend_keeps_primary_in_process_local_state() {
         .expect("PRIMARY disown must not fail on this platform");
     assert_eq!(backend.text(ClipboardSelection::Primary), Ok(None));
 }
+
+#[cfg(target_os = "linux")]
+mod wayland_fallback {
+    use super::super::smithay_text_or_fallback;
+    use std::cell::Cell;
+    use std::io;
+
+    fn no_offer() -> io::Result<String> {
+        Err(io::Error::other("selection is empty"))
+    }
+
+    #[test]
+    fn smithay_text_is_returned_without_consulting_data_control() {
+        let consulted = Cell::new(false);
+        let result = smithay_text_or_fallback(Ok("native".to_owned()), || {
+            consulted.set(true);
+            Ok(Some("data-control".to_owned()))
+        });
+        assert_eq!(result, Ok(Some("native".to_owned())));
+        assert!(!consulted.get());
+    }
+
+    #[test]
+    fn missing_selection_offer_reads_through_data_control() {
+        // Hyprland delivers the selection only to winit's data device, so
+        // smithay-clipboard's device never holds an offer.
+        let result = smithay_text_or_fallback(no_offer(), || Ok(Some("foreign".to_owned())));
+        assert_eq!(result, Ok(Some("foreign".to_owned())));
+    }
+
+    #[test]
+    fn missing_text_mime_reads_through_data_control() {
+        let result = smithay_text_or_fallback(
+            Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "supported mime-type is not found",
+            )),
+            || Ok(Some("text from data-control".to_owned())),
+        );
+        assert_eq!(result, Ok(Some("text from data-control".to_owned())));
+    }
+
+    #[test]
+    fn empty_transfer_is_text_not_a_missing_selection() {
+        let result = smithay_text_or_fallback(Ok(String::new()), || {
+            panic!("an empty transfer must not consult data-control")
+        });
+        assert_eq!(result, Ok(Some(String::new())));
+    }
+
+    #[test]
+    fn seat_and_focus_errors_are_not_masked_by_data_control() {
+        for message in [
+            "client doesn't have focus",
+            "no events received on any seat",
+        ] {
+            let result = smithay_text_or_fallback(Err(io::Error::other(message)), || {
+                panic!("{message} must not consult data-control")
+            });
+            assert_eq!(result, Err(message.to_owned()));
+        }
+    }
+
+    #[test]
+    fn failed_data_control_read_keeps_the_empty_result() {
+        let result = smithay_text_or_fallback(no_offer(), || {
+            Err("data-control transfer timed out".to_owned())
+        });
+        assert_eq!(result, Ok(None));
+    }
+}
