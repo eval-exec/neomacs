@@ -100,53 +100,83 @@ fn gc_tls_ownership_in_flight_signal_roots_survive_same_heap_gc() {
     );
 }
 
+/// Identifies an existing pinned slot; the originating error stays live until
+/// the worker acknowledges that it claimed its own local pin from this slot.
+#[derive(Clone, Copy)]
+struct InFlightSlotId(usize);
+
+static_assertions::assert_impl_all!(InFlightSlotId: Send, Sync, Copy);
+
+fn pinned_slot(error: &EvalError) -> (InFlightRegistryHandle, InFlightSlotId) {
+    let EvalError::Signal { pin, .. } = error else {
+        panic!("expected a pinned signal");
+    };
+    let pin = pin.pin.as_ref().expect("signal has traceable payload");
+    (pin.registry.clone(), InFlightSlotId(pin.slot))
+}
+
+fn claim_registry_slot(registry: InFlightRegistryHandle, slot: InFlightSlotId) -> InFlightRoots {
+    // The source error remains alive until the receiver claims this pin.
+    // Copy only the mutex-protected root words; no Lisp object is dereferenced.
+    let values = registry.lock().slots[slot.0]
+        .as_ref()
+        .expect("acknowledgement keeps the source slot live")
+        .clone();
+    InFlightRoots::claim(registry, values)
+}
+
 #[test]
-fn gc_tls_ownership_in_flight_roots_follow_a_context_to_another_thread() {
+fn gc_tls_ownership_in_flight_shared_registry_pin_outlives_owner_local_error() {
     let mut first = Context::new();
     let error = first
         .eval_str("(signal 'error (list (vector 46)))")
-        .expect_err("retain a public error on the source thread");
-    let payload = match &error {
-        EvalError::Signal { data, .. } => data[0],
+        .expect_err("retain a public error on its owner thread");
+    let payload_bits = match &error {
+        EvalError::Signal { data, .. } => data[0].bits(),
         other => panic!("expected signal, received {other:?}"),
     };
-    let payload_bits = payload.bits();
-    let (ready, proceed) = std::sync::mpsc::channel();
+    let (registry, slot) = pinned_slot(&error);
+    let (claimed, wait_for_claim) = std::sync::mpsc::channel();
+    let (release, wait_for_release) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || {
-        proceed.recv().unwrap();
-        first.setup_thread_locals();
-        assert!(
-            roots_for(&first)
-                .iter()
-                .any(|root| root.bits() == payload_bits),
-            "moving the Context lost an error still retained by its source thread"
-        );
-        first.gc_collect_exact();
-        first
+        // Neither Context nor EvalError crosses threads. The shared registry
+        // and scalar slot id let this thread own a separate local root pin.
+        let pin = claim_registry_slot(registry, slot);
+        claimed.send(()).unwrap();
+        wait_for_release.recv().unwrap();
+        drop(pin);
     });
+    wait_for_claim.recv().unwrap();
+    drop(error);
+    first.gc_collect_exact();
+    assert!(
+        roots_for(&first)
+            .iter()
+            .any(|root| root.bits() == payload_bits)
+    );
+
     let mut second = Context::new();
-    ready.send(()).unwrap();
-    let mut first = worker.join().expect("collect on the destination thread");
-    assert_eq!(payload.as_vector_data().unwrap()[0], Value::fixnum(46));
-    second.setup_thread_locals();
     let other = second
         .eval_str("(signal 'error (list (vector 47)))")
-        .expect_err("pin an error in the source thread's new Context");
+        .expect_err("pin an error in the independent Context");
     let other_payload = match &other {
         EvalError::Signal { data, .. } => data[0],
         other => panic!("expected signal, received {other:?}"),
     };
-    drop(error);
     assert!(
         roots_for(&second)
             .iter()
-            .any(|root| root.bits() == other_payload.bits())
+            .all(|root| root.bits() != payload_bits)
     );
     second.gc_collect_exact();
     assert_eq!(
         other_payload.as_vector_data().unwrap()[0],
         Value::fixnum(47)
     );
+    release.send(()).unwrap();
+    worker
+        .join()
+        .expect("release the worker's local registry pin");
     first.setup_thread_locals();
     assert!(
         roots_for(&first)
@@ -158,66 +188,66 @@ fn gc_tls_ownership_in_flight_roots_follow_a_context_to_another_thread() {
 }
 
 #[test]
-fn gc_tls_ownership_in_flight_source_pins_change_during_worker_gc() {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, Barrier, mpsc};
+fn gc_tls_ownership_in_flight_registry_pins_change_during_owner_gc() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
 
     let mut first = Context::new();
     let error = first
         .eval_str("(signal 'error (list (vector 48)))")
-        .expect_err("retain a public error on the source thread");
+        .expect_err("retain a public error on its owner thread");
     let payload_bits = match &error {
         EvalError::Signal { data, .. } => data[0].bits(),
         other => panic!("expected signal, received {other:?}"),
     };
-    let (start, wait_for_start) = mpsc::channel();
-    let (ready, wait_for_ready) = mpsc::channel();
+    let (registry, slot) = pinned_slot(&error);
     let collecting = Arc::new(Barrier::new(2));
     let finished = Arc::new(AtomicBool::new(false));
+    let completed = Arc::new(AtomicUsize::new(0));
     let worker_collecting = Arc::clone(&collecting);
     let worker_finished = Arc::clone(&finished);
+    let worker_completed = Arc::clone(&completed);
     let worker = std::thread::spawn(move || {
-        wait_for_start.recv().unwrap();
-        first.setup_thread_locals();
-        assert!(
-            roots_for(&first)
-                .iter()
-                .any(|root| root.bits() == payload_bits)
-        );
-        ready.send(()).unwrap();
+        let pin = claim_registry_slot(registry, slot);
         worker_collecting.wait();
-        let mut collections = 0;
-        while collections < 8 || !worker_finished.load(Ordering::Acquire) {
-            first.gc_collect_exact();
-            collections += 1;
+        let mut clones = 0;
+        while clones < 512 || worker_completed.load(Ordering::Acquire) < 8 {
+            drop(pin.clone());
+            clones += 1;
+            if clones % 64 == 0 {
+                std::thread::yield_now();
+            }
         }
-        assert!(
-            roots_for(&first)
-                .iter()
-                .all(|root| root.bits() != payload_bits)
-        );
-        first.gc_collect_exact();
-        first
+        drop(pin);
+        worker_finished.store(true, Ordering::Release);
     });
     let mut second = Context::new();
     let other = second
         .eval_str("(signal 'error (list (vector 49)))")
-        .expect_err("retain a separate pin in the source thread's active Context");
+        .expect_err("retain a separate pin in the active Context");
     let other_payload = match &other {
         EvalError::Signal { data, .. } => data[0],
         other => panic!("expected signal, received {other:?}"),
     };
-    start.send(()).unwrap();
-    wait_for_ready.recv().unwrap();
     collecting.wait();
-    for _ in 0..512 {
-        drop(error.clone());
-    }
     drop(error);
-    finished.store(true, Ordering::Release);
-    let mut first = worker
+    let mut collections = 0;
+    while collections < 8 || !finished.load(Ordering::Acquire) {
+        first.gc_collect_exact();
+        collections += 1;
+        completed.store(collections, Ordering::Release);
+    }
+    worker
         .join()
-        .expect("collect while source pins clone and drop");
+        .expect("clone and release registry pins during owner GC");
+    first.setup_thread_locals();
+    assert!(
+        roots_for(&first)
+            .iter()
+            .all(|root| root.bits() != payload_bits)
+    );
+    first.gc_collect_exact();
+    second.setup_thread_locals();
     assert!(
         roots_for(&second)
             .iter()
@@ -228,12 +258,5 @@ fn gc_tls_ownership_in_flight_source_pins_change_during_worker_gc() {
         other_payload.as_vector_data().unwrap()[0],
         Value::fixnum(49)
     );
-    first.setup_thread_locals();
-    assert!(
-        roots_for(&first)
-            .iter()
-            .all(|root| root.bits() != payload_bits)
-    );
-    first.gc_collect_exact();
     drop(other);
 }

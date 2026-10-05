@@ -569,8 +569,8 @@ impl Context {
 
     /// Set the thread-local heap pointers for the current thread.
     ///
-    /// Must be called when using an Context from a thread other than the one
-    /// that created it (e.g., in worker thread pools).
+    /// Reactivates this thread's Context after another local Context ran.
+    /// Context is thread-confined; worker threads construct their own Context.
     pub fn setup_thread_locals(&mut self) {
         crate::tagged::gc::set_tagged_heap(&mut self.tagged_heap);
         super::super::ccl::install_ccl_registry_handle(&self.ccl_registry);

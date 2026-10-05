@@ -94,6 +94,10 @@ pub(crate) struct LeafSidecar {
     pub(crate) spec_expected_base: *const u64,
 }
 
+// These pointers name one mutator's relocations and Cell-based deopt scratch.
+// Sharing executable pages does not make a sidecar transferable or shareable.
+static_assertions::assert_not_impl_any!(LeafSidecar: Send, Sync);
+
 impl LeafSidecar {
     /// Byte offsets of each field, for the AOT lowering's `load(sidecar, off)`.
     /// `#[repr(C)]` fixes the layout so these match the generated loads exactly.
@@ -581,6 +585,11 @@ impl LeafTotals {
     }
 }
 
+/// Compiled code together with one mutator's relocation and deopt storage.
+///
+/// The owning cache and its Rc leases remain on that mutator thread. Sharing
+/// immutable executable code requires a separate code owner; it cannot share
+/// this handle's Cell/RefCell scratch or its per-mutator sidecar.
 pub struct CompiledLeaf {
     /// The tier that produced this leaf (see [`LeafTier`]).
     pub(crate) tier: LeafTier,
@@ -740,6 +749,8 @@ pub struct CompiledLeaf {
     pub(crate) entry: *const u8,
     pub(crate) _backing: LeafBacking,
 }
+
+static_assertions::assert_not_impl_any!(CompiledLeaf: Send, Sync);
 
 /// How a native-to-native caller that owns the frame bookkeeping (the spec
 /// shim, `cache::run_resolved_leaf_native`) enters a leaf: one byte decided

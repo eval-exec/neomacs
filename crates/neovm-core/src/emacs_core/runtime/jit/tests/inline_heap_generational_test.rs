@@ -131,37 +131,24 @@ fn heapless_runtime_lowering_does_not_install_a_fallback_heap() {
 
 #[cfg(debug_assertions)]
 #[test]
-fn pure_runtime_lowering_does_not_read_a_moved_and_dropped_context_heap() {
-    // Keep live replacement storage ready before the source TLS becomes stale.
-    // Cleanup overwrites the raw slot without ever reading its old allocation,
-    // including if compilation or an assertion panics.
-    struct ClearSourceHeap(Box<crate::tagged::gc::TaggedHeap>);
-    impl Drop for ClearSourceHeap {
-        fn drop(&mut self) {
-            crate::tagged::gc::set_tagged_heap(&mut self.0);
-            crate::tagged::gc::clear_tagged_heap_if_installed(&self.0);
-        }
-    }
-    let cleanup = ClearSourceHeap(Box::new(crate::tagged::gc::TaggedHeap::new()));
+fn pure_runtime_lowering_does_not_read_an_owner_dropped_context_heap() {
     let context = Context::new();
-    let identity = context.tagged_heap.identity();
-    std::thread::spawn(move || drop(context)).join().unwrap();
-    // Drop retracts only the worker's installation. These metadata queries
-    // deliberately do not dereference the freed source-thread heap pointer.
-    assert!(crate::tagged::gc::tagged_heap_is_installed());
-    assert_eq!(
-        crate::tagged::gc::current_tagged_heap_identity(),
-        Some(identity)
-    );
+    drop(context);
+    // Context cannot leave its owner. Dropping it retracts that owner's TLS;
+    // lowering must stay heap-independent and must not reinstall a fallback.
+    assert!(!crate::tagged::gc::tagged_heap_is_installed());
+    assert_eq!(crate::tagged::gc::current_tagged_heap_identity(), None);
     let before = crate::tagged::gc::heap_generational_mode_reads_for_test();
     let leaf = lower_leaf(&[Op::Constant(0), Op::Length, Op::Return], &[Value::NIL], 0);
     let after = crate::tagged::gc::heap_generational_mode_reads_for_test();
-    drop(cleanup);
     assert!(
         leaf.is_ok(),
         "pure runtime lowering remains heap-independent"
     );
-    assert_eq!(after, before, "pure lowering must not query the stale heap");
+    assert_eq!(
+        after, before,
+        "pure lowering must not query the dropped heap"
+    );
     assert!(!crate::tagged::gc::tagged_heap_is_installed());
 }
 

@@ -1,0 +1,632 @@
+error[E0277]: `Cell<bool>` cannot be shared between threads safely
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:6:25
+  |
+6 |     requires_contract::<CompiledLeaf>();
+  |                         ^^^^^^^^^^^^ `Cell<bool>` cannot be shared between threads safely
+  |
+  = help: within `CompiledLeaf`, the trait `Sync` is not implemented for `Cell<bool>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` or `std::sync::atomic::AtomicBool` instead
+note: required because it appears within the type `CompiledLeaf`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub struct CompiledLeaf {
+  |            ^^^^^^^^^^^^
+note: required by a bound in `requires_contract`
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:3:25
+  |
+3 | fn requires_contract<T: Sync>() {}
+  |                         ^^^^ required by this bound in `requires_contract`
+
+error[E0277]: `RefCell<Option<Rc<CompiledLeaf>>>` cannot be shared between threads safely
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:6:25
+  |
+6 |     requires_contract::<CompiledLeaf>();
+  |                         ^^^^^^^^^^^^ `RefCell<Option<Rc<CompiledLeaf>>>` cannot be shared between threads safely
+  |
+  = help: within `CompiledLeaf`, the trait `Sync` is not implemented for `RefCell<Option<Rc<CompiledLeaf>>>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` instead
+note: required because it appears within the type `CompiledLeaf`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub struct CompiledLeaf {
+  |            ^^^^^^^^^^^^
+note: required by a bound in `requires_contract`
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:3:25
+  |
+3 | fn requires_contract<T: Sync>() {}
+  |                         ^^^^ required by this bound in `requires_contract`
+
+error[E0277]: `*const u8` cannot be shared between threads safely
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:6:25
+  |
+6 |     requires_contract::<CompiledLeaf>();
+  |                         ^^^^^^^^^^^^ `*const u8` cannot be shared between threads safely
+  |
+  = help: within `CompiledLeaf`, the trait `Sync` is not implemented for `*const u8`
+note: required because it appears within the type `CompiledLeaf`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub struct CompiledLeaf {
+  |            ^^^^^^^^^^^^
+note: required by a bound in `requires_contract`
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:3:25
+  |
+3 | fn requires_contract<T: Sync>() {}
+  |                         ^^^^ required by this bound in `requires_contract`
+
+error[E0277]: `RefCell<HashMap<std::string::String, cranelift_jit::backend::SendWrapper<*const u8>>>` cannot be shared between threads safely
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:6:25
+  |
+6 |     requires_contract::<CompiledLeaf>();
+  |                         ^^^^^^^^^^^^ `RefCell<HashMap<std::string::String, cranelift_jit::backend::SendWrapper<*const u8>>>` cannot be shared between threads safely
+  |
+  = help: within `CompiledLeaf`, the trait `Sync` is not implemented for `RefCell<HashMap<std::string::String, cranelift_jit::backend::SendWrapper<*const u8>>>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` instead
+note: required because it appears within the type `cranelift_jit::backend::JITModule`
+ --> $CARGO/cranelift-jit-$VERSION/src/backend.rs
+  |
+  | pub struct JITModule {
+  |            ^^^^^^^^^
+note: required because it appears within the type `compile::leaf::LeafBacking`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub(crate) enum LeafBacking {
+  |                 ^^^^^^^^^^^
+note: required because it appears within the type `CompiledLeaf`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub struct CompiledLeaf {
+  |            ^^^^^^^^^^^^
+note: required by a bound in `requires_contract`
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:3:25
+  |
+3 | fn requires_contract<T: Sync>() {}
+  |                         ^^^^ required by this bound in `requires_contract`
+
+error[E0277]: `Cell<i64>` cannot be shared between threads safely
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:6:25
+  |
+6 |     requires_contract::<CompiledLeaf>();
+  |                         ^^^^^^^^^^^^ `Cell<i64>` cannot be shared between threads safely
+  |
+  = help: within `[Cell<i64>]`, the trait `Sync` is not implemented for `Cell<i64>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` or `std::sync::atomic::AtomicI64` instead
+  = note: required because it appears within the type `[Cell<i64>]`
+  = note: required for `std::ptr::Unique<[Cell<i64>]>` to implement `Sync`
+note: required because it appears within the type `std::boxed::Box<[Cell<i64>]>`
+ --> $RUST/alloc/src/boxed.rs
+  |
+  | pub struct Box<
+  |            ^^^
+note: required because it appears within the type `CompiledLeaf`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub struct CompiledLeaf {
+  |            ^^^^^^^^^^^^
+note: required by a bound in `requires_contract`
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:3:25
+  |
+3 | fn requires_contract<T: Sync>() {}
+  |                         ^^^^ required by this bound in `requires_contract`
+
+error[E0277]: `Cell<u64>` cannot be shared between threads safely
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:6:25
+  |
+6 |     requires_contract::<CompiledLeaf>();
+  |                         ^^^^^^^^^^^^ `Cell<u64>` cannot be shared between threads safely
+  |
+  = help: within `compile::leaf::LeafObs`, the trait `Sync` is not implemented for `Cell<u64>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` or `std::sync::atomic::AtomicU64` instead
+note: required because it appears within the type `compile::leaf::LeafObs`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub(crate) struct LeafObs {
+  |                   ^^^^^^^
+  = note: required for `std::ptr::Unique<compile::leaf::LeafObs>` to implement `Sync`
+note: required because it appears within the type `std::boxed::Box<compile::leaf::LeafObs>`
+ --> $RUST/alloc/src/boxed.rs
+  |
+  | pub struct Box<
+  |            ^^^
+note: required because it appears within the type `CompiledLeaf`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub struct CompiledLeaf {
+  |            ^^^^^^^^^^^^
+note: required by a bound in `requires_contract`
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:3:25
+  |
+3 | fn requires_contract<T: Sync>() {}
+  |                         ^^^^ required by this bound in `requires_contract`
+
+error[E0277]: `RefCell<smallvec::SmallVec<[(u64, u32, u64); 4]>>` cannot be shared between threads safely
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:6:25
+  |
+6 |     requires_contract::<CompiledLeaf>();
+  |                         ^^^^^^^^^^^^ `RefCell<smallvec::SmallVec<[(u64, u32, u64); 4]>>` cannot be shared between threads safely
+  |
+  = help: within `compile::leaf::LeafObs`, the trait `Sync` is not implemented for `RefCell<smallvec::SmallVec<[(u64, u32, u64); 4]>>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` instead
+note: required because it appears within the type `compile::leaf::LeafObs`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub(crate) struct LeafObs {
+  |                   ^^^^^^^
+  = note: required for `std::ptr::Unique<compile::leaf::LeafObs>` to implement `Sync`
+note: required because it appears within the type `std::boxed::Box<compile::leaf::LeafObs>`
+ --> $RUST/alloc/src/boxed.rs
+  |
+  | pub struct Box<
+  |            ^^^
+note: required because it appears within the type `CompiledLeaf`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub struct CompiledLeaf {
+  |            ^^^^^^^^^^^^
+note: required by a bound in `requires_contract`
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:3:25
+  |
+3 | fn requires_contract<T: Sync>() {}
+  |                         ^^^^ required by this bound in `requires_contract`
+
+error[E0277]: `RefCell<smallvec::SmallVec<[(u32, u64); 4]>>` cannot be shared between threads safely
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:6:25
+  |
+6 |     requires_contract::<CompiledLeaf>();
+  |                         ^^^^^^^^^^^^ `RefCell<smallvec::SmallVec<[(u32, u64); 4]>>` cannot be shared between threads safely
+  |
+  = help: within `compile::leaf::LeafObs`, the trait `Sync` is not implemented for `RefCell<smallvec::SmallVec<[(u32, u64); 4]>>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` instead
+note: required because it appears within the type `compile::leaf::LeafObs`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub(crate) struct LeafObs {
+  |                   ^^^^^^^
+  = note: required for `std::ptr::Unique<compile::leaf::LeafObs>` to implement `Sync`
+note: required because it appears within the type `std::boxed::Box<compile::leaf::LeafObs>`
+ --> $RUST/alloc/src/boxed.rs
+  |
+  | pub struct Box<
+  |            ^^^
+note: required because it appears within the type `CompiledLeaf`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub struct CompiledLeaf {
+  |            ^^^^^^^^^^^^
+note: required by a bound in `requires_contract`
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:3:25
+  |
+3 | fn requires_contract<T: Sync>() {}
+  |                         ^^^^ required by this bound in `requires_contract`
+
+error[E0277]: `Cell<u32>` cannot be shared between threads safely
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:6:25
+  |
+6 |     requires_contract::<CompiledLeaf>();
+  |                         ^^^^^^^^^^^^ `Cell<u32>` cannot be shared between threads safely
+  |
+  = help: within `compile::leaf::LeafObs`, the trait `Sync` is not implemented for `Cell<u32>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` or `std::sync::atomic::AtomicU32` instead
+note: required because it appears within the type `compile::leaf::LeafObs`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub(crate) struct LeafObs {
+  |                   ^^^^^^^
+  = note: required for `std::ptr::Unique<compile::leaf::LeafObs>` to implement `Sync`
+note: required because it appears within the type `std::boxed::Box<compile::leaf::LeafObs>`
+ --> $RUST/alloc/src/boxed.rs
+  |
+  | pub struct Box<
+  |            ^^^
+note: required because it appears within the type `CompiledLeaf`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub struct CompiledLeaf {
+  |            ^^^^^^^^^^^^
+note: required by a bound in `requires_contract`
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:3:25
+  |
+3 | fn requires_contract<T: Sync>() {}
+  |                         ^^^^ required by this bound in `requires_contract`
+
+error[E0277]: `*const TaggedValue` cannot be shared between threads safely
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:6:25
+  |
+6 |     requires_contract::<CompiledLeaf>();
+  |                         ^^^^^^^^^^^^ `*const TaggedValue` cannot be shared between threads safely
+  |
+  = help: within `compile::leaf::LeafSidecar`, the trait `Sync` is not implemented for `*const TaggedValue`
+note: required because it appears within the type `compile::leaf::LeafSidecar`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub(crate) struct LeafSidecar {
+  |                   ^^^^^^^^^^^
+  = note: required for `std::ptr::Unique<compile::leaf::LeafSidecar>` to implement `Sync`
+note: required because it appears within the type `std::boxed::Box<compile::leaf::LeafSidecar>`
+ --> $RUST/alloc/src/boxed.rs
+  |
+  | pub struct Box<
+  |            ^^^
+note: required because it appears within the type `Option<std::boxed::Box<compile::leaf::LeafSidecar>>`
+ --> $RUST/core/src/option.rs
+  |
+  | pub enum Option<T> {
+  |          ^^^^^^
+note: required because it appears within the type `CompiledLeaf`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub struct CompiledLeaf {
+  |            ^^^^^^^^^^^^
+note: required by a bound in `requires_contract`
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:3:25
+  |
+3 | fn requires_contract<T: Sync>() {}
+  |                         ^^^^ required by this bound in `requires_contract`
+
+error[E0277]: `*const Cell<i64>` cannot be shared between threads safely
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:6:25
+  |
+6 |     requires_contract::<CompiledLeaf>();
+  |                         ^^^^^^^^^^^^ `*const Cell<i64>` cannot be shared between threads safely
+  |
+  = help: within `compile::leaf::LeafSidecar`, the trait `Sync` is not implemented for `*const Cell<i64>`
+note: required because it appears within the type `compile::leaf::LeafSidecar`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub(crate) struct LeafSidecar {
+  |                   ^^^^^^^^^^^
+  = note: required for `std::ptr::Unique<compile::leaf::LeafSidecar>` to implement `Sync`
+note: required because it appears within the type `std::boxed::Box<compile::leaf::LeafSidecar>`
+ --> $RUST/alloc/src/boxed.rs
+  |
+  | pub struct Box<
+  |            ^^^
+note: required because it appears within the type `Option<std::boxed::Box<compile::leaf::LeafSidecar>>`
+ --> $RUST/core/src/option.rs
+  |
+  | pub enum Option<T> {
+  |          ^^^^^^
+note: required because it appears within the type `CompiledLeaf`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub struct CompiledLeaf {
+  |            ^^^^^^^^^^^^
+note: required by a bound in `requires_contract`
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:3:25
+  |
+3 | fn requires_contract<T: Sync>() {}
+  |                         ^^^^ required by this bound in `requires_contract`
+
+error[E0277]: `*const compile::spec_slot::SpecSlot` cannot be shared between threads safely
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:6:25
+  |
+6 |     requires_contract::<CompiledLeaf>();
+  |                         ^^^^^^^^^^^^ `*const compile::spec_slot::SpecSlot` cannot be shared between threads safely
+  |
+  = help: within `compile::leaf::LeafSidecar`, the trait `Sync` is not implemented for `*const compile::spec_slot::SpecSlot`
+note: required because it appears within the type `compile::leaf::LeafSidecar`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub(crate) struct LeafSidecar {
+  |                   ^^^^^^^^^^^
+  = note: required for `std::ptr::Unique<compile::leaf::LeafSidecar>` to implement `Sync`
+note: required because it appears within the type `std::boxed::Box<compile::leaf::LeafSidecar>`
+ --> $RUST/alloc/src/boxed.rs
+  |
+  | pub struct Box<
+  |            ^^^
+note: required because it appears within the type `Option<std::boxed::Box<compile::leaf::LeafSidecar>>`
+ --> $RUST/core/src/option.rs
+  |
+  | pub enum Option<T> {
+  |          ^^^^^^
+note: required because it appears within the type `CompiledLeaf`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub struct CompiledLeaf {
+  |            ^^^^^^^^^^^^
+note: required by a bound in `requires_contract`
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:3:25
+  |
+3 | fn requires_contract<T: Sync>() {}
+  |                         ^^^^ required by this bound in `requires_contract`
+
+error[E0277]: `*const u64` cannot be shared between threads safely
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:6:25
+  |
+6 |     requires_contract::<CompiledLeaf>();
+  |                         ^^^^^^^^^^^^ `*const u64` cannot be shared between threads safely
+  |
+  = help: within `compile::leaf::LeafSidecar`, the trait `Sync` is not implemented for `*const u64`
+note: required because it appears within the type `compile::leaf::LeafSidecar`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub(crate) struct LeafSidecar {
+  |                   ^^^^^^^^^^^
+  = note: required for `std::ptr::Unique<compile::leaf::LeafSidecar>` to implement `Sync`
+note: required because it appears within the type `std::boxed::Box<compile::leaf::LeafSidecar>`
+ --> $RUST/alloc/src/boxed.rs
+  |
+  | pub struct Box<
+  |            ^^^
+note: required because it appears within the type `Option<std::boxed::Box<compile::leaf::LeafSidecar>>`
+ --> $RUST/core/src/option.rs
+  |
+  | pub enum Option<T> {
+  |          ^^^^^^
+note: required because it appears within the type `CompiledLeaf`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub struct CompiledLeaf {
+  |            ^^^^^^^^^^^^
+note: required by a bound in `requires_contract`
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:3:25
+  |
+3 | fn requires_contract<T: Sync>() {}
+  |                         ^^^^ required by this bound in `requires_contract`
+
+error[E0277]: `Cell<jit::tier2::T2State>` cannot be shared between threads safely
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:6:25
+  |
+6 |     requires_contract::<CompiledLeaf>();
+  |                         ^^^^^^^^^^^^ `Cell<jit::tier2::T2State>` cannot be shared between threads safely
+  |
+  = help: within `compile::leaf::LeafObs`, the trait `Sync` is not implemented for `Cell<jit::tier2::T2State>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock`
+note: required because it appears within the type `jit::tier2::T2Cells`
+ --> src/emacs_core/runtime/jit/tier2.rs
+  |
+  | pub(crate) struct T2Cells {
+  |                   ^^^^^^^
+note: required because it appears within the type `compile::leaf::LeafObs`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub(crate) struct LeafObs {
+  |                   ^^^^^^^
+  = note: required for `std::ptr::Unique<compile::leaf::LeafObs>` to implement `Sync`
+note: required because it appears within the type `std::boxed::Box<compile::leaf::LeafObs>`
+ --> $RUST/alloc/src/boxed.rs
+  |
+  | pub struct Box<
+  |            ^^^
+note: required because it appears within the type `CompiledLeaf`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub struct CompiledLeaf {
+  |            ^^^^^^^^^^^^
+note: required by a bound in `requires_contract`
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:3:25
+  |
+3 | fn requires_contract<T: Sync>() {}
+  |                         ^^^^ required by this bound in `requires_contract`
+
+error[E0277]: `Cell<(u64, u64)>` cannot be shared between threads safely
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:6:25
+  |
+6 |     requires_contract::<CompiledLeaf>();
+  |                         ^^^^^^^^^^^^ `Cell<(u64, u64)>` cannot be shared between threads safely
+  |
+  = help: within `compile::leaf::LeafObs`, the trait `Sync` is not implemented for `Cell<(u64, u64)>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock`
+note: required because it appears within the type `jit::tier2::T2Cells`
+ --> src/emacs_core/runtime/jit/tier2.rs
+  |
+  | pub(crate) struct T2Cells {
+  |                   ^^^^^^^
+note: required because it appears within the type `compile::leaf::LeafObs`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub(crate) struct LeafObs {
+  |                   ^^^^^^^
+  = note: required for `std::ptr::Unique<compile::leaf::LeafObs>` to implement `Sync`
+note: required because it appears within the type `std::boxed::Box<compile::leaf::LeafObs>`
+ --> $RUST/alloc/src/boxed.rs
+  |
+  | pub struct Box<
+  |            ^^^
+note: required because it appears within the type `CompiledLeaf`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub struct CompiledLeaf {
+  |            ^^^^^^^^^^^^
+note: required by a bound in `requires_contract`
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:3:25
+  |
+3 | fn requires_contract<T: Sync>() {}
+  |                         ^^^^ required by this bound in `requires_contract`
+
+error[E0277]: `RefCell<Option<Arc<RuntimeState>>>` cannot be shared between threads safely
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:6:25
+  |
+6 |     requires_contract::<CompiledLeaf>();
+  |                         ^^^^^^^^^^^^ `RefCell<Option<Arc<RuntimeState>>>` cannot be shared between threads safely
+  |
+  = help: within `compile::leaf::LeafObs`, the trait `Sync` is not implemented for `RefCell<Option<Arc<RuntimeState>>>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` instead
+note: required because it appears within the type `jit::tier2::T2Cells`
+ --> src/emacs_core/runtime/jit/tier2.rs
+  |
+  | pub(crate) struct T2Cells {
+  |                   ^^^^^^^
+note: required because it appears within the type `compile::leaf::LeafObs`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub(crate) struct LeafObs {
+  |                   ^^^^^^^
+  = note: required for `std::ptr::Unique<compile::leaf::LeafObs>` to implement `Sync`
+note: required because it appears within the type `std::boxed::Box<compile::leaf::LeafObs>`
+ --> $RUST/alloc/src/boxed.rs
+  |
+  | pub struct Box<
+  |            ^^^
+note: required because it appears within the type `CompiledLeaf`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub struct CompiledLeaf {
+  |            ^^^^^^^^^^^^
+note: required by a bound in `requires_contract`
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:3:25
+  |
+3 | fn requires_contract<T: Sync>() {}
+  |                         ^^^^ required by this bound in `requires_contract`
+
+error[E0277]: `RefCell<jit::tier2::policy::PolicyState>` cannot be shared between threads safely
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:6:25
+  |
+6 |     requires_contract::<CompiledLeaf>();
+  |                         ^^^^^^^^^^^^ `RefCell<jit::tier2::policy::PolicyState>` cannot be shared between threads safely
+  |
+  = help: within `compile::leaf::LeafObs`, the trait `Sync` is not implemented for `RefCell<jit::tier2::policy::PolicyState>`
+  = note: if you want to do aliasing and mutation between multiple threads, use `std::sync::RwLock` instead
+note: required because it appears within the type `jit::tier2::T2Cells`
+ --> src/emacs_core/runtime/jit/tier2.rs
+  |
+  | pub(crate) struct T2Cells {
+  |                   ^^^^^^^
+note: required because it appears within the type `compile::leaf::LeafObs`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub(crate) struct LeafObs {
+  |                   ^^^^^^^
+  = note: required for `std::ptr::Unique<compile::leaf::LeafObs>` to implement `Sync`
+note: required because it appears within the type `std::boxed::Box<compile::leaf::LeafObs>`
+ --> $RUST/alloc/src/boxed.rs
+  |
+  | pub struct Box<
+  |            ^^^
+note: required because it appears within the type `CompiledLeaf`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub struct CompiledLeaf {
+  |            ^^^^^^^^^^^^
+note: required by a bound in `requires_contract`
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:3:25
+  |
+3 | fn requires_contract<T: Sync>() {}
+  |                         ^^^^ required by this bound in `requires_contract`
+
+error[E0277]: `(dyn cranelift_jit::memory::JITMemoryProvider + Send + 'static)` cannot be shared between threads safely
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:6:25
+  |
+6 |     requires_contract::<CompiledLeaf>();
+  |                         ^^^^^^^^^^^^ `(dyn cranelift_jit::memory::JITMemoryProvider + Send + 'static)` cannot be shared between threads safely
+  |
+  = help: the trait `Sync` is not implemented for `(dyn cranelift_jit::memory::JITMemoryProvider + Send + 'static)`
+  = note: required for `std::ptr::Unique<(dyn cranelift_jit::memory::JITMemoryProvider + Send + 'static)>` to implement `Sync`
+note: required because it appears within the type `std::boxed::Box<(dyn cranelift_jit::memory::JITMemoryProvider + Send + 'static)>`
+ --> $RUST/alloc/src/boxed.rs
+  |
+  | pub struct Box<
+  |            ^^^
+note: required because it appears within the type `cranelift_jit::backend::JITModule`
+ --> $CARGO/cranelift-jit-$VERSION/src/backend.rs
+  |
+  | pub struct JITModule {
+  |            ^^^^^^^^^
+note: required because it appears within the type `compile::leaf::LeafBacking`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub(crate) enum LeafBacking {
+  |                 ^^^^^^^^^^^
+note: required because it appears within the type `CompiledLeaf`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub struct CompiledLeaf {
+  |            ^^^^^^^^^^^^
+note: required by a bound in `requires_contract`
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:3:25
+  |
+3 | fn requires_contract<T: Sync>() {}
+  |                         ^^^^ required by this bound in `requires_contract`
+
+error[E0277]: `*mut u8` cannot be shared between threads safely
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:6:25
+  |
+6 |     requires_contract::<CompiledLeaf>();
+  |                         ^^^^^^^^^^^^ `*mut u8` cannot be shared between threads safely
+  |
+  = help: within `CompiledLeaf`, the trait `Sync` is not implemented for `*mut u8`
+note: required because it appears within the type `cranelift_jit::compiled_blob::CompiledBlob`
+ --> $CARGO/cranelift-jit-$VERSION/src/compiled_blob.rs
+  |
+  | pub(crate) struct CompiledBlob {
+  |                   ^^^^^^^^^^^^
+note: required because it appears within the type `Option<cranelift_jit::compiled_blob::CompiledBlob>`
+ --> $RUST/core/src/option.rs
+  |
+  | pub enum Option<T> {
+  |          ^^^^^^
+note: required because it appears within the type `cranelift_entity::map::SecondaryMap<cranelift_module::module::FuncId, Option<cranelift_jit::compiled_blob::CompiledBlob>>`
+ --> $CARGO/cranelift-entity-$VERSION/src/map.rs
+  |
+  | pub struct SecondaryMap<K, V>
+  |            ^^^^^^^^^^^^
+note: required because it appears within the type `cranelift_jit::backend::JITModule`
+ --> $CARGO/cranelift-jit-$VERSION/src/backend.rs
+  |
+  | pub struct JITModule {
+  |            ^^^^^^^^^
+note: required because it appears within the type `compile::leaf::LeafBacking`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub(crate) enum LeafBacking {
+  |                 ^^^^^^^^^^^
+note: required because it appears within the type `CompiledLeaf`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub struct CompiledLeaf {
+  |            ^^^^^^^^^^^^
+note: required by a bound in `requires_contract`
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:3:25
+  |
+3 | fn requires_contract<T: Sync>() {}
+  |                         ^^^^ required by this bound in `requires_contract`
+
+error[E0277]: `(dyn for<'a> Fn(&'a str) -> Option<*const u8> + Send + 'static)` cannot be shared between threads safely
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:6:25
+  |
+6 |     requires_contract::<CompiledLeaf>();
+  |                         ^^^^^^^^^^^^ `(dyn for<'a> Fn(&'a str) -> Option<*const u8> + Send + 'static)` cannot be shared between threads safely
+  |
+  = help: the trait `Sync` is not implemented for `(dyn for<'a> Fn(&'a str) -> Option<*const u8> + Send + 'static)`
+  = note: required for `std::ptr::Unique<(dyn for<'a> Fn(&'a str) -> Option<*const u8> + Send + 'static)>` to implement `Sync`
+note: required because it appears within the type `std::boxed::Box<(dyn for<'a> Fn(&'a str) -> Option<*const u8> + Send + 'static)>`
+ --> $RUST/alloc/src/boxed.rs
+  |
+  | pub struct Box<
+  |            ^^^
+note: required because it appears within the type `PhantomData<std::boxed::Box<(dyn for<'a> Fn(&'a str) -> Option<*const u8> + Send + 'static)>>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `alloc::raw_vec::RawVec<std::boxed::Box<(dyn for<'a> Fn(&'a str) -> Option<*const u8> + Send + 'static)>>`
+ --> $RUST/alloc/src/raw_vec/mod.rs
+  |
+  | pub(crate) struct RawVec<T, A: Allocator = Global> {
+  |                   ^^^^^^
+note: required because it appears within the type `Vec<std::boxed::Box<(dyn for<'a> Fn(&'a str) -> Option<*const u8> + Send + 'static)>>`
+ --> $RUST/alloc/src/vec/mod.rs
+  |
+  | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+  |            ^^^
+note: required because it appears within the type `cranelift_jit::backend::JITModule`
+ --> $CARGO/cranelift-jit-$VERSION/src/backend.rs
+  |
+  | pub struct JITModule {
+  |            ^^^^^^^^^
+note: required because it appears within the type `compile::leaf::LeafBacking`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub(crate) enum LeafBacking {
+  |                 ^^^^^^^^^^^
+note: required because it appears within the type `CompiledLeaf`
+ --> src/emacs_core/runtime/jit/compile/leaf.rs
+  |
+  | pub struct CompiledLeaf {
+  |            ^^^^^^^^^^^^
+note: required by a bound in `requires_contract`
+ --> tests/thread_safety_ui/compiled_leaf_sync.rs:3:25
+  |
+3 | fn requires_contract<T: Sync>() {}
+  |                         ^^^^ required by this bound in `requires_contract`

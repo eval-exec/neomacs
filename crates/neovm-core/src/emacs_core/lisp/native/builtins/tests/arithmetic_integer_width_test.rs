@@ -332,53 +332,37 @@ fn integer_width_slot_is_retired_with_its_context() {
     assert!(super::integer_width_below(65537));
 }
 
-/// A Context that moved to another thread and was dropped there leaves its
-/// descriptor installed on the thread it came from. The descriptor outlives
-/// the Context, but its arithmetic policy and heap do not. After retirement
-/// the original thread uses the default without dereferencing the old bignum.
+/// A worker's permissive arithmetic policy belongs to its own Context and
+/// never changes the spawning thread's default policy.
 #[test]
-fn integer_width_slot_of_a_context_dropped_elsewhere_is_read_without_its_heap() {
-    crate::test_utils::init_test_tracing();
-    let mut ctx = Context::new();
-    ctx.eval_str("(setq integer-width (expt 2 62))").unwrap();
-    assert!(!super::integer_width_below(1 << 20));
-    crate::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap);
-    std::thread::spawn(move || {
-        ctx.setup_thread_locals();
-        ctx.eval_str("(setq integer-width (- (expt 2 62)))")
-            .unwrap();
-        assert!(!super::integer_width_below(1 << 20));
-        drop(ctx);
-    })
-    .join()
-    .expect("drop the moved Context on its new thread");
-    // Its policy is retired on this thread too, without reading the freed heap.
-    assert!(super::integer_width_below(1 << 20));
-}
-
-/// Dropping the owner on another thread must restore the default policy on
-/// its former thread, including when the old width allowed larger results.
-#[test]
-fn integer_width_cross_thread_drop_restores_default_arithmetic_policy() {
+fn integer_width_context_on_its_owner_thread_preserves_the_spawning_threads_default() {
     use crate::emacs_core::value::Value;
 
-    for width in ["1000000", "-1", "(expt 2 62)"] {
-        let mut ctx = Context::new();
-        ctx.eval_str(&format!("(setq integer-width {width})"))
-            .unwrap();
-        crate::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap);
+    crate::test_utils::init_test_tracing();
+    // Context is !Send, pinned by the thread-contract tests: it cannot move
+    // to another thread for Drop. Upstream retirement remains defence in depth.
+    for form in [
+        "(setq integer-width 1000000)",
+        "(setq integer-width -1)",
+        "(setq integer-width (expt 2 62))",
+    ] {
         std::thread::spawn(move || {
-            ctx.setup_thread_locals();
+            let mut ctx = Context::new();
+            ctx.eval_str(form).unwrap();
+            assert!(!super::integer_width_below(65537));
             drop(ctx);
+            assert!(!super::integer_width_below(65536));
+            assert!(super::integer_width_below(65537));
         })
         .join()
-        .unwrap();
-        // The actual expt subr must reject this with the no-Context default,
-        // before allocating its result. A stale permissive policy accepts it.
+        .expect("construct and drop the Context on its permanent owner thread");
+        // The spawning thread uses only immediate values, never the worker's heap.
+        assert!(!super::integer_width_below(65536));
+        assert!(super::integer_width_below(65537));
         let result = super::builtin_expt(vec![Value::fixnum(2), Value::fixnum(65536)]);
         assert!(
             result.is_err(),
-            "retired width {width} still permits a 65537-bit result"
+            "worker policy {form} changed the spawning thread's default limit"
         );
     }
 }

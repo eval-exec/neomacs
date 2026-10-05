@@ -51,7 +51,7 @@ fn assert_deleted_terminal(ctx: &mut Context, deleted: Value) {
 }
 
 #[test]
-fn deleted_terminal_stays_dead_after_context_migration() {
+fn deleted_terminal_stays_dead_after_context_reactivation() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
     let mut ctx = Context::new();
@@ -64,20 +64,16 @@ fn deleted_terminal_stays_dead_after_context_migration() {
     builtin_delete_terminal(&mut ctx, vec![deleted]).expect("delete the secondary terminal");
     crate::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap);
 
-    let mut ctx = std::thread::spawn(move || {
-        ctx.setup_thread_locals();
-        assert_deleted_terminal(&mut ctx, deleted);
-        assert_eq!(
-            builtin_terminal_parameter(&mut ctx, vec![terminal_handle_value(), key])
-                .expect("live terminal parameters survive migration")
-                .bits(),
-            payload.bits()
-        );
-        crate::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap);
-        ctx
-    })
-    .join()
-    .expect("migrated Context keeps deleted terminals dead");
+    let _other = Context::new();
+    ctx.setup_thread_locals();
+    assert_deleted_terminal(&mut ctx, deleted);
+    assert_eq!(
+        builtin_terminal_parameter(&mut ctx, vec![terminal_handle_value(), key])
+            .expect("live terminal parameters survive reactivation")
+            .bits(),
+        payload.bits()
+    );
+    crate::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap);
 
     ctx.setup_thread_locals();
     assert_deleted_terminal(&mut ctx, deleted);
@@ -125,7 +121,7 @@ fn deleted_initial_terminal_stays_dead_after_native_manager_reset() {
 }
 
 #[test]
-fn terminal_creation_order_survives_native_manager_rebuild_and_migration() {
+fn terminal_creation_order_survives_native_manager_rebuild_and_reactivation() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
     let mut ctx = Context::new();
@@ -153,14 +149,10 @@ fn terminal_creation_order_survives_native_manager_rebuild_and_migration() {
         assert_eq!(live_terminal_ids_in_keyboard_poll_order(), poll_order);
     }
     crate::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap);
-    let mut ctx = std::thread::spawn(move || {
-        ctx.setup_thread_locals();
-        assert_eq!(terminal_list_ids(), creation_order);
-        assert_eq!(live_terminal_ids_in_keyboard_poll_order(), poll_order);
-        crate::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap);
-        ctx
-    })
-    .join()
-    .expect("terminal order survives Context migration");
+    let _other = Context::new();
+    ctx.setup_thread_locals();
+    assert_eq!(terminal_list_ids(), creation_order);
+    assert_eq!(live_terminal_ids_in_keyboard_poll_order(), poll_order);
+    crate::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap);
     ctx.setup_thread_locals();
 }

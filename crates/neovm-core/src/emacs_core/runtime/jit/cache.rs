@@ -5,10 +5,9 @@
 //! keyed by the function's stable [`super::Runtime::compiled_id`]:
 //!
 //! - A [`CompiledLeaf`] owns executable memory and a raw code pointer, so it is
-//!   `!Send + !Sync`. Keeping it thread-local means it is never shared across
-//!   threads — sound by construction, and a fine fit for elisp's overwhelmingly
-//!   single-threaded execution. (Each thread that runs a function hot enough
-//!   compiles its own copy; in practice that is just the main thread.)
+//!   `!Send + !Sync`. Each mutator owns its compiled cache and activation state.
+//!   The legacy shared source leaf slot also carries an address into this cache;
+//!   it still requires an owner-local replacement before parallel activation.
 //! - The id is monotonic and never reused, so a function that is GC'd (freeing
 //!   the memory its compiled code baked constant pointers into) can never have
 //!   its stale cache entry looked up again — even after the non-moving GC reuses
@@ -390,6 +389,8 @@ pub(crate) fn leaf_report_rows() -> (Vec<LeafRow>, LeafTotals) {
 /// compiled entry leaves a cache (retire or clear), so a slot armed earlier
 /// reads as empty and re-resolves through the cache. Starts at 1 so a fresh
 /// slot (epoch 0) never matches.
+/// This invalidation counter is not a cache-owner or lifetime capability. A
+/// leaf slot can be dereferenced only by the mutator owning the live TLS entry.
 static LEAF_SLOT_EPOCH: AtomicU64 = AtomicU64::new(1);
 
 #[inline]

@@ -82,24 +82,24 @@ fn gc_tls_ownership_charset_metadata_follows_context_activation() {
 }
 
 #[test]
-fn gc_tls_ownership_charset_registry_follows_context_thread_transfer() {
-    let mut first = Context::new();
-    let value = populate(&mut first);
+fn gc_tls_ownership_charset_registries_collect_on_independent_owner_threads() {
     let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
     let worker_barrier = std::sync::Arc::clone(&barrier);
     let worker = std::thread::spawn(move || {
+        let mut first = Context::new();
+        let value = populate(&mut first);
         worker_barrier.wait();
         first.setup_thread_locals();
         assert!(
             roots(&first).iter().any(|root| root.bits() == value.bits()),
-            "Context thread transfer lost its owning registry"
+            "worker Context lost its owning registry"
         );
         first.gc_collect_exact();
         assert!(first.tagged_heap.owns_heap_value_for_test(value));
     });
     barrier.wait();
-    // Replacing the source thread's installed alias may overlap destination
-    // activation/rooting. Its refcount and lifetime must remain thread-safe.
+    // Each Context is created on its owner. Registry collection on one thread
+    // must remain independent of activation and collection on the other.
     let mut second = Context::new();
     populate(&mut second);
     second.gc_collect_exact();

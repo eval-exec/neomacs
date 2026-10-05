@@ -3,11 +3,15 @@
 use super::*;
 use crate::emacs_core::eval::Context;
 
-use super::gc_collection_epoch_tests::{assert_warm_entry, populate_cache};
+use super::gc_collection_epoch_tests::{
+    UncoveredStringPosCache, assert_warm_entry, populate_cache,
+};
 
 fn generational_context() -> Context {
     // Nextest isolates tests in separate processes. Set the constructor knob
     // before creating a Context or starting a collector thread.
+    // SAFETY: nextest isolates this test process; no runtime workers exist
+    // before constructor configuration, so no thread reads the environment.
     unsafe {
         std::env::set_var("NEOVM_GC_GENERATIONAL", "1");
         std::env::set_var("NEOVM_GC_MAJOR_MAX_MINORS", usize::MAX.to_string());
@@ -131,27 +135,22 @@ enum ReturnAt {
     Sweeping,
 }
 
-fn collect_minor_on_another_thread(
+fn collect_minor_with_uncovered_cache(
     mut context: Context,
     string: Value,
     return_at: ReturnAt,
 ) -> (Context, usize) {
     let completed = context.tagged_heap.gc_collections();
-    let context = std::thread::spawn(move || {
-        context.setup_thread_locals();
-        assert!(CACHE.with(Cell::get).is_none());
-        assert_eq!(start_minor(&mut context), completed);
-        if matches!(return_at, ReturnAt::Completed) {
-            finish_minor(&mut context, completed);
-            assert!(
-                !context.tagged_heap.owns_heap_value_for_test(string),
-                "the destination minor must reclaim the source's young string"
-            );
-        }
-        context
-    })
-    .join()
-    .unwrap();
+    let stale = UncoveredStringPosCache::take();
+    assert_eq!(start_minor(&mut context), completed);
+    if matches!(return_at, ReturnAt::Completed) {
+        finish_minor(&mut context, completed);
+        assert!(
+            !context.tagged_heap.owns_heap_value_for_test(string),
+            "an uncovered minor must reclaim the saved cache's young string"
+        );
+    }
+    stale.restore();
     (context, completed)
 }
 
@@ -161,7 +160,7 @@ fn gc_collection_epoch_string_pos_minor_activation_discards_swept_source_entry()
     let heap_identity = context.tagged_heap.identity();
     let string = cache_young_string(&mut context);
     let (mut context, completed) =
-        collect_minor_on_another_thread(context, string, ReturnAt::Completed);
+        collect_minor_with_uncovered_cache(context, string, ReturnAt::Completed);
     assert_eq!(context.tagged_heap.identity(), heap_identity);
     assert_eq!(context.tagged_heap.gc_collections(), completed + 1);
     assert!(!context.tagged_heap.owns_heap_value_for_test(string));
@@ -179,7 +178,7 @@ fn gc_collection_epoch_string_pos_minor_sweep_foreign_activation_discards_entry(
     let mut context = generational_context();
     let string = cache_young_string(&mut context);
     let (mut context, completed) =
-        collect_minor_on_another_thread(context, string, ReturnAt::Sweeping);
+        collect_minor_with_uncovered_cache(context, string, ReturnAt::Sweeping);
     assert!(context.tagged_heap.sweep_in_progress());
     assert!(!context.tagged_heap.mark_in_progress());
     assert!(!context.tagged_heap.concurrent_mark_running());

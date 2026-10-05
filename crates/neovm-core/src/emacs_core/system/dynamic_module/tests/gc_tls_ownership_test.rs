@@ -173,30 +173,26 @@ fn gc_tls_ownership_module_global_refs_keep_equal_but_distinct_objects() {
 }
 
 #[test]
-fn gc_tls_ownership_module_global_refs_follow_context_migration() {
+fn gc_tls_ownership_module_global_refs_follow_owner_context_reactivation() {
     let mut first = Context::new();
     let mut env = Environment::new();
     let value = Value::vector(vec![Value::fixnum(42)]);
     let reference = env.global_ref(value);
     drop(env);
-    let (ready, receive) = std::sync::mpsc::channel();
-    let worker = std::thread::spawn(move || {
-        receive.recv().unwrap();
-        first.setup_thread_locals();
-        assert!(
-            roots_for(&first)
-                .iter()
-                .any(|root| root.bits() == value.bits()),
-            "module global references stayed on the source thread after their Context moved"
-        );
-        first.gc_collect_exact();
-        assert_eq!(value.as_vector_data().unwrap()[0], Value::fixnum(42));
-    });
-    // Retire the source thread's active aliases before the worker mutates A.
     let mut second = Context::new();
-    ready.send(()).unwrap();
-    worker.join().expect("collect the migrated Context");
+    second.gc_collect_exact();
+    first.setup_thread_locals();
+    assert!(
+        roots_for(&first)
+            .iter()
+            .any(|root| root.bits() == value.bits()),
+        "module global references lost their owning Context after activation"
+    );
+    first.gc_collect_exact();
+    assert_eq!(value.as_vector_data().unwrap()[0], Value::fixnum(42));
+    drop(first);
     assert!(value_to_lisp(reference.0).is_nil());
+    second.setup_thread_locals();
     second.gc_collect_exact();
     drop(reference);
 }

@@ -4879,8 +4879,9 @@ fn lower_bcall_leaf_site(
 /// [`STATUS_DEOPT_AT`]: the failing op's bytecode index, the live operand
 /// stack depth (the values themselves go to the spill buffer), and the number
 /// of condition frames this frame had registered at that point. `Cell` makes
-/// the native interior writes legal; the mutator is single-threaded and the
-/// values are consumed immediately after the native call returns.
+/// the native interior writes legal. The enclosing !Send/!Sync CompiledLeaf
+/// confines its scratch to one mutator, which consumes these values immediately
+/// after the native call returns.
 ///
 /// Two trailing cells carry what a cold block knows beyond the framestate
 /// (P2.0 §3.4; the offsets of the first three never move, so the AOT
@@ -4906,6 +4907,11 @@ pub(crate) struct DeoptCells {
     pub(crate) reason: core::cell::Cell<i64>,
     pub(crate) chain: core::cell::Cell<i64>,
 }
+
+// The unshared allocation may move before publication. Once published to a
+// leaf, generated code writes these cells only on that leaf's owning mutator.
+static_assertions::assert_impl_all!(DeoptCells: Send);
+static_assertions::assert_not_impl_any!(DeoptCells: Sync);
 
 impl DeoptCells {
     /// `reason`'s unset value: the hook classifies the deopt from its op.

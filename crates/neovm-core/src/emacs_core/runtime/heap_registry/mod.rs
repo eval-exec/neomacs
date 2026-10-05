@@ -1,8 +1,8 @@
 //! Context-owned semantic registries with a thread-local active view.
 //!
-//! Handles use Arc so a worker may move the exclusively accessed Context
-//! while the originating thread drops its installed alias. The registry's
-//! RefCell remains subject to the Context's exclusive-mutator contract.
+//! A Context and its installed registry views remain on their owning mutator
+//! thread. Arc maintains registry lifetime across local Context activations;
+//! it does not make the RefCell registries Send or Sync.
 
 use std::cell::{Ref, RefCell, RefMut};
 use std::ops::{Deref, DerefMut};
@@ -17,6 +17,9 @@ pub(crate) struct HeapRegistryWeak<T> {
     heap_identity: usize,
     registry: Weak<RefCell<T>>,
 }
+
+static_assertions::assert_not_impl_any!(HeapRegistryHandle<()>: Send, Sync);
+static_assertions::assert_not_impl_any!(HeapRegistryWeak<()>: Send, Sync);
 
 impl<T> Clone for HeapRegistryWeak<T> {
     fn clone(&self) -> Self {
@@ -128,8 +131,7 @@ impl<T> HeapRegistrySlot<T> {
             return;
         }
         // This outer borrow refuses replacement while a local registry guard
-        // is alive. Never inspect the old inner RefCell: its Context may have
-        // moved to a worker thread that is currently using it.
+        // is alive. Its Context and the installed registry are thread-confined.
         *self.active.borrow_mut() = handle.clone();
     }
 
@@ -151,7 +153,7 @@ impl<T> HeapRegistrySlot<T> {
         // SAFETY: the outer Ref guard keeps the Arc installed and prevents
         // replacement for the entire inner Ref lifetime. The returned guard
         // drops the inner Ref first. Registry access follows the Context's
-        // existing exclusive-mutator contract, including thread transfers.
+        // owning mutator thread; neither Context nor this handle is Send.
         let registry = unsafe { &*Arc::as_ptr(&handle.registry) };
         HeapRegistryRef {
             value: registry.borrow(),

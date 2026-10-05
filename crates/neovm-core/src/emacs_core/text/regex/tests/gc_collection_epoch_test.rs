@@ -2,6 +2,50 @@ use super::*;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::value::Value;
 
+/// Saved owner-local caches absent from the collection's root publication.
+/// Restoring their old coverage metadata preserves stale-cache regression
+/// conditions while Context stays on the thread that constructs it.
+#[must_use]
+pub(super) struct UncoveredRegexCaches {
+    _search: crate::tls_scope::TlsScope<
+        Vec<SearchPatternCacheEntry>,
+        RefCell<Vec<SearchPatternCacheEntry>>,
+    >,
+    #[allow(clippy::vec_box)] // same address-stable MRU representation as TLS
+    _lisp: crate::tls_scope::TlsScope<
+        Vec<Box<LispRegexPatternCacheEntry>>,
+        RefCell<Vec<Box<LispRegexPatternCacheEntry>>>,
+    >,
+    _literal: crate::tls_scope::TlsScope<
+        Option<(usize, Rc<CaseTranslation>)>,
+        RefCell<Option<(usize, Rc<CaseTranslation>)>>,
+    >,
+    _heap: crate::tls_scope::TlsScope<usize, Cell<usize>>,
+    _collection_epoch: crate::tls_scope::TlsScope<Option<usize>, Cell<Option<usize>>>,
+}
+
+static_assertions::assert_not_impl_any!(UncoveredRegexCaches: Send, Sync);
+
+impl UncoveredRegexCaches {
+    pub(super) fn take() -> Self {
+        use crate::tls_scope::TlsScope;
+        Self {
+            _search: TlsScope::new(&SEARCH_PATTERN_CACHE, Vec::new()),
+            _lisp: TlsScope::new(&LISP_REGEX_PATTERN_CACHE, Vec::new()),
+            _literal: TlsScope::new(&LITERAL_TRT_CACHE, None),
+            _heap: TlsScope::restore(&REGEX_CACHE_HEAP, REGEX_CACHE_HEAP.with(Cell::get)),
+            _collection_epoch: TlsScope::restore(
+                &REGEX_CACHE_COLLECTION_EPOCH,
+                REGEX_CACHE_COLLECTION_EPOCH.with(Cell::get),
+            ),
+        }
+    }
+
+    pub(super) fn restore(self) {
+        drop(self);
+    }
+}
+
 #[derive(Clone, Copy)]
 enum CacheOwner {
     SearchSyntax,
@@ -33,6 +77,8 @@ fn regex_roots(ctx: &Context) -> Vec<Value> {
 fn non_generational_context() -> Context {
     // Constructor-read selection, isolated per test by nextest. These tests
     // specifically require concurrent marking rather than a deferred minor.
+    // SAFETY: nextest isolates this test process; configuration precedes
+    // Context construction and every runtime worker or environment reader.
     unsafe { std::env::set_var("NEOVM_GC_GENERATIONAL", "0") };
     let mut ctx = Context::new();
     ctx.gc_stress = false;
@@ -131,26 +177,18 @@ fn populate_cache(ctx: &mut Context, owner: CacheOwner) -> (Value, Value) {
     (table, payload)
 }
 
-fn assert_migrated_cache_discards_swept_roots(owner: CacheOwner, synchronize_at: SynchronizeAt) {
-    // The test thread is T1. It stays alive (and retains its thread-local
-    // caches) while T2 borrows the same Context, exactly as a worker pool does.
+fn assert_uncovered_cache_discards_swept_roots(owner: CacheOwner, synchronize_at: SynchronizeAt) {
+    // Keep the owner-local cache outside TLS during collection, then restore
+    // its stale coverage metadata without moving the Context across threads.
     let mut ctx = Context::new();
     // Build the cache fixture without safe-point collections of Rust locals.
     ctx.gc_inhibit_depth += 1;
     let identity = ctx.tagged_heap.identity();
     let (table, payload) = populate_cache(&mut ctx, owner);
     ctx.gc_inhibit_depth -= 1;
-    let mut ctx = std::thread::Builder::new()
-        .name("regex-epoch-collector".into())
-        .stack_size(16 * 1024 * 1024)
-        .spawn(move || {
-            ctx.setup_thread_locals();
-            ctx.gc_collect_exact();
-            ctx
-        })
-        .unwrap()
-        .join()
-        .unwrap();
+    let stale = UncoveredRegexCaches::take();
+    ctx.gc_collect_exact();
+    stale.restore();
     assert_eq!(ctx.tagged_heap.identity(), identity);
     // Box ownership checks inspect the allocation registry, never the freed
     // char-table/hash-table memory. Exact collection must have swept both.
@@ -184,17 +222,20 @@ fn assert_migrated_cache_discards_swept_roots(owner: CacheOwner, synchronize_at:
 
 #[test]
 fn gc_collection_epoch_regex_activation_discards_swept_search_syntax() {
-    assert_migrated_cache_discards_swept_roots(CacheOwner::SearchSyntax, SynchronizeAt::Activation);
+    assert_uncovered_cache_discards_swept_roots(
+        CacheOwner::SearchSyntax,
+        SynchronizeAt::Activation,
+    );
 }
 
 #[test]
 fn gc_collection_epoch_regex_activation_discards_swept_lisp_syntax() {
-    assert_migrated_cache_discards_swept_roots(CacheOwner::LispSyntax, SynchronizeAt::Activation);
+    assert_uncovered_cache_discards_swept_roots(CacheOwner::LispSyntax, SynchronizeAt::Activation);
 }
 
 #[test]
 fn gc_collection_epoch_regex_activation_discards_swept_compiled_translation() {
-    assert_migrated_cache_discards_swept_roots(
+    assert_uncovered_cache_discards_swept_roots(
         CacheOwner::LispTranslation,
         SynchronizeAt::Activation,
     );
@@ -202,7 +243,7 @@ fn gc_collection_epoch_regex_activation_discards_swept_compiled_translation() {
 
 #[test]
 fn gc_collection_epoch_regex_activation_discards_swept_literal_translation() {
-    assert_migrated_cache_discards_swept_roots(
+    assert_uncovered_cache_discards_swept_roots(
         CacheOwner::LiteralTranslation,
         SynchronizeAt::Activation,
     );
@@ -210,7 +251,7 @@ fn gc_collection_epoch_regex_activation_discards_swept_literal_translation() {
 
 #[test]
 fn gc_collection_epoch_regex_enumeration_discards_swept_search_syntax() {
-    assert_migrated_cache_discards_swept_roots(
+    assert_uncovered_cache_discards_swept_roots(
         CacheOwner::SearchSyntax,
         SynchronizeAt::RootEnumeration,
     );
@@ -218,7 +259,7 @@ fn gc_collection_epoch_regex_enumeration_discards_swept_search_syntax() {
 
 #[test]
 fn gc_collection_epoch_regex_enumeration_discards_swept_lisp_syntax() {
-    assert_migrated_cache_discards_swept_roots(
+    assert_uncovered_cache_discards_swept_roots(
         CacheOwner::LispSyntax,
         SynchronizeAt::RootEnumeration,
     );
@@ -226,7 +267,7 @@ fn gc_collection_epoch_regex_enumeration_discards_swept_lisp_syntax() {
 
 #[test]
 fn gc_collection_epoch_regex_enumeration_discards_swept_compiled_translation() {
-    assert_migrated_cache_discards_swept_roots(
+    assert_uncovered_cache_discards_swept_roots(
         CacheOwner::LispTranslation,
         SynchronizeAt::RootEnumeration,
     );
@@ -234,7 +275,7 @@ fn gc_collection_epoch_regex_enumeration_discards_swept_compiled_translation() {
 
 #[test]
 fn gc_collection_epoch_regex_enumeration_discards_swept_literal_translation() {
-    assert_migrated_cache_discards_swept_roots(
+    assert_uncovered_cache_discards_swept_roots(
         CacheOwner::LiteralTranslation,
         SynchronizeAt::RootEnumeration,
     );
@@ -548,20 +589,12 @@ fn assert_foreign_in_progress_activation_clears(phase: ForeignCollectionPhase) {
     ctx.setup_thread_locals();
     let _warm = WarmRegexCaches::new(&mut ctx);
     let completed = ctx.tagged_heap.gc_collections();
-    let mut ctx = std::thread::Builder::new()
-        .name("regex-in-progress-collector".into())
-        .stack_size(16 * 1024 * 1024)
-        .spawn(move || {
-            ctx.setup_thread_locals();
-            start_public_concurrent_cycle(&mut ctx);
-            if matches!(phase, ForeignCollectionPhase::Sweeping) {
-                drive_public_cycle_until_sweeping(&mut ctx);
-            }
-            ctx
-        })
-        .unwrap()
-        .join()
-        .unwrap();
+    let stale = UncoveredRegexCaches::take();
+    start_public_concurrent_cycle(&mut ctx);
+    if matches!(phase, ForeignCollectionPhase::Sweeping) {
+        drive_public_cycle_until_sweeping(&mut ctx);
+    }
+    stale.restore();
     assert_eq!(ctx.tagged_heap.gc_collections(), completed);
     assert!(ctx.tagged_heap.mark_in_progress() || ctx.tagged_heap.sweep_in_progress());
     ctx.setup_thread_locals();

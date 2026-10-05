@@ -575,10 +575,6 @@ pub struct RuntimeState {
     /// elisp, which never gets hot. One relaxed load on the dispatch path,
     /// never set in the default (AOT-off) configuration.
     aot_prewarmed: std::sync::atomic::AtomicBool,
-    /// Slice C1 of the JIT call seam: the compiled leaf the interpreter's
-    /// `Bcall` arm enters DIRECTLY (no cache probe, no arg marshaling), as a
-    /// raw `*const CompiledLeaf`, valid only while `leaf_slot_epoch` equals
-    /// `cache::leaf_slot_epoch()` (bumped on every retire/clear). Zero = empty.
     /// Set once this body has been compiled and its numeric feedback read.
     ///
     /// Feedback is an input to COMPILATION; once it has been consumed every
@@ -590,6 +586,14 @@ pub struct RuntimeState {
     /// paths barely bumps it (`pidigits` sat at heat 1332 after 333 calls).
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
     numeric_feedback_consumed: std::sync::atomic::AtomicBool,
+    /// Slice C1 of the JIT call seam: the compiled leaf the interpreter's
+    /// `Bcall` arm enters directly, as a raw `*const CompiledLeaf`. Zero = empty.
+    /// Dereferencing requires the arming mutator's TLS cache to remain live,
+    /// and `leaf_slot_epoch` to equal `cache::leaf_slot_epoch()`.
+    ///
+    /// P7.11's shared-source/local-activation split must replace this slot
+    /// before several mutators enter the same source concurrently: the epoch
+    /// supplies neither cache ownership nor an atomic pointer/epoch pair.
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
     leaf_slot: AtomicU64,
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
@@ -1328,8 +1332,9 @@ impl RuntimeState {
     }
 
     /// Arm the direct stack entry with a leaf resolved from the cache under
-    /// `epoch`. Epoch first, pointer second: a reader that sees the pointer
-    /// sees an epoch at least as new.
+    /// `epoch` on the same mutator that later probes it. These Relaxed stores
+    /// do not publish a consistent pair to other mutators; the cache owner and
+    /// its Cell-based deopt storage remain thread-confined (P7.11).
     #[cfg(feature = "jit")]
     pub(crate) fn arm_leaf_slot(&self, leaf: *const compile::CompiledLeaf, epoch: u64) {
         self.leaf_slot_epoch.store(epoch, Ordering::Relaxed);

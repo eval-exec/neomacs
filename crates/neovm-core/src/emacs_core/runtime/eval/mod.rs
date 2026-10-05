@@ -2814,19 +2814,6 @@ pub struct PopupMenuRequest {
     pub selected: usize,
 }
 
-/// The Elisp evaluator.
-///
-/// # Safety: Send
-/// Evaluator is inherently single-threaded (uses thread-local heap and caches).
-/// # Safety: Send
-/// Context is inherently single-threaded (uses thread-local heap and caches).
-/// `neovm-worker` moves the Context to a worker thread inside
-/// `Arc<Mutex<..>>`, which ensures exclusive access.
-// SAFETY: Rc is !Send only because it uses non-atomic refcounting.
-// Since Context is always used single-threaded (guarded by Mutex when
-// transferred between threads), this is safe.
-unsafe impl Send for Context {}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct OverlayModificationHook {
     pub(crate) hook_list: Value,
@@ -3039,6 +3026,10 @@ pub(crate) struct DaemonState {
     pub(crate) notify: Option<DaemonNotifier>,
 }
 
+/// The evaluator state owned by the mutator thread that constructs it.
+///
+/// Host hooks, Rc leases and active TLS registry views remain on that thread.
+/// Parallel Lisp creates a Context on each mutator over the shared World.
 pub struct Context {
     /// Arithmetic policy ownership, reconstructed rather than dumped.
     pub(crate) integer_width_context: super::builtins::IntegerWidthContext,
@@ -3660,6 +3651,9 @@ pub struct Context {
     pub(crate) in_flight_registry: super::error::InFlightRegistryHandle,
     pub(crate) cached_standard_case_table: Option<Value>,
 }
+
+// A mutex does not make the host hooks, Rc leases or TLS views transferable.
+static_assertions::assert_not_impl_any!(Context: Send, Sync);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ShutdownRequest {
@@ -4328,12 +4322,26 @@ fn lisp_frame_manager() -> FrameManager {
 impl Drop for Context {
     fn drop(&mut self) {
         super::dynamic_module::retire_dynamic_module_registry(&self.dynamic_module_registry);
+        // Context is !Send, pinned by thread contracts, so Drop stays on its
+        // owner thread. Retain upstream policy retirement as defence in depth.
         self.integer_width_context.retire();
         crate::tagged::gc::clear_tagged_heap_if_installed(&self.tagged_heap);
     }
 }
 
 impl Context {
+    /// Stop and finish this owner's concurrent marker before orderly teardown.
+    ///
+    /// This may wait for the marker. Drop instead retains reader-visible
+    /// storage when no explicit completion has been established.
+    ///
+    /// # Errors
+    /// Returns an error if the worker completion is missing/disconnected or
+    /// collector queues are poisoned. The heap then refuses reclamation.
+    pub fn finish_concurrent_mark(&mut self) -> Result<(), crate::tagged::gc::MarkFinishError> {
+        self.tagged_heap.finish_concurrent_mark()
+    }
+
     pub(crate) fn module_boundary_snapshot(&self) -> ModuleBoundarySnapshot {
         ModuleBoundarySnapshot {
             spec_depth: self.specpdl.len(),

@@ -1,5 +1,6 @@
 //! Collection-coverage stamps across the runtime's deferred minor path.
 
+use super::gc_collection_epoch_tests::UncoveredRegexCaches;
 use super::gc_collection_epoch_tests::WarmRegexCaches;
 use super::*;
 use crate::emacs_core::eval::Context;
@@ -14,6 +15,8 @@ struct MinorCounts {
 fn generational_context() -> Context {
     // Nextest isolates each test. Select before construction, rather than
     // relying on a caller's environment or weakening phase assertions.
+    // SAFETY: nextest isolates this test process; no runtime workers exist
+    // before constructor configuration, so no thread reads the environment.
     unsafe {
         std::env::set_var("NEOVM_GC_GENERATIONAL", "1");
         std::env::set_var("NEOVM_GC_MAJOR_MAX_MINORS", usize::MAX.to_string());
@@ -163,33 +166,25 @@ fn gc_collection_epoch_regex_cache_only_young_tables_survive_minor_and_major() {
 }
 
 #[test]
-fn gc_collection_epoch_regex_destination_minor_clears_source_cache_on_activation() {
+fn gc_collection_epoch_regex_uncovered_minor_clears_saved_cache_on_activation() {
     let mut ctx = generational_context();
     let warm = WarmRegexCaches::new(&mut ctx);
     detach_literal_case_table(&mut ctx, &warm);
     assert_table_generation(&ctx, &warm, false);
     let tables = warm.cache_tables();
     let completed = ctx.tagged_heap.gc_collections();
-    let mut ctx = std::thread::Builder::new()
-        .name("regex-minor-collector".into())
-        .stack_size(16 * 1024 * 1024)
-        .spawn(move || {
-            ctx.setup_thread_locals();
-            let before = start_public_minor(&mut ctx);
-            finish_public_minor(&mut ctx, before);
-            for table in tables {
-                assert!(
-                    !ctx.tagged_heap.owns_heap_value_for_test(table),
-                    "destination minor unexpectedly rooted the source thread's cache"
-                );
-            }
-            ctx
-        })
-        .unwrap()
-        .join()
-        .unwrap();
+    let stale = UncoveredRegexCaches::take();
+    let before = start_public_minor(&mut ctx);
+    finish_public_minor(&mut ctx, before);
+    for table in tables {
+        assert!(
+            !ctx.tagged_heap.owns_heap_value_for_test(table),
+            "uncovered minor unexpectedly rooted the saved cache"
+        );
+    }
+    stale.restore();
     assert_eq!(ctx.tagged_heap.gc_collections(), completed + 1);
-    // Keep T1's Rc identities alive without reading their reclaimed Lisp
+    // Saved Rc identities remain local without reading their reclaimed Lisp
     // tables. Activation must clear every cache before publishing any root.
     ctx.setup_thread_locals();
     assert_all_regex_caches_empty();
@@ -218,21 +213,13 @@ fn gc_collection_epoch_regex_foreign_minor_sweep_activation_clears_uncovered_ent
     detach_literal_case_table(&mut ctx, &warm);
     assert_table_generation(&ctx, &warm, false);
     let completed = ctx.tagged_heap.gc_collections();
-    let (mut ctx, before) = std::thread::Builder::new()
-        .name("regex-minor-sweep-collector".into())
-        .stack_size(16 * 1024 * 1024)
-        .spawn(move || {
-            ctx.setup_thread_locals();
-            let before = start_public_minor(&mut ctx);
-            (ctx, before)
-        })
-        .unwrap()
-        .join()
-        .unwrap();
+    let stale = UncoveredRegexCaches::take();
+    let before = start_public_minor(&mut ctx);
+    stale.restore();
     assert_eq!(ctx.tagged_heap.gc_collections(), completed);
     assert!(ctx.tagged_heap.sweep_in_progress());
-    // This is reachable through the public API: return a Context after the
-    // destination safe point finished marking but before its deferred sweep.
+    // Restore an uncovered cache after the owner finished marking but before
+    // the public safe point finishes its deferred sweep.
     ctx.setup_thread_locals();
     assert_all_regex_caches_empty();
     finish_public_minor(&mut ctx, before);

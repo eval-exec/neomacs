@@ -22,26 +22,26 @@ fn gc_tls_ownership_safe_point_uses_the_collecting_heap() {
 }
 
 #[test]
-fn gc_tls_ownership_semantic_registry_follows_context_to_another_thread() {
-    let mut first = Context::new();
-    first
-        .eval_str("(register-ccl-program 'gc-tls-moved-program [0 0 0])")
-        .unwrap();
+fn gc_tls_ownership_semantic_registries_have_independent_thread_owners() {
     let (send, receive) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || {
+        let mut first = Context::new();
+        first
+            .eval_str("(register-ccl-program 'gc-tls-worker-program [0 0 0])")
+            .unwrap();
         receive.recv().unwrap();
-        first.setup_thread_locals();
         assert!(super::super::ccl::is_registered_ccl_program(intern(
-            "gc-tls-moved-program"
+            "gc-tls-worker-program"
         )));
         first.gc_collect_exact();
     });
-    // Retire the source thread's installation before the destination uses the
-    // Context; replacing source TLS must not discard its semantic registry.
     let mut second = Context::new();
     send.send(()).unwrap();
     second.gc_collect_exact();
     worker.join().unwrap();
+    assert!(!super::super::ccl::is_registered_ccl_program(intern(
+        "gc-tls-worker-program"
+    )));
 }
 
 fn registered_public_entry_contexts() -> (Context, Context) {

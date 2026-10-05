@@ -573,9 +573,10 @@ struct InFlightRootTable {
     free: Vec<usize>,
 }
 
-/// Roots retained by flows from one Context, including after it moves threads.
-/// A source thread may keep or drop a public EvalError while a worker collects
-/// its owning Context, so the slot arena uses a mutex rather than RefCell.
+/// Heap-identified registry storage for one Context's in-flight roots.
+/// The slot arena uses a mutex so root publication and collection may access
+/// registry metadata concurrently. Context and public EvalError stay on their
+/// owner threads; sharing registry storage does not transfer either owner.
 #[derive(Clone)]
 pub(crate) struct InFlightRegistryHandle {
     heap_identity: Option<usize>,
@@ -625,13 +626,13 @@ struct InFlightRootPin {
 
 /// A pin on one in-flight payload's heap values. Owns a slot in its Context's
 /// registry for its whole life; clones take independent slots in that same
-/// registry, and Drop releases the owning slot even after Context activation
-/// changes or the Context moves to another thread.
+/// registry, and Drop releases the owning slot even after local Context
+/// activation changes. The payload and this pin remain on their owner thread.
 pub struct InFlightRoots {
     /// `None` for a payload with no traceable values, avoiding registry traffic.
     pin: Option<InFlightRootPin>,
-    /// Flow payloads remain local to their Rust evaluator call stack. Moving
-    /// the owning Context is allowed; its registry follows it independently.
+    /// Flow payloads and Context remain local to their evaluator call stack.
+    /// Shared registry metadata does not make a payload transferable.
     _not_send: std::marker::PhantomData<*const ()>,
 }
 

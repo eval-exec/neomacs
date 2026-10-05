@@ -1,23 +1,21 @@
 use super::*;
 use crate::emacs_core::{builtins, casetab, category, ccl, charset, syntax, xfaces};
 
-fn collect_on_worker_and_return(mut ctx: Context) -> Context {
-    // Retire both raw allocation views before transferring Context storage.
-    crate::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap);
-    let mut ctx = std::thread::spawn(move || {
-        ctx.setup_thread_locals();
-        ctx.gc_collect_exact();
-        crate::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap);
-        ctx
-    })
-    .join()
-    .expect("collect the exclusively moved Context on the worker");
+fn collect_on_owner_and_reactivate(mut ctx: Context) -> Context {
+    // Local Context switches exercise the same registry reinstallation and
+    // canonical root retention without transferring thread-confined storage.
+    let mut other = Context::new();
+    other.gc_collect_exact();
+    ctx.setup_thread_locals();
+    ctx.gc_collect_exact();
+    other.setup_thread_locals();
+    other.gc_collect_exact();
     ctx.setup_thread_locals();
     ctx
 }
 
 #[test]
-fn gc_tls_ownership_canonical_tables_survive_worker_collection_and_return() {
+fn gc_tls_ownership_canonical_tables_survive_owner_collection_and_reactivation() {
     let mut ctx = Context::new();
     let case = casetab::builtin_standard_case_table(&mut ctx, vec![]).unwrap();
     casetab::builtin_set_standard_case_table(&mut ctx, vec![case]).unwrap();
@@ -29,7 +27,7 @@ fn gc_tls_ownership_canonical_tables_survive_worker_collection_and_return() {
     ];
     let descriptor_bits = ctx.syntax_code_objects.as_vector_data().unwrap()[0].bits();
 
-    let mut ctx = collect_on_worker_and_return(ctx);
+    let mut ctx = collect_on_owner_and_reactivate(ctx);
     let restored = [
         syntax::builtin_standard_syntax_table(vec![]).unwrap(),
         syntax::ensure_syntax_code_objects(),
@@ -40,7 +38,7 @@ fn gc_tls_ownership_canonical_tables_survive_worker_collection_and_return() {
         assert_eq!(value.bits(), bits, "activation replaced a canonical object");
         assert!(
             ctx.tagged_heap.owns_heap_value_for_test(value),
-            "worker collection swept a Context-owned canonical object"
+            "owner collection swept a Context-owned canonical object"
         );
     }
     let descriptor = ctx.syntax_code_objects.as_vector_data().unwrap()[0];
@@ -66,7 +64,7 @@ fn registry_roots(ctx: &Context) -> Vec<Value> {
 }
 
 #[test]
-fn gc_tls_ownership_context_registries_survive_worker_collection_and_return() {
+fn gc_tls_ownership_context_registries_survive_owner_collection_and_reactivation() {
     let mut ctx = Context::new();
     let program_name = Value::symbol("gc-tls-roundtrip-program");
     let program = Value::vector(vec![Value::fixnum(0); 3]);
@@ -119,7 +117,7 @@ fn gc_tls_ownership_context_registries_survive_worker_collection_and_return() {
             .all(|bits| roots.iter().any(|v| v.bits() == *bits))
     );
 
-    let mut ctx = collect_on_worker_and_return(ctx);
+    let mut ctx = collect_on_owner_and_reactivate(ctx);
     let roots = registry_roots(&ctx);
     for bits in expected {
         let value = roots
@@ -129,7 +127,7 @@ fn gc_tls_ownership_context_registries_survive_worker_collection_and_return() {
             .expect("return activation lost a Context-owned registry value");
         assert!(
             ctx.tagged_heap.owns_heap_value_for_test(value),
-            "worker collection swept a Context-owned registry value"
+            "owner collection swept a Context-owned registry value"
         );
     }
     assert!(
