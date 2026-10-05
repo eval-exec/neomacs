@@ -494,3 +494,7 @@ impl ClipboardBackend for WaylandClipboard {
 #[cfg(test)]
 #[path = "clipboard/tests/clipboard_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "clipboard/tests/contract_test.rs"]
+mod contract_tests;
