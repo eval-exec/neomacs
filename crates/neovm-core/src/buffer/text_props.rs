@@ -3801,65 +3801,73 @@ impl TextPropertyTable {
     }
 
     fn remove_property_raw(&mut self, range: CharRange, name: Value) -> bool {
-        self.mutation_tick += 1;
-        if Self::name_is_syntax_relevant(name) {
-            self.syntax_prop_tick += 1;
-            // Removal keeps existing entries: an entry only BOUNDS a run —
-            // the value always resolves fresh from the tree, and a stale
-            // presence entry just yields a shorter-than-optimal run. What
-            // must not happen is the full-rebuild scan per propertize flush.
-            self.syntax_ranges_revalidate();
-        }
-        if range.is_empty() {
-            return false;
-        }
-        let mut changed = false;
-
-        let affected = self
-            .intervals
-            .existing_intervals_overlapping_after_splits(range);
-        for (_, id) in affected {
-            if plist_value_remove(&mut self.intervals.nodes[id.0].plist, name) {
-                self.intervals.nodes[id.0].refresh_cache();
-                changed = true;
-            }
-        }
-        changed
+        self.remove_properties_in_char_range(range, &[name])
     }
 
-    /// Strip every property in `names` over `range` in ONE split+collect
-    /// interval walk. The per-name variant repeats that walk (and its
-    /// callers repeat their undo-run walk) per property; font-lock
-    /// unfontify removes several properties per edit.
+    /// Strip every property in `names` over `range` in one interval walk.
+    ///
+    /// GNU `Fremove_text_properties` (textprop.c:1597-1619, 1646-1670) and
+    /// `Fremove_list_of_text_properties` (1723-1745, 1757-1789) check explicit
+    /// plist membership before splitting either range edge. Intervals without
+    /// any requested name retain their boundaries even when another changes.
     pub fn remove_properties_in_char_range(&mut self, range: CharRange, names: &[Value]) -> bool {
-        self.mutation_tick += 1;
-        if names
-            .iter()
-            .any(|name| Self::name_is_syntax_relevant(*name))
-        {
-            self.syntax_prop_tick += 1;
-            // Same policy as the single-name removal: presence entries only
-            // bound runs, so keep them and revalidate the guard.
-            self.syntax_ranges_revalidate();
-        }
         if range.is_empty() || names.is_empty() {
             return false;
         }
+        let Some((mut node_start, mut id)) = self.first_interval_overlapping(range) else {
+            return false;
+        };
         let mut changed = false;
-        let affected = self
-            .intervals
-            .existing_intervals_overlapping_after_splits(range);
-        for (_, id) in affected {
-            let mut node_changed = false;
-            for name in names {
-                if plist_value_remove(&mut self.intervals.nodes[id.0].plist, *name) {
-                    node_changed = true;
+        while node_start < range.end() {
+            let node_end = self.intervals.interval_end(node_start, id);
+            // GNU removes names directly from whole interior intervals
+            // (textprop.c:1677-1679). Probe only while finding the first
+            // change or before splitting the last interval. Inspect the
+            // live plist: Lisp can add names through `text-properties-at`.
+            let visit = (changed && node_end <= range.end())
+                || names
+                    .iter()
+                    .any(|name| plist_value_get(self.intervals.nodes[id.0].plist, *name).is_some());
+            if visit {
+                if !changed {
+                    self.mutation_tick += 1;
+                    if names
+                        .iter()
+                        .any(|name| Self::name_is_syntax_relevant(*name))
+                    {
+                        self.syntax_prop_tick += 1;
+                        // Presence entries only bound runs; keep them and
+                        // revalidate the guard instead of rebuilding.
+                        self.syntax_ranges_revalidate();
+                    }
+                }
+                if node_start < range.start() {
+                    id = self
+                        .intervals
+                        .split_at(range.start())
+                        .expect("the first changed interval contains the range start");
+                }
+                if node_end > range.end() {
+                    self.intervals.split_at(range.end());
+                }
+                let node = &mut self.intervals.nodes[id.0];
+                let mut node_changed = false;
+                for name in names {
+                    node_changed |= plist_value_remove(&mut node.plist, *name);
+                }
+                if node_changed {
+                    node.refresh_cache();
+                    changed = true;
                 }
             }
-            if node_changed {
-                self.intervals.nodes[id.0].refresh_cache();
-                changed = true;
+            if node_end >= range.end() {
+                break;
             }
+            let Some(next_id) = self.intervals.next_id(id) else {
+                break;
+            };
+            node_start = node_end;
+            id = next_id;
         }
         changed
     }

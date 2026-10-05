@@ -8,6 +8,75 @@ use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
 #[test]
+fn oracle_object_intervals_absent_string_property_removal() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"
+(let (out)
+  (dolist (method '(remove-text-properties remove-list-of-text-properties))
+    (dolist (shape '(plain uniform split nil-valued))
+      (let ((s (copy-sequence "aé🙂bcd")))
+        (cond ((eq shape 'uniform) (put-text-property 0 6 'keep t s))
+              ((eq shape 'split)
+               (put-text-property 0 2 'keep 'left s)
+               (put-text-property 2 6 'keep 'right s))
+              ((eq shape 'nil-valued) (put-text-property 0 6 'keep nil s)))
+        (let ((removed (funcall method 1 5
+                                (if (eq method 'remove-text-properties)
+                                    '(absent nil also-absent nil)
+                                  '(absent also-absent))
+                                s)))
+          (push (list method shape removed (object-intervals s)
+                      (next-property-change 0 s t)
+                      (next-property-change 1 s 4)
+                      (previous-property-change 5 s 1))
+                out)))))
+  (nreverse out))
+"#;
+    let expect = expect_test::expect![[
+        r#""OK ((remove-text-properties plain nil nil 6 4 1) (remove-text-properties uniform nil ((0 6 (keep t))) 6 4 1) (remove-text-properties split nil ((0 2 (keep left)) (2 6 (keep right))) 2 2 2) (remove-text-properties nil-valued nil ((0 6 (keep nil))) 6 4 1) (remove-list-of-text-properties plain nil nil 6 4 1) (remove-list-of-text-properties uniform nil ((0 6 (keep t))) 6 4 1) (remove-list-of-text-properties split nil ((0 2 (keep left)) (2 6 (keep right))) 2 2 2) (remove-list-of-text-properties nil-valued nil ((0 6 (keep nil))) 6 4 1))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_object_intervals_string_removal_splits_only_changed_endpoints() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"
+(let (out)
+  (dolist (method '(remove-text-properties remove-list-of-text-properties))
+    (dolist (span '((0 2) (2 4) (4 6) (0 6)))
+      (dolist (names '((absent drop) (drop absent) (absent drop absent)))
+        (let ((s (copy-sequence "aé🙂bcd")))
+          (put-text-property 0 6 'keep t s)
+          (put-text-property (car span) (cadr span) 'drop nil s)
+          (let* ((properties (if (eq method 'remove-text-properties)
+                                 (apply 'append (mapcar (lambda (name) (list name nil)) names))
+                               names))
+                 (removed (funcall method 1 5 properties s)))
+            (push (list method span names removed (object-intervals s)) out))))))
+  (nreverse out))
+"#;
+    let expect = expect_test::expect![[
+        r#""OK ((remove-text-properties (0 2) (absent drop) t ((0 1 (drop nil keep t)) (1 2 (keep t)) (2 6 (keep t)))) (remove-text-properties (0 2) (drop absent) t ((0 1 (drop nil keep t)) (1 2 (keep t)) (2 6 (keep t)))) (remove-text-properties (0 2) (absent drop absent) t ((0 1 (drop nil keep t)) (1 2 (keep t)) (2 6 (keep t)))) (remove-text-properties (2 4) (absent drop) t ((0 2 (keep t)) (2 4 (keep t)) (4 6 (keep t)))) (remove-text-properties (2 4) (drop absent) t ((0 2 (keep t)) (2 4 (keep t)) (4 6 (keep t)))) (remove-text-properties (2 4) (absent drop absent) t ((0 2 (keep t)) (2 4 (keep t)) (4 6 (keep t)))) (remove-text-properties (4 6) (absent drop) t ((0 4 (keep t)) (4 5 (keep t)) (5 6 (drop nil keep t)))) (remove-text-properties (4 6) (drop absent) t ((0 4 (keep t)) (4 5 (keep t)) (5 6 (drop nil keep t)))) (remove-text-properties (4 6) (absent drop absent) t ((0 4 (keep t)) (4 5 (keep t)) (5 6 (drop nil keep t)))) (remove-text-properties (0 6) (absent drop) t ((0 1 (drop nil keep t)) (1 5 (keep t)) (5 6 (drop nil keep t)))) (remove-text-properties (0 6) (drop absent) t ((0 1 (drop nil keep t)) (1 5 (keep t)) (5 6 (drop nil keep t)))) (remove-text-properties (0 6) (absent drop absent) t ((0 1 (drop nil keep t)) (1 5 (keep t)) (5 6 (drop nil keep t)))) (remove-list-of-text-properties (0 2) (absent drop) t ((0 1 (drop nil keep t)) (1 2 (keep t)) (2 6 (keep t)))) (remove-list-of-text-properties (0 2) (drop absent) t ((0 1 (drop nil keep t)) (1 2 (keep t)) (2 6 (keep t)))) (remove-list-of-text-properties (0 2) (absent drop absent) t ((0 1 (drop nil keep t)) (1 2 (keep t)) (2 6 (keep t)))) (remove-list-of-text-properties (2 4) (absent drop) t ((0 2 (keep t)) (2 4 (keep t)) (4 6 (keep t)))) (remove-list-of-text-properties (2 4) (drop absent) t ((0 2 (keep t)) (2 4 (keep t)) (4 6 (keep t)))) (remove-list-of-text-properties (2 4) (absent drop absent) t ((0 2 (keep t)) (2 4 (keep t)) (4 6 (keep t)))) (remove-list-of-text-properties (4 6) (absent drop) t ((0 4 (keep t)) (4 5 (keep t)) (5 6 (drop nil keep t)))) (remove-list-of-text-properties (4 6) (drop absent) t ((0 4 (keep t)) (4 5 (keep t)) (5 6 (drop nil keep t)))) (remove-list-of-text-properties (4 6) (absent drop absent) t ((0 4 (keep t)) (4 5 (keep t)) (5 6 (drop nil keep t)))) (remove-list-of-text-properties (0 6) (absent drop) t ((0 1 (drop nil keep t)) (1 5 (keep t)) (5 6 (drop nil keep t)))) (remove-list-of-text-properties (0 6) (drop absent) t ((0 1 (drop nil keep t)) (1 5 (keep t)) (5 6 (drop nil keep t)))) (remove-list-of-text-properties (0 6) (absent drop absent) t ((0 1 (drop nil keep t)) (1 5 (keep t)) (5 6 (drop nil keep t)))))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_object_intervals_removal_observes_live_plist_additions() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"(let ((s (propertize "abcdef" 'keep t)))
+      (setcdr (cdr (text-properties-at 0 s)) '(added t))
+      (list (remove-text-properties 1 5 '(added nil) s) (object-intervals s)))"#;
+    crate::common::assert_oracle_parity_expect(
+        form,
+        expect_test::expect![[
+            r#""OK (t ((0 1 (keep t added t)) (1 5 (keep t)) (5 6 (keep t added t))))""#
+        ]],
+    );
+}
+
+#[test]
 fn oracle_object_intervals_string_and_buffer_interval_shape() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 

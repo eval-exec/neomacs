@@ -2748,15 +2748,12 @@ pub(crate) fn builtin_remove_text_properties_in_buffers(
         let Some(char_range) = validate_string_range(s, beg, end, args[0], args[1])? else {
             return Ok(Value::NIL);
         };
+        if names.is_empty() || !string_has_text_property_interval_tree(str_val) {
+            return Ok(Value::NIL);
+        }
         let any_removed =
             crate::emacs_core::value::mutate_string_text_properties(str_val, |table| {
-                let mut any_removed = false;
-                for name in names {
-                    if table.remove_property_in_char_range(char_range, name) {
-                        any_removed = true;
-                    }
-                }
-                any_removed
+                table.remove_properties_in_char_range(char_range, &names)
             })
             .unwrap_or(false);
         return Ok(if any_removed { Value::T } else { Value::NIL });
@@ -2774,16 +2771,16 @@ pub(crate) fn builtin_remove_text_properties_in_buffers(
     // that holds one of the names and returns nil, tree untouched, when there
     // is none -- the common case for `syntax-propertize`'s per-chunk
     // `(remove-text-properties start end '(syntax-table nil syntax-multiline
-    // nil))` in a buffer where those properties are rare.  The removal walk
-    // below would otherwise split the intervals at both range edges.
+    // nil))` in a buffer where those properties are rare. Avoid the removal
+    // walk entirely when the range holds none of the requested names.
     let present = buffers.get(buf_id).is_some_and(|buf| {
         buf.text_props_range_has_any_property_named_in_emacs_byte_range(byte_range, &names)
     });
     if !present {
         return Ok(Value::NIL);
     }
-    // One split+collect interval walk (and one undo-run walk) for every
-    // name, like `remove-list-of-text-properties`; GNU's `remove_properties`
+    // One interval walk (and one undo-run walk) for every name together,
+    // like `remove-list-of-text-properties`; GNU's `remove_properties`
     // strips all of PROPERTIES from each interval in a single pass.
     let any_removed = buffers
         .remove_buffer_text_properties_in_emacs_byte_range(buf_id, byte_range, &names)
@@ -2941,14 +2938,11 @@ pub(crate) fn builtin_remove_list_of_text_properties_in_buffers(
         let Some(char_range) = validate_string_range(s, beg, end, args[0], args[1])? else {
             return Ok(Value::NIL);
         };
+        if names.is_empty() || !string_has_text_property_interval_tree(str_val) {
+            return Ok(Value::NIL);
+        }
         let changed = crate::emacs_core::value::mutate_string_text_properties(str_val, |table| {
-            let mut changed = false;
-            for name in names {
-                if table.remove_property_in_char_range(char_range, name) {
-                    changed = true;
-                }
-            }
-            changed
+            table.remove_properties_in_char_range(char_range, &names)
         })
         .unwrap_or(false);
         return Ok(if changed { Value::T } else { Value::NIL });
@@ -2976,8 +2970,7 @@ pub(crate) fn builtin_remove_list_of_text_properties_in_buffers(
     });
     if !changed {
         // GNU Fremove_list_of_text_properties: no interval in the range holds
-        // any of the names, so return nil without touching the tree (the
-        // removal walk would still split the intervals at both range edges).
+        // any of the names, so return nil without starting the removal walk.
         return Ok(Value::NIL);
     }
     let _ = buffers.remove_buffer_text_properties_in_emacs_byte_range(buf_id, byte_range, &names);

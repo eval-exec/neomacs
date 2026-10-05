@@ -3207,3 +3207,6 @@ fn graft_at_boundary_rehomes_predecessor_so_held_plists_survive_undo() {
         .unwrap();
     assert_eq!(got, Value::T);
 }
+
+#[cfg(test)]
+mod string_property_removal;
