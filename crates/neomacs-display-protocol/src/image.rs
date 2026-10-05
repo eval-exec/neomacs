@@ -1147,6 +1147,7 @@ impl ImageRealization {
             .max(1.0)) as u32
     }
 
+
     /// Scale factor for GNU `compute_image_size` / Fimage_size pixel space.
     ///
     /// Equal to `layout_scale × report_scale`, with a near-1.0 snap so that
@@ -1188,6 +1189,89 @@ impl ImageRealization {
             ImageRasterExtent::new(raster_width, raster_height),
         )
         .oriented(rotation)
+    }
+
+    /// Geometry for an image whose native extent is not known yet.
+    ///
+    /// A header probe or a decode has not landed, so the native size is
+    /// unknown. Every axis the size spec *pins* resolves exactly as
+    /// [`Self::resolve_geometry`] will resolve it; an axis left to the native
+    /// size falls back to a square of the known extent, because the aspect
+    /// ratio is unknowable until the header arrives.
+    ///
+    /// The result is provisional by construction. Handing the pinned case the
+    /// same arithmetic as the final case is the point: a spec that pins both
+    /// axes must reserve the extent it will end up with, or every animation
+    /// frame re-runs the difference as a layout shift.
+    #[must_use]
+    pub fn resolve_provisional(
+        self,
+        size: ImageSizeSpec,
+        rotation: ImageRotation,
+    ) -> ProvisionalExtent {
+        let (width, height) = size.placeholder_extent().unwrap_or((1, 1));
+        ProvisionalExtent::new(
+            self.resolve_geometry(size, ImageNativeExtent::new(width, height), rotation)
+                .layout(),
+        )
+    }
+}
+
+/// An extent resolved while the native size is still unknown.
+///
+/// Layout may reserve with it — that is what it is for — but it must not be
+/// treated as the image's extent: on a spec that pins both axes it is equal to
+/// the resolved extent by construction, and on one that leaves an axis to the
+/// native size it legitimately is not. [`Self::finalize`] is the only way to
+/// find out, and it is the only place a reserved slot may move.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProvisionalExtent(ImageLayoutExtent);
+
+impl ProvisionalExtent {
+    #[must_use]
+    pub const fn new(layout: ImageLayoutExtent) -> Self {
+        Self(layout)
+    }
+
+    /// The extent to reserve. Callers lay out with this and nothing else.
+    #[must_use]
+    pub const fn layout(self) -> ImageLayoutExtent {
+        self.0
+    }
+
+    /// Classify what a resolved extent does to the slot this reserved.
+    #[must_use]
+    pub fn finalize(self, resolved: ImageLayoutExtent) -> SlotChange {
+        if self.0 == resolved {
+            SlotChange::Unchanged
+        } else {
+            SlotChange::Moved {
+                from: self.0,
+                to: resolved,
+            }
+        }
+    }
+}
+
+/// What a resolved extent does to the slot a provisional extent reserved.
+///
+/// `Moved` is legal only where the provisional extent could not know the
+/// answer: an axis left to the native size, whose aspect ratio only the header
+/// can supply. Anywhere else it is a geometry disagreement that layout pays
+/// for — once per image if it is lucky, once per frame if the image animates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SlotChange {
+    Unchanged,
+    Moved {
+        from: ImageLayoutExtent,
+        to: ImageLayoutExtent,
+    },
+}
+
+impl SlotChange {
+    #[must_use]
+    pub const fn moved(self) -> bool {
+        matches!(self, Self::Moved { .. })
     }
 }
 

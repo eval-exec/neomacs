@@ -17,7 +17,9 @@ use std::sync::{Arc, Mutex, OnceLock, TryLockError};
 use std::time::Duration;
 
 use neomacs_display_protocol::image_diagnostic::ImageDiagnostic;
-use neomacs_display_protocol::{ImageNativeExtent, ImageSequenceId, ImageSequenceRetirement};
+use neomacs_display_protocol::{
+    ImageNativeExtent, ImageSequenceId, ImageSequenceRetirement, ProvisionalExtent, SlotChange,
+};
 use neomacs_display_runtime::render_thread::{
     ImageDecodeTerminal, ImageProbeSource, ImageTerminalProbe, SharedImageRenderState,
     probe_image_layout,
@@ -962,24 +964,34 @@ fn image_load_command(
     }
 }
 
-fn placeholder_image_extent(request: &ImageResolveRequest) -> ImageLayoutExtent {
-    let (width, height) = request.size.placeholder_extent().unwrap_or((1, 1));
-    // Resolve through the same geometry call the header probe and the decoder
-    // use, so the slot reserved here cannot move by a pixel when the pixels
-    // land. Converting the pinned size with `ImageRealization::layout_dimension`
-    // rounded where `resolve_geometry` ceils: a square `:width 24 :height 24`
-    // icon at layout scale 0.8 reserved 19x19 and became 20x20 once the header
-    // resolved. An animated source re-runs that resolution for every frame, so
-    // the disagreement showed up as a one-pixel jitter of everything laid out
-    // after the image (the tab bar this was found on).
+/// The extent a request reserves before any header or decode has landed.
+///
+/// The resolution lives behind [`ImageRealization::resolve_provisional`] rather
+/// than here, so that the reservation, the header probe and the decoder are one
+/// computation with three levels of knowledge instead of three computations
+/// that have to be kept in agreement by hand.
+fn provisional_extent(request: &ImageResolveRequest) -> ProvisionalExtent {
     request
         .realization
-        .resolve_geometry(
-            request.size,
-            ImageNativeExtent::new(width, height),
-            request.rotation,
-        )
-        .layout()
+        .resolve_provisional(request.size, request.rotation)
+}
+
+fn placeholder_image_extent(request: &ImageResolveRequest) -> ImageLayoutExtent {
+    provisional_extent(request).layout()
+}
+
+/// The request a resolved geometry is keyed on: everything the header probe
+/// reads except the animation frame.
+///
+/// Frames of a raster source composite onto the canvas its header names, so the
+/// probe's answer cannot depend on which frame is selected. Keying without the
+/// frame is what lets an animation resolve its geometry once instead of once
+/// per frame — see [`AsyncImageCatalog::geometry_layouts`].
+fn geometry_key(request: &ImageResolveRequest) -> ImageResolveRequest {
+    ImageResolveRequest {
+        frame: Default::default(),
+        ..request.clone()
+    }
 }
 
 fn home_directory_from_environment() -> Option<String> {
