@@ -23598,6 +23598,45 @@ fn command_loop_reporter_signal_reaches_enclosing_handler() {
     assert_eq!(result, Value::symbol("caught"));
 }
 
+/// A builtin's signal reaches the reporter undispatched -- the `%' format
+/// error did.  Rerouting gives it GNU's normal dispatch exactly once
+/// (`signal-hook-function' included) before the top-level throw; a signal
+/// that was already dispatched is not dispatched again.
+#[test]
+fn command_error_report_failure_dispatches_an_undispatched_signal_once() {
+    crate::test_utils::init_test_tracing();
+    let (mut ev, _global_map) = command_loop_error_test_context();
+    ev.eval_str(
+        r#"(setq neo-signal-hook-calls 0
+                 signal-hook-function
+                 (lambda (_symbol _data)
+                   (setq neo-signal-hook-calls (1+ neo-signal-hook-calls))))"#,
+    )
+    .expect("install counting signal-hook-function");
+    let hook_calls = |ev: &mut Context| ev.eval_symbol("neo-signal-hook-calls").expect("count");
+    let undispatched = || {
+        crate::emacs_core::error::signal(
+            "error",
+            vec![Value::string("Not enough arguments for format string")],
+        )
+    };
+    let is_top_level_throw =
+        |flow: &Flow| flow.as_throw().is_some_and(|thrown| thrown.tag.is_symbol_named("top-level"));
+
+    let rerouted = ev.command_error_report_failure(undispatched());
+    assert!(is_top_level_throw(&rerouted), "an unhandled signal throws to top-level");
+    assert_eq!(hook_calls(&mut ev), Value::fixnum(1), "dispatched exactly once");
+
+    let FlowKind::Signal(sig) = undispatched().into_kind() else {
+        panic!("signal flow");
+    };
+    let dispatched = ev.dispatch_signal_if_needed(sig).expect("dispatch");
+    assert_eq!(hook_calls(&mut ev), Value::fixnum(2));
+    let rerouted = ev.command_error_report_failure(Flow::from_kind(FlowKind::Signal(dispatched)));
+    assert!(is_top_level_throw(&rerouted));
+    assert_eq!(hook_calls(&mut ev), Value::fixnum(2), "no second dispatch");
+}
+
 /// GNU `command_loop' runs its batch check after the catch around
 /// `command_loop_2' returns, including from a top-level throw: a batch
 /// session whose error report fails exits instead of reading on.
