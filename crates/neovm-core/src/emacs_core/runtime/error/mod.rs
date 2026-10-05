@@ -825,6 +825,14 @@ pub(crate) enum LispCondition {
     InvalidRegexp,
     #[strum(serialize = "malformed-keyword-arg-list")]
     MalformedKeywordArgList,
+    #[strum(serialize = "missing-module-init-function")]
+    MissingModuleInitFunction,
+    #[strum(serialize = "module-init-failed")]
+    ModuleInitFailed,
+    #[strum(serialize = "module-not-gpl-compatible")]
+    ModuleNotGplCompatible,
+    #[strum(serialize = "module-open-failed")]
+    ModuleOpenFailed,
     #[strum(serialize = "no-catch")]
     NoCatch,
     #[strum(serialize = "overflow-error")]

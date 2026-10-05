@@ -447,6 +447,50 @@ pub fn init_standard_errors(obarray: &mut Obarray) {
         &["sqlite-error"],
     );
 
+    // --- module-load-failed family (GNU src/emacs-module.c `syms_of_module`) ---
+    register_simple(
+        obarray,
+        "module-load-failed",
+        "Module load failed",
+        &["error"],
+    );
+    register_simple(
+        obarray,
+        "module-open-failed",
+        "Module could not be opened",
+        &["module-load-failed"],
+    );
+    register_simple(
+        obarray,
+        "module-not-gpl-compatible",
+        "Module is not GPL compatible",
+        &["module-load-failed"],
+    );
+    register_simple(
+        obarray,
+        "missing-module-init-function",
+        "Module does not export an initialization function",
+        &["module-load-failed"],
+    );
+    register_simple(
+        obarray,
+        "module-init-failed",
+        "Module initialization failed",
+        &["module-load-failed"],
+    );
+    register_simple(
+        obarray,
+        "invalid-arity",
+        "Invalid function arity",
+        &["error"],
+    );
+    register_simple(
+        obarray,
+        "memory-buffer-too-small",
+        "Memory buffer too small",
+        &["error"],
+    );
+
     // --- json-error family (mirrors GNU src/json.c `syms_of_json`) ---
     // Parents must be registered before children so the transitive
     // `error-conditions` closure can be built.
