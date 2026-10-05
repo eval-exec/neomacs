@@ -244,14 +244,15 @@ fn paused_worker_with_policy(
     let snapshot = Arc::new(snapshot);
     heap.set_concurrent_hash_snapshot(Some(snapshot.clone()));
     let (exited, result) = std::sync::mpsc::channel();
+    let mut pages = heap.page_snapshot_for_mark();
+    let leaves = heap.leaf_page_snapshot_for_mark(&mut pages);
     let job = ConcurrentMarkJob {
         // Pop the owner first so its first fresh claim reaches the latch.
         gray: other_roots.iter().copied().chain([owner]).collect(),
         claims: ConcurrentClaimJob {
             parity: heap.mark_parity,
             major: heap.generational.major_in_progress,
-            concurrent_claims: true,
-            pages: heap.page_snapshot_for_mark(),
+            pages,
             dump_lo: heap.dump_addr_lo,
             dump_hi: heap.dump_addr_hi,
             drop_dump_children: false,
@@ -260,9 +261,6 @@ fn paused_worker_with_policy(
             vec_claimed: heap.concurrent_vec_claimed.clone(),
             bc_claimed: heap.concurrent_bc_claimed.clone(),
             subr_dropped: heap.concurrent_subr_dropped.clone(),
-            leaf_claimed: heap.concurrent_leaf_claimed().cloned(),
-            hashes: Some(snapshot),
-            hash_claimed: heap.concurrent_hash_claimed().cloned(),
         },
         satb: heap.satb_shared.clone(),
         deferred: heap.deferred_veclikes.clone(),
@@ -274,6 +272,15 @@ fn paused_worker_with_policy(
         vectors: None,
         mapped_cons_ranges: None,
         mapped_veclikes: None,
+    };
+    let job = EnabledConcurrentMarkJob {
+        job,
+        claims: EnabledClaims {
+            leaves,
+            leaf_claimed: heap.concurrent_leaf_claimed().cloned(),
+            hashes: Some(snapshot),
+            hash_claimed: heap.concurrent_hash_claimed().cloned(),
+        },
     };
     heap.concurrent_mark_running = true;
     heap.gc_exited = Some(result);
@@ -301,7 +308,7 @@ fn paused_worker_with_policy(
                 });
             }
         }
-        run_concurrent_mark(job);
+        run_concurrent_mark_enabled(job);
         CONCURRENT_HASH_BEFORE_CLAIM_HOOK.with(|slot| assert!(slot.borrow().is_none()));
         CONCURRENT_HASH_SCAN_HOOK.with(|slot| assert!(slot.borrow().is_none()));
     });

@@ -70,39 +70,81 @@ fn header(value: TaggedValue) -> *mut GcHeader {
     value.as_veclike_ptr().unwrap().cast_mut().cast()
 }
 
-fn job(heap: &mut TaggedHeap, major: bool) -> ConcurrentClaimJob {
+struct LeafClaimFixture {
+    base: ConcurrentClaimJob,
+    enabled: Option<EnabledClaims>,
+}
+
+impl std::ops::Deref for LeafClaimFixture {
+    type Target = ConcurrentClaimJob;
+    fn deref(&self) -> &Self::Target {
+        &self.base
+    }
+}
+
+impl std::ops::DerefMut for LeafClaimFixture {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.base
+    }
+}
+
+impl LeafClaimFixture {
+    fn leaf_class(&self, addr: usize) -> Option<ChunkClass> {
+        self.enabled
+            .as_ref()
+            .and_then(|claims| claims.leaves.leaf_class(&self.base.pages, addr))
+    }
+}
+
+fn job(heap: &mut TaggedHeap, major: bool) -> LeafClaimFixture {
     heap.close_alloc_regions();
-    ConcurrentClaimJob {
-        parity: heap.mark_parity.flip(),
-        major,
-        concurrent_claims: heap.concurrent_claims(),
-        pages: heap.page_snapshot_for_mark(),
-        dump_lo: heap.dump_addr_lo,
-        dump_hi: heap.dump_addr_hi,
-        drop_dump_children: false,
-        str_claimed: Arc::new(AtomicUsize::new(0)),
-        float_claimed: Arc::new(AtomicUsize::new(0)),
-        vec_claimed: Arc::new(AtomicUsize::new(0)),
-        bc_claimed: Arc::new(AtomicUsize::new(0)),
-        subr_dropped: Arc::new(AtomicUsize::new(0)),
+    let mut pages = heap.page_snapshot_for_mark();
+    let enabled = heap.concurrent_claims().then(|| EnabledClaims {
+        leaves: heap.leaf_page_snapshot_for_mark(&mut pages),
         hashes: None,
         hash_claimed: None,
-        leaf_claimed: heap
-            .concurrent_claims()
-            .then(|| Arc::new(AtomicUsize::new(0))),
+        leaf_claimed: Some(Arc::new(AtomicUsize::new(0))),
+    });
+    LeafClaimFixture {
+        base: ConcurrentClaimJob {
+            parity: heap.mark_parity.flip(),
+            major,
+            pages,
+            dump_lo: heap.dump_addr_lo,
+            dump_hi: heap.dump_addr_hi,
+            drop_dump_children: false,
+            str_claimed: Arc::new(AtomicUsize::new(0)),
+            float_claimed: Arc::new(AtomicUsize::new(0)),
+            vec_claimed: Arc::new(AtomicUsize::new(0)),
+            bc_claimed: Arc::new(AtomicUsize::new(0)),
+            subr_dropped: Arc::new(AtomicUsize::new(0)),
+        },
+        enabled,
     }
 }
 
 fn claim(
     value: TaggedValue,
-    job: &ConcurrentClaimJob,
+    job: &LeafClaimFixture,
     gray: &mut Vec<TaggedValue>,
-    logs: &mut WorkerMarkLogs,
+    logs: &mut EnabledWorkerMarkLogs,
 ) -> bool {
-    if job.major {
-        concurrent_try_mark_owned_logged::<true>(value, job, gray, logs)
+    if let Some(enabled) = &job.enabled {
+        if job.major {
+            concurrent_try_mark_owned_enabled::<true>(value, &job.base, enabled, gray, logs)
+        } else {
+            concurrent_try_mark_owned_enabled::<false>(value, &job.base, enabled, gray, logs)
+        }
     } else {
-        concurrent_try_mark_owned_logged::<false>(value, job, gray, logs)
+        let mut legacy = WorkerMarkLogs::default();
+        let handled = if job.major {
+            concurrent_try_mark_owned_logged::<true>(value, &job.base, gray, &mut legacy)
+        } else {
+            concurrent_try_mark_owned_logged::<false>(value, &job.base, gray, &mut legacy)
+        };
+        logs.result.promo.extend(legacy.result.promo);
+        logs.result.symbols.extend(legacy.result.symbols);
+        handled
     }
 }
 
@@ -117,12 +159,12 @@ fn concurrent_leaf_claims_off_keeps_the_original_defer_path_and_allocates_no_cou
         for (kind, value) in Leaf::ALL.into_iter().zip(values) {
             let before = unsafe { (*header(value)).raw_mark() };
             assert!(!job.pages.contains(kind.class(), header(value) as usize));
-            assert_eq!(job.pages.leaf_class(header(value) as usize), None);
+            assert_eq!(job.leaf_class(header(value) as usize), None);
             assert!(!claim(
                 value,
                 &job,
                 &mut Vec::new(),
-                &mut WorkerMarkLogs::default()
+                &mut EnabledWorkerMarkLogs::default()
             ));
             assert_eq!(unsafe { (*header(value)).raw_mark() }, before);
         }
@@ -151,11 +193,17 @@ fn concurrent_leaf_claims_obey_generation_parity_and_once_only_promotion() {
                         let before = unsafe { (*header(value)).raw_mark() };
                         let expected = usize::from(age == 0 || (major && age == 1));
                         let mut gray = Vec::new();
-                        let mut logs = WorkerMarkLogs::default();
+                        let mut logs = EnabledWorkerMarkLogs::default();
                         assert!(claim(value, &job, &mut gray, &mut logs), "{kind:?}");
                         assert!(claim(value, &job, &mut gray, &mut logs), "{kind:?}");
                         assert_eq!(
-                            job.leaf_claimed.as_ref().unwrap().load(Ordering::Relaxed),
+                            job.enabled
+                                .as_ref()
+                                .unwrap()
+                                .leaf_claimed
+                                .as_ref()
+                                .unwrap()
+                                .load(Ordering::Relaxed),
                             expected
                         );
                         assert!(gray.is_empty());
@@ -189,20 +237,23 @@ fn concurrent_leaf_claims_refuse_post_start_pages_without_touching_the_header() 
             while kind.page_count(&heap) == pages {
                 fresh = kind.allocate(&mut heap);
             }
-            assert!(job.pages.contains(kind.class(), header(old) as usize));
-            assert!(!job.pages.contains(kind.class(), header(fresh) as usize));
-            assert_eq!(
-                job.pages.leaf_class(header(old) as usize),
-                Some(kind.class())
-            );
-            assert_eq!(job.pages.leaf_class(header(fresh) as usize), None);
+            assert_eq!(job.leaf_class(header(old) as usize), Some(kind.class()));
+            assert_eq!(job.leaf_class(header(fresh) as usize), None);
+            assert_eq!(job.leaf_class(header(old) as usize), Some(kind.class()));
+            assert_eq!(job.leaf_class(header(fresh) as usize), None);
             let before = unsafe { (*header(fresh)).raw_mark() };
-            let mut logs = WorkerMarkLogs::default();
+            let mut logs = EnabledWorkerMarkLogs::default();
             assert!(!claim(fresh, &job, &mut Vec::new(), &mut logs));
             assert_eq!(unsafe { (*header(fresh)).raw_mark() }, before);
             assert!(logs.result.promo.is_empty());
             assert_eq!(
-                job.leaf_claimed.as_ref().unwrap().load(Ordering::Relaxed),
+                job.enabled
+                    .as_ref()
+                    .unwrap()
+                    .leaf_claimed
+                    .as_ref()
+                    .unwrap()
+                    .load(Ordering::Relaxed),
                 0
             );
         }
@@ -230,12 +281,18 @@ fn concurrent_leaf_claims_keep_mapped_and_residual_box_symbol_positions_deferred
         let value = unsafe { TaggedValue::from_veclike_ptr(object.cast()) };
         let job = job(&mut heap, false);
         let before = unsafe { (*header(value)).raw_mark() };
-        let mut logs = WorkerMarkLogs::default();
+        let mut logs = EnabledWorkerMarkLogs::default();
         assert!(!claim(value, &job, &mut Vec::new(), &mut logs));
         assert_eq!(unsafe { (*header(value)).raw_mark() }, before);
         assert!(logs.result.symbols.is_empty());
         assert_eq!(
-            job.leaf_claimed.as_ref().unwrap().load(Ordering::Relaxed),
+            job.enabled
+                .as_ref()
+                .unwrap()
+                .leaf_claimed
+                .as_ref()
+                .unwrap()
+                .load(Ordering::Relaxed),
             0
         );
     }
@@ -252,13 +309,19 @@ fn concurrent_leaf_symbol_positions_route_both_fields_and_skip_born_black_payloa
         let value = heap.alloc_symbol_with_pos(symbol, child);
         let job = job(&mut heap, major);
         let mut gray = Vec::new();
-        let mut logs = WorkerMarkLogs::default();
+        let mut logs = EnabledWorkerMarkLogs::default();
         unsafe { (*header(value)).set_marked(job.parity) };
         assert!(claim(value, &job, &mut gray, &mut logs));
         assert!(gray.is_empty());
         assert!(logs.result.symbols.is_empty());
         assert_eq!(
-            job.leaf_claimed.as_ref().unwrap().load(Ordering::Relaxed),
+            job.enabled
+                .as_ref()
+                .unwrap()
+                .leaf_claimed
+                .as_ref()
+                .unwrap()
+                .load(Ordering::Relaxed),
             0
         );
         unsafe { (*header(value)).set_marked(job.parity.flip()) };
@@ -377,7 +440,7 @@ fn concurrent_leaf_claim_rmw_has_one_winner_across_threads() {
             .map(|_| {
                 let job = &job;
                 scope.spawn(move || {
-                    let mut logs = WorkerMarkLogs::default();
+                    let mut logs = EnabledWorkerMarkLogs::default();
                     assert!(claim(value, job, &mut Vec::new(), &mut logs));
                     logs.result.promo.len()
                 })
@@ -390,7 +453,13 @@ fn concurrent_leaf_claim_rmw_has_one_winner_across_threads() {
     });
     assert_eq!(promotions, 1);
     assert_eq!(
-        job.leaf_claimed.as_ref().unwrap().load(Ordering::Relaxed),
+        job.enabled
+            .as_ref()
+            .unwrap()
+            .leaf_claimed
+            .as_ref()
+            .unwrap()
+            .load(Ordering::Relaxed),
         1
     );
 }

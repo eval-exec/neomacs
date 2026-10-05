@@ -221,7 +221,10 @@ impl TaggedHeap {
         // claim-benign). Blocks and pages created during the mark are absent,
         // which is fail-safe: their objects allocate black and whatever the
         // marker meets there defers to the termination.
-        let pages = self.page_snapshot_for_mark();
+        let mut pages = self.page_snapshot_for_mark();
+        let leaves = self
+            .concurrent_claims()
+            .then(|| self.leaf_page_snapshot_for_mark(&mut pages));
         let vecsnap_t0 = std::time::Instant::now();
         // Stage 2 Tier B CONCURRENT VECTOR SCAN: snapshot every
         // OWNED/Mapped vector backing AT THIS world-stopped point (same instant the
@@ -411,7 +414,6 @@ impl TaggedHeap {
                 // Mandated carry: the GC thread claims at THIS cycle's parity.
                 parity: self.mark_parity,
                 major: self.generational.major_in_progress,
-                concurrent_claims: self.concurrent_claims(),
                 pages,
                 dump_lo: self.dump_addr_lo,
                 dump_hi: self.dump_addr_hi,
@@ -421,9 +423,6 @@ impl TaggedHeap {
                 subr_dropped: self.concurrent_subr_dropped.clone(),
                 vec_claimed: self.concurrent_vec_claimed.clone(),
                 bc_claimed: self.concurrent_bc_claimed.clone(),
-                leaf_claimed: self.concurrent_leaf_claimed().cloned(),
-                hashes,
-                hash_claimed: self.concurrent_hash_claimed().cloned(),
             },
             satb: self.satb_shared.clone(),
             deferred: self.deferred_veclikes.clone(),
@@ -440,9 +439,20 @@ impl TaggedHeap {
             mapped_cons_ranges: self.staged_mapped_cons_scan.take(),
             mapped_veclikes: self.staged_mapped_veclikes.take(),
         };
-        gc_thread()
-            .send(GcRequest::ConcurrentMark(job))
-            .expect("neovm-gc thread is gone");
+        let request = if let Some(leaves) = leaves {
+            GcRequest::ConcurrentMarkEnabled(Box::new(EnabledConcurrentMarkJob {
+                job,
+                claims: EnabledClaims {
+                    leaves,
+                    leaf_claimed: self.concurrent_leaf_claimed().cloned(),
+                    hashes,
+                    hash_claimed: self.concurrent_hash_claimed().cloned(),
+                },
+            }))
+        } else {
+            GcRequest::ConcurrentMark(job)
+        };
+        gc_thread().send(request).expect("neovm-gc thread is gone");
         self.handshake.last_start_jobasm_us = jobasm_t0.elapsed().as_micros() as u64;
         // Pacer: open this cycle's mark window (closed by `incremental_finish`).
         self.pace_mark_start = Some(std::time::Instant::now());
@@ -451,9 +461,9 @@ impl TaggedHeap {
 
     /// The ownership snapshot a concurrent mark starting now hands the GC
     /// thread (`chunk_map::PageSnapshot`). Without the chunk map: the base
-    /// addresses of every cons block and claimable arena page, with the
-    /// marker/bignum/symbol-with-pos classes gated by their frozen policy.
-    /// With the map: each class's start count, O(1).
+    /// addresses of every cons block and string, float, vector and bytecode
+    /// page, each class timed into its handshake slot. With it: the map and
+    /// each class's count, O(1).
     pub(super) fn page_snapshot_for_mark(&mut self) -> PageSnapshot {
         if let Some(map) = self.chunk_map.as_ref() {
             let mut start_count = [0usize; CHUNK_CLASS_COUNT];
@@ -465,12 +475,6 @@ impl TaggedHeap {
                 knobs::VecScanMode::Defer => 0,
             };
             start_count[ChunkClass::ByteCode as usize] = self.bytecode_arena.pages.len();
-            if self.concurrent_claims() {
-                start_count[ChunkClass::Marker as usize] = self.marker_arena.pages.len();
-                start_count[ChunkClass::Bignum as usize] = self.bignum_arena.pages.len();
-                start_count[ChunkClass::SymbolWithPos as usize] =
-                    self.symbol_with_pos_arena.pages.len();
-            }
             self.handshake.last_start_conssnap_us = 0;
             self.handshake.last_start_floatsnap_us = 0;
             self.handshake.last_start_vecbasesnap_us = 0;
@@ -510,29 +514,42 @@ impl TaggedHeap {
         let bcsnap_t0 = std::time::Instant::now();
         let bytecode = bases(&self.bytecode_arena);
         self.handshake.last_start_bcsnap_us = bcsnap_t0.elapsed().as_micros() as u64;
-        let (marker, bignum, symbol_with_pos) = if self.concurrent_claims() {
-            (
-                bases(&self.marker_arena),
-                bases(&self.bignum_arena),
-                bases(&self.symbol_with_pos_arena),
-            )
-        } else {
-            (
-                FxHashSet::default(),
-                FxHashSet::default(),
-                FxHashSet::default(),
-            )
-        };
         PageSnapshot::BaseSets {
             cons,
             string,
             float,
             vector,
             bytecode,
-            marker,
-            bignum,
-            symbol_with_pos,
         }
+    }
+
+    /// Add enabled leaf ownership to a start-captured legacy snapshot.
+    /// Only the stopped-world launcher calls this; live allocator registries
+    /// never cross to the worker.
+    pub(super) fn leaf_page_snapshot_for_mark(
+        &self,
+        pages: &mut PageSnapshot,
+    ) -> chunk_map::LeafPageSnapshot {
+        if let PageSnapshot::ChunkMap { start_count, .. } = pages {
+            start_count[ChunkClass::Marker as usize] = self.marker_arena.pages.len();
+            start_count[ChunkClass::Bignum as usize] = self.bignum_arena.pages.len();
+            start_count[ChunkClass::SymbolWithPos as usize] =
+                self.symbol_with_pos_arena.pages.len();
+            return chunk_map::LeafPageSnapshot::default();
+        }
+        fn bases<T: PagedObject>(arena: &ObjectArena<T>) -> FxHashSet<usize> {
+            let mut set =
+                FxHashSet::with_capacity_and_hasher(arena.pages.len(), Default::default());
+            for page in &arena.pages {
+                set.insert(page.base_addr());
+            }
+            set
+        }
+        chunk_map::LeafPageSnapshot::new(
+            bases(&self.marker_arena),
+            bases(&self.bignum_arena),
+            bases(&self.symbol_with_pos_arena),
+        )
     }
 
     /// Stop the GC thread and fold its residual work back into the gray queue so
