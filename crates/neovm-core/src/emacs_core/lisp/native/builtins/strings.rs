@@ -3350,6 +3350,8 @@ pub(crate) fn builtin_make_string_in_context(
 #[derive(Clone, Copy, Debug)]
 struct StringByteLength(usize);
 
+static_assertions::assert_impl_all!(StringByteLength: Send, Sync);
+
 impl StringByteLength {
     fn new(count: usize, bytes_per_character: usize) -> Result<Self, Flow> {
         count
