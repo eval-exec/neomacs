@@ -26,3 +26,21 @@ fn gde_overlay_cycle_and_property_filtering() {
     let expected = r#"OK ((a b c) ((nil c c c) (a c c c) (b a a a) (c b b b)))"#;
     assert_eq!(actual, expected);
 }
+
+#[test]
+fn gde_overlay_nontransitive_sorted_queries() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::runtime_startup_context();
+    eval.set_lexical_binding(true);
+    let result = eval.eval_str(
+        r#"(with-temp-buffer (insert "abcdefghijkl")
+(let ((a (make-overlay 1 10)) (b (make-overlay 2 8)) (c (make-overlay 3 11)))
+(dolist (item (list (list a 'a '(0 . 2)) (list b 'b '(0 . 0)) (list c 'c '(0 . 1))))
+(overlay-put (car item) 'tag (cadr item)) (overlay-put (car item) 'priority (nth 2 item)))
+(list (mapcar (lambda (o) (overlay-get o 'tag)) (overlays-at 5 t))
+(mapcar (lambda (o) (overlay-get o 'tag)) (overlays-at 5)))))"#,
+    );
+    let actual = crate::emacs_core::format_eval_result_with_eval(&eval, &result);
+    let expected = r#"OK ((c b a) (a b c))"#;
+    assert_eq!(actual, expected);
+}

@@ -17,3 +17,7 @@ mod category_priority_alias_and_direct_nil;
 #[cfg(test)]
 #[path = "gd_e_overlay_seams/multibyte_unibyte_raw_byte_positions.rs"]
 mod multibyte_unibyte_raw_byte_positions;
+
+#[cfg(test)]
+#[path = "gd_e_overlay_seams/nontransitive_sorted_queries.rs"]
+mod nontransitive_sorted_queries;

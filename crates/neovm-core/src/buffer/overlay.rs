@@ -1548,9 +1548,8 @@ impl OverlayList {
             .iter()
             .map(|overlay| (*overlay, overlay_precedence(*overlay, priority_of)))
             .collect();
-        keyed.sort_by(|(left, left_key), (right, right_key)| {
-            compare_overlay_precedence_keys(*right, *right_key, *left, *left_key)
-        });
+        gnu_sort_overlay_keys_ascending(&mut keyed);
+        keyed.reverse();
         for (slot, (overlay, _)) in overlay_ids.iter_mut().zip(keyed) {
             *slot = overlay;
         }
@@ -1879,11 +1878,41 @@ fn sort_overlays_by_precedence_ascending(overlays: &mut [Value]) {
             )
         })
         .collect();
-    keyed.sort_by(|(left, left_key), (right, right_key)| {
-        compare_overlay_precedence_keys(*left, *left_key, *right, *right_key)
-    });
+    gnu_sort_overlay_keys_ascending(&mut keyed);
     for (slot, (overlay, _)) in overlays.iter_mut().zip(keyed) {
         *slot = overlay;
+    }
+}
+
+/// GNU buffer.c:3347 calls the host's qsort in ascending order, then
+/// Foverlays_at reverses its result (buffer.c:3917). The comparator is not a
+/// total order: using Rust's sort or reversing the comparator changes cyclic
+/// cases and can panic. Keys are call-local immutable scalar snapshots taken
+/// before sorting, with no Lisp callbacks or state shared between mutators.
+fn gnu_sort_overlay_keys_ascending(keyed: &mut [(Value, Option<OverlayPrecedence>)]) {
+    unsafe extern "C" fn compare(
+        left: *const libc::c_void,
+        right: *const libc::c_void,
+    ) -> libc::c_int {
+        // SAFETY: qsort passes aligned pointers to initialized elements of
+        // the slice below; it only relocates Copy records within that slice.
+        let (left, left_key) = unsafe { *left.cast::<(Value, Option<OverlayPrecedence>)>() };
+        let (right, right_key) = unsafe { *right.cast::<(Value, Option<OverlayPrecedence>)>() };
+        match compare_overlay_precedence_keys(left, left_key, right, right_key) {
+            Ordering::Less => -1,
+            Ordering::Equal => 0,
+            Ordering::Greater => 1,
+        }
+    }
+    // SAFETY: the slice contains initialized Copy values, its allocation is
+    // writable for len * size bytes, and the callback cannot run Lisp/panic.
+    unsafe {
+        libc::qsort(
+            keyed.as_mut_ptr().cast(),
+            keyed.len(),
+            std::mem::size_of::<(Value, Option<OverlayPrecedence>)>(),
+            Some(compare),
+        );
     }
 }
 
