@@ -48,6 +48,11 @@ pub(crate) use posn_object_extent::force_posn_object_extent_for_test;
 pub use posn_object_extent::{PosnObjectExtentMode, posn_object_extent_mode, retained_posn_extent};
 mod scroll_bar;
 mod sibling_layout;
+mod size;
+pub(crate) use size::{
+    HorizontalScroll, SplitSizeError, SplitSizes, WindowPixelOperation, WindowPixelStage,
+    WindowPixels, WindowTotal,
+};
 pub mod split;
 mod string_property_input;
 pub mod window_markers;
