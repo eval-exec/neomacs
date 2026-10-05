@@ -9,6 +9,8 @@
 //! `Face` value type, merge core, `FaceTable` derived cache) lives in
 //! `crate::face`; font.c matching stays in `super::font`.
 
+pub(crate) mod height;
+
 use crate::emacs_core::error::EvalResult;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
 use crate::emacs_core::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
