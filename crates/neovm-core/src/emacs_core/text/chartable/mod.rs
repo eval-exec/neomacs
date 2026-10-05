@@ -711,9 +711,8 @@ pub(crate) fn builtin_make_char_table(eval: &mut Context, args: Vec<Value>) -> E
     } else {
         0
     };
-    Ok(make_char_table_with_extra_slots(
-        sub_type, default, n_extras,
-    ))
+    let n_extras = crate::emacs_core::alloc::CharTableExtras::try_from(Value::fixnum(n_extras))?;
+    Value::try_char_table(sub_type, default, n_extras)
 }
 
 pub(crate) fn fill_char_table_from_fillarray(table: &Value, item: Value) -> Result<(), Flow> {

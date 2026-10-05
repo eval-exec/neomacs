@@ -123,25 +123,55 @@ impl TryFrom<Value> for CharTableExtras {
         Ok(Self(extras.max(0) as usize))
     }
 }
-impl TryFrom<Value> for HashTableSize {
+/// A Lisp hash-table size hint whose shape is valid for GNU FIXNATP.
+///
+/// This proves nil/default or a nonnegative fixnum, without reserving storage
+/// or testing backing-slot representability. Keeping those phases separate
+/// preserves GNU's weakness-error precedence before allocation errors.
+/// This immutable scalar contains no Lisp handles and is Send + Sync.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct HashTableHint(u64);
+
+static_assertions::assert_impl_all!(HashTableHint: Send, Sync);
+
+impl TryFrom<Value> for HashTableHint {
     type Error = Flow;
 
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         let size = if value.is_nil() {
+            // Preserve the current constructor default. GNU DEFAULT_HASH_SIZE
+            // parity is a separate issue, unrelated to error ordering.
             0
         } else if let Some(n) = value.as_fixnum().filter(|n| *n >= 0) {
-            n as usize
+            n.unsigned_abs()
         } else {
             return Err(signal(
                 LispCondition::Error,
                 vec![Value::string("Invalid hash table size"), value],
             ));
         };
+        Ok(Self(size))
+    }
+}
+
+impl TryFrom<HashTableHint> for HashTableSize {
+    type Error = Flow;
+
+    fn try_from(hint: HashTableHint) -> Result<Self, Self::Error> {
+        let size = usize::try_from(hint.0).map_err(|_| memory_exhausted())?;
         // GNU allocates two Lisp_Object slots per entry before its index.
         if size > isize::MAX as usize / (2 * size_of::<Value>()) {
             return Err(memory_exhausted());
         }
         Ok(Self(size))
+    }
+}
+
+impl TryFrom<Value> for HashTableSize {
+    type Error = Flow;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        Self::try_from(HashTableHint::try_from(value)?)
     }
 }
 
@@ -187,8 +217,9 @@ impl StringByteLen {
         Ok(Self(len))
     }
 
-    pub(crate) fn capacity(self) -> usize {
-        self.0
+    /// Empty text storage for this length, reserved fallibly.
+    pub(crate) fn reserved_text(self) -> Result<String, Flow> {
+        reserved_lisp_text(self.0)
     }
 }
 
@@ -210,9 +241,32 @@ impl BufferByteLen {
         Ok(Self(len))
     }
 
-    pub(crate) fn capacity(self) -> usize {
-        self.0
+    /// Empty byte storage for this length, reserved fallibly.
+    pub(crate) fn reserved_bytes(self) -> Result<Vec<u8>, Flow> {
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(lisp_text_payload_capacity(self.0))
+            .map_err(|_| memory_exhausted())?;
+        Ok(bytes)
     }
+
+    /// Empty text storage for this length, reserved fallibly.
+    pub(crate) fn reserved_text(self) -> Result<String, Flow> {
+        reserved_lisp_text(self.0)
+    }
+}
+
+/// One byte of room for the NUL every owned Lisp string payload appends, so
+/// turning the reserved text into a string never reallocates it.
+fn lisp_text_payload_capacity(len: usize) -> usize {
+    len + 1
+}
+
+fn reserved_lisp_text(len: usize) -> Result<String, Flow> {
+    let mut text = String::new();
+    text.try_reserve_exact(lisp_text_payload_capacity(len))
+        .map_err(|_| memory_exhausted())?;
+    Ok(text)
 }
 
 pub(crate) fn buffer_overflow() -> Flow {

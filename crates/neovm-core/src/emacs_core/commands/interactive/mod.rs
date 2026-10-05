@@ -3257,8 +3257,17 @@ pub(crate) fn builtin_self_insert_command(eval: &mut Context, args: Vec<Value>) 
         return Ok(Value::NIL);
     }
 
-    let repeat_count = repeats as usize;
-    let mut text = String::with_capacity(repeat_count * ch.len_utf8() + spaces_to_insert);
+    let count = crate::emacs_core::alloc::RepeatCount::try_from(repeats).map_err(
+        |crate::emacs_core::alloc::RepeatCountError::OutOfRange| {
+            crate::emacs_core::alloc::memory_exhausted()
+        },
+    )?;
+    let repeat_count = usize::from(count);
+    // GNU internal_self_insert constructs the repeated string before insertion.
+    // A string allocation failure uses memory-signal-data, not buffer_overflow.
+    let length =
+        crate::emacs_core::alloc::StringByteLen::repeated(ch.len_utf8(), count, spaces_to_insert)?;
+    let mut text = length.reserved_text()?;
     for _ in 0..repeat_count {
         text.push(ch);
     }

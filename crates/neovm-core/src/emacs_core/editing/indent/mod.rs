@@ -2541,7 +2541,11 @@ pub(crate) fn indent_to(
 
     let fromcol = column_for_lisp_string(&line_prefix, tab_width);
 
-    let mincol = column.max(fromcol + minimum);
+    let mincol = column.max(
+        fromcol
+            .checked_add(minimum)
+            .ok_or_else(crate::emacs_core::alloc::buffer_overflow)?,
+    );
     if fromcol >= mincol {
         return Ok(Value::fixnum(mincol as i64));
     }
@@ -2555,25 +2559,38 @@ pub(crate) fn indent_to(
 
     let use_tabs = indent_tabs_mode_in_state(&ctx.obarray, &[], Some(buf));
 
-    let mut indent = String::new();
-    let mut col = fromcol;
-
-    if use_tabs {
-        let tab = tab_width.max(1);
-        while col < mincol {
-            let next_tab = col + (tab - (col % tab));
-            if next_tab <= mincol {
-                indent.push('\t');
-                col = next_tab;
-            } else {
-                break;
-            }
-        }
+    // Compute the run lengths before allocating or entering a repeat loop.
+    let tab = tab_width.max(1);
+    let tabs = if use_tabs {
+        mincol / tab - fromcol / tab
+    } else {
+        0
+    };
+    let after_tabs = if tabs > 0 {
+        (mincol / tab) * tab
+    } else {
+        fromcol
+    };
+    let spaces = mincol - after_tabs;
+    let count = tabs
+        .checked_add(spaces)
+        .and_then(|count| i64::try_from(count).ok())
+        .ok_or_else(crate::emacs_core::alloc::buffer_overflow)?;
+    let length = crate::emacs_core::alloc::BufferByteLen::repeated(
+        1,
+        crate::emacs_core::alloc::RepeatCount::try_from(count).map_err(
+            |crate::emacs_core::alloc::RepeatCountError::OutOfRange| {
+                crate::emacs_core::alloc::buffer_overflow()
+            },
+        )?,
+        buf.total_emacs_byte_len().get(),
+    )?;
+    let mut indent = length.reserved_text()?;
+    for _ in 0..tabs {
+        indent.push('\t');
     }
-
-    while col < mincol {
+    for _ in 0..spaces {
         indent.push(' ');
-        col += 1;
     }
 
     insert_inheriting_indentation(ctx, indent)?;

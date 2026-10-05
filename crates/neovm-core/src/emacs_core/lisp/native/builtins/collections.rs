@@ -509,16 +509,7 @@ pub(crate) fn builtin_make_hash_table_slice(args: &[Value]) -> EvalResult {
         }
     };
 
-    let size = match size_arg.kind() {
-        ValueKind::Nil => 0,
-        ValueKind::Fixnum(n) if n >= 0 => n,
-        _ => {
-            return Err(signal(
-                "error",
-                vec![Value::string("Invalid hash table size"), size_arg],
-            ));
-        }
-    };
+    let size_hint = crate::emacs_core::alloc::HashTableHint::try_from(size_arg)?;
 
     let weakness = match weakness_arg.kind() {
         ValueKind::Nil => None,
@@ -542,7 +533,8 @@ pub(crate) fn builtin_make_hash_table_slice(args: &[Value]) -> EvalResult {
         }
     };
 
-    let table = Value::hash_table_with_options(test, size, weakness, 1.5, 0.8125);
+    let size = crate::emacs_core::alloc::HashTableSize::try_from(size_hint)?;
+    let table = Value::try_hash_table_with_options(test, size, weakness)?;
     if table.is_hash_table() {
         let _ = table.with_hash_table_mut(|ht| {
             ht.test_name = test_name;

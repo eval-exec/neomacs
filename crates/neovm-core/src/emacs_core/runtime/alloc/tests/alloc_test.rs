@@ -2,6 +2,9 @@ use super::*;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::value::list_to_vec;
 
+#[cfg(test)]
+mod boundary_numbers;
+
 #[test]
 fn register_bootstrap_vars_matches_gnu_alloc_defaults() {
     crate::test_utils::init_test_tracing();

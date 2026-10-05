@@ -6172,7 +6172,7 @@ fn pure_dispatch_obarray_make_returns_gnu_obarray_and_clear_keeps_vector_compat(
         panic!("obarray-make should return obarray");
     };
     let created_data = crate::emacs_core::builtins::symbols::obarray_buckets(made).unwrap();
-    assert_eq!(created_data.len(), 3);
+    assert_eq!(created_data.len(), 4);
     assert!(created_data.iter().all(|v| v.is_nil()));
 
     let default = dispatch_builtin_pure("obarray-make", vec![])
@@ -6183,7 +6183,7 @@ fn pure_dispatch_obarray_make_returns_gnu_obarray_and_clear_keeps_vector_compat(
     };
     assert_eq!(
         crate::emacs_core::builtins::symbols::obarray_len(default).unwrap(),
-        1511
+        8
     );
 
     let table = Value::vector(vec![Value::NIL, Value::list(vec![Value::symbol("x")])]);

@@ -3993,7 +3993,20 @@ pub(crate) fn builtin_insert_char(eval: &mut super::eval::Context, args: Vec<Val
             vec![Value::symbol("characterp"), args[0]],
         ));
     };
-    let mut bytes = Vec::with_capacity(unit.len() * count as usize);
+    let existing = eval
+        .buffers
+        .current_buffer()
+        .map_or(0, |buffer| buffer.total_emacs_byte_len().get());
+    let length = crate::emacs_core::alloc::BufferByteLen::repeated(
+        unit.len(),
+        crate::emacs_core::alloc::RepeatCount::try_from(count).map_err(
+            |crate::emacs_core::alloc::RepeatCountError::OutOfRange| {
+                crate::emacs_core::alloc::buffer_overflow()
+            },
+        )?,
+        existing,
+    )?;
+    let mut bytes = length.reserved_bytes()?;
     for _ in 0..count {
         bytes.extend_from_slice(&unit);
     }
@@ -4087,7 +4100,20 @@ pub(crate) fn builtin_insert_byte(eval: &mut super::eval::Context, args: Vec<Val
         multibyte,
     )
     .expect("insert-byte must produce a valid buffer encoding");
-    let mut bytes = Vec::with_capacity(unit.len() * count as usize);
+    let existing = eval
+        .buffers
+        .current_buffer()
+        .map_or(0, |buffer| buffer.total_emacs_byte_len().get());
+    let length = crate::emacs_core::alloc::BufferByteLen::repeated(
+        unit.len(),
+        crate::emacs_core::alloc::RepeatCount::try_from(count).map_err(
+            |crate::emacs_core::alloc::RepeatCountError::OutOfRange| {
+                crate::emacs_core::alloc::buffer_overflow()
+            },
+        )?,
+        existing,
+    )?;
+    let mut bytes = length.reserved_bytes()?;
     for _ in 0..count {
         bytes.extend_from_slice(&unit);
     }

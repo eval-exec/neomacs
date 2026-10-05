@@ -34,12 +34,11 @@ fn validated_allocation_counts_reject_before_reservation() {
             .capacity(),
         0
     );
-    assert_eq!(
-        BufferByteLen::repeated(5, RepeatCount::try_from(50).unwrap(), 1)
-            .unwrap()
-            .capacity(),
-        250
-    );
+    let reserved = BufferByteLen::repeated(5, RepeatCount::try_from(50).unwrap(), 1)
+        .unwrap()
+        .reserved_bytes()
+        .unwrap();
+    assert!(reserved.is_empty() && reserved.capacity() > 250);
     assert!(
         BufferByteLen::repeated(
             1,

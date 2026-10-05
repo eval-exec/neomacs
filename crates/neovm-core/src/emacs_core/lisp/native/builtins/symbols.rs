@@ -1900,12 +1900,10 @@ pub(crate) fn intern_soft_impl(eval: &super::eval::Context, args: &[Value]) -> E
 
 pub(crate) fn builtin_obarray_make(args: Vec<Value>) -> EvalResult {
     expect_args_range("obarray-make", &args, 0, 1)?;
-    let size = if args.is_empty() || args[0].is_nil() {
-        1511usize
-    } else {
-        expect_wholenump(&args[0])? as usize
-    };
-    Ok(Value::obarray(size))
+    let size = crate::emacs_core::alloc::ObarrayBits::try_from(
+        args.first().copied().unwrap_or(Value::NIL),
+    )?;
+    Value::try_obarray(size)
 }
 
 fn is_legacy_obarray_vector(value: Value) -> bool {
@@ -2319,12 +2317,11 @@ pub(crate) fn builtin_mapbacktrace(args: Vec<Value>) -> EvalResult {
 
 pub(crate) fn builtin_make_record(args: Vec<Value>) -> EvalResult {
     expect_args("make-record", &args, 3)?;
-    let length = expect_wholenump(&args[1])? as usize;
-    let mut items = Vec::with_capacity(length + 1);
-    items.push(args[0]); // type tag
-    for _ in 0..length {
-        items.push(args[2]); // init value
-    }
+    use crate::emacs_core::alloc::{AllocLen, RecordLen, reserved_values};
+    let length = RecordLen::try_from(args[1])?;
+    let mut items = reserved_values(length)?;
+    items.resize(length.capacity(), args[2]);
+    items[0] = args[0];
     Ok(Value::make_record(items))
 }
 

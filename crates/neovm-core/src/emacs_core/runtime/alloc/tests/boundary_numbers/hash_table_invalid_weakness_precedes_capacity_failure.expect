@@ -1,0 +1,1 @@
+(error "Invalid hash table weakness" tsb-invalid-weakness)
