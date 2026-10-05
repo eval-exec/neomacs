@@ -21,7 +21,7 @@ fn gdl_nonfinite_radix() {
     crate::common::assert_oracle_parity_expect(
         form,
         expect_test::expect![[
-            r#""OK (((overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error)) (overflow-error) \"c9f2c9cd04675000000000000\")""#
+            r#""OK ((((overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error)) (overflow-error) \"c9f2c9cd04675000000000000\") (((overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error)) (overflow-error) (overflow-error) \"c9f2c9cd04675000000000000\" \"c9f2c9cd04675000000000000\"))""#
         ]],
     );
 }
@@ -40,7 +40,7 @@ fn gdl_width_bound() {
     crate::common::assert_oracle_parity_expect(
         form,
         expect_test::expect![[
-            r#""OK ((error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\"))""#
+            r#""OK (((error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\")) ((error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\") (error \"Maximum string size exceeded\")))""#
         ]],
     );
 }
@@ -60,7 +60,7 @@ fn gdl_saturating_counts() {
     crate::common::assert_oracle_parity_expect(
         form,
         expect_test::expect![[
-            r#""OK ((error \"Not enough arguments for format string\") (error \"Not enough arguments for format string\") (error \"Not enough arguments for format string\") \"a\" \"a\")""#
+            r#""OK (((error \"Not enough arguments for format string\") (error \"Not enough arguments for format string\") (error \"Not enough arguments for format string\") \"a\" \"a\") ((error \"Not enough arguments for format string\") (error \"Not enough arguments for format string\") \"a\" \"a\"))""#
         ]],
     );
 }
@@ -81,7 +81,7 @@ fn gdl_bignum_precision() {
     crate::common::assert_oracle_parity_expect(
         form,
         expect_test::expect![[
-            r#""OK (\"-00000001180591620717411303424\" \"-1180591620717411303424\" \"-00000000000400000000000000000\" \"-0x00000000000400000000000000000\" \"-00012\" \"000000001180591620717411303424\" \"-00000001180591620717411303424\")""#
+            r#""OK ((\"-00000001180591620717411303424\" \"-1180591620717411303424\" \"-00000000000400000000000000000\" \"-0x00000000000400000000000000000\" \"-00012\" \"000000001180591620717411303424\" \"-00000001180591620717411303424\") (\"-00000001180591620717411303424\" \"-1180591620717411303424\" \"-00000000000400000000000000000\" \"-0x00000000000400000000000000000\" \"-00012\" \"000000001180591620717411303424\" \"-00000001180591620717411303424\"))""#
         ]],
     );
 }
@@ -102,7 +102,7 @@ fn gdl_decimal_float() {
     crate::common::assert_oracle_parity_expect(
         form,
         expect_test::expect![[
-            r#""OK (\"0\" \"0\" \"    0|\" \"+0\" \"0\" \"\" \"+inf\" \" -inf\" \"-nan\" \"0inf\" \"-0nan\" \"-00012\" \"00000000\")""#
+            r#""OK ((\"0\" \"0\" \"    0|\" \"+0\" \"0\" \"\" \"+inf\" \" -inf\" \"-nan\" \"0inf\" \"-0nan\" \"-00012\" \"00000000\") (\"0\" \"0\" \"    0|\" \"+0\" \"+inf\" \" -inf\" \"-nan\" \"0inf\" \"-0nan\" \"00000000\"))""#
         ]],
     );
 }
@@ -124,6 +124,8 @@ fn gdl_zero_string_precision() {
 "#;
     crate::common::assert_oracle_parity_expect(
         form,
-        expect_test::expect![[r#""OK (\"|\" \"|\" \"|\" \"   |\" \"\u{200b}a|\" \"|\" nil)""#]],
+        expect_test::expect![[
+            r#""OK ((\"|\" \"|\" \"|\" \"   |\" \"\u{200b}a|\" \"|\" nil) (\"|\" \"|\" \"|\" \"   |\" \"\u{200b}a|\" #(\"é界\" 0 2 (face italic)) nil))""#
+        ]],
     );
 }

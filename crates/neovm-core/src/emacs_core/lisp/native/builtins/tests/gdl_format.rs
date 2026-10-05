@@ -1,5 +1,4 @@
 //! GNU 31.1 format regressions. Refresh fixtures with UPDATE_EXPECT=1 EMACS=... .
-use super::*;
 
 fn assert_gnu(name: &str, form: &str, frozen: &str) {
     crate::test_utils::init_test_tracing();

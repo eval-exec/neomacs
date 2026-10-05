@@ -4405,3 +4405,7 @@ mod branch_target_tests;
 #[cfg(test)]
 #[path = "compile/tests/function_params.rs"]
 mod function_param_tests;
+
+#[cfg(test)]
+#[path = "tests/gdl_integer_width.rs"]
+mod gdl_integer_width_tests;

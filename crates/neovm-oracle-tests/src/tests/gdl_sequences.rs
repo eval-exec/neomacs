@@ -43,7 +43,9 @@ fn value_lt_exact() {
 "#;
     assert_oracle_parity_expect(
         form,
-        expect_test::expect![[r#""OK (t t nil t nil t nil nil nil t t (9007199254740992.0 0))""#]],
+        expect_test::expect![[
+            r#""OK ((t t nil t nil t nil nil nil t t (\"9007199254740992.0\" \"9007199254740993\")) ((\"9007199254740992.0\" \"9007199254740993\") (\"9007199254740992.0\" \"9007199254740993\") (\"9007199254740992.0\" \"9007199254740993\") (\"9007199254740992.0\" \"9007199254740993\") (\"9007199254740992.0\" \"9007199254740993\") (\"9007199254740992.0\" \"9007199254740993\")))""#
+        ]],
     );
 }
 
@@ -63,7 +65,7 @@ fn constructor_limits() {
     assert_oracle_parity_expect(
         form,
         expect_test::expect![[
-            r#""OK ((error \"allocation exhausted\") (error \"allocation exhausted\") (error \"Maximum string size exceeded\") (error \"allocation exhausted\") [] \"ééé\" 65)""#
+            r#""OK (((error \"allocation exhausted\") (error \"allocation exhausted\") (error \"Maximum string size exceeded\") (error \"allocation exhausted\") [] \"ééé\" 65) ((error \"buffer-local exhausted\") (error \"buffer-local exhausted\") (error \"buffer-local exhausted\")))""#
         ]],
     );
 }

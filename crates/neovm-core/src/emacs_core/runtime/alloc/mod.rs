@@ -312,7 +312,7 @@ pub(crate) enum AllocationFailure {
     #[error("Lisp argument condition")]
     Lisp(crate::emacs_core::error::Flow),
     #[error("memory exhausted")]
-    MemoryExhausted,
+    MemoryExhausted(#[from] std::collections::TryReserveError),
 }
 
 impl From<crate::emacs_core::error::Flow> for AllocationFailure {
@@ -321,17 +321,11 @@ impl From<crate::emacs_core::error::Flow> for AllocationFailure {
     }
 }
 
-impl From<std::collections::TryReserveError> for AllocationFailure {
-    fn from(_: std::collections::TryReserveError) -> Self {
-        Self::MemoryExhausted
-    }
-}
-
 impl AllocationFailure {
     pub(crate) fn into_flow(self) -> crate::emacs_core::error::Flow {
         match self {
             Self::Lisp(flow) => flow,
-            Self::MemoryExhausted => crate::emacs_core::error::memory_exhausted_error(),
+            Self::MemoryExhausted(_) => crate::emacs_core::error::memory_exhausted_error(),
         }
     }
 
@@ -341,8 +335,8 @@ impl AllocationFailure {
     ) -> crate::emacs_core::error::Flow {
         match self {
             Self::Lisp(flow) => flow,
-            Self::MemoryExhausted => context
-                .special_variable_value_by_id(crate::emacs_core::symbol::intern(
+            Self::MemoryExhausted(_) => context
+                .special_variable_value_by_id(crate::emacs_core::intern::intern(
                     "memory-signal-data",
                 ))
                 .and_then(crate::emacs_core::error::signal_from_binding_value)

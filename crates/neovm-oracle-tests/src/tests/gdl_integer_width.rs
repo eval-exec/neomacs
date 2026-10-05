@@ -86,7 +86,7 @@ fn oracle_gdl_integer_width() {
     assert_oracle_parity_expect(
         form,
         expect_test::expect![[
-            r#""OK ((overflow-error) ((overflow-error) (overflow-error) (overflow-error) \"10000000000000000159028911097599180468360808563945281389781327557747838772170381060813469985856815104\" (overflow-error) (overflow-error) 127 t t t t t t (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error)))""#
+            r#""OK (((overflow-error) ((overflow-error) (overflow-error) (overflow-error) \"10000000000000000159028911097599180468360808563945281389781327557747838772170381060813469985856815104\" (overflow-error) (overflow-error) 127 t t t t t t (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error))) ((fresh (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error)) (identities t t t t t t t t t t t t t t t) (compiled (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error) (overflow-error))))""#
         ]],
     );
 }
@@ -95,14 +95,18 @@ fn oracle_gdl_integer_width() {
 fn oracle_gdl_integer_width_compiled_signal_hook_collects() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let form = r#"(let ((hits nil)
+      (part (expt 2 100))
       (fn (byte-compile (lambda (a b) (* a b)))))
+  ;; Establish bignum operand feedback and enter the generic compiled path
+  ;; before narrowing the result limit and collecting from its signal hook.
+  (dotimes (_ 32) (funcall fn part part))
   (let ((integer-width 128)
         (signal-hook-function
          (lambda (symbol data)
            (when (eq symbol 'overflow-error)
              (push symbol hits)
              (garbage-collect)))))
-    (list (condition-case e (funcall fn (expt 2 100) (expt 2 100)) (error e))
+    (list (condition-case e (funcall fn part part) (error e))
           hits)))
 "#;
     assert_oracle_parity_expect(

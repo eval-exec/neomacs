@@ -1,5 +1,4 @@
 //! GNU editfns.c:3840-4170 float-format regressions. Fixtures come from GNU only.
-use super::*;
 
 const CASES: &[(&str, &str, &str)] = &[
     (
