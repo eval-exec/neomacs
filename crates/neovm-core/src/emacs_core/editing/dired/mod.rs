@@ -135,7 +135,21 @@ fn signal_file_io(action: &str, path: &str, err: std::io::Error) -> Flow {
 
 /// Read directory entry names byte-faithfully.  Public directory primitives
 /// decode these host bytes using GNU's DECODE_FILE rules before inspecting
-/// them. Returns the entries as file-name `LispString`s plus "." and "..".
+/// them. Native dot entries retain their positions in the directory stream.
+#[cfg(unix)]
+fn read_directory_names(dir: &LispString) -> Result<Vec<LispString>, Flow> {
+    super::fileio::directory_stream::read_names(&super::fileio::lisp_file_name_to_path_buf(dir))
+        .map_err(|error| {
+            let (action, err) = error.into_parts();
+            signal_file_io(
+                action,
+                &super::emacs_char::to_utf8_lossy(dir.as_bytes()),
+                err,
+            )
+        })
+}
+
+#[cfg(not(unix))]
 fn read_directory_names(dir: &LispString) -> Result<Vec<LispString>, Flow> {
     let path = super::fileio::lisp_file_name_to_path_buf(dir);
     let entries = fs::read_dir(&path).map_err(|e| {

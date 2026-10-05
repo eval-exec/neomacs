@@ -31,6 +31,9 @@ use super::value::{
     OrderedRuntimeBindingMap, Value, ValueKind, VecLikeType, eq_value, list_to_vec,
 };
 
+#[cfg(unix)]
+pub(crate) mod directory_stream;
+
 // ===========================================================================
 // Path operations (pure, no evaluator needed)
 // ===========================================================================
@@ -1462,11 +1465,19 @@ fn write_bytes_to_file_with_mode(
 // Directory operations
 // ===========================================================================
 
-/// Return a list of file names in DIR.
-/// If FULL is true, return absolute paths.
-/// If MATCH_REGEX is Some, only include entries whose names match the regex.
-/// If NOSORT is true, preserve filesystem enumeration order.
-/// COUNT limits the number of accepted entries during enumeration.
+/// Read host names byte-faithfully in native stream order, including dots.
+/// Callers apply GNU's decoding, filtering, COUNT, and list accumulation.
+#[cfg(unix)]
+fn read_directory_names_lisp(
+    dir: &crate::heap_types::LispString,
+) -> Result<Vec<crate::heap_types::LispString>, DirectoryFilesError> {
+    directory_stream::read_names(&lisp_file_name_to_path_buf(dir)).map_err(|error| {
+        let (action, err) = error.into_parts();
+        DirectoryFilesError::Io { action, err }
+    })
+}
+
+#[cfg(not(unix))]
 fn read_directory_names_lisp(
     dir: &crate::heap_types::LispString,
 ) -> Result<Vec<crate::heap_types::LispString>, DirectoryFilesError> {
