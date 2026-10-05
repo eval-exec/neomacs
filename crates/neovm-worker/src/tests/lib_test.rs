@@ -223,7 +223,7 @@ fn elisp_factory_constructs_context_only_on_its_owner() {
                 .lock()
                 .expect("owner records")
                 .push(thread::current().id());
-            Ok(Context::new())
+            Ok(Box::new(Context::new()))
         })),
     );
     assert!(constructed_on.lock().expect("owner records").is_empty());

@@ -28,6 +28,104 @@ fn explicit_marker_finish_reclaims_pages_at_shutdown() {
     assert_eq!(LIVE_FLOAT_PAGES.load(Ordering::Relaxed), before);
 }
 
+unsafe extern "C" fn count_native_finalizer(data: *mut std::ffi::c_void) {
+    // SAFETY: the fixtures register a live AtomicUsize for exactly the
+    // duration of the heap's explicit shutdown or synchronous collection.
+    unsafe { &*data.cast::<AtomicUsize>() }.fetch_add(1, Ordering::Relaxed);
+}
+
+fn allocate_counted_native_objects(heap: &mut TaggedHeap, count: &AtomicUsize) {
+    let data = std::ptr::from_ref(count).cast_mut().cast();
+    heap.alloc_user_ptr(data, Some(count_native_finalizer));
+    let function = heap.alloc_module_function(
+        0,
+        0,
+        std::ptr::null(),
+        data,
+        TaggedValue::NIL,
+        TaggedValue::NIL,
+    );
+    // SAFETY: this test exclusively owns the initialized module function and
+    // its data points to count, which outlives all synchronous reclamation.
+    unsafe {
+        (*(function.as_veclike_ptr().unwrap() as *mut ModuleFunctionObj)).finalizer =
+            Some(count_native_finalizer);
+    }
+}
+
+#[test]
+fn idle_heap_drop_skips_foreign_finalizers() {
+    let count = AtomicUsize::new(0);
+    let mut heap = TaggedHeap::new();
+    allocate_counted_native_objects(&mut heap, &count);
+    drop(heap);
+    assert_eq!(count.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn explicit_shutdown_runs_foreign_finalizers_once() {
+    let count = AtomicUsize::new(0);
+    let mut heap = TaggedHeap::new();
+    allocate_counted_native_objects(&mut heap, &count);
+    heap.shutdown().unwrap();
+    assert_eq!(count.load(Ordering::Relaxed), 2);
+}
+
+#[test]
+fn ordinary_sweep_runs_foreign_finalizers_once() {
+    let count = AtomicUsize::new(0);
+    let mut heap = TaggedHeap::new();
+    allocate_counted_native_objects(&mut heap, &count);
+    heap.collect_exact(std::iter::empty());
+    assert_eq!(count.load(Ordering::Relaxed), 2);
+    heap.shutdown().unwrap();
+    assert_eq!(count.load(Ordering::Relaxed), 2);
+}
+
+#[test]
+fn failed_shutdown_skips_foreign_finalizers() {
+    let count = AtomicUsize::new(0);
+    let mut heap = TaggedHeap::new();
+    allocate_counted_native_objects(&mut heap, &count);
+    let completion = stalled_mark(&mut heap);
+    drop(completion);
+    assert!(matches!(
+        heap.shutdown(),
+        Err(MarkFinishError::Disconnected(_))
+    ));
+    assert_eq!(count.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn explicit_shutdown_reclaims_all_intrusive_owner_lists_once() {
+    let count = AtomicUsize::new(0);
+    let mut heap = TaggedHeap::new();
+    let data = std::ptr::from_ref(&count).cast_mut().cast();
+    for _ in 0..5 {
+        heap.alloc_user_ptr(data, Some(count_native_finalizer));
+    }
+    let mut heads = [std::ptr::null_mut(); 5];
+    let mut current = heap.all_objects;
+    for head in &mut heads {
+        *head = current;
+        // SAFETY: these are five disjoint initialized residual Boxes owned by
+        // the heap. The fixture transfers each to a different ownership list
+        // without reclaiming it or introducing a callback or marker.
+        unsafe {
+            current = (*current).gc_link();
+            (**head).set_gc_link_world_stopped(std::ptr::null_mut());
+        }
+    }
+    assert!(current.is_null());
+    heap.all_objects = heads[0];
+    heap.tenured_objects = heads[1];
+    heap.sweep_noncons_pending = heads[2];
+    heap.generational.old_objects = heads[3];
+    heap.generational.old_sweep_pending = heads[4];
+    heap.shutdown().unwrap();
+    assert_eq!(count.load(Ordering::Relaxed), 5);
+}
+
 #[test]
 fn heap_drop_retains_stalled_marker_storage_without_waiting() {
     let before = LIVE_FLOAT_PAGES.load(Ordering::Relaxed);

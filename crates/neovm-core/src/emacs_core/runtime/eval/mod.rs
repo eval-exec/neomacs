@@ -4330,6 +4330,22 @@ impl Drop for Context {
 }
 
 impl Context {
+    /// Finish the marker and reclaim native resources on this Context's owner
+    /// thread before consuming its stationary allocation.
+    ///
+    /// Module finalizers and SQLite teardown may block or fail. Automatic Drop
+    /// skips those operations; callers use this explicit lifecycle boundary.
+    ///
+    /// # Errors
+    /// Returns an error if marker completion cannot be established. Drop then
+    /// retains marker-readable storage and skips native callbacks.
+    pub fn shutdown(mut self: Box<Self>) -> Result<(), crate::tagged::gc::MarkFinishError> {
+        // SAFETY: this consumes the boxed Context without moving its contents.
+        // The heap remains at its owner-thread address through reclamation,
+        // and this method neither reads Values nor executes Lisp afterward.
+        unsafe { self.tagged_heap.shutdown_owned_resources() }
+    }
+
     /// Stop and finish this owner's concurrent marker before orderly teardown.
     ///
     /// This may wait for the marker. Drop instead retains reader-visible
@@ -7752,6 +7768,10 @@ use form_head_cache::{FormHead, HeadClass};
 #[cfg(test)]
 #[path = "tests/eval_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/gc_context_shutdown.rs"]
+mod gc_context_shutdown_tests;
 
 // task3-jitcrash-diag: diagnostic repros for the pre-existing JIT
 // heap-corruption crash (no fix here).

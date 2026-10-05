@@ -2496,37 +2496,10 @@ impl Drop for TaggedHeap {
         // which is also why the frees below run with no heap installed either
         // way.
         crate::tagged::gc::clear_tagged_heap_if_installed(self);
-        // Free all non-cons objects via every intrusive list: young, tenured,
-        // and any objects detached for an in-flight deferred sweep.
-        for mut current in [
-            self.all_objects,
-            self.tenured_objects,
-            self.sweep_noncons_pending,
-        ] {
-            while !current.is_null() {
-                // SAFETY: no concurrent mark is active; each intrusive list
-                // contains exclusively owned live allocations exactly once.
-                unsafe {
-                    let next = (*current).next;
-                    self.free_gc_object(current);
-                    current = next;
-                }
-            }
-        }
-        for mut old in [
-            self.generational.old_objects,
-            self.generational.old_sweep_pending,
-        ] {
-            while !old.is_null() {
-                // SAFETY: these old-generation lists own live allocations,
-                // and explicit finish established no remaining marker reads.
-                unsafe {
-                    let next = (*old).gc_link();
-                    self.free_gc_object(old);
-                    old = next;
-                }
-            }
-        }
+        // Automatic destruction cannot invoke module finalizers or SQLite
+        // teardown. Explicit shutdown reclaims those resources beforehand;
+        // the fallback retains native payloads and frees inert Rust storage.
+        self.reclaim_intrusive_objects(ReclamationMode::DropFallback);
         // ConsBlocks are dropped automatically (they implement Drop).
         // Object arena pages likewise: page floats/strings/vectors/bytecode/
         // lambdas/macros/records/symbols-with-pos are on NONE of the lists
@@ -2674,6 +2647,8 @@ pub(crate) mod scan_contract;
 mod shutdown_tests;
 
 mod incremental;
+mod reclamation;
+use reclamation::ReclamationMode;
 
 mod cons_block_trailer;
 use cons_block_trailer::*;

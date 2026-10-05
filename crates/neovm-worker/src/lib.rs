@@ -18,7 +18,7 @@ pub const CORE_BACKEND: &str = neovm_core::CORE_BACKEND;
 
 type ExecuteFn =
     dyn Fn(&LispValue, &TaskOptions, &TaskContext) -> Result<LispValue, TaskError> + Send + Sync;
-type ElispFactoryFn = dyn Fn() -> Result<Context, WorkerStartError> + Send + Sync;
+type ElispFactoryFn = dyn Fn() -> Result<Box<Context>, WorkerStartError> + Send + Sync;
 
 /// Only factories and host executors travel to workers. An Elisp factory
 /// returns its owner-local Context after being invoked on that worker.
@@ -75,7 +75,7 @@ impl LocalExecutor {
         match executor {
             Executor::Shared(executor) => Ok(Self::Shared(executor)),
             Executor::Elisp(factory) => {
-                let mut evaluator = Box::new(factory()?);
+                let mut evaluator = factory()?;
                 evaluator.setup_thread_locals();
                 Ok(Self::Elisp(evaluator))
             }
@@ -94,10 +94,10 @@ impl LocalExecutor {
         }
     }
 
-    fn finish(&mut self) -> Result<(), neovm_core::tagged::gc::MarkFinishError> {
+    fn finish(self) -> Result<(), neovm_core::tagged::gc::MarkFinishError> {
         match self {
             Self::Shared(_) => Ok(()),
-            Self::Elisp(evaluator) => evaluator.finish_concurrent_mark(),
+            Self::Elisp(evaluator) => evaluator.shutdown(),
         }
     }
 }
@@ -842,7 +842,7 @@ impl WorkerRuntime {
                     }
                 };
                 if ready.send(Ok(())).is_err() {
-                    executor.finish().expect("worker marker finish");
+                    executor.finish().expect("worker shutdown");
                     return;
                 }
                 loop {
@@ -927,7 +927,7 @@ impl WorkerRuntime {
                 // This explicit lifecycle boundary may wait and reports any
                 // marker failure through the worker's JoinHandle. Drop stays
                 // non-blocking and cannot be the first completion boundary.
-                executor.finish().expect("worker marker finish");
+                executor.finish().expect("worker shutdown");
             });
             let worker = match worker {
                 Ok(worker) => worker,
@@ -1172,15 +1172,17 @@ impl WorkerRuntime {
     }
 }
 
-fn create_elisp_context() -> Result<Context, WorkerStartError> {
-    let mut evaluator = create_bootstrap_evaluator_cached()
-        .map_err(|err| WorkerStartError::Initialization(format!("bootstrap evaluator: {err:?}")))?;
+fn create_elisp_context() -> Result<Box<Context>, WorkerStartError> {
+    let mut evaluator = Box::new(create_bootstrap_evaluator_cached().map_err(|err| {
+        WorkerStartError::Initialization(format!("bootstrap evaluator: {err:?}"))
+    })?);
+    evaluator.setup_thread_locals();
     if let Err(err) = apply_runtime_startup_state(&mut evaluator) {
         // Render while this owner-local evaluator and its error roots are live.
         let failure = format!("runtime startup state: {:?}", eval_error_to_task_error(err));
-        let failure = match evaluator.finish_concurrent_mark() {
+        let failure = match evaluator.shutdown() {
             Ok(()) => failure,
-            Err(err) => format!("{failure}; marker finish: {err}"),
+            Err(err) => format!("{failure}; worker shutdown: {err}"),
         };
         return Err(WorkerStartError::Initialization(failure));
     }

@@ -37,6 +37,13 @@ mod enabled {
 
     static NEXT_HANDLE: AtomicI64 = AtomicI64::new(1);
 
+    // The ownership fixtures belong to the implementation namespace so the
+    // registry and native-resource types keep their production visibility.
+    #[cfg(test)]
+    mod shutdown_tests {
+        include!("tests/shutdown.rs");
+    }
+
     thread_local! {
         /// Open database connections: handle_id -> shared Connection.  Result sets
         /// retain the connection so finalizing their raw statement can never race

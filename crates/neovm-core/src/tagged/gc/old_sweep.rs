@@ -23,8 +23,10 @@ impl TaggedHeap {
             if ptr.is_null() {
                 break;
             }
-            // No object is freed during marking. The slice owns the heap;
-            // no mutator executes or appends a barrier while it runs.
+            // SAFETY: no object is freed during marking. The stopped slice
+            // exclusively owns this initialized old list; detaching a dead
+            // header precedes explicit resource teardown, and no mutator
+            // executes or appends a barrier while the list is traversed.
             unsafe {
                 let header = &*ptr;
                 debug_assert!(header.tenured && !header.generation.permanent());
@@ -34,7 +36,7 @@ impl TaggedHeap {
                 } else {
                     self.non_cons_object_addrs.remove(&(ptr as usize));
                     self.unregister_vector_object(ptr);
-                    self.free_gc_object(ptr);
+                    self.free_gc_object(ptr, ReclamationMode::Explicit);
                     freed += 1;
                 }
             }

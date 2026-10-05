@@ -611,10 +611,27 @@ impl TaggedHeap {
         Ok(())
     }
 
-    /// Finish the marker before releasing this heap's ownership.
-    /// On error, Drop abandons the marker-readable allocations.
+    /// Finish the marker and explicitly reclaim native resources before
+    /// releasing this heap's ownership. Module finalizers and SQLite teardown
+    /// may block or fail; automatic Drop never invokes those operations.
+    /// On marker error, Drop abandons the marker-readable allocations.
     pub fn shutdown(mut self) -> Result<(), MarkFinishError> {
-        self.finish_concurrent_mark()
+        // SAFETY: shutdown consumes this heap, and its only remaining access
+        // is automatic destruction after the explicit resource teardown.
+        unsafe { self.shutdown_owned_resources() }
+    }
+
+    /// Explicit preparation for an enclosing stationary owner's destruction.
+    ///
+    /// # Safety
+    /// The enclosing owner is consumed and may perform no further object or
+    /// Lisp Value access, including through legacy TLS aliases. Its only
+    /// remaining operation is automatic destruction after this returns.
+    pub(crate) unsafe fn shutdown_owned_resources(&mut self) -> Result<(), MarkFinishError> {
+        self.finish_concurrent_mark()?;
+        crate::tagged::gc::clear_tagged_heap_if_installed(&self);
+        self.reclaim_intrusive_objects(ReclamationMode::Explicit);
+        Ok(())
     }
 
     /// Request stop without waiting, then retain every allocation the marker
