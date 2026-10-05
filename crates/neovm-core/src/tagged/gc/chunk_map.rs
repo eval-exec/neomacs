@@ -91,8 +91,15 @@ impl ChunkEntry {
     /// The granule's class.
     #[inline(always)]
     pub(crate) fn class(self) -> ChunkClass {
-        // Every stored entry was built from a `ChunkClass`.
-        ChunkClass::try_from((self.0 & Self::CLASS_MASK) as u8).unwrap_or(ChunkClass::None)
+        // INVARIANT: leaves start zeroed (ChunkClass::None), and set only
+        // publishes NONE or entries built by new from a ChunkClass. Whole-word
+        // Release/Acquire stores and loads preserve the code. An invalid code
+        // is an internal map inconsistency and must not look like empty space.
+        let code = (self.0 & Self::CLASS_MASK) as u8;
+        match ChunkClass::try_from(code) {
+            Ok(class) => class,
+            Err(_) => invalid_chunk_class(code),
+        }
     }
 
     /// The block's index in `cons_blocks`, or the page's in its arena.
@@ -100,6 +107,12 @@ impl ChunkEntry {
     pub(crate) fn index(self) -> usize {
         (self.0 >> Self::CLASS_BITS) as usize
     }
+}
+
+#[cold]
+#[inline(never)]
+fn invalid_chunk_class(code: u8) -> ! {
+    panic!("invalid chunk class code {code} in sealed map");
 }
 
 const GRANULE_SHIFT: usize = 16;
@@ -325,3 +338,7 @@ impl PageSnapshot {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/chunk_entry_decode_tests.rs"]
+mod decode_tests;
