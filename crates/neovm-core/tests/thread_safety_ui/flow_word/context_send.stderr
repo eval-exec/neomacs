@@ -1,5 +1,5 @@
 error[E0599]: the associated function or constant `transfer` exists for struct `ThreadTransfer<neovm_core::Context>`, but its trait bounds were not satisfied
-  --> tests/thread_safety_ui/context_send.rs:11:32
+  --> tests/thread_safety_ui/flow_word/context_send.rs:11:32
    |
  4 |   struct ThreadTransfer<T>(PhantomData<T>);
    |   ------------------------ associated function or constant `transfer` not found for this struct
