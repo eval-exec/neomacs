@@ -588,6 +588,56 @@ pub fn init_standard_errors(obarray: &mut Obarray) {
         &["file-error"],
     );
 
+    // --- dynamic module errors (GNU src/emacs-module.c `syms_of_module`) ---
+    register_simple(
+        obarray,
+        "module-out-of-memory",
+        "Module out of memory",
+        &["error"],
+    );
+    register_simple(
+        obarray,
+        "module-load-failed",
+        "Module load failed",
+        &["error"],
+    );
+    register_simple(
+        obarray,
+        "module-open-failed",
+        "Module could not be opened",
+        &["module-load-failed"],
+    );
+    register_simple(
+        obarray,
+        "module-not-gpl-compatible",
+        "Module is not GPL compatible",
+        &["module-load-failed"],
+    );
+    register_simple(
+        obarray,
+        "missing-module-init-function",
+        "Module does not export an initialization function",
+        &["module-load-failed"],
+    );
+    register_simple(
+        obarray,
+        "module-init-failed",
+        "Module initialization failed",
+        &["module-load-failed"],
+    );
+    register_simple(
+        obarray,
+        "invalid-arity",
+        "Invalid function arity",
+        &["error"],
+    );
+    register_simple(
+        obarray,
+        "memory-buffer-too-small",
+        "Memory buffer too small",
+        &["error"],
+    );
+
     // Also register some common signal names that may be used without a
     // full `define-error` (e.g. excessive-lisp-nesting).
     register_simple(
@@ -1284,6 +1334,25 @@ impl ErrorRegistry {
         // remote-file-error is a child of file-error.
         self.parents
             .insert(intern("remote-file-error"), vec![intern("file-error")]);
+
+        // Dynamic module errors (mirrors GNU src/emacs-module.c).
+        for name in &[
+            "module-out-of-memory",
+            "module-load-failed",
+            "invalid-arity",
+            "memory-buffer-too-small",
+        ] {
+            self.parents.insert(intern(name), vec![intern("error")]);
+        }
+        for name in &[
+            "module-open-failed",
+            "module-not-gpl-compatible",
+            "missing-module-init-function",
+            "module-init-failed",
+        ] {
+            self.parents
+                .insert(intern(name), vec![intern("module-load-failed")]);
+        }
     }
 }
 

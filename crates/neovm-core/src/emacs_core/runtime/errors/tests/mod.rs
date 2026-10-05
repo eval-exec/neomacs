@@ -224,6 +224,81 @@ fn registry_remote_file_error_inherits_file_error() {
     assert!(reg.signal_matches_condition("remote-file-error", "error"));
 }
 
+#[test]
+fn registry_module_load_failed_family() {
+    crate::test_utils::init_test_tracing();
+    let reg = ErrorRegistry::new();
+    for cond in [
+        "module-open-failed",
+        "module-not-gpl-compatible",
+        "missing-module-init-function",
+        "module-init-failed",
+    ] {
+        assert!(
+            reg.signal_matches_condition(cond, "module-load-failed"),
+            "{cond} should match module-load-failed"
+        );
+        assert!(reg.signal_matches_condition(cond, "error"));
+    }
+    for cond in [
+        "module-load-failed",
+        "module-out-of-memory",
+        "invalid-arity",
+        "memory-buffer-too-small",
+    ] {
+        assert_eq!(reg.conditions_for(cond), vec![cond, "error"]);
+    }
+}
+
+#[test]
+fn module_error_symbols_match_gnu_emacs_module_c() {
+    crate::test_utils::init_test_tracing();
+    // GNU src/emacs-module.c `syms_of_module'.
+    let results = bootstrap_eval_all(
+        r#"(condition-case err
+               (module-load "/nonexistent/neomacs-missing-module.so")
+             (module-load-failed (car err)))
+           (mapcar (lambda (sym)
+                     (list sym
+                           (get sym 'error-conditions)
+                           (get sym 'error-message)))
+                   '(module-out-of-memory
+                     module-load-failed
+                     module-open-failed
+                     module-not-gpl-compatible
+                     missing-module-init-function
+                     module-init-failed
+                     invalid-arity
+                     memory-buffer-too-small))
+           (error-message-string '(module-open-failed "/x.so" "no such file"))"#,
+    );
+    assert_eq!(
+        results,
+        vec![
+            "OK module-open-failed".to_string(),
+            concat!(
+                "OK (",
+                "(module-out-of-memory (module-out-of-memory error) \"Module out of memory\") ",
+                "(module-load-failed (module-load-failed error) \"Module load failed\") ",
+                "(module-open-failed (module-open-failed module-load-failed error) ",
+                "\"Module could not be opened\") ",
+                "(module-not-gpl-compatible (module-not-gpl-compatible module-load-failed error) ",
+                "\"Module is not GPL compatible\") ",
+                "(missing-module-init-function ",
+                "(missing-module-init-function module-load-failed error) ",
+                "\"Module does not export an initialization function\") ",
+                "(module-init-failed (module-init-failed module-load-failed error) ",
+                "\"Module initialization failed\") ",
+                "(invalid-arity (invalid-arity error) \"Invalid function arity\") ",
+                "(memory-buffer-too-small (memory-buffer-too-small error) ",
+                "\"Memory buffer too small\"))"
+            )
+            .to_string(),
+            "OK \"Module could not be opened: \\\"/x.so\\\", \\\"no such file\\\"\"".to_string(),
+        ]
+    );
+}
+
 // =======================================================================
 // Obarray-based hierarchy tests
 // =======================================================================
