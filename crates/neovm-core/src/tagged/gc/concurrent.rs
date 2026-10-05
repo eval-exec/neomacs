@@ -325,35 +325,6 @@ impl TaggedHeap {
         // Tier-H capture is stopped-world. Exact owned Box membership is its
         // ownership proof; weak, pending and generation-black owners refuse.
         let hashes = if self.concurrent_claims() {
-            if !self.concurrent_hash_lazy_registry()
-                && ((cfg!(test) && cfg!(debug_assertions))
-                    || std::env::var("NEOVM_GC_VERIFY_PARTITION").as_deref() == Ok("1"))
-            {
-                let expected = self
-                    .non_cons_object_addrs
-                    .iter()
-                    .filter(|&&addr| unsafe {
-                        (*(addr as *const GcHeader)).kind == HeapObjectKind::VecLike
-                            && (*(addr as *const VecLikeHeader)).type_tag == VecLikeType::HashTable
-                    })
-                    .count();
-                let registered: usize = self
-                    .concurrent_hash_mutators()
-                    .map(|entry| entry.lock().unwrap().hash_table_addrs.len())
-                    .sum();
-                assert_eq!(
-                    registered, expected,
-                    "hash registries diverged from live Boxes"
-                );
-                let mut seen = FxHashSet::default();
-                for entry in self.concurrent_hash_mutators() {
-                    let mutator = entry.lock().unwrap();
-                    for &addr in &mutator.hash_table_addrs {
-                        assert!(seen.insert(addr), "hash owner registered by two mutators");
-                        assert!(self.non_cons_object_addrs.contains(&addr));
-                    }
-                }
-            }
             let t0 = std::time::Instant::now();
             // The coordinator's existing exact Box inventory includes every
             // mutator's allocations, including ordinary-old major owners.
@@ -362,16 +333,11 @@ impl TaggedHeap {
                 (*(addr as *const GcHeader)).kind == HeapObjectKind::VecLike
                     && (*(addr as *const VecLikeHeader)).type_tag == VecLikeType::HashTable
             };
-            let tables = if self.concurrent_hash_lazy_registry() {
-                self.non_cons_object_addrs
-                    .iter()
-                    .filter(|&&addr| is_hash(addr))
-                    .count()
-            } else {
-                self.concurrent_hash_mutators()
-                    .map(|entry| entry.lock().unwrap().hash_table_addrs.len())
-                    .sum()
-            };
+            let tables = self
+                .non_cons_object_addrs
+                .iter()
+                .filter(|&&addr| is_hash(addr))
+                .count();
             let mut snapshot = concurrent_hash::HashTableScanSnapshot::with_policy(
                 tables,
                 self.concurrent_claims_state()
@@ -382,19 +348,12 @@ impl TaggedHeap {
                 let mutator = entry.lock().unwrap();
                 debug_assert!(mutator.retired_hash_buffers.is_empty());
                 debug_assert!(mutator.written_hash_owners.is_empty());
-                for &addr in &mutator.hash_table_addrs {
-                    // The registry is maintained from link through every Box
-                    // free path. No mutator can write during this handshake.
-                    unsafe { snapshot.capture_owned(addr, self.collection_scope()) };
-                }
             }
-            if self.concurrent_hash_lazy_registry() {
-                for &addr in &self.non_cons_object_addrs {
-                    if is_hash(addr) {
-                        // This is the authoritative live-Box inventory, not
-                        // a possibly borrowed or mapped header address.
-                        unsafe { snapshot.capture_owned(addr, self.collection_scope()) };
-                    }
+            for &addr in &self.non_cons_object_addrs {
+                if is_hash(addr) {
+                    // This is the authoritative live-Box inventory, not
+                    // a possibly borrowed or mapped header address.
+                    unsafe { snapshot.capture_owned(addr, self.collection_scope()) };
                 }
             }
             if std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1") {

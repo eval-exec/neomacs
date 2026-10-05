@@ -34,7 +34,6 @@ fn current_mutator_id() -> NonZeroUsize {
 /// U35 logs belong to a registered mutator, independently of the hot inline
 /// MutatorGcState. All access is protected by this entry's mutex.
 pub(super) struct ConcurrentHashMutatorState {
-    pub(super) hash_table_addrs: FxHashSet<usize>,
     pub(super) retired_hash_buffers: Vec<Vec<Option<crate::emacs_core::value::HashTableEntry>>>,
     pub(super) written_hash_owners: Vec<TaggedValue>,
 }
@@ -42,7 +41,6 @@ pub(super) struct ConcurrentHashMutatorState {
 impl ConcurrentHashMutatorState {
     pub(super) fn new() -> Self {
         Self {
-            hash_table_addrs: FxHashSet::default(),
             retired_hash_buffers: Vec::new(),
             written_hash_owners: Vec::new(),
         }
@@ -55,7 +53,6 @@ pub(super) struct ConcurrentClaimsState {
     pub(super) hash_snapshot: Option<Arc<concurrent_hash::HashTableScanSnapshot>>,
     pub(super) hash_claimed: Arc<AtomicUsize>,
     pub(super) last_hash_claimed: usize,
-    pub(super) lazy_registry: bool,
     pub(super) scan_policy: concurrent_hash::HashTableScanPolicy,
     // Never hold this map lock while locking an entry/table descriptor.
     mutators: Mutex<FxHashMap<NonZeroUsize, Arc<Mutex<ConcurrentHashMutatorState>>>>,
@@ -69,7 +66,6 @@ impl ConcurrentClaimsState {
             hash_snapshot: None,
             hash_claimed: Arc::new(AtomicUsize::new(0)),
             last_hash_claimed: 0,
-            lazy_registry: knobs::concurrent_hash_lazy_registry_enabled(),
             scan_policy: knobs::concurrent_hash_scan_policy(),
             mutators: Mutex::new(FxHashMap::default()),
         }
@@ -84,7 +80,7 @@ impl ConcurrentClaimsState {
             .clone()
     }
 
-    /// Called with all mutators stopped for capture, join, release and free.
+    /// Called with all mutators stopped for capture, join and release.
     /// Thread exit must not discard cycle-retained logs/buffers. Entries stay
     /// heap-owned through its lifetime; a future unregister can prune them
     /// only after stopped-world termination has drained their obligations.
@@ -153,23 +149,6 @@ impl TaggedHeap {
         self.concurrent_claims_state().is_some()
     }
 
-    /// OFF executes only the existing carrier's null-pointer gate. Present
-    /// census-only/lazy carriers refuse before the outlined registration call.
-    #[inline(always)]
-    pub(super) fn concurrent_hash_registration_enabled(&self) -> bool {
-        let Some(cold) = self.census.as_deref() else {
-            return false;
-        };
-        cold.concurrent
-            .as_ref()
-            .is_some_and(|state| !state.lazy_registry)
-    }
-
-    pub(super) fn concurrent_hash_lazy_registry(&self) -> bool {
-        self.concurrent_claims_state()
-            .is_none_or(|state| state.lazy_registry)
-    }
-
     pub(super) fn concurrent_hash_snapshot(
         &self,
     ) -> Option<&Arc<concurrent_hash::HashTableScanSnapshot>> {
@@ -209,13 +188,6 @@ impl TaggedHeap {
     pub(super) fn last_concurrent_hash_claimed(&self) -> usize {
         self.concurrent_claims_state()
             .map_or(0, |state| state.last_hash_claimed)
-    }
-
-    #[cfg(test)]
-    pub(super) fn set_concurrent_hash_lazy_registry_for_test(&mut self, lazy: bool) {
-        self.concurrent_claims_state_mut()
-            .expect("claims enabled")
-            .lazy_registry = lazy;
     }
 }
 
@@ -327,14 +299,18 @@ mod tests {
         assert_eq!(size_of::<Option<Box<ColdGcState>>>(), size_of::<usize>());
         assert_eq!(size_of::<JitHeapState>(), 48);
         let mut off = heap(false, knobs::CensusMode::Off);
-        assert!(!off.concurrent_hash_registration_enabled());
+        assert!(!off.concurrent_claims());
         let census = heap(false, knobs::CensusMode::Survivors);
-        assert!(!census.concurrent_hash_registration_enabled());
+        assert!(!census.concurrent_claims());
         let mut on = heap(true, knobs::CensusMode::Off);
-        on.set_concurrent_hash_lazy_registry_for_test(true);
-        assert!(!on.concurrent_hash_registration_enabled());
-        on.set_concurrent_hash_lazy_registry_for_test(false);
-        assert!(on.concurrent_hash_registration_enabled());
+        let owner = on.alloc_hash_table(crate::emacs_core::value::LispHashTable::new(
+            crate::emacs_core::value::HashTableTest::Eq,
+        ));
+        assert!(
+            on.non_cons_object_addrs
+                .contains(&(owner.as_veclike_ptr().unwrap() as usize))
+        );
+        assert!(on.concurrent_hash_mutators().next().is_none());
         // Installing cold state cannot relocate any already-open region or
         // alter accounting layout; the OFF allocation uses the original path.
         let cons = off.alloc_cons(TaggedValue::fixnum(5), TaggedValue::NIL);
@@ -390,7 +366,6 @@ mod tests {
                     let entry = state.current_mutator();
                     assert!(Arc::ptr_eq(&entry, &state.current_mutator()));
                     let mut log = entry.lock().unwrap();
-                    log.hash_table_addrs.insert(100 + i);
                     log.written_hash_owners.push(TaggedValue::fixnum(i as i64));
                     log.retired_hash_buffers.push(vec![Some(
                         crate::emacs_core::value::HashTableEntry {
@@ -409,20 +384,11 @@ mod tests {
         let mut owners = Vec::new();
         for entry in &entries {
             let mut log = entry.lock().unwrap();
-            assert_eq!(log.hash_table_addrs.len(), 1);
             assert_eq!(log.retired_hash_buffers.len(), 1);
             owners.append(&mut log.written_hash_owners);
-            // World-stopped unregister must inspect every mutator, including
-            // the owner whose allocating thread has already exited.
-            log.hash_table_addrs.remove(&101);
         }
         owners.sort_by_key(|owner| owner.bits());
         assert_eq!(owners, (0..3).map(TaggedValue::fixnum).collect::<Vec<_>>());
-        assert!(
-            entries
-                .iter()
-                .all(|entry| !entry.lock().unwrap().hash_table_addrs.contains(&101))
-        );
         // A vector of copied handles holds no registry lock; the coordinator
         // can enumerate again while those same entry locks are held.
         let locked = entries[0].lock().unwrap();

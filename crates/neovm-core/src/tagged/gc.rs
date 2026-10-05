@@ -2457,60 +2457,6 @@ impl TaggedHeap {
         }
     }
 
-    /// Remove ownership before a Box hash address can be reused. Sweep is
-    /// stopped-world; the current mutator need not be its allocating mutator.
-    /// Lazy capture uses the existing live-Box inventory, so it maintains no
-    /// hash registry and returns before reading the dying object's kind.
-    unsafe fn unregister_hash_table_object(&mut self, header: *mut GcHeader) {
-        // One predictable OFF branch, before any dying-header kind read.
-        if self.concurrent_hash_registration_enabled() {
-            unsafe { self.unregister_hash_table_object_cold(header) };
-        }
-    }
-
-    #[cold]
-    #[inline(never)]
-    unsafe fn unregister_hash_table_object_cold(&mut self, header: *mut GcHeader) {
-        if !self.concurrent_claims() || self.concurrent_hash_lazy_registry() {
-            return;
-        }
-        unsafe {
-            if (*header).kind == HeapObjectKind::VecLike
-                && (*(header as *const VecLikeHeader)).type_tag == VecLikeType::HashTable
-            {
-                let mut removed = false;
-                for entry in self.concurrent_hash_mutators() {
-                    removed |= entry
-                        .lock()
-                        .unwrap()
-                        .hash_table_addrs
-                        .remove(&(header as usize));
-                }
-                debug_assert!(removed, "freed hash table was not in a mutator registry");
-            }
-        }
-    }
-
-    #[cold]
-    #[inline(never)]
-    unsafe fn register_concurrent_hash_table_object(&self, header: *mut VecLikeHeader) {
-        if !self.concurrent_claims() || self.concurrent_hash_lazy_registry() {
-            return;
-        }
-        if unsafe { (*header).type_tag } == VecLikeType::HashTable {
-            let entry = self.current_concurrent_hash_mutator();
-            let registered = entry
-                .lock()
-                .unwrap()
-                .hash_table_addrs
-                .insert(header as usize);
-            debug_assert!(
-                registered,
-                "hash table linked twice into a mutator registry"
-            );
-        }
-    }
-
     /// Link a veclike object into the all_objects list.
     fn link_veclike(&mut self, header: *mut VecLikeHeader) {
         unsafe {
@@ -2531,11 +2477,6 @@ impl TaggedHeap {
             if (*header).type_tag == VecLikeType::Vector {
                 let registered = self.vector_object_addrs.insert(gc_header as usize);
                 debug_assert!(registered, "vector linked twice into the registry");
-            }
-            // Preserve the ordinary Box link body behind one OFF cold-carrier
-            // branch. Census-only/lazy modes refuse in the outlined helper.
-            if self.concurrent_hash_registration_enabled() {
-                self.register_concurrent_hash_table_object(header);
             }
             self.all_objects = gc_header;
             self.note_black_born(gc_header);

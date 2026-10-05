@@ -786,7 +786,7 @@ fn wait_for_hash_worker(heap: &TaggedHeap) {
 }
 
 #[test]
-fn tier_h_lazy_inventory_tracks_current_boxes_and_ordinary_old_owners() {
+fn tier_h_exact_inventory_tracks_current_boxes_and_ordinary_old_owners() {
     for generational in [false, true] {
         // This image-shaped fixture is owned outside the heap and must outlive
         // its mapped registry. It has no ordinary-Box ownership membership.
@@ -795,7 +795,6 @@ fn tier_h_lazy_inventory_tracks_current_boxes_and_ordinary_old_owners() {
             table: worker_hash_table(TaggedValue::fixnum(2000)),
         });
         let mut heap = heap(generational);
-        heap.set_concurrent_hash_lazy_registry_for_test(true);
         let mapped_address = &mut mapped.header as *mut VecLikeHeader as usize;
         // SAFETY: this complete image-shaped Box outlives the heap registry.
         unsafe {
@@ -826,13 +825,7 @@ fn tier_h_lazy_inventory_tracks_current_boxes_and_ordinary_old_owners() {
             Some(TaggedValue::fixnum(1)),
         )]);
         let pending = heap.alloc_hash_table(pending_table);
-        assert!(
-            heap.concurrent_hash_mutators().all(|entry| entry
-                .lock()
-                .unwrap()
-                .hash_table_addrs
-                .is_empty())
-        );
+        assert!(heap.concurrent_hash_mutators().next().is_none());
         let roots = [strong, non_hash, weak, pending];
         heap.concurrent_begin();
         for &root in &roots {
@@ -899,13 +892,7 @@ fn tier_h_lazy_inventory_tracks_current_boxes_and_ordinary_old_owners() {
         wait_for_hash_worker(&heap);
         assert!(heap.is_value_marked(strong));
         finish_cycle(&mut heap, &roots);
-        assert!(
-            heap.concurrent_hash_mutators().all(|entry| entry
-                .lock()
-                .unwrap()
-                .hash_table_addrs
-                .is_empty())
-        );
+        assert!(heap.concurrent_hash_mutators().next().is_none());
         ordinary_cycle(&mut heap, &[]);
         assert!(!heap.owns_heap_value_for_test(strong));
         assert!(!heap.owns_heap_value_for_test(child));
@@ -917,29 +904,22 @@ fn tier_h_lazy_inventory_tracks_current_boxes_and_ordinary_old_owners() {
 }
 
 #[test]
-fn tier_h_lazy_inventory_includes_boxes_from_independent_allocation_states() {
+fn tier_h_exact_inventory_includes_boxes_from_independent_allocation_states() {
     use super::super::mutator_gc::MutatorGcState;
 
     let mut heap = heap(true);
-    heap.set_concurrent_hash_lazy_registry_for_test(true);
     let mut states = Vec::new();
     let mut roots = Vec::new();
     for i in 0..3 {
         // Model three independent allocation-state owners. Ordinary Box
         // inventory is coordinator-owned, so switching the current state
-        // must not hide any previously allocated table from lazy capture.
+        // must not hide any previously allocated table from capture.
         assert_eq!(heap.current_mutator_gc().allocated_count, 0);
         let non_hash = heap.alloc_bool_vector(1, vec![1]);
         let owner = heap.alloc_hash_table(worker_hash_table(TaggedValue::fixnum(2100 + i)));
         roots.extend([non_hash, owner]);
         let state = std::mem::replace(heap.current_mutator_gc_mut(), MutatorGcState::new());
-        assert!(
-            heap.concurrent_hash_mutators().all(|entry| entry
-                .lock()
-                .unwrap()
-                .hash_table_addrs
-                .is_empty())
-        );
+        assert!(heap.concurrent_hash_mutators().next().is_none());
         states.push(state);
     }
     assert_eq!(heap.non_cons_object_addrs.len(), 6);
@@ -958,13 +938,7 @@ fn tier_h_lazy_inventory_includes_boxes_from_independent_allocation_states() {
             *current_count += count;
         }
     }
-    assert!(
-        heap.current_concurrent_hash_mutator()
-            .lock()
-            .unwrap()
-            .hash_table_addrs
-            .is_empty()
-    );
+    assert!(heap.concurrent_hash_mutators().next().is_none());
     heap.concurrent_begin();
     for &root in &roots {
         heap.seed_root(root);

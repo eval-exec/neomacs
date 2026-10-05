@@ -36,7 +36,6 @@ impl TaggedHeap {
                 } else {
                     self.non_cons_object_addrs.remove(&(ptr as usize));
                     self.unregister_vector_object(ptr);
-                    self.unregister_hash_table_object(ptr);
                     self.free_gc_object(ptr, ReclamationMode::Explicit);
                     freed += 1;
                 }

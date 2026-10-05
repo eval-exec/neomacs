@@ -174,41 +174,54 @@ fn tier_h_first_write_retires_once_through_resize_clear_and_whole_replacement() 
 }
 
 #[test]
-fn tier_h_combines_independent_mutator_registries_without_current_mutator_assumptions() {
-    let objects = [
-        boxed_table(table_with_entries(1)),
-        boxed_table(table_with_entries(2)),
-        boxed_table(table_with_entries(3)),
-    ];
-    let mut mutators: Vec<_> = (0..3).map(|_| ConcurrentHashMutatorState::new()).collect();
-    for (mutator, object) in mutators.iter_mut().zip(&objects) {
-        assert!(mutator.hash_table_addrs.insert(address(object)));
+fn tier_h_exact_box_inventory_needs_no_per_mutator_address_registry() {
+    let mut heap = real_heap(false);
+    let owners: Vec<_> = (1..=3)
+        .map(|count| heap.alloc_hash_table(table_with_entries(count)))
+        .collect();
+    let addresses: Vec<_> = owners
+        .iter()
+        .map(|owner| owner.as_veclike_ptr().unwrap() as usize)
+        .collect();
+    let non_hash = heap.alloc_bool_vector(1, vec![1]);
+    for address in &addresses {
+        assert!(heap.non_cons_object_addrs.contains(address));
     }
-    let mut snapshot = HashTableScanSnapshot::new();
-    for mutator in &mutators {
-        for &owner in &mutator.hash_table_addrs {
-            // SAFETY: every registry's distinct Box remains complete/live.
-            assert!(unsafe { snapshot.capture_owned(owner, CollectionScope::Full) });
+    assert!(heap.concurrent_hash_mutators().next().is_none());
+    let mut roots = owners.clone();
+    roots.push(non_hash);
+    start_cycle(&mut heap, &roots);
+    {
+        let snapshot = heap.concurrent_hash_snapshot().unwrap();
+        assert_eq!(snapshot.len(), 3);
+        assert_eq!(snapshot.initialized_entry_count(), 6);
+        for &owner in &owners {
+            assert!(
+                snapshot
+                    .get(owner.as_veclike_ptr().unwrap() as usize)
+                    .is_some()
+            );
         }
+        assert!(
+            snapshot
+                .get(non_hash.as_veclike_ptr().unwrap() as usize)
+                .is_none()
+        );
     }
-    assert_eq!(snapshot.len(), 3);
-    assert_eq!(snapshot.initialized_entry_count(), 6);
-    let removed = address(&objects[1]);
-    for mutator in &mut mutators {
-        mutator.hash_table_addrs.remove(&removed);
-    }
-    assert!(
-        mutators
-            .iter()
-            .all(|m| !m.hash_table_addrs.contains(&removed))
-    );
-    assert_eq!(
-        mutators
-            .iter()
-            .map(|m| m.hash_table_addrs.len())
-            .sum::<usize>(),
-        2
-    );
+    finish_cycle(&mut heap, &roots);
+    // No table has been mutated, so neither allocation, capture nor free
+    // needs a per-mutator log entry. The canonical inventory drops dead Boxes.
+    roots.remove(1);
+    start_cycle(&mut heap, &roots);
+    finish_cycle(&mut heap, &roots);
+    assert!(!heap.non_cons_object_addrs.contains(&addresses[1]));
+    assert!(heap.concurrent_hash_mutators().next().is_none());
+    start_cycle(&mut heap, &roots);
+    let snapshot = heap.concurrent_hash_snapshot().unwrap();
+    assert_eq!(snapshot.len(), 2);
+    assert!(snapshot.get(addresses[1]).is_none());
+    finish_cycle(&mut heap, &roots);
+    clear_tagged_heap_if_installed(&mut heap);
 }
 
 /// The fixture's live payload is accessed only under its captured entry lock.

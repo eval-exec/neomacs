@@ -367,7 +367,6 @@ impl TaggedHeap {
                 } else {
                     self.non_cons_object_addrs.remove(&(current as usize));
                     self.unregister_vector_object(current);
-                    self.unregister_hash_table_object(current);
                     self.free_gc_object(current, ReclamationMode::Explicit);
                     self.current_mutator_gc_mut().allocated_count =
                         self.current_mutator_gc().allocated_count.saturating_sub(1);
@@ -1338,7 +1337,6 @@ impl TaggedHeap {
                     *prev = next;
                     self.non_cons_object_addrs.remove(&(current as usize));
                     self.unregister_vector_object(current);
-                    self.unregister_hash_table_object(current);
                     self.free_gc_object(current, ReclamationMode::Explicit);
                     self.current_mutator_gc_mut().allocated_count =
                         self.current_mutator_gc().allocated_count.saturating_sub(1);

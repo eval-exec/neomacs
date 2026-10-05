@@ -285,9 +285,9 @@ retirement log, then publishes READY with Release. The selected defaults are
 `DeferWrites` and lazy discovery from the live-Box inventory; the master
 `NEOVM_GC_CONCURRENT_CLAIMS` knob remains off pending qualification gates.
 `NEOVM_GC_CONCURRENT_HASH_POLICY=traced` selects `CloneUntilTraced`, and
-`=legacy` selects `AlwaysClone`. `NEOVM_GC_CONCURRENT_HASH_LAZY_REGISTRY=0`
-selects maintained registration for comparison. These policies take effect
-only when the master knob is enabled.
+`=legacy` selects `AlwaysClone`. Capture always uses the existing exact
+live-Box inventory; allocation and free maintain no additional hash-address
+registry. These policies take effect only when the master knob is enabled.
 
 `with_hash_table_mut` retains the shared snapshot and locks an eligible table's
 entry before the preimage barrier or payload borrow. The guard covers reserve,
