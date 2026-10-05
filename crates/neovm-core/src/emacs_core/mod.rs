@@ -475,3 +475,7 @@ pub fn eval_source(input: &str) -> Result<Value, EvalError> {
     let mut evaluator = Context::new();
     evaluator.eval_str(input)
 }
+
+#[cfg(test)]
+#[path = "tests/architecture/transmute_guard.rs"]
+mod architecture_transmute_guard_test;
