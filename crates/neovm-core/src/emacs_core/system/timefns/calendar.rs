@@ -1,4 +1,4 @@
-use super::{Flow, TM_YEAR_BASE, decode_epoch_secs, time_error_overflow};
+use super::{Flow, TM_YEAR_BASE, decode_epoch_secs};
 
 /// Broken-down calendar fields representable by GNU's `struct tm` members.
 ///
@@ -47,10 +47,6 @@ impl TryFrom<[i64; 6]> for CalendarTime {
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "encode-time callers migrate in the next change")
-)]
 impl CalendarTime {
     /// Closed-form Gregorian conversion, bounded by the checked C-int fields.
     /// Intermediate values fit in i64 even when month/day fields normalize far
@@ -78,10 +74,6 @@ impl CalendarTime {
 
 impl CalendarTime {
     #[cfg(unix)]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "mktime callers migrate in the next change")
-    )]
     pub(super) fn into_tm(self) -> libc::tm {
         // SAFETY: zero initializes every field of libc::tm validly; the
         // checked calendar fields replace its input members below.

@@ -1857,10 +1857,14 @@ fn current_cpu_time_is_cpu_not_wall_time() {
 }
 
 #[cfg(test)]
-mod time_zone_spec;
-
-#[cfg(test)]
-mod unix_timestamp;
+mod boundary;
 
 #[cfg(test)]
 mod calendar;
+#[cfg(test)]
+mod time_zone_spec;
+#[cfg(test)]
+mod unix_timestamp;
+
+#[cfg(unix)]
+mod cpu_soft_limit;
