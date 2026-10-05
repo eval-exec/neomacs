@@ -1399,4 +1399,7 @@ mod compare_case_table;
 mod count_nil;
 
 #[cfg(all(test, unix))]
+mod count_zero_open;
+
+#[cfg(all(test, unix))]
 mod readdir_order;

@@ -554,10 +554,6 @@ fn directory_files_and_attributes_with_dir(
     // GNU Emacs: return string names unless ID-FORMAT is nil or 'integer.
     let id_format = FileIdFormat::from_id_format_arg(args.get(4));
     let count = parse_wholenump_count(args.get(5))?;
-    if count == Some(0) {
-        return Ok(Value::NIL);
-    }
-
     let names = read_directory_names(dir)?;
 
     let dir_with_slash = ensure_trailing_slash_lisp(dir);
@@ -594,6 +590,9 @@ fn directory_files_and_attributes_with_dir(
 
         let full_path = concat_dir_entry_lisp(&dir_with_slash, &name);
         let display_name = if full_name { full_path.clone() } else { name };
+        if remaining == 0 {
+            break;
+        }
         items.push_front((display_name, full_path));
 
         if remaining != usize::MAX {

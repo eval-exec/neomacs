@@ -1546,10 +1546,6 @@ fn directory_files_with_decoder(
     buffers: &crate::buffer::BufferManager,
     decode_name: impl Fn(&[u8]) -> crate::heap_types::LispString,
 ) -> Result<Vec<crate::heap_types::LispString>, DirectoryFilesError> {
-    if count == Some(0) {
-        return Ok(Vec::new());
-    }
-
     let names = read_directory_names_lisp(dir)?;
 
     // Emacs builds this list via `cons` while scanning readdir output.
@@ -1584,6 +1580,10 @@ fn directory_files_with_decoder(
             }
         }
 
+        // GNU dired.c:248 opens first and checks COUNT after matching (351).
+        if remaining == 0 {
+            break;
+        }
         if full {
             result.push_front(concat_file_name_lisp(&dir_with_slash, &name));
         } else {

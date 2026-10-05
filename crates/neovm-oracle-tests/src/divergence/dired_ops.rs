@@ -12,6 +12,9 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 mod count_nil;
 
 #[cfg(all(test, unix))]
+mod count_zero_open;
+
+#[cfg(all(test, unix))]
 mod readdir_order;
 
 macro_rules! diredt {
