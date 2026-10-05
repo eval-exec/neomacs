@@ -152,6 +152,7 @@ mod function;
 #[cfg(test)]
 mod gc_generational;
 mod gc_scan_strict_edge_semantics;
+mod gdh_strconv_semantics;
 mod generator_semantics;
 mod generic_function_comprehensive;
 mod get;

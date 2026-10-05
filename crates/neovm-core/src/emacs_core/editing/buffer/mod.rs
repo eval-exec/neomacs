@@ -3334,20 +3334,27 @@ fn convert_buffer_string_for_multibyte(
     source: Value,
     flag: Value,
 ) -> Result<(Value, BufferMultibyteConversionMode), Flow> {
+    // GNU `Fset_buffer_multibyte` (`buffer.c:2881-2884`) keeps a valid
+    // multibyte sequence only when FLAG is exactly Qt, and even then
+    // `multibyte_length` is called with `allow_8bit` false. Every other
+    // non-nil value — the symbol `to`, any other symbol, a number, a
+    // string — expands each high byte the way `string-to-multibyte` does.
+    // Whether the buffer's multibyteness changes at all is decided by the
+    // caller, matching `NILP (flag) == NILP (enable-multibyte-characters)`.
     let (converted, mode) = if flag.is_nil() {
         (
             misc::builtin_string_as_unibyte(vec![source])?,
             BufferMultibyteConversionMode::AsUnibyte,
         )
-    } else if flag.as_symbol_name() == Some("to") {
-        (
-            misc::builtin_string_to_multibyte(vec![source])?,
-            BufferMultibyteConversionMode::ToMultibyte,
-        )
-    } else {
+    } else if flag.is_t() {
         (
             misc::builtin_string_as_multibyte(vec![source])?,
             BufferMultibyteConversionMode::AsMultibyte,
+        )
+    } else {
+        (
+            misc::builtin_string_to_multibyte(vec![source])?,
+            BufferMultibyteConversionMode::ToMultibyte,
         )
     };
     if converted != source {

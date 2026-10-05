@@ -71,3 +71,46 @@ fn symbol_to_expands_every_high_byte() {
         "OK (to t 2 3 3 5 2 (4194243 4194217) 2 1 3 yes (apply set-buffer-multibyte nil))"
     );
 }
+
+#[test]
+fn only_exact_t_keeps_valid_utf8() {
+    crate::test_utils::init_test_tracing();
+    // GNU Emacs 31.1, unibyte C3 A9 (U+00E9), point between the two bytes.
+    // `foo`, `1`, `0` and the string "t" expand both bytes. Exact `t` does not.
+    let expanded = "2 3 3 5 2 (4194243 4194217) 2 1 3 yes (apply set-buffer-multibyte nil)";
+    assert_eq!(
+        convert("195 169", "'foo", 2),
+        format!("OK (foo t {expanded})")
+    );
+    assert_eq!(convert("195 169", "1", 2), format!("OK (1 t {expanded})"));
+    assert_eq!(convert("195 169", "0", 2), format!("OK (0 t {expanded})"));
+    assert_eq!(
+        convert("195 169", "\"t\"", 2),
+        format!("OK (\"t\" t {expanded})")
+    );
+    // A non-t flag still splits a C0 80 pair. `1` used to take the
+    // as-multibyte path; after the Qt-only check it takes to-multibyte,
+    // which agrees with GNU on this input.
+    assert_eq!(
+        convert("192 128", "1", 2),
+        "OK (1 t 2 3 3 5 2 (4194240 4194176) 2 1 3 yes (apply set-buffer-multibyte nil))"
+    );
+}
+
+#[test]
+fn non_nil_on_an_already_multibyte_buffer_is_a_noop() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval::Context::new();
+    let rendered = format_eval_result(&eval.eval_str(
+        r#"(progn
+             (erase-buffer)
+             (set-buffer-multibyte t)
+             (insert (string 233))
+             (goto-char 2)
+             (list (set-buffer-multibyte 'foo)
+                   enable-multibyte-characters
+                   (point)
+                   (append (buffer-string) nil)))"#,
+    ));
+    assert_eq!(rendered, "OK (foo t 2 (233))");
+}
