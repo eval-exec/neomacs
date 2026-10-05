@@ -23396,6 +23396,28 @@ fn command_loop_error_test_context() -> (Context, Value) {
 /// Queue commands behind synthetic function keys, then a final command that
 /// stops the recursive edit after every signal has passed through recovery.
 fn run_command_loop_error_commands(ev: &mut Context, global_map: Value, commands: &[(&str, &str)]) {
+    queue_command_loop_error_commands(ev, global_map, commands);
+    ev.recursive_edit_inner()
+        .expect("command loop should recover and run the stop command");
+}
+
+/// Make the command loop interactive.  An interactive loop needs an input
+/// source; keep the returned sender alive for the duration of the test.
+fn interactive_command_loop_input(
+    ev: &mut Context,
+) -> crossbeam_channel::Sender<crate::keyboard::InputEvent> {
+    ev.noninteractive = false;
+    let (tx, rx) = crossbeam_channel::unbounded();
+    ev.input_rx = Some(rx);
+    tx
+}
+
+/// Queue commands behind synthetic function keys, then the stop command.
+fn queue_command_loop_error_commands(
+    ev: &mut Context,
+    global_map: Value,
+    commands: &[(&str, &str)],
+) {
     for &(key, command) in commands {
         crate::emacs_core::keymap::list_keymap_define_seq(
             global_map,
@@ -23413,9 +23435,6 @@ fn run_command_loop_error_commands(ev: &mut Context, global_map: Value, commands
     .expect("define stop command");
     ev.command_loop.unread_event(Value::fixnum('q' as i64));
     ev.command_loop.running = true;
-
-    ev.recursive_edit_inner()
-        .expect("command loop should recover and run the stop command");
 }
 
 /// GNU `command_loop_2' catches an unhandled command signal with `cmd_error',
@@ -23492,6 +23511,7 @@ fn command_error_report_shows_percent_literally() {
 fn command_loop_survives_signaling_command_error_function() {
     crate::test_utils::init_test_tracing();
     let (mut ev, global_map) = command_loop_error_test_context();
+    let _input = interactive_command_loop_input(&mut ev);
     ev.eval_str(
         r#"(progn
              (setq neo-after-error-command-ran nil)
@@ -23529,6 +23549,7 @@ fn command_loop_survives_signaling_command_error_function() {
 fn command_loop_survives_signaling_report_of_startup_error() {
     crate::test_utils::init_test_tracing();
     let (mut ev, global_map) = command_loop_error_test_context();
+    let _input = interactive_command_loop_input(&mut ev);
     ev.eval_str(
         r#"(progn
              (setq neo-after-error-command-ran nil)
@@ -23548,6 +23569,74 @@ fn command_loop_survives_signaling_report_of_startup_error() {
             .expect("after-error observation"),
         Value::T,
         "a failed startup report must not keep the command loop from reading commands"
+    );
+}
+
+/// GNU `signal_or_quit' throws to `top-level' only when no handler matches.
+/// A `condition-case' around a `recursive-edit' is outside the command loop's
+/// own handler, so a signal from the reporter must still reach it.
+#[test]
+fn command_loop_reporter_signal_reaches_enclosing_handler() {
+    crate::test_utils::init_test_tracing();
+    let (mut ev, global_map) = command_loop_error_test_context();
+    let _input = interactive_command_loop_input(&mut ev);
+    ev.eval_str(
+        r#"(progn
+             (put 'neo-report-failed 'error-conditions '(neo-report-failed error))
+             (put 'neo-report-failed 'error-message "Report failed")
+             (set (make-local-variable 'command-error-function)
+                  (lambda (_data _context _caller) (signal 'neo-report-failed nil)))
+             (fset 'neo-signaling-command
+                   (lambda () (interactive) (signal 'error '("boom")))))"#,
+    )
+    .expect("install enclosing-handler probe");
+    queue_command_loop_error_commands(&mut ev, global_map, &[("f9", "neo-signaling-command")]);
+
+    let result = ev
+        .eval_str("(condition-case nil (recursive-edit) (neo-report-failed 'caught))")
+        .expect("the enclosing handler must receive the reporter's signal");
+    assert_eq!(result, Value::symbol("caught"));
+}
+
+/// GNU `command_loop' runs its batch check after the catch around
+/// `command_loop_2' returns, including from a top-level throw: a batch
+/// session whose error report fails exits instead of reading on.
+#[test]
+fn command_loop_batch_exits_after_failed_report() {
+    crate::test_utils::init_test_tracing();
+    let (mut ev, global_map) = command_loop_error_test_context();
+    ev.noninteractive = true;
+    ev.eval_str(
+        r#"(progn
+             (setq neo-after-error-command-ran nil)
+             (set (make-local-variable 'command-error-function)
+                  (lambda (_data _context _caller)
+                    (signal 'error '("presentation failed"))))
+             (fset 'neo-signaling-command
+                   (lambda () (interactive) (signal 'error '("boom"))))
+             (fset 'neo-after-error-command
+                   (lambda () (interactive) (setq neo-after-error-command-ran t))))"#,
+    )
+    .expect("install batch failing-report probe");
+
+    run_command_loop_error_commands(
+        &mut ev,
+        global_map,
+        &[
+            ("f9", "neo-signaling-command"),
+            ("f10", "neo-after-error-command"),
+        ],
+    );
+
+    assert_eq!(
+        ev.eval_symbol("neo-after-error-command-ran")
+            .expect("after-error observation"),
+        Value::NIL,
+        "a batch session must not read further commands after a failed report"
+    );
+    assert!(
+        ev.shutdown_request.is_some(),
+        "the batch check must request kill-emacs"
     );
 }
 

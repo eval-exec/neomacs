@@ -281,16 +281,26 @@ impl Context {
                 self.pop_condition_frame();
             }
 
-            match result {
-                // top-level throw → restart the loop
-                Err(ref flow)
-                    if let Some(thrown) = flow.as_throw()
-                        && outermost_command_loop
-                        && thrown.tag.is_symbol_named("top-level") =>
-                {
+            // GNU keyboard.c command_loop(): the catch around command_loop_2
+            // returns on a top-level throw as on a normal return, and the
+            // batch check below it runs either way.
+            let caught_top_level = outermost_command_loop
+                && result
+                    .as_ref()
+                    .err()
+                    .and_then(Flow::as_throw)
+                    .is_some_and(|thrown| thrown.tag.is_symbol_named("top-level"));
+            let result = if caught_top_level {
+                if !self.command_loop_noninteractive() {
                     tracing::debug!("command_loop_inner: top-level throw, restarting loop");
                     continue;
                 }
+                Ok(Value::NIL)
+            } else {
+                result
+            };
+
+            match result {
                 Ok(value) if outermost_command_loop && self.command_loop_noninteractive() => {
                     // GNU keyboard.c:1145 — end of file in batch run
                     tracing::info!("command_loop_inner: noninteractive EOF, calling kill-emacs");
@@ -520,17 +530,27 @@ impl Context {
     /// Reroute a signal raised while presenting a command error.
     ///
     /// GNU `cmd_error' runs after the condition-case of `command_loop_2' (or
-    /// `top_level_1') has unwound, so a signal from `command-error-function'
-    /// finds no handler and `signal_or_quit' throws to `top-level' (eval.c),
-    /// which `command_loop' catches and restarts.  Propagating the signal instead would end the
+    /// `top_level_1') has unwound, so `signal_or_quit' searches only the
+    /// handlers outside the command loop (eval.c).  A matching one -- a
+    /// `condition-case' around a `recursive-edit', say -- still receives the
+    /// signal; an unhandled signal throws to `top-level', which `command_loop'
+    /// catches.  Propagating an unhandled signal instead would end the
     /// outermost command loop and with it the session.  Throws, shutdowns and
     /// thread handoffs keep their own meaning.
-    pub(super) fn command_error_report_failure(&self, failure: Flow) -> Flow {
-        let Some(sig) = failure.as_signal() else {
-            return failure;
+    pub(super) fn command_error_report_failure(&mut self, failure: Flow) -> Flow {
+        let sig = match failure.into_kind() {
+            FlowKind::Signal(sig) => sig,
+            other => return Flow::from_kind(other),
         };
+        let sig = match self.dispatch_signal_if_needed(sig) {
+            Ok(sig) => sig,
+            Err(flow) => return flow,
+        };
+        if sig.selected_resume.is_some() {
+            return Flow::from_kind(FlowKind::Signal(sig));
+        }
         tracing::warn!(
-            signal = %super::super::error::format_signal_data_with_eval(self, sig),
+            signal = %super::super::error::format_signal_data_with_eval(self, &sig),
             "Reporting a command error signaled; returning to top level"
         );
         Flow::throw(Value::symbol("top-level"), Value::T)
