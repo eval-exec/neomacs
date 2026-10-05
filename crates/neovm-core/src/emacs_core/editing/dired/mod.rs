@@ -212,18 +212,59 @@ fn build_file_attributes(
     filename: &LispString,
     id_format: FileIdFormat,
     time_output: LispTimeOutput,
-) -> Option<Value> {
-    let path = super::fileio::lisp_file_name_to_path_buf(filename);
+    error_filename: &LispString,
+) -> Result<Option<Value>, Flow> {
+    build_file_attributes_with_metadata(filename, id_format, time_output, error_filename, |path| {
+        fs::symlink_metadata(path)
+    })
+}
 
-    // Use symlink_metadata first to detect symlinks.
-    let sym_meta = fs::symlink_metadata(&path).ok()?;
+// The metadata operation belongs to this invocation; tests can supply failures
+// deterministically without a deletion race or process-wide filesystem hooks.
+fn build_file_attributes_with_metadata(
+    filename: &LispString,
+    id_format: FileIdFormat,
+    time_output: LispTimeOutput,
+    error_filename: &LispString,
+    read_metadata: impl FnOnce(&std::path::Path) -> std::io::Result<fs::Metadata>,
+) -> Result<Option<Value>, Flow> {
+    let path = super::fileio::lisp_file_name_to_path_buf(filename);
+    let sym_meta = match read_metadata(&path) {
+        Ok(metadata) => metadata,
+        // GNU fileio.c:325-335 ignores only absent or inaccessible-by-type
+        // metadata; permission, I/O, and symlink-loop failures signal.
+        Err(error) if matches!(error.raw_os_error(), Some(0 | libc::ENOENT | libc::ENOTDIR)) => {
+            return Ok(None);
+        }
+        Err(error) => {
+            return Err(super::fileio::signal_file_action_error_value(
+                error,
+                "Getting attributes",
+                file_name_value(error_filename.clone()),
+            ));
+        }
+    };
 
     // Determine file type.
     let file_type = if sym_meta.file_type().is_symlink() {
         // Read the symlink target, preserving raw file-name bytes.
         match fs::read_link(&path) {
             Ok(target) => Value::heap_string(super::fileio::path_to_lisp_file_name(&target)),
-            Err(_) => Value::string(""),
+            Err(error)
+                if matches!(
+                    error.raw_os_error(),
+                    Some(0 | libc::ENOENT | libc::ENOTDIR | libc::EINVAL)
+                ) =>
+            {
+                return Ok(None);
+            }
+            Err(error) => {
+                return Err(super::fileio::signal_file_action_error_value(
+                    error,
+                    "Reading symbolic link",
+                    file_name_value(error_filename.clone()),
+                ));
+            }
         }
     } else if sym_meta.is_dir() {
         Value::T
@@ -367,7 +408,7 @@ fn build_file_attributes(
     #[cfg(not(unix))]
     let device = Value::fixnum(0);
 
-    Some(Value::list(vec![
+    Ok(Some(Value::list(vec![
         file_type,
         nlinks,
         uid_val,
@@ -380,7 +421,7 @@ fn build_file_attributes(
         gid_changep,
         inode,
         device,
-    ]))
+    ])))
 }
 
 /// Format a Unix file mode string like "drwxr-xr-x" or "-rw-r--r--".
@@ -477,6 +518,35 @@ fn directory_files_and_attributes_with_dir(
     syntax: super::builtins::search::FastStringMatchSyntax,
     decode_name: impl Fn(&Context, &[u8]) -> LispString,
 ) -> EvalResult {
+    // GNU dired.c:224-231 validates COUNT and MATCH before opening.
+    parse_wholenump_count(args.get(5))?;
+    if let Some(pattern) = args.get(2).filter(|value| value.is_truthy()) {
+        expect_lisp_string("directory-files-and-attributes", pattern)?;
+    }
+    let mut names = super::fileio::DirectoryNameSource::open(dir)?;
+    directory_files_and_attributes_from_reader(
+        ctx,
+        args,
+        dir,
+        time_output,
+        syntax,
+        decode_name,
+        |ctx| names.next_name(ctx),
+        |path| fs::symlink_metadata(path),
+    )
+}
+
+#[allow(clippy::too_many_arguments)] // GNU's entry processing order stays explicit
+fn directory_files_and_attributes_from_reader(
+    ctx: &mut Context,
+    args: &[Value],
+    dir: &LispString,
+    time_output: LispTimeOutput,
+    syntax: super::builtins::search::FastStringMatchSyntax,
+    decode_name: impl Fn(&Context, &[u8]) -> LispString,
+    mut read_name: impl FnMut(&mut Context) -> Result<Option<LispString>, Flow>,
+    mut read_metadata: impl FnMut(&std::path::Path) -> std::io::Result<fs::Metadata>,
+) -> EvalResult {
     let full_name = args.get(1).is_some_and(|v| v.is_truthy());
     let match_regexp = match args.get(2) {
         Some(v) if v.is_truthy() => Some(expect_lisp_string("directory-files-and-attributes", v)?),
@@ -486,71 +556,84 @@ fn directory_files_and_attributes_with_dir(
     // GNU Emacs: return string names unless ID-FORMAT is nil or 'integer.
     let id_format = FileIdFormat::from_id_format_arg(args.get(4));
     let count = parse_wholenump_count(args.get(5))?;
-    let mut names = super::fileio::DirectoryNameSource::open(dir)?;
 
-    let dir_with_slash = ensure_trailing_slash_lisp(dir);
-    // (DISPLAY-NAME, FULL-PATH) — both kept byte-faithfully as LispStrings.
-    let mut items: VecDeque<(LispString, LispString)> = VecDeque::new();
-    let mut remaining = count.unwrap_or(usize::MAX);
-    while let Some(raw_name) = names.next_name(ctx)? {
-        let name = decode_name(ctx, raw_name.as_bytes());
-        ctx.maybe_quit()?;
-        if let Some(pattern) = match_regexp.as_ref() {
-            let matched = syntax
-                .search(
-                    &ctx.obarray,
-                    &ctx.buffers,
-                    pattern,
-                    &name,
-                    super::regex::SearchedString::Owned(name.clone()),
-                    0,
-                    false,
-                )
-                .map_err(|msg| {
-                    signal(
-                        LispCondition::InvalidRegexp,
-                        vec![Value::string(format!(
-                            "Invalid regexp \"{}\": {}",
-                            super::emacs_char::to_utf8_lossy(pattern.as_bytes()),
-                            msg
-                        ))],
+    let root_scope = ctx.save_specpdl_roots();
+    let result = (|| {
+        let dir_with_slash = ensure_trailing_slash_lisp(dir);
+        // (DISPLAY-NAME, FULL-PATH) — both kept byte-faithfully as LispStrings.
+        let mut items: VecDeque<(LispString, Value)> = VecDeque::new();
+        let mut remaining = count.unwrap_or(usize::MAX);
+        while let Some(raw_name) = read_name(ctx)? {
+            let name = decode_name(ctx, raw_name.as_bytes());
+            ctx.maybe_quit()?;
+            if let Some(pattern) = match_regexp.as_ref() {
+                let matched = syntax
+                    .search(
+                        &ctx.obarray,
+                        &ctx.buffers,
+                        pattern,
+                        &name,
+                        super::regex::SearchedString::Owned(name.clone()),
+                        0,
+                        false,
                     )
-                })?;
-            if matched.is_none() {
+                    .map_err(|msg| {
+                        signal(
+                            LispCondition::InvalidRegexp,
+                            vec![Value::string(format!(
+                                "Invalid regexp \"{}\": {}",
+                                super::emacs_char::to_utf8_lossy(pattern.as_bytes()),
+                                msg
+                            ))],
+                        )
+                    })?;
+                if matched.is_none() {
+                    continue;
+                }
+            }
+
+            let full_path = concat_dir_entry_lisp(&dir_with_slash, &name);
+            // GNU dired.c:314-320 fetches metadata before COUNT and skips nil.
+            // Error data uses the decoded entry name, not the full display name.
+            let Some(attrs) = build_file_attributes_with_metadata(
+                &full_path,
+                id_format,
+                time_output,
+                &name,
+                &mut read_metadata,
+            )?
+            else {
                 continue;
+            };
+            let display_name = if full_name { full_path.clone() } else { name };
+            if remaining == 0 {
+                break;
+            }
+            ctx.push_specpdl_root(attrs);
+            items.push_front((display_name, attrs));
+
+            if remaining != usize::MAX {
+                remaining -= 1;
             }
         }
 
-        let full_path = concat_dir_entry_lisp(&dir_with_slash, &name);
-        let display_name = if full_name { full_path.clone() } else { name };
-        if remaining == 0 {
-            break;
+        let mut items: Vec<(LispString, Value)> = items.into_iter().collect();
+        // Sort unless NOSORT is non-nil. Compare byte-faithfully so eight-bit
+        // file names order exactly as GNU's string_lessp does.
+        if !nosort {
+            items.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
         }
-        items.push_front((display_name, full_path));
 
-        if remaining != usize::MAX {
-            remaining -= 1;
-        }
-    }
+        // Build result list of (NAME . ATTRIBUTES) cons cells.
+        let result: Vec<Value> = items
+            .into_iter()
+            .map(|(display_name, attrs)| Value::cons(file_name_value(display_name), attrs))
+            .collect();
 
-    let mut items: Vec<(LispString, LispString)> = items.into_iter().collect();
-    // Sort unless NOSORT is non-nil. Compare byte-faithfully so eight-bit
-    // file names order exactly as GNU's string_lessp does.
-    if !nosort {
-        items.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
-    }
-
-    // Build result list of (NAME . ATTRIBUTES) cons cells.
-    let result: Vec<Value> = items
-        .into_iter()
-        .map(|(display_name, full_path)| {
-            let attrs =
-                build_file_attributes(&full_path, id_format, time_output).unwrap_or(Value::NIL);
-            Value::cons(file_name_value(display_name), attrs)
-        })
-        .collect();
-
-    Ok(Value::list(result))
+        Ok(Value::list(result))
+    })();
+    ctx.restore_specpdl_roots(root_scope);
+    result
 }
 
 /// Context-backed variant of `file-name-completion`.
@@ -1432,10 +1515,10 @@ pub(crate) fn builtin_file_attributes(eval: &mut Context, args: Vec<Value>) -> E
     let id_format = FileIdFormat::from_id_format_arg(args.get(1));
     let time_output = LispTimeOutput::from_context(eval)?;
 
-    match build_file_attributes(&filename_lisp, id_format, time_output) {
-        Some(attrs) => Ok(attrs),
-        None => Ok(Value::NIL),
-    }
+    Ok(
+        build_file_attributes(&filename_lisp, id_format, time_output, &filename_lisp)?
+            .unwrap_or(Value::NIL),
+    )
 }
 
 /// (file-attributes-lessp F1 F2)

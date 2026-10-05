@@ -1408,4 +1408,10 @@ mod directory_error_data;
 mod streaming_quit;
 
 #[cfg(all(test, unix))]
+mod attribute_failures;
+
+#[cfg(all(test, unix))]
+mod attribute_failure_seams;
+
+#[cfg(all(test, unix))]
 mod readdir_order;
