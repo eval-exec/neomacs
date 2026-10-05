@@ -428,5 +428,9 @@ mod yank_properties_semantics;
 mod zlib_decompress_region_semantics;
 
 #[cfg(test)]
+#[path = "tests/gd_e_overlay_seams.rs"]
+mod gd_e_overlay_seams;
+
+#[cfg(test)]
 #[path = "tests/gd_e_sort.rs"]
 mod gd_e_sort;

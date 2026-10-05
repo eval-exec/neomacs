@@ -1974,39 +1974,17 @@ pub(crate) fn buffer_overlay_property_at_byte_pos(
     prop: Value,
     window_id: Option<WindowId>,
 ) -> Option<(Value, Value)> {
-    let mut overlays = buf
-        .overlays
-        .overlays_at_emacs_byte_pos(EmacsBytePos::new(byte_pos));
-    // GNU's `sort_overlays' reads `priority' through `Foverlay_get', so an
-    // overlay carrying only a `category' is ordered by that symbol's
-    // `priority'. The overlay layer has no obarray to follow the category
-    // with; this one does.
-    let priority_sym = priority_prop();
+    let value_of = |overlay: Value, property: Value| {
+        Some(lookup_overlay_property(obarray, buffers, overlay, property))
+    };
     buf.overlays
-        .sort_overlay_ids_by_priority_desc_with(&mut overlays, &|overlay| {
-            Some(lookup_overlay_property(
-                obarray,
-                buffers,
-                overlay,
-                priority_sym,
-            ))
-        });
-    for overlay in overlays {
-        if let Some(wid) = window_id {
-            let window_prop = lookup_overlay_property(obarray, buffers, overlay, window_prop());
-            if window_prop
-                .as_window_id()
-                .is_some_and(|overlay_wid| overlay_wid != wid.0)
-            {
-                continue;
-            }
-        }
-        let value = lookup_overlay_property(obarray, buffers, overlay, prop);
-        if !value.is_nil() {
-            return Some((value, overlay));
-        }
-    }
-    None
+        .property_winner_at_emacs_byte_pos_with(
+            EmacsBytePos::new(byte_pos),
+            prop,
+            window_id.map(|wid| wid.0),
+            &value_of,
+        )
+        .map(|winner| (winner.value(), winner.overlay()))
 }
 
 pub(crate) fn buffer_overlay_property_for_inserted_char_at_byte_pos(

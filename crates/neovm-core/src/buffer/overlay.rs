@@ -1151,6 +1151,43 @@ impl OverlayList {
         self.index.overlays_in_region_iter(range, accessible_end)
     }
 
+    /// GNU textprop.c:647-663 reduces eligible carriers in ascending tree
+    /// order. The comparator can contain cycles, so sorting or heap selection
+    /// cannot replace this sequential reduction. Winner state is private to
+    /// this lookup under the buffer's existing ownership; nothing is cached
+    /// or published to other mutators.
+    pub(crate) fn property_winner_at_emacs_byte_pos_with(
+        &self,
+        pos: EmacsBytePos,
+        property: Value,
+        window_id: Option<u64>,
+        value_of: OverlayPropertyLookup,
+    ) -> Option<OverlayPropertyWinner> {
+        let priority_of = |overlay| value_of(overlay, priority_value());
+        let window_filter = window_id.map(|id| (id, Value::from_sym_id(winner_window_symbol_id())));
+        let mut best: Option<(OverlayPropertyWinner, Option<OverlayPrecedence>)> = None;
+        for overlay in self.index.overlays_at_iter(pos) {
+            let Some(value) = value_of(overlay, property).and_then(NonNilPropertyValue::new) else {
+                continue;
+            };
+            if let Some((window_id, window_property)) = window_filter
+                && value_of(overlay, window_property)
+                    .and_then(Value::as_window_id)
+                    .is_some_and(|overlay_window| overlay_window != window_id)
+            {
+                continue;
+            }
+            let key = overlay_precedence(overlay, &priority_of);
+            if best.is_none_or(|(current, current_key)| {
+                compare_overlay_precedence_keys(current.overlay(), current_key, overlay, key)
+                    == Ordering::Less
+            }) {
+                best = Some((OverlayPropertyWinner::new(overlay, value), key));
+            }
+        }
+        best.map(|(winner, _)| winner)
+    }
+
     pub fn highest_priority_overlay_at_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
@@ -1924,6 +1961,15 @@ fn overlay_identity_key(overlay: Value) -> u64 {
 fn priority_symbol_id() -> crate::emacs_core::intern::SymId {
     static ID: std::sync::OnceLock<crate::emacs_core::intern::SymId> = std::sync::OnceLock::new();
     *ID.get_or_init(|| crate::emacs_core::intern::intern("priority"))
+}
+
+/// Immutable process-wide symbol ID for this query's window restriction.
+/// OnceLock publishes after initialization; it contains no mutable Lisp state
+/// and is shared safely by every mutator using the global interner.
+#[inline]
+fn winner_window_symbol_id() -> crate::emacs_core::intern::SymId {
+    static ID: std::sync::OnceLock<crate::emacs_core::intern::SymId> = std::sync::OnceLock::new();
+    *ID.get_or_init(|| crate::emacs_core::intern::intern("window"))
 }
 
 /// How the sort reads an overlay's `priority'.
