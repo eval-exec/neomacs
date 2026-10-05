@@ -13,6 +13,8 @@ use std::cell::RefCell;
 use std::mem::MaybeUninit;
 use std::sync::{Arc, Mutex, Weak};
 
+mod bounded_power;
+
 // ===========================================================================
 // Arithmetic
 // ===========================================================================
