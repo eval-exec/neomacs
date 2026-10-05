@@ -44,3 +44,30 @@ fn gde_overlay_nontransitive_sorted_queries() {
     let expected = r#"OK ((c b a) (a b c))"#;
     assert_eq!(actual, expected);
 }
+
+#[test]
+fn gde_overlay_sorted_category_and_window() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::runtime_startup_context();
+    eval.set_lexical_binding(true);
+    let result = eval.eval_str(
+        r#"(save-window-excursion
+(with-temp-buffer (insert "abcdef")
+(let ((w1 (selected-window)) (w2 (split-window))
+(a (make-overlay 1 6)) (b (make-overlay 1 6)) (c (make-overlay 1 6)))
+(set-window-buffer w1 (current-buffer)) (set-window-buffer w2 (current-buffer))
+(unwind-protect
+(progn (put 'gde-sorted-category 'priority 5) (put 'gde-sorted-category 'window w1)
+(overlay-put a 'category 'gde-sorted-category) (overlay-put a 'tag 'category)
+(overlay-put b 'priority 9) (overlay-put b 'window w2) (overlay-put b 'tag 'window2)
+(overlay-put c 'priority 1) (overlay-put c 'tag 'plain)
+(mapcar (lambda (sorted) (mapcar (lambda (o) (overlay-get o 'tag)) (overlays-at 3 sorted)))
+(list t w1 w2)))
+(setplist 'gde-sorted-category nil)))))"#,
+    );
+    let actual = crate::emacs_core::format_eval_result_with_eval(&eval, &result);
+    assert_eq!(
+        actual,
+        r#"OK ((window2 category plain) (category plain) (window2 plain))"#
+    );
+}

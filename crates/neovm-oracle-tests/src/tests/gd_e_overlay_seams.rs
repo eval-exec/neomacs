@@ -21,3 +21,7 @@ mod multibyte_unibyte_raw_byte_positions;
 #[cfg(test)]
 #[path = "gd_e_overlay_seams/nontransitive_sorted_queries.rs"]
 mod nontransitive_sorted_queries;
+
+#[cfg(test)]
+#[path = "gd_e_overlay_seams/sorted_category_and_window.rs"]
+mod sorted_category_and_window;

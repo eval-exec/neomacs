@@ -5480,13 +5480,7 @@ pub(crate) fn builtin_overlayp_pure(args: Vec<Value>) -> EvalResult {
 
 /// (overlays-at POS &optional SORTED)
 pub(crate) fn builtin_overlays_at(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    builtin_overlays_at_in_buffers(&eval.buffers, args)
-}
-
-pub(crate) fn builtin_overlays_at_in_buffers(
-    buffers: &BufferManager,
-    args: Vec<Value>,
-) -> EvalResult {
+    let buffers = &eval.buffers;
     expect_min_args("overlays-at", &args, 1)?;
     expect_max_args("overlays-at", &args, 2)?;
     let pos = expect_integer_or_marker_in_buffers(buffers, &args[0])?;
@@ -5505,14 +5499,24 @@ pub(crate) fn builtin_overlays_at_in_buffers(
         // whose `window` property is a window distinct from W are dropped.
         if let Some(target_window_id) = sorted.as_window_id() {
             let window_sym = Value::symbol("window");
-            ids.retain(|ov| match buf.overlays.overlay_get_named(*ov, window_sym) {
-                Some(prop) => prop
+            ids.retain(|ov| {
+                super::textprop::lookup_overlay_property(&eval.obarray, buffers, *ov, window_sym)
                     .as_window_id()
-                    .is_none_or(|wid| wid == target_window_id),
-                None => true,
+                    .is_none_or(|wid| wid == target_window_id)
             });
         }
-        buf.overlays.sort_overlay_ids_by_priority_desc(&mut ids);
+        // GNU buffer.c:3292 resolves priority with Foverlay_get, including
+        // the category symbol and char-property aliases.
+        let priority = Value::symbol("priority");
+        buf.overlays
+            .sort_overlay_ids_by_priority_desc_with(&mut ids, &|overlay| {
+                Some(super::textprop::lookup_overlay_property(
+                    &eval.obarray,
+                    buffers,
+                    overlay,
+                    priority,
+                ))
+            });
     }
     Ok(Value::list(ids))
 }
