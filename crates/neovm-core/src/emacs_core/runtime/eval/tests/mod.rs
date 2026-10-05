@@ -23453,6 +23453,104 @@ fn command_loop_error_uses_buffer_local_command_error_function() {
     );
 }
 
+/// A `%' in a rendered command error is text, not a format directive.  GNU
+/// `print_error_message' writes the diagnostic literally; feeding it to
+/// `message' as the format string signalled "Not enough arguments for format
+/// string" from inside the reporter, which escaped `command_loop_2' and ended
+/// the session.
+#[test]
+fn command_error_report_shows_percent_literally() {
+    crate::test_utils::init_test_tracing();
+    let (mut ev, _global_map) = command_loop_error_test_context();
+    ev.noninteractive = false;
+    let data = ev
+        .eval_str(r#"'(error "Text is read-only: 50% of #chan%irc.example")"#)
+        .expect("error data");
+
+    ev.report_command_error(data, "")
+        .expect("reporting a command error must not signal");
+
+    let messages_id = ev
+        .buffers
+        .find_buffer_by_name("*Messages*")
+        .expect("the report must log to *Messages*");
+    let messages = ev
+        .buffers
+        .get(messages_id)
+        .expect("*Messages* live")
+        .buffer_string();
+    assert!(
+        messages.contains("Text is read-only: 50% of #chan%irc.example"),
+        "the diagnostic must be shown literally, got {messages:?}"
+    );
+}
+
+/// GNU runs `cmd_error' outside `command_loop_2's condition-case: a signal
+/// from `command-error-function' finds no handler and `signal_or_quit' throws
+/// to `top-level', so the command loop restarts instead of ending.
+#[test]
+fn command_loop_survives_signaling_command_error_function() {
+    crate::test_utils::init_test_tracing();
+    let (mut ev, global_map) = command_loop_error_test_context();
+    ev.eval_str(
+        r#"(progn
+             (setq neo-after-error-command-ran nil)
+             (set (make-local-variable 'command-error-function)
+                  (lambda (_data _context _caller)
+                    (signal 'error '("presentation failed"))))
+             (fset 'neo-signaling-command
+                   (lambda () (interactive) (signal 'error '("boom"))))
+             (fset 'neo-after-error-command
+                   (lambda () (interactive) (setq neo-after-error-command-ran t))))"#,
+    )
+    .expect("install failing command-error-function probe");
+
+    run_command_loop_error_commands(
+        &mut ev,
+        global_map,
+        &[
+            ("f9", "neo-signaling-command"),
+            ("f10", "neo-after-error-command"),
+        ],
+    );
+
+    assert_eq!(
+        ev.eval_symbol("neo-after-error-command-ran")
+            .expect("after-error observation"),
+        Value::T,
+        "the command loop must keep reading commands after a failed report"
+    );
+}
+
+/// GNU `top_level_1' reports a startup error through the same `cmd_error'; a
+/// signal from that report throws to `top-level', and `command_loop' still
+/// enters `command_loop_2'.
+#[test]
+fn command_loop_survives_signaling_report_of_startup_error() {
+    crate::test_utils::init_test_tracing();
+    let (mut ev, global_map) = command_loop_error_test_context();
+    ev.eval_str(
+        r#"(progn
+             (setq neo-after-error-command-ran nil)
+             (setq top-level '(signal 'error '("init failed")))
+             (set (make-local-variable 'command-error-function)
+                  (lambda (_data _context _caller)
+                    (signal 'error '("presentation failed"))))
+             (fset 'neo-after-error-command
+                   (lambda () (interactive) (setq neo-after-error-command-ran t))))"#,
+    )
+    .expect("install failing startup report probe");
+
+    run_command_loop_error_commands(&mut ev, global_map, &[("f10", "neo-after-error-command")]);
+
+    assert_eq!(
+        ev.eval_symbol("neo-after-error-command-ran")
+            .expect("after-error observation"),
+        Value::T,
+        "a failed startup report must not keep the command loop from reading commands"
+    );
+}
+
 /// GNU decides whether an error is ignored while dispatching the signal, before
 /// `cmd_error_internal' invokes the buffer-local `command-error-function'.  A
 /// presentation callback may mutate `debug-ignored-errors', but that mutation
