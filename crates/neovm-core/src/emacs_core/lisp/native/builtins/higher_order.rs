@@ -2,23 +2,12 @@ use super::*;
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_min_args};
 use crate::emacs_core::eval::{CheckedNativeCallback, LispArgVec, native_callback_cache_enabled};
 use smallvec::SmallVec;
-use std::sync::LazyLock;
-
-// Sort knobs, read once per process:
-// | Knob | Values | Default | Effect |
-// | NEOVM_SORT_CAPTURE | off, on | on | Capture GNU's resolved predicate before key callbacks, including builtin aliases. |
-
-/// Immutable process configuration contains no Lisp state and may be read by
-/// concurrent mutators; captured predicates themselves belong to each sort.
-static SORT_CAPTURE: LazyLock<bool> =
-    LazyLock::new(|| std::env::var("NEOVM_SORT_CAPTURE").map_or(true, |value| value == "on"));
-
-#[inline]
-fn sort_capture_enabled() -> bool {
-    *SORT_CAPTURE
-}
 
 type MapResultVec = SmallVec<[Value; 8]>;
+
+#[cfg(test)]
+#[path = "tests/gd_e_sort.rs"]
+mod gd_e_sort;
 
 #[cfg(test)]
 #[path = "tests/higher_order_capture_test.rs"]
@@ -691,7 +680,7 @@ pub(crate) struct SortOptions {
 
 /// A sort's `lessp' predicate, resolved once for the whole sort.
 ///
-/// With `NEOVM_SORT_CAPTURE`, GNU `sort.c:resolve_fun` captures the current
+/// GNU `sort.c:resolve_fun` captures the current
 /// callable before computing keys. A captured subr is also its own designator:
 /// an epoch change falls back to calling that object, rather than reading a
 /// symbol that a key, predicate, debugger or GC hook may have redefined.
@@ -728,7 +717,7 @@ impl SortPredicate {
 }
 
 /// GNU `sort.c:resolve_fun`: follow aliases, but keep the original symbol for
-/// void and autoload cells. Compiler overrides keep their existing call path.
+/// void and autoload cells. Resolution follows the function cells directly.
 /// The caller roots the returned callable before any Lisp callback can run.
 pub(super) fn capture_sort_predicate(
     eval: &mut super::eval::Context,
@@ -737,27 +726,10 @@ pub(super) fn capture_sort_predicate(
     use crate::emacs_core::eval::subr_entry_from_value;
     use crate::tagged::header::{SubrDispatchKind, SubrFn, SubrFn2};
 
-    if eval.compiler_function_overrides_active() {
-        return None;
-    }
     if predicate.is_nil() {
         return Some(SortPredicate::ValueLt);
     }
-    let function = eval
-        .unwrap_symbol(predicate)
-        .as_symbol_id()
-        .and_then(|symbol| {
-            super::symbols::resolve_indirect_symbol_by_id_in_obarray_checked(
-                eval.obarray(),
-                symbol,
-                eval.symbols_with_pos_enabled,
-            )
-        })
-        .map(|(_, function)| function)
-        .filter(|function| {
-            !function.is_nil() && !crate::emacs_core::autoload::is_autoload_value(function)
-        })
-        .unwrap_or(predicate);
+    let function = resolve_sort_function(eval, predicate);
 
     if let Some((_, entry)) = subr_entry_from_value(function)
         && entry.dispatch_kind == SubrDispatchKind::Builtin
@@ -783,7 +755,29 @@ pub(super) fn capture_sort_predicate(
     Some(SortPredicate::Generic(function))
 }
 
+/// GNU sort.c:1061-1077 resolves symbols and aliases once, retaining void
+/// and autoload symbols for the ordinary call path. Callers root this value.
+fn resolve_sort_function(eval: &super::eval::Context, function: Value) -> Value {
+    eval.unwrap_symbol(function)
+        .as_symbol_id()
+        .and_then(|symbol| {
+            super::symbols::resolve_indirect_symbol_by_id_in_obarray_checked(
+                eval.obarray(),
+                symbol,
+                eval.symbols_with_pos_enabled,
+            )
+        })
+        .map(|(_, function)| function)
+        .filter(|function| {
+            !function.is_nil() && !crate::emacs_core::autoload::is_autoload_value(function)
+        })
+        .unwrap_or(function)
+}
+
 pub(crate) trait SortRuntime {
+    fn resolve_sort_key(&mut self, key: Value) -> Value {
+        key
+    }
     fn call_sort_function1(&mut self, function: Value, arg: Value) -> Result<Value, Flow>;
     fn call_sort_function2(
         &mut self,
@@ -823,6 +817,9 @@ pub(crate) trait SortRuntime {
 }
 
 impl SortRuntime for super::eval::Context {
+    fn resolve_sort_key(&mut self, key: Value) -> Value {
+        resolve_sort_function(self, key)
+    }
     fn call_sort_function1(&mut self, function: Value, arg: Value) -> Result<Value, Flow> {
         let mut args = LispArgVec::new();
         args.push(arg);
@@ -849,9 +846,7 @@ impl SortRuntime for super::eval::Context {
         if predicate.is_nil() {
             return SortPredicate::ValueLt;
         }
-        if sort_capture_enabled()
-            && let Some(captured) = capture_sort_predicate(self, predicate)
-        {
+        if let Some(captured) = capture_sort_predicate(self, predicate) {
             return captured;
         }
         let callback_epoch = self.obarray().function_epoch();
@@ -1057,15 +1052,14 @@ pub(crate) fn stable_sort_values_with(
 
     // GNU captures the predicate before key callbacks, which may redefine it
     // and collect the old callable after removing its function-cell root.
-    let captured_predicate = if sort_capture_enabled() {
-        let predicate = runtime.resolve_sort_predicate(lessp_fn);
-        if let Some(callable) = predicate.callable() {
-            runtime.root_sort_value(callable);
-        }
-        Some(predicate)
-    } else {
-        None
-    };
+    let lessp_fn = runtime.resolve_sort_predicate(lessp_fn);
+    if let Some(callable) = lessp_fn.callable() {
+        runtime.root_sort_value(callable);
+    }
+    let key_fn = runtime.resolve_sort_key(key_fn);
+    if !key_fn.is_nil() {
+        runtime.root_sort_value(key_fn);
+    }
 
     let mut items: Vec<SortItem> = values
         .iter()
@@ -1092,7 +1086,6 @@ pub(crate) fn stable_sort_values_with(
         items.reverse();
     }
 
-    let lessp_fn = captured_predicate.unwrap_or_else(|| runtime.resolve_sort_predicate(lessp_fn));
     gnu_style_sort_items(runtime, &mut items, lessp_fn)?;
 
     if reverse {

@@ -129,9 +129,8 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOVM_REGEX_ANCHOR_ALT",
     "NEOVM_REGEX_DFA",
     "NEOVM_REGEX_DFA_STATS",
-    // Folded two-character suffix search and GNU sort predicate capture.
+    // Folded two-character suffix search.
     "NEOVM_REGEX_SUFFIX_LITERAL",
-    "NEOVM_SORT_CAPTURE",
     "NEOVM_CALLBACK_CACHE",
     // P4.1 Stage 0 cconv memo (`off`/`stats`/`on`/`verify`) and the native
     // no-lexvars closure path (`on`).

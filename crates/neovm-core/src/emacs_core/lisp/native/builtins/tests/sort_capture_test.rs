@@ -1,5 +1,5 @@
 //! Resolver engagement tests. Lisp behavior is pinned by GNU-refreshed forms in
-//! `neovm-oracle-tests/src/sort/captured_predicate.rs` under both knob states.
+//! `neovm-oracle-tests/src/sort/captured_predicate.rs` under the VM and default JIT.
 use super::higher_order::{SortPredicate, capture_sort_predicate};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::value::Value;
