@@ -609,6 +609,25 @@ fn edit_commands_remeasure_after_change_callbacks_like_gnu() {
 }
 
 #[test]
+fn treesit_parse_string_restores_caller_before_parser_creation() {
+    if !oracle_enabled() {
+        return;
+    }
+    // tsA owns condition-name parity; this probe observes caller state on
+    // language-loader failure without pinning the independent error symbol.
+    let form = r#"(with-temp-buffer
+      (insert "aé€𝄞")
+      (let ((orig (current-buffer)))
+        (list (condition-case nil
+                (treesit-parse-string "x" 'no-such-lang-tse-scope)
+                (error (list 'caught (eq (current-buffer) orig))))
+              (eq (current-buffer) orig) (buffer-string) (point))))"#;
+    let expected = run_oracle_eval(form).expect("GNU treesit oracle");
+    let actual = run_neovm_eval(form).expect("NeoVM treesit probe");
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn buffer_property_hook_errors_restore_current_buffer() {
     if !oracle_enabled() {
         return;
