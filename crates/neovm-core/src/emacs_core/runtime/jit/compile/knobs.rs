@@ -3,6 +3,67 @@
 //! Every emission a knob gates is decided at compile time, so both sides of
 //! an A/B run in one binary.
 
+/// Whether an unresolved Switch table participates in ops-only loop policy.
+/// Threading: immutable scalar compile configuration; no Lisp state or cache.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, strum::EnumString)]
+pub(crate) enum SwitchLoopPolicy {
+    #[default]
+    #[strum(serialize = "off")]
+    DirectOnly,
+    #[strum(serialize = "on", serialize = "1")]
+    Conservative,
+}
+
+pub(super) fn parse_switch_loop_policy(value: Option<&str>) -> SwitchLoopPolicy {
+    value
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or_default()
+}
+
+/// Read once, before emitting a leaf. Off preserves the previous direct-edge
+/// loop policy; on also classifies operandless Switch as a possible loop.
+pub(crate) fn jit_switch_loop_policy() -> SwitchLoopPolicy {
+    #[cfg(test)]
+    if let Some(policy) = SWITCH_LOOP_POLICY_TEST_OVERRIDE.with(std::cell::Cell::get) {
+        return policy;
+    }
+    static POLICY: std::sync::OnceLock<SwitchLoopPolicy> = std::sync::OnceLock::new();
+    *POLICY.get_or_init(|| {
+        parse_switch_loop_policy(
+            std::env::var("NEOVM_JIT_SWITCH_LOOP_POLICY")
+                .ok()
+                .as_deref(),
+        )
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Compiler-test scalar only; never a mutator's Lisp state.
+    static SWITCH_LOOP_POLICY_TEST_OVERRIDE: std::cell::Cell<Option<SwitchLoopPolicy>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+#[must_use]
+pub(crate) fn switch_loop_policy_scope_for_test(policy: SwitchLoopPolicy) -> impl Drop {
+    #[must_use]
+    #[derive(Debug)]
+    struct Scope {
+        previous: Option<SwitchLoopPolicy>,
+        _compiler_thread: std::marker::PhantomData<std::rc::Rc<()>>,
+    }
+    static_assertions::assert_not_impl_any!(Scope: Send, Sync);
+    impl Drop for Scope {
+        fn drop(&mut self) {
+            let _ = SWITCH_LOOP_POLICY_TEST_OVERRIDE.try_with(|current| current.set(self.previous));
+        }
+    }
+    Scope {
+        previous: SWITCH_LOOP_POLICY_TEST_OVERRIDE.with(|current| current.replace(Some(policy))),
+        _compiler_thread: std::marker::PhantomData,
+    }
+}
+
 /// Full allocation for bodies with at most this many bytecode ops; zero
 /// preserves the original policy. Threading: immutable process configuration,
 /// safely initialized once and shared by every mutator's compiler.

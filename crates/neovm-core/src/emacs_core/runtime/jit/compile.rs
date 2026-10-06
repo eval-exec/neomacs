@@ -3979,33 +3979,8 @@ pub(crate) fn build_baseline_leaf_object<S: LeafSink>(
 
 mod boolean;
 mod leaf_builder;
-/// Original direct-edge policy before the P6.11 typed branch view.
-pub(crate) fn has_back_edge(ops: &[Op]) -> bool {
-    ops.iter().enumerate().any(|(i, op)| match op {
-        Op::Goto(t)
-        | Op::GotoIfNil(t)
-        | Op::GotoIfNotNil(t)
-        | Op::GotoIfNilElsePop(t)
-        | Op::GotoIfNotNilElsePop(t) => (*t as usize) <= i,
-        _ => false,
-    })
-}
-
-/// Original resolved CFG policy before the P6.11 typed branch view.
-pub(crate) fn baseline_has_backedge(ops: &[Op], cfg: &Cfg) -> bool {
-    ops.iter().enumerate().any(|(i, o)| match o {
-        Op::Goto(t)
-        | Op::GotoIfNil(t)
-        | Op::GotoIfNotNil(t)
-        | Op::GotoIfNilElsePop(t)
-        | Op::GotoIfNotNilElsePop(t) => (*t as usize) <= i,
-        _ => false,
-    }) || cfg
-        .switch_targets
-        .iter()
-        .any(|(i, ts)| ts.iter().any(|&(_, t)| t <= *i))
-}
-
+mod loop_walk;
+pub(crate) use loop_walk::{baseline_has_backedge, has_back_edge};
 mod leaf_builder_selected;
 mod numeric_carrier;
 pub(crate) mod opt_backend;
@@ -4317,6 +4292,10 @@ mod opt_sink_native_verification;
 #[cfg(test)]
 #[path = "compile/tests/opt_rootwin_counts_test.rs"]
 mod opt_rootwin_count_tests;
+
+#[cfg(test)]
+#[path = "tests/branch_targets.rs"]
+mod branch_target_tests;
 
 #[cfg(test)]
 #[path = "compile/tests/function_params.rs"]

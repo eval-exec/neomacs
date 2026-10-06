@@ -180,6 +180,7 @@ fn fixed(ty: TypeSet) -> Option<Range> {
 /// arbitrary narrowing Refine, mutable length/backing/slot-0, Eq/SWP or floating
 /// arithmetic is made speculative. Only a proved live FLOAT payload is an
 /// immutable memory read; its native adapter is a separate implementation seam.
+#[deny(clippy::wildcard_enum_match_arm)]
 fn movable(func: &Func, inst: &InstData, args: &[Value]) -> Option<bool> {
     let result = inst.result?;
     let output = &func.values[result.index()];
@@ -236,7 +237,52 @@ fn movable(func: &Func, inst: &InstData, args: &[Value]) -> Option<bool> {
                     Rep::Tagged | Rep::TaggedFix | Rep::RawInt | Rep::Bool
                 )
         }
-        _ => false,
+        Opcode::Sink(..)
+        | Opcode::EnvConst(..)
+        | Opcode::Arg(..)
+        | Opcode::OsrSlot(..)
+        | Opcode::UnboxF64
+        | Opcode::FixDiv
+        | Opcode::FixRem
+        | Opcode::FixMinMax(..)
+        | Opcode::F64Add
+        | Opcode::F64Sub
+        | Opcode::F64Mul
+        | Opcode::F64Div
+        | Opcode::F64Cmp(..)
+        | Opcode::F64FromFix
+        | Opcode::F64Neg
+        | Opcode::F64Sqrt
+        | Opcode::Eq
+        | Opcode::CheckType(..)
+        | Opcode::CheckNonZero
+        | Opcode::CheckBounds
+        | Opcode::CheckEq(..)
+        | Opcode::CheckNoOverflow
+        | Opcode::LoadCar
+        | Opcode::LoadCdr
+        | Opcode::StoreCar
+        | Opcode::StoreCdr
+        | Opcode::LoadVecLen
+        | Opcode::LoadVecSlots
+        | Opcode::LoadVecElem
+        | Opcode::StoreVecElem
+        | Opcode::LoadRecTag
+        | Opcode::LoadSymValue(..)
+        | Opcode::StoreSymValue(..)
+        | Opcode::LoadF64
+        | Opcode::AllocCons
+        | Opcode::AllocFloat
+        | Opcode::Call { .. }
+        | Opcode::Builtin(..)
+        | Opcode::Opaque(..)
+        | Opcode::OpaqueBool(..)
+        | Opcode::InlineEntry(..)
+        | Opcode::Poll
+        | Opcode::PublishRoot
+        | Opcode::FixAdd { checked: true }
+        | Opcode::FixSub { checked: true }
+        | Opcode::FixMul { checked: true } => false,
     };
     yes.then_some(false)
 }

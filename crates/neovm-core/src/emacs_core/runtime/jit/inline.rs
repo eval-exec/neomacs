@@ -150,6 +150,7 @@ impl FusedBody {
 /// a jump table breaks a structural assumption of the splice.
 ///
 /// `feedback` is the CALLEE's for this op's pc.
+#[deny(clippy::wildcard_enum_match_arm)]
 fn op_is_inlinable(op: &Op, feedback: NumericFeedback) -> bool {
     match op {
         // Stack shuffles, constants, control flow inside the body.
@@ -207,7 +208,55 @@ fn op_is_inlinable(op: &Op, feedback: NumericFeedback) -> bool {
         | Op::Geq
         | Op::Max
         | Op::Min => feedback == NumericFeedback::FixnumOnly,
-        _ => false,
+        Op::VarRef(..)
+        | Op::VarSet(..)
+        | Op::VarBind(..)
+        | Op::Unbind(..)
+        | Op::Call(..)
+        | Op::Apply(..)
+        | Op::Switch
+        | Op::Div
+        | Op::Rem
+        | Op::Cons
+        | Op::List(..)
+        | Op::Length
+        | Op::Nth
+        | Op::Nthcdr
+        | Op::Setcar
+        | Op::Setcdr
+        | Op::Elt
+        | Op::Nconc
+        | Op::Nreverse
+        | Op::Member
+        | Op::Memq
+        | Op::Assq
+        | Op::Equal
+        | Op::Concat(..)
+        | Op::Substring
+        | Op::StringEqual
+        | Op::StringLessp
+        | Op::Aref
+        | Op::Aset
+        | Op::SymbolValue
+        | Op::SymbolFunction
+        | Op::Set
+        | Op::Fset
+        | Op::Get
+        | Op::Put
+        | Op::PushConditionCase(..)
+        | Op::PushConditionCaseRaw(..)
+        | Op::PushCatch(..)
+        | Op::PopHandler
+        | Op::UnwindProtectPop
+        | Op::Throw
+        | Op::SaveCurrentBuffer
+        | Op::SaveExcursion
+        | Op::SaveRestriction
+        | Op::SaveWindowExcursion
+        | Op::MakeClosure(..)
+        | Op::CallBuiltin(..)
+        | Op::CallBuiltinSym(..)
+        | Op::TrapOutOfRangeConstant(..) => false,
     }
 }
 
@@ -300,14 +349,12 @@ fn inlinable_verdict(callee: &ByteCodeFunction, nargs: usize) -> Result<(), Stri
 }
 
 /// The branch target of a jump op, if it is one.
+#[deny(clippy::wildcard_enum_match_arm)]
 fn jump_target(op: &Op) -> Option<u32> {
-    match op {
-        Op::Goto(t)
-        | Op::GotoIfNil(t)
-        | Op::GotoIfNotNil(t)
-        | Op::GotoIfNilElsePop(t)
-        | Op::GotoIfNotNilElsePop(t) => Some(*t),
-        _ => None,
+    use crate::emacs_core::bytecode::opcode::BranchTargets;
+    match op.branch_targets() {
+        BranchTargets::Direct(target) => Some(target.get()),
+        BranchTargets::None | BranchTargets::Handler(_) | BranchTargets::SwitchTable => None,
     }
 }
 
@@ -754,3 +801,7 @@ mod closure_tests;
 #[cfg(test)]
 #[path = "tests/inline_entry_cache_test.rs"]
 mod entry_cache_tests;
+
+#[cfg(test)]
+#[path = "tests/branch_target_admission.rs"]
+mod branch_target_admission_tests;

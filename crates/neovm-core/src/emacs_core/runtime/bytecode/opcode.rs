@@ -6,6 +6,12 @@
 
 use serde::{Deserialize, Serialize};
 
+// Branch classification serves only JIT compilation and its tests.
+#[cfg(any(test, feature = "jit"))]
+mod branch_targets;
+#[cfg(any(test, feature = "jit"))]
+pub(crate) use branch_targets::BranchTargets;
+
 /// A single bytecode instruction.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Op {

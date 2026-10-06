@@ -549,12 +549,98 @@ fn unbind_sites(
 /// Whether the baseline lowers OP with an inline variable write that reads
 /// the heap's barrier window (`heap_inline::hoist_heap_ptr` counts these
 /// with its own sites). JIT only.
+#[deny(clippy::wildcard_enum_match_arm)]
 pub(crate) fn op_reads_heap_window(op: &Op) -> bool {
     let knob = jit_inline_vars();
     match op {
         Op::VarSet(_) => knob.set,
         Op::VarBind(_) | Op::Unbind(_) => knob.bind,
-        _ => false,
+        Op::Constant(..)
+        | Op::Nil
+        | Op::True
+        | Op::Pop
+        | Op::Dup
+        | Op::StackRef(..)
+        | Op::StackSet(..)
+        | Op::DiscardN(..)
+        | Op::VarRef(..)
+        | Op::Call(..)
+        | Op::Apply(..)
+        | Op::Goto(..)
+        | Op::GotoIfNil(..)
+        | Op::GotoIfNotNil(..)
+        | Op::GotoIfNilElsePop(..)
+        | Op::GotoIfNotNilElsePop(..)
+        | Op::Switch
+        | Op::Return
+        | Op::Add
+        | Op::Sub
+        | Op::Mul
+        | Op::Div
+        | Op::Rem
+        | Op::Add1
+        | Op::Sub1
+        | Op::Negate
+        | Op::Eqlsign
+        | Op::Gtr
+        | Op::Lss
+        | Op::Leq
+        | Op::Geq
+        | Op::Max
+        | Op::Min
+        | Op::Car
+        | Op::Cdr
+        | Op::Cons
+        | Op::List(..)
+        | Op::Length
+        | Op::Nth
+        | Op::Nthcdr
+        | Op::Setcar
+        | Op::Setcdr
+        | Op::CarSafe
+        | Op::CdrSafe
+        | Op::Elt
+        | Op::Nconc
+        | Op::Nreverse
+        | Op::Member
+        | Op::Memq
+        | Op::Assq
+        | Op::Symbolp
+        | Op::Consp
+        | Op::Stringp
+        | Op::Listp
+        | Op::Integerp
+        | Op::Numberp
+        | Op::Null
+        | Op::Not
+        | Op::Eq
+        | Op::Equal
+        | Op::Concat(..)
+        | Op::Substring
+        | Op::StringEqual
+        | Op::StringLessp
+        | Op::Aref
+        | Op::Aset
+        | Op::SymbolValue
+        | Op::SymbolFunction
+        | Op::Set
+        | Op::Fset
+        | Op::Get
+        | Op::Put
+        | Op::PushConditionCase(..)
+        | Op::PushConditionCaseRaw(..)
+        | Op::PushCatch(..)
+        | Op::PopHandler
+        | Op::UnwindProtectPop
+        | Op::Throw
+        | Op::SaveCurrentBuffer
+        | Op::SaveExcursion
+        | Op::SaveRestriction
+        | Op::SaveWindowExcursion
+        | Op::MakeClosure(..)
+        | Op::CallBuiltin(..)
+        | Op::CallBuiltinSym(..)
+        | Op::TrapOutOfRangeConstant(..) => false,
     }
 }
 
