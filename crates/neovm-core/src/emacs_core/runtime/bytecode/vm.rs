@@ -6254,21 +6254,29 @@ impl<'a> Vm<'a> {
             return;
         }
 
-        let Some(first_arg) = call_args.first() else {
+        // Copy the argument out of the caller's buffer, as `replacement` is
+        // copied out of `result`. The walks below hand `from` to hash-table
+        // mutation closures, and the concurrent mutation path runs those out
+        // of line: a `from` pointing into `call_args` would make the
+        // interpreter's argument buffer escape at all six run_loop call sites
+        // of this function, which reloads it around each call and reshuffled
+        // the whole dispatch loop's register allocation (+2.5% VM tier).
+        let Some(&first_arg) = call_args.first() else {
             return;
         };
         if !first_arg.is_string() {
             return;
         }
 
-        if !result.is_string() || eq_value(first_arg, result) {
+        if !result.is_string() || eq_value(&first_arg, result) {
             return;
         }
         let replacement = *result;
 
-        if crate::emacs_core::value::equal_value(first_arg, &replacement, 0) {
+        if crate::emacs_core::value::equal_value(&first_arg, &replacement, 0) {
             return;
         }
+        let first_arg = &first_arg;
 
         let mut visited = HashSet::new();
         for value in self.ctx.bc_buf.iter_mut() {
