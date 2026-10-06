@@ -228,6 +228,10 @@ name = "gdm_casing"
 path = "tests/gdm_casing.rs"
 
 [[test]]
+name = "gdm_columns"
+path = "tests/gdm_columns.rs"
+
+[[test]]
 name = "gdm_region"
 path = "tests/gdm_region.rs"
 

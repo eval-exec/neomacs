@@ -19,7 +19,8 @@ use super::value::*;
 use super::xdisp::LineWrap;
 use super::xdisp::line_number_digit_width;
 use crate::buffer::{
-    Buffer, CharLen, CharPos0, EmacsByteLen, EmacsBytePos, EmacsByteRange, TextExtent,
+    Buffer, CharLen, CharPos0, DisplayColumn, EmacsByteLen, EmacsBytePos, EmacsByteRange,
+    TextExtent,
 };
 use crate::buffer::{BufferId, LispCharPos1};
 use crate::emacs_core::error::LispCondition;
@@ -1357,33 +1358,38 @@ pub(crate) fn dynamic_buffer_or_global_symbol_value(
     obarray.symbol_value_copied(name)
 }
 
+/// A GNU tab stop width: only 1..=1000 are valid; other Lisp values mean eight.
+/// This immutable value is local to one scan and carries no mutator state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TabWidth(usize);
+
+impl From<Value> for TabWidth {
+    fn from(value: Value) -> Self {
+        Self(match value.as_fixnum() {
+            Some(width @ 1..=1000) => width as usize,
+            _ => 8,
+        })
+    }
+}
+
+impl TabWidth {
+    const fn get(self) -> usize {
+        self.0
+    }
+}
+
 fn tab_width_in_state(
     obarray: &Obarray,
     _dynamic: &[OrderedRuntimeBindingMap],
     buf: Option<&Buffer>,
-) -> usize {
-    // By identity (tab_width_sym_id): `display_advance_at` calls this once per
-    // character, so the name must not be re-hashed into the slot map each time.
-    match obarray.value_in_buffer_id(buf, tab_width_sym_id()) {
-        Some(v) if v.is_fixnum() && v.as_fixnum().unwrap() > 0 => v.as_fixnum().unwrap() as usize,
-        Some(v) if v.is_char() && (v.as_char().unwrap() as u32) > 0 => {
-            v.as_char().unwrap() as usize
-        }
-        _ => 8,
-    }
+) -> TabWidth {
+    // Resolve by identity while retaining GNU's validated tab-width fallback.
+    TabWidth::from(obarray.value_in_buffer_id(buf, tab_width_sym_id()).unwrap_or(Value::NIL))
 }
 
-/// Current buffer's `tab-width', used by `char-width' for a TAB character.
-///
-/// GNU `CHARACTER_WIDTH` (buffer.h) returns `SANE_TAB_WIDTH (current_buffer)`
-/// for `\t', i.e. the buffer-local `tab-width' clamped to 1..1000.  This is
-/// the column width `char-width' reports for a tab, and what
-/// `internal_self_insert' uses to decide how much to overwrite.
+/// GNU SANE_TAB_WIDTH, shared with char-width and string formatting.
 pub(crate) fn current_buffer_tab_width(ctx: &crate::emacs_core::eval::Context) -> usize {
-    let buf = ctx.buffers.current_buffer();
-    let width = tab_width_in_state(&ctx.obarray, &[], buf);
-    // GNU SANE_TAB_WIDTH clamps to 1..=1000.
-    width.clamp(1, 1000)
+    tab_width_in_state(&ctx.obarray, &[], ctx.buffers.current_buffer()).get()
 }
 
 fn indent_tabs_mode_in_state(
@@ -1398,16 +1404,6 @@ fn indent_tabs_mode_in_state(
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn buffer_read_only_active(eval: &super::eval::Context, buf: &Buffer) -> bool {
     super::editfns::buffer_read_only_active_in_state(&eval.obarray, &[], buf)
-}
-
-#[derive(Clone, Copy)]
-struct DecodedUnit {
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    start: usize,
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    end: usize,
-    code: u32,
-    width: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1453,9 +1449,9 @@ fn next_column(column: usize, ch: char, tab_width: usize) -> usize {
     }
 }
 
-fn next_column_for_code(column: usize, code: u32, width: usize, tab_width: usize) -> usize {
+fn next_column_for_code(column: usize, code: u32, width: usize, tab_width: TabWidth) -> usize {
     if code == b'\t' as u32 {
-        let tab = tab_width.max(1);
+        let tab = tab_width.get();
         column + (tab - (column % tab))
     } else {
         column + width
@@ -1990,10 +1986,12 @@ fn current_buffer_line_bounds(
     buffer_id: crate::buffer::BufferId,
     point: EmacsBytePos,
 ) -> Result<EmacsByteRange, Flow> {
-    let buf = ctx
-        .buffers
-        .get(buffer_id)
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let buf = ctx.buffers.get(buffer_id).ok_or_else(|| {
+        signal(
+            LispCondition::Error,
+            vec![Value::string("No current buffer")],
+        )
+    })?;
     Ok(line_bounds(buf, point))
 }
 
@@ -2032,17 +2030,161 @@ fn next_char_property_boundary_byte(
     if next > byte { next } else { limit }
 }
 
+/// Closed scan targets prevent combining a point limit with a column goal.
+/// They carry only positions/columns, and are local to the current mutator call.
+#[derive(Clone, Copy, Debug)]
+enum ColumnTarget {
+    Position(EmacsBytePos),
+    Column(DisplayColumn),
+}
+
+/// GNU selective-display recognizes CR as line end only for the symbol t.
+/// This per-scan copy has no Lisp handles or shared mutable state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LineEndPolicy {
+    Newline,
+    NewlineOrCarriageReturn,
+}
+
+impl LineEndPolicy {
+    fn is_line_end(self, code: u32) -> bool {
+        match self {
+            Self::Newline => code == u32::from(b'\n'),
+            Self::NewlineOrCarriageReturn => matches!(code, 10 | 13),
+        }
+    }
+}
+
+/// Per-scan control-character rendering, immutable and safe for any mutator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ControlRendering {
+    Caret,
+    Octal,
+}
+
+impl ControlRendering {
+    fn width(self) -> usize {
+        match self {
+            Self::Caret => 2,
+            Self::Octal => 4,
+        }
+    }
+}
+
+/// A display-vector newline stops inside the vector without consuming its
+/// source character. Non-newline glyphs each occupy one column in indent.c.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ColumnAdvance {
+    Continue(DisplayColumn),
+    EndOfLine(DisplayColumn),
+}
+
+fn advance_column_glyphs(
+    column: DisplayColumn,
+    entry: &Value,
+    tab_width: TabWidth,
+    line_end: LineEndPolicy,
+) -> Option<ColumnAdvance> {
+    let glyphs = entry.as_vector_data()?;
+    let mut column = column.get();
+    for glyph in glyphs.iter() {
+        let code = crate::encoding::display_glyph_character(*glyph)
+            .map(|character| character.code())
+            .unwrap_or(u32::from(b' '));
+        if line_end.is_line_end(code) {
+            return Some(ColumnAdvance::EndOfLine(DisplayColumn::new(column)));
+        }
+        column = if code == u32::from(b'\t') {
+            next_column_for_code(column, code, 1, tab_width)
+        } else {
+            column.saturating_add(1)
+        };
+    }
+    Some(ColumnAdvance::Continue(DisplayColumn::new(column)))
+}
+
+/// GNU indent.c:395-462 walks the simple buffer backwards, including each
+/// display vector. Its tab accumulator measures the suffix after the last tab.
+/// This call borrows one mutator's buffer and holds no shared or cached state.
+fn simple_backward_column(
+    buf: &Buffer,
+    point: EmacsBytePos,
+    display_table: Option<&Value>,
+    tab_width: TabWidth,
+    line_end: LineEndPolicy,
+    control: ControlRendering,
+) -> DisplayColumn {
+    let mut scan = point;
+    let start = buf.accessible_emacs_byte_region().start();
+    let mut column = DisplayColumn::ZERO;
+    let mut post_tab = None::<DisplayColumn>;
+    let tab = tab_width.get();
+    'text: while scan > start {
+        scan = scan.saturating_sub_len(EmacsByteLen::new(1));
+        let Some(byte) = buf.emacs_byte_at_pos(scan) else {
+            break;
+        };
+        let entry = display_table.map(|table| super::chartable::ct_ref(table, i64::from(byte)));
+        let glyphs = entry.as_ref().and_then(|entry| entry.as_vector_data());
+        let count = glyphs.as_ref().map_or(1, |glyphs| glyphs.len());
+        for index in (0..count).rev() {
+            let code = match glyphs.as_ref() {
+                Some(glyphs) => crate::encoding::display_glyph_character(glyphs[index])
+                    .map(|character| character.code())
+                    .unwrap_or(u32::from(b' ')),
+                None => u32::from(byte),
+            };
+            if (0o40..0o177).contains(&code) {
+                column = DisplayColumn::new(column.get().saturating_add(1));
+            } else if line_end.is_line_end(code) {
+                break 'text;
+            } else if code == u32::from(b'\t') {
+                let before = match post_tab {
+                    Some(_) => (column.get() + tab) / tab * tab,
+                    None => column.get(),
+                };
+                post_tab = Some(DisplayColumn::new(
+                    post_tab
+                        .map_or(0, DisplayColumn::get)
+                        .saturating_add(before),
+                ));
+                column = DisplayColumn::ZERO;
+            } else {
+                let width = if glyphs.is_some() {
+                    1
+                } else if code < 0x80 {
+                    control.width()
+                } else {
+                    4
+                };
+                column = DisplayColumn::new(column.get().saturating_add(width));
+            }
+        }
+    }
+    match post_tab {
+        Some(following) => {
+            DisplayColumn::new(((column.get() + tab) / tab * tab).saturating_add(following.get()))
+        }
+        None => column,
+    }
+}
+
 fn scan_for_column(
     ctx: &mut super::eval::Context,
     buffer_id: crate::buffer::BufferId,
-    end_byte: Option<EmacsBytePos>,
-    goal_column: Option<usize>,
+    target: ColumnTarget,
 ) -> Result<ColumnScan, Flow> {
-    let (mut scan, line_end, tab_width) = {
-        let buf = ctx
-            .buffers
-            .get(buffer_id)
-            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let (end_byte, goal) = match target {
+        ColumnTarget::Position(pos) => (Some(pos), usize::MAX),
+        ColumnTarget::Column(goal) => (None, goal.get()),
+    };
+    let (mut scan, line_end, tab_width, line_end_policy, control_rendering) = {
+        let buf = ctx.buffers.get(buffer_id).ok_or_else(|| {
+            signal(
+                LispCondition::Error,
+                vec![Value::string("No current buffer")],
+            )
+        })?;
         // Anchor the line at the target byte position when one is given so the
         // column is measured from *that* position's beginning-of-line, not the
         // buffer's current point.  For the two in-buffer callers
@@ -2052,17 +2194,37 @@ fn scan_for_column(
         // non-selected window's `pointm`.
         let anchor = end_byte.unwrap_or_else(|| buf.point_emacs_byte_pos());
         let line = line_bounds(buf, anchor);
+        let line_end_policy = if dynamic_buffer_or_global_symbol_value(
+            &ctx.obarray,
+            &[],
+            Some(buf),
+            "selective-display",
+        ) == Some(Value::T)
+        {
+            LineEndPolicy::NewlineOrCarriageReturn
+        } else {
+            LineEndPolicy::Newline
+        };
+        let control_rendering =
+            if dynamic_buffer_or_global_symbol_value(&ctx.obarray, &[], Some(buf), "ctl-arrow")
+                .is_none_or(|value| value.is_truthy())
+            {
+                ControlRendering::Caret
+            } else {
+                ControlRendering::Octal
+            };
         (
             line.start().get(),
             line.end().get(),
             tab_width_in_state(&ctx.obarray, &[], Some(buf)),
+            line_end_policy,
+            control_rendering,
         )
     };
     let end = end_byte
         .map(|pos| pos.get())
         .unwrap_or(line_end)
         .min(line_end);
-    let goal = goal_column.unwrap_or(usize::MAX);
     let mut column = 0usize;
     let mut previous_byte_pos = scan;
     let mut previous_column = 0usize;
@@ -2082,6 +2244,33 @@ fn scan_for_column(
             })
             .filter(|v| !v.is_nil())
     };
+
+    // GNU's simple backward scan resolves glyph vectors before deciding that
+    // CR ends a line. A literal-CR prefix reset would ignore table overrides
+    // and choose the wrong side of a line break inside a vector.
+    if let ColumnTarget::Position(point) = target
+        && (line_end_policy == LineEndPolicy::NewlineOrCarriageReturn || display_table.is_some())
+        && let Some(buf) = ctx.buffers.get(buffer_id)
+        && buf.text_props_is_empty()
+        && buf.overlays.is_empty()
+        && buf.total_char_len().get() == buf.total_emacs_byte_len().get()
+    {
+        let column = simple_backward_column(
+            buf,
+            point,
+            display_table.as_ref(),
+            tab_width,
+            line_end_policy,
+            control_rendering,
+        );
+        return Ok(ColumnScan {
+            byte_pos: point,
+            column: column.get(),
+            previous_byte_pos: point,
+            previous_column: column.get(),
+            previous_code: None,
+        });
+    }
 
     // Property probes are re-run only at the next change boundary of their
     // property (GNU `skip_invisible`'s `next_boundary`, extended to all
@@ -2178,11 +2367,13 @@ fn scan_for_column(
                 next_char_property_boundary_byte(ctx, buffer_id, scan, composition_sym, end);
         }
 
-        let (code, char_len, width) = {
-            let buf = ctx
-                .buffers
-                .get(buffer_id)
-                .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let (code, char_len, width, multibyte) = {
+            let buf = ctx.buffers.get(buffer_id).ok_or_else(|| {
+                signal(
+                    LispCondition::Error,
+                    vec![Value::string("No current buffer")],
+                )
+            })?;
             let scan_pos = EmacsBytePos::new(scan);
             let Some(code) = buf.char_code_after_emacs_byte_pos(scan_pos) else {
                 break;
@@ -2191,26 +2382,51 @@ fn scan_for_column(
                 .char_after_emacs_byte_len(scan_pos)
                 .map(|len| len.max(EmacsByteLen::new(1)))
                 .unwrap_or(EmacsByteLen::new(1));
-            let width = buffer_char_display_width(buf, scan_pos, code);
-            (code, char_len, width)
+            let width = if code < 0x20 || code == 0x7f {
+                control_rendering.width()
+            } else {
+                buffer_char_display_width(buf, scan_pos, code)
+            };
+            (code, char_len, width, buf.get_multibyte())
         };
-
-        if code == b'\n' as u32 {
-            break;
-        }
 
         previous_byte_pos = scan;
         previous_column = column;
         previous_code = Some(code);
-        // A display-table entry remaps the character to a glyph sequence,
-        // overriding its normal width (and tab expansion).
-        column = match display_table
+        let glyph_entry = display_table
             .as_ref()
-            .and_then(|dt| display_table_glyph_width(dt, code))
-        {
-            Some(glyph_width) => column.saturating_add(glyph_width),
-            None => next_column_for_code(column, code, width, tab_width),
-        };
+            .map(|dt| super::chartable::ct_ref(dt, i64::from(code)));
+        // GNU indent.c:283-295 counts a multibyte display vector by length;
+        // :760-788 interprets TAB/newline within single-byte glyph vectors.
+        let glyph_advance = glyph_entry.as_ref().and_then(|entry| {
+            if multibyte && code >= 0x80 {
+                entry.as_vector_data().map(|glyphs| {
+                    ColumnAdvance::Continue(DisplayColumn::new(
+                        column.saturating_add(glyphs.len().min(1000)),
+                    ))
+                })
+            } else {
+                advance_column_glyphs(
+                    DisplayColumn::new(column),
+                    entry,
+                    tab_width,
+                    line_end_policy,
+                )
+            }
+        });
+        match glyph_advance {
+            Some(ColumnAdvance::Continue(next)) => column = next.get(),
+            Some(ColumnAdvance::EndOfLine(next)) => {
+                column = next.get();
+                break;
+            }
+            None => {
+                if line_end_policy.is_line_end(code) {
+                    break;
+                }
+                column = next_column_for_code(column, code, width, tab_width);
+            }
+        }
         scan += char_len.get();
     }
 
@@ -2221,56 +2437,6 @@ fn scan_for_column(
         previous_column,
         previous_code,
     })
-}
-
-fn decode_lisp_string_units(text: &LispString) -> Vec<DecodedUnit> {
-    let mut out = Vec::new();
-    let bytes = text.as_bytes();
-    if text.is_multibyte() {
-        let mut pos = 0usize;
-        while pos < bytes.len() {
-            let start = pos;
-            let (code, len) = crate::emacs_core::emacs_char::string_char(&bytes[pos..]);
-            pos += len;
-            let width = if crate::emacs_core::emacs_char::char_byte8_p(code) {
-                4
-            } else if let Some(ch) = char::from_u32(code) {
-                crate::encoding::char_width(ch)
-            } else {
-                1
-            };
-            out.push(DecodedUnit {
-                start,
-                end: pos,
-                code,
-                width,
-            });
-        }
-        return out;
-    }
-
-    for (idx, &byte) in bytes.iter().enumerate() {
-        let width = if byte < 0x80 {
-            crate::encoding::char_width(byte as char)
-        } else {
-            4
-        };
-        out.push(DecodedUnit {
-            start: idx,
-            end: idx + 1,
-            code: byte as u32,
-            width,
-        });
-    }
-    out
-}
-
-fn column_for_lisp_string(prefix: &LispString, tab_width: usize) -> usize {
-    let mut column = 0usize;
-    for unit in decode_lisp_string_units(prefix) {
-        column = next_column_for_code(column, unit.code, unit.width, tab_width);
-    }
-    column
 }
 
 fn spaces_to_column(column: usize, target: usize) -> String {
@@ -2292,10 +2458,12 @@ fn insert_inheriting_indentation(
     }
     debug_assert!(indentation.bytes().all(|byte| matches!(byte, b' ' | b'\t')));
 
-    let current_id = ctx
-        .buffers
-        .current_buffer_id()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let current_id = ctx.buffers.current_buffer_id().ok_or_else(|| {
+        signal(
+            LispCondition::Error,
+            vec![Value::string("No current buffer")],
+        )
+    })?;
     let insert_pos = ctx
         .buffers
         .get(current_id)
@@ -2336,21 +2504,60 @@ pub(crate) fn current_indentation(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("current-indentation", &args, 0)?;
-    let Some(buf) = &ctx.buffers.current_buffer() else {
+    let Some(current_id) = ctx.buffers.current_buffer_id() else {
         return Ok(Value::fixnum(0));
     };
-
-    let tabw = tab_width_in_state(&ctx.obarray, &[], Some(buf));
-    let line_range = line_bounds(buf, buf.point_emacs_byte_pos());
-    let line = buf.buffer_substring_lisp_string_range(line_range);
-
+    let (mut scan, end, tabw, invisible_possible) = {
+        let Some(buf) = ctx.buffers.get(current_id) else {
+            return Ok(Value::fixnum(0));
+        };
+        let line = line_bounds(buf, buf.point_emacs_byte_pos());
+        (
+            line.start().get(),
+            buf.accessible_emacs_byte_region().end().get(),
+            tab_width_in_state(&ctx.obarray, &[], Some(buf)),
+            !buf.overlays.is_empty()
+                || buf.text_props_property_name_presence(Value::symbol("invisible"))
+                    != crate::buffer::text_props::PropertyNamePresence::DefinitelyAbsent,
+        )
+    };
     let mut column = 0usize;
-    for unit in decode_lisp_string_units(&line) {
-        if unit.code == b' ' as u32 || unit.code == b'\t' as u32 {
-            column = next_column_for_code(column, unit.code, unit.width, tabw);
+    let mut next_invisible_probe = if invisible_possible { scan } else { end };
+    while scan < end {
+        if scan >= next_invisible_probe {
+            if let Some(next_visible) = super::xdisp::invisible_source_run_end_byte(
+                ctx,
+                current_id,
+                scan,
+                super::xdisp::InvisibleRunContext::ColumnScan,
+            )? && next_visible > scan
+            {
+                scan = next_visible.min(end);
+                next_invisible_probe = scan;
+                continue;
+            }
+            next_invisible_probe = next_char_property_boundary_byte(
+                ctx,
+                current_id,
+                scan,
+                Value::symbol("invisible"),
+                end,
+            );
+        }
+        let Some(buf) = ctx.buffers.get(current_id) else {
+            break;
+        };
+        let pos = EmacsBytePos::new(scan);
+        let Some(byte) = buf.emacs_byte_at_pos(pos) else {
+            break;
+        };
+        if byte == b' ' || byte == b'\t' || (byte == 0xa0 && !buf.get_multibyte()) {
+            column = next_column_for_code(column, u32::from(byte), 1, tabw);
         } else {
             break;
         }
+        // Only the single-byte whitespace cases above advance this scan.
+        scan += 1;
     }
 
     Ok(Value::fixnum(column as i64))
@@ -2383,7 +2590,7 @@ pub(crate) fn current_column(
     if let Some(column) = cached_current_column(current_id.0, point, modiff) {
         return Ok(Value::fixnum(column as i64));
     }
-    let scan = scan_for_column(ctx, current_id, Some(point), None)?;
+    let scan = scan_for_column(ctx, current_id, ColumnTarget::Position(point))?;
     set_last_known_column(current_id.0, point, modiff, scan.column);
     Ok(Value::fixnum(scan.column as i64))
 }
@@ -2408,7 +2615,7 @@ pub(crate) fn display_column_at_emacs_byte_pos(
         };
         buf.accessible_emacs_byte_region().clamp(pos)
     };
-    let scan = scan_for_column(ctx, buffer_id, Some(clamped), None)?;
+    let scan = scan_for_column(ctx, buffer_id, ColumnTarget::Position(clamped))?;
     Ok(scan.column)
 }
 
@@ -2446,7 +2653,11 @@ pub(crate) fn move_to_column(
     }
 
     let mut tab_split: Option<(EmacsBytePos, usize, usize)> = None;
-    let scan = scan_for_column(ctx, current_id, None, Some(target))?;
+    let scan = scan_for_column(
+        ctx,
+        current_id,
+        ColumnTarget::Column(DisplayColumn::new(target)),
+    )?;
     let dest_byte = scan.byte_pos;
     let mut reached = scan.column;
 
@@ -2525,21 +2736,20 @@ pub(crate) fn indent_to(
         0
     };
 
-    let current_id = ctx
-        .buffers
-        .current_buffer_id()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let buf = ctx
-        .buffers
-        .current_buffer()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-
-    let pt = buf.point_emacs_byte_pos();
-    let line = line_bounds(buf, pt);
-    let line_prefix = buf.buffer_substring_lisp_string_range(EmacsByteRange::new(line.start(), pt));
-    let tab_width = tab_width_in_state(&ctx.obarray, &[], Some(buf));
-
-    let fromcol = column_for_lisp_string(&line_prefix, tab_width);
+    let current_id = ctx.buffers.current_buffer_id().ok_or_else(|| {
+        signal(
+            LispCondition::Error,
+            vec![Value::string("No current buffer")],
+        )
+    })?;
+    let fromcol = expect_fixnump(&current_column(ctx, vec![])?)? as usize;
+    let buf = ctx.buffers.current_buffer().ok_or_else(|| {
+        signal(
+            LispCondition::Error,
+            vec![Value::string("No current buffer")],
+        )
+    })?;
+    let tab_width = tab_width_in_state(&ctx.obarray, &[], Some(buf)).get();
 
     let mincol = column.max(
         fromcol

@@ -1232,3 +1232,6 @@ fn display_advance_interns_no_symbols_per_character() {
         crate::emacs_core::intern::intern_call_names(),
     );
 }
+#[cfg(test)]
+mod gdm_columns;
+

@@ -531,6 +531,78 @@ fn char_width_for_code_without_display_table(code: i64) -> usize {
     char::from_u32(code as u32).map(char_width).unwrap_or(1)
 }
 
+/// A validated GNU packed display glyph (dispextern.h:389,1973,2040-2050).
+///
+/// The low 22 bits contain a character and the next 20 bits a face ID. This
+/// immutable scalar owns no Lisp state and may be copied between mutators.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+struct PackedDisplayGlyph(i64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+enum PackedDisplayGlyphError {
+    #[error("packed display glyph exceeds the character and face domains")]
+    OutOfRange,
+}
+
+impl PackedDisplayGlyph {
+    const CHARACTER_BITS: u32 = 22;
+    const CHARACTER_MASK: i64 = crate::emacs_core::emacs_char::EmacsChar::MAX as i64;
+    const FACE_ID_MAX: i64 = (1 << 20) - 1;
+    const FACE_MASK: i64 = Self::FACE_ID_MAX << Self::CHARACTER_BITS;
+    const MAX: i64 = Self::FACE_MASK | Self::CHARACTER_MASK;
+
+    #[inline]
+    fn character(self) -> Option<crate::emacs_core::emacs_char::EmacsChar> {
+        crate::emacs_core::emacs_char::EmacsChar::from_code((self.0 & Self::CHARACTER_MASK) as u32)
+    }
+}
+
+const _: () = {
+    assert!(PackedDisplayGlyph::CHARACTER_MASK == (1 << PackedDisplayGlyph::CHARACTER_BITS) - 1);
+    assert!(PackedDisplayGlyph::CHARACTER_MASK & PackedDisplayGlyph::FACE_MASK == 0);
+    assert!(PackedDisplayGlyph::MAX <= Value::MOST_POSITIVE_FIXNUM);
+    assert!(std::mem::size_of::<PackedDisplayGlyph>() == std::mem::size_of::<i64>());
+};
+static_assertions::assert_impl_all!(PackedDisplayGlyph: Send, Sync);
+
+impl TryFrom<i64> for PackedDisplayGlyph {
+    type Error = PackedDisplayGlyphError;
+
+    #[inline]
+    fn try_from(code: i64) -> Result<Self, Self::Error> {
+        if (0..=Self::MAX).contains(&code) {
+            Ok(Self(code))
+        } else {
+            Err(PackedDisplayGlyphError::OutOfRange)
+        }
+    }
+}
+
+/// Decode one valid GNU display glyph (dispextern.h:389,2040-2050).
+/// Face IDs occupy 20 bits; packed characters occupy the low 22 bits.
+/// Cons glyphs carry the same validated character and face domains separately.
+#[inline]
+pub(crate) fn display_glyph_character(
+    value: Value,
+) -> Option<crate::emacs_core::emacs_char::EmacsChar> {
+    use crate::emacs_core::emacs_char::EmacsChar;
+    match value.kind() {
+        ValueKind::Fixnum(code) => PackedDisplayGlyph::try_from(code).ok()?.character(),
+        ValueKind::Cons => {
+            let code = value.cons_car().as_fixnum()?;
+            let face = value.cons_cdr().as_fixnum()?;
+            if !(0..=MAX_CHAR_CODE).contains(&code)
+                || !(0..=PackedDisplayGlyph::FACE_ID_MAX).contains(&face)
+            {
+                return None;
+            }
+            EmacsChar::from_code(code as u32)
+        }
+        _ => None,
+    }
+}
+
 fn display_table_replacement_width(disp: Value) -> Option<usize> {
     let items = disp.as_vector_data()?;
     let mut width = 0usize;
