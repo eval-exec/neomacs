@@ -1249,7 +1249,7 @@ fn checked_buffer_substring_for_char_region_in_manager(
 fn compare_buffer_substring_strings(
     left: &crate::heap_types::LispString,
     right: &crate::heap_types::LispString,
-    case_fold: bool,
+    fold: impl Fn(u32) -> u32,
 ) -> i64 {
     // Issue #131: compare the two substrings character-by-character over their
     // exact Emacs bytes (GNU `Fcompare_buffer_substrings` returns the 1-based
@@ -1264,13 +1264,26 @@ fn compare_buffer_substring_strings(
     loop {
         match (lp < left_bytes.len(), rp < right_bytes.len()) {
             (true, true) => {
-                let (a_code, a_len) = crate::emacs_core::emacs_char::string_char(&left_bytes[lp..]);
-                let (b_code, b_len) =
-                    crate::emacs_core::emacs_char::string_char(&right_bytes[rp..]);
+                let (a_code, a_len) = if left.is_multibyte() {
+                    crate::emacs_core::emacs_char::string_char(&left_bytes[lp..])
+                } else {
+                    (
+                        crate::emacs_core::emacs_char::unibyte_to_char(left_bytes[lp]),
+                        1,
+                    )
+                };
+                let (b_code, b_len) = if right.is_multibyte() {
+                    crate::emacs_core::emacs_char::string_char(&right_bytes[rp..])
+                } else {
+                    (
+                        crate::emacs_core::emacs_char::unibyte_to_char(right_bytes[rp]),
+                        1,
+                    )
+                };
                 lp += a_len;
                 rp += b_len;
-                let a = fold_emacs_char_code(a_code, case_fold);
-                let b = fold_emacs_char_code(b_code, case_fold);
+                let a = fold(a_code);
+                let b = fold(b_code);
                 if a != b {
                     return if a < b { -pos } else { pos };
                 }
@@ -1280,18 +1293,6 @@ fn compare_buffer_substring_strings(
             (false, true) => return -pos,
             (false, false) => return 0,
         }
-    }
-}
-
-/// Issue #131: lowercase an Emacs character code when `case_fold` is set,
-/// preserving non-Unicode/eight-bit codes (which have no Rust `char`) verbatim.
-fn fold_emacs_char_code(code: u32, case_fold: bool) -> u32 {
-    if !case_fold {
-        return code;
-    }
-    match char::from_u32(code) {
-        Some(ch) => ch.to_lowercase().next().map(|c| c as u32).unwrap_or(code),
-        None => code,
     }
 }
 
@@ -2476,13 +2477,28 @@ pub(crate) fn builtin_compare_buffer_substrings(
         super::builtins::misc_eval::dynamic_or_global_symbol_value(eval, "case-fold-search")
             .map(|value| !value.is_nil())
             .unwrap_or(true);
-    builtin_compare_buffer_substrings_with_case_fold(case_fold, &eval.buffers, args)
+    // GNU editfns.c:1769-1771 uses the current buffer's canonical table,
+    // including standard equivalence classes (sigma/final sigma, micro sign).
+    let canon = if case_fold {
+        Some(super::casetab::current_case_canon_table(eval)?)
+    } else {
+        None
+    };
+    compare_buffer_substrings_with_translation(&eval.buffers, args, |code| {
+        canon
+            .and_then(|table| super::chartable::ct_lookup(&table, code as i64).ok())
+            .and_then(|value| value.as_fixnum())
+            .filter(|&mapped| {
+                (0..=crate::emacs_core::emacs_char::MAX_CHAR as i64).contains(&mapped)
+            })
+            .map_or(code, |mapped| mapped as u32)
+    })
 }
 
-pub(crate) fn builtin_compare_buffer_substrings_with_case_fold(
-    case_fold: bool,
+fn compare_buffer_substrings_with_translation(
     buffers: &BufferManager,
     args: Vec<Value>,
+    fold: impl Fn(u32) -> u32,
 ) -> EvalResult {
     expect_args("compare-buffer-substrings", &args, 6)?;
 
@@ -2511,7 +2527,7 @@ pub(crate) fn builtin_compare_buffer_substrings_with_case_fold(
         args[5],
     )?;
     Ok(Value::fixnum(compare_buffer_substring_strings(
-        &left, &right, case_fold,
+        &left, &right, fold,
     )))
 }
 

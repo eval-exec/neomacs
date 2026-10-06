@@ -72,6 +72,15 @@ fn gdm_casing_empty_table() {
     );
 }
 
+// GNU editfns.c:1769-1771,1860-1864 compares through the current canon table.
+#[test]
+fn gdm_casing_compare_canon() {
+    parity(
+        r#"(list (with-temp-buffer (insert "az") (let ((tbl (copy-case-table (standard-case-table)))) (set-case-syntax-pair ?Z ?a tbl) (set-case-table tbl)) (mapcar (lambda (fold) (let ((case-fold-search fold)) (compare-buffer-substrings nil 1 2 nil 2 3))) '(nil t))) (mapcar (lambda (text) (with-temp-buffer (insert text) (let ((case-fold-search t)) (compare-buffer-substrings nil 1 2 nil 2 3)))) '("σς" "İi" "µμ" "aA")) (with-temp-buffer (insert "aA") (set-case-table (make-char-table 'case-table)) (compare-buffer-substrings nil 1 2 nil 2 3)))"#,
+        expect_test::expect![[r###"OK ((-1 0) (0 1 0 0) 1)"###]],
+    );
+}
+
 // GNU bytecode.c:Bupcase/Bdowncase and Bcall share the casing primitives.
 #[test]
 fn gdm_casing_compiled_calls() {
