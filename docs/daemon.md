@@ -164,10 +164,19 @@ startup locks are rejected.
 
 ## Current limitations
 
-- Headless daemons support ordinary evaluation and client TTY frames. Attaching
-  a native graphical frame is not implemented: it requires a separately hosted
-  GUI event loop. Graphical frame requests fail rather than creating an invisible
-  stand-in window. Start ordinary GUI Neomacs for graphical editing.
+- On Linux a display-free daemon can later attach native frames to one explicitly
+  selected Wayland socket. Lisp `make-frame` and native/GNU client `-c -d SOCKET`
+  use the original evaluator and an OS-main-owned native loop. Deleting the last
+  graphical frame retains that connection and evaluator for recreation. Explicit
+  X11 and multiple independent display connections are rejected. Native attach
+  and frame readiness have a 15-second budget. If cancellation interrupts a
+  synchronous Wayland registry/configure wait, the exact owned connection is
+  closed and cannot be reused after a successful native-loop construction;
+  the daemon evaluator remains available, and restart establishes a fresh loop.
+  Ordinary GPU-start and evaluator/font/admission errors do not discard a healthy
+  native loop. Foreign driver, font and loader calls are not claimed to finish
+  within a deadline; cancelled foreign workers require bounded process exit
+  without library finalizers.
 - Automatic startup is for local Unix sockets. TCP clients continue to use the
   existing server-file/authentication path, but do not automatically start a
   local daemon for a missing or unreachable TCP endpoint.
