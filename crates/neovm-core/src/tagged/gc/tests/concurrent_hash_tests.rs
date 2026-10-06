@@ -381,7 +381,7 @@ fn tier_h_done_mutation_copies_only_the_legacy_policy() {
         let mut object = boxed_table(table_with_entries(3));
         let owner = address(&object);
         let expected = expected_children(&object.table);
-        let mut snapshot = HashTableScanSnapshot::with_policy(1, policy);
+        let mut snapshot = HashTableScanSnapshot::unbound_with_policy(1, policy);
         assert!(unsafe { snapshot.capture_owned(owner, CollectionScope::Full) });
         assert_eq!(captured_children(&snapshot, owner), expected);
         let mut mutator = ConcurrentHashMutatorState::new();
@@ -419,7 +419,8 @@ fn tier_h_first_writer_defers_before_reader_admission_without_retirement() {
     let owner = address(&object);
     let parity = super::super::MarkParity::One;
     object.header.gc.set_marked(parity.flip());
-    let mut snapshot = HashTableScanSnapshot::with_policy(1, HashTableScanPolicy::DeferWrites);
+    let mut snapshot =
+        HashTableScanSnapshot::unbound_with_policy(1, HashTableScanPolicy::DeferWrites);
     assert!(unsafe { snapshot.capture_owned(owner, CollectionScope::Full) });
     let mut mutator = ConcurrentHashMutatorState::new();
     {
@@ -457,7 +458,8 @@ fn tier_h_n_deferred_writers_admit_one_dirty_owner_and_no_retirement() {
     let table = GuardedTable(UnsafeCell::new(boxed_table(table_with_entries(4))));
     // SAFETY: every writer starts after this stopped-world capture.
     let owner = unsafe { address(&*table.0.get()) };
-    let mut snapshot = HashTableScanSnapshot::with_policy(1, HashTableScanPolicy::DeferWrites);
+    let mut snapshot =
+        HashTableScanSnapshot::unbound_with_policy(1, HashTableScanPolicy::DeferWrites);
     assert!(unsafe { snapshot.capture_owned(owner, CollectionScope::Full) });
     let snapshot = Arc::new(snapshot);
     let table = Arc::new(table);
@@ -524,7 +526,7 @@ fn tier_h_reader_lease_blocks_writers_until_every_word_and_callback_is_routed() 
         let owner = address(&object);
         let expected = expected_children(&object.table);
         let table = Arc::new(GuardedTable(UnsafeCell::new(object)));
-        let mut snapshot = HashTableScanSnapshot::with_policy(1, policy);
+        let mut snapshot = HashTableScanSnapshot::unbound_with_policy(1, policy);
         assert!(unsafe { snapshot.capture_owned(owner, CollectionScope::Full) });
         let snapshot = Arc::new(snapshot);
         let (paused, read_paused) = std::sync::mpsc::sync_channel(1);
@@ -1060,11 +1062,16 @@ fn tier_h_wrapper_unwind_poison_is_observed_and_join_refuses_to_sweep() {
                 .len(),
             usize::from(knobs::concurrent_hash_scan_policy() == HashTableScanPolicy::AlwaysClone)
         );
+        assert!(matches!(
+            heap.finish_concurrent_mark(),
+            Err(super::super::MarkFinishError::PoisonedCollectorState)
+        ));
         let join = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             heap.join_concurrent_mark();
         }));
         assert!(join.is_err());
-        assert!(!heap.concurrent_mark_running);
+        // The failed finish retains the active state, so nothing can sweep.
+        assert!(heap.concurrent_mark_running);
         assert!(!heap.sweep_in_progress);
         clear_tagged_heap_if_installed(&heap);
     }
@@ -1296,4 +1303,116 @@ fn tier_h_user_test_guards_inhibit_gc_without_cow_and_restore_after_all_exits() 
         assert_eq!(record.len(), 1);
         assert_eq!(record[0], TaggedValue::fixnum(8091));
     }
+}
+
+/// A claims heap whose marker is "running" and whose completion this test
+/// sends, like the shutdown tests' stalled marker.
+fn stalled_claims_mark(
+    heap: &mut TaggedHeap,
+) -> std::sync::mpsc::Sender<super::super::ConcurrentMarkResult> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    heap.concurrent_mark_running = true;
+    heap.gc_exited = Some(rx);
+    tx
+}
+
+fn admitted_snapshot(heap: &mut TaggedHeap, owner: usize) -> Arc<HashTableScanSnapshot> {
+    // SAFETY: the fixture heap is this test's only writer, and the captured
+    // Box outlives every lease and the heap's use of the snapshot.
+    let world = unsafe { super::super::scan_contract::SingleMutatorWorld::from_heap(heap) };
+    let mut snapshot =
+        HashTableScanSnapshot::with_policy(1, HashTableScanPolicy::CloneUntilTraced, &world);
+    // SAFETY: a complete, exclusively owned Box, captured under the admission.
+    assert!(unsafe { snapshot.capture_owned(owner, CollectionScope::Full) });
+    assert_eq!(snapshot.heap_identity(), world.heap_identity());
+    Arc::new(snapshot)
+}
+
+#[test]
+#[should_panic(expected = "Tier-H snapshot belongs to another heap")]
+fn tier_h_snapshot_admitted_by_one_heap_is_refused_by_another() {
+    let object = boxed_table(table_with_entries(1));
+    let mut admitting = TaggedHeap::new_for_concurrent_hash_test(false);
+    let mut other = TaggedHeap::new_for_concurrent_hash_test(false);
+    let snapshot = admitted_snapshot(&mut admitting, address(&object));
+    other.set_concurrent_hash_snapshot(Some(snapshot));
+}
+
+#[test]
+fn poisoned_tier_h_protocol_fails_finish_before_state_changes() {
+    let object = boxed_table(table_with_entries(1));
+    let owner = address(&object);
+    let mut heap = TaggedHeap::new_for_concurrent_hash_test(false);
+    let snapshot = admitted_snapshot(&mut heap, owner);
+    let interrupted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = snapshot.lock_mutation(owner).unwrap();
+        snapshot
+            .get(owner)
+            .unwrap()
+            .cow
+            .compare_exchange(UNTOUCHED, COPYING, Ordering::AcqRel, Ordering::Acquire)
+            .unwrap();
+        panic!("interrupt a Tier-H retirement");
+    }));
+    assert!(interrupted.is_err());
+    assert!(snapshot.is_poisoned());
+    heap.set_concurrent_hash_snapshot(Some(snapshot));
+    let tx = stalled_claims_mark(&mut heap);
+    tx.send(Default::default()).unwrap();
+    assert!(matches!(
+        heap.finish_concurrent_mark(),
+        Err(super::super::MarkFinishError::PoisonedCollectorState)
+    ));
+    assert!(
+        heap.concurrent_mark_running(),
+        "failure retains active state"
+    );
+    assert!(heap.concurrent_hash_snapshot().is_some());
+}
+
+#[test]
+fn poisoned_tier_h_dirty_log_fails_finish_before_state_changes() {
+    let mut heap = TaggedHeap::new_for_concurrent_hash_test(false);
+    let entry = heap.current_concurrent_hash_mutator();
+    let poison = std::panic::catch_unwind(|| {
+        let _held = entry.lock().unwrap();
+        panic!("poison a Tier-H mutator log");
+    });
+    assert!(poison.is_err());
+    let tx = stalled_claims_mark(&mut heap);
+    tx.send(Default::default()).unwrap();
+    assert!(matches!(
+        heap.finish_concurrent_mark(),
+        Err(super::super::MarkFinishError::PoisonedCollectorState)
+    ));
+    assert!(
+        heap.concurrent_mark_running(),
+        "failure retains active state"
+    );
+}
+
+#[test]
+fn abandoned_marker_retains_retired_tier_h_original() {
+    let mut heap = TaggedHeap::new_for_concurrent_hash_test(false);
+    let tx = stalled_claims_mark(&mut heap);
+    let original = vec![Some(HashTableEntry {
+        key: TaggedValue::fixnum(41),
+        value: TaggedValue::fixnum(42),
+    })];
+    let retired = original.clone();
+    let retired_address = retired.as_ptr();
+    heap.current_concurrent_hash_mutator()
+        .lock()
+        .unwrap()
+        .retired_hash_buffers
+        .push(retired);
+    drop(heap);
+    // SAFETY: active-marker abandonment retained the retired original with
+    // the claims state; this reader runs after owner destruction.
+    let retained = unsafe { std::slice::from_raw_parts(retired_address, original.len()) };
+    assert_eq!(
+        retained[0].map(|e| (e.key, e.value)),
+        original[0].map(|e| (e.key, e.value))
+    );
+    assert!(tx.send(Default::default()).is_err());
 }

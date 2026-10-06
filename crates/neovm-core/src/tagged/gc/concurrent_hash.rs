@@ -1,6 +1,7 @@
 //! Tier-H hash snapshots: exact ownership, reader leases and retirement.
 //!
-//! Capture happens with all mutators stopped. The worker reads only copied
+//! Capture is admitted through `SingleMutatorWorld` at the start handshake and
+//! records its heap identity. The worker reads only copied
 //! callbacks and initialized key/value words in the original slots allocation.
 //! One entry mutex serializes all writers and the complete worker read lease.
 //! Writer policy either retires the original before reader admission, or defers
@@ -45,24 +46,30 @@ pub(crate) struct HashTableScanEntry {
 /// the exact-address map, without per-table Arc/Vecs or an eager slots walk.
 pub(crate) struct HashTableScanSnapshot {
     entries: FxHashMap<usize, HashTableScanEntry>,
+    /// The admitted heap; zero only for unbound test snapshots, which a heap
+    /// refuses to install.
+    heap_identity: usize,
     policy: HashTableScanPolicy,
     slots_len: usize,
     initialized_entries: usize,
     poisoned: AtomicBool,
 }
 
-// SAFETY: capture proves live owned table addresses with the world stopped.
+// SAFETY: an admitted capture proves live owned table addresses of one heap.
 // Before reader admission, policy keeps the original unchanged/retired or
 // atomically cancels admission. The reader holds the entry mutex through every
 // backing read; all writers acquire that same mutex before any payload borrow.
 // DONE/DEFERRED forbid later reads even if resize has freed the captured backing.
-// The coordinator joins the worker and stops every mutator before dropping the
-// snapshot or retired allocations. Bare captured pointers are never dereferenced
-// without the current entry's admitted read lease.
+// Retired originals are freed only after an explicit finish proves reader exit;
+// abandonment retains them with the heap's other marker-readable storage. Bare
+// captured pointers are never dereferenced without the entry's read lease.
 unsafe impl Send for HashTableScanSnapshot {}
 unsafe impl Sync for HashTableScanSnapshot {}
+static_assertions::assert_impl_all!(HashTableScanSnapshot: Send, Sync);
+static_assertions::assert_not_impl_any!(HashTableScanSnapshot: Clone);
 
 impl HashTableScanSnapshot {
+    /// An unbound snapshot for protocol tests that never install it in a heap.
     #[cfg(test)]
     pub(crate) fn new() -> Self {
         Self::with_capacity(0, 0)
@@ -70,12 +77,27 @@ impl HashTableScanSnapshot {
 
     #[cfg(test)]
     pub(crate) fn with_capacity(tables: usize, _initialized_entries: usize) -> Self {
-        Self::with_policy(tables, HashTableScanPolicy::CloneUntilTraced)
+        Self::unbound_with_policy(tables, HashTableScanPolicy::CloneUntilTraced)
     }
 
-    pub(crate) fn with_policy(tables: usize, policy: HashTableScanPolicy) -> Self {
+    #[cfg(test)]
+    pub(crate) fn unbound_with_policy(tables: usize, policy: HashTableScanPolicy) -> Self {
+        Self::with_identity(tables, policy, 0)
+    }
+
+    /// Build an empty snapshot for the admitted heap's start handshake.
+    pub(crate) fn with_policy(
+        tables: usize,
+        policy: HashTableScanPolicy,
+        world: &super::scan_contract::SingleMutatorWorld<'_>,
+    ) -> Self {
+        Self::with_identity(tables, policy, world.heap_identity())
+    }
+
+    fn with_identity(tables: usize, policy: HashTableScanPolicy, heap_identity: usize) -> Self {
         Self {
             entries: FxHashMap::with_capacity_and_hasher(tables, Default::default()),
+            heap_identity,
             policy,
             slots_len: 0,
             initialized_entries: 0,
@@ -83,15 +105,21 @@ impl HashTableScanSnapshot {
         }
     }
 
+    /// The heap whose start handshake admitted this snapshot.
+    pub(crate) fn heap_identity(&self) -> usize {
+        self.heap_identity
+    }
+
     /// Capture one registry-proven owned Box hash table. Eligibility remains
     /// fixed for this cycle even if its current contents or weakness change.
     /// Permanently/generation-black owners need no worker claim or snapshot.
     ///
     /// # Safety
-    /// `owner` must address a live, complete owned `HashTableObj`. All mutators
-    /// must be stopped. The Box cannot be freed until worker join. Every later
-    /// mutable accessor must hold this snapshot's guard before borrowing the
-    /// payload; backing storage may change only according to its reader policy.
+    /// `owner` must address a live, complete owned `HashTableObj` of this
+    /// snapshot's admitted heap, captured during its admission. The Box cannot
+    /// be freed until worker join or abandonment. Every later mutable accessor
+    /// must hold this snapshot's guard before borrowing the payload; backing
+    /// storage may change only according to its reader policy.
     pub(crate) unsafe fn capture_owned(&mut self, owner: usize, scope: CollectionScope) -> bool {
         if self.entries.contains_key(&owner) {
             return false;

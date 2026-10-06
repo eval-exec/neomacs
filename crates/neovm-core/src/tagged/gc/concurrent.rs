@@ -325,40 +325,49 @@ impl TaggedHeap {
         self.handshake.last_start_vecsnap_us = vecsnap_t0.elapsed().as_micros() as u64;
         self.handshake.probe_vector_snapshot_len =
             vectors.as_ref().map(|snap| snap.len()).unwrap_or(0);
-        // Tier-H capture is stopped-world. Exact owned Box membership is its
-        // ownership proof; weak, pending and generation-black owners refuse.
+        // Tier-H capture is admitted like the vector snapshot: exact owned Box
+        // membership is its ownership proof; weak, pending and
+        // generation-black owners refuse.
         let hashes = if self.concurrent_claims() {
             let t0 = std::time::Instant::now();
-            // The coordinator's existing exact Box inventory includes every
-            // mutator's allocations, including ordinary-old major owners.
-            // Read headers only after all mutators have stopped.
-            let is_hash = |addr: usize| unsafe {
-                (*(addr as *const GcHeader)).kind == HeapObjectKind::VecLike
-                    && (*(addr as *const VecLikeHeader)).type_tag == VecLikeType::HashTable
-            };
-            let tables = self
-                .non_cons_object_addrs
-                .iter()
-                .filter(|&&addr| is_hash(addr))
-                .count();
-            let mut snapshot = concurrent_hash::HashTableScanSnapshot::with_policy(
-                tables,
-                self.concurrent_claims_state()
-                    .expect("claims enabled")
-                    .scan_policy,
-            );
+            let policy = self
+                .concurrent_claims_state()
+                .expect("claims enabled")
+                .scan_policy;
+            let scope = self.collection_scope();
             for entry in self.concurrent_hash_mutators() {
                 let mutator = entry.lock().unwrap();
                 debug_assert!(mutator.retired_hash_buffers.is_empty());
                 debug_assert!(mutator.written_hash_owners.is_empty());
             }
-            for &addr in &self.non_cons_object_addrs {
+            // SAFETY: this exclusive owner captures without Lisp callbacks at
+            // the legacy single-writer start handshake. Writers lock each
+            // captured entry before borrowing its table, and the cycle's
+            // retirement and explicit finish/abandonment retain originals.
+            let world = unsafe { scan_contract::SingleMutatorWorld::from_heap(self) };
+            let heap = world.heap();
+            // The coordinator's existing exact Box inventory includes every
+            // mutator's allocations, including ordinary-old major owners.
+            // SAFETY: inventory addresses are live owned non-cons headers.
+            let is_hash = |addr: usize| unsafe {
+                (*(addr as *const GcHeader)).kind == HeapObjectKind::VecLike
+                    && (*(addr as *const VecLikeHeader)).type_tag == VecLikeType::HashTable
+            };
+            let tables = heap
+                .non_cons_object_addrs
+                .iter()
+                .filter(|&&addr| is_hash(addr))
+                .count();
+            let mut snapshot =
+                concurrent_hash::HashTableScanSnapshot::with_policy(tables, policy, &world);
+            for &addr in &heap.non_cons_object_addrs {
                 if is_hash(addr) {
-                    // This is the authoritative live-Box inventory, not
-                    // a possibly borrowed or mapped header address.
-                    unsafe { snapshot.capture_owned(addr, self.collection_scope()) };
+                    // SAFETY: the authoritative live-Box inventory of the
+                    // admitted heap, not a borrowed or mapped header address.
+                    unsafe { snapshot.capture_owned(addr, scope) };
                 }
             }
+            debug_assert_eq!(snapshot.heap_identity(), heap.identity());
             if std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1") {
                 eprintln!(
                     "NEOVM_GC hash_snapshot capture={}us tables={} slots={} entries={} descriptor_bytes={}",
@@ -607,6 +616,14 @@ impl TaggedHeap {
                 .map_err(|_| MarkFinishError::PoisonedCollectorState)?;
             (std::mem::take(&mut *satb), std::mem::take(&mut *deferred))
         };
+        // Tier-H's mutation protocol and dirty-owner logs are correctness
+        // state too: prove them before changing active state. Poison means a
+        // mutation escaped mid-protocol; do not terminate or sweep it.
+        let hash_owners = if self.concurrent_claims() {
+            self.take_concurrent_hash_finish_logs()?
+        } else {
+            Vec::new()
+        };
         // The GC thread has exited, so nothing reads the bitmaps while the
         // black regions granted during the mark give their tails back (I1).
         self.close_alloc_regions();
@@ -616,14 +633,6 @@ impl TaggedHeap {
             TAGGED_HEAP_CONCURRENT_HASH_ACTIVE.with(|active| active.set(false));
         }
         self.publish_barrier_window();
-        // All writers are stopped and the receiver proves reader exit. Poison
-        // means a mutation escaped mid-protocol; do not terminate/sweep it.
-        assert!(
-            !self
-                .concurrent_hash_snapshot()
-                .is_some_and(|s| s.is_poisoned()),
-            "Tier-H mutation protocol poisoned during concurrent mark",
-        );
         #[cfg(feature = "gc-memory-telemetry")]
         memory_telemetry::observe(self, memory_telemetry::Phase::ConcurrentJoined);
         // New snapshot kinds hand bare symbols back in legacy full cycles
@@ -687,10 +696,6 @@ impl TaggedHeap {
         // mark_value of an already claimed header. Merge every mutator's dirty
         // log and enumerate current children directly, including weak registry
         // handling if a captured strong table was replaced with a weak one.
-        let mut hash_owners = Vec::new();
-        for entry in self.concurrent_hash_mutators() {
-            hash_owners.append(&mut entry.lock().unwrap().written_hash_owners);
-        }
         for owner in hash_owners {
             self.push_value_children_to_gray(owner, "hash-written-retrace");
         }
@@ -812,6 +817,9 @@ impl TaggedHeap {
         std::mem::forget(std::mem::take(&mut self.marker_arena.pages));
         std::mem::forget(std::mem::take(&mut self.bignum_arena.pages));
         std::mem::forget(std::mem::take(&mut self.retired_vector_buffers));
+        if self.concurrent_claims() {
+            self.retain_concurrent_hash_storage_for_abandonment();
+        }
         // Intrusive lists own raw allocations; the Drop body skips their free
         // walks. Job-owned Arcs retain mark queues, counters and page metadata.
     }
@@ -944,7 +952,11 @@ impl TaggedHeap {
         );
         self.set_concurrent_hash_snapshot(None);
         for entry in self.concurrent_hash_mutators() {
-            let mut mutator = entry.lock().unwrap();
+            // The reader has joined; clearing inert logs is valid even after
+            // a poisoning panic, which finish has already reported.
+            let mut mutator = entry
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             mutator.retired_hash_buffers.clear();
             mutator.written_hash_owners.clear();
         }

@@ -2496,9 +2496,9 @@ impl Drop for TaggedHeap {
             crate::tagged::gc::clear_tagged_heap_if_installed(self);
             return;
         }
-        // Cancellation/teardown has no termination fixpoint, but the joined
-        // reader is quiescent before either attached or retired slots are freed.
-        self.release_concurrent_hash_storage();
+        // No marker is active, so Tier-H's snapshot and retired originals are
+        // freed with the claims state when the census carrier drops below;
+        // Drop takes none of its locks.
         // Leave no dangling thread-local pointer behind: a heap installed with
         // `set_tagged_heap` and dropped by anything but a `Context` (a failed
         // pdump load drops the half-built one on its error path) used to stay

@@ -80,12 +80,35 @@ impl ConcurrentClaimsState {
             .clone()
     }
 
-    /// Called with all mutators stopped for capture, join and release.
+    /// Used by the admitted start capture, the finish fold and release.
     /// Thread exit must not discard cycle-retained logs/buffers. Entries stay
     /// heap-owned through its lifetime; a future unregister can prune them
     /// only after stopped-world termination has drained their obligations.
     pub(super) fn mutators_world_stopped(&self) -> Vec<Arc<Mutex<ConcurrentHashMutatorState>>> {
         self.mutators.lock().unwrap().values().cloned().collect()
+    }
+
+    /// Take every mutator's dirty-owner log for the finish fold. Poison in
+    /// the registry or an entry is a collector failure, reported rather than
+    /// panicking so finish can retain the active state.
+    fn take_written_hash_owners(&self) -> Result<Vec<TaggedValue>, MarkFinishError> {
+        let entries: Vec<_> = self
+            .mutators
+            .lock()
+            .map_err(|_| MarkFinishError::PoisonedCollectorState)?
+            .values()
+            .cloned()
+            .collect();
+        let mut owners = Vec::new();
+        for entry in entries {
+            owners.append(
+                &mut entry
+                    .lock()
+                    .map_err(|_| MarkFinishError::PoisonedCollectorState)?
+                    .written_hash_owners,
+            );
+        }
+        Ok(owners)
     }
 
     pub(super) fn locks_poisoned(&self) -> bool {
@@ -137,6 +160,38 @@ impl TaggedHeap {
             .and_then(|census| census.concurrent.as_deref_mut())
     }
 
+    /// Finish-time proof of Tier-H state, before active state changes: a
+    /// poisoned mutation protocol or log is a collector error.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn take_concurrent_hash_finish_logs(
+        &self,
+    ) -> Result<Vec<TaggedValue>, MarkFinishError> {
+        let Some(state) = self.concurrent_claims_state() else {
+            return Ok(Vec::new());
+        };
+        if state
+            .hash_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.is_poisoned())
+        {
+            return Err(MarkFinishError::PoisonedCollectorState);
+        }
+        state.take_written_hash_owners()
+    }
+
+    /// Abandonment cannot prove the marker's last read of a retired original
+    /// or captured entry. Retain the whole claims state (snapshot, retired
+    /// originals and logs) with the heap's other marker-readable storage.
+    /// Takes no lock, so Drop neither blocks nor panics here.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn retain_concurrent_hash_storage_for_abandonment(&mut self) {
+        if let Some(carrier) = self.census.as_deref_mut() {
+            std::mem::forget(carrier.concurrent.take());
+        }
+    }
+
     #[inline]
     pub(super) fn concurrent_claims(&self) -> bool {
         self.concurrent_claims_state().is_some()
@@ -153,6 +208,13 @@ impl TaggedHeap {
         &mut self,
         snapshot: Option<Arc<concurrent_hash::HashTableScanSnapshot>>,
     ) {
+        if let Some(snapshot) = &snapshot {
+            assert_eq!(
+                snapshot.heap_identity(),
+                self.identity(),
+                "Tier-H snapshot belongs to another heap"
+            );
+        }
         if let Some(state) = self.concurrent_claims_state_mut() {
             state.hash_snapshot = snapshot;
         } else {
@@ -351,7 +413,15 @@ mod tests {
             knobs::CensusMode::SurvivorsAndRemset,
         ] {
             let mut heap = heap(true, mode);
-            let snapshot = Arc::new(concurrent_hash::HashTableScanSnapshot::new());
+            let snapshot = {
+                // SAFETY: the fixture heap is this test's only writer.
+                let world = unsafe { scan_contract::SingleMutatorWorld::from_heap(&mut heap) };
+                Arc::new(concurrent_hash::HashTableScanSnapshot::with_policy(
+                    0,
+                    concurrent_hash::HashTableScanPolicy::CloneUntilTraced,
+                    &world,
+                ))
+            };
             heap.set_concurrent_hash_snapshot(Some(snapshot.clone()));
             let entry = heap.current_concurrent_hash_mutator();
             let retired = vec![Some(crate::emacs_core::value::HashTableEntry {

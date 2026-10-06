@@ -180,9 +180,16 @@ fn gc_tls_hash_activation_is_local_to_each_installed_mutator() {
     let (resume, released) = mpsc::channel();
     let worker = std::thread::spawn(move || {
         let mut heap = heap_with_hash_claims(true);
-        heap.set_concurrent_hash_snapshot(Some(Arc::new(
-            concurrent_hash::HashTableScanSnapshot::new(),
-        )));
+        let snapshot = {
+            // SAFETY: the fixture heap is this thread's only writer.
+            let world = unsafe { scan_contract::SingleMutatorWorld::from_heap(&mut heap) };
+            concurrent_hash::HashTableScanSnapshot::with_policy(
+                0,
+                concurrent_hash::HashTableScanPolicy::CloneUntilTraced,
+                &world,
+            )
+        };
+        heap.set_concurrent_hash_snapshot(Some(Arc::new(snapshot)));
         set_tagged_heap(&mut heap);
         heap.set_concurrent_active_for_test(true);
         assert!(concurrent_hash_mutation_active());

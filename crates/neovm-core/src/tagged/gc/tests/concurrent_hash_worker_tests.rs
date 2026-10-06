@@ -232,7 +232,12 @@ fn paused_worker_with_policy(
 ) -> PausedWorker {
     heap.concurrent_begin();
     heap.close_alloc_regions();
-    let mut snapshot = concurrent_hash::HashTableScanSnapshot::with_policy(1, policy);
+    let mut snapshot = {
+        // SAFETY: this fixture heap has no other writer, captures at its
+        // stopped start point, and the worker retains the snapshot to join.
+        let world = unsafe { scan_contract::SingleMutatorWorld::from_heap(heap) };
+        concurrent_hash::HashTableScanSnapshot::with_policy(1, policy, &world)
+    };
     // SAFETY: a complete live owned Box, captured with this mutator stopped.
     // The heap and worker retain the snapshot through reader join.
     assert!(unsafe {
