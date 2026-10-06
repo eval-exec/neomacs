@@ -28093,6 +28093,62 @@ mod byte_code_function;
 #[path = "marker_identity.rs"]
 mod marker_identity;
 
+#[test]
+fn current_buffer_scope_finish_watcher_panic_restores_popped_binding_and_roots() {
+    use crate::emacs_core::error::EvalResult;
+    use crate::emacs_core::eval::CurrentBufferScope;
+    use crate::emacs_core::intern::intern;
+    use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
+    fn panic_during_unlet(_: &mut Context, args: Vec<Value>) -> EvalResult {
+        if args.get(2) == Some(&Value::symbol("unlet")) {
+            panic!("exercise Rust panic in explicit scope finish");
+        }
+        Ok(Value::NIL)
+    }
+    let mut ctx = Context::new();
+    let original = ctx.buffers.current_buffer_id().unwrap();
+    let other = ctx.buffers.create_buffer("scope-finish-watcher-other");
+    let symbol = intern("scope-finish-watcher-value");
+    ctx.obarray.set_symbol_value_id(symbol, Value::fixnum(10));
+    ctx.register_subr(SubrSpec::new(
+        "scope-finish-watcher-panic",
+        NativeFn::ContextVec(panic_during_unlet),
+        SubrArity::new(4, Some(4)),
+    ));
+    let depth = ctx.specpdl.len();
+    let root_depth = ctx.vm_root_frames.len();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut scope = CurrentBufferScope::enter(&mut ctx);
+        scope
+            .context()
+            .set_current_buffer_unrecorded(other)
+            .unwrap();
+        scope
+            .context()
+            .try_specbind(symbol, Value::fixnum(20))
+            .unwrap();
+        crate::emacs_core::advice::builtin_add_variable_watcher(
+            scope.context(),
+            vec![
+                Value::from_sym_id(symbol),
+                Value::symbol("scope-finish-watcher-panic"),
+            ],
+        )
+        .unwrap();
+        let _ = scope.finish(Ok(Value::NIL));
+    }));
+    assert!(outcome.is_err());
+    assert_eq!(
+        ctx.obarray.symbol_value_id_or_nil(symbol),
+        Value::fixnum(10),
+        "a popped Let must remain owned while its watcher can panic"
+    );
+    assert_eq!(ctx.buffers.current_buffer_id(), Some(original));
+    assert_eq!(ctx.specpdl.len(), depth);
+    assert_eq!(ctx.vm_root_frames.len(), root_depth);
+    assert!(!ctx.active_variable_watchers.contains(&symbol));
+}
+
 /// Rust watcher panic must release temporary unwind roots and reinstate GNU's
 /// pending-quit bracket independently of restoring the popped variable cell.
 #[test]

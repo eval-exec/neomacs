@@ -181,6 +181,112 @@ impl Drop for UnwindQuitScope<'_> {
 }
 static_assertions::assert_not_impl_any!(UnwindQuitScope<'static>: Send, Sync);
 
+/// Keeps one popped entry's native storage recovery armed during Lisp cleanup.
+/// Normal Flow exits preserve GNU's existing popped-entry semantics; only a
+/// Rust panic replays the owned entry through the storage-only discarder.
+#[derive(Debug)]
+#[must_use = "finish the popped binding after normal or signaled cleanup"]
+struct PoppedBindingScope<'a> {
+    roots: UnwindVmRootsScope<'a>,
+    recovery: Option<SpecBinding>,
+    count: usize,
+    lexical_environment: Option<Value>,
+    watcher_owner: Option<SymId>,
+}
+impl<'a> PoppedBindingScope<'a> {
+    #[deny(clippy::wildcard_enum_match_arm)]
+    fn enter(context: &'a mut Context, binding: SpecBinding) -> Self {
+        let count = context.specpdl.len().saturating_sub(1);
+        let lexical_environment =
+            (!matches!(&binding, SpecBinding::LexicalEnv { .. })).then_some(context.lexenv);
+        let watcher_owner = binding
+            .let_bound_symbol()
+            .filter(|sym| !context.active_variable_watchers.contains(sym));
+        let mut guard = Self {
+            roots: UnwindVmRootsScope::enter(context),
+            recovery: Some(binding),
+            count,
+            lexical_environment,
+            watcher_owner,
+        };
+        if let Some(environment) = lexical_environment {
+            guard.roots.context().push_vm_frame_root(environment);
+        }
+        // This root copy cannot run Lisp. The original entry is still on the
+        // specpdl until construction succeeds, so every capture is traced.
+        let (roots, recovery) = (&mut guard.roots, &guard.recovery);
+        if let Some(binding) = recovery {
+            let context = roots.context();
+            match binding {
+                SpecBinding::Let { old_value, .. } | SpecBinding::LetDefault { old_value, .. } => {
+                    if let Some(value) = old_value.get() {
+                        context.push_vm_frame_root(value);
+                    }
+                }
+                SpecBinding::LetLocal { old_value, .. } => context.push_vm_frame_root(*old_value),
+                SpecBinding::LexicalEnv { old_lexenv } => context.push_vm_frame_root(*old_lexenv),
+                SpecBinding::GcRoot { value } => context.push_vm_frame_root(*value),
+                SpecBinding::UnwindProtect { forms, lexenv } => {
+                    context.push_vm_frame_root(*forms);
+                    context.push_vm_frame_root(*lexenv);
+                }
+                SpecBinding::SaveExcursion { marker, .. } => context.push_vm_frame_root(*marker),
+                SpecBinding::NativeUnwind { action } => {
+                    action.trace_roots(&mut |value| context.push_vm_frame_root(value))
+                }
+                SpecBinding::Backtrace { .. }
+                | SpecBinding::Backtrace1 { .. }
+                | SpecBinding::Backtrace2 { .. }
+                | SpecBinding::BacktraceNative { .. }
+                | SpecBinding::SaveCurrentBuffer { .. }
+                | SpecBinding::SaveRestriction { .. }
+                | SpecBinding::LoadsInProgress { .. }
+                | SpecBinding::RequireStack { .. }
+                | SpecBinding::Nop => {}
+            }
+        }
+        guard
+    }
+    fn context(&mut self) -> &mut Context {
+        self.roots.context()
+    }
+    fn finish(mut self) {
+        self.recovery = None;
+        self.roots.restore();
+    }
+}
+impl Drop for PoppedBindingScope<'_> {
+    fn drop(&mut self) {
+        if let Some(binding) = self.recovery.take() {
+            let context = self.roots.context();
+            if context.specpdl.len() >= self.count {
+                context.discard_specpdl_to(self.count);
+                // The entry occupied this slot before being popped; draining
+                // the child suffix makes the retained capacity sufficient.
+                context.specpdl.push(binding);
+                context.discard_specpdl_to(self.count);
+                if let Some(environment) = self.lexical_environment {
+                    context.lexenv = environment;
+                }
+                context.lexenv_assq_cache.clear();
+                context.lexenv_special_cache.clear();
+            }
+            if let Some(symbol) = self.watcher_owner {
+                context.active_variable_watchers.remove(&symbol);
+            }
+        }
+    }
+}
+static_assertions::assert_not_impl_any!(PoppedBindingScope<'static>: Send, Sync);
+
+/// Recovery is needed only while the popped entry can evaluate Lisp.
+/// Pure storage variants do not clone entries or grow a root frame.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PoppedBindingPolicy {
+    PureStorage,
+    LispCleanup,
+}
+
 impl Context {
     // Shared runtime write path for symbol-cell mutation. This mirrors GNU
     // `set_internal` after lexical handling has already been decided.
@@ -1139,14 +1245,75 @@ impl Context {
         let context = quit_scope.context();
         let result = (|| -> Result<(), Flow> {
             while context.specpdl.len() > count {
-                let Some(binding) = context.specpdl.pop() else {
-                    break;
-                };
-                context.unbind_popped_binding(binding)?;
+                match context.next_popped_binding_policy() {
+                    PoppedBindingPolicy::PureStorage => {
+                        let Some(binding) = context.specpdl.pop() else {
+                            break;
+                        };
+                        context.unbind_popped_binding(binding)?;
+                    }
+                    PoppedBindingPolicy::LispCleanup => context.unbind_popped_with_recovery()?,
+                }
             }
             Ok(())
         })();
         quit_scope.finish_unbind(result)
+    }
+
+    #[deny(clippy::wildcard_enum_match_arm)]
+    fn next_popped_binding_policy(&self) -> PoppedBindingPolicy {
+        match self.specpdl.last() {
+            Some(
+                SpecBinding::Let { sym_id, .. }
+                | SpecBinding::LetDefault { sym_id, .. }
+                | SpecBinding::LetLocal { sym_id, .. },
+            ) => {
+                if self.watchers.has_watchers(*sym_id) {
+                    PoppedBindingPolicy::LispCleanup
+                } else {
+                    PoppedBindingPolicy::PureStorage
+                }
+            }
+            Some(SpecBinding::UnwindProtect { .. }) => match self.lisp_execution() {
+                LispExecution::Live => PoppedBindingPolicy::LispCleanup,
+                LispExecution::ExitedAlready => PoppedBindingPolicy::PureStorage,
+            },
+            Some(SpecBinding::NativeUnwind { .. }) => PoppedBindingPolicy::LispCleanup,
+            Some(
+                SpecBinding::LexicalEnv { .. }
+                | SpecBinding::GcRoot { .. }
+                | SpecBinding::Backtrace { .. }
+                | SpecBinding::Backtrace1 { .. }
+                | SpecBinding::Backtrace2 { .. }
+                | SpecBinding::BacktraceNative { .. }
+                | SpecBinding::SaveExcursion { .. }
+                | SpecBinding::SaveCurrentBuffer { .. }
+                | SpecBinding::SaveRestriction { .. }
+                | SpecBinding::LoadsInProgress { .. }
+                | SpecBinding::RequireStack { .. }
+                | SpecBinding::Nop,
+            )
+            | None => PoppedBindingPolicy::PureStorage,
+        }
+    }
+
+    /// Callback-only cold ownership; ordinary pure unbind entries bypass it.
+    #[cold]
+    #[inline(never)]
+    fn unbind_popped_with_recovery(&mut self) -> Result<(), Flow> {
+        let Some(recovery) = self.specpdl.last().cloned() else {
+            return Ok(());
+        };
+        let mut in_flight = PoppedBindingScope::enter(self, recovery);
+        let Some(binding) = in_flight.context().specpdl.pop() else {
+            in_flight.finish();
+            return Ok(());
+        };
+        let result = in_flight.context().unbind_popped_binding(binding);
+        // Normal signals preserve GNU's popped-entry semantics. Only Rust
+        // panic recovery replays native storage without evaluating Lisp.
+        in_flight.finish();
+        result
     }
 
     fn unbind_popped_binding(&mut self, binding: SpecBinding) -> Result<(), Flow> {
