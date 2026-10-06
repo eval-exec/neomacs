@@ -11,6 +11,31 @@ use crate::emacs_core::jit::opt::{build, ir};
 #[path = "tests/opt_opcode_transport_effects_test.rs"]
 mod opcode_transport_effects_tests;
 
+#[cfg(test)]
+#[path = "tests/opt_reps_tail.rs"]
+mod reps_tail_tests;
+
+/// Whether Reps is the final transforming pass and may retain its complete
+/// validation through immutable reporting. Sink selection always retains the
+/// original backend check, even when that invocation changes nothing.
+/// Threading: copied compile-time policy only, never IR or runtime state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RepsTailPolicy {
+    RepeatBackend,
+    FinishFromReps,
+}
+
+impl RepsTailPolicy {
+    fn for_selected_reps() -> Self {
+        match (jit_opt_fast(), jit_opt_passes().sink) {
+            (true, false) => Self::FinishFromReps,
+            (false, false) | (false, true) | (true, true) => Self::RepeatBackend,
+        }
+    }
+}
+
+static_assertions::assert_impl_all!(RepsTailPolicy: Send, Sync);
+
 /// Honor a Feedback request's explicit Full policy when the verified opt plan
 /// transports at least two parameters simultaneously at an actual join. Entry
 /// parameters and serial single-parameter joins retain the outer allocator
@@ -228,16 +253,42 @@ pub(super) fn build_plan_with_sqrt_sites(
         func.census.licm = Some(stats);
     }
     if let Some(lift) = lift {
-        let selection =
-            crate::emacs_core::jit::opt::passes::reps::run(&mut func).map_err(|error| {
+        match RepsTailPolicy::for_selected_reps() {
+            RepsTailPolicy::RepeatBackend => {
+                let selection =
+                    crate::emacs_core::jit::opt::passes::reps::run(&mut func).map_err(|error| {
+                        tracing::debug!(
+                            ?error,
+                            "opt integer representation pass refused a compilation"
+                        );
+                        CompileError::UnsupportedOp("opt-reps:verify")
+                    })?;
+                tracing::debug!(target: "neovm_jit::opt", ?lift, ?selection, "opt integer census");
+                func.census.reps = Some(ir::RepsCensus { lift, selection });
+            }
+            RepsTailPolicy::FinishFromReps => {
+                let verified = crate::emacs_core::jit::opt::passes::reps::run_terminal(func)
+                    .map_err(|error| {
+                        tracing::debug!(
+                            ?error,
+                            "opt integer representation pass refused a compilation"
+                        );
+                        CompileError::UnsupportedOp("opt-reps:verify")
+                    })?;
                 tracing::debug!(
-                    ?error,
-                    "opt integer representation pass refused a compilation"
+                    target: "neovm_jit::opt", ?lift, selection = ?verified.stats(),
+                    "opt integer census"
                 );
-                CompileError::UnsupportedOp("opt-reps:verify")
-            })?;
-        tracing::debug!(target: "neovm_jit::opt", ?lift, ?selection, "opt integer census");
-        func.census.reps = Some(ir::RepsCensus { lift, selection });
+                let completed = verified.finish(lift);
+                record(
+                    Some(completed.as_func()),
+                    "lower",
+                    ops.len(),
+                    cfg.entry_depth.values().sum(),
+                );
+                return Ok(completed.into_func());
+            }
+        }
     }
     if jit_opt_passes().sink {
         let feedback = (0..ops.len())

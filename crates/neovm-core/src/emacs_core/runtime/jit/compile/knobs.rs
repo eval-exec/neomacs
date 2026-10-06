@@ -1831,6 +1831,8 @@ pub(crate) fn jit_opt_passes() -> OptPasses {
 thread_local! {
     /// Compiler configuration only, never mutator or Lisp state.
     static OPT_PASSES_TEST_OVERRIDE: std::cell::Cell<Option<OptPasses>> = const { std::cell::Cell::new(None) };
+    /// Test-thread work schedule only, never Lisp or mutator state.
+    static OPT_FAST_TEST_OVERRIDE: std::cell::Cell<Option<FastWorkSchedule>> = const { std::cell::Cell::new(None) };
 }
 
 #[cfg(test)]
@@ -1838,10 +1840,79 @@ pub(crate) fn force_opt_passes_for_test(passes: Option<OptPasses>) {
     OPT_PASSES_TEST_OVERRIDE.with(|v| v.set(passes));
 }
 
+/// Test-owned work policy; neither variant changes generated-code semantics.
+/// Threading: copied scalar configuration on the compiling test thread only.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FastWorkSchedule {
+    RepeatChecks,
+    ReuseChecks,
+}
+
+#[cfg(test)]
+impl FastWorkSchedule {
+    const fn enabled(self) -> bool {
+        match self {
+            Self::RepeatChecks => false,
+            Self::ReuseChecks => true,
+        }
+    }
+}
+
+/// Override the test's pass selection and restore its exact prior selection.
+/// Threading: this scalar TLS guard cannot migrate from its compiler thread.
+#[cfg(test)]
+#[must_use = "the pass override ends when the returned guard is dropped"]
+pub(super) fn opt_passes_scope_for_test(passes: OptPasses) -> impl Drop {
+    #[derive(Debug)]
+    #[must_use = "dropping the guard restores the previous test passes"]
+    struct Scope {
+        previous: Option<OptPasses>,
+        _thread: std::marker::PhantomData<*const ()>,
+    }
+    static_assertions::assert_not_impl_any!(Scope: Send, Sync);
+    impl Drop for Scope {
+        fn drop(&mut self) {
+            OPT_PASSES_TEST_OVERRIDE.with(|value| value.set(self.previous));
+        }
+    }
+    Scope {
+        previous: OPT_PASSES_TEST_OVERRIDE.with(|value| value.replace(Some(passes))),
+        _thread: std::marker::PhantomData,
+    }
+}
+
+/// Override work policy and restore its exact previous test-thread state.
+/// Threading: the guard retains no IR, Lisp values or runtime pointers.
+#[cfg(test)]
+#[must_use = "the work override ends when the returned guard is dropped"]
+pub(super) fn opt_fast_scope_for_test(schedule: FastWorkSchedule) -> impl Drop {
+    #[derive(Debug)]
+    #[must_use = "dropping the guard restores the previous test work schedule"]
+    struct Scope {
+        previous: Option<FastWorkSchedule>,
+        _thread: std::marker::PhantomData<*const ()>,
+    }
+    static_assertions::assert_not_impl_any!(Scope: Send, Sync);
+    impl Drop for Scope {
+        fn drop(&mut self) {
+            OPT_FAST_TEST_OVERRIDE.with(|value| value.set(self.previous));
+        }
+    }
+    Scope {
+        previous: OPT_FAST_TEST_OVERRIDE.with(|value| value.replace(Some(schedule))),
+        _thread: std::marker::PhantomData,
+    }
+}
+
 /// Profile-controlled compile-time work elision, on in lists48-osr, off with
 /// PROFILE=off. Threading: immutable process
 /// configuration only, never Lisp state, mutator pointers or compiler scratch.
 pub(crate) fn jit_opt_fast() -> bool {
+    #[cfg(test)]
+    if let Some(schedule) = OPT_FAST_TEST_OVERRIDE.with(std::cell::Cell::get) {
+        return schedule.enabled();
+    }
     #[cfg(test)]
     if let Some(defaults) = super::opt_profile::test_defaults() {
         return defaults.fast;
