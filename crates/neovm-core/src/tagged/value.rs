@@ -750,6 +750,13 @@ impl TaggedValue {
         }
     }
 
+    /// The fixnum payload as a [`Fixnum`]: decoding never leaves the fixnum
+    /// range, so callers need no further range check.
+    #[inline]
+    pub(crate) fn as_fixnum_value(self) -> Option<Fixnum> {
+        self.as_fixnum().map(Fixnum)
+    }
+
     /// Extract fixnum value without tag check. Caller must ensure `is_fixnum()`.
     #[inline(always)]
     pub fn xfixnum(self) -> i64 {

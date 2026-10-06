@@ -2606,6 +2606,9 @@ impl TryFrom<(&BufferManager, Value)> for FieldMotionPosition {
     type Error = Flow;
 
     fn try_from((buffers, value): (&BufferManager, Value)) -> Result<Self, Self::Error> {
+        if let Some(position) = value.as_fixnum_value() {
+            return Ok(Self(position));
+        }
         let position = expect_integer_or_marker_in_buffers(buffers, &value)?;
         crate::tagged::value::Fixnum::try_from(position)
             .map(Self)
@@ -2617,46 +2620,50 @@ impl TryFrom<(&BufferManager, Value)> for FieldMotionPosition {
     }
 }
 
-impl TryFrom<i64> for FieldMotionPosition {
-    type Error = Flow;
-
-    fn try_from(position: i64) -> Result<Self, Self::Error> {
-        crate::tagged::value::Fixnum::try_from(position)
-            .map(Self)
-            .map_err(|error| match error {
-                crate::tagged::value::FixnumRangeError::OutOfRange(_) => {
-                    signal(LispCondition::OverflowError, vec![])
-                }
-            })
+impl From<crate::buffer::position::BufferLispPos> for FieldMotionPosition {
+    fn from(position: crate::buffer::position::BufferLispPos) -> Self {
+        Self(position.into())
     }
 }
 
 static_assertions::assert_impl_all!(FieldMotionPosition: Send, Sync);
 
-/// A field-motion property probe position proven inside the accessible buffer.
-/// This scalar witness is created from the current mutator's buffer bounds; it
-/// contains no mutable state and is used before any Lisp callback can run.
+/// The accessible region `[BEGV, ZV]` that field-motion probe positions must
+/// lie in, read once from the current buffer before any Lisp can run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct FieldProbePosition(LispCharPos1);
+struct FieldProbeBounds {
+    begv: LispCharPos1,
+    zv: LispCharPos1,
+}
 
-static_assertions::assert_impl_all!(FieldProbePosition: Send, Sync);
-
-impl TryFrom<(FieldMotionPosition, &Buffer)> for FieldProbePosition {
-    type Error = Flow;
-
-    fn try_from((position, buffer): (FieldMotionPosition, &Buffer)) -> Result<Self, Self::Error> {
-        let integer = position.0;
-        let position = i64::from(integer);
-        if position < buffer.point_min_lisp_char_pos().as_i64()
-            || position > buffer.point_max_lisp_char_pos().as_i64()
-        {
-            return Err(signal(
-                LispCondition::ArgsOutOfRange,
-                vec![Value::from_fixnum(integer)],
-            ));
+impl From<&Buffer> for FieldProbeBounds {
+    fn from(buffer: &Buffer) -> Self {
+        Self {
+            begv: buffer.point_min_lisp_char_pos(),
+            zv: buffer.point_max_lisp_char_pos(),
         }
-        Ok(Self(LispCharPos1::new(position)))
     }
+}
+
+impl FieldProbeBounds {
+    /// GNU's char-property probes signal `args-out-of-range` outside the
+    /// accessible region.
+    fn check_probe(self, position: FieldMotionPosition) -> Result<(), Flow> {
+        let candidate = LispCharPos1::new(i64::from(position.0));
+        if candidate < self.begv || candidate > self.zv {
+            return Err(field_probe_out_of_range(position));
+        }
+        Ok(())
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn field_probe_out_of_range(position: FieldMotionPosition) -> Flow {
+    signal(
+        LispCondition::ArgsOutOfRange,
+        vec![Value::from_fixnum(position.0)],
+    )
 }
 
 /// `constrain-to-field` on an argument slice (2..=5 values, already
@@ -2671,19 +2678,21 @@ pub(crate) fn builtin_constrain_to_field_5(
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let point_min = current.point_min_lisp_char_pos().as_i64();
+    let bounds = FieldProbeBounds::from(&**current);
+    let point_min = bounds.begv.as_i64();
     let orig_point = if args[0].is_nil() {
-        Some(current.point_lisp_char_pos().as_i64())
+        Some(FieldMotionPosition::from(current.point_position()))
     } else {
         None
     };
     let new_argument = if let Some(point) = orig_point {
-        FieldMotionPosition::try_from(point)?
+        point
     } else {
         FieldMotionPosition::try_from((&eval.buffers, args[0]))?
     };
     let old_argument = FieldMotionPosition::try_from((&eval.buffers, args[1]))?;
-    let mut new_pos = i64::from(new_argument.0);
+    let mut result = new_argument;
+    let new_pos = i64::from(new_argument.0);
     let old_pos = i64::from(old_argument.0);
     let escape_from_edge = args.get(2).is_some_and(|value| value.is_truthy());
     let only_in_line = args.get(3).is_some_and(|value| value.is_truthy());
@@ -2702,19 +2711,11 @@ pub(crate) fn builtin_constrain_to_field_5(
 
     let mut constrain = !inhibit_field_text_motion && new_pos != old_pos;
     if constrain && current_buffer_cannot_have_fields(eval) {
-        let buffer = eval.buffers.current_buffer().ok_or_else(|| {
-            signal(
-                LispCondition::Error,
-                vec![Value::string("No current buffer")],
-            )
-        })?;
         // These two probes would both return nil before GNU's OR completes.
         // Retain their accessible-range checks when skipping the lookups.
         // Buffers with fields keep the original short-circuit probe ordering.
-        new_pos = FieldProbePosition::try_from((new_argument, buffer))?
-            .0
-            .as_i64();
-        let _ = FieldProbePosition::try_from((old_argument, buffer))?;
+        bounds.check_probe(new_argument)?;
+        bounds.check_probe(old_argument)?;
         // GNU would now run up to four `Fget_char_property` probes; when the
         // buffer cannot hold a `field` anywhere they all answer nil, and
         // `line-beginning-position` calls this once per line (~1.8K Ir).
@@ -2764,38 +2765,38 @@ pub(crate) fn builtin_constrain_to_field_5(
     if constrain {
         let forward = new_pos > old_pos;
         let field_bound = if forward {
-            expect_int(&builtin_field_end(
+            builtin_field_end(
                 eval,
                 vec![
-                    Value::fixnum(old_pos),
+                    Value::from_fixnum(old_argument.0),
                     Value::bool_val(escape_from_edge),
-                    Value::fixnum(new_pos),
+                    Value::from_fixnum(new_argument.0),
                 ],
-            )?)?
+            )?
         } else {
-            expect_int(&builtin_field_beginning(
+            builtin_field_beginning(
                 eval,
                 vec![
-                    Value::fixnum(old_pos),
+                    Value::from_fixnum(old_argument.0),
                     Value::bool_val(escape_from_edge),
-                    Value::fixnum(new_pos),
+                    Value::from_fixnum(new_argument.0),
                 ],
-            )?)?
+            )?
         };
+        expect_int(&field_bound)?;
+        let field_bound = FieldMotionPosition::try_from((&eval.buffers, field_bound))?;
+        let bound = i64::from(field_bound.0);
 
-        let should_constrain = if field_bound < new_pos {
-            forward
-        } else {
-            !forward
-        };
+        let should_constrain = if bound < new_pos { forward } else { !forward };
         let same_line = !only_in_line
-            || !current_buffer_has_newline_between_positions(&eval.buffers, new_pos, field_bound)?;
+            || !current_buffer_has_newline_between_positions(&eval.buffers, new_pos, bound)?;
         if should_constrain && same_line {
-            new_pos = field_bound;
+            result = field_bound;
         }
     }
 
-    if let Some(orig_point) = orig_point
+    let new_pos = i64::from(result.0);
+    if let Some(orig_point) = orig_point.map(|point| i64::from(point.0))
         && new_pos != orig_point
     {
         let current_id = eval
@@ -2812,7 +2813,7 @@ pub(crate) fn builtin_constrain_to_field_5(
             .goto_buffer_emacs_byte_pos(current_id, byte_pos);
     }
 
-    Ok(Value::fixnum(new_pos))
+    Ok(Value::from_fixnum(result.0))
 }
 
 fn char_property_in_current_buffer(
@@ -3138,7 +3139,7 @@ pub(crate) fn builtin_point_0(eval: &mut super::eval::Context) -> EvalResult {
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    Ok(Value::fixnum(buf.point_lisp_char_pos().as_i64()))
+    Ok(Value::from_fixnum(buf.point_position().into()))
 }
 
 pub(crate) fn builtin_point_min_0(eval: &mut super::eval::Context) -> EvalResult {
@@ -3146,7 +3147,7 @@ pub(crate) fn builtin_point_min_0(eval: &mut super::eval::Context) -> EvalResult
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    Ok(Value::fixnum(buf.point_min_lisp_char_pos().as_i64()))
+    Ok(Value::from_fixnum(buf.point_min_position().into()))
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -3160,7 +3161,7 @@ pub(crate) fn builtin_point_max_0(eval: &mut super::eval::Context) -> EvalResult
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    Ok(Value::fixnum(buf.point_max_lisp_char_pos().as_i64()))
+    Ok(Value::from_fixnum(buf.point_max_position().into()))
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up

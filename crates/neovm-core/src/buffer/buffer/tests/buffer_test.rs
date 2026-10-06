@@ -4,6 +4,10 @@ use crate::buffer::{CharRange, LispCharPos1};
 use crate::emacs_core::value::ValueKind;
 use crate::heap_types::{LispString, OverlayData};
 
+#[cfg(test)]
+#[path = "fixnum_positions_test.rs"]
+mod fixnum_positions_test;
+
 #[path = "gnu_beg_unchanged_test.rs"]
 mod gnu_beg_unchanged_test;
 

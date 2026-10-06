@@ -5952,8 +5952,8 @@ fn prepare_write_region(
                     .buffers
                     .get(buffer_after)
                     .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-                callback_start = Value::fixnum(buf.point_min_lisp_char_pos().as_i64());
-                callback_end = Value::fixnum(buf.point_max_lisp_char_pos().as_i64());
+                callback_start = Value::from_fixnum(buf.point_min_position().into());
+                callback_end = Value::from_fixnum(buf.point_max_position().into());
                 annotations.clear();
             }
             annotations.merge_callback_result(result)?;

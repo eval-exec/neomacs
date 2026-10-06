@@ -9,8 +9,8 @@ use super::syntax::{SyntaxClass, SyntaxTable};
 use super::textprop::{buffer_overlay_property_at_byte_pos, lookup_buffer_text_property};
 use super::value::{Value, ValueKind, VecLikeType, lexenv_lookup};
 use crate::buffer::{
-    AccessibleEmacsByteRange, BufferManager, CharPos0, EmacsByteLen, EmacsBytePos, EmacsByteRange,
-    LispCharPos1,
+    AccessibleEmacsByteRange, BufferLispPos, BufferManager, CharPos0, EmacsByteLen, EmacsBytePos,
+    EmacsByteRange, LispCharPos1,
 };
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_fixnum, expect_max_args, expect_min_args};
@@ -588,7 +588,7 @@ pub(crate) fn builtin_eolp_0(ctx: &mut super::eval::Context) -> EvalResult {
 pub(crate) fn pos_bol_compute(
     ctx: &super::eval::Context,
     scan_count: i64,
-) -> Result<(i64, i64, i64), Flow> {
+) -> Result<(BufferLispPos, BufferLispPos, i64), Flow> {
     let buf = current_buffer_in_manager(&ctx.buffers)?;
     let accessible = buf.accessible_emacs_byte_region();
     let begv = accessible.start().get();
@@ -612,8 +612,8 @@ pub(crate) fn pos_bol_compute(
         line_beginning_byte_narrowed(buf, pos, begv)
     };
     Ok((
-        byte_to_char_pos(buf, EmacsBytePos::new(bol)),
-        byte_to_char_pos(buf, point),
+        buf.emacs_byte_pos_to_position(EmacsBytePos::new(bol)),
+        buf.emacs_byte_pos_to_position(point),
         moved,
     ))
 }
@@ -624,7 +624,7 @@ pub(crate) fn pos_bol_compute(
 pub(crate) fn pos_eol_compute(
     ctx: &super::eval::Context,
     scan_count: i64,
-) -> Result<(i64, i64), Flow> {
+) -> Result<(BufferLispPos, BufferLispPos), Flow> {
     let buf = current_buffer_in_manager(&ctx.buffers)?;
     let accessible = buf.accessible_emacs_byte_region();
     let begv = accessible.start().get();
@@ -644,8 +644,8 @@ pub(crate) fn pos_eol_compute(
         line_end_byte_narrowed(buf, pos, zv)
     };
     Ok((
-        byte_to_char_pos(buf, EmacsBytePos::new(eol)),
-        byte_to_char_pos(buf, point),
+        buf.emacs_byte_pos_to_position(EmacsBytePos::new(eol)),
+        buf.emacs_byte_pos_to_position(point),
     ))
 }
 
@@ -674,8 +674,8 @@ pub(crate) fn builtin_line_beginning_position_1(
     crate::emacs_core::builtins::builtin_constrain_to_field_5(
         ctx,
         &[
-            Value::fixnum(bol_charpos),
-            Value::fixnum(orig_charpos),
+            Value::from_fixnum(bol_charpos.into()),
+            Value::from_fixnum(orig_charpos.into()),
             if count != 0 { Value::T } else { Value::NIL },
             Value::T,
             Value::NIL,
@@ -705,8 +705,8 @@ pub(crate) fn builtin_line_end_position_1(ctx: &mut super::eval::Context, n: Val
     crate::emacs_core::builtins::builtin_constrain_to_field_5(
         ctx,
         &[
-            Value::fixnum(eol_charpos),
-            Value::fixnum(orig_charpos),
+            Value::from_fixnum(eol_charpos.into()),
+            Value::from_fixnum(orig_charpos.into()),
             Value::NIL,
             Value::T,
             Value::NIL,

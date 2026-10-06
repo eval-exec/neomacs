@@ -15,8 +15,9 @@ use std::sync::OnceLock;
 use super::buffer_text::BufferText;
 use super::marker_data::{marker_data_anchor, positioned_marker_data, set_marker_data_anchor};
 use super::position::{
-    AccessibleCharRange, AccessibleEmacsByteRange, CharLen, CharPos0, CharRange, EmacsByteLen,
-    EmacsBytePos, EmacsByteRange, FullBufferLispCharRange, LispCharPos1, TextPositionAnchor,
+    AccessibleCharRange, AccessibleEmacsByteRange, BufferLispPos, CharLen, CharPos0, CharRange,
+    EmacsByteLen, EmacsBytePos, EmacsByteRange, FullBufferLispCharRange, LispCharPos1,
+    TextPositionAnchor,
 };
 #[cfg(test)]
 use super::text::BufferTextBytesSnapshot;
@@ -2979,6 +2980,21 @@ impl Buffer {
         self.accessible_start.char_pos()
     }
 
+    /// Point, convertible to a fixnum without a range check.
+    pub(crate) fn point_position(&self) -> BufferLispPos {
+        BufferLispPos::of_live_buffer(self.point_char_pos())
+    }
+
+    /// `point-min`, convertible to a fixnum without a range check.
+    pub(crate) fn point_min_position(&self) -> BufferLispPos {
+        BufferLispPos::of_live_buffer(self.point_min_char_pos())
+    }
+
+    /// `point-max`, convertible to a fixnum without a range check.
+    pub(crate) fn point_max_position(&self) -> BufferLispPos {
+        BufferLispPos::of_live_buffer(self.point_max_char_pos())
+    }
+
     /// Beginning of the accessible portion as a 1-based Lisp character position.
     pub fn point_min_lisp_char_pos(&self) -> LispCharPos1 {
         self.point_min_char_pos().to_lisp()
@@ -3146,6 +3162,12 @@ impl Buffer {
 
     pub fn emacs_byte_pos_to_lisp_char_pos(&self, byte_pos: EmacsBytePos) -> LispCharPos1 {
         self.emacs_byte_pos_to_char_pos_clamped(byte_pos).to_lisp()
+    }
+
+    /// [`Self::emacs_byte_pos_to_lisp_char_pos`], clamped into this buffer, so
+    /// it converts to a fixnum without a range check.
+    pub(crate) fn emacs_byte_pos_to_position(&self, byte_pos: EmacsBytePos) -> BufferLispPos {
+        BufferLispPos::of_live_buffer(self.emacs_byte_pos_to_char_pos_clamped(byte_pos))
     }
 
     /// See [`BufferText::single_byte_chars_end`]: where it is `Some(end)`,

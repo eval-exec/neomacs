@@ -1001,3 +1001,15 @@ fn move_gap_both_matches_scanning_variant() {
     assert_eq!(a.gpt_byte(), b.gpt_byte());
     assert_eq!(a.char_count(), b.char_count());
 }
+
+#[test]
+fn text_up_to_gnu_buf_bytes_max_is_accepted() {
+    assert_within_buffer_limit(0);
+    assert_within_buffer_limit(BUF_BYTES_MAX);
+}
+
+#[test]
+#[should_panic(expected = "Maximum buffer size exceeded")]
+fn text_beyond_gnu_buf_bytes_max_is_rejected() {
+    assert_within_buffer_limit(BUF_BYTES_MAX + 1);
+}

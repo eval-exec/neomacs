@@ -25,6 +25,7 @@ pub use buffer::{
 pub(crate) use buffer_text::BufferText;
 pub use edit_transaction::TranspositionAnchorPolicy;
 pub use overlay::{Overlay, OverlayList};
+pub(crate) use position::BufferLispPos;
 pub use position::{
     AccessibleCharRange, AccessibleEmacsByteRange, CharLen, CharPos0, CharRange, DisplayColumn,
     EmacsByteLen, EmacsBytePos, EmacsByteRange, FullBufferLispCharRange, LispBytePos1,

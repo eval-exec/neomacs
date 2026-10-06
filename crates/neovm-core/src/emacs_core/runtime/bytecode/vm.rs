@@ -9233,7 +9233,7 @@ impl<'a> Vm<'a> {
         #[cfg(test)]
         INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(count.get() + 1));
         match self.ctx.buffers.current_buffer() {
-            Some(buf) => Ok(Value::fixnum(buf.point_lisp_char_pos().as_i64())),
+            Some(buf) => Ok(Value::from_fixnum(buf.point_position().into())),
             None => Err(signal("error", vec![Value::string("No current buffer")])),
         }
     }
@@ -9243,7 +9243,7 @@ impl<'a> Vm<'a> {
         #[cfg(test)]
         INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(count.get() + 1));
         match self.ctx.buffers.current_buffer() {
-            Some(buf) => Ok(Value::fixnum(buf.point_min_lisp_char_pos().as_i64())),
+            Some(buf) => Ok(Value::from_fixnum(buf.point_min_position().into())),
             None => Err(signal("error", vec![Value::string("No current buffer")])),
         }
     }
@@ -9253,7 +9253,7 @@ impl<'a> Vm<'a> {
         #[cfg(test)]
         INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(count.get() + 1));
         match self.ctx.buffers.current_buffer() {
-            Some(buf) => Ok(Value::fixnum(buf.point_max_lisp_char_pos().as_i64())),
+            Some(buf) => Ok(Value::from_fixnum(buf.point_max_position().into())),
             None => Err(signal("error", vec![Value::string("No current buffer")])),
         }
     }

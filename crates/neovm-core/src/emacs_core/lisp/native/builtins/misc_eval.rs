@@ -118,7 +118,7 @@ pub(crate) fn builtin_pos_bol_1(eval: &mut super::eval::Context, n: Value) -> Ev
     // position; only `Fline_beginning_position` adds field constraints.
     let scan_count = super::navigation::line_beginning_scan_count_arg(&args)?;
     let (bol_charpos, _orig, _count) = super::navigation::pos_bol_compute(eval, scan_count)?;
-    Ok(Value::fixnum(bol_charpos))
+    Ok(Value::from_fixnum(bol_charpos.into()))
 }
 
 /// `pos-eol` as registered: fixed arity 1, called straight off the bytecode
@@ -130,7 +130,7 @@ pub(crate) fn builtin_pos_eol_1(eval: &mut super::eval::Context, n: Value) -> Ev
     // position; only `Fline_end_position` adds field constraints.
     let scan_count = super::navigation::line_end_scan_count_arg(&args)?;
     let (eol_charpos, _orig) = super::navigation::pos_eol_compute(eval, scan_count)?;
-    Ok(Value::fixnum(eol_charpos))
+    Ok(Value::from_fixnum(eol_charpos.into()))
 }
 
 pub(crate) fn builtin_previous_property_change(
