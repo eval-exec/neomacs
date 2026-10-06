@@ -192,6 +192,12 @@ thread_local! {
     /// bool whenever a heap is (re)installed on a thread — that resync, not a
     /// guard, is the panic-recovery point.
     static TAGGED_HEAP_CONCURRENT_ACTIVE: Cell<bool> = const { Cell::new(false) };
+    /// The installed mutator's Tier-H activation, independently of the general
+    /// SATB window: claims-OFF cycles still mark concurrently. Derived from
+    /// running + claims + snapshot presence at launch and heap installation;
+    /// cleared at join/uninstall, before retained snapshot storage is freed.
+    /// Like the general window, this is protocol state, never scope-restored.
+    static TAGGED_HEAP_CONCURRENT_HASH_ACTIVE: Cell<bool> = const { Cell::new(false) };
     /// Mirrors `TaggedHeap::{dump_addr_lo, dump_addr_hi}` so the write
     /// barrier's partition-only path can span-test a cons owner without
     /// dereferencing the heap. `(usize::MAX, 0)` = empty span.
@@ -776,10 +782,6 @@ pub struct TaggedHeap {
     /// in-flight cycle (see `ConcurrentClaimJob::bc_claimed`) + fold.
     concurrent_bc_claimed: std::sync::Arc<AtomicUsize>,
     last_concurrent_bc_claimed: usize,
-    /// U3.5 counter exists only when its frozen policy is enabled. Every
-    /// successful marker/bignum/symbol-with-pos claim uses an atomic RMW.
-    concurrent_leaf_claimed: Option<std::sync::Arc<AtomicUsize>>,
-    last_concurrent_leaf_claimed: usize,
     /// CONCURRENT STRING MARKING: per-cycle dedup for the ENFORCED in-mutator
     /// string interval SATB barrier (`note_string_interval_preimage`), keyed by
     /// `LispString` address — stable for the whole cycle because nothing is
@@ -912,12 +914,10 @@ pub struct TaggedHeap {
     /// read once, here at construction): the Tier-B snapshot (the default),
     /// or, for the F-G measurement only, deferral to the termination.
     vec_scan: knobs::VecScanMode,
-    /// Default-off U3.5 policy, immutable for this heap's lifetime.
-    concurrent_claims: bool,
-    /// The generation census (`census.rs`), present only under
-    /// `NEOVM_GC_CENSUS` / `NEOVM_GC_CENSUS_REMSET` (read once, here at
-    /// construction). Trace-only: it never changes what is marked or freed.
-    census: Option<Box<GenCensus>>,
+    /// Optional collector cold state in the original census pointer carrier.
+    /// Census and U35 have independent lifetimes; no inline U35 state changes
+    /// allocation/barrier offsets while the default-off policy is disabled.
+    census: Option<Box<ColdGcState>>,
 }
 
 impl Default for TaggedHeap {
@@ -1067,9 +1067,6 @@ impl TaggedHeap {
             last_concurrent_vec_claimed: 0,
             concurrent_bc_claimed: std::sync::Arc::new(AtomicUsize::new(0)),
             last_concurrent_bc_claimed: 0,
-            concurrent_leaf_claimed: concurrent_claims
-                .then(|| std::sync::Arc::new(AtomicUsize::new(0))),
-            last_concurrent_leaf_claimed: 0,
             satb_string_preimage_addrs: FxHashSet::default(),
             gc_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             gc_wake: std::sync::Arc::new((std::sync::Mutex::new(()), std::sync::Condvar::new())),
@@ -1130,8 +1127,7 @@ impl TaggedHeap {
             dump_addr_lo: usize::MAX,
             dump_addr_hi: 0,
             vec_scan: knobs::vec_scan_mode(),
-            concurrent_claims,
-            census: GenCensus::from_knob(),
+            census: ColdGcState::from_knobs(concurrent_claims),
         };
         // The census's remembered-set probe widens the window compiled code
         // tests from the start (the thread-local mirror follows when the heap
@@ -1289,7 +1285,8 @@ impl TaggedHeap {
             last_concurrent_subr_dropped: self.last_concurrent_subr_dropped,
             last_concurrent_vec_claimed: self.last_concurrent_vec_claimed,
             last_concurrent_bc_claimed: self.last_concurrent_bc_claimed,
-            last_concurrent_leaf_claimed: self.last_concurrent_leaf_claimed,
+            last_concurrent_leaf_claimed: self.last_concurrent_leaf_claimed(),
+            last_concurrent_hash_claimed: self.last_concurrent_hash_claimed(),
             last_termination_fold_us: self.last_termination_fold_us,
             termination_count: self.termination_count,
             mark_us: self.sweep_mark_us,
@@ -2460,6 +2457,60 @@ impl TaggedHeap {
         }
     }
 
+    /// Remove ownership before a Box hash address can be reused. Sweep is
+    /// stopped-world; the current mutator need not be its allocating mutator.
+    /// Lazy capture uses the existing live-Box inventory, so it maintains no
+    /// hash registry and returns before reading the dying object's kind.
+    unsafe fn unregister_hash_table_object(&mut self, header: *mut GcHeader) {
+        // One predictable OFF branch, before any dying-header kind read.
+        if self.concurrent_hash_registration_enabled() {
+            unsafe { self.unregister_hash_table_object_cold(header) };
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    unsafe fn unregister_hash_table_object_cold(&mut self, header: *mut GcHeader) {
+        if !self.concurrent_claims() || self.concurrent_hash_lazy_registry() {
+            return;
+        }
+        unsafe {
+            if (*header).kind == HeapObjectKind::VecLike
+                && (*(header as *const VecLikeHeader)).type_tag == VecLikeType::HashTable
+            {
+                let mut removed = false;
+                for entry in self.concurrent_hash_mutators() {
+                    removed |= entry
+                        .lock()
+                        .unwrap()
+                        .hash_table_addrs
+                        .remove(&(header as usize));
+                }
+                debug_assert!(removed, "freed hash table was not in a mutator registry");
+            }
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    unsafe fn register_concurrent_hash_table_object(&self, header: *mut VecLikeHeader) {
+        if !self.concurrent_claims() || self.concurrent_hash_lazy_registry() {
+            return;
+        }
+        if unsafe { (*header).type_tag } == VecLikeType::HashTable {
+            let entry = self.current_concurrent_hash_mutator();
+            let registered = entry
+                .lock()
+                .unwrap()
+                .hash_table_addrs
+                .insert(header as usize);
+            debug_assert!(
+                registered,
+                "hash table linked twice into a mutator registry"
+            );
+        }
+    }
+
     /// Link a veclike object into the all_objects list.
     fn link_veclike(&mut self, header: *mut VecLikeHeader) {
         unsafe {
@@ -2481,6 +2532,11 @@ impl TaggedHeap {
                 let registered = self.vector_object_addrs.insert(gc_header as usize);
                 debug_assert!(registered, "vector linked twice into the registry");
             }
+            // Preserve the ordinary Box link body behind one OFF cold-carrier
+            // branch. Census-only/lazy modes refuse in the outlined helper.
+            if self.concurrent_hash_registration_enabled() {
+                self.register_concurrent_hash_table_object(header);
+            }
             self.all_objects = gc_header;
             self.note_black_born(gc_header);
             #[cfg(test)]
@@ -2499,6 +2555,9 @@ impl Drop for TaggedHeap {
             crate::tagged::gc::clear_tagged_heap_if_installed(self);
             return;
         }
+        // Cancellation/teardown has no termination fixpoint, but the joined
+        // reader is quiescent before either attached or retired slots are freed.
+        self.release_concurrent_hash_storage();
         // Leave no dangling thread-local pointer behind: a heap installed with
         // `set_tagged_heap` and dropped by anything but a `Context` (a failed
         // pdump load drops the half-built one on its error path) used to stay
@@ -2657,6 +2716,8 @@ pub(crate) mod scan_contract;
 #[cfg(test)]
 #[path = "gc/tests/shutdown_tests.rs"]
 mod shutdown_tests;
+pub(crate) use concurrent::{concurrent_hash_snapshot, prepare_concurrent_hash_write};
+pub(crate) mod concurrent_hash;
 
 mod incremental;
 mod reclamation;
@@ -2706,6 +2767,8 @@ mod knobs;
 mod chunk_map;
 use chunk_map::{CHUNK_CLASS_COUNT, ChunkClass, ChunkEntry, ChunkMap, HeapChunkMap, PageSnapshot};
 
+mod cold_gc;
+use cold_gc::ColdGcState;
 mod census;
 #[cfg(test)]
 use census::CensusRecord;

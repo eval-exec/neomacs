@@ -485,11 +485,19 @@ fn concurrent_termination_classifies_deferred_kinds() {
         "no float may remain parked on a bare page-only heap (f={})",
         kinds.float,
     );
-    assert!(
-        kinds.hash_table >= N_HT,
-        "hash tables parked (ht={})",
-        kinds.hash_table,
-    );
+    if heap.concurrent_claims() {
+        assert!(stats.last_concurrent_hash_claimed >= N_HT);
+        assert_eq!(
+            kinds.hash_table, 0,
+            "eligible hashes leave the parked buffer"
+        );
+    } else {
+        assert!(
+            kinds.hash_table >= N_HT,
+            "hash tables parked with U3.5 off (ht={})",
+            kinds.hash_table,
+        );
+    }
     // Task 01: owned page vectors' headers are claimed on the GC thread
     // (their backings already traced concurrently via Tier B), so the
     // vector bucket collapses and the claim counter carries the count.
@@ -504,7 +512,7 @@ fn concurrent_termination_classifies_deferred_kinds() {
         "no vector may remain parked on a bare page-only heap (vec={})",
         kinds.vector,
     );
-    if heap.concurrent_claims {
+    if heap.concurrent_claims() {
         assert!(stats.last_concurrent_leaf_claimed >= N_BIG);
         assert_eq!(kinds.other, 0, "page leaves leave the parked buffer");
     } else {

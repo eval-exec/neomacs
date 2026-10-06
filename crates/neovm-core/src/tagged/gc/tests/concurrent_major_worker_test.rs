@@ -125,6 +125,8 @@ fn claim_job(heap: &TaggedHeap, major: bool) -> ConcurrentClaimJob {
         float_claimed: Arc::new(AtomicUsize::new(0)),
         vec_claimed: Arc::new(AtomicUsize::new(0)),
         bc_claimed: Arc::new(AtomicUsize::new(0)),
+        hashes: None,
+        hash_claimed: None,
         leaf_claimed: None,
         subr_dropped: Arc::new(AtomicUsize::new(0)),
     }

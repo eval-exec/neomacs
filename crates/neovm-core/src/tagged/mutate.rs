@@ -397,11 +397,48 @@ pub fn with_hash_table_mut<R>(
     value: TaggedValue,
     f: impl FnOnce(&mut LispHashTable) -> R,
 ) -> Option<R> {
-    LispCollectionRevision::changed(value);
     if value.veclike_type()? != VecLikeType::HashTable {
         return None;
     }
+    if super::gc::concurrent_hash_mutation_active() {
+        return with_hash_table_mut_concurrent(value, f);
+    }
+    with_hash_table_mut_body(value, f, || {})
+}
+
+/// Keep the snapshot, mutation lease and their unwind/drop paths outside the
+/// inline inactive accessor. The lease must cover preimage enumeration as well
+/// as the caller's mutable borrow, so its owning Arc stays in this activation.
+#[cold]
+#[inline(never)]
+fn with_hash_table_mut_concurrent<R>(
+    value: TaggedValue,
+    f: impl FnOnce(&mut LispHashTable) -> R,
+) -> Option<R> {
+    // Keep the shared snapshot alive while borrowing its entry. The same-table
+    // guard precedes even preimage enumeration, which reads the live slots.
+    let snapshot = super::gc::concurrent_hash_snapshot(value);
+    let mut mutation = snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.lock_mutation(value.as_veclike_ptr().unwrap() as usize));
+    with_hash_table_mut_body(value, f, || {
+        if let Some(guard) = mutation.as_mut() {
+            super::gc::prepare_concurrent_hash_write(value, guard);
+        }
+    })
+}
+
+/// The inactive specialization has no snapshot or guard to construct/drop.
+/// Both specializations retain the journal/barrier before policy preparation.
+#[inline(always)]
+fn with_hash_table_mut_body<R>(
+    value: TaggedValue,
+    f: impl FnOnce(&mut LispHashTable) -> R,
+    prepare: impl FnOnce(),
+) -> Option<R> {
+    LispCollectionRevision::changed(value);
     note_heap_write(value, HeapWriteKind::HashTableData);
+    prepare();
     let ptr = value.as_veclike_ptr().unwrap() as *mut HashTableObj;
     unsafe {
         // Lazy dump hydration before the caller sees the table (see

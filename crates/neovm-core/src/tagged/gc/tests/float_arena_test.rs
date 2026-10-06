@@ -406,6 +406,8 @@ fn concurrent_claim_arm_defers_mid_cycle_float_pages() {
         subr_dropped: std::sync::Arc::new(AtomicUsize::new(0)),
         vec_claimed: std::sync::Arc::new(AtomicUsize::new(0)),
         bc_claimed: std::sync::Arc::new(AtomicUsize::new(0)),
+        hashes: None,
+        hash_claimed: None,
         leaf_claimed: None,
     };
     let mut gray = Vec::new();

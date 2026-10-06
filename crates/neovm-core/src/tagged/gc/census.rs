@@ -183,7 +183,11 @@ impl TaggedHeap {
         kind: CensusCycleKind,
         mark_window_alloc_bytes: usize,
     ) {
-        let Some(mut census) = self.census.take() else {
+        let Some(mut census) = self
+            .census
+            .as_deref_mut()
+            .and_then(|cold| cold.census.take())
+        else {
             return;
         };
         debug_assert!(!self.alloc_regions_open(), "census with an open region");
@@ -329,7 +333,10 @@ impl TaggedHeap {
             }
         }
         census.last = Some(record);
-        self.census = Some(census);
+        self.census
+            .as_deref_mut()
+            .expect("cold carrier retained during census")
+            .census = Some(census);
     }
 
     /// Heap children of `owner` (immediates create no edge a minor traces).
@@ -360,7 +367,7 @@ impl TaggedHeap {
     /// A cons block is being released: its address may come back as a new
     /// block, which must start with no census history.
     pub(super) fn census_forget_cons_block(&mut self, base: usize) {
-        if let Some(census) = self.census.as_deref_mut() {
+        if let Some(census) = self.census_state_mut() {
             census.forget_cons_block(base);
         }
     }
@@ -371,7 +378,7 @@ impl TaggedHeap {
     #[cold]
     #[inline(never)]
     pub(super) fn census_note_write(&mut self, record: HeapWriteRecord) {
-        if !self.census.as_deref().is_some_and(GenCensus::remset_probe) {
+        if !self.census_state().is_some_and(GenCensus::remset_probe) {
             return;
         }
         if let Some(value) = record.value
@@ -384,7 +391,7 @@ impl TaggedHeap {
             return;
         };
         let mapped = self.owner_is_mapped(owner);
-        let census = self.census.as_deref_mut().expect("checked above");
+        let census = self.census_state_mut().expect("checked above");
         if census.remset_seen.contains(&owner.bits()) {
             return;
         }
@@ -413,7 +420,7 @@ impl TaggedHeap {
     /// Test hook: the last cycle's census, when the census is on.
     #[cfg(test)]
     pub(crate) fn last_census_for_test(&self) -> Option<CensusRecord> {
-        self.census.as_deref().and_then(|census| census.last)
+        self.census_state().and_then(|census| census.last)
     }
 }
 

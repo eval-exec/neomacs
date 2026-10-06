@@ -32,7 +32,7 @@ termination handshake). The GC thread holds NO `&mut TaggedHeap` (two `&mut`
 to one heap is UB even with atomic fields); it works entirely through:
 
 - Cons block mark bitmaps (atomic `fetch_or`), read via atomic `load_car/load_cdr`.
-- `GcHeader.marked` (`AtomicBool`), claimed with an atomic `swap`.
+- `GcHeader.marked` (`AtomicU8`), claimed with an atomic `swap`.
 - Read-only `Arc` snapshots of owned page bases + the dump address span.
 - A shared `Mutex`-backed SATB buffer (mutator appends; GC drains into gray).
 
@@ -43,17 +43,18 @@ cost is ~zero; the cost was the pervasive representation change.
 
 ### Parity mark bits (`tagged/header.rs`)
 
-`GcHeader { marked: AtomicBool, kind: HeapObjectKind, tenured: bool, next }`.
+`GcHeader` has an atomic mark byte, generation state, an atomic remembered
+byte and collector-owned list links. Its layout is unchanged by U3.5.
 
 - `marked` is the RAW mark-parity bit (relaxed atomic). For a YOUNG
   (non-tenured, heap-owned) non-cons object, "marked this cycle" ≡
   `marked == TaggedHeap::mark_parity`. The heap FLIPS `mark_parity` at
   `begin_collection` instead of walking `all_objects` to clear bits, so the
   raw value alone is meaningless — interpret it via `is_marked_at` /
-  `mark_claim_at` against the owning heap's parity. `mark_parity` starts
-  `false`.
-- `is_marked_at(parity)` = `marked.load(Relaxed) == parity`.
-- `mark_claim_at(parity)` = `marked.swap(parity, Relaxed) != parity` — the
+  `mark_claim_at` against the owning heap's parity. The third byte value,
+  `UNMARKED_AT_REST`, is white under either parity.
+- `is_marked_at(parity)` = `marked.load(Relaxed) == parity.byte()`.
+- `mark_claim_at(parity)` = `marked.swap(parity.byte(), Relaxed) != parity.byte()` — the
   atomic CLAIM: sets the bit and returns `true` iff THIS call flipped it from
   unmarked → marked. Used by the concurrent GC thread to mark a heap object
   exactly once with no `&mut TaggedHeap`; the non-cons analogue of
@@ -62,17 +63,15 @@ cost is ~zero; the cost was the pervasive representation change.
 - **born-at-parity**: heap allocation paths overwrite `marked` at the link
   seams with the current parity (allocate-black), so a mid-cycle birth is
   already marked and never enters the GC's gray.
-- **tenured-before-parity read order**: `tenured` is a frozen bit (set at a
-  world-stopped promotion) meaning "permanently black, never re-traced /
-  re-swept". EVERY reader short-circuits on `tenured` FIRST
-  (`tenured || is_marked_at(parity)`), because the frozen flag is stable to
-  read on any thread while the parity bit is live.
+- **generation-before-parity read order**: every reader asks
+  `black_by_generation(scope)` first. A minor skips all tenured owners; a
+  major skips only permanent image survivors and traces ordinary old owners.
+  Generation state changes only after the worker joins.
 - Mapped (pdump) objects mark via the heap's mutator-only side tables and
   never interpret `marked` at all.
 
-`marked` is atomic precisely so the GC thread can claim it while the mutator
-allocate-blacks / reads it without a data race (`AtomicBool` has the same
-size/layout as `bool`, so the header does not grow).
+`marked` is atomic so the GC thread can claim it while the mutator
+allocate-blacks / reads it without a data race.
 
 ### Size-class object arenas (`tagged/gc.rs`)
 
@@ -91,6 +90,8 @@ a page holds `OBJECT_PAGE_BYTES / T::SLOT_BYTES` slots. Size classes
 | `macro_arena` | `MacroObj` | 128 | ≤ 120 |
 | `record_arena` | `RecordObj` | 64 | ≤ 56 |
 | `symbol_with_pos_arena` | `SymbolWithPosObj` | 64 | ≤ 56 |
+| `marker_arena` | `MarkerObj` | 128 | ≤ 120 |
+| `bignum_arena` | `BignumObj` | 64 | ≤ 56 |
 
 The struct must fit in `SLOT_BYTES` minus an 8-byte trailing free-link word
 (`FREE_LINK_OFFSET = SLOT_BYTES - size_of::<usize>()`), const-checked. Conses
@@ -138,8 +139,10 @@ should_run_concurrent = if partition_dump { dump_blackened }
    mutator-side `mark_all`; weak-table / finalizer / dead-marker post-passes;
    then the deferred sweep.
 
-Both are bounded root scans, sub-millisecond. The expensive cons-spine
-traversal runs entirely between them, off the pause.
+Both include root scans. Termination also traces the deferred residue to a
+fixpoint; its cost depends on the kinds the worker can trace and the mutations
+made during the cycle. Trace measurements report start, join and drain costs
+separately.
 
 **HandshakeStats** (`handshake_stats` / `handshake_stats_mut`) is a
 diagnostics-only (no behavior) sibling of `SweepStats` that records both
@@ -169,8 +172,7 @@ buffer until both are empty and the mutator asks it to stop. It marks:
   rules out mapped objects); a MISS returns `false` = defer (fail-safe):
 
   - **strings** → `concurrent_try_mark_string`: owned page strings with NO
-    interval tree (`intervals_ptr()` null) claim the side-table bool (claiming
-    the `GcHeader` bit would collide with string interval roots); zero Lisp
+    interval tree (`intervals_ptr()` null) claim the owned `GcHeader`; zero Lisp
     children ⇒ the claim IS the trace. Interval-bearing strings defer.
     Counter: `str_claimed`.
   - **floats** → page-snapshot claim: a float has ZERO Lisp children
@@ -212,9 +214,109 @@ buffer until both are empty and the mutator asks it to stop. It marks:
 1. Any inspection that can still send the value to `deferred` runs BEFORE the
    claim — a claimed-THEN-deferred object whose termination trace early-returns
    on the (now-set) mark bit would DROP its children.
-2. The TENURED check runs BEFORE the parity claim — tenured ≡ permanently
-   black; the flag froze at the world-stopped promotion, so the read is stable
-   on this thread and "handled, nothing owed" needs no touch of the frozen bit.
+2. The generation check runs BEFORE the parity claim. Generation-black owners
+   need no claim; ordinary old owners are white and traceable at a major.
+
+## U3.5 claims and Tier-H hash snapshots
+
+`NEOVM_GC_CONCURRENT_CLAIMS=1` enables these additions. The process policy is
+captured in each heap and job and defaults **off**. Off captures no hash
+snapshot, maintains no hash registry and allocates no additional claim counters.
+Records, closures, char-tables and interval-bearing strings retain their existing
+tracing discipline.
+
+Marker, bignum and symbol-with-pos claims require a start-snapshot page hit
+before any header read. Chunk-map counts exclude pages added during the mark;
+base-set snapshots provide the same rule with the chunk map disabled. Markers
+and bignums have no Lisp children. A freshly claimed symbol-with-pos queues its
+two immutable fields, including bare symbols in both full and generational
+major cycles. Failed claims never read a birth's partially initialized payload.
+
+Symbol handoff covers transitive descendants too. The worker selects its symbol
+policy once at launch, independently of generation/promotion: generational
+majors and U3.5-enabled full cycles preserve symbols found in cons car/cdr and
+every bytecode child field. Direct snapshot-field handoff alone is insufficient:
+a claimed hash or symbol-with-pos can expose a cons containing an uninterned
+symbol, and termination cannot repair it by retracing an already-claimed cons.
+The worker returns deduplicated symbol IDs; the coordinator records their
+side-table liveness after join in both generation modes. Default-off legacy full
+loops retain their
+existing policy, with no new per-edge knob branch.
+
+Hash tables use exact owned Box addresses rather than page membership. The
+maintained-registry comparison visits every mutator's table registry with all
+mutators stopped. The default lazy discovery instead finds tables in the
+heap's existing exact live-Box inventory, which includes ordinary-old owners;
+it adds no hash registration on allocation or free. Both capture only hydrated,
+nonweak, generation-relevant tables. Mapped and post-start owners miss the
+snapshot. Weak and pending tables refuse before the claim, preserving
+mutator-side weak registration and hydration. Capture does not root a table:
+the worker scans only eligible owners it reaches.
+
+Capture records constant-sized metadata per table: `(slots.as_ptr(),
+slots.len())` and copied custom comparison/hash callbacks. It does not walk
+slots or allocate initialized-field descriptors. Before claiming the header,
+the worker acquires the entry mutex and atomically elects AVAILABLE→READING.
+It keeps that read lease through the complete scan, including callbacks and
+child routing, even if stop arrives. Writers use the same mutex, so the
+original backing remains alive and immutable during every read. The worker
+matches typed `Option<HashTableEntry>` cells on demand, then reads initialized
+`Some` key/value words atomically with Acquire. It never interprets the raw
+Option representation or reads None payload, padding, live Vec metadata,
+index, weak mode, user-hash memo or mutability byte. This avoids assumptions
+about Option layout while still visiting removed-entry holes in `slots.len()`.
+
+The reader publishes DONE with Release after routing every child, or after a
+failed header claim that owes no scan. DONE and DEFERRED are terminal for that
+cycle: no later reader may dereference the captured pointer. A resize, clear
+or replacement may therefore free attached backing after the completed lease
+has released its mutex. A dropped incomplete lease poisons the cycle.
+
+Round 2 retains three policies for comparison. `CloneUntilTraced` clones only
+on the first write before reader admission; DONE mutations need no copy.
+`DeferWrites` atomically elects AVAILABLE→DEFERRED under the writer mutex before
+the preimage barrier and any worker header claim. The worker then leaves that
+owner for mutator tracing. If a reader wins admission first, the writer waits
+for its complete lease and subsequently mutates without copying: this policy
+uses zero COW. `AlwaysClone` retains the once-per-cycle copy policy for the
+legacy measurement. A copying writer atomically elects UNTOUCHED→COPYING,
+clones slots, transfers the unchanged original Vec to its own mutator
+retirement log, then publishes READY with Release. The selected defaults are
+`DeferWrites` and lazy discovery from the live-Box inventory; the master
+`NEOVM_GC_CONCURRENT_CLAIMS` knob remains off pending qualification gates.
+`NEOVM_GC_CONCURRENT_HASH_POLICY=traced` selects `CloneUntilTraced`, and
+`=legacy` selects `AlwaysClone`. `NEOVM_GC_CONCURRENT_HASH_LAZY_REGISTRY=0`
+selects maintained registration for comparison. These policies take effect
+only when the master knob is enabled.
+
+`with_hash_table_mut` retains the shared snapshot and locks an eligible table's
+entry before the preimage barrier or payload borrow. The guard covers reserve,
+removal, clear, whole replacement, hydration and switch-cache epoch changes.
+Its dirty atomic RMW admits one current-child retrace into the winning
+mutator's log, regardless of copying or deferral. Termination merges every
+mutator's logs and traces current children even if the header was claimed;
+replacing a strong table with a weak table still registers the current weak
+table on the mutator. This preserves existing white values inserted during
+marking as well as SATB deletion coverage. No entry mutex spans a Lisp callback
+or collector safe point.
+
+The heap and job share the snapshot. Retired originals remain owned by mutator
+logs after the worker joins, through the primary and black-born drains,
+finalizers, weak fixpoint and verification. Termination drops snapshot handles
+and retired buffers before detaching sweep lists. Heap teardown joins any active
+reader before cleanup. Unwound/incomplete reader or mutation guards publish a
+snapshot-wide poison flag; poisoned locks and incomplete COPYING remain
+observable by `gc_locks_poisoned`. Join refuses to terminate or sweep a poisoned
+cycle instead of treating it as a completed read or write.
+The new shared protocol uses atomic RMW/locks and all-mutator iteration, while
+ordinary same-table read/write APIs retain the runtime's existing ownership
+requirements.
+
+The generational barrier and remembered sets remain in place. GNU custom-test
+guards modify only the mutability metadata and inhibit GC; guard entry does
+not COW or invalidate a key cache. Actual user-hash memo writes use the guarded
+mutation wrapper and its selected policy. The worker reads copied callback
+values and never executes Lisp or reads guard metadata.
 
 ## The SATB (deletion / Yuasa) barrier
 
@@ -254,16 +356,13 @@ unchanged outlined rejects and `record_heap_write`).
   after `running = true`, `join_concurrent_mark` after `running = false`);
   `set_tagged_heap` re-derives the thread-local (protocol state, no drop
   guard, like the concurrent flag).
-- **The remembered bit.** `GcHeader.remembered` (header byte 3) is set by
-  exactly one helper, `TaggedHeap::remember_owner`, right after the owner is
-  inserted into the never-cleared `mapped_remembered`; tenured objects are
-  never freed, so a set bit cannot outlive its fact. A spurious bit would let
-  an owner skip the barrier with no re-seed of its young children (a UAF),
-  which is why nothing else writes it. Image owners never get it: they sit
-  in the window.
-- **Preconditions** (debug-asserted in `record_heap_write`): tenured implies
-  the dump partition (promotion only happens at the partition's first
-  cycle), and a remembered header implies set membership.
+- **The remembered bit.** `TaggedHeap::remember_owner` uses an atomic RMW to
+  admit one log entry across mutators. With generations enabled, the owner
+  belongs to a mutator remembered log or the coordinator's remembered seeds;
+  stopped-world publication merges those logs, and cycle boundaries reset
+  the bit with the corresponding set. The legacy dump partition keeps its
+  persistent mapped-owner tracking. A remembered claim publishes no log by
+  itself: stop-all must wait for every in-flight barrier append.
 - **Plain inline stores are sound outside the window.** The window is ALL
   from the launch handshake (published before the GC thread reads anything)
   until join (cleared only after the thread exited), so an inline store never
@@ -271,6 +370,21 @@ unchanged outlined rejects and `record_heap_write`).
   orders it before any. JIT `setcar`/`setcdr` and `aset` of owned plain
   vectors and records store inline under exactly this test
   (`jit/compile/heap_inline.rs`).
+
+### Generational obligations
+
+Minors trace young objects and remembered old/image owners. Concurrent majors
+trace young and ordinary old objects, skip permanent image survivors, and
+promote every marked young survivor plus allocate-black births (P-all). The
+worker returns promotion addresses and symbol IDs in owned logs; only the
+coordinator mutates generation or symbol mark state after joining it.
+
+The GEN invariants remain: unmarked-at-rest headers are white at either parity
+(GEN-1); every old-to-young insertion reaches remembered state (GEN-2); promotion
+and sweep run with mutators stopped and the reader joined (GEN-3); remembered
+bits imply a pending log or published seed (GEN-4); bulk mutation closures permit
+no collector safe point (GEN-5). Tier-H's dirty-owner retrace supplements these
+rules rather than replacing its generational barrier.
 
 ## Allocation regions (`tagged/gc/alloc_region.rs`)
 

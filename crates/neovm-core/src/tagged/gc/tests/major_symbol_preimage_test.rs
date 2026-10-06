@@ -350,6 +350,9 @@ fn major_symbol_raw_interval_choke_points_retain_plists_once_and_ignore_nil_gaps
 fn major_symbol_join_merges_worker_and_mutator_results_after_publication_stops() {
     for enabled in [false, true] {
         let mut heap = heap(enabled);
+        // U3.5 full cycles preserve worker-discovered Symbols independently
+        // of the still-major-only mutator preimage producers below.
+        let worker_preserves_symbols = enabled || heap.concurrent_claims();
         set_tagged_heap(&mut heap);
         let roots = ScratchRoots::new();
         let worker = symbol("major-preimage-worker-snapshot");
@@ -395,7 +398,7 @@ fn major_symbol_join_merges_worker_and_mutator_results_after_publication_stops()
         );
         assert_eq!(
             heap.marked_symbols.contains(id(worker)),
-            enabled,
+            worker_preserves_symbols,
             "start scans finish even if join requests an immediate stop"
         );
         assert_eq!(heap.marked_symbols.contains(id(root)), enabled);

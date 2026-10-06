@@ -1418,6 +1418,30 @@ impl HashTableStorage {
         self.slots.len()
     }
 
+    /// Capture the slots allocation before a concurrent hash-table mark.
+    ///
+    /// The collector must keep this allocation attached and unchanged, or
+    /// retire it through `clone_slots_for_concurrent_mark`, until an admitted
+    /// reader completes its lease. After DONE or DEFERRED, the collector must
+    /// never dereference this pointer again. The `Option` cells have no promised
+    /// atomic word layout: match them only in immutable storage, then atomically
+    /// load the typed initialized key/value fields of `Some`.
+    #[inline]
+    pub(crate) fn concurrent_slots_snapshot(&self) -> (*const Option<HashTableEntry>, usize) {
+        (self.slots.as_ptr(), self.slots.len())
+    }
+
+    /// Detach the immutable start-of-cycle allocation before its first write.
+    ///
+    /// The index and free-slot numbers continue to describe the cloned slots.
+    /// The collector owns the returned original until every snapshot reader
+    /// has joined and the cycle's termination has completed.
+    #[inline]
+    pub(crate) fn clone_slots_for_concurrent_mark(&mut self) -> Vec<Option<HashTableEntry>> {
+        let replacement = self.slots.clone();
+        std::mem::replace(&mut self.slots, replacement)
+    }
+
     pub fn live_hash_keys_in_slot_order(&self) -> Vec<&HashKey> {
         self.keyed_entries_in_slot_order()
             .into_iter()

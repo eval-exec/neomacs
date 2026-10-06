@@ -103,7 +103,7 @@ impl TaggedHeap {
         }
         // The generation census reads the final marks before the sweep
         // detaches the young list (no-op unless `NEOVM_GC_CENSUS`).
-        if self.census.is_some() {
+        if self.census_state().is_some() {
             let (kind, mark_window_alloc) = if self.is_minor_collection() {
                 (CensusCycleKind::StopTheWorld, 0)
             } else {
@@ -125,6 +125,10 @@ impl TaggedHeap {
         self.unchain_dead_markers();
         self.reset_generational_remembered_world_stopped();
         self.handshake.last_term_unchain_us = unchain_t0.elapsed().as_micros() as u64;
+
+        // No reader can remain: join preceded all drains and weak/finalizer
+        // work. Keep originals until this termination boundary, before sweep.
+        self.release_concurrent_hash_storage();
 
         // Begin the deferred sweep. Detach the young non-cons list (new non-cons
         // allocations link onto a fresh `all_objects` and are not swept this
@@ -221,6 +225,12 @@ impl TaggedHeap {
         self.satb_shared.is_poisoned()
             || self.deferred_veclikes.is_poisoned()
             || self.gc_wake.0.is_poisoned()
+            || self
+                .concurrent_hash_snapshot()
+                .is_some_and(|snapshot| snapshot.is_poisoned())
+            || self
+                .concurrent_claims_state()
+                .is_some_and(|state| state.locks_poisoned())
     }
 
     /// Test-only: poison one of the collector's own locks by panicking while
@@ -357,6 +367,7 @@ impl TaggedHeap {
                 } else {
                     self.non_cons_object_addrs.remove(&(current as usize));
                     self.unregister_vector_object(current);
+                    self.unregister_hash_table_object(current);
                     self.free_gc_object(current, ReclamationMode::Explicit);
                     self.current_mutator_gc_mut().allocated_count =
                         self.current_mutator_gc().allocated_count.saturating_sub(1);
@@ -1146,7 +1157,10 @@ impl TaggedHeap {
                 // reachable from the allocator.
                 *cons_free_list = saved;
                 released += 1;
-                if let Some(census) = census.as_deref_mut() {
+                if let Some(census) = census
+                    .as_deref_mut()
+                    .and_then(|cold| cold.census.as_deref_mut())
+                {
                     census.forget_cons_block(block.base_addr());
                 }
                 if let Some(map) = chunk_map.as_deref() {
@@ -1219,7 +1233,7 @@ impl TaggedHeap {
 
         self.cons_free_list = std::ptr::null_mut();
         self.mark_cons_block_cache = None;
-        if self.census.is_some() || self.chunk_map.is_some() {
+        if self.census_state().is_some() || self.chunk_map.is_some() {
             let released: Vec<usize> = self
                 .cons_blocks
                 .iter()
@@ -1324,6 +1338,7 @@ impl TaggedHeap {
                     *prev = next;
                     self.non_cons_object_addrs.remove(&(current as usize));
                     self.unregister_vector_object(current);
+                    self.unregister_hash_table_object(current);
                     self.free_gc_object(current, ReclamationMode::Explicit);
                     self.current_mutator_gc_mut().allocated_count =
                         self.current_mutator_gc().allocated_count.saturating_sub(1);

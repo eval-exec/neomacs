@@ -1798,6 +1798,7 @@ pub(crate) struct SweepStats {
     pub last_concurrent_bc_claimed: usize,
     /// U3.5 marker/bignum/symbol-with-pos fresh claims; zero with policy off.
     pub last_concurrent_leaf_claimed: usize,
+    pub last_concurrent_hash_claimed: usize,
     /// Cost of the `join_concurrent_mark` fold itself (taking the SATB +
     /// deferred buffers, classifying, pushing to gray) — the cheap half of the
     /// termination; the mark fixpoint that follows is the trace line's `drain`.

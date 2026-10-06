@@ -75,7 +75,7 @@ fn job(heap: &mut TaggedHeap, major: bool) -> ConcurrentClaimJob {
     ConcurrentClaimJob {
         parity: heap.mark_parity.flip(),
         major,
-        concurrent_claims: heap.concurrent_claims,
+        concurrent_claims: heap.concurrent_claims(),
         pages: heap.page_snapshot_for_mark(),
         dump_lo: heap.dump_addr_lo,
         dump_hi: heap.dump_addr_hi,
@@ -85,8 +85,10 @@ fn job(heap: &mut TaggedHeap, major: bool) -> ConcurrentClaimJob {
         vec_claimed: Arc::new(AtomicUsize::new(0)),
         bc_claimed: Arc::new(AtomicUsize::new(0)),
         subr_dropped: Arc::new(AtomicUsize::new(0)),
+        hashes: None,
+        hash_claimed: None,
         leaf_claimed: heap
-            .concurrent_claims
+            .concurrent_claims()
             .then(|| Arc::new(AtomicUsize::new(0))),
     }
 }
@@ -108,8 +110,8 @@ fn claim(
 fn concurrent_leaf_claims_off_keeps_the_original_defer_path_and_allocates_no_counter() {
     for chunk_map in [false, true] {
         let mut heap = heap(false, chunk_map, false);
-        assert!(!heap.concurrent_claims);
-        assert!(heap.concurrent_leaf_claimed.is_none());
+        assert!(!heap.concurrent_claims());
+        assert!(heap.concurrent_leaf_claimed().is_none());
         let values: Vec<_> = Leaf::ALL.map(|kind| kind.allocate(&mut heap)).into();
         let job = job(&mut heap, false);
         for (kind, value) in Leaf::ALL.into_iter().zip(values) {

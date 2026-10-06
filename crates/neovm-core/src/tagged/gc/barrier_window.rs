@@ -127,7 +127,7 @@ impl TaggedHeap {
     pub(crate) fn barrier_window(&self) -> BarrierWindow {
         if self.concurrent_mark_running
             || self.write_tracking_mode != WriteTrackingMode::Disabled
-            || self.census.as_deref().is_some_and(GenCensus::remset_probe)
+            || self.census_state().is_some_and(GenCensus::remset_probe)
         {
             BarrierWindow::ALL
         } else if self.partition_dump {
@@ -243,6 +243,13 @@ impl TaggedHeap {
         self.close_alloc_regions();
         self.concurrent_mark_running = on;
         TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(on));
+        if tagged_heap_is_current(self) {
+            TAGGED_HEAP_CONCURRENT_HASH_ACTIVE.with(|active| {
+                active.set(
+                    on && self.concurrent_claims() && self.concurrent_hash_snapshot().is_some(),
+                );
+            });
+        }
         self.publish_barrier_window();
     }
 }

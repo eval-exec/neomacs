@@ -128,3 +128,27 @@ impl TaggedHeap {
         }
     }
 }
+
+// U35's cold per-mutator accessors share this accessor family. Hot allocation
+// and barrier callers keep the original inline MutatorGcState above.
+impl TaggedHeap {
+    pub(super) fn current_concurrent_hash_mutator(
+        &self,
+    ) -> std::sync::Arc<std::sync::Mutex<cold_gc::ConcurrentHashMutatorState>> {
+        self.concurrent_claims_state()
+            .expect("claims enabled")
+            .current_mutator()
+    }
+
+    /// The caller has stopped all registered mutators. Copy Arc handles under
+    /// the map lock, then release it before locking any log/descriptor entry.
+    pub(super) fn concurrent_hash_mutators(
+        &self,
+    ) -> impl Iterator<Item = std::sync::Arc<std::sync::Mutex<cold_gc::ConcurrentHashMutatorState>>>
+    {
+        self.concurrent_claims_state()
+            .map(|state| state.mutators_world_stopped())
+            .unwrap_or_default()
+            .into_iter()
+    }
+}

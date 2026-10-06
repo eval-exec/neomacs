@@ -11,6 +11,8 @@
 //! | `NEOVM_GC_MEMORY_FILE=<path>` | unset | append memory snapshots as JSONL when telemetry or GC trace is enabled |
 //! | `NEOVM_GC_CHUNK_MAP` | on (`=0` disables) | page and block ownership through the chunk map (`chunk_map.rs`), on the mutator and on the GC thread |
 //! | `NEOVM_GC_CONCURRENT_CLAIMS=1` | off | concurrent marker/bignum/symbol-with-pos claims and Tier-H hash tracing |
+//! | `NEOVM_GC_CONCURRENT_HASH_POLICY` | `defer` | MEASUREMENT ONLY: `traced` copies before a completed scan; `legacy` copies on every first write |
+//! | `NEOVM_GC_CONCURRENT_HASH_LAZY_REGISTRY` | on (`=0` disables) | MEASUREMENT ONLY: discover hash tables from the stopped-world live-Box inventory instead of maintaining an allocation/free registry |
 //! | `NEOVM_GC_MAJOR_GROWTH_PERCENT` | `15` | major growth limit, with an 8 MiB floor; generational only |
 //! | `NEOVM_GC_MAJOR_MAX_MINORS` | `64` | maximum completed minors between majors; generational only |
 //! | `NEOVM_GC_STRESS_MAJOR_EVERY` | `8` | stressed cycle stride, normalized to at least one; generational only |
@@ -142,6 +144,35 @@ pub(crate) fn concurrent_claims_on() -> bool {
             note_knob("NEOVM_GC_CONCURRENT_CLAIMS", "1");
         }
         on
+    })
+}
+
+/// U3.5 comparison policy, frozen per process; never read on a hash edge.
+pub(crate) fn concurrent_hash_scan_policy() -> super::concurrent_hash::HashTableScanPolicy {
+    use super::concurrent_hash::HashTableScanPolicy;
+    static POLICY: OnceLock<HashTableScanPolicy> = OnceLock::new();
+    *POLICY.get_or_init(|| {
+        match std::env::var("NEOVM_GC_CONCURRENT_HASH_POLICY")
+            .ok()
+            .as_deref()
+        {
+            Some("legacy") => HashTableScanPolicy::AlwaysClone,
+            Some("traced") => HashTableScanPolicy::CloneUntilTraced,
+            _ => HashTableScanPolicy::DeferWrites,
+        }
+    })
+}
+
+/// Compare start-time discovery with the maintained allocation/free registry.
+pub(crate) fn concurrent_hash_lazy_registry_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("NEOVM_GC_CONCURRENT_HASH_LAZY_REGISTRY")
+                .ok()
+                .as_deref(),
+            Some("0" | "off" | "false" | "no")
+        )
     })
 }
 

@@ -41,7 +41,7 @@ fn census_is_off_by_default() {
     let mut heap = census_heap(CensusMode::Off);
     let root = list(&mut heap, 10);
     heap.collect_exact(std::iter::once(root));
-    assert!(heap.census.is_none());
+    assert!(heap.census_state().is_none());
     assert_eq!(heap.last_census_for_test(), None);
 }
 
@@ -179,11 +179,11 @@ fn census_forgets_a_released_cons_block() {
     let a = list(&mut heap, 100);
     heap.collect_exact(std::iter::once(a));
     let base = ConsBlock::block_base_for_ptr(a.as_cons_ptr().unwrap());
-    assert!(heap.census.as_deref().unwrap().has_cons_block_history(base));
+    assert!(heap.census_state().unwrap().has_cons_block_history(base));
     // Nothing survives: the only block empties and is released.
     heap.collect_exact(std::iter::empty());
     assert!(heap.cons_blocks.is_empty(), "the empty block is released");
-    assert!(!heap.census.as_deref().unwrap().has_cons_block_history(base));
+    assert!(!heap.census_state().unwrap().has_cons_block_history(base));
 }
 
 /// The remembered-set probe: the window covers every owner, and each old
