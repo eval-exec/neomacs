@@ -791,16 +791,22 @@ pub(super) struct CellWrite<'a> {
 }
 
 impl<'a> CellWrite<'a> {
-    /// Begin a write of SYM's cell. SEQ must be the seqlock of the chunk that
-    /// holds SYM (the obarray passes its own); GATE is the caller's read of
-    /// the mark gate.
+    /// Begin a write of SYM's cell. SEQ names the seqlock of the chunk that
+    /// holds SYM (the obarray passes its own); it is asked for only while a
+    /// mark runs, so an off-mark write never touches the chunk's side data.
+    /// GATE is the caller's read of the mark gate.
     #[inline(always)]
-    pub(super) fn begin(sym: &'a mut LispSymbol, seq: &'a AtomicU32, gate: MarkGate) -> Self {
+    pub(super) fn begin(
+        sym: &'a mut LispSymbol,
+        seq: impl FnOnce() -> &'a AtomicU32,
+        gate: MarkGate,
+    ) -> Self {
         debug_assert!(
             gate.is_marking() || !crate::tagged::gc::concurrent_mark_active(),
             "a mark began between this write's gate read and the write"
         );
         let seq = if gate.is_marking() {
+            let seq = seq();
             seqlock_enter(seq);
             Some(seq)
         } else {
@@ -826,10 +832,23 @@ impl<'a> CellWrite<'a> {
     #[inline(always)]
     pub(super) fn arm(&mut self) -> ArmMut<'_, 'a> {
         match self.sym.value_cell() {
-            ValueCell::Plain(value) => ArmMut::Plain(PlainArm { write: self, value }),
+            ValueCell::Plain(_) => ArmMut::Plain(PlainArm { write: self }),
             ValueCell::Alias(_) => ArmMut::Alias(AliasArm { write: self }),
             ValueCell::Localized(blv) => ArmMut::Localized(LocalizedArm { write: self, blv }),
             ValueCell::Forwarded(fwd) => ArmMut::Forwarded(ForwardedArm { write: self, fwd }),
+        }
+    }
+
+    /// The cell as a `Plainval` arm, or `None` for any other arm: what a
+    /// writer that only ever stores a plain value asks, without decoding the
+    /// other arms.
+    #[inline(always)]
+    pub(super) fn plain(&mut self) -> Option<PlainArm<'_, 'a>> {
+        match self.sym.flags.redirect() {
+            SymbolRedirect::Plainval => Some(PlainArm { write: self }),
+            SymbolRedirect::Varalias | SymbolRedirect::Localized | SymbolRedirect::Forwarded => {
+                None
+            }
         }
     }
 
@@ -838,12 +857,12 @@ impl<'a> CellWrite<'a> {
     ///
     /// Order: while a mark runs, the pre-image of a plain word is noted
     /// first (the only arm whose word is a heap reference); then the word is
-    /// published with a Release store; then the tag, if it changed, with an
-    /// atomic byte store. Both stores sit inside the seqlock window
-    /// [`Self::begin`] opened, so the marker's consistent read sees the old
-    /// pair or the new one.
+    /// published with a Release store; then, for a transition that moves the
+    /// cell to another arm, the tag, with an atomic byte store. Both stores
+    /// sit inside the seqlock window [`Self::begin`] opened, so the marker's
+    /// consistent read sees the old pair or the new one.
     #[inline(always)]
-    fn publish(&mut self, redirect: SymbolRedirect, word: CellWord) {
+    fn publish(&mut self, tag: NewTag, word: CellWord) {
         if self.seq.is_some()
             && let ValueCell::Plain(old) = self.sym.value_cell()
         {
@@ -853,10 +872,19 @@ impl<'a> CellWrite<'a> {
         // SAFETY: as in `LispSymbol::load_word_acquire`; `&mut` makes this
         // the only writer.
         unsafe { (*p).store(word.0, Ordering::Release) };
-        if self.sym.flags.redirect() != redirect {
-            self.sym.flags.set_redirect(redirect);
+        match tag {
+            NewTag::Keep => {}
+            NewTag::Set(redirect) => self.sym.flags.set_redirect(redirect),
         }
     }
+}
+
+/// What a [`CellWrite::publish`] does to the cell's tag: a transition within
+/// an arm keeps it (no tag load or store), one to another arm sets it.
+#[derive(Clone, Copy)]
+enum NewTag {
+    Keep,
+    Set(SymbolRedirect),
 }
 
 impl Drop for CellWrite<'_> {
@@ -879,43 +907,54 @@ pub(super) enum ArmMut<'w, 'a> {
 /// A `Plainval` cell being written.
 pub(super) struct PlainArm<'w, 'a> {
     write: &'w mut CellWrite<'a>,
-    value: Value,
 }
 
 impl PlainArm<'_, '_> {
     /// The value the cell holds ([`Value::UNBOUND`] when void).
     #[inline(always)]
     pub(super) fn value(&self) -> Value {
-        self.value
+        Value::from_bits(self.write.sym.val.0)
     }
 
     /// GNU `SET_SYMBOL_VAL`: store VALUE ([`Value::UNBOUND`] voids the cell)
     /// and hand back the value it replaced.
     #[inline(always)]
     pub(super) fn store(self, value: Value) -> Value {
-        self.write
-            .publish(SymbolRedirect::Plainval, CellWord::plain(value));
-        self.value
+        let old = self.value();
+        self.write.publish(NewTag::Keep, CellWord::plain(value));
+        old
+    }
+
+    /// [`Self::store`] for a writer that does not want the old value.
+    #[inline(always)]
+    pub(super) fn set(self, value: Value) {
+        self.write.publish(NewTag::Keep, CellWord::plain(value));
     }
 
     /// GNU `Fdefvaralias` on a plain NEW-ALIAS (`src/eval.c:688-698`).
     pub(super) fn alias_to(self, target: SymId) {
-        self.write
-            .publish(SymbolRedirect::Varalias, CellWord::alias(target));
+        self.write.publish(
+            NewTag::Set(SymbolRedirect::Varalias),
+            CellWord::alias(target),
+        );
     }
 
     /// GNU `make_blv` on a plain variable (`src/data.c:2112-2140`).
     pub(super) fn localize(self, blv: BlvPtr) {
-        self.write
-            .publish(SymbolRedirect::Localized, CellWord::localized(blv));
+        self.write.publish(
+            NewTag::Set(SymbolRedirect::Localized),
+            CellWord::localized(blv),
+        );
     }
 
     /// GNU `defvar_int` / `defvar_bool` / `defvar_lisp` /
     /// `defvar_per_buffer` / `defvar_kboard` (`src/lread.c`,
     /// `src/buffer.c`).
     pub(super) fn forward_to(self, fwd: &'static LispFwd) {
-        self.write
-            .publish(SymbolRedirect::Forwarded, CellWord::forwarded(fwd));
+        self.write.publish(
+            NewTag::Set(SymbolRedirect::Forwarded),
+            CellWord::forwarded(fwd),
+        );
     }
 }
 
@@ -927,16 +966,17 @@ pub(super) struct AliasArm<'w, 'a> {
 impl AliasArm<'_, '_> {
     /// GNU `Fdefvaralias` on an alias NEW-ALIAS: re-point it.
     pub(super) fn alias_to(self, target: SymId) {
-        self.write
-            .publish(SymbolRedirect::Varalias, CellWord::alias(target));
+        self.write.publish(NewTag::Keep, CellWord::alias(target));
     }
 
     /// GNU `Fmakunbound` / `internal-delete-indirect-variable` on an alias:
     /// `redirect = SYMBOL_PLAINVAL; SET_SYMBOL_VAL (sym, VALUE)`
     /// (`src/data.c:781-784`, `src/eval.c:740-742`).
     pub(super) fn unalias(self, value: Value) {
-        self.write
-            .publish(SymbolRedirect::Plainval, CellWord::plain(value));
+        self.write.publish(
+            NewTag::Set(SymbolRedirect::Plainval),
+            CellWord::plain(value),
+        );
     }
 }
 
@@ -956,8 +996,7 @@ impl LocalizedArm<'_, '_> {
     /// Point the cell at BLV, the deep copy of its record. Only for
     /// `Obarray::clone`, whose copied cells still name the source's records.
     pub(super) fn rehome(self, blv: BlvPtr) {
-        self.write
-            .publish(SymbolRedirect::Localized, CellWord::localized(blv));
+        self.write.publish(NewTag::Keep, CellWord::localized(blv));
     }
 }
 
@@ -976,15 +1015,16 @@ impl ForwardedArm<'_, '_> {
     /// Install FWD in place of the current descriptor (a re-registration,
     /// or `Obarray::clone` re-homing a stateful descriptor's copy).
     pub(super) fn forward_to(self, fwd: &'static LispFwd) {
-        self.write
-            .publish(SymbolRedirect::Forwarded, CellWord::forwarded(fwd));
+        self.write.publish(NewTag::Keep, CellWord::forwarded(fwd));
     }
 
     /// GNU `make_blv` on a forwarded variable: the record keeps the
     /// descriptor (`blv->fwd`), the cell moves to it.
     pub(super) fn localize(self, blv: BlvPtr) {
-        self.write
-            .publish(SymbolRedirect::Localized, CellWord::localized(blv));
+        self.write.publish(
+            NewTag::Set(SymbolRedirect::Localized),
+            CellWord::localized(blv),
+        );
     }
 }
 

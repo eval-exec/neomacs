@@ -15,7 +15,7 @@ fn idle_write<'a>(sym: &'a mut LispSymbol, seq: &'a AtomicU32) -> CellWrite<'a> 
         !gate.is_marking(),
         "unit tests run outside a concurrent mark"
     );
-    CellWrite::begin(sym, seq, gate)
+    CellWrite::begin(sym, || seq, gate)
 }
 
 /// SymbolFlags packs into a single byte (matches GNU's bit layout).
@@ -224,7 +224,7 @@ fn a_cell_write_brackets_the_seqlock_only_while_marking() {
     }
     assert_eq!(seq.load(std::sync::atomic::Ordering::Relaxed), 0);
     {
-        let write = CellWrite::begin(&mut sym, &seq, MarkGate { marking: true });
+        let write = CellWrite::begin(&mut sym, || &seq, MarkGate { marking: true });
         assert_eq!(
             seq.load(std::sync::atomic::Ordering::Relaxed),
             1,

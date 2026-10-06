@@ -1035,8 +1035,8 @@ impl SymbolChunks {
         if !slot.is_present() {
             return None;
         }
-        let seq = &self.sides[idx >> 12].seq;
-        Some(CellWrite::begin(slot, seq, gate))
+        let sides = &self.sides;
+        Some(CellWrite::begin(slot, || &sides[idx >> 12].seq, gate))
     }
 
     /// The function-stamp validity rule for slot `idx` (see
@@ -2174,10 +2174,7 @@ impl Obarray {
         }
         #[cfg(test)]
         note_plain_value_slot_visit();
-        match write.arm() {
-            ArmMut::Plain(plain) => Some(plain.store(value)),
-            ArmMut::Alias(_) | ArmMut::Localized(_) | ArmMut::Forwarded(_) => None,
-        }
+        write.plain().map(|plain| plain.store(value))
     }
 
     /// [`Self::swap_plain_untrapped_value_id`] during a concurrent mark: the
@@ -2198,10 +2195,7 @@ impl Obarray {
         }
         #[cfg(test)]
         note_plain_value_slot_visit();
-        match write.arm() {
-            ArmMut::Plain(plain) => Some(plain.store(value)),
-            ArmMut::Alias(_) | ArmMut::Localized(_) | ArmMut::Forwarded(_) => None,
-        }
+        write.plain().map(|plain| plain.store(value))
     }
 
     /// [`Self::swap_plain_untrapped_value_id`] for a writer that does not
@@ -2211,7 +2205,22 @@ impl Obarray {
     /// and no SATB note, neither of which a store needs then.
     #[inline(always)]
     pub(crate) fn set_plain_untrapped_value_id(&mut self, id: SymId, value: Value) -> bool {
-        self.swap_plain_untrapped_value_id(id, value).is_some()
+        let gate = MarkGate::read();
+        if gate.is_marking() {
+            return self
+                .swap_plain_untrapped_value_id_while_marking(id, value, gate)
+                .is_some();
+        }
+        let Some(mut write) = self.symbols.cell_write(Self::slot_index(id), gate) else {
+            return false;
+        };
+        let sym = write.symbol();
+        if !sym.flags().is_plain_untrapped_unprojected() || !sym.interned_global {
+            return false;
+        }
+        #[cfg(test)]
+        note_plain_value_slot_visit();
+        write.plain().map(|plain| plain.set(value)).is_some()
     }
 
     /// Whether a write to `id` could be a bare `SET_SYMBOL_VAL`: an interned,
@@ -2254,13 +2263,7 @@ impl Obarray {
         };
         #[cfg(test)]
         note_plain_value_slot_visit();
-        match write.arm() {
-            ArmMut::Plain(plain) => {
-                plain.store(value);
-                Ok(())
-            }
-            ArmMut::Alias(_) | ArmMut::Localized(_) | ArmMut::Forwarded(_) => Err(NotPlain),
-        }
+        write.plain().map(|plain| plain.set(value)).ok_or(NotPlain)
     }
 
     #[cold]
@@ -2271,13 +2274,10 @@ impl Obarray {
         }
         #[cfg(test)]
         note_plain_value_slot_visit();
-        match self.cell_write_ensure(id).arm() {
-            ArmMut::Plain(plain) => {
-                plain.store(value);
-                Ok(())
-            }
-            ArmMut::Alias(_) | ArmMut::Localized(_) | ArmMut::Forwarded(_) => Err(NotPlain),
-        }
+        self.cell_write_ensure(id)
+            .plain()
+            .map(|plain| plain.set(value))
+            .ok_or(NotPlain)
     }
 
     /// Allocate a fresh `LispBufferLocalValue` for `id`, flip the
