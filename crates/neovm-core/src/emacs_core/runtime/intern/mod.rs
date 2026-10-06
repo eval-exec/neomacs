@@ -508,15 +508,45 @@ struct SymbolNameHeapId(usize);
 struct SymbolNameObjectId(usize);
 
 impl SymbolNameObjectId {
+    fn of(word: HeapNameWord) -> Self {
+        Self(word.0)
+    }
+}
+
+/// The word of one heap's Lisp-visible symbol name object, as the
+/// process-global registry stores it.
+///
+/// The registry is shared by every thread, so it cannot hold thread-confined
+/// values. Each word is paired with the [`SymbolNameHeapId`] of the heap that
+/// allocated it, is rooted for that heap by [`SymbolNameRootIndex`], and turns
+/// back into a value only for a lookup made for that same heap.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(transparent)]
+struct HeapNameWord(usize);
+
+impl HeapNameWord {
     fn of(value: TaggedValue) -> Self {
         Self(value.bits())
+    }
+
+    /// The name object. Callers have matched the word's heap with the heap
+    /// the lookup is for.
+    fn value(self) -> TaggedValue {
+        TaggedValue::from_bits(self.0)
     }
 }
 
 #[derive(Clone, Copy, Debug)]
 struct SymbolNameValue {
-    value: TaggedValue,
+    word: HeapNameWord,
     heap_id: SymbolNameHeapId,
+}
+
+impl SymbolNameValue {
+    /// The name object when it belongs to `heap_id`.
+    fn value_in(self, heap_id: SymbolNameHeapId) -> Option<TaggedValue> {
+        (self.heap_id == heap_id).then(|| self.word.value())
+    }
 }
 
 /// Identity of a lazily materialized atom-backed symbol name.
@@ -537,26 +567,26 @@ struct MaterializedSymbolNameKey {
 /// follows name-object identity, not symbol cardinality.
 #[derive(Debug, Default)]
 struct SymbolNameRootIndex {
-    by_heap: FxHashMap<SymbolNameHeapId, FxHashMap<SymbolNameObjectId, TaggedValue>>,
+    by_heap: FxHashMap<SymbolNameHeapId, FxHashMap<SymbolNameObjectId, HeapNameWord>>,
 }
 
 impl SymbolNameRootIndex {
     fn insert(&mut self, name: SymbolNameValue) {
-        let object_id = SymbolNameObjectId::of(name.value);
+        let object_id = SymbolNameObjectId::of(name.word);
         let old = self
             .by_heap
             .entry(name.heap_id)
             .or_default()
-            .insert(object_id, name.value);
+            .insert(object_id, name.word);
         debug_assert!(
-            old.is_none_or(|old| old.bits() == name.value.bits()),
+            old.is_none_or(|old| old == name.word),
             "one symbol-name object identity mapped to different values"
         );
     }
 
     fn extend_roots(&self, roots: &mut Vec<TaggedValue>, heap_id: SymbolNameHeapId) {
         if let Some(by_object) = self.by_heap.get(&heap_id) {
-            roots.extend(by_object.values().copied());
+            roots.extend(by_object.values().map(|word| word.value()));
         }
     }
 
@@ -650,7 +680,7 @@ impl NewSymbolName {
         let heap_id = crate::tagged::gc::current_tagged_heap_identity()
             .expect("a Lisp symbol name value requires an installed tagged heap");
         Self::LispObject(SymbolNameValue {
-            value,
+            word: HeapNameWord::of(value),
             heap_id: SymbolNameHeapId(heap_id),
         })
     }
@@ -690,7 +720,7 @@ struct SymbolRegistry {
     /// as a Rust/process-lifetime atom.  GNU always stores one Lisp string in
     /// every symbol; this cache supplies the equivalent object without making
     /// every process-global [`SymbolSlot`] carry a heap-local pointer.
-    materialized_name_values: FxHashMap<MaterializedSymbolNameKey, TaggedValue>,
+    materialized_name_values: FxHashMap<MaterializedSymbolNameKey, HeapNameWord>,
     /// Per-heap set of exact Lisp name objects. This is deliberately indexed
     /// by object identity rather than symbol id: many uninterned symbols can
     /// share one name object, and seeding it once is sufficient.
@@ -853,13 +883,12 @@ impl SymbolRegistry {
             .unwrap_or_else(|| panic!("invalid symbol id {:?}", id));
         if slot.name_origin == SymbolNameOrigin::LispObject {
             note_exact_symbol_name_value_probe();
-            if let Some(name_value) = self
+            if let Some(value) = self
                 .name_values
                 .get(&id)
-                .copied()
-                .filter(|name_value| name_value.heap_id == heap_id)
+                .and_then(|name_value| name_value.value_in(heap_id))
             {
-                return Some(name_value.value);
+                return Some(value);
             }
         }
 
@@ -869,7 +898,7 @@ impl SymbolRegistry {
                 heap_id,
                 symbol: id,
             })
-            .copied()
+            .map(|word| word.value())
     }
 
     #[inline]
@@ -1110,7 +1139,7 @@ impl SymbolRegistry {
                 .values()
                 .filter(|name_value| name_value.heap_id == heap_id)
             {
-                unique.insert(SymbolNameObjectId::of(name_value.value), name_value.value);
+                unique.insert(SymbolNameObjectId::of(name_value.word), name_value.word);
             }
             for value in self
                 .materialized_name_values
@@ -1548,13 +1577,15 @@ pub(crate) fn materialize_symbol_name_value(id: SymId) -> TaggedValue {
         heap_id,
         symbol: id,
     };
-    let old = registry.materialized_name_values.insert(key, materialized);
+    let old = registry
+        .materialized_name_values
+        .insert(key, HeapNameWord::of(materialized));
     debug_assert!(
         old.is_none(),
         "materialized symbol name replaced after lookup"
     );
     registry.name_value_roots.insert(SymbolNameValue {
-        value: materialized,
+        word: HeapNameWord::of(materialized),
         heap_id,
     });
     SYMBOL_NAME_MATERIALIZATION_EPOCH.fetch_add(1, Ordering::Release);
