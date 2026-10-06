@@ -113,6 +113,15 @@ impl SharedRoot {
         })
     }
 
+    /// The local value when this thread has the root's heap installed, for
+    /// crate code that reaches its heap only through the installed view. The
+    /// installed identity is this thread's proof that it is that heap's
+    /// mutator, and the root keeps the object alive while `&self` lives.
+    pub(crate) fn value_on_current_mutator(&self) -> Option<TaggedValue> {
+        let installed = current_tagged_heap_identity().and_then(HeapIdentity::from_legacy_word)?;
+        (installed == self.heap).then(|| TaggedValue::from_bits(self.word()))
+    }
+
     /// Whether both roots hold the same object of the same heap (Lisp `eq`).
     pub fn is_same_object(&self, other: &Self) -> bool {
         self.heap == other.heap && self.word() == other.word()

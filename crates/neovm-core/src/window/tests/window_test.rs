@@ -1774,11 +1774,19 @@ fn frame_manager_gc_traces_name_icon_name_and_title_values() {
 }
 
 #[test]
-fn frame_manager_gc_traces_prepared_and_active_chrome_strings() {
+fn prepared_and_active_chrome_strings_are_rooted_by_their_shared_roots() {
+    let mut heap = crate::tagged::gc::TaggedHeap::new();
+    let displayed = heap.alloc_string(crate::heap_types::LispString::from_utf8(
+        "displayed tab line",
+    ));
+    let collect = |heap: &mut crate::tagged::gc::TaggedHeap| {
+        let mut roots = Vec::new();
+        crate::tagged::transport::collect_shared_root_gc_roots(heap.heap_identity(), &mut roots);
+        heap.collect_exact(roots.into_iter());
+    };
     let mut mgr = FrameManager::new();
     let frame_id = mgr.create_frame("chrome-roots", 800, 600, BufferId(1));
     let window_id = mgr.get(frame_id).unwrap().selected_window;
-    let displayed = Value::string("displayed tab line");
     mgr.get_mut(frame_id)
         .unwrap()
         .prepare_live_window_presentation(
@@ -1789,24 +1797,31 @@ fn frame_manager_gc_traces_prepared_and_active_chrome_strings() {
                 chrome_strings: vec![PresentedWindowChromeString::new(
                     PresentedWindowChromeArea::TabLine,
                     neomacs_display_protocol::GlyphStringId::new(1),
-                    displayed,
+                    crate::tagged::transport::SharedRoot::new(&heap, displayed),
                 )],
                 ..Default::default()
             }],
         )
         .unwrap();
 
+    // The frame manager no longer traces chrome strings itself: each copy of
+    // a snapshot, including render-thread copies, roots its own object.
     let mut roots = Vec::new();
     mgr.trace_roots(&mut roots);
-    assert!(roots.contains(&displayed));
+    assert!(!roots.iter().any(|root| root.bits() == displayed.bits()));
+    collect(&mut heap);
+    assert!(heap.owns_heap_value_for_test(displayed));
 
     mgr.get_mut(frame_id)
         .unwrap()
         .activate_display_presentation(geometry::PresentationId::new(9))
         .unwrap();
-    roots.clear();
-    mgr.trace_roots(&mut roots);
-    assert!(roots.contains(&displayed));
+    collect(&mut heap);
+    assert!(heap.owns_heap_value_for_test(displayed));
+
+    drop(mgr);
+    collect(&mut heap);
+    assert!(!heap.owns_heap_value_for_test(displayed));
 }
 
 #[test]

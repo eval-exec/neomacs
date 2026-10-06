@@ -2229,16 +2229,17 @@ fn tab_line_pointer_provenance_preserves_nested_source_string() {
         .and_then(neovm_core::window::WindowPresentationSnapshot::live_window_snapshot)
         .expect("active window snapshot");
     assert!(
-        snapshot
-            .chrome_strings
-            .iter()
-            .any(|source| source.value() == first_tab),
+        snapshot.chrome_strings.iter().any(|source| eval
+            .materialize(source.object())
+            .unwrap()
+            .value()
+            == first_tab),
         "every nested tab string must remain a presentation source"
     );
     let nested_source = snapshot
         .chrome_strings
         .iter()
-        .find(|source| source.value() == second_tab)
+        .find(|source| eval.materialize(source.object()).unwrap().value() == second_tab)
         .expect("nested tab string must remain a presentation source");
     let rendered = engine
         .last_frame_display_state
@@ -2514,7 +2515,12 @@ fn accepted_presentation_publishes_identical_evaluator_and_renderer_window_regio
     assert!(active_snapshot.chrome_strings.iter().any(|source| {
         source.area() == neovm_core::window::PresentedWindowChromeArea::TabLine
             && source.string_id() == tab_string_position.string()
-            && source.value().as_utf8_str() == Some("TAB")
+            && eval
+                .materialize(source.object())
+                .unwrap()
+                .value()
+                .as_utf8_str()
+                == Some("TAB")
     }));
     let text_position = hit_index
         .text_positions()

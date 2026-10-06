@@ -384,6 +384,27 @@ impl Context {
     }
 
     /// Get the current GC threshold.
+    /// Share `value` with other threads, rooted in this evaluator's heap until
+    /// the last clone of the returned root drops.
+    pub fn share_value(&self, value: Value) -> crate::tagged::transport::SharedRoot {
+        crate::tagged::transport::SharedRoot::new(&self.tagged_heap, value)
+    }
+
+    /// The local value of `root` on this evaluator's thread.
+    ///
+    /// # Errors
+    /// [`SharedRootError::ForeignHeap`] when `root` was shared from another
+    /// evaluator's heap.
+    ///
+    /// [`SharedRootError::ForeignHeap`]: crate::tagged::transport::SharedRootError::ForeignHeap
+    pub fn materialize<'r>(
+        &'r self,
+        root: &'r crate::tagged::transport::SharedRoot,
+    ) -> Result<crate::tagged::transport::LocalRoot<'r>, crate::tagged::transport::SharedRootError>
+    {
+        root.materialize(&self.tagged_heap)
+    }
+
     pub fn gc_threshold(&self) -> usize {
         self.tagged_heap.gc_threshold()
     }

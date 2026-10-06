@@ -139,7 +139,7 @@ fn chrome_lisp_string_row_request_preserves_policy_inputs() {
 
 #[test]
 fn window_chrome_display_row_request_renders_measured_lifecycle_row() {
-    let _eval = Context::new();
+    let eval = Context::new();
     let table = FaceTable::new();
     let face_resolver = FaceResolver::new(&table, 0x00ffffff, 0x000000, 14.0, None);
     let base_face =
@@ -171,7 +171,7 @@ fn window_chrome_display_row_request_renders_measured_lifecycle_row() {
             neovm_core::emacs_core::image_catalog::ImageScaleEnvironment::default(),
         tty_glyphless_char_display: Default::default(),
     }
-    .into_render_request(render_services.face_ids())
+    .into_render_request(render_services.face_ids(), &eval)
     .render_measured(&mut render_services, None)
     .expect("chrome row should render");
 
@@ -190,7 +190,7 @@ fn window_chrome_display_row_request_renders_measured_lifecycle_row() {
 
 #[test]
 fn header_line_fills_the_complete_window_width_with_its_base_face() {
-    let _eval = Context::new();
+    let eval = Context::new();
     let table = FaceTable::new();
     let face_resolver = FaceResolver::new(&table, 0x00ffffff, 0x000000, 14.0, None);
     let base_face = window_chrome_test_face(
@@ -220,7 +220,7 @@ fn header_line_fills_the_complete_window_width_with_its_base_face() {
             neovm_core::emacs_core::image_catalog::ImageScaleEnvironment::default(),
         tty_glyphless_char_display: Default::default(),
     }
-    .into_render_request(render_services.face_ids())
+    .into_render_request(render_services.face_ids(), &eval)
     .render_measured(&mut render_services, None)
     .expect("header line should render");
 
@@ -268,7 +268,7 @@ fn assert_matches_proportional_dot_width(actual: f32, label: &str) {
 
 #[test]
 fn window_chrome_gui_tab_and_mode_lines_use_font_backed_glyph_advances() {
-    let _eval = Context::new();
+    let eval = Context::new();
     let table = FaceTable::new();
     let face_resolver =
         FaceResolver::new(&table, 0x00ffffff, 0x000000, 14.0, Some("neo".to_string()));
@@ -311,7 +311,7 @@ fn window_chrome_gui_tab_and_mode_lines_use_font_backed_glyph_advances() {
                 neovm_core::emacs_core::image_catalog::ImageScaleEnvironment::default(),
             tty_glyphless_char_display: Default::default(),
         }
-        .into_render_request(render_services.face_ids())
+        .into_render_request(render_services.face_ids(), &eval)
         .render_measured(&mut render_services, None)
         .expect("window chrome row should render");
         let first_width =
@@ -1019,7 +1019,7 @@ fn built_tab_bar_preserves_concatenated_caption_ranges() {
 /// face height, and reuses the same built row at render time.
 #[test]
 fn window_chrome_mode_line_row_grows_for_tall_display_element() {
-    let _eval = Context::new();
+    let eval = Context::new();
     let table = FaceTable::new();
     let face_resolver = FaceResolver::new(&table, 0x00ffffff, 0x000000, 14.0, None);
     let base_face =
@@ -1051,7 +1051,7 @@ fn window_chrome_mode_line_row_grows_for_tall_display_element() {
             neovm_core::emacs_core::image_catalog::ImageScaleEnvironment::default(),
         tty_glyphless_char_display: Default::default(),
     }
-    .into_render_request(render_services.face_ids())
+    .into_render_request(render_services.face_ids(), &eval)
     .render_measured(&mut render_services, None)
     .expect("plain mode-line row should render");
     assert_eq!(
@@ -1090,7 +1090,7 @@ fn window_chrome_mode_line_row_grows_for_tall_display_element() {
             neovm_core::emacs_core::image_catalog::ImageScaleEnvironment::default(),
         tty_glyphless_char_display: Default::default(),
     }
-    .into_render_request(render_services.face_ids())
+    .into_render_request(render_services.face_ids(), &eval)
     .render_measured(&mut render_services, None)
     .expect("tall mode-line row should render");
 

@@ -155,19 +155,22 @@ enum EditReplayStructureProperty {
 }
 
 impl EditReplayStructureProperty {
-    fn symbols() -> &'static [Value; <Self as strum::EnumCount>::COUNT] {
+    /// The property symbols. The process-wide cache holds immediates, which
+    /// may be shared across threads; each call builds the local values.
+    fn symbols() -> [Value; <Self as strum::EnumCount>::COUNT] {
+        use neovm_core::tagged::transport::ImmediateValue;
         use std::sync::OnceLock;
         use strum::VariantArray;
 
         const N: usize = <EditReplayStructureProperty as strum::EnumCount>::COUNT;
-        static SYMBOLS: OnceLock<[Value; N]> = OnceLock::new();
-        SYMBOLS.get_or_init(|| {
-            std::array::from_fn(|index| {
-                Value::symbol(neovm_core::emacs_core::intern::intern(
-                    EditReplayStructureProperty::VARIANTS[index].into(),
-                ))
+        static SYMBOLS: OnceLock<[ImmediateValue; N]> = OnceLock::new();
+        SYMBOLS
+            .get_or_init(|| {
+                std::array::from_fn(|index| {
+                    ImmediateValue::interned(EditReplayStructureProperty::VARIANTS[index].into())
+                })
             })
-        })
+            .map(ImmediateValue::value)
     }
 }
 
@@ -4265,7 +4268,7 @@ impl LayoutEngine {
                     crate::incremental_layout::lazy_proof_test_support::note_property_query();
                     !buffer.has_any_non_nil_property_in_char_range(
                         structure_range,
-                        EditReplayStructureProperty::symbols(),
+                        &EditReplayStructureProperty::symbols(),
                     )
                 };
                 observed_newlines = Some(newlines);
@@ -4333,7 +4336,7 @@ impl LayoutEngine {
                 crate::incremental_layout::lazy_proof_test_support::note_property_query();
                 !buffer.has_any_non_nil_property_in_char_range(
                     structure_range,
-                    EditReplayStructureProperty::symbols(),
+                    &EditReplayStructureProperty::symbols(),
                 )
             };
             let damage = EditDamage::new(dirty_start, dirty_end, delta, span_newlines);

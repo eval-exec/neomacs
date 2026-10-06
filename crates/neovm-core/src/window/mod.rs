@@ -2674,40 +2674,65 @@ pub use neomacs_display_protocol::PresentedWindowChromeArea;
 /// Evaluator-owned half of GNU's `(glyph->object, glyph->charpos)` pair.
 ///
 /// The renderer-safe presentation carries the string identity and character
-/// index.  This rooted value remains in the window snapshot so input can join
-/// the two halves without re-evaluating a mode/tab/header-line format.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// index. The string object stays in the window snapshot so input can join the
+/// two halves without re-evaluating a mode/tab/header-line format. Snapshots
+/// are shared with render and input threads and retained by the layout engine
+/// across frames, so the object travels as a [`SharedRoot`]: its own lease
+/// keeps it alive in every copy, and only the evaluator materializes it.
+///
+/// [`SharedRoot`]: crate::tagged::transport::SharedRoot
+#[derive(Clone, Debug)]
 pub struct PresentedWindowChromeString {
     area: PresentedWindowChromeArea,
     string_id: neomacs_display_protocol::glyph_matrix::GlyphStringId,
-    value: Value,
+    object: crate::tagged::transport::SharedRoot,
 }
 
 impl PresentedWindowChromeString {
-    pub const fn new(
+    pub fn new(
         area: PresentedWindowChromeArea,
         string_id: neomacs_display_protocol::glyph_matrix::GlyphStringId,
-        value: Value,
+        object: crate::tagged::transport::SharedRoot,
     ) -> Self {
         Self {
             area,
             string_id,
-            value,
+            object,
         }
     }
 
-    pub const fn area(self) -> PresentedWindowChromeArea {
+    pub const fn area(&self) -> PresentedWindowChromeArea {
         self.area
     }
 
-    pub const fn string_id(self) -> neomacs_display_protocol::glyph_matrix::GlyphStringId {
+    pub const fn string_id(&self) -> neomacs_display_protocol::glyph_matrix::GlyphStringId {
         self.string_id
     }
 
-    pub const fn value(self) -> Value {
-        self.value
+    /// The rooted string object; the evaluator materializes it.
+    pub fn object(&self) -> &crate::tagged::transport::SharedRoot {
+        &self.object
     }
 }
+
+/// Snapshot equality keeps GNU `equal` on the string objects, as when the
+/// field held the raw value: an evaluator comparing two snapshots treats a
+/// re-formatted, equal mode line as unchanged. Off the evaluator only object
+/// identity is observable.
+impl PartialEq for PresentedWindowChromeString {
+    fn eq(&self, other: &Self) -> bool {
+        self.area == other.area
+            && self.string_id == other.string_id
+            && (self.object.is_same_object(&other.object)
+                || self
+                    .object
+                    .value_on_current_mutator()
+                    .zip(other.object.value_on_current_mutator())
+                    .is_some_and(|(left, right)| left == right))
+    }
+}
+
+impl Eq for PresentedWindowChromeString {}
 
 /// Last authoritative redisplay geometry for a live leaf window.
 #[derive(Clone, Debug)]
@@ -8754,21 +8779,8 @@ impl GcTrace for FrameManager {
                 roots.push(*v);
             }
             roots.push(frame.face_hash_table);
-            for snapshot in frame.redisplay_cache.values() {
-                roots.extend(snapshot.chrome_strings.iter().map(|source| source.value()));
-            }
-            for prepared in frame.presentation_state.prepared.values() {
-                for publication in &prepared.publications {
-                    let snapshot = publication.display_snapshot();
-                    roots.extend(snapshot.chrome_strings.iter().map(|source| source.value()));
-                }
-            }
-            if let Some(active) = &frame.presentation_state.active {
-                for publication in &active.publications {
-                    let snapshot = publication.display_snapshot();
-                    roots.extend(snapshot.chrome_strings.iter().map(|source| source.value()));
-                }
-            }
+            // Chrome string objects in published snapshots are rooted by
+            // their own `SharedRoot` leases.
             frame.tree().trace_roots(roots);
             if let Some(mb) = &frame.minibuffer_leaf {
                 mb.trace_roots(roots);

@@ -996,10 +996,18 @@ struct WindowChromeStringSources {
 }
 
 impl WindowChromeStringSources {
-    fn new(area: PresentedWindowChromeArea, formatted: &ModeLineDisplayOutput) -> Self {
+    fn new(
+        area: PresentedWindowChromeArea,
+        formatted: &ModeLineDisplayOutput,
+        evaluator: &Context,
+    ) -> Self {
         let root_id = crate::display_row::root_lisp_string_id();
         let root_value = formatted.value();
-        let mut presented = vec![PresentedWindowChromeString::new(area, root_id, root_value)];
+        let mut presented = vec![PresentedWindowChromeString::new(
+            area,
+            root_id,
+            evaluator.share_value(root_value),
+        )];
         let mut source_ids: Vec<(Value, GlyphStringId)> = Vec::new();
         let mut spans = Vec::with_capacity(formatted.source_spans().len());
 
@@ -1012,7 +1020,11 @@ impl WindowChromeStringSources {
             } else {
                 let id = GlyphStringId::new(source_ids.len().saturating_add(2) as u64);
                 source_ids.push((source, id));
-                presented.push(PresentedWindowChromeString::new(area, id, source));
+                presented.push(PresentedWindowChromeString::new(
+                    area,
+                    id,
+                    evaluator.share_value(source),
+                ));
                 id
             };
             spans.push(WindowChromeSourceSpan::from_mode_line_span(span, string_id));
@@ -1146,10 +1158,12 @@ impl<'face> WindowChromeDisplayRowRequest<'face> {
     fn into_render_request(
         self,
         face_ids: &mut FrameFaceAttempt,
+        evaluator: &Context,
     ) -> WindowChromeDisplayRowRenderRequest<'face> {
         let chrome_strings = WindowChromeStringSources::new(
             presented_window_chrome_area(self.kind),
             &self.formatted,
+            evaluator,
         );
         let composition_regions = self
             .formatted
@@ -1277,7 +1291,7 @@ impl<'state, 'services, 'face> WindowChromeRowsRenderState<'state, 'services, 'f
             return Some(height);
         }
         let rendered = request
-            .into_render_request(self.render_services.face_ids())
+            .into_render_request(self.render_services.face_ids(), self.evaluator)
             .render_and_apply(self, anchor, rules);
         if let Some((index, row, _)) = memo_hit {
             self.verify_memo_row(index, &row);
@@ -1370,6 +1384,7 @@ impl<'state, 'services, 'face> WindowChromeRowsRenderState<'state, 'services, 'f
         let chrome_strings = WindowChromeStringSources::new(
             presented_window_chrome_area(request.kind),
             &request.formatted,
+            self.evaluator,
         );
         self.output_emitter
             .replace_chrome_area_strings(chrome_strings.area, chrome_strings.presented);

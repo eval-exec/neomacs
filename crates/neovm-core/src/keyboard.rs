@@ -7400,7 +7400,8 @@ impl crate::emacs_core::eval::Context {
             y: (y - coordinate_origin.y().get()).round() as i64,
             metrics,
         });
-        let Some(posn_string) = Self::presented_string_position_value(frame, window_id, hit) else {
+        let Some(posn_string) = Self::presented_string_position_value(eval, frame, window_id, hit)
+        else {
             return Some(position);
         };
         let Some(mut parts) = crate::emacs_core::value::list_to_vec(&position) else {
@@ -7411,6 +7412,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     fn presented_string_position_value(
+        eval: &Self,
         frame: &crate::window::Frame,
         window: crate::window::WindowId,
         hit: neomacs_display_protocol::PresentedHit,
@@ -7422,8 +7424,9 @@ impl crate::emacs_core::eval::Context {
             .chrome_strings
             .iter()
             .find(|source| source.area() == area && source.string_id() == position.string())?;
+        let object = eval.materialize(source.object()).ok()?.value();
         Some(Value::cons(
-            source.value(),
+            object,
             Value::fixnum(position.char_index().min(i64::MAX as u64) as i64),
         ))
     }
