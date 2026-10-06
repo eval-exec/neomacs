@@ -569,9 +569,30 @@ thread_local! {
 #[derive(Default)]
 struct InFlightRootTable {
     /// One entry per live pin; `None` marks a reusable slot.
-    slots: Vec<Option<Vec<Value>>>,
+    slots: Vec<Option<Vec<PinnedWord>>>,
     free: Vec<usize>,
 }
+
+/// The word of one pinned in-flight value.
+///
+/// The registry is shared through a mutex, so it holds words rather than
+/// thread-confined values. Its table roots each word for the registry's heap,
+/// and the word becomes a value again only in that heap's root walk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(transparent)]
+pub(crate) struct PinnedWord(usize);
+
+impl PinnedWord {
+    fn of(value: Value) -> Self {
+        Self(value.bits())
+    }
+
+    fn value(self) -> Value {
+        Value::from_bits(self.0)
+    }
+}
+
+static_assertions::assert_impl_all!(InFlightRegistryHandle: Send, Sync);
 
 /// Heap-identified registry storage for one Context's in-flight roots.
 /// The slot arena uses a mutex so root publication and collection may access
@@ -645,7 +666,7 @@ impl InFlightRoots {
     /// and an uninterned symbol's value/function/plist cells survive only
     /// while something marks it. In flight, nothing else does.
     fn pin(payload: impl IntoIterator<Item = Value>) -> Self {
-        let mut values: Vec<Value> = Vec::new();
+        let mut values: Vec<PinnedWord> = Vec::new();
         for value in payload {
             Self::push_if_traceable(&mut values, value);
         }
@@ -663,16 +684,16 @@ impl InFlightRoots {
     /// non-canonical symbol's cells. Fixnums, `nil` and `t` are immediates the
     /// collector never touches.
     #[inline]
-    fn push_if_traceable(values: &mut Vec<Value>, value: Value) {
+    fn push_if_traceable(values: &mut Vec<PinnedWord>, value: Value) {
         if value.is_nil() || value.is_t() {
             return;
         }
         if value.is_heap_object() || value.is_symbol() {
-            values.push(value);
+            values.push(PinnedWord::of(value));
         }
     }
 
-    fn claim(registry: InFlightRegistryHandle, values: Vec<Value>) -> Self {
+    fn claim(registry: InFlightRegistryHandle, values: Vec<PinnedWord>) -> Self {
         let slot = {
             let mut table = registry.lock();
             match table.free.pop() {
@@ -735,7 +756,7 @@ pub(crate) fn collect_in_flight_registry_gc_roots(
     }
     let table = registry.lock();
     for values in table.slots.iter().flatten() {
-        for &value in values {
+        for value in values.iter().map(|word| word.value()) {
             if registry.heap_identity.is_some() || !value.is_heap_object() {
                 out.push(value);
             }
