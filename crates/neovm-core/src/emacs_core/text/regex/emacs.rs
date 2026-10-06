@@ -5265,7 +5265,9 @@ impl MatchScratchLease {
 }
 
 impl Drop for MatchScratchLease {
-    #[inline]
+    // Keep restoration at a call boundary: inlining the TLS cleanup into
+    // `re_search` changes register allocation throughout its candidate loops.
+    #[inline(never)]
     fn drop(&mut self) {
         // SAFETY: this private field is initialized by `take`, remains owned
         // by the lease, and is extracted exactly once by its only destructor.
