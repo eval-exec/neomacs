@@ -2597,6 +2597,68 @@ pub(crate) fn builtin_constrain_to_field(
     builtin_constrain_to_field_5(eval, &args)
 }
 
+/// GNU field motion first coerces markers and saturates bignums to fixnums.
+/// This immutable scalar owns no heap pointers or mutable buffer state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FieldMotionPosition(crate::tagged::value::Fixnum);
+
+impl TryFrom<(&BufferManager, Value)> for FieldMotionPosition {
+    type Error = Flow;
+
+    fn try_from((buffers, value): (&BufferManager, Value)) -> Result<Self, Self::Error> {
+        let position = expect_integer_or_marker_in_buffers(buffers, &value)?;
+        crate::tagged::value::Fixnum::try_from(position)
+            .map(Self)
+            .map_err(|error| match error {
+                crate::tagged::value::FixnumRangeError::OutOfRange(_) => {
+                    signal(LispCondition::OverflowError, vec![])
+                }
+            })
+    }
+}
+
+impl TryFrom<i64> for FieldMotionPosition {
+    type Error = Flow;
+
+    fn try_from(position: i64) -> Result<Self, Self::Error> {
+        crate::tagged::value::Fixnum::try_from(position)
+            .map(Self)
+            .map_err(|error| match error {
+                crate::tagged::value::FixnumRangeError::OutOfRange(_) => {
+                    signal(LispCondition::OverflowError, vec![])
+                }
+            })
+    }
+}
+
+static_assertions::assert_impl_all!(FieldMotionPosition: Send, Sync);
+
+/// A field-motion property probe position proven inside the accessible buffer.
+/// This scalar witness is created from the current mutator's buffer bounds; it
+/// contains no mutable state and is used before any Lisp callback can run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FieldProbePosition(LispCharPos1);
+
+static_assertions::assert_impl_all!(FieldProbePosition: Send, Sync);
+
+impl TryFrom<(FieldMotionPosition, &Buffer)> for FieldProbePosition {
+    type Error = Flow;
+
+    fn try_from((position, buffer): (FieldMotionPosition, &Buffer)) -> Result<Self, Self::Error> {
+        let integer = position.0;
+        let position = i64::from(integer);
+        if position < buffer.point_min_lisp_char_pos().as_i64()
+            || position > buffer.point_max_lisp_char_pos().as_i64()
+        {
+            return Err(signal(
+                LispCondition::ArgsOutOfRange,
+                vec![Value::from_fixnum(integer)],
+            ));
+        }
+        Ok(Self(LispCharPos1::new(position)))
+    }
+}
+
 /// `constrain-to-field` on an argument slice (2..=5 values, already
 /// arity-checked): the internal callers (`line-beginning-position`,
 /// `line-end-position`, `forward-word`) pass a stack array instead of
@@ -2615,12 +2677,14 @@ pub(crate) fn builtin_constrain_to_field_5(
     } else {
         None
     };
-    let mut new_pos = if let Some(point) = orig_point {
-        point
+    let new_argument = if let Some(point) = orig_point {
+        FieldMotionPosition::try_from(point)?
     } else {
-        expect_integer_or_marker_in_buffers(&eval.buffers, &args[0])?
+        FieldMotionPosition::try_from((&eval.buffers, args[0]))?
     };
-    let old_pos = expect_integer_or_marker_in_buffers(&eval.buffers, &args[1])?;
+    let old_argument = FieldMotionPosition::try_from((&eval.buffers, args[1]))?;
+    let mut new_pos = i64::from(new_argument.0);
+    let old_pos = i64::from(old_argument.0);
     let escape_from_edge = args.get(2).is_some_and(|value| value.is_truthy());
     let only_in_line = args.get(3).is_some_and(|value| value.is_truthy());
 
@@ -2638,6 +2702,19 @@ pub(crate) fn builtin_constrain_to_field_5(
 
     let mut constrain = !inhibit_field_text_motion && new_pos != old_pos;
     if constrain && current_buffer_cannot_have_fields(eval) {
+        let buffer = eval.buffers.current_buffer().ok_or_else(|| {
+            signal(
+                LispCondition::Error,
+                vec![Value::string("No current buffer")],
+            )
+        })?;
+        // These two probes would both return nil before GNU's OR completes.
+        // Retain their accessible-range checks when skipping the lookups.
+        // Buffers with fields keep the original short-circuit probe ordering.
+        new_pos = FieldProbePosition::try_from((new_argument, buffer))?
+            .0
+            .as_i64();
+        let _ = FieldProbePosition::try_from((old_argument, buffer))?;
         // GNU would now run up to four `Fget_char_property` probes; when the
         // buffer cannot hold a `field` anywhere they all answer nil, and
         // `line-beginning-position` calls this once per line (~1.8K Ir).
