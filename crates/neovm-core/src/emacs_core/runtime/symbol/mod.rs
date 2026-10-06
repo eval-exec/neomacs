@@ -1538,10 +1538,26 @@ pub(crate) struct ObarrayScanSnapshot {
     chunks: Vec<ObarrayScanEntry>,
     /// Logical live-slot count at start (so the scan covers slots [0, n_slots)).
     n_slots: usize,
-    /// Chunk count at start (chunks beyond this are interned mid-cycle).
-    n_chunks: usize,
     heap_identity: usize,
 }
+
+// This snapshot is embedded in TaggedHeap. Preserve its original envelope so
+// adding heap identity does not move the heap's JIT-visible allocation fields.
+static_assertions::assert_eq_size!(ObarrayScanSnapshot, [usize; 5]);
+static_assertions::assert_eq_size!(Option<ObarrayScanSnapshot>, [usize; 5]);
+static_assertions::const_assert_eq!(
+    std::mem::align_of::<ObarrayScanSnapshot>(),
+    std::mem::align_of::<usize>()
+);
+static_assertions::const_assert_eq!(std::mem::offset_of!(ObarrayScanSnapshot, chunks), 0);
+static_assertions::const_assert_eq!(
+    std::mem::offset_of!(ObarrayScanSnapshot, n_slots),
+    3 * std::mem::size_of::<usize>()
+);
+static_assertions::const_assert_eq!(
+    std::mem::offset_of!(ObarrayScanSnapshot, heap_identity),
+    4 * std::mem::size_of::<usize>()
+);
 
 // SAFETY: construction requires the heap-identified serialized-writer admission.
 // Every raw chunk/side pointer has a storage lease: owner destruction retains
@@ -1555,7 +1571,7 @@ impl std::fmt::Debug for ObarrayScanSnapshot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ObarrayScanSnapshot")
             .field("heap_identity", &self.heap_identity)
-            .field("chunks", &self.n_chunks)
+            .field("chunks", &self.chunks.len())
             .field("slots", &self.n_slots)
             .finish()
     }
@@ -1571,7 +1587,7 @@ impl ObarrayScanSnapshot {
     /// termination re-seed covers that new range.
     #[inline]
     pub(crate) fn n_chunks(&self) -> usize {
-        self.n_chunks
+        self.chunks.len()
     }
 
     /// Logical live-slot count captured at start. The scan covers slots
@@ -1962,11 +1978,9 @@ impl Obarray {
         world: &crate::tagged::gc::scan_contract::SingleMutatorWorld<'_>,
     ) -> ObarrayScanSnapshot {
         let (chunks, n_slots) = self.symbols.snapshot_parts(world);
-        let n_chunks = chunks.len();
         ObarrayScanSnapshot {
             chunks,
             n_slots,
-            n_chunks,
             heap_identity: world.heap_identity(),
         }
     }

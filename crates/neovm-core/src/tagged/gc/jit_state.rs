@@ -100,3 +100,25 @@ pub(crate) const HEAP_JIT_BARRIER_LO: usize =
 #[cfg_attr(not(feature = "jit"), allow(dead_code))]
 pub(crate) const HEAP_JIT_BARRIER_LEN: usize =
     std::mem::offset_of!(TaggedHeap, jit) + std::mem::offset_of!(JitHeapState, barrier_len);
+
+// ABI 32's measured production layout. Deriving offsets above keeps generated
+// code consistent with this build; these independent pins also detect drift
+// from the existing ABI. Test-only heap fields and unmeasured configurations
+// have their own layout probes rather than inheriting these numeric values.
+#[cfg(all(
+    not(test),
+    target_arch = "x86_64",
+    target_os = "linux",
+    target_pointer_width = "64",
+    feature = "jit",
+    feature = "flow-word",
+    not(feature = "gc-memory-telemetry")
+))]
+const _: () = {
+    assert!(HEAP_JIT_CONS_CUR == 0xe18);
+    assert!(HEAP_JIT_CONS_LIM == 0xe20);
+    assert!(HEAP_JIT_FLOAT_CUR == 0xe28);
+    assert!(HEAP_JIT_FLOAT_LIM == 0xe30);
+    assert!(HEAP_JIT_BARRIER_LO == 0xe38);
+    assert!(HEAP_JIT_BARRIER_LEN == 0xe40);
+};
