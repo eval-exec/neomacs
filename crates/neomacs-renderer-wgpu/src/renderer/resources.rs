@@ -19,6 +19,9 @@ use crate::vertex::{CoverageGlyphVertex, GlyphVertex, RectVertex, RoundedRectVer
 pub(crate) struct Pipelines {
     pub(crate) rect: wgpu::RenderPipeline,
     pub(crate) background_rect: wgpu::RenderPipeline,
+    pub(crate) transition_background_add: wgpu::RenderPipeline,
+    pub(crate) transition_composition_marked: wgpu::RenderPipeline,
+    pub(crate) transition_uncovered_background: wgpu::RenderPipeline,
     pub(crate) background_rounded_rect: wgpu::RenderPipeline,
     pub(crate) transparent_glyph: wgpu::RenderPipeline,
     pub(crate) rounded_rect: wgpu::RenderPipeline,

@@ -7113,8 +7113,27 @@ pub(crate) fn builtin_x_create_frame(
     if let Ok(value) = &result
         && let Some(id) = value.as_frame_id()
     {
-        super::frame::sync_gui_frame_alpha(eval, FrameId(id))?;
-        super::frame::sync_gui_frame_focus_redirects(eval)?;
+        // The frame is already live and realized. Like GNU x_set_frame_alpha,
+        // which ignores X errors, a host opacity failure must not turn into a
+        // signal that hides the new frame from its caller.
+        for (what, sync) in [
+            (
+                "alpha",
+                super::frame::sync_gui_frame_alpha(eval, FrameId(id)),
+            ),
+            (
+                "focus redirects",
+                super::frame::sync_gui_frame_focus_redirects(eval),
+            ),
+        ] {
+            if let Err(err) = sync {
+                tracing::warn!(
+                    frame_id = id,
+                    ?err,
+                    "x-create-frame: failed to sync GUI frame {what}"
+                );
+            }
+        }
     }
     result
 }

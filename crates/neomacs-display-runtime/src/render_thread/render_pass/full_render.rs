@@ -90,6 +90,7 @@ pub(super) fn through_composition_ring(
         composition_view,
         native.content_size().0,
         native.content_size().1,
+        frame,
     );
     if render.compositor.transitions.has_active() {
         render.mark_dirty();

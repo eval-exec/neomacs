@@ -521,6 +521,7 @@ pub(super) fn render_frame_transitions(
     surface_view: &wgpu::TextureView,
     width: u32,
     height: u32,
+    frame: &FrameGlyphBuffer,
 ) {
     let now = renderer.frame_sample().presentation_time();
     let Some(compositions) = transitions.compositions.as_ref() else {
@@ -546,6 +547,8 @@ pub(super) fn render_frame_transitions(
                 transition.plan.easing,
                 width,
                 height,
+                frame.background,
+                frame.background_alpha,
             );
         }
 

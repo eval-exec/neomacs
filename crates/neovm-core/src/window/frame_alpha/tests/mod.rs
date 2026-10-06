@@ -70,3 +70,16 @@ fn gnu_frame_alpha_pair() {
     );
     assert!(pair(Value::list(vec![Value::fixnum(80), Value::fixnum(101)])).is_err());
 }
+#[test]
+fn gnu_frame_alpha_lower_limit_keeps_x_set_frame_alpha_values() {
+    // GNU x_set_frame_alpha: a fixnum is a percentage and a float a fraction;
+    // anything else leaves alpha_min at 1.0 (fully opaque).  Out-of-range
+    // values pass through: alpha_min only applies when it is at most 1.0.
+    assert_eq!(lower_limit(Value::fixnum(20)), 0.2);
+    assert_eq!(lower_limit(Value::make_float(0.3)), 0.3);
+    assert_eq!(lower_limit(Value::NIL), 1.0);
+    assert_eq!(lower_limit(Value::symbol("bad")), 1.0);
+    assert_eq!(lower_limit(Value::fixnum(500)), 5.0);
+    assert_eq!(lower_limit(Value::fixnum(-10)), -0.1);
+    assert!(lower_limit(Value::make_float(f64::NAN)).is_nan());
+}
