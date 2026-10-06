@@ -12569,3 +12569,7 @@ fn compiler_function_overrides_change_bumps_the_function_epoch() {
     );
     assert_eq!(run(&mut eval).as_utf8_str(), Some("neovm-epoch-probe"));
 }
+
+#[cfg(test)]
+#[path = "frame_bindings.rs"]
+mod frame_bindings;

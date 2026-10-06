@@ -5,6 +5,10 @@ use std::sync::OnceLock;
 
 use smallvec::SmallVec;
 
+#[path = "frame_bindings.rs"]
+mod frame_bindings;
+use frame_bindings::BindStack;
+
 use super::arith_kind::ArithGenericKind;
 use super::chunk::ByteCodeFunction;
 use super::opcode::Op;
@@ -460,8 +464,6 @@ enum Handler {
 }
 
 type HandlerStack = SmallVec<[Handler; 4]>;
-type BindStack = SmallVec<[usize; 8]>;
-
 #[cfg(test)]
 thread_local! {
     static RUN_LOOP_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -2473,6 +2475,24 @@ impl<'a> Vm<'a> {
         self.ctx.push_vm_frame_root(value);
     }
 
+    /// Bunbind's tail (GNU bytecode.c:843-851): unwind to the frame-owned
+    /// mark `BindStack::consume` selected. Bunbind0 unwinds nothing, and a
+    /// count the frame does not own signals Invalid byte-code instead of
+    /// unwinding the caller's bindings.
+    #[inline(always)]
+    fn unbind_frame_target(
+        &mut self,
+        target: Result<Option<frame_bindings::FrameUnbindTarget>, frame_bindings::FrameUnbindError>,
+    ) -> EvalResult {
+        match target {
+            Ok(Some(target)) => self
+                .ctx
+                .unbind_to_with_result(target.depth(), Ok(Value::NIL)),
+            Ok(None) => Ok(Value::NIL),
+            Err(_) => Err(invalid_bytecode_flow()),
+        }
+    }
+
     fn cleanup_bytecode_frame(
         &mut self,
         result: EvalResult,
@@ -3914,7 +3934,11 @@ impl<'a> Vm<'a> {
         let entry_spec_depth = self.ctx.specpdl.len();
         let ctx_ptr: *mut crate::emacs_core::eval::Context = &mut *self.ctx;
         let resume = match crate::emacs_core::jit::cache::try_run_osr_probe(
-            ctx_ptr, func, target, &snapshot, bind_stack,
+            ctx_ptr,
+            func,
+            target,
+            &snapshot,
+            bind_stack.as_slice(),
         ) {
             OsrProbe::Ran(NativeRun::Ok(bits)) => {
                 return OsrOutcome::Returned(Value::from_bits(bits));
@@ -4846,22 +4870,15 @@ impl<'a> Vm<'a> {
                         aux_stack.current_mut().bind_stack.push(bind_depth);
                     }
                     Op::Unbind(n) => {
-                        let n = *n as usize;
-                        let target = {
-                            let aux = aux_stack.current_mut();
-                            if n <= aux.bind_stack.len() {
-                                let depth = aux.bind_stack[aux.bind_stack.len() - n];
-                                aux.bind_stack.truncate(aux.bind_stack.len() - n);
-                                depth
-                            } else {
-                                aux.bind_stack.clear();
-                                0
-                            }
-                        };
-                        // Cleanup watcher/unwind-protect exits supersede normal
-                        // bytecode execution and re-enter the VM's nonlocal
-                        // dispatcher, exactly like any other fallible opcode.
-                        let _ = vm_try!(self.ctx.unbind_to_with_result(target, Ok(Value::NIL)));
+                        let target = aux_stack
+                            .current_mut()
+                            .bind_stack
+                            .consume(*n as usize, self.ctx.specpdl.len());
+                        // Cleanup watcher/unwind-protect exits, and a count the
+                        // frame does not own, supersede normal bytecode
+                        // execution and re-enter the VM's nonlocal dispatcher
+                        // through the one published-cursor path.
+                        let _ = vm_try!(self.unbind_frame_target(target));
                     }
 
                     // -- Function calls --
@@ -10022,6 +10039,10 @@ mod collection_capture_tests;
 #[cfg(test)]
 #[path = "tests/stack_pool_test.rs"]
 mod stack_pool_tests;
+
+#[cfg(test)]
+#[path = "tests/frame_bind_stack.rs"]
+mod frame_bind_stack_tests;
 
 impl ArithGenericKind {
     /// The builtin this kind's slow arm calls: the SAME cached symbol ids the

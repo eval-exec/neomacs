@@ -2628,8 +2628,8 @@ pub(crate) fn analyze_cfg(
                             let un = *un as usize;
                             if un > binds {
                                 // Unbinding more than this function bound —
-                                // bail to the interpreter (its bind_stack
-                                // saturation handles it).
+                                // bail to the interpreter, which reports
+                                // invalid byte-code without unwinding callers.
                                 return Err(CompileError::UnsupportedOp("unbalanced-unbind"));
                             }
                             binds -= un;
