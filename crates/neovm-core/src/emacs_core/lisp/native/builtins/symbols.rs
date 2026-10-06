@@ -5916,6 +5916,44 @@ pub(crate) fn make_byte_code_from_parts(
     )
 }
 
+/// When a constructed GNU byte-code object turns its byte string into
+/// executable instructions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GnuDecodeTiming {
+    /// `make-byte-code` and the reader: check the string now and let the
+    /// process-wide eager/lazy policy decide when to decode it.
+    Deferred,
+    /// `byte-code` (GNU bytecode.c:298-320): the object runs once, at once.
+    /// Decode a single time, keep the instructions resident, and run them
+    /// on the checked driver instead of proving their stack effects first.
+    Immediate,
+}
+
+/// The function object GNU `Fbyte_code` builds through `Fmake_byte_code`
+/// with a nil arglist (bytecode.c:317), for immediate execution.
+///
+/// GNU hands that object straight to `exec_byte_code`; no Lisp frame or
+/// opcode can name it afterwards. It therefore stays an owned value here: its
+/// decoded instructions are released when the call returns, as GNU's only
+/// cost is the small vector, instead of staying resident until a collection.
+pub(crate) fn byte_code_for_immediate_call(
+    bytecode_str: &Value,
+    constants_vec: &Value,
+    maxdepth: &Value,
+) -> Result<crate::emacs_core::bytecode::ByteCodeFunction, Flow> {
+    build_byte_code_function(
+        &Value::NIL,
+        bytecode_str,
+        constants_vec,
+        maxdepth,
+        None,
+        None,
+        4,
+        &[],
+        GnuDecodeTiming::Immediate,
+    )
+}
+
 #[allow(clippy::too_many_arguments)] // preserves the observable GNU closure-slot layout
 fn make_byte_code_from_parts_with_slots(
     arglist: &Value,
@@ -5927,6 +5965,32 @@ fn make_byte_code_from_parts_with_slots(
     closure_slot_count: usize,
     extra_slots: &[Value],
 ) -> EvalResult {
+    build_byte_code_function(
+        arglist,
+        bytecode_str,
+        constants_vec,
+        maxdepth,
+        docstring,
+        interactive,
+        closure_slot_count,
+        extra_slots,
+        GnuDecodeTiming::Deferred,
+    )
+    .map(Value::make_bytecode)
+}
+
+#[allow(clippy::too_many_arguments)] // preserves the observable GNU closure-slot layout
+fn build_byte_code_function(
+    arglist: &Value,
+    bytecode_str: &Value,
+    constants_vec: &Value,
+    maxdepth: &Value,
+    docstring: Option<&Value>,
+    interactive: Option<&Value>,
+    closure_slot_count: usize,
+    extra_slots: &[Value],
+    timing: GnuDecodeTiming,
+) -> Result<crate::emacs_core::bytecode::ByteCodeFunction, Flow> {
     use crate::emacs_core::bytecode::ByteCodeFunction;
     use crate::emacs_core::bytecode::chunk::eager_gnu_bytecode;
     use crate::emacs_core::bytecode::decode::{
@@ -5960,7 +6024,11 @@ fn make_byte_code_from_parts_with_slots(
     // no instructions built. The eager policy keeps them resident;
     // `NEOVM_MAKE_BYTE_CODE_VALIDATE_ONLY=off` decodes in full and lets
     // `defer_gnu_decode` drop the result, the former behavior (A/B).
-    let (ops, gnu_byte_offset_map) = if eager_gnu_bytecode() || !make_byte_code_validates_only() {
+    let decode_now = match timing {
+        GnuDecodeTiming::Immediate => true,
+        GnuDecodeTiming::Deferred => eager_gnu_bytecode() || !make_byte_code_validates_only(),
+    };
+    let (ops, gnu_byte_offset_map) = if decode_now {
         decode_gnu_bytecode_with_offset_map(&raw_bytes, &mut constants)
             .map(|(ops, offset_map)| (ops, Some(offset_map)))
     } else {
@@ -6030,14 +6098,22 @@ fn make_byte_code_from_parts_with_slots(
         runtime: Some(crate::emacs_core::jit::Runtime::new()),
         lazy_gnu_code: None,
     };
-    bc.defer_gnu_decode();
-    if !bc.ops.is_empty() {
-        // Eager decode policy kept the instructions resident; prove them now
-        // that every shape field is final. (The lazy path proves at decode.)
-        bc.refresh_stack_verification();
+    match timing {
+        GnuDecodeTiming::Deferred => {
+            bc.defer_gnu_decode();
+            if !bc.ops.is_empty() {
+                // Eager decode policy kept the instructions resident; prove
+                // them now that every shape field is final. (The lazy path
+                // proves at decode.)
+                bc.refresh_stack_verification();
+            }
+        }
+        // One run of straight-line GNU code costs less on the checked driver
+        // than a separate stack-effect proof pass would.
+        GnuDecodeTiming::Immediate => {}
     }
 
-    Ok(Value::make_bytecode(bc))
+    Ok(bc)
 }
 
 #[cfg(test)]

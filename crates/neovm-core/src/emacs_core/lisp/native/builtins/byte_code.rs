@@ -18,20 +18,11 @@ pub(crate) fn builtin_byte_code(context: &mut Context, args: Vec<Value>) -> Eval
         .into_unibyte(origin)?;
     let constants = ConstantsVector::try_from(args[1]).map_err(|error| error.into_flow(origin))?;
     let depth = StackDepth::try_from(args[2]).map_err(|error| error.into_flow(origin))?;
-    let function = super::make_byte_code_from_parts(
-        &Value::NIL,
-        &code.value(),
-        &constants.value(),
-        &depth.value(),
-        None,
-        None,
-    )
-    .map_err(|_| origin.invalid_flow())?;
-    let bytecode = function
-        .get_bytecode_data()
-        .ok_or_else(|| origin.invalid_flow())?;
-    // Carry the actual function into the VM: its frame roots the new object
-    // and its constants through Lisp calls and collections.
+    let function =
+        super::byte_code_for_immediate_call(&code.value(), &constants.value(), &depth.value())
+            .map_err(|_| origin.invalid_flow())?;
+    // The direct VM entry roots the owned function's constants through Lisp
+    // calls and collections, and its instructions die with this call.
     let mut vm = crate::emacs_core::bytecode::Vm::from_context(context);
-    vm.execute_with_func_value(bytecode, Vec::new(), function)
+    vm.execute(&function, Vec::new())
 }

@@ -349,15 +349,11 @@ impl Context {
         // function cell's UNEVALLED subr, so user-visible special forms
         // should flow through the resolved subr surface below.
         //
-        // With overrides active there is no cached head, so the three literal
+        // With overrides active there is no cached head, so the two literal
         // heads are still tested directly.
         if let Some(sym_id) = sym_id
             && head.map_or_else(
-                || {
-                    sym_id == lambda_symbol()
-                        || sym_id == byte_code_literal_symbol()
-                        || sym_id == byte_code_symbol()
-                },
+                || sym_id == lambda_symbol() || sym_id == byte_code_literal_symbol(),
                 |head| head.literal_head,
             )
             && let Some(result) = self.try_special_form_value_id(sym_id, original_args)

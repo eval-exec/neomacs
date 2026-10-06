@@ -28063,5 +28063,8 @@ mod function_slots;
 mod runtime_constants;
 
 #[cfg(test)]
+mod byte_code_function;
+
+#[cfg(test)]
 #[path = "marker_identity.rs"]
 mod marker_identity;

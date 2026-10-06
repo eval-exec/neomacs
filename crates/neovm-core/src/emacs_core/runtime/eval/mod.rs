@@ -1898,7 +1898,6 @@ cached_symbol_id!(macro_symbol, "macro");
 cached_symbol_id!(max_lisp_eval_depth_symbol, "max-lisp-eval-depth");
 cached_symbol_id!(frame_alpha_lower_limit_symbol, "frame-alpha-lower-limit");
 cached_symbol_id!(byte_code_literal_symbol, "byte-code-literal");
-cached_symbol_id!(byte_code_symbol, "byte-code");
 cached_symbol_id!(input_decode_map_symbol, "input-decode-map");
 cached_symbol_id!(local_function_key_map_symbol, "local-function-key-map");
 cached_symbol_id!(post_gc_hook_symbol, "post-gc-hook");

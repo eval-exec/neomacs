@@ -99,9 +99,6 @@ impl Context {
                 id if id == byte_code_literal_symbol() && surface_id == target_id => {
                     Some(self.sf_byte_code_literal_value(tail))
                 }
-                id if id == byte_code_symbol() && surface_id == target_id => {
-                    Some(self.sf_byte_code_value(tail))
-                }
                 _ => None,
             },
         };
@@ -1286,17 +1283,6 @@ impl Context {
         }
 
         crate::emacs_core::builtins::make_byte_code_from_slots(items)
-    }
-
-    pub(super) fn sf_byte_code_value(&mut self, tail: Value) -> EvalResult {
-        let args = list_to_vec(&tail).ok_or_else(|| self.listp_error(tail))?;
-        if args.len() != 3 {
-            return Err(signal(
-                LispCondition::WrongNumberOfArguments,
-                vec![Value::symbol("byte-code"), Value::fixnum(args.len() as i64)],
-            ));
-        }
-        crate::emacs_core::builtins::builtin_byte_code(self, args)
     }
 
     pub(crate) fn defalias_value(&mut self, sym: Value, def: Value) -> EvalResult {

@@ -30,7 +30,7 @@ use crate::tagged::header::{SubrDispatchKind, SubrObj};
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn is_evaluator_special_form_name(name: &str) -> bool {
     super::eval::evaluator_dispatch_kind(name) == Some(SubrDispatchKind::SpecialForm)
-        || matches!(name, "lambda" | "byte-code-literal" | "byte-code")
+        || matches!(name, "lambda" | "byte-code-literal")
 }
 
 /// Returns true for special forms exposed by `special-form-p`.
