@@ -52,6 +52,17 @@ fn gnu_fixture(case: &str, form: &str, cached: &str) -> String {
 }
 
 #[test]
+fn circular_lists_rassoc_matches_gnu() {
+    let form = include_str!("circular_lists_cases/rassoc.el");
+    let expected = gnu_fixture(
+        "rassoc",
+        form,
+        include_str!("circular_lists_cases/rassoc.expect"),
+    );
+    assert_eq!(runtime_startup_eval_one(form), expected);
+}
+
+#[test]
 fn circular_lists_cycle_tails_matches_gnu() {
     let form = include_str!("circular_lists_cases/cycle_tails.el");
     let expected = gnu_fixture(
