@@ -143,9 +143,21 @@ fn lookup_static_rodata(key: u64, len: usize) -> Option<*const u8> {
     }
 }
 
+/// The table an interval-free string reports.
+///
+/// Interval tables hold Lisp values, which stay on their mutator thread, so
+/// each thread gets its own empty table rather than sharing a process-wide
+/// one. It is one small allocation per thread that reads an interval-free
+/// table, intentionally never freed: the reference outlives any borrow of a
+/// string. During thread teardown, after the slot is gone, a fresh one is
+/// leaked the same way.
 fn empty_text_property_table() -> &'static TextPropertyTable {
-    static EMPTY: OnceLock<TextPropertyTable> = OnceLock::new();
-    EMPTY.get_or_init(TextPropertyTable::new)
+    thread_local! {
+        static EMPTY: &'static TextPropertyTable = Box::leak(Box::new(TextPropertyTable::new()));
+    }
+    EMPTY
+        .try_with(|empty| *empty)
+        .unwrap_or_else(|_| Box::leak(Box::new(TextPropertyTable::new())))
 }
 
 struct OwnedStringDataGuard<'a> {

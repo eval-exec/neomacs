@@ -652,8 +652,9 @@ struct IntervalTree {
     /// the same interval. GNU's `find_interval` re-descends from the root on every
     /// call, so this beats it.
     ///
-    /// Stored as plain atomics (not a `Cell`) because `TextPropertyTable` must be
-    /// `Sync` -- it backs a shared `OnceLock` sentinel. `version` is bumped by the
+    /// Stored as plain atomics (not a `Cell`) because `TextPropertyTable` once
+    /// backed a process-wide empty sentinel; it holds Lisp values and is now
+    /// confined to its mutator thread like them. `version` is bumped by the
     /// three in-place structural/positional mutators (`push_node`,
     /// `add_length_to_ancestors`, `delete_node`); a lookup trusts the memo only
     /// when `cache_gen == gen`, so any such mutation invalidates it. Plist-value
@@ -2563,17 +2564,17 @@ pub struct TextPropertyTable {
     /// `((syntax_prop_tick + 1) << 1) | any` — the +1 makes the default `0`
     /// never match, and the answer self-recomputes on first query after a
     /// syntax-relevant mutation. One full-tree bit scan per such mutation,
-    /// zero per-mutation bookkeeping. Atomic (not Cell) only so the table
-    /// stays `Sync` for the shared EMPTY static; ordering is Relaxed — a
-    /// racing recompute is just repeated work.
+    /// zero per-mutation bookkeeping. Atomic (not Cell) from when the table
+    /// backed a shared empty static; ordering is Relaxed — a racing recompute
+    /// is just repeated work.
     syntax_prop_any: std::sync::atomic::AtomicU64,
     /// Lazy sorted list of the bit-set intervals' `[start, end)` bounds,
     /// tagged with the `syntax_prop_tick + 1` it was built at (0 = never).
     /// Sparse in practice (elisp-mode marks ~21 docstring delimiters in a
     /// 50k-interval fontified buffer), so queries binary-search this instead
-    /// of walking thousands of face intervals. Mutex only for `Sync` (the
-    /// shared EMPTY static); the heap is per-thread, so it is uncontended —
-    /// and a failed try_lock just falls back to the cursor walk.
+    /// of walking thousands of face intervals. A Mutex from when the table
+    /// backed a shared empty static; the table is thread-confined, so it is
+    /// uncontended — and a failed try_lock just falls back to the cursor walk.
     syntax_prop_ranges: std::sync::Mutex<(u64, Vec<(CharPos0, CharPos0)>)>,
 }
 
