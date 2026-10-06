@@ -362,3 +362,6 @@ fn ensure_startup_compat_variables_reseeds_existing_face_defaults_table() {
         "existing face--new-frame-defaults tables must be reseeded after dump load"
     );
 }
+
+#[cfg(test)]
+mod tsb_face_height;

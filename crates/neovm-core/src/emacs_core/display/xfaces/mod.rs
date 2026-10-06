@@ -2698,7 +2698,9 @@ fn merge_face_height_value(
     match from.kind() {
         ValueKind::Fixnum(_) => from,
         ValueKind::Float => match to.kind() {
-            ValueKind::Fixnum(height) => Value::fixnum((from.xfloat() * height as f64) as i64),
+            ValueKind::Fixnum(height) => Value::from_fixnum(height::gnu_height_merge_fixnum(
+                from.xfloat() * height as f64,
+            )),
             ValueKind::Float => Value::make_float(from.xfloat() * to.xfloat()),
             _ if is_reset_like_face_attr_value(&to) => from,
             _ => invalid,
@@ -2761,43 +2763,35 @@ fn normalize_face_attr_for_set_with_eval(
         }
         ":height" => {
             if !is_reset_like {
-                if face_name == "default" {
-                    match normalized.kind() {
-                        ValueKind::Fixnum(n) if n > 0 => {}
-                        _ => {
-                            return Err(signal(
-                                "error",
-                                vec![
-                                    Value::string("Default face height not absolute and positive"),
-                                    normalized,
-                                ],
-                            ));
-                        }
+                let valid = match height::NumericFaceHeight::try_from(normalized) {
+                    Ok(height::NumericFaceHeight::Absolute(_)) => true,
+                    Ok(height::NumericFaceHeight::Relative(_)) => face_name != "default",
+                    Err(height::FaceHeightError::InvalidNumericHeight)
+                        if face_name == "default" || normalized.is_number() =>
+                    {
+                        false
                     }
-                } else {
-                    match normalized.kind() {
-                        ValueKind::Fixnum(n) if n > 0 => {}
-                        ValueKind::Float if normalized.xfloat() > 0.0 => {}
-                        _ => {
-                            let test = merge_face_height_value(
-                                eval,
-                                normalized,
-                                Value::fixnum(10),
-                                Value::NIL,
-                            );
-                            if test.as_int().is_none_or(|n| n <= 0) {
-                                return Err(signal(
-                                    "error",
-                                    vec![
-                                        Value::string(
-                                            "Face height does not produce a positive integer",
-                                        ),
-                                        normalized,
-                                    ],
-                                ));
-                            }
-                        }
+                    Err(height::FaceHeightError::InvalidNumericHeight) => {
+                        let test = merge_face_height_value(
+                            eval,
+                            normalized,
+                            Value::fixnum(10),
+                            Value::NIL,
+                        );
+                        test.as_int().is_some_and(|height| height > 0)
                     }
+                    Err(height::FaceHeightError::BackendRange) => false,
+                };
+                if !valid {
+                    let message = if face_name == "default" {
+                        "Default face height not absolute and positive"
+                    } else {
+                        "Face height does not produce a positive integer"
+                    };
+                    return Err(signal(
+                        LispCondition::Error,
+                        vec![Value::string(message), normalized],
+                    ));
                 }
             }
         }
@@ -3383,8 +3377,8 @@ fn lisp_value_to_face_attr_resolved(
     resolver: FaceColorResolver<'_>,
 ) -> Option<crate::face::FaceAttrValue> {
     use crate::face::{
-        BoxBorder, BoxStyle, FaceAttrValue, FaceHeight, FontSlant, FontWeight, FontWidth,
-        SpecifiedColor, Underline, UnderlinePosition, UnderlineStyle,
+        BoxBorder, BoxStyle, FaceAttrValue, FontSlant, FontWeight, FontWidth, SpecifiedColor,
+        Underline, UnderlinePosition, UnderlineStyle,
     };
 
     // "unspecified" symbol = reset the attribute
@@ -3418,10 +3412,10 @@ fn lisp_value_to_face_attr_resolved(
             let name = value.as_symbol_name()?;
             Some(FaceAttrValue::Width(FontWidth::from_symbol(name)?))
         }
-        LFaceAttr::Height => match value.kind() {
-            ValueKind::Fixnum(n) => Some(FaceAttrValue::Height(FaceHeight::Absolute(n as i32))),
-            ValueKind::Float => Some(FaceAttrValue::Height(FaceHeight::Relative(value.xfloat()))),
-            _ => None,
+        LFaceAttr::Height => match height::BackendFaceHeight::try_from(value) {
+            Ok(height) => Some(FaceAttrValue::Height(height.into())),
+            Err(height::FaceHeightError::InvalidNumericHeight) => None,
+            Err(height::FaceHeightError::BackendRange) => None,
         },
         LFaceAttr::Family | LFaceAttr::Foundry => {
             if value.is_string() {
