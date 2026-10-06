@@ -1885,7 +1885,7 @@ fn format_integer_digits(
 /// Render `n` as plain decimal digits appended to `out`, with no heap
 /// traffic: one backward stack-buffer pass, like GNU's sprintf into
 /// `sprintf_buf`.
-#[inline]
+#[inline(always)]
 fn push_i64_decimal(
     out: &mut FormatOutput,
     n: i64,
@@ -2745,11 +2745,15 @@ fn do_format(
         .len()
         .checked_add(32)
         .ok_or_else(format_string_overflow_error)?;
-    let encoding = if args.iter().any(|value| value.string_is_multibyte()) {
-        FormatStringEncoding::Multibyte
-    } else {
-        FormatStringEncoding::Unibyte
-    };
+    // The format string has already been borrowed and validated above. Reuse
+    // its encoding witness while still inspecting every remaining argument:
+    // GNU includes unused multibyte string arguments in the upfront decision.
+    let encoding =
+        if fmt_ls.is_multibyte() || args[1..].iter().any(|value| value.string_is_multibyte()) {
+            FormatStringEncoding::Multibyte
+        } else {
+            FormatStringEncoding::Unibyte
+        };
     let mut result = FormatOutput::new(initial_capacity, encoding)?;
     let mut spans: Vec<FormatPropSpan> = Vec::new();
     let mut source_spans: Vec<FormatSourceSpan> = Vec::new();
