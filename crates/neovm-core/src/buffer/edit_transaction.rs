@@ -16,6 +16,108 @@ use crate::buffer::{
 use crate::emacs_core::value::Value;
 use crate::heap_types::LispString;
 
+/// Native buffer-edit failure; this immutable data contains no Lisp handles or mutation
+/// authority and may cross threads. Every mutating lease remains !Send/!Sync.
+/// Lisp callers map these causes to their existing GNU-visible conditions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, thiserror::Error)]
+pub(crate) enum BufferEditError {
+    #[error("buffer is unavailable")]
+    BufferUnavailable,
+}
+static_assertions::assert_impl_all!(BufferEditError: Send, Sync);
+const _: () = assert!(
+    std::mem::size_of::<Result<(), BufferEditError>>() == std::mem::size_of::<Option<()>>()
+);
+
+/// A measured physical buffer range leased to one mutator until mutation.
+///
+/// Construction validates character bounds against the live buffer text and
+/// derives its character/Emacs-byte coordinate pair together. The exclusive
+/// BufferManager borrow excludes edits and Lisp callbacks through this manager,
+/// including its managed indirect buffers. Cloned managers own distinct mutable
+/// text storage. Buffer-module code must keep shared_clone aliases attached to
+/// their owning manager and must not mutate a detached alias while a lease lives.
+/// This lease introduces no process-global or thread-local state.
+#[must_use = "consume the prepared lease to mutate, or drop it to cancel"]
+pub(crate) struct PreparedBufferEdit<'a> {
+    buffers: &'a mut BufferManager,
+    buffer: BufferId,
+    range: TextEditRange,
+    _mutator: std::marker::PhantomData<*const ()>,
+}
+
+static_assertions::assert_not_impl_any!(PreparedBufferEdit<'static>: Send, Sync);
+
+impl std::fmt::Debug for PreparedBufferEdit<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedBufferEdit")
+            .field("buffer", &self.buffer)
+            .field("range", &self.range)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a> PreparedBufferEdit<'a> {
+    /// No narrowing policy is imposed here: GNU's edit commands determine
+    /// their accessible range after hooks, while this boundary proves that
+    /// the final physical range is still live and coordinate-coherent.
+    #[inline]
+    pub(in crate::buffer) fn new(
+        buffers: &'a mut BufferManager,
+        buffer: BufferId,
+        chars: crate::buffer::CharRange,
+    ) -> Option<Self> {
+        let range = {
+            let live = buffers.get(buffer)?;
+            if chars.start() > chars.end() || chars.end() > live.total_char_end_pos() {
+                return None;
+            }
+            live.edit_range_for_char_range(chars)
+        };
+        Some(Self {
+            buffers,
+            buffer,
+            range,
+            _mutator: std::marker::PhantomData,
+        })
+    }
+
+    /// Read-only measured geometry for notifications; this value alone
+    /// cannot authorize mutation outside the buffer implementation.
+    #[inline]
+    pub(crate) fn range(&self) -> TextEditRange {
+        self.range
+    }
+
+    #[inline]
+    pub(crate) fn buffer_id(&self) -> BufferId {
+        self.buffer
+    }
+
+    /// Delete the leased range. An empty range is a successful no-op.
+    ///
+    /// # Errors
+    /// Returns BufferUnavailable if the manager cannot find the leased buffer.
+    #[inline]
+    pub(crate) fn delete(self) -> Result<(), BufferEditError> {
+        self.buffers
+            .delete_buffer_measured_region(self.buffer, self.range)
+            .ok_or(BufferEditError::BufferUnavailable)
+    }
+
+    #[inline]
+    pub(crate) fn delete_and_extract(self) -> Option<LispString> {
+        self.buffers
+            .delete_and_extract_buffer_measured_region(self.buffer, self.range)
+    }
+
+    #[inline]
+    pub(crate) fn replace(self, text: &LispString) -> Option<TextExtent> {
+        self.buffers
+            .replace_buffer_measured_region_lisp_string(self.buffer, self.range, text)
+    }
+}
+
 #[inline]
 pub(in crate::buffer) fn lisp_string_from_buffer_bytes(
     bytes: Vec<u8>,
