@@ -313,6 +313,12 @@ pub(crate) enum AllocationFailure {
     Lisp(crate::emacs_core::error::Flow),
     #[error("memory exhausted")]
     MemoryExhausted(#[from] std::collections::TryReserveError),
+    /// The global allocator rejected a nonzero, validated storage request.
+    #[error("allocation returned null")]
+    NullAllocation,
+    /// A checked allocation layout could not represent the requested extent.
+    #[error("invalid allocation layout")]
+    InvalidLayout(#[from] std::alloc::LayoutError),
 }
 
 impl From<crate::emacs_core::error::Flow> for AllocationFailure {
@@ -325,7 +331,9 @@ impl AllocationFailure {
     pub(crate) fn into_flow(self) -> crate::emacs_core::error::Flow {
         match self {
             Self::Lisp(flow) => flow,
-            Self::MemoryExhausted(_) => crate::emacs_core::error::memory_exhausted_error(),
+            Self::MemoryExhausted(_) | Self::NullAllocation | Self::InvalidLayout(_) => {
+                crate::emacs_core::error::memory_exhausted_error()
+            }
         }
     }
 
@@ -335,7 +343,7 @@ impl AllocationFailure {
     ) -> crate::emacs_core::error::Flow {
         match self {
             Self::Lisp(flow) => flow,
-            Self::MemoryExhausted(_) => context
+            Self::MemoryExhausted(_) | Self::NullAllocation | Self::InvalidLayout(_) => context
                 .special_variable_value_by_id(crate::emacs_core::intern::intern(
                     "memory-signal-data",
                 ))

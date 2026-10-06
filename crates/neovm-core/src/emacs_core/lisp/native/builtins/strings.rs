@@ -1503,6 +1503,39 @@ fn reserve_format_output(
         .map_err(crate::emacs_core::alloc::AllocationFailure::from)
 }
 
+/// Allocate empty canonical byte storage with a validated extent. Zero capacity
+/// needs no allocation; allocation failures retain their category until the
+/// invoking mutator selects its live memory-signal-data (GNU alloc.c:4140-4142).
+/// Vec owns the resulting global-allocator storage and its ordinary Send/Sync
+/// and RAII contracts; no Lisp references or allocator state are retained.
+#[inline(always)]
+fn allocate_format_bytes(
+    capacity: FormatStorageBytes,
+) -> Result<Vec<u8>, crate::emacs_core::alloc::AllocationFailure> {
+    use crate::emacs_core::alloc::AllocationFailure;
+    use std::alloc::Layout;
+    use std::ptr::NonNull;
+
+    let bytes = capacity.get();
+    if bytes == 0 {
+        return Ok(Vec::new());
+    }
+    let layout = Layout::array::<u8>(bytes)?;
+    // SAFETY: Layout::array checked the size and alignment, and bytes is
+    // nonzero. alloc uses Rust's global allocator; null is handled below.
+    let pointer = unsafe { std::alloc::alloc(layout) };
+    let pointer = NonNull::new(pointer).ok_or(AllocationFailure::NullAllocation)?;
+    // SAFETY: this unique, non-null global allocation has exactly the size and
+    // alignment of Vec<u8>'s requested capacity. Both witnesses bound bytes by
+    // isize::MAX; length zero needs no initialized elements. Immediate transfer
+    // gives Vec sole ownership, without an alias or intervening fallible step.
+    Ok(unsafe { Vec::from_raw_parts(pointer.as_ptr(), 0, bytes) })
+}
+
+#[cfg(test)]
+#[path = "tests/format_storage_allocation.rs"]
+mod format_storage_allocation;
+
 /// Aggregate canonical storage with GNU's actual result encoding. In-capacity
 /// writes below the GNU byte bound need no decode; larger extents validate the
 /// actual result before any growth (editfns.c:4251-4263). This owned buffer and
@@ -1521,8 +1554,7 @@ impl FormatOutput {
         encoding: FormatStringEncoding,
     ) -> Result<Self, crate::emacs_core::alloc::AllocationFailure> {
         let capacity = FormatStorageBytes::try_from(capacity)?;
-        let mut bytes = Vec::new();
-        bytes.try_reserve_exact(capacity.get())?;
+        let bytes = allocate_format_bytes(capacity)?;
         Ok(Self { bytes, encoding })
     }
 
@@ -1548,7 +1580,7 @@ impl FormatOutput {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn append(&mut self, bytes: &[u8]) -> Result<(), crate::emacs_core::alloc::AllocationFailure> {
         // Vec owns its actual storage extent: deriving spare capacity avoids a
         // second, independently stored count that can disagree with the buffer.
