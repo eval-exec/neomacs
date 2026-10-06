@@ -69,7 +69,7 @@ use super::value::Value;
 use crate::buffer::buffer::BufferSlotPredicateError;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::cell::UnsafeCell;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// Discriminant for [`LispFwd`]. Mirrors GNU `enum Lisp_Fwd_Type`
 /// (`src/lisp.h:3046-3055`). Always read the first field of any `*Fwd`
@@ -317,9 +317,16 @@ impl LispFwd {
         }
     }
 
-    /// [`Self::load`] for a leaked descriptor, for the `&Value`-returning
-    /// symbol accessors.
-    pub fn load_ref(&'static self) -> Option<&'static Value> {
+    /// [`Self::load`] as a reference into the descriptor's slot, for the
+    /// `&Value`-returning symbol accessors (`Obarray::symbol_value_id`,
+    /// `default_value_id`).
+    ///
+    /// The slot is written in place, so a caller must copy the value before
+    /// anything can store to the variable; a reference held across a store
+    /// is undefined behaviour. That is why this is not public and its
+    /// callers are ratcheted (`value_ref_guard`): P7.4 replaces them with
+    /// copied values and removes it.
+    pub(super) fn load_ref(&'static self) -> Option<&'static Value> {
         match self.slot() {
             ForwardSlot::Int(int_fwd) => Some(int_fwd.get_ref()),
             ForwardSlot::Bool(bool_fwd) => Some(if bool_fwd.get() {
@@ -536,7 +543,7 @@ pub(crate) const LISP_INT_FWD_VALUE_OFFSET: usize = std::mem::offset_of!(LispInt
 // Safety: a `LispIntFwd` is only ever mutated from the Lisp thread that owns
 // its `Obarray`, exactly like the symbol value cells beside it; the `Sync`
 // bound is needed solely so the descriptor can be a `&'static` shared with the
-// GC's root scan, which reads it with `load_value_atomic`.
+// GC's root scan, which reads it atomically (`load_slot`).
 unsafe impl Sync for LispIntFwd {}
 
 impl LispIntFwd {
@@ -544,7 +551,7 @@ impl LispIntFwd {
     /// which wraps the C slot back up with `make_int`.
     #[inline]
     pub fn get(&self) -> Value {
-        crate::tagged::header::load_value_atomic(unsafe { &*self.value.get() })
+        load_slot(&self.value)
     }
 
     /// The slot as GNU's C reads it: a plain `intmax_t`, no Lisp object.
@@ -567,10 +574,9 @@ impl LispIntFwd {
         }
     }
 
-    /// Borrow the stored integer. The descriptor is leaked at registration, so
-    /// the borrow is genuinely `'static`.
+    /// Borrow the stored integer, for [`LispFwd::load_ref`] only.
     #[inline]
-    pub fn get_ref(&'static self) -> &'static Value {
+    fn get_ref(&'static self) -> &'static Value {
         unsafe { &*self.value.get() }
     }
 
@@ -578,10 +584,7 @@ impl LispIntFwd {
     /// so there is no spelling of this call that stores a non-integer.
     #[inline]
     pub fn set(&self, value: LispInteger) {
-        let slot = unsafe { &mut *self.value.get() };
-        // SATB: a bignum slot value is a heap object about to be replaced.
-        crate::tagged::gc::note_root_overwrite(*slot);
-        crate::tagged::header::store_value_atomic(slot, value.value());
+        store_slot(&self.value, value.value());
     }
 }
 
@@ -664,30 +667,26 @@ pub(crate) const LISP_OBJ_FWD_VALUE_OFFSET: usize = std::mem::offset_of!(LispObj
 
 // Safety: identical to `LispIntFwd` -- mutated only from the Lisp thread that
 // owns its `Obarray`; `Sync` is needed solely so the descriptor can be the
-// `&'static` the GC root scan reads with `load_value_atomic`.
+// `&'static` the GC root scan reads atomically (`load_slot`).
 unsafe impl Sync for LispObjFwd {}
 
 impl LispObjFwd {
     /// GNU `do_symval_forwarding`'s `Lisp_Fwd_Obj` arm (`src/data.c:1343-1344`).
     #[inline]
     pub fn get(&self) -> Value {
-        crate::tagged::header::load_value_atomic(unsafe { &*self.value.get() })
+        load_slot(&self.value)
     }
 
-    /// Borrow the stored value.  The descriptor is leaked at registration, so
-    /// the borrow is genuinely `'static`.
+    /// Borrow the stored value, for [`LispFwd::load_ref`] only.
     #[inline]
-    pub fn get_ref(&'static self) -> &'static Value {
+    fn get_ref(&'static self) -> &'static Value {
         unsafe { &*self.value.get() }
     }
 
     /// The store half of GNU's `Lisp_Fwd_Obj` arm (`src/data.c:1489-1516`).
     #[inline]
     pub fn set(&self, value: Value) {
-        let slot = unsafe { &mut *self.value.get() };
-        // SATB: the slot holds a heap object about to be replaced.
-        crate::tagged::gc::note_root_overwrite(*slot);
-        crate::tagged::header::store_value_atomic(slot, value);
+        store_slot(&self.value, value);
     }
 }
 
@@ -789,6 +788,29 @@ pub struct LispKboardObjFwd {
 pub(crate) const LISP_KBOARD_OBJ_FWD_VALUE_OFFSET: usize =
     std::mem::offset_of!(LispKboardObjFwd, value);
 
+/// Read a descriptor's `Value` slot with an atomic Acquire load, the
+/// counterpart of [`store_slot`] (and of the GC root scan's
+/// `load_value_atomic`).
+#[inline(always)]
+fn load_slot(slot: &UnsafeCell<Value>) -> Value {
+    // SAFETY: the slot is one machine word, as `AtomicUsize` is (asserted
+    // below), and every access to it is atomic.
+    Value::from_bits(unsafe { (*slot.get().cast::<AtomicUsize>()).load(Ordering::Acquire) })
+}
+
+/// Write a descriptor's `Value` slot: note the pre-image for the
+/// snapshot-at-the-beginning mark, then publish VALUE with a Release store.
+///
+/// The store goes through the cell's raw pointer and never forms a `&mut
+/// Value`: a `&Value` from [`LispFwd::load_ref`] may be live, and a `&mut`
+/// beside it would be undefined behaviour even if neither were read.
+#[inline(always)]
+fn store_slot(slot: &UnsafeCell<Value>, value: Value) {
+    crate::tagged::gc::note_root_overwrite(load_slot(slot));
+    // SAFETY: as in `load_slot`.
+    unsafe { (*slot.get().cast::<AtomicUsize>()).store(value.bits(), Ordering::Release) };
+}
+
 // A slot is one `Value` word the JIT reads and writes whole.
 const _: () = {
     assert!(std::mem::size_of::<UnsafeCell<Value>>() == std::mem::size_of::<usize>());
@@ -802,7 +824,6 @@ const _: () = {
 // needs once every access to them is atomic.
 const _: () = {
     use std::mem::{align_of, size_of};
-    use std::sync::atomic::AtomicUsize;
     assert!(LISP_INT_FWD_VALUE_OFFSET == 8);
     assert!(LISP_OBJ_FWD_VALUE_OFFSET == 8);
     assert!(LISP_KBOARD_OBJ_FWD_VALUE_OFFSET == 8);
@@ -870,12 +891,12 @@ impl LispKboardObjFwd {
     /// (`src/data.c:1352-1356`).
     #[inline]
     pub fn get(&self) -> Value {
-        crate::tagged::header::load_value_atomic(unsafe { &*self.value.get() })
+        load_slot(&self.value)
     }
 
-    /// Borrow the stored value; the descriptor is leaked at registration.
+    /// Borrow the stored value, for [`LispFwd::load_ref`] only.
     #[inline]
-    pub fn get_ref(&'static self) -> &'static Value {
+    fn get_ref(&'static self) -> &'static Value {
         unsafe { &*self.value.get() }
     }
 
@@ -883,9 +904,7 @@ impl LispKboardObjFwd {
     /// (`src/data.c:1529-1536`), which checks nothing.
     #[inline]
     pub fn set(&self, value: Value) {
-        let slot = unsafe { &mut *self.value.get() };
-        crate::tagged::gc::note_root_overwrite(*slot);
-        crate::tagged::header::store_value_atomic(slot, value);
+        store_slot(&self.value, value);
     }
 }
 
