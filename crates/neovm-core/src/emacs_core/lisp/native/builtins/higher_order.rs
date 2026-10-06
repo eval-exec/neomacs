@@ -391,20 +391,23 @@ pub(crate) fn builtin_apply_slice(eval: &mut super::eval::Context, args: &[Value
     }
 
     let last = args[args.len() - 1];
-    let spread_len = proper_list_length_or_signal(last)?;
-    // GNU Fapply knows this count before copying (eval.c:2818-2828).
-    // SmallVec keeps up to eight arguments inline and allocates once for
-    // longer spreads, using the validation pass instead of reallocating.
-    let call_len = spread_len.saturating_add(args.len()).saturating_sub(2);
-    let mut call_args = LispArgVec::with_capacity(call_len);
-
-    if args.len() == 1 {
-        let mut cursor = last;
-        let func = match cursor.kind() {
+    // GNU Fapply measures the spread list with `list_length` before copying
+    // it (eval.c:2818-2828).  No Lisp runs between that pass and the copy, so
+    // copying while taking the same FOR_EACH_TAIL steps signals the same
+    // `circular-list` or `listp` condition, with the same data, before the
+    // function is called -- in one walk instead of two.
+    let mut cycle = super::cons_list::GnuTailCycle::new(last);
+    let mut call_args = LispArgVec::new();
+    let mut cursor = last;
+    let func = if args.len() == 1 {
+        match cursor.kind() {
             ValueKind::Nil => args[0],
             ValueKind::Cons => {
                 let func = cursor.cons_car();
                 cursor = cursor.cons_cdr();
+                if cursor.is_cons() {
+                    cycle.check(cursor)?;
+                }
                 func
             }
             _ => {
@@ -413,38 +416,25 @@ pub(crate) fn builtin_apply_slice(eval: &mut super::eval::Context, args: &[Value
                     vec![Value::symbol("listp"), last],
                 ));
             }
-        };
-        while cursor.is_cons() {
-            call_args.push(cursor.cons_car());
-            cursor = cursor.cons_cdr();
         }
-        if !cursor.is_nil() {
-            return Err(signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("listp"), cursor],
-            ));
-        }
-        eval.apply_from_lisp_funcall(func, call_args)
     } else {
         call_args.extend_from_slice(&args[1..args.len() - 1]);
-        let mut cursor = last;
-        loop {
-            match cursor.kind() {
-                ValueKind::Nil => break,
-                ValueKind::Cons => {
-                    call_args.push(cursor.cons_car());
-                    cursor = cursor.cons_cdr();
-                }
-                _ => {
-                    return Err(signal(
-                        LispCondition::WrongTypeArgument,
-                        vec![Value::symbol("listp"), cursor],
-                    ));
-                }
-            }
+        args[0]
+    };
+    while cursor.is_cons() {
+        call_args.push(cursor.cons_car());
+        cursor = cursor.cons_cdr();
+        if cursor.is_cons() {
+            cycle.check(cursor)?;
         }
-        eval.apply_from_lisp_funcall(args[0], call_args)
     }
+    if !cursor.is_nil() {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("listp"), cursor],
+        ));
+    }
+    eval.apply_from_lisp_funcall(func, call_args)
 }
 
 pub(crate) fn builtin_funcall_slice(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
