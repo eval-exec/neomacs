@@ -200,6 +200,8 @@ fn fade_edges(alpha: f32) {
                 TransitionEasing::Linear,
                 W,
                 HEIGHT,
+                Color::BLUE,
+                alpha,
             );
             let after = pixels(&h);
             let bg = px(&after, 70, 56);
@@ -265,6 +267,8 @@ fn dispatched_page_curl_keeps_ordered_source_over_occlusion() {
             TransitionEasing::Linear,
             W,
             HEIGHT,
+            Color::BLUE,
+            alpha,
         );
         let after = pixels(&h);
         // Old picture covers the new one, not a complementary replacement.

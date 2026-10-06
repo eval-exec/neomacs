@@ -370,6 +370,7 @@ fn snapshot(fractional: bool) {
         native.view(),
         W,
         H,
+        &root,
     );
     drop(native);
     child(&mut render, 0.5);

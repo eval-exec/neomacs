@@ -63,6 +63,56 @@ fn accepted_root_and_child_alpha_operations_survive_numeric_then_nil_without_lay
 }
 
 #[test]
+fn x_create_frame_returns_the_realized_frame_when_alpha_sync_fails() {
+    let mut ev = Context::new();
+    let buf = ev.buffers.create_buffer("*scratch*");
+    ev.buffers.set_current(buf);
+    ev.frames.create_frame("F1", 800, 600, buf);
+    let host = RecordingDisplayHost {
+        fail_alpha_sync: true,
+        ..RecordingDisplayHost::new()
+    };
+    let realized = host.realized.clone();
+    let operations = host.alpha_operations.clone();
+    ev.set_display_host(Box::new(host));
+    let result = ev.eval_str_each(
+        "(let ((frame (x-create-frame '((alpha . 50))))) (list (and (framep frame) t) (and (frame-live-p frame) t) (and (memq frame (frame-list)) t)))",
+    );
+    assert_eq!(format_eval_result(&result[0]), "OK (t t t)");
+    assert_eq!(realized.borrow().len(), 1);
+    assert_eq!(operations.borrow().len(), 1);
+}
+
+#[test]
+fn focus_redirect_sync_failure_keeps_frame_creation_and_restoration_effects() {
+    let mut ev = Context::new();
+    let buf = ev.buffers.create_buffer("*scratch*");
+    ev.buffers.set_current(buf);
+    ev.frames.create_frame("F1", 800, 600, buf);
+    let host = RecordingDisplayHost::new();
+    let fail_focus_sync = host.fail_focus_sync.clone();
+    fail_focus_sync.set(true);
+    ev.set_display_host(Box::new(host));
+    let created = ev.eval_str_each(
+        "(setq neomacs--test-frame (x-create-frame nil)) (and (frame-live-p neomacs--test-frame) t)",
+    );
+    assert_eq!(format_eval_result(&created[1]), "OK t");
+
+    let saved = ev.eval_str_each("(setq neomacs--test-config (current-window-configuration))");
+    assert!(saved[0].is_ok());
+    let before = ev.menu_bar_rebuild_generation();
+    let restored = ev.eval_str_each(
+        "(condition-case err (set-window-configuration neomacs--test-config) (error (car (cdr err))))",
+    );
+    assert_eq!(
+        format_eval_result(&restored[0]),
+        "OK \"focus channel closed\""
+    );
+    // The accepted restoration still requests its redisplay before signaling.
+    assert_ne!(ev.menu_bar_rebuild_generation(), before);
+}
+
+#[test]
 fn x_create_frame_resolves_alpha_defaults_and_explicit_nil() {
     for (parameter, value, explicit, expected, background) in [
         ("alpha", "50", "nil", [0.5, 0.5], 1.0),
@@ -274,6 +324,8 @@ fn active_minibuffer_window_tracks_live_minibuffer_state() {
 #[derive(Clone, Default)]
 struct RecordingDisplayHost {
     alpha_operations: Rc<RefCell<Vec<(crate::window::FrameId, [f32; 2], f32)>>>,
+    fail_alpha_sync: bool,
+    fail_focus_sync: Rc<Cell<bool>>,
     alpha_limits: Rc<RefCell<Vec<f32>>>,
     realized: Rc<RefCell<Vec<GuiFrameHostRequest>>>,
     resized: Rc<RefCell<Vec<GuiFrameHostRequest>>>,
@@ -360,6 +412,18 @@ impl DisplayHost for RecordingDisplayHost {
         self.alpha_operations
             .borrow_mut()
             .push((frame, pair, limit));
+        if self.fail_alpha_sync {
+            return Err("opacity channel closed".into());
+        }
+        Ok(())
+    }
+    fn set_gui_frame_focus_redirects(
+        &mut self,
+        _redirects: Vec<(crate::window::FrameId, Option<crate::window::FrameId>)>,
+    ) -> Result<(), String> {
+        if self.fail_focus_sync.get() {
+            return Err("focus channel closed".into());
+        }
         Ok(())
     }
     fn realize_gui_frame(&mut self, request: GuiFrameHostRequest) -> Result<(), String> {

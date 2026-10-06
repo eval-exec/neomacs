@@ -1703,6 +1703,7 @@ pub(crate) fn set_window_configuration_with_options(
         ));
     };
 
+    let mut focus_redirect_result = Ok(Value::NIL);
     let snapshot = WINDOW_CONFIGURATION_SNAPSHOTS.with(|slot| {
         slot.borrow()
             .get(&serial)
@@ -1875,7 +1876,9 @@ pub(crate) fn set_window_configuration_with_options(
         if let Some(frame_id) = frame_to_select {
             let _ = eval.frames.select_frame(frame_id);
         }
-        crate::emacs_core::frame::sync_gui_frame_focus_redirects(eval)?;
+        // The restored configuration is accepted; a host that cannot apply
+        // its focus redirects must not cancel the redisplay request below.
+        focus_redirect_result = crate::emacs_core::frame::sync_gui_frame_focus_redirects(eval);
     }
 
     // GNU `Fset_window_configuration` marks the frame for redisplay with
@@ -1889,6 +1892,7 @@ pub(crate) fn set_window_configuration_with_options(
     // owned by `redisplay_with_force`, where the live-vs-recorded frame state
     // is compared exactly once per natural redisplay cycle.
     eval.request_menu_bar_rebuild(super::eval::MenuBarRebuildReason::WindowsOrBuffersChanged);
+    focus_redirect_result?;
     Ok(Value::T)
 }
 

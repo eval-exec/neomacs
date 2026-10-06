@@ -142,6 +142,24 @@ fn render_frame_window_contents(
     }
 }
 
+fn composition_surface(
+    render: &mut GuiFrameRenderState,
+    surface_state: neomacs_display_protocol::SurfaceState,
+) -> Result<neomacs_display_protocol::DrawableSurface, FrameRenderFailure> {
+    // Native readiness precedes editor-content and scratch-admission checks.
+    render.set_surface_state(surface_state);
+    if matches!(
+        surface_state,
+        neomacs_display_protocol::SurfaceState::Suspended
+    ) {
+        return Err(FrameRenderFailure::WindowNotReady);
+    }
+    render
+        .present_mapping()
+        .map(|mapping| mapping.surface())
+        .ok_or(FrameRenderFailure::AwaitingContent)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_frame_window_contents_to_surface(
     renderer: &mut WgpuRenderer,
@@ -158,20 +176,16 @@ fn render_frame_window_contents_to_surface(
 ) -> Result<RenderedFrameSurface, FrameRenderFailure> {
     // Reserve interactive child composition before acquiring a swapchain,
     // sampling motion, publishing projections or consuming presentation hints.
-    if !matches!(window_state.lifecycle, FrameLifecycle::Active { .. }) {
+    let FrameLifecycle::Active { native, .. } = &window_state.lifecycle else {
         return Err(FrameRenderFailure::WindowNotReady);
-    }
+    };
+    let surface = composition_surface(&mut window_state.render, native.surface_state())?;
     let frame_has_theme_transition = window_state
         .render
         .pending_theme_change()
         .ok_or(FrameRenderFailure::AwaitingContent)?;
     let feature_plan =
         render_policy.plan_frame(frame_has_theme_transition, renderer.has_frame_post());
-    let surface = window_state
-        .render
-        .present_mapping()
-        .ok_or(FrameRenderFailure::AwaitingContent)?
-        .surface();
     let targets = composition_targets::prepare_frame_targets_for_scene(
         renderer,
         &mut window_state.render,
@@ -500,3 +514,7 @@ fn render_frame_window_contents_reserved(
         projection: pane_projection,
     })
 }
+
+#[cfg(test)]
+#[path = "tests/mod.rs"]
+mod tests;

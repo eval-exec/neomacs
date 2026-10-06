@@ -701,7 +701,7 @@ impl WgpuRenderer {
             });
 
         // Create image pipeline (similar to glyph but for RGBA textures)
-        let make_image_pipeline = |blend, entry_point| {
+        let make_image_pipeline_with = |blend, entry_point, depth_stencil| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("Image Pipeline"),
                 layout: Some(&image_pipeline_layout),
@@ -730,7 +730,7 @@ impl WgpuRenderer {
                     unclipped_depth: false,
                     conservative: false,
                 },
-                depth_stencil: None,
+                depth_stencil,
                 multisample: wgpu::MultisampleState {
                     count: 1,
                     mask: !0,
@@ -740,6 +740,8 @@ impl WgpuRenderer {
                 multiview_mask: None,
             })
         };
+        let make_image_pipeline =
+            |blend, entry_point| make_image_pipeline_with(blend, entry_point, None);
 
         let image_pipeline = make_image_pipeline(Some(wgpu::BlendState::ALPHA_BLENDING), "fs_main");
         let surface_copy_pipeline = make_image_pipeline(None, "fs_copy");
@@ -763,6 +765,14 @@ impl WgpuRenderer {
             dst_factor: wgpu::BlendFactor::One,
             operation: wgpu::BlendOperation::Add,
         };
+        let transition_background_add_pipeline = make_rect_pipeline(
+            "Transition Background Complement",
+            wgpu::BlendState {
+                color: additive_component,
+                alpha: additive_component,
+            },
+            None,
+        );
         let crossfade_add_pipeline = make_image_pipeline(
             Some(wgpu::BlendState {
                 color: additive_component,
@@ -883,6 +893,36 @@ impl WgpuRenderer {
             },
             bias: wgpu::DepthBiasState::default(),
         };
+
+        // Transition coverage: every rasterized picture fragment marks its
+        // pixel, then the frame background fills only unmarked pixels.
+        let transition_mark_face = wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::Always,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op: wgpu::StencilOperation::Replace,
+        };
+        let transition_composition_marked_pipeline = make_image_pipeline_with(
+            Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+            "fs_copy",
+            Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Stencil8,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: wgpu::StencilState {
+                    front: transition_mark_face,
+                    back: transition_mark_face,
+                    read_mask: 0xFF,
+                    write_mask: 0xFF,
+                },
+                bias: wgpu::DepthBiasState::default(),
+            }),
+        );
+        let transition_uncovered_background_pipeline = make_rect_pipeline(
+            "Transition Uncovered Background",
+            wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+            Some(stencil_read_state.clone()),
+        );
 
         let stencil_background_rect_pipeline = make_rect_pipeline(
             "Stencil background_rect",
@@ -1104,6 +1144,9 @@ impl WgpuRenderer {
             pipelines: Pipelines {
                 rect: rect_pipeline,
                 background_rect: background_rect_pipeline,
+                transition_background_add: transition_background_add_pipeline,
+                transition_composition_marked: transition_composition_marked_pipeline,
+                transition_uncovered_background: transition_uncovered_background_pipeline,
                 background_rounded_rect: background_rounded_rect_pipeline,
                 rounded_rect: rounded_rect_pipeline,
                 rounded_fill: rounded_fill_pipeline,

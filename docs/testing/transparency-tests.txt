@@ -13,7 +13,9 @@ cpu neovm-core emacs_core::reader::tests::read_from_minibuffer_swallows_exit_hoo
 cpu neovm-core emacs_core::reader::tests::shared_child_minibuffer_publishes_focus_on_entry_and_unwind
 cpu neovm-core emacs_core::window_cmds::tests::accepted_root_and_child_alpha_operations_survive_numeric_then_nil_without_layout
 cpu neovm-core emacs_core::window_cmds::tests::alpha_lower_limit_variable_projects_without_replaying_alpha_policy
+cpu neovm-core emacs_core::window_cmds::tests::focus_redirect_sync_failure_keeps_frame_creation_and_restoration_effects
 cpu neovm-core emacs_core::window_cmds::tests::x_create_frame_resolves_alpha_defaults_and_explicit_nil
+cpu neovm-core emacs_core::window_cmds::tests::x_create_frame_returns_the_realized_frame_when_alpha_sync_fails
 gpu neomacs-renderer-wgpu fade_edges_test::dispatched_fade_edges_preserves_fractional_complementary_pictures
 gpu neomacs-renderer-wgpu fade_edges_test::dispatched_fade_edges_preserves_opaque_complementary_pictures
 gpu neomacs-renderer-wgpu fade_edges_test::dispatched_page_curl_keeps_ordered_source_over_occlusion
@@ -29,6 +31,7 @@ gpu neomacs-renderer-wgpu opacity_test::dispatched_scale_zoom_preserves_overlap_
 gpu neomacs-renderer-wgpu opacity_test::mandatory_child_picture_refusal_is_typed_and_recovers_after_lease_release
 gpu neomacs-renderer-wgpu opacity_test::native_inset_clear_matches_completed_content_opacity
 gpu neomacs-renderer-wgpu opacity_test::pane_previous_patches_interpolate_complete_colored_pictures
+gpu neomacs-renderer-wgpu opacity_test::source_over_transitions_fill_uncovered_geometry_with_the_background
 gpu neomacs-renderer-wgpu opacity_test::transition_postprocess_preserves_alpha_and_color_modulation
 cpu neomacs-layout-engine output::builder::tests::bidi_restamps_terminals_from_visual_boxed_adjacency
 cpu neomacs-layout-engine output::builder::tests::buffer_mouse_face_is_derived_only_from_the_final_authoritative_row
@@ -140,6 +143,9 @@ gpu neomacs-display-runtime render_thread::render_pass::scene::tests::retained_o
 gpu neomacs-display-runtime render_thread::render_pass::scene::tests::retained_owner::stale_static_generation_and_census_retire_under_held_pressure
 gpu neomacs-display-runtime render_thread::render_pass::scene::tests::retained_owner::terminal_unique_pane_retires_without_surrendering_fractional_native
 gpu neomacs-display-runtime render_thread::render_pass::scene::tests::retained_owner::wrong_size_post_retires_under_held_pressure
+gpu neomacs-display-runtime render_thread::render_pass::tests::drawable_native_surface_refreshes_suspended_cached_mapping
+gpu neomacs-display-runtime render_thread::render_pass::tests::drawable_surface_without_editor_content_is_still_awaiting_content
+gpu neomacs-display-runtime render_thread::render_pass::tests::suspended_native_surface_is_window_not_ready_with_or_without_content
 gpu neomacs-display-runtime render_thread::transitions::tests::default_transition_state_has_expected_policy_defaults
 gpu neomacs-display-runtime render_thread::transitions::tests::default_transition_state_starts_without_active_transitions
 gpu neomacs-display-runtime render_thread::transitions::tests::frame_buffer_hint_plans_one_synchronized_group_for_each_viewport
@@ -165,6 +171,10 @@ gpu neomacs-renderer-wgpu renderer::snapshot_pool::tests::a_texture_the_render_t
 gpu neomacs-renderer-wgpu renderer::snapshot_pool::tests::the_pool_reclaims_before_it_decides_whether_a_lease_fits
 gpu neomacs-renderer-wgpu renderer::snapshot_pool::tests::the_pool_refuses_a_lease_that_would_cross_the_ceiling_rather_than_allocating_it
 gpu neomacs-renderer-wgpu renderer::transitions::tests::slide_offsets_follow_the_typed_axis_and_direction
+gpu neomacs-renderer-wgpu renderer::transitions::tests::card_flip_complement_never_fills_beneath_the_picture
+gpu neomacs-renderer-wgpu renderer::transitions::tests::full_size_endpoints_need_no_weighted_background
+gpu neomacs-renderer-wgpu renderer::transitions::tests::geometric_background_complements_preserve_weight_and_fractional_alpha
+gpu neomacs-renderer-wgpu renderer::transitions::tests::parallax_complements_fill_each_vacated_band_by_its_picture_weight
 cpu neomacs-display-runtime thread_comm::frame_opacity::tests::accepted_numeric_then_nil_survives_absent_and_replaced_scenes
 cpu neomacs-display-runtime thread_comm::frame_opacity::tests::lower_limit_changes_apply_at_focus_without_replaying_nil
 cpu neomacs-display-runtime thread_comm::frame_opacity::tests::nil_component_retains_last_scalar_not_previous_policy_component
@@ -174,5 +184,6 @@ cpu neomacs-display-runtime thread_comm::frame_opacity::tests::shared_child_read
 cpu neomacs-display-runtime thread_comm::frame_opacity::tests::unchanged_highlight_and_stale_focus_do_not_reapply_policy
 cpu neomacs-display-runtime thread_comm::tests::accepted_opacity_is_independent_of_superseded_visual_mailbox
 cpu neovm-core window::frame_alpha::tests::gnu_frame_alpha_components
+cpu neovm-core window::frame_alpha::tests::gnu_frame_alpha_lower_limit_keeps_x_set_frame_alpha_values
 cpu neovm-core window::frame_alpha::tests::gnu_frame_alpha_pair
 cpu neovm-core window::frame_alpha::tests::gnu_frame_alpha_raw_and_accepted_state_are_distinct

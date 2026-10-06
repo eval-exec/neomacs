@@ -15,7 +15,11 @@ For example:
 The compositor keeps completed pictures premultiplied. Background alpha applies
 to background layers, and frame/lifecycle opacity applies once to the completed
 picture. Complementary transition pictures add their weighted colors and alpha;
-ordered effects such as PageCurl still use source-over. Native output converts
+ordered effects such as PageCurl still use source-over. Where a transition's
+pictures leave part of its region uncovered, the frame background shows there
+at its own alpha. Source-over effects that fade a picture partway (Cascade,
+CylinderRoll, TypewriterReveal) still show that picture's covered pixels at
+its partial weight. Native output converts
 at the final boundary, including pane motion and uncovered child fill.
 
 Fractional child and pane pictures need scratch textures. Before mandatory

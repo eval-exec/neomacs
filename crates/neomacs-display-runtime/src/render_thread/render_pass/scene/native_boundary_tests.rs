@@ -299,6 +299,7 @@ fn dispatched_scale_zoom_strips_use_final_native_conversion_with_opaque_controls
                 destination,
                 W,
                 H,
+                &new_frame,
             );
             if let Some(native) = &native {
                 let placement =
@@ -317,15 +318,18 @@ fn dispatched_scale_zoom_strips_use_final_native_conversion_with_opaque_controls
                 "native ScaleZoom {background_alpha}/{whole_alpha} {millis}: strip {strip:?} overlap {overlap:?} outside {outside:?} conversion={}",
                 native.is_some()
             );
-            let weight = 0.75;
-            let expected_alpha =
-                (255.0_f32 * background_alpha * whole_alpha * weight).round() as u8;
+            // Missing geometric weight is the current (blue) background,
+            // not a transparent strip or a third layer under both snapshots.
+            let a = background_alpha * whole_alpha;
+            let expected_alpha = (255.0_f32 * a).round() as u8;
             assert!(strip[3].abs_diff(expected_alpha) <= 2);
-            let colored = if millis == 250 { strip[1] } else { strip[2] };
-            assert!(
-                colored.abs_diff(expected_alpha) <= 2,
-                "native encoded-premultiplied strip must store color=alpha, not encode(linear-premultiplied): {strip:?}"
-            );
+            let strip_color = if millis == 250 {
+                Color::new(0.0, 0.75, 0.25, 1.0).linear_to_srgb()
+            } else {
+                Color::BLUE
+            };
+            assert!(strip[1].abs_diff((255.0 * a * strip_color.g).round() as u8) <= 2);
+            assert!(strip[2].abs_diff((255.0 * a * strip_color.b).round() as u8) <= 2);
             assert!(strip[..3].iter().all(|c| *c <= strip[3].saturating_add(1)));
             let t = millis as f32 / 1000.0;
             let straight = Color::new(0.0, 1.0 - t, t, 1.0).linear_to_srgb();
