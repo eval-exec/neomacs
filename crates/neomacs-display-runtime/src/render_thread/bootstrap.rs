@@ -482,6 +482,120 @@ pub fn build_render_event_loop() -> Result<EventLoop, String> {
     build_render_event_loop_impl(false)
 }
 
+/// Build on the OS-main owner using the exact caller-selected Wayland socket.
+/// This path never consults ambient display/backend discovery.
+#[cfg(target_os = "linux")]
+pub fn build_render_event_loop_wayland(socket: &std::path::Path) -> Result<EventLoop, String> {
+    use std::os::unix::net::UnixStream;
+    let stream = UnixStream::connect(socket).map_err(|error| {
+        format!(
+            "Cannot connect to Wayland socket {}: {error}",
+            socket.display()
+        )
+    })?;
+    build_render_event_loop_wayland_stream(stream, socket)
+}
+
+/// The caller retains an owned socket duplicate for cancellation of the actual
+/// synchronous registry waits. Native construction remains on the caller.
+#[cfg(target_os = "linux")]
+pub fn build_render_event_loop_wayland_stream(
+    stream: std::os::unix::net::UnixStream,
+    socket: &std::path::Path,
+) -> Result<EventLoop, String> {
+    use winit::platform::wayland::WaylandConnection;
+    let connection = WaylandConnection::from_socket(stream).map_err(|error| {
+        format!(
+            "Cannot initialize Wayland socket {}: {error}",
+            socket.display()
+        )
+    })?;
+    let mut builder = EventLoop::builder();
+    builder.with_wayland_connection(connection);
+    builder
+        .build()
+        .map_err(|error| format!("Cannot open Wayland socket {}: {error}", socket.display()))
+}
+
+/// OS-main daemon root. Once constructed, the native singleton is never
+/// dropped merely because an attachment request or frame preparation failed.
+pub struct DaemonRenderRoot {
+    event_loop: EventLoop,
+    app: startup::StartingApp,
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl DaemonRenderRoot {
+    pub fn new(event_loop: EventLoop) -> Self {
+        let cancelled = Default::default();
+        Self {
+            event_loop,
+            app: startup::StartingApp::retained(),
+            cancelled,
+        }
+    }
+    pub fn event_loop(&self) -> &EventLoop {
+        &self.event_loop
+    }
+    pub fn proxy(&self) -> winit::event_loop::EventLoopProxy {
+        self.event_loop.create_proxy()
+    }
+    pub fn install(
+        &mut self,
+        comms: RenderComms,
+        initial: InitialWindowReceiver,
+        image_metadata: SharedImageRenderState,
+        shared_monitors: SharedMonitorInfo,
+        #[cfg(feature = "neo-term")] shared_terminals: crate::terminal::SharedTerminals,
+    ) {
+        let mut app = RenderApp::new(
+            comms,
+            0,
+            0,
+            "Neomacs".into(),
+            image_metadata,
+            shared_monitors,
+            false,
+            #[cfg(feature = "neo-term")]
+            shared_terminals,
+        );
+        app.gpu_startup_cancelled = self.cancelled.clone();
+        let proxy = self.event_loop.create_proxy();
+        match super::frame_preparation::FramePreparation::spawn(
+            app.comms.frame_rx.clone(),
+            move || proxy.wake_up(),
+        ) {
+            Ok(worker) => app.frame_preparation = Some(worker),
+            Err(error) => tracing::warn!(%error, "frame preparation worker unavailable"),
+        }
+        #[cfg(feature = "video")]
+        {
+            let proxy = self.event_loop.create_proxy();
+            app.video_wake = neomacs_video::VideoWake::new(move || proxy.wake_up());
+        }
+        #[cfg(feature = "webview")]
+        {
+            let proxy = self.event_loop.create_proxy();
+            app.webview_wake = neomacs_webview::WebViewWake::new(move || proxy.wake_up());
+        }
+        self.app.install(initial, app);
+    }
+    pub fn pump(&mut self) -> bool {
+        use winit::event_loop::pump_events::{EventLoopExtPumpEvents, PumpStatus};
+        matches!(
+            self.event_loop.pump_app_events(None, &mut self.app),
+            PumpStatus::Continue
+        )
+    }
+    /// Retire exact attachment resources before root acknowledgement/re-exec.
+    pub fn retire(&mut self) {
+        self.app.retire();
+    }
+    pub fn bypass_finalizers(&self) -> bool {
+        self.cancelled.load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+
 /// Build a render event loop for the legacy render-thread helper.
 pub(crate) fn build_render_event_loop_any_thread() -> Result<EventLoop, String> {
     build_render_event_loop_impl(true)

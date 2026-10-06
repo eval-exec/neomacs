@@ -21,9 +21,19 @@ pub struct DisplayIdentityResolver {
 enum WaylandConnectionName {
     InheritedSocket,
     Environment(Option<String>),
+    Explicit(String),
 }
 
 impl DisplayIdentityResolver {
+    /// Provenance for the socket passed to the explicit Wayland constructor.
+    /// `resolve` still checks the opened native display handle, not the request.
+    pub fn explicit_wayland(name: String) -> Self {
+        Self {
+            wayland: WaylandConnectionName::Explicit(name),
+            x11: None,
+        }
+    }
+
     pub fn capture_environment() -> Self {
         Self {
             wayland: if std::env::var_os("WAYLAND_SOCKET").is_some() {
@@ -56,6 +66,7 @@ impl DisplayIdentityResolver {
             GraphicalBackend::Wayland => match self.wayland {
                 WaylandConnectionName::InheritedSocket => None,
                 WaylandConnectionName::Environment(name) => name,
+                WaylandConnectionName::Explicit(name) => Some(name),
             },
             GraphicalBackend::X11 => self.x11,
             GraphicalBackend::Cocoa => Some(system_name.to_owned()),
