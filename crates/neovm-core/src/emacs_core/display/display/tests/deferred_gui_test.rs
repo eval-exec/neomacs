@@ -148,11 +148,12 @@ fn deferred_gui_delete_recreate_retains_separate_initial_terminal() {
     eval.eval_str("(setq owned-terminal (frame-terminal owned-frame))")
         .unwrap();
     eval.eval_str("(delete-frame owned-frame t)").unwrap();
-    assert!(
-        eval.eval_str("(terminal-live-p owned-terminal)")
-            .unwrap()
-            .is_truthy(),
-        "the native connection must retain its terminal after its last frame closes"
+    eval.set_variable("initial-frame", initial);
+    eval.eval_str("(select-frame initial-frame)").unwrap();
+    assert_eq!(
+        eval.eval_str("(terminal-live-p owned-terminal)").unwrap(),
+        Value::symbol("neo"),
+        "the native connection must retain its type after its last frame closes"
     );
     assert!(eval.shutdown_request().is_none());
     assert!(
@@ -188,6 +189,114 @@ fn deferred_gui_delete_recreate_retains_separate_initial_terminal() {
             .unwrap()
             .is_truthy()
     );
+}
+
+#[test]
+fn deferred_gui_explicit_terminal_deletion_is_rejected_before_hooks() {
+    reset_terminal_thread_locals();
+    let mut eval = Context::new();
+    eval.eval_str("(selected-frame)").unwrap();
+    let host = deferred_host(false);
+    let native_frames = host.native_frames.clone();
+    eval.set_display_host(Box::new(host));
+    let frame = eval.eval_str("(x-create-frame nil)").unwrap();
+    eval.set_variable("owned-frame", frame);
+    eval.eval_str(
+        "(setq owned-terminal (frame-terminal owned-frame) deletion-hooks nil)
+         (select-frame owned-frame)
+         (setq delete-terminal-functions
+               (list (lambda (term) (setq deletion-hooks t) (delete-terminal term t)))
+               delete-frame-functions
+               (list (lambda (_frame) (setq deletion-hooks t))))",
+    )
+    .unwrap();
+    // Another active terminal allows the unforced deletion past its usual
+    // sole-terminal check; the retained graphical owner must still reject it.
+    crate::emacs_core::terminal::pure::ensure_terminal_runtime_owner(
+        99,
+        "other-active-tty",
+        crate::emacs_core::terminal::pure::TerminalRuntimeConfig::interactive(
+            None,
+            neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(8),
+        ),
+    );
+    let before = eval.frames.frame_list();
+    let selected = eval.frames.selected_frame().unwrap().id;
+    let native_before = native_frames.borrow().clone();
+    for expression in [
+        "(delete-terminal owned-terminal t)",
+        "(delete-terminal owned-frame t)",
+        "(delete-terminal nil t)",
+        "(delete-terminal owned-terminal)",
+    ] {
+        let error = eval.eval_str(expression).unwrap_err();
+        match error {
+            crate::emacs_core::error::EvalError::Signal { data, .. } => assert_eq!(
+                data,
+                vec![Value::string(
+                    "Deleting a retained graphical display terminal is not supported",
+                )],
+                "{expression}"
+            ),
+            other => panic!("expected deletion rejection, got {other:?}"),
+        }
+        eval.flush_pending_safe_funcalls();
+        assert_eq!(eval.frames.frame_list(), before);
+        assert_eq!(eval.frames.selected_frame().unwrap().id, selected);
+        assert_eq!(*native_frames.borrow(), native_before);
+        assert!(eval.eval_str("deletion-hooks").unwrap().is_nil());
+        assert!(
+            eval.eval_str("(terminal-live-p owned-terminal)")
+                .unwrap()
+                .is_truthy()
+        );
+    }
+    eval.eval_str("(delete-frame owned-frame t)").unwrap();
+    eval.eval_str("(setq deletion-hooks nil)").unwrap();
+    assert!(eval.eval_str("(delete-terminal owned-terminal t)").is_err());
+    eval.flush_pending_safe_funcalls();
+    assert!(eval.eval_str("deletion-hooks").unwrap().is_nil());
+    let recreated = eval.eval_str("(x-create-frame nil)").unwrap();
+    eval.set_variable("recreated", recreated);
+    assert!(
+        eval.eval_str(
+            "(and (eq (frame-terminal recreated) owned-terminal) (terminal-live-p owned-terminal))"
+        )
+        .unwrap()
+        .is_truthy()
+    );
+    assert!(eval.shutdown_request().is_none());
+}
+
+#[test]
+fn deferred_gui_retained_terminal_does_not_block_noelisp_or_other_terminal_cleanup() {
+    reset_terminal_thread_locals();
+    let mut eval = Context::new();
+    let initial = eval.eval_str("(selected-frame)").unwrap();
+    let initial_terminal = builtin_frame_terminal(&mut eval, vec![initial]).unwrap();
+    let host = deferred_host(false);
+    let terminal = host.terminal;
+    let native_frames = host.native_frames.clone();
+    eval.set_display_host(Box::new(host));
+    let frame = eval.eval_str("(x-create-frame nil)").unwrap();
+    // Display-host presence must not prohibit deletion of a different owner.
+    crate::emacs_core::terminal::pure::builtin_delete_terminal(
+        &mut eval,
+        vec![initial_terminal, Value::T],
+    )
+    .unwrap();
+    assert!(
+        eval.frames
+            .get(crate::window::FrameId(frame.as_frame_id().unwrap()))
+            .is_some()
+    );
+    eval.eval_str("(setq cleanup-hook nil delete-terminal-functions (list (lambda (_terminal) (setq cleanup-hook t))))").unwrap();
+    crate::emacs_core::terminal::pure::delete_terminal_noelisp_owned(&mut eval, terminal).unwrap();
+    assert!(eval.frames.frame_list().is_empty());
+    assert!(native_frames.borrow().is_empty());
+    assert!(eval.eval_str("cleanup-hook").unwrap().is_nil());
+    eval.flush_pending_safe_funcalls();
+    assert!(eval.eval_str("cleanup-hook").unwrap().is_truthy());
 }
 
 #[test]

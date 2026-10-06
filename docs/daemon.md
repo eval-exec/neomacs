@@ -167,7 +167,11 @@ startup locks are rejected.
 - On Linux a display-free daemon can later attach native frames to one explicitly
   selected Wayland socket. Lisp `make-frame` and native/GNU client `-c -d SOCKET`
   use the original evaluator and an OS-main-owned native loop. Deleting the last
-  graphical frame retains that connection and evaluator for recreation. Explicit
+  graphical frame retains that connection and evaluator for recreation. Unlike
+  GNU Emacs, explicit `delete-terminal` on this retained graphical connection is
+  rejected, even with FORCE, before hooks or frame/terminal changes: independent
+  connection retirement/reconnection is not supported. Ordinary frame deletion,
+  TTY terminal deletion and daemon shutdown remain available. Explicit
   X11 and multiple independent display connections are rejected. Native attach
   and frame readiness have a 15-second budget. If cancellation interrupts a
   synchronous Wayland registry/configure wait, the exact owned connection is
