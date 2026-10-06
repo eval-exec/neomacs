@@ -3120,19 +3120,21 @@ static_assertions::assert_impl_all!(FormatResultStorage: Send, Sync);
 impl FormatResultStorage {
     #[inline(always)]
     fn new(
-        bytes: Vec<u8>,
+        mut bytes: Vec<u8>,
         encoding: FormatStringEncoding,
     ) -> Result<Self, crate::emacs_core::alloc::AllocationFailure> {
         // Capacity inside GNU's byte domain proves the final length bound;
         // a spare byte also proves that LispString's terminator cannot grow.
         // Unibyte canonical bytes need normalization unless they are ASCII.
-        if bytes.capacity() <= Value::MOST_POSITIVE_FIXNUM as usize
+        if !(bytes.capacity() <= Value::MOST_POSITIVE_FIXNUM as usize
             && bytes.len() < bytes.capacity()
-            && (matches!(encoding, FormatStringEncoding::Multibyte) || bytes.is_ascii())
+            && (matches!(encoding, FormatStringEncoding::Multibyte) || bytes.is_ascii()))
         {
-            return Ok(Self::validated(bytes, encoding));
+            Self::prepare_cold(&mut bytes, encoding)?;
         }
-        Self::prepare_cold(bytes, encoding)
+        // Keep the Vec owned here across both preflight paths, and construct
+        // the validated witness only after all fallible preparation succeeds.
+        Ok(Self::validated(bytes, encoding))
     }
 
     #[inline(always)]
@@ -3146,11 +3148,11 @@ impl FormatResultStorage {
     #[cold]
     #[inline(never)]
     fn prepare_cold(
-        mut bytes: Vec<u8>,
+        bytes: &mut Vec<u8>,
         encoding: FormatStringEncoding,
-    ) -> Result<Self, crate::emacs_core::alloc::AllocationFailure> {
+    ) -> Result<(), crate::emacs_core::alloc::AllocationFailure> {
         if matches!(encoding, FormatStringEncoding::Unibyte) && !bytes.is_ascii() {
-            bytes = emacs_bytes_to_unibyte(bytes);
+            *bytes = emacs_bytes_to_unibyte(std::mem::take(bytes));
         }
         FormatOutputBytes::try_from(bytes.len())?;
         // The terminator consumes Rust storage, not a GNU output byte.
@@ -3160,7 +3162,7 @@ impl FormatResultStorage {
             .ok_or_else(crate::emacs_core::error::memory_exhausted_error)?;
         FormatStorageBytes::try_from(storage)?;
         bytes.try_reserve(1)?;
-        Ok(Self::validated(bytes, encoding))
+        Ok(())
     }
 }
 
