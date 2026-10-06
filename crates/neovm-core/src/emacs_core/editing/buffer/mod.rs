@@ -1108,31 +1108,56 @@ fn resolve_lisp_range_with_buffer_defaults(
     Ok((LispCharPos1::new(start), LispCharPos1::new(end)))
 }
 
+/// A call-local argument policy; it holds no shared or mutator state.
+#[derive(Clone, Copy, Debug)]
+enum BufferDesignatorDefault {
+    Current,
+    Required,
+}
+
 pub(crate) fn resolve_buffer_designator_allow_nil_current_in_manager(
     buffers: &BufferManager,
     arg: &Value,
 ) -> Result<Option<BufferId>, Flow> {
+    resolve_buffer_designator_in_manager(buffers, arg, BufferDesignatorDefault::Current).map(Some)
+}
+
+fn resolve_buffer_designator_in_manager(
+    buffers: &BufferManager,
+    arg: &Value,
+    default: BufferDesignatorDefault,
+) -> Result<BufferId, Flow> {
     match arg.kind() {
-        ValueKind::Nil => buffers
-            .current_buffer()
-            .map(|buf| Some(buf.id))
-            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")])),
+        ValueKind::Nil => match default {
+            BufferDesignatorDefault::Current => {
+                buffers.current_buffer().map(|buf| buf.id).ok_or_else(|| {
+                    signal(
+                        LispCondition::Error,
+                        vec![Value::string("No current buffer")],
+                    )
+                })
+            }
+            BufferDesignatorDefault::Required => Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("stringp"), *arg],
+            )),
+        },
         ValueKind::Veclike(VecLikeType::Buffer) => {
             let id = arg.as_buffer_id().unwrap();
             if buffers.get(id).is_some() {
-                Ok(Some(id))
+                Ok(id)
             } else {
                 Err(signal(
-                    "error",
+                    LispCondition::Error,
                     vec![Value::string("Selecting deleted buffer")],
                 ))
             }
         }
         ValueKind::String => {
             let name = expect_buffer_name_string(arg)?;
-            buffers.find_buffer_by_name(&name).map(Some).ok_or_else(|| {
+            buffers.find_buffer_by_name(&name).ok_or_else(|| {
                 signal(
-                    "error",
+                    LispCondition::Error,
                     vec![Value::string(format!("No buffer named {name}"))],
                 )
             })
@@ -1437,8 +1462,12 @@ pub(crate) fn builtin_insert_buffer_substring(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("insert-buffer-substring", &args, 1, 3)?;
-    let buffer_id =
-        resolve_buffer_designator_allow_nil_current_in_manager(&eval.buffers, &args[0])?;
+    // GNU editfns.c:1728 resolves a required BUFFER through get-buffer.
+    let buffer_id = Some(resolve_buffer_designator_in_manager(
+        &eval.buffers,
+        &args[0],
+        BufferDesignatorDefault::Required,
+    )?);
     let (default_start, default_end) = buffer_id
         .and_then(|id| {
             eval.buffers.get(id).map(|buf| {

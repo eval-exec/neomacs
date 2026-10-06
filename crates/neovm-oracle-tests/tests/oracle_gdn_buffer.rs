@@ -27,6 +27,14 @@ fn oracle_gdn_buf15() {
 }
 
 #[test]
+fn oracle_gdn_buf16() {
+    common::assert_oracle_parity_expect(
+        r#"(with-temp-buffer (insert "abc") (list (insert-buffer-substring nil 1 2) (buffer-string)))"#,
+        expect_test::expect![[r#""ERR (wrong-type-argument stringp nil)""#]],
+    );
+}
+
+#[test]
 fn oracle_gdn_buf18() {
     common::assert_oracle_parity_expect(
         r#"(with-temp-buffer (insert "abé") (subst-char-in-region 1 4 ?a ?é))"#,
