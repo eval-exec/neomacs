@@ -55,3 +55,26 @@ fn gdn_equal_car_cycles() {
                             (setcar x x) (setcar y y) (equal x y))))"#;
     common::assert_oracle_parity_expect(form, expect_test::expect![[r#""OK (t nil t t t nil)""#]]);
 }
+
+#[test]
+fn gdn_equal_depth_errors_propagate() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"(let ((x 0) (y 0))
+                    (dotimes (_ 300) (setq x (list x) y (list y)))
+                    (mapcar (lambda (thunk) (condition-case e (funcall thunk) (error e)))
+                            (list (lambda () (member x (list y)))
+                                  (lambda () (length (delete x (list y))))
+                                  (lambda () (assoc x (list (cons y 1))))
+                                  (lambda () (rassoc x (list (cons 1 y))))
+                                  (lambda () (length (remove x (list y))))
+                                  (lambda () (length (delete x (vector y))))
+                                  (lambda () (length (delete-dups (list x y))))
+                                  (lambda () (funcall (byte-compile (lambda (a b) (member a b))) x (list y)))
+                                  (lambda () (funcall (byte-compile (lambda (a b) (assoc a b))) x (list (cons y 1)))))))"#;
+    common::assert_oracle_parity_expect(
+        form,
+        expect_test::expect![[
+            r#""OK ((error \"Stack overflow in equal\") (error \"Stack overflow in equal\") (error \"Stack overflow in equal\") (error \"Stack overflow in equal\") (error \"Stack overflow in equal\") (error \"Stack overflow in equal\") (error \"Stack overflow in equal\") (error \"Stack overflow in equal\") (error \"Stack overflow in equal\"))""#
+        ]],
+    );
+}

@@ -150,7 +150,14 @@ fn builtin_rassoc_with_symbols(args: Vec<Value>, symbols_with_pos_enabled: bool)
     let mut cycle = crate::emacs_core::builtins::GnuTailCycle::new(alist);
     while cursor.is_cons() {
         let pair = cursor.cons_car();
-        if pair.is_cons() && equal_value_swp(&pair.cons_cdr(), &key, 0, symbols_with_pos_enabled) {
+        if pair.is_cons()
+            && crate::emacs_core::value::try_equal_value_swp(
+                &pair.cons_cdr(),
+                &key,
+                0,
+                symbols_with_pos_enabled,
+            )?
+        {
             return Ok(pair);
         }
         cursor = cursor.cons_cdr();

@@ -1284,7 +1284,12 @@ fn builtin_member_values_scan<const OBSERVED: bool>(
     }
     for_each_proper_list_tail_scan::<OBSERVED, _>(list, list, |tail| {
         let pair_car = scan_car::<OBSERVED>(tail);
-        if equal_value_swp(&target, &pair_car, 0, symbols_with_pos_enabled) {
+        if crate::emacs_core::value::try_equal_value_swp(
+            &target,
+            &pair_car,
+            0,
+            symbols_with_pos_enabled,
+        )? {
             Ok(Some(tail))
         } else {
             Ok(None)
@@ -1555,7 +1560,12 @@ fn assoc_values_scan<const OBSERVED: bool>(
         if pair_car.is_cons() {
             let entry_key = scan_car::<OBSERVED>(pair_car);
             if entry_key.bits() == key.bits()
-                || equal_value_swp(&key, &entry_key, 0, symbols_with_pos_enabled)
+                || crate::emacs_core::value::try_equal_value_swp(
+                    &key,
+                    &entry_key,
+                    0,
+                    symbols_with_pos_enabled,
+                )?
             {
                 return Ok(Some(pair_car));
             }
@@ -1627,7 +1637,12 @@ pub(crate) fn builtin_assoc_slice(eval: &mut super::eval::Context, args: &[Value
             let pair_car = tail.cons_car();
             if let ValueKind::Cons = pair_car.kind() {
                 let entry_key = pair_car.cons_car();
-                if equal_value_swp(key, &entry_key, 0, eval.symbols_with_pos_enabled) {
+                if crate::emacs_core::value::try_equal_value_swp(
+                    key,
+                    &entry_key,
+                    0,
+                    eval.symbols_with_pos_enabled,
+                )? {
                     return Ok(Some(pair_car));
                 }
             }
@@ -1977,15 +1992,20 @@ fn builtin_delete_with_symbols(args: Vec<Value>, symbols_with_pos_enabled: bool)
     let elt = &args[0];
     match args[1].kind() {
         ValueKind::Nil => Ok(Value::NIL),
-        ValueKind::Cons => delete_from_list_in_place(&args[1], |item| {
-            equal_value_swp(elt, item, 0, symbols_with_pos_enabled)
+        ValueKind::Cons => delete_from_list_in_place_result(&args[1], |item| {
+            crate::emacs_core::value::try_equal_value_swp(elt, item, 0, symbols_with_pos_enabled)
         }),
         ValueKind::Veclike(VecLikeType::Vector) => {
             let items = args[1].as_vector_data().unwrap().clone();
             let mut changed = false;
             let mut kept = Vec::with_capacity(items.len());
             for item in items.iter() {
-                if equal_value_swp(elt, item, 0, symbols_with_pos_enabled) {
+                if crate::emacs_core::value::try_equal_value_swp(
+                    elt,
+                    item,
+                    0,
+                    symbols_with_pos_enabled,
+                )? {
                     changed = true;
                 } else {
                     kept.push(*item);

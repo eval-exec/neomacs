@@ -48,3 +48,24 @@ fn gdn_equal_car_cycle_terminates() {
         false
     );
 }
+
+#[test]
+fn gdn_sequence_equal_depth_error_is_not_false() {
+    let mut a = Value::fixnum(0);
+    let mut b = Value::fixnum(0);
+    for _ in 0..300 {
+        a = Value::list(vec![a]);
+        b = Value::list(vec![b]);
+    }
+    assert!(builtin_member_values(a, Value::list(vec![b]), false).is_err());
+    assert!(
+        assoc_values(
+            a,
+            Value::list(vec![Value::cons(b, Value::fixnum(1))]),
+            false
+        )
+        .is_err()
+    );
+    assert!(builtin_delete_with_symbols(vec![a, Value::list(vec![b])], false).is_err());
+    assert!(builtin_delete_with_symbols(vec![a, Value::vector(vec![b])], false).is_err());
+}
