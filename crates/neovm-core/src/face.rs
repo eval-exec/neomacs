@@ -17,6 +17,7 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::collections::HashMap;
 use strum::{EnumString, IntoStaticStr};
 
+mod dump_codes;
 mod remapping;
 pub use remapping::{FaceRemapEntry, FaceRemapping};
 
@@ -634,70 +635,15 @@ impl FontWeight {
     }
 
     pub fn from_dump_code(code: u16) -> Self {
-        match code {
-            100 => Self::Thin,
-            101 => Self::UltraLight,
-            102 => Self::Ultralight,
-            200 => Self::ExtraLight,
-            201 => Self::Extralight,
-            300 => Self::Light,
-            350 => Self::SemiLight,
-            351 => Self::Semilight,
-            352 => Self::Demilight,
-            401 => Self::Regular,
-            400 => Self::Normal,
-            402 => Self::Unspecified,
-            403 => Self::Book,
-            500 => Self::Medium,
-            600 => Self::SemiBold,
-            601 => Self::Semibold,
-            602 => Self::Demibold,
-            603 => Self::DemiBold,
-            604 => Self::Demi,
-            700 => Self::Bold,
-            800 => Self::ExtraBold,
-            801 => Self::Extrabold,
-            802 => Self::UltraBold,
-            803 => Self::Ultrabold,
-            900 => Self::Black,
-            901 => Self::Heavy,
-            950 => Self::UltraHeavy,
-            951 => Self::Ultraheavy,
-            other => Self::from_css_weight(other),
+        // Preserve the legacy CSS-weight fallback for unrecognized alias codes.
+        match dump_codes::FontWeightDumpCode::try_from(code) {
+            Ok(code) => code.into(),
+            Err(_) => Self::from_css_weight(code),
         }
     }
 
     pub fn dump_code(self) -> u16 {
-        match self {
-            Self::Thin => 100,
-            Self::UltraLight => 101,
-            Self::Ultralight => 102,
-            Self::ExtraLight => 200,
-            Self::Extralight => 201,
-            Self::Light => 300,
-            Self::SemiLight => 350,
-            Self::Semilight => 351,
-            Self::Demilight => 352,
-            Self::Regular => 401,
-            Self::Normal => 400,
-            Self::Unspecified => 402,
-            Self::Book => 403,
-            Self::Medium => 500,
-            Self::SemiBold => 600,
-            Self::Semibold => 601,
-            Self::Demibold => 602,
-            Self::DemiBold => 603,
-            Self::Demi => 604,
-            Self::Bold => 700,
-            Self::ExtraBold => 800,
-            Self::Extrabold => 801,
-            Self::UltraBold => 802,
-            Self::Ultrabold => 803,
-            Self::Black => 900,
-            Self::Heavy => 901,
-            Self::UltraHeavy => 950,
-            Self::Ultraheavy => 951,
-        }
+        u16::from(dump_codes::FontWeightDumpCode::from(self))
     }
 
     pub fn gnu_numeric(self) -> u16 {
