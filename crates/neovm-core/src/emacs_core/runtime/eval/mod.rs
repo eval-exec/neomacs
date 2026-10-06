@@ -3300,7 +3300,9 @@ pub struct Context {
     pub(crate) command_loop: crate::keyboard::CommandLoop,
     /// Input event receiver from the display/render thread.
     /// `None` in batch mode (tests, non-interactive evaluation).
-    /// When `Some`, `read_char()` blocks on this channel for interactive input.
+    /// When `Some`, `read_char()` drains this queue but normally blocks on the
+    /// unified process/input poller. Producers must enqueue first, then call
+    /// [`Context::wait_notifier`]'s notifier so input cannot miss that wait.
     pub input_rx: Option<crossbeam_channel::Receiver<crate::keyboard::InputEvent>>,
     /// Tasks queued from other threads (e.g. the diagnostics server) to run on
     /// the Lisp thread at a safe point. Drained in the `read_char` loop.
