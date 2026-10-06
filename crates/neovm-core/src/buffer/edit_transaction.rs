@@ -277,11 +277,11 @@ impl CasifyExpansion {
         })
     }
 
-    pub(in crate::buffer) fn source_pos(self) -> CharPos0 {
+    pub(crate) fn source_pos(self) -> CharPos0 {
         self.source
     }
 
-    pub(in crate::buffer) fn growth(self) -> CharLen {
+    pub(crate) fn growth(self) -> CharLen {
         // Construction proves that the replacement contains at least two
         // characters for the single source character.
         CharLen::new(self.replacement_len.get() - 1)

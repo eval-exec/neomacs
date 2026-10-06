@@ -940,3 +940,506 @@ fn saved_excursion_skips_killed_saved_buffer() {
     );
     tse_excursion_window_oracle_case(&form, "OK (nil nil 7 t t 1 t)");
 }
+
+#[test]
+fn compat_casing_hook_mutations_keep_gnu_live_source_and_full_state() {
+    if !oracle_enabled() {
+        return;
+    }
+    let cases = [
+        (
+            "upcase-region-none",
+            r###"(with-temp-buffer
+ (insert "abé€𝄞def")
+ (dotimes (i 8) (put-text-property (1+ i) (+ i 2) 'tse-index (1+ i)))
+ (goto-char 2) (buffer-enable-undo) (setq buffer-undo-list nil)
+ (let ((calls nil) (ran nil)
+       (markers (list (copy-marker 1) (copy-marker 2) (copy-marker 5 t) (copy-marker 9)))
+       (overlay (make-overlay 2 5)))
+  nil
+  (add-hook 'after-change-functions
+   (lambda (beg end old) (push (list 'after beg end old) calls)) nil t)
+  (let* ((result (condition-case err (upcase-region 2 5) (error err)))
+         (text (buffer-string)) (chars (string-to-list text)))
+   (list result chars (multibyte-string-p text) (string-bytes text)
+         (equal text (apply #'string chars)) (point) (point-min) (point-max)
+         (let ((i 0) props) (while (< i (length text))
+          (push (get-text-property i 'tse-index text) props) (setq i (1+ i))) (nreverse props))
+         (mapcar #'marker-position markers) (list (overlay-start overlay) (overlay-end overlay))
+         (mapcar (lambda (entry)
+          (if (and (consp entry) (stringp (car entry)))
+           (cons (list (multibyte-string-p (car entry)) (string-to-list (car entry))
+             (let ((i 0) props) (while (< i (length (car entry)))
+              (push (get-text-property i 'tse-index (car entry)) props) (setq i (1+ i))) (nreverse props))) (cdr entry))
+           (if (and (consp entry) (markerp (car entry)))
+             (cons (list 'undo-marker (marker-position (car entry))
+                         (marker-insertion-type (car entry))) (cdr entry))
+             entry))) buffer-undo-list)
+         (nreverse calls)))))"###,
+            r###"OK (nil (97 66 201 8364 119070 100 101 102) t 14 t 2 1 9 (1 2 3 4 5 6 7 8) (1 2 5 9) (2 5) ((2 . 5) ((t (98 233 8364) (2 3 4)) . 2)) ((after 2 4 2)))"###,
+        ),
+        (
+            "upcase-region-prefix",
+            r###"(with-temp-buffer
+ (insert "abé€𝄞def")
+ (dotimes (i 8) (put-text-property (1+ i) (+ i 2) 'tse-index (1+ i)))
+ (goto-char 2) (buffer-enable-undo) (setq buffer-undo-list nil)
+ (let ((calls nil) (ran nil)
+       (markers (list (copy-marker 1) (copy-marker 2) (copy-marker 5 t) (copy-marker 9)))
+       (overlay (make-overlay 2 5)))
+  (add-hook 'before-change-functions (lambda (beg end) (push (list 'before beg end) calls) (unless ran (setq ran t) (goto-char 1) (insert "xx"))) nil t)
+  (add-hook 'after-change-functions
+   (lambda (beg end old) (push (list 'after beg end old) calls)) nil t)
+  (let* ((result (condition-case err (upcase-region 2 5) (error err)))
+         (text (buffer-string)) (chars (string-to-list text)))
+   (list result chars (multibyte-string-p text) (string-bytes text)
+         (equal text (apply #'string chars)) (point) (point-min) (point-max)
+         (let ((i 0) props) (while (< i (length text))
+          (push (get-text-property i 'tse-index text) props) (setq i (1+ i))) (nreverse props))
+         (mapcar #'marker-position markers) (list (overlay-start overlay) (overlay-end overlay))
+         (mapcar (lambda (entry)
+          (if (and (consp entry) (stringp (car entry)))
+           (cons (list (multibyte-string-p (car entry)) (string-to-list (car entry))
+             (let ((i 0) props) (while (< i (length (car entry)))
+              (push (get-text-property i 'tse-index (car entry)) props) (setq i (1+ i))) (nreverse props))) (cdr entry))
+           (if (and (consp entry) (markerp (car entry)))
+             (cons (list 'undo-marker (marker-position (car entry))
+                         (marker-insertion-type (car entry))) (cdr entry))
+             entry))) buffer-undo-list)
+         (nreverse calls)))))"###,
+            r###"OK (nil (120 88 65 66 233 8364 119070 100 101 102) t 16 t 3 1 11 (nil nil 1 2 3 4 5 6 7 8) (1 4 7 11) (4 7) ((2 . 5) ((t (120 97 98) (nil 1 2)) . 2) (1 . 3)) ((before 2 5) (after 2 5 3)))"###,
+        ),
+        (
+            "downcase-region-none",
+            r###"(with-temp-buffer
+ (insert "abé€𝄞def")
+ (dotimes (i 8) (put-text-property (1+ i) (+ i 2) 'tse-index (1+ i)))
+ (goto-char 2) (buffer-enable-undo) (setq buffer-undo-list nil)
+ (let ((calls nil) (ran nil)
+       (markers (list (copy-marker 1) (copy-marker 2) (copy-marker 5 t) (copy-marker 9)))
+       (overlay (make-overlay 2 5)))
+  nil
+  (add-hook 'after-change-functions
+   (lambda (beg end old) (push (list 'after beg end old) calls)) nil t)
+  (let* ((result (condition-case err (downcase-region 2 5) (error err)))
+         (text (buffer-string)) (chars (string-to-list text)))
+   (list result chars (multibyte-string-p text) (string-bytes text)
+         (equal text (apply #'string chars)) (point) (point-min) (point-max)
+         (let ((i 0) props) (while (< i (length text))
+          (push (get-text-property i 'tse-index text) props) (setq i (1+ i))) (nreverse props))
+         (mapcar #'marker-position markers) (list (overlay-start overlay) (overlay-end overlay))
+         (mapcar (lambda (entry)
+          (if (and (consp entry) (stringp (car entry)))
+           (cons (list (multibyte-string-p (car entry)) (string-to-list (car entry))
+             (let ((i 0) props) (while (< i (length (car entry)))
+              (push (get-text-property i 'tse-index (car entry)) props) (setq i (1+ i))) (nreverse props))) (cdr entry))
+           (if (and (consp entry) (markerp (car entry)))
+             (cons (list 'undo-marker (marker-position (car entry))
+                         (marker-insertion-type (car entry))) (cdr entry))
+             entry))) buffer-undo-list)
+         (nreverse calls)))))"###,
+            r###"OK (nil (97 98 233 8364 119070 100 101 102) t 14 t 2 1 9 (1 2 3 4 5 6 7 8) (1 2 5 9) (2 5) ((2 . 5) ((t (98 233 8364) (2 3 4)) . 2)) nil)"###,
+        ),
+        (
+            "downcase-region-prefix",
+            r###"(with-temp-buffer
+ (insert "abé€𝄞def")
+ (dotimes (i 8) (put-text-property (1+ i) (+ i 2) 'tse-index (1+ i)))
+ (goto-char 2) (buffer-enable-undo) (setq buffer-undo-list nil)
+ (let ((calls nil) (ran nil)
+       (markers (list (copy-marker 1) (copy-marker 2) (copy-marker 5 t) (copy-marker 9)))
+       (overlay (make-overlay 2 5)))
+  (add-hook 'before-change-functions (lambda (beg end) (push (list 'before beg end) calls) (unless ran (setq ran t) (goto-char 1) (insert "xx"))) nil t)
+  (add-hook 'after-change-functions
+   (lambda (beg end old) (push (list 'after beg end old) calls)) nil t)
+  (let* ((result (condition-case err (downcase-region 2 5) (error err)))
+         (text (buffer-string)) (chars (string-to-list text)))
+   (list result chars (multibyte-string-p text) (string-bytes text)
+         (equal text (apply #'string chars)) (point) (point-min) (point-max)
+         (let ((i 0) props) (while (< i (length text))
+          (push (get-text-property i 'tse-index text) props) (setq i (1+ i))) (nreverse props))
+         (mapcar #'marker-position markers) (list (overlay-start overlay) (overlay-end overlay))
+         (mapcar (lambda (entry)
+          (if (and (consp entry) (stringp (car entry)))
+           (cons (list (multibyte-string-p (car entry)) (string-to-list (car entry))
+             (let ((i 0) props) (while (< i (length (car entry)))
+              (push (get-text-property i 'tse-index (car entry)) props) (setq i (1+ i))) (nreverse props))) (cdr entry))
+           (if (and (consp entry) (markerp (car entry)))
+             (cons (list 'undo-marker (marker-position (car entry))
+                         (marker-insertion-type (car entry))) (cdr entry))
+             entry))) buffer-undo-list)
+         (nreverse calls)))))"###,
+            r###"OK (nil (120 120 97 98 233 8364 119070 100 101 102) t 16 t 3 1 11 (nil nil 1 2 3 4 5 6 7 8) (1 4 7 11) (4 7) ((2 . 5) ((t (120 97 98) (nil 1 2)) . 2) (1 . 3)) ((before 2 5)))"###,
+        ),
+        (
+            "capitalize-region-none",
+            r###"(with-temp-buffer
+ (insert "abé€𝄞def")
+ (dotimes (i 8) (put-text-property (1+ i) (+ i 2) 'tse-index (1+ i)))
+ (goto-char 2) (buffer-enable-undo) (setq buffer-undo-list nil)
+ (let ((calls nil) (ran nil)
+       (markers (list (copy-marker 1) (copy-marker 2) (copy-marker 5 t) (copy-marker 9)))
+       (overlay (make-overlay 2 5)))
+  nil
+  (add-hook 'after-change-functions
+   (lambda (beg end old) (push (list 'after beg end old) calls)) nil t)
+  (let* ((result (condition-case err (capitalize-region 2 5) (error err)))
+         (text (buffer-string)) (chars (string-to-list text)))
+   (list result chars (multibyte-string-p text) (string-bytes text)
+         (equal text (apply #'string chars)) (point) (point-min) (point-max)
+         (let ((i 0) props) (while (< i (length text))
+          (push (get-text-property i 'tse-index text) props) (setq i (1+ i))) (nreverse props))
+         (mapcar #'marker-position markers) (list (overlay-start overlay) (overlay-end overlay))
+         (mapcar (lambda (entry)
+          (if (and (consp entry) (stringp (car entry)))
+           (cons (list (multibyte-string-p (car entry)) (string-to-list (car entry))
+             (let ((i 0) props) (while (< i (length (car entry)))
+              (push (get-text-property i 'tse-index (car entry)) props) (setq i (1+ i))) (nreverse props))) (cdr entry))
+           (if (and (consp entry) (markerp (car entry)))
+             (cons (list 'undo-marker (marker-position (car entry))
+                         (marker-insertion-type (car entry))) (cdr entry))
+             entry))) buffer-undo-list)
+         (nreverse calls)))))"###,
+            r###"OK (nil (97 66 233 8364 119070 100 101 102) t 14 t 2 1 9 (1 2 3 4 5 6 7 8) (1 2 5 9) (2 5) ((2 . 5) ((t (98 233 8364) (2 3 4)) . 2)) ((after 2 3 1)))"###,
+        ),
+        (
+            "capitalize-region-prefix",
+            r###"(with-temp-buffer
+ (insert "abé€𝄞def")
+ (dotimes (i 8) (put-text-property (1+ i) (+ i 2) 'tse-index (1+ i)))
+ (goto-char 2) (buffer-enable-undo) (setq buffer-undo-list nil)
+ (let ((calls nil) (ran nil)
+       (markers (list (copy-marker 1) (copy-marker 2) (copy-marker 5 t) (copy-marker 9)))
+       (overlay (make-overlay 2 5)))
+  (add-hook 'before-change-functions (lambda (beg end) (push (list 'before beg end) calls) (unless ran (setq ran t) (goto-char 1) (insert "xx"))) nil t)
+  (add-hook 'after-change-functions
+   (lambda (beg end old) (push (list 'after beg end old) calls)) nil t)
+  (let* ((result (condition-case err (capitalize-region 2 5) (error err)))
+         (text (buffer-string)) (chars (string-to-list text)))
+   (list result chars (multibyte-string-p text) (string-bytes text)
+         (equal text (apply #'string chars)) (point) (point-min) (point-max)
+         (let ((i 0) props) (while (< i (length text))
+          (push (get-text-property i 'tse-index text) props) (setq i (1+ i))) (nreverse props))
+         (mapcar #'marker-position markers) (list (overlay-start overlay) (overlay-end overlay))
+         (mapcar (lambda (entry)
+          (if (and (consp entry) (stringp (car entry)))
+           (cons (list (multibyte-string-p (car entry)) (string-to-list (car entry))
+             (let ((i 0) props) (while (< i (length (car entry)))
+              (push (get-text-property i 'tse-index (car entry)) props) (setq i (1+ i))) (nreverse props))) (cdr entry))
+           (if (and (consp entry) (markerp (car entry)))
+             (cons (list 'undo-marker (marker-position (car entry))
+                         (marker-insertion-type (car entry))) (cdr entry))
+             entry))) buffer-undo-list)
+         (nreverse calls)))))"###,
+            r###"OK (nil (120 88 97 98 233 8364 119070 100 101 102) t 16 t 3 1 11 (nil nil 1 2 3 4 5 6 7 8) (1 4 7 11) (4 7) ((2 . 5) ((t (120 97 98) (nil 1 2)) . 2) (1 . 3)) ((before 2 5) (after 2 3 1)))"###,
+        ),
+        (
+            "upcase-initials-region-none",
+            r###"(with-temp-buffer
+ (insert "abé€𝄞def")
+ (dotimes (i 8) (put-text-property (1+ i) (+ i 2) 'tse-index (1+ i)))
+ (goto-char 2) (buffer-enable-undo) (setq buffer-undo-list nil)
+ (let ((calls nil) (ran nil)
+       (markers (list (copy-marker 1) (copy-marker 2) (copy-marker 5 t) (copy-marker 9)))
+       (overlay (make-overlay 2 5)))
+  nil
+  (add-hook 'after-change-functions
+   (lambda (beg end old) (push (list 'after beg end old) calls)) nil t)
+  (let* ((result (condition-case err (upcase-initials-region 2 5) (error err)))
+         (text (buffer-string)) (chars (string-to-list text)))
+   (list result chars (multibyte-string-p text) (string-bytes text)
+         (equal text (apply #'string chars)) (point) (point-min) (point-max)
+         (let ((i 0) props) (while (< i (length text))
+          (push (get-text-property i 'tse-index text) props) (setq i (1+ i))) (nreverse props))
+         (mapcar #'marker-position markers) (list (overlay-start overlay) (overlay-end overlay))
+         (mapcar (lambda (entry)
+          (if (and (consp entry) (stringp (car entry)))
+           (cons (list (multibyte-string-p (car entry)) (string-to-list (car entry))
+             (let ((i 0) props) (while (< i (length (car entry)))
+              (push (get-text-property i 'tse-index (car entry)) props) (setq i (1+ i))) (nreverse props))) (cdr entry))
+           (if (and (consp entry) (markerp (car entry)))
+             (cons (list 'undo-marker (marker-position (car entry))
+                         (marker-insertion-type (car entry))) (cdr entry))
+             entry))) buffer-undo-list)
+         (nreverse calls)))))"###,
+            r###"OK (nil (97 66 233 8364 119070 100 101 102) t 14 t 2 1 9 (1 2 3 4 5 6 7 8) (1 2 5 9) (2 5) ((2 . 5) ((t (98 233 8364) (2 3 4)) . 2)) ((after 2 3 1)))"###,
+        ),
+        (
+            "upcase-initials-region-prefix",
+            r###"(with-temp-buffer
+ (insert "abé€𝄞def")
+ (dotimes (i 8) (put-text-property (1+ i) (+ i 2) 'tse-index (1+ i)))
+ (goto-char 2) (buffer-enable-undo) (setq buffer-undo-list nil)
+ (let ((calls nil) (ran nil)
+       (markers (list (copy-marker 1) (copy-marker 2) (copy-marker 5 t) (copy-marker 9)))
+       (overlay (make-overlay 2 5)))
+  (add-hook 'before-change-functions (lambda (beg end) (push (list 'before beg end) calls) (unless ran (setq ran t) (goto-char 1) (insert "xx"))) nil t)
+  (add-hook 'after-change-functions
+   (lambda (beg end old) (push (list 'after beg end old) calls)) nil t)
+  (let* ((result (condition-case err (upcase-initials-region 2 5) (error err)))
+         (text (buffer-string)) (chars (string-to-list text)))
+   (list result chars (multibyte-string-p text) (string-bytes text)
+         (equal text (apply #'string chars)) (point) (point-min) (point-max)
+         (let ((i 0) props) (while (< i (length text))
+          (push (get-text-property i 'tse-index text) props) (setq i (1+ i))) (nreverse props))
+         (mapcar #'marker-position markers) (list (overlay-start overlay) (overlay-end overlay))
+         (mapcar (lambda (entry)
+          (if (and (consp entry) (stringp (car entry)))
+           (cons (list (multibyte-string-p (car entry)) (string-to-list (car entry))
+             (let ((i 0) props) (while (< i (length (car entry)))
+              (push (get-text-property i 'tse-index (car entry)) props) (setq i (1+ i))) (nreverse props))) (cdr entry))
+           (if (and (consp entry) (markerp (car entry)))
+             (cons (list 'undo-marker (marker-position (car entry))
+                         (marker-insertion-type (car entry))) (cdr entry))
+             entry))) buffer-undo-list)
+         (nreverse calls)))))"###,
+            r###"OK (nil (120 88 97 98 233 8364 119070 100 101 102) t 16 t 3 1 11 (nil nil 1 2 3 4 5 6 7 8) (1 4 7 11) (4 7) ((2 . 5) ((t (120 97 98) (nil 1 2)) . 2) (1 . 3)) ((before 2 5) (after 2 3 1)))"###,
+        ),
+        (
+            "upcase-word-none",
+            r###"(with-temp-buffer
+ (insert "abé€𝄞def")
+ (dotimes (i 8) (put-text-property (1+ i) (+ i 2) 'tse-index (1+ i)))
+ (goto-char 2) (buffer-enable-undo) (setq buffer-undo-list nil)
+ (let ((calls nil) (ran nil)
+       (markers (list (copy-marker 1) (copy-marker 2) (copy-marker 5 t) (copy-marker 9)))
+       (overlay (make-overlay 2 5)))
+  nil
+  (add-hook 'after-change-functions
+   (lambda (beg end old) (push (list 'after beg end old) calls)) nil t)
+  (let* ((result (condition-case err (upcase-word 1) (error err)))
+         (text (buffer-string)) (chars (string-to-list text)))
+   (list result chars (multibyte-string-p text) (string-bytes text)
+         (equal text (apply #'string chars)) (point) (point-min) (point-max)
+         (let ((i 0) props) (while (< i (length text))
+          (push (get-text-property i 'tse-index text) props) (setq i (1+ i))) (nreverse props))
+         (mapcar #'marker-position markers) (list (overlay-start overlay) (overlay-end overlay))
+         (mapcar (lambda (entry)
+          (if (and (consp entry) (stringp (car entry)))
+           (cons (list (multibyte-string-p (car entry)) (string-to-list (car entry))
+             (let ((i 0) props) (while (< i (length (car entry)))
+              (push (get-text-property i 'tse-index (car entry)) props) (setq i (1+ i))) (nreverse props))) (cdr entry))
+           (if (and (consp entry) (markerp (car entry)))
+             (cons (list 'undo-marker (marker-position (car entry))
+                         (marker-insertion-type (car entry))) (cdr entry))
+             entry))) buffer-undo-list)
+         (nreverse calls)))))"###,
+            r###"OK (nil (97 66 201 8364 119070 100 101 102) t 14 t 4 1 9 (1 2 3 4 5 6 7 8) (1 2 5 9) (2 5) ((2 . 4) ((t (98 233) (2 3)) . 2)) ((after 2 4 2)))"###,
+        ),
+        (
+            "upcase-word-prefix",
+            r###"(with-temp-buffer
+ (insert "abé€𝄞def")
+ (dotimes (i 8) (put-text-property (1+ i) (+ i 2) 'tse-index (1+ i)))
+ (goto-char 2) (buffer-enable-undo) (setq buffer-undo-list nil)
+ (let ((calls nil) (ran nil)
+       (markers (list (copy-marker 1) (copy-marker 2) (copy-marker 5 t) (copy-marker 9)))
+       (overlay (make-overlay 2 5)))
+  (add-hook 'before-change-functions (lambda (beg end) (push (list 'before beg end) calls) (unless ran (setq ran t) (goto-char 1) (insert "xx"))) nil t)
+  (add-hook 'after-change-functions
+   (lambda (beg end old) (push (list 'after beg end old) calls)) nil t)
+  (let* ((result (condition-case err (upcase-word 1) (error err)))
+         (text (buffer-string)) (chars (string-to-list text)))
+   (list result chars (multibyte-string-p text) (string-bytes text)
+         (equal text (apply #'string chars)) (point) (point-min) (point-max)
+         (let ((i 0) props) (while (< i (length text))
+          (push (get-text-property i 'tse-index text) props) (setq i (1+ i))) (nreverse props))
+         (mapcar #'marker-position markers) (list (overlay-start overlay) (overlay-end overlay))
+         (mapcar (lambda (entry)
+          (if (and (consp entry) (stringp (car entry)))
+           (cons (list (multibyte-string-p (car entry)) (string-to-list (car entry))
+             (let ((i 0) props) (while (< i (length (car entry)))
+              (push (get-text-property i 'tse-index (car entry)) props) (setq i (1+ i))) (nreverse props))) (cdr entry))
+           (if (and (consp entry) (markerp (car entry)))
+             (cons (list 'undo-marker (marker-position (car entry))
+                         (marker-insertion-type (car entry))) (cdr entry))
+             entry))) buffer-undo-list)
+         (nreverse calls)))))"###,
+            r###"OK (nil (120 88 65 98 233 8364 119070 100 101 102) t 16 t 4 1 11 (nil nil 1 2 3 4 5 6 7 8) (1 4 7 11) (4 7) ((2 . 4) ((t (120 97) (nil 1)) . 2) (1 . 3)) ((before 2 4) (after 2 4 2)))"###,
+        ),
+        (
+            "downcase-word-none",
+            r###"(with-temp-buffer
+ (insert "abé€𝄞def")
+ (dotimes (i 8) (put-text-property (1+ i) (+ i 2) 'tse-index (1+ i)))
+ (goto-char 2) (buffer-enable-undo) (setq buffer-undo-list nil)
+ (let ((calls nil) (ran nil)
+       (markers (list (copy-marker 1) (copy-marker 2) (copy-marker 5 t) (copy-marker 9)))
+       (overlay (make-overlay 2 5)))
+  nil
+  (add-hook 'after-change-functions
+   (lambda (beg end old) (push (list 'after beg end old) calls)) nil t)
+  (let* ((result (condition-case err (downcase-word 1) (error err)))
+         (text (buffer-string)) (chars (string-to-list text)))
+   (list result chars (multibyte-string-p text) (string-bytes text)
+         (equal text (apply #'string chars)) (point) (point-min) (point-max)
+         (let ((i 0) props) (while (< i (length text))
+          (push (get-text-property i 'tse-index text) props) (setq i (1+ i))) (nreverse props))
+         (mapcar #'marker-position markers) (list (overlay-start overlay) (overlay-end overlay))
+         (mapcar (lambda (entry)
+          (if (and (consp entry) (stringp (car entry)))
+           (cons (list (multibyte-string-p (car entry)) (string-to-list (car entry))
+             (let ((i 0) props) (while (< i (length (car entry)))
+              (push (get-text-property i 'tse-index (car entry)) props) (setq i (1+ i))) (nreverse props))) (cdr entry))
+           (if (and (consp entry) (markerp (car entry)))
+             (cons (list 'undo-marker (marker-position (car entry))
+                         (marker-insertion-type (car entry))) (cdr entry))
+             entry))) buffer-undo-list)
+         (nreverse calls)))))"###,
+            r###"OK (nil (97 98 233 8364 119070 100 101 102) t 14 t 4 1 9 (1 2 3 4 5 6 7 8) (1 2 5 9) (2 5) ((2 . 4) ((t (98 233) (2 3)) . 2)) nil)"###,
+        ),
+        (
+            "downcase-word-prefix",
+            r###"(with-temp-buffer
+ (insert "abé€𝄞def")
+ (dotimes (i 8) (put-text-property (1+ i) (+ i 2) 'tse-index (1+ i)))
+ (goto-char 2) (buffer-enable-undo) (setq buffer-undo-list nil)
+ (let ((calls nil) (ran nil)
+       (markers (list (copy-marker 1) (copy-marker 2) (copy-marker 5 t) (copy-marker 9)))
+       (overlay (make-overlay 2 5)))
+  (add-hook 'before-change-functions (lambda (beg end) (push (list 'before beg end) calls) (unless ran (setq ran t) (goto-char 1) (insert "xx"))) nil t)
+  (add-hook 'after-change-functions
+   (lambda (beg end old) (push (list 'after beg end old) calls)) nil t)
+  (let* ((result (condition-case err (downcase-word 1) (error err)))
+         (text (buffer-string)) (chars (string-to-list text)))
+   (list result chars (multibyte-string-p text) (string-bytes text)
+         (equal text (apply #'string chars)) (point) (point-min) (point-max)
+         (let ((i 0) props) (while (< i (length text))
+          (push (get-text-property i 'tse-index text) props) (setq i (1+ i))) (nreverse props))
+         (mapcar #'marker-position markers) (list (overlay-start overlay) (overlay-end overlay))
+         (mapcar (lambda (entry)
+          (if (and (consp entry) (stringp (car entry)))
+           (cons (list (multibyte-string-p (car entry)) (string-to-list (car entry))
+             (let ((i 0) props) (while (< i (length (car entry)))
+              (push (get-text-property i 'tse-index (car entry)) props) (setq i (1+ i))) (nreverse props))) (cdr entry))
+           (if (and (consp entry) (markerp (car entry)))
+             (cons (list 'undo-marker (marker-position (car entry))
+                         (marker-insertion-type (car entry))) (cdr entry))
+             entry))) buffer-undo-list)
+         (nreverse calls)))))"###,
+            r###"OK (nil (120 120 97 98 233 8364 119070 100 101 102) t 16 t 4 1 11 (nil nil 1 2 3 4 5 6 7 8) (1 4 7 11) (4 7) ((2 . 4) ((t (120 97) (nil 1)) . 2) (1 . 3)) ((before 2 4)))"###,
+        ),
+        (
+            "capitalize-word-none",
+            r###"(with-temp-buffer
+ (insert "abé€𝄞def")
+ (dotimes (i 8) (put-text-property (1+ i) (+ i 2) 'tse-index (1+ i)))
+ (goto-char 2) (buffer-enable-undo) (setq buffer-undo-list nil)
+ (let ((calls nil) (ran nil)
+       (markers (list (copy-marker 1) (copy-marker 2) (copy-marker 5 t) (copy-marker 9)))
+       (overlay (make-overlay 2 5)))
+  nil
+  (add-hook 'after-change-functions
+   (lambda (beg end old) (push (list 'after beg end old) calls)) nil t)
+  (let* ((result (condition-case err (capitalize-word 1) (error err)))
+         (text (buffer-string)) (chars (string-to-list text)))
+   (list result chars (multibyte-string-p text) (string-bytes text)
+         (equal text (apply #'string chars)) (point) (point-min) (point-max)
+         (let ((i 0) props) (while (< i (length text))
+          (push (get-text-property i 'tse-index text) props) (setq i (1+ i))) (nreverse props))
+         (mapcar #'marker-position markers) (list (overlay-start overlay) (overlay-end overlay))
+         (mapcar (lambda (entry)
+          (if (and (consp entry) (stringp (car entry)))
+           (cons (list (multibyte-string-p (car entry)) (string-to-list (car entry))
+             (let ((i 0) props) (while (< i (length (car entry)))
+              (push (get-text-property i 'tse-index (car entry)) props) (setq i (1+ i))) (nreverse props))) (cdr entry))
+           (if (and (consp entry) (markerp (car entry)))
+             (cons (list 'undo-marker (marker-position (car entry))
+                         (marker-insertion-type (car entry))) (cdr entry))
+             entry))) buffer-undo-list)
+         (nreverse calls)))))"###,
+            r###"OK (nil (97 66 233 8364 119070 100 101 102) t 14 t 4 1 9 (1 2 3 4 5 6 7 8) (1 2 5 9) (2 5) ((2 . 4) ((t (98 233) (2 3)) . 2)) ((after 2 3 1)))"###,
+        ),
+        (
+            "capitalize-word-prefix",
+            r###"(with-temp-buffer
+ (insert "abé€𝄞def")
+ (dotimes (i 8) (put-text-property (1+ i) (+ i 2) 'tse-index (1+ i)))
+ (goto-char 2) (buffer-enable-undo) (setq buffer-undo-list nil)
+ (let ((calls nil) (ran nil)
+       (markers (list (copy-marker 1) (copy-marker 2) (copy-marker 5 t) (copy-marker 9)))
+       (overlay (make-overlay 2 5)))
+  (add-hook 'before-change-functions (lambda (beg end) (push (list 'before beg end) calls) (unless ran (setq ran t) (goto-char 1) (insert "xx"))) nil t)
+  (add-hook 'after-change-functions
+   (lambda (beg end old) (push (list 'after beg end old) calls)) nil t)
+  (let* ((result (condition-case err (capitalize-word 1) (error err)))
+         (text (buffer-string)) (chars (string-to-list text)))
+   (list result chars (multibyte-string-p text) (string-bytes text)
+         (equal text (apply #'string chars)) (point) (point-min) (point-max)
+         (let ((i 0) props) (while (< i (length text))
+          (push (get-text-property i 'tse-index text) props) (setq i (1+ i))) (nreverse props))
+         (mapcar #'marker-position markers) (list (overlay-start overlay) (overlay-end overlay))
+         (mapcar (lambda (entry)
+          (if (and (consp entry) (stringp (car entry)))
+           (cons (list (multibyte-string-p (car entry)) (string-to-list (car entry))
+             (let ((i 0) props) (while (< i (length (car entry)))
+              (push (get-text-property i 'tse-index (car entry)) props) (setq i (1+ i))) (nreverse props))) (cdr entry))
+           (if (and (consp entry) (markerp (car entry)))
+             (cons (list 'undo-marker (marker-position (car entry))
+                         (marker-insertion-type (car entry))) (cdr entry))
+             entry))) buffer-undo-list)
+         (nreverse calls)))))"###,
+            r###"OK (nil (120 88 97 98 233 8364 119070 100 101 102) t 16 t 4 1 11 (nil nil 1 2 3 4 5 6 7 8) (1 4 7 11) (4 7) ((2 . 4) ((t (120 97) (nil 1)) . 2) (1 . 3)) ((before 2 4) (after 2 3 1)))"###,
+        ),
+    ];
+    for (name, form, expected) in cases {
+        let gnu = run_oracle_eval(form).expect("GNU casing transaction oracle");
+        assert_eq!(
+            gnu, expected,
+            "unexpected GNU casing transaction state for {name}"
+        );
+        let actual = run_neovm_eval(form).expect("NeoVM casing transaction result");
+        assert_eq!(actual, gnu, "casing transaction mismatch for {name}");
+    }
+}
+
+// GNU casefiddle.c:443-525 narrows the notification to the first and last
+// changed source characters, including expansions; :570 adjusts old length.
+#[test]
+fn compat_expanded_casing_after_change_extents_match_gnu() {
+    if !oracle_enabled() {
+        return;
+    }
+
+    let form = r#"(mapcar
+ (lambda (spec)
+  (with-temp-buffer
+   (set-buffer-multibyte (nth 3 spec))
+   (insert (nth 2 spec))
+   (when (nth 4 spec)
+    (let ((table (copy-case-table (standard-case-table))))
+     (set-case-table table)
+     (if (eq (nth 4 spec) 'width)
+         (let ((up (char-table-extra-slot table 0)))
+          (aset up ?a ?é)
+          (aset up ?é ?A))
+       (set-case-syntax-pair ?İ ?i table)
+       (set-case-syntax-pair ?ẞ ?ß table))))
+   (let (calls)
+    (add-hook 'after-change-functions
+              (lambda (beg end old) (push (list beg end old) calls)) nil t)
+    (let ((result (funcall (nth 1 spec) (point-min) (point-max))))
+     (list (car spec) result (string-to-list (buffer-string))
+           (string-bytes (buffer-string))
+           (multibyte-string-p (buffer-string))
+           (point) (point-max) (nreverse calls))))))
+ (list
+  (list 'prefix-suffix 'upcase-region "--ß--" t nil)
+  (list 'separated-expansions 'upcase-region "--ß--ﬃ--" t nil)
+  (list 'mixed-upcase 'upcase-region "--éaß--" t nil)
+  (list 'mixed-downcase 'downcase-region "--AİZ--" t nil)
+  (list 'capitalize-expansions 'capitalize-region "--ßa--ﬃb--" t nil)
+  (list 'initial-expansions 'upcase-initials-region "--ßa--ﬃb--" t nil)
+  (list 'multibyte-byte8 'upcase-region
+        (concat "--" (string-to-multibyte (unibyte-string 128 255))
+                "ßa" (string-to-multibyte (unibyte-string 255)) "--") t nil)
+  (list 'unibyte 'upcase-region
+        (unibyte-string 45 45 128 97 233 255 45 45) nil nil)
+  (list 'custom-width 'upcase-region "--aéß--" t 'width)
+  (list 'custom-specials 'upcase-region "--iß--ﬃ--" t 'specials)))"#;
+
+    let gnu = run_oracle_eval(form).expect("GNU expanded casing extent oracle");
+    assert!(gnu.starts_with("OK "), "GNU casing fixture failed: {gnu}");
+    let actual = run_neovm_eval(form).expect("NeoVM expanded casing extent result");
+    assert_eq!(actual, gnu, "expanded casing after-change extent mismatch");
+}

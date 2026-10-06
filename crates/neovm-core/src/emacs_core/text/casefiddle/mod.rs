@@ -1018,9 +1018,85 @@ fn casify_replace_current_buffer_region(
         &properties,
     )?;
     if replacement.text.as_bytes() != text.as_bytes() {
-        super::editfns::signal_after_text_change(eval, change)?;
+        if let Some(span) = changed_char_span(&text, &replacement) {
+            // GNU casefiddle.c:475-525 retains the first source position and
+            // last output end; :570 subtracts character growth from the old length.
+            super::editfns::signal_after_change_chars(
+                eval,
+                change.old_range().char_start().add_len(span.offset),
+                span.old_len,
+                span.new_len,
+            )?;
+        }
     }
     Ok(end)
+}
+
+/// Source-aligned notification extents, including multi-character mappings.
+/// These lengths count Emacs characters, independently of byte-width changes.
+struct CasingChangedSpan {
+    offset: crate::buffer::CharLen,
+    old_len: crate::buffer::CharLen,
+    new_len: crate::buffer::CharLen,
+}
+
+fn changed_char_span(old: &LispString, new: &CasedRegion) -> Option<CasingChangedSpan> {
+    let mut expansions = new.expansions.iter().copied().peekable();
+    let mut output = lisp_string_char_codes(&new.text);
+    let mut output_end = 0;
+    let mut first = None;
+    let mut last_old_end = 0;
+    let mut last_new_end = 0;
+    for (index, old_code) in lisp_string_char_codes(old).enumerate() {
+        let growth = if expansions
+            .peek()
+            .is_some_and(|expansion| expansion.source_pos().get() == index)
+        {
+            expansions
+                .next()
+                .map_or(0, |expansion| expansion.growth().get())
+        } else {
+            0
+        };
+        let new_code = output.next();
+        let consumed = output.by_ref().take(growth).count();
+        // Text and expansion offsets come from the same casing transducer.
+        debug_assert!(new_code.is_some());
+        debug_assert_eq!(consumed, growth);
+        output_end += 1 + growth;
+        if growth != 0 || new_code != Some(old_code) {
+            first.get_or_insert(index);
+            last_old_end = index + 1;
+            last_new_end = output_end;
+        }
+    }
+    debug_assert!(expansions.next().is_none());
+    debug_assert!(output.next().is_none());
+    first.map(|first| CasingChangedSpan {
+        offset: crate::buffer::CharLen::new(first),
+        old_len: crate::buffer::CharLen::new(last_old_end - first),
+        new_len: crate::buffer::CharLen::new(last_new_end - first),
+    })
+}
+
+/// Character codes of S in order, decoding the internal multibyte form.
+fn lisp_string_char_codes(s: &LispString) -> impl Iterator<Item = u32> + '_ {
+    let bytes = s.as_bytes();
+    let multibyte = s.is_multibyte();
+    let mut pos = 0;
+    std::iter::from_fn(move || {
+        if pos >= bytes.len() {
+            return None;
+        }
+        if multibyte {
+            Some(crate::emacs_core::emacs_char::string_char_advance(
+                bytes, &mut pos,
+            ))
+        } else {
+            pos += 1;
+            Some(u32::from(bytes[pos - 1]))
+        }
+    })
 }
 
 fn casify_word_in_state(
