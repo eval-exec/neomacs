@@ -28043,3 +28043,6 @@ fn fontset_changes_invalidate_redisplay_skip_signature() {
         "unchanged font policy still permits the idle skip"
     );
 }
+
+#[cfg(test)]
+mod circular_lists;

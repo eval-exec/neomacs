@@ -273,9 +273,7 @@ fn builtin_rassq_values_scan<const OBSERVED: bool>(
 fn rassq_exact(key: Value, alist: Value) -> EvalResult {
     let key_bits = key.bits();
     let mut tail = alist;
-    let mut tortoise = alist;
-    let mut power = 1usize;
-    let mut distance = 0usize;
+    let mut cycle = crate::emacs_core::builtins::GnuTailCycle::new(alist);
 
     while tail.is_cons() {
         let pair_car = tail.cons_car();
@@ -284,17 +282,7 @@ fn rassq_exact(key: Value, alist: Value) -> EvalResult {
         }
 
         tail = tail.cons_cdr();
-        if tail.is_cons() {
-            distance = distance.saturating_add(1);
-            if tail.bits() == tortoise.bits() {
-                return Err(signal(LispCondition::CircularList, vec![tail]));
-            }
-            if distance == power {
-                tortoise = tail;
-                power = power.saturating_mul(2).max(1);
-                distance = 0;
-            }
-        }
+        cycle.check(tail)?;
     }
 
     if tail.is_nil() {
@@ -341,9 +329,7 @@ fn builtin_rassq_values_swp_scan<const OBSERVED: bool>(key: Value, alist: Value)
 #[inline(never)]
 fn rassq_swp_exact(bare: Value, alist: Value) -> EvalResult {
     let mut tail = alist;
-    let mut tortoise = alist;
-    let mut power = 1usize;
-    let mut distance = 0usize;
+    let mut cycle = crate::emacs_core::builtins::GnuTailCycle::new(alist);
 
     while tail.is_cons() {
         let pair_car = tail.cons_car();
@@ -354,17 +340,7 @@ fn rassq_swp_exact(bare: Value, alist: Value) -> EvalResult {
         }
 
         tail = tail.cons_cdr();
-        if tail.is_cons() {
-            distance = distance.saturating_add(1);
-            if tail.bits() == tortoise.bits() {
-                return Err(signal(LispCondition::CircularList, vec![tail]));
-            }
-            if distance == power {
-                tortoise = tail;
-                power = power.saturating_mul(2).max(1);
-                distance = 0;
-            }
-        }
+        cycle.check(tail)?;
     }
 
     if tail.is_nil() {

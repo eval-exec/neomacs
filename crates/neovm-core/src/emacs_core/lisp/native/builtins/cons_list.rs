@@ -93,6 +93,49 @@ fn for_each_tail_cycle_tail(
     }
 }
 
+/// Stack-local GNU Brent state, with its counters kept together so callers
+/// cannot mix cycle algorithms or initialization phases. The unsigned-short
+/// countdown matches GNU lisp.h:5875-5892, including its wrapping semantics.
+/// Each traversal belongs to its mutator; this stores no shared or cached
+/// Lisp state. Callers that run Lisp must root `tortoise()` across callbacks.
+#[derive(Debug)]
+pub(crate) struct GnuTailCycle {
+    tortoise: Value,
+    max: i64,
+    n: i64,
+    q: u16,
+    mutator: std::marker::PhantomData<*const ()>,
+}
+
+static_assertions::assert_not_impl_any!(GnuTailCycle: Send, Sync);
+
+impl GnuTailCycle {
+    pub(crate) fn new(head: Value) -> Self {
+        Self {
+            tortoise: head,
+            max: 2,
+            n: 0,
+            q: 2,
+            mutator: std::marker::PhantomData,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn check(&mut self, advanced_tail: Value) -> Result<(), Flow> {
+        if let Some(tail) = for_each_tail_cycle_tail(
+            advanced_tail,
+            &mut self.tortoise,
+            &mut self.max,
+            &mut self.n,
+            &mut self.q,
+        ) {
+            Err(circular_list_error(tail))
+        } else {
+            Ok(())
+        }
+    }
+}
+
 fn for_each_proper_list_tail<F>(list: Value, improper_error_object: Value, visit: F) -> EvalResult
 where
     F: FnMut(Value) -> Result<Option<Value>, Flow>,
@@ -975,21 +1018,15 @@ fn builtin_append_slice_impl(args: &[Value]) -> EvalResult {
 
     fn append_proper_list(result: &mut Value, last: &mut Value, list: Value) -> Result<(), Flow> {
         let mut tail = list;
-        let mut tortoise = list;
-        let mut max = 2i64;
-        let mut n = 0i64;
-        let mut q = 2u16;
-
+        if tail.is_cons() {
+            append_element(result, last, tail.cons_car());
+            tail = tail.cons_cdr();
+        }
+        let mut cycle = GnuTailCycle::new(tail);
         while tail.is_cons() {
             append_element(result, last, tail.cons_car());
-
             tail = tail.cons_cdr();
-            if tail.is_cons()
-                && let Some(cycle_tail) =
-                    for_each_tail_cycle_tail(tail, &mut tortoise, &mut max, &mut n, &mut q)
-            {
-                return Err(signal(LispCondition::CircularList, vec![cycle_tail]));
-            }
+            cycle.check(tail)?;
         }
 
         if !tail.is_nil() {
@@ -1662,9 +1699,7 @@ fn builtin_assq_values_scan<const OBSERVED: bool>(
 fn assq_exact(key: Value, list: Value) -> EvalResult {
     let key_bits = key.bits();
     let mut tail = list;
-    let mut tortoise = list;
-    let mut power = 1usize;
-    let mut distance = 0usize;
+    let mut cycle = GnuTailCycle::new(list);
 
     while tail.is_cons() {
         let pair_car = tail.cons_car();
@@ -1676,17 +1711,7 @@ fn assq_exact(key: Value, list: Value) -> EvalResult {
         }
 
         tail = tail.cons_cdr();
-        if tail.is_cons() {
-            distance = distance.saturating_add(1);
-            if tail.bits() == tortoise.bits() {
-                return Err(circular_list_error(tail));
-            }
-            if distance == power {
-                tortoise = tail;
-                power = power.saturating_mul(2).max(1);
-                distance = 0;
-            }
-        }
+        cycle.check(tail)?;
     }
 
     if tail.is_nil() {
@@ -1735,9 +1760,7 @@ fn builtin_assq_values_swp_scan<const OBSERVED: bool>(key: Value, list: Value) -
 #[inline(never)]
 fn assq_swp_exact(bare: Value, list: Value) -> EvalResult {
     let mut tail = list;
-    let mut tortoise = list;
-    let mut power = 1usize;
-    let mut distance = 0usize;
+    let mut cycle = GnuTailCycle::new(list);
 
     while tail.is_cons() {
         let pair_car = tail.cons_car();
@@ -1746,17 +1769,7 @@ fn assq_swp_exact(bare: Value, list: Value) -> EvalResult {
         }
 
         tail = tail.cons_cdr();
-        if tail.is_cons() {
-            distance = distance.saturating_add(1);
-            if tail.bits() == tortoise.bits() {
-                return Err(circular_list_error(tail));
-            }
-            if distance == power {
-                tortoise = tail;
-                power = power.saturating_mul(2).max(1);
-                distance = 0;
-            }
-        }
+        cycle.check(tail)?;
     }
 
     if tail.is_nil() {
@@ -2123,24 +2136,12 @@ fn builtin_nconc_slice_values_scan<const OBSERVED: bool>(args: &[Value]) -> Eval
     fn last_cons_for_nconc<const OBSERVED: bool>(list: Value) -> Result<Value, Flow> {
         let mut last = list;
         let mut tail = list;
-        let mut tortoise = list;
-        let mut power = 1usize;
-        let mut distance = 0usize;
+        let mut cycle = GnuTailCycle::new(list);
 
         while tail.is_cons() {
             last = tail;
             tail = scan_cdr::<OBSERVED>(tail);
-            if tail.is_cons() {
-                distance = distance.saturating_add(1);
-                if tail.bits() == tortoise.bits() {
-                    return Err(signal(LispCondition::CircularList, vec![tail]));
-                }
-                if distance == power {
-                    tortoise = tail;
-                    power = power.saturating_mul(2).max(1);
-                    distance = 0;
-                }
-            }
+            cycle.check(tail)?;
         }
 
         Ok(last)

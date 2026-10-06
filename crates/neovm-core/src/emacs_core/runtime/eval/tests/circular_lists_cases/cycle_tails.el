@@ -1,0 +1,7 @@
+(mapcar (lambda (n)
+ (let ((l (mapcar (lambda (x) (cons x x)) (number-sequence 1 n))))
+  (setcdr (nthcdr (1- n) l) l)
+  (mapcar (lambda (f) (condition-case e (funcall f l)
+                        (error (list (car e) (caar (cadr e))))))
+    (list (lambda (x) (assq 'z x)) (lambda (x) (rassq 'z x))
+          (lambda (x) (nconc x nil)) (lambda (x) (append x nil)))))) '(1 2 3 4 5))
