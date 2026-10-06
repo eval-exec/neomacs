@@ -63,6 +63,17 @@ fn circular_lists_rassoc_matches_gnu() {
 }
 
 #[test]
+fn circular_lists_concat_matches_gnu() {
+    let form = include_str!("circular_lists_cases/concat.el");
+    let expected = gnu_fixture(
+        "concat",
+        form,
+        include_str!("circular_lists_cases/concat.expect"),
+    );
+    assert_eq!(runtime_startup_eval_one(form), expected);
+}
+
+#[test]
 fn circular_lists_cycle_tails_matches_gnu() {
     let form = include_str!("circular_lists_cases/cycle_tails.el");
     let expected = gnu_fixture(

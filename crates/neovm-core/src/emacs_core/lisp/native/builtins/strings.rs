@@ -415,31 +415,48 @@ pub(crate) fn builtin_concat_slice(args: &[Value]) -> EvalResult {
     crate::emacs_core::perf_trace::time_op(crate::emacs_core::perf_trace::HotpathOp::Concat, || {
         use crate::emacs_core::emacs_char;
 
-        fn concat_arg_makes_multibyte(value: Value) -> bool {
+        fn concat_character_makes_multibyte(value: Value) -> Result<bool, Flow> {
+            let Some(c) = value.as_fixnum().filter(|c| (0..=0x3FFFFF).contains(c)) else {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("characterp"), value],
+                ));
+            };
+            Ok(c >= 0x80 && !emacs_char::char_byte8_p(c as u32))
+        }
+
+        fn concat_arg_makes_multibyte(value: Value) -> Result<bool, Flow> {
             match value.kind() {
-                ValueKind::String => value
+                ValueKind::String => Ok(value
                     .as_lisp_string()
-                    .is_some_and(|string| string.is_multibyte()),
-                ValueKind::Veclike(VecLikeType::Vector) => value
-                    .as_vector_data()
-                    .is_some_and(|items| items.iter().copied().any(concat_arg_makes_multibyte)),
+                    .is_some_and(|string| string.is_multibyte())),
+                ValueKind::Veclike(VecLikeType::Vector) => {
+                    let mut multibyte = false;
+                    if let Some(items) = value.as_vector_data() {
+                        for item in items.iter().copied() {
+                            multibyte |= concat_character_makes_multibyte(item)?;
+                        }
+                    }
+                    Ok(multibyte)
+                }
                 ValueKind::Cons => {
+                    // GNU fns.c:885 validates this list's complete spine
+                    // before inspecting its characters. Invalid earlier
+                    // arguments still take precedence over later cycles.
+                    proper_list_length_or_signal(value)?;
+                    let mut multibyte = false;
                     let mut cursor = value;
                     while cursor.is_cons() {
-                        let car = cursor.cons_car();
-                        if concat_arg_makes_multibyte(car) {
-                            return true;
-                        }
+                        multibyte |= concat_character_makes_multibyte(cursor.cons_car())?;
                         cursor = cursor.cons_cdr();
                     }
-                    false
+                    Ok(multibyte)
                 }
-                ValueKind::Fixnum(c) => {
-                    c >= 0x80
-                        && (c as u32) <= emacs_char::MAX_CHAR
-                        && !emacs_char::char_byte8_p(c as u32)
-                }
-                _ => false,
+                ValueKind::Nil => Ok(false),
+                _ => Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("sequencep"), value],
+                )),
             }
         }
 
@@ -495,8 +512,11 @@ pub(crate) fn builtin_concat_slice(args: &[Value]) -> EvalResult {
             }
         }
 
-        let dest_multibyte = args.iter().copied().any(concat_arg_makes_multibyte);
         if args.iter().all(|arg| arg.is_string()) {
+            let dest_multibyte = args.iter().any(|arg| {
+                arg.as_lisp_string()
+                    .is_some_and(|string| string.is_multibyte())
+            });
             let mut combined = Vec::new();
             let mut string_sources: Vec<(Value, usize)> = Vec::new();
             let mut result_chars = 0usize;
@@ -518,6 +538,11 @@ pub(crate) fn builtin_concat_slice(args: &[Value]) -> EvalResult {
                 set_string_text_properties_table_for_value(new_val, combined_table);
             }
             return Ok(new_val);
+        }
+
+        let mut dest_multibyte = false;
+        for arg in args {
+            dest_multibyte |= concat_arg_makes_multibyte(*arg)?;
         }
 
         let preallocated_len = args.iter().fold(0usize, |acc, arg| match arg.kind() {
