@@ -28092,3 +28092,50 @@ mod byte_code_function;
 #[cfg(test)]
 #[path = "marker_identity.rs"]
 mod marker_identity;
+
+/// Rust watcher panic must release temporary unwind roots and reinstate GNU's
+/// pending-quit bracket independently of restoring the popped variable cell.
+#[test]
+fn unbind_watcher_panic_restores_quit_and_vm_roots() {
+    use crate::emacs_core::error::EvalResult;
+    use crate::emacs_core::intern::intern;
+    use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
+    fn watcher(_: &mut Context, args: Vec<Value>) -> EvalResult {
+        if args.get(2) == Some(&Value::symbol("unlet")) {
+            panic!("contained watcher panic while unwind roots are owned");
+        }
+        Ok(Value::NIL)
+    }
+    let mut ctx = Context::new();
+    let symbol = intern("unwind-roots-independent-value");
+    let depth = ctx.specpdl.len();
+    ctx.obarray.set_symbol_value_id(symbol, Value::fixnum(10));
+    ctx.try_specbind(symbol, Value::fixnum(20)).unwrap();
+    ctx.register_subr(SubrSpec::new(
+        "unwind-roots-independent-watcher",
+        NativeFn::ContextVec(watcher),
+        SubrArity::new(4, Some(4)),
+    ));
+    crate::emacs_core::advice::builtin_add_variable_watcher(
+        &mut ctx,
+        vec![
+            Value::from_sym_id(symbol),
+            Value::symbol("unwind-roots-independent-watcher"),
+        ],
+    )
+    .unwrap();
+    let frame_count = ctx.vm_root_frames.len();
+    let root_count = ctx.vm_root_frames.last().map(|frame| frame.roots.len());
+    let pending = Value::fixnum(7);
+    ctx.set_quit_flag_value(pending);
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = ctx.unbind_to_with_result(depth, Ok(Value::NIL));
+    }));
+    assert!(caught.is_err());
+    assert_eq!(ctx.quit_flag_value(), pending);
+    assert_eq!(ctx.vm_root_frames.len(), frame_count);
+    assert_eq!(
+        ctx.vm_root_frames.last().map(|frame| frame.roots.len()),
+        root_count
+    );
+}

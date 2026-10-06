@@ -1506,20 +1506,15 @@ impl Context {
         // more (a buffer-local or forwarded `let`, a watched symbol, an
         // `unwind-protect`, ...) hands the remaining suffix -- in the same
         // top-down order -- to the general unwinder.
-        let quitf = self.quit_flag_value();
-        if !quitf.is_nil() {
-            self.set_quit_flag_value(Value::NIL);
-        }
-        self.pop_simple_specpdl_suffix(count);
-        let result = if self.specpdl.len() > count {
-            self.drain_unwind_to(count, result)
+        let mut quit_scope = super::specpdl::UnwindQuitScope::enter(self);
+        let context = quit_scope.context();
+        context.pop_simple_specpdl_suffix(count);
+        let result = if context.specpdl.len() > count {
+            context.drain_unwind_to(count, result)
         } else {
             result
         };
-        if !quitf.is_nil() && self.quit_flag_value().is_nil() {
-            self.set_quit_flag_value(quitf);
-        }
-        result
+        quit_scope.finish(result)
     }
 
     /// Pop entries from the top of the specpdl down toward COUNT while each
@@ -1656,15 +1651,16 @@ impl Context {
         // GNU eval.c `unbind_to(count, value)` carries VALUE through cleanup.
         // In Rust the value is not on the C stack/register root set, so keep
         // all heap payloads rooted while unwind-protect/watchers may allocate.
-        let root_scope = self.save_vm_roots();
-        self.push_eval_result_roots(&result);
+        let mut roots = super::specpdl::UnwindVmRootsScope::enter(self);
+        let context = roots.context();
+        context.push_eval_result_roots(&result);
         let mut cleanup_error = None;
-        while self.specpdl.len() > count {
-            match self.unbind_to_result(count) {
+        while context.specpdl.len() > count {
+            match context.unbind_to_result(count) {
                 Ok(()) => break,
                 Err(flow) => {
                     let rooted_error: EvalResult = Err(flow);
-                    self.push_eval_result_roots(&rooted_error);
+                    context.push_eval_result_roots(&rooted_error);
                     cleanup_error = rooted_error.err();
                     // A cleanup nonlocal exit has already popped its own
                     // specbinding. Continue toward COUNT so lower dynamic
@@ -1673,7 +1669,7 @@ impl Context {
                 }
             }
         }
-        self.restore_vm_roots(root_scope);
+        roots.finish();
         if let Some(flow) = cleanup_error {
             return Err(flow);
         }

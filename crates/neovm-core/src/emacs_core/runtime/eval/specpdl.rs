@@ -43,6 +43,144 @@ fn grow_specpdl_for_push(specpdl: &mut Vec<SpecBinding>) {
     specpdl.reserve(1);
 }
 
+/// Stack-local root ownership with no work in its inactive state.
+#[derive(Clone, Copy, Debug)]
+enum UnwindVmRootsOwnership {
+    Inactive,
+    Owned {
+        saved: VmRootScopeState,
+        frame_count: usize,
+    },
+}
+
+/// Stack-local ownership of VM roots through arbitrary Lisp or Rust unwind.
+/// No Context/pdump layout changes; the exclusive mutator borrow stays local.
+#[must_use = "finish the temporary root scope"]
+pub(super) struct UnwindVmRootsScope<'a> {
+    context: &'a mut Context,
+    ownership: UnwindVmRootsOwnership,
+    thread_confined: std::marker::PhantomData<*const ()>,
+}
+impl std::fmt::Debug for UnwindVmRootsScope<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UnwindVmRootsScope")
+            .field("ownership", &self.ownership)
+            .finish_non_exhaustive()
+    }
+}
+impl<'a> UnwindVmRootsScope<'a> {
+    #[inline]
+    fn idle(context: &'a mut Context) -> Self {
+        Self {
+            context,
+            ownership: UnwindVmRootsOwnership::Inactive,
+            thread_confined: std::marker::PhantomData,
+        }
+    }
+    #[inline]
+    pub(super) fn enter(context: &'a mut Context) -> Self {
+        let frame_count = context.vm_root_frames.len();
+        let saved = context.save_vm_roots();
+        Self {
+            context,
+            ownership: UnwindVmRootsOwnership::Owned { saved, frame_count },
+            thread_confined: std::marker::PhantomData,
+        }
+    }
+    #[inline]
+    pub(super) fn context(&mut self) -> &mut Context {
+        self.context
+    }
+    #[inline]
+    fn restore(&mut self) {
+        match std::mem::replace(&mut self.ownership, UnwindVmRootsOwnership::Inactive) {
+            UnwindVmRootsOwnership::Inactive => {}
+            UnwindVmRootsOwnership::Owned { saved, frame_count } => {
+                // Captured frames are LIFO-owned: nested containment snapshots
+                // retain this guard's frame; older-boundary recovery follows its
+                // Drop. Surviving depth therefore still names the captured frame.
+                // Recovery may already have removed it; never recreate it.
+                self.context.vm_root_frames.truncate(frame_count);
+                // A removed captured frame does not transfer this guard's
+                // root span to a different surviving caller frame.
+                if frame_count != 0
+                    && self.context.vm_root_frames.len() == frame_count
+                    && let Some(frame) = self.context.vm_root_frames.last_mut()
+                    && let Some(len) = saved.saved_vm_root_frame_len
+                {
+                    frame.roots.truncate(len);
+                }
+            }
+        }
+    }
+    #[inline]
+    pub(super) fn finish(mut self) {
+        self.restore();
+    }
+}
+impl Drop for UnwindVmRootsScope<'_> {
+    #[inline]
+    fn drop(&mut self) {
+        self.restore();
+    }
+}
+static_assertions::assert_not_impl_any!(UnwindVmRootsScope<'static>: Send, Sync);
+
+/// GNU's pending-quit bracket, including Rust panic exits from a watcher.
+#[derive(Debug)]
+#[must_use = "finish the pending-quit bracket"]
+pub(super) struct UnwindQuitScope<'a> {
+    roots: UnwindVmRootsScope<'a>,
+    pending: Option<Value>,
+}
+impl<'a> UnwindQuitScope<'a> {
+    #[inline]
+    pub(super) fn enter(context: &'a mut Context) -> Self {
+        let pending = Some(context.quit_flag_value());
+        let roots = if pending.is_some_and(|value| !value.is_nil()) {
+            UnwindVmRootsScope::enter(context)
+        } else {
+            UnwindVmRootsScope::idle(context)
+        };
+        let mut guard = Self { roots, pending };
+        if let Some(quitf) = pending.filter(|value| !value.is_nil()) {
+            guard.roots.context().push_vm_frame_root(quitf);
+            guard.roots.context().set_quit_flag_value(Value::NIL);
+        }
+        guard
+    }
+    #[inline]
+    pub(super) fn context(&mut self) -> &mut Context {
+        self.roots.context()
+    }
+    #[inline]
+    fn restore(&mut self) {
+        if let Some(quitf) = self.pending.take()
+            && !quitf.is_nil()
+            && self.roots.context().quit_flag_value().is_nil()
+        {
+            self.roots.context().set_quit_flag_value(quitf);
+        }
+    }
+    #[inline]
+    pub(super) fn finish(mut self, result: EvalResult) -> EvalResult {
+        self.restore();
+        result
+    }
+    #[inline]
+    fn finish_unbind(mut self, result: Result<(), Flow>) -> Result<(), Flow> {
+        self.restore();
+        result
+    }
+}
+impl Drop for UnwindQuitScope<'_> {
+    #[inline]
+    fn drop(&mut self) {
+        self.restore();
+    }
+}
+static_assertions::assert_not_impl_any!(UnwindQuitScope<'static>: Send, Sync);
+
 impl Context {
     // Shared runtime write path for symbol-cell mutation. This mirrors GNU
     // `set_internal` after lexical handling has already been decided.
@@ -997,252 +1135,239 @@ impl Context {
     }
 
     pub(crate) fn unbind_to_result(&mut self, count: usize) -> Result<(), Flow> {
-        // Mirrors GNU `unbind_to` in `eval.c:3907-3930`: suppress a
-        // pending quit during cleanup so `unwind-protect` cleanup forms
-        // run to completion, then restore the pending state on exit if
-        // no inner form replaced it. Without this an interactive `C-g`
-        // arriving during a long-running protected form would abort the
-        // CLEANUP clause mid-way, leaving resources in a bad state.
-        let quitf = self.quit_flag_value();
-        if !quitf.is_nil() {
-            self.set_quit_flag_value(Value::NIL);
-        }
+        let mut quit_scope = UnwindQuitScope::enter(self);
+        let context = quit_scope.context();
         let result = (|| -> Result<(), Flow> {
-            while self.specpdl.len() > count {
-                let binding = self.specpdl.pop().unwrap();
-                match binding {
-                    SpecBinding::Let { sym_id, old_value } => {
-                        let old_value = old_value.get();
-                        let still_plain = self.obarray.get_by_id(sym_id).is_none_or(|s| {
-                            s.redirect() == crate::emacs_core::symbol::SymbolRedirect::Plainval
-                        });
-                        if still_plain && self.watchers.has_watchers(sym_id) {
-                            let restore_val = old_value.unwrap_or(Value::NIL);
-                            self.run_variable_watchers_by_id(
-                                sym_id,
-                                &restore_val,
-                                &Value::NIL,
-                                "unlet",
-                            )?;
-                            // `do_one_unbind` hands a trapped plain cell to
-                            // `set_internal`, which restores on the arm the
-                            // watcher left (`src/eval.c:3848-3860`).
-                            self.set_internal_after_watchers(
-                                sym_id,
-                                old_value.unwrap_or(Value::UNBOUND),
-                                crate::emacs_core::symbol::SetInternalBind::Unbind,
-                            )?;
-                        } else if still_plain {
-                            match old_value {
-                                Some(val) => {
-                                    self.obarray.set_symbol_value_id(sym_id, val);
-                                    self.sync_cached_runtime_binding_by_id(sym_id, val);
-                                    self.sync_user_test_gc_binding_by_id(sym_id);
-                                }
-                                None => {
-                                    self.obarray.makunbound_id(sym_id);
-                                    self.sync_cached_runtime_binding_by_id(sym_id, Value::NIL);
-                                    self.sync_user_test_gc_binding_by_id(sym_id);
-                                }
-                            }
-                        } else {
-                            self.restore_default_binding_by_id(
-                                sym_id,
-                                old_value,
-                                crate::emacs_core::symbol::SetInternalBind::Unbind,
-                            )?;
-                        }
-                    }
-                    SpecBinding::LetLocal {
-                        sym_id,
-                        old_value,
-                        buffer_id,
-                    } => {
-                        // Restore only if the buffer is still live AND the
-                        // variable is *still* buffer-local in that buffer.
-                        // Mirrors GNU `do_one_unbind` SPECPDL_LET_LOCAL
-                        // arm at `eval.c:3852-3863`:
-                        //     /* If this was a local binding, reset the value in
-                        //        the appropriate buffer, but only if that buffer's
-                        //        binding still exists.  */
-                        //     if (!NILP (Flocal_variable_p (symbol, where)))
-                        //       set_internal (symbol, old_value, where, UNBIND);
-                        //
-                        // The `Flocal_variable_p` guard is load-bearing: if the
-                        // local binding was eliminated *inside* the `let` body
-                        // (e.g. `kill-all-local-variables` killed a non-permanent
-                        // local), GNU does NOT restore the old value — the kill
-                        // wins. Without this guard neomacs resurrected the old
-                        // local value, leaking stale buffer-local state across a
-                        // major-mode switch (the org/derived-mode hook-loss path:
-                        // `delay-mode-hooks`/`delayed-mode-hooks` machinery relies
-                        // on KALV's reset surviving the surrounding `let`).
-                        use crate::emacs_core::symbol::{SetInternalBind, SymbolRedirect};
-                        let is_localized = self
-                            .obarray
-                            .get_by_id(sym_id)
-                            .map(|s| s.redirect() == SymbolRedirect::Localized)
-                            .unwrap_or(false);
-                        let still_local = match self.buffers.get(buffer_id) {
-                            None => false,
-                            Some(buf) => {
-                                if is_localized {
-                                    let buf_val = Value::make_buffer(buffer_id);
-                                    self.obarray.has_per_buffer_binding(
-                                        sym_id,
-                                        buf_val,
-                                        buf.local_var_alist_value(),
-                                    )
-                                } else {
-                                    // `is_localized` is false here, so a non-slot,
-                                    // non-undo symbol is never in the alist: gate the
-                                    // scan away (slot/undo still resolve).
-                                    buf.has_buffer_local_by_sym_id_gated(sym_id, false)
-                                }
-                            }
-                        };
-                        if still_local {
-                            if self.watchers.has_watchers(sym_id) {
-                                self.run_variable_watchers_by_id_with_where(
-                                    sym_id,
-                                    &old_value,
-                                    &Value::NIL,
-                                    "unlet",
-                                    &Value::make_buffer(buffer_id),
-                                )?;
-                            }
-                            // Phase 10E: for LOCALIZED symbols, restore via
-                            // set_internal_localized(UNBIND) targeting the
-                            // saved buffer. This walks the buffer's alist
-                            // and rewrites the cell's cdr in place,
-                            // matching GNU's set_internal LOCALIZED arm
-                            // and bypassing the legacy lisp_bindings path.
-                            if is_localized {
-                                let buf_val = Value::make_buffer(buffer_id);
-                                let alist = self
-                                    .buffers
-                                    .get(buffer_id)
-                                    .map(|buf| buf.local_var_alist_value())
-                                    .unwrap_or(Value::NIL);
-                                let new_alist = self.obarray.set_internal_localized(
-                                    sym_id,
-                                    old_value,
-                                    buf_val,
-                                    alist,
-                                    SetInternalBind::Unbind,
-                                    false,
-                                );
-                                if let Some(buf) = self.buffers.get_mut(buffer_id) {
-                                    buf.replace_local_var_alist(new_alist);
-                                }
-                            } else {
-                                let _ = self.buffers.set_buffer_local_property_by_sym_id(
-                                    buffer_id, sym_id, old_value,
-                                );
-                            }
-                            self.sync_cached_runtime_binding_by_id(sym_id, old_value);
-                            self.sync_user_test_gc_binding_by_id(sym_id);
-                        }
-                    }
-                    SpecBinding::LetDefault {
-                        sym_id, old_value, ..
-                    } => {
-                        let old_value = old_value.get();
-                        self.restore_default_binding_by_id(
-                            sym_id,
-                            old_value,
-                            crate::emacs_core::symbol::SetInternalBind::Unbind,
-                        )?;
-                    }
-                    SpecBinding::LexicalEnv { old_lexenv } => {
-                        // Mirrors GNU unbind_to for
-                        // specbind(Qinternal_interpreter_environment, ...).
-                        self.lexenv = old_lexenv;
-                    }
-                    SpecBinding::GcRoot { .. } => {}
-                    SpecBinding::Backtrace { args, .. } => {
-                        self.release_backtrace_args(&args);
-                        // No-op, matches GNU SPECPDL_BACKTRACE
-                    }
-                    SpecBinding::Backtrace1 { .. }
-                    | SpecBinding::Backtrace2 { .. }
-                    | SpecBinding::BacktraceNative { .. } => {
-                        // Inline evaluated backtraces own no side-stack payload.
-                    }
-                    SpecBinding::Nop => {
-                        // No-op, matches GNU SPECPDL_NOP
-                    }
-                    SpecBinding::UnwindProtect {
-                        forms: cleanup,
-                        lexenv,
-                    } => match self.lisp_execution() {
-                        // GNU's `Fkill_emacs` is `attributes: noreturn`
-                        // (src/emacs.c:2974) and ends in `exit (exit_code)` (:3088)
-                        // without ever reaching `unbind_to`, so a cleanup form
-                        // still on the specpdl when `kill-emacs` is called
-                        // never runs.  This port has to drain the specpdl to
-                        // walk back out to `main`; the drain must not evaluate
-                        // what GNU has already exited past.  The binding
-                        // restorations below/above still run -- see
-                        // [`LispExecution`] for why that is invisible.
-                        LispExecution::ExitedAlready => {}
-                        LispExecution::Live => {
-                            // Entry already popped — re-entrant errors won't re-unwind.
-                            let saved_lexenv = self.lexenv;
-                            self.lexenv = lexenv;
-                            let cleanup_result = {
-                                let mut guard = UnwindCleanupGuard::enter(self);
-                                if cleanup.is_cons() || cleanup.is_nil() {
-                                    // Interpreter path: list of forms
-                                    guard.context().sf_progn_value(cleanup)
-                                } else {
-                                    // VM path: callable (bytecode function)
-                                    guard.context().apply(cleanup, vec![])
-                                }
-                            };
-                            self.lexenv = saved_lexenv;
-                            cleanup_result?;
-                        }
-                    },
-                    SpecBinding::SaveExcursion { marker, .. } => {
-                        // GNU editfns.c:792-803 follows the saved marker's
-                        // current buffer, including after buffer-swap-text.
-                        if let Some(location) =
-                            super::super::marker::marker_location(&self.buffers, marker)
-                        {
-                            self.restore_current_buffer_if_live(location.buffer());
-                            let _ = self
-                                .buffers
-                                .goto_buffer_emacs_byte_pos(location.buffer(), location.byte_pos());
-                        }
-                        super::super::marker::unchain_marker(&mut self.buffers, &marker);
-                    }
-                    SpecBinding::SaveCurrentBuffer { buffer_id } => {
-                        self.restore_current_buffer_if_live(buffer_id);
-                    }
-                    SpecBinding::SaveRestriction { state } => {
-                        self.buffers
-                            .restore_saved_restriction_state(state.into_state());
-                    }
-                    SpecBinding::LoadsInProgress { len } => {
-                        self.loads_in_progress.truncate(len);
-                    }
-                    SpecBinding::RequireStack { len } => {
-                        self.require_stack.truncate(len);
-                    }
-                    SpecBinding::NativeUnwind { action } => {
-                        action.run(self)?;
-                    }
-                }
+            while context.specpdl.len() > count {
+                let Some(binding) = context.specpdl.pop() else {
+                    break;
+                };
+                context.unbind_popped_binding(binding)?;
             }
             Ok(())
         })();
-        // If cleanup forms didn't set their own quit, reinstate the
-        // pending state. Matches `eval.c:3927-3928`.
-        if !quitf.is_nil() && self.quit_flag_value().is_nil() {
-            self.set_quit_flag_value(quitf);
+        quit_scope.finish_unbind(result)
+    }
+
+    fn unbind_popped_binding(&mut self, binding: SpecBinding) -> Result<(), Flow> {
+        match binding {
+            SpecBinding::Let { sym_id, old_value } => {
+                let old_value = old_value.get();
+                let still_plain = self.obarray.get_by_id(sym_id).is_none_or(|s| {
+                    s.redirect() == crate::emacs_core::symbol::SymbolRedirect::Plainval
+                });
+                if still_plain && self.watchers.has_watchers(sym_id) {
+                    let restore_val = old_value.unwrap_or(Value::NIL);
+                    self.run_variable_watchers_by_id(sym_id, &restore_val, &Value::NIL, "unlet")?;
+                    // A watcher can change the redirect arm. Restore through
+                    // the arm it left, as GNU do_one_unbind does.
+                    self.set_internal_after_watchers(
+                        sym_id,
+                        old_value.unwrap_or(Value::UNBOUND),
+                        crate::emacs_core::symbol::SetInternalBind::Unbind,
+                    )?;
+                } else if still_plain {
+                    match old_value {
+                        Some(val) => {
+                            self.obarray.set_symbol_value_id(sym_id, val);
+                            self.sync_cached_runtime_binding_by_id(sym_id, val);
+                            self.sync_user_test_gc_binding_by_id(sym_id);
+                        }
+                        None => {
+                            self.obarray.makunbound_id(sym_id);
+                            self.sync_cached_runtime_binding_by_id(sym_id, Value::NIL);
+                            self.sync_user_test_gc_binding_by_id(sym_id);
+                        }
+                    }
+                } else {
+                    self.restore_default_binding_by_id(
+                        sym_id,
+                        old_value,
+                        crate::emacs_core::symbol::SetInternalBind::Unbind,
+                    )?;
+                }
+            }
+            SpecBinding::LetLocal {
+                sym_id,
+                old_value,
+                buffer_id,
+            } => {
+                // Restore only if the buffer is still live AND the
+                // variable is *still* buffer-local in that buffer.
+                // Mirrors GNU `do_one_unbind` SPECPDL_LET_LOCAL
+                // arm at `eval.c:3852-3863`:
+                //     /* If this was a local binding, reset the value in
+                //        the appropriate buffer, but only if that buffer's
+                //        binding still exists.  */
+                //     if (!NILP (Flocal_variable_p (symbol, where)))
+                //       set_internal (symbol, old_value, where, UNBIND);
+                //
+                // The `Flocal_variable_p` guard is load-bearing: if the
+                // local binding was eliminated *inside* the `let` body
+                // (e.g. `kill-all-local-variables` killed a non-permanent
+                // local), GNU does NOT restore the old value — the kill
+                // wins. Without this guard neomacs resurrected the old
+                // local value, leaking stale buffer-local state across a
+                // major-mode switch (the org/derived-mode hook-loss path:
+                // `delay-mode-hooks`/`delayed-mode-hooks` machinery relies
+                // on KALV's reset surviving the surrounding `let`).
+                use crate::emacs_core::symbol::{SetInternalBind, SymbolRedirect};
+                let is_localized = self
+                    .obarray
+                    .get_by_id(sym_id)
+                    .map(|s| s.redirect() == SymbolRedirect::Localized)
+                    .unwrap_or(false);
+                let still_local = match self.buffers.get(buffer_id) {
+                    None => false,
+                    Some(buf) => {
+                        if is_localized {
+                            let buf_val = Value::make_buffer(buffer_id);
+                            self.obarray.has_per_buffer_binding(
+                                sym_id,
+                                buf_val,
+                                buf.local_var_alist_value(),
+                            )
+                        } else {
+                            // `is_localized` is false here, so a non-slot,
+                            // non-undo symbol is never in the alist: gate the
+                            // scan away (slot/undo still resolve).
+                            buf.has_buffer_local_by_sym_id_gated(sym_id, false)
+                        }
+                    }
+                };
+                if still_local {
+                    if self.watchers.has_watchers(sym_id) {
+                        self.run_variable_watchers_by_id_with_where(
+                            sym_id,
+                            &old_value,
+                            &Value::NIL,
+                            "unlet",
+                            &Value::make_buffer(buffer_id),
+                        )?;
+                    }
+                    // Phase 10E: for LOCALIZED symbols, restore via
+                    // set_internal_localized(UNBIND) targeting the
+                    // saved buffer. This walks the buffer's alist
+                    // and rewrites the cell's cdr in place,
+                    // matching GNU's set_internal LOCALIZED arm
+                    // and bypassing the legacy lisp_bindings path.
+                    if is_localized {
+                        let buf_val = Value::make_buffer(buffer_id);
+                        let alist = self
+                            .buffers
+                            .get(buffer_id)
+                            .map(|buf| buf.local_var_alist_value())
+                            .unwrap_or(Value::NIL);
+                        let new_alist = self.obarray.set_internal_localized(
+                            sym_id,
+                            old_value,
+                            buf_val,
+                            alist,
+                            SetInternalBind::Unbind,
+                            false,
+                        );
+                        if let Some(buf) = self.buffers.get_mut(buffer_id) {
+                            buf.replace_local_var_alist(new_alist);
+                        }
+                    } else {
+                        let _ = self
+                            .buffers
+                            .set_buffer_local_property_by_sym_id(buffer_id, sym_id, old_value);
+                    }
+                    self.sync_cached_runtime_binding_by_id(sym_id, old_value);
+                    self.sync_user_test_gc_binding_by_id(sym_id);
+                }
+            }
+            SpecBinding::LetDefault {
+                sym_id, old_value, ..
+            } => {
+                let old_value = old_value.get();
+                self.restore_default_binding_by_id(
+                    sym_id,
+                    old_value,
+                    crate::emacs_core::symbol::SetInternalBind::Unbind,
+                )?;
+            }
+            SpecBinding::LexicalEnv { old_lexenv } => {
+                // Mirrors GNU unbind_to for
+                // specbind(Qinternal_interpreter_environment, ...).
+                self.lexenv = old_lexenv;
+            }
+            SpecBinding::GcRoot { .. } => {}
+            SpecBinding::Backtrace { args, .. } => {
+                self.release_backtrace_args(&args);
+                // No-op, matches GNU SPECPDL_BACKTRACE
+            }
+            SpecBinding::Backtrace1 { .. }
+            | SpecBinding::Backtrace2 { .. }
+            | SpecBinding::BacktraceNative { .. } => {
+                // Inline evaluated backtraces own no side-stack payload.
+            }
+            SpecBinding::Nop => {
+                // No-op, matches GNU SPECPDL_NOP
+            }
+            SpecBinding::UnwindProtect {
+                forms: cleanup,
+                lexenv,
+            } => match self.lisp_execution() {
+                // GNU's `Fkill_emacs` is `attributes: noreturn`
+                // (src/emacs.c:2974) and ends in `exit (exit_code)` (:3088)
+                // without ever reaching `unbind_to`, so a cleanup form
+                // still on the specpdl when `kill-emacs` is called
+                // never runs.  This port has to drain the specpdl to
+                // walk back out to `main`; the drain must not evaluate
+                // what GNU has already exited past.  The binding
+                // restorations below/above still run -- see
+                // [`LispExecution`] for why that is invisible.
+                LispExecution::ExitedAlready => {}
+                LispExecution::Live => {
+                    // Entry already popped — re-entrant errors won't re-unwind.
+                    let saved_lexenv = self.lexenv;
+                    self.lexenv = lexenv;
+                    let cleanup_result = {
+                        let mut guard = UnwindCleanupGuard::enter(self);
+                        if cleanup.is_cons() || cleanup.is_nil() {
+                            // Interpreter path: list of forms
+                            guard.context().sf_progn_value(cleanup)
+                        } else {
+                            // VM path: callable (bytecode function)
+                            guard.context().apply(cleanup, vec![])
+                        }
+                    };
+                    self.lexenv = saved_lexenv;
+                    cleanup_result?;
+                }
+            },
+            SpecBinding::SaveExcursion { marker, .. } => {
+                // GNU editfns.c:792-803 follows the saved marker's
+                // current buffer, including after buffer-swap-text.
+                if let Some(location) = super::super::marker::marker_location(&self.buffers, marker)
+                {
+                    self.restore_current_buffer_if_live(location.buffer());
+                    let _ = self
+                        .buffers
+                        .goto_buffer_emacs_byte_pos(location.buffer(), location.byte_pos());
+                }
+                super::super::marker::unchain_marker(&mut self.buffers, &marker);
+            }
+            SpecBinding::SaveCurrentBuffer { buffer_id } => {
+                self.restore_current_buffer_if_live(buffer_id);
+            }
+            SpecBinding::SaveRestriction { state } => {
+                self.buffers
+                    .restore_saved_restriction_state(state.into_state());
+            }
+            SpecBinding::LoadsInProgress { len } => {
+                self.loads_in_progress.truncate(len);
+            }
+            SpecBinding::RequireStack { len } => {
+                self.require_stack.truncate(len);
+            }
+            SpecBinding::NativeUnwind { action } => {
+                action.run(self)?;
+            }
         }
-        result
+        Ok(())
     }
 }
 
