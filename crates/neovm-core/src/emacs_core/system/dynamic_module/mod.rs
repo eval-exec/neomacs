@@ -305,27 +305,20 @@ pub struct emacs_env_private {
 // Global module state
 // ============================================================================
 
+/// A loaded module's shared library, kept mapped until the process exits or
+/// the same path loads again.
+///
+/// Only the library outlives `module-load`. GNU's `Fmodule_load` keeps the
+/// runtime and its initialization environment on the C stack, valid only while
+/// the module's init function runs, so they are freed when loading returns,
+/// as on the failure paths. The environment holds evaluator-local values; it
+/// never belonged in this process-wide registry.
 pub struct LoadedModule {
     #[allow(dead_code)]
     library: Library,
-    #[allow(dead_code)]
-    runtime: Box<emacs_runtime>,
-    #[allow(dead_code)]
-    runtime_priv: Box<emacs_runtime_private>,
-    #[allow(dead_code)]
-    env: Box<emacs_env>,
-    #[allow(dead_code)]
-    env_priv: Box<emacs_env_private>,
 }
 
-// SAFETY: neomacs runs single-threaded. Module state is never accessed
-// from threads other than the main Lisp evaluation thread.
-unsafe impl Send for emacs_runtime {}
-unsafe impl Sync for emacs_runtime {}
-unsafe impl Send for emacs_runtime_private {}
-unsafe impl Sync for emacs_runtime_private {}
-unsafe impl Send for LoadedModule {}
-unsafe impl Sync for LoadedModule {}
+static_assertions::assert_impl_all!(LoadedModule: Send, Sync);
 
 static LOADED_MODULES: Mutex<Option<HashMap<String, LoadedModule>>> = Mutex::new(None);
 
@@ -2231,17 +2224,14 @@ pub fn load_module(ctx: &mut Context, path: std::path::PathBuf) -> EvalResult {
     }
 
     unsafe { finalize_storage(&mut env_priv.storage) };
-    env_priv.non_local_exit_symbol = Value::NIL;
-    env_priv.non_local_exit_data = Value::NIL;
-    let rt_priv_reconstructed = unsafe { Box::from_raw(rt.private_members) };
+    // SAFETY: `private_members` came from `Box::into_raw` above and nothing
+    // else frees it. Init has returned, so no module code reads the runtime.
+    drop(unsafe { Box::from_raw(rt.private_members) });
+    drop(rt);
+    drop(env_box);
+    drop(env_priv);
 
-    let loaded = LoadedModule {
-        library: lib,
-        runtime: rt,
-        runtime_priv: rt_priv_reconstructed,
-        env: env_box,
-        env_priv,
-    };
+    let loaded = LoadedModule { library: lib };
 
     // Heal poison rather than unwrap: the registry is a plain map with no
     // invariant spanning the lock (an interrupted insert either happened or

@@ -962,10 +962,11 @@ enum LispValueVecStorage {
     Mapped { ptr: *const TaggedValue, len: usize },
 }
 
-// Mapped slots are read-only through shared references.  Mutation paths use
-// `ensure_owned` before exposing `&mut Vec<TaggedValue>`.
-unsafe impl Send for LispValueVecStorage {}
-unsafe impl Sync for LispValueVecStorage {}
+// Vector payloads hold Lisp values, so they stay on their mutator thread like
+// the values themselves; the collector reads them only through typed scan
+// snapshots. Mapped slots are read-only through shared references, and
+// mutation paths use `ensure_owned` before exposing `&mut Vec<TaggedValue>`.
+static_assertions::assert_not_impl_any!(LispValueVecStorage: Send, Sync);
 
 impl std::fmt::Debug for LispValueVec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
