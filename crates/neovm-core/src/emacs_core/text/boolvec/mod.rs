@@ -227,6 +227,36 @@ fn allocate_zeroed_bool_vector_words(
     }
 }
 
+/// Allocate empty u64 word backing for the truthy fill path (GNU
+/// alloc.c:2145-2169, 2183-2190). The checked extent is arithmetic-only and
+/// allocator-independent; the storage contains no Lisp or mutator state.
+/// Vec owns the Global allocation immediately, with zero initialized words;
+/// the existing resize supplies all-one words before bool-vector adoption.
+/// InvalidLayout and NullAllocation remain typed for live memory delivery.
+#[inline]
+#[deny(clippy::wildcard_enum_match_arm)]
+fn allocate_bool_vector_word_capacity(
+    extent: BoolVectorWordLayout,
+) -> Result<Vec<u64>, crate::emacs_core::alloc::AllocationFailure> {
+    match extent {
+        BoolVectorWordLayout::Empty => Ok(Vec::new()),
+        BoolVectorWordLayout::Nonempty { words, layout } => {
+            // SAFETY: the witness checked this nonzero Layout::array::<u64>,
+            // including alignment and isize size limits. alloc uses the
+            // Global allocator; null is handled before storage adoption.
+            let pointer = unsafe { std::alloc::alloc(layout) };
+            let pointer = NonNull::new(pointer)
+                .ok_or(crate::emacs_core::alloc::AllocationFailure::NullAllocation)?
+                .cast::<u64>();
+            // SAFETY: unique Global storage has exactly Vec<u64>'s layout for
+            // capacity words. Length zero exposes no uninitialized word.
+            // Immediate ownership has no alias or intervening fallible step;
+            // Vec growth and Drop retain the same allocator and exact layout.
+            Ok(unsafe { Vec::from_raw_parts(pointer.as_ptr(), 0, words.get()) })
+        }
+    }
+}
+
 /// A new bool-vector holding `bits`.
 pub(crate) fn bool_vector_from_bits(bits: &[bool]) -> Value {
     let mut words = vec![0u64; BoolVectorObj::words_for(bits.len())];
@@ -357,8 +387,8 @@ fn make_bool_vector(
     // GNU alloc.c:2183-2190: failed backing storage is memory_full.
     let nwords = BoolVectorObj::words_for(length);
     let words = if args[1].is_truthy() {
-        let mut words = Vec::new();
-        words.try_reserve_exact(nwords)?;
+        let mut words =
+            allocate_bool_vector_word_capacity(BoolVectorWordLayout::try_from(nwords)?)?;
         words.resize(nwords, u64::MAX);
         words
     } else {

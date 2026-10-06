@@ -11,6 +11,69 @@ use crate::emacs_core::value::{HashProbe, HashTableMakeKeyword, ValueKind, VecLi
 // Vector operations
 // ===========================================================================
 
+/// Checked backing extent for a Value vector. Nonempty storage has exactly
+/// the size and alignment of `elements` Values; empty storage never reaches
+/// the allocator. Only arithmetic metadata is retained, so this witness is
+/// Send + Sync and independent of any mutator or GC. It grants no permission
+/// to transfer the Lisp Values subsequently stored in the allocation.
+#[derive(Clone, Copy, Debug)]
+enum VectorElementLayout {
+    Empty,
+    Nonempty {
+        elements: std::num::NonZeroUsize,
+        layout: std::alloc::Layout,
+    },
+}
+
+static_assertions::assert_impl_all!(VectorElementLayout: Send, Sync);
+
+impl TryFrom<usize> for VectorElementLayout {
+    type Error = crate::emacs_core::alloc::AllocationFailure;
+
+    #[inline]
+    fn try_from(elements: usize) -> Result<Self, Self::Error> {
+        let Some(elements) = std::num::NonZeroUsize::new(elements) else {
+            return Ok(Self::Empty);
+        };
+        let layout = std::alloc::Layout::array::<Value>(elements.get())?;
+        Ok(Self::Nonempty { elements, layout })
+    }
+}
+
+/// Allocate empty Value backing through Rust's global allocator. GNU
+/// alloc.c:3399-3400 rejects an unrepresentable extent; alloc.c:3353-3383 and
+/// 4142 deliver backing allocation failure through memory-signal-data.
+/// InvalidLayout and NullAllocation remain typed until the invoking mutator
+/// selects its live memory condition. No Lisp allocation or GC occurs here;
+/// Vec immediately owns the storage, while its existing resize initializes
+/// the Values and the existing Value::vector adoption registers the result.
+#[inline]
+#[deny(clippy::wildcard_enum_match_arm)]
+fn allocate_vector_elements(
+    extent: VectorElementLayout,
+) -> Result<Vec<Value>, crate::emacs_core::alloc::AllocationFailure> {
+    match extent {
+        VectorElementLayout::Empty => Ok(Vec::new()),
+        VectorElementLayout::Nonempty { elements, layout } => {
+            // SAFETY: the private witness checked Layout::array::<Value> for
+            // this nonzero capacity, including Value alignment and isize size
+            // limits. alloc uses the Global allocator, and null is handled
+            // before the storage can be adopted or dereferenced.
+            let pointer = unsafe { std::alloc::alloc(layout) };
+            let pointer = std::ptr::NonNull::new(pointer)
+                .ok_or(crate::emacs_core::alloc::AllocationFailure::NullAllocation)?
+                .cast::<Value>();
+            // SAFETY: this unique Global allocation exactly matches the
+            // Vec<Value> capacity's Layout::array::<Value>. Length zero exposes
+            // no uninitialized Values. Immediate adoption has no alias or
+            // intervening fallible step; ordinary Vec growth and Drop use the
+            // same global allocator and matching Value layout. Stored Values
+            // retain their existing invoking-mutator ownership contract.
+            Ok(unsafe { Vec::from_raw_parts(pointer.as_ptr(), 0, elements.get()) })
+        }
+    }
+}
+
 pub(crate) fn builtin_make_vector(args: Vec<Value>) -> EvalResult {
     make_vector(args).map_err(crate::emacs_core::alloc::AllocationFailure::into_flow)
 }
@@ -27,8 +90,7 @@ fn make_vector(args: Vec<Value>) -> Result<Value, crate::emacs_core::alloc::Allo
     let len = expect_wholenump(&args[0])? as usize;
     // GNU alloc.c:3399-3400 rejects unrepresentable vector storage and
     // lisp_malloc reports allocation failure as a Lisp condition.
-    let mut elements = Vec::new();
-    elements.try_reserve_exact(len)?;
+    let mut elements = allocate_vector_elements(VectorElementLayout::try_from(len)?)?;
     elements.resize(len, args[1]);
     Ok(Value::vector(elements))
 }
@@ -1765,3 +1827,7 @@ mod aset_string_in_place_test;
 #[cfg(test)]
 #[path = "tests/gc_tls_collections_test.rs"]
 mod gc_tls_ownership_tests;
+
+#[cfg(test)]
+#[path = "tests/vector_storage.rs"]
+mod vector_storage_tests;
