@@ -2788,7 +2788,7 @@ fn subst_char_in_region_rejects_different_utf8_lengths() {
             assert_eq!(
                 sig.data,
                 vec![Value::string(
-                    "Characters in `subst-char-in-region' have different byte-lengths",
+                    "Characters in ‘subst-char-in-region’ have different byte-lengths",
                 )]
             );
         }
@@ -3938,7 +3938,7 @@ fn buffer_swap_text_rejects_dead_and_indirect_buffers_like_gnu() {
         &mut eval,
         vec![Value::make_buffer(other_id)],
     ));
-    assert_eq!(indirect_message, "Cannot swap indirect buffers's text");
+    assert_eq!(indirect_message, "Cannot swap indirect buffers’s text");
 
     eval.buffers.set_current(base_id);
     let has_indirect_message = buffer_swap_text_signal_message(builtin_buffer_swap_text(
@@ -3957,7 +3957,7 @@ fn buffer_swap_text_rejects_dead_and_indirect_buffers_like_gnu() {
         &mut eval,
         vec![Value::make_buffer(dead_id)],
     ));
-    assert_eq!(dead_message, "Cannot swap a dead buffer's text");
+    assert_eq!(dead_message, "Cannot swap a dead buffer’s text");
 }
 
 #[test]

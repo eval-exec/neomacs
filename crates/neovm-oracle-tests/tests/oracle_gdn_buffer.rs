@@ -11,6 +11,16 @@ fn oracle_gdn_buf07() {
 }
 
 #[test]
+fn oracle_gdn_buf18() {
+    common::assert_oracle_parity_expect(
+        r#"(with-temp-buffer (insert "abé") (subst-char-in-region 1 4 ?a ?é))"#,
+        expect_test::expect![[
+            r#""ERR (error \"Characters in ‘subst-char-in-region’ have different byte-lengths\")""#
+        ]],
+    );
+}
+
+#[test]
 fn oracle_gdn_word_motion_scripts_categories_and_overrides() {
     common::assert_oracle_parity_expect(
         r#"(list
@@ -135,6 +145,22 @@ fn oracle_gdn_word_motion_preserves_emacs_character_codes() {
             (list nil (string #x110000 ?a) #x110000)))"#,
         expect_test::expect![[
             r#""OK ((((2 2) (3 1) (2 2)) ((2 2) (3 1) (2 2)) ((2 2) (3 1) (2 2)) ((2 2) (3 1) (2 2))) (((2 2) (3 1) (2 2)) ((2 2) (3 1) (2 2)) ((2 2) (3 1) (2 2)) ((2 2) (3 1) (2 2))) (((2 2) (3 1) (2 2)) ((2 2) (3 1) (2 2)) ((2 2) (3 1) (2 2)) ((2 2) (3 1) (2 2))))""#
+        ]],
+    );
+}
+
+#[test]
+fn oracle_gdn_native_error_quoting_styles() {
+    common::assert_oracle_parity_expect(
+        r#"(mapcar (lambda (style)
+      (let ((text-quoting-style style))
+        (list (condition-case e (with-temp-buffer (insert "abé")
+          (subst-char-in-region 1 4 ?a ?é)) (error e))
+          (let ((dead (generate-new-buffer "dead"))) (kill-buffer dead)
+            (condition-case e (buffer-swap-text dead) (error e))))))
+      '(curve grave straight))"#,
+        expect_test::expect![[
+            r#""OK (((error \"Characters in ‘subst-char-in-region’ have different byte-lengths\") (error \"Cannot swap a dead buffer’s text\")) ((error \"Characters in `subst-char-in-region' have different byte-lengths\") (error \"Cannot swap a dead buffer's text\")) ((error \"Characters in 'subst-char-in-region' have different byte-lengths\") (error \"Cannot swap a dead buffer's text\")))""#
         ]],
     );
 }

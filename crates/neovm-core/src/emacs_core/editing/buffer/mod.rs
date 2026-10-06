@@ -1425,7 +1425,11 @@ pub(crate) fn builtin_buffer_swap_text(
     buffers
         .swap_buffer_text(current_id, other_id)
         .map(|()| Value::NIL)
-        .map_err(|err| signal("error", vec![Value::string(err.message())]))
+        .map_err(|err| {
+            eval.signal_c_error(crate::emacs_core::errors::CErrorMessage::from(
+                err.message(),
+            ))
+        })
 }
 
 pub(crate) fn builtin_insert_buffer_substring(
@@ -4101,12 +4105,11 @@ pub(crate) fn builtin_subst_char_in_region(
     // Unicode but diverge for raw bytes (C0/C1 overlong vs PUA sentinel)
     // and nonunicode codepoints.
     if from_bytes.len() != to_bytes.len() {
-        return Err(signal(
-            "error",
-            vec![Value::string(
+        return Err(
+            eval.signal_c_error(crate::emacs_core::errors::CErrorMessage::from(
                 "Characters in `subst-char-in-region' have different byte-lengths",
-            )],
-        ));
+            )),
+        );
     }
 
     let Some((range, changed_range)) = subst_char_in_region_scan(

@@ -420,3 +420,6 @@ fn every_insert_door_reads_the_string_after_the_change_hook_like_gnu() {
         "empty argument signals nothing"
     );
 }
+
+#[cfg(test)]
+mod gdn_primitives;
