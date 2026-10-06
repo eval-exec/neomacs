@@ -52,6 +52,17 @@ fn gnu_fixture(case: &str, form: &str, cached: &str) -> String {
 }
 
 #[test]
+fn gdn_buf14() {
+    let form = include_str!("gdn_primitives_cases/buf14.el");
+    let expected = gnu_fixture(
+        "buf14",
+        form,
+        include_str!("gdn_primitives_cases/buf14.expect"),
+    );
+    assert_eq!(runtime_startup_eval_one(form), expected);
+}
+
+#[test]
 fn gdn_buf15() {
     let form = include_str!("gdn_primitives_cases/buf15.el");
     let expected = gnu_fixture(

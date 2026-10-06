@@ -1445,7 +1445,6 @@ pub(crate) fn builtin_delete_char(
     // GNU cmds.c:233 uses CHECK_FIXNUM, including for bignums.
     let n = crate::emacs_core::error::expect_fixnum(&args[0])?;
     let killflag = args.get(1).is_some_and(|v| v.is_truthy());
-    ensure_current_buffer_writable_in_state(&ctx.obarray, &[], &ctx.buffers)?;
     if n.unsigned_abs() < 2 {
         // GNU `Fdelete_char' calls this too, but does not intern its name
         // on the way: every single-character deletion runs this line.

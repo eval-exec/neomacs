@@ -11,6 +11,14 @@ fn oracle_gdn_buf07() {
 }
 
 #[test]
+fn oracle_gdn_buf14() {
+    common::assert_oracle_parity_expect(
+        r#"(with-temp-buffer (insert "abc") (setq buffer-read-only t) (list (delete-char 0) (buffer-string)))"#,
+        expect_test::expect![[r#""OK (nil \"abc\")""#]],
+    );
+}
+
+#[test]
 fn oracle_gdn_buf15() {
     common::assert_oracle_parity_expect(
         r#"(with-temp-buffer (insert "abc") (goto-char 2) (delete-char nil))"#,
