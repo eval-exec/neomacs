@@ -854,6 +854,7 @@ pub(crate) fn builtin_upcase_in_state_1(
     upcase_with_override(
         &args,
         casetab,
+        super::super::casefiddle::CaseEncoding::for_current_buffer(eval),
         super::super::casefiddle::upcase_word_predicate(eval, &casetab),
     )
 }
@@ -861,6 +862,7 @@ pub(crate) fn builtin_upcase_in_state_1(
 fn upcase_with_override(
     args: &[Value],
     casetab: super::super::casetab::CaseTableOverride,
+    encoding: super::super::casefiddle::CaseEncoding,
     is_word: impl Fn(u32) -> bool,
 ) -> EvalResult {
     expect_args("upcase", args, 1)?;
@@ -882,18 +884,18 @@ fn upcase_with_override(
             }
             Ok(result)
         }
-        ValueKind::Fixnum(c) if (0..=0x3F_FFFF).contains(&c) => {
-            // GNU `upcase` consults the per-buffer upcase table first
-            // (`buffer.h:1656-1663`); only fall through to the hardwired
-            // Unicode mapping when the table has no explicit entry.
-            let mapped = casetab
-                .map(super::super::casetab::CaseMap::Up, c)
-                .unwrap_or_else(|| upcase_char_code_emacs_compat(c));
-            if let Some(ch) = u32::try_from(mapped).ok().and_then(char::from_u32) {
-                Ok(Value::fixnum(ch as i64))
-            } else {
-                Ok(Value::fixnum(c))
-            }
+        ValueKind::Fixnum(c) if c >= 0 => {
+            let code = super::super::casefiddle::CaseNatnum::try_from(c).map_err(|_| {
+                signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("char-or-string-p"), args[0]],
+                )
+            })?;
+            Ok(Value::fixnum(code.casify(
+                super::super::casefiddle::CaseAction::Up,
+                encoding,
+                &casetab,
+            )))
         }
         ValueKind::Fixnum(_) => Err(signal(
             LispCondition::WrongTypeArgument,
@@ -1040,6 +1042,7 @@ fn downcase_with_word_pred(
     args: &[Value],
     is_word: impl Fn(u32) -> bool,
     casetab: super::super::casetab::CaseTableOverride,
+    encoding: super::super::casefiddle::CaseEncoding,
 ) -> EvalResult {
     expect_args("downcase", args, 1)?;
     match args[0].kind() {
@@ -1060,18 +1063,18 @@ fn downcase_with_word_pred(
             }
             Ok(result)
         }
-        ValueKind::Fixnum(c) if (0..=0x3F_FFFF).contains(&c) => {
-            // GNU `downcase` consults the per-buffer downcase table first
-            // (`buffer.h:1648-1655`); fall through to the hardwired Unicode
-            // mapping only when there is no explicit entry.
-            let mapped = casetab
-                .map(super::super::casetab::CaseMap::Down, c)
-                .unwrap_or_else(|| downcase_char_code_emacs_compat(c));
-            if let Some(ch) = u32::try_from(mapped).ok().and_then(char::from_u32) {
-                Ok(Value::fixnum(ch as i64))
-            } else {
-                Ok(Value::fixnum(c))
-            }
+        ValueKind::Fixnum(c) if c >= 0 => {
+            let code = super::super::casefiddle::CaseNatnum::try_from(c).map_err(|_| {
+                signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("char-or-string-p"), args[0]],
+                )
+            })?;
+            Ok(Value::fixnum(code.casify(
+                super::super::casefiddle::CaseAction::Down,
+                encoding,
+                &casetab,
+            )))
         }
         ValueKind::Fixnum(_) => Err(signal(
             LispCondition::WrongTypeArgument,
@@ -1091,6 +1094,7 @@ pub(crate) fn builtin_downcase(args: Vec<Value>) -> EvalResult {
         &args,
         |_| false,
         super::super::casetab::CaseTableOverride::none(),
+        super::super::casefiddle::CaseEncoding::Multibyte,
     )
 }
 
@@ -1115,7 +1119,12 @@ pub(crate) fn builtin_downcase_in_state_1(
     let args: [Value; 1] = [obj];
     let is_word = casing_word_predicate(eval);
     let casetab = super::super::casetab::CaseTableOverride::for_current_buffer(eval)?;
-    downcase_with_word_pred(&args, is_word, casetab)
+    downcase_with_word_pred(
+        &args,
+        is_word,
+        casetab,
+        super::super::casefiddle::CaseEncoding::for_current_buffer(eval),
+    )
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up

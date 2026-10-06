@@ -17,6 +17,28 @@ fn gdm_casing_final_sigma() {
     );
 }
 
+// GNU casefiddle.c:248-277 strips event modifiers then restores them.
+#[test]
+fn gdm_casing_modifier_events() {
+    parity(
+        r#"(mapcar (lambda (fn) (mapcar (lambda (ch) (condition-case e (funcall fn ch) (error e))) (list ?\M-a ?\C-\S-a #x400000 (+ ?a (ash 1 27)) (ash 1 30) (+ (ash 1 32) 97) (+ (ash 1 40) 97) most-positive-fixnum ?\s-a (+ ?A (ash 1 22)) -1 (expt 2 80)))) '(upcase downcase capitalize upcase-initials))"#,
+        expect_test::expect![[
+            r###"OK ((134217793 33554433 4194304 134217793 1073741824 65 65 2305843009213693951 8388673 4194369 (wrong-type-argument char-or-string-p -1) (wrong-type-argument char-or-string-p 1208925819614629174706176)) (134217825 33554433 4194304 134217825 1073741824 4294967393 1099511627873 2305843009213693951 8388705 4194401 (wrong-type-argument char-or-string-p -1) (wrong-type-argument char-or-string-p 1208925819614629174706176)) (134217793 33554433 4194304 134217793 1073741824 65 65 2305843009213693951 8388673 4194369 (wrong-type-argument char-or-string-p -1) (wrong-type-argument char-or-string-p 1208925819614629174706176)) (134217793 33554433 4194304 134217793 1073741824 65 65 2305843009213693951 8388673 4194369 (wrong-type-argument char-or-string-p -1) (wrong-type-argument char-or-string-p 1208925819614629174706176)))"###
+        ]],
+    );
+}
+
+// GNU casefiddle.c:264-277 translates high unibyte bytes to byte8 characters.
+#[test]
+fn gdm_casing_unibyte_characters() {
+    parity(
+        r#"(mapcar (lambda (multi) (with-temp-buffer (set-buffer-multibyte multi) (mapcar (lambda (fn) (mapcar fn '(97 65 233 201 255 305 134218025))) '(upcase downcase capitalize upcase-initials)))) '(nil t))"#,
+        expect_test::expect![[
+            r###"OK (((65 65 233 201 255 305 134218024) (97 97 233 201 255 305 134218025) (65 65 233 201 255 73 134218024) (65 65 233 201 255 73 134218024)) ((65 65 201 201 376 305 134218024) (97 97 233 233 255 305 134218025) (65 65 201 201 376 73 134218024) (65 65 201 201 376 73 134218024)))"###
+        ]],
+    );
+}
+
 // GNU casefiddle.c:328-347 falls back to Unicode ASCII casing, never truncation.
 #[test]
 fn gdm_casing_unibyte_custom_table() {
@@ -46,6 +68,17 @@ fn gdm_casing_empty_table() {
         r#"(with-case-table (make-char-table 'case-table) (mapcar (lambda (fn) (list (funcall fn "A a É é ΣΑΣ") (mapcar fn '(65 97 201 233 223 304 64259 329 452 453 454 8064 8115 4304)) (funcall fn "ß İ ﬃ"))) '(upcase downcase capitalize upcase-initials)))"#,
         expect_test::expect![[
             r###"OK (("A a É é ΣΑΣ" (65 97 201 233 223 304 64259 329 452 453 454 8064 8115 4304) "SS İ FFI") ("A a É é ΣΑΣ" (65 97 201 233 223 304 64259 329 452 453 454 8064 8115 4304) "ß i̇ ﬃ") ("A A É É ΣΑΣ" (65 65 201 201 223 304 64259 329 453 453 453 8072 8124 4304) "Ss İ Ffi") ("A A É É ΣΑΣ" (65 65 201 201 223 304 64259 329 453 453 453 8072 8124 4304) "Ss İ Ffi"))"###
+        ]],
+    );
+}
+
+// GNU bytecode.c:Bupcase/Bdowncase and Bcall share the casing primitives.
+#[test]
+fn gdm_casing_compiled_calls() {
+    parity(
+        r#"(progn (require 'bytecomp) (let ((f (byte-compile '(lambda (obj) (list (upcase obj) (downcase obj) (capitalize obj) (upcase-initials obj)))))) (mapcar (lambda (obj) (mapcar (lambda (value) (if (stringp value) (list (string-to-list value) (multibyte-string-p value)) value)) (funcall f obj))) (list ?\M-a "ΣΑΣ" "ß" (unibyte-string 233 65) (+ ?A (ash 1 22))))))"#,
+        expect_test::expect![[
+            r###"OK ((134217793 134217825 134217793 134217793) (((931 913 931) t) ((963 945 962) t) ((931 945 962) t) ((931 913 931) t)) (((83 83) t) ((223) t) ((83 115) t) ((83 115) t)) (((233 65) nil) ((233 97) nil) ((233 97) nil) ((233 65) nil)) (4194369 4194401 4194369 4194369))"###
         ]],
     );
 }

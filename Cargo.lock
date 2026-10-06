@@ -4258,6 +4258,7 @@ version = "0.0.19"
 dependencies = [
  "aes",
  "base64 0.22.1",
+ "bitflags 2.13.1",
  "bytemuck",
  "cbc",
  "cranelift-codegen",

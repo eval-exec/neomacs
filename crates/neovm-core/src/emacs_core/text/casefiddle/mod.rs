@@ -267,6 +267,28 @@ enum CasingWordState {
     Inside,
 }
 
+/// Buffer encoding determines whether integer characters 128..255 denote
+/// Latin-1 or raw bytes. This call-local projection contains no shared state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CaseEncoding {
+    Unibyte,
+    Multibyte,
+}
+
+impl CaseEncoding {
+    pub(crate) fn for_current_buffer(ctx: &super::eval::Context) -> Self {
+        if ctx
+            .buffers
+            .current_buffer()
+            .is_some_and(|buf| !buf.get_multibyte())
+        {
+            Self::Unibyte
+        } else {
+            Self::Multibyte
+        }
+    }
+}
+
 /// Standard upcasing cannot change a capital sigma, so no syntax lookup is
 /// needed. A custom table may change it and requires GNU's word context.
 pub(crate) fn upcase_word_predicate(
@@ -322,6 +344,76 @@ fn simple_case_character(
             }
         }
         CharacterCaseAction::Unchanged => code,
+    }
+}
+
+/// A validated nonnegative fixnum event. GNU first projects it to the C int
+/// event domain; modifiers are restored after casing. Out-of-domain projections
+/// and characters whose case is unchanged retain the original fixnum.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CaseNatnum(i64);
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum CaseNatnumError {
+    #[error("Casing input must be a nonnegative fixnum")]
+    OutsideFixnumDomain,
+}
+
+impl TryFrom<i64> for CaseNatnum {
+    type Error = CaseNatnumError;
+
+    fn try_from(value: i64) -> Result<Self, Self::Error> {
+        (0..=Value::MOST_POSITIVE_FIXNUM)
+            .contains(&value)
+            .then_some(Self(value))
+            .ok_or(CaseNatnumError::OutsideFixnumDomain)
+    }
+}
+
+bitflags::bitflags! {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct CaseModifiers: i32 {
+        const ALT = CHAR_ALT as i32;
+        const SUPER = CHAR_SUPER as i32;
+        const HYPER = CHAR_HYPER as i32;
+        const SHIFT = CHAR_SHIFT as i32;
+        const CONTROL = CHAR_CTL as i32;
+        const META = CHAR_META as i32;
+    }
+}
+
+const _: () = assert!(CaseModifiers::all().bits() as i64 == CHAR_MODIFIER_MASK);
+
+impl CaseNatnum {
+    pub(crate) fn casify(
+        self,
+        action: CaseAction,
+        encoding: CaseEncoding,
+        casetab: &CaseTableOverride,
+    ) -> i64 {
+        // GNU do_casify_natnum (casefiddle.c:248-277).
+        let event = self.0 as i32 as i64;
+        if !(0..=CHAR_MODIFIER_MASK).contains(&event) {
+            return self.0;
+        }
+        let flags = CaseModifiers::from_bits_truncate(event as i32);
+        let code = event & !(CaseModifiers::all().bits() as i64);
+        let raw_byte = matches!(encoding, CaseEncoding::Unibyte) && code < 256;
+        let source = if raw_byte {
+            super::emacs_char::unibyte_to_char(code as u8) as i64
+        } else {
+            code
+        };
+        let mapped = simple_case_character(
+            source,
+            action.character_action(CasingWordState::Outside),
+            casetab,
+        );
+        if mapped == source {
+            self.0
+        } else {
+            (if raw_byte { mapped & 0xff } else { mapped }) | flags.bits() as i64
+        }
     }
 }
 
@@ -871,6 +963,7 @@ fn capitalize_with_word_pred(
     args: Vec<Value>,
     is_word: impl Fn(u32) -> bool,
     casetab: &CaseTableOverride,
+    encoding: CaseEncoding,
 ) -> EvalResult {
     expect_args("capitalize", &args, 1)?;
     match args[0].kind() {
@@ -886,11 +979,16 @@ fn capitalize_with_word_pred(
             }
             Ok(result)
         }
-        ValueKind::Fixnum(c) => {
-            let code = c;
-            Ok(Value::fixnum(simple_case_character(
-                code,
-                CharacterCaseAction::Title,
+        ValueKind::Fixnum(c) if c >= 0 => {
+            let code = CaseNatnum::try_from(c).map_err(|_| {
+                signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("char-or-string-p"), args[0]],
+                )
+            })?;
+            Ok(Value::fixnum(code.casify(
+                CaseAction::Capitalize,
+                encoding,
                 casetab,
             )))
         }
@@ -904,7 +1002,12 @@ fn capitalize_with_word_pred(
 /// Pure form (used by tests); word boundaries follow the standard syntax table.
 #[cfg(test)]
 pub(crate) fn builtin_capitalize(args: Vec<Value>) -> EvalResult {
-    capitalize_with_word_pred(args, standard_word_predicate, &CaseTableOverride::none())
+    capitalize_with_word_pred(
+        args,
+        standard_word_predicate,
+        &CaseTableOverride::none(),
+        CaseEncoding::Multibyte,
+    )
 }
 
 /// Dispatched form: word boundaries follow the current buffer's syntax table
@@ -916,7 +1019,12 @@ pub(crate) fn builtin_capitalize_in_state(
 ) -> EvalResult {
     let is_word = crate::emacs_core::syntax::casing_word_predicate(eval);
     let casetab = CaseTableOverride::for_current_buffer(eval)?;
-    capitalize_with_word_pred(args, is_word, &casetab)
+    capitalize_with_word_pred(
+        args,
+        is_word,
+        &casetab,
+        CaseEncoding::for_current_buffer(eval),
+    )
 }
 
 /// `(upcase-initials OBJ)` -- uppercase the first letter of each word in
@@ -925,6 +1033,7 @@ fn upcase_initials_with_word_pred(
     args: Vec<Value>,
     is_word: impl Fn(u32) -> bool,
     casetab: &CaseTableOverride,
+    encoding: CaseEncoding,
 ) -> EvalResult {
     expect_args("upcase-initials", &args, 1)?;
     match args[0].kind() {
@@ -940,11 +1049,16 @@ fn upcase_initials_with_word_pred(
             }
             Ok(result)
         }
-        ValueKind::Fixnum(c) => {
-            let code = c;
-            Ok(Value::fixnum(simple_case_character(
-                code,
-                CharacterCaseAction::Title,
+        ValueKind::Fixnum(c) if c >= 0 => {
+            let code = CaseNatnum::try_from(c).map_err(|_| {
+                signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("char-or-string-p"), args[0]],
+                )
+            })?;
+            Ok(Value::fixnum(code.casify(
+                CaseAction::Capitalize,
+                encoding,
                 casetab,
             )))
         }
@@ -958,7 +1072,12 @@ fn upcase_initials_with_word_pred(
 /// Pure form (used by tests); word boundaries follow the standard syntax table.
 #[cfg(test)]
 pub(crate) fn builtin_upcase_initials(args: Vec<Value>) -> EvalResult {
-    upcase_initials_with_word_pred(args, standard_word_predicate, &CaseTableOverride::none())
+    upcase_initials_with_word_pred(
+        args,
+        standard_word_predicate,
+        &CaseTableOverride::none(),
+        CaseEncoding::Multibyte,
+    )
 }
 
 /// Dispatched form: word boundaries follow the current buffer's syntax table.
@@ -968,7 +1087,12 @@ pub(crate) fn builtin_upcase_initials_in_state(
 ) -> EvalResult {
     let is_word = crate::emacs_core::syntax::casing_word_predicate(eval);
     let casetab = CaseTableOverride::for_current_buffer(eval)?;
-    upcase_initials_with_word_pred(args, is_word, &casetab)
+    upcase_initials_with_word_pred(
+        args,
+        is_word,
+        &casetab,
+        CaseEncoding::for_current_buffer(eval),
+    )
 }
 
 /// Uppercase the first letter of each word, leaving the rest unchanged.
