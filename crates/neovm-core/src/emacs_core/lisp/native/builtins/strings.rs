@@ -376,6 +376,10 @@ fn substring_impl(name: &str, args: &[Value], preserve_props: bool) -> EvalResul
 #[path = "tests/strings_test.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "tests/width_policy.rs"]
+mod width_policy_tests;
+
 pub(crate) fn builtin_substring(args: Vec<Value>) -> EvalResult {
     builtin_substring_slice(&args)
 }
@@ -1703,8 +1707,13 @@ fn format_float_spec(f: f64, spec: &FormatSpec) -> String {
 }
 
 /// Format a string (%s) with width and precision.
-fn format_string_spec(data: &[u8], is_multibyte: bool, spec: &FormatSpec) -> Vec<u8> {
-    format_string_spec_tracked(data, is_multibyte, spec).0
+fn format_string_spec(
+    data: &[u8],
+    is_multibyte: bool,
+    spec: &FormatSpec,
+    ctx: &super::eval::Context,
+) -> Vec<u8> {
+    format_string_spec_tracked(data, is_multibyte, spec, ctx).0
 }
 
 /// Like `format_string_spec` but also returns the byte range in the output bytes
@@ -1715,24 +1724,26 @@ fn format_string_spec(data: &[u8], is_multibyte: bool, spec: &FormatSpec) -> Vec
 /// `styled_format` (editfns.c:3651-3806).
 ///
 /// Issue #131: `data` is the argument's Emacs internal-encoding bytes, measured
-/// with its own `is_multibyte` flag (a unibyte raw byte is one column, a
-/// multibyte eight-bit char is four, matching GNU). The returned content is
-/// canonical multibyte (unibyte content promoted), so the caller can splice it
+/// with its own `is_multibyte` flag. Unibyte C1 bytes and multibyte eight-bit
+/// characters occupy four columns; unibyte bytes 0xA0..0xFF occupy one.
+/// The returned content is canonical multibyte (unibyte content promoted), so the caller can splice it
 /// into the byte result; padding is always ASCII spaces.
 fn format_string_spec_tracked(
     data: &[u8],
     is_multibyte: bool,
     spec: &FormatSpec,
+    ctx: &super::eval::Context,
 ) -> (Vec<u8>, usize, usize) {
     let mut content_width = 0usize;
     let mut truncated_end = data.len();
     let mut saw_limit = spec.precision.is_none();
     if spec.precision.is_some() || spec.width.is_some() {
+        let policy = crate::encoding::CharacterWidthPolicy::from_context(ctx);
         truncated_end = 0;
         let mut pos = 0usize;
         while pos < data.len() {
             let (code, len) = next_format_unit(data, pos, is_multibyte);
-            let display_width = format_unit_display_width(code, is_multibyte);
+            let display_width = policy.width(code);
             if let Some(prec) = spec.precision
                 && content_width + display_width > prec
             {
@@ -1920,26 +1931,6 @@ fn next_format_unit(data: &[u8], pos: usize, is_multibyte: bool) -> (u32, usize)
     }
 }
 
-/// Display width of one character unit, mirroring [`display_width_emacs`].
-fn format_unit_display_width(code: u32, is_multibyte: bool) -> usize {
-    use crate::emacs_core::emacs_char;
-    if is_multibyte {
-        if emacs_char::char_byte8_p(code) {
-            4
-        } else if let Some(ch) = char::from_u32(code) {
-            crate::encoding::char_width(ch)
-        } else {
-            1
-        }
-    } else if code < 0x80 {
-        char::from_u32(code)
-            .map(crate::encoding::char_width)
-            .unwrap_or(1)
-    } else {
-        1
-    }
-}
-
 /// Push a single Emacs character `code` to `out` as canonical internal-encoding
 /// bytes (eight-bit / non-Unicode codes become their disjoint extended sequence,
 /// so a real Private-Use glyph survives instead of being mistaken for a raw byte).
@@ -1995,6 +1986,7 @@ fn do_format(
     princ_fn: &dyn Fn(&Value) -> Vec<u8>,
     prin1_fn: &dyn Fn(&Value) -> Vec<u8>,
     quoting_style: FormatMessageQuotingStyle,
+    ctx: &super::eval::Context,
 ) -> Result<
     (
         Vec<u8>,
@@ -2187,7 +2179,7 @@ fn do_format(
                     (princ_fn(&arg), true)
                 };
                 let (formatted, content_byte_start_in_formatted, content_byte_end_in_formatted) =
-                    format_string_spec_tracked(&s, src_multibyte, &spec);
+                    format_string_spec_tracked(&s, src_multibyte, &spec, ctx);
                 if track_props
                     && arg_is_string
                     && content_byte_start_in_formatted < content_byte_end_in_formatted
@@ -2218,7 +2210,7 @@ fn do_format(
             }
             'S' => {
                 let s = prin1_fn(&args[this_arg_idx]);
-                format_string_spec(&s, true, &spec)
+                format_string_spec(&s, true, &spec, ctx)
             }
             'd' | 'i' | 'b' | 'B' | 'o' | 'x' | 'X' => {
                 // Plain `%d` on a fixnum with no property tracking: render the
@@ -2267,7 +2259,7 @@ fn do_format(
                     .map_err(|_| format_spec_type_mismatch_error())?;
                 let formatted_char = format_char_argument(n)?;
                 force_multibyte_result |= formatted_char.force_multibyte_result;
-                format_string_spec(&formatted_char.rendered, true, &spec)
+                format_string_spec(&formatted_char.rendered, true, &spec, ctx)
             }
             _ => {
                 return Err(signal(
@@ -2388,6 +2380,7 @@ pub(crate) fn builtin_format_wrapper_strict_slice(
             &|v| format_percent_s_in_state(ctx, v),
             &|v| super::error::print_value_bytes_escaped_with_eval(ctx, v),
             FormatMessageQuotingStyle::None,
+            ctx,
         )?;
         // GNU `styled_format`: `if (! new_result) { val = args[0]; goto return_val; }`
         // (editfns.c:4289). Nothing was formatted, so GNU builds no new string and
@@ -2567,6 +2560,7 @@ pub(crate) fn builtin_format_message_slice(
             &|v| format_percent_s_in_state(ctx, v),
             &|v| super::error::print_value_bytes_escaped_with_eval(ctx, v),
             quoting_style,
+            ctx,
         )?;
         // GNU `styled_format`: `if (! new_result) { val = args[0]; goto return_val; }`
         // (editfns.c:4289). Nothing was formatted, so GNU builds no new string and
@@ -2772,19 +2766,16 @@ pub(crate) fn builtin_string_width(ctx: &mut super::eval::Context, args: Vec<Val
     })?;
     let data = ls.as_bytes();
     let is_multibyte = ls.is_multibyte();
-    let display_table = crate::encoding::active_display_table(ctx);
-    // GNU `lisp_string_width' measures each character with `char_width', which
-    // bottoms out in `CHARACTER_WIDTH' returning `SANE_TAB_WIDTH(current_buffer)'
-    // for a TAB -- i.e. the dynamically-bound `tab-width', not a hardcoded 8.
-    let tab_width = crate::emacs_core::indent::current_buffer_tab_width(ctx);
-    let unit_width = |code: u32, width: usize| -> usize {
-        if display_table.is_some() {
-            crate::encoding::char_width_for_code_with_display_table(code as i64, display_table)
-        } else if code == 0x09 {
-            tab_width
-        } else {
-            width
+    let policy = crate::encoding::CharacterWidthPolicy::from_context(ctx);
+    let string_width = |data: &[u8]| {
+        let mut width = 0usize;
+        let mut position = 0usize;
+        while position < data.len() {
+            let (code, bytes) = next_format_unit(data, position, is_multibyte);
+            width += policy.width(code);
+            position += bytes;
         }
+        width
     };
     if args.len() <= 1
         || (args.len() == 2 && args[1] == Value::NIL)
@@ -2793,11 +2784,7 @@ pub(crate) fn builtin_string_width(ctx: &mut super::eval::Context, args: Vec<Val
             && (args.len() < 3 || args[2] == Value::NIL))
     {
         // Fast path: full string width
-        let units = super::super::string_escape::decode_units_emacs(data, is_multibyte);
-        let width = units
-            .iter()
-            .map(|(code, width)| unit_width(*code, *width))
-            .sum::<usize>();
+        let width = string_width(data);
         return Ok(Value::fixnum(width as i64));
     }
     // Substring range specified: sum the widths of [from, to) only.  GNU
@@ -2844,10 +2831,6 @@ pub(crate) fn builtin_string_width(ctx: &mut super::eval::Context, args: Vec<Val
         ));
     }
     let range = &data[ls.char_to_byte_pos(from)..ls.char_to_byte_pos(to)];
-    let units = super::super::string_escape::decode_units_emacs(range, is_multibyte);
-    let width: usize = units
-        .iter()
-        .map(|(code, width)| unit_width(*code, *width))
-        .sum();
+    let width = string_width(range);
     Ok(Value::fixnum(width as i64))
 }

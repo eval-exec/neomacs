@@ -9641,10 +9641,11 @@ pub fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray)
     obarray.define_special_variable("auto-fill-chars", auto_fill);
 
     // char-width-table: a char-table for character display widths.
-    // Official Emacs (character.c) creates it with default 1.
+    // GNU character.c:1112-1119 seeds default 1 plus C1/raw-byte width 4.
+    // Include characters.el Unicode ranges for contexts before Lisp bootstrap.
     obarray.set_symbol_value(
         "char-width-table",
-        make_char_table_value(Value::symbol("char-width-table"), Value::fixnum(1)),
+        crate::encoding::default_char_width_table(),
     );
 
     // translation-table-vector: vector recording all translation tables.

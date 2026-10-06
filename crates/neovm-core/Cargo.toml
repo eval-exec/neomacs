@@ -235,6 +235,10 @@ path = "tests/gdm_columns.rs"
 name = "gdm_region"
 path = "tests/gdm_region.rs"
 
+[[test]]
+name = "gdm_widths"
+path = "tests/gdm_widths.rs"
+
 [[bench]]
 name = "buffer_text_backends"
 harness = false
