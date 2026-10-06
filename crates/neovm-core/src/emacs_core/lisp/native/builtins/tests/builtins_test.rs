@@ -16551,12 +16551,24 @@ fn defvaralias_and_indirect_variable_follow_runtime_aliases() {
     .expect("get should read cleared documentation");
     assert!(cleared_doc.is_nil());
 
+    // GNU `Fmakunbound` undoes an alias instead of voiding its target
+    // (`src/data.c:779-783`); GNU 31.1 answers `t`, 7, nil and the alias
+    // itself for the four reads below.
     let unbound = builtin_makunbound(&mut eval, vec![Value::symbol("vm-defvaralias-new")])
-        .expect("makunbound should clear target through alias");
+        .expect("makunbound should undo the alias");
     assert_eq!(unbound, Value::symbol("vm-defvaralias-new"));
     let bound_old = builtin_boundp(&mut eval, vec![Value::symbol("vm-defvaralias-old")])
-        .expect("boundp should read aliased target");
-    assert!(bound_old.is_nil());
+        .expect("boundp should read the former target");
+    assert!(bound_old.is_truthy());
+    let old_value = builtin_symbol_value(&mut eval, vec![Value::symbol("vm-defvaralias-old")])
+        .expect("the former target keeps its value");
+    assert_eq!(old_value, Value::fixnum(7));
+    let bound_new = builtin_boundp(&mut eval, vec![Value::symbol("vm-defvaralias-new")])
+        .expect("boundp should read the former alias");
+    assert!(bound_new.is_nil());
+    let unaliased = builtin_indirect_variable(&mut eval, vec![Value::symbol("vm-defvaralias-new")])
+        .expect("indirect-variable of a plain symbol is the symbol");
+    assert_eq!(unaliased, Value::symbol("vm-defvaralias-new"));
 }
 
 #[test]

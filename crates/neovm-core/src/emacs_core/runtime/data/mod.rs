@@ -174,6 +174,15 @@ fn set_default_internal_with(
                 value
             };
             ctx.run_variable_watchers_by_id(resolved, &reported_value, &Value::NIL, operation)?;
+            // These arms ARE a `set_internal` call (`src/data.c:2067`,
+            // `:2123`), which stores on the arm the watcher left: a
+            // `make-local-variable` in it sends a `set-default` to the new
+            // buffer-local binding.
+            ctx.set_internal_after_watchers(resolved, value, bindflag)?;
+            if bindflag == SetInternalBind::Set {
+                ctx.note_macro_expansion_mutation();
+            }
+            return Ok(value);
         }
     }
 

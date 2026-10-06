@@ -7132,48 +7132,6 @@ pub(crate) fn check_forwarded_unbind(
     ))
 }
 
-pub(crate) fn makunbound_runtime_binding_in_state(
-    obarray: &mut Obarray,
-    buffers: &mut BufferManager,
-    _custom: &CustomManager,
-    _specpdl: &[SpecBinding],
-    sym_id: SymId,
-) {
-    let symbol_is_canonical = super::builtins::is_canonical_symbol_id(sym_id);
-
-    // specbind writes directly to obarray, so no dynamic frame lookup needed.
-
-    // Non-localized globals are never in any `local_var_alist`; skip the scan.
-    let sym_is_localized = obarray.is_localized(sym_id);
-    if symbol_is_canonical
-        && let Some(current_id) = buffers.current_buffer_id()
-        && let Some(buf) = buffers.get(current_id)
-        && buf.has_buffer_local_by_sym_id_gated(sym_id, sym_is_localized)
-    {
-        let _ = buffers.set_buffer_local_void_property_by_sym_id(current_id, sym_id);
-        return;
-    }
-
-    // Mirrors GNU `set_internal` SYMBOL_LOCALIZED arm with
-    // `unbinding_p = true` (`src/data.c:1687-1762`). The BLV's
-    // `local_if_set` flag determines whether to create a per-buffer
-    // void binding; LOCALIZED symbols carry a BLV so this fires only
-    // for them.
-    let local_if_set = obarray
-        .blv(sym_id)
-        .map(|blv| blv.local_if_set)
-        .unwrap_or(false);
-    if symbol_is_canonical
-        && local_if_set
-        && let Some(current_id) = buffers.current_buffer_id()
-    {
-        let _ = buffers.set_buffer_local_void_property_by_sym_id(current_id, sym_id);
-        return;
-    }
-
-    obarray.makunbound_id(sym_id);
-}
-
 impl Context {
     /// Call a registered subr value directly. Returns None if VALUE is not a
     /// fully registered subr.
@@ -7375,14 +7333,13 @@ impl Context {
         Ok(locus)
     }
 
+    /// Void the plain cell SYM_ID names, without watchers: what GNU
+    /// `Fmakunbound`'s alias arm (`src/data.c:779-783`) and
+    /// `internal-delete-indirect-variable` leave once the alias is undone.
+    /// Any other arm is voided by `set_internal`'s store,
+    /// [`Self::set_internal_after_watchers`].
     pub(crate) fn makunbound_runtime_binding_by_id(&mut self, sym_id: SymId) {
-        makunbound_runtime_binding_in_state(
-            &mut self.obarray,
-            &mut self.buffers,
-            &self.custom,
-            &[],
-            sym_id,
-        );
+        self.obarray.makunbound_id(sym_id);
         self.sync_cached_runtime_binding_by_id(sym_id, Value::NIL);
         self.sync_keyboard_runtime_binding_by_id(sym_id, Value::NIL);
         self.refresh_gc_runtime_settings_after_change_by_id(sym_id);
@@ -7800,6 +7757,9 @@ mod cconv_memo_tests;
 #[cfg(test)]
 #[path = "tests/var_fast_test.rs"]
 mod var_fast_tests;
+#[cfg(test)]
+#[path = "tests/watcher_redispatch.rs"]
+mod watcher_redispatch_tests;
 
 #[cfg(test)]
 #[path = "tests/builtin_vars_test.rs"]

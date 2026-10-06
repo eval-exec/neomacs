@@ -77,6 +77,136 @@ impl Context {
         )
     }
 
+    /// GNU `set_internal` from its redirect switch on (`src/data.c:1712-1830`):
+    /// the store a watched write makes once its watchers have run.
+    ///
+    /// GNU notifies before it looks at the redirect, so the value lands on
+    /// whatever arm the watchers left: a `make-local-variable` in a `let`
+    /// watcher sends the binding to the new buffer-local cell, and a
+    /// `defvaralias` in an `unlet` watcher sends the restored value to the
+    /// alias target. A caller that read the arm before running the watchers
+    /// stores through here instead of on the arm it read.
+    ///
+    /// BINDFLAG is GNU's `Set_Internal_Bind`: only `Set` may create a binding
+    /// for an automatically buffer-local variable, and VALUE `UNBOUND` (GNU
+    /// `unbinding_p`) is refused for a built-in variable.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn set_internal_after_watchers(
+        &mut self,
+        sym_id: SymId,
+        value: Value,
+        bindflag: crate::emacs_core::symbol::SetInternalBind,
+    ) -> Result<(), Flow> {
+        use crate::emacs_core::forward::ForwardSlot;
+        use crate::emacs_core::symbol::{SetInternalBind, ValueCell};
+
+        // `case SYMBOL_VARALIAS: sym = SYMBOL_ALIAS (sym); goto start;`
+        let resolved = builtins::resolve_variable_alias_id_in_obarray(&self.obarray, sym_id)?;
+        let unbinding = value.is_unbound();
+        if unbinding {
+            // "Built-in variable may not be unbound", named by the symbol the
+            // caller wrote (`src/data.c:1723-1727`, `:1802-1806`).
+            check_forwarded_unbind(&self.obarray, resolved, Value::from_sym_id(sym_id))?;
+        }
+        let cell = self.obarray.get_by_id(resolved).map(|sym| sym.value_cell());
+        let stored = match cell {
+            // Ordinary assignment storage is this switch for `SET_INTERNAL_SET`:
+            // the local-if-set binding, the `let`-shadowed default, the
+            // per-buffer slot flag.
+            _ if bindflag == SetInternalBind::Set => {
+                let checked = check_forwarded_store(
+                    &self.obarray,
+                    &self.buffers,
+                    &self.specpdl,
+                    resolved,
+                    value,
+                )?;
+                let stored = checked.value();
+                store_runtime_binding(
+                    &mut self.obarray,
+                    &mut self.buffers,
+                    &self.custom,
+                    &self.specpdl,
+                    resolved,
+                    checked,
+                );
+                stored
+            }
+            Some(ValueCell::Localized(_)) => {
+                let stored = check_forwarded_store_at(
+                    &self.obarray,
+                    &self.buffers,
+                    &self.specpdl,
+                    resolved,
+                    value,
+                    ForwardStoreSite::Bind,
+                )?
+                .value();
+                match self.buffers.current_buffer_id() {
+                    Some(buf_id) => {
+                        let (cur_val, alist) = match self.buffers.get(buf_id) {
+                            Some(buf) => (Value::make_buffer(buf.id), buf.local_var_alist_value()),
+                            None => (Value::NIL, Value::NIL),
+                        };
+                        // A `let` or its unwind never creates a binding: no
+                        // binding here means the default cell.
+                        let new_alist = self.obarray.set_internal_localized(
+                            resolved, stored, cur_val, alist, bindflag, false,
+                        );
+                        if let Some(buf) = self.buffers.get_mut(buf_id) {
+                            buf.replace_local_var_alist(new_alist);
+                        }
+                    }
+                    None => self.obarray.set_symbol_value_id(resolved, stored),
+                }
+                stored
+            }
+            Some(ValueCell::Forwarded(fwd)) => match fwd.slot() {
+                // `store_symval_forwarding` writes the current buffer's slot;
+                // only `SET_INTERNAL_SET` touches the slot's local flag.
+                ForwardSlot::BufferObj(buf_fwd) => {
+                    let stored = match fwd.store(value) {
+                        Ok(store) => store.canonical_value(),
+                        Err(error) => return Err(forward_store_signal(error, value)),
+                    };
+                    if let Some(slot) = crate::buffer::buffer::BufferSlot::from_u16(buf_fwd.offset)
+                        && let Some(buf_id) = self.buffers.current_buffer_id()
+                        && let Some(buf) = self.buffers.get_mut(buf_id)
+                    {
+                        buf.slots[slot.index()] = stored;
+                    }
+                    stored
+                }
+                ForwardSlot::Int(_)
+                | ForwardSlot::Bool(_)
+                | ForwardSlot::Obj(_)
+                | ForwardSlot::KboardObj(_) => {
+                    let stored = check_forwarded_store_at(
+                        &self.obarray,
+                        &self.buffers,
+                        &self.specpdl,
+                        resolved,
+                        value,
+                        ForwardStoreSite::Bind,
+                    )?
+                    .value();
+                    self.obarray.set_symbol_value_id(resolved, stored);
+                    stored
+                }
+            },
+            // The alias walk above ends on a non-alias cell.
+            None | Some(ValueCell::Plain(_) | ValueCell::Alias(_)) => {
+                self.obarray.set_symbol_value_id(resolved, value);
+                value
+            }
+        };
+        let visible = if unbinding { Value::NIL } else { stored };
+        self.publish_runtime_binding_write_by_resolved_id(resolved, visible);
+        self.sync_user_test_gc_binding_by_id(resolved);
+        Ok(())
+    }
+
     /// Save the current value of a special variable and set a new value.
     /// Matches GNU Emacs's `specbind` in eval.c:
     /// - Follows SYMBOL_VARALIAS to the final target
@@ -144,12 +274,20 @@ impl Context {
             self.push_specpdl_with(|| SpecBinding::Let { sym_id, old_value });
             if trapped {
                 self.run_specbind_watcher(sym_id, value, "let")?;
+                // `do_specbind` hands a trapped plain cell to `set_internal`,
+                // which stores on the arm the watcher left
+                // (`src/eval.c:3618-3622`).
+                return self.set_internal_after_watchers(
+                    sym_id,
+                    value,
+                    crate::emacs_core::symbol::SetInternalBind::Bind,
+                );
             }
-            if self.obarray.store_plain_value_id(sym_id, value).is_err() {
-                // The watcher moved the cell to another arm; the plain store
-                // was refused rather than written over that arm's payload.
-                self.obarray.set_symbol_value_id(sym_id, value);
-            }
+            let stored = self.obarray.store_plain_value_id(sym_id, value);
+            debug_assert!(
+                stored.is_ok(),
+                "an untrapped cell left the plain arm unseen"
+            );
             self.sync_cached_runtime_binding_by_id(sym_id, value);
             self.sync_user_test_gc_binding_by_id(sym_id);
             return Ok(());
@@ -702,16 +840,23 @@ impl Context {
                         let still_plain = self.obarray.get_by_id(sym_id).is_none_or(|s| {
                             s.redirect() == crate::emacs_core::symbol::SymbolRedirect::Plainval
                         });
-                        if still_plain {
-                            if self.watchers.has_watchers(sym_id) {
-                                let restore_val = old_value.unwrap_or(Value::NIL);
-                                self.run_variable_watchers_by_id(
-                                    sym_id,
-                                    &restore_val,
-                                    &Value::NIL,
-                                    "unlet",
-                                )?;
-                            }
+                        if still_plain && self.watchers.has_watchers(sym_id) {
+                            let restore_val = old_value.unwrap_or(Value::NIL);
+                            self.run_variable_watchers_by_id(
+                                sym_id,
+                                &restore_val,
+                                &Value::NIL,
+                                "unlet",
+                            )?;
+                            // `do_one_unbind` hands a trapped plain cell to
+                            // `set_internal`, which restores on the arm the
+                            // watcher left (`src/eval.c:3848-3860`).
+                            self.set_internal_after_watchers(
+                                sym_id,
+                                old_value.unwrap_or(Value::UNBOUND),
+                                crate::emacs_core::symbol::SetInternalBind::Unbind,
+                            )?;
+                        } else if still_plain {
                             match old_value {
                                 Some(val) => {
                                     self.obarray.set_symbol_value_id(sym_id, val);

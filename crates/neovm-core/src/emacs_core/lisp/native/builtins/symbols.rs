@@ -812,14 +812,30 @@ pub(crate) fn would_create_function_alias_cycle_in_obarray(
 pub(crate) fn builtin_makunbound(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args("makunbound", &args, 1)?;
     let symbol = SymId::from_value(eval, args[0])?;
+    // GNU `Fmakunbound` (`src/data.c:776-789`). An alias inherits its
+    // target's `trapped_write` (`Fdefvaralias`), so an alias of a constant
+    // is a constant too.
     let resolved = resolve_variable_alias_id(eval, symbol)?;
     if eval.obarray().is_constant_id(resolved) {
         return Err(signal(LispCondition::SettingConstant, vec![args[0]]));
     }
-    crate::emacs_core::eval::check_forwarded_unbind(eval.obarray(), resolved, args[0])?;
     eval.note_macro_expansion_mutation();
+    if eval.obarray().is_alias_id(symbol) {
+        // `redirect = SYMBOL_PLAINVAL; SET_SYMBOL_VAL (sym, Qunbound)`: the
+        // alias becomes a void plain cell, its target keeps its value, and no
+        // watcher hears of it.
+        eval.obarray_mut().delete_variable_alias_id(symbol);
+        eval.makunbound_runtime_binding_by_id(symbol);
+        return Ok(args[0]);
+    }
+    // `Fset (symbol, Qunbound)`: the watchers first, then `set_internal`'s
+    // store on the arm they left, which refuses to void a built-in.
     eval.run_variable_watchers_by_id(resolved, &Value::NIL, &Value::NIL, "makunbound")?;
-    eval.makunbound_runtime_binding_by_id(resolved);
+    eval.set_internal_after_watchers(
+        symbol,
+        Value::UNBOUND,
+        crate::emacs_core::symbol::SetInternalBind::Set,
+    )?;
     Ok(args[0])
 }
 
