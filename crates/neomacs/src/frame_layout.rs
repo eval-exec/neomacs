@@ -133,8 +133,12 @@ pub fn run_tty_layout_tree_with(
         if frame_id == root_id {
             continue;
         }
-        let prepared =
-            layout_frame_display_state_with(runtime, evaluator, frame_id, FrameLayoutPurpose::Redisplay);
+        let prepared = layout_frame_display_state_with(
+            runtime,
+            evaluator,
+            frame_id,
+            FrameLayoutPurpose::Redisplay,
+        );
         if evaluator.has_mode_line_display_flow() {
             // The redisplay driver returns the Context-owned exit. Neither
             // primary nor auxiliary TTY may rasterize a partial frame tree.
@@ -161,15 +165,23 @@ fn prepare_tty_tree_before_activation(
     root_id: FrameId,
     frame_order: Vec<FrameId>,
 ) -> Option<(SealedFramePresentation, Vec<SealedFramePresentation>)> {
-    let root =
-        layout_frame_display_state_with(runtime, evaluator, root_id, FrameLayoutPurpose::Redisplay)?;
+    let root = layout_frame_display_state_with(
+        runtime,
+        evaluator,
+        root_id,
+        FrameLayoutPurpose::Redisplay,
+    )?;
     let mut children: Vec<PreparedFrameDisplay> = Vec::new();
     for frame_id in frame_order {
         if frame_id == root_id {
             continue;
         }
-        let child =
-            layout_frame_display_state_with(runtime, evaluator, frame_id, FrameLayoutPurpose::Redisplay);
+        let child = layout_frame_display_state_with(
+            runtime,
+            evaluator,
+            frame_id,
+            FrameLayoutPurpose::Redisplay,
+        );
         if evaluator.has_mode_line_display_flow() {
             // Discard all tickets before the driver returns the original Flow.
             // Both primary and auxiliary TTYs use this tree producer.
@@ -258,7 +270,7 @@ pub fn install_tty_redisplay_callback_with_popup_redraw(
     if startup.daemon.is_some() {
         // No primary terminal exists. Attached client TTYs own their renderers
         // and are the only valid destination for daemon redisplay.
-        REDISPLAY_RUNTIME.with(RedisplayRuntime::disable_cosmic_metrics);
+        REDISPLAY_RUNTIME.with(EditorPresentationRuntime::use_cell_grid);
         evaluator.redisplay_fn = Some(Box::new(move |eval: &mut Context| {
             if let Some(render) = try_render_selected_auxiliary.as_mut() {
                 render(eval);

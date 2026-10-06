@@ -4818,7 +4818,7 @@ fn configure_gnu_startup_state(eval: &mut Context, frame_id: FrameId, startup: &
         // its initial terminal has no real display. This also allows
         // deleting the last attached client frame without FORCE.
         frame.visibility = FrameVisibility::Visible;
-        frame.displays_chrome = false;
+        frame.set_chrome_layout(neovm_core::window::FrameChromeLayout::Unrealized);
     }
     eval.set_variable("frame-initial-frame", frame_initial_frame);
     eval.set_variable("default-minibuffer-frame", default_minibuffer_frame);

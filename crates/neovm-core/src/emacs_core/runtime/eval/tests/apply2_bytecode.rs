@@ -153,7 +153,7 @@ fn apply2_bytecode_probed_stack_keeps_two_arguments_and_balances_depth() {
     let right = Value::string("two");
     eval.push_vm_frame_root(left);
     eval.push_vm_frame_root(right);
-    eval.depth = super::STACK_GROWTH_PROBE_START_DEPTH - 1;
+    eval.depth = crate::emacs_core::stack_growth::PROBE_INTERVAL - 1;
     let before = (eval.depth, eval.specpdl.len());
     let expected = outcome(eval.apply(function, LispArgVec::from_slice(&[left, right])));
     assert_eq!(

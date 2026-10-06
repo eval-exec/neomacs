@@ -1,5 +1,19 @@
 use super::*;
 use crate::image_bands::{BandPlacement, DecodedBand, RasterBand, RowRange};
+use std::io::Cursor;
+
+/// A diagnostic for tests that only exercise scheduling, not wording.
+fn test_diagnostic() -> neomacs_display_protocol::image_diagnostic::ImageDiagnostic {
+    neomacs_display_protocol::image_diagnostic::ImageDiagnostic::InvalidSize
+}
+
+fn test_load_identity() -> neomacs_display_protocol::image_diagnostic::ImageLoadIdentity {
+    use neomacs_display_protocol::image_diagnostic::{ImageDiagnosticSubject, ImageFormatName};
+    neomacs_display_protocol::image_diagnostic::ImageLoadIdentity::new(
+        ImageFormatName::Png,
+        ImageDiagnosticSubject::File(String::new()),
+    )
+}
 #[test]
 fn image_decoder_pool_is_nonempty_and_bounded_on_large_hosts() {
     let one = NonZeroUsize::new(1).unwrap();
@@ -269,4 +283,104 @@ fn test_band() -> DecodedBand {
         TextureRows::new(0, std::num::NonZeroU32::new(1).expect("one row")),
     );
     DecodedBand::new(rows, RasterBand::new(placement, vec![0u8; 4].into()))
+}
+
+#[test]
+fn decoder_worker_survives_a_panicking_request() {
+    let (request_tx, request_rx) = mpsc::channel();
+    let (outcome_tx, outcome_rx) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        ImageCache::decoder_thread_pooled(
+            0,
+            Arc::new(Mutex::new(request_rx)),
+            outcome_tx,
+            Arc::new(ImageSequenceCache::new()),
+        )
+    });
+    let mut loads = ImageLoadLifecycle::default();
+    let panicking = loads.begin_generated(ImageId::new(61));
+    let following = loads.begin_generated(ImageId::new(62));
+
+    request_tx
+        .send(DecodeRequest {
+            load: panicking,
+            source: ImageSource::Panic,
+            size: Default::default(),
+            rotation: Default::default(),
+            realization: ImageRealization::with_device_scale(1.0, 1.0),
+            colors: ImageColorContext::default(),
+            mask: ImageMaskPolicy::default(),
+            frame: ImageFrameIndex::default(),
+            identity: test_load_identity(),
+        })
+        .unwrap();
+    request_tx
+        .send(DecodeRequest {
+            load: following,
+            source: ImageSource::Data {
+                data: EncodedBytes::new(png_bytes(vec![0x12, 0x34, 0x56, 0xff], 1, 1)),
+                resources: neomacs_image::SvgResourceContext::Isolated,
+                sequence: ImageSequenceId::new(62).expect("non-zero sequence"),
+            },
+            size: Default::default(),
+            rotation: Default::default(),
+            realization: ImageRealization::with_device_scale(1.0, 1.0),
+            colors: ImageColorContext::default(),
+            mask: ImageMaskPolicy::default(),
+            frame: ImageFrameIndex::default(),
+            identity: test_load_identity(),
+        })
+        .unwrap();
+    drop(request_tx);
+
+    assert!(matches!(
+        outcome_rx.recv().unwrap(),
+        WorkerDecodeOutcome::Failed { load, .. } if load == panicking
+    ));
+    assert!(matches!(
+        outcome_rx.recv().unwrap(),
+        WorkerDecodeOutcome::Ready(decoded) if decoded.load == following
+    ));
+    worker.join().unwrap();
+}
+
+fn png_bytes(pixels: Vec<u8>, width: u32, height: u32) -> Vec<u8> {
+    let image = image::RgbaImage::from_raw(width, height, pixels).unwrap();
+    let mut bytes = Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(image)
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .unwrap();
+    bytes.into_inner()
+}
+
+fn encoded_image_bytes(format: image::ImageFormat) -> Vec<u8> {
+    let image = image::RgbaImage::from_raw(1, 1, vec![0x12, 0x34, 0x56, 0xff]).unwrap();
+    let mut bytes = Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(image)
+        .write_to(&mut bytes, format)
+        .unwrap();
+    bytes.into_inner()
+}
+
+fn animated_gif_bytes() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = image::codecs::gif::GifEncoder::new(&mut bytes);
+        let frames = [
+            image::Frame::from_parts(
+                image::RgbaImage::from_pixel(2, 1, image::Rgba([0xff, 0, 0, 0xff])),
+                0,
+                0,
+                image::Delay::from_numer_denom_ms(20, 1),
+            ),
+            image::Frame::from_parts(
+                image::RgbaImage::from_pixel(2, 1, image::Rgba([0, 0xff, 0, 0xff])),
+                0,
+                0,
+                image::Delay::from_numer_denom_ms(40, 1),
+            ),
+        ];
+        encoder.encode_frames(frames).unwrap();
+    }
+    bytes
 }

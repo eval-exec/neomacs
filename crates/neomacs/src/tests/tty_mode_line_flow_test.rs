@@ -1,6 +1,7 @@
 //! A child mode-line throw preserves the TTY tree's active presentations.
 
 use super::*;
+use neomacs_app::presentation::EditorPresentationRuntime;
 use neovm_core::emacs_core::Value;
 
 #[test]
@@ -33,7 +34,7 @@ fn tty_child_mode_line_throw_discards_staged_presentations_before_activation() {
         .get_mut(child)
         .expect("child")
         .parent_frame = Value::make_frame(root.0);
-    REDISPLAY_RUNTIME.with(RedisplayRuntime::disable_cosmic_metrics);
+    REDISPLAY_RUNTIME.with(EditorPresentationRuntime::use_cell_grid);
     let (_, initial_children) = run_tty_layout_tree(&mut eval).expect("initial TTY tree");
     assert_eq!(
         initial_children.len(),

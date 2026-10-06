@@ -33,3 +33,7 @@ jpeg-encoder.workspace = true
 
 [lints]
 workspace = true
+
+[features]
+# Test-only panic-injection source, for out-of-crate worker tests.
+testing = []

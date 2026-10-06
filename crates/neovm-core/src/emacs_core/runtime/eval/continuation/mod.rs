@@ -469,15 +469,18 @@ impl Context {
                             self.bc_buf.truncate(operands);
                             Step::Return(result)
                         }
-                        Continuation::NamedFunction { symbol } => Step::Return(match result {
-                            Err(Flow::Signal(sig)) if sig.symbol == invalid_function_symbol() => {
-                                Err(signal(
+                        Continuation::NamedFunction { symbol } => {
+                            if let Err(FlowRef::Signal(sig)) = result.kinded_ref()
+                                && sig.symbol == invalid_function_symbol()
+                            {
+                                Step::Return(Err(signal(
                                     LispCondition::InvalidFunction,
                                     vec![Value::from_sym_id(symbol)],
-                                ))
+                                )))
+                            } else {
+                                Step::Return(result)
                             }
-                            other => other,
-                        }),
+                        }
                         Continuation::Form { specpdl, operands } => {
                             let result = self.dispatch_signal_result_if_needed(result);
                             self.record_sequence_call_roots(specpdl);
@@ -523,55 +526,61 @@ impl Context {
                                 }
                             }
                         },
-                        Continuation::Body { cursor } => match result {
-                            Ok(value) => {
-                                let remaining = self.bc_buf[cursor].cons_cdr();
-                                self.bc_buf[cursor] = remaining;
-                                if remaining.is_cons() {
-                                    continuations.push(Continuation::Body { cursor });
-                                    Step::Eval(remaining.cons_car())
-                                } else {
-                                    Step::Return(Ok(value))
-                                }
-                            }
-                            Err(Flow::ThreadBlocked(blocked)) => {
+                        Continuation::Body { cursor } => {
+                            if let Err(FlowRef::ThreadBlocked(blocked)) = result.kinded_ref() {
                                 let remaining = if blocked.remaining_forms.is_nil() {
                                     self.bc_buf[cursor].cons_cdr()
                                 } else {
                                     blocked.remaining_forms
                                 };
                                 Step::Return(Err(Flow::thread_blocked(blocked.blocker, remaining)))
+                            } else {
+                                match result {
+                                    Ok(value) => {
+                                        let remaining = self.bc_buf[cursor].cons_cdr();
+                                        self.bc_buf[cursor] = remaining;
+                                        if remaining.is_cons() {
+                                            continuations.push(Continuation::Body { cursor });
+                                            Step::Eval(remaining.cons_car())
+                                        } else {
+                                            Step::Return(Ok(value))
+                                        }
+                                    }
+                                    Err(flow) => Step::Return(Err(flow)),
+                                }
                             }
-                            Err(flow) => Step::Return(Err(flow)),
-                        },
+                        }
                         Continuation::Lambda { call, operands } => {
                             let result = self.finish_interpreted_lambda(call, result);
                             self.bc_buf.truncate(operands);
                             Step::Return(result)
                         }
-                        Continuation::Sequence { cursor } => match result {
-                            Ok(value) => {
-                                let remaining = self.bc_buf[cursor].cons_cdr();
-                                self.bc_buf[cursor] = remaining;
-                                if remaining.is_cons() {
-                                    continuations.push(Continuation::Sequence { cursor });
-                                    Step::Eval(remaining.cons_car())
-                                } else if remaining.is_nil() {
-                                    Step::Return(Ok(value))
-                                } else {
-                                    Step::Return(Err(self.listp_error(remaining)))
-                                }
-                            }
-                            Err(Flow::ThreadBlocked(blocked)) => {
+                        Continuation::Sequence { cursor } => {
+                            if let Err(FlowRef::ThreadBlocked(blocked)) = result.kinded_ref() {
                                 let remaining = if blocked.remaining_forms.is_nil() {
                                     self.bc_buf[cursor].cons_cdr()
                                 } else {
                                     blocked.remaining_forms
                                 };
                                 Step::Return(Err(Flow::thread_blocked(blocked.blocker, remaining)))
+                            } else {
+                                match result {
+                                    Ok(value) => {
+                                        let remaining = self.bc_buf[cursor].cons_cdr();
+                                        self.bc_buf[cursor] = remaining;
+                                        if remaining.is_cons() {
+                                            continuations.push(Continuation::Sequence { cursor });
+                                            Step::Eval(remaining.cons_car())
+                                        } else if remaining.is_nil() {
+                                            Step::Return(Ok(value))
+                                        } else {
+                                            Step::Return(Err(self.listp_error(remaining)))
+                                        }
+                                    }
+                                    Err(flow) => Step::Return(Err(flow)),
+                                }
                             }
-                            Err(flow) => Step::Return(Err(flow)),
-                        },
+                        }
                         Continuation::Conditional { branches } => match result {
                             Ok(value) if value.is_truthy() => Step::Eval(self.bc_buf[branches]),
                             Ok(_) => Step::Sequence(self.bc_buf[branches + 1]),

@@ -28,13 +28,16 @@ fn key_event(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
 fn key_parts(code: KeyCode, modifiers: KeyModifiers) -> (FrontendKey, u32) {
     match map_key_event(key_event(code, modifiers)).expect("key event") {
         // Named keys keep their keysym identity through the key channel.
-        InputEvent::Frontend(neovm_host_abi::frontend_event::FrontendEvent::Key(key)) => {
-            (FrontendKey::Keysym(key.symbol().get()), key.modifiers().bits())
-        }
+        InputEvent::Frontend(neovm_host_abi::frontend_event::FrontendEvent::Key(key)) => (
+            FrontendKey::Keysym(key.symbol().get()),
+            key.modifiers().bits(),
+        ),
         // Characters ride the text channel (#458).
-        InputEvent::Frontend(
-            neovm_host_abi::frontend_event::FrontendEvent::TextCommitted { text, modifiers, .. },
-        ) if text.chars().count() == 1 => (
+        InputEvent::Frontend(neovm_host_abi::frontend_event::FrontendEvent::TextCommitted {
+            text,
+            modifiers,
+            ..
+        }) if text.chars().count() == 1 => (
             FrontendKey::Character(text.chars().next().expect("single char")),
             modifiers.bits(),
         ),

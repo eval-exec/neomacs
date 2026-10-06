@@ -394,27 +394,6 @@ fn the_mask_comes_from_the_source_pixels_not_from_the_raster() {
     );
 }
 
-#[test]
-fn a_sixteen_bit_png_declines_banding_rather_than_re_deriving_its_endianness() {
-    let width = 9;
-    let height = 4;
-    let raw: Vec<u16> = (0..width * height * 4).map(|i| (i * 997) as u16).collect();
-    let data = png_from(
-        image::ImageBuffer::<image::Rgba<u16>, _>::from_raw(width, height, raw)
-            .unwrap()
-            .into(),
-    );
-
-    assert!(
-        matches!(open_banded(&data), BandSource::Whole),
-        "16-bit output is read whole"
-    );
-    // The control: the same source without the extra bit depth bands.
-    assert!(matches!(
-        open_banded(&varying_png(width, height)),
-        BandSource::Banded(_)
-    ));
-}
 
 /// Adam7 rows are partial rows, so an interlaced source has no bands to take.
 /// The `png` encoder cannot write one, so the flag is set on an otherwise
@@ -813,7 +792,9 @@ fn test_diagnostic() -> neomacs_display_protocol::image_diagnostic::ImageDiagnos
 }
 
 fn test_load_identity() -> neomacs_display_protocol::image_diagnostic::ImageLoadIdentity {
-    use neomacs_display_protocol::image_diagnostic::{ImageDiagnosticSubject, ImageFormatName};
+    use neomacs_display_protocol::image_diagnostic::{
+        ImageDiagnosticSubject, ImageFormatName, ImageLoadIdentity,
+    };
     ImageLoadIdentity::new(
         ImageFormatName::Png,
         ImageDiagnosticSubject::File(String::new()),

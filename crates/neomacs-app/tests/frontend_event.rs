@@ -52,7 +52,7 @@ fn viewport_validates_scale_at_the_adapter_boundary() {
 fn committed_text_remains_atomic_until_the_evaluator_adapter() {
     let event = FrontendEvent::text_committed("λ🙂", FrontendFrameId::new(7));
 
-    let FrontendEvent::TextCommitted { text, target } = event else {
+    let FrontendEvent::TextCommitted { text, target, .. } = event else {
         panic!("committed text changed variant");
     };
     assert_eq!(text, "λ🙂");

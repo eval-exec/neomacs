@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use neomacs_display_protocol::image::EncodedBytes;
+use neomacs_display_protocol::image_diagnostic::ImageDiagnostic;
 use neomacs_display_protocol::{DecodedImage, ImageSequenceId};
 use neomacs_image::portable::{EncodedImage, PortableImageDecoder};
 use neovm_core::emacs_core::display_host::ImageHost;
@@ -102,7 +103,10 @@ impl BrowserImages {
         })();
         let state = match result {
             Ok(ready) => ImageLookup::Ready(ready),
-            Err(error) => ImageLookup::Failed(pending.failed(error.to_owned())),
+            Err(error) => {
+                tracing::warn!(error = %error, "browser image decode failed");
+                ImageLookup::Failed(pending.failed(ImageDiagnostic::NotDrawable))
+            }
         };
         self.entries
             .borrow_mut()
@@ -213,7 +217,7 @@ impl ImageHost for BrowserImageHost {
         self.0.lookup(request.clone(), limit);
         match self.0.resolve(&request) {
             ImageLookup::Ready(image) => Ok(Some(image)),
-            ImageLookup::Failed(image) => Err(image.error),
+            ImageLookup::Failed(image) => Err(image.error.to_string()),
             ImageLookup::Pending(_) => unreachable!("explicit image query completed"),
         }
     }

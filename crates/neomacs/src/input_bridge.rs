@@ -12,7 +12,7 @@ use neomacs_display_runtime::thread_comm::{
 use neovm_core::emacs_core::builtins::NeomacsMonitorInfo;
 use neovm_core::keyboard::{
     self, FrontendLoadPhase, FrontendWebProcessFailure, FrontendWebValue, FrontendWebViewEvent,
-    InputEvent as KbInputEvent, MouseButton,
+    InputEvent as KbInputEvent,
 };
 
 fn convert_web_process_failure(

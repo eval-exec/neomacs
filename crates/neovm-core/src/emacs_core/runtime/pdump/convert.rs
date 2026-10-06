@@ -4695,7 +4695,7 @@ fn hash_key_requires_restored_identity(
         | DumpHashKey::ByteCode(_)
         | DumpHashKey::Marker(_, _)
         | DumpHashKey::Overlay { .. }
-        | DumpHashKey::BoolVec { .. }
+        | DumpHashKey::BoolVector { .. }
         | DumpHashKey::SymbolWithPos(_, _)
         | DumpHashKey::Cycle(_)
         | DumpHashKey::Text(_) => false,

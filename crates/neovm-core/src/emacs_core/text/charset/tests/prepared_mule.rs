@@ -68,14 +68,11 @@ fn prepared_mule_scalar_preserves_map_alias_and_unification() {
         code_to_char: [(105, 233)].into_iter().collect(),
         char_to_code: [(233, 105)].into_iter().collect(),
     });
-    charset_map_cache().write().expect("charset cache").insert(
-        CharsetMapCacheKey {
-            map_name: map_name.to_string(),
-            code_space: mapped.code_space,
-            min_code: mapped.min_code,
-        },
-        Some(map),
-    );
+    let seed_key = CharsetMapCacheKey {
+        map_name: map_name.to_string(),
+        code_space: mapped.code_space,
+        min_code: mapped.min_code,
+    };
     let mut unified = mapped.clone();
     unified.name = intern("neovm-mule-unified");
     unified.id = 911;
@@ -84,6 +81,7 @@ fn prepared_mule_scalar_preserves_map_alias_and_unification() {
     unified.unify_map = Value::string(map_name);
     CHARSET_REGISTRY.with(|slot| {
         let mut registry = slot.borrow_mut();
+        registry.seed_charset_map(seed_key, Some(map));
         registry.register(mapped);
         registry.register(unified);
         registry.define_alias(

@@ -19,7 +19,6 @@ fn restore_failed_callback_roots(saved_len: usize) {
     restore_scratch_gc_roots(saved_len);
 }
 
-||||||| parent of a94cdce597 (fix(eval): drive funcall and apply with shared continuations)
 /// One Ffuncall entry, including its logical depth and optional backtrace.
 /// Kept separate from lambda bindings: subrs and bytecode have this scope too.
 pub(super) struct ActiveApplication {
@@ -2688,10 +2687,7 @@ impl Context {
             };
             match entered {
                 Err(flow) => Err(flow),
-                Ok(())
-                    if self.depth < STACK_GROWTH_PROBE_START_DEPTH
-                        || !self.depth.is_multiple_of(STACK_GROWTH_PROBE_INTERVAL) =>
-                {
+                Ok(()) if !super::super::stack_growth::should_probe(self.depth) => {
                     let bc_data = if OBSERVED {
                         function.get_bytecode_data()
                     } else {
@@ -4100,8 +4096,8 @@ impl Context {
         call: ActiveInterpretedLambdaCall,
         result: EvalResult,
     ) -> EvalResult {
-        let result = match result {
-            Err(Flow::ThreadBlocked(blocked))
+        let result = match result.kinded_ref() {
+            Err(FlowRef::ThreadBlocked(blocked))
                 if !blocked.remaining_forms.is_nil()
                     && crate::emacs_core::threads::thread_condition_case_continuation_parts(
                         blocked.remaining_forms,
@@ -4121,7 +4117,7 @@ impl Context {
                     Err(flow) => Err(flow),
                 }
             }
-            other => other,
+            _ => result,
         };
         let result = self.finish_lambda_call(call.call_state, result);
         self.unbind_to_with_result(call.root_count, result)

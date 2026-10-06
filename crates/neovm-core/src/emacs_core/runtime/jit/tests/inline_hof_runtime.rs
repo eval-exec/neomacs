@@ -181,6 +181,7 @@ fn inline_hof_runtime_abort_dispatches_signal_with_live_map_depth_and_frame() {
             min_args: 2,
             max_args: Some(2),
             dispatch_kind: SubrDispatchKind::Builtin,
+            portability: crate::emacs_core::subr::SubrPortability::AllTargets,
             interactive_spec: None,
         },
     );

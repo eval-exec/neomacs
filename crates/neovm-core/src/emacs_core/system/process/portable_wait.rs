@@ -1,6 +1,6 @@
 //! Timer-serving process-output wait for hosts without process transports.
 
-use crate::emacs_core::error::{EvalResult, LispCondition, expect_fixnum, expect_max_args, signal};
+use crate::emacs_core::error::{EvalResult, FlowResultExt, LispCondition, expect_fixnum, expect_max_args, signal};
 use crate::emacs_core::{Context, Value};
 
 pub(crate) fn builtin_accept_process_output(eval: &mut Context, args: Vec<Value>) -> EvalResult {
@@ -97,16 +97,18 @@ mod tests {
                 "fixnump",
             ),
         ] {
-            let error = builtin_accept_process_output(&mut eval, args).unwrap_err();
-            let crate::emacs_core::error::Flow::Signal(signal) = error else {
-                panic!("expected argument signal, got {error:?}");
+            let wrapped = Err::<(), _>(builtin_accept_process_output(&mut eval, args).unwrap_err());
+            let Err(crate::emacs_core::error::FlowRef::Signal(signal)) = wrapped.kinded_ref() else {
+                panic!("expected argument signal, got {wrapped:?}");
             };
             assert_eq!(signal.symbol_name(), "wrong-type-argument");
             assert_eq!(signal.data[0], Value::symbol(predicate));
         }
-        let error = builtin_accept_process_output(&mut eval, vec![Value::NIL; 5]).unwrap_err();
-        let crate::emacs_core::error::Flow::Signal(signal) = error else {
-            panic!("expected arity signal, got {error:?}");
+        let wrapped = Err::<(), _>(
+            builtin_accept_process_output(&mut eval, vec![Value::NIL; 5]).unwrap_err(),
+        );
+        let Err(crate::emacs_core::error::FlowRef::Signal(signal)) = wrapped.kinded_ref() else {
+            panic!("expected arity signal, got {wrapped:?}");
         };
         assert_eq!(signal.symbol_name(), "wrong-number-of-arguments");
     }

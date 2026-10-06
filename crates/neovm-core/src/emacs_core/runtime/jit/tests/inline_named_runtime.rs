@@ -345,6 +345,7 @@ fn inline_named_runtime_assigned_argument_is_resumed_without_losing_original_cal
             min_args: 2,
             max_args: Some(2),
             dispatch_kind: SubrDispatchKind::Builtin,
+            portability: crate::emacs_core::subr::SubrPortability::AllTargets,
             interactive_spec: None,
         },
     );

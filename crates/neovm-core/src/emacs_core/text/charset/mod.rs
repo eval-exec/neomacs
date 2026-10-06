@@ -14,6 +14,7 @@ use super::value::*;
 use crate::buffer::{EmacsBytePos, LispCharPos1};
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -991,12 +992,6 @@ impl CharsetRegistry {
                     registry.charsets.contains_key(identity) && seen.insert(*identity)
                 })
                 .collect();
-||||||| parent of a0dd24e050 (fix(wasm): load charset maps from runtime resources)
-=======
-            map_source: CharsetMapSource::NativeInstallation,
-            map_cache: RefCell::new(HashMap::new()),
-            map_memo: RefCell::new(Vec::new()),
->>>>>>> a0dd24e050 (fix(wasm): load charset maps from runtime resources)
         }
         registry
     }
@@ -1059,6 +1054,17 @@ impl CharsetRegistry {
             });
         }
         loaded
+    }
+
+    /// Pre-seed one map cache entry. Tests use this to install synthetic
+    /// maps without a resource store.
+    #[cfg(test)]
+    pub(crate) fn seed_charset_map(
+        &self,
+        key: CharsetMapCacheKey,
+        map: Option<Arc<CharsetMapData>>,
+    ) {
+        self.map_cache.borrow_mut().insert(key, map);
     }
 
     /// Replace the plist for a charset.
@@ -1230,9 +1236,6 @@ thread_local! {
 /// Reset charset registry to default state (called from Context::new).
 pub(crate) fn reset_charset_registry() {
     CHARSET_REGISTRY.with(|slot| slot.reset(CharsetRegistry::new()));
-    if let Ok(mut cache) = charset_map_cache().write() {
-        cache.clear();
-    }
 }
 
 /// Bind the active evaluator's resource source to its GNU-style charset table.

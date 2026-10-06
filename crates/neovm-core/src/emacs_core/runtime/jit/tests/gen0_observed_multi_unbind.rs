@@ -3,6 +3,7 @@
 use super::*;
 use crate::emacs_core::error::EvalResult;
 use crate::emacs_core::eval::{SubrEntry, register_global_subr_entry};
+use crate::emacs_core::subr::SubrPortability;
 use crate::tagged::collection_reads::{
     CompiledJournalMode, capture, force_compiled_journal_for_test, is_observed,
 };
@@ -100,6 +101,7 @@ fn gen0_multi_blv_unbind_keeps_coherent_window_after_first_refinement() {
             min_args: 0,
             max_args: Some(0),
             dispatch_kind: SubrDispatchKind::Builtin,
+            portability: crate::emacs_core::subr::SubrPortability::AllTargets,
             interactive_spec: None,
         },
     );

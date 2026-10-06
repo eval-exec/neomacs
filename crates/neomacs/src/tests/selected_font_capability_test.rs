@@ -1,4 +1,7 @@
 use super::super::*;
+use neomacs_app::font_queries::conversion::{
+    core_font_otf_capability, core_opened_font_from_selection, font_otf_capability_for_file,
+};
 
 #[test]
 fn selected_font_capability_reuse_preserves_the_complete_opened_font() {

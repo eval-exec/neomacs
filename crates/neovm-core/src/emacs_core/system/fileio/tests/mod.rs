@@ -1,5 +1,5 @@
 use super::*;
-use crate::emacs_core::error::{FlowKind, FlowResultExt};
+use crate::emacs_core::error::{FlowKind, FlowRef, FlowResultExt};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::format_eval_result;
 use crate::emacs_core::value::list_to_vec;
@@ -170,8 +170,8 @@ fn lisp_file_metadata_queries_share_the_context_filesystem() {
     )
     .expect_err("existing virtual file should reject noninteractive overwrite");
     assert!(matches!(
-        overwrite_error,
-        Flow::Signal(ref signal) if signal.symbol_name() == "file-already-exists"
+        Err::<(), _>(overwrite_error).kinded_ref(),
+        Err(FlowRef::Signal(signal)) if signal.symbol_name() == "file-already-exists"
     ));
 
     let found = builtin_find_file_noselect(&mut eval, vec![Value::string("/neomacs-fake/newer")])
@@ -238,7 +238,10 @@ fn lisp_copy_file_uses_the_context_filesystem() {
         ],
     )
     .expect_err("copying a file onto itself must fail");
-    assert!(matches!(same_file_error, Flow::Signal(_)));
+    assert!(matches!(
+        Err::<(), _>(same_file_error).kinded_ref(),
+        Err(FlowRef::Signal(_))
+    ));
 }
 
 #[test]
@@ -1018,8 +1021,14 @@ fn get_file_errno_data_keys_the_condition_on_errno_like_gnu() {
     ] {
         let err = std::io::Error::from_raw_os_error(errno);
         let expected_text = file_error_class::classify(&err).strerror;
-        match get_file_errno_data(&err, "Doing chmod", vec![Value::string("/etc/passwd")]) {
-            Flow::Signal(sig) => {
+        match Err::<(), _>(get_file_errno_data(
+            &err,
+            "Doing chmod",
+            vec![Value::string("/etc/passwd")],
+        ))
+        .kinded_ref()
+        {
+            Err(FlowRef::Signal(sig)) => {
                 assert_eq!(sig.symbol_name(), symbol, "errno {errno}");
                 let data: Vec<String> = sig
                     .data
@@ -1043,8 +1052,14 @@ fn get_file_errno_data_keys_the_condition_on_errno_like_gnu() {
 
     // EEXIST drops the ACTION: (file-already-exists STRERROR . NAME).
     let err = std::io::Error::from_raw_os_error(libc::EEXIST);
-    match get_file_errno_data(&err, "Creating", vec![Value::string("/tmp/x")]) {
-        Flow::Signal(sig) => {
+    match Err::<(), _>(get_file_errno_data(
+        &err,
+        "Creating",
+        vec![Value::string("/tmp/x")],
+    ))
+    .kinded_ref()
+    {
+        Err(FlowRef::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "file-already-exists");
             assert_eq!(sig.data.len(), 2);
             assert_eq!(sig.data[0].as_utf8_str(), Some("File exists"));
@@ -2625,8 +2640,10 @@ fn installed_filesystem_synthesizes_modes_but_rejects_unsupported_metadata_chang
         builtin_set_file_modes(&mut eval, vec![path, Value::fixnum(0o600)]),
         builtin_set_file_times(&mut eval, vec![path, Value::fixnum(0)]),
     ] {
-        match result.expect_err("unsupported host metadata must be explicit") {
-            Flow::Signal(signal) => assert_eq!(signal.symbol_name(), "file-error"),
+        match Err::<(), _>(result.expect_err("unsupported host metadata must be explicit"))
+            .kinded_ref()
+        {
+            Err(FlowRef::Signal(signal)) => assert_eq!(signal.symbol_name(), "file-error"),
             other => panic!("expected file-error signal, got {other:?}"),
         }
     }
@@ -2667,9 +2684,13 @@ fn file_modes_signals_permission_denied_instead_of_claiming_a_missing_file() {
     );
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
     if inaccessible {
-        match result.expect_err("access failure is not evidence that the file is missing") {
+        match Err::<(), _>(
+            result.expect_err("access failure is not evidence that the file is missing"),
+        )
+        .kinded_ref()
+        {
             // GNU's permission-denied condition is a subtype of file-error.
-            Flow::Signal(signal) => assert_eq!(signal.symbol_name(), "permission-denied"),
+            Err(FlowRef::Signal(signal)) => assert_eq!(signal.symbol_name(), "permission-denied"),
             other => panic!("expected file-error, got {other:?}"),
         }
     }

@@ -14,7 +14,7 @@ use neovm_core::heap_types::LispString;
 use neovm_core::window::FrameId;
 use std::cell::{Cell, RefCell, RefMut};
 use std::rc::Rc;
-mod conversion;
+pub mod conversion;
 mod host;
 use conversion::{core_font_px_metrics, font_otf_capability_for_asset};
 pub use conversion::{core_opened_font_from_selection, font_otf_capability_for_file};

@@ -4,7 +4,6 @@ use super::state::effective_window_scale_factor;
 use crate::thread_comm::InputEvent;
 use neomacs_display_protocol::{ModifierEventKind, TransportModifierBits};
 use neovm_core::keyboard::FrontendKey;
-use neovm_host_abi::frontend_event::FrontendLogicalExtent;
 use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::PhysicalKey;
@@ -420,12 +419,13 @@ impl RenderApp {
                                     // (#458): committed characters ride the
                                     // text channel, never a numeric keysym.
                                     FrontendKey::Character(character) => {
-                                        self.comms
-                                            .send_input(InputEvent::text_committed_with_modifiers(
+                                        self.comms.send_input(
+                                            InputEvent::text_committed_with_modifiers(
                                                 character.to_string(),
                                                 ordinary_modifiers,
                                                 self.emacs_frame_for_window_event(window_id),
-                                            ));
+                                            ),
+                                        );
                                     }
                                     FrontendKey::Keysym(keysym) => {
                                         self.comms.send_input(InputEvent::key(
@@ -478,33 +478,32 @@ impl RenderApp {
                             if self.effects.idle_dim.enabled {
                                 self.record_idle_dim_activity(window_id);
                             }
-                            let (receipt, token) =
-                                let input = match key {
-                                    FrontendKey::Character(character) => {
-                                        // Text identity must survive transport
-                                        // (#458): characters ride the text
-                                        // channel, never a numeric keysym.
-                                        // Releases carry no text, so nothing
-                                        // is sent for them.
-                                        (state == ElementState::Pressed).then(|| {
-                                            InputEvent::text_committed_with_modifiers(
-                                                character.to_string(),
-                                                key_modifiers,
-                                                self.emacs_frame_for_window_event(window_id),
-                                            )
-                                        })
-                                    }
-                                    FrontendKey::Keysym(keysym) => Some(InputEvent::key(
-                                        keysym,
-                                        key_modifiers,
-                                        state == ElementState::Pressed,
-                                        self.emacs_frame_for_window_event(window_id),
-                                    )),
-                                };
-                                let (receipt, token) = match input {
-                                    Some(input) => self.comms.send_input_with_receipt(input),
-                                    None => (None, None),
-                                };
+                            let input = match key {
+                                FrontendKey::Character(character) => {
+                                    // Text identity must survive transport
+                                    // (#458): characters ride the text
+                                    // channel, never a numeric keysym.
+                                    // Releases carry no text, so nothing
+                                    // is sent for them.
+                                    (state == ElementState::Pressed).then(|| {
+                                        InputEvent::text_committed_with_modifiers(
+                                            character.to_string(),
+                                            key_modifiers,
+                                            self.emacs_frame_for_window_event(window_id),
+                                        )
+                                    })
+                                }
+                                FrontendKey::Keysym(keysym) => Some(InputEvent::key(
+                                    keysym,
+                                    key_modifiers,
+                                    state == ElementState::Pressed,
+                                    self.emacs_frame_for_window_event(window_id),
+                                )),
+                            };
+                            let (receipt, token) = match input {
+                                Some(input) => self.comms.send_input_with_receipt(input),
+                                None => (None, None),
+                            };
                             if let Some(receipt) = receipt
                                 && let Some(window) = self.frame_windows.get_by_winit_mut(window_id)
                             {
@@ -729,7 +728,6 @@ impl RenderApp {
                         ));
                         self.record_idle_dim_activity(window_id);
                         self.record_typing_speed_keypress(window_id);
-                    }
                     }
                 }
                 winit::event::Ime::Preedit(text, cursor_range) => {

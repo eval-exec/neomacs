@@ -8,6 +8,7 @@
 //! - LRU cache with memory limits
 
 use neomacs_display_protocol::image::EncodedBytes;
+use neomacs_display_protocol::image_diagnostic::{ImageDiagnostic, ImageLoadIdentity};
 use neomacs_display_protocol::{
     ImageCacheUsage, ImageColorContext, ImageFrameIndex, ImageId, ImageIntrinsicExtent,
     ImageLayoutExtent, ImageLoadAttempt, ImageLoadToken, ImageMaskKind, ImageMaskPolicy,
@@ -645,6 +646,7 @@ impl ImageCache {
         frame: ImageFrameIndex,
         sequence: ImageSequenceId,
         resources: neomacs_image::SvgResourceContext,
+        identity: ImageLoadIdentity,
     ) {
         let load = self.begin_load(load);
         let image = load.image();

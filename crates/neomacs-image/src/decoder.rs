@@ -1,5 +1,6 @@
 use crate::image_sequence::{ImageSequenceCache, ImageSequenceResolution};
 use neomacs_display_protocol::image::EncodedBytes;
+use neomacs_display_protocol::image_diagnostic::{ImageDiagnostic, ImageLoadIdentity};
 use neomacs_display_protocol::{
     DecodedImage, ImageColorContext, ImageEmbeddedMetadata, ImageFrameIndex, ImageHeuristicMask,
     ImageIntrinsicExtent, ImageLoadToken, ImageMaskKind, ImageMaskPolicy, ImageMetadata,
@@ -7,7 +8,6 @@ use neomacs_display_protocol::{
     ImageSizeSpec, ResolvedImageGeometry,
 };
 #[cfg(test)]
-use neomacs_display_protocol::image_diagnostic::{ImageDiagnostic, ImageLoadIdentity};
 use neomacs_display_protocol::{ImageId, ImageLoadAttempt};
 use std::num::NonZeroUsize;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -227,7 +227,7 @@ pub struct ImageDecoderPoolSize(NonZeroUsize);
 
 #[cfg(not(target_family = "wasm"))]
 impl ImageDecoderPoolSize {
-    pub(crate) fn detected() -> Self {
+    pub fn detected() -> Self {
         Self::from_available_parallelism(std::thread::available_parallelism().ok())
     }
 
@@ -308,11 +308,13 @@ impl WorkerDecodeOutcome {
 /// Captured before the decode consumes the source, so the failure path can
 /// re-read what the job carried and reproduce GNU's distinction between "the
 /// file is not there" and "the file is not this format".
-enum DecodeFailureSource {
+pub(crate) enum DecodeFailureSource {
     /// A `:file` source, named by the path a load command was given.
     File { path: String },
     /// A `:data` source, whose bytes are already in hand.
-    Bytes { data: Vec<u8> },
+    Bytes {
+        data: neomacs_display_protocol::image::EncodedBytes,
+    },
     /// Raw pixels handed over by a caller, with no encoded format to name and
     /// no GNU loader behind them.
     Raw,
@@ -325,12 +327,12 @@ impl DecodeFailureSource {
             ImageSource::File { path, .. } => Self::File { path: path.clone() },
             ImageSource::Data { data, .. } => Self::Bytes { data: data.clone() },
             ImageSource::RawArgb32 { .. } | ImageSource::RawRgb24 { .. } => Self::Raw,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "testing"))]
             ImageSource::Panic => Self::Raw,
         }
     }
 
-    fn diagnostic(&self, identity: &ImageLoadIdentity) -> ImageDiagnostic {
+    pub(crate) fn diagnostic(&self, identity: &ImageLoadIdentity) -> ImageDiagnostic {
         // A source that arrived without a specification has no declared type
         // and no printed spec, so there is no GNU sentence that is true of it.
         if identity.is_unspecified() {
@@ -408,7 +410,7 @@ pub enum ImageSource {
         resources: crate::svg::SvgResourceContext,
         sequence: ImageSequenceId,
     },
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     Panic,
     /// Raw ARGB32 pixel data (A,R,G,B byte order, 4 bytes per pixel)
     RawArgb32 {
@@ -457,7 +459,7 @@ impl ImageDecoder {
         // worked at all.
         let failure_source = DecodeFailureSource::of(&source);
         let result = catch_unwind(AssertUnwindSafe(|| match source {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "testing"))]
             ImageSource::Panic => panic!("injected decoder panic"),
             ImageSource::File { path, sequence } => Self::decode_file(
                 &path,

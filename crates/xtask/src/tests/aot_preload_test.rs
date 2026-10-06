@@ -93,7 +93,7 @@ fn aot_preload_dump_environment_requires_opt_in_and_honors_skip() {
         OsString::from("NEOMACS_RUNTIME_ROOT"),
         OsString::from("/runtime"),
     )];
-    let enabled = aot_preload_dump_envs(&options(&["--release", "--aot-preload"]), &base);
+    let enabled = final_dump_envs(&options(&["--release", "--aot-preload"]), &base);
     assert_eq!(
         enabled,
         [
@@ -101,9 +101,9 @@ fn aot_preload_dump_environment_requires_opt_in_and_honors_skip() {
             (OsString::from(AOT_PRELOAD_ENV), OsString::from("1")),
         ]
     );
-    assert_eq!(aot_preload_dump_envs(&options(&["--release"]), &base), base);
+    assert_eq!(final_dump_envs(&options(&["--release"]), &base), base);
     assert_eq!(
-        aot_preload_dump_envs(&options(&["--release", "--no-aot-preload"]), &base),
+        final_dump_envs(&options(&["--release", "--no-aot-preload"]), &base),
         base
     );
 }
@@ -126,7 +126,7 @@ fn aot_preload_child_environment_discards_inherited_producer_flags() {
         Some(&Some(OsStr::new("retained")))
     );
 
-    let dump_envs = aot_preload_dump_envs(&options(&["--release", "--aot-preload"]), &[]);
+    let dump_envs = final_dump_envs(&options(&["--release", "--aot-preload"]), &[]);
     configure_fresh_build_environment(&mut command, &dump_envs);
     let envs: BTreeMap<_, _> = command.get_envs().collect();
     assert_eq!(

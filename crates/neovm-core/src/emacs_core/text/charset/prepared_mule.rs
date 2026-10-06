@@ -59,7 +59,7 @@ impl CharsetEncoder {
             };
             match &info.method {
                 CharsetMethod::Map(map_name) if !info.unified_p => {
-                    CharsetEncoderKind::Map(load_charset_map(map_name, info))
+                    CharsetEncoderKind::Map(registry.load_charset_map(map_name, info))
                 }
                 _ => fallback,
             }

@@ -44,6 +44,7 @@ ash.workspace = true
 wgpu-hal.workspace = true
 
 [dev-dependencies]
+neomacs-image = { path = "../neomacs-image", features = ["testing"] }
 neomacs-infra.workspace = true
 neomacs-test-fonts.workspace = true
 tracing-test.workspace = true

@@ -2,6 +2,7 @@
 
 use crate::ImageSequenceCache;
 use crate::decoder::{DecodeRequest, ImageDecoder, ImageSource, WorkerDecodeOutcome};
+use neomacs_display_protocol::image_diagnostic::ImageLoadIdentity;
 use neomacs_display_protocol::{
     DecodedImage, ImageColorContext, ImageFrameIndex, ImageLoadToken, ImageMaskPolicy,
     ImageRealization, ImageRotation, ImageSequenceId, ImageSizeSpec,
@@ -49,13 +50,14 @@ impl PortableImageDecoder {
             colors: image.colors,
             mask: image.mask,
             frame: image.frame,
+            identity: ImageLoadIdentity::unspecified(),
         };
         match ImageDecoder::decode_request(request, &self.sequences) {
             WorkerDecodeOutcome::Band { .. } => {
                 unreachable!("decoding without a sink returns only a terminal outcome")
             }
             WorkerDecodeOutcome::Ready(image) => Ok(image),
-            WorkerDecodeOutcome::Failed(_) => Err("image decode failed"),
+            WorkerDecodeOutcome::Failed { .. } => Err("image decode failed"),
         }
     }
 }

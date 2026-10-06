@@ -146,12 +146,9 @@ fn map_key_event(event: KeyEvent) -> Option<InputEvent> {
         neovm_core::keyboard::FrontendKey::Character(c) => {
             InputEvent::text_committed_with_modifiers(c.to_string(), modifiers, 0)
         }
-        neovm_core::keyboard::FrontendKey::Keysym(keysym) => InputEvent::key(
-            keysym,
-            modifiers,
-            event.kind == KeyEventKind::Press,
-            0,
-        ),
+        neovm_core::keyboard::FrontendKey::Keysym(keysym) => {
+            InputEvent::key(keysym, modifiers, event.kind == KeyEventKind::Press, 0)
+        }
     })
 }
 

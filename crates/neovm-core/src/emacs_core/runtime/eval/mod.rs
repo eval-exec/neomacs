@@ -8104,8 +8104,8 @@ mod special_forms;
 
 mod apply;
 pub(crate) mod assoc_predicate;
-mod sort_predicate;
 mod continuation;
+mod sort_predicate;
 
 mod command_loop;
 

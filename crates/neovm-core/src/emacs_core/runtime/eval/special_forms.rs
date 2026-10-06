@@ -521,21 +521,20 @@ impl Context {
             self.push_specpdl_with(|| SpecBinding::LexicalEnv { old_lexenv });
         }
 
-        let mut roots = EvalTempRootsToSequenceGuard::enter(self);
-        let context = roots.context();
-        let val_temp_slot = context.push_eval_temp_root_slot(Value::NIL);
-        let tortoise_slot = context.push_eval_temp_root_slot(varlist);
-        let bindings_slot = context.push_eval_temp_root_slot(varlist);
+        let temp_scope = self.save_eval_temp_roots();
+        let val_temp_slot = self.push_eval_temp_root_slot(Value::NIL);
+        let tortoise_slot = self.push_eval_temp_root_slot(varlist);
+        let bindings_slot = self.push_eval_temp_root_slot(varlist);
         let init_result: Result<(), Flow> = (|| {
             let mut bindings = varlist;
             let mut cycle = crate::emacs_core::builtins::GnuTailCycle::new(varlist);
             while bindings.is_cons() {
-                context.set_eval_temp_root_slot(bindings_slot, bindings);
-                let binding = context.unwrap_symbol(bindings.cons_car());
+                self.set_eval_temp_root_slot(bindings_slot, bindings);
+                let binding = self.unwrap_symbol(bindings.cons_car());
                 let (id, value) = if let Some(id) = binding.as_symbol_id() {
                     (id, Value::NIL)
                 } else if binding.is_cons() {
-                    let head = context.unwrap_symbol(binding.cons_car());
+                    let head = self.unwrap_symbol(binding.cons_car());
                     let Some(id) = head.as_symbol_id() else {
                         return Err(signal(
                             LispCondition::WrongTypeArgument,
@@ -557,9 +556,9 @@ impl Context {
                                 ],
                             ));
                         }
-                        context.eval_sub(init_form)?
+                        self.eval_sub(init_form)?
                     } else {
-                        return Err(context.listp_error(binding));
+                        return Err(self.listp_error(binding));
                     };
                     (id, value)
                 } else {
@@ -570,30 +569,30 @@ impl Context {
                         vec![Value::symbol("listp"), binding],
                     ));
                 };
-                context.set_eval_temp_root_slot(val_temp_slot, value);
+                self.set_eval_temp_root_slot(val_temp_slot, value);
 
-                if let Some(name) = let_constant_error_name(&context.obarray, id, value) {
+                if let Some(name) = let_constant_error_name(&self.obarray, id, value) {
                     return Err(signal(
                         LispCondition::SettingConstant,
                         vec![Value::symbol(&name)],
                     ));
                 }
                 if use_lexical
-                    && !context.obarray.is_special_id(id)
-                    && !context.lexenv_declares_special_cached_in(context.lexenv, id)
+                    && !self.obarray.is_special_id(id)
+                    && !self.lexenv_declares_special_cached_in(self.lexenv, id)
                 {
                     // Matches GNU Flet_star (eval.c:1113-1120):
                     // Direct cons onto Vinternal_interpreter_environment.
                     // The LexicalEnv entry at specpdl_count saves the pre-let*
                     // state; unbind_to restores it.
                     let binding = Value::make_cons(lexenv_binding_symbol_value(id), value);
-                    context.lexenv = Value::make_cons(binding, context.lexenv);
+                    self.lexenv = Value::make_cons(binding, self.lexenv);
                 } else {
-                    context.try_specbind(id, value)?;
+                    self.try_specbind(id, value)?;
                 }
                 bindings = bindings.cons_cdr();
                 cycle.check(bindings)?;
-                context.set_eval_temp_root_slot(tortoise_slot, cycle.tortoise());
+                self.set_eval_temp_root_slot(tortoise_slot, cycle.tortoise());
             }
             if !bindings.is_nil() {
                 // GNU CHECK_LIST_END reports the original variable list,

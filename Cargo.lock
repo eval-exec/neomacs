@@ -3810,6 +3810,7 @@ dependencies = [
  "neomacs-layout-engine",
  "neovm-core",
  "neovm-host-abi",
+ "serde",
  "serde_json",
  "sha2",
  "tar",
@@ -4223,6 +4224,7 @@ dependencies = [
  "neomacs-wasm-protocol",
  "neovm-core",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]
@@ -9188,8 +9190,6 @@ dependencies = [
  "tracing",
  "unicode-segmentation",
  "url",
- "windows 0.62.2",
- "windows-core 0.62.2",
  "windows-sys 0.61.2",
  "winit-common",
  "winit-core",
@@ -9368,6 +9368,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 name = "xtask"
 version = "0.0.19"
 dependencies = [
+ "flate2",
  "rayon",
  "resvg",
  "serde",

@@ -221,7 +221,9 @@ impl EditorPresentationRuntime {
             let states = snapshots.collect_snapshot_states(eval, &request.target)?;
             Ok(match request.format {
                 SnapshotFormat::Json => serde_json::to_string(&SnapshotDoc { frames: &states })
-                    .map_err(|error| format!("frame snapshot JSON serialization failed: {error}"))?,
+                    .map_err(|error| {
+                        format!("frame snapshot JSON serialization failed: {error}")
+                    })?,
                 SnapshotFormat::JsonGeometry => {
                     let frames = states
                         .iter()
@@ -234,8 +236,9 @@ impl EditorPresentationRuntime {
                             window_infos: &state.window_infos,
                         })
                         .collect();
-                    serde_json::to_string(&SnapshotGeometryDoc { frames })
-                        .map_err(|error| format!("frame geometry JSON serialization failed: {error}"))?
+                    serde_json::to_string(&SnapshotGeometryDoc { frames }).map_err(|error| {
+                        format!("frame geometry JSON serialization failed: {error}")
+                    })?
                 }
                 SnapshotFormat::Text => states
                     .iter()

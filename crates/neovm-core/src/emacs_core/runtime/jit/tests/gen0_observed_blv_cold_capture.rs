@@ -7,6 +7,7 @@
 use super::*;
 use crate::emacs_core::error::EvalResult;
 use crate::emacs_core::eval::{SubrEntry, register_global_subr_entry};
+use crate::emacs_core::subr::SubrPortability;
 use crate::tagged::collection_reads::{
     CompiledJournalMode, capture, force_compiled_journal_for_test, is_observed,
 };
@@ -185,6 +186,7 @@ fn check_binding(local: bool) {
             min_args: 0,
             max_args: Some(0),
             dispatch_kind: SubrDispatchKind::Builtin,
+            portability: crate::emacs_core::subr::SubrPortability::AllTargets,
             interactive_spec: None,
         },
     );

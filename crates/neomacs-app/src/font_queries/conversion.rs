@@ -24,7 +24,7 @@ pub(super) fn font_otf_capability_for_asset(
     }
 }
 
-fn core_font_otf_capability(
+pub fn core_font_otf_capability(
     caps: neomacs_layout_engine::font::probe::OtfCapability,
 ) -> neovm_core::emacs_core::eval::FontOtfCapability {
     let side = |scripts: Vec<neomacs_layout_engine::font::probe::OtfScript>| {

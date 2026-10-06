@@ -62,7 +62,7 @@ fn fixture(gnu: bool) -> SnapshotFixture {
     } else {
         RedisplayHookPolicyGuard::legacy()
     };
-    REDISPLAY_RUNTIME.with(|runtime| runtime.disable_cosmic_metrics());
+    REDISPLAY_RUNTIME.with(|runtime| runtime.use_cell_grid());
     let (mut eval, _visible_buffer, visible_frame, visible_window) =
         initialized_redisplay_test_frame(
             "snapshot-visible",

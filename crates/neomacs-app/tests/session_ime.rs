@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use neomacs_app::frontend_event::{FrontendEvent, FrontendFrameId};
+use neomacs_app::frontend_event::{FrontendEvent, FrontendFrameId, FrontendModifiers};
 use neomacs_app::presentation::PresentationMetrics;
 use neomacs_app::session::{EditorSession, ImeReply};
 use neovm_core::emacs_core::eval::Context;
@@ -50,6 +50,7 @@ fn live_ime_keeps_accepting_commits_after_gnu_post_insert_hooks_edit_the_buffer(
         .input()
         .submit(&FrontendEvent::TextCommitted {
             text: "z".into(),
+            modifiers: FrontendModifiers::from_bits(0),
             target: FrontendFrameId::PRIMARY,
         })
         .unwrap();
@@ -93,6 +94,7 @@ fn acknowledged_replacement_delivers_a_text_conversion_event() {
         .input()
         .submit(&FrontendEvent::TextCommitted {
             text: "z".into(),
+            modifiers: FrontendModifiers::from_bits(0),
             target: FrontendFrameId::PRIMARY,
         })
         .unwrap();
@@ -176,6 +178,7 @@ fn applied_selection_acknowledges_the_resulting_cursor() {
         .input()
         .submit(&FrontendEvent::TextCommitted {
             text: "z".into(),
+            modifiers: FrontendModifiers::from_bits(0),
             target: FrontendFrameId::PRIMARY,
         })
         .unwrap();
@@ -223,6 +226,7 @@ fn replacement_hook_cannot_redirect_an_observed_range() {
         .input()
         .submit(&FrontendEvent::TextCommitted {
             text: "z".into(),
+            modifiers: FrontendModifiers::from_bits(0),
             target: FrontendFrameId::PRIMARY,
         })
         .unwrap();
@@ -281,6 +285,7 @@ fn replacement_rejects_invalid_observed_coordinates_without_editing() {
             .input()
             .submit(&FrontendEvent::TextCommitted {
                 text: "z".into(),
+                modifiers: FrontendModifiers::from_bits(0),
                 target: FrontendFrameId::PRIMARY,
             })
             .unwrap();
@@ -323,6 +328,7 @@ fn stale_selection_acknowledges_the_current_snapshot_in_input_order() {
         .input()
         .submit(&FrontendEvent::TextCommitted {
             text: "z".into(),
+            modifiers: FrontendModifiers::from_bits(0),
             target: FrontendFrameId::PRIMARY,
         })
         .unwrap();
@@ -365,6 +371,7 @@ fn selection_acknowledgement_does_not_export_private_input() {
         .input()
         .submit(&FrontendEvent::TextCommitted {
             text: "z".into(),
+            modifiers: FrontendModifiers::from_bits(0),
             target: FrontendFrameId::PRIMARY,
         })
         .unwrap();
@@ -402,6 +409,7 @@ fn snapshot_request_honors_dynamic_password_bindings_during_input() {
         .input()
         .submit(&FrontendEvent::TextCommitted {
             text: "z".into(),
+            modifiers: FrontendModifiers::from_bits(0),
             target: FrontendFrameId::PRIMARY,
         })
         .unwrap();
@@ -432,6 +440,7 @@ fn snapshot_request_observes_the_preceding_keyboard_edit_and_wakes_frontend() {
         .input()
         .submit(&FrontendEvent::TextCommitted {
             text: "a".into(),
+            modifiers: FrontendModifiers::from_bits(0),
             target: FrontendFrameId::PRIMARY,
         })
         .unwrap();
@@ -441,6 +450,7 @@ fn snapshot_request_observes_the_preceding_keyboard_edit_and_wakes_frontend() {
         .input()
         .submit(&FrontendEvent::TextCommitted {
             text: "z".into(),
+            modifiers: FrontendModifiers::from_bits(0),
             target: FrontendFrameId::PRIMARY,
         })
         .unwrap();
@@ -477,6 +487,7 @@ fn queued_selection_cannot_target_a_buffer_switched_by_preceding_input() {
         .input()
         .submit(&FrontendEvent::TextCommitted {
             text: "a".into(),
+            modifiers: FrontendModifiers::from_bits(0),
             target: FrontendFrameId::PRIMARY,
         })
         .unwrap();
@@ -493,6 +504,7 @@ fn queued_selection_cannot_target_a_buffer_switched_by_preceding_input() {
         .input()
         .submit(&FrontendEvent::TextCommitted {
             text: "z".into(),
+            modifiers: FrontendModifiers::from_bits(0),
             target: FrontendFrameId::PRIMARY,
         })
         .unwrap();
@@ -550,6 +562,7 @@ fn check_selection_failure(observe: bool) {
         .input()
         .submit(&FrontendEvent::TextCommitted {
             text: "z".into(),
+            modifiers: FrontendModifiers::from_bits(0),
             target: FrontendFrameId::PRIMARY,
         })
         .unwrap();
@@ -578,6 +591,7 @@ fn abandoning_a_reply_does_not_block_input_processing() {
         .input()
         .submit(&FrontendEvent::TextCommitted {
             text: "z".into(),
+            modifiers: FrontendModifiers::from_bits(0),
             target: FrontendFrameId::PRIMARY,
         })
         .unwrap();
@@ -715,6 +729,7 @@ fn check_native_worker_snapshot(query_after_idle: bool) {
         .input()
         .submit(&FrontendEvent::TextCommitted {
             text: "z".into(),
+            modifiers: FrontendModifiers::from_bits(0),
             target: FrontendFrameId::PRIMARY,
         })
         .unwrap();
@@ -753,6 +768,7 @@ fn snapshot_follows_command_execution_not_just_key_dequeue() {
         .input()
         .submit(&FrontendEvent::TextCommitted {
             text: "a".into(),
+            modifiers: FrontendModifiers::from_bits(0),
             target: FrontendFrameId::PRIMARY,
         })
         .unwrap();
@@ -765,6 +781,7 @@ fn snapshot_follows_command_execution_not_just_key_dequeue() {
         .input()
         .submit(&FrontendEvent::TextCommitted {
             text: "z".into(),
+            modifiers: FrontendModifiers::from_bits(0),
             target: FrontendFrameId::PRIMARY,
         })
         .unwrap();

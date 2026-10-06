@@ -417,13 +417,6 @@ pub(crate) fn prepare_apply_args(args: &[Value]) -> Result<(Value, LispArgVec), 
                 ));
             }
         }
-        if !cursor.is_nil() {
-            return Err(signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("listp"), cursor],
-            ));
-        }
-        Ok((func, call_args))
     } else {
         call_args.extend_from_slice(&args[1..args.len() - 1]);
         args[0]
@@ -434,7 +427,6 @@ pub(crate) fn prepare_apply_args(args: &[Value]) -> Result<(Value, LispArgVec), 
         if cursor.is_cons() {
             cycle.check(cursor)?;
         }
-        Ok((args[0], call_args))
     }
     if !cursor.is_nil() {
         return Err(signal(
@@ -442,7 +434,7 @@ pub(crate) fn prepare_apply_args(args: &[Value]) -> Result<(Value, LispArgVec), 
             vec![Value::symbol("listp"), cursor],
         ));
     }
-    eval.apply_from_lisp_funcall(func, call_args)
+    Ok((func, call_args))
 }
 
 pub(crate) fn prepare_funcall_args(args: &[Value]) -> Result<(Value, LispArgVec), Flow> {

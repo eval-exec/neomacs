@@ -12,6 +12,7 @@ name = "neomacs_wasm_worker"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+tracing.workspace = true
 ciborium.workspace = true
 neomacs-app.workspace = true
 neomacs-host-runtime.workspace = true

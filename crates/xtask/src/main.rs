@@ -692,7 +692,7 @@ impl FreshBuildOptions {
                         .into(),
                 );
             }
-            if aot_preload {
+            if aot_preload.enabled() {
                 return Err("the portable seed product cannot enable --aot-preload".into());
             }
             if skip_build {
