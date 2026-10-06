@@ -3322,7 +3322,7 @@ pub(crate) fn dump_symbol_data(
             let (default_val, local_if_set, forwarder) = unsafe {
                 let blv = &*sd.val.blv;
                 let default_val = blv.defcell.cons_cdr();
-                (default_val, blv.local_if_set, blv.fwd.map(|fwd| fwd.ty))
+                (default_val, blv.local_if_set, blv.fwd.map(|fwd| fwd.ty()))
             };
             let default_val = match dynamic_default {
                 Some(Some(value)) => value,
@@ -3336,35 +3336,22 @@ pub(crate) fn dump_symbol_data(
             }
         }
         SymbolRedirect::Forwarded => {
+            use crate::emacs_core::forward::ForwardSlot;
             let fwd = unsafe { &*sd.val.fwd };
-            match fwd.ty {
-                crate::emacs_core::forward::LispFwdType::Bool => {
-                    let bool_fwd = unsafe {
-                        &*(fwd as *const _ as *const crate::emacs_core::forward::LispBoolFwd)
-                    };
-                    DumpSymbolVal::BoolForwarded(bool_fwd.get())
+            match fwd.slot() {
+                ForwardSlot::Bool(bool_fwd) => DumpSymbolVal::BoolForwarded(bool_fwd.get()),
+                ForwardSlot::Int(int_fwd) => {
+                    DumpSymbolVal::IntForwarded(encoder.dump_value(&int_fwd.get()))
+                }
+                ForwardSlot::Obj(obj_fwd) => {
+                    DumpSymbolVal::ObjForwarded(encoder.dump_value(&obj_fwd.get()))
+                }
+                ForwardSlot::KboardObj(kbd_fwd) => {
+                    DumpSymbolVal::KboardForwarded(encoder.dump_value(&kbd_fwd.get()))
                 }
                 // BUFFER_OBJFWD forwarders are re-installed from
                 // BUFFER_SLOT_INFO in reconstruct_evaluator.
-                crate::emacs_core::forward::LispFwdType::Int => {
-                    let int_fwd = unsafe {
-                        &*(fwd as *const _ as *const crate::emacs_core::forward::LispIntFwd)
-                    };
-                    DumpSymbolVal::IntForwarded(encoder.dump_value(&int_fwd.get()))
-                }
-                crate::emacs_core::forward::LispFwdType::Obj => {
-                    let obj_fwd = unsafe {
-                        &*(fwd as *const _ as *const crate::emacs_core::forward::LispObjFwd)
-                    };
-                    DumpSymbolVal::ObjForwarded(encoder.dump_value(&obj_fwd.get()))
-                }
-                crate::emacs_core::forward::LispFwdType::KboardObj => {
-                    let kbd_fwd = unsafe {
-                        &*(fwd as *const _ as *const crate::emacs_core::forward::LispKboardObjFwd)
-                    };
-                    DumpSymbolVal::KboardForwarded(encoder.dump_value(&kbd_fwd.get()))
-                }
-                crate::emacs_core::forward::LispFwdType::BufferObj => DumpSymbolVal::Forwarded,
+                ForwardSlot::BufferObj(_) => DumpSymbolVal::Forwarded,
             }
         }
     };

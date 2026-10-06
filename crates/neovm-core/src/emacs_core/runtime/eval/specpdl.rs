@@ -206,11 +206,9 @@ impl Context {
         // LOCALIZED path. Mirrors GNU `specbind` SYMBOL_FORWARDED arm at
         // `eval.c:3641-3677`.
         {
-            use crate::emacs_core::forward::{LispBufferObjFwd, LispFwdType};
             if let Some(fwd_ptr) = forwarded {
                 let fwd = unsafe { &*fwd_ptr };
-                if matches!(fwd.ty, LispFwdType::BufferObj) {
-                    let buf_fwd = unsafe { &*(fwd as *const _ as *const LispBufferObjFwd) };
+                if let Some(buf_fwd) = fwd.as_buffer_obj_fwd() {
                     let Some(slot) = crate::buffer::buffer::BufferSlot::from_u16(buf_fwd.offset)
                     else {
                         return Ok(());

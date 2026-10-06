@@ -5918,28 +5918,21 @@ impl Context {
         // update the visible per-buffer slot rather than just the
         // obarray symbol value (which a FORWARDED symbol no longer
         // consults at read time).
-        use super::symbol::SymbolRedirect;
-        if let Some(sym) = self.obarray.get_by_id(sym_id)
-            && sym.flags.redirect() == SymbolRedirect::Forwarded
+        if let Some(buf_fwd) = self
+            .obarray
+            .get_by_id(sym_id)
+            .and_then(|sym| sym.forwarded_descriptor())
+            .and_then(|fwd| fwd.as_buffer_obj_fwd())
             && let Some(buf_id) = self.buffers.current_buffer_id()
         {
-            use super::forward::{LispBufferObjFwd, LispFwdType};
-            // Safety: install_buffer_objfwd leaks a 'static
-            // descriptor; the symbol's redirect tag and val.fwd
-            // pointer are immutable once installed.
-            let fwd_ptr = unsafe { sym.val.fwd };
-            let header = unsafe { &*fwd_ptr };
-            if matches!(header.ty, LispFwdType::BufferObj) {
-                let buf_fwd = unsafe { &*(fwd_ptr as *const LispBufferObjFwd) };
-                let offset = buf_fwd.offset as usize;
-                if let Some(buf) = self.buffers.get_mut(buf_id)
-                    && offset < buf.slots.len()
-                {
-                    buf.slots[offset] = value;
-                    self.refresh_gc_runtime_settings_after_change_by_id(sym_id);
-                    self.mark_redisplay_dirty_if_display_var(sym_id);
-                    return;
-                }
+            let offset = buf_fwd.offset as usize;
+            if let Some(buf) = self.buffers.get_mut(buf_id)
+                && offset < buf.slots.len()
+            {
+                buf.slots[offset] = value;
+                self.refresh_gc_runtime_settings_after_change_by_id(sym_id);
+                self.mark_redisplay_dirty_if_display_var(sym_id);
+                return;
             }
         }
         self.obarray.set_symbol_value(name, value);
@@ -5991,12 +5984,12 @@ impl Context {
         &self,
         sym: &crate::emacs_core::symbol::LispSymbol,
     ) -> Option<Value> {
-        use crate::emacs_core::forward::LispFwdType;
+        use crate::emacs_core::forward::ForwardSlot;
 
-        let fwd = unsafe { &*sym.val.fwd };
-        match fwd.ty {
-            LispFwdType::Int | LispFwdType::Bool | LispFwdType::Obj => fwd.load(),
-            LispFwdType::BufferObj | LispFwdType::KboardObj => None,
+        let fwd = sym.forwarded_descriptor()?;
+        match fwd.slot() {
+            ForwardSlot::Int(_) | ForwardSlot::Bool(_) | ForwardSlot::Obj(_) => fwd.load(),
+            ForwardSlot::BufferObj(_) | ForwardSlot::KboardObj(_) => None,
         }
     }
 
@@ -6005,14 +5998,7 @@ impl Context {
         &self,
         sym: &crate::emacs_core::symbol::LispSymbol,
     ) -> Option<Value> {
-        use crate::emacs_core::forward::{LispBufferObjFwd, LispFwdType};
-
-        let fwd = unsafe { &*sym.val.fwd };
-        if !matches!(fwd.ty, LispFwdType::BufferObj) {
-            return None;
-        }
-
-        let buf_fwd = unsafe { &*(fwd as *const _ as *const LispBufferObjFwd) };
+        let buf_fwd = sym.forwarded_descriptor()?.as_buffer_obj_fwd()?;
         let slot = crate::buffer::buffer::BufferSlot::from_u16(buf_fwd.offset)?;
         let off = slot.index();
         if let Some(buf) = self.buffers.current_buffer() {
@@ -7060,7 +7046,7 @@ pub(crate) fn check_forwarded_store_at(
     let Some(fwd) = assignment_forwarder(obarray, sym_id) else {
         return Ok(ForwardChecked(value));
     };
-    if fwd.ty == LispFwdType::BufferObj {
+    if fwd.ty() == LispFwdType::BufferObj {
         if site == ForwardStoreSite::SetDefault {
             return Ok(ForwardChecked(value));
         }
@@ -7629,7 +7615,7 @@ impl Context {
     }
 
     pub(crate) fn variable_watcher_where_for_set_by_id(&self, sym_id: SymId) -> Value {
-        use crate::emacs_core::forward::{LispBufferObjFwd, LispFwdType};
+        use crate::emacs_core::forward::LispFwdType;
         use crate::emacs_core::symbol::SymbolRedirect;
 
         let Some(current_id) = self.buffers.current_buffer_id() else {
@@ -7655,9 +7641,10 @@ impl Context {
                 }
             }
             SymbolRedirect::Forwarded => {
-                let fwd = unsafe { &*sym.val.fwd };
-                if matches!(fwd.ty, LispFwdType::BufferObj) {
-                    let _buf_fwd = unsafe { &*(fwd as *const _ as *const LispBufferObjFwd) };
+                if sym
+                    .forwarded_descriptor()
+                    .is_some_and(|fwd| fwd.ty() == LispFwdType::BufferObj)
+                {
                     return Value::make_buffer(current_id);
                 }
                 Value::NIL

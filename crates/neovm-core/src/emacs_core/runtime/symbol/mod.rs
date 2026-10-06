@@ -40,6 +40,7 @@ use super::intern::{
 };
 use super::value::{Value, ValueKind, VecLikeType};
 use crate::emacs_core::error::Flow;
+use crate::emacs_core::forward::FwdDescriptor;
 use crate::gc_trace::GcTrace;
 use crate::heap_types::LispString;
 use crate::tagged::header::{load_value_atomic, store_value_atomic};
@@ -2919,7 +2920,7 @@ impl Obarray {
     /// caller that cares about one variant has to say what it does about the
     /// others.
     pub fn forward_type(&self, id: SymId) -> Option<crate::emacs_core::forward::LispFwdType> {
-        self.forwarder(id).map(|fwd| fwd.ty)
+        self.forwarder(id).map(|fwd| fwd.ty())
     }
 
     /// The `Lisp_Boolfwd` cell behind a `DEFVAR_BOOL` symbol -- GNU's `bool *`,
@@ -3319,8 +3320,7 @@ impl Obarray {
         sym.flags.set_redirect(SymbolRedirect::Forwarded);
         sym.flags.set_declared_special(true);
         sym.val = SymbolVal {
-            fwd: fwd as *const crate::emacs_core::forward::LispBufferObjFwd
-                as *const crate::emacs_core::forward::LispFwd,
+            fwd: std::ptr::from_ref(fwd.header()),
         };
     }
 
@@ -3341,8 +3341,7 @@ impl Obarray {
         sym.flags.set_redirect(SymbolRedirect::Forwarded);
         sym.flags.set_declared_special(true);
         sym.val = SymbolVal {
-            fwd: fwd as *const crate::emacs_core::forward::LispBoolFwd
-                as *const crate::emacs_core::forward::LispFwd,
+            fwd: std::ptr::from_ref(fwd.header()),
         };
         // This descriptor is now the variable's cell: the memoized pointer
         // follows it (an earlier probe may have found none, or a different
@@ -3452,21 +3451,13 @@ impl Obarray {
         let (fwd, canonical) = match kind {
             Kind::Bool => {
                 let flag = restored.is_truthy();
-                let fwd = crate::emacs_core::forward::alloc_boolfwd(flag);
-                let fwd = unsafe {
-                    &*(fwd as *const crate::emacs_core::forward::LispBoolFwd
-                        as *const crate::emacs_core::forward::LispFwd)
-                };
+                let fwd = crate::emacs_core::forward::alloc_boolfwd(flag).header();
                 (fwd, if flag { Value::T } else { Value::NIL })
             }
             Kind::Int => {
                 let integer = crate::emacs_core::forward::LispInteger::check(restored)
                     .unwrap_or_else(|_| crate::emacs_core::forward::LispInteger::from_i64(0));
-                let fwd = crate::emacs_core::forward::alloc_intfwd(integer);
-                let fwd = unsafe {
-                    &*(fwd as *const crate::emacs_core::forward::LispIntFwd
-                        as *const crate::emacs_core::forward::LispFwd)
-                };
+                let fwd = crate::emacs_core::forward::alloc_intfwd(integer).header();
                 (fwd, integer.value())
             }
             // A `Lisp_Fwd_Obj` accepts anything and canonicalises nothing, so
@@ -3474,19 +3465,11 @@ impl Obarray {
             // for the redirect tag, which is what refuses an unbind through
             // `blv->fwd` (`src/data.c:1723-1727`).
             Kind::Obj => {
-                let fwd = crate::emacs_core::forward::alloc_objfwd(restored);
-                let fwd = unsafe {
-                    &*(fwd as *const crate::emacs_core::forward::LispObjFwd
-                        as *const crate::emacs_core::forward::LispFwd)
-                };
+                let fwd = crate::emacs_core::forward::alloc_objfwd(restored).header();
                 (fwd, restored)
             }
             Kind::Kboard => {
-                let fwd = crate::emacs_core::forward::alloc_kboard_objfwd(restored);
-                let fwd = unsafe {
-                    &*(fwd as *const crate::emacs_core::forward::LispKboardObjFwd
-                        as *const crate::emacs_core::forward::LispFwd)
-                };
+                let fwd = crate::emacs_core::forward::alloc_kboard_objfwd(restored).header();
                 (fwd, restored)
             }
         };
@@ -3524,13 +3507,9 @@ impl Obarray {
         sym.flags.set_redirect(SymbolRedirect::Forwarded);
         sym.flags.set_declared_special(true);
         sym.val = SymbolVal {
-            fwd: fwd as *const crate::emacs_core::forward::LispIntFwd
-                as *const crate::emacs_core::forward::LispFwd,
+            fwd: std::ptr::from_ref(fwd.header()),
         };
-        self.register_value_fwd(unsafe {
-            &*(fwd as *const crate::emacs_core::forward::LispIntFwd
-                as *const crate::emacs_core::forward::LispFwd)
-        });
+        self.register_value_fwd(fwd.header());
     }
 
     /// Record a descriptor that owns a Lisp value as a GC root.
@@ -3564,13 +3543,9 @@ impl Obarray {
         sym.flags.set_redirect(SymbolRedirect::Forwarded);
         sym.flags.set_declared_special(true);
         sym.val = SymbolVal {
-            fwd: fwd as *const crate::emacs_core::forward::LispObjFwd
-                as *const crate::emacs_core::forward::LispFwd,
+            fwd: std::ptr::from_ref(fwd.header()),
         };
-        self.register_value_fwd(unsafe {
-            &*(fwd as *const crate::emacs_core::forward::LispObjFwd
-                as *const crate::emacs_core::forward::LispFwd)
-        });
+        self.register_value_fwd(fwd.header());
     }
 
     /// Install a GNU `Lisp_Kboard_Objfwd`-equivalent descriptor on a symbol
@@ -3588,13 +3563,9 @@ impl Obarray {
         sym.flags.set_redirect(SymbolRedirect::Forwarded);
         sym.flags.set_declared_special(true);
         sym.val = SymbolVal {
-            fwd: fwd as *const crate::emacs_core::forward::LispKboardObjFwd
-                as *const crate::emacs_core::forward::LispFwd,
+            fwd: std::ptr::from_ref(fwd.header()),
         };
-        self.register_value_fwd(unsafe {
-            &*(fwd as *const crate::emacs_core::forward::LispKboardObjFwd
-                as *const crate::emacs_core::forward::LispFwd)
-        });
+        self.register_value_fwd(fwd.header());
     }
 
     /// Define a global Lisp variable with GNU `DEFVAR_INT` storage.
@@ -3700,16 +3671,11 @@ impl Obarray {
                     // this in sync with `BufferManager::buffer_defaults`
                     // is `setq-default`'s job).
                     let fwd = unsafe { &*sym.val.fwd };
-                    use crate::emacs_core::forward::{LispBufferObjFwd, LispFwdType};
                     if let Some(value) = fwd.load() {
                         return Some(value);
                     }
-                    if fwd.ty == LispFwdType::BufferObj {
-                        let buf_fwd = unsafe { &*(fwd as *const _ as *const LispBufferObjFwd) };
-                        return Some(buf_fwd.default);
-                    }
-                    // Obj / KboardObj forwarders are not installed here.
-                    return None;
+                    // `load` answers for every family but the per-buffer slot.
+                    return fwd.as_buffer_obj_fwd().map(|buf_fwd| buf_fwd.default);
                 }
             }
         }
@@ -3792,10 +3758,9 @@ impl Obarray {
                     // arm + `PER_BUFFER_VALUE_P` (`buffer.h:1640`).
                     let sym = self.slot(current)?;
                     let fwd = unsafe { &*sym.val.fwd };
-                    use crate::emacs_core::forward::{LispBufferObjFwd, LispFwdType};
-                    match fwd.ty {
-                        LispFwdType::BufferObj => {
-                            let buf_fwd = unsafe { &*(fwd as *const _ as *const LispBufferObjFwd) };
+                    use crate::emacs_core::forward::ForwardSlot;
+                    match fwd.slot() {
+                        ForwardSlot::BufferObj(buf_fwd) => {
                             // Shared with the cached read tier
                             // (`Context::read_var_cached`), so the two
                             // cannot drift.
@@ -3810,10 +3775,10 @@ impl Obarray {
                         // context this function was handed applies to them;
                         // the buffer-free walk reads them through
                         // `do_symval_forwarding` and is the whole answer.
-                        LispFwdType::Int
-                        | LispFwdType::Bool
-                        | LispFwdType::Obj
-                        | LispFwdType::KboardObj => {
+                        ForwardSlot::Int(_)
+                        | ForwardSlot::Bool(_)
+                        | ForwardSlot::Obj(_)
+                        | ForwardSlot::KboardObj(_) => {
                             return self.find_symbol_value(current);
                         }
                     }
@@ -4884,17 +4849,15 @@ impl Obarray {
                     });
                 }
                 SymbolRedirect::Forwarded => {
-                    use crate::emacs_core::forward::{LispBufferObjFwd, LispFwd, LispFwdType};
+                    use crate::emacs_core::forward::LispFwd;
                     // Safety: `install_*fwd` leaks every descriptor.
                     let fwd: &'static LispFwd = unsafe { &*sym.val.fwd };
                     if let Some(value) = fwd.load_ref() {
                         return Some(value);
                     }
-                    if fwd.ty == LispFwdType::BufferObj {
-                        let buf_fwd = unsafe { &*(fwd as *const _ as *const LispBufferObjFwd) };
-                        return Some(&buf_fwd.default);
-                    }
-                    return None;
+                    // `load_ref` answers for every family but the per-buffer
+                    // slot, whose registration default is immutable.
+                    return fwd.as_buffer_obj_fwd().map(|buf_fwd| &buf_fwd.default);
                 }
             }
         }

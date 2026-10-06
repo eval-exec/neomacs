@@ -6657,19 +6657,14 @@ impl<'a> Vm<'a> {
         if matches!(redirect, Some(SymbolRedirect::Forwarded))
             && let Some(buf_id) = self.ctx.buffers.current_buffer_id()
         {
-            use crate::emacs_core::forward::{LispBufferObjFwd, LispFwdType};
-            let fwd_ptr = self
+            let buf_fwd = self
                 .ctx
                 .obarray
                 .get_by_id(resolved)
-                .map(|s| unsafe { s.val.fwd });
-            if let Some(fwd) = fwd_ptr {
-                // Safety: install_buffer_objfwd leaks a 'static
-                // descriptor and the symbol's redirect tag is
-                // immutable once installed.
-                let header = unsafe { &*fwd };
-                if matches!(header.ty, LispFwdType::BufferObj) {
-                    let buf_fwd = unsafe { &*(fwd as *const LispBufferObjFwd) };
+                .and_then(|s| s.forwarded_descriptor())
+                .and_then(|fwd| fwd.as_buffer_obj_fwd());
+            {
+                if let Some(buf_fwd) = buf_fwd {
                     let Some(slot) = crate::buffer::buffer::BufferSlot::from_u16(buf_fwd.offset)
                     else {
                         return Err(signal(

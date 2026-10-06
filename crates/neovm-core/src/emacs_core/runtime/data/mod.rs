@@ -302,12 +302,11 @@ pub(crate) fn default_value_in_state(
         {
             return Some(defaults[offset]);
         }
-        if let Some(default) = obarray.forwarder(resolved).and_then(|forwarder| {
-            use super::forward::{LispBufferObjFwd, LispFwdType};
-
-            matches!(forwarder.ty, LispFwdType::BufferObj)
-                .then(|| unsafe { (&*(forwarder as *const _ as *const LispBufferObjFwd)).default })
-        }) {
+        if let Some(default) = obarray
+            .forwarder(resolved)
+            .and_then(|forwarder| forwarder.as_buffer_obj_fwd())
+            .map(|buf_fwd| buf_fwd.default)
+        {
             return Some(default);
         }
     }

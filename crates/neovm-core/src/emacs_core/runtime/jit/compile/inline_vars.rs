@@ -227,17 +227,17 @@ fn classify(sym: u32) -> Option<VarSite> {
                     let blv_ptr = unsafe { symbol.val.blv };
                     let blv = unsafe { &*blv_ptr };
                     match blv.fwd {
-                        Some(fwd) if FwdKind::of(fwd.ty).is_none() => VarShape::Plain,
+                        Some(fwd) if FwdKind::of(fwd.ty()).is_none() => VarShape::Plain,
                         fwd => VarShape::Localized {
                             blv: blv_ptr as usize,
                             fwd: fwd.map_or(0, |f| std::ptr::from_ref::<LispFwd>(f) as usize),
-                            rule: fwd.and_then(|f| FwdKind::of(f.ty)),
+                            rule: fwd.and_then(|f| FwdKind::of(f.ty())),
                             remembered_defcell: None,
                         },
                     }
                 }
                 SymbolRedirect::Forwarded => match symbol.forwarded_descriptor() {
-                    Some(fwd) => match FwdKind::of(fwd.ty) {
+                    Some(fwd) => match FwdKind::of(fwd.ty()) {
                         Some(kind) => VarShape::Forwarded {
                             desc: std::ptr::from_ref::<LispFwd>(fwd) as usize,
                             kind,

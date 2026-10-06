@@ -117,7 +117,7 @@ fn file_restore_preserves_configuration_hook_default_and_local_lists() {
             .obarray()
             .blv(symbol)
             .and_then(|value| value.fwd)
-            .map(|value| value.ty),
+            .map(|value| value.ty()),
         Some(LispFwdType::Obj),
         "existing activation must attach the normal GNU localized forwarder"
     );

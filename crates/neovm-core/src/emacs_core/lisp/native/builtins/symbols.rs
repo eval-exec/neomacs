@@ -3883,7 +3883,7 @@ pub(crate) fn builtin_variable_binding_locus(
                 {
                     use crate::emacs_core::forward::LispFwdType;
                     let fwd = unsafe { &*sym.val.fwd };
-                    if matches!(fwd.ty, LispFwdType::KboardObj) {
+                    if matches!(fwd.ty(), LispFwdType::KboardObj) {
                         return crate::emacs_core::terminal::pure::builtin_frame_terminal(
                             ctx,
                             vec![],
@@ -3892,10 +3892,8 @@ pub(crate) fn builtin_variable_binding_locus(
                 }
                 if let Some(buf) = ctx.buffers.current_buffer() {
                     let is_local = {
-                        use crate::emacs_core::forward::{LispBufferObjFwd, LispFwdType};
                         let fwd = unsafe { &*sym.val.fwd };
-                        if matches!(fwd.ty, LispFwdType::BufferObj) {
-                            let buf_fwd = unsafe { &*(fwd as *const _ as *const LispBufferObjFwd) };
+                        if let Some(buf_fwd) = fwd.as_buffer_obj_fwd() {
                             let Some(slot) =
                                 crate::buffer::buffer::BufferSlot::from_u16(buf_fwd.offset)
                             else {
@@ -4362,7 +4360,7 @@ pub(crate) fn builtin_local_variable_if_set_p(
             let is_buffer_objfwd = {
                 use crate::emacs_core::forward::LispFwdType;
                 let fwd = unsafe { &*sym.val.fwd };
-                matches!(fwd.ty, LispFwdType::BufferObj)
+                matches!(fwd.ty(), LispFwdType::BufferObj)
             };
             Ok(Value::bool_val(is_buffer_objfwd))
         }

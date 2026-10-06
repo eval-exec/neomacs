@@ -551,7 +551,7 @@ fn fixture_shapes_are_what_the_scenarios_assume() {
         let redirect = sym.redirect();
         let fwd = match redirect {
             SymbolRedirect::Forwarded => ev.obarray.forward_type(id),
-            SymbolRedirect::Localized => ev.obarray.blv(id).and_then(|b| b.fwd).map(|f| f.ty),
+            SymbolRedirect::Localized => ev.obarray.blv(id).and_then(|b| b.fwd).map(|f| f.ty()),
             _ => None,
         };
         (redirect, fwd)
