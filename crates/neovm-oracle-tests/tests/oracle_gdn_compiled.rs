@@ -20,3 +20,27 @@ fn oracle_gdn_compiled_car_cycle_equal() {
         expect_test::expect![[r#""OK (t nil (error \"Stack overflow in equal\"))""#]],
     );
 }
+
+#[test]
+fn oracle_gdn_compiled_multibyte_transpose_anchors() {
+    // GNU editfns.c:4631-4641 moves the gap, and 4782-4797 preserves markers.
+    common::assert_oracle_parity_expect(
+        r#"(progn (require 'bytecomp)
+  (let ((fn (byte-compile
+    (lambda (shape)
+      (with-temp-buffer
+        (if (eq shape 'gap)
+          (progn (insert "b") (goto-char 1) (insert "é")
+            (transpose-regions 1 2 2 3)
+            (list (buffer-string) (char-after 1) (char-after 2)))
+          (insert "a中")
+          (let ((m (copy-marker 2)))
+            (transpose-regions 1 2 2 3 t)
+            (list (buffer-string) (char-after m) (position-bytes 2)
+                  (marker-position m)))))))))
+    (mapcar (lambda (shape)
+      (let (answer) (dotimes (_ 20) (setq answer (funcall fn shape))) answer))
+      '(gap markers))))"#,
+        expect_test::expect![[r#""OK ((\"bé\" 98 233) (\"中a\" 97 4 2))""#]],
+    );
+}

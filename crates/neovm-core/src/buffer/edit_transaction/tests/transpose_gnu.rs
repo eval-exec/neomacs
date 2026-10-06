@@ -62,9 +62,38 @@ fn transpose_leave_markers_rebuilds_byte_positions() {
 }
 
 #[test]
+fn transpose_gap_does_not_split_characters() {
+    assert_gnu(
+        "transpose-gap",
+        r#"(list
+(with-temp-buffer (insert "b") (goto-char 1) (insert "é") (transpose-regions 1 2 2 3) (list (buffer-string) (char-after 2) (char-after 1)))
+(with-temp-buffer (insert "中") (goto-char 1) (insert "ééé") (transpose-regions 1 2 3 5) (list (buffer-string) (position-bytes 4) (char-after 4) (progn (delete-region 4 5) (buffer-string)))))"#,
+    );
+}
+
+#[test]
+fn transpose_gap_position_uses_character_distance() {
+    assert_gnu(
+        "transpose-gap-position",
+        r#"(list
+(with-temp-buffer (insert "ab") (goto-char 1) (insert "中") (transpose-regions 1 2 3 4) (list (buffer-string) (gap-position)))
+(with-temp-buffer (insert "中") (goto-char 1) (insert "ab") (transpose-regions 1 2 3 4) (list (buffer-string) (gap-position)))
+(with-temp-buffer (insert "b") (goto-char 1) (insert "a") (transpose-regions 1 2 2 3) (list (buffer-string) (gap-position))))"#,
+    );
+}
+
+#[test]
 fn transpose_leave_markers_preserves_point() {
     assert_gnu(
         "transpose-point",
         r#"(let ((results nil)) (dolist (pos '(1 2 3 4 5 6 7 8 9)) (with-temp-buffer (insert "abcdefgh") (goto-char pos) (transpose-regions 1 3 5 7 t) (push (point) results))) (nreverse results))"#,
+    );
+}
+
+#[test]
+fn transpose_marker_then_delete_stays_consistent() {
+    assert_gnu(
+        "transpose-delete",
+        r#"(with-temp-buffer (insert "😀x😀é\n aé") (let ((m (copy-marker 5 t))) (delete-region 6 3) (goto-char 3) (insert-char ?中 2) (transpose-regions 1 3 7 8 t) (delete-region 7 2) (list (buffer-string) (marker-position m))))"#,
     );
 }

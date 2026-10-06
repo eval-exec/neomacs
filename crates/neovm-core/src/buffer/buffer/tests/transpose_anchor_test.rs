@@ -1,6 +1,54 @@
 use super::*;
 
 #[test]
+fn transpose_gap_positions_match_across_storage_backends() {
+    for kind in implemented_text_backends() {
+        for (initial, inserted, expected_gap) in [("ab", "中", 1), ("中", "ab", 4), ("b", "a", 3)]
+        {
+            let mut buf = buf_with_text_backend(initial, kind);
+            buf.insert(inserted);
+            let last = initial.chars().count() + inserted.chars().count();
+            let transposition = buf.text_transposition_for_char_ranges(
+                CharRange::from_usize(0, 1),
+                CharRange::from_usize(last - 1, last),
+            );
+            buf.transpose_regions(
+                transposition,
+                crate::buffer::TranspositionAnchorPolicy::FollowText,
+            );
+            assert_eq!(
+                buf.gap_position_lisp(),
+                expected_gap,
+                "{kind:?}: {initial:?} + {inserted:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn transpose_storage_moves_gap_outside_rearranged_character_boundaries() {
+    for kind in implemented_text_backends() {
+        let mut buf = buf_with_text_backend("b", kind);
+        buf.insert("é");
+        let transposition = buf.text_transposition_for_char_ranges(
+            CharRange::from_usize(0, 1),
+            CharRange::from_usize(1, 2),
+        );
+        buf.transpose_regions(
+            transposition,
+            crate::buffer::TranspositionAnchorPolicy::FollowText,
+        );
+        assert_eq!(
+            buf.char_code_at_emacs_byte_pos(EmacsBytePos::new(1)),
+            Some(233),
+            "{kind:?}"
+        );
+        assert_eq!(byte_pos_for_char(&buf, 1), 1, "{kind:?}");
+        assert_eq!(byte_pos_for_char(&buf, 2), 3, "{kind:?}");
+    }
+}
+
+#[test]
 fn transpose_preserved_marker_anchor_has_consistent_coordinates() {
     for kind in implemented_text_backends() {
         let mut buf = buf_with_text_backend("a中", kind);

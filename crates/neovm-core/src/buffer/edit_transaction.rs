@@ -727,6 +727,8 @@ impl Buffer {
         }
         let old_point = self.point_anchor();
         self.text
+            .prepare_transposition_storage(transposition.span_edit_range());
+        self.text
             .replace_same_len_measured_range(plan.replacement(), plan.replacement_bytes());
         self.text.text_props_replace(replacement_props);
         match anchor_policy {

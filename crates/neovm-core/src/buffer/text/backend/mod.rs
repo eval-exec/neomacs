@@ -10,7 +10,8 @@ use std::fmt;
 
 use super::ImplementedBufferTextBackendKind;
 use crate::buffer::position::{
-    CharPos0, EmacsBytePos, EmacsByteRange, TextPositionHint, TextPositionLookup,
+    CharPos0, EmacsBytePos, EmacsByteRange, TextPositionAnchor, TextPositionHint,
+    TextPositionLookup,
 };
 #[cfg(test)]
 use crate::buffer::text::TextBackendDebugLayout;
@@ -254,6 +255,17 @@ impl TextBackend {
                 true
             }
             _ => self.has_contiguous_emacs_byte_range(range),
+        }
+    }
+
+    /// Move physical gap storage to a validated, coupled coordinate pair.
+    /// Chunked backends have no physical gap; BufferText owns their virtual
+    /// compatibility gap. Exclusive access keeps this mutation local to its
+    /// owning mutator and leaves logical text and anchors unchanged.
+    pub(in crate::buffer) fn move_physical_gap_to_anchor(&mut self, anchor: TextPositionAnchor) {
+        match self {
+            Self::Gap(gap) => gap.move_gap_to_anchor(anchor),
+            Self::PieceTree(_) | Self::Rope(_) => {}
         }
     }
 
