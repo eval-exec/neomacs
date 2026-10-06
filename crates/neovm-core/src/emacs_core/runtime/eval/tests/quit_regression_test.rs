@@ -672,6 +672,64 @@ fn excursion_scope_normal_finish_retains_standard_case_table_seeding() {
 }
 
 #[test]
+fn excursion_scope_without_current_buffer_discards_child_binding_on_panic() {
+    use crate::emacs_core::eval::ExcursionScope;
+    use crate::emacs_core::intern::intern;
+    let mut ctx = Context::new();
+    let current = ctx.buffers.current_buffer_id().unwrap();
+    assert!(ctx.buffers.kill_buffer(current));
+    assert_eq!(ctx.buffers.current_buffer_id(), None);
+    let symbol = intern("empty-excursion-scope-value");
+    ctx.obarray.set_symbol_value_id(symbol, Value::fixnum(10));
+    let count = ctx.specpdl.len();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut scope = ExcursionScope::enter(&mut ctx);
+        assert_eq!(scope.context().specpdl.len(), count);
+        scope
+            .context()
+            .try_specbind(symbol, Value::fixnum(20))
+            .unwrap();
+        panic!("exercise cleanup boundary without a captured buffer");
+    }));
+    assert!(outcome.is_err());
+    assert_eq!(
+        ctx.obarray.symbol_value_id_or_nil(symbol),
+        Value::fixnum(10)
+    );
+    assert_eq!(ctx.specpdl.len(), count);
+    assert_eq!(ctx.buffers.current_buffer_id(), None);
+}
+
+#[test]
+fn restriction_scope_without_current_buffer_discards_child_binding_on_panic() {
+    use crate::emacs_core::eval::RestrictionScope;
+    use crate::emacs_core::intern::intern;
+    let mut ctx = Context::new();
+    let current = ctx.buffers.current_buffer_id().unwrap();
+    assert!(ctx.buffers.kill_buffer(current));
+    assert_eq!(ctx.buffers.current_buffer_id(), None);
+    let symbol = intern("empty-restriction-scope-value");
+    ctx.obarray.set_symbol_value_id(symbol, Value::fixnum(10));
+    let count = ctx.specpdl.len();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut scope = RestrictionScope::enter(&mut ctx);
+        assert_eq!(scope.context().specpdl.len(), count);
+        scope
+            .context()
+            .try_specbind(symbol, Value::fixnum(20))
+            .unwrap();
+        panic!("exercise cleanup boundary without a captured buffer");
+    }));
+    assert!(outcome.is_err());
+    assert_eq!(
+        ctx.obarray.symbol_value_id_or_nil(symbol),
+        Value::fixnum(10)
+    );
+    assert_eq!(ctx.specpdl.len(), count);
+    assert_eq!(ctx.buffers.current_buffer_id(), None);
+}
+
+#[test]
 fn current_buffer_scope_failed_setup_finishes_owned_boundary() {
     use crate::emacs_core::eval::CurrentBufferScope;
     let mut ctx = Context::new();

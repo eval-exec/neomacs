@@ -1640,7 +1640,8 @@ static_assertions::assert_not_impl_any!(ExcursionScope<'static>: Send, Sync);
 
 impl<'a> ExcursionScope<'a> {
     pub(crate) fn enter(context: &'a mut Context) -> Self {
-        let count = context.record_save_excursion();
+        let count = Some(context.specpdl.len());
+        let _ = context.record_save_excursion();
         Self(SavedStateScope {
             context,
             count,
@@ -1664,14 +1665,10 @@ static_assertions::assert_not_impl_any!(RestrictionScope<'static>: Send, Sync);
 
 impl<'a> RestrictionScope<'a> {
     pub(crate) fn enter(context: &'a mut Context) -> Self {
-        let count = context
-            .buffers
-            .save_current_restriction_state()
-            .map(|state| {
-                let count = context.specpdl.len();
-                context.push_specpdl_with(|| SpecBinding::save_restriction(state));
-                count
-            });
+        let count = Some(context.specpdl.len());
+        if let Some(state) = context.buffers.save_current_restriction_state() {
+            context.push_specpdl_with(|| SpecBinding::save_restriction(state));
+        }
         Self(SavedStateScope {
             context,
             count,
