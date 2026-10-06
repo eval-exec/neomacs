@@ -120,6 +120,10 @@ impl GnuTailCycle {
         }
     }
 
+    pub(crate) fn tortoise(&self) -> Value {
+        self.tortoise
+    }
+
     #[inline]
     pub(crate) fn check(&mut self, advanced_tail: Value) -> Result<(), Flow> {
         if let Some(tail) = for_each_tail_cycle_tail(

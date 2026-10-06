@@ -7862,7 +7862,7 @@ fn let_dotted_binding_list_reports_listp_tail_payload() {
     );
     assert_eq!(
         eval_one("(condition-case err (let* ((x 1) . 2) x) (error err))"),
-        "OK (wrong-type-argument listp 2)"
+        "OK (wrong-type-argument listp ((x 1) . 2))"
     );
 }
 

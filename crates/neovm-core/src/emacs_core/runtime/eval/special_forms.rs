@@ -5,6 +5,55 @@
 
 use super::*;
 
+/// Temporary root visibility owned by one mutator during a special form.
+///
+/// The mutable Context borrow is confined to this scope. Drop preserves the same
+/// enclosing-sequence residue as the normal return path; it only compacts
+/// existing arena entries and does not allocate, run Lisp, or perform I/O.
+#[must_use = "dropping the guard restores temporary roots to the enclosing sequence"]
+pub(super) struct EvalTempRootsToSequenceGuard<'a> {
+    context: &'a mut Context,
+    scope: EvalTempRootScopeState,
+    _mutator: std::marker::PhantomData<*const ()>,
+}
+
+static_assertions::assert_not_impl_any!(EvalTempRootsToSequenceGuard<'static>: Send, Sync);
+
+impl std::fmt::Debug for EvalTempRootsToSequenceGuard<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("EvalTempRootsToSequenceGuard")
+            .field("scope", &self.scope)
+            .finish()
+    }
+}
+
+impl<'a> EvalTempRootsToSequenceGuard<'a> {
+    #[inline]
+    pub(super) fn enter(context: &'a mut Context) -> Self {
+        let scope = context.save_eval_temp_roots();
+        Self {
+            context,
+            scope,
+            _mutator: std::marker::PhantomData,
+        }
+    }
+
+    #[inline]
+    pub(super) fn context(&mut self) -> &mut Context {
+        self.context
+    }
+}
+
+impl Drop for EvalTempRootsToSequenceGuard<'_> {
+    #[inline]
+    fn drop(&mut self) {
+        // Restoring arena visibility clamps ranges to their current length;
+        // Values are Copy and their removal does not execute destructors.
+        self.context.restore_eval_temp_roots_to_sequence(self.scope);
+    }
+}
+
 impl Context {
     pub(super) fn try_special_form_value_id(
         &mut self,
@@ -106,24 +155,18 @@ impl Context {
         result
     }
 
+    #[cold]
     pub(super) fn listp_error(&self, value: Value) -> Flow {
-        // GNU `CHECK_LIST` walks the cdr chain until it finds the
-        // non-cons tail and signals
-        // `(wrong-type-argument listp TAIL)` with the offending
-        // tail element, not the whole input. Verified against
-        // emacs 31.0.50 via:
-        //   (condition-case e (length '(1 . 2)) (error e))
-        //     -> (wrong-type-argument listp 2)
-        //   (condition-case e (let ((x 1) . 2) x) (error e))
-        //     -> (wrong-type-argument listp 2)
-        let mut tail = value;
-        while tail.is_cons() {
-            tail = tail.cons_cdr();
+        // list_length's Option cannot distinguish dotted from circular.
+        // GNU list_length (fns.c:107-118) signals with the detected tail;
+        // this error classifier must use the same terminating traversal.
+        match crate::emacs_core::builtins::proper_list_length_or_signal(value) {
+            Err(error) => error,
+            Ok(_) => signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("listp"), Value::NIL],
+            ),
         }
-        signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("listp"), tail],
-        )
     }
 
     pub(super) fn value_list_len_or_error(&self, list: Value) -> Result<usize, Flow> {
@@ -199,6 +242,8 @@ impl Context {
         }
 
         let varlist = tail.cons_car();
+        // GNU Flet (eval.c:1151) validates the spine before any binding.
+        let varlist_len = self.value_list_len_or_error(varlist)?;
         let body = tail.cons_cdr();
         let mut lexical_bindings = LetBindingVec::new();
         let mut dynamic_sym_ids = LetBindingVec::new();
@@ -207,23 +252,34 @@ impl Context {
         // The evaluated init values, rooted on the operand stack like GNU's
         // `temps[]` until every init form has run; every exit truncates it
         // back.
-        let temps_base = self.bc_buf.len();
+        let mut roots = EvalTempRootsToSequenceGuard::enter(self);
+        let context = roots.context();
+        let bindings_slot = context.push_eval_temp_root_slot(varlist);
+        let temps_base = context.bc_buf.len();
         let mut bindings = varlist;
 
-        while bindings.is_cons() {
-            let binding = self.unwrap_symbol(bindings.cons_car());
+        // Initializers may mutate the validated spine. GNU Flet (eval.c:1158)
+        // visits at most the original length and stops when it reaches an atom.
+        for _ in 0..varlist_len {
+            if !bindings.is_cons() {
+                break;
+            }
+            let binding = context.unwrap_symbol(bindings.cons_car());
             bindings = bindings.cons_cdr();
+            // GNU advances before the initializer, which may detach this
+            // next cons before forcing GC. Keep the live cursor rooted.
+            context.set_eval_temp_root_slot(bindings_slot, bindings);
             if let Some(id) = binding.as_symbol_id() {
                 // A bare binder binds nil, which is never a keyword's own value.
-                if let Some(name) = let_constant_error_name(&self.obarray, id, Value::NIL) {
+                if let Some(name) = let_constant_error_name(&context.obarray, id, Value::NIL) {
                     if constant_binding_error.is_none() {
                         constant_binding_error = Some(name);
                     }
                     continue;
                 }
                 if use_lexical
-                    && !self.obarray.is_special_id(id)
-                    && !self.lexenv_declares_special_cached_in(self.lexenv, id)
+                    && !context.obarray.is_special_id(id)
+                    && !context.lexenv_declares_special_cached_in(context.lexenv, id)
                 {
                     lexical_bindings.push((id, Value::NIL));
                 } else {
@@ -232,7 +288,7 @@ impl Context {
                 continue;
             }
             if !binding.is_cons() {
-                self.bc_buf.truncate(temps_base);
+                context.bc_buf.truncate(temps_base);
                 // GNU takes `(car elt)` of a non-symbol binding, so a non-list
                 // element signals `(wrong-type-argument listp ELT)`.
                 return Err(signal(
@@ -240,9 +296,9 @@ impl Context {
                     vec![Value::symbol("listp"), binding],
                 ));
             }
-            let head = self.unwrap_symbol(binding.cons_car());
+            let head = context.unwrap_symbol(binding.cons_car());
             let Some(id) = head.as_symbol_id() else {
-                self.bc_buf.truncate(temps_base);
+                context.bc_buf.truncate(temps_base);
                 return Err(signal(
                     LispCondition::WrongTypeArgument,
                     vec![Value::symbol("symbolp"), head],
@@ -255,48 +311,44 @@ impl Context {
                 let init_form = value_tail.cons_car();
                 value_tail = value_tail.cons_cdr();
                 if !value_tail.is_nil() {
-                    self.bc_buf.truncate(temps_base);
+                    context.bc_buf.truncate(temps_base);
                     return Err(signal(
-                        "error",
+                        LispCondition::Error,
                         vec![
                             Value::string("`let' bindings can have only one value-form"),
                             binding,
                         ],
                     ));
                 }
-                match self.eval_sub(init_form) {
+                match context.eval_sub(init_form) {
                     Ok(value) => value,
                     Err(err) => {
-                        self.bc_buf.truncate(temps_base);
+                        context.bc_buf.truncate(temps_base);
                         return Err(err);
                     }
                 }
             } else {
-                self.bc_buf.truncate(temps_base);
-                return Err(self.listp_error(binding));
+                context.bc_buf.truncate(temps_base);
+                return Err(context.listp_error(binding));
             };
-            self.bc_buf.push(value);
-            if let Some(name) = let_constant_error_name(&self.obarray, id, value) {
+            context.bc_buf.push(value);
+            if let Some(name) = let_constant_error_name(&context.obarray, id, value) {
                 if constant_binding_error.is_none() {
                     constant_binding_error = Some(name);
                 }
                 continue;
             }
             if use_lexical
-                && !self.obarray.is_special_id(id)
-                && !self.lexenv_declares_special_cached_in(self.lexenv, id)
+                && !context.obarray.is_special_id(id)
+                && !context.lexenv_declares_special_cached_in(context.lexenv, id)
             {
                 lexical_bindings.push((id, value));
             } else {
                 dynamic_sym_ids.push((id, value));
             }
         }
-        if !bindings.is_nil() {
-            self.bc_buf.truncate(temps_base);
-            return Err(self.listp_error(varlist));
-        }
         if let Some(name) = constant_binding_error {
-            self.bc_buf.truncate(temps_base);
+            context.bc_buf.truncate(temps_base);
             return Err(signal(
                 LispCondition::SettingConstant,
                 vec![Value::symbol(name)],
@@ -307,29 +359,29 @@ impl Context {
         // pushed on the specpdl.  From here to the install and the temp-root
         // pushes below nothing can collect: only conses are allocated, and
         // `alloc_cons` never collects (`tagged/gc/allocation.rs`).
-        self.bc_buf.truncate(temps_base);
+        context.bc_buf.truncate(temps_base);
 
         // Save lexenv AFTER init forms run (matches GNU eval.c:1167:
         //   `lexenv = Vinternal_interpreter_environment;`).
         // Capture specpdl_count AFTER restoring so LexicalEnv sits exactly at
         // specpdl[specpdl_count] and unbind_to will pop it.
-        let lexenv_at_entry = self.lexenv;
-        let specpdl_count = self.specpdl.len();
+        let lexenv_at_entry = context.lexenv;
+        let specpdl_count = context.specpdl.len();
 
         // Always save the entry-point lexenv on the specpdl when in lexical
         // mode, so unbind_to restores it regardless of what the body does.
         // Matches GNU's specbind(Qinternal_interpreter_environment).
         if use_lexical {
-            self.push_specpdl_with(|| SpecBinding::LexicalEnv {
+            context.push_specpdl_with(|| SpecBinding::LexicalEnv {
                 old_lexenv: lexenv_at_entry,
             });
         }
 
         // Build new lexenv locally by consing bindings onto the ENTRY-POINT
-        // lexenv (not self.lexenv which may have been modified by init forms).
+        // lexenv (not context.lexenv which may have been modified by init forms).
         // Matches GNU eval.c:1167-1186.
         // In a local, like GNU's `lexenv`: nothing here can collect (see
-        // above), and `self.lexenv` roots it from the install on.
+        // above), and `context.lexenv` roots it from the install on.
         let mut new_lexenv = lexenv_at_entry;
         for (sym_id, val) in &lexical_bindings {
             let binding_pair = Value::make_cons(
@@ -339,26 +391,21 @@ impl Context {
             new_lexenv = Value::make_cons(binding_pair, new_lexenv);
         }
         // Install the new lexenv atomically.
-        self.lexenv = new_lexenv;
+        context.lexenv = new_lexenv;
 
-        let temp_scope = self.save_eval_temp_roots();
         for (_, value) in lexical_bindings.iter().chain(dynamic_sym_ids.iter()) {
-            self.push_eval_temp_root(*value);
+            context.push_eval_temp_root(*value);
         }
         for (sym_id, value) in &dynamic_sym_ids {
-            if let Err(flow) = self.try_specbind(*sym_id, *value) {
-                let result = self.unbind_to_with_result(specpdl_count, Err(flow));
-                self.restore_eval_temp_roots_to_sequence(temp_scope);
-                return result;
+            if let Err(flow) = context.try_specbind(*sym_id, *value) {
+                return context.unbind_to_with_result(specpdl_count, Err(flow));
             }
         }
 
-        let result = self.sf_progn_value(body);
+        let result = context.sf_progn_value(body);
         // A let with only lexical bindings leaves exactly its `LexicalEnv`
         // entry, retired inline; dynamic bindings take the general unwinder.
-        let result = self.unbind_lexenv_frame(specpdl_count, result);
-        self.restore_eval_temp_roots_to_sequence(temp_scope);
-        result
+        context.unbind_lexenv_frame(specpdl_count, result)
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -388,17 +435,21 @@ impl Context {
             self.push_specpdl_with(|| SpecBinding::LexicalEnv { old_lexenv });
         }
 
-        let temp_scope = self.save_eval_temp_roots();
-        let val_temp_slot = self.push_eval_temp_root_slot(Value::NIL);
+        let mut roots = EvalTempRootsToSequenceGuard::enter(self);
+        let context = roots.context();
+        let val_temp_slot = context.push_eval_temp_root_slot(Value::NIL);
+        let tortoise_slot = context.push_eval_temp_root_slot(varlist);
+        let bindings_slot = context.push_eval_temp_root_slot(varlist);
         let init_result: Result<(), Flow> = (|| {
             let mut bindings = varlist;
+            let mut cycle = crate::emacs_core::builtins::GnuTailCycle::new(varlist);
             while bindings.is_cons() {
-                let binding = self.unwrap_symbol(bindings.cons_car());
-                bindings = bindings.cons_cdr();
+                context.set_eval_temp_root_slot(bindings_slot, bindings);
+                let binding = context.unwrap_symbol(bindings.cons_car());
                 let (id, value) = if let Some(id) = binding.as_symbol_id() {
                     (id, Value::NIL)
                 } else if binding.is_cons() {
-                    let head = self.unwrap_symbol(binding.cons_car());
+                    let head = context.unwrap_symbol(binding.cons_car());
                     let Some(id) = head.as_symbol_id() else {
                         return Err(signal(
                             LispCondition::WrongTypeArgument,
@@ -413,16 +464,16 @@ impl Context {
                         value_tail = value_tail.cons_cdr();
                         if !value_tail.is_nil() {
                             return Err(signal(
-                                "error",
+                                LispCondition::Error,
                                 vec![
                                     Value::string("`let' bindings can have only one value-form"),
                                     binding,
                                 ],
                             ));
                         }
-                        self.eval_sub(init_form)?
+                        context.eval_sub(init_form)?
                     } else {
-                        return Err(self.listp_error(binding));
+                        return Err(context.listp_error(binding));
                     };
                     (id, value)
                 } else {
@@ -433,43 +484,47 @@ impl Context {
                         vec![Value::symbol("listp"), binding],
                     ));
                 };
-                self.set_eval_temp_root_slot(val_temp_slot, value);
+                context.set_eval_temp_root_slot(val_temp_slot, value);
 
-                if let Some(name) = let_constant_error_name(&self.obarray, id, value) {
+                if let Some(name) = let_constant_error_name(&context.obarray, id, value) {
                     return Err(signal(
                         LispCondition::SettingConstant,
                         vec![Value::symbol(&name)],
                     ));
                 }
                 if use_lexical
-                    && !self.obarray.is_special_id(id)
-                    && !self.lexenv_declares_special_cached_in(self.lexenv, id)
+                    && !context.obarray.is_special_id(id)
+                    && !context.lexenv_declares_special_cached_in(context.lexenv, id)
                 {
                     // Matches GNU Flet_star (eval.c:1113-1120):
                     // Direct cons onto Vinternal_interpreter_environment.
                     // The LexicalEnv entry at specpdl_count saves the pre-let*
                     // state; unbind_to restores it.
                     let binding = Value::make_cons(lexenv_binding_symbol_value(id), value);
-                    self.lexenv = Value::make_cons(binding, self.lexenv);
+                    context.lexenv = Value::make_cons(binding, context.lexenv);
                 } else {
-                    self.try_specbind(id, value)?;
+                    context.try_specbind(id, value)?;
                 }
+                bindings = bindings.cons_cdr();
+                cycle.check(bindings)?;
+                context.set_eval_temp_root_slot(tortoise_slot, cycle.tortoise());
             }
             if !bindings.is_nil() {
-                return Err(self.listp_error(varlist));
+                // GNU CHECK_LIST_END reports the original variable list,
+                // rather than the ending found by list_length.
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("listp"), varlist],
+                ));
             }
             Ok(())
         })();
         if let Err(error) = init_result {
-            let result = self.unbind_to_with_result(specpdl_count, Err(error));
-            self.restore_eval_temp_roots_to_sequence(temp_scope);
-            return result;
+            return context.unbind_to_with_result(specpdl_count, Err(error));
         }
 
-        let result = self.sf_progn_value(body);
-        let result = self.unbind_to_with_result(specpdl_count, result);
-        self.restore_eval_temp_roots_to_sequence(temp_scope);
-        result
+        let result = context.sf_progn_value(body);
+        context.unbind_to_with_result(specpdl_count, result)
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up

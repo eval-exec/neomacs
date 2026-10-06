@@ -85,6 +85,17 @@ fn circular_lists_apply_matches_gnu() {
 }
 
 #[test]
+fn circular_lists_eval_matches_gnu() {
+    let form = include_str!("circular_lists_cases/eval.el");
+    let expected = gnu_fixture(
+        "eval",
+        form,
+        include_str!("circular_lists_cases/eval.expect"),
+    );
+    assert_eq!(runtime_startup_eval_one(form), expected);
+}
+
+#[test]
 fn circular_lists_cycle_tails_matches_gnu() {
     let form = include_str!("circular_lists_cases/cycle_tails.el");
     let expected = gnu_fixture(
@@ -102,6 +113,17 @@ fn circular_lists_compiled_matches_gnu() {
         "compiled",
         form,
         include_str!("circular_lists_cases/compiled.expect"),
+    );
+    assert_eq!(runtime_startup_eval_one(form), expected);
+}
+
+#[test]
+fn circular_lists_initializer_callbacks_match_gnu() {
+    let form = include_str!("circular_lists_cases/init_callbacks.el");
+    let expected = gnu_fixture(
+        "init_callbacks",
+        form,
+        include_str!("circular_lists_cases/init_callbacks.expect"),
     );
     assert_eq!(runtime_startup_eval_one(form), expected);
 }
