@@ -609,6 +609,40 @@ fn edit_commands_remeasure_after_change_callbacks_like_gnu() {
 }
 
 #[test]
+fn kill_buffer_hooks_restore_caller_excursion() {
+    if !oracle_enabled() {
+        return;
+    }
+    for hook in ["kill-buffer-hook", "kill-buffer-query-functions"] {
+        for body in [
+            "(error \"tse-kill-hook\")",
+            "(with-current-buffer orig (goto-char 3)) t",
+            "(with-current-buffer orig (goto-char 3)) nil",
+        ] {
+            let form = format!(
+                "(with-temp-buffer
+                   (insert \"0123456789\")
+                   (let ((orig (current-buffer)) (b (generate-new-buffer \"tse-kill-hook\")))
+                     (with-current-buffer b
+                       (set (make-local-variable '{hook})
+                         (list (lambda () {body}))))
+                     (unwind-protect
+                       (list (condition-case e (kill-buffer b)
+                               (error (list (cadr e) (eq (current-buffer) orig))))
+                             (eq (current-buffer) orig) (point) (buffer-live-p b))
+                       (when (buffer-live-p b)
+                         (with-current-buffer b
+                           (setq kill-buffer-hook nil kill-buffer-query-functions nil))
+                         (kill-buffer b)))))"
+            );
+            let expected = run_oracle_eval(&form).expect("GNU kill-buffer oracle");
+            let actual = run_neovm_eval(&form).expect("NeoVM kill-buffer probe");
+            assert_eq!(actual, expected, "{form}");
+        }
+    }
+}
+
+#[test]
 fn treesit_parse_string_restores_caller_before_parser_creation() {
     if !oracle_enabled() {
         return;
@@ -914,6 +948,40 @@ fn compat_word_casing_shared_replace_expansion_matches_gnu() {
         neovm, gnu,
         "shared edit helper semantics mismatch:\nGNU: {gnu}\nNeoVM: {neovm}"
     );
+}
+
+#[test]
+fn kill_buffer_post_hook_callbacks_preserve_selected_buffer_and_point() {
+    if !oracle_enabled() {
+        return;
+    }
+    let template = r#"(let ((orig (generate-new-buffer " *tse-kill-boundary-orig*"))
+      (victim (generate-new-buffer " *tse-kill-boundary-victim*"))
+      (other (generate-new-buffer " *tse-kill-boundary-other*")))
+      (unwind-protect
+          (progn
+            (set-buffer orig) (insert "0123456789") (goto-char 5)
+            (with-current-buffer other (insert "abcdefghij") (goto-char 1))
+            (let ((buffer-list-update-hook
+                   (list (lambda () (set-buffer other) (goto-char 3) @HOOK@))))
+              (list (condition-case e (kill-buffer @TARGET@)
+                      (error (list (car e) (cadr e))))
+                    (eq (current-buffer) other) (point)
+                    (buffer-live-p @TARGET@))))
+        (let ((buffer-list-update-hook nil))
+          (when (buffer-live-p victim) (kill-buffer victim))
+          (when (buffer-live-p orig) (kill-buffer orig))
+          (when (buffer-live-p other) (kill-buffer other)))))"#;
+    for target in ["victim", "orig"] {
+        for hook in ["nil", "(error \"tse-after-kill-hooks\")"] {
+            let form = template.replace("@TARGET@", target).replace("@HOOK@", hook);
+            assert_eq!(
+                run_neovm_eval(&form).expect("NeoVM post-kill callback"),
+                run_oracle_eval(&form).expect("GNU post-kill callback"),
+                "{form}"
+            );
+        }
+    }
 }
 
 fn tse_excursion_window_oracle_case(form: &str, expected_state: &str) {

@@ -502,6 +502,57 @@ pub(crate) fn builtin_get_file_buffer(
     Ok(Value::NIL)
 }
 
+/// What `kill-buffer`'s hooks decided.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KillBufferHooks {
+    /// Go on killing the buffer (unless a hook already killed it).
+    Proceed,
+    /// A `kill-buffer-query-functions` member returned nil.
+    Refused,
+}
+
+/// The hook phase of GNU `Fkill_buffer` (buffer.c:1936-1986), run with BUFFER
+/// selected; the caller owns the excursion that restores the caller's state.
+fn run_kill_buffer_hooks(
+    eval: &mut super::eval::Context,
+    buffer: BufferId,
+    inhibit_buffer_hooks: bool,
+) -> Result<KillBufferHooks, Flow> {
+    // GNU selects with `set_buffer_internal`, not `record_buffer`: killing
+    // or querying a buffer must not make it the head of `buffer-list`.
+    eval.set_current_buffer_unrecorded(buffer)?;
+    if !inhibit_buffer_hooks {
+        let query_sym = crate::emacs_core::hook_runtime::hook_symbol_by_name(
+            eval,
+            "kill-buffer-query-functions",
+        );
+        let query_value = crate::emacs_core::hook_runtime::hook_value_by_id(eval, query_sym)
+            .unwrap_or(Value::NIL);
+        let answer = crate::emacs_core::hook_runtime::run_hook_value_until_failure(
+            eval,
+            query_sym,
+            query_value,
+            &[],
+            true,
+        )?;
+        if answer.is_nil() {
+            return Ok(KillBufferHooks::Refused);
+        }
+    }
+    // "If the hooks have killed the buffer, exit now."
+    if eval.buffers.get(buffer).is_none() {
+        return Ok(KillBufferHooks::Proceed);
+    }
+    if !inhibit_buffer_hooks {
+        let hook_sym =
+            crate::emacs_core::hook_runtime::hook_symbol_by_name(eval, "kill-buffer-hook");
+        let hook_value =
+            crate::emacs_core::hook_runtime::hook_value_by_id(eval, hook_sym).unwrap_or(Value::NIL);
+        crate::emacs_core::hook_runtime::run_hook_value(eval, hook_sym, hook_value, &[], true)?;
+    }
+    Ok(KillBufferHooks::Proceed)
+}
+
 pub(crate) fn builtin_kill_buffer(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_max_args("kill-buffer", &args, 1)?;
     let id = match args.first() {
@@ -542,49 +593,22 @@ pub(crate) fn builtin_kill_buffer(eval: &mut super::eval::Context, args: Vec<Val
         },
     };
 
-    let saved_current = eval.buffers.current_buffer_id();
     let inhibit_buffer_hooks = eval.buffers.buffer_hooks_inhibited(id);
-    // GNU `Fkill_buffer` runs query functions and `kill-buffer-hook` after
-    // `set_buffer_internal`/`Fset_buffer`, not `record_buffer`; killing or
-    // querying a buffer must not make it the head of `buffer-list`.
-    eval.set_current_buffer_unrecorded(id)?;
-    let query_result = if inhibit_buffer_hooks {
-        Value::T
-    } else {
-        let query_sym = crate::emacs_core::hook_runtime::hook_symbol_by_name(
-            eval,
-            "kill-buffer-query-functions",
-        );
-        let query_value = crate::emacs_core::hook_runtime::hook_value_by_id(eval, query_sym)
-            .unwrap_or(Value::NIL);
-        crate::emacs_core::hook_runtime::run_hook_value_until_failure(
-            eval,
-            query_sym,
-            query_value,
-            &[],
-            true,
-        )?
-    };
-    if let Some(buffer_id) = saved_current {
-        eval.restore_current_buffer_if_live(buffer_id);
-    }
-    if query_result.is_nil() {
-        return Ok(Value::NIL);
-    }
-    if eval.buffers.get(id).is_none() {
-        return Ok(Value::T);
-    }
-
-    eval.set_current_buffer_unrecorded(id)?;
-    if !inhibit_buffer_hooks {
-        let hook_sym =
-            crate::emacs_core::hook_runtime::hook_symbol_by_name(eval, "kill-buffer-hook");
-        let hook_value =
-            crate::emacs_core::hook_runtime::hook_value_by_id(eval, hook_sym).unwrap_or(Value::NIL);
-        crate::emacs_core::hook_runtime::run_hook_value(eval, hook_sym, hook_value, &[], true)?;
-    }
-    if let Some(buffer_id) = saved_current {
-        eval.restore_current_buffer_if_live(buffer_id);
+    // GNU `Fkill_buffer` (buffer.c:1931-1987) runs the query functions and
+    // `kill-buffer-hook` with the dying buffer current inside ONE
+    // `record_unwind_protect_excursion`, so the caller's buffer and its
+    // point come back on every exit, a hook signal included.
+    let mut hooks = KillBufferHooks::Proceed;
+    let mut excursion = super::eval::ExcursionScope::enter(eval);
+    let result =
+        run_kill_buffer_hooks(excursion.context(), id, inhibit_buffer_hooks).map(|outcome| {
+            hooks = outcome;
+            Value::NIL
+        });
+    excursion.finish(result)?;
+    match hooks {
+        KillBufferHooks::Refused => return Ok(Value::NIL),
+        KillBufferHooks::Proceed => {}
     }
     if eval.buffers.get(id).is_none() {
         return Ok(Value::T);
