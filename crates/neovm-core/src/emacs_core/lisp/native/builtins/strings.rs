@@ -1584,13 +1584,13 @@ impl FormatOutput {
     fn append(&mut self, bytes: &[u8]) -> Result<(), crate::emacs_core::alloc::AllocationFailure> {
         // Vec owns its actual storage extent: deriving spare capacity avoids a
         // second, independently stored count that can disagree with the buffer.
-        if bytes.len() > self.bytes.capacity() - self.bytes.len() {
-            return self.grow_and_append(bytes);
-        }
         if self.bytes.capacity() > Value::MOST_POSITIVE_FIXNUM as usize {
             // Spare canonical capacity above GNU's bound cannot prove that an
             // append stays in the actual output domain, even without growth.
             self.checked_append_extent(bytes)?;
+        }
+        if bytes.len() > self.bytes.capacity() - self.bytes.len() {
+            return self.grow_and_append(bytes);
         }
         let old_length = self.bytes.len();
         self.bytes.spare_capacity_mut()[..bytes.len()].write_copy_of_slice(bytes);
@@ -2711,7 +2711,7 @@ fn result_bytes_imply_multibyte(data: &[u8]) -> bool {
 
 /// Down-convert canonical multibyte Emacs bytes to unibyte raw bytes. Only valid
 /// when the content has no genuine multibyte character (ASCII + eight-bit only),
-/// which `build_format_result` guarantees before choosing a unibyte result; a
+/// which `FormatResultStorage` validates before choosing a unibyte result; a
 /// stray multibyte char is preserved defensively rather than dropped.
 fn emacs_bytes_to_unibyte(mut data: Vec<u8>) -> Vec<u8> {
     use crate::emacs_core::emacs_char;
@@ -3104,32 +3104,77 @@ fn do_format(
     ))
 }
 
+/// Owned final format bytes with their GNU encoding and terminator capacity
+/// validated before LispString construction (editfns.c:4251-4263,4296-4297).
+/// Variants are constructed only by the fallible preflight below; unibyte
+/// storage has already been normalized from canonical bytes. No Lisp heap
+/// references are retained, so ownership can move or be shared across mutators.
+#[derive(Debug)]
+enum FormatResultStorage {
+    Unibyte(Vec<u8>),
+    Multibyte(Vec<u8>),
+}
+
+static_assertions::assert_impl_all!(FormatResultStorage: Send, Sync);
+
+impl FormatResultStorage {
+    #[inline(always)]
+    fn new(
+        bytes: Vec<u8>,
+        encoding: FormatStringEncoding,
+    ) -> Result<Self, crate::emacs_core::alloc::AllocationFailure> {
+        // Capacity inside GNU's byte domain proves the final length bound;
+        // a spare byte also proves that LispString's terminator cannot grow.
+        // Unibyte canonical bytes need normalization unless they are ASCII.
+        if bytes.capacity() <= Value::MOST_POSITIVE_FIXNUM as usize
+            && bytes.len() < bytes.capacity()
+            && (matches!(encoding, FormatStringEncoding::Multibyte) || bytes.is_ascii())
+        {
+            return Ok(Self::validated(bytes, encoding));
+        }
+        Self::prepare_cold(bytes, encoding)
+    }
+
+    #[inline(always)]
+    fn validated(bytes: Vec<u8>, encoding: FormatStringEncoding) -> Self {
+        match encoding {
+            FormatStringEncoding::Unibyte => Self::Unibyte(bytes),
+            FormatStringEncoding::Multibyte => Self::Multibyte(bytes),
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn prepare_cold(
+        mut bytes: Vec<u8>,
+        encoding: FormatStringEncoding,
+    ) -> Result<Self, crate::emacs_core::alloc::AllocationFailure> {
+        if matches!(encoding, FormatStringEncoding::Unibyte) && !bytes.is_ascii() {
+            bytes = emacs_bytes_to_unibyte(bytes);
+        }
+        FormatOutputBytes::try_from(bytes.len())?;
+        // The terminator consumes Rust storage, not a GNU output byte.
+        let storage = bytes
+            .len()
+            .checked_add(1)
+            .ok_or_else(crate::emacs_core::error::memory_exhausted_error)?;
+        FormatStorageBytes::try_from(storage)?;
+        bytes.try_reserve(1)?;
+        Ok(Self::validated(bytes, encoding))
+    }
+}
+
 fn build_format_result(
     args: &[Value],
-    mut bytes: Vec<u8>,
+    storage: FormatResultStorage,
     spans: &[FormatPropSpan],
     source_spans: &[FormatSourceSpan],
-    force_multibyte_result: bool,
-) -> Result<Value, crate::emacs_core::alloc::AllocationFailure> {
-    // The accumulator owns GNU's upfront/promotion decision. Its bytes remain
-    // canonical until this final unibyte conversion, performed in place.
-    let multibyte = force_multibyte_result;
-    if !multibyte && !bytes.is_ascii() {
-        bytes = emacs_bytes_to_unibyte(bytes);
-    }
-    FormatOutputBytes::try_from(bytes.len())?;
-    // LispString appends its terminator; this is storage capacity, not an
-    // additional GNU string byte. Reserve fallibly before handing it off.
-    let storage = bytes
-        .len()
-        .checked_add(1)
-        .ok_or_else(crate::emacs_core::error::memory_exhausted_error)?;
-    FormatStorageBytes::try_from(storage)?;
-    bytes.try_reserve(1)?;
-    let result = Value::heap_string(if multibyte {
-        crate::heap_types::LispString::from_emacs_bytes(bytes)
-    } else {
-        crate::heap_types::LispString::from_unibyte(bytes)
+) -> Value {
+    let result = Value::heap_string(match storage {
+        FormatResultStorage::Multibyte(bytes) => {
+            crate::heap_types::LispString::from_emacs_bytes(bytes)
+        }
+        FormatResultStorage::Unibyte(bytes) => crate::heap_types::LispString::from_unibyte(bytes),
     });
 
     // Copy text properties from the format string first, then from each
@@ -3149,7 +3194,7 @@ fn build_format_result(
     // that got flattened by `(format "%-37s" ...)`).
     apply_format_prop_spans(result, spans);
 
-    Ok(result)
+    result
 }
 
 /// Return GNU `styled_format`'s exact `%s` identity result when it is a string.
@@ -3196,8 +3241,14 @@ pub(crate) fn builtin_format_wrapper_strict_slice(
         if !new_result {
             return Ok(args[0]);
         }
-        build_format_result(args, bytes, &spans, &source_spans, force_multibyte_result)
-            .map_err(|failure| failure.into_flow_in_context(ctx))
+        let encoding = if force_multibyte_result {
+            FormatStringEncoding::Multibyte
+        } else {
+            FormatStringEncoding::Unibyte
+        };
+        let storage = FormatResultStorage::new(bytes, encoding)
+            .map_err(|failure| failure.into_flow_in_context(ctx))?;
+        Ok(build_format_result(args, storage, &spans, &source_spans))
     })
 }
 
@@ -3372,8 +3423,14 @@ pub(crate) fn builtin_format_message_slice(
         if !new_result {
             return Ok(args[0]);
         }
-        build_format_result(args, bytes, &spans, &source_spans, force_multibyte_result)
-            .map_err(|failure| failure.into_flow_in_context(ctx))
+        let encoding = if force_multibyte_result {
+            FormatStringEncoding::Multibyte
+        } else {
+            FormatStringEncoding::Unibyte
+        };
+        let storage = FormatResultStorage::new(bytes, encoding)
+            .map_err(|failure| failure.into_flow_in_context(ctx))?;
+        Ok(build_format_result(args, storage, &spans, &source_spans))
     })
 }
 

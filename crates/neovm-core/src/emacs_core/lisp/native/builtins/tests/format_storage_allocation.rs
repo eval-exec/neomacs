@@ -1,4 +1,7 @@
-use super::{FormatOutput, FormatStorageBytes, FormatStringEncoding, allocate_format_bytes};
+use super::{
+    FormatOutput, FormatResultStorage, FormatStorageBytes, FormatStringEncoding,
+    allocate_format_bytes, format_source_bytes,
+};
 use crate::emacs_core::alloc::AllocationFailure;
 use crate::emacs_core::error::{FlowKind, SignalDelivery};
 use crate::emacs_core::eval::Context;
@@ -35,6 +38,50 @@ fn format_initial_storage_retains_vector_ownership_and_live_null_failure() {
         output.append(b"!").unwrap();
         output.append(b" again").unwrap();
         assert_eq!(output.bytes, b"initial storage! again");
+    }
+
+    // Final storage distinguishes canonical byte capacity from the actual
+    // unibyte extent, and guarantees a terminator without infallible growth.
+    let canonical_byte = format_source_bytes(&[0xff], FormatStringEncoding::Unibyte).unwrap();
+    for (encoding, canonical, expected) in [
+        (FormatStringEncoding::Unibyte, &b""[..], &b""[..]),
+        (FormatStringEncoding::Multibyte, &b""[..], &b""[..]),
+        (FormatStringEncoding::Unibyte, &b"ASCII"[..], &b"ASCII"[..]),
+        (
+            FormatStringEncoding::Multibyte,
+            &b"ASCII"[..],
+            &b"ASCII"[..],
+        ),
+        (
+            FormatStringEncoding::Multibyte,
+            "é界".as_bytes(),
+            "é界".as_bytes(),
+        ),
+        (
+            FormatStringEncoding::Unibyte,
+            canonical_byte.as_slice(),
+            &[0xff][..],
+        ),
+    ] {
+        for spare_terminator in [false, true] {
+            let capacity = canonical.len() + usize::from(spare_terminator);
+            let mut bytes =
+                allocate_format_bytes(FormatStorageBytes::try_from(capacity).unwrap()).unwrap();
+            bytes.extend_from_slice(canonical);
+            let pointer = bytes.as_ptr();
+            let storage = FormatResultStorage::new(bytes, encoding).unwrap();
+            let bytes = match (encoding, storage) {
+                (FormatStringEncoding::Unibyte, FormatResultStorage::Unibyte(bytes))
+                | (FormatStringEncoding::Multibyte, FormatResultStorage::Multibyte(bytes)) => bytes,
+                _ => panic!("final storage must retain the validated encoding"),
+            };
+            assert_eq!(bytes.as_slice(), expected);
+            assert!(bytes.len() < bytes.capacity());
+            if spare_terminator {
+                assert_eq!(bytes.as_ptr(), pointer, "adequate storage must be retained");
+                assert_eq!(bytes.capacity(), capacity);
+            }
+        }
     }
 
     let mut context = Context::new();
