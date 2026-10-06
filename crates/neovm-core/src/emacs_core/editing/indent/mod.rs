@@ -2795,15 +2795,17 @@ pub(crate) fn indent_to(
         )?,
         buf.total_emacs_byte_len().get(),
     )?;
-    let mut indent = length.reserved_text()?;
-    for _ in 0..tabs {
-        indent.push('\t');
-    }
-    for _ in 0..spaces {
-        indent.push(' ');
-    }
 
-    insert_inheriting_indentation(ctx, indent)?;
+    // GNU indent.c:969-982 inserts tabs and spaces separately, exposing
+    // both inheriting edits to the before/after-change hooks.
+    if tabs > 0 {
+        let mut tab_run = length.reserved_text()?;
+        for _ in 0..tabs {
+            tab_run.push('\t');
+        }
+        insert_inheriting_indentation(ctx, tab_run)?;
+    }
+    insert_inheriting_indentation(ctx, " ".repeat(spaces))?;
 
     // GNU `Findent_to` caches the resulting column at the new point/MODIFF so a
     // following `current-column' returns it without rescanning (src/indent.c:

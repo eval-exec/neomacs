@@ -66,6 +66,17 @@ fn gdm_columns_display_glyphs() {
     );
 }
 
+// GNU src/indent.c:975,982: separate inheriting tab and space insertions.
+#[test]
+fn gdm_columns_indentation_hook_boundaries() {
+    parity(
+        r#"(mapcar (lambda (move) (with-temp-buffer (insert "abc") (let (before after) (add-hook 'before-change-functions (lambda (&rest a) (push a before)) nil t) (add-hook 'after-change-functions (lambda (&rest a) (push a after)) nil t) (if move (move-to-column 10 t) (indent-to 10)) (list (nreverse before) (nreverse after) (string-to-list (buffer-string)))))) '(nil t))"#,
+        expect_test::expect![[
+            r#"OK ((((4 4) (5 5)) ((4 5 0) (5 7 0)) (97 98 99 9 32 32)) (((4 4) (5 5)) ((4 5 0) (5 7 0)) (97 98 99 9 32 32)))"#
+        ]],
+    );
+}
+
 #[test]
 fn gdm_columns_compiled_call_paths() {
     parity(
