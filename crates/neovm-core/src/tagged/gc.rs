@@ -262,12 +262,6 @@ fn clear_barrier_cache(cache: &'static std::thread::LocalKey<[Cell<usize>; BARRI
     cache.with(|slots| slots.iter().for_each(|slot| slot.set(0)));
 }
 
-static NEXT_TAGGED_HEAP_ID: AtomicUsize = AtomicUsize::new(1);
-
-fn next_tagged_heap_identity() -> usize {
-    NEXT_TAGGED_HEAP_ID.fetch_add(1, Ordering::Relaxed)
-}
-
 // ---------------------------------------------------------------------------
 // TaggedHeap — the main GC-managed heap
 // ---------------------------------------------------------------------------
@@ -370,7 +364,7 @@ pub struct TaggedHeap {
     /// Lisp values.  It deliberately does not use this heap's address: boxed
     /// heaps are routinely dropped and recreated by snapshot-based tests, and
     /// the allocator may reuse an address for a different heap lifetime.
-    identity: usize,
+    identity: HeapIdentity,
 
     /// The O(1) page directory (`chunk_map.rs`) when `NEOVM_GC_CHUNK_MAP`
     /// is on (read once, at construction): every cons block and arena page
@@ -969,7 +963,7 @@ impl TaggedHeap {
             jit: JitHeapState::new(),
             region_book: RegionBook::new(),
             region_stats: RegionStats::default(),
-            identity: next_tagged_heap_identity(),
+            identity: HeapIdentity::issue(),
             chunk_map: chunk_map.clone().map(HeapChunkMap::new),
             cons_blocks: Vec::new(),
             cons_block_index_by_base: FxHashMap::default(),
@@ -1139,6 +1133,12 @@ impl TaggedHeap {
     }
 
     pub(crate) fn identity(&self) -> usize {
+        self.identity.get()
+    }
+
+    /// This heap lifetime's typed identity.
+    #[inline]
+    pub fn heap_identity(&self) -> HeapIdentity {
         self.identity
     }
 
@@ -2653,6 +2653,8 @@ mod pacing;
 
 mod concurrent;
 pub use concurrent::MarkFinishError;
+mod heap_identity;
+pub use heap_identity::HeapIdentity;
 pub(crate) mod scan_contract;
 #[cfg(test)]
 #[path = "gc/tests/shutdown_tests.rs"]

@@ -276,6 +276,15 @@ impl Context {
         for root in registry_roots.drain(..) {
             visit(root);
         }
+        // Values that any thread holds through this heap's `SharedRoot`s.
+        group("shared_roots");
+        crate::tagged::transport::collect_shared_root_gc_roots(
+            self.tagged_heap.heap_identity(),
+            &mut registry_roots,
+        );
+        for root in registry_roots.drain(..) {
+            visit(root);
+        }
         group("ccl_registry");
         super::super::ccl::collect_ccl_registry_gc_roots(&self.ccl_registry, &mut registry_roots);
         for root in registry_roots.drain(..) {

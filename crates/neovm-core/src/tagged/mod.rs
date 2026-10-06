@@ -11,6 +11,7 @@ pub mod gc;
 pub mod header;
 pub mod mutate;
 pub mod symbol_marks;
+pub mod transport;
 pub mod value;
 
 #[cfg(test)]
