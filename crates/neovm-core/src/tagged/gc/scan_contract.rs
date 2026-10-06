@@ -4,7 +4,6 @@ use std::cell::Cell;
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::TaggedHeap;
 
@@ -55,25 +54,70 @@ impl std::fmt::Debug for SingleMutatorWorld<'_> {
     }
 }
 
+/// The unique owner of a stable allocation's scan-retention identity.
+///
+/// Only this owner and its admitted leases hold the private Arc. Checking Arc
+/// uniqueness proves that all leases have ended before storage is reclaimed.
+/// The owner is not cloneable, and leases never expose or downgrade the Arc.
+#[repr(transparent)]
+pub(crate) struct ScanStorageOwner {
+    storage: Arc<()>,
+}
+
+static_assertions::assert_impl_all!(ScanStorageOwner: Send, Sync, std::fmt::Debug);
+static_assertions::assert_not_impl_any!(ScanStorageOwner: Clone);
+const _: () = {
+    assert!(std::mem::size_of::<ScanStorageOwner>() == std::mem::size_of::<usize>());
+    assert!(std::mem::align_of::<ScanStorageOwner>() == std::mem::align_of::<usize>());
+};
+
+impl ScanStorageOwner {
+    pub(crate) fn new() -> Self {
+        Self {
+            storage: Arc::new(()),
+        }
+    }
+
+    /// True when a scan lease still requires this owner's storage.
+    ///
+    /// Arc's uniqueness check synchronizes with completed lease destruction.
+    /// An outstanding lease causes the owner to retain its allocation instead
+    /// of waiting. Private Arc construction prevents future readers after the
+    /// owner has entered its exclusive destruction path.
+    pub(crate) fn has_leases(&mut self) -> bool {
+        Arc::get_mut(&mut self.storage).is_none()
+    }
+}
+
+impl std::fmt::Debug for ScanStorageOwner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScanStorageOwner")
+            .field(
+                "leases",
+                &Arc::strong_count(&self.storage).saturating_sub(1),
+            )
+            .finish()
+    }
+}
+
 /// A marker reader's lease on an owner-retained, stable storage allocation.
 ///
-/// The owner observes the counter with Acquire before freeing its storage.
-/// Destruction releases the reader only after its final raw-pointer access.
-/// This lease is neither cloneable nor shareable; one marker owns each lease.
+/// The lease holds the owner's private Arc through its final raw-pointer read.
+/// Its ordinary Arc destructor ends retention; no second reader counter or
+/// callback is needed. This lease is neither cloneable nor shareable.
 #[must_use = "dropping the lease ends this reader's storage retention"]
 pub(crate) struct ScanStorageLease {
-    readers: Arc<AtomicUsize>,
+    storage: Arc<()>,
     _exclusive_reader: PhantomData<Cell<()>>,
 }
 
 static_assertions::assert_impl_all!(ScanStorageLease: Send, std::fmt::Debug);
-static_assertions::assert_not_impl_any!(ScanStorageLease: Sync);
+static_assertions::assert_not_impl_any!(ScanStorageLease: Sync, Clone);
 
 impl ScanStorageLease {
-    pub(crate) fn capture(readers: &Arc<AtomicUsize>, _: &SingleMutatorWorld<'_>) -> Self {
-        readers.fetch_add(1, Ordering::Relaxed);
+    pub(crate) fn capture(owner: &ScanStorageOwner, _: &SingleMutatorWorld<'_>) -> Self {
         Self {
-            readers: Arc::clone(readers),
+            storage: Arc::clone(&owner.storage),
             _exclusive_reader: PhantomData,
         }
     }
@@ -82,13 +126,10 @@ impl ScanStorageLease {
 impl std::fmt::Debug for ScanStorageLease {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScanStorageLease")
-            .field("readers", &self.readers.load(Ordering::Acquire))
+            .field(
+                "leases",
+                &Arc::strong_count(&self.storage).saturating_sub(1),
+            )
             .finish()
-    }
-}
-
-impl Drop for ScanStorageLease {
-    fn drop(&mut self) {
-        self.readers.fetch_sub(1, Ordering::Release);
     }
 }

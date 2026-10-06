@@ -1212,11 +1212,11 @@ struct SymbolChunks {
 
 impl Drop for SymbolChunks {
     fn drop(&mut self) {
-        // A snapshot releases its lease only after its last raw-pointer read.
-        // An owner dropped first must retain both allocations, without waiting
-        // for the marker. A stale positive count only retains extra storage.
-        for (chunk, side) in self.chunks.drain(..).zip(self.sides.drain(..)) {
-            if side.scan_readers.load(Ordering::Acquire) != 0 {
+        // Arc uniqueness proves that all snapshot leases have ended after
+        // their final raw-pointer reads. An outstanding lease retains both
+        // allocations without waiting for the marker or invoking callbacks.
+        for (chunk, mut side) in self.chunks.drain(..).zip(self.sides.drain(..)) {
+            if side.scan_storage.has_leases() {
                 std::mem::forget(chunk);
                 std::mem::forget(side);
             }
@@ -1502,7 +1502,7 @@ impl SymbolChunks {
                 slots: chunk.as_ptr(),
                 seq: &side.seq,
                 _lease: crate::tagged::gc::scan_contract::ScanStorageLease::capture(
-                    &side.scan_readers,
+                    &side.scan_storage,
                     world,
                 ),
             })

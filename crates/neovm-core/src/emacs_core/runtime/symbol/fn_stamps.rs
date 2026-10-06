@@ -44,7 +44,7 @@
 //! concurrent reader can follow a pointer freed by a floor reset.
 
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64, Ordering};
 
 use super::OBARRAY_CHUNK;
 
@@ -72,7 +72,7 @@ pub(super) struct ChunkSide {
     fn_stamps: AtomicPtr<StampChunk>,
     /// Snapshot readers keep the owning symbol chunk and this side box alive
     /// if their owner is abandoned before an explicit marker finish.
-    pub(super) scan_readers: std::sync::Arc<AtomicUsize>,
+    pub(super) scan_storage: crate::tagged::gc::scan_contract::ScanStorageOwner,
 }
 
 static_assertions::assert_impl_all!(ChunkSide: Send, Sync);
@@ -86,7 +86,7 @@ impl ChunkSide {
             seq: AtomicU32::new(0),
             fn_floor: AtomicU64::new(floor),
             fn_stamps: AtomicPtr::new(core::ptr::null_mut()),
-            scan_readers: std::sync::Arc::new(AtomicUsize::new(0)),
+            scan_storage: crate::tagged::gc::scan_contract::ScanStorageOwner::new(),
         }
     }
 

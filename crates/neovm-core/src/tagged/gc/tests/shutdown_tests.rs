@@ -341,11 +341,30 @@ fn obarray_snapshot_leases_survive_owner_drop() {
 #[test]
 fn snapshot_storage_lease_releases_after_final_read() {
     let mut heap = TaggedHeap::new();
-    let readers = Arc::new(AtomicUsize::new(0));
+    let mut storage = scan_contract::ScanStorageOwner::new();
+    assert!(!storage.has_leases());
     // SAFETY: this sole test owner admits a callback-free capture.
     let world = unsafe { scan_contract::SingleMutatorWorld::from_heap(&mut heap) };
-    let lease = scan_contract::ScanStorageLease::capture(&readers, &world);
-    assert_eq!(readers.load(Ordering::Acquire), 1);
-    std::thread::spawn(move || drop(lease)).join().unwrap();
-    assert_eq!(readers.load(Ordering::Acquire), 0);
+    let first = scan_contract::ScanStorageLease::capture(&storage, &world);
+    let last = scan_contract::ScanStorageLease::capture(&storage, &world);
+    assert!(storage.has_leases());
+    drop(first);
+    assert!(storage.has_leases());
+
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        ready_tx.send(()).unwrap();
+        release_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        drop(last);
+    });
+    ready_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    assert!(storage.has_leases());
+    release_tx.send(()).unwrap();
+    reader.join().unwrap();
+    assert!(!storage.has_leases());
 }
