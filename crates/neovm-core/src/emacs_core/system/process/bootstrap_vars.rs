@@ -242,10 +242,19 @@ impl From<SignalNumber> for i32 {
     }
 }
 
-pub(super) fn parse_signal_number(value: &Value) -> Result<i32, Flow> {
+pub(super) fn parse_signal_number(value: &Value) -> Result<SignalNumber, Flow> {
     match value.kind() {
-        ValueKind::Fixnum(n) => Ok(n as i32),
-        ValueKind::String => Err(signal(
+        ValueKind::Fixnum(n) => SignalNumber::try_from(n).map_err(|_| {
+            signal(
+                LispCondition::ArgsOutOfRange,
+                vec![
+                    *value,
+                    Value::fixnum(i64::from(i32::MIN)),
+                    Value::fixnum(i64::from(i32::MAX)),
+                ],
+            )
+        }),
+        ValueKind::String | ValueKind::Veclike(VecLikeType::Bignum) => Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), *value],
         )),
@@ -253,7 +262,9 @@ pub(super) fn parse_signal_number(value: &Value) -> Result<i32, Flow> {
             // Borrow the symbol name before consuming it
             let sym_name = value.as_symbol_name().map(|s| s.to_owned());
             if let Some(name) = sym_name {
-                sys::signal_name_number(&name).ok_or_else(|| signal_undefined_signal_name(&name))
+                sys::signal_name_number(&name)
+                    .map(SignalNumber)
+                    .ok_or_else(|| signal_undefined_signal_name(&name))
             } else {
                 Err(signal_wrong_type_integerp(*value))
             }

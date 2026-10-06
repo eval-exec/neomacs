@@ -534,5 +534,9 @@ pub use types::*;
 mod tests;
 
 #[cfg(test)]
+#[path = "tests/signal_number.rs"]
+mod signal_number_tests;
+
+#[cfg(test)]
 #[path = "tests/timeout.rs"]
 mod timeout_tests;

@@ -77,16 +77,16 @@ pub(crate) fn builtin_internal_default_signal_process_impl(
                 }
                 return Ok(Value::fixnum(signal_process_or_unbacked_success(
                     proc,
-                    signal_num,
+                    signal_num.into(),
                     ProcessSignalRecipient::ImmediateProcess,
                 ) as i64));
             }
             Ok(Value::fixnum(-1))
         }
         SignalProcessTarget::MissingNamedProcess => Ok(Value::NIL),
-        SignalProcessTarget::Pid(pid) => {
-            Ok(Value::fixnum(sys::send_signal(pid, signal_num) as i64))
-        }
+        SignalProcessTarget::Pid(pid) => Ok(Value::fixnum(
+            sys::send_signal(pid, signal_num.into()) as i64,
+        )),
     }
 }
 
@@ -3736,16 +3736,16 @@ pub(crate) fn builtin_signal_process_impl(
                 }
                 return Ok(Value::fixnum(signal_process_or_unbacked_success(
                     proc,
-                    signal_num,
+                    signal_num.into(),
                     ProcessSignalRecipient::ImmediateProcess,
                 ) as i64));
             }
             Ok(Value::fixnum(-1))
         }
         SignalProcessTarget::MissingNamedProcess => Ok(Value::NIL),
-        SignalProcessTarget::Pid(pid) => {
-            Ok(Value::fixnum(sys::send_signal(pid, signal_num) as i64))
-        }
+        SignalProcessTarget::Pid(pid) => Ok(Value::fixnum(
+            sys::send_signal(pid, signal_num.into()) as i64,
+        )),
     }
 }
 
