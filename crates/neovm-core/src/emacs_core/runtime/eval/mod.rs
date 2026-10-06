@@ -6113,9 +6113,8 @@ impl Context {
         if sym_id != buffer_undo_list_symbol()
             && let Some(sym) = self.obarray.get_by_id(sym_id)
         {
-            match sym.redirect() {
-                crate::emacs_core::symbol::SymbolRedirect::Plainval => {
-                    let value = unsafe { sym.val.plain };
+            match sym.value_cell() {
+                crate::emacs_core::symbol::ValueCell::Plain(value) => {
                     if !value.is_unbound() {
                         return Ok(SymbolValueLookup::Bound(value));
                     }
@@ -6126,7 +6125,7 @@ impl Context {
                 // `find_symbol_value` dispatches on the redirect tag
                 // directly). `read_localized`'s same-buffer epoch check makes
                 // the common read one compare + one cdr.
-                crate::emacs_core::symbol::SymbolRedirect::Localized => {
+                crate::emacs_core::symbol::ValueCell::Localized(_) => {
                     if let Some(buf) = self.buffers.current_buffer()
                         && let Some(value) = self.obarray.read_localized_symbol_for_buffer(
                             sym_id,
@@ -6141,7 +6140,7 @@ impl Context {
                         return Ok(SymbolValueLookup::Bound(value));
                     }
                 }
-                crate::emacs_core::symbol::SymbolRedirect::Forwarded => {
+                crate::emacs_core::symbol::ValueCell::Forwarded(_) => {
                     if let Some(value) = self.forwarded_buffer_obj_value(sym) {
                         return Ok(SymbolValueLookup::Bound(value));
                     }
@@ -6155,7 +6154,7 @@ impl Context {
                         return Ok(SymbolValueLookup::Bound(value));
                     }
                 }
-                crate::emacs_core::symbol::SymbolRedirect::Varalias => {}
+                crate::emacs_core::symbol::ValueCell::Alias(_) => {}
             }
         }
 

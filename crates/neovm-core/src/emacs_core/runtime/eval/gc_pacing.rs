@@ -480,7 +480,7 @@ impl Context {
                 if !self
                     .obarray
                     .get_by_id(id)
-                    .is_some_and(|symbol| symbol.flags.runtime_projected())
+                    .is_some_and(|symbol| symbol.flags().runtime_projected())
                 {
                     self.obarray.mark_runtime_projected_id(id);
                 }

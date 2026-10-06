@@ -3298,29 +3298,26 @@ pub(crate) fn dump_symbol_data(
     dynamic_default: Option<Option<Value>>,
 ) -> DumpSymbolData {
     // Phase I (pdump v21): encode redirect + flags directly.
-    use crate::emacs_core::symbol::SymbolRedirect;
-    let redirect = sd.flags.redirect();
-    let val = match redirect {
-        SymbolRedirect::Plainval => {
+    use crate::emacs_core::symbol::ValueCell;
+    let redirect = sd.redirect();
+    let val = match sd.value_cell() {
+        ValueCell::Plain(plain) => {
             let v = match dynamic_default {
                 Some(Some(value)) => value,
                 Some(None) => Value::UNBOUND,
-                None => unsafe { sd.val.plain },
+                None => plain,
             };
             // Preserve the UNBOUND sentinel — DumpValue::Unbound maps back to
             // Value::UNBOUND on load, which is the correct "unbound" state.
             DumpSymbolVal::Plain(encoder.dump_value(&v))
         }
-        SymbolRedirect::Varalias => {
-            let target = unsafe { sd.val.alias };
-            DumpSymbolVal::Alias(dump_sym_id(target))
-        }
-        SymbolRedirect::Localized => {
+        ValueCell::Alias(target) => DumpSymbolVal::Alias(dump_sym_id(target)),
+        ValueCell::Localized(blv) => {
             // Read the BLV to get the global default, the local_if_set flag and
             // the forwarder `make_blv` copied across (`src/data.c:2112-2140`).
             // The BLV is heap-allocated and valid while sd is alive.
             let (default_val, local_if_set, forwarder) = unsafe {
-                let blv = &*sd.val.blv;
+                let blv = &*blv.as_ptr();
                 let default_val = blv.defcell.cons_cdr();
                 (default_val, blv.local_if_set, blv.fwd.map(|fwd| fwd.ty()))
             };
@@ -3335,9 +3332,8 @@ pub(crate) fn dump_symbol_data(
                 forwarder: forwarder.and_then(dump_localized_forwarder),
             }
         }
-        SymbolRedirect::Forwarded => {
+        ValueCell::Forwarded(fwd) => {
             use crate::emacs_core::forward::ForwardSlot;
-            let fwd = unsafe { &*sd.val.fwd };
             match fwd.slot() {
                 ForwardSlot::Bool(bool_fwd) => DumpSymbolVal::BoolForwarded(bool_fwd.get()),
                 ForwardSlot::Int(int_fwd) => {
@@ -3357,9 +3353,9 @@ pub(crate) fn dump_symbol_data(
     };
     DumpSymbolData {
         redirect: redirect.into(),
-        trapped_write: sd.flags.trapped_write().into(),
-        interned: sd.flags.interned().into(),
-        declared_special: sd.flags.declared_special(),
+        trapped_write: sd.flags().trapped_write().into(),
+        interned: sd.flags().interned().into(),
+        declared_special: sd.flags().declared_special(),
         val,
         function: encoder.dump_value(&sd.function),
         plist: encoder.dump_value(&sd.plist),
@@ -4943,17 +4939,48 @@ pub(crate) fn load_symbol_data(
     sym_id: SymId,
     sd: &DumpSymbolData,
 ) -> Result<LispSymbol, DumpError> {
-    use crate::emacs_core::symbol::{SymbolInterned, SymbolRedirect, SymbolVal};
+    use crate::emacs_core::symbol::{
+        DumpedCell, DumpedSymbolFlags, SymbolInterned, SymbolRedirect,
+    };
     let redirect = SymbolRedirect::try_from(sd.redirect)?;
-    let expected = match &sd.val {
-        DumpSymbolVal::Plain(_) => SymbolRedirect::Plainval,
-        DumpSymbolVal::Alias(_) => SymbolRedirect::Varalias,
-        DumpSymbolVal::Localized { .. } => SymbolRedirect::Localized,
-        DumpSymbolVal::Forwarded
-        | DumpSymbolVal::BoolForwarded(_)
-        | DumpSymbolVal::IntForwarded(_)
-        | DumpSymbolVal::ObjForwarded(_)
-        | DumpSymbolVal::KboardForwarded(_) => SymbolRedirect::Forwarded,
+    // The redirect code and the arm are decoded together: the cell a symbol
+    // starts with comes out of the arm, and the code must name that arm.
+    //
+    // A `Localized` or `Forwarded` cell names process memory (a BLV record, a
+    // leaked descriptor), so it cannot come out of the image. Those symbols
+    // start as a plain cell holding the value the second pass in
+    // `load_obarray` rebuilds them from -- the localized default, the
+    // forwarded value -- and that pass makes the typed transition
+    // (`make_symbol_localized`, `install_*fwd`). A per-buffer slot starts
+    // unbound; `reconstruct_evaluator` installs its forwarder from
+    // `BUFFER_SLOT_INFO`.
+    let (expected, cell) = match &sd.val {
+        DumpSymbolVal::Plain(v) => (
+            SymbolRedirect::Plainval,
+            DumpedCell::Plain(decoder.load_value(v)),
+        ),
+        DumpSymbolVal::Alias(target) => (
+            SymbolRedirect::Varalias,
+            DumpedCell::Alias(load_sym_id(target)),
+        ),
+        DumpSymbolVal::Localized { default, .. } => (
+            SymbolRedirect::Localized,
+            DumpedCell::Plain(decoder.load_value(default)),
+        ),
+        DumpSymbolVal::Forwarded => (
+            SymbolRedirect::Forwarded,
+            DumpedCell::Plain(crate::emacs_core::value::Value::UNBOUND),
+        ),
+        DumpSymbolVal::BoolForwarded(value) => (
+            SymbolRedirect::Forwarded,
+            DumpedCell::Plain(crate::emacs_core::value::Value::bool_val(*value)),
+        ),
+        DumpSymbolVal::IntForwarded(value)
+        | DumpSymbolVal::ObjForwarded(value)
+        | DumpSymbolVal::KboardForwarded(value) => (
+            SymbolRedirect::Forwarded,
+            DumpedCell::Plain(decoder.load_value(value)),
+        ),
     };
     if redirect != expected {
         return Err(DumpError::SymbolRedirectMismatch {
@@ -4961,71 +4988,21 @@ pub(crate) fn load_symbol_data(
             found: redirect,
         });
     }
-    let mut symbol = LispSymbol::new(sym_id);
 
     // The writer stores each enum in its own byte; no other flags share
     // these bytes. Reject the full code before constructing runtime flags.
-    let trapped_write = SymbolTrappedWrite::try_from(sd.trapped_write)?;
-    let interned = SymbolInterned::try_from(sd.interned)?;
-    symbol.flags.set_trapped_write(trapped_write);
-    symbol.flags.set_interned(interned);
-    symbol.flags.set_declared_special(sd.declared_special);
-
-    match &sd.val {
-        DumpSymbolVal::Plain(v) => {
-            symbol.flags.set_redirect(SymbolRedirect::Plainval);
-            symbol.val = SymbolVal {
-                plain: decoder.load_value(v),
-            };
-        }
-        DumpSymbolVal::Alias(target) => {
-            symbol.set_alias_target(load_sym_id(target));
-        }
-        DumpSymbolVal::Localized { default, .. } => {
-            // BLV reconstruction requires the Obarray to be live so that
-            // make_symbol_localized can allocate and track the BLV pointer.
-            // We cannot do it here (we don't have &mut Obarray).  Instead
-            // we store the default in val.plain temporarily; load_obarray
-            // performs a second pass after Obarray::from_dump to call
-            // make_symbol_localized on every Localized symbol and fix the
-            // redirect + BLV pointer.
-            symbol.flags.set_redirect(SymbolRedirect::Plainval);
-            symbol.val = SymbolVal {
-                plain: decoder.load_value(default),
-            };
-        }
-        DumpSymbolVal::Forwarded => {
-            // BUFFER_OBJFWD forwarders are re-installed from BUFFER_SLOT_INFO
-            // in reconstruct_evaluator after the obarray is built.  Leave the
-            // redirect at Plainval / UNBOUND for now; reconstruct_evaluator
-            // will call install_buffer_objfwd which flips it to Forwarded.
-            symbol.flags.set_redirect(SymbolRedirect::Plainval);
-            symbol.val = SymbolVal {
-                plain: crate::emacs_core::value::Value::UNBOUND,
-            };
-        }
-        DumpSymbolVal::BoolForwarded(value) => {
-            // Like BUFFER_OBJFWD, the stable descriptor pointer is rebuilt
-            // only after Obarray construction.  Keep the canonical value in
-            // a temporary Plainval cell for the second pass.
-            symbol.flags.set_redirect(SymbolRedirect::Plainval);
-            symbol.val = SymbolVal {
-                plain: crate::emacs_core::value::Value::bool_val(*value),
-            };
-        }
-        DumpSymbolVal::IntForwarded(value)
-        | DumpSymbolVal::ObjForwarded(value)
-        | DumpSymbolVal::KboardForwarded(value) => {
-            symbol.flags.set_redirect(SymbolRedirect::Plainval);
-            symbol.val = SymbolVal {
-                plain: decoder.load_value(value),
-            };
-        }
-    }
-
-    symbol.function = decoder.load_value(&sd.function);
-    symbol.plist = decoder.load_value(&sd.plist);
-    Ok(symbol)
+    let flags = DumpedSymbolFlags {
+        trapped_write: SymbolTrappedWrite::try_from(sd.trapped_write)?,
+        interned: SymbolInterned::try_from(sd.interned)?,
+        declared_special: sd.declared_special,
+    };
+    Ok(LispSymbol::from_dump(
+        sym_id,
+        flags,
+        cell,
+        decoder.load_value(&sd.function),
+        decoder.load_value(&sd.plist),
+    ))
 }
 
 #[deny(clippy::wildcard_enum_match_arm)]
@@ -5060,7 +5037,7 @@ pub(crate) fn load_obarray(
         let symbol = load_symbol_data(decoder, sym_id, sd)?;
         if matches!(sd.val, DumpSymbolVal::Localized { .. }) {
             // Carry already validated flags through BLV reconstruction.
-            localized_entries.push((sym_id, sd, symbol.flags));
+            localized_entries.push((sym_id, sd, symbol.flags()));
         }
         if let DumpSymbolVal::BoolForwarded(value) = &sd.val {
             bool_forwarded_entries.push((sym_id, *value));
@@ -5082,7 +5059,7 @@ pub(crate) fn load_obarray(
     // each row is a header unpack plus three word reads - no DumpValue
     // decode. See `DumpObarray::plain_rows` for the layout.
     if let Some((rows_offset, rows_count)) = dob.plain_rows {
-        use crate::emacs_core::symbol::{SymbolRedirect, SymbolVal};
+        use crate::emacs_core::symbol::{DumpedCell, DumpedSymbolFlags, SymbolRedirect};
         let mapped_heap = decoder.state.mapped_heap.ok_or_else(|| {
             DumpError::ImageFormatError("obarray symbol rows require a mapped heap image".into())
         })?;
@@ -5141,31 +5118,33 @@ pub(crate) fn load_obarray(
                     sym_id.0
                 )));
             }
-            let mut symbol = crate::emacs_core::symbol::LispSymbol::new(sym_id);
-            symbol.flags.set_trapped_write(trapped_write);
-            symbol.flags.set_interned(interned);
-            symbol.flags.set_declared_special(declared_special);
             let val = crate::tagged::value::TaggedValue::from_bits(val_word);
-            match redirect {
+            // The row's redirect and its word decode together into the cell.
+            let cell = match redirect {
                 SymbolRedirect::Varalias => {
-                    let target = val.as_symbol_id().ok_or_else(|| {
+                    DumpedCell::Alias(val.as_symbol_id().ok_or_else(|| {
                         DumpError::DeserializationError(format!(
                             "obarray alias row {} target is not a symbol",
                             sym_id.0
                         ))
-                    })?;
-                    symbol.set_alias_target(target);
+                    })?)
                 }
-                SymbolRedirect::Plainval => {
-                    symbol.flags.set_redirect(SymbolRedirect::Plainval);
-                    symbol.val = SymbolVal { plain: val };
-                }
+                SymbolRedirect::Plainval => DumpedCell::Plain(val),
                 SymbolRedirect::Localized | SymbolRedirect::Forwarded => {
                     return Err(DumpError::InvalidObarrayRowRedirect(redirect));
                 }
-            }
-            symbol.function = crate::tagged::value::TaggedValue::from_bits(function);
-            symbol.plist = crate::tagged::value::TaggedValue::from_bits(plist);
+            };
+            let symbol = crate::emacs_core::symbol::LispSymbol::from_dump(
+                sym_id,
+                DumpedSymbolFlags {
+                    trapped_write,
+                    interned,
+                    declared_special,
+                },
+                cell,
+                crate::tagged::value::TaggedValue::from_bits(function),
+                crate::tagged::value::TaggedValue::from_bits(plist),
+            );
             symbols.push((sym_id, symbol));
         }
     }
@@ -5240,9 +5219,9 @@ pub(crate) fn load_obarray(
             // only sets the redirect bit, leaving trapped_write / interned /
             // declared_special as defaults.  Re-apply them from the dump.
             if let Some(sym) = obarray.get_mut_by_id(*sym_id) {
-                sym.flags.set_trapped_write(flags.trapped_write());
-                sym.flags.set_interned(flags.interned());
-                sym.flags.set_declared_special(sd.declared_special);
+                sym.set_trapped_write(flags.trapped_write());
+                sym.set_interned(flags.interned());
+                sym.set_declared_special(sd.declared_special);
             }
         }
     }

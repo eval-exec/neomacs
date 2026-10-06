@@ -287,13 +287,11 @@ fn current_textprop_variable_value(
     let Some(sym) = obarray.get_by_id(sym_id) else {
         return None;
     };
-    match sym.flags.redirect() {
-        crate::emacs_core::symbol::SymbolRedirect::Plainval => {
-            // SAFETY: redirect=Plainval selects the plain value arm.
-            let value = unsafe { sym.val.plain };
+    match sym.value_cell() {
+        crate::emacs_core::symbol::ValueCell::Plain(value) => {
             return (!value.is_unbound()).then_some(value);
         }
-        crate::emacs_core::symbol::SymbolRedirect::Localized => {
+        crate::emacs_core::symbol::ValueCell::Localized(_) => {
             if let Some(buf) = buffers.current_buffer()
                 && let Some(value) = obarray.read_localized_symbol_for_buffer(
                     sym_id,
@@ -308,13 +306,10 @@ fn current_textprop_variable_value(
         // `default-text-properties` is a C-defined global: its forwarder is
         // the value, read exactly as `symbol_value_id_copied` reads it,
         // without looking the symbol up a second time.
-        crate::emacs_core::symbol::SymbolRedirect::Forwarded => {
-            // SAFETY: redirect=Forwarded selects the forwarder arm, and every
-            // forwarder is leaked at registration.
-            let fwd: &'static crate::emacs_core::forward::LispFwd = unsafe { &*sym.val.fwd };
+        crate::emacs_core::symbol::ValueCell::Forwarded(fwd) => {
             return fwd.load();
         }
-        crate::emacs_core::symbol::SymbolRedirect::Varalias => {}
+        crate::emacs_core::symbol::ValueCell::Alias(_) => {}
     }
     obarray.symbol_value_id_copied(sym_id)
 }

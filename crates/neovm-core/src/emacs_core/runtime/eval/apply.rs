@@ -1573,9 +1573,12 @@ impl Context {
                         break;
                     }
                     self.specpdl.pop();
-                    // `UNBOUND` stored to a plain cell is `makunbound`.
-                    self.obarray
+                    // `UNBOUND` stored to a plain cell is `makunbound`. The
+                    // cell was plain one check ago and nothing ran since.
+                    let restored = self
+                        .obarray
                         .store_plain_value_id(sym_id, old_value.as_plain());
+                    debug_assert!(restored.is_ok(), "the cell left the plain arm unseen");
                     self.sync_cached_runtime_binding_by_id(
                         sym_id,
                         old_value.get().unwrap_or(Value::NIL),

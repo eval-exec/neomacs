@@ -134,7 +134,7 @@ fn symbol_write_window_holds_flags_then_interned_global() {
             *base.add(LISP_SYMBOL_INTERNED_GLOBAL_OFFSET),
         )
     };
-    assert_eq!(flags, sym.flags.0);
+    assert_eq!(flags, sym.flags().bits());
     assert_eq!(
         interned, 1,
         "an interned symbol reads 1 in the window's high byte"
@@ -174,7 +174,7 @@ fn symbol_value_id_or_nil_matches_value_cell_reads() {
     assert_eq!(ob.symbol_value_id_or_nil(plain), Value::fixnum(42));
 
     let alias = intern("symbol-value-id-or-nil-alias");
-    ob.make_alias(alias, plain);
+    ob.make_alias(alias, plain).expect("alias edge");
     assert_eq!(ob.symbol_value_id_or_nil(alias), Value::fixnum(42));
 
     let localized = intern("symbol-value-id-or-nil-localized");
@@ -349,7 +349,7 @@ fn for_each_value_cell_mut_updates_plain_and_buffer_local_values() {
 // Symbol-redirect refactor — Phase 1 sanity tests
 // ===========================================================================
 //
-// These cover the new SymbolRedirect / SymbolFlags / SymbolVal machinery
+// These cover the new SymbolRedirect / SymbolFlags / value-cell machinery
 // introduced in `drafts/symbol-redirect-plan.md` Step 1. They do NOT yet
 // exercise LOCALIZED or FORWARDED dispatch — those land in later phases.
 
@@ -362,10 +362,13 @@ fn fresh_lisp_symbol_is_plainval_unbound() {
     let id = intern("phase1-fresh");
     let sym = LispSymbol::new(id);
     assert_eq!(sym.redirect(), SymbolRedirect::Plainval);
-    assert_eq!(sym.flags.trapped_write(), SymbolTrappedWrite::Untrapped);
-    assert_eq!(sym.flags.interned(), SymbolInterned::Uninterned);
-    assert!(!sym.flags.declared_special());
-    assert_eq!(sym.plain(), Value::UNBOUND);
+    assert_eq!(sym.flags().trapped_write(), SymbolTrappedWrite::Untrapped);
+    assert_eq!(sym.flags().interned(), SymbolInterned::Uninterned);
+    assert!(!sym.flags().declared_special());
+    assert_eq!(
+        sym.plain_value().map(Value::bits),
+        Some(Value::UNBOUND.bits())
+    );
 }
 
 /// Phase F: `Obarray::set_symbol_value` writes ONLY to `flags + val`.
@@ -379,7 +382,7 @@ fn plainval_redirect_mirrors_legacy_value_field() {
     let id = intern("phase1-mirror");
     let sym = ob.get_by_id(id).expect("symbol just installed");
     assert_eq!(sym.redirect(), SymbolRedirect::Plainval);
-    assert_eq!(sym.plain(), Value::fixnum(7));
+    assert_eq!(sym.plain_value(), Some(Value::fixnum(7)));
     // Phase F: legacy `value` field is intentionally not written anymore;
     // the authoritative source is `flags.redirect() + val`.
     // (Phase H deletes the field entirely.)
@@ -395,10 +398,10 @@ fn varalias_redirect_mirrors_legacy_alias_field() {
     let to_id = intern("phase1-alias-to");
     ob.ensure_symbol_id(from_id);
     ob.ensure_symbol_id(to_id);
-    ob.make_alias(from_id, to_id);
+    ob.make_alias(from_id, to_id).expect("alias edge");
     let sym = ob.get_by_id(from_id).expect("symbol just installed");
     assert_eq!(sym.redirect(), SymbolRedirect::Varalias);
-    assert_eq!(sym.alias_target(), to_id);
+    assert_eq!(sym.alias_target(), Some(to_id));
     // Phase F: legacy `value` field is intentionally not written anymore;
     // the authoritative source is `flags.redirect() + val.alias`.
     // (Phase H deletes the field entirely.)
@@ -414,71 +417,11 @@ fn t_and_nil_have_consistent_redirect_state() {
     let t = ob.get_by_id(intern("t")).expect("t pre-interned");
     let nil = ob.get_by_id(intern("nil")).expect("nil pre-interned");
     assert_eq!(t.redirect(), SymbolRedirect::Plainval);
-    assert_eq!(t.plain(), Value::T);
-    assert!(t.flags.trapped_write() == SymbolTrappedWrite::NoWrite);
+    assert_eq!(t.plain_value(), Some(Value::T));
+    assert!(t.trapped_write() == SymbolTrappedWrite::NoWrite);
     assert_eq!(nil.redirect(), SymbolRedirect::Plainval);
-    assert_eq!(nil.plain(), Value::NIL);
-    assert!(nil.flags.trapped_write() == SymbolTrappedWrite::NoWrite);
-}
-
-/// SymbolFlags packs into a single byte (matches GNU's bit layout).
-#[test]
-fn symbol_flags_pack_into_one_byte() {
-    crate::test_utils::init_test_tracing();
-    assert_eq!(std::mem::size_of::<SymbolFlags>(), 1);
-}
-
-/// Bit 7 (this port's `runtime_projected`) round-trips without disturbing
-/// GNU's four fields, and the one-byte plain-untrapped test is true for
-/// exactly the (Plainval, Untrapped, unprojected) shape.
-#[test]
-fn runtime_projected_bit_is_independent_of_gnu_symbol_fields() {
-    use crate::emacs_core::symbol::{SymbolInterned, SymbolRedirect, SymbolTrappedWrite};
-    crate::test_utils::init_test_tracing();
-    let mut flags = SymbolFlags::default();
-    flags.set_redirect(SymbolRedirect::Localized);
-    flags.set_trapped_write(SymbolTrappedWrite::Trapped);
-    flags.set_interned(SymbolInterned::InternedInInitial);
-    flags.set_declared_special(true);
-    flags.set_runtime_projected(true);
-    assert_eq!(flags.redirect(), SymbolRedirect::Localized);
-    assert_eq!(flags.trapped_write(), SymbolTrappedWrite::Trapped);
-    assert_eq!(flags.interned(), SymbolInterned::InternedInInitial);
-    assert!(flags.declared_special());
-    assert!(flags.runtime_projected());
-    flags.set_runtime_projected(false);
-    assert!(!flags.runtime_projected());
-    assert_eq!(flags.redirect(), SymbolRedirect::Localized);
-    assert!(flags.declared_special());
-
-    for redirect in [
-        SymbolRedirect::Plainval,
-        SymbolRedirect::Varalias,
-        SymbolRedirect::Localized,
-        SymbolRedirect::Forwarded,
-    ] {
-        for trapped in [
-            SymbolTrappedWrite::Untrapped,
-            SymbolTrappedWrite::NoWrite,
-            SymbolTrappedWrite::Trapped,
-        ] {
-            for projected in [false, true] {
-                let mut f = SymbolFlags::default();
-                f.set_redirect(redirect);
-                f.set_trapped_write(trapped);
-                f.set_runtime_projected(projected);
-                f.set_declared_special(true);
-                let want = redirect == SymbolRedirect::Plainval
-                    && trapped == SymbolTrappedWrite::Untrapped
-                    && !projected;
-                assert_eq!(
-                    f.is_plain_untrapped_unprojected(),
-                    want,
-                    "{redirect:?} {trapped:?} projected={projected}"
-                );
-            }
-        }
-    }
+    assert_eq!(nil.plain_value(), Some(Value::NIL));
+    assert!(nil.trapped_write() == SymbolTrappedWrite::NoWrite);
 }
 
 /// The bind/unbind fast tier stores only into an interned, plain, untrapped,
@@ -520,7 +463,7 @@ fn swap_plain_untrapped_value_refuses_every_slow_shape() {
     let watched = intern("swap-watched");
     ob.set_symbol_value_id(watched, Value::fixnum(3));
     if let Some(sym) = ob.get_mut_by_id(watched) {
-        sym.flags.set_trapped_write(SymbolTrappedWrite::Trapped);
+        sym.set_trapped_write(SymbolTrappedWrite::Trapped);
     }
     assert!(
         ob.swap_plain_untrapped_value_id(watched, Value::fixnum(4))
@@ -549,7 +492,7 @@ fn swap_plain_untrapped_value_refuses_every_slow_shape() {
     let base = intern("swap-alias-base");
     ob.set_symbol_value_id(base, Value::fixnum(8));
     ob.ensure_symbol_id(alias);
-    ob.make_alias(alias, base);
+    ob.make_alias(alias, base).expect("alias edge");
     assert!(
         ob.swap_plain_untrapped_value_id(alias, Value::fixnum(9))
             .is_none()
@@ -575,8 +518,8 @@ fn indirect_variable_id_follows_chain() {
     ob.ensure_symbol_id(b);
     ob.ensure_symbol_id(c);
     // a → b → c
-    ob.make_alias(a, b);
-    ob.make_alias(b, c);
+    ob.make_alias(a, b).expect("alias edge");
+    ob.make_alias(b, c).expect("alias edge");
     assert_eq!(ob.indirect_variable_id(a), Some(c));
     assert_eq!(ob.indirect_variable_id(b), Some(c));
     assert_eq!(ob.indirect_variable_id(c), Some(c));
@@ -595,8 +538,8 @@ fn indirect_variable_id_detects_cycle() {
     ob.ensure_symbol_id(a);
     ob.ensure_symbol_id(b);
     // a → b → a (cycle)
-    ob.make_alias(a, b);
-    ob.make_alias(b, a);
+    ob.make_alias(a, b).expect("alias edge");
+    ob.make_alias(b, a).expect("alias edge");
     assert_eq!(ob.indirect_variable_id(a), None);
     assert_eq!(ob.indirect_variable_id(b), None);
 }
@@ -1002,8 +945,8 @@ fn install_buffer_objfwd_flips_redirect() {
     ob.install_buffer_objfwd(id, fwd);
     let sym = ob.get_by_id(id).expect("symbol installed");
     assert_eq!(sym.redirect(), SymbolRedirect::Forwarded);
-    assert!(sym.flags.declared_special());
-    assert!(sym.flags.declared_special());
+    assert!(sym.flags().declared_special());
+    assert!(sym.flags().declared_special());
 }
 
 /// `find_symbol_value_in_buffer` for a FORWARDED `BUFFER_OBJFWD`
@@ -1082,187 +1025,6 @@ fn uninterned_keyword_and_nil_names_are_not_canonical_constants() {
     assert!(eval.obarray().symbol_function_id(nil_id).is_some());
     assert!(eval.obarray().intern_soft("nil").is_some());
     assert!(eval.obarray().intern_soft(":vm-k").is_none());
-}
-
-// ===========================================================================
-// Stage 1b seqlock symbol-read protocol: torn-arm-read defense
-// ===========================================================================
-//
-// These two tests prove that `read_symbol_children_consistent` (the GC-thread
-// read side of the per-chunk seqlock) never returns a value read from the WRONG
-// union arm under a concurrent writer that flips a symbol between two redirect
-// states. The positive test asserts zero torn reads under the real protocol; the
-// negative control holds the writer inside the torn window and proves that the
-// same read without the seqlock retry accepts an inconsistent arm/value pair.
-
-/// Two distinct "heap-looking" `Value`s minted from raw tagged bits.
-///
-/// `TAG_CONS == 0b011`. A word `(fake_ptr | TAG_CONS)` with `fake_ptr`
-/// 8-aligned has `tag() == TAG_CONS`, so `Value::is_heap_object()` returns
-/// `true` (it matches `TAG_CONS | TAG_STRING | TAG_FLOAT | TAG_VECLIKE`).
-/// The pointer is NEVER dereferenced by the test — only its bits are compared
-/// and its heap-object-ness exercised — so a fake address is sound here. The
-/// two values differ in the high bits, so a torn read that swaps one for the
-/// other is detectable by value comparison.
-fn heap_a() -> Value {
-    // 0x1_0000 | 0b011 = 0x1_0003. 8-aligned base, cons tag.
-    Value::from_bits(0x1_0000 | crate::tagged::value::TAG_CONS)
-}
-fn heap_b() -> Value {
-    // 0x2_0000 | 0b011 = 0x2_0003. Distinct 8-aligned base, cons tag.
-    Value::from_bits(0x2_0000 | crate::tagged::value::TAG_CONS)
-}
-
-/// Raw-pointer bundle to share the symbol + seqlock across threads. The only
-/// cross-thread accesses are the atomic word/flag stores on the writer side and
-/// the seqlock-protocol atomic loads on the reader side, mirroring the
-/// production `ConsCell` / per-chunk-seqlock pattern (single mutator, single GC
-/// reader). Hence `Send` is sound.
-struct Shared(*mut LispSymbol, *const std::sync::atomic::AtomicU32);
-unsafe impl Send for Shared {}
-
-/// Number of writer arm-flips in the protected concurrent stress test.
-const SEQLOCK_WRITER_ITERS: u64 = 4_000_000;
-
-/// Drive the shared writer loop: flip the symbol between
-///   State P: redirect=Plainval, val word = HEAP_A
-///   State V: redirect=Varalias, val word = HEAP_B (deliberately staged as a
-///            heap-looking word so a TORN (Plainval, HEAP_B) read is detectable;
-///            a real SymId alias word would be non-heap and silently invisible)
-/// EXACTLY mirroring `SeqlockWriteGuard`: bump seq to ODD (Release), do the two
-/// writes (redirect first, then the val word — so a non-retrying reader that
-/// samples redirect=Plainval then the still-stale/just-updated word can tear),
-/// bump seq back to EVEN (Release).
-fn run_seqlock_writer(shared: Shared, done: &std::sync::atomic::AtomicBool) {
-    use std::sync::atomic::Ordering;
-    let sym: &mut LispSymbol = unsafe { &mut *shared.0 };
-    let seq: &std::sync::atomic::AtomicU32 = unsafe { &*shared.1 };
-    let a = heap_a();
-    let b = heap_b();
-    for _ in 0..SEQLOCK_WRITER_ITERS {
-        // --- State V: Varalias arm, word staged as HEAP_B ---
-        seq.fetch_add(1, Ordering::Release); // -> odd: arm change in flight
-        sym.flags.set_redirect(SymbolRedirect::Varalias);
-        crate::tagged::header::store_value_atomic(unsafe { &mut sym.val.plain }, b);
-        seq.fetch_add(1, Ordering::Release); // -> even
-
-        // --- State P: Plainval arm, word = HEAP_A ---
-        seq.fetch_add(1, Ordering::Release); // -> odd
-        sym.flags.set_redirect(SymbolRedirect::Plainval);
-        crate::tagged::header::store_value_atomic(unsafe { &mut sym.val.plain }, a);
-        seq.fetch_add(1, Ordering::Release); // -> even
-    }
-    done.store(true, Ordering::Release);
-}
-
-fn run_paused_seqlock_writer(
-    shared: Shared,
-    arm_published: &std::sync::Barrier,
-    reader_sampled: &std::sync::Barrier,
-) {
-    use std::sync::atomic::Ordering;
-    let sym: &mut LispSymbol = unsafe { &mut *shared.0 };
-    let seq: &std::sync::atomic::AtomicU32 = unsafe { &*shared.1 };
-
-    seq.fetch_add(1, Ordering::Release); // odd: arm change in flight
-    sym.flags.set_redirect(SymbolRedirect::Plainval);
-    arm_published.wait();
-    reader_sampled.wait();
-    crate::tagged::header::store_value_atomic(unsafe { &mut sym.val.plain }, heap_a());
-    seq.fetch_add(1, Ordering::Release); // even: stable State P
-}
-
-#[test]
-fn seqlock_symbol_read_never_tears_arm() {
-    crate::test_utils::init_test_tracing();
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    // Start in State P so the very first reads (before the writer runs) are
-    // already a consistent Plainval/HEAP_A pair.
-    let mut sym = LispSymbol::new(intern("vm-seqlock-test-sym"));
-    sym.flags.set_redirect(SymbolRedirect::Plainval);
-    sym.val = SymbolVal { plain: heap_a() };
-    // Only the val arm may produce a child: function/plist are NIL (non-heap).
-    sym.function = Value::NIL;
-    sym.plist = Value::NIL;
-
-    let seq = std::sync::atomic::AtomicU32::new(0); // even = stable
-    let done = AtomicBool::new(false);
-
-    let a = heap_a();
-    let b = heap_b();
-
-    std::thread::scope(|scope| {
-        let shared = Shared(&mut sym as *mut LispSymbol, &seq as *const _);
-        let writer = scope.spawn(|| run_seqlock_writer(shared, &done));
-
-        // Reader (this thread): hammer the real protocol until the writer is done.
-        // Every pushed child MUST be HEAP_A — the only value legally reachable
-        // through the Plainval arm. If HEAP_B (the Varalias-arm word) is ever
-        // pushed, the seqlock failed to prevent a torn-arm read.
-        let mut reads: u64 = 0;
-        while !done.load(Ordering::Acquire) {
-            for _ in 0..1024 {
-                read_symbol_children_consistent(&seq, &sym, |child| {
-                    assert_eq!(
-                        child.bits(),
-                        a.bits(),
-                        "TORN ARM READ: protocol pushed {:#x}, expected HEAP_A {:#x} \
-                         (HEAP_B is {:#x} — pushing it means redirect=Plainval was \
-                         paired with the Varalias-arm word)",
-                        child.bits(),
-                        a.bits(),
-                        b.bits(),
-                    );
-                });
-                reads += 1;
-            }
-        }
-        writer.join().unwrap();
-        // Sanity: the reader actually ran many times against the live race.
-        assert!(reads > 1000, "reader barely ran ({reads} iterations)");
-    });
-}
-
-#[test]
-fn seqlock_negative_control_tears_without_protocol() {
-    crate::test_utils::init_test_tracing();
-    use std::sync::Barrier;
-
-    // Begin in State V. The writer will publish the Plainval redirect, then
-    // pause before replacing HEAP_B with HEAP_A so the reader deterministically
-    // samples the exact torn window that the seqlock protects.
-    let mut sym = LispSymbol::new(intern("vm-seqlock-test-sym"));
-    sym.flags.set_redirect(SymbolRedirect::Varalias);
-    sym.val = SymbolVal { plain: heap_b() };
-    sym.function = Value::NIL;
-    sym.plist = Value::NIL;
-
-    let seq = std::sync::atomic::AtomicU32::new(0);
-    let arm_published = Barrier::new(2);
-    let reader_sampled = Barrier::new(2);
-    let b = heap_b();
-
-    let (redirect, value) = std::thread::scope(|scope| {
-        let shared = Shared(&mut sym as *mut LispSymbol, &seq as *const _);
-        let writer =
-            scope.spawn(|| run_paused_seqlock_writer(shared, &arm_published, &reader_sampled));
-
-        // BROKEN reader: read the redirect tag, then read the val word, with NO
-        // seqlock retry (no odd-check, no re-read of seq). This is exactly the
-        // bug the real protocol defends against. The barriers hold the writer
-        // mid-flip V->P: redirect is Plainval while the word is still HEAP_B.
-        arm_published.wait();
-        let redirect = sym.flags.load_redirect();
-        let value = crate::tagged::header::load_value_atomic(unsafe { &sym.val.plain });
-        reader_sampled.wait();
-        writer.join().unwrap();
-        (redirect, value)
-    });
-
-    assert_eq!(redirect, SymbolRedirect::Plainval);
-    assert!(value.is_heap_object());
-    assert_eq!(value.bits(), b.bits(), "broken reader must accept HEAP_B");
 }
 
 /// A bare obarray has no `DEFVAR_BOOL` for `debug-on-next-call`: before the

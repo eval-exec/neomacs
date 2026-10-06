@@ -27,7 +27,7 @@ fn cached_cell(context: &Context, name: &str, local: bool) -> Value {
     assert_eq!(symbol.redirect(), SymbolRedirect::Localized);
     // SAFETY: the localized symbol retains its BLV and the fixture loaded
     // this buffer's actual cache, without changing any production fields.
-    let blv = unsafe { &*symbol.val.blv };
+    let blv = unsafe { &*symbol.localized_blv().expect("localized").as_ptr() };
     assert_eq!(blv.found, local);
     if !local {
         assert_eq!(blv.valcell, blv.defcell);

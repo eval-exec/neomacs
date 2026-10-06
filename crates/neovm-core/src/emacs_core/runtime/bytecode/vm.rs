@@ -6386,9 +6386,7 @@ impl<'a> Vm<'a> {
                 vec![Value::from_sym_id(name_id)],
             )
         })?;
-        if sym.redirect() == crate::emacs_core::symbol::SymbolRedirect::Plainval {
-            // SAFETY: redirect() already confirmed Plainval, so val.plain is active
-            let val = unsafe { sym.val.plain };
+        if let Some(val) = sym.plain_value() {
             if !val.is_unbound() {
                 // GNU installs `buffer-undo-list` as a DEFVAR_PER_BUFFER
                 // forwarder. Neomacs keeps its value in SharedUndoState so
@@ -6416,13 +6414,10 @@ impl<'a> Vm<'a> {
         // `None` for exactly the one variant that does need the context
         // (`BufferObj`), and the slow path's own non-`BufferObj` arm ends at
         // the same call, so the two cannot drift.
-        if sym.redirect() == crate::emacs_core::symbol::SymbolRedirect::Forwarded {
-            // SAFETY: redirect() confirmed Forwarded, so val.fwd is active and
-            // points at a descriptor `install_*fwd` leaked.
-            let fwd = unsafe { &*sym.val.fwd };
-            if let Some(value) = fwd.load() {
-                return Ok(value);
-            }
+        if let Some(fwd) = sym.forwarded_descriptor()
+            && let Some(value) = fwd.load()
+        {
+            return Ok(value);
         }
         self.lookup_var_id(name_id)
     }
@@ -6442,17 +6437,14 @@ impl<'a> Vm<'a> {
                     if crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(name_id).is_none()
                         && crate::buffer::buffer::lookup_buffer_slot_by_sym_id(name_id).is_none()
                     {
-                        let target = sym.alias_target();
-                        if crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(target)
-                            .is_none()
-                            && let Some(target_sym) = ob.get_by_id(target)
-                            && target_sym.redirect() == SymbolRedirect::Plainval
+                        if let Some(target) = sym.alias_target()
+                            && crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(target)
+                                .is_none()
+                            && let Some(value) =
+                                ob.get_by_id(target).and_then(|target| target.plain_value())
+                            && !value.is_unbound()
                         {
-                            // SAFETY: the target's redirect selects its plain value cell.
-                            let value = unsafe { target_sym.val.plain };
-                            if !value.is_unbound() {
-                                return Ok(value);
-                            }
+                            return Ok(value);
                         }
                     }
                 }
@@ -8901,10 +8893,7 @@ impl<'a> Vm<'a> {
         let Some(sym) = ob.get_by_id(name_id) else {
             return (VR_SLOW_OTHER, false);
         };
-        if sym.redirect() == SymbolRedirect::Plainval {
-            // SAFETY: redirect() confirmed Plainval, so val.plain is active
-            // (same contract as fast_path_var_ref).
-            let val = unsafe { sym.val.plain };
+        if let Some(val) = sym.plain_value() {
             if !val.is_unbound() {
                 if !val.is_nil() {
                     return (VR_PLAIN, false);

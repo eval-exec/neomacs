@@ -150,7 +150,9 @@ fn file_restore_preserves_an_explicit_unbound_configuration_hook_cell() {
         // can be explicitly made unbound and has no separate provenance bit.
         eval.obarray_mut().get_or_intern(HOOK);
         assert_eq!(
-            eval.obarray().get_by_id(symbol).map(|value| value.plain()),
+            eval.obarray()
+                .get_by_id(symbol)
+                .and_then(|value| value.plain_value()),
             Some(Value::UNBOUND)
         );
         assert!(!eval.obarray().is_special_id(symbol));

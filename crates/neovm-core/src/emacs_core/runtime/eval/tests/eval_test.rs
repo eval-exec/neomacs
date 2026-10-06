@@ -25697,14 +25697,14 @@ fn context_cached_symbols_are_marked_runtime_projected() {
             .get_by_id(intern(name))
             .unwrap_or_else(|| panic!("{name} should have a slot"));
         assert!(
-            sym.flags.runtime_projected(),
+            sym.flags().runtime_projected(),
             "{name} is mirrored by the Context and must refuse the bind/unbind fast tier"
         );
     }
     assert!(
         ev.obarray
             .get_by_id(intern("most-positive-fixnum"))
-            .is_some_and(|s| !s.flags.runtime_projected()),
+            .is_some_and(|s| !s.flags().runtime_projected()),
         "an ordinary variable must stay on the fast tier"
     );
 }

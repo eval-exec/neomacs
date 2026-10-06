@@ -26,7 +26,7 @@ fn loaded_local(context: &Context, name: &str) -> Value {
     assert_eq!(symbol.redirect(), SymbolRedirect::Localized);
     // SAFETY: the checked symbol retains its BLV; fixture lookup loaded this
     // buffer's actual local pair, without replacing any production fields.
-    let blv = unsafe { &*symbol.val.blv };
+    let blv = unsafe { &*symbol.localized_blv().expect("localized").as_ptr() };
     assert!(blv.found);
     blv.valcell
 }

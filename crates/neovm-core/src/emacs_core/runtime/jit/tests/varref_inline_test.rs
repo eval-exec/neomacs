@@ -470,7 +470,7 @@ fn reused_alias_reader_observes_retargeting_and_contextual_values() {
     let second = crate::emacs_core::intern::intern("vri-alias-second");
     // Public defvaralias rejects cycles. Exercise the resolver's signal path
     // through a low-level cycle after this same native leaf already ran.
-    eval.obarray.make_alias(second, alias);
+    eval.obarray.make_alias(second, alias).expect("alias edge");
     check(
         &mut eval,
         "signal cyclic-variable-indirection [\"vri-alias-reused\"]",
@@ -488,14 +488,28 @@ fn aliases_of_buffer_identities_keep_original_name_context() {
                 (setq buffer-undo-list '(3 4)))",
     );
     let target = crate::emacs_core::intern::intern("vri-identity-target");
-    // Public defvaralias rejects slot-backed builtins. The low-level alias
-    // state still exercises the full reader's original-name buffer lookup;
-    // a target-cell shortcut must not bypass that existing behavior.
-    for (name, expected) in [("fill-column", "88"), ("buffer-undo-list", "(3 4)")] {
+    // Public defvaralias rejects slot-backed builtins, and so does the cell:
+    // a forwarded cell offers no alias transition (GNU `Fdefvaralias`,
+    // `src/eval.c:665-668`), so `fill-column` keeps its slot. The dedicated
+    // `buffer-undo-list` cell is plain and takes the low-level alias, which
+    // still exercises the full reader's original-name buffer lookup; a
+    // target-cell shortcut must not bypass that existing behavior.
+    for (name, expected, alias) in [
+        (
+            "fill-column",
+            "88",
+            Err(crate::emacs_core::symbol::MakeAliasError::Forwarded),
+        ),
+        ("buffer-undo-list", "(3 4)", Ok(())),
+    ] {
         let f = reader(Value::symbol(name));
         let leaf = compile_bytecode_function(&f).expect("compiles");
-        eval.obarray
-            .make_alias(crate::emacs_core::intern::intern(name), target);
+        assert_eq!(
+            eval.obarray
+                .make_alias(crate::emacs_core::intern::intern(name), target),
+            alias,
+            "{name}"
+        );
         assert_eq!(interpret(&mut eval, &f), expected);
         match leaf.call(&mut eval as *mut Context as *mut u8, &[]) {
             NativeRun::Ok(bits) => assert_eq!(print_value(&Value::from_bits(bits)), expected),

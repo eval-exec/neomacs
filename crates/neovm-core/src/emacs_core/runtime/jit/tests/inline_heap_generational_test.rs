@@ -341,7 +341,7 @@ fn blv(context: &Context) -> *mut LispBufferLocalValue {
         .expect("BLV symbol");
     assert_eq!(symbol.redirect(), SymbolRedirect::Localized);
     // SAFETY: the checked localized symbol owns this record for its life.
-    unsafe { symbol.val.blv }
+    symbol.localized_blv().expect("localized").as_ptr()
 }
 
 fn blv_cell(context: &Context, local: bool) -> Value {

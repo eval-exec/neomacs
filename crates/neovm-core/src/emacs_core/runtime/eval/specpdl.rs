@@ -132,9 +132,9 @@ impl Context {
     pub(crate) fn specbind_uncached(&mut self, sym_id: SymId, value: Value) -> Result<(), Flow> {
         if sym_id != buffer_undo_list_symbol()
             && let Some(sym) = self.obarray.get_by_id(sym_id)
-            && sym.redirect() == crate::emacs_core::symbol::SymbolRedirect::Plainval
+            && let Some(old_plain) = sym.plain_value()
         {
-            let old_value = SavedBindingValue::from_plain(sym.plain());
+            let old_value = SavedBindingValue::from_plain(old_plain);
             // GNU `specbind` on a plain cell: `SET_SYMBOL_VAL` when the
             // symbol is untrapped, `set_internal` (watchers) when it is
             // `SYMBOL_TRAPPED_WRITE`.  The flag sits on the slot in hand.
@@ -145,7 +145,11 @@ impl Context {
             if trapped {
                 self.run_specbind_watcher(sym_id, value, "let")?;
             }
-            self.obarray.store_plain_value_id(sym_id, value);
+            if self.obarray.store_plain_value_id(sym_id, value).is_err() {
+                // The watcher moved the cell to another arm; the plain store
+                // was refused rather than written over that arm's payload.
+                self.obarray.set_symbol_value_id(sym_id, value);
+            }
             self.sync_cached_runtime_binding_by_id(sym_id, value);
             self.sync_user_test_gc_binding_by_id(sym_id);
             return Ok(());
@@ -187,18 +191,7 @@ impl Context {
         // arm below reuses them instead of re-fetching the symbol.
         use crate::emacs_core::symbol::SymbolRedirect;
         let (redirect, forwarded) = match self.obarray.get_by_id(resolved) {
-            Some(sym) => {
-                let redirect = sym.redirect();
-                // The union read must stay behind the redirect test: the
-                // `alias` arm writes a narrower `SymId`, so reading `fwd`
-                // for a non-forwarded symbol would read uninitialized bytes.
-                let fwd = if redirect == SymbolRedirect::Forwarded {
-                    Some(unsafe { sym.val.fwd })
-                } else {
-                    None
-                };
-                (redirect, fwd)
-            }
+            Some(sym) => (sym.redirect(), sym.forwarded_descriptor()),
             None => (SymbolRedirect::Plainval, None),
         };
 
@@ -206,8 +199,7 @@ impl Context {
         // LOCALIZED path. Mirrors GNU `specbind` SYMBOL_FORWARDED arm at
         // `eval.c:3641-3677`.
         {
-            if let Some(fwd_ptr) = forwarded {
-                let fwd = unsafe { &*fwd_ptr };
+            if let Some(fwd) = forwarded {
                 if let Some(buf_fwd) = fwd.as_buffer_obj_fwd() {
                     let Some(slot) = crate::buffer::buffer::BufferSlot::from_u16(buf_fwd.offset)
                     else {

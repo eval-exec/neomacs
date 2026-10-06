@@ -215,7 +215,7 @@ fn gen0_mapped_blv_keeps_remembered_proof_until_its_default_cell_is_observed() {
     // silently testing a newly allocated owner outside the dump window.
     // SAFETY: this exclusive Context owns the checked BLV record; both cells
     // are live and have identical symbol/default contents.
-    let blv = unsafe { &mut *symbol.val.blv };
+    let blv = unsafe { &mut *symbol.localized_blv().expect("localized").as_ptr() };
     if blv.valcell == blv.defcell {
         blv.valcell = owner;
     }

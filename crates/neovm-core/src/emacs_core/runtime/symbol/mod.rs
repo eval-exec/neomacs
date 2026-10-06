@@ -14,21 +14,26 @@
 //! symbol has a [`SymbolRedirect`] tag that determines how its value cell is
 //! interpreted:
 //!
-//! | Tag         | `val` payload                  | GNU equivalent      |
+//! | Tag         | payload ([`ValueCell`])        | GNU equivalent      |
 //! | ----------- | ------------------------------ | ------------------- |
 //! | `Plainval`  | direct [`Value`] (or UNBOUND)  | `SYMBOL_PLAINVAL`   |
 //! | `Varalias`  | aliased [`SymId`]              | `SYMBOL_VARALIAS`   |
-//! | `Localized` | `*mut LispBufferLocalValue`    | `SYMBOL_LOCALIZED`  |
-//! | `Forwarded` | `*const LispFwd`               | `SYMBOL_FORWARDED`  |
+//! | `Localized` | the BLV record ([`BlvPtr`])    | `SYMBOL_LOCALIZED`  |
+//! | `Forwarded` | `&'static LispFwd`             | `SYMBOL_FORWARDED`  |
 //!
-//! Phase 1 of the symbol-redirect refactor (`drafts/symbol-redirect-plan.md`)
-//! introduces the new shape but every existing symbol still routes through
-//! `Plainval`. The `BufferLocal` and `Forwarded` paths still also live on
-//! the legacy `SymbolValue` enum during the transition; Phases 4-8 cut them
-//! over to the redirect dispatch and Phase 10 deletes the legacy enum.
+//! The tag and its payload live in the private `cell` module: they are read
+//! together as a [`ValueCell`] and written together by one seam, so the
+//! obarray cannot pair a tag with another arm's payload (see `cell`).
 
+mod cell;
 mod fn_stamps;
 mod property_revision;
+use cell::{ArmMut, CellWrite, MarkGate, read_symbol_children};
+pub(crate) use cell::{
+    BlvPtr, DumpedCell, DumpedSymbolFlags, LISP_SYMBOL_FLAGS_OFFSET,
+    LISP_SYMBOL_INTERNED_GLOBAL_OFFSET, LISP_SYMBOL_SIZE, LISP_SYMBOL_VAL_OFFSET, ValueCell,
+};
+pub use cell::{LispSymbol, SymbolFlags};
 #[cfg(test)]
 pub(crate) use fn_stamps::force_fn_stamps_for_test;
 pub use property_revision::SymbolPropertyRevision;
@@ -36,7 +41,7 @@ pub use property_revision::SymbolPropertyRevision;
 use super::defvar_bool::ByteBooleanVars;
 use super::intern::{
     NameId, SymId, intern, intern_lisp_string, is_canonical_id, lookup_interned,
-    lookup_interned_lisp_string, resolve_name, resolve_sym_lisp_string, symbol_name_id,
+    lookup_interned_lisp_string, resolve_name, resolve_sym_lisp_string,
 };
 use super::value::{Value, ValueKind, VecLikeType};
 use crate::emacs_core::error::Flow;
@@ -47,7 +52,7 @@ use crate::tagged::header::{load_value_atomic, store_value_atomic};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 #[cfg(test)]
 use std::cell::Cell;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(test)]
 thread_local! {
@@ -87,7 +92,7 @@ pub(crate) fn function_cell_lookup_count() -> usize {
 // ===========================================================================
 
 /// Two-bit `redirect` tag. Mirrors GNU `enum symbol_redirect`
-/// (`src/lisp.h:771-777`). Discriminant for [`SymbolVal`].
+/// (`src/lisp.h:771-777`). The tag of a symbol's [`ValueCell`].
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Default, IntoPrimitive, TryFromPrimitive)]
 pub enum SymbolRedirect {
@@ -260,183 +265,6 @@ impl SymbolInterned {
     }
 }
 
-/// Packed flags byte for a [`LispSymbol`]. Mirrors the bit-packed first byte
-/// of GNU `Lisp_Symbol::s` (`src/lisp.h:786-792`).
-///
-/// Bit layout:
-/// ```text
-///   bits 0..2 : SymbolRedirect
-///   bits 2..4 : SymbolTrappedWrite
-///   bits 4..6 : SymbolInterned
-///   bit  6    : declared_special
-///   bit  7    : runtime_projected (this port's own; see below)
-/// ```
-#[repr(transparent)]
-#[derive(Copy, Clone, Debug, Default)]
-pub struct SymbolFlags(u8);
-
-/// `SymbolFlags::is_plain_untrapped_unprojected` reads the redirect and
-/// trapped-write fields as raw zero bits; that is only the (Plainval,
-/// Untrapped) pair while both encodings are GNU's zero.
-const _: () =
-    assert!(SymbolRedirect::Plainval as u8 == 0 && SymbolTrappedWrite::Untrapped as u8 == 0);
-
-impl SymbolFlags {
-    const REDIRECT_MASK: u8 = 0b0000_0011;
-    const TRAPPED_WRITE_SHIFT: u8 = 2;
-    const TRAPPED_WRITE_MASK: u8 = 0b0000_1100;
-    const INTERNED_SHIFT: u8 = 4;
-    const INTERNED_MASK: u8 = 0b0011_0000;
-    const DECLARED_SPECIAL_BIT: u8 = 0b0100_0000;
-    /// Not a GNU field: the value cell of this symbol is mirrored by a host
-    /// projection (`Context`'s cached `quit-flag`, `inhibit-quit`, … or
-    /// `buffer-undo-list`'s shared undo state), so a write must go through
-    /// the `Context` path that republishes it.  The bind/unbind fast tiers
-    /// refuse such a symbol on this one bit.
-    const RUNTIME_PROJECTED_BIT: u8 = 0b1000_0000;
-
-    #[inline(always)]
-    pub fn redirect(self) -> SymbolRedirect {
-        SymbolRedirect::try_from(self.0 & Self::REDIRECT_MASK)
-            .expect("symbol redirect flag contains valid GNU symbol_redirect code")
-    }
-
-    #[inline]
-    pub fn set_redirect(&mut self, r: SymbolRedirect) {
-        self.store_byte((self.0 & !Self::REDIRECT_MASK) | r.gnu_code());
-    }
-
-    #[inline]
-    pub fn trapped_write(self) -> SymbolTrappedWrite {
-        let raw = (self.0 & Self::TRAPPED_WRITE_MASK) >> Self::TRAPPED_WRITE_SHIFT;
-        SymbolTrappedWrite::try_from(raw)
-            .expect("symbol trapped-write flag contains valid GNU symbol_trapped_write code")
-    }
-
-    #[inline]
-    pub fn set_trapped_write(&mut self, t: SymbolTrappedWrite) {
-        self.store_byte(
-            (self.0 & !Self::TRAPPED_WRITE_MASK) | (t.gnu_code() << Self::TRAPPED_WRITE_SHIFT),
-        );
-    }
-
-    #[inline]
-    pub fn interned(self) -> SymbolInterned {
-        let raw = (self.0 & Self::INTERNED_MASK) >> Self::INTERNED_SHIFT;
-        SymbolInterned::try_from(raw)
-            .expect("symbol interned flag contains valid GNU symbol_interned code")
-    }
-
-    #[inline]
-    pub fn set_interned(&mut self, i: SymbolInterned) {
-        self.store_byte((self.0 & !Self::INTERNED_MASK) | (i.gnu_code() << Self::INTERNED_SHIFT));
-    }
-
-    #[inline]
-    pub fn runtime_projected(self) -> bool {
-        self.0 & Self::RUNTIME_PROJECTED_BIT != 0
-    }
-
-    #[inline]
-    pub fn set_runtime_projected(&mut self, v: bool) {
-        let byte = if v {
-            self.0 | Self::RUNTIME_PROJECTED_BIT
-        } else {
-            self.0 & !Self::RUNTIME_PROJECTED_BIT
-        };
-        self.store_byte(byte);
-    }
-
-    /// The shape GNU's `do_one_unbind` restores with a bare `SET_SYMBOL_VAL`
-    /// and `do_specbind` binds without `set_internal`: a plain value cell
-    /// with no watcher and no constant refusal — plus, here, no host
-    /// projection.  One byte test, since `Plainval` and `Untrapped` are both
-    /// the zero encoding.
-    #[inline(always)]
-    pub fn is_plain_untrapped_unprojected(self) -> bool {
-        self.0 & (Self::REDIRECT_MASK | Self::TRAPPED_WRITE_MASK | Self::RUNTIME_PROJECTED_BIT) == 0
-    }
-
-    #[inline]
-    pub fn declared_special(self) -> bool {
-        self.0 & Self::DECLARED_SPECIAL_BIT != 0
-    }
-
-    #[inline]
-    pub fn set_declared_special(&mut self, v: bool) {
-        let byte = if v {
-            self.0 | Self::DECLARED_SPECIAL_BIT
-        } else {
-            self.0 & !Self::DECLARED_SPECIAL_BIT
-        };
-        self.store_byte(byte);
-    }
-
-    /// Atomic (relaxed) store of the whole flags byte so a concurrent GC reader
-    /// (`load_redirect`) never observes a torn byte. Mirrors `ConsCell::set_car`:
-    /// the field stays a plain `u8`, accessed atomically via a raw cast. There is
-    /// a single mutator, so the caller's plain read of `self.0` to compute `byte`
-    /// does not race (the GC thread only ever reads this byte).
-    #[inline]
-    fn store_byte(&mut self, byte: u8) {
-        let p = &self.0 as *const u8 as *const std::sync::atomic::AtomicU8;
-        unsafe { (*p).store(byte, std::sync::atomic::Ordering::Relaxed) };
-    }
-
-    /// Atomic (relaxed) read of the redirect tag, for the concurrent GC obarray
-    /// scan. Pairs with the `store_byte` writes above so the scan never reads a
-    /// torn flags byte while the mutator changes a redirect/flag bit.
-    #[inline]
-    pub fn load_redirect(&self) -> SymbolRedirect {
-        let p = &self.0 as *const u8 as *const std::sync::atomic::AtomicU8;
-        let byte = unsafe { (*p).load(std::sync::atomic::Ordering::Relaxed) };
-        SymbolRedirect::try_from(byte & Self::REDIRECT_MASK)
-            .expect("symbol redirect flag contains valid GNU symbol_redirect code")
-    }
-}
-
-/// One-word value cell for a symbol, reinterpreted by the [`SymbolFlags`]
-/// `redirect` tag. Mirrors GNU `union { Lisp_Object value; struct
-/// Lisp_Symbol *alias; struct Lisp_Buffer_Local_Value *blv; lispfwd fwd; }`
-/// at `src/lisp.h:797-802`.
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub union SymbolVal {
-    /// Live when redirect == Plainval. The value, or [`Value::NIL`] for
-    /// "still unbound" (Phase 1 keeps an explicit "bound" bit on the side
-    /// in [`LispSymbol::value`] until the legacy [`SymbolValue`] is removed
-    /// in Phase 4-10).
-    pub plain: Value,
-    /// Live when redirect == Varalias. The aliased symbol id.
-    pub alias: SymId,
-    /// Live when redirect == Localized. Pointer to a heap-allocated
-    /// per-symbol BLV cache. Null until Phase 4 wires up the LOCALIZED
-    /// dispatch.
-    pub blv: *mut LispBufferLocalValue,
-    /// Live when redirect == Forwarded. Pointer to a 'static forwarder
-    /// descriptor. Null until Phase 8 introduces forwarded variables.
-    pub fwd: *const crate::emacs_core::forward::LispFwd,
-}
-
-impl Default for SymbolVal {
-    fn default() -> Self {
-        // Plainval / UNBOUND is the correct initial state — matches GNU
-        // where freshly-interned symbols have val.value == Qunbound.
-        Self {
-            plain: Value::UNBOUND,
-        }
-    }
-}
-
-impl std::fmt::Debug for SymbolVal {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Without the redirect tag we can't safely interpret the union;
-        // print the raw bits for diagnostics.
-        let raw: usize = unsafe { std::mem::transmute_copy(self) };
-        write!(f, "SymbolVal({:#x})", raw)
-    }
-}
-
 /// Per-symbol buffer-local cache. Mirrors GNU `struct
 /// Lisp_Buffer_Local_Value` at `src/lisp.h:3116-3137`.
 ///
@@ -545,13 +373,6 @@ pub(crate) fn note_blv_alist_structural_mutation() {
 // LispSymbol — per-symbol metadata stored in the obarray
 // ===========================================================================
 
-/// Per-symbol metadata stored in the obarray. Mirrors GNU `struct
-/// Lisp_Symbol` at `src/lisp.h:786-829`.
-///
-/// Renamed from `LispSymbol` as part of the symbol-redirect refactor
-/// (Phase 1). As of Phase H the legacy `SymbolValue`/`special`/`constant`
-/// mirror fields have been removed; all reads and writes go through
-/// `flags` + `val`.
 /// Reserved [`NameId`] stored in the `name` cell of an EMPTY obarray slot.
 /// The obarray's chunk store holds fully-initialized [`LispSymbol`]s rather
 /// than `Option<LispSymbol>`; a slot is "empty" (never interned) iff its
@@ -559,55 +380,6 @@ pub(crate) fn note_blv_alist_structural_mutation() {
 /// mint densely from `NameId(strings.len())` (`intern.rs`), and the mint site
 /// carries a `debug_assert` that a real id never reaches `u32::MAX`.
 pub(crate) const SYMBOL_NAME_SENTINEL: NameId = NameId(u32::MAX);
-
-#[derive(Debug)]
-pub struct LispSymbol {
-    /// The symbol's name, held as the raw [`NameId`] `u32` in an atomic cell.
-    /// This field is BOTH the real name AND the obarray slot's presence
-    /// discriminant ([`SYMBOL_NAME_SENTINEL`] == empty), so that the concurrent
-    /// GC obarray scan ([`ObarrayScanSnapshot::scan`], the only cross-thread
-    /// reader) can gate on presence with an `Acquire` load that pairs with the
-    /// slot fill's terminal `Release` store (see [`LispSymbol::publish_fill`]):
-    /// observing a non-sentinel name happens-after every arm write. Write-once
-    /// (name is never reset to the sentinel on a live slot — presence is
-    /// monotonic), so the single mutator reads it `Relaxed` ([`LispSymbol::name`]).
-    name: AtomicU32,
-    /// Packed flags: redirect tag, trapped-write tag, interned tag,
-    /// declared-special bit. Mirrors the first byte of GNU
-    /// `Lisp_Symbol::s` (`lisp.h:786-792`).
-    pub flags: SymbolFlags,
-    /// One-word value cell. Reinterpreted by `flags.redirect()`.
-    pub val: SymbolVal,
-    /// Function slot. `Value::NIL` is the unbound sentinel (GNU `Qnil` in
-    /// `struct Lisp_Symbol::s.function`, `lisp.h:820`).
-    pub function: Value,
-    /// Property list as a Lisp cons list (NIL = empty). Matches GNU
-    /// `struct Lisp_Symbol::s.plist` (`lisp.h:820`).
-    pub plist: Value,
-    /// Whether this symbol is interned in the global obarray.
-    interned_global: bool,
-    /// Whether `fmakunbound` explicitly masked the symbol's fallback function.
-    function_unbound: bool,
-}
-
-// Compile-time layout guard for the relaxed-atomic symbol-cell accesses
-// (`load_value_atomic`/`store_value_atomic`). They reinterpret a one-word
-// `Value` slot as `AtomicUsize`, which is only sound if `Value` is exactly a
-// machine word wide and at least word-aligned.
-const _: () = {
-    assert!(core::mem::align_of::<Value>() >= core::mem::align_of::<usize>());
-    assert!(core::mem::size_of::<Value>() == core::mem::size_of::<usize>());
-};
-
-// The obarray scan is the pause-floor bottleneck (CONCURRENT_GC.md:185-222): it
-// walks `[LispSymbol; 4096]` chunks cache-line by cache-line. Reusing the
-// write-once `name` field as the presence discriminant (an `AtomicU32`, same 4
-// bytes as the old `NameId`) keeps the slot at its historical 32 bytes — do NOT
-// grow it. This const-asserts that invariant so a future field addition trips
-// the build rather than silently regressing scan throughput.
-const _: () = {
-    assert!(core::mem::size_of::<LispSymbol>() == 32);
-};
 
 /// What a `Localized` symbol's BLV cache holds when it is loaded for one
 /// buffer at the current structural epoch: GNU `swap_in_symval_forwarding`'s
@@ -717,6 +489,13 @@ impl SetInternalAlist {
     }
 }
 
+/// A plain-cell store found the cell in another arm and stored nothing
+/// ([`Obarray::store_plain_value_id`]): the caller has to re-dispatch on the
+/// arm the cell is in now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use = "the value was not stored; re-dispatch on the cell's current arm"]
+pub(crate) struct NotPlain;
+
 /// `bindflag` argument for [`Obarray::set_internal_localized`].
 /// Mirrors GNU `enum Set_Internal_Bind` (`src/lisp.h:3590-3596`).
 #[derive(Copy, Clone, Debug, Eq, PartialEq, IntoPrimitive, TryFromPrimitive)]
@@ -790,111 +569,17 @@ pub enum MakeAliasError {
 }
 
 impl LispSymbol {
-    /// A fully-initialized EMPTY obarray slot: `name == `[`SYMBOL_NAME_SENTINEL`]
-    /// with the arm defaults GNU gives a freshly-interned symbol (Plainval /
-    /// UNBOUND / NIL / NIL). Chunks are built heap-direct from this value in
-    /// [`SymbolChunks::grow_for`]; a slot is later published
-    /// by [`Self::publish_fill`], which flips the name off the sentinel LAST.
-    fn empty() -> Self {
-        let mut flags = SymbolFlags::default();
-        flags.set_redirect(SymbolRedirect::Plainval);
-        Self {
-            name: AtomicU32::new(SYMBOL_NAME_SENTINEL.0),
-            flags,
-            val: SymbolVal {
-                plain: Value::UNBOUND,
-            },
-            function: Value::NIL,
-            plist: Value::NIL,
-            interned_global: false,
-            function_unbound: false,
-        }
-    }
-
-    pub fn new(id: SymId) -> Self {
-        let sym = Self::empty();
-        // Fresh single-threaded construction. The cross-thread PUBLISH (a
-        // `Release` store) happens at the obarray slot fill (`publish_fill`),
-        // not here, so `Relaxed` is correct for building a detached symbol.
-        sym.name.store(symbol_name_id(id).0, Ordering::Relaxed);
-        sym
-    }
-
-    /// The symbol's name. Write-once, and read here only by the single mutator
-    /// thread, so `Relaxed` is correct (program order orders the construction /
-    /// publish store before any same-thread read). The concurrent GC obarray
-    /// scan is the ONLY cross-thread reader and loads the name atom with
-    /// `Acquire` itself — it does not go through this accessor.
-    #[inline]
-    pub fn name(&self) -> NameId {
-        NameId(self.name.load(Ordering::Relaxed))
-    }
-
-    /// Presence predicate for the single mutator and stop-the-world callers
-    /// (get/get_mut/iter/from_dump/trace/clone). `Relaxed`: the concurrent GC
-    /// scan is the only reader that needs `Acquire`, and it loads the atom
-    /// directly at its presence gate.
-    #[inline]
-    fn is_present(&self) -> bool {
-        self.name.load(Ordering::Relaxed) != SYMBOL_NAME_SENTINEL.0
-    }
-
-    /// Publish `src` into this (currently EMPTY) slot: write ALL arm fields
-    /// FIRST, THEN `Release`-store the name LAST. The terminal `Release`
-    /// publishes the whole fill; the concurrent GC obarray scan's `Acquire`
-    /// load of the name is the pairing entry gate, so once the scan observes
-    /// the published (non-sentinel) name every arm write above happens-before
-    /// its arm reads. A plain struct memcpy would NOT establish that ordering —
-    /// the name store MUST be a separate `Release` after the arm writes. Called
-    /// only on a pristine empty slot (presence is monotonic: None -> Some only).
-    #[inline]
-    fn publish_fill(&mut self, src: LispSymbol) {
-        let published_name = src.name.load(Ordering::Relaxed);
-        self.flags = src.flags;
-        self.val = src.val;
-        self.function = src.function;
-        self.plist = src.plist;
-        self.interned_global = src.interned_global;
-        self.function_unbound = src.function_unbound;
-        // Terminal Release: publishes the arm writes above to the GC scan's
-        // Acquire load of `name`.
-        self.name.store(published_name, Ordering::Release);
-    }
-
-    /// Read the redirect tag.
-    #[inline]
-    pub fn redirect(&self) -> SymbolRedirect {
-        self.flags.redirect()
-    }
-
-    /// GNU `SYMBOL_TRAPPED_WRITE_P`: the symbol's `trapped_write` field.
-    #[inline]
-    pub fn trapped_write(&self) -> SymbolTrappedWrite {
-        self.flags.trapped_write()
-    }
-
-    /// The symbol's 16-bit write window: the flags byte with
-    /// `interned_global` above it, the two bytes at
-    /// [`LISP_SYMBOL_FLAGS_OFFSET`] that an inline or cached symbol-cell
-    /// write tests under [`SYMCELL_INLINE_WRITE_MASK`].
-    #[inline(always)]
-    pub(crate) fn write_window(&self) -> u16 {
-        u16::from(self.flags.0) | (u16::from(self.interned_global) << 8)
-    }
-
     /// The BLV cache of a `Localized` symbol when it is loaded for BUFFER at
     /// the current epoch (see [`BlvCacheHit`]); `None` for a miss or any
     /// other redirect.
     #[inline]
     pub(crate) fn blv_cache_hit(&self, buffer: crate::buffer::BufferId) -> Option<BlvCacheHit> {
-        if self.flags.redirect() != SymbolRedirect::Localized {
-            return None;
-        }
-        // SAFETY: redirect=Localized selects the BLV arm, a record
-        // `make_symbol_localized` allocated and the obarray owns for its
-        // lifetime; the evaluator thread is its only writer and nothing is
-        // written while this shared borrow lives.
-        let blv = unsafe { &*self.val.blv };
+        let blv = self.localized_blv()?;
+        // SAFETY: a `Localized` cell names a record `make_symbol_localized`
+        // allocated and the obarray owns for its lifetime; the evaluator
+        // thread is its only writer and nothing is written while this shared
+        // borrow lives.
+        let blv = unsafe { &*blv.as_ptr() };
         if blv.alist_epoch != blv_alist_epoch() || blv.where_buf_id != buffer.0 {
             return None;
         }
@@ -918,88 +603,13 @@ impl LispSymbol {
     /// redirect.
     #[inline]
     pub(crate) fn blv_default_cells(&self) -> Option<BlvDefaultCells> {
-        if self.flags.redirect() != SymbolRedirect::Localized {
-            return None;
-        }
+        let blv = self.localized_blv()?;
         // SAFETY: as in `blv_cache_hit`.
-        let blv = unsafe { &*self.val.blv };
+        let blv = unsafe { &*blv.as_ptr() };
         Some(BlvDefaultCells {
             defcell: blv.defcell,
             fwd: blv.fwd,
         })
-    }
-
-    /// The descriptor of a `Forwarded` symbol; `None` for any other redirect.
-    #[inline]
-    pub(crate) fn forwarded_descriptor(
-        &self,
-    ) -> Option<&'static crate::emacs_core::forward::LispFwd> {
-        if self.flags.redirect() != SymbolRedirect::Forwarded {
-            return None;
-        }
-        // SAFETY: redirect=Forwarded selects the `fwd` arm, a descriptor
-        // `install_*fwd` leaked.
-        Some(unsafe { &*self.val.fwd })
-    }
-
-    #[inline]
-    pub fn is_interned_global(&self) -> bool {
-        self.interned_global
-    }
-
-    /// Read the value cell as a plain `Value`. Caller must have verified
-    /// the redirect is `Plainval`.
-    #[inline]
-    pub fn plain(&self) -> Value {
-        debug_assert_eq!(self.redirect(), SymbolRedirect::Plainval);
-        unsafe { self.val.plain }
-    }
-
-    /// Write the value cell as a plain `Value`. Caller must have set the
-    /// redirect to `Plainval` (or be initializing a fresh symbol).
-    #[inline]
-    pub fn set_plain(&mut self, v: Value) {
-        debug_assert_eq!(self.redirect(), SymbolRedirect::Plainval);
-        self.val = SymbolVal { plain: v };
-    }
-
-    /// Read the alias target. Caller must have verified the redirect is
-    /// `Varalias`.
-    #[inline]
-    pub fn alias_target(&self) -> SymId {
-        debug_assert_eq!(self.redirect(), SymbolRedirect::Varalias);
-        unsafe { self.val.alias }
-    }
-
-    /// Switch this symbol to `Varalias` and store the target id.
-    #[inline]
-    pub fn set_alias_target(&mut self, target: SymId) {
-        // SATB: a Plainval cell holds a heap Value about to become a non-heap alias
-        // SymId — retain its pre-image during a concurrent mark before the clobber.
-        if self.redirect() == SymbolRedirect::Plainval {
-            crate::tagged::gc::note_root_overwrite(unsafe { self.val.plain });
-        }
-        self.flags.set_redirect(SymbolRedirect::Varalias);
-        self.val = SymbolVal { alias: target };
-    }
-}
-
-// Hand-written because `name: AtomicU32` is not `Clone`-derivable. A cloned
-// obarray is never concurrently scanned, so a `Relaxed` load of the source name
-// is sufficient; the arms are plain `Copy`. Mirrors what `#[derive(Clone)]`
-// produced before the presence-byte-race fix (empty slots clone to empty:
-// name == SENTINEL is copied verbatim).
-impl Clone for LispSymbol {
-    fn clone(&self) -> Self {
-        Self {
-            name: AtomicU32::new(self.name.load(Ordering::Relaxed)),
-            flags: self.flags,
-            val: self.val,
-            function: self.function,
-            plist: self.plist,
-            interned_global: self.interned_global,
-            function_unbound: self.function_unbound,
-        }
     }
 }
 
@@ -1050,7 +660,7 @@ fn note_function_cell_unchanged() {
 ///
 /// Phase 4 of the symbol-redirect refactor adds a heap-allocated BLV
 /// pool ([`Obarray::blvs`]) for `LOCALIZED` symbols. The Obarray owns
-/// every BLV; symbols' [`SymbolVal::blv`] field stores a raw pointer
+/// every BLV; a `Localized` symbol's cell names its record by [`BlvPtr`]
 /// into the pool. The custom [`Clone`] impl deep-copies BLVs and
 /// remaps the pointers in the cloned symbols, so `Obarray::clone()`
 /// stays semantically a deep copy. The custom [`Drop`] impl frees the
@@ -1081,7 +691,7 @@ pub struct Obarray {
     /// Heap-allocated BLVs for `SYMBOL_LOCALIZED` symbols. Each entry
     /// is a `Box::into_raw` pointer; freed in [`Obarray::drop`]. The
     /// pool is append-only — we never reuse a slot.
-    blvs: Vec<*mut LispBufferLocalValue>,
+    blvs: Vec<BlvPtr>,
     /// Every forwarder descriptor installed in this obarray that OWNS a Lisp
     /// value -- `Lisp_Fwd_Int`, `Lisp_Fwd_Obj`, `Lisp_Fwd_Kboard_Obj` -- so
     /// the GC can trace what they hold (see [`Obarray::trace_roots`]).
@@ -1254,19 +864,8 @@ pub(crate) const OBARRAY_JIT_LEN_OFFSET: usize =
 pub(crate) const OBARRAY_CHUNK_BITS: u32 = 12;
 /// See [`OBARRAY_JIT_SPINE_OFFSET`].
 pub(crate) const OBARRAY_CHUNK_SLOTS: usize = OBARRAY_CHUNK;
-/// See [`OBARRAY_JIT_SPINE_OFFSET`].
-pub(crate) const LISP_SYMBOL_SIZE: usize = std::mem::size_of::<LispSymbol>();
-/// Byte offset of a symbol's packed flags; its low bits are the redirect.
-pub(crate) const LISP_SYMBOL_FLAGS_OFFSET: usize = std::mem::offset_of!(LispSymbol, flags);
-/// Byte offset of a symbol's value cell (`SymbolVal::plain` for `Plainval`).
-pub(crate) const LISP_SYMBOL_VAL_OFFSET: usize = std::mem::offset_of!(LispSymbol, val);
 /// Mask of the redirect bits in the flags byte; `Plainval` is zero.
 pub(crate) const SYMBOL_FLAGS_REDIRECT_MASK: u8 = SymbolFlags::REDIRECT_MASK;
-/// Byte offset of a symbol's `interned_global` flag: the byte right after the
-/// flags byte (const-asserted below), so compiled code and the cached
-/// variable tiers read `flags | interned_global << 8` as one 16-bit window.
-pub(crate) const LISP_SYMBOL_INTERNED_GLOBAL_OFFSET: usize =
-    std::mem::offset_of!(LispSymbol, interned_global);
 /// The aligned 4-byte word of a symbol that holds its write-relevant bytes:
 /// the flags byte and `interned_global` today, and the watch byte P1.3 plans.
 /// One aligned word, so a JIT guard reads them all with one load and a
@@ -1309,7 +908,6 @@ const _: () = {
     );
     assert!(std::mem::size_of::<SymbolFlags>() == 1);
     assert!(SymbolRedirect::Plainval as u8 == 0);
-    assert!(std::mem::size_of::<SymbolVal>() == std::mem::size_of::<Value>());
 };
 
 impl Clone for SymbolChunks {
@@ -1424,22 +1022,21 @@ impl SymbolChunks {
         self.chunks.iter().flat_map(|c| c.iter())
     }
 
-    fn iter_mut(&mut self) -> impl Iterator<Item = &mut LispSymbol> {
-        self.chunks.iter_mut().flat_map(|c| c.iter_mut())
-    }
-
-    /// Raw pointer to the seqlock guarding the chunk that holds slot `idx`. The
-    /// seq box never moves, so the pointer stays valid for the concurrent reader
-    /// even across a spine realloc. Returns `None` if `idx`'s chunk does not yet
-    /// exist (the slot was never `ensure`d). Returning a raw pointer (not a
-    /// borrow) lets a write site bump the seqlock and then take a `&mut` to the
-    /// slot without a borrow conflict (the `AtomicU32` is interior-mutable).
-    // Used by the write-site seqlock bump + the GC scan in the next increment.
+    /// Begin a write of the value cell of the PRESENT slot `idx`, with the
+    /// seqlock of the chunk that holds it (see [`CellWrite`]); `None` when the
+    /// slot is out of range or empty. The slot and its seqlock live in
+    /// different allocations (`chunks` and `sides`), so both borrows coexist.
     #[inline(always)]
-    fn chunk_seq_ptr(&self, idx: usize) -> Option<*const std::sync::atomic::AtomicU32> {
-        self.sides
-            .get(idx >> 12)
-            .map(|b| &b.seq as *const std::sync::atomic::AtomicU32)
+    fn cell_write(&mut self, idx: usize, gate: MarkGate) -> Option<CellWrite<'_>> {
+        if idx >= self.len {
+            return None;
+        }
+        let slot = &mut self.chunks[idx >> 12][idx & (OBARRAY_CHUNK - 1)];
+        if !slot.is_present() {
+            return None;
+        }
+        let seq = &self.sides[idx >> 12].seq;
+        Some(CellWrite::begin(slot, seq, gate))
     }
 
     /// The function-stamp validity rule for slot `idx` (see
@@ -1517,7 +1114,7 @@ impl SymbolChunks {
 /// slots-array base pointer and its per-chunk seqlock pointer, the logical
 /// live-slot count, and the chunk count. The GC thread walks slots `[0, n_slots)`
 /// across these chunks, reading each symbol's heap children via the seqlock
-/// protocol ([`read_symbol_children_consistent`]). Chunks (and slots) interned
+/// protocol (`cell::read_symbol_children`). Chunks (and slots) interned
 /// mid-cycle live beyond `n_chunks`/`n_slots` and are NOT in the snapshot; they are
 /// allocate-black-equivalent in the obarray sense and are picked up by the
 /// termination re-seed of the new range.
@@ -1662,103 +1259,6 @@ impl ObarrayScanSnapshot {
     }
 }
 
-/// Brackets a symbol value-cell ARM change (redirect tag + val word) with the
-/// per-chunk seqlock so a concurrent GC reader sees a consistent (redirect,val)
-/// pair. Bumps the chunk seqlock to ODD on construction and back to EVEN on
-/// drop. No-op unless a concurrent mark is active. Holds a raw pointer (not a
-/// borrow) so the caller can still take `&mut` to the slot.
-struct SeqlockWriteGuard {
-    seq: Option<*const std::sync::atomic::AtomicU32>,
-}
-impl SeqlockWriteGuard {
-    #[inline]
-    fn new(seq: Option<*const std::sync::atomic::AtomicU32>) -> Self {
-        if let Some(p) = seq {
-            unsafe { (*p).fetch_add(1, std::sync::atomic::Ordering::Release) }; // -> odd
-        }
-        Self { seq }
-    }
-}
-impl Drop for SeqlockWriteGuard {
-    #[inline]
-    fn drop(&mut self) {
-        if let Some(p) = self.seq {
-            unsafe { (*p).fetch_add(1, std::sync::atomic::Ordering::Release) }; // -> even
-        }
-    }
-}
-
-/// Read a symbol's traceable heap children CONSISTENTLY with concurrent mutator
-/// arm changes, for the Stage 1b concurrent obarray scan (the GC-thread read
-/// side; pairs with [`SeqlockWriteGuard`] on the write side).
-///
-/// `seq` is the symbol's per-chunk seqlock; `sym` the symbol in that chunk. The
-/// standard seqlock read protocol (retry while the counter is odd or changes
-/// across the read) guarantees the `(redirect, val)` pair is observed from a
-/// single epoch — never torn — so `val` is interpreted only as the arm the
-/// consistently-observed `redirect` names. Only `Plainval` holds a heap value
-/// cell: alias = a non-heap `SymId`, localized = a `*mut BLV`, forwarded = a raw
-/// fwd ptr — none is a heap `Value` to trace here (BLV interiors are reached via
-/// the BLV-pool root). `function`/`plist` are single-word atomic `Value`s with no
-/// discriminant, so they are always consistent. `push` is called for each
-/// heap-object child to enqueue onto the GC gray set.
-///
-/// Caller must hold the start-of-cycle chunk snapshot so `sym`/`seq` address live,
-/// non-moving memory. Bounded in practice: with a single mutator the odd window
-/// is ~4 stores, so the retry loop converges immediately.
-pub(crate) fn read_symbol_children_consistent(
-    seq: &std::sync::atomic::AtomicU32,
-    sym: &LispSymbol,
-    push: impl FnMut(Value),
-) {
-    read_symbol_children::<false>(seq, sym, push);
-}
-
-fn read_symbol_children<const MAJOR: bool>(
-    seq: &std::sync::atomic::AtomicU32,
-    sym: &LispSymbol,
-    mut push: impl FnMut(Value),
-) {
-    use std::sync::atomic::Ordering;
-    loop {
-        let s1 = seq.load(Ordering::Acquire);
-        if s1 & 1 != 0 {
-            // A `(flags, val)` arm change is in flight in this chunk — wait it out.
-            std::hint::spin_loop();
-            continue;
-        }
-        let redirect = sym.flags.load_redirect();
-        // Read `val` as a raw word regardless of arm; it is only INTERPRETED
-        // below when the consistently-observed redirect is `Plainval`.
-        let plain = load_value_atomic(unsafe { &sym.val.plain });
-        let function = load_value_atomic(&sym.function);
-        let plist = load_value_atomic(&sym.plist);
-        if seq.load(Ordering::Acquire) != s1 {
-            // An arm change landed during the read — the quadruple may be torn.
-            continue;
-        }
-        // Consistent snapshot. `is_heap_object()` excludes fixnums, nil, symbol
-        // ids and UNBOUND, so the Plainval gate never traces a non-heap word.
-        if redirect == SymbolRedirect::Plainval
-            && (plain.is_heap_object()
-                || (MAJOR && matches!(plain.kind(), crate::tagged::value::ValueKind::Symbol(_))))
-        {
-            push(plain);
-        }
-        if function.is_heap_object()
-            || (MAJOR && matches!(function.kind(), crate::tagged::value::ValueKind::Symbol(_)))
-        {
-            push(function);
-        }
-        if plist.is_heap_object()
-            || (MAJOR && matches!(plist.kind(), crate::tagged::value::ValueKind::Symbol(_)))
-        {
-            push(plist);
-        }
-        return;
-    }
-}
-
 impl std::fmt::Debug for Obarray {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Obarray")
@@ -1771,12 +1271,11 @@ impl std::fmt::Debug for Obarray {
 
 impl Drop for Obarray {
     fn drop(&mut self) {
-        for ptr in self.blvs.drain(..) {
-            // Safety: we created each pointer via `Box::into_raw` in
-            // `make_symbol_localized` and never alias it elsewhere
-            // (the only other reference lives inside a `LispSymbol`'s
-            // `val.blv` field, which goes away with `self`).
-            unsafe { drop(Box::from_raw(ptr)) };
+        for blv in self.blvs.drain(..) {
+            // SAFETY: every record in the pool was leaked by
+            // `make_symbol_localized` or `clone` for this obarray alone, and
+            // the only cells that name it go away with `self`.
+            unsafe { blv.free() };
         }
     }
 }
@@ -1784,27 +1283,16 @@ impl Drop for Obarray {
 impl Clone for Obarray {
     fn clone(&self) -> Self {
         // Deep-copy the BLV pool. Build a `old → new` map so we can
-        // remap each LOCALIZED symbol's `val.blv` to its clone.
-        let mut blvs: Vec<*mut LispBufferLocalValue> = Vec::with_capacity(self.blvs.len());
-        let mut blv_map: rustc_hash::FxHashMap<usize, *mut LispBufferLocalValue> =
-            rustc_hash::FxHashMap::default();
+        // re-home each LOCALIZED symbol's cell to its record's copy.
+        let mut blvs: Vec<BlvPtr> = Vec::with_capacity(self.blvs.len());
+        let mut blv_map: rustc_hash::FxHashMap<BlvPtr, BlvPtr> = rustc_hash::FxHashMap::default();
         for &orig in &self.blvs {
-            // Safety: each entry was Box::into_raw'd by us and is
-            // alive for the duration of `&self`.
-            let cloned_box = Box::new(unsafe { (*orig).clone() });
-            let cloned_ptr = Box::into_raw(cloned_box);
-            blvs.push(cloned_ptr);
-            blv_map.insert(orig as usize, cloned_ptr);
+            // SAFETY: the pool's records are alive for the duration of `&self`.
+            let copy = BlvPtr::leak(Box::new(unsafe { (*orig.as_ptr()).clone() }));
+            blvs.push(copy);
+            blv_map.insert(orig, copy);
         }
         let mut symbols = self.symbols.clone();
-        for slot in symbols.iter_mut().filter(|s| s.is_present()) {
-            if slot.flags.redirect() == SymbolRedirect::Localized {
-                let orig = unsafe { slot.val.blv };
-                if let Some(&new_ptr) = blv_map.get(&(orig as usize)) {
-                    slot.val = SymbolVal { blv: new_ptr };
-                }
-            }
-        }
         // Duplicate the forwarders that OWN a value. Sharing them would make
         // `(setq gc-cons-threshold ...)` in one obarray visible in the other,
         // which is the very desync the per-context descriptor exists to avoid.
@@ -1813,34 +1301,43 @@ impl Clone for Obarray {
             &'static crate::emacs_core::forward::LispFwd,
         > = rustc_hash::FxHashMap::default();
         let mut value_fwds = Vec::with_capacity(self.value_fwds.len());
-        for slot in symbols.iter_mut().filter(|s| s.is_present()) {
-            if slot.flags.redirect() != SymbolRedirect::Forwarded {
+        let gate = MarkGate::read();
+        for idx in 0..symbols.len() {
+            let Some(mut write) = symbols.cell_write(idx, gate) else {
                 continue;
-            }
-            let orig = unsafe { slot.val.fwd };
-            let copy = match fwd_map.get(&(orig as usize)) {
-                Some(&existing) => existing,
-                None => {
-                    // Safety: every descriptor is leaked at installation.
-                    let orig_ref: &'static crate::emacs_core::forward::LispFwd = unsafe { &*orig };
-                    let Some(copy) = orig_ref.clone_stateful() else {
-                        continue;
-                    };
-                    if copy.owned_value().is_some() {
-                        value_fwds.push(copy);
+            };
+            match write.arm() {
+                ArmMut::Localized(local) => {
+                    if let Some(&copy) = blv_map.get(&local.blv()) {
+                        local.rehome(copy);
                     }
-                    fwd_map.insert(orig as usize, copy);
-                    copy
                 }
-            };
-            slot.val = SymbolVal {
-                fwd: copy as *const crate::emacs_core::forward::LispFwd,
-            };
+                ArmMut::Forwarded(forwarded) => {
+                    let orig = forwarded.descriptor();
+                    let key = std::ptr::from_ref(orig) as usize;
+                    let copy = match fwd_map.get(&key) {
+                        Some(&existing) => existing,
+                        None => {
+                            let Some(copy) = orig.clone_stateful() else {
+                                continue;
+                            };
+                            if copy.owned_value().is_some() {
+                                value_fwds.push(copy);
+                            }
+                            fwd_map.insert(key, copy);
+                            copy
+                        }
+                    };
+                    forwarded.forward_to(copy);
+                }
+                ArmMut::Plain(_) | ArmMut::Alias(_) => {}
+            }
         }
         // A BLV built from a forwarded symbol keeps a pointer to the same
         // descriptor; re-point it at the clone so the pair stays consistent.
         for &blv_ptr in &blvs {
-            let blv = unsafe { &mut *blv_ptr };
+            // SAFETY: a record this clone just leaked and alone owns.
+            let blv = unsafe { &mut *blv_ptr.as_ptr() };
             if let Some(fwd) = blv.fwd
                 && let Some(&copy) =
                     fwd_map.get(&(fwd as *const crate::emacs_core::forward::LispFwd as usize))
@@ -1956,17 +1453,22 @@ impl Obarray {
         slot.publish_fill(LispSymbol::new(id));
     }
 
-    /// Returns a seqlock guard for the chunk holding `id`'s slot, armed only while a
-    /// concurrent mark is active. Must be created BEFORE the redirect/val write and
-    /// held until after it (the RAII drop closes the window).
-    #[inline]
-    fn seqlock_guard(&self, id: SymId) -> SeqlockWriteGuard {
-        let seq = if crate::tagged::gc::concurrent_mark_active() {
-            self.symbols.chunk_seq_ptr(Self::slot_index(id))
-        } else {
-            None
-        };
-        SeqlockWriteGuard::new(seq)
+    /// Begin a write of `id`'s value cell, interning the slot if it is
+    /// empty: the entry for the cold transitions (alias, localize, forward,
+    /// unbind). See [`CellWrite`].
+    fn cell_write_ensure(&mut self, id: SymId) -> CellWrite<'_> {
+        self.ensure_slot(id);
+        let gate = MarkGate::read();
+        self.symbols
+            .cell_write(Self::slot_index(id), gate)
+            .unwrap_or_else(|| unreachable!("ensure_slot published the slot"))
+    }
+
+    /// Begin a write of `id`'s value cell when its slot is present.
+    #[inline(always)]
+    fn cell_write(&mut self, id: SymId) -> Option<CellWrite<'_>> {
+        let gate = MarkGate::read();
+        self.symbols.cell_write(Self::slot_index(id), gate)
     }
 
     /// Capture a start-of-cycle [`ObarrayScanSnapshot`] for the Stage 1b concurrent
@@ -2004,16 +1506,13 @@ impl Obarray {
             let Some(sym) = self.symbols.get(idx) else {
                 continue;
             };
-            match sym.flags.redirect() {
-                SymbolRedirect::Plainval => {
-                    let v = load_value_atomic(unsafe { &sym.val.plain });
+            match sym.value_cell_acquire() {
+                ValueCell::Plain(v) => {
                     if v != Value::UNBOUND {
                         push(v);
                     }
                 }
-                SymbolRedirect::Varalias
-                | SymbolRedirect::Forwarded
-                | SymbolRedirect::Localized => {}
+                ValueCell::Alias(_) | ValueCell::Forwarded(_) | ValueCell::Localized(_) => {}
             }
             push(load_value_atomic(&sym.function));
             push(load_value_atomic(&sym.plist));
@@ -2032,34 +1531,34 @@ impl Obarray {
         if self.slot(id).is_some_and(|s| s.interned_global) {
             return;
         }
-        let added = {
+        let keyword = {
             let sym = self.ensure_slot(id);
             if sym.interned_global {
                 return;
             }
             sym.interned_global = true;
-            sym.flags.set_interned(SymbolInterned::InternedInInitial);
+            sym.set_interned(SymbolInterned::InternedInInitial);
             let name = resolve_sym_lisp_string(id);
-            if name.as_bytes().first().is_some_and(|byte| *byte == b':') {
+            let keyword = name.as_bytes().first().is_some_and(|byte| *byte == b':');
+            if keyword {
                 // Match GNU lread.c intern_sym: keywords interned in the
                 // initial obarray are self-evaluating constants and are marked
                 // declared-special.
-                sym.flags.set_declared_special(true);
-                sym.flags.set_trapped_write(SymbolTrappedWrite::NoWrite);
-                // Only initialize if not already set (idempotent).
-                // Phase F: check val.plain (UNBOUND = not yet set).
-                if unsafe { sym.val.plain }.is_unbound() {
-                    let kw = Value::keyword_id(id);
-                    sym.flags.set_redirect(SymbolRedirect::Plainval);
-                    sym.val = SymbolVal { plain: kw };
-                }
+                sym.set_declared_special(true);
+                sym.set_trapped_write(SymbolTrappedWrite::NoWrite);
             }
-            true
+            keyword
         };
-        if added {
-            self.global_member_count += 1;
-            self.members_epoch += 1;
+        if keyword
+            && let Some(mut write) = self.cell_write(id)
+            && let ArmMut::Plain(plain) = write.arm()
+            // Only initialize if not already set (idempotent).
+            && plain.value().is_unbound()
+        {
+            plain.store(Value::keyword_id(id));
         }
+        self.global_member_count += 1;
+        self.members_epoch += 1;
     }
 
     fn clear_global_member(&mut self, id: SymId) -> bool {
@@ -2070,7 +1569,7 @@ impl Obarray {
             return false;
         }
         sym.interned_global = false;
-        sym.flags.set_interned(SymbolInterned::Uninterned);
+        sym.set_interned(SymbolInterned::Uninterned);
         self.global_member_count = self.global_member_count.saturating_sub(1);
         self.members_epoch += 1;
         true
@@ -2087,12 +1586,12 @@ impl Obarray {
     /// watched from startup), so every bind and unbind used to hash into it.
     pub(crate) fn note_watchers_changed(&mut self, id: SymId, has_watchers: bool) {
         let sym = self.ensure_slot(id);
-        match (sym.flags.trapped_write(), has_watchers) {
+        match (sym.trapped_write(), has_watchers) {
             (SymbolTrappedWrite::Untrapped, true) => {
-                sym.flags.set_trapped_write(SymbolTrappedWrite::Trapped);
+                sym.set_trapped_write(SymbolTrappedWrite::Trapped);
             }
             (SymbolTrappedWrite::Trapped, false) => {
-                sym.flags.set_trapped_write(SymbolTrappedWrite::Untrapped);
+                sym.set_trapped_write(SymbolTrappedWrite::Untrapped);
             }
             _ => {}
         }
@@ -2156,25 +1655,15 @@ impl Obarray {
 
         // Pre-intern fundamental symbols. Both `t` and `nil` are
         // self-referential constants in GNU.
-        let t_id = intern("t");
-        {
-            let t_sym = ob.ensure_slot(t_id);
-            t_sym.flags.set_redirect(SymbolRedirect::Plainval);
-            t_sym.val = SymbolVal { plain: Value::T };
-            t_sym.flags.set_trapped_write(SymbolTrappedWrite::NoWrite);
-            t_sym.flags.set_declared_special(true);
+        for (id, value) in [(intern("t"), Value::T), (intern("nil"), Value::NIL)] {
+            if let ArmMut::Plain(plain) = ob.cell_write_ensure(id).arm() {
+                plain.store(value);
+            }
+            let sym = ob.ensure_slot(id);
+            sym.set_trapped_write(SymbolTrappedWrite::NoWrite);
+            sym.set_declared_special(true);
+            ob.mark_global_member(id);
         }
-        ob.mark_global_member(t_id);
-
-        let nil_id = intern("nil");
-        {
-            let nil_sym = ob.ensure_slot(nil_id);
-            nil_sym.flags.set_redirect(SymbolRedirect::Plainval);
-            nil_sym.val = SymbolVal { plain: Value::NIL };
-            nil_sym.flags.set_trapped_write(SymbolTrappedWrite::NoWrite);
-            nil_sym.flags.set_declared_special(true);
-        }
-        ob.mark_global_member(nil_id);
 
         ob
     }
@@ -2467,7 +1956,7 @@ impl Obarray {
         }
         let localized = self
             .slot(self.resolve_alias_for_read(id))
-            .is_some_and(|sym| sym.flags.redirect() == SymbolRedirect::Localized);
+            .is_some_and(|sym| sym.redirect() == SymbolRedirect::Localized);
         match self.symbol_value_id_copied(id) {
             None => BufferlessValue::Void,
             Some(value) if localized => BufferlessValue::DefaultOfLocalized(value),
@@ -2481,13 +1970,10 @@ impl Obarray {
     fn resolve_alias_for_read(&self, id: SymId) -> SymId {
         let mut current = id;
         for _ in 0..50 {
-            let Some(sym) = self.slot(current) else {
+            let Some(target) = self.slot(current).and_then(LispSymbol::alias_target) else {
                 return current;
             };
-            if sym.flags.redirect() != SymbolRedirect::Varalias {
-                return current;
-            }
-            current = unsafe { sym.val.alias };
+            current = target;
         }
         current
     }
@@ -2503,22 +1989,17 @@ impl Obarray {
             Some(sym) => sym,
             _ => return None,
         };
-        match sym.flags.redirect() {
-            SymbolRedirect::Plainval => {
-                // Safety: redirect=Plainval guarantees val.plain is
-                // the live value field. UNBOUND sentinel = unbound.
-                let value = unsafe { sym.val.plain };
+        match sym.value_cell() {
+            // UNBOUND sentinel = unbound.
+            ValueCell::Plain(value) => {
                 if value.is_unbound() {
                     None
                 } else {
                     Some(value)
                 }
             }
-            SymbolRedirect::Varalias => {
-                let current = unsafe { sym.val.alias };
-                self.symbol_value_id_copied_slow(current, 49)
-            }
-            SymbolRedirect::Localized => {
+            ValueCell::Alias(current) => self.symbol_value_id_copied_slow(current, 49),
+            ValueCell::Localized(_) => {
                 let value = self.blv(id)?.defcell.cons_cdr();
                 if value.is_unbound() {
                     None
@@ -2526,10 +2007,7 @@ impl Obarray {
                     Some(value)
                 }
             }
-            SymbolRedirect::Forwarded => {
-                let fwd = unsafe { &*sym.val.fwd };
-                fwd.load()
-            }
+            ValueCell::Forwarded(fwd) => fwd.load(),
         }
     }
 
@@ -2545,28 +2023,25 @@ impl Obarray {
                 Some(sym) => sym,
                 _ => return None,
             };
-            match sym.flags.redirect() {
-                SymbolRedirect::Plainval => {
-                    // Safety: redirect=Plainval guarantees val.plain is
-                    // the live value field. UNBOUND sentinel = unbound.
-                    let v = unsafe { sym.val.plain };
+            match sym.value_cell() {
+                // UNBOUND sentinel = unbound.
+                ValueCell::Plain(v) => {
                     if v.is_unbound() {
                         return None;
                     }
                     return Some(v);
                 }
-                SymbolRedirect::Varalias => {
-                    current = unsafe { sym.val.alias };
+                ValueCell::Alias(target) => {
+                    current = target;
                 }
-                SymbolRedirect::Localized => {
+                ValueCell::Localized(_) => {
                     let value = self.blv(current)?.defcell.cons_cdr();
                     if value.is_unbound() {
                         return None;
                     }
                     return Some(value);
                 }
-                SymbolRedirect::Forwarded => {
-                    let fwd = unsafe { &*sym.val.fwd };
+                ValueCell::Forwarded(fwd) => {
                     return fwd.load();
                 }
             }
@@ -2595,20 +2070,15 @@ impl Obarray {
                 Some(sym) => sym,
                 _ => return None,
             };
-            match sym.flags.redirect() {
-                SymbolRedirect::Plainval => {
-                    // Safety: redirect=Plainval guarantees val.plain is
-                    // the live value field. UNBOUND sentinel = unbound.
-                    let v = unsafe { &sym.val.plain };
-                    if v.is_unbound() {
-                        return None;
-                    }
-                    return Some(v);
+            match sym.value_cell() {
+                ValueCell::Plain(_) => {
+                    // UNBOUND sentinel = unbound.
+                    return sym.plain_value_ref().filter(|v| !v.is_unbound());
                 }
-                SymbolRedirect::Varalias => {
-                    current = unsafe { sym.val.alias };
+                ValueCell::Alias(target) => {
+                    current = target;
                 }
-                SymbolRedirect::Localized => {
+                ValueCell::Localized(_) => {
                     // Return the BLV defcell default (global) value.
                     // The defcell is a heap-allocated cons (sym . default);
                     // its cdr field lives in the GC heap, which is owned
@@ -2631,11 +2101,7 @@ impl Obarray {
                         }
                     });
                 }
-                SymbolRedirect::Forwarded => {
-                    // Safety: `install_*fwd` leaks every descriptor, so the
-                    // borrow the accessor hands back really is `'static`.
-                    let fwd: &'static crate::emacs_core::forward::LispFwd =
-                        unsafe { &*sym.val.fwd };
+                ValueCell::Forwarded(fwd) => {
                     return fwd.load_ref();
                 }
             }
@@ -2698,44 +2164,45 @@ impl Obarray {
         id: SymId,
         value: Value,
     ) -> Option<Value> {
-        if crate::tagged::gc::concurrent_mark_active() {
-            return self.swap_plain_untrapped_value_id_while_marking(id, value);
+        let gate = MarkGate::read();
+        if gate.is_marking() {
+            return self.swap_plain_untrapped_value_id_while_marking(id, value, gate);
         }
-        let sym = self.symbols.get_mut(Self::slot_index(id))?;
-        if !sym.flags.is_plain_untrapped_unprojected() || !sym.interned_global {
+        let mut write = self.symbols.cell_write(Self::slot_index(id), gate)?;
+        let sym = write.symbol();
+        if !sym.flags().is_plain_untrapped_unprojected() || !sym.interned_global {
             return None;
         }
         #[cfg(test)]
         note_plain_value_slot_visit();
-        // SAFETY: the redirect is `Plainval`, so `val.plain` is the live arm.
-        let old = unsafe { sym.val.plain };
-        store_value_atomic(unsafe { &mut sym.val.plain }, value);
-        Some(old)
+        match write.arm() {
+            ArmMut::Plain(plain) => Some(plain.store(value)),
+            ArmMut::Alias(_) | ArmMut::Localized(_) | ArmMut::Forwarded(_) => None,
+        }
     }
 
     /// [`Self::swap_plain_untrapped_value_id`] during a concurrent mark: the
-    /// store is bracketed by the chunk's seqlock, and the pre-image is noted
-    /// so the snapshot-at-the-beginning mark stays exact.
+    /// [`CellWrite`] brackets the store with the chunk's seqlock and notes
+    /// the pre-image, so the snapshot-at-the-beginning mark stays exact.
     #[cold]
     #[inline(never)]
     fn swap_plain_untrapped_value_id_while_marking(
         &mut self,
         id: SymId,
         value: Value,
+        gate: MarkGate,
     ) -> Option<Value> {
-        let idx = Self::slot_index(id);
-        let _seq_guard = SeqlockWriteGuard::new(self.symbols.chunk_seq_ptr(idx));
-        let sym = self.symbols.get_mut(idx)?;
-        if !sym.flags.is_plain_untrapped_unprojected() || !sym.interned_global {
+        let mut write = self.symbols.cell_write(Self::slot_index(id), gate)?;
+        let sym = write.symbol();
+        if !sym.flags().is_plain_untrapped_unprojected() || !sym.interned_global {
             return None;
         }
         #[cfg(test)]
         note_plain_value_slot_visit();
-        // SAFETY: the redirect is `Plainval`, so `val.plain` is the live arm.
-        let old = unsafe { sym.val.plain };
-        crate::tagged::gc::note_root_overwrite_while_marking(old);
-        store_value_atomic(unsafe { &mut sym.val.plain }, value);
-        Some(old)
+        match write.arm() {
+            ArmMut::Plain(plain) => Some(plain.store(value)),
+            ArmMut::Alias(_) | ArmMut::Localized(_) | ArmMut::Forwarded(_) => None,
+        }
     }
 
     /// [`Self::swap_plain_untrapped_value_id`] for a writer that does not
@@ -2745,20 +2212,7 @@ impl Obarray {
     /// and no SATB note, neither of which a store needs then.
     #[inline(always)]
     pub(crate) fn set_plain_untrapped_value_id(&mut self, id: SymId, value: Value) -> bool {
-        if crate::tagged::gc::concurrent_mark_active() {
-            return self.swap_plain_untrapped_value_id(id, value).is_some();
-        }
-        let Some(sym) = self.symbols.get_mut(Self::slot_index(id)) else {
-            return false;
-        };
-        if !sym.flags.is_plain_untrapped_unprojected() || !sym.interned_global {
-            return false;
-        }
-        #[cfg(test)]
-        note_plain_value_slot_visit();
-        // SAFETY: the redirect is `Plainval`, so `val.plain` is the live arm.
-        store_value_atomic(unsafe { &mut sym.val.plain }, value);
-        true
+        self.swap_plain_untrapped_value_id(id, value).is_some()
     }
 
     /// Whether a write to `id` could be a bare `SET_SYMBOL_VAL`: an interned,
@@ -2769,67 +2223,62 @@ impl Obarray {
     #[inline]
     pub(crate) fn is_plain_value_cell_id(&self, id: SymId) -> bool {
         self.slot(id)
-            .is_some_and(|sym| sym.flags.is_plain_untrapped_unprojected() && sym.interned_global)
+            .is_some_and(|sym| sym.flags().is_plain_untrapped_unprojected() && sym.interned_global)
     }
 
     /// Mark `id` as carrying a host projection (see
     /// `SymbolFlags::RUNTIME_PROJECTED_BIT`).  Armed at `Context`
     /// construction, not carried by a dump image.
     pub(crate) fn mark_runtime_projected_id(&mut self, id: SymId) {
-        self.ensure_slot(id).flags.set_runtime_projected(true);
+        self.ensure_slot(id).set_runtime_projected(true);
     }
 
+    /// GNU `SET_SYMBOL_VAL` on `id`'s cell -- watched, host-projected and
+    /// non-member cells included -- when that cell is still `Plainval`.
+    /// A cell some other arm took over (a watcher made the variable
+    /// buffer-local, say) is left untouched and reported, so the caller
+    /// re-dispatches the way GNU's `set_internal` does after its watchers
+    /// (`src/data.c:1714-1718`): a plain store can no longer land in a
+    /// buffer-local record or a forwarder's place.
     #[inline]
-    pub(crate) fn store_plain_value_id(&mut self, id: SymId, value: Value) {
-        // One read of the concurrent-mark gate serves both the seqlock
-        // bracket and the SATB pre-image note; each used to read it.
-        let marking = crate::tagged::gc::concurrent_mark_active();
-        let seq = if marking {
-            self.symbols.chunk_seq_ptr(Self::slot_index(id))
-        } else {
-            None
-        };
-        let _seq_guard = SeqlockWriteGuard::new(seq);
-        let Some(sym) = self.slot_mut(id) else {
-            return self.set_symbol_value_id_inner(id, value);
-        };
-        if !sym.interned_global {
+    pub(crate) fn store_plain_value_id(&mut self, id: SymId, value: Value) -> Result<(), NotPlain> {
+        let idx = Self::slot_index(id);
+        if !self.symbols.get(idx).is_some_and(|sym| sym.interned_global) {
             // Membership is marked before the store, for canonical ids only —
             // the old `ensure_global_member_if_canonical` prologue, now paid
             // only by the symbols that are not members yet.
             return self.store_plain_value_id_nonmember(id, value);
         }
+        let gate = MarkGate::read();
+        let Some(mut write) = self.symbols.cell_write(idx, gate) else {
+            return Err(NotPlain);
+        };
         #[cfg(test)]
         note_plain_value_slot_visit();
-        debug_assert_eq!(sym.flags.redirect(), SymbolRedirect::Plainval);
-        if marking {
-            crate::tagged::gc::note_root_overwrite_while_marking(unsafe { sym.val.plain });
+        match write.arm() {
+            ArmMut::Plain(plain) => {
+                plain.store(value);
+                Ok(())
+            }
+            ArmMut::Alias(_) | ArmMut::Localized(_) | ArmMut::Forwarded(_) => Err(NotPlain),
         }
-        store_value_atomic(unsafe { &mut sym.val.plain }, value);
     }
 
     #[cold]
     #[inline(never)]
-    fn store_plain_value_id_nonmember(&mut self, id: SymId, value: Value) {
+    fn store_plain_value_id_nonmember(&mut self, id: SymId, value: Value) -> Result<(), NotPlain> {
         if Self::is_canonical_symbol_id(id) {
             self.mark_global_member(id);
         }
-        let marking = crate::tagged::gc::concurrent_mark_active();
-        let seq = if marking {
-            self.symbols.chunk_seq_ptr(Self::slot_index(id))
-        } else {
-            None
-        };
-        let _seq_guard = SeqlockWriteGuard::new(seq);
-        let Some(sym) = self.slot_mut(id) else {
-            return self.set_symbol_value_id_inner(id, value);
-        };
         #[cfg(test)]
         note_plain_value_slot_visit();
-        if marking {
-            crate::tagged::gc::note_root_overwrite_while_marking(unsafe { sym.val.plain });
+        match self.cell_write_ensure(id).arm() {
+            ArmMut::Plain(plain) => {
+                plain.store(value);
+                Ok(())
+            }
+            ArmMut::Alias(_) | ArmMut::Localized(_) | ArmMut::Forwarded(_) => Err(NotPlain),
         }
-        store_value_atomic(unsafe { &mut sym.val.plain }, value);
     }
 
     /// Allocate a fresh `LispBufferLocalValue` for `id`, flip the
@@ -2841,29 +2290,24 @@ impl Obarray {
     /// per-buffer binding loaded" invariant).
     ///
     /// If the symbol is already LOCALIZED, this is a no-op (returns
-    /// the existing BLV pointer).
-    pub fn make_symbol_localized(
-        &mut self,
-        id: SymId,
-        default: Value,
-    ) -> *mut LispBufferLocalValue {
+    /// the existing BLV record). `None` when the alias chain from `id` does
+    /// not end (a cycle GNU's `indirect_variable` refuses): an alias cell
+    /// cannot be localized.
+    pub(crate) fn make_symbol_localized(&mut self, id: SymId, default: Value) -> Option<BlvPtr> {
         let target = self.resolve_alias_for_write(id);
-        // Check existing state before mutating.
-        if let Some(existing) = self.slot(target)
-            && existing.flags.redirect() == SymbolRedirect::Localized
-        {
-            return unsafe { existing.val.blv };
-        }
-        // GNU `make_blv` keeps the forwarder when the symbol it localizes was
-        // SYMBOL_FORWARDED (`src/data.c:2112-2140`, `blv->fwd = valcontents`),
-        // which is why a per-buffer binding of a `DEFVAR_INT` variable is
-        // still an integer slot and a per-buffer `DEFVAR_BOOL` still reads
-        // back `t`. Dropping it here would disarm the type rule for the rest
-        // of the session the first time any buffer made a local binding.
-        let forwarder: Option<&'static crate::emacs_core::forward::LispFwd> = self
-            .slot(target)
-            .filter(|sym| sym.flags.redirect() == SymbolRedirect::Forwarded)
-            .map(|sym| unsafe { &*sym.val.fwd });
+        // Check existing state before mutating. GNU `make_blv` keeps the
+        // forwarder when the symbol it localizes was SYMBOL_FORWARDED
+        // (`src/data.c:2112-2140`, `blv->fwd = valcontents`), which is why a
+        // per-buffer binding of a `DEFVAR_INT` variable is still an integer
+        // slot and a per-buffer `DEFVAR_BOOL` still reads back `t`. Dropping
+        // it here would disarm the type rule for the rest of the session the
+        // first time any buffer made a local binding.
+        let forwarder = match self.slot(target).map(LispSymbol::value_cell) {
+            Some(ValueCell::Localized(existing)) => return Some(existing),
+            Some(ValueCell::Alias(_)) => return None,
+            Some(ValueCell::Forwarded(fwd)) => Some(fwd),
+            Some(ValueCell::Plain(_)) | None => None,
+        };
         // Build defcell = (sym . default). The same cons doubles as
         // valcell until per-buffer bindings are swapped in.
         let defcell = Value::cons(Value::from_sym_id(target), default);
@@ -2879,37 +2323,27 @@ impl Obarray {
             // fast-path-hits before its first swap_in records reality.
             alist_epoch: 0,
         });
-        let raw = Box::into_raw(blv);
-        self.blvs.push(raw);
-        // Stage 1b: bracket the redirect-arm change (Plainval/... -> Localized) +
-        // val-word store with the per-chunk seqlock, armed only during a concurrent
-        // mark. Created BEFORE the &mut slot borrow (holds a raw ptr, no borrow).
-        let _seq_guard = self.seqlock_guard(target);
-        let sym = self.ensure_symbol_id(target);
-        // SATB: a Plainval cell holds a heap Value about to be replaced by the BLV
-        // pointer — retain its pre-image during a concurrent mark (it only survives
-        // transitively if it equals `default`, so log it unconditionally here).
-        if sym.flags.redirect() == SymbolRedirect::Plainval {
-            crate::tagged::gc::note_root_overwrite(unsafe { sym.val.plain });
+        let record = BlvPtr::leak(blv);
+        self.blvs.push(record);
+        // The cell write notes the plain pre-image during a concurrent mark
+        // (it only survives transitively if it equals `default`).
+        match self.cell_write_ensure(target).arm() {
+            ArmMut::Plain(plain) => plain.localize(record),
+            ArmMut::Forwarded(forwarded) => forwarded.localize(record),
+            ArmMut::Alias(_) | ArmMut::Localized(_) => {
+                unreachable!("the arm was read above with no write since")
+            }
         }
-        sym.flags.set_redirect(SymbolRedirect::Localized);
-        sym.val = SymbolVal { blv: raw };
         if crate::emacs_core::intern::resolve_sym(target) == "max-lisp-eval-depth" {
             self.max_lisp_eval_depth_localized = true;
         }
-        raw
+        Some(record)
     }
 
     /// The forward descriptor installed on `id`, if the symbol is
     /// `SYMBOL_FORWARDED`. Mirrors GNU `SYMBOL_FWD` (`src/lisp.h:1082`).
     pub fn forwarder(&self, id: SymId) -> Option<&'static crate::emacs_core::forward::LispFwd> {
-        let sym = self.slot(id)?;
-        if sym.flags.redirect() != SymbolRedirect::Forwarded {
-            return None;
-        }
-        // Safety: `install_*fwd` is the only writer of this arm and it always
-        // stores a `Box::leak`ed descriptor.
-        Some(unsafe { &*sym.val.fwd })
+        self.slot(id)?.forwarded_descriptor()
     }
 
     /// Which `Lisp_Fwd` variant a symbol forwards through, if it forwards.
@@ -2937,13 +2371,10 @@ impl Obarray {
         &self,
         id: SymId,
     ) -> Option<&'static crate::emacs_core::forward::LispBoolFwd> {
-        let sym = self.slot(id)?;
-        match sym.flags.redirect() {
-            // Safety: `install_*fwd` is the only writer of this arm and always
-            // stores a `Box::leak`ed descriptor (see `Obarray::forwarder`).
-            SymbolRedirect::Forwarded => unsafe { &*sym.val.fwd }.as_bool_fwd(),
-            SymbolRedirect::Localized => self.blv(id)?.fwd?.as_bool_fwd(),
-            _ => None,
+        match self.slot(id)?.value_cell() {
+            ValueCell::Forwarded(fwd) => fwd.as_bool_fwd(),
+            ValueCell::Localized(_) => self.blv(id)?.fwd?.as_bool_fwd(),
+            ValueCell::Plain(_) | ValueCell::Alias(_) => None,
         }
     }
 
@@ -3049,13 +2480,10 @@ impl Obarray {
         &self,
         id: SymId,
     ) -> Option<&'static crate::emacs_core::forward::LispIntFwd> {
-        let sym = self.slot(id)?;
-        match sym.flags.redirect() {
-            // Safety: `install_*fwd` is the only writer of this arm and always
-            // stores a `Box::leak`ed descriptor (see `Obarray::forwarder`).
-            SymbolRedirect::Forwarded => unsafe { &*sym.val.fwd }.as_int_fwd(),
-            SymbolRedirect::Localized => self.blv(id)?.fwd?.as_int_fwd(),
-            _ => None,
+        match self.slot(id)?.value_cell() {
+            ValueCell::Forwarded(fwd) => fwd.as_int_fwd(),
+            ValueCell::Localized(_) => self.blv(id)?.fwd?.as_int_fwd(),
+            ValueCell::Plain(_) | ValueCell::Alias(_) => None,
         }
     }
 
@@ -3065,10 +2493,7 @@ impl Obarray {
     /// helper so the LOCALIZED tests can flip it directly.
     pub fn set_blv_local_if_set(&mut self, id: SymId, local_if_set: bool) {
         let target = self.resolve_alias_for_write(id);
-        if let Some(sym) = self.slot(target)
-            && sym.flags.redirect() == SymbolRedirect::Localized
-        {
-            let blv = unsafe { &mut *sym.val.blv };
+        if let Some(blv) = self.blv_mut(target) {
             blv.local_if_set = local_if_set;
         }
     }
@@ -3084,19 +2509,15 @@ impl Obarray {
     #[inline]
     pub fn is_localized(&self, id: SymId) -> bool {
         self.slot(id)
-            .is_some_and(|sym| sym.flags.redirect() == SymbolRedirect::Localized)
+            .is_some_and(|sym| sym.redirect() == SymbolRedirect::Localized)
     }
 
     pub fn blv(&self, id: SymId) -> Option<&LispBufferLocalValue> {
-        let sym = self.slot(id)?;
-        if sym.flags.redirect() != SymbolRedirect::Localized {
-            return None;
-        }
-        // Safety: the symbol's val.blv was allocated by
-        // make_symbol_localized and is owned by self.blvs. The
-        // pointer stays valid for &self's lifetime because Drop
-        // can't run while we hold &self.
-        Some(unsafe { &*sym.val.blv })
+        let blv = self.slot(id)?.localized_blv()?;
+        // Safety: a `Localized` cell names a record make_symbol_localized
+        // allocated and self.blvs owns. It stays valid for &self's
+        // lifetime because Drop can't run while we hold &self.
+        Some(unsafe { &*blv.as_ptr() })
     }
 
     /// Look up a LOCALIZED symbol's value in `target_buf` without
@@ -3145,11 +2566,7 @@ impl Obarray {
         target_buf_id: crate::buffer::BufferId,
         target_alist: Value,
     ) -> Option<Value> {
-        if sym.flags.redirect() != SymbolRedirect::Localized {
-            return None;
-        }
-        // SAFETY: redirect=Localized selects the BLV arm.
-        let blv_ptr = unsafe { sym.val.blv };
+        let blv_ptr = sym.localized_blv()?.as_ptr();
         let epoch = blv_alist_epoch();
         // SAFETY: identical to `read_localized` -- the BLV record is reached
         // only through the symbol's raw pointer and the evaluator thread is
@@ -3246,11 +2663,7 @@ impl Obarray {
     /// Raw pointer to a LOCALIZED symbol's BLV record (see `read_localized`
     /// for the aliasing contract), `None` for any other redirect.
     fn blv_ptr(&self, id: SymId) -> Option<*mut LispBufferLocalValue> {
-        let sym = self.slot(id)?;
-        if sym.flags.redirect() != SymbolRedirect::Localized {
-            return None;
-        }
-        Some(unsafe { sym.val.blv })
+        Some(self.slot(id)?.localized_blv()?.as_ptr())
     }
 
     /// Look up whether a LOCALIZED symbol has an explicit per-buffer
@@ -3283,13 +2696,10 @@ impl Obarray {
     /// Mutable BLV access. Used by `set_internal` (Phase 5) and
     /// `swap_in_symval_forwarding` (Phase 4).
     pub fn blv_mut(&mut self, id: SymId) -> Option<&mut LispBufferLocalValue> {
-        let sym = self.slot(id)?;
-        if sym.flags.redirect() != SymbolRedirect::Localized {
-            return None;
-        }
+        let blv = self.slot(id)?.localized_blv()?;
         // Safety: same rationale as `blv`. The mutable borrow follows
         // from `&mut self`.
-        Some(unsafe { &mut *sym.val.blv })
+        Some(unsafe { &mut *blv.as_ptr() })
     }
 
     /// Install a `BUFFER_OBJFWD` forwarder on a symbol. Phase 8a of
@@ -3307,21 +2717,44 @@ impl Obarray {
         id: SymId,
         fwd: &'static crate::emacs_core::forward::LispBufferObjFwd,
     ) {
-        // Stage 1b: bracket the redirect-arm change (Plainval/... -> Forwarded) +
-        // val-word store with the per-chunk seqlock, armed only during a concurrent
-        // mark. Created BEFORE the &mut slot borrow (holds a raw ptr, no borrow).
-        let _seq_guard = self.seqlock_guard(id);
-        let sym = self.ensure_symbol_id(id);
-        // SATB: a Plainval cell holds a heap Value about to be replaced by a
-        // forwarder descriptor — retain its pre-image during a concurrent mark.
-        if sym.flags.redirect() == SymbolRedirect::Plainval {
-            crate::tagged::gc::note_root_overwrite(unsafe { sym.val.plain });
-        }
-        sym.flags.set_redirect(SymbolRedirect::Forwarded);
-        sym.flags.set_declared_special(true);
-        sym.val = SymbolVal {
-            fwd: std::ptr::from_ref(fwd.header()),
+        self.forward_cell(id, fwd.header());
+    }
+
+    /// GNU `defvar_int` / `defvar_bool` / `defvar_lisp` /
+    /// `defvar_per_buffer` / `defvar_kboard` (`src/lread.c`,
+    /// `src/buffer.c`): make `id` a `SYMBOL_FORWARDED` variable through FWD,
+    /// declared special. A plain cell, or one that already forwards, takes
+    /// the descriptor; the cell write notes a plain pre-image during a
+    /// concurrent mark. GNU declares its C variables before Lisp can alias
+    /// or localize them, so an alias or a localized cell is left as it is
+    /// (`false`): a late declaration of a localized variable goes through
+    /// [`Self::reattach_localized_forwarder`] instead, and replacing the arm
+    /// would orphan the alias edge or the buffer-local record.
+    fn forward_cell(
+        &mut self,
+        id: SymId,
+        fwd: &'static crate::emacs_core::forward::LispFwd,
+    ) -> bool {
+        let mut write = self.cell_write_ensure(id);
+        let installed = match write.arm() {
+            ArmMut::Plain(plain) => {
+                plain.forward_to(fwd);
+                true
+            }
+            ArmMut::Forwarded(forwarded) => {
+                forwarded.forward_to(fwd);
+                true
+            }
+            ArmMut::Alias(_) | ArmMut::Localized(_) => false,
         };
+        if installed {
+            write.set_declared_special(true);
+        }
+        debug_assert!(
+            installed,
+            "a C variable is declared after Lisp aliased or localized it: {id:?}"
+        );
+        installed
     }
 
     /// Install a GNU `Lisp_Boolfwd`-equivalent descriptor on a symbol.
@@ -3333,16 +2766,9 @@ impl Obarray {
         id: SymId,
         fwd: &'static crate::emacs_core::forward::LispBoolFwd,
     ) {
-        let _seq_guard = self.seqlock_guard(id);
-        let sym = self.ensure_symbol_id(id);
-        if sym.flags.redirect() == SymbolRedirect::Plainval {
-            crate::tagged::gc::note_root_overwrite(unsafe { sym.val.plain });
+        if !self.forward_cell(id, fwd.header()) {
+            return;
         }
-        sym.flags.set_redirect(SymbolRedirect::Forwarded);
-        sym.flags.set_declared_special(true);
-        sym.val = SymbolVal {
-            fwd: std::ptr::from_ref(fwd.header()),
-        };
         // This descriptor is now the variable's cell: the memoized pointer
         // follows it (an earlier probe may have found none, or a different
         // descriptor).
@@ -3499,16 +2925,9 @@ impl Obarray {
         id: SymId,
         fwd: &'static crate::emacs_core::forward::LispIntFwd,
     ) {
-        let _seq_guard = self.seqlock_guard(id);
-        let sym = self.ensure_symbol_id(id);
-        if sym.flags.redirect() == SymbolRedirect::Plainval {
-            crate::tagged::gc::note_root_overwrite(unsafe { sym.val.plain });
+        if !self.forward_cell(id, fwd.header()) {
+            return;
         }
-        sym.flags.set_redirect(SymbolRedirect::Forwarded);
-        sym.flags.set_declared_special(true);
-        sym.val = SymbolVal {
-            fwd: std::ptr::from_ref(fwd.header()),
-        };
         self.register_value_fwd(fwd.header());
     }
 
@@ -3535,16 +2954,9 @@ impl Obarray {
         id: SymId,
         fwd: &'static crate::emacs_core::forward::LispObjFwd,
     ) {
-        let _seq_guard = self.seqlock_guard(id);
-        let sym = self.ensure_symbol_id(id);
-        if sym.flags.redirect() == SymbolRedirect::Plainval {
-            crate::tagged::gc::note_root_overwrite(unsafe { sym.val.plain });
+        if !self.forward_cell(id, fwd.header()) {
+            return;
         }
-        sym.flags.set_redirect(SymbolRedirect::Forwarded);
-        sym.flags.set_declared_special(true);
-        sym.val = SymbolVal {
-            fwd: std::ptr::from_ref(fwd.header()),
-        };
         self.register_value_fwd(fwd.header());
     }
 
@@ -3555,16 +2967,9 @@ impl Obarray {
         id: SymId,
         fwd: &'static crate::emacs_core::forward::LispKboardObjFwd,
     ) {
-        let _seq_guard = self.seqlock_guard(id);
-        let sym = self.ensure_symbol_id(id);
-        if sym.flags.redirect() == SymbolRedirect::Plainval {
-            crate::tagged::gc::note_root_overwrite(unsafe { sym.val.plain });
+        if !self.forward_cell(id, fwd.header()) {
+            return;
         }
-        sym.flags.set_redirect(SymbolRedirect::Forwarded);
-        sym.flags.set_declared_special(true);
-        sym.val = SymbolVal {
-            fwd: std::ptr::from_ref(fwd.header()),
-        };
         self.register_value_fwd(fwd.header());
     }
 
@@ -3616,23 +3021,19 @@ impl Obarray {
         let mut current = id;
         for _ in 0..50 {
             let sym = self.slot(current)?;
-            match sym.flags.redirect() {
-                SymbolRedirect::Plainval => {
-                    // Read val.plain directly. UNBOUND sentinel means void.
-                    let v = unsafe { sym.val.plain };
+            match sym.value_cell() {
+                ValueCell::Plain(v) => {
+                    // UNBOUND sentinel means void.
                     if v.is_unbound() {
                         return None;
                     }
                     return Some(v);
                 }
-                SymbolRedirect::Varalias => {
-                    // Phase 1 still keeps the legacy `value` field too,
-                    // but we follow the redirect-side chain since it's
-                    // the eventual source of truth.
-                    current = unsafe { sym.val.alias };
+                ValueCell::Alias(target) => {
+                    current = target;
                     continue;
                 }
-                SymbolRedirect::Localized => {
+                ValueCell::Localized(_) => {
                     // Bare obarray reads of a LOCALIZED symbol return
                     // the BLV `defcell` (default cell), NOT the
                     // currently-loaded `valcell`. The valcell points
@@ -3654,12 +3055,11 @@ impl Obarray {
                     // `current_buffer` is NULL: the SYMBOL_LOCALIZED
                     // arm reads the BLV default cell.
                     //
-                    // Use the safe `Obarray::blv` accessor instead
-                    // of dereferencing `sym.val.blv` directly so this
-                    // code path stays out of `unsafe` blocks.
+                    // Use the safe `Obarray::blv` accessor so this code
+                    // path stays out of `unsafe` blocks.
                     return self.blv(current).map(|blv| blv.defcell.cons_cdr());
                 }
-                SymbolRedirect::Forwarded => {
+                ValueCell::Forwarded(fwd) => {
                     // Phase 10D: bare-obarray reads of FORWARDED
                     // BUFFER_OBJFWD symbols return the forwarder's
                     // default. Mirrors GNU `find_symbol_value`
@@ -3670,7 +3070,6 @@ impl Obarray {
                     // forwarder's stored `default` field — keeping
                     // this in sync with `BufferManager::buffer_defaults`
                     // is `setq-default`'s job).
-                    let fwd = unsafe { &*sym.val.fwd };
                     if let Some(value) = fwd.load() {
                         return Some(value);
                     }
@@ -3711,17 +3110,15 @@ impl Obarray {
             // Phase 4: only the LOCALIZED arm needs &mut self for the
             // cache swap. Borrow-check it carefully so the rest of the
             // walk can stay on a shared reference.
-            let redirect = self.slot(current)?.flags.redirect();
-            match redirect {
-                SymbolRedirect::Plainval => {
+            match self.slot(current)?.value_cell() {
+                ValueCell::Plain(_) => {
                     return self.find_symbol_value(current);
                 }
-                SymbolRedirect::Varalias => {
-                    let next = unsafe { self.slot(current)?.val.alias };
+                ValueCell::Alias(next) => {
                     current = next;
                     continue;
                 }
-                SymbolRedirect::Localized => {
+                ValueCell::Localized(_) => {
                     // Same-buffer fast path (GNU `swap_in_symval_forwarding`
                     // early-outs when `blv->where` is already the current
                     // buffer): trust the cached `valcell` iff the cache was
@@ -3747,7 +3144,7 @@ impl Obarray {
                     let blv = self.blv(current)?;
                     return Some(blv.valcell.cons_cdr());
                 }
-                SymbolRedirect::Forwarded => {
+                ValueCell::Forwarded(fwd) => {
                     // Phase 8a: read through the forwarder descriptor.
                     // Phase 10D: dispatch on `local_flags_idx`.
                     // Always-local slots (`-1`) read `slots[off]`
@@ -3756,8 +3153,6 @@ impl Obarray {
                     // through to `buffer_defaults` when clear.
                     // Mirrors GNU `do_symval_forwarding` BUFFER_OBJFWD
                     // arm + `PER_BUFFER_VALUE_P` (`buffer.h:1640`).
-                    let sym = self.slot(current)?;
-                    let fwd = unsafe { &*sym.val.fwd };
                     use crate::emacs_core::forward::ForwardSlot;
                     match fwd.slot() {
                         ForwardSlot::BufferObj(buf_fwd) => {
@@ -3928,41 +3323,10 @@ impl Obarray {
     /// without per-buffer entries.
     fn set_symbol_value_id_inner(&mut self, id: SymId, value: Value) {
         let target = self.resolve_alias_for_write(id);
-        // Stage 1b: bracket the redirect-arm change (the `_ =>` arm below resets to
-        // Plainval) + val-word store with the per-chunk seqlock, armed only during a
-        // concurrent mark. Created BEFORE the &mut slot borrow (holds a raw ptr, no
-        // borrow). The Localized fast-path returns early, dropping the guard then;
-        // the val word it touches lives in the BLV pool, not the seqlock'd slot.
-        let _seq_guard = self.seqlock_guard(target);
-        let sym = self.ensure_symbol_id(target);
-
-        // LOCALIZED: write to BLV defcell (the default). Do NOT touch
-        // the redirect or val.blv — that would orphan the BLV cache.
-        // Phase F: no legacy SymbolValue mirror write needed.
-        if sym.flags.redirect() == SymbolRedirect::Localized {
-            // Safety: redirect=Localized guarantees val.blv is a
-            // valid pointer to a BLV owned by self.blvs.
-            unsafe {
-                let blv = &mut *sym.val.blv;
-                blv.defcell.set_cdr(value);
-                // If the BLV cache is currently swapped to defcell
-                // (no per-buffer entry loaded), mirror the new value
-                // through valcell as well so subsequent reads
-                // observe it without re-swapping.
-                if super::value::eq_value(&blv.valcell, &blv.defcell) {
-                    blv.valcell.set_cdr(value);
-                }
-            }
-            return;
-        }
-
-        // Write through the redirect union. LOCALIZED is handled above.
-        // VARALIAS should have been resolved by resolve_alias_for_write;
-        // FORWARDED goes through the descriptor. Everything else becomes
-        // Plainval.
-        match sym.flags.redirect() {
-            SymbolRedirect::Forwarded => {
-                let fwd = unsafe { &*sym.val.fwd };
+        let blv = match self.cell_write_ensure(target).arm() {
+            ArmMut::Localized(local) => local.blv(),
+            ArmMut::Forwarded(forwarded) => {
+                let fwd = forwarded.descriptor();
                 // This is the storage-level entry point, below the evaluator,
                 // so a refusal has no way to become a Lisp signal here; the
                 // Lisp-visible check runs in `set_runtime_binding_in_state`.
@@ -3977,17 +3341,31 @@ impl Obarray {
                         debug_assert!(false, "forwarded slot refused an internal write: {error:?}")
                     }
                 }
+                return;
             }
-            _ => {
-                // SATB: a Plainval cell holds a heap Value about to be clobbered —
-                // retain its pre-image during a concurrent mark. Gated on the OLD
-                // redirect (set_redirect runs after) so `val.plain` is the live
-                // union arm; a Varalias `_` holds a non-heap SymId, so skip it.
-                if sym.flags.redirect() == SymbolRedirect::Plainval {
-                    crate::tagged::gc::note_root_overwrite(unsafe { sym.val.plain });
-                }
-                sym.flags.set_redirect(SymbolRedirect::Plainval);
-                store_value_atomic(unsafe { &mut sym.val.plain }, value);
+            ArmMut::Plain(plain) => {
+                plain.store(value);
+                return;
+            }
+            // `resolve_alias_for_write` stops on an alias only when the chain
+            // does not end; the write lands here as it always has.
+            ArmMut::Alias(alias) => {
+                alias.unalias(value);
+                return;
+            }
+        };
+        // LOCALIZED: write to BLV defcell (the default). The cell keeps
+        // its arm -- replacing it would orphan the BLV record.
+        // Safety: a `Localized` cell names a record owned by self.blvs.
+        unsafe {
+            let blv = &mut *blv.as_ptr();
+            blv.defcell.set_cdr(value);
+            // If the BLV cache is currently swapped to defcell
+            // (no per-buffer entry loaded), mirror the new value
+            // through valcell as well so subsequent reads
+            // observe it without re-swapping.
+            if super::value::eq_value(&blv.valcell, &blv.defcell) {
+                blv.valcell.set_cdr(value);
             }
         }
     }
@@ -3998,26 +3376,28 @@ impl Obarray {
     /// legacy `value` enum field. Visits Plainval symbols (non-UNBOUND)
     /// and BLV defcell defaults (for Localized symbols).
     pub fn for_each_value_cell_mut(&mut self, mut f: impl FnMut(&mut Value)) {
-        for sym in self.symbols.iter_mut().filter(|s| s.is_present()) {
-            match sym.flags.redirect() {
-                SymbolRedirect::Plainval => {
-                    // Safety: redirect=Plainval guarantees val.plain is live.
-                    let mut v = unsafe { sym.val.plain };
+        let gate = MarkGate::read();
+        for idx in 0..self.symbols.len() {
+            let Some(mut write) = self.symbols.cell_write(idx, gate) else {
+                continue;
+            };
+            match write.arm() {
+                ArmMut::Plain(plain) => {
+                    let mut v = plain.value();
                     if v != Value::UNBOUND {
-                        // SATB: this closure mutates the value cell in place, so
-                        // retain the pre-image during a concurrent mark before f.
-                        crate::tagged::gc::note_root_overwrite(v);
+                        // The store notes the pre-image during a concurrent
+                        // mark, as an in-place mutation must.
                         f(&mut v);
-                        store_value_atomic(unsafe { &mut sym.val.plain }, v);
+                        plain.store(v);
                     }
                 }
-                SymbolRedirect::Localized => {
+                ArmMut::Localized(local) => {
                     // Visit the BLV defcell default. Route the write back through
                     // `set_cdr` so the heap SATB barrier logs the old cdr — the
                     // original raw-pointer write to the defcell cons bypassed it.
-                    // Safety: redirect=Localized guarantees val.blv is valid.
+                    // Safety: a `Localized` cell names a record self.blvs owns.
                     unsafe {
-                        let blv = &mut *sym.val.blv;
+                        let blv = &mut *local.blv().as_ptr();
                         let mut cdr = blv.defcell.cons_cdr();
                         if cdr != Value::UNBOUND {
                             f(&mut cdr);
@@ -4025,7 +3405,7 @@ impl Obarray {
                         }
                     }
                 }
-                SymbolRedirect::Varalias | SymbolRedirect::Forwarded => {}
+                ArmMut::Alias(_) | ArmMut::Forwarded(_) => {}
             }
         }
     }
@@ -4038,12 +3418,9 @@ impl Obarray {
     fn resolve_alias_for_write(&mut self, id: SymId) -> SymId {
         let mut current = id;
         for _ in 0..50 {
-            match self.slot(current) {
-                Some(s) if s.flags.redirect() == SymbolRedirect::Varalias => {
-                    // Safety: redirect=Varalias guarantees val.alias is set.
-                    current = unsafe { s.val.alias };
-                }
-                _ => return current,
+            match self.slot(current).and_then(LispSymbol::alias_target) {
+                Some(target) => current = target,
+                None => return current,
             }
         }
         current // cycle — write to the last hop
@@ -4284,30 +3661,52 @@ impl Obarray {
         self.makunbound_id(intern(name));
     }
 
-    /// Remove the value cell by identity.
-    /// Follows alias chains (max 50 hops).
+    /// Remove the value cell by identity: the store GNU's `set_internal`
+    /// makes for `Qunbound` when no buffer binding takes it
+    /// (`src/data.c:1714-1795`). Follows alias chains (max 50 hops).
+    ///
+    /// - A plain cell becomes void (`SET_SYMBOL_VAL (sym, Qunbound)`).
+    /// - A buffer-local variable keeps its arm and its record: its DEFAULT
+    ///   becomes void, which is what `set_internal` stores into
+    ///   `blv->defcell` for a buffer with no binding of its own. (Replacing
+    ///   the arm used to orphan the record and every other buffer's binding.)
+    /// - A forwarded variable, or a buffer-local one with a forwarder, is
+    ///   left alone: GNU refuses "Built-in variable may not be unbound"
+    ///   (`src/data.c:1723-1727`, `:1802-1809`), which the evaluator signals
+    ///   before it gets here (`check_forwarded_unbind`).
+    /// - A constant is left alone.
     pub fn makunbound_id(&mut self, id: SymId) {
         self.ensure_global_member_if_canonical(id);
         let target = self.resolve_alias_for_write(id);
-        // Stage 1b: bracket the redirect-arm change (-> Plainval/UNBOUND) + val-word
-        // store with the per-chunk seqlock, armed only during a concurrent mark.
-        // Created BEFORE the &mut slot borrow (holds a raw ptr, no borrow).
-        let _seq_guard = self.seqlock_guard(target);
-        if let Some(sym) = self.slot_mut(target)
-            && sym.flags.trapped_write() != SymbolTrappedWrite::NoWrite
+        if self
+            .slot(target)
+            .is_none_or(|sym| sym.trapped_write() == SymbolTrappedWrite::NoWrite)
         {
-            // SATB: retain the old plain value during a concurrent mark before
-            // clobbering to UNBOUND. Only the Plainval arm holds a heap value;
-            // a Localized blv stays reachable via the BLV pool root.
-            if sym.flags.redirect() == SymbolRedirect::Plainval {
-                crate::tagged::gc::note_root_overwrite(unsafe { sym.val.plain });
+            return;
+        }
+        let blv = match self.cell_write_ensure(target).arm() {
+            ArmMut::Plain(plain) => {
+                plain.store(Value::UNBOUND);
+                return;
             }
-            // Plainval / UNBOUND is the "no value" state, matching
-            // GNU where makunbound sets val.value = Qunbound.
-            sym.flags.set_redirect(SymbolRedirect::Plainval);
-            sym.val = SymbolVal {
-                plain: Value::UNBOUND,
-            };
+            // `resolve_alias_for_write` stops on an alias only when the chain
+            // does not end; GNU `Fmakunbound` on an alias undoes it
+            // (`src/data.c:781-784`).
+            ArmMut::Alias(alias) => {
+                alias.unalias(Value::UNBOUND);
+                return;
+            }
+            ArmMut::Forwarded(_) => return,
+            ArmMut::Localized(local) => local.blv(),
+        };
+        // Safety: a `Localized` cell names a record self.blvs owns.
+        let blv = unsafe { &mut *blv.as_ptr() };
+        if blv.fwd.is_some() {
+            return;
+        }
+        blv.defcell.set_cdr(Value::UNBOUND);
+        if super::value::eq_value(&blv.valcell, &blv.defcell) {
+            blv.valcell.set_cdr(Value::UNBOUND);
         }
     }
 
@@ -4327,22 +3726,20 @@ impl Obarray {
             let Some(s) = self.slot(current) else {
                 return false;
             };
-            match s.flags.redirect() {
-                SymbolRedirect::Plainval => {
-                    // Safety: redirect=Plainval guarantees val.plain is live.
-                    let v = unsafe { s.val.plain };
+            match s.value_cell() {
+                ValueCell::Plain(v) => {
                     return v != Value::UNBOUND;
                 }
-                SymbolRedirect::Varalias => {
-                    current = unsafe { s.val.alias };
+                ValueCell::Alias(target) => {
+                    current = target;
                 }
-                SymbolRedirect::Localized => {
+                ValueCell::Localized(_) => {
                     // Bound if the BLV defcell has a non-UNBOUND default.
                     return self
                         .blv(current)
                         .is_some_and(|blv| blv.defcell.cons_cdr() != Value::UNBOUND);
                 }
-                SymbolRedirect::Forwarded => {
+                ValueCell::Forwarded(_) => {
                     // A forwarded slot is never unbound, whatever it forwards
                     // to: GNU's C storage has no "unbound" representation for
                     // any `Lisp_Fwd` variant, which is the same fact that
@@ -4488,7 +3885,7 @@ impl Obarray {
     pub fn make_special(&mut self, name: &str) {
         let id = intern(name);
         self.mark_global_member(id);
-        self.ensure_symbol_id(id).flags.set_declared_special(true);
+        self.ensure_symbol_id(id).set_declared_special(true);
     }
 
     /// Define a bound special variable in one semantic operation.
@@ -4526,20 +3923,20 @@ impl Obarray {
     /// Mark a symbol as special by identity.
     pub fn make_special_id(&mut self, id: SymId) {
         self.ensure_global_member_if_canonical(id);
-        self.ensure_symbol_id(id).flags.set_declared_special(true);
+        self.ensure_symbol_id(id).set_declared_special(true);
     }
 
     /// Clear the special flag on a symbol.
     pub fn make_non_special(&mut self, name: &str) {
         let id = intern(name);
         self.mark_global_member(id);
-        self.ensure_symbol_id(id).flags.set_declared_special(false);
+        self.ensure_symbol_id(id).set_declared_special(false);
     }
 
     /// Clear the special flag on a symbol by identity.
     pub fn make_non_special_id(&mut self, id: SymId) {
         self.ensure_global_member_if_canonical(id);
-        self.ensure_symbol_id(id).flags.set_declared_special(false);
+        self.ensure_symbol_id(id).set_declared_special(false);
     }
 
     /// Check if a symbol is special.
@@ -4549,7 +3946,7 @@ impl Obarray {
 
     /// Check if a symbol is special by identity.
     pub fn is_special_id(&self, id: SymId) -> bool {
-        self.slot(id).is_some_and(|s| s.flags.declared_special())
+        self.slot(id).is_some_and(|s| s.flags().declared_special())
     }
 
     /// Check if a symbol is a constant.
@@ -4569,7 +3966,7 @@ impl Obarray {
         crate::emacs_core::intern::is_keyword_id(id)
             || self
                 .slot(id)
-                .is_some_and(|s| s.flags.trapped_write() == SymbolTrappedWrite::NoWrite)
+                .is_some_and(|s| s.trapped_write() == SymbolTrappedWrite::NoWrite)
     }
 
     /// Decide what GNU does when `new_value` is written to `id`.
@@ -4615,7 +4012,6 @@ impl Obarray {
     pub fn set_constant_id(&mut self, id: SymId) {
         self.ensure_global_member_if_canonical(id);
         self.ensure_symbol_id(id)
-            .flags
             .set_trapped_write(SymbolTrappedWrite::NoWrite);
     }
 
@@ -4640,14 +4036,19 @@ impl Obarray {
     ///
     /// Phase 1: maintains both the legacy enum and the new redirect tag.
     /// Phase 3 cuts callers over to the redirect-only path.
-    pub fn make_alias(&mut self, id: SymId, target: SymId) {
-        // Stage 1b: bracket the redirect-arm change (Plainval/... -> Varalias) +
-        // val-word store performed inside `set_alias_target` with the per-chunk
-        // seqlock, armed only during a concurrent mark. Created BEFORE the &mut slot
-        // borrow (holds a raw ptr, no borrow).
-        let _seq_guard = self.seqlock_guard(id);
-        let sym = self.ensure_symbol_id(id);
-        sym.set_alias_target(target);
+    ///
+    /// A plain cell or an existing alias takes the edge (the cell write notes
+    /// a plain pre-image during a concurrent mark); a forwarded or
+    /// buffer-local cell is refused with GNU `Fdefvaralias`'s reason
+    /// (`src/eval.c:665-679`) and left as it is.
+    pub fn make_alias(&mut self, id: SymId, target: SymId) -> Result<(), MakeAliasError> {
+        match self.cell_write_ensure(id).arm() {
+            ArmMut::Plain(plain) => plain.alias_to(target),
+            ArmMut::Alias(alias) => alias.alias_to(target),
+            ArmMut::Forwarded(_) => return Err(MakeAliasError::Forwarded),
+            ArmMut::Localized(_) => return Err(MakeAliasError::Localized),
+        }
+        Ok(())
     }
 
     /// Check whether a symbol is a buffer-local variable in the obarray.
@@ -4659,35 +4060,28 @@ impl Obarray {
     /// Phase F: uses the redirect tag rather than the legacy value enum.
     pub fn is_buffer_local_id(&self, id: SymId) -> bool {
         self.slot(id)
-            .is_some_and(|s| s.flags.redirect() == SymbolRedirect::Localized)
+            .is_some_and(|s| s.redirect() == SymbolRedirect::Localized)
     }
 
     /// Check whether a symbol is an alias by identity. Reads through the
     /// new redirect tag (Phase 3 of the symbol-redirect refactor).
     pub fn is_alias_id(&self, id: SymId) -> bool {
         self.slot(id)
-            .is_some_and(|s| s.flags.redirect() == SymbolRedirect::Varalias)
+            .is_some_and(|s| s.redirect() == SymbolRedirect::Varalias)
     }
 
     /// Remove a variable alias without following it and leave SYMBOL void.
     /// Mirrors GNU `internal-delete-indirect-variable`: the alias symbol is
     /// restored to `SYMBOL_PLAINVAL` with `Qunbound` in its value cell.
+    /// A symbol that is not an alias is left as it is (GNU signals "Cannot
+    /// undeclare a variable that is not an alias", which the subr checks
+    /// first).
     pub fn delete_variable_alias_id(&mut self, id: SymId) {
         self.ensure_global_member_if_canonical(id);
-        // Stage 1b: bracket the redirect-arm change (Varalias -> Plainval) + val-word
-        // store with the per-chunk seqlock, armed only during a concurrent mark.
-        // Created BEFORE the &mut slot borrow (holds a raw ptr, no borrow).
-        let _seq_guard = self.seqlock_guard(id);
-        let sym = self.ensure_symbol_id(id);
-        // SATB: normally the prior redirect is Varalias (a non-heap SymId), but
-        // guard for a Plainval heap value being clobbered to UNBOUND during a mark.
-        if sym.flags.redirect() == SymbolRedirect::Plainval {
-            crate::tagged::gc::note_root_overwrite(unsafe { sym.val.plain });
+        match self.cell_write_ensure(id).arm() {
+            ArmMut::Alias(alias) => alias.unalias(Value::UNBOUND),
+            ArmMut::Plain(_) | ArmMut::Localized(_) | ArmMut::Forwarded(_) => {}
         }
-        sym.flags.set_redirect(SymbolRedirect::Plainval);
-        sym.val = SymbolVal {
-            plain: Value::UNBOUND,
-        };
     }
 
     /// Walk an alias chain to its terminus and return the resolved
@@ -4702,23 +4096,18 @@ impl Obarray {
         let mut fast = id;
         loop {
             // Tortoise: advance one hop (or stop if not an alias).
-            let Some(slow_sym) = self.slot(slow) else {
-                return Some(slow); // no slot → not an alias
-            };
-            if slow_sym.flags.redirect() != SymbolRedirect::Varalias {
+            // (No slot, or any other arm, means "not an alias".)
+            let Some(next) = self.slot(slow).and_then(LispSymbol::alias_target) else {
                 return Some(slow);
-            }
-            slow = unsafe { slow_sym.val.alias };
+            };
+            slow = next;
 
             // Hare: advance two hops (or stop if not an alias).
             for _ in 0..2 {
-                let Some(fast_sym) = self.slot(fast) else {
+                let Some(next) = self.slot(fast).and_then(LispSymbol::alias_target) else {
                     return Some(slow);
                 };
-                if fast_sym.flags.redirect() != SymbolRedirect::Varalias {
-                    return Some(slow);
-                }
-                fast = unsafe { fast_sym.val.alias };
+                fast = next;
             }
 
             if slow == fast {
@@ -4750,9 +4139,8 @@ impl Obarray {
         base: SymId,
     ) -> Result<(), MakeAliasError> {
         self.check_variable_alias(new_alias, base)?;
-        // Install the alias edge. `make_alias` keeps both
-        // representations in sync.
-        self.make_alias(new_alias, base);
+        // Install the alias edge.
+        self.make_alias(new_alias, base)?;
         self.make_special_id(new_alias);
         self.make_special_id(base);
         Ok(())
@@ -4780,7 +4168,7 @@ impl Obarray {
         // redirect (`:665-679`).  The order is Lisp-visible: a constant that
         // would also cycle reports the constant.
         if let Some(sym) = self.slot(new_alias)
-            && sym.flags.trapped_write() == SymbolTrappedWrite::NoWrite
+            && sym.trapped_write() == SymbolTrappedWrite::NoWrite
         {
             return Err(MakeAliasError::Constant);
         }
@@ -4791,20 +4179,17 @@ impl Obarray {
             if current == new_alias {
                 return Err(MakeAliasError::Cycle);
             }
-            let Some(sym) = self.slot(current) else {
+            let Some(next) = self.slot(current).and_then(LispSymbol::alias_target) else {
                 break;
             };
-            if sym.flags.redirect() != SymbolRedirect::Varalias {
-                break;
-            }
-            current = unsafe { sym.val.alias };
+            current = next;
         }
 
         if let Some(sym) = self.slot(new_alias) {
-            match sym.flags.redirect() {
-                SymbolRedirect::Forwarded => return Err(MakeAliasError::Forwarded),
-                SymbolRedirect::Localized => return Err(MakeAliasError::Localized),
-                SymbolRedirect::Plainval | SymbolRedirect::Varalias => {}
+            match sym.value_cell() {
+                ValueCell::Forwarded(_) => return Err(MakeAliasError::Forwarded),
+                ValueCell::Localized(_) => return Err(MakeAliasError::Localized),
+                ValueCell::Plain(_) | ValueCell::Alias(_) => {}
             }
         }
         Ok(())
@@ -4821,19 +4206,14 @@ impl Obarray {
         let mut current = id;
         for _ in 0..50 {
             let sym = self.slot(current)?;
-            match sym.flags.redirect() {
-                SymbolRedirect::Plainval => {
-                    // Safety: redirect=Plainval guarantees val.plain is live.
-                    let v = unsafe { &sym.val.plain };
-                    if v.is_unbound() {
-                        return None;
-                    }
-                    return Some(v);
+            match sym.value_cell() {
+                ValueCell::Plain(_) => {
+                    return sym.plain_value_ref().filter(|v| !v.is_unbound());
                 }
-                SymbolRedirect::Varalias => {
-                    current = unsafe { sym.val.alias };
+                ValueCell::Alias(target) => {
+                    current = target;
                 }
-                SymbolRedirect::Localized => {
+                ValueCell::Localized(_) => {
                     // Return a reference to the BLV defcell cdr (the default).
                     return self.blv(current).and_then(|blv| {
                         // Safety: same as symbol_value_id's Localized arm.
@@ -4848,10 +4228,7 @@ impl Obarray {
                         }
                     });
                 }
-                SymbolRedirect::Forwarded => {
-                    use crate::emacs_core::forward::LispFwd;
-                    // Safety: `install_*fwd` leaks every descriptor.
-                    let fwd: &'static LispFwd = unsafe { &*sym.val.fwd };
+                ValueCell::Forwarded(fwd) => {
                     if let Some(value) = fwd.load_ref() {
                         return Some(value);
                     }
@@ -5141,30 +4518,27 @@ impl GcTrace for Obarray {
             if skip_symbol_cells {
                 continue;
             }
-            match sym.flags.redirect() {
-                SymbolRedirect::Plainval => {
-                    // Safety: redirect==Plainval guarantees val.plain is
-                    // the live union variant. TaggedValue is Copy. Relaxed
-                    // atomic load: a concurrent mutator may store via
-                    // store_value_atomic into the same word.
-                    let v = load_value_atomic(unsafe { &sym.val.plain });
+            // Acquire loads: a concurrent mutator may publish into the
+            // same word (`CellWrite`).
+            match sym.value_cell_acquire() {
+                ValueCell::Plain(v) => {
                     if v != Value::UNBOUND {
                         roots.push(v);
                     }
                 }
-                // Varalias:  val.alias is a SymId, not a heap ref.
-                // Forwarded: val.fwd is 'static forwarder metadata.
+                // Alias:     a SymId, not a heap ref.
+                // Forwarded: 'static forwarder metadata (owned values are
+                //            traced from `value_fwds` below).
                 // Localized: BLV contents traced via self.blvs below.
-                SymbolRedirect::Varalias
-                | SymbolRedirect::Forwarded
-                | SymbolRedirect::Localized => {}
+                ValueCell::Alias(_) | ValueCell::Forwarded(_) | ValueCell::Localized(_) => {}
             }
             roots.push(load_value_atomic(&sym.function));
             roots.push(load_value_atomic(&sym.plist));
         }
         // BLV contents for LOCALIZED symbols. Unchanged.
         for &blv_ptr in &self.blvs {
-            let blv = unsafe { &*blv_ptr };
+            // SAFETY: the pool's records live as long as `self`.
+            let blv = unsafe { &*blv_ptr.as_ptr() };
             roots.push(load_value_atomic(&blv.defcell));
             roots.push(load_value_atomic(&blv.valcell));
             roots.push(load_value_atomic(&blv.where_buf));

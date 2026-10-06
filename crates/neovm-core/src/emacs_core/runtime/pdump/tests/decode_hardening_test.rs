@@ -207,10 +207,10 @@ fn pdump_localized_rebuild_preserves_validated_symbol_flags() {
         };
         let obarray = convert::load_obarray(&mut decoder, &residual_obarray(data)).unwrap();
         let symbol = obarray.get_by_id(_symbols.runtime_symbol).unwrap();
-        assert_eq!(symbol.flags.redirect(), SymbolRedirect::Localized);
-        assert_eq!(symbol.flags.trapped_write(), trapped_write);
-        assert_eq!(symbol.flags.interned(), interned);
-        assert!(symbol.flags.declared_special());
+        assert_eq!(symbol.redirect(), SymbolRedirect::Localized);
+        assert_eq!(symbol.trapped_write(), trapped_write);
+        assert_eq!(symbol.flags().interned(), interned);
+        assert!(symbol.flags().declared_special());
     }
 }
 

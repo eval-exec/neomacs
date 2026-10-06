@@ -240,15 +240,12 @@ pub(crate) fn inhibit_modification_hooks(ctx: &crate::emacs_core::eval::Context)
     if let Some(s) = ctx.obarray.get_by_id(sym) {
         match s.redirect() {
             SymbolRedirect::Forwarded => {
-                // SAFETY: `redirect() == Forwarded` means `val.fwd` is the live
-                // field, and every forwarder is leaked at registration.
-                let fwd: &'static crate::emacs_core::forward::LispFwd = unsafe { &*s.val.fwd };
                 // Whichever forwarder this runtime installed for it -- the
                 // `DEFVAR_BOOL` flag, or an object cell when the symbol was
-                // adopted as a global object variable -- `load_ref` is the
+                // adopted as a global object variable -- `load` is the
                 // one-load read of `do_symval_forwarding`; only a buffer
                 // object forwarder (never this symbol) answers `None`.
-                if let Some(value) = fwd.load_ref() {
+                if let Some(value) = s.forwarded_descriptor().and_then(|fwd| fwd.load()) {
                     return value.is_truthy();
                 }
             }
@@ -593,7 +590,7 @@ fn deactivate_mark_set_is_noop(
     let Some(symbol) = ctx.obarray.get_by_id(sym) else {
         return false;
     };
-    if symbol.flags.trapped_write() != SymbolTrappedWrite::Untrapped {
+    if symbol.trapped_write() != SymbolTrappedWrite::Untrapped {
         return false;
     }
     match symbol.redirect() {
