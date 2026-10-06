@@ -1996,21 +1996,51 @@ fn builtin_delete_with_symbols(args: Vec<Value>, symbols_with_pos_enabled: bool)
             }
         }
         ValueKind::String => {
-            let mut changed = false;
-            let mut kept = Vec::new();
-            let string = args[1].as_lisp_string().expect("string");
-            for cp in super::lisp_string_char_codes(string) {
-                let ch = Value::fixnum(cp as i64);
-                if equal_value_swp(elt, &ch, 0, symbols_with_pos_enabled) {
-                    changed = true;
+            // GNU Fdelete (fns.c:2190-2223) compares character codes, copies
+            // their original bytes, and preserves the input storage kind.
+            let Some(target) = elt.as_fixnum() else {
+                return Ok(args[1]);
+            };
+            let string = args[1].as_lisp_string().ok_or_else(|| {
+                signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("stringp"), args[1]],
+                )
+            })?;
+            let storage = string.storage_kind();
+            let bytes = string.as_bytes();
+            let mut kept = Vec::with_capacity(bytes.len());
+            let mut removed = 0;
+            let mut pos = 0;
+            while pos < bytes.len() {
+                let (code, len) = match storage {
+                    crate::heap_types::LispStringStorageKind::Unibyte => (u32::from(bytes[pos]), 1),
+                    crate::heap_types::LispStringStorageKind::Multibyte => {
+                        crate::emacs_core::emacs_char::string_char_unchecked(&bytes[pos..])
+                    }
+                };
+                if i64::from(code) == target {
+                    removed += 1;
                 } else {
-                    kept.push(ch);
+                    kept.extend_from_slice(&bytes[pos..pos + len]);
                 }
+                pos += len;
             }
-            if !changed {
+            if removed == 0 {
                 return Ok(args[1]);
             }
-            builtin_concat(vec![Value::list(kept)])
+            let rebuilt = match storage {
+                crate::heap_types::LispStringStorageKind::Unibyte => {
+                    crate::heap_types::LispString::from_unibyte(kept)
+                }
+                crate::heap_types::LispStringStorageKind::Multibyte => {
+                    crate::heap_types::LispString::from_emacs_bytes_with_chars(
+                        kept,
+                        string.schars() - removed,
+                    )
+                }
+            };
+            Ok(Value::heap_string(rebuilt))
         }
         _ => Err(signal(
             LispCondition::WrongTypeArgument,
@@ -2198,3 +2228,7 @@ fn builtin_nconc_slice_values_scan<const OBSERVED: bool>(args: &[Value]) -> Eval
 #[cfg(test)]
 #[path = "tests/collection_scan_capture.rs"]
 mod collection_scan_capture;
+
+#[cfg(test)]
+#[path = "tests/gdn_equality.rs"]
+mod gdn_equality;
