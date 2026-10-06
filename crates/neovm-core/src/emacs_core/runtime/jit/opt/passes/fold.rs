@@ -30,10 +30,31 @@ pub(crate) struct FoldStats {
     pub(crate) analysis_bailed: bool,
 }
 
+/// Validation work after transactional CFG cleanup. Threading: an immutable
+/// compiler-local choice; it contains neither IR nor runtime state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CleanupValidation {
+    ReuseCleanup,
+    RepeatCleanup,
+}
+static_assertions::assert_impl_all!(CleanupValidation: Send, Sync);
+
 /// Run only when the owning pipeline selected the fold pass. Calls, stores,
 /// allocations and polls stay in their original order. No fact reads a Lisp
 /// header, and no patched environment constant supplies an instance's type.
 pub(crate) fn run(func: &mut Func) -> Result<FoldStats, VerifyError> {
+    let validation = if super::super::pass_fast::enabled() {
+        CleanupValidation::ReuseCleanup
+    } else {
+        CleanupValidation::RepeatCleanup
+    };
+    run_with_validation(func, validation)
+}
+
+fn run_with_validation(
+    func: &mut Func,
+    validation: CleanupValidation,
+) -> Result<FoldStats, VerifyError> {
     func.verify()?;
     let Some(analysis) = analyze(func)? else {
         return Ok(FoldStats {
@@ -269,9 +290,20 @@ pub(crate) fn run(func: &mut Func) -> Result<FoldStats, VerifyError> {
     }
     thread_edges(func, &analysis, &mut stats)?;
     cleanup(func)?;
-    func.verify()?;
+    // Cleanup validates its complete remapped candidate before publication;
+    // its metadata-preserving sink path also runs the full verifier. No IR
+    // mutation occurs after that successful return. FAST keeps that result;
+    // the original work schedule remains available with FAST=off.
+    match validation {
+        CleanupValidation::ReuseCleanup => {}
+        CleanupValidation::RepeatCleanup => func.verify()?,
+    }
     Ok(stats)
 }
+
+#[cfg(test)]
+#[path = "tests/fold_validation.rs"]
+mod validation_tests;
 
 /// Invocation-local fixed-point facts. An edge slot distinguishes even two
 /// switch edges with the same destination and different phi arguments.

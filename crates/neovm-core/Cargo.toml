@@ -176,6 +176,7 @@ fuzzing = []
 static_assertions.workspace = true
 trybuild = "1.0"
 expect-test.workspace = true
+thiserror.workspace = true
 neomacs-infra.workspace = true
 criterion = { version = "0.8", default-features = false, features = ["plotters", "cargo_bench_support"] }
 proptest.workspace = true
