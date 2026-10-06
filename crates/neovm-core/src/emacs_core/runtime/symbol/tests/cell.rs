@@ -340,10 +340,10 @@ fn stage(sym: &mut LispSymbol, redirect: SymbolRedirect, word: Value) {
 ///   State V: redirect=Varalias, val word = HEAP_B (deliberately staged as a
 ///            heap-looking word so a TORN (Plainval, HEAP_B) read is detectable;
 ///            a real SymId alias word would be non-heap and silently invisible)
-/// EXACTLY mirroring `CellWrite`: bump seq to ODD (Release), do the two
-/// writes (redirect first, then the val word — so a non-retrying reader that
-/// samples redirect=Plainval then the still-stale/just-updated word can tear),
-/// bump seq back to EVEN (Release).
+/// EXACTLY mirroring `CellWrite`: open the window (`seqlock_enter`: odd count,
+/// Release fence), do the two writes (redirect first, then the val word — so a
+/// non-retrying reader that samples redirect=Plainval then the
+/// still-stale/just-updated word can tear), close it (`seqlock_exit`).
 fn run_seqlock_writer(shared: Shared, done: &AtomicBool) {
     use std::sync::atomic::Ordering;
     let sym: &mut LispSymbol = unsafe { &mut *shared.0 };
@@ -352,14 +352,14 @@ fn run_seqlock_writer(shared: Shared, done: &AtomicBool) {
     let b = heap_b();
     for _ in 0..SEQLOCK_WRITER_ITERS {
         // --- State V: Varalias arm, word staged as HEAP_B ---
-        seq.fetch_add(1, Ordering::Release); // -> odd: arm change in flight
+        seqlock_enter(seq); // -> odd: arm change in flight
         stage(sym, SymbolRedirect::Varalias, b);
-        seq.fetch_add(1, Ordering::Release); // -> even
+        seqlock_exit(seq); // -> even
 
         // --- State P: Plainval arm, word = HEAP_A ---
-        seq.fetch_add(1, Ordering::Release); // -> odd
+        seqlock_enter(seq); // -> odd
         stage(sym, SymbolRedirect::Plainval, a);
-        seq.fetch_add(1, Ordering::Release); // -> even
+        seqlock_exit(seq); // -> even
     }
     done.store(true, Ordering::Release);
 }
@@ -369,16 +369,15 @@ fn run_paused_seqlock_writer(
     arm_published: &std::sync::Barrier,
     reader_sampled: &std::sync::Barrier,
 ) {
-    use std::sync::atomic::Ordering;
     let sym: &mut LispSymbol = unsafe { &mut *shared.0 };
     let seq: &AtomicU32 = unsafe { &*shared.1 };
 
-    seq.fetch_add(1, Ordering::Release); // odd: arm change in flight
+    seqlock_enter(seq); // odd: arm change in flight
     sym.flags.set_redirect(SymbolRedirect::Plainval);
     arm_published.wait();
     reader_sampled.wait();
     stage(sym, SymbolRedirect::Plainval, heap_a());
-    seq.fetch_add(1, Ordering::Release); // even: stable State P
+    seqlock_exit(seq); // even: stable State P
 }
 
 #[test]

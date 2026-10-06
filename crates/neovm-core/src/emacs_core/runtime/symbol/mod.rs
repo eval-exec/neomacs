@@ -1301,9 +1301,8 @@ impl Clone for Obarray {
             &'static crate::emacs_core::forward::LispFwd,
         > = rustc_hash::FxHashMap::default();
         let mut value_fwds = Vec::with_capacity(self.value_fwds.len());
-        let gate = MarkGate::read();
         for idx in 0..symbols.len() {
-            let Some(mut write) = symbols.cell_write(idx, gate) else {
+            let Some(mut write) = symbols.cell_write(idx, MarkGate::read()) else {
                 continue;
             };
             match write.arm() {
@@ -3376,9 +3375,8 @@ impl Obarray {
     /// legacy `value` enum field. Visits Plainval symbols (non-UNBOUND)
     /// and BLV defcell defaults (for Localized symbols).
     pub fn for_each_value_cell_mut(&mut self, mut f: impl FnMut(&mut Value)) {
-        let gate = MarkGate::read();
         for idx in 0..self.symbols.len() {
-            let Some(mut write) = self.symbols.cell_write(idx, gate) else {
+            let Some(mut write) = self.symbols.cell_write(idx, MarkGate::read()) else {
                 continue;
             };
             match write.arm() {

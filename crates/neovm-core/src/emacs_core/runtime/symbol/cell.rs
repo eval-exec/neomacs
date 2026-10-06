@@ -678,8 +678,12 @@ impl LispSymbol {
 /// "no mark is running" without having asked.
 ///
 /// The answer stays true for the write: a mark starts only at a
-/// world-stopped handshake, and a cell write reaches no safe point.
-#[derive(Clone, Copy, Debug)]
+/// world-stopped handshake, and a cell write reaches no safe point. It is
+/// neither `Copy` nor `Clone`, so one read serves one write and cannot be
+/// carried across a safe point to a later one, where a mark that began in
+/// between would miss that write's pre-image. (P7.10's mutator token makes
+/// the safe point itself unrepresentable here.)
+#[derive(Debug)]
 pub(super) struct MarkGate {
     marking: bool,
 }
@@ -693,9 +697,27 @@ impl MarkGate {
     }
 
     #[inline(always)]
-    pub(super) fn is_marking(self) -> bool {
+    pub(super) fn is_marking(&self) -> bool {
         self.marking
     }
+}
+
+/// Open a chunk seqlock's write window: the odd count, then a Release fence,
+/// so no store inside the window can become visible before the count that
+/// announces it. A Release increment alone orders only what came before it;
+/// this is Boehm's fence-based writer ("Can Seqlocks Get Along With
+/// Programming Language Memory Models?", MSPC 2012).
+#[inline(always)]
+fn seqlock_enter(seq: &AtomicU32) {
+    seq.fetch_add(1, Ordering::Relaxed);
+    std::sync::atomic::fence(Ordering::Release);
+}
+
+/// Close a chunk seqlock's write window: the even count, Release, after
+/// every store inside it.
+#[inline(always)]
+fn seqlock_exit(seq: &AtomicU32) {
+    seq.fetch_add(1, Ordering::Release);
 }
 
 /// Exclusive write access to one symbol's value cell: the only way to change
@@ -719,8 +741,12 @@ impl<'a> CellWrite<'a> {
     /// the mark gate.
     #[inline(always)]
     pub(super) fn begin(sym: &'a mut LispSymbol, seq: &'a AtomicU32, gate: MarkGate) -> Self {
+        debug_assert!(
+            gate.is_marking() || !crate::tagged::gc::concurrent_mark_active(),
+            "a mark began between this write's gate read and the write"
+        );
         let seq = if gate.is_marking() {
-            seq.fetch_add(1, Ordering::Release); // -> odd
+            seqlock_enter(seq);
             Some(seq)
         } else {
             None
@@ -782,7 +808,7 @@ impl Drop for CellWrite<'_> {
     #[inline(always)]
     fn drop(&mut self) {
         if let Some(seq) = self.seq {
-            seq.fetch_add(1, Ordering::Release); // -> even
+            seqlock_exit(seq);
         }
     }
 }
@@ -957,7 +983,11 @@ pub(super) fn read_symbol_children<const MAJOR: bool>(
         let word = sym.load_word_acquire();
         let function = load_value_atomic(&sym.function);
         let plist = load_value_atomic(&sym.plist);
-        if seq.load(Ordering::Acquire) != s1 {
+        // Boehm's reader half of `seqlock_enter`: a load above that saw a
+        // store from a write window also sees, after this fence, the odd
+        // count that opened it.
+        std::sync::atomic::fence(Ordering::Acquire);
+        if seq.load(Ordering::Relaxed) != s1 {
             // An arm change landed during the read — the quadruple may be torn.
             continue;
         }
