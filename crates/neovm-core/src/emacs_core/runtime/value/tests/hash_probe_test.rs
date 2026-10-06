@@ -168,15 +168,33 @@ fn a_long_list_lookup_does_not_recurse_per_cdr() {
     let test = HashTableTest::Equal;
     let mut storage = HashTableStorage::default();
     storage.insert(stored.to_hash_key_swp(&test, false), stored, Value::T);
+    // Raw values stay on their mutator. This mutator lends its table and key
+    // to one helper thread only to get a small stack, and blocks in `join`
+    // for the helper's whole life, so exactly one thread touches the heap.
+    struct BlockedOwnerLend<T>(T);
+    // SAFETY: the lending thread does nothing but wait in `join` while the
+    // helper runs; spawn and join order every heap access between them.
+    unsafe impl<T> Send for BlockedOwnerLend<T> {}
+    impl<T> BlockedOwnerLend<T> {
+        // A method call moves the whole wrapper into the closure; a field
+        // pattern would capture only the non-Send fields.
+        fn into_inner(self) -> T {
+            self.0
+        }
+    }
+    let lend = BlockedOwnerLend((&storage, copy));
     let found = std::thread::scope(|scope| {
         std::thread::Builder::new()
             .stack_size(32 * 1024)
-            .spawn_scoped(scope, || storage.lookup(copy, test, false).copied())
+            .spawn_scoped(scope, move || {
+                let (storage, copy) = lend.into_inner();
+                storage.lookup(copy, test, false).copied().map(Value::bits)
+            })
             .expect("spawn a small-stack thread")
             .join()
             .expect("the lookup fits a 32 KiB stack")
     });
-    assert_eq!(found.map(Value::bits), Some(Value::T.bits()));
+    assert_eq!(found, Some(Value::T.bits()));
 }
 
 #[test]

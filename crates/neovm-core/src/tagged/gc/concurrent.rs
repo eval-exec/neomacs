@@ -740,7 +740,7 @@ impl TaggedHeap {
         let written = std::mem::take(&mut self.satb_snapshotted_owners);
         clear_barrier_cache(&TAGGED_HEAP_SATB_CACHE);
         for bits in written {
-            self.push_value_children_to_gray(TaggedValue(bits), "satb-written-retrace");
+            self.push_value_children_to_gray(TaggedValue::from_bits(bits), "satb-written-retrace");
         }
         // Classify what the drain is about to trace, per kind — the measurement
         // that decides which kinds a concurrent-tracing extension should take

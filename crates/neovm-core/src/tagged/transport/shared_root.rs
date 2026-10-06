@@ -36,13 +36,13 @@ enum Transport {
 
 /// A value materialized from a [`SharedRoot`] on its heap's mutator.
 ///
-/// The guard borrows the root, which keeps the object alive, and the heap,
-/// which proves the caller is that heap's mutator. Like every raw value it is
-/// confined to this thread.
+/// [`SharedRoot::materialize`] ties `'r` to both the root, which keeps the
+/// object alive, and the heap borrow that proves the caller is that heap's
+/// mutator. Like every raw value it is confined to this thread.
 #[must_use = "materializing a shared root has no effect besides producing its value"]
 pub struct LocalRoot<'r> {
     value: TaggedValue,
-    _borrows: PhantomData<(&'r SharedRoot, &'r TaggedHeap)>,
+    _borrows: PhantomData<&'r ()>,
 }
 
 /// Why a [`SharedRoot`] could not be created or materialized.

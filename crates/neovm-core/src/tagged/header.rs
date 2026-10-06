@@ -65,7 +65,7 @@ impl ConsCell {
     #[inline]
     pub unsafe fn load_car(&self) -> TaggedValue {
         let p = &self.car as *const TaggedValue as *const AtomicUsize;
-        TaggedValue(unsafe { (*p).load(Ordering::Acquire) })
+        TaggedValue::from_bits(unsafe { (*p).load(Ordering::Acquire) })
     }
 
     /// Atomic (acquire) read of `cdr` (the cdr/next-free union word).
@@ -77,7 +77,7 @@ impl ConsCell {
     #[inline]
     pub unsafe fn load_cdr(&self) -> TaggedValue {
         let p = &self.cdr_or_next as *const ConsCdrOrNext as *const AtomicUsize;
-        TaggedValue(unsafe { (*p).load(Ordering::Acquire) })
+        TaggedValue::from_bits(unsafe { (*p).load(Ordering::Acquire) })
     }
 
     /// Store `car` atomically so a concurrent GC read sees a whole value,
@@ -1121,7 +1121,7 @@ impl LispValueVec {
     #[inline]
     pub fn load_atomic(&self, i: usize) -> TaggedValue {
         let p = &self.as_slice()[i] as *const TaggedValue as *const AtomicUsize;
-        TaggedValue(unsafe { (*p).load(Ordering::Acquire) })
+        TaggedValue::from_bits(unsafe { (*p).load(Ordering::Acquire) })
     }
 
     /// Atomic (release) store to element `i` of owned storage. The element must
@@ -1141,7 +1141,7 @@ impl LispValueVec {
     pub fn iter_atomic(&self) -> impl Iterator<Item = TaggedValue> + '_ {
         self.as_slice().iter().map(|slot| {
             let p = slot as *const TaggedValue as *const AtomicUsize;
-            TaggedValue(unsafe { (*p).load(Ordering::Acquire) })
+            TaggedValue::from_bits(unsafe { (*p).load(Ordering::Acquire) })
         })
     }
 
@@ -1361,7 +1361,7 @@ impl VectorScanSnapshot {
 #[inline]
 pub fn load_value_atomic(slot: &TaggedValue) -> TaggedValue {
     let p = slot as *const TaggedValue as *const AtomicUsize;
-    TaggedValue(unsafe { (*p).load(Ordering::Acquire) })
+    TaggedValue::from_bits(unsafe { (*p).load(Ordering::Acquire) })
 }
 
 /// Atomic (release) store to a single `TaggedValue` slot in place. See the
@@ -1611,7 +1611,7 @@ impl ByteCodeSlotObjects {
     /// [`load_value_atomic`]).
     #[inline(always)]
     pub fn get(&self, slot: ByteCodeSlotObject) -> TaggedValue {
-        TaggedValue(self.word(slot).load(Ordering::Acquire))
+        TaggedValue::from_bits(self.word(slot).load(Ordering::Acquire))
     }
 
     /// Byte offset of `slot`'s word in this struct (the pdump bakes a

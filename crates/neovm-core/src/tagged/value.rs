@@ -25,6 +25,7 @@ use malachite::integer::Integer;
 use std::cell::RefCell;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::marker::PhantomData;
 
 use crate::emacs_core::intern::{
     SymId, UNBOUND_SYM_ID, canonical_symbol_for_name, resolve_sym_lisp_string, symbol_name_id,
@@ -151,9 +152,40 @@ pub(crate) fn update_static_subr_object_entry(
 ///
 /// This is `Copy` and `Eq` — can be freely duplicated and compared.
 /// Heap access is via direct pointer dereference (no ObjId indirection).
-#[derive(Clone, Copy, PartialOrd, Ord)]
+///
+/// A raw value is confined to the mutator thread that holds it: it stays
+/// valid only while that mutator keeps it reachable, so it is `!Send` and
+/// `!Sync`. Values leave a mutator as an
+/// [`ImmediateValue`](crate::tagged::transport::ImmediateValue) or a rooted
+/// [`SharedRoot`](crate::tagged::transport::SharedRoot); the collector carries
+/// its own work words. The marker is zero-sized, so a value is still exactly
+/// one machine word with the same layout and code.
+#[derive(Clone, Copy)]
 #[repr(transparent)]
-pub struct TaggedValue(pub(crate) usize);
+pub struct TaggedValue(pub(crate) usize, ThreadConfined);
+
+/// Zero-sized marker that makes a raw value `!Send` and `!Sync`.
+type ThreadConfined = PhantomData<*const ()>;
+
+static_assertions::assert_not_impl_any!(TaggedValue: Send, Sync);
+static_assertions::assert_eq_size!(TaggedValue, usize);
+static_assertions::assert_eq_align!(TaggedValue, usize);
+static_assertions::assert_eq_size!(Option<TaggedValue>, [usize; 2]);
+
+/// Raw word order (no Lisp meaning), for ordered containers keyed by values.
+impl PartialOrd for TaggedValue {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for TaggedValue {
+    #[inline]
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.cmp(&other.0)
+    }
+}
 
 /// `PartialEq` uses structural comparison (`equal`), matching the behavior
 /// of the old `Value` enum. This allows `assert_eq!` in tests to work
@@ -245,10 +277,10 @@ impl TaggedValue {
     // -- Special values --
 
     /// The nil value. `nil = Symbol(0) = 0`.
-    pub const NIL: Self = Self(0);
+    pub const NIL: Self = Self(0, PhantomData);
 
     /// The t (true) value. `t = Symbol(1) = 0x8`.
-    pub const T: Self = Self(1 << TAG_BITS);
+    pub const T: Self = Self(1 << TAG_BITS, PhantomData);
 
     /// The `Qunbound` sentinel. GNU represents this as a real symbol
     /// object, not as an immediate tag. Neomacs mirrors that shape with
@@ -257,7 +289,10 @@ impl TaggedValue {
     /// This must never leak into ordinary Lisp code — callers that
     /// observe it should either signal `void-variable` or treat it
     /// as "absent" depending on context.
-    pub const UNBOUND: Self = Self((UNBOUND_SYM_ID.0 as usize) << TAG_BITS | TAG_SYMBOL);
+    pub const UNBOUND: Self = Self(
+        (UNBOUND_SYM_ID.0 as usize) << TAG_BITS | TAG_SYMBOL,
+        PhantomData,
+    );
 
     /// GNU's `dead_object ()` (`src/lisp.h:1353-1357`): "Return a Lisp_Object
     /// value that does not correspond to any object. This can make some Lisp
@@ -270,7 +305,7 @@ impl TaggedValue {
     /// a reclaimed cell's slots still decode as ordinary Lisp values. `nil` in
     /// the car is indistinguishable from a real `nil`; `dead_object` is
     /// distinguishable from every live value, which is the whole point.
-    pub const DEAD: Self = Self(TAG_STRING);
+    pub const DEAD: Self = Self(TAG_STRING, PhantomData);
 
     /// GNU `deadp` (`src/alloc.c:425-429`) — is this the free-list poison?
     #[inline]
@@ -285,7 +320,10 @@ impl TaggedValue {
     pub fn fixnum(n: i64) -> Self {
         // Encode: (n << 2) | 2. The low 2 bits are `10`, matching GNU's
         // fixnum tags 010 and 110.
-        Self(((n as usize) << FIXNUM_SHIFT) | FIXNUM_CHECK_VALUE)
+        Self(
+            ((n as usize) << FIXNUM_SHIFT) | FIXNUM_CHECK_VALUE,
+            PhantomData,
+        )
     }
 
     /// Maximum fixnum value (62-bit signed).
@@ -298,7 +336,7 @@ impl TaggedValue {
     /// Create a symbol value from a SymId.
     #[inline]
     pub fn from_sym_id(id: SymId) -> Self {
-        Self((id.0 as usize) << TAG_BITS | TAG_SYMBOL)
+        Self((id.0 as usize) << TAG_BITS | TAG_SYMBOL, PhantomData)
     }
 
     // -- Cons --
@@ -311,7 +349,7 @@ impl TaggedValue {
     pub unsafe fn from_cons_ptr(cell: *const ConsCell) -> Self {
         debug_assert!(!cell.is_null());
         debug_assert!(cell as usize & TAG_MASK == 0, "ConsCell not aligned");
-        Self(cell as usize | TAG_CONS)
+        Self(cell as usize | TAG_CONS, PhantomData)
     }
 
     // -- String --
@@ -324,7 +362,7 @@ impl TaggedValue {
     pub unsafe fn from_string_ptr(obj: *const StringObj) -> Self {
         debug_assert!(!obj.is_null());
         debug_assert!(obj as usize & TAG_MASK == 0, "StringObj not aligned");
-        Self(obj as usize | TAG_STRING)
+        Self(obj as usize | TAG_STRING, PhantomData)
     }
 
     // -- Float --
@@ -337,7 +375,7 @@ impl TaggedValue {
     pub unsafe fn from_float_ptr(obj: *const FloatObj) -> Self {
         debug_assert!(!obj.is_null());
         debug_assert!(obj as usize & TAG_MASK == 0, "FloatObj not aligned");
-        Self(obj as usize | TAG_FLOAT)
+        Self(obj as usize | TAG_FLOAT, PhantomData)
     }
 
     // -- Vectorlike --
@@ -350,7 +388,7 @@ impl TaggedValue {
     pub unsafe fn from_veclike_ptr(obj: *const VecLikeHeader) -> Self {
         debug_assert!(!obj.is_null());
         debug_assert!(obj as usize & TAG_MASK == 0, "VecLikeHeader not aligned");
-        Self(obj as usize | TAG_VECLIKE)
+        Self(obj as usize | TAG_VECLIKE, PhantomData)
     }
 
     // -- GNU Lisp object constructors --
@@ -447,7 +485,7 @@ impl TaggedValue {
     /// [`bits`]: Self::bits
     #[inline(always)]
     pub(crate) const fn from_bits(bits: usize) -> Self {
-        Self(bits)
+        Self(bits, PhantomData)
     }
 
     #[inline(always)]

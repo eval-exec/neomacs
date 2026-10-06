@@ -65,6 +65,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `Rc<RefCell<neomacs_display_protocol::input_progress::InputStaging>>: Send`
            which is required by `neovm_core::Context: Send`
+           `*const (): Send`
+           which is required by `neovm_core::Context: Send`
            `Rc<Cell<Option<shared::PointBeforeCommand>>>: Send`
            which is required by `neovm_core::Context: Send`
            `NonNull<()>: Send`
@@ -92,8 +94,6 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `*mut ConsCell: Send`
            which is required by `neovm_core::Context: Send`
            `(dyn for<'a> FnMut(&'a mut neovm_core::Context) + 'static): Send`
-           which is required by `neovm_core::Context: Send`
-           `*const (): Send`
            which is required by `neovm_core::Context: Send`
            `(dyn for<'a> FnMut(&'a mut neovm_core::Context, RedisplayMiniGeometryRequest) -> Result<TaggedValue, Flow> + 'static): Send`
            which is required by `neovm_core::Context: Send`
@@ -170,4 +170,6 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `NonNull<ByteCodeFunction>: Send`
            which is required by `neovm_core::Context: Send`
            `NonNull<[Op]>: Send`
+           which is required by `neovm_core::Context: Send`
+           `*const (): Sync`
            which is required by `neovm_core::Context: Send`

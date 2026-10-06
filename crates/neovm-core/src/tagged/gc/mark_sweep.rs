@@ -771,7 +771,7 @@ impl TaggedHeap {
         // owner inserted meanwhile would be merged back.
         let owners = std::mem::take(&mut self.mapped_remembered);
         for &bits in &owners {
-            self.push_value_children_to_gray(TaggedValue(bits), "remembered-dump-child");
+            self.push_value_children_to_gray(TaggedValue::from_bits(bits), "remembered-dump-child");
         }
         let inserted = std::mem::replace(&mut self.mapped_remembered, owners);
         self.mapped_remembered.extend(inserted);

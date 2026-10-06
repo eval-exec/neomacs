@@ -25,11 +25,6 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
    |   pub struct NonNull<T: PointeeSized> {
    |   ----------------------------------- doesn't satisfy `NonNull<()>: Sync`, `NonNull<ByteCodeFunction>: Sync` or `NonNull<[Op]>: Sync`
    |
-  ::: $CARGO/portable-pty-$VERSION/src/lib.rs
-   |
-   |   pub trait MasterPty: Downcast + Send {
-   |   ------------------------------------ doesn't satisfy `_: Sync`
-   |
   ::: $RUST/core/src/cell.rs
    |
    |   pub struct Cell<T: ?Sized> {
@@ -55,6 +50,11 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
    | |     #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global,
    | | > {
    | |_- doesn't satisfy 6 bounds
+   |
+  ::: $CARGO/portable-pty-$VERSION/src/lib.rs
+   |
+   |   pub trait MasterPty: Downcast + Send {
+   |   ------------------------------------ doesn't satisfy `_: Sync`
    |
   ::: $RUST/std/src/io/mod.rs
    |
@@ -85,6 +85,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `Rc<neomacs_display_protocol::tty_palette::TtyPalette>: Sync`
            which is required by `neovm_core::Context: Sync`
            `Rc<RefCell<neomacs_display_protocol::input_progress::InputStaging>>: Sync`
+           which is required by `neovm_core::Context: Sync`
+           `*const (): Sync`
            which is required by `neovm_core::Context: Sync`
            `Rc<Cell<Option<shared::PointBeforeCommand>>>: Sync`
            which is required by `neovm_core::Context: Sync`
@@ -117,8 +119,6 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `*mut ConsCell: Sync`
            which is required by `neovm_core::Context: Sync`
            `(dyn for<'a> FnMut(&'a mut neovm_core::Context) + 'static): Sync`
-           which is required by `neovm_core::Context: Sync`
-           `*const (): Sync`
            which is required by `neovm_core::Context: Sync`
            `(dyn for<'a> FnMut(&'a mut neovm_core::Context, RedisplayMiniGeometryRequest) -> Result<TaggedValue, Flow> + 'static): Sync`
            which is required by `neovm_core::Context: Sync`
@@ -223,6 +223,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `NonNull<ByteCodeFunction>: Sync`
            which is required by `neovm_core::Context: Sync`
            `NonNull<[Op]>: Sync`
+           which is required by `neovm_core::Context: Sync`
+           `*const (): Send`
            which is required by `neovm_core::Context: Sync`
            `Cell<()>: Sync`
            which is required by `neovm_core::Context: Sync`

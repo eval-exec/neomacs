@@ -2929,7 +2929,7 @@ pub(crate) fn dump_hash_key(encoder: &mut DumpEncoder, k: &HashKey) -> DumpHashK
         HashKey::Window(w) => DumpHashKey::Window(*w),
         HashKey::Frame(f) => DumpHashKey::Frame(*f),
         HashKey::Ptr(p) => {
-            let value = TaggedValue(*p);
+            let value = TaggedValue::from_bits(*p);
             if value.is_heap_object() {
                 let id = encoder.value_to_heap_ref(&value);
                 DumpHashKey::HeapRef(id.index)

@@ -33,3 +33,5 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `CompiledLeaf: Send`
            `*const u64: Send`
            which is required by `CompiledLeaf: Send`
+           `*const (): Send`
+           which is required by `CompiledLeaf: Send`

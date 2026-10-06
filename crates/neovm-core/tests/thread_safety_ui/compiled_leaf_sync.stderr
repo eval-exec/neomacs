@@ -67,6 +67,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `CompiledLeaf: Sync`
            `(dyn cranelift_jit::memory::JITMemoryProvider + Send + 'static): Sync`
            which is required by `CompiledLeaf: Sync`
+           `*const (): Sync`
+           which is required by `CompiledLeaf: Sync`
            `*mut u8: Sync`
            which is required by `CompiledLeaf: Sync`
            `(dyn for<'a> Fn(&'a str) -> Option<*const u8> + Send + 'static): Sync`
