@@ -1596,34 +1596,34 @@ fn buffer_property_range_for_args(
         .map(|range| range.map(|byte_range| (buf_id, byte_range)))
 }
 
-fn begin_buffer_text_property_change(
+/// Run GNU's text-property change protocol on BUFFER: `prepare_to_modify_buffer_1`,
+/// the property mutation, then `signal_after_change`.
+///
+/// GNU selects BUFFER under `record_unwind_current_buffer` when it is not the
+/// current buffer, and records nothing when it is (textprop.c:1175-1184,
+/// bug#36190), so the caller's buffer is current again on every exit,
+/// including a hook, read-only or argument signal. The after-change signal
+/// runs only once the before-change signal and the mutation succeeded.
+fn with_buffer_property_change(
     eval: &mut super::eval::Context,
     buf_id: BufferId,
     byte_range: EmacsByteRange,
-) -> Result<(Option<BufferId>, crate::buffer::TextChange), Flow> {
-    let saved_current = eval.buffers.current_buffer_id();
-    if saved_current != Some(buf_id) {
-        eval.set_current_buffer_unrecorded(buf_id)?;
-    }
-    let change = super::editfns::text_change_for_unchanged_extent_in_manager(
-        &eval.buffers,
-        buf_id,
-        byte_range,
-    )?;
-    super::editfns::signal_before_property_change(eval, change)?;
-    Ok((saved_current, change))
-}
-
-fn finish_buffer_text_property_change(
-    eval: &mut super::eval::Context,
-    saved_current: Option<BufferId>,
-    change: crate::buffer::TextChange,
-) -> Result<(), Flow> {
-    let result = super::editfns::signal_after_property_change(eval, change);
-    if let Some(saved) = saved_current {
-        eval.restore_current_buffer_if_live(saved);
-    }
-    result
+    mutate: impl FnOnce(&mut BufferManager) -> EvalResult,
+) -> EvalResult {
+    let mut scope = super::eval::CurrentBufferScope::for_buffer(eval, buf_id)?;
+    let result = (|| {
+        let ctx = scope.context();
+        let change = super::editfns::text_change_for_unchanged_extent_in_manager(
+            &ctx.buffers,
+            buf_id,
+            byte_range,
+        )?;
+        super::editfns::signal_before_property_change(ctx, change)?;
+        let value = mutate(&mut ctx.buffers)?;
+        super::editfns::signal_after_property_change(ctx, change)?;
+        Ok(value)
+    })();
+    scope.finish(result)
 }
 
 fn call_text_property_hook_lists(
@@ -1836,21 +1836,16 @@ pub(crate) fn builtin_put_text_property_5(
         }
         // GNU `add_text_properties_1` verifies read-only text once, inside
         // `modify_text_properties` -> `prepare_to_modify_buffer_1`; here that is
-        // `begin_buffer_text_property_change` -> `signal_before_change_with_kind`.
+        // `with_buffer_property_change` -> `prepare_buffer_change`.
         // The range was validated above, so the interval work takes it directly
         // instead of re-parsing and re-validating the argument list.
         let prop = expect_property_key(&args[2])?;
         let val = args[3];
-        let (saved_current, change) = begin_buffer_text_property_change(eval, buf_id, byte_range)?;
-        let result = put_text_property_in_buffer_byte_range(
-            &mut eval.buffers,
-            buf_id,
-            byte_range,
-            prop,
-            val,
-        );
-        finish_buffer_text_property_change(eval, saved_current, change)?;
-        Ok(result)
+        with_buffer_property_change(eval, buf_id, byte_range, |buffers| {
+            Ok(put_text_property_in_buffer_byte_range(
+                buffers, buf_id, byte_range, prop, val,
+            ))
+        })
     } else {
         // Strings (and degenerate arg shapes): no buffer hooks, no buffer
         // read-only semantics — GNU's modify_text_properties is buffer-only.
@@ -2445,12 +2440,11 @@ pub(crate) fn builtin_add_text_properties_4(
         if unchanged {
             return Ok(Value::NIL);
         }
-        // Read-only text is verified once, inside `begin_buffer_text_property_change`
+        // Read-only text is verified once, inside `with_buffer_property_change`
         // (GNU `prepare_to_modify_buffer_1`).
-        let (saved_current, change) = begin_buffer_text_property_change(eval, buf_id, byte_range)?;
-        let result = builtin_add_text_properties_in_buffers(&mut eval.buffers, &args)?;
-        finish_buffer_text_property_change(eval, saved_current, change)?;
-        Ok(result)
+        with_buffer_property_change(eval, buf_id, byte_range, |buffers| {
+            builtin_add_text_properties_in_buffers(buffers, &args)
+        })
     } else {
         builtin_add_text_properties_in_buffers(&mut eval.buffers, &args)
     }
@@ -2593,12 +2587,11 @@ pub(crate) fn builtin_add_face_text_property(
         if unchanged {
             return Ok(Value::NIL);
         }
-        // Read-only text is verified once, inside `begin_buffer_text_property_change`
+        // Read-only text is verified once, inside `with_buffer_property_change`
         // (GNU `prepare_to_modify_buffer_1`).
-        let (saved_current, change) = begin_buffer_text_property_change(eval, buf_id, byte_range)?;
-        let result = builtin_add_face_text_property_in_buffers(&mut eval.buffers, args)?;
-        finish_buffer_text_property_change(eval, saved_current, change)?;
-        Ok(result)
+        with_buffer_property_change(eval, buf_id, byte_range, |buffers| {
+            builtin_add_face_text_property_in_buffers(buffers, args)
+        })
     } else {
         builtin_add_face_text_property_in_buffers(&mut eval.buffers, args)
     }
@@ -2730,16 +2723,14 @@ pub(crate) fn builtin_remove_text_properties(
             )
             .then_some((buf_id, byte_range))
         });
-    let before = if let Some((buf_id, byte_range)) = change {
-        Some(begin_buffer_text_property_change(eval, buf_id, byte_range)?)
-    } else {
-        None
-    };
-    let result = builtin_remove_text_properties_in_buffers(&mut eval.buffers, args.clone())?;
-    if let Some((saved_current, change)) = before {
-        finish_buffer_text_property_change(eval, saved_current, change)?;
+    match change {
+        Some((buf_id, byte_range)) => {
+            with_buffer_property_change(eval, buf_id, byte_range, |buffers| {
+                builtin_remove_text_properties_in_buffers(buffers, args)
+            })
+        }
+        None => builtin_remove_text_properties_in_buffers(&mut eval.buffers, args),
     }
-    Ok(result)
 }
 
 pub(crate) fn builtin_remove_text_properties_in_buffers(
@@ -2822,16 +2813,14 @@ pub(crate) fn builtin_set_text_properties(
                 || buf.text_props_range_has_any_interval_in_emacs_byte_range(byte_range))
             .then_some((buf_id, byte_range))
         });
-    let before = if let Some((buf_id, byte_range)) = change {
-        Some(begin_buffer_text_property_change(eval, buf_id, byte_range)?)
-    } else {
-        None
-    };
-    let result = builtin_set_text_properties_in_buffers(&mut eval.buffers, args.clone())?;
-    if let Some((saved_current, change)) = before {
-        finish_buffer_text_property_change(eval, saved_current, change)?;
+    match change {
+        Some((buf_id, byte_range)) => {
+            with_buffer_property_change(eval, buf_id, byte_range, |buffers| {
+                builtin_set_text_properties_in_buffers(buffers, args)
+            })
+        }
+        None => builtin_set_text_properties_in_buffers(&mut eval.buffers, args),
     }
-    Ok(result)
 }
 
 pub(crate) fn builtin_set_text_properties_in_buffers(
@@ -2919,17 +2908,14 @@ pub(crate) fn builtin_remove_list_of_text_properties_4(
             )
             .then_some((buf_id, byte_range))
         });
-    let before = if let Some((buf_id, byte_range)) = change {
-        Some(begin_buffer_text_property_change(eval, buf_id, byte_range)?)
-    } else {
-        None
-    };
-    let result =
-        builtin_remove_list_of_text_properties_in_buffers(&mut eval.buffers, &args.clone())?;
-    if let Some((saved_current, change)) = before {
-        finish_buffer_text_property_change(eval, saved_current, change)?;
+    match change {
+        Some((buf_id, byte_range)) => {
+            with_buffer_property_change(eval, buf_id, byte_range, |buffers| {
+                builtin_remove_list_of_text_properties_in_buffers(buffers, &args)
+            })
+        }
+        None => builtin_remove_list_of_text_properties_in_buffers(&mut eval.buffers, &args),
     }
-    Ok(result)
 }
 
 pub(crate) fn builtin_remove_list_of_text_properties_in_buffers(

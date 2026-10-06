@@ -609,6 +609,38 @@ fn edit_commands_remeasure_after_change_callbacks_like_gnu() {
 }
 
 #[test]
+fn buffer_property_hook_errors_restore_current_buffer() {
+    if !oracle_enabled() {
+        return;
+    }
+    for command in [
+        "(put-text-property 1 2 'face 'bold other)",
+        "(add-text-properties 1 2 '(face bold) other)",
+        "(set-text-properties 1 2 '(face bold) other)",
+        "(remove-text-properties 1 2 '(face nil) other)",
+        "(remove-list-of-text-properties 1 2 '(face) other)",
+        "(add-face-text-property 1 2 'italic nil other)",
+    ] {
+        for setup in [
+            "(setq buffer-read-only t)",
+            "(add-hook 'before-change-functions (lambda (&rest _) (error \"scope-hook\")) nil t)",
+        ] {
+            let form = format!(
+                "(let* ((orig (current-buffer)) (other (generate-new-buffer \"tse-property\")))
+                   (with-current-buffer other (insert \"abc\") (put-text-property 1 2 'face 'bold) {setup})
+                   (unwind-protect
+                     (list (condition-case e {command} (error (list (car e) (eq orig (current-buffer)))))
+                           (eq orig (current-buffer)))
+                     (with-current-buffer other (setq buffer-read-only nil before-change-functions nil)) (kill-buffer other)))"
+            );
+            let expected = run_oracle_eval(&form).expect("GNU property oracle");
+            let actual = run_neovm_eval(&form).expect("NeoVM property probe");
+            assert_eq!(actual, expected, "{form}");
+        }
+    }
+}
+
+#[test]
 fn replace_region_contents_remeasures_each_live_diff_run() {
     if !oracle_enabled() {
         return;
