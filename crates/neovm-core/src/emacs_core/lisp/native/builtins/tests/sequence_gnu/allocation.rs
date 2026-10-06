@@ -65,6 +65,7 @@ fn constructors_report_failed_storage_as_lisp_conditions() {
         builtin_make_vector(vec![huge, Value::NIL]),
         builtin_make_string(vec![huge, Value::fixnum(97)]),
         crate::emacs_core::boolvec::builtin_make_bool_vector(vec![huge, Value::T]),
+        crate::emacs_core::boolvec::builtin_make_bool_vector(vec![huge, Value::NIL]),
     ] {
         let FlowKind::Signal(signal) = result.expect_err("huge allocation").into_kind() else {
             panic!("allocation must signal");
@@ -81,4 +82,22 @@ fn constructors_report_failed_storage_as_lisp_conditions() {
         signal.data,
         vec![Value::string("Maximum string size exceeded")]
     );
+
+    let mut context = crate::emacs_core::eval::Context::new();
+    let original = context
+        .eval_str("(setq memory-signal-data '(error . bool-vector-null-allocation))")
+        .expect("live memory condition");
+    let flow = crate::emacs_core::boolvec::builtin_make_bool_vector_in_context(
+        &mut context,
+        vec![huge, Value::NIL],
+    )
+    .expect_err("huge zeroed allocation");
+    let FlowKind::Signal(signal) = flow.into_kind() else {
+        panic!("zeroed allocation must signal");
+    };
+    let crate::emacs_core::error::SignalDelivery::MemoryExhausted(binding) = signal.delivery()
+    else {
+        panic!("zeroed allocation must retain GNU memory delivery");
+    };
+    assert_eq!(binding.original(), original);
 }
