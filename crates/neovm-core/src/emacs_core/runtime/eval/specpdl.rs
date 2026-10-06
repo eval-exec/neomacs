@@ -893,16 +893,16 @@ impl Context {
                             cleanup_result?;
                         }
                     },
-                    SpecBinding::SaveExcursion {
-                        buffer_id,
-                        marker_id,
-                        marker,
-                    } => {
-                        self.restore_current_buffer_if_live(buffer_id);
-                        if let Some(saved_pt) =
-                            self.buffers.marker_emacs_byte_pos(buffer_id, marker_id)
+                    SpecBinding::SaveExcursion { marker, .. } => {
+                        // GNU editfns.c:792-803 follows the saved marker's
+                        // current buffer, including after buffer-swap-text.
+                        if let Some(location) =
+                            super::super::marker::marker_location(&self.buffers, marker)
                         {
-                            let _ = self.buffers.goto_buffer_emacs_byte_pos(buffer_id, saved_pt);
+                            self.restore_current_buffer_if_live(location.buffer());
+                            let _ = self
+                                .buffers
+                                .goto_buffer_emacs_byte_pos(location.buffer(), location.byte_pos());
                         }
                         super::super::marker::unchain_marker(&mut self.buffers, &marker);
                     }

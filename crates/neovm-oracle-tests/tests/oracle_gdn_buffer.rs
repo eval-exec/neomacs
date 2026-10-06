@@ -61,6 +61,14 @@ fn oracle_gdn_buf19() {
 }
 
 #[test]
+fn oracle_gdn_buf20() {
+    common::assert_oracle_parity_expect(
+        r#"(let ((b (generate-new-buffer " sw"))) (with-current-buffer b (insert "abcd") (goto-char 2)) (with-temp-buffer (insert "xy") (goto-char 2) (save-excursion (buffer-swap-text b) (goto-char 4)) (prog1 (list (point) (buffer-string)) (kill-buffer b))))"#,
+        expect_test::expect![[r#""OK (2 \"xy\")""#]],
+    );
+}
+
+#[test]
 fn oracle_gdn_word_motion_scripts_categories_and_overrides() {
     common::assert_oracle_parity_expect(
         r#"(list

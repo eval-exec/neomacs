@@ -1105,9 +1105,13 @@ pub(crate) enum SpecBinding {
     /// For VM: forms is a callable (bytecode fn), unbind_to calls apply.
     UnwindProtect { forms: Value, lexenv: Value },
     /// save-excursion state. Matches GNU SPECPDL_UNWIND_EXCURSION.
+    /// The owning evaluator's mutator records the original IDs for diagnostics
+    /// and retains their payload slots to preserve the specpdl layout. Restore
+    /// follows the traced marker's live location (GNU editfns.c:792-803), since
+    /// buffer-swap-text can move it away from these recording-time identities.
     SaveExcursion {
-        buffer_id: crate::buffer::BufferId,
-        marker_id: u64,
+        _saved_buffer_id: crate::buffer::BufferId,
+        _saved_marker_id: u64,
         marker: Value,
     },
     /// save-current-buffer state. Matches GNU record_unwind_current_buffer.

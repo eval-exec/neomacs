@@ -1204,8 +1204,8 @@ impl Context {
         // copying it with wide loads stalled on the preceding narrow stores.
         self.specpdl.reserve(1);
         self.specpdl.spare_capacity_mut()[0].write(SpecBinding::SaveExcursion {
-            buffer_id,
-            marker_id,
+            _saved_buffer_id: buffer_id,
+            _saved_marker_id: marker_id,
             marker,
         });
         // SAFETY: reserve ensured a spare slot and write initialized it above.

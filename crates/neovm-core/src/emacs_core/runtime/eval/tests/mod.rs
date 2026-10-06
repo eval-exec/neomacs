@@ -12666,7 +12666,7 @@ fn save_excursion_preserves_marker_across_stack_growth_and_gc() {
         assert_eq!(count, 1);
         assert_eq!(ev.specpdl.len(), 2);
         let SpecBinding::SaveExcursion {
-            buffer_id: saved_buffer,
+            _saved_buffer_id: saved_buffer,
             marker,
             ..
         } = ev.specpdl[count]
