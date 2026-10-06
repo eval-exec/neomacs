@@ -3,6 +3,7 @@
 pub mod buffer;
 pub(crate) mod buffer_text;
 mod edit_transaction;
+pub(crate) use edit_transaction::{CasifyExpansion, CasifyStorageShape};
 pub(crate) mod gap_buffer;
 mod marker_data;
 pub mod overlay;

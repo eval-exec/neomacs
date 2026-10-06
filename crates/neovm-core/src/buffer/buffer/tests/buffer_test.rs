@@ -461,11 +461,15 @@ fn casify_region_records_gnu_undo_shape_when_changed() {
     // on "hello world" with point at end.
     let (mut mgr, id) = casify_manager_with_text("hello world");
 
-    mgr.casify_replace_buffer_emacs_byte_range_lisp_string(
+    mgr.casify_replace_buffer_region_with_expansions(
         id,
         crate::buffer::EmacsByteRange::from_usize(0, 5),
         &LispString::from_utf8("HELLO"),
-    );
+        &[],
+        crate::buffer::CasifyStorageShape::PerCharacterExtentPreserved,
+        &crate::buffer::text_props::CasingPropertyMode::Unneeded,
+    )
+    .expect("valid casing transaction");
 
     let buf = mgr.get(id).expect("buffer");
     assert_eq!(buf.buffer_string(), "HELLO world");
@@ -509,11 +513,15 @@ fn casify_region_records_undo_even_when_unchanged() {
         buf.set_undo_list(ul);
     }
 
-    mgr.casify_replace_buffer_emacs_byte_range_lisp_string(
+    mgr.casify_replace_buffer_region_with_expansions(
         id,
         crate::buffer::EmacsByteRange::from_usize(0, 5),
         &LispString::from_utf8("HELLO"),
-    );
+        &[],
+        crate::buffer::CasifyStorageShape::PerCharacterExtentPreserved,
+        &crate::buffer::text_props::CasingPropertyMode::Unneeded,
+    )
+    .expect("valid casing transaction");
 
     let buf = mgr.get(id).expect("buffer");
     assert_eq!(buf.buffer_string(), "HELLO world");

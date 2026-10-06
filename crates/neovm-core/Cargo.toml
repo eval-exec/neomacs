@@ -226,6 +226,10 @@ harness = false
 name = "gdm_casing"
 path = "tests/gdm_casing.rs"
 
+[[test]]
+name = "gdm_region"
+path = "tests/gdm_region.rs"
+
 [[bench]]
 name = "buffer_text_backends"
 harness = false

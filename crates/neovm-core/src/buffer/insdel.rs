@@ -544,34 +544,35 @@ impl BufferManager {
         })
     }
 
-    /// Replace `byte_range` with `text` using GNU `casify_region`'s undo
-    /// recording (a single `record_delete` of the original text followed by a
-    /// `record_insert`).  Used by `upcase-region`/`downcase-region`/
-    /// `capitalize-region` so the undo list shape matches GNU even when the
-    /// replacement leaves the text unchanged.
-    pub fn casify_replace_buffer_emacs_byte_range_lisp_string(
+    /// Case replacement with the per-character growth retained by the casing
+    /// transducer. Expansion offsets are in the original region's characters.
+    pub(crate) fn casify_replace_buffer_region_with_expansions(
         &mut self,
         id: BufferId,
         byte_range: EmacsByteRange,
         text: &LispString,
-    ) -> Option<()> {
+        expansions: &[crate::buffer::CasifyExpansion],
+        storage_shape: crate::buffer::CasifyStorageShape,
+        properties: &crate::buffer::text_props::CasingPropertyMode<'_>,
+    ) -> Result<(), crate::emacs_core::error::Flow> {
+        let missing = || {
+            crate::emacs_core::error::signal(
+                crate::emacs_core::error::LispCondition::Error,
+                vec![crate::emacs_core::value::Value::string("No current buffer")],
+            )
+        };
         if byte_range.start() >= byte_range.end() {
-            return None;
+            return Err(missing());
         }
-        let range = self.edit_range_for_buffer_emacs_byte_range(id, byte_range)?;
+        let range = self
+            .edit_range_for_buffer_emacs_byte_range(id, byte_range)
+            .ok_or_else(missing)?;
         if range.is_empty() {
-            return None;
+            return Err(missing());
         }
-        let multibyte = self.buffers.get(&id)?.get_multibyte();
+        let multibyte = self.get(id).ok_or_else(missing)?.get_multibyte();
         let plan = ReplaceTextPlan::from_lisp_string(range, text, multibyte);
-        self.execute_shared_text_edit(id, |buffer| {
-            let replacement = buffer.execute_casify_replace_text_plan(plan);
-            let edit = MeasuredReplaceEdit::new(replacement);
-            Some(SharedTextEditOutcome::edited(
-                (),
-                SharedTextEditMetadata::Replace(edit),
-            ))
-        })
+        self.execute_shared_casify_edit(id, plan, expansions, storage_shape, properties)
     }
 
     pub fn subst_char_in_buffer_region(

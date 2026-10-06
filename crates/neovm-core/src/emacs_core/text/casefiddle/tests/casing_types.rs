@@ -1,6 +1,32 @@
 use super::*;
 
 #[test]
+fn casing_extents_pair_character_and_byte_units() {
+    crate::test_utils::init_test_tracing();
+    let input = LispString::from_utf8("aßﬃİ");
+    let mut extents = Vec::new();
+    let upper = casify_lisp_string_with_extents(
+        &input,
+        CaseAction::Up,
+        standard_word_predicate,
+        &CaseTableOverride::none(),
+        |extent| extents.push(extent),
+    );
+    assert_eq!(upper.as_bytes(), "ASSFFIİ".as_bytes());
+    assert_eq!(
+        extents
+            .iter()
+            .map(|extent| (
+                extent.source_pos().get(),
+                extent.output_extent().chars().get(),
+                extent.output_extent().emacs_bytes().get()
+            ))
+            .collect::<Vec<_>>(),
+        vec![(0, 1, 1), (1, 2, 2), (2, 3, 3), (3, 1, 2)]
+    );
+}
+
+#[test]
 fn missing_installed_case_entries_are_identity() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::runtime_startup_context();
@@ -21,19 +47,21 @@ fn target_policy_distinguishes_unibyte_strings_and_buffers() {
     super::super::casetab::builtin_set_case_table(&mut ev, vec![table]).unwrap();
     let cases = CaseTableOverride::for_current_buffer(&mut ev).unwrap();
     let input = LispString::from_unibyte(vec![b'i']);
-    let string = casify_text(
+    let string = casify_text_with_extents(
         &input,
         CaseAction::Up,
         CaseTarget::String,
         standard_word_predicate,
         &cases,
+        |_| {},
     );
-    let buffer = casify_text(
+    let buffer = casify_text_with_extents(
         &input,
         CaseAction::Up,
         CaseTarget::Buffer,
         standard_word_predicate,
         &cases,
+        |_| {},
     );
     assert_eq!(string.as_bytes(), b"I");
     assert_eq!(buffer.as_bytes(), b"0");

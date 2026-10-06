@@ -5,7 +5,6 @@
 use super::casetab::{CaseMap, CaseTableOverride};
 use super::error::{EvalResult, Flow, signal};
 use super::value::*;
-use crate::buffer::{EmacsBytePos, EmacsByteRange};
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::expect_args;
 use crate::emacs_core::value::ValueKind;
@@ -326,6 +325,27 @@ fn simple_case_character(
     }
 }
 
+/// Measured output for exactly one source character. Character and byte units
+/// cannot be confused. Values live only during one mutator's casing call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CaseExtent {
+    source_pos: crate::buffer::CharPos0,
+    source_extent: crate::buffer::TextExtent,
+    output_extent: crate::buffer::TextExtent,
+}
+
+impl CaseExtent {
+    pub(crate) fn source_pos(self) -> crate::buffer::CharPos0 {
+        self.source_pos
+    }
+    pub(crate) fn source_extent(self) -> crate::buffer::TextExtent {
+        self.source_extent
+    }
+    pub(crate) fn output_extent(self) -> crate::buffer::TextExtent {
+        self.output_extent
+    }
+}
+
 /// GNU applies ASCII fallback only to unibyte strings, while buffer casing
 /// writes the cased byte directly. The target makes callers choose that policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -334,21 +354,35 @@ pub(crate) enum CaseTarget {
     Buffer,
 }
 
-/// Shared GNU casing transducer, with the target policy chosen by its caller.
+#[inline]
+pub(crate) fn casify_lisp_string_with_extents(
+    text: &LispString,
+    action: CaseAction,
+    is_word: impl Fn(u32) -> bool,
+    casetab: &CaseTableOverride,
+    extent: impl FnMut(CaseExtent),
+) -> LispString {
+    casify_text_with_extents(text, action, CaseTarget::String, is_word, casetab, extent)
+}
+
+/// Casing with an optional monomorphized extent sink. The no-op sink used by
+/// string builtins compiles away; buffer edits retain both coordinate units.
 /// GNU casefiddle.c:137-151 resolves Unicode special casing before case tables;
 /// 221-237 then applies contextual final sigma to a changed capital sigma.
 #[inline]
-pub(crate) fn casify_text(
+pub(crate) fn casify_text_with_extents(
     text: &LispString,
     action: CaseAction,
     target: CaseTarget,
     is_word: impl Fn(u32) -> bool,
     casetab: &CaseTableOverride,
+    mut extent: impl FnMut(CaseExtent),
 ) -> LispString {
     let multibyte = text.is_multibyte();
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut pos = 0;
+    let mut source_index = 0;
     let mut word_state = CasingWordState::Outside;
     while pos < bytes.len() {
         let (code, len) = if multibyte {
@@ -367,6 +401,8 @@ pub(crate) fn casify_text(
             } else {
                 super::emacs_char::unibyte_to_char(bytes[pos])
             });
+        let output_start = out.len();
+        let mut output_chars = 0;
         let mut emit = |mapped: u32| {
             if multibyte {
                 push_multibyte_char_code(&mut out, mapped);
@@ -390,6 +426,7 @@ pub(crate) fn casify_text(
                 };
                 out.push((mapped & 0xff) as u8);
             }
+            output_chars += 1;
         };
         let mut expanded = false;
         if multibyte && let Some(ch) = char::from_u32(code) {
@@ -464,6 +501,18 @@ pub(crate) fn casify_text(
                 },
             );
         }
+        extent(CaseExtent {
+            source_pos: crate::buffer::CharPos0::new(source_index),
+            source_extent: crate::buffer::TextExtent::new(
+                crate::buffer::CharLen::new(1),
+                crate::buffer::EmacsByteLen::new(len),
+            ),
+            output_extent: crate::buffer::TextExtent::new(
+                crate::buffer::CharLen::new(output_chars),
+                crate::buffer::EmacsByteLen::new(out.len() - output_start),
+            ),
+        });
+        source_index += 1;
         word_state = match action {
             CaseAction::Up if !casetab.is_custom() => CasingWordState::Outside,
             CaseAction::Down if !multibyte => CasingWordState::Outside,
@@ -490,7 +539,7 @@ pub(crate) fn casify_lisp_string(
     is_word: impl Fn(u32) -> bool,
     casetab: &CaseTableOverride,
 ) -> LispString {
-    casify_text(text, action, CaseTarget::String, is_word, casetab)
+    casify_lisp_string_with_extents(text, action, is_word, casetab, |_| {})
 }
 
 fn upcase_lisp_string_emacs_compat(text: &LispString, casetab: &CaseTableOverride) -> LispString {
@@ -576,61 +625,60 @@ fn noncontiguous_case_regions(
         .collect()
 }
 
-fn replace_current_buffer_region_in_buffers(
-    eval: &mut super::eval::Context,
-    byte_range: EmacsByteRange,
-    replacement: &LispString,
-    restore_point: bool,
-) -> EvalResult {
-    let (buffer_id, saved_pt) = {
-        let buf = eval
-            .buffers
-            .current_buffer()
-            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-        (
-            eval.buffers
-                .current_buffer_id()
-                .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?,
-            buf.point_emacs_byte_pos(),
-        )
-    };
-    super::fns::replace_buffer_emacs_byte_range_lisp_string(
-        eval,
-        buffer_id,
-        byte_range,
-        replacement,
-    )?;
-    if restore_point {
-        let restore_pos = eval
-            .buffers
-            .get(buffer_id)
-            .map(|buf| saved_pt.min(buf.accessible_emacs_byte_region().end()));
-        if let Some(restore_pos) = restore_pos {
-            let _ = eval
-                .buffers
-                .goto_buffer_emacs_byte_pos(buffer_id, restore_pos);
-        }
-    }
-    Ok(Value::NIL)
+/// A recased region retains the character expansions produced by the same
+/// transducer as its text. Call-local typed offsets cannot be mixed with bytes.
+/// Its heap-backed text belongs to this mutator and cannot cross threads.
+#[derive(Debug)]
+struct CasedRegion {
+    text: LispString,
+    expansions: Vec<crate::buffer::CasifyExpansion>,
+    storage_shape: crate::buffer::CasifyStorageShape,
+    mutator: std::marker::PhantomData<*const ()>,
 }
+
+static_assertions::assert_not_impl_any!(CasedRegion: Send, Sync);
 
 fn casify_region_text(
     text: &LispString,
     action: CaseAction,
     is_word: impl Fn(u32) -> bool,
     casetab: &CaseTableOverride,
-) -> LispString {
-    casify_text(text, action, CaseTarget::Buffer, is_word, casetab)
+) -> CasedRegion {
+    let mut expansions = Vec::new();
+    let mut storage_shape = crate::buffer::CasifyStorageShape::PerCharacterExtentPreserved;
+    let text = casify_text_with_extents(
+        text,
+        action,
+        CaseTarget::Buffer,
+        is_word,
+        casetab,
+        |extent| {
+            if extent.source_extent() != extent.output_extent() {
+                storage_shape = crate::buffer::CasifyStorageShape::Changed;
+            }
+            if let Some(expansion) = crate::buffer::CasifyExpansion::new(
+                extent.source_pos(),
+                extent.output_extent().chars(),
+            ) {
+                expansions.push(expansion);
+            }
+        },
+    );
+    CasedRegion {
+        text,
+        expansions,
+        storage_shape,
+        mutator: std::marker::PhantomData,
+    }
 }
 
 fn casify_region_in_state(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
     name: &str,
-    transform: impl Fn(&LispString) -> LispString + Copy,
+    action: CaseAction,
 ) -> EvalResult {
     expect_min_max_args(name, &args, 2, 3)?;
-
     let regions = if args.get(2).is_some_and(|value| !value.is_nil()) {
         noncontiguous_case_regions(eval)?
     } else {
@@ -640,171 +688,175 @@ fn casify_region_in_state(
             args[1],
         )?]
     };
-
     for region in regions {
-        let (buffer_id, byte_range, text) = {
-            let buf = eval
-                .buffers
-                .current_buffer()
-                .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-            let byte_range = region.accessible_byte_range(buf)?;
-            if byte_range.is_empty() {
-                continue;
-            }
-            if super::editfns::buffer_read_only_active_in_state(&eval.obarray, &[], buf) {
-                return Err(signal(
-                    LispCondition::BufferReadOnly,
-                    vec![buf.name_value()],
-                ));
-            }
-            let buffer_id = eval
-                .buffers
-                .current_buffer_id()
-                .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-            let text = buf.buffer_substring_lisp_string_range(byte_range);
-            (buffer_id, byte_range, text)
-        };
-
-        // GNU `casify_region` calls `modify_text (start, end)`
-        // (casefiddle.c:540) -> `prepare_to_modify_buffer_1` ->
-        // `verify_interval_modification`, which signals `text-read-only` for any
-        // read-only interval in [start,end) BEFORE any character is cased --
-        // even when the conversion would be a no-op. The buffer-wide
-        // `buffer-read-only` check above is GNU's `Fbarf_if_buffer_read_only`;
-        // this is the text-property half it was missing.
-        crate::emacs_core::textprop::verify_text_read_only_emacs_byte_range_in_state(
-            &eval.obarray,
-            &eval.buffers,
-            buffer_id,
-            byte_range,
-        )?;
-
-        // GNU `casify_region` (casefiddle.c) always `modify_text`s the range
-        // and records `record_delete (start, ORIGINAL) + record_insert (start,
-        // NEW_LEN)` even when no character changes, so the undo list keeps the
-        // GNU shape `((START . END) (ORIGINAL . START) POINT ...)`.  Route the
-        // edit through the casify-specific replace so the undo recording and
-        // marker handling match GNU instead of the generic replace path.
-        let replacement = transform(&text);
-        // GNU fires after-change-functions only when a character actually
-        // changed (e.g. `downcase-region` over already-lowercase text signals
-        // before- but not after-change); before-change and the undo record
-        // still happen for the no-op. Match that.
-        let changed = replacement.as_bytes() != text.as_bytes();
-        casify_replace_current_buffer_region(eval, byte_range, &replacement, changed)?;
+        casify_replace_current_buffer_region(eval, region, action)?;
     }
-
     Ok(Value::NIL)
 }
 
-/// Apply a case-region replacement to the current buffer, recording undo with
-/// GNU `casify_region`'s shape.  Point and markers are preserved for a
-/// same-length change, matching GNU's in-place `replace_range_2`.
+/// Run GNU's modification preparation before reading the casing context or
+/// source. Character arguments survive hooks; byte positions and per-character
+/// replacement extents are measured together afterwards, without Lisp callbacks
+/// between measurement and storage execution (casefiddle.c:528-583).
 fn casify_replace_current_buffer_region(
     eval: &mut super::eval::Context,
-    byte_range: EmacsByteRange,
-    replacement: &LispString,
-    changed: bool,
-) -> EvalResult {
-    let buffer_id = eval
-        .buffers
-        .current_buffer_id()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    // GNU's `casify_region` (casefiddle.c) runs `modify_text` before and
-    // `signal_after_change` after the edit; the earlier port kept only the
-    // read-only checks and dropped the change hooks, so `upcase-region` &c.
-    // mutated the buffer without firing before/after-change-functions -- which
-    // `track-changes.el` flags as "Missing/incorrect calls to
-    // before/after-change-functions" (issue #145). Bracket the casify-specific
-    // replace exactly like the generic replace + the *word* case variants.
+    region: super::position::LispRegionArgs,
+    action: CaseAction,
+) -> Result<crate::buffer::CharPos0, Flow> {
+    let (buffer_id, byte_range) = {
+        let buf = eval.buffers.current_buffer().ok_or_else(|| {
+            signal(
+                LispCondition::Error,
+                vec![Value::string("No current buffer")],
+            )
+        })?;
+        let byte_range = region.accessible_byte_range(buf)?;
+        if byte_range.is_empty() {
+            return Ok(buf
+                .emacs_byte_pos_to_lisp_char_pos(byte_range.end())
+                .to_char_pos());
+        }
+        if super::editfns::buffer_read_only_active_in_state(&eval.obarray, &[], buf) {
+            return Err(signal(
+                LispCondition::BufferReadOnly,
+                vec![buf.name_value()],
+            ));
+        }
+        (buf.id, byte_range)
+    };
+    crate::emacs_core::textprop::verify_text_read_only_emacs_byte_range_in_state(
+        &eval.obarray,
+        &eval.buffers,
+        buffer_id,
+        byte_range,
+    )?;
+    let before = super::editfns::text_change_for_unchanged_extent_in_manager(
+        &eval.buffers,
+        buffer_id,
+        byte_range,
+    )?;
+    // GNU modify_text precedes prepare_casing_context (casefiddle.c:540-541).
+    // A before-change hook can change text, encoding, syntax and case tables.
+    super::editfns::signal_before_text_change(eval, before)?;
+    let (buffer_id, byte_range, text) = {
+        let buf = eval.buffers.current_buffer().ok_or_else(|| {
+            signal(
+                LispCondition::Error,
+                vec![Value::string("No current buffer")],
+            )
+        })?;
+        let chars = before.old_range().char_range();
+        if chars.end() > buf.total_char_end_pos() {
+            return Err(signal(
+                LispCondition::ArgsOutOfRange,
+                vec![
+                    Value::make_buffer(buf.id),
+                    Value::fixnum(chars.start().to_lisp().as_i64()),
+                    Value::fixnum(chars.end().to_lisp().as_i64()),
+                ],
+            ));
+        }
+        // GNU validates the original accessible region only before hooks.
+        // CHAR_TO_BYTE and make_buffer_string then use physical bounds even
+        // if the hook narrows the end (casefiddle.c:534-557; editfns.c:1561-1566).
+        // Its property copy still validates the original starting position
+        // (editfns.c:1620-1624), so narrowing past start signals before editing.
+        if chars.start() < buf.point_min_char_pos() || chars.start() > buf.point_max_char_pos() {
+            crate::emacs_core::textprop::builtin_text_properties_at_in_buffers(
+                &eval.buffers,
+                &[Value::fixnum(chars.start().to_lisp().as_i64())],
+            )?;
+        }
+        let byte_range = buf.edit_range_for_char_range(chars).byte_range();
+        (
+            buf.id,
+            byte_range,
+            buf.buffer_substring_lisp_string_range(byte_range),
+        )
+    };
+    let casetab = CaseTableOverride::for_current_buffer(eval)?;
+    let replacement = match action {
+        CaseAction::Up => {
+            let is_word = upcase_word_predicate(eval, &casetab);
+            casify_region_text(&text, action, is_word, &casetab)
+        }
+        CaseAction::Down | CaseAction::Capitalize | CaseAction::Initials => {
+            let is_word = crate::emacs_core::syntax::casing_word_predicate(eval);
+            casify_region_text(&text, action, is_word, &casetab)
+        }
+    };
     let change = super::editfns::text_change_for_lisp_string_replacement_in_manager(
         &eval.buffers,
         buffer_id,
         byte_range,
-        replacement,
+        &replacement.text,
     )?;
-    super::editfns::signal_before_text_change(eval, change)?;
-    eval.buffers
-        .casify_replace_buffer_emacs_byte_range_lisp_string(buffer_id, byte_range, replacement);
-    if changed {
+    let end = change
+        .old_range()
+        .char_start()
+        .add_len(change.new_extent().chars());
+    // GNU records casing undo even for an unchanged nonempty region. The
+    // before hook runs for that case, but the after hook requires changed text.
+    // GNU sticky inheritance controls are read only after modification hooks.
+    // Plain/no-expansion casing needs no policy lookup or interval allocation.
+    let controls = (!replacement.expansions.is_empty()
+        && eval
+            .buffers
+            .get(buffer_id)
+            .is_some_and(|buf| !buf.text_props_is_empty()))
+    .then(|| crate::buffer::text_props::CasingPropertyControls::for_context(eval));
+    let properties =
+        crate::buffer::text_props::CasingPropertyMode::from_controls(&eval.obarray, controls);
+    eval.buffers.casify_replace_buffer_region_with_expansions(
+        buffer_id,
+        byte_range,
+        &replacement.text,
+        &replacement.expansions,
+        replacement.storage_shape,
+        &properties,
+    )?;
+    if replacement.text.as_bytes() != text.as_bytes() {
         super::editfns::signal_after_text_change(eval, change)?;
     }
-    Ok(Value::NIL)
+    Ok(end)
 }
 
 fn casify_word_in_state(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
     name: &str,
-    transform: impl FnOnce(&LispString) -> LispString,
+    action: CaseAction,
 ) -> EvalResult {
     expect_args(name, &args, 1)?;
     let n = expect_int(&args[0])?;
-
-    // Honor `find-word-boundary-function-table` (subword/superword) for the
-    // word boundary, mirroring GNU's forward-word; computed without moving point.
+    // GNU scans words before modification preparation (casefiddle.c:661-668).
     let honor = crate::emacs_core::syntax::parse_sexp_lookup_properties_enabled(eval);
     let target = crate::emacs_core::syntax::forward_word_destination(eval, n, honor);
-    let (byte_range, text, buffer_name, read_only) = {
-        let buf = eval
-            .buffers
-            .current_buffer()
-            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-        let pt = buf.point_emacs_byte_pos();
-        let byte_range = EmacsByteRange::ordered(pt, target);
-        let text = buf.buffer_substring_lisp_string_range(byte_range);
+    let (start, end) = {
+        let buf = eval.buffers.current_buffer().ok_or_else(|| {
+            signal(
+                LispCondition::Error,
+                vec![Value::string("No current buffer")],
+            )
+        })?;
         (
-            byte_range,
-            text,
-            buf.name_value(),
-            super::editfns::buffer_read_only_active_in_state(&eval.obarray, &[], buf),
+            buf.point_lisp_char_pos(),
+            buf.emacs_byte_pos_to_lisp_char_pos(target),
         )
     };
-
-    let replacement = transform(&text);
-    if replacement.schars() != text.schars() {
-        // A mapping that changes the character count (`ß` -> `SS`): the
-        // casify path's same-byte-length overwrite does not yet move point
-        // and ZV for it, so keep the generic replacement here.
-        if replacement != text {
-            if read_only {
-                return Err(signal(LispCondition::BufferReadOnly, vec![buffer_name]));
-            }
-            replace_current_buffer_region_in_buffers(eval, byte_range, &replacement, false)?;
-        }
-    } else if !byte_range.is_empty() {
-        // GNU `casify_word` is `casify_region (PT, farend)`: the same
-        // read-only checks, `modify_text` and undo record even when no
-        // character changes, and a same-size overwrite that leaves text
-        // properties alone -- so take the region command's path rather than a
-        // generic replace.
-        if read_only {
-            return Err(signal(LispCondition::BufferReadOnly, vec![buffer_name]));
-        }
-        let buffer_id = eval
-            .buffers
-            .current_buffer_id()
-            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-        crate::emacs_core::textprop::verify_text_read_only_emacs_byte_range_in_state(
-            &eval.obarray,
-            &eval.buffers,
-            buffer_id,
-            byte_range,
-        )?;
-        let changed = replacement.as_bytes() != text.as_bytes();
-        casify_replace_current_buffer_region(eval, byte_range, &replacement, changed)?;
-    }
-    // GNU `casify_word` sets point to `casify_region(PT, farend)`, i.e. the
-    // greater of point and the forward-word destination (the end of the cased
-    // region), shifted by any length change. For a negative ARG this leaves
-    // point at the original PT ("convert previous words but do not move").
-    let _ = n;
-    if let Some(id) = eval.buffers.current_buffer_id() {
-        let delta = replacement.sbytes() as i64 - text.sbytes() as i64;
-        let new_pt = (byte_range.end().get() as i64 + delta).max(0) as usize;
-        let _ = eval
-            .buffers
-            .goto_buffer_emacs_byte_pos(id, EmacsBytePos::new(new_pt));
+    let region = super::position::LispRegionArgs::from_values(
+        &eval.buffers,
+        Value::fixnum(start.as_i64()),
+        Value::fixnum(end.as_i64()),
+    )?;
+    let end = casify_replace_current_buffer_region(eval, region, action)?;
+    // GNU SET_PT converts casify_region's character endpoint after the after
+    // hook, which can change byte widths again (casefiddle.c:668-669). Negative
+    // word arguments retain the greater endpoint, as region validation orders it.
+    if let Some(buf) = eval.buffers.current_buffer() {
+        let id = buf.id;
+        let point = buf.char_pos_to_emacs_byte_pos_clamped(end);
+        let _ = eval.buffers.goto_buffer_emacs_byte_pos(id, point);
     }
     Ok(Value::NIL)
 }
@@ -1225,74 +1277,46 @@ pub(crate) fn builtin_downcase_region(
     ctx: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let casetab = CaseTableOverride::for_current_buffer(ctx)?;
-    let is_word = crate::emacs_core::syntax::casing_word_predicate(ctx);
-    casify_region_in_state(ctx, args, "downcase-region", move |s| {
-        casify_region_text(s, CaseAction::Down, is_word, &casetab)
-    })
+    casify_region_in_state(ctx, args, "downcase-region", CaseAction::Down)
 }
 
 pub(crate) fn builtin_upcase_region(
     ctx: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let casetab = CaseTableOverride::for_current_buffer(ctx)?;
-    let is_word = upcase_word_predicate(ctx, &casetab);
-    casify_region_in_state(ctx, args, "upcase-region", move |s| {
-        casify_region_text(s, CaseAction::Up, is_word, &casetab)
-    })
+    casify_region_in_state(ctx, args, "upcase-region", CaseAction::Up)
 }
 
 pub(crate) fn builtin_capitalize_region(
     ctx: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let casetab = CaseTableOverride::for_current_buffer(ctx)?;
-    let is_word = crate::emacs_core::syntax::casing_word_predicate(ctx);
-    casify_region_in_state(ctx, args, "capitalize-region", move |s| {
-        casify_region_text(s, CaseAction::Capitalize, is_word, &casetab)
-    })
+    casify_region_in_state(ctx, args, "capitalize-region", CaseAction::Capitalize)
 }
 
 pub(crate) fn builtin_upcase_initials_region(
     ctx: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let casetab = CaseTableOverride::for_current_buffer(ctx)?;
-    let is_word = crate::emacs_core::syntax::casing_word_predicate(ctx);
-    casify_region_in_state(ctx, args, "upcase-initials-region", move |s| {
-        casify_region_text(s, CaseAction::Initials, is_word, &casetab)
-    })
+    casify_region_in_state(ctx, args, "upcase-initials-region", CaseAction::Initials)
 }
 
 pub(crate) fn builtin_downcase_word(
     ctx: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let casetab = CaseTableOverride::for_current_buffer(ctx)?;
-    let is_word = crate::emacs_core::syntax::casing_word_predicate(ctx);
-    casify_word_in_state(ctx, args, "downcase-word", move |s| {
-        casify_region_text(s, CaseAction::Down, is_word, &casetab)
-    })
+    casify_word_in_state(ctx, args, "downcase-word", CaseAction::Down)
 }
 
 pub(crate) fn builtin_upcase_word(ctx: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    let casetab = CaseTableOverride::for_current_buffer(ctx)?;
-    let is_word = upcase_word_predicate(ctx, &casetab);
-    casify_word_in_state(ctx, args, "upcase-word", move |s| {
-        casify_region_text(s, CaseAction::Up, is_word, &casetab)
-    })
+    casify_word_in_state(ctx, args, "upcase-word", CaseAction::Up)
 }
 
 pub(crate) fn builtin_capitalize_word(
     ctx: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let casetab = CaseTableOverride::for_current_buffer(ctx)?;
-    let is_word = crate::emacs_core::syntax::casing_word_predicate(ctx);
-    casify_word_in_state(ctx, args, "capitalize-word", move |s| {
-        casify_region_text(s, CaseAction::Capitalize, is_word, &casetab)
-    })
+    casify_word_in_state(ctx, args, "capitalize-word", CaseAction::Capitalize)
 }
 
 /// `(char-resolve-modifiers CHAR)` -- resolve modifier bits in character.

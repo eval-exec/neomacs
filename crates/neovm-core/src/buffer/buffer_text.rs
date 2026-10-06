@@ -15,6 +15,29 @@ use crate::gc_trace::GcTrace;
 
 use super::buffer::{BufferId, InsertionType};
 
+/// A prepared interval table belongs to the calling Lisp mutator. Scratch
+/// roots keep new plists alive through undo allocation until publication.
+#[derive(Debug)]
+#[must_use = "publish the prepared properties or abandon the edit before changing storage"]
+pub(in crate::buffer) struct PreparedCasingProperties {
+    state: PreparedCasingPropertyState,
+    mutator: std::marker::PhantomData<*const ()>,
+}
+
+/// A detached table and its calling mutator's scratch roots are owned together.
+/// Publication or abandonment drops the guard only after the table is consumed.
+#[derive(Debug)]
+enum PreparedCasingPropertyState {
+    Unneeded,
+    Inherit {
+        replacement: TextPropertyTable,
+        roots: crate::buffer::text_props::CasingPropertyRoots,
+    },
+}
+
+static_assertions::assert_not_impl_any!(PreparedCasingProperties: Send, Sync);
+static_assertions::assert_not_impl_any!(PreparedCasingPropertyState: Send, Sync);
+
 /// What ends a line when lines are counted (GNU `display_count_lines`,
 /// src/xdisp.c).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2429,6 +2452,67 @@ impl BufferText {
         Rc::make_mut(&mut storage.text_props).adjust_for_insert_at_char_pos(pos, len);
     }
 
+    /// Prepare detached interval edits before storage, undo or anchors change.
+    /// Malformed policy values can signal without publishing a partial edit.
+    pub(in crate::buffer) fn prepare_casify_properties(
+        &self,
+        start: CharPos0,
+        expansions: &[crate::buffer::edit_transaction::CasifyExpansion],
+        properties: &crate::buffer::text_props::CasingPropertyMode<'_>,
+    ) -> Result<PreparedCasingProperties, crate::emacs_core::error::Flow> {
+        let crate::buffer::text_props::CasingPropertyMode::Inherit(context) = properties else {
+            if !expansions.is_empty() && !self.text_props_is_empty() {
+                return Err(crate::emacs_core::error::signal(
+                    crate::emacs_core::error::LispCondition::Error,
+                    vec![Value::string("Missing casing property context")],
+                ));
+            }
+            return Ok(PreparedCasingProperties {
+                state: PreparedCasingPropertyState::Unneeded,
+                mutator: std::marker::PhantomData,
+            });
+        };
+        let roots = crate::buffer::text_props::CasingPropertyRoots::new();
+        let mut table = self.storage.borrow().text_props.as_ref().clone();
+        table.invalidate_casify_syntax_caches();
+        let mut object_len = self.char_count();
+        let mut added = CharLen::new(0);
+        for expansion in expansions {
+            let pos = start
+                .add_len(CharLen::new(expansion.source_pos().get()))
+                .add_len(added);
+            let growth = expansion.growth();
+            table.adjust_for_casify_insertion(pos, growth, object_len, context, &roots)?;
+            object_len = object_len.add_len(growth);
+            added = added.add_len(growth);
+        }
+        // Preparation has no Lisp callbacks or evaluator GC safepoints. The
+        // helper roots each newly allocated plist; collect the final table's
+        // roots once before undo allocation, avoiding O(expansions * intervals).
+        table.for_each_root(|value| roots.root(value));
+        Ok(PreparedCasingProperties {
+            state: PreparedCasingPropertyState::Inherit {
+                replacement: table,
+                roots,
+            },
+            mutator: std::marker::PhantomData,
+        })
+    }
+
+    pub(in crate::buffer) fn install_casify_properties(&self, prepared: PreparedCasingProperties) {
+        match prepared.state {
+            PreparedCasingPropertyState::Unneeded => {}
+            PreparedCasingPropertyState::Inherit {
+                replacement,
+                roots: _roots,
+            } => {
+                self.text_props_replace(replacement);
+                // Keep the guard through publication of every prepared plist.
+            }
+        }
+        // No evaluator callback runs between preparation and publication.
+    }
+
     /// See [`Self::adjust_text_props_for_insert_at`] for why the empty table
     /// can be answered without touching it.
     pub(crate) fn adjust_text_props_for_delete_range(&self, range: CharRange) {
@@ -2679,6 +2763,32 @@ impl BufferText {
             }
         }
         false
+    }
+
+    /// GNU insdel.c:1793: retain marker character positions after casing.
+    /// Read the backend directly: stale marker byte anchors must never seed a
+    /// character-to-byte conversion while this resynchronization is in flight.
+    /// The caller exclusively owns this buffer's mutation, as for other edits.
+    pub(crate) fn resync_marker_byte_positions(&self) {
+        let storage = self.storage.borrow();
+        let mut markers = Vec::new();
+        let mut curr = storage.markers_head;
+        // SAFETY: every non-null chain node is a live chain-owned MarkerObj;
+        // the exclusive buffer edit keeps the chain and allocations alive.
+        unsafe {
+            while !curr.is_null() {
+                markers.push(curr);
+                curr = (*curr).data.next_marker;
+            }
+            markers.sort_unstable_by_key(|marker| (**marker).data.charpos);
+            let mut anchor = TextPositionAnchor::new(CharPos0::ZERO, EmacsBytePos::ZERO);
+            for marker in markers {
+                let position = CharPos0::new((*marker).data.charpos);
+                let byte = scan_forward(&storage.backend, anchor, position);
+                anchor = TextPositionAnchor::new(position, byte);
+                set_marker_data_anchor(&mut (*marker).data, anchor);
+            }
+        }
     }
 
     pub(crate) fn adjust_markers_for_insert_extent(
