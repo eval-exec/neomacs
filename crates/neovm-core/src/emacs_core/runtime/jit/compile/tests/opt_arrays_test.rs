@@ -70,7 +70,11 @@ fn plan(f: &ByteCodeFunction) -> ir::Func {
     plan_prefix(f, 0)
 }
 fn plan_prefix(f: &ByteCodeFunction, prefix: usize) -> ir::Func {
-    let arity = f.params.required.len();
+    let arity = f
+        .params
+        .stack_shape()
+        .expect("fixture stack parameters")
+        .required();
     let cfg = analyze_cfg(
         f.executable_ops(),
         &f.constants,
@@ -103,7 +107,10 @@ fn lower(f: &ByteCodeFunction, ir: &ir::Func) -> CompiledLeaf {
     let leaf = lower_opt_ir_for_test(
         f.executable_ops(),
         &f.constants,
-        f.params.required.len(),
+        f.params
+            .stack_shape()
+            .expect("fixture stack parameters")
+            .required(),
         f.executable_gnu_byte_offset_map(),
         ir,
     )

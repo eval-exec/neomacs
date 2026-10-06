@@ -59,7 +59,11 @@ impl Drop for Roots {
 }
 
 fn plan(f: &ByteCodeFunction) -> ir::Func {
-    let arity = f.params.required.len();
+    let arity = f
+        .params
+        .stack_shape()
+        .expect("fixture stack parameters")
+        .required();
     let cfg = analyze_cfg(
         f.executable_ops(),
         &f.constants,
@@ -93,7 +97,10 @@ fn lower(f: &ByteCodeFunction, plan: &ir::Func) -> CompiledLeaf {
     let leaf = lower_opt_ir_for_test(
         f.executable_ops(),
         &f.constants,
-        f.params.required.len(),
+        f.params
+            .stack_shape()
+            .expect("fixture stack parameters")
+            .required(),
         f.executable_gnu_byte_offset_map(),
         plan,
     )
@@ -962,7 +969,10 @@ fn assert_terminal_poll_target(f: &ByteCodeFunction, plan: &ir::Func, clif: &str
         f.executable_ops(),
         &f.constants,
         f.executable_gnu_byte_offset_map(),
-        f.params.required.len(),
+        f.params
+            .stack_shape()
+            .expect("fixture stack parameters")
+            .required(),
     )
     .unwrap();
     // The shared scaffold allocates the source CFG's blocks, then one block

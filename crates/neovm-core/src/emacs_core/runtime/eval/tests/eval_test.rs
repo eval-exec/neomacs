@@ -15478,7 +15478,7 @@ fn jit_tierup_executes_through_funcall_seam() {
         });
         f.ops = ops;
         f.constants = consts.into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         f.jit_runtime().set_hot_for_test();
         Value::make_bytecode(f)
     };
@@ -15522,7 +15522,7 @@ fn jit_tierup_executes_through_funcall_seam() {
     });
     addf.lexical = true;
     addf.ops = vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return];
-    addf.max_stack = 16;
+    addf.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     addf.jit_runtime().set_hot_for_test();
     let addv = Value::make_bytecode(addf);
     assert_eq!(
@@ -15562,7 +15562,7 @@ fn jit_cons_through_funcall_seam() {
     });
     f.lexical = true;
     f.ops = vec![Op::StackRef(1), Op::StackRef(1), Op::Cons, Op::Return];
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f.jit_runtime().set_hot_for_test();
     let fv = Value::make_bytecode(f);
 
@@ -15597,7 +15597,7 @@ fn jit_call_through_funcall_seam() {
     dbl.lexical = true;
     dbl.ops = vec![Op::StackRef(0), Op::Constant(0), Op::Mul, Op::Return];
     dbl.constants = vec![Value::make_int(2)].into();
-    dbl.max_stack = 16;
+    dbl.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let dbl_sym = Value::symbol("jit-e2e-double");
     let ValueKind::Symbol(dbl_id) = dbl_sym.kind() else {
         panic!("symbol expected");
@@ -15622,7 +15622,7 @@ fn jit_call_through_funcall_seam() {
             Op::Return,
         ];
         f.constants = vec![Value::symbol("jit-e2e-double")].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -15671,7 +15671,7 @@ fn jit_call_through_funcall_seam() {
     callee.lexical = true;
     callee.ops = vec![Op::StackRef(0), Op::Constant(0), Op::Mul, Op::Return];
     callee.constants = vec![Value::make_int(3)].into();
-    callee.max_stack = 16;
+    callee.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     callee.jit_runtime().set_hot_for_test();
     let callee_sym = Value::symbol("jit-e2e-triple-hot");
     let ValueKind::Symbol(callee_id) = callee_sym.kind() else {
@@ -15693,7 +15693,7 @@ fn jit_call_through_funcall_seam() {
         Op::Return,
     ];
     nested.constants = vec![callee_sym].into();
-    nested.max_stack = 16;
+    nested.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     nested.jit_runtime().set_hot_for_test();
     let nested_v = Value::make_bytecode(nested);
     assert_eq!(
@@ -15712,7 +15712,7 @@ fn jit_call_through_funcall_seam() {
     sig.lexical = true;
     sig.ops = vec![Op::Constant(0), Op::Call(0), Op::Return];
     sig.constants = vec![Value::symbol("jit-e2e-no-such-function")].into();
-    sig.max_stack = 16;
+    sig.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     sig.jit_runtime().set_hot_for_test();
     let sig_v = Value::make_bytecode(sig);
     assert!(
@@ -15749,7 +15749,7 @@ fn jit_handlers_through_funcall_seam() {
         f.lexical = true;
         f.ops = ops;
         f.constants = consts.into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -16006,7 +16006,7 @@ fn jit_switch_through_funcall_seam() {
             Value::make_int(0),
         ]
         .into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -16053,7 +16053,7 @@ fn jit_named_builtins_through_funcall_seam() {
         f.lexical = true;
         f.ops = ops;
         f.constants = consts.into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -16150,7 +16150,7 @@ fn jit_save_window_excursion_through_funcall_seam() {
         f.lexical = true;
         f.ops = vec![Op::Constant(0), Op::SaveWindowExcursion, Op::Return];
         f.constants = vec![body].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -16176,7 +16176,7 @@ fn jit_save_window_excursion_through_funcall_seam() {
         f.lexical = true;
         f.ops = vec![Op::Constant(0), Op::SaveWindowExcursion, Op::Return];
         f.constants = vec![bad_body].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -16226,7 +16226,7 @@ fn jit_direct_call_speculation_tracks_redefinition() {
             Op::Return,
         ];
         f.constants = vec![Value::make_int(k)].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         Value::make_bytecode(f)
     };
     let g_sym = Value::symbol("jit-spec-g");
@@ -16246,7 +16246,7 @@ fn jit_direct_call_speculation_tracks_redefinition() {
         f.lexical = true;
         f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
         f.constants = vec![g_sym].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -16335,7 +16335,7 @@ fn jit_direct_call_speculation_mid_execution_redefinition() {
     h2.lexical = true;
     h2.ops = vec![Op::Constant(0), Op::Return];
     h2.constants = vec![Value::make_int(2)].into();
-    h2.max_stack = 16;
+    h2.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let h2_val = Value::make_bytecode(h2);
     // h1: (lambda () (fset 'jit-spec-h h2) 1) — redefines itself, returns 1.
     let mut h1 = ByteCodeFunction::new(LambdaParams {
@@ -16354,7 +16354,7 @@ fn jit_direct_call_speculation_mid_execution_redefinition() {
         Op::Return,
     ];
     h1.constants = vec![Value::symbol("fset"), h_sym, h2_val, Value::make_int(1)].into();
-    h1.max_stack = 16;
+    h1.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     ev.obarray
         .set_symbol_function_id(h_id, Value::make_bytecode(h1));
 
@@ -16376,7 +16376,7 @@ fn jit_direct_call_speculation_mid_execution_redefinition() {
             Op::Return,
         ];
         f.constants = vec![h_sym].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -16413,7 +16413,7 @@ fn jit_direct_call_speculation_mid_execution_redefinition() {
         Op::Return,
     ];
     h1b.constants = vec![Value::symbol("fset"), h_sym, h2_val, Value::make_int(1)].into();
-    h1b.max_stack = 16;
+    h1b.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     ev.obarray
         .set_symbol_function_id(h_id, Value::make_bytecode(h1b));
     let r = ev
@@ -16447,7 +16447,7 @@ fn jit_subr_spec_caller(name: &str, nargs: usize, hot: bool) -> Value {
     ops.push(Op::Return);
     f.ops = ops;
     f.constants = vec![Value::symbol(name)].into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     if hot {
         f.jit_runtime().set_hot_for_test();
     }
@@ -17696,7 +17696,7 @@ fn jit_cbsym_spec_caller(name: &str, nargs: usize, hot: bool) -> Value {
     ops.push(Op::Return);
     f.ops = ops;
     f.constants = Vec::new().into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     if hot {
         f.jit_runtime().set_hot_for_test();
     }
@@ -17866,7 +17866,7 @@ fn jit_cbsym_buffer_loop_tiers_with_profit_gate_on() {
             Op::Return,        // 16
         ];
         f.constants = vec![Value::make_int(0), Value::make_int(1)].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -18048,7 +18048,7 @@ fn jit_cbsym_spec_adds_no_eval_depth_level() {
             Op::Return,    // 7
         ];
         f.constants = vec![Value::symbol("cbsym-depth"), f_sym].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -18403,7 +18403,7 @@ fn jit_fib_and_loops_compile_under_precise_deopt() {
             Op::Return,       // 17
         ];
         f.constants = vec![Value::make_int(2), fib_sym, Value::make_int(1)].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -18441,7 +18441,7 @@ fn jit_fib_and_loops_compile_under_precise_deopt() {
     });
     ident.lexical = true;
     ident.ops = vec![Op::StackRef(0), Op::Return];
-    ident.max_stack = 16;
+    ident.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     ev.obarray
         .set_symbol_function_id(id_id, Value::make_bytecode(ident));
     let mk_loop = |hot: bool| {
@@ -18466,7 +18466,7 @@ fn jit_fib_and_loops_compile_under_precise_deopt() {
             Op::Return,        // 11
         ];
         f.constants = vec![Value::make_int(0), id_sym].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -18512,7 +18512,7 @@ fn jit_native_to_native_optional_callee_pure_and_marshaled() {
         Op::StackRef(1),  // 6: a           [a b a]
         Op::Return,       // 7
     ];
-    callee.max_stack = 16;
+    callee.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let c_sym = Value::symbol("jit-n2n-opt");
     let ValueKind::Symbol(c_id) = c_sym.kind() else {
         panic!("symbol expected");
@@ -18539,7 +18539,7 @@ fn jit_native_to_native_optional_callee_pure_and_marshaled() {
             Op::Return,
         ];
         f.constants = vec![c_sym].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -18555,7 +18555,7 @@ fn jit_native_to_native_optional_callee_pure_and_marshaled() {
         f.lexical = true;
         f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
         f.constants = vec![c_sym].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -18630,7 +18630,7 @@ fn jit_v3_fast_path_engages_and_tracks_redefinition() {
             Op::Return,
         ];
         f.constants = vec![Value::make_int(k)].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         Value::make_bytecode(f)
     };
     let g_sym = Value::symbol("jit-v3-g");
@@ -18648,7 +18648,7 @@ fn jit_v3_fast_path_engages_and_tracks_redefinition() {
         f.lexical = true;
         f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
         f.constants = vec![g_sym].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         f.jit_runtime().set_hot_for_test();
         Value::make_bytecode(f)
     };
@@ -18730,7 +18730,7 @@ fn a_spec_slot_drops_its_leaf_when_the_callee_slot_is_recycled() {
             Op::Return,
         ];
         f.constants = vec![Value::make_int(k)].into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         Value::make_bytecode(f)
     };
     let g_sym = Value::symbol("jit-recycled-g");
@@ -18746,7 +18746,7 @@ fn a_spec_slot_drops_its_leaf_when_the_callee_slot_is_recycled() {
     caller.lexical = true;
     caller.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
     caller.constants = vec![g_sym].into();
-    caller.max_stack = 16;
+    caller.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     caller.jit_runtime().set_hot_for_test();
     let hot = Value::make_bytecode(caller);
     crate::emacs_core::eval::push_scratch_gc_root(hot);
@@ -18828,7 +18828,7 @@ fn spec_call_fast_path_keeps_the_reference_protocol_on_its_exits() {
         f.lexical = true;
         f.ops = ops;
         f.constants = constants.into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -19126,7 +19126,7 @@ fn optional_arity_callees_take_the_spec_fast_path() {
         f.lexical = true;
         f.ops = ops;
         f.constants = constants.into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         if hot {
             f.jit_runtime().set_hot_for_test();
         }
@@ -19244,7 +19244,7 @@ fn jit_bench_fib_value(sym_name: &str, tier: BenchTier) -> Value {
         Op::Return,
     ];
     f.constants = vec![Value::make_int(2), fib_sym, Value::make_int(1)].into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     tier.apply(f.jit_runtime());
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
@@ -19287,7 +19287,7 @@ fn jit_bench_loop_value(tier: BenchTier) -> Value {
         Op::Return,
     ];
     f.constants = vec![Value::make_int(0)].into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     tier.apply(f.jit_runtime());
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
@@ -19373,7 +19373,7 @@ fn jit_bench_big_body_value(tier: BenchTier) -> Value {
         Value::make_int(-1),
     ]
     .into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     tier.apply(f.jit_runtime());
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
@@ -19563,7 +19563,7 @@ fn jit_bench_call_bound_caller(tier: BenchTier) -> Value {
         Op::Return,        // 25
     ];
     f.constants = vec![Value::make_int(0), Value::symbol("jit-bench-cbleaf")].into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     tier.apply(f.jit_runtime());
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
@@ -19601,7 +19601,7 @@ fn jit_bench_call_bound_loop() {
         Op::StackRef(0),  // 4  x (else)
         Op::Return,       // 5
     ];
-    leaf.max_stack = 8;
+    leaf.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     leaf.jit_runtime().set_hot_for_test();
     let ValueKind::Symbol(cbleaf_id) = Value::symbol("jit-bench-cbleaf").kind() else {
         panic!("symbol")
@@ -19671,7 +19671,7 @@ fn jit_bench_builtin_bound_caller(tier: BenchTier) -> Value {
         Op::Return,                 // 21
     ];
     f.constants = vec![Value::make_int(0)].into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     tier.apply(f.jit_runtime());
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
@@ -19775,7 +19775,7 @@ fn aot_bench_compute_loop() {
     aot_fn.lexical = true;
     aot_fn.ops = ops.clone();
     aot_fn.constants = constants.clone().into();
-    aot_fn.max_stack = 16;
+    aot_fn.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let aot_val = Value::make_bytecode(aot_fn.clone());
 
     let cold = jit_bench_loop_value(BenchTier::Cold);
@@ -19893,7 +19893,7 @@ fn jit_bench_call_heavy_fontlock_reweight() {
     let bc = fn_val
         .get_bytecode_data()
         .expect("scan must be byte-compiled to a bytecode object");
-    let arity = bc.params.required.len();
+    let arity = bc.params.fixed_arity().expect("fixed test arity");
 
     // Shape report: op histogram (documents that this really is call-heavy).
     let (mut n_call, mut n_cbsym, mut n_arith) = (0usize, 0usize, 0usize);
@@ -20038,7 +20038,7 @@ fn jit_bench_spec_call_dispatch_upper_bound() {
     let bc = fn_val
         .get_bytecode_data()
         .expect("microloop must be byte-compiled");
-    let arity = bc.params.required.len();
+    let arity = bc.params.fixed_arity().expect("fixed test arity");
     assert!(
         compile::has_op_call_spec_sites(bc.executable_ops(), &bc.constants, arity, &ev.obarray),
         "microloop must carry the looking-at Op::Call Many-spec site"
@@ -20193,7 +20193,7 @@ fn aot_bench_real_algorithm() {
     aot_fn.lexical = true;
     aot_fn.ops = ops.clone();
     aot_fn.constants = constants.clone().into();
-    aot_fn.max_stack = 16;
+    aot_fn.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let aot_val = Value::make_bytecode(aot_fn.clone());
 
     // Interp copy: force-COLD via the shared BenchTier mechanism, never tiers
@@ -20206,7 +20206,7 @@ fn aot_bench_real_algorithm() {
     cold_f.lexical = true;
     cold_f.ops = ops.clone();
     cold_f.constants = constants.clone().into();
-    cold_f.max_stack = 16;
+    cold_f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     BenchTier::Cold.apply(cold_f.jit_runtime());
     let cold_val = Value::make_bytecode(cold_f);
 
@@ -20689,7 +20689,7 @@ fn vm_bench_call_loop_caller(callee_designator: Value) -> Value {
         Op::Return,
     ];
     f.constants = vec![Value::make_int(0), callee_designator].into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
     // collect; the collector is precise (no stack scan), so root it here or
@@ -20758,7 +20758,7 @@ fn vm_bench_call_dispatch_closure_sym_vs_val() {
     });
     callee.lexical = true;
     callee.ops = vec![Op::Add1, Op::Return];
-    callee.max_stack = 4;
+    callee.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
     let callee_val = Value::make_bytecode(callee);
 
     let ValueKind::Symbol(callee_sym) = Value::symbol("vm-bench-callee").kind() else {
@@ -20820,7 +20820,7 @@ fn vm_bench_varref_loop_caller(var_sym: Value) -> Value {
         Op::Return,
     ];
     f.constants = vec![Value::make_int(0), var_sym].into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
     // collect; the collector is precise (no stack scan), so root it here or
@@ -20894,7 +20894,7 @@ fn varref_reader_fn(sym: Value) -> Value {
     f.lexical = true;
     f.ops = vec![Op::VarRef(1), Op::Return];
     f.constants = vec![Value::NIL, sym].into();
-    f.max_stack = 4;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
     // collect; the collector is precise (no stack scan), so root it here or
@@ -21096,7 +21096,7 @@ fn jit_bench_cbsym_value(tier: BenchTier) -> Value {
         Value::list_from_slice(&[Value::symbol("a"), Value::symbol("b"), Value::symbol("c")]),
     ]
     .into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     tier.apply(f.jit_runtime());
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
@@ -21161,7 +21161,7 @@ fn jit_bench_cbsym_goto_value(tier: BenchTier) -> Value {
         Op::Return,        // 12
     ];
     f.constants = vec![Value::make_int(0), Value::make_int(1)].into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     tier.apply(f.jit_runtime());
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
@@ -21230,7 +21230,7 @@ fn jit_bench_subr_value(tier: BenchTier) -> Value {
         Value::list_from_slice(&[Value::symbol("a"), Value::symbol("b"), Value::symbol("c")]),
     ]
     .into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     tier.apply(f.jit_runtime());
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
@@ -21310,7 +21310,7 @@ fn jit_bench_many_value(tier: BenchTier) -> Value {
         Value::string("(defun\\|[a-z]+"),
     ]
     .into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     tier.apply(f.jit_runtime());
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
@@ -21392,7 +21392,7 @@ fn jit_bench_pred_value(tier: BenchTier) -> Value {
         Value::list_from_slice(&[Value::symbol("a"), Value::symbol("b"), Value::symbol("c")]),
     ]
     .into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     tier.apply(f.jit_runtime());
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
@@ -21457,7 +21457,7 @@ fn jit_bench_cons_value(tier: BenchTier) -> Value {
         Op::Return,        // 13
     ];
     f.constants = vec![Value::make_int(0)].into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     tier.apply(f.jit_runtime());
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
@@ -24189,7 +24189,7 @@ fn bench_jit_vs_vm_loop() {
         });
         f.ops = ops.clone();
         f.constants = constants.clone().into();
-        f.max_stack = 64;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(64);
         if hot {
             f.jit_runtime().set_hot_for_test();
         } else {
@@ -24220,7 +24220,7 @@ fn bench_jit_vs_vm_loop() {
         });
         probe.ops = ops.clone();
         probe.constants = constants.clone().into();
-        probe.max_stack = 64;
+        probe.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(64);
         crate::emacs_core::jit::compile::compile_bytecode_function(&probe)
             .expect("loop body must compile to native (no unsupported op / CFG bail)");
     }
@@ -24343,7 +24343,7 @@ fn jit_bench_threshold_economics() {
         });
         f.ops = ops.clone();
         f.constants = constants.clone().into();
-        f.max_stack = 64;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(64);
         Value::make_bytecode(f)
     };
 
@@ -26342,7 +26342,7 @@ fn jit_cached_leaf_fixture(ev: &mut Context, name: &str) -> Value {
     });
     f.ops = vec![Op::Constant(0), Op::Constant(1), Op::Add, Op::Return];
     f.constants = vec![Value::make_int(40), Value::make_int(2)].into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f.jit_runtime().set_hot_for_test();
     let fv = Value::make_bytecode(f);
     crate::emacs_core::builtins::builtin_fset(ev, vec![Value::symbol(name), fv])
@@ -26440,7 +26440,7 @@ fn jit_closure_prototype(
     f.lexical = true;
     f.ops = ops;
     f.constants = consts.into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let v = Value::make_bytecode(f);
     // The caller holds `v` in a Rust local across evaluations that can
     // collect; the collector is precise (no stack scan), so root it here or
@@ -27153,7 +27153,7 @@ fn a_speculated_call_caches_a_bit_op_inlining_callee_and_sees_its_redefinition()
         f.lexical = true;
         f.ops = ops;
         f.constants = constants.into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         f.jit_runtime().set_hot_for_test();
         Value::make_bytecode(f)
     };
@@ -27256,7 +27256,9 @@ fn native_calls_marshal_optional_and_rest_arguments() {
         });
         f.lexical = true;
         f.ops = vec![Op::List(slots as u16), Op::Return];
-        f.max_stack = slots as u16 + 1;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(
+            usize::try_from(slots + 1).expect("test frame fits host"),
+        );
         f.jit_runtime().set_hot_for_test();
         let v = Value::make_bytecode(f);
         crate::emacs_core::eval::push_scratch_gc_root(v);
@@ -27285,7 +27287,7 @@ fn native_calls_marshal_optional_and_rest_arguments() {
         Op::Return,
     ];
     caller.constants = vec![Value::symbol("apply"), Value::make_int(1)].into();
-    caller.max_stack = 16;
+    caller.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     caller.jit_runtime().set_hot_for_test();
     let caller = Value::make_bytecode(caller);
     crate::emacs_core::eval::push_scratch_gc_root(caller);
@@ -27365,7 +27367,7 @@ fn jit_apply_enters_a_compiled_callee_natively() {
         });
         f.lexical = true;
         f.ops = ops;
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         f.jit_runtime().set_hot_for_test();
         let v = Value::make_bytecode(f);
         crate::emacs_core::eval::push_scratch_gc_root(v);
@@ -27414,7 +27416,7 @@ fn jit_apply_enters_a_compiled_callee_natively() {
         Op::Return,
     ];
     caller.constants = vec![Value::symbol("apply"), Value::make_int(1)].into();
-    caller.max_stack = 16;
+    caller.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     caller.jit_runtime().set_hot_for_test();
     let caller = Value::make_bytecode(caller);
     crate::emacs_core::eval::push_scratch_gc_root(caller);
@@ -28053,3 +28055,10 @@ fn fontset_changes_invalidate_redisplay_skip_signature() {
 #[cfg(test)]
 #[path = "circular_lists_test.rs"]
 mod circular_lists;
+
+#[cfg(test)]
+mod function_slots;
+
+#[cfg(test)]
+#[path = "marker_identity.rs"]
+mod marker_identity;

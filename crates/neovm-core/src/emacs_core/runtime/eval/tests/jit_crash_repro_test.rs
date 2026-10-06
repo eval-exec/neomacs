@@ -37,7 +37,7 @@ fn bc(required: u32, ops: Vec<Op>, constants: Vec<Value>, hot: bool) -> ByteCode
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 64;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(64);
     if hot {
         f.jit_runtime().set_hot_for_test();
     }

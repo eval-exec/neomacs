@@ -24,7 +24,7 @@ fn lister(required: u32, optional: u32, rest: bool, hot: bool) -> ByteCodeFuncti
     function.lexical = true;
     function.ops = (0..n).map(|_| Op::StackRef((n - 1) as u16)).collect();
     function.ops.extend([Op::List(n as u16), Op::Return]);
-    function.max_stack = 16;
+    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     if hot {
         function.jit_runtime().set_hot_for_test();
     }
@@ -118,7 +118,7 @@ fn apply2_bytecode_unwinds_frame_and_caller_roots_on_signal() {
     });
     function.lexical = true;
     function.ops = vec![Op::StackRef(1), Op::Car, Op::Return];
-    function.max_stack = 8;
+    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     function.jit_runtime().set_hot_for_test();
     let function = Value::make_bytecode(function);
     eval.push_vm_frame_root(function);

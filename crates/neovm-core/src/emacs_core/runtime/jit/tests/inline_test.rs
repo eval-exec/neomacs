@@ -21,7 +21,7 @@ fn lexical_fn(required: u32, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFun
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f
 }
 
@@ -89,7 +89,11 @@ fn a_fused_body_runs_as_the_call_did() {
     ];
     for (name, callee) in cases {
         callee.jit_runtime().set_hot_for_test();
-        let nargs = callee.params.required.len();
+        let nargs = callee
+            .params
+            .stack_shape()
+            .expect("fixture stack parameters")
+            .required();
         let callee_value = Value::make_bytecode(callee);
         crate::emacs_core::eval::push_scratch_gc_root(callee_value);
         // (lambda (y) (cons (CALLEE y [y]) 'tail))
@@ -111,7 +115,7 @@ fn a_fused_body_runs_as_the_call_did() {
             .unwrap_or_else(|| panic!("{name}: the call must fuse"));
         assert_eq!(fused.regions.len(), 1, "{name}: one region");
         let mut fused_fn = lexical_fn(1, fused.ops.clone(), fused.constants.clone());
-        fused_fn.max_stack = 32;
+        fused_fn.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(32);
         for arg in [Value::make_int(5), Value::make_int(40), Value::make_int(-7)] {
             let want = interp(&mut ev, &caller, vec![arg]);
             let got = interp(&mut ev, &fused_fn, vec![arg]);

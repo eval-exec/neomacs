@@ -39,7 +39,7 @@ fn bc_with(
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     if hot {
         f.jit_runtime().set_hot_for_test();
     }

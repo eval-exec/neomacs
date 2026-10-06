@@ -3586,7 +3586,7 @@ impl TaggedValue {
                 crate::emacs_core::pdump::stub_params_required_only(ptr, data.closure_slot_count)
             });
         }
-        Some(data.params.optional.is_empty() && data.params.rest.is_none())
+        Some(data.params.fixed_arity().is_some())
     }
 
     /// The required-parameter count of a byte-code function that takes only
@@ -3603,8 +3603,7 @@ impl TaggedValue {
                 crate::emacs_core::pdump::stub_required_only_arity(ptr, data.closure_slot_count)
             };
         }
-        (data.params.optional.is_empty() && data.params.rest.is_none())
-            .then_some(data.params.required.len())
+        data.params.fixed_arity()
     }
 
     pub(crate) fn bytecode_interactive_probe(self) -> Option<BytecodeInteractiveProbe> {

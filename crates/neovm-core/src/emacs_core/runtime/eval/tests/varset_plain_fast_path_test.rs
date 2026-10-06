@@ -50,7 +50,7 @@ fn run_setq(ev: &mut Context, engine: Engine, sym: Value, value: Value) -> Resul
             f.lexical = true;
             f.ops = ops;
             f.constants = constants.into();
-            f.max_stack = 8;
+            f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
             let mut vm = Vm::from_context(ev);
             match vm.execute(&f, vec![value]).kinded() {
                 Ok(_) => Ok(()),

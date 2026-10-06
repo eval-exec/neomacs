@@ -22,7 +22,7 @@ fn assert_store_semantic(store: Op) {
     f.lexical = true;
     f.ops = vec![Op::Constant(0), Op::Constant(1), store, Op::Return];
     f.constants = vec![cell, Value::make_int(1)].into();
-    f.max_stack = 4;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
     f.seal_hand_assembled_ops_for_test();
     let id = cache::compile_and_cache_jit_leaf(&f, None).expect("store body compiles");
     let pointer = cache::compiled_leaf_ptr_for_test(id).expect("cached store body");

@@ -17,7 +17,7 @@ fn lexical(required: usize, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunc
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f.seal_hand_assembled_ops_for_test();
     f.jit_runtime().set_hot_for_test();
     f
@@ -53,7 +53,10 @@ fn fuse(f: &ByteCodeFunction, mode: Inline2Mode) -> Option<FusedBody> {
         f.executable_ops(),
         &f.constants,
         None,
-        f.params.required.len(),
+        f.params
+            .stack_shape()
+            .expect("fixture stack parameters")
+            .required(),
         &vec![NumericFeedback::FixnumOnly; f.executable_ops().len()],
     );
     compile::force_inline2_for_test(None);

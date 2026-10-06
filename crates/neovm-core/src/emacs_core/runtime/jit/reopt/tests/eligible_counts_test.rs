@@ -22,7 +22,7 @@ fn function(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 4;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
     f.seal_hand_assembled_ops();
     f
 }

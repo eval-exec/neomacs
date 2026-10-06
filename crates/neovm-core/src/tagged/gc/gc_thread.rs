@@ -793,8 +793,8 @@ fn concurrent_try_mark_owned_with_symbols<
         //  (a) fresh claim: THIS arm gray-pushes exactly the fields
         //      `trace_veclike`'s ByteCode arm traces (the two `aref` slot
         //      objects, arglist, constants, env, doc_form, interactive,
-        //      extra_slots; `params` carries only SymIds — untraced by
-        //      design), and the drain traces them
+        //      extra_slots and the Dynamic parameter child; Stack/Named
+        //      parameters carry no heap children), and the drain traces them
         //      to the fixpoint (a mid-drain stop hands residual gray to the
         //      termination).
         //  (b) mid-cycle-ALLOCATED bytecode in a NEW page: not in the
@@ -862,6 +862,9 @@ fn concurrent_try_mark_owned_with_symbols<
                     "arena bytecode must never be a lazy pdump stub"
                 );
                 logs.queue_child::<SYMBOLS>(data.arglist, gray);
+                if let Some(child) = data.params.heap_child() {
+                    logs.queue_child::<SYMBOLS>(child, gray);
+                }
                 for &c in &data.constants {
                     logs.queue_child::<SYMBOLS>(c, gray);
                 }

@@ -9,7 +9,7 @@ fn bytecode_getter_capture_keeps_identity_and_first_read_revision() {
     let mut code = ByteCodeFunction::new(LambdaParams::simple(vec![]));
     code.ops = vec![Op::Constant(0), Op::Return];
     code.constants = vec![Value::fixnum(41)].into();
-    code.max_stack = 1;
+    code.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
     let function = Value::make_bytecode(code);
     let accesses = bytecode_data_access_count();
     let (constant, reads) = capture(|| {

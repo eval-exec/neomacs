@@ -42,7 +42,8 @@ const MMAP_MAGIC: [u8; 16] = *b"NEOMMAPDUMP\0\0\0\0\0";
 // v16: `ByteCodeObj` grew the two `aref` slot-object words after `data`
 // (relocated value words, nil when never created), which moves every
 // bytecode extras region by 16 bytes.
-const MMAP_FORMAT_VERSION: u32 = 16;
+// v17: bytecode extras carry full-width depth and explicit parameter kind.
+const MMAP_FORMAT_VERSION: u32 = 17;
 
 /// The address every production image plans to map at. Above the worst-case
 /// mmap_rnd_bits=32 PIE window top (0x6555_5555_4000) and the ASAN shadow

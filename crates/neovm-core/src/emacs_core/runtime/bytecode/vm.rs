@@ -578,6 +578,31 @@ fn invalid_bytecode_flow() -> Flow {
     signal("error", vec![Value::string("Invalid byte-code")])
 }
 
+/// GNU bytecode.c:538-541 signals the raw descriptor pair (mandatory .
+/// nonrest), even when the `&rest` bit is set; a frame the host cannot
+/// represent is invalid byte-code.
+#[cold]
+#[inline(never)]
+fn stack_call_shape_flow(
+    template: super::ArgTemplate,
+    nargs: usize,
+    error: super::function_slots::CallShapeError,
+) -> Flow {
+    match error {
+        super::function_slots::CallShapeError::Arity => signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![
+                Value::cons(
+                    Value::fixnum(template.mandatory() as i64),
+                    Value::fixnum(template.nonrest()),
+                ),
+                Value::fixnum(nargs as i64),
+            ],
+        ),
+        super::function_slots::CallShapeError::Shape(_) => invalid_bytecode_flow(),
+    }
+}
+
 #[cold]
 #[inline(never)]
 fn trace_invalid_bytecode_site(
@@ -626,7 +651,7 @@ fn trace_invalid_bytecode_site(
         stack_len,
         frame_base,
         frame_limit,
-        max_stack = func.max_stack,
+        max_stack = func.max_stack.get(),
         ops_len = ops.len(),
         constants_len = func.constants.len(),
         lexical = func.lexical,
@@ -1094,7 +1119,7 @@ impl InterpreterFrame {
     /// when it reserved the capacity.
     #[inline(always)]
     fn frame_limit(&self) -> usize {
-        self.frame_base + self.function.code().max_stack as usize
+        self.frame_base + self.function.code().max_stack.get()
     }
 
     #[inline(always)]
@@ -2687,8 +2712,8 @@ impl<'a> Vm<'a> {
     ///
     /// Only the direct/manual path (func_value == NIL/non-heap, e.g.
     /// `execute()`) holds nothing else alive, so it keeps a vm-root scope
-    /// rooting each constant individually (trace_roots skips non-heap
-    /// BcFrame.fun).
+    /// rooting the parameter child, original arglist and constants
+    /// individually (trace_roots skips non-heap BcFrame.fun).
     pub(crate) fn execute_from_stack_args(
         &mut self,
         func: &ByteCodeFunction,
@@ -2753,6 +2778,13 @@ impl<'a> Vm<'a> {
             self.run_frame(func, args_start, nargs, func_value)
         } else {
             self.with_dynamic_vm_roots(|vm| {
+                // Manual chunks have no heap function owner. Keep both
+                // parameter fields alive after the invocation cursor ends:
+                // safe Rust callers may assign arglist independently.
+                vm.push_dynamic_vm_root(func.arglist);
+                if let Some(child) = func.params.heap_child() {
+                    vm.push_dynamic_vm_root(child);
+                }
                 for value in func.constants.iter().copied() {
                     vm.push_dynamic_vm_root(value);
                 }
@@ -2834,17 +2866,30 @@ impl<'a> Vm<'a> {
             base: frame_base,
             fun: func_value,
         });
-        let frame_limit = match frame_base.checked_add(func.max_stack as usize) {
+        let frame_limit = match frame_base.checked_add(func.max_stack.get()) {
             Some(limit) => limit,
             None => {
-                self.ctx.bc_frames.pop();
-                return Err(invalid_bytecode_flow());
+                return self.cleanup_bytecode_frame(
+                    Err(super::function_slots::FrameStorageError::Overflow.into_flow()),
+                    condition_stack_base,
+                    specpdl_base,
+                    frame_base,
+                );
             }
         };
         if self.ctx.bc_buf.capacity() < frame_limit {
-            self.ctx
+            if let Err(error) = self
+                .ctx
                 .bc_buf
-                .reserve_exact(frame_limit - self.ctx.bc_buf.len());
+                .try_reserve_exact(frame_limit - self.ctx.bc_buf.len())
+            {
+                return self.cleanup_bytecode_frame(
+                    Err(super::function_slots::FrameStorageError::from(error).into_flow()),
+                    condition_stack_base,
+                    specpdl_base,
+                    frame_base,
+                );
+            }
         }
         // Seed the operand stack with the native frame's live values (traced
         // from here on; the caller performed no allocation since reading them
@@ -2899,44 +2944,101 @@ impl<'a> Vm<'a> {
         let specpdl_base = self.ctx.specpdl.len();
         let mut bind_stack = BindStack::new();
 
-        let n_required = func.params.required.len();
-        let n_optional = func.params.optional.len();
-        let has_rest = func.params.rest.is_some();
-        let nonrest = n_required + n_optional;
+        use super::FunctionParams;
+        let params_on_stack = match &func.params {
+            FunctionParams::Stack(_) => true,
+            FunctionParams::Dynamic(_) => false,
+            FunctionParams::Named(_) => {
+                func.lexical
+                    || func.env.is_some()
+                    || matches!(func.arglist.kind(), ValueKind::Fixnum(_))
+            }
+        };
+        let shape = match &func.params {
+            // GNU checks the exact signed descriptor before converting its
+            // nonrest bound into any host stack/allocation count.
+            FunctionParams::Stack(template) => match template.call_shape(nargs) {
+                Ok(shape) => Some(shape),
+                Err(error) => {
+                    return self.cleanup_bytecode_frame(
+                        Err(stack_call_shape_flow(*template, nargs, error)),
+                        condition_stack_base,
+                        specpdl_base,
+                        frame_base,
+                    );
+                }
+            },
+            FunctionParams::Dynamic(params) => {
+                if let Err(flow) =
+                    self.bind_dynamic_bytecode_formals(*params, args_start, nargs, func_value)
+                {
+                    return self.cleanup_bytecode_frame(
+                        Err(flow),
+                        condition_stack_base,
+                        specpdl_base,
+                        frame_base,
+                    );
+                }
+                None
+            }
+            FunctionParams::Named(_) => {
+                let Some(shape) = func.params.stack_shape() else {
+                    return self.cleanup_bytecode_frame(
+                        Err(invalid_bytecode_flow()),
+                        condition_stack_base,
+                        specpdl_base,
+                        frame_base,
+                    );
+                };
+                if !(shape.required() <= nargs
+                    && (shape.rest().is_present() || nargs <= shape.nonrest()))
+                {
+                    let arity = Value::cons(
+                        Value::fixnum(shape.required() as i64),
+                        Value::fixnum(shape.nonrest() as i64),
+                    );
+                    return self.cleanup_bytecode_frame(
+                        Err(signal(
+                            LispCondition::WrongNumberOfArguments,
+                            vec![arity, Value::fixnum(nargs as i64)],
+                        )),
+                        condition_stack_base,
+                        specpdl_base,
+                        frame_base,
+                    );
+                }
+                Some(shape)
+            }
+        };
+        let n_required = shape.map_or(0, |shape| shape.required());
+        let nonrest = shape.map_or(0, |shape| shape.nonrest());
+        let n_optional = nonrest.saturating_sub(n_required);
+        let has_rest = shape.is_some_and(|shape| shape.rest().is_present());
 
-        // GNU Emacs validates bytecode arity before pushing the frame.
-        // See src/bytecode.c: the VM checks the arg descriptor and signals
-        // wrong-number-of-arguments immediately instead of nil-padding missing
-        // required args.
-        if !(n_required <= nargs && (has_rest || nargs <= nonrest)) {
-            // GNU bytecode.c signals the raw bytecode descriptor pair
-            // (mandatory . nonrest), even when the descriptor has the &rest
-            // bit set.  This differs intentionally from func-arity, which
-            // reports `many` for the same bytecode function.
-            let arity = Value::cons(
-                Value::fixnum(n_required as i64),
-                Value::fixnum(nonrest as i64),
-            );
-            self.ctx.bc_buf.truncate(frame_base);
-            self.ctx.bc_frames.pop();
-            return Err(signal(
-                LispCondition::WrongNumberOfArguments,
-                vec![arity, Value::fixnum(nargs as i64)],
-            ));
-        }
-
-        let frame_limit = match frame_base.checked_add(func.max_stack as usize) {
+        let frame_limit = match frame_base.checked_add(func.max_stack.get()) {
             Some(limit) => limit,
             None => {
-                self.ctx.bc_buf.truncate(frame_base);
-                self.ctx.bc_frames.pop();
-                return Err(invalid_bytecode_flow());
+                return self.cleanup_bytecode_frame(
+                    Err(super::function_slots::FrameStorageError::Overflow.into_flow()),
+                    condition_stack_base,
+                    specpdl_base,
+                    frame_base,
+                );
             }
         };
         if self.ctx.bc_buf.capacity() < frame_limit {
-            self.ctx
+            if let Err(error) = self
+                .ctx
                 .bc_buf
-                .reserve_exact(frame_limit - self.ctx.bc_buf.len());
+                .try_reserve_exact(frame_limit - self.ctx.bc_buf.len())
+            {
+                return self.cleanup_bytecode_frame(
+                    Err(super::function_slots::FrameStorageError::from(error).into_flow()),
+                    condition_stack_base,
+                    specpdl_base,
+                    frame_base,
+                );
+            }
         }
 
         // GNU's bytecode stores lexical params at known stack positions; the
@@ -2951,9 +3053,6 @@ impl<'a> Vm<'a> {
         // code did even for the lexical case) is dead work that dominated
         // debug-build batch-byte-compile runtime.
         let has_named_params = nonrest > 0 || has_rest;
-        let params_on_stack = func.lexical
-            || func.env.is_some()
-            || matches!(func.arglist.kind(), ValueKind::Fixnum(_));
         if params_on_stack {
             // Lexical bytecode follows GNU bytecode.c: exec_byte_code receives
             // the encoded arg template and pushes incoming arguments into the
@@ -2961,8 +3060,8 @@ impl<'a> Vm<'a> {
             // slots (nonrest params + optional rest list) must fit the frame:
             // the same bound the old per-push checks enforced, folded into one
             // comparison (the error path truncates any partial seed anyway).
-            let seed_slots = nonrest + usize::from(has_rest);
-            if frame_base + seed_slots > frame_limit {
+            let seed_slots = shape.and_then(|shape| shape.entry_depth().ok());
+            if seed_slots.is_none_or(|slots| slots > func.max_stack.get()) {
                 self.ctx.bc_buf.truncate(frame_base);
                 self.ctx.bc_frames.pop();
                 return Err(invalid_bytecode_flow());
@@ -2977,14 +3076,7 @@ impl<'a> Vm<'a> {
                         panic!(
                             "RUN_FRAME ARG BUG: arg[{}] = {:#x} (ptr {:?}, kind={:?}) is corrupt string. \
                              nargs={}, func has {} required, {} optional, rest={}",
-                            i,
-                            v.0,
-                            ptr,
-                            hdr.kind,
-                            nargs,
-                            func.params.required.len(),
-                            func.params.optional.len(),
-                            func.params.rest.is_some(),
+                            i, v.0, ptr, hdr.kind, nargs, n_required, n_optional, has_rest,
                         );
                     }
                 }
@@ -3068,8 +3160,16 @@ impl<'a> Vm<'a> {
             // bytecode stack slots. The caller's arg span stays live on
             // bc_buf through every specbind (variable watchers can run
             // arbitrary Lisp that captures backtraces reading it).
+            let FunctionParams::Named(named_params) = &func.params else {
+                return self.cleanup_bytecode_frame(
+                    Err(invalid_bytecode_flow()),
+                    condition_stack_base,
+                    specpdl_base,
+                    frame_base,
+                );
+            };
             let mut arg_idx = 0;
-            for param in &func.params.required {
+            for param in &named_params.required {
                 let val = if arg_idx < nargs {
                     self.ctx.bc_buf[args_start + arg_idx]
                 } else {
@@ -3085,7 +3185,7 @@ impl<'a> Vm<'a> {
                 }
                 arg_idx += 1;
             }
-            for param in &func.params.optional {
+            for param in &named_params.optional {
                 let val = if arg_idx < nargs {
                     self.ctx.bc_buf[args_start + arg_idx]
                 } else {
@@ -3101,7 +3201,7 @@ impl<'a> Vm<'a> {
                 }
                 arg_idx += 1;
             }
-            if let Some(rest_name) = func.params.rest {
+            if let Some(rest_name) = named_params.rest {
                 let rest_list = if arg_idx < nargs {
                     self.ctx
                         .tagged_heap
@@ -3171,6 +3271,100 @@ impl<'a> Vm<'a> {
         self.cleanup_bytecode_frame(result, condition_stack_base, specpdl_base, frame_base)
     }
 
+    /// GNU eval.c:funcall_lambda validates each formal when it is reached,
+    /// including after watcher callbacks mutate the remaining argument list.
+    /// The invocation cursor and caller args stay rooted through every bind.
+    /// The cursor's two live cells sit in scratch slots at the frame base:
+    /// `bc_buf` is traced, a nested call pushes its own frame above them,
+    /// and each step overwrites the pair in place.
+    #[cold]
+    #[inline(never)]
+    fn bind_dynamic_bytecode_formals(
+        &mut self,
+        params: super::DynamicArglist,
+        args_start: usize,
+        nargs: usize,
+        func_value: Value,
+    ) -> Result<(), Flow> {
+        let cursor = params.invocation();
+        let roots_at = self.ctx.bc_buf.len();
+        debug_assert!(args_start + nargs <= roots_at);
+        self.ctx.bc_buf.extend_from_slice(&cursor.roots());
+        let bound =
+            self.bind_dynamic_formals_rooted(cursor, roots_at, args_start, nargs, func_value);
+        self.ctx.bc_buf.truncate(roots_at);
+        bound
+    }
+
+    fn bind_dynamic_formals_rooted(
+        &mut self,
+        mut cursor: super::function_slots::FormalCursor,
+        roots_at: usize,
+        args_start: usize,
+        nargs: usize,
+        func_value: Value,
+    ) -> Result<(), Flow> {
+        use super::function_slots::{FormalBinding, FormalStep};
+        let mut arg_index = 0;
+        loop {
+            self.ctx.bc_buf[roots_at..roots_at + 2].copy_from_slice(&cursor.roots());
+            if cursor.has_next_cell() {
+                // GNU eval.c:3397 polls before each cell, including
+                // markers; callbacks/quit handling may run Lisp here.
+                self.ctx.maybe_quit()?;
+            }
+            let step = cursor
+                .next_step()
+                .map_err(|_| signal(LispCondition::InvalidFunction, vec![func_value]))?;
+            let binding = match step {
+                FormalStep::End => break,
+                FormalStep::Marker => continue,
+                FormalStep::Binding(binding) => binding,
+            };
+            let (symbol, value) = match binding {
+                FormalBinding::Required(symbol) => {
+                    if arg_index >= nargs {
+                        return Err(signal(
+                            LispCondition::WrongNumberOfArguments,
+                            vec![func_value, Value::fixnum(nargs as i64)],
+                        ));
+                    }
+                    let value = self.ctx.bc_buf[args_start + arg_index];
+                    arg_index += 1;
+                    (symbol, value)
+                }
+                FormalBinding::Optional(symbol) => {
+                    let value = if arg_index < nargs {
+                        let value = self.ctx.bc_buf[args_start + arg_index];
+                        arg_index += 1;
+                        value
+                    } else {
+                        Value::NIL
+                    };
+                    (symbol, value)
+                }
+                FormalBinding::Rest(symbol) => {
+                    let value = self.ctx.tagged_heap.list_from_slice(
+                        &self.ctx.bc_buf[args_start + arg_index..args_start + nargs],
+                    );
+                    arg_index = nargs;
+                    (symbol, value)
+                }
+            };
+            self.ctx.try_specbind(symbol, value)?;
+            cursor
+                .finish_binding()
+                .map_err(|_| signal(LispCondition::InvalidFunction, vec![func_value]))?;
+        }
+        if arg_index < nargs {
+            return Err(signal(
+                LispCondition::WrongNumberOfArguments,
+                vec![func_value, Value::fixnum(nargs as i64)],
+            ));
+        }
+        Ok(())
+    }
+
     /// Whether this frame can use the first iterative `setup_frame` slice.
     ///
     /// The slice deliberately starts with GNU's common encoded-argument,
@@ -3184,18 +3378,30 @@ impl<'a> Vm<'a> {
         func: &ByteCodeFunction,
         nargs: usize,
     ) -> bool {
-        let required = func.params.required.len();
-        let optional = func.params.optional.len();
-        let nonrest = required + optional;
+        let Some(shape) = func.params.stack_shape() else {
+            return false;
+        };
+        let required = shape.required();
+        let nonrest = shape.nonrest();
         let has_named_params = nonrest > 0;
-        let params_on_stack = func.lexical || matches!(func.arglist.kind(), ValueKind::Fixnum(_));
+        let params_on_stack = match &func.params {
+            super::FunctionParams::Stack(_) => true,
+            super::FunctionParams::Dynamic(_) => false,
+            super::FunctionParams::Named(_) => {
+                func.lexical || matches!(func.arglist.kind(), ValueKind::Fixnum(_))
+            }
+        };
 
         func.env.is_none()
-            && func.params.rest.is_none()
+            && !shape.rest().is_present()
             && (!has_named_params || params_on_stack)
             && required <= nargs
             && nargs <= nonrest
-            && nonrest <= func.max_stack as usize
+            && nonrest <= func.max_stack.get()
+            // The in-place installer grows the operand stack infallibly, as
+            // it always has; deeper frames take `run_frame`, whose fallible
+            // reservation reports failure as a Lisp error.
+            && func.max_stack <= super::StackDepth::ITERATIVE_FRAME_LIMIT
             // Sealed-dispatch safety gate for iterative callees, the twin of
             // the entry gate in `run_loop`: only `seal_ops`-normalized code
             // may enter the unchecked-fetch driver. Evaluated at (cacheable)
@@ -3257,21 +3463,27 @@ impl<'a> Vm<'a> {
         let frame_base = cursor.len;
         debug_assert!(args_start + nargs <= frame_base);
         let frame_limit = frame_base
-            .checked_add(func.max_stack as usize)
+            .checked_add(func.max_stack.get())
             .expect("iterative frame limit prevalidated");
 
         #[cfg(test)]
         observe_iterative_context_bc_frames_len(self.ctx.bc_frames.len());
         if self.ctx.bc_buf.capacity() < frame_limit {
             // Cold growth: sync the live length, let the Vec reallocate,
-            // rearm the base pointer.
+            // rearm the base pointer. The admission gate bounds the depth by
+            // `StackDepth::ITERATIVE_FRAME_LIMIT`, so this reservation is an
+            // ordinary allocation, not a Lisp-controlled size.
             // SAFETY: same initialization argument as `StackCursor::publish`.
             unsafe { self.ctx.bc_buf.set_len(cursor.len) };
             self.ctx.bc_buf.reserve_exact(frame_limit - cursor.len);
             cursor.base = self.ctx.bc_buf.as_mut_ptr();
         }
 
-        let nonrest = func.params.required.len() + func.params.optional.len();
+        let nonrest = func
+            .params
+            .stack_shape()
+            .expect("iterative parameter shape prevalidated")
+            .nonrest();
         // GNU setup_frame's PUSH loop on the live cursor: copy the incoming
         // arguments into the fresh frame, then nil-fill missing optionals.
         // SAFETY: capacity >= frame_limit >= frame_base + nonrest
@@ -3736,7 +3948,7 @@ impl<'a> Vm<'a> {
         if handlers == 0
             && spec_base == entry_spec_depth
             && cond_base == self.ctx.condition_stack_len()
-            && stack.len() <= func.max_stack as usize
+            && stack.len() <= func.max_stack.get()
         {
             bind_stack.clear();
             bind_stack.extend_from_slice(&binds);
@@ -4008,7 +4220,7 @@ impl<'a> Vm<'a> {
             // match on the storage kind, where the instruction stream costs a
             // lazy-decode probe.
             let constants: &[Value] = func.constants.as_slice();
-            let frame_limit = frame_base + func.max_stack as usize;
+            let frame_limit = frame_base + func.max_stack.get();
             let ops_len = ops.len();
             let ops_ptr = ops.as_ptr();
             let mut pc_local = callers.active().pc();
@@ -9887,3 +10099,6 @@ impl crate::emacs_core::eval::Context {
         result
     }
 }
+#[cfg(test)]
+#[path = "tests/manual_parameter_roots.rs"]
+mod manual_parameter_roots_tests;

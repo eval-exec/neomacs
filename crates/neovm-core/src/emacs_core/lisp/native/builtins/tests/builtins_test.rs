@@ -103,7 +103,7 @@ fn install_noarg_hook_probe(
     body: Vec<Value>,
 ) {
     let lambda = Value::make_lambda(LambdaData {
-        params: LambdaParams::simple(vec![]),
+        params: LambdaParams::simple(vec![]).into(),
         body,
         env: None,
         docstring: None,
@@ -739,7 +739,7 @@ fn pure_dispatch_typed_vconcat_flattens_bool_vector_logical_bits() {
 fn pure_dispatch_typed_length_tracks_interpreted_closure_slot_count() {
     crate::test_utils::init_test_tracing();
     let bare = Value::make_lambda(LambdaData {
-        params: LambdaParams::simple(vec![intern("x")]),
+        params: LambdaParams::simple(vec![intern("x")]).into(),
         body: vec![Value::symbol("x")],
         env: Some(Value::NIL),
         docstring: None,
@@ -747,7 +747,7 @@ fn pure_dispatch_typed_length_tracks_interpreted_closure_slot_count() {
         interactive: None,
     });
     let with_doc = Value::make_lambda(LambdaData {
-        params: LambdaParams::simple(vec![intern("x")]),
+        params: LambdaParams::simple(vec![intern("x")]).into(),
         body: vec![Value::symbol("x")],
         env: Some(Value::NIL),
         docstring: Some(crate::heap_types::LispString::from_utf8("doc")),
@@ -4377,7 +4377,7 @@ fn barf_bury_char_equal_cl_type_and_cancel_semantics() {
         Value::symbol("primitive-function")
     );
     let lambda = Value::make_lambda(LambdaData {
-        params: LambdaParams::simple(vec![intern("x")]),
+        params: LambdaParams::simple(vec![intern("x")]).into(),
         body: Vec::new(),
         env: None,
         docstring: None,
@@ -12993,7 +12993,7 @@ fn prin1_to_string_preserves_gensym_lambda_parameter_identity_like_gnu() {
     let mut eval = crate::emacs_core::eval::Context::new();
     let sym = crate::emacs_core::intern::intern_uninterned("stack");
     let lambda = Value::make_lambda(LambdaData {
-        params: LambdaParams::simple(vec![sym]),
+        params: LambdaParams::simple(vec![sym]).into(),
         body: vec![Value::from_sym_id(sym)],
         env: Some(Value::NIL),
         docstring: None,

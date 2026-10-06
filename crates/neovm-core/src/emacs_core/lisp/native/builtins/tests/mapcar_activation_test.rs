@@ -41,7 +41,7 @@ fn identity(_: &mut Context, item: Value) -> EvalResult {
 fn bytecode(target: Option<Value>) -> Value {
     let mut code = ByteCodeFunction::new(LambdaParams::simple(vec![intern("mapact-item")]));
     code.lexical = true;
-    code.max_stack = 8;
+    code.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     code.ops = match target {
         Some(target) => {
             code.constants = vec![target].into();
@@ -747,7 +747,7 @@ fn mapcar_activation_optional_and_rest_callbacks_keep_parameter_marshaling() {
             params.required.len() + params.optional.len() + usize::from(params.rest.is_some());
         let mut code = ByteCodeFunction::new(params);
         code.lexical = true;
-        code.max_stack = 16;
+        code.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         code.ops = (0..slots)
             .map(|_| Op::StackRef((slots - 1) as u16))
             .collect();
@@ -808,7 +808,7 @@ fn mapcar_activation_wrong_arity_is_deferred_until_a_nonempty_sequence() {
     ]));
     code.lexical = true;
     code.ops = vec![Op::StackRef(1), Op::Return];
-    code.max_stack = 8;
+    code.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     let function = Value::make_bytecode(code);
     let roots = ctx.save_vm_roots();
     ctx.push_vm_frame_root(function);

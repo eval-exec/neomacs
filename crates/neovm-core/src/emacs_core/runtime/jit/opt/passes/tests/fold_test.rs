@@ -19,7 +19,7 @@ fn source(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFunction
         rest: None,
     });
     function.lexical = true;
-    function.max_stack = 64;
+    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(64);
     function.ops = ops;
     function.constants = constants.into();
     function
@@ -27,7 +27,11 @@ fn source(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFunction
 
 fn plan(function: &ByteCodeFunction, prefix: usize) -> Func {
     let params = ParamShape {
-        required: function.params.required.len(),
+        required: function
+            .params
+            .stack_shape()
+            .expect("fixture stack parameters")
+            .required(),
         ..ParamShape::default()
     };
     let cfg = crate::emacs_core::jit::compile::analyze_cfg(
@@ -450,7 +454,7 @@ fn opt_fold_gnu_dhry_proc3_alias_join_remains_verifiable() {
     )
     .expect("GNU fixture decodes");
     let mut function = source(ops, constants, 1);
-    function.max_stack = 8;
+    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     function.gnu_byte_offset_map = Some(offsets);
     function.gnu_bytecode_bytes = Some(crate::tagged::header::LispByteVec::owned(raw));
     // Installing GNU bytes must use the canonical decode publication path.

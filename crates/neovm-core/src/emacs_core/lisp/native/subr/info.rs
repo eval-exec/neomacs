@@ -72,6 +72,8 @@ fn macro_wrapper_payload(function: Value) -> Option<Value> {
 }
 
 fn lambda_arity_from_arglist(function: Value, arglist: Value) -> EvalResult {
+    use crate::emacs_core::bytecode::function_slots::{FormalMarkers, FormalRole};
+    let markers = FormalMarkers::canonical();
     let mut syms_left = arglist;
     let mut minargs = 0;
     let mut maxargs = 0;
@@ -85,14 +87,14 @@ fn lambda_arity_from_arglist(function: Value, arglist: Value) -> EvalResult {
         } else {
             next
         };
-        let Some(name) = next.as_symbol_name() else {
+        let Some(symbol) = next.as_symbol_id() else {
             return Err(signal(LispCondition::InvalidFunction, vec![function]));
         };
 
-        match name {
-            "&rest" => return Ok(arity_cons(minargs, None)),
-            "&optional" => optional = true,
-            _ => {
+        match markers.classify(symbol) {
+            FormalRole::RestMarker => return Ok(arity_cons(minargs, None)),
+            FormalRole::OptionalMarker => optional = true,
+            FormalRole::Variable => {
                 if !optional {
                     minargs += 1;
                 }
@@ -292,9 +294,23 @@ pub(crate) fn builtin_func_arity_ctx(
         }
         ValueKind::Veclike(VecLikeType::ByteCode) => {
             let bc = function.get_bytecode_data().unwrap();
-            let min = bc.params.min_arity();
-            let max = bc.params.max_arity();
-            Ok(arity_cons(min, max))
+            use crate::emacs_core::bytecode::function_slots::FunctionParams;
+            match &bc.params {
+                FunctionParams::Stack(template) => Ok(Value::cons(
+                    Value::fixnum(template.mandatory() as i64),
+                    if template.rest().is_present() {
+                        Value::symbol("many")
+                    } else {
+                        Value::fixnum(template.nonrest())
+                    },
+                )),
+                FunctionParams::Dynamic(arglist) => {
+                    lambda_arity_from_arglist(function, arglist.value())
+                }
+                FunctionParams::Named(params) => {
+                    Ok(arity_cons(params.min_arity(), params.max_arity()))
+                }
+            }
         }
         ValueKind::Subr(id) => Ok(subr_arity_from_registry(ctx, id)),
         ValueKind::Veclike(VecLikeType::Subr) => {

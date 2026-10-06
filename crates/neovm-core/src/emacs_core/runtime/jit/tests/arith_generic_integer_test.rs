@@ -27,7 +27,7 @@ fn generic_site(op: Op, nargs: usize) -> ByteCodeFunction {
     } else {
         vec![Op::StackRef(0), op, Op::Return]
     };
-    f.max_stack = 8;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     let pc = f.ops.len() - 2;
     f.jit_runtime()
         .record_numeric(pc, f.ops.len(), NumericFeedback::Other);

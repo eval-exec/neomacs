@@ -22,17 +22,22 @@ fn native_vector_sort_batches_collection_mutations() {
                 })
                 .collect(),
         );
-        let (revisions, _) = capture(|| {
-            let _ = vector.as_vector_data().unwrap();
-            let before = LispCollectionRevision::current();
-            let args = if predicate.is_nil() {
-                vec![vector, Value::symbol(":in-place"), Value::T]
-            } else {
-                vec![vector, predicate]
-            };
-            assert_eq!(builtin_sort_slice(&mut eval, &args).unwrap(), vector);
-            let revisions = LispCollectionRevision::current().steps_since_for_test(before);
-            revisions
+        // Cached bootstrap can leave a mark cycle active. Hold collection for
+        // this journal count so it measures the native no-callback path;
+        // the adjacent stress test exercises publication at GC boundaries.
+        let (revisions, _) = eval.with_gc_inhibited(|eval| {
+            capture(|| {
+                let _ = vector.as_vector_data().unwrap();
+                let before = LispCollectionRevision::current();
+                let args = if predicate.is_nil() {
+                    vec![vector, Value::symbol(":in-place"), Value::T]
+                } else {
+                    vec![vector, predicate]
+                };
+                assert_eq!(builtin_sort_slice(eval, &args).unwrap(), vector);
+                let revisions = LispCollectionRevision::current().steps_since_for_test(before);
+                revisions
+            })
         });
         assert!(
             revisions <= 2,

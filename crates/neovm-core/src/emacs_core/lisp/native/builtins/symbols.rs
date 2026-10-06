@@ -5847,6 +5847,21 @@ pub(crate) fn closure_from_reader_literal_slots(slots: &[Value]) -> EvalResult {
                 vec![Value::string("Invalid byte-code object")],
             ));
         }
+        use crate::emacs_core::bytecode::{BytecodeSlotOrigin, BytecodeString};
+        let code = BytecodeString::try_from(slots[1])
+            .map_err(|error| error.into_flow(BytecodeSlotOrigin::Reader))?
+            .into_unibyte(BytecodeSlotOrigin::Reader)?;
+        let normalized;
+        let slots = if code.value() != slots[1] {
+            normalized = {
+                let mut slots = slots.to_vec();
+                slots[1] = code.value();
+                slots
+            };
+            normalized.as_slice()
+        } else {
+            slots
+        };
         return make_byte_code_from_slots(slots).map_err(|_| {
             signal(
                 LispCondition::InvalidReadSyntax,
@@ -5915,41 +5930,23 @@ fn make_byte_code_from_parts_with_slots(
     use crate::emacs_core::bytecode::ByteCodeFunction;
     use crate::emacs_core::bytecode::chunk::eager_gnu_bytecode;
     use crate::emacs_core::bytecode::decode::{
-        decode_gnu_bytecode_with_offset_map, parse_arglist_value, validate_gnu_bytecode,
+        decode_gnu_bytecode_with_offset_map, validate_gnu_bytecode,
     };
 
-    if !valid_closure_arglist(*arglist)
-        || !bytecode_str.is_string()
-        || bytecode_str.string_is_multibyte()
-        || !constants_vec.is_vector()
-        || !valid_bytecode_stack_depth(*maxdepth)
-    {
-        return Err(signal(
-            "error",
-            vec![Value::string("Invalid byte-code object")],
-        ));
-    }
-
-    // 1. Parse arglist
-    let params = parse_arglist_value(arglist);
+    use crate::emacs_core::bytecode::function_slots::{BytecodeSlotOrigin, CompiledSlots};
+    let slots = CompiledSlots::try_from([*arglist, *bytecode_str, *constants_vec, *maxdepth])
+        .map_err(|error| error.into_flow(BytecodeSlotOrigin::Constructor))?;
+    let params = slots.params;
 
     // 2. Copy the raw bytes out of the bytecode string, once.
     // Bytecode strings are unibyte and may contain arbitrary byte values
     // (including non-UTF-8), so we must access the raw bytes directly
     // rather than going through as_str() which requires valid UTF-8.
-    let raw_bytes = crate::tagged::header::LispByteVec::copy_from_slice(
-        bytecode_str
-            .as_lisp_string()
-            .expect("validated bytecode string")
-            .as_bytes(),
-    );
+    let raw_bytes = crate::tagged::header::LispByteVec::copy_from_slice(slots.code.as_bytes());
     let _ = bytecode_str.with_lisp_string_mut(|string| string.pin_immovable());
 
     // 3. Extract constants from vector
-    let mut constants: Vec<Value> = match constants_vec.kind() {
-        ValueKind::Veclike(VecLikeType::Vector) => constants_vec.as_vector_data().unwrap().clone(),
-        _ => Vec::new(),
-    };
+    let mut constants: Vec<Value> = slots.constants.as_slice().to_vec();
 
     // 3b. Reify compiled literals embedded in the constants vector.
     // GNU `.elc` constants may contain nested `#[...]` bytecode objects or
@@ -5981,11 +5978,8 @@ fn make_byte_code_from_parts_with_slots(
         )
     })?;
 
-    // 5. Extract maxdepth
-    let max_stack = match maxdepth.kind() {
-        ValueKind::Fixnum(n) => n as u16,
-        _ => 16, // fallback
-    };
+    // Preserve the full nonnegative fixnum depth in every runtime consumer.
+    let max_stack = slots.depth;
 
     // 6. Extract closure slot 4.
     // GNU byte-code objects use this slot for either a docstring or an

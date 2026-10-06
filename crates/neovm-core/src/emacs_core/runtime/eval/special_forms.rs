@@ -1315,117 +1315,15 @@ impl Context {
     }
 
     pub(super) fn sf_byte_code_value(&mut self, tail: Value) -> EvalResult {
-        let args = list_to_vec(&tail).ok_or_else(|| self.listp_error(tail))?;
+        let mut args = list_to_vec(&tail).ok_or_else(|| self.listp_error(tail))?;
         if args.len() != 3 {
             return Err(signal(
                 LispCondition::WrongNumberOfArguments,
                 vec![Value::symbol("byte-code"), Value::fixnum(args.len() as i64)],
             ));
         }
-        let trace_toplevel_bytecode = std::env::var_os("NEOVM_TRACE_TOPLEVEL_BYTECODE").is_some();
-        let load_file_name = if trace_toplevel_bytecode {
-            self.obarray()
-                .symbol_value_copied("load-file-name")
-                .and_then(|value| {
-                    value
-                        .as_lisp_string()
-                        .map(|ls| crate::emacs_core::emacs_char::to_utf8_lossy(ls.as_bytes()))
-                })
-                .unwrap_or_else(|| "<unknown>".to_string())
-        } else {
-            String::new()
-        };
-        let decode_start = trace_toplevel_bytecode.then(std::time::Instant::now);
-
-        let bytecode_str = args[0];
-        let constants_vec = self.quote_value_with_bytecode(args[1])?;
-        let maxdepth = args[2];
-
-        use crate::emacs_core::bytecode::ByteCodeFunction;
-        use crate::emacs_core::bytecode::decode::decode_gnu_bytecode_with_offset_map;
-        use crate::emacs_core::value::LambdaParams;
-
-        // Bytecode strings are unibyte and may contain non-UTF-8 bytes.
-        // Access raw bytes directly, same fix as make_byte_code_from_parts.
-        let raw_bytes = if let Some(ls) = bytecode_str.as_lisp_string() {
-            ls.as_bytes().to_vec()
-        } else {
-            Vec::new()
-        };
-
-        let mut constants: Vec<Value> = match constants_vec.kind() {
-            ValueKind::Veclike(VecLikeType::Vector) => {
-                constants_vec.as_vector_data().unwrap().clone()
-            }
-            _ => Vec::new(),
-        };
-
-        for constant in &mut constants {
-            *constant =
-                crate::emacs_core::builtins::try_convert_nested_compiled_literal(*constant)?;
-        }
-
-        let (ops, gnu_byte_offset_map) =
-            decode_gnu_bytecode_with_offset_map(&raw_bytes, &mut constants).map_err(|e| {
-                signal(
-                    "error",
-                    vec![Value::string(format!("bytecode decode error: {}", e))],
-                )
-            })?;
-        if let Some(start) = decode_start {
-            tracing::info!(
-                "TOPLEVEL-BYTECODE decode file={} bytes={} consts={} ops={} elapsed={:.2?}",
-                load_file_name,
-                raw_bytes.len(),
-                constants.len(),
-                ops.len(),
-                start.elapsed()
-            );
-        }
-
-        let max_stack = match maxdepth.kind() {
-            ValueKind::Fixnum(n) => n as u16,
-            _ => 16,
-        };
-
-        let bc = ByteCodeFunction {
-            source_id: super::super::bytecode::fresh_bytecode_source_id(),
-            ops,
-            // The instructions above came straight from the sealing decoder;
-            // the stack proof is recomputed below once every shape field
-            // (params/lexical/arglist/env/max_stack) is in place.
-            ops_sealed: true,
-            stack_verified: false,
-            constants: constants.into(),
-            max_stack,
-            params: LambdaParams::simple(vec![]),
-            arglist: Value::NIL,
-            lexical: false,
-            env: None,
-            gnu_byte_offset_map: Some(gnu_byte_offset_map),
-            gnu_bytecode_bytes: None,
-            docstring: None,
-            doc_form: None,
-            interactive: None,
-            closure_slot_count: 4,
-            extra_slots: Vec::new(),
-            #[cfg(feature = "jit")]
-            runtime: Some(crate::emacs_core::jit::Runtime::new()),
-            lazy_gnu_code: None,
-        };
-
-        let mut vm = super::super::bytecode::Vm::from_context(self);
-        let exec_start = trace_toplevel_bytecode.then(std::time::Instant::now);
-        let result = vm.execute(&bc, vec![]);
-        if let Some(start) = exec_start {
-            tracing::info!(
-                "TOPLEVEL-BYTECODE exec   file={} ops={} elapsed={:.2?}",
-                load_file_name,
-                bc.executable_ops().len(),
-                start.elapsed()
-            );
-        }
-        result
+        args[1] = self.quote_value_with_bytecode(args[1])?;
+        crate::emacs_core::builtins::builtin_byte_code(self, args)
     }
 
     pub(crate) fn defalias_value(&mut self, sym: Value, def: Value) -> EvalResult {

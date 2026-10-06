@@ -83,9 +83,15 @@ fn opt_admits_optional_and_rest_with_gnu_argument_seeding() {
     // GNU bytecode.c pushes non-rest arguments, nil-pads missing optionals,
     // and allocates the extra arguments' list in the final parameter slot.
     let mut f = function(vec![Op::List(3), Op::Return], vec![], 3);
-    f.params.required.truncate(1);
-    f.params.optional = vec![SymId(2)];
-    f.params.rest = Some(SymId(3));
+    let mut params = f.params.named().expect("named fixture parameters").clone();
+    params.required.truncate(1);
+    f.params = params.into();
+    let mut params = f.params.named().expect("named fixture parameters").clone();
+    params.optional = vec![SymId(2)];
+    f.params = params.into();
+    let mut params = f.params.named().expect("named fixture parameters").clone();
+    params.rest = Some(SymId(3));
+    f.params = params.into();
     let leaf = compile(&ctx, &f);
     assert_eq!(leaf.required, 1);
     assert!(leaf.has_rest);

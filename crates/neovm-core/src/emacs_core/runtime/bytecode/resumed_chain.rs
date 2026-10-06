@@ -442,9 +442,7 @@ impl<'a> Vm<'a> {
             } else {
                 &inlined[i - 1].frame
             };
-            if frame.stack.len() > code.max_stack as usize
-                || frame.pc >= code.executable_ops().len()
-            {
+            if frame.stack.len() > code.max_stack.get() || frame.pc >= code.executable_ops().len() {
                 return None;
             }
         }
@@ -488,11 +486,23 @@ impl<'a> Vm<'a> {
             fun: frame.function,
         });
         // Validated: frame_base + max_stack bounds the frame.
-        let frame_limit = frame_base + code.max_stack as usize;
+        let frame_limit = frame_base + code.max_stack.get();
         if self.ctx.bc_buf.capacity() < frame_limit {
-            self.ctx
+            if let Err(error) = self
+                .ctx
                 .bc_buf
-                .reserve_exact(frame_limit - self.ctx.bc_buf.len());
+                .try_reserve_exact(frame_limit - self.ctx.bc_buf.len())
+            {
+                return self.cleanup_bytecode_frame(
+                    Err(
+                        crate::emacs_core::bytecode::function_slots::FrameStorageError::from(error)
+                            .into_flow(),
+                    ),
+                    condition_stack_base,
+                    specpdl_base,
+                    frame_base,
+                );
+            }
         }
         let mut pc = pc;
         let mut handlers = HandlerStack::new();

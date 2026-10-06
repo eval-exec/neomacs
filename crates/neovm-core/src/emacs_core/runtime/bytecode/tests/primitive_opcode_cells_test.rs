@@ -590,7 +590,7 @@ fn assert_sink_only_cons_is_virtual_at_aset(
         source.executable_ops(),
         &source.constants,
         source.executable_gnu_byte_offset_map(),
-        source.params.required.len(),
+        source.params.fixed_arity().unwrap(),
     )
     .expect("exact sink repro CFG");
     let constants = source
@@ -604,7 +604,7 @@ fn assert_sink_only_cons_is_virtual_at_aset(
         constants: &constants,
         cfg: &cfg,
         params: ir::ParamShape {
-            required: source.params.required.len(),
+            required: source.params.fixed_arity().unwrap(),
             ..Default::default()
         },
         dynamic_prefix: 0,

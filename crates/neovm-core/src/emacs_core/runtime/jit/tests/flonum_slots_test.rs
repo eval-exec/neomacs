@@ -32,7 +32,7 @@ fn float_fn(
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f.seal_hand_assembled_ops();
     for &pc in float_pcs {
         f.jit_runtime().record_numeric(pc, f.ops.len(), NF::Float);
@@ -856,7 +856,7 @@ fn a_fused_region_entry_boxes_flonums_before_its_framestate() {
     });
     callee.lexical = true;
     callee.ops = vec![Op::StackRef(0), Op::Return];
-    callee.max_stack = 4;
+    callee.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
     callee.jit_runtime().set_hot_for_test();
     let callee_value = Value::make_bytecode(callee);
     crate::emacs_core::eval::push_scratch_gc_root(callee_value);

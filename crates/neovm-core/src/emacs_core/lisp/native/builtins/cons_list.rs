@@ -352,7 +352,7 @@ pub(crate) fn bytecode_closure_slot(value: &Value, idx: usize) -> Option<Value> 
     }
     Some(match idx {
         crate::tagged::header::CLOSURE_ARGLIST => bc.arglist,
-        crate::tagged::header::CLOSURE_STACK_DEPTH => Value::fixnum(bc.max_stack as i64),
+        crate::tagged::header::CLOSURE_STACK_DEPTH => bc.max_stack.value(),
         crate::tagged::header::CLOSURE_DOC_STRING => bc
             .doc_form
             .or_else(|| bc.docstring.as_ref().map(|d| Value::heap_string(d.clone())))

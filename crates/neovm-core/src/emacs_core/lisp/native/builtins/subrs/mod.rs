@@ -144,8 +144,6 @@ fn push_onto_charset_list(
 }
 
 pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
-    use crate::emacs_core::value::*;
-
     #[cfg(windows)]
     crate::emacs_core::w32::register_subrs(ctx);
     lcms::register_subrs(ctx);
@@ -4567,85 +4565,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     // the GNU bytecodes, and executes them via the bytecode VM.
     ctx.register_subr(SubrSpec::new(
         "byte-code",
-        NativeFn::ContextVec(|ctx, args| {
-            crate::emacs_core::builtins::expect_args("byte-code", &args, 3)?;
-            let bytestr = args[0];
-            let constants_vec = args[1];
-            let maxdepth = args[2];
-
-            use crate::emacs_core::bytecode::ByteCodeFunction;
-            use crate::emacs_core::bytecode::decode::decode_gnu_bytecode_with_offset_map;
-            use crate::emacs_core::value::LambdaParams;
-
-            // Bytecode strings are unibyte and may contain non-UTF-8 bytes.
-            let raw_bytes = if let Some(ls) = ctx.lisp_string(bytestr) {
-                ls.as_bytes().to_vec()
-            } else {
-                return Err(crate::emacs_core::error::signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("stringp"), bytestr],
-                ));
-            };
-
-            let mut constants: Vec<Value> = match constants_vec.kind() {
-                ValueKind::Veclike(VecLikeType::Vector) => {
-                    constants_vec.as_vector_data().unwrap().clone()
-                }
-                _ => {
-                    return Err(crate::emacs_core::error::signal(
-                        LispCondition::WrongTypeArgument,
-                        vec![Value::symbol("vectorp"), constants_vec],
-                    ));
-                }
-            };
-
-            for constant in &mut constants {
-                *constant =
-                    crate::emacs_core::builtins::try_convert_nested_compiled_literal(*constant)?;
-            }
-
-            let (ops, gnu_byte_offset_map) =
-                decode_gnu_bytecode_with_offset_map(&raw_bytes, &mut constants).map_err(|e| {
-                    crate::emacs_core::error::signal(
-                        "error",
-                        vec![Value::string(format!("bytecode decode error: {}", e))],
-                    )
-                })?;
-
-            let max_stack = match maxdepth.kind() {
-                ValueKind::Fixnum(n) => n as u16,
-                _ => 16,
-            };
-
-            let bc = ByteCodeFunction {
-                source_id: crate::emacs_core::bytecode::fresh_bytecode_source_id(),
-                ops,
-                // The instructions above came straight from the sealing decoder;
-                // the stack proof is recomputed below once every shape field
-                // (params/lexical/arglist/env/max_stack) is in place.
-                ops_sealed: true,
-                stack_verified: false,
-                constants: constants.into(),
-                max_stack,
-                params: LambdaParams::simple(vec![]),
-                arglist: Value::NIL,
-                lexical: false,
-                env: None,
-                gnu_byte_offset_map: Some(gnu_byte_offset_map),
-                gnu_bytecode_bytes: None,
-                docstring: None,
-                doc_form: None,
-                interactive: None,
-                closure_slot_count: 4,
-                extra_slots: Vec::new(),
-                #[cfg(feature = "jit")]
-                runtime: Some(crate::emacs_core::jit::Runtime::new()),
-                lazy_gnu_code: None,
-            };
-
-            let mut vm = crate::emacs_core::bytecode::Vm::from_context(ctx);
-            vm.execute(&bc, vec![])
-        }),
+        NativeFn::ContextVec(crate::emacs_core::builtins::builtin_byte_code),
         SubrArity::new(3, Some(3)),
     ));
     ctx.register_subr(

@@ -14,6 +14,7 @@
 pub(crate) mod arith_kind;
 pub mod chunk;
 pub mod decode;
+pub mod function_slots;
 pub mod opcode;
 pub mod vm;
 
@@ -22,5 +23,10 @@ pub mod vm;
 pub(crate) use arith_kind::ArithGenericKind;
 pub(crate) use chunk::fresh_bytecode_source_id;
 pub use chunk::{ByteCodeFunction, ByteCodeStructuralPart};
+pub use function_slots::{
+    ArgTemplate, BytecodeSlotError, BytecodeSlotOrigin, BytecodeString, CompiledSlots,
+    ConstantsVector, DynamicArglist, FunctionParams, ParamShapeError, RestSlot, StackDepth,
+    StackDepthError, StackParamShape, UnibyteCode,
+};
 pub use opcode::Op;
 pub use vm::Vm;

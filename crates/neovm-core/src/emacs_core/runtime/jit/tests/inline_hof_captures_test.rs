@@ -38,7 +38,7 @@ fn function(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     function.lexical = true;
     function.ops = ops;
     function.constants = constants.into();
-    function.max_stack = 16;
+    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     function.seal_hand_assembled_ops_for_test();
     function.jit_runtime().set_hot_for_test();
     function

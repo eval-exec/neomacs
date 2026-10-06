@@ -7,9 +7,10 @@
 use super::DumpError;
 use super::types::{
     DumpBufferId, DumpByteCodeFunction, DumpByteCodeInstructions, DumpByteCodeKeyPart,
-    DumpByteData, DumpHashKey, DumpHashTableTest, DumpHashTableWeakness, DumpHeapObject,
-    DumpHeapRef, DumpLambdaParams, DumpLispHashTable, DumpLispString, DumpMarker, DumpNameId,
-    DumpOverlay, DumpStringTextPropertyRun, DumpSymId, DumpValue,
+    DumpByteData, DumpFunctionParams, DumpFunctionParamsKind, DumpHashKey, DumpHashTableTest,
+    DumpHashTableWeakness, DumpHeapObject, DumpHeapRef, DumpLambdaParams, DumpLispHashTable,
+    DumpLispString, DumpMarker, DumpNameId, DumpOverlay, DumpStringTextPropertyRun, DumpSymId,
+    DumpValue,
 };
 
 use crate::emacs_core::bytecode::opcode::Op;
@@ -553,8 +554,8 @@ fn write_byte_code(out: &mut Vec<u8>, function: &DumpByteCodeFunction) -> Result
         }
     }
     write_values(out, &function.constants)?;
-    write_u16(out, function.max_stack);
-    write_lambda_params(out, &function.params)?;
+    write_u64(out, function.max_stack);
+    write_function_params(out, &function.params)?;
     write_opt_value(out, function.arglist.as_ref())?;
     write_bool(out, function.lexical);
     write_opt_value(out, function.env.as_ref())?;
@@ -566,6 +567,17 @@ fn write_byte_code(out: &mut Vec<u8>, function: &DumpByteCodeFunction) -> Result
     write_bool(out, function.ops_sealed);
     write_opt_value(out, function.code_object.as_ref())?;
     write_opt_value(out, function.constants_object.as_ref())?;
+    Ok(())
+}
+
+#[deny(clippy::wildcard_enum_match_arm)]
+fn write_function_params(out: &mut Vec<u8>, params: &DumpFunctionParams) -> Result<(), DumpError> {
+    write_u8(out, params.kind().into());
+    match params {
+        DumpFunctionParams::Stack(raw) => write_i64(out, *raw),
+        DumpFunctionParams::Dynamic => {}
+        DumpFunctionParams::Named(params) => write_lambda_params(out, params)?,
+    }
     Ok(())
 }
 
@@ -1300,8 +1312,8 @@ impl<'a> Cursor<'a> {
         Ok(DumpByteCodeFunction {
             instructions,
             constants: self.read_values()?,
-            max_stack: self.read_u16("bytecode max stack")?,
-            params: self.read_lambda_params()?,
+            max_stack: self.read_u64("bytecode max stack")?,
+            params: self.read_function_params()?,
             arglist: self.read_opt_value()?,
             lexical: self.read_bool("bytecode lexical flag")?,
             env: self.read_opt_value()?,
@@ -1313,6 +1325,19 @@ impl<'a> Cursor<'a> {
             ops_sealed: self.read_bool("bytecode ops sealed flag")?,
             code_object: self.read_opt_value()?,
             constants_object: self.read_opt_value()?,
+        })
+    }
+
+    #[deny(clippy::wildcard_enum_match_arm)]
+    fn read_function_params(&mut self) -> Result<DumpFunctionParams, DumpError> {
+        let kind = DumpFunctionParamsKind::try_from(self.read_u8("bytecode parameter kind")?)
+            .map_err(DumpError::BytecodeParameterKind)?;
+        Ok(match kind {
+            DumpFunctionParamsKind::Stack => {
+                DumpFunctionParams::Stack(self.read_i64("bytecode arg template")?)
+            }
+            DumpFunctionParamsKind::Dynamic => DumpFunctionParams::Dynamic,
+            DumpFunctionParamsKind::Named => DumpFunctionParams::Named(self.read_lambda_params()?),
         })
     }
 
@@ -1621,3 +1646,7 @@ mod tests;
 #[cfg(test)]
 #[path = "object_value_codec/tests/enum_decode_test.rs"]
 mod enum_decode_tests;
+
+#[cfg(test)]
+#[path = "object_value_codec/tests/function_params.rs"]
+mod function_params_tests;

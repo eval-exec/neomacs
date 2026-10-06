@@ -54,6 +54,7 @@ use super::spec_slot::{
     SPEC_SLOT_LEAF_OFFSET,
 };
 use super::*;
+use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use std::sync::atomic::AtomicU64;
 
 /// Direct sites a leaf may emit (design §3.9); later sites keep the shim.
@@ -253,21 +254,20 @@ impl DirectSite {
             return None;
         }
         let bc = Value::from_bits(expected as usize).bytecode_data_if_materialized()?;
+        let params = JitParamShape::try_from(bc).ok()?;
         let self_only = jit_direct_sites() == DirectSitesMode::SelfOnly;
         if self_only {
             let source = rt.self_direct_source?;
             if !self_only::expected_is_source(expected, source)
-                || bc.params.required.len() != nargs
-                || !bc.params.optional.is_empty()
-                || bc.params.rest.is_some()
+                || params.fixed_arity() != Some(nargs)
             {
                 return None;
             }
         }
         let callee = CalleeShape {
-            required: bc.params.required.len(),
-            nonrest: bc.params.required.len() + bc.params.optional.len(),
-            rest: bc.params.rest.is_some(),
+            required: params.required(),
+            nonrest: params.nonrest(),
+            rest: params.rest().is_present(),
         };
         let shapes = jit_direct_shapes();
         let callable = if callee.rest {

@@ -78,7 +78,7 @@ fn bcall_fn(callee: &str, nargs: usize) -> ByteCodeFunction {
     ops.push(Op::Return);
     f.ops = ops;
     f.constants = vec![Value::symbol(callee)].into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f
 }
 
@@ -91,7 +91,7 @@ fn arith_fn(op: Op, nargs: usize) -> ByteCodeFunction {
     } else {
         vec![Op::StackRef(0), op, Op::Return]
     };
-    f.max_stack = 8;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     f
 }
 
@@ -157,7 +157,7 @@ fn inline_builtin_results_and_frameless_signal() {
         Op::CallBuiltinSym(intern("char-after"), 1),
         Op::Return,
     ];
-    f.max_stack = 4;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
     assert_eq!(
         run(&mut eval, &f, vec![Value::fixnum(1)]).unwrap(),
         Value::fixnum(i64::from(b'a'))

@@ -22,7 +22,7 @@ fn lexical_fn(nargs: u32, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFuncti
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 8;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     f
 }
 
@@ -511,7 +511,7 @@ fn bcall_fn(callee: &str, nargs: usize) -> ByteCodeFunction {
     ops.push(Op::Call(nargs as u16));
     ops.push(Op::Return);
     let mut f = lexical_fn(nargs as u32, ops, vec![Value::symbol(callee)]);
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f
 }
 
@@ -831,7 +831,7 @@ fn a_bcall_leaf_signal_edge_keeps_the_residual_alive() {
             Value::symbol("gethash"),
         ],
     );
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let leaf = compile_bcall_with_knob(&ev, &f, bcall_knob());
     ev.eval_str(
         "(setq signal-hook-function

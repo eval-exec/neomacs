@@ -43,7 +43,7 @@ fn effect_before_numeric_loop() -> ByteCodeFunction {
         Op::Unbind(1),
         Op::Return,
     ];
-    f.max_stack = 8;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     f.seal_hand_assembled_ops();
     f
 }

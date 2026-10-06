@@ -27,7 +27,7 @@ impl Member {
         f.lexical = true;
         f.ops = self.ops.clone();
         f.constants = self.constants.clone().into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         f.seal_hand_assembled_ops();
         f
     }
@@ -332,8 +332,15 @@ fn leaves_hash(ctx: &Context, name: &str) -> u128 {
     let bc = function_of(ctx, name)
         .get_bytecode_data()
         .expect("byte code");
-    leaf_content_hash(bc.executable_ops(), &bc.constants, bc.params.required.len())
-        .expect("hashable")
+    leaf_content_hash(
+        bc.executable_ops(),
+        &bc.constants,
+        bc.params
+            .stack_shape()
+            .expect("fixture stack parameters")
+            .required(),
+    )
+    .expect("hashable")
 }
 
 /// Startup marking streams the manifest's member lines (P4.2 A2, A4): `m`

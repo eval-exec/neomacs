@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use super::function_slots::{FunctionParams, StackDepth};
 use super::opcode::Op;
 use crate::emacs_core::value::{LambdaParams, Value, ValueKind};
 use crate::heap_types::LispString;
@@ -65,7 +66,7 @@ impl LazyGnuCode {
         &self,
         raw_bytes: &[u8],
         published_constants_len: usize,
-        entry_depth: usize,
+        entry_depth: impl FnOnce() -> Option<usize>,
         max_stack: usize,
     ) -> &DecodedGnuCode {
         self.decoded.get_or_init(|| {
@@ -79,7 +80,8 @@ impl LazyGnuCode {
                 published_constants_len,
             )
             .expect("validated GNU bytecode failed deferred decoding");
-            let stack_verified = super::decode::verify_stack_effects(&ops, entry_depth, max_stack);
+            let stack_verified = entry_depth()
+                .is_some_and(|depth| super::decode::verify_stack_effects(&ops, depth, max_stack));
             DecodedGnuCode {
                 ops,
                 byte_offset_map,
@@ -199,9 +201,9 @@ pub struct ByteCodeFunction {
     /// mapped image instead of materializing an owned Vec per function.
     pub constants: crate::tagged::header::LispValueVec,
     /// Maximum stack depth needed (for pre-allocation).
-    pub max_stack: u16,
+    pub max_stack: StackDepth,
     /// Parameter specification.
-    pub params: LambdaParams,
+    pub params: FunctionParams,
     /// Original GNU byte-code slot 0 value.
     ///
     /// Lexical byte-code uses an integer arg descriptor here, while old-style
@@ -346,15 +348,20 @@ impl Clone for ByteCodeFunction {
 }
 
 impl ByteCodeFunction {
-    pub fn new(params: LambdaParams) -> Self {
-        let arglist = arglist_value_from_params(&params);
+    pub fn new(params: impl Into<FunctionParams>) -> Self {
+        let params = params.into();
+        let arglist = match &params {
+            FunctionParams::Named(params) => arglist_value_from_params(params),
+            FunctionParams::Stack(template) => Value::fixnum(template.raw()),
+            FunctionParams::Dynamic(arglist) => arglist.value(),
+        };
         Self {
             source_id: fresh_bytecode_source_id(),
             ops: Vec::new(),
             ops_sealed: false,
             stack_verified: false,
             constants: Vec::new().into(),
-            max_stack: 0,
+            max_stack: StackDepth::ZERO,
             params,
             arglist,
             lexical: false,
@@ -457,15 +464,20 @@ impl ByteCodeFunction {
     /// `run_frame`'s argument staging exactly: params-on-stack conventions
     /// seed `nonrest` slots plus one `&rest` list slot; pure dynamic-binding
     /// functions enter with an empty operand stack.
-    pub(crate) fn verifier_entry_depth(&self) -> usize {
-        let nonrest = self.params.required.len() + self.params.optional.len();
-        let params_on_stack = self.lexical
-            || self.env.is_some()
-            || matches!(self.arglist.kind(), ValueKind::Fixnum(_));
+    pub(crate) fn verifier_entry_depth(&self) -> Option<usize> {
+        let params_on_stack = match &self.params {
+            FunctionParams::Stack(_) => true,
+            FunctionParams::Dynamic(_) => false,
+            FunctionParams::Named(_) => {
+                self.lexical
+                    || self.env.is_some()
+                    || matches!(self.arglist.kind(), ValueKind::Fixnum(_))
+            }
+        };
         if params_on_stack {
-            nonrest + usize::from(self.params.rest.is_some())
+            self.params.stack_shape()?.entry_depth().ok()
         } else {
-            0
+            Some(0)
         }
     }
 
@@ -475,6 +487,9 @@ impl ByteCodeFunction {
     pub(crate) fn executes_verified_ops(&self) -> bool {
         match &self.lazy_gnu_code {
             Some(lazy) => {
+                if let Some(decoded) = lazy.decoded.get() {
+                    return decoded.stack_verified;
+                }
                 let raw_bytes = self
                     .gnu_bytecode_bytes
                     .as_deref()
@@ -482,8 +497,8 @@ impl ByteCodeFunction {
                 lazy.decode(
                     raw_bytes,
                     self.constants.len(),
-                    self.verifier_entry_depth(),
-                    self.max_stack as usize,
+                    || self.verifier_entry_depth(),
+                    self.max_stack.get(),
                 )
                 .stack_verified
             }
@@ -495,11 +510,9 @@ impl ByteCodeFunction {
     /// the last point before publication, after every shape field
     /// (params/lexical/arglist/env/max_stack) has its final value.
     pub(crate) fn refresh_stack_verification(&mut self) {
-        self.stack_verified = super::decode::verify_stack_effects(
-            &self.ops,
-            self.verifier_entry_depth(),
-            self.max_stack as usize,
-        );
+        self.stack_verified = self.verifier_entry_depth().is_some_and(|depth| {
+            super::decode::verify_stack_effects(&self.ops, depth, self.max_stack.get())
+        });
     }
 
     /// Run hand-assembled instructions through the real sealing normalizer
@@ -514,11 +527,9 @@ impl ByteCodeFunction {
         }
         self.ops = super::decode::seal_ops(std::mem::take(&mut self.ops), self.constants.len());
         self.ops_sealed = true;
-        self.stack_verified = super::decode::verify_stack_effects(
-            &self.ops,
-            self.verifier_entry_depth(),
-            self.max_stack as usize,
-        );
+        self.stack_verified = self.verifier_entry_depth().is_some_and(|depth| {
+            super::decode::verify_stack_effects(&self.ops, depth, self.max_stack.get())
+        });
     }
 
     /// Unit-test alias for [`Self::seal_hand_assembled_ops`].
@@ -548,11 +559,9 @@ impl ByteCodeFunction {
             )?;
             self.ops = ops;
             self.ops_sealed = true;
-            self.stack_verified = super::decode::verify_stack_effects(
-                &self.ops,
-                self.verifier_entry_depth(),
-                self.max_stack as usize,
-            );
+            self.stack_verified = self.verifier_entry_depth().is_some_and(|depth| {
+                super::decode::verify_stack_effects(&self.ops, depth, self.max_stack.get())
+            });
             self.gnu_byte_offset_map = Some(byte_offset_map);
         } else {
             self.ops.clear();
@@ -579,8 +588,8 @@ impl ByteCodeFunction {
                         lazy.decode(
                             raw_bytes,
                             self.constants.len(),
-                            self.verifier_entry_depth(),
-                            self.max_stack as usize,
+                            || self.verifier_entry_depth(),
+                            self.max_stack.get(),
                         )
                     }
                 };
@@ -605,8 +614,8 @@ impl ByteCodeFunction {
                         lazy.decode(
                             raw_bytes,
                             self.constants.len(),
-                            self.verifier_entry_depth(),
-                            self.max_stack as usize,
+                            || self.verifier_entry_depth(),
+                            self.max_stack.get(),
                         )
                     }
                 };
@@ -710,7 +719,7 @@ impl ByteCodeFunction {
                 },
                 Part::Values(self.constants.as_slice()),
                 self.env.map_or(Part::Absent, Part::Value),
-                Part::Value(Value::fixnum(i64::from(self.max_stack))),
+                Part::Value(self.max_stack.value()),
                 match (self.doc_form, &self.docstring) {
                     (Some(form), _) => Part::Value(form),
                     (None, Some(doc)) => Part::Text(doc),

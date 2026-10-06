@@ -19,7 +19,7 @@ fn lexical_fn(nargs: u32, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFuncti
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 8;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     f.seal_hand_assembled_ops();
     f.jit_runtime()
         .set_reopt_level_for_test(ReoptLevel::BaselineOnly);
@@ -397,7 +397,7 @@ fn with_direct_calls_an_inexact_callee_keeps_the_shim() {
         f.lexical = true;
         f.ops = vec![Op::StackRef(1), Op::Return];
         f.constants = vec![Value::make_int(0)].into();
-        f.max_stack = 4;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
         f.seal_hand_assembled_ops();
         f.jit_runtime()
             .set_reopt_level_for_test(ReoptLevel::BaselineOnly);

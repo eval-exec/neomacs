@@ -17,6 +17,7 @@
 
 use super::compile::lowering::{RegallocChoice, RegallocPolicy, RegallocScope, forced_regalloc};
 use super::compile::{CompileError, CompileRequest, compile_bytecode_function_requested};
+use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -619,9 +620,9 @@ fn compile_osr_leaf_timed(
         return None;
     }
     let ops = func.executable_ops();
-    let native_arity = func.params.required.len()
-        + func.params.optional.len()
-        + usize::from(func.params.rest.is_some());
+    let params = JitParamShape::try_from(func).ok()?;
+    let optional = params.optional();
+    let native_arity = params.entry_depth();
     let offset_map = func.executable_gnu_byte_offset_map();
     let cfg = match super::compile::analyze_cfg(ops, &func.constants, offset_map, native_arity) {
         Ok(cfg) => cfg,
@@ -727,9 +728,9 @@ fn compile_osr_leaf_timed(
     let opt_params = (super::compile::jit_opt_mode() == super::compile::OptMode::Opt
         && func.jit_runtime().reopt_level() < ReoptLevel::BaselineOnly)
         .then_some(super::opt::ir::ParamShape {
-            required: func.params.required.len(),
-            optional: func.params.optional.len(),
-            has_rest: func.params.rest.is_some(),
+            required: params.required(),
+            optional,
+            has_rest: params.rest().is_present(),
         });
     let mut leaf = match super::compile::opt_backend::lower_best(
         ops,
@@ -2722,8 +2723,7 @@ pub fn try_run_compiled(
             // leaf speculates exactly as the one that deopted.
             if super::aot::aot_enabled()
                 && super::aot::retier::may_load(func.jit_runtime())
-                && func.params.optional.is_empty()
-                && func.params.rest.is_none()
+                && JitParamShape::try_from(func).is_ok_and(|params| params.fixed_arity().is_some())
                 && func.jit_runtime().patched_prefix() == 0
                 && func.jit_runtime().reopt_count() == 0
             {

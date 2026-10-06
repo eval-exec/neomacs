@@ -1449,6 +1449,9 @@ impl TaggedHeap {
                         return;
                     }
                     sink.child(data.arglist);
+                    if let Some(child) = data.params.heap_child() {
+                        sink.child(child);
+                    }
                     sink.children(data.constants.iter().copied());
                     if let Some(env) = data.env {
                         sink.child(env);

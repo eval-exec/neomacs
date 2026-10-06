@@ -7,6 +7,7 @@
 
 use super::super::jit_layout::runtime_identity_word;
 use super::*;
+use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 
 std::thread_local! {
     /// Scalar source token for the compile in progress, absent for direct
@@ -102,9 +103,10 @@ fn exact_site_of_source(site: &SpecSite, arity: usize, source: usize) -> bool {
         && Value::from_bits(site.expected_bits as usize)
             .bytecode_data_if_materialized()
             .is_some_and(|bc| {
-                bc.params.required.len() == arity
-                    && bc.params.optional.is_empty()
-                    && bc.params.rest.is_none()
+                JitParamShape::try_from(bc)
+                    .ok()
+                    .and_then(JitParamShape::fixed_arity)
+                    == Some(arity)
                     && bc.jit_runtime().patched_prefix() == 0
                     && runtime_identity_word(bc.jit_runtime()) == source
             })

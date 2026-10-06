@@ -182,7 +182,7 @@ fn load_fixture(ctx: &mut Context, roots: &Roots) -> Fixture {
             .get_bytecode_data()
             .expect("real GNU byte-code object");
         assert_eq!(source.arglist, Value::make_int(spec.descriptor));
-        assert_eq!(source.max_stack, spec.max_stack);
+        assert_eq!(source.max_stack.get(), spec.max_stack as usize);
         assert_eq!(
             source.gnu_bytecode_bytes.as_ref().unwrap().as_slice(),
             spec.bytes

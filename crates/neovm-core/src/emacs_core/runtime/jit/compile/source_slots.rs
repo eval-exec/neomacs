@@ -31,6 +31,7 @@ use super::jit_layout::{BYTECODE_RUNTIME_WORD_OFFSET, VECLIKE_TYPE_TAG_OFFSET};
 use super::lowering::{RtCtx, band_imm_p, icmp_imm_p};
 use super::*;
 use crate::emacs_core::eval::AttentionMask;
+use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use crate::emacs_core::jit::feedback::{CallTarget, SiteShape};
 use crate::tagged::header::VecLikeType;
 use cranelift_codegen::isa::CallConv;
@@ -153,9 +154,10 @@ pub(crate) fn add_constant_sites(
 /// memory body the contained trampoline may enter.
 fn constant_callee_takes_direct_calls(bc: &ByteCodeFunction, nargs: usize) -> bool {
     let ops = bc.executable_ops();
-    bc.params.required.len() == nargs
-        && bc.params.optional.is_empty()
-        && bc.params.rest.is_none()
+    JitParamShape::try_from(bc)
+        .ok()
+        .and_then(JitParamShape::fixed_arity)
+        == Some(nargs)
         && nargs <= super::reg_abi::MAX_REG_ARGS
         && (bc.jit_runtime().patched_prefix() == 0 || jit_spec_sources_on())
         && (jit_direct_shapes().framed

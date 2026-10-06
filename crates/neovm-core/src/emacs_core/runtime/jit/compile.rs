@@ -68,7 +68,10 @@
 //! code: it flows as its `usize` bit pattern (`i64` in CLIF), exactly as the
 //! interpreter stores it.
 
+pub(crate) mod param_shape;
+
 use crate::emacs_core::error::LispCondition;
+use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use cranelift_codegen::ir::Value as ClifValue;
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{
@@ -467,8 +470,10 @@ fn jit_profile_emit(
     // `calls - inlinable` are subr / dynamic / non-bytecode callees inlining
     // can't directly take. This sizes inlining's TRUE surface (vs the
     // call-bearing upper bound).
-    let arity =
-        f.params.required.len() + f.params.optional.len() + usize::from(f.params.rest.is_some());
+    let Ok(params) = JitParamShape::try_from(f) else {
+        return;
+    };
+    let arity = params.entry_depth();
     let inlinable = match obarray {
         Some(ob) => analyze_cfg(ops, &f.constants, f.executable_gnu_byte_offset_map(), arity)
             .map(|cfg| {
@@ -505,7 +510,7 @@ fn jit_profile_emit(
         u8::from(backedges > 0),
         u8::from(compiled),
         inlinable,
-        f.params.required.len() + f.params.optional.len() + usize::from(f.params.rest.is_some()),
+        arity,
         reason,
         fingerprint,
         elapsed.as_micros(),
@@ -907,19 +912,6 @@ pub fn compile_bytecode_function_requested(
     result
 }
 
-/// Whether `ops` jump backwards anywhere: the body can loop, so its work per
-/// entry is unbounded (the same classification `jit_profile_emit` counts).
-pub(crate) fn has_back_edge(ops: &[Op]) -> bool {
-    ops.iter().enumerate().any(|(i, op)| match op {
-        Op::Goto(t)
-        | Op::GotoIfNil(t)
-        | Op::GotoIfNotNil(t)
-        | Op::GotoIfNilElsePop(t)
-        | Op::GotoIfNotNilElsePop(t) => (*t as usize) <= i,
-        _ => false,
-    })
-}
-
 /// The register allocator for a compile of `ops` under `policy` (the forced
 /// `NEOVM_JIT_REGALLOC` choice first; see `lowering::choose_regalloc`).
 pub(crate) fn regalloc_for(
@@ -1005,8 +997,8 @@ fn resolve_inline_callee(ob: &Obarray, sym: Value) -> Option<mir::MirFunction> {
     // Required-only lexical, and no captured lexenv: inlining drops the lexenv
     // install, which is only otherwise safe because lexenv-reading ops lower to
     // Opaque and `callee_inlinable` rejects them — keep the safety local here too.
-    if !bc.lexical || bc.env.is_some() || !bc.params.optional.is_empty() || bc.params.rest.is_some()
-    {
+    let arity = JitParamShape::try_from(bc).ok()?.fixed_arity()?;
+    if !bc.lexical || bc.env.is_some() {
         return None;
     }
     // A patched source's leading constants are per-instance; inlining would
@@ -1046,7 +1038,7 @@ fn resolve_inline_callee(ob: &Obarray, sym: Value) -> Option<mir::MirFunction> {
         bc.executable_ops(),
         &bc.constants,
         bc.executable_gnu_byte_offset_map(),
-        bc.params.required.len(),
+        arity,
     )
     .ok()
 }
@@ -1061,10 +1053,12 @@ fn compile_bytecode_function_inner(
     use super::stats::{CompilePhase, enter_phase};
     let gate_phase = enter_phase(CompilePhase::Gate);
     let ops = f.executable_ops();
-    let required = f.params.required.len();
-    let nonrest = required + f.params.optional.len();
-    let has_rest = f.params.rest.is_some();
-    let native_arity = nonrest + usize::from(has_rest);
+    let params = JitParamShape::try_from(f)?;
+    let optional = params.optional();
+    let required = params.required();
+    let nonrest = params.nonrest();
+    let has_rest = params.rest().is_present();
+    let native_arity = params.entry_depth();
     if native_arity > 0 && !params_on_stack(f) {
         // Params are dynamically bound, not on the stack — `StackRef` would not
         // find them.
@@ -1109,7 +1103,7 @@ fn compile_bytecode_function_inner(
     if has_rest {
         super::stats::record_mir(super::stats::MirFunnel::GateRest);
     }
-    if !f.params.optional.is_empty() {
+    if optional != 0 {
         super::stats::record_mir(super::stats::MirFunnel::GateOptional);
     }
     if dynamic_prefix > 0 {
@@ -1130,7 +1124,7 @@ fn compile_bytecode_function_inner(
     let mir_phase = enter_phase(CompilePhase::MirBuild);
     let mir_built = (jit_opt_mode() == OptMode::Legacy
         && !has_rest
-        && f.params.optional.is_empty()
+        && optional == 0
         && dynamic_prefix == 0
         && !reopt_gate
         && !fused_v2)
@@ -3268,24 +3262,6 @@ fn emit_backedge_jump_with_representations(
 
 /// Lower a leaf bytecode body taking `arity` fixed arguments to native code.
 ///
-/// Whether the body has a BACKWARD jump (a loop) — needs the back-edge poll
-/// (GC safepoint + quit), mirroring the interpreter's `branch_to!` wrap. Switch
-/// targets count: a jump-table edge can also close a loop. Single source of truth
-/// for both the JIT (`lower_leaf_full`) and the baseline-AOT emit (R2-E).
-pub(crate) fn baseline_has_backedge(ops: &[Op], cfg: &Cfg) -> bool {
-    ops.iter().enumerate().any(|(i, o)| match o {
-        Op::Goto(t)
-        | Op::GotoIfNil(t)
-        | Op::GotoIfNotNil(t)
-        | Op::GotoIfNilElsePop(t)
-        | Op::GotoIfNotNilElsePop(t) => (*t as usize) <= i,
-        _ => false,
-    }) || cfg
-        .switch_targets
-        .iter()
-        .any(|(i, ts)| ts.iter().any(|&(_, t)| t <= *i))
-}
-
 /// Whether the body re-enters the runtime (needs vmctx + the `neovm_jit_*` shim
 /// scaffolding): a back-edge polls through vmctx; Eq/Symbolp use the
 /// symbols-with-pos slow path; VarRef/VarSet/VarBind/Unbind hit the variable
@@ -4009,6 +3985,33 @@ pub(crate) fn build_baseline_leaf_object<S: LeafSink>(
 
 mod boolean;
 mod leaf_builder;
+/// Original direct-edge policy before the P6.11 typed branch view.
+pub(crate) fn has_back_edge(ops: &[Op]) -> bool {
+    ops.iter().enumerate().any(|(i, op)| match op {
+        Op::Goto(t)
+        | Op::GotoIfNil(t)
+        | Op::GotoIfNotNil(t)
+        | Op::GotoIfNilElsePop(t)
+        | Op::GotoIfNotNilElsePop(t) => (*t as usize) <= i,
+        _ => false,
+    })
+}
+
+/// Original resolved CFG policy before the P6.11 typed branch view.
+pub(crate) fn baseline_has_backedge(ops: &[Op], cfg: &Cfg) -> bool {
+    ops.iter().enumerate().any(|(i, o)| match o {
+        Op::Goto(t)
+        | Op::GotoIfNil(t)
+        | Op::GotoIfNotNil(t)
+        | Op::GotoIfNilElsePop(t)
+        | Op::GotoIfNotNilElsePop(t) => (*t as usize) <= i,
+        _ => false,
+    }) || cfg
+        .switch_targets
+        .iter()
+        .any(|(i, ts)| ts.iter().any(|&(_, t)| t <= *i))
+}
+
 mod leaf_builder_selected;
 mod numeric_carrier;
 pub(crate) mod opt_backend;
@@ -4320,3 +4323,7 @@ mod opt_sink_native_verification;
 #[cfg(test)]
 #[path = "compile/tests/opt_rootwin_counts_test.rs"]
 mod opt_rootwin_count_tests;
+
+#[cfg(test)]
+#[path = "compile/tests/function_params.rs"]
+mod function_param_tests;

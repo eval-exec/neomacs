@@ -41,7 +41,7 @@ fn two_calls(tail: bool) -> ByteCodeFunction {
     }
     f.ops.push(Op::Return);
     f.constants = vec![Value::symbol("neovm--tc-h1"), Value::symbol("neovm--tc-h2")].into();
-    f.max_stack = 8;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     f
 }
 

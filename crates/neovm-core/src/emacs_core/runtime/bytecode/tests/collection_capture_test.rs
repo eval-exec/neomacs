@@ -32,7 +32,7 @@ fn interpreter_collection_opcodes_keep_capture_dependencies() {
             } else {
                 vec![Op::Constant(0), op.clone(), Op::Return]
             };
-            code.max_stack = 2;
+            code.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
             let mut vm = Vm::from_context(&mut eval);
             #[cfg(feature = "jit")]
             vm.force_interpreter_only_for_test();

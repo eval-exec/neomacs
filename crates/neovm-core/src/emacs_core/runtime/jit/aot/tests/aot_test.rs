@@ -310,7 +310,7 @@ fn assert_aot_matches_interp_and_jit(ops: &[Op], constants: &[Value], nargs: usi
     f.lexical = true;
     f.ops = ops.to_vec();
     f.constants = constants.to_vec().into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
 
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     // For a 1-arg body sweep `args`; otherwise call once with the first
@@ -762,7 +762,7 @@ fn aot_reloc_const_is_gc_rooted_via_compiled_walk() {
     f.lexical = true;
     f.ops = ops.clone();
     f.constants = constants.clone().into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
 
     // Drive try_run_compiled so the AOT leaf is cached.
     let id = f.jit_runtime().compiled_id_or_assign();
@@ -869,7 +869,7 @@ fn aot_hit_serves_without_jitting_through_cache() {
     f.lexical = true;
     f.ops = ops.clone();
     f.constants = constants.clone().into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
 
     let id = f.jit_runtime().compiled_id_or_assign();
     let got = super::super::cache::try_run_compiled(
@@ -913,7 +913,7 @@ fn r2_enumerate_loadup_leaves_finds_d0_candidates() {
     a.lexical = true;
     a.ops = vec![Op::Constant(0), Op::Add, Op::Return];
     a.constants = vec![Value::make_int(5)].into();
-    a.max_stack = 16;
+    a.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let a_id = crate::emacs_core::intern::intern("r2-cand-add5");
     ev.obarray
         .set_symbol_function_id(a_id, Value::make_bytecode(a));
@@ -927,7 +927,7 @@ fn r2_enumerate_loadup_leaves_finds_d0_candidates() {
     });
     b.lexical = true;
     b.ops = vec![Op::StackRef(0), Op::Return];
-    b.max_stack = 16;
+    b.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let b_id = crate::emacs_core::intern::intern("r2-noncand-optional");
     ev.obarray
         .set_symbol_function_id(b_id, Value::make_bytecode(b));
@@ -1038,7 +1038,7 @@ fn r2_prepopulate_native_from_call_1_and_survives_gc() {
     a.lexical = true;
     a.ops = ops.clone();
     a.constants = constants.clone().into();
-    a.max_stack = 16;
+    a.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let sym = crate::emacs_core::intern::intern("r2-prepop-add5");
     ev.obarray
         .set_symbol_function_id(sym, Value::make_bytecode(a));
@@ -1131,7 +1131,7 @@ fn r2_prepopulate_skips_on_preload_miss() {
     a.lexical = true;
     a.ops = vec![Op::Constant(0), Op::Add, Op::Return];
     a.constants = vec![Value::make_int(5)].into();
-    a.max_stack = 16;
+    a.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let sym = crate::emacs_core::intern::intern("r2-prepop-miss-add5");
     ev.obarray
         .set_symbol_function_id(sym, Value::make_bytecode(a));
@@ -1194,7 +1194,7 @@ fn r2_prepopulate_never_overwrites_existing_jit_leaf() {
     a.lexical = true;
     a.ops = vec![Op::Constant(0), Op::Add, Op::Return];
     a.constants = vec![Value::make_int(5)].into();
-    a.max_stack = 16;
+    a.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let sym = crate::emacs_core::intern::intern("r2-prepop-nooverwrite-add5");
     ev.obarray
         .set_symbol_function_id(sym, Value::make_bytecode(a));
@@ -1271,7 +1271,7 @@ fn r2_prepopulate_never_overwrites_existing_jit_leaf() {
             b.lexical = true;
             b.ops = vec![Op::Constant(0), Op::Sub, Op::Return];
             b.constants = vec![Value::make_int(1)].into();
-            b.max_stack = 16;
+            b.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
             b
         }),
     );
@@ -1399,7 +1399,7 @@ fn build_and_link_preload_writes_v2_prekey_manifest() {
         f.lexical = true;
         f.ops = ops;
         f.constants = consts.into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         f.seal_hand_assembled_ops();
         f
     };
@@ -1532,7 +1532,7 @@ fn prepopulate_manifest_prefilter_skips_nonmember_without_hashing() {
         f.lexical = true;
         f.ops = ops;
         f.constants = consts.into();
-        f.max_stack = 16;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
         f.seal_hand_assembled_ops();
         f
     };
@@ -1674,7 +1674,7 @@ fn prepopulate_prekey_mismatch_fails_closed_to_hash_path() {
     f.lexical = true;
     f.ops = ops.clone();
     f.constants = consts.clone().into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let sym = crate::emacs_core::intern::intern("pf-fc-add5");
     ev.obarray
         .set_symbol_function_id(sym, Value::make_bytecode(f));
@@ -1747,7 +1747,7 @@ fn pgo_pred_body(callee: &str) -> crate::emacs_core::bytecode::ByteCodeFunction 
     f.lexical = true;
     f.ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
     f.constants = vec![Value::symbol(intern(callee))].into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f
 }
 

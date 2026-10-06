@@ -10,7 +10,7 @@ fn nullary_fn(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     });
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f
 }
 
@@ -416,7 +416,7 @@ fn runs_with_args_and_rejects_arity_mismatch() {
     });
     f.lexical = true;
     f.ops = vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return];
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     // Correct arity -> native result.
     assert_eq!(
         try_run_compiled(
@@ -445,7 +445,7 @@ fn unary_add_one() -> ByteCodeFunction {
     f.lexical = true;
     f.ops = vec![Op::StackRef(0), Op::Constant(0), Op::Add, Op::Return];
     f.constants = vec![Value::make_int(1)].into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f
 }
 
@@ -699,7 +699,7 @@ fn lexical_fn(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFunc
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f.seal_hand_assembled_ops();
     f
 }

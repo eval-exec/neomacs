@@ -4,6 +4,7 @@
 //! the synchronous source/front owner and are never dereferenced by IR code.
 
 use super::*;
+use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use crate::emacs_core::jit::opt::{build, ir};
 
 #[cfg(test)]
@@ -343,10 +344,14 @@ pub(super) fn build_census(f: &ByteCodeFunction, fused: Option<&inline::FusedBod
     if census_path().is_none() {
         return;
     }
+    let Ok(shape) = JitParamShape::try_from(f) else {
+        return;
+    };
+    let optional = shape.optional();
     let params = ir::ParamShape {
-        required: f.params.required.len(),
-        optional: f.params.optional.len(),
-        has_rest: f.params.rest.is_some(),
+        required: shape.required(),
+        optional,
+        has_rest: shape.rest().is_present(),
     };
     let prefix = f.jit_runtime().patched_prefix();
     let masked = mask_dynamic_prefix(&f.constants, prefix);

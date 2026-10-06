@@ -59,7 +59,11 @@ impl Drop for Roots {
 }
 
 fn plan(source: &ByteCodeFunction) -> ir::Func {
-    let arity = source.params.required.len();
+    let arity = source
+        .params
+        .stack_shape()
+        .expect("fixture stack parameters")
+        .required();
     let cfg = analyze_cfg(
         source.executable_ops(),
         &source.constants,
@@ -94,7 +98,11 @@ fn lower(source: &ByteCodeFunction, plan: &ir::Func) -> CompiledLeaf {
     let leaf = lower_opt_ir_for_test(
         source.executable_ops(),
         &source.constants,
-        source.params.required.len(),
+        source
+            .params
+            .stack_shape()
+            .expect("fixture stack parameters")
+            .required(),
         source.executable_gnu_byte_offset_map(),
         plan,
     )

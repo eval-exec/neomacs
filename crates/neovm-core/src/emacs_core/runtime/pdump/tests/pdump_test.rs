@@ -2193,7 +2193,7 @@ fn lazy_stub_survives_gc_and_materializes_on_first_call() {
     });
     function.ops = vec![Op::Constant(0), Op::Return];
     function.constants = vec![secret].into();
-    function.max_stack = 8;
+    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     function.lexical = true;
     function.docstring = Some(crate::heap_types::LispString::from_unibyte(
         b"Lazy stub docstring.".to_vec(),
@@ -2254,12 +2254,16 @@ fn lazy_stub_survives_gc_and_materializes_on_first_call() {
             .bytecode_data_if_materialized()
             .expect("the call must have materialized the stub");
         assert_eq!(
-            crate::emacs_core::intern::resolve_sym(data.params.required[0]),
+            crate::emacs_core::intern::resolve_sym(data.params.named().unwrap().required[0]),
             "pdump-lazy-a",
             "param symbols must resolve after the fallback-path id rewrite"
         );
         assert_eq!(
-            data.params.rest.map(crate::emacs_core::intern::resolve_sym),
+            data.params
+                .named()
+                .unwrap()
+                .rest
+                .map(crate::emacs_core::intern::resolve_sym),
             Some("pdump-lazy-c"),
         );
     }
@@ -2316,3 +2320,6 @@ mod bytecode_slot_objects;
 #[cfg(test)]
 #[path = "decode_hardening_test.rs"]
 mod decode_hardening;
+
+#[path = "bytecode_function_params.rs"]
+mod bytecode_function_params;

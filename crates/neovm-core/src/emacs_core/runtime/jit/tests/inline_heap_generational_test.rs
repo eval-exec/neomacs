@@ -79,7 +79,7 @@ fn store_function(op: Op) -> ByteCodeFunction {
     });
     function.lexical = true;
     function.ops = vec![Op::StackRef(1), Op::StackRef(1), op, Op::Return];
-    function.max_stack = 8;
+    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     function
 }
 

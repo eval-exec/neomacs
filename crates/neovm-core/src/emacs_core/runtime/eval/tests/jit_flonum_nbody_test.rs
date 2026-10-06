@@ -50,7 +50,7 @@ fn applyforces() -> ByteCodeFunction {
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 18;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(18);
     f
 }
 

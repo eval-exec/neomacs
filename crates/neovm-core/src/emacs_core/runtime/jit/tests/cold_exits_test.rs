@@ -26,7 +26,7 @@ fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFuncti
     f.lexical = true;
     f.ops = ops;
     f.constants = constants.into();
-    f.max_stack = 16;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     f.seal_hand_assembled_ops();
     f
 }
@@ -129,7 +129,10 @@ fn compile(ev: &Context, path: Path, f: &ByteCodeFunction) {
             lower_leaf_full(
                 &f.ops,
                 &f.constants,
-                f.params.required.len(),
+                f.params
+                    .stack_shape()
+                    .expect("fixture stack parameters")
+                    .required(),
                 None,
                 Some(&ev.obarray),
                 0,
@@ -375,7 +378,10 @@ fn cold_exits_run_the_corpus_unchanged() {
         let leaf = lower_leaf_full(
             &f.ops,
             &f.constants,
-            f.params.required.len(),
+            f.params
+                .stack_shape()
+                .expect("fixture stack parameters")
+                .required(),
             None,
             Some(&ev.obarray),
             0,
@@ -399,7 +405,13 @@ fn cold_exits_run_the_corpus_unchanged() {
     for (name, _, f) in corpus() {
         for arg in [Value::make_int(300), Value::make_float(2.5)] {
             // A float operand deopts at the first guard, in both.
-            let args = vec![arg; f.params.required.len()];
+            let args = vec![
+                arg;
+                f.params
+                    .stack_shape()
+                    .expect("fixture stack parameters")
+                    .required()
+            ];
             let off = describe(run(&mut ev, ColdExitsMode::Off, &f, &args));
             for mode in [ColdExitsMode::On, ColdExitsMode::Share] {
                 let got = describe(run(&mut ev, mode, &f, &args));

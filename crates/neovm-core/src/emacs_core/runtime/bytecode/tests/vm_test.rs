@@ -232,7 +232,7 @@ fn vm_dynamic_bytecode_args_do_not_occupy_bytecode_stack_like_gnu() {
         Op::Call(2),
         Op::Return,
     ];
-    func.max_stack = 3;
+    func.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(3);
     func.lexical = false;
 
     let result = {
@@ -1079,7 +1079,7 @@ fn vm_arithmetic_bcall_fast_path_observes_live_function_cell() {
     });
     let replacement_value_idx = replacement.add_constant(Value::fixnum(99));
     replacement.ops = vec![Op::Constant(replacement_value_idx), Op::Return];
-    replacement.max_stack = 3;
+    replacement.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(3);
 
     let plus = intern("+");
     eval.obarray
@@ -1100,7 +1100,7 @@ fn vm_arithmetic_bcall_fast_path_observes_live_function_cell() {
         Op::Call(2),
         Op::Return,
     ];
-    caller.max_stack = 3;
+    caller.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(3);
 
     let result = {
         let mut vm = new_vm(&mut eval);
@@ -1136,7 +1136,7 @@ fn vm_records_call_targets_of_non_constant_call_sites() {
     });
     let v99 = callee.add_constant(Value::fixnum(99));
     callee.ops = vec![Op::Constant(v99), Op::Return];
-    callee.max_stack = 2;
+    callee.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
     let callee_value = Value::make_bytecode(callee);
     eval.obarray
         .set_symbol_function_id(callee_sym, callee_value);
@@ -1159,7 +1159,7 @@ fn vm_records_call_targets_of_non_constant_call_sites() {
         Op::Call(1),
         Op::Return,
     ];
-    caller.max_stack = 4;
+    caller.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
     // Seal in place: the assertions below inspect THIS object's runtime
     // feedback, so the execute harness must not run a sealed clone instead.
     caller.seal_hand_assembled_ops_for_test();
@@ -1212,7 +1212,7 @@ fn vm_records_one_source_for_instances_of_a_closure() {
     });
     let seven = proto.add_constant(Value::fixnum(7));
     proto.ops = vec![Op::Constant(seven), Op::Return];
-    proto.max_stack = 1;
+    proto.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
     // (lambda (f) (funcall f)): the call is ops[1].
     let mut caller = ByteCodeFunction::new(LambdaParams {
         required: vec![intern("f")],
@@ -1221,7 +1221,7 @@ fn vm_records_one_source_for_instances_of_a_closure() {
     });
     caller.lexical = true;
     caller.ops = vec![Op::StackRef(0), Op::Call(0), Op::Return];
-    caller.max_stack = 2;
+    caller.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
     caller.seal_hand_assembled_ops_for_test();
     for _ in 0..2 {
         // Two instances (clones share the source's runtime).
@@ -1269,7 +1269,7 @@ fn vm_interpreter_only_policy_skips_jit_call_feedback() {
     });
     let answer = callee.add_constant(Value::fixnum(42));
     callee.ops = vec![Op::Constant(answer), Op::Return];
-    callee.max_stack = 1;
+    callee.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
     eval.obarray
         .set_symbol_function_id(callee_sym, Value::make_bytecode(callee));
 
@@ -1280,7 +1280,7 @@ fn vm_interpreter_only_policy_skips_jit_call_feedback() {
     });
     let callee_idx = caller.add_constant(Value::from_sym_id(callee_sym));
     caller.ops = vec![Op::Constant(callee_idx), Op::Call(0), Op::Return];
-    caller.max_stack = 1;
+    caller.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
 
     // Even with recording on, an interpreter-only VM records nothing.
     crate::emacs_core::jit::force_call_feedback_for_test(true);
@@ -1759,7 +1759,7 @@ fn vm_unbind_restores_saved_current_buffer() {
             Op::Nil,
             Op::Return,
         ];
-        func.max_stack = 2;
+        func.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
         (func, saved_buffer)
     });
 
@@ -1780,7 +1780,7 @@ fn vm_unbind_counts_unwind_protect_entries_like_gnu() {
             rest: None,
         });
         noop_func.ops = vec![Op::Nil, Op::Return];
-        noop_func.max_stack = 1;
+        noop_func.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
         let noop = Value::make_bytecode(noop_func);
 
         let mut func = ByteCodeFunction::new(LambdaParams {
@@ -1804,7 +1804,7 @@ fn vm_unbind_counts_unwind_protect_entries_like_gnu() {
             Op::VarRef(b_idx),
             Op::Return,
         ];
-        func.max_stack = 2;
+        func.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
         (func, ())
     });
     assert_eq!(result, Value::fixnum(9));
@@ -1841,7 +1841,7 @@ fn vm_bytecode_varref_and_varset_ignore_interpreter_lexenv_like_gnu() {
         Op::List(2),
         Op::Return,
     ];
-    func.max_stack = 3;
+    func.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(3);
 
     let result = {
         let mut vm = new_vm(&mut eval);
@@ -1872,7 +1872,7 @@ fn vm_bytecoded_call_executes_heap_bytecode_without_cloning_function() {
     });
     let answer_idx = inner.add_constant(Value::fixnum(42));
     inner.ops = vec![Op::Constant(answer_idx), Op::Return];
-    inner.max_stack = 1;
+    inner.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
     let inner_value = Value::make_bytecode(inner);
 
     let mut outer = ByteCodeFunction::new(LambdaParams {
@@ -1882,7 +1882,7 @@ fn vm_bytecoded_call_executes_heap_bytecode_without_cloning_function() {
     });
     let inner_idx = outer.add_constant(inner_value);
     outer.ops = vec![Op::Constant(inner_idx), Op::Call(0), Op::Return];
-    outer.max_stack = 1;
+    outer.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
     // Seal before the clone counter arms: the counter measures the VM's
     // execution path, not the test harness's sealing normalization.
     outer.seal_hand_assembled_ops_for_test();
@@ -1915,7 +1915,7 @@ fn vm_symbol_bytecode_call_resolves_live_function_cell_once() {
     });
     callee.lexical = true;
     callee.ops = vec![Op::StackRef(0), Op::Return];
-    callee.max_stack = 2;
+    callee.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
     eval.obarray
         .set_symbol_function_id(callee_symbol, Value::make_bytecode(callee));
 
@@ -1932,7 +1932,7 @@ fn vm_symbol_bytecode_call_resolves_live_function_cell_once() {
         Op::Call(1),
         Op::Return,
     ];
-    caller.max_stack = 2;
+    caller.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
 
     crate::emacs_core::symbol::reset_function_cell_lookup_count();
     let result = {
@@ -1962,7 +1962,7 @@ fn vm_adjacent_stack_transfer_pairs_each_use_one_dispatch() {
     });
     callee.lexical = true;
     callee.ops = vec![Op::StackRef(0), Op::Return];
-    callee.max_stack = 2;
+    callee.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
     eval.obarray
         .set_symbol_function_id(callee_symbol, Value::make_bytecode(callee));
 
@@ -1979,7 +1979,7 @@ fn vm_adjacent_stack_transfer_pairs_each_use_one_dispatch() {
         Op::Call(1),
         Op::Return,
     ];
-    caller.max_stack = 3;
+    caller.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(3);
 
     reset_opcode_dispatch_count();
     let result = {
@@ -2008,7 +2008,7 @@ fn vm_stackref_return_pair_uses_one_dispatch() {
     });
     function.lexical = true;
     function.ops = vec![Op::StackRef(0), Op::Return];
-    function.max_stack = 2;
+    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
 
     reset_opcode_dispatch_count();
     let result = new_vm(&mut eval)
@@ -2035,7 +2035,7 @@ fn vm_stackref_return_fusion_preserves_frame_limit_validation() {
     });
     function.lexical = true;
     function.ops = vec![Op::StackRef(0), Op::Return];
-    function.max_stack = 1;
+    function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
 
     let result = new_vm(&mut eval).execute(&function, vec![Value::fixnum(42)]);
 
@@ -2058,7 +2058,7 @@ fn vm_bytecode_callee_skips_native_string_writeback_classification() {
     });
     callee.lexical = true;
     callee.ops = vec![Op::StackRef(0), Op::Return];
-    callee.max_stack = 2;
+    callee.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
     eval.obarray
         .set_symbol_function_id(callee_symbol, Value::make_bytecode(callee));
 
@@ -2077,7 +2077,7 @@ fn vm_bytecode_callee_skips_native_string_writeback_classification() {
         Op::Call(1),
         Op::Return,
     ];
-    caller.max_stack = 2;
+    caller.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
 
     reset_mutating_writeback_classification_count();
     let result = {
@@ -2171,7 +2171,7 @@ fn string_call_retaining_argument(callee: Value, string: Value, item: Value) -> 
         Op::Pop,
         Op::Return,
     ];
-    caller.max_stack = 4;
+    caller.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
     caller
 }
 
@@ -2487,7 +2487,7 @@ fn vm_repeated_symbol_bytecode_calls_reuse_epoch_validated_resolution() {
     });
     let answer_idx = callee.add_constant(Value::fixnum(42));
     callee.ops = vec![Op::Constant(answer_idx), Op::Return];
-    callee.max_stack = 1;
+    callee.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
     eval.obarray
         .set_symbol_function_id(callee_symbol, Value::make_bytecode(callee));
 
@@ -2506,7 +2506,7 @@ fn vm_repeated_symbol_bytecode_calls_reuse_epoch_validated_resolution() {
         Op::Call(0),
         Op::Return,
     ];
-    caller.max_stack = 3;
+    caller.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(3);
 
     crate::emacs_core::symbol::reset_function_cell_lookup_count();
     crate::emacs_core::value::reset_bytecode_data_access_count();
@@ -2549,7 +2549,7 @@ fn vm_symbol_bytecode_call_cache_invalidates_after_fset() {
         });
         let answer_idx = callee.add_constant(Value::fixnum(answer));
         callee.ops = vec![Op::Constant(answer_idx), Op::Return];
-        callee.max_stack = 1;
+        callee.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
         Value::make_bytecode(callee)
     };
     let first = make_callee(1);
@@ -2589,7 +2589,7 @@ fn vm_repeated_symbol_call_observes_fset_before_the_next_call() {
         let mut callee = ByteCodeFunction::new(LambdaParams::simple(vec![]));
         let answer_idx = callee.add_constant(Value::fixnum(answer));
         callee.ops = vec![Op::Constant(answer_idx), Op::Return];
-        callee.max_stack = 1;
+        callee.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
         Value::make_bytecode(callee)
     };
     let first = make_callee(1);
@@ -2611,7 +2611,7 @@ fn vm_repeated_symbol_call_observes_fset_before_the_next_call() {
         Op::Call(0),
         Op::Return,
     ];
-    caller.max_stack = 2;
+    caller.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
 
     let result = new_vm(&mut eval)
         .execute(&caller, vec![])
@@ -2634,7 +2634,7 @@ fn vm_bytecode_call_chain_stays_in_one_interpreter_driver() {
     });
     let answer_idx = leaf.add_constant(Value::fixnum(42));
     leaf.ops = vec![Op::Constant(answer_idx), Op::Return];
-    leaf.max_stack = 1;
+    leaf.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
     eval.obarray
         .set_symbol_function_id(leaf_symbol, Value::make_bytecode(leaf));
 
@@ -2645,7 +2645,7 @@ fn vm_bytecode_call_chain_stays_in_one_interpreter_driver() {
     });
     let leaf_idx = middle.add_constant(Value::from_sym_id(leaf_symbol));
     middle.ops = vec![Op::Constant(leaf_idx), Op::Call(0), Op::Return];
-    middle.max_stack = 1;
+    middle.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
     eval.obarray
         .set_symbol_function_id(middle_symbol, Value::make_bytecode(middle));
 
@@ -2656,7 +2656,7 @@ fn vm_bytecode_call_chain_stays_in_one_interpreter_driver() {
     });
     let middle_idx = outer.add_constant(Value::from_sym_id(middle_symbol));
     outer.ops = vec![Op::Constant(middle_idx), Op::Call(0), Op::Return];
-    outer.max_stack = 1;
+    outer.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
 
     reset_run_loop_max_depth();
     reset_iterative_context_bc_frames_max();
@@ -2707,14 +2707,14 @@ fn vm_iterative_call_roots_exact_callee_after_self_redefinition_and_gc() {
         Op::Constant(answer),
         Op::Return,
     ];
-    child.max_stack = 2;
+    child.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
     eval.obarray
         .set_symbol_function_id(child_symbol, Value::make_bytecode(child));
 
     let mut caller = ByteCodeFunction::new(LambdaParams::simple(vec![]));
     let child_designator = caller.add_constant(Value::from_sym_id(child_symbol));
     caller.ops = vec![Op::Constant(child_designator), Op::Call(0), Op::Return];
-    caller.max_stack = 1;
+    caller.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
 
     let result = {
         let mut vm = new_vm(&mut eval);
@@ -2768,7 +2768,7 @@ fn vm_backward_branch_quit_counter_spans_bytecode_calls_like_gnu() {
         Op::Constant(2),
         Op::Return,
     ];
-    child.max_stack = 3;
+    child.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(3);
     eval.obarray
         .set_symbol_function_id(child_symbol, Value::make_bytecode(child));
 
@@ -2792,7 +2792,7 @@ fn vm_backward_branch_quit_counter_spans_bytecode_calls_like_gnu() {
         Op::Call(0),
         Op::Return,
     ];
-    outer.max_stack = 3;
+    outer.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(3);
 
     crate::emacs_core::eval::reset_bytecode_branch_poll_count();
     let result = new_vm(&mut eval)
@@ -2988,7 +2988,7 @@ fn vm_bcall_max_eval_depth_reports_error_like_gnu_bytecode() {
     });
     let recurse_idx = recurse.add_constant(Value::from_sym_id(recurse_sym));
     recurse.ops = vec![Op::Constant(recurse_idx), Op::Call(0), Op::Return];
-    recurse.max_stack = 1;
+    recurse.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
     eval.obarray
         .set_symbol_function_id(recurse_sym, Value::make_bytecode(recurse.clone()));
 
@@ -3031,7 +3031,7 @@ fn vm_bcall_funcall_recursion_reports_bytecode_error_like_gnu() {
         Op::Call(1),
         Op::Return,
     ];
-    recurse.max_stack = 2;
+    recurse.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
     eval.obarray
         .set_symbol_function_id(recurse_sym, Value::make_bytecode(recurse.clone()));
 
@@ -3084,7 +3084,7 @@ fn vm_unbind_restores_saved_excursion_point() {
             Op::Nil,
             Op::Return,
         ];
-        func.max_stack = 2;
+        func.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
         (func, (buffer_id, saved_point))
     });
 
@@ -3138,7 +3138,7 @@ fn vm_save_window_excursion_restores_selected_window() {
     });
     let body_idx = func.add_constant(body);
     func.ops = vec![Op::Constant(body_idx), Op::SaveWindowExcursion, Op::Return];
-    func.max_stack = 2;
+    func.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
 
     let result = {
         let mut vm = new_vm(&mut eval);
@@ -3190,7 +3190,7 @@ fn vm_unbind_restores_saved_restriction() {
             Op::Nil,
             Op::Return,
         ];
-        func.max_stack = 3;
+        func.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(3);
         (func, saved)
     });
 
@@ -3432,8 +3432,8 @@ fn vm_switch_branches_using_hash_table_jump_table() {
             Value::fixnum(20),
         ]
         .into(),
-        max_stack: 2,
-        params: crate::emacs_core::value::LambdaParams::simple(vec![]),
+        max_stack: crate::emacs_core::bytecode::StackDepth::for_test(2),
+        params: crate::emacs_core::value::LambdaParams::simple(vec![]).into(),
         arglist: Value::NIL,
         lexical: false,
         env: None,
@@ -3481,7 +3481,7 @@ fn switch_on_arg(table: Value) -> ByteCodeFunction {
         Value::fixnum(30),
     ]
     .into();
-    func.max_stack = 3;
+    func.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(3);
     func.gnu_byte_offset_map = Some(vec![
         GnuByteOffsetMapEntry::new(8, 5),
         GnuByteOffsetMapEntry::new(12, 7),
@@ -3879,8 +3879,8 @@ fn vm_throw_restores_saved_stack_before_resuming_catch() {
             Op::Return,
         ],
         constants: vec![Value::fixnum(42), Value::symbol("done"), Value::fixnum(99)].into(),
-        max_stack: 3,
-        params: crate::emacs_core::value::LambdaParams::simple(vec![]),
+        max_stack: crate::emacs_core::bytecode::StackDepth::for_test(3),
+        params: crate::emacs_core::value::LambdaParams::simple(vec![]).into(),
         arglist: Value::NIL,
         lexical: false,
         env: None,
@@ -3949,7 +3949,7 @@ fn vm_throw_selection_uses_resume_identity_not_numeric_tuple() {
         Op::Constant(inner_result_idx),
         Op::Return,
     ];
-    inner.max_stack = 2;
+    inner.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
     let inner_value = Value::make_bytecode(inner);
 
     let mut outer = ByteCodeFunction::new(LambdaParams {
@@ -3969,7 +3969,7 @@ fn vm_throw_selection_uses_resume_identity_not_numeric_tuple() {
         Op::Constant(outer_result_idx),
         Op::Return,
     ];
-    outer.max_stack = 2;
+    outer.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
 
     let result = {
         let mut vm = new_vm(&mut eval);
@@ -4006,7 +4006,7 @@ fn vm_signal_selection_uses_resume_identity_not_numeric_tuple() {
         Op::Constant(inner_result_idx),
         Op::Return,
     ];
-    inner.max_stack = 2;
+    inner.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
     let inner_value = Value::make_bytecode(inner);
 
     let mut outer = ByteCodeFunction::new(LambdaParams {
@@ -4026,7 +4026,7 @@ fn vm_signal_selection_uses_resume_identity_not_numeric_tuple() {
         Op::Constant(outer_result_idx),
         Op::Return,
     ];
-    outer.max_stack = 2;
+    outer.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
 
     let result = {
         let mut vm = new_vm(&mut eval);
@@ -10529,7 +10529,7 @@ fn vm_vector_ops() {
 }
 
 #[test]
-fn vm_aset_string_writeback() {
+fn vm_aset_mutates_string_in_place() {
     crate::test_utils::init_test_tracing();
     assert_eq!(
         vm_eval_str("(let ((s (copy-sequence \"abc\"))) (aset s 1 ?x) s)"),
@@ -10538,7 +10538,7 @@ fn vm_aset_string_writeback() {
 }
 
 #[test]
-fn vm_fillarray_string_writeback() {
+fn vm_fillarray_mutates_string_in_place() {
     crate::test_utils::init_test_tracing();
     assert_eq!(
         vm_eval_str("(let ((s (copy-sequence \"abc\"))) (fillarray s ?y) s)"),
@@ -10628,7 +10628,7 @@ fn vm_bytecode_wrong_arity_matches_gnu_entry_check() {
     );
     func.constants = vec![Value::NIL].into();
     func.ops = vec![Op::Constant(0), Op::Return];
-    func.max_stack = 1;
+    func.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
 
     let mut eval = Context::new_minimal_vm_harness();
     let mut vm = new_vm(&mut eval);
@@ -10659,7 +10659,7 @@ fn vm_bytecode_rest_wrong_arity_reports_nonrest_descriptor_like_gnu() {
     );
     func.constants = vec![Value::NIL].into();
     func.ops = vec![Op::Constant(0), Op::Return];
-    func.max_stack = 1;
+    func.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(1);
 
     let mut eval = Context::new_minimal_vm_harness();
     let mut vm = new_vm(&mut eval);
@@ -11852,7 +11852,7 @@ fn vm_gnu_arg_descriptor_preserves_optional_and_rest_slots() {
             Op::Return,
         ],
         constants: vec![].into(),
-        max_stack: 10,
+        max_stack: crate::emacs_core::bytecode::StackDepth::for_test(10),
         params: crate::emacs_core::bytecode::decode::parse_arglist_descriptor(arg_descriptor),
         arglist: Value::fixnum(arg_descriptor),
         lexical: false,
@@ -12408,7 +12408,7 @@ fn vm_inline_opcode_builtins_dispatch_directly_like_gnu() {
         let mut f = ByteCodeFunction::new(LambdaParams::simple(vec![]));
         f.constants = constants.into();
         f.ops = ops;
-        f.max_stack = 4;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(4);
         reset_inline_builtin_direct_count();
         let result = new_vm(eval).execute(&f, vec![]);
         (result, inline_builtin_direct_count())
@@ -12507,7 +12507,7 @@ fn second_bytecode_call_to_a_builtin_resolves_from_the_context_cache() {
         Op::Call(1),
         Op::Return,
     ];
-    func.max_stack = 2;
+    func.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
     func.lexical = true;
     let run = |eval: &mut Context| {
         let mut vm = new_vm(eval);
@@ -12543,7 +12543,7 @@ fn compiler_function_overrides_change_bumps_the_function_epoch() {
         Op::Call(1),
         Op::Return,
     ];
-    func.max_stack = 2;
+    func.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
     func.lexical = true;
     let run = |eval: &mut Context| {
         let mut vm = new_vm(eval);

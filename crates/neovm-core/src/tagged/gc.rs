@@ -1845,18 +1845,13 @@ impl TaggedHeap {
                     .owned_capacity()
                     .saturating_mul(size_of::<TaggedValue>()),
             )
-            .saturating_add(
-                data.params
+            .saturating_add(data.params.named().map_or(0, |params| {
+                params
                     .required
                     .capacity()
-                    .saturating_mul(size_of::<SymId>()),
-            )
-            .saturating_add(
-                data.params
-                    .optional
-                    .capacity()
-                    .saturating_mul(size_of::<SymId>()),
-            )
+                    .saturating_add(params.optional.capacity())
+                    .saturating_mul(size_of::<SymId>())
+            }))
             .saturating_add(
                 data.resident_gnu_byte_offset_map_capacity()
                     .saturating_mul(size_of::<GnuByteOffsetMapEntry>()),
@@ -2047,7 +2042,9 @@ impl TaggedHeap {
             owned: data.constants.owned_capacity() > 0,
             mapped: false,
         });
-        stats = stats.add(Self::lambda_params_payload_layout(&data.params));
+        if let Some(params) = data.params.named() {
+            stats = stats.add(Self::lambda_params_payload_layout(params));
+        }
         if let Some(offsets) = data.resident_gnu_byte_offset_map() {
             stats = stats.add(PayloadLayout {
                 logical_bytes: std::mem::size_of_val(offsets),
@@ -2832,6 +2829,9 @@ mod generational_major_tests;
 #[path = "gc/tests/generational_pacing_test.rs"]
 mod generational_pacing_tests;
 
+#[cfg(test)]
+#[path = "gc/tests/bytecode_parameter_roots.rs"]
+mod bytecode_parameter_roots_tests;
 #[cfg(test)]
 #[path = "gc/tests/major_symbol_preimage_test.rs"]
 mod major_symbol_preimage_tests;

@@ -81,7 +81,7 @@ fn opcode_fn(op: Op, nargs: usize) -> ByteCodeFunction {
         1 => vec![Op::StackRef(0), op, Op::Return],
         _ => vec![Op::StackRef(1), Op::StackRef(1), op, Op::Return],
     };
-    f.max_stack = 8;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     f
 }
 

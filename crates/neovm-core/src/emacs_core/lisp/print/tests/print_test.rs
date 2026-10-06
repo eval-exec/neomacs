@@ -589,7 +589,7 @@ fn print_default_uses_gnu_depth_for_nested_bytecode_backrefs() {
 fn print_lambda() {
     crate::test_utils::init_test_tracing();
     let lam = Value::make_lambda(LambdaData {
-        params: LambdaParams::simple(vec![intern("x"), intern("y")]),
+        params: LambdaParams::simple(vec![intern("x"), intern("y")]).into(),
         body: vec![Value::list(vec![
             Value::symbol("+"),
             Value::symbol("x"),
@@ -607,7 +607,7 @@ fn print_lambda() {
 fn print_lexical_closure_uses_gnu_vector_syntax() {
     crate::test_utils::init_test_tracing();
     let closure = Value::make_lambda(LambdaData {
-        params: LambdaParams::simple(vec![intern("a"), intern("b")]),
+        params: LambdaParams::simple(vec![intern("a"), intern("b")]).into(),
         body: vec![Value::list(vec![
             Value::symbol("+"),
             Value::symbol("a"),
@@ -636,7 +636,7 @@ fn print_recursive_closure_uses_backreference() {
     let binding = Value::cons(Value::symbol("f"), Value::NIL);
     let env = Value::list(vec![binding]);
     let closure = Value::make_lambda(LambdaData {
-        params: LambdaParams::simple(vec![]),
+        params: LambdaParams::simple(vec![]).into(),
         body: vec![Value::symbol("f")],
         env: Some(env),
         docstring: None,

@@ -100,7 +100,7 @@ fn fixnum_comparison_deopt_resumes_after_effect_without_replaying_it() {
         Op::Lss,
         Op::Return,
     ];
-    f.max_stack = 8;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     f.seal_hand_assembled_ops();
     let leaf = lower_leaf_full(&f.ops, &f.constants, 2, None, Some(&ctx.obarray), 0).unwrap();
     for (args, want) in [

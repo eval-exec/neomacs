@@ -42,6 +42,7 @@ use crate::emacs_core::bytecode::ByteCodeFunction;
 use crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::jit::NumericFeedback;
+use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use crate::emacs_core::value::Value;
 
 #[path = "compile/inline_census.rs"]
@@ -248,10 +249,11 @@ fn inlinable_verdict(callee: &ByteCodeFunction, nargs: usize) -> Result<(), Stri
     if callee.env.is_some() {
         return Err("env".into());
     }
-    if !callee.params.optional.is_empty() || callee.params.rest.is_some() {
-        return Err("arglist".into());
-    }
-    if callee.params.required.len() != nargs {
+    let arity = JitParamShape::try_from(callee)
+        .ok()
+        .and_then(JitParamShape::fixed_arity)
+        .ok_or_else(|| "arglist".to_string())?;
+    if arity != nargs {
         return Err("arity".into());
     }
     if callee.jit_runtime().patched_prefix() > 0 {

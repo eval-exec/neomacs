@@ -185,7 +185,7 @@ fn arithmetic_opcodes_answer_integer_operands_directly() {
         });
         f.lexical = true;
         f.ops = vec![Op::StackRef(1), Op::StackRef(1), op.clone(), Op::Return];
-        f.max_stack = 8;
+        f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
         let direct0 = crate::emacs_core::bytecode::vm::arith_integer_fast_count();
         let got = Vm::from_context(&mut eval)
             .execute(&f, vec![a, b])
@@ -229,7 +229,7 @@ fn division_opcode_preserves_fixnum_boundaries_and_slow_conditions() {
     });
     f.lexical = true;
     f.ops = vec![Op::StackRef(1), Op::StackRef(1), Op::Div, Op::Return];
-    f.max_stack = 8;
+    f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     for (lhs, rhs) in cases {
         let a = eval.eval_str(lhs).unwrap();
         let a = rooted(&mut eval, a);
