@@ -808,6 +808,115 @@ fn move_to_column_force_remeasures_each_stage_after_hooks() {
     }
 }
 
+fn ts_e_file_scope_case(name: &str, form_template: &str) {
+    if !oracle_enabled() {
+        return;
+    }
+    let directory = common::workspace_root().join("tmp");
+    std::fs::create_dir_all(&directory).unwrap();
+    let output = directory.join(format!("ts-e-{name}-{}.out", std::process::id()));
+    let input = directory.join(format!("ts-e-{name}-{}.in", std::process::id()));
+    std::fs::write(&input, "FILE").unwrap();
+    let form = form_template
+        .replace("@OUTPUT@", &format!("{:?}", output.to_str().unwrap()))
+        .replace("@INPUT@", &format!("{:?}", input.to_str().unwrap()));
+    let expected = run_oracle_eval(&form).unwrap();
+    let actual = run_neovm_eval(&form).unwrap();
+    let _ = std::fs::remove_file(output);
+    let _ = std::fs::remove_file(input);
+    assert_eq!(actual, expected, "{name}");
+}
+
+#[test]
+fn write_region_nil_start_widens_and_restores_restriction() {
+    ts_e_file_scope_case(
+        "nil-start",
+        r#"(with-temp-buffer
+      (insert "abcdef") (narrow-to-region 2 4)
+      (write-region nil nil @OUTPUT@ nil 'silent)
+      (list (point-min) (point-max)
+            (with-temp-buffer (insert-file-contents @OUTPUT@) (buffer-string))))"#,
+    );
+}
+
+#[test]
+fn write_region_annotate_narrow_success_restores_restriction() {
+    ts_e_file_scope_case(
+        "narrow-success",
+        r#"(with-temp-buffer
+      (insert "abcdef") (narrow-to-region 2 4)
+      (let ((write-region-annotate-functions
+             (list (lambda (_start _end) (narrow-to-region 1 2) nil))))
+        (write-region nil nil @OUTPUT@ nil 'silent))
+      (list (point-min) (point-max)))"#,
+    );
+}
+
+#[test]
+fn write_region_annotate_narrow_signal_restores_restriction() {
+    ts_e_file_scope_case(
+        "narrow-signal",
+        r#"(with-temp-buffer
+      (insert "abcdef") (narrow-to-region 2 4)
+      (let ((write-region-annotate-functions
+             (list (lambda (_start _end) (narrow-to-region 1 2) (error "wra")))))
+        (list (condition-case err
+                  (write-region nil nil @OUTPUT@ nil 'silent)
+                (error (cadr err)))
+              (point-min) (point-max))))"#,
+    );
+}
+
+#[test]
+fn write_region_annotate_signal_preserves_selected_buffer() {
+    ts_e_file_scope_case(
+        "switch-signal",
+        r#"(let ((other (generate-new-buffer " *p410-write-other*")))
+      (unwind-protect
+          (with-temp-buffer
+            (let ((original (current-buffer)))
+              (insert "abcdef") (narrow-to-region 2 4)
+              (let ((write-region-annotate-functions
+                     (list (lambda (_start _end) (set-buffer other) (error "wra2")))))
+                (list (condition-case err
+                          (write-region nil nil @OUTPUT@ nil 'silent)
+                        (error (cadr err)))
+                      (eq (current-buffer) original) (buffer-name)
+                      (with-current-buffer original (list (point-min) (point-max)))))))
+        (kill-buffer other)))"#,
+    );
+}
+
+#[test]
+fn insert_file_contents_signal_leaves_undo_disabled() {
+    ts_e_file_scope_case(
+        "undo-signal",
+        r#"(with-temp-buffer
+      (buffer-enable-undo) (insert "old")
+      (let ((after-insert-file-functions (list (lambda (_count) (error "ifc")))))
+        (list (condition-case err (insert-file-contents @INPUT@) (error (cadr err)))
+              (eq buffer-undo-list t))))"#,
+    );
+}
+
+#[test]
+fn insert_file_contents_signal_preserves_selected_buffer_and_disabled_undo() {
+    ts_e_file_scope_case(
+        "insert-switch-signal",
+        r#"(let ((other (generate-new-buffer " *p410-insert-other*")))
+      (unwind-protect
+          (with-temp-buffer
+            (buffer-enable-undo) (insert "old")
+            (let ((original (current-buffer))
+                  (after-insert-file-functions
+                   (list (lambda (_count) (set-buffer other) (error "ifc2")))))
+              (list (condition-case err (insert-file-contents @INPUT@) (error (cadr err)))
+                    (eq (current-buffer) original) (buffer-name)
+                    (with-current-buffer original (eq buffer-undo-list t)))))
+        (kill-buffer other)))"#,
+    );
+}
+
 #[test]
 fn edit_preparation_before_hook_selected_buffer_persists_and_is_edited() {
     if !oracle_enabled() {
@@ -947,6 +1056,82 @@ fn compat_word_casing_shared_replace_expansion_matches_gnu() {
     assert_eq!(
         neovm, gnu,
         "shared edit helper semantics mismatch:\nGNU: {gnu}\nNeoVM: {neovm}"
+    );
+}
+
+#[test]
+fn write_region_literal_start_restores_coding_callback_restriction() {
+    if !oracle_enabled() {
+        return;
+    }
+    ts_e_file_scope_case(
+        "literal-coding-success",
+        r#"(with-temp-buffer
+      (insert "abcdef") (narrow-to-region 2 6)
+      (let* ((seen nil) (annotations 0)
+            (coding-system-for-write nil)
+            (select-safe-coding-system-function 'tse-lean-write-coding)
+            (write-region-annotate-functions
+             (list (lambda (&rest _) (setq annotations (1+ annotations)) nil))))
+        (unwind-protect
+            (progn
+              (fset 'tse-lean-write-coding
+                    (lambda (&rest _)
+                      (setq seen (list (point-min) (point-max)))
+                      (narrow-to-region 3 5) 'utf-8))
+              (write-region "xy" nil @OUTPUT@ nil 'silent)
+              (list seen annotations (point-min) (point-max)
+                    (with-temp-buffer (insert-file-contents @OUTPUT@) (buffer-string))))
+          (fmakunbound 'tse-lean-write-coding))))"#,
+    );
+}
+
+#[test]
+fn write_region_literal_start_restores_signaling_coding_callback_restriction() {
+    if !oracle_enabled() {
+        return;
+    }
+    ts_e_file_scope_case(
+        "literal-coding-signal",
+        r#"(with-temp-buffer
+      (insert "abcdef") (narrow-to-region 2 6)
+      (let ((coding-system-for-write nil)
+            (select-safe-coding-system-function 'tse-lean-write-coding))
+        (unwind-protect
+            (progn
+              (fset 'tse-lean-write-coding
+                    (lambda (&rest _)
+                      (narrow-to-region 3 5) (error "literal-coding")))
+              (list (condition-case err
+                        (write-region "xy" nil @OUTPUT@ nil 'silent)
+                      (error (cadr err)))
+                    (point-min) (point-max)))
+          (fmakunbound 'tse-lean-write-coding))))"#,
+    );
+}
+
+#[test]
+fn write_region_handler_precedes_native_restriction_scope() {
+    if !oracle_enabled() {
+        return;
+    }
+    ts_e_file_scope_case(
+        "handler-before-restriction",
+        r#"(with-temp-buffer
+      (insert "abcdef") (narrow-to-region 2 4)
+      (let* ((seen nil)
+            (file-name-handler-alist
+             (list (cons (concat "\\`" (regexp-quote @OUTPUT@) "\\'")
+                         (lambda (operation &rest arguments)
+                           (if (eq operation 'write-region)
+                               (progn
+                                 (setq seen (list (point-min) (point-max)))
+                                 (widen) (error "handler-coding"))
+                             (let ((file-name-handler-alist nil))
+                               (apply operation arguments))))))))
+        (list (condition-case err (write-region nil nil @OUTPUT@ nil 'silent)
+                (error (cadr err)))
+              seen (point-min) (point-max))))"#,
     );
 }
 
