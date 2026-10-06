@@ -418,7 +418,7 @@ impl TaggedHeap {
         }
         self.publish_barrier_window();
         let job = ConcurrentMarkJob {
-            gray,
+            gray: MarkStack::from_values(gray),
             claims: ConcurrentClaimJob {
                 // Mandated carry: the GC thread claims at THIS cycle's parity.
                 parity: self.mark_parity,
@@ -676,7 +676,8 @@ impl TaggedHeap {
         // cheap push half is attributable separately from the mark fixpoint.
         let fold_t0 = std::time::Instant::now();
         self.last_termination_satb = satb.len();
-        self.gray_queue.extend(satb);
+        self.gray_queue
+            .extend(satb.into_iter().map(MarkWord::value));
         self.last_termination_deferred = deferred.len();
         self.max_termination_deferred = self.max_termination_deferred.max(deferred.len());
         // Strings/floats the GC thread claimed concurrently and subrs it
@@ -749,16 +750,17 @@ impl TaggedHeap {
         // on; the kind buckets stay zero otherwise.
         if cfg!(test) || std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1") {
             let mut kinds = DrainKinds::default();
-            for &val in &deferred {
+            for &word in &deferred {
                 // Safety: parked entries are live heap values; nothing has been
                 // swept since they were parked (see `DrainKinds::note`).
-                unsafe { kinds.note(val) };
+                unsafe { kinds.note(word.value()) };
             }
             self.last_termination_kinds = kinds;
             self.max_termination_kinds.merge_max(&kinds);
         }
         self.termination_count += 1;
-        self.gray_queue.extend(deferred);
+        self.gray_queue
+            .extend(deferred.into_iter().map(MarkWord::value));
         self.last_termination_fold_us = fold_t0.elapsed().as_micros() as u64;
         // Stage 2 Tier B CONCURRENT VECTOR SCAN: the GC thread has provably exited its
         // mark loop (the `rx.recv()` above), so its snapshot pointers into the retired
@@ -854,11 +856,17 @@ impl TaggedHeap {
     /// cycle ends floats one cycle, the standard SATB trade.
     pub(crate) fn feed_satb_roots(&self, values: &[TaggedValue]) {
         let mut shared = self.satb_shared.lock().unwrap();
-        shared.extend(values.iter().copied().filter(|v| {
-            v.is_heap_object()
-                || (self.generational.major_in_progress
-                    && matches!(v.kind(), crate::tagged::value::ValueKind::Symbol(_)))
-        }));
+        shared.extend(
+            values
+                .iter()
+                .copied()
+                .filter(|v| {
+                    v.is_heap_object()
+                        || (self.generational.major_in_progress
+                            && matches!(v.kind(), crate::tagged::value::ValueKind::Symbol(_)))
+                })
+                .map(MarkWord::of),
+        );
     }
 
     pub(super) fn push_value_children_to_satb_shared(&mut self, owner: TaggedValue) {
@@ -875,7 +883,7 @@ impl TaggedHeap {
         self.push_value_children_to_gray(owner, "satb-concurrent");
         if !self.gray_queue.is_empty() {
             let mut shared = self.satb_shared.lock().unwrap();
-            shared.extend(self.gray_queue.drain(..));
+            shared.extend(self.gray_queue.drain(..).map(MarkWord::of));
         }
     }
 
@@ -898,7 +906,10 @@ impl TaggedHeap {
             return;
         }
         if pre_image.is_heap_object() {
-            self.satb_shared.lock().unwrap().push(pre_image);
+            self.satb_shared
+                .lock()
+                .unwrap()
+                .push(MarkWord::of(pre_image));
         }
     }
 

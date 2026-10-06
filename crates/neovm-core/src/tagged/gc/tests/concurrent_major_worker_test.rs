@@ -128,8 +128,8 @@ fn claim_job(heap: &TaggedHeap, major: bool) -> ConcurrentClaimJob {
 struct WorkerHarness {
     job: ConcurrentMarkJob,
     result: std::sync::mpsc::Receiver<ConcurrentMarkResult>,
-    deferred: Arc<Mutex<Vec<TaggedValue>>>,
-    satb: Arc<Mutex<Vec<TaggedValue>>>,
+    deferred: SharedMarkQueue,
+    satb: SharedMarkQueue,
 }
 impl WorkerHarness {
     fn new(heap: &TaggedHeap, major: bool) -> Self {
@@ -138,7 +138,7 @@ impl WorkerHarness {
         let satb = Arc::new(Mutex::new(Vec::new()));
         Self {
             job: ConcurrentMarkJob {
-                gray: Vec::new(),
+                gray: MarkStack::default(),
                 claims: claim_job(heap, major),
                 satb: satb.clone(),
                 deferred: deferred.clone(),
@@ -166,7 +166,7 @@ impl WorkerHarness {
             "worker must send only once"
         );
         let deferred = std::mem::take(&mut *self.deferred.lock().unwrap());
-        (result, deferred)
+        (result, deferred.into_iter().map(MarkWord::value).collect())
     }
 }
 
@@ -209,7 +209,7 @@ fn generational_worker_major_claims_promote_only_young_headers() {
             set_age(value, age);
             let job = claim_job(&heap, true);
             let before = unsafe { (*header(value)).raw_mark() };
-            let mut gray = Vec::new();
+            let mut gray = MarkStack::default();
             let mut logs = WorkerMarkLogs::default();
             assert!(concurrent_try_mark_owned_logged::<true>(
                 value, &job, &mut gray, &mut logs
@@ -231,7 +231,7 @@ fn generational_worker_major_claims_promote_only_young_headers() {
                 assert!(unsafe { (*header(value)).is_marked_at(job.parity) });
             }
             logs.result.symbols.clear();
-            gray.clear();
+            gray = MarkStack::default();
             assert!(concurrent_try_mark_owned_logged::<true>(
                 value, &job, &mut gray, &mut logs
             ));
@@ -258,7 +258,7 @@ fn generational_worker_legacy_claim_parity_and_tenured_rules_are_unchanged() {
             set_age(value, age);
             let job = claim_job(&heap, false);
             let before = unsafe { (*header(value)).raw_mark() };
-            let mut gray = Vec::new();
+            let mut gray = MarkStack::default();
             let mut logs = WorkerMarkLogs::default();
             assert!(concurrent_try_mark_owned_logged::<false>(
                 value, &job, &mut gray, &mut logs
@@ -286,7 +286,7 @@ fn generational_worker_born_black_claims_have_no_promo_or_child_handoff() {
         heap.close_alloc_regions();
         let job = claim_job(&heap, true);
         unsafe { (*header(value)).set_marked(job.parity) };
-        let mut gray = Vec::new();
+        let mut gray = MarkStack::default();
         let mut logs = WorkerMarkLogs::default();
         assert!(concurrent_try_mark_owned_logged::<true>(
             value, &job, &mut gray, &mut logs
@@ -313,7 +313,7 @@ fn generational_worker_born_black_bytecode_does_not_read_its_value_children() {
     let job = claim_job(&heap, true);
     unsafe { (*header(value)).set_marked(job.parity) };
     let mut logs = WorkerMarkLogs::default();
-    let mut gray = Vec::new();
+    let mut gray = MarkStack::default();
     assert!(concurrent_try_mark_owned_logged::<true>(
         value, &job, &mut gray, &mut logs
     ));
@@ -337,7 +337,7 @@ fn generational_worker_refuses_interval_strings_and_snapshot_misses_before_claim
     if let PageSnapshot::BaseSets { vector, .. } = &mut job.pages {
         vector.clear();
     }
-    let mut gray = Vec::new();
+    let mut gray = MarkStack::default();
     let mut logs = WorkerMarkLogs::default();
     for value in [string, vector, boxed] {
         let before = unsafe { (*header(value)).raw_mark() };
@@ -371,7 +371,7 @@ fn generational_worker_snapshot_misses_never_claim_or_promote_any_header_class()
         vector: FxHashSet::default(),
         bytecode: FxHashSet::default(),
     };
-    let mut gray = Vec::new();
+    let mut gray = MarkStack::default();
     let mut logs = WorkerMarkLogs::default();
     for value in values {
         let before = unsafe { (*header(value)).raw_mark() };
@@ -408,7 +408,7 @@ fn generational_worker_bytecode_routes_each_symbol_field_and_keeps_legacy_heap_f
         let value = roots.keep(heap.alloc_bytecode(function));
         heap.close_alloc_regions();
         let job = claim_job(&heap, major);
-        let mut gray = Vec::new();
+        let mut gray = MarkStack::default();
         let mut logs = WorkerMarkLogs::default();
         let handled = if major {
             concurrent_try_mark_owned_logged::<true>(value, &job, &mut gray, &mut logs)
@@ -416,7 +416,7 @@ fn generational_worker_bytecode_routes_each_symbol_field_and_keeps_legacy_heap_f
             concurrent_try_mark_owned_logged::<false>(value, &job, &mut gray, &mut logs)
         };
         assert!(handled);
-        assert_eq!(gray, [child]);
+        assert_eq!(gray.into_values(), [child]);
         if major {
             assert_eq!(logs.result.promo, [header(value) as usize]);
             for symbol in &symbols {
@@ -476,7 +476,11 @@ fn generational_worker_gray_and_satb_symbols_reach_major_result_only() {
         let second = symbol("u34-worker-satb");
         let mut harness = WorkerHarness::new(&heap, major);
         harness.job.gray.push(first);
-        harness.satb.lock().unwrap().extend([first, second]);
+        harness
+            .satb
+            .lock()
+            .unwrap()
+            .extend([first, second].map(MarkWord::of));
         let (result, deferred) = harness.run();
         assert!(deferred.is_empty());
         assert!(result.promo.is_empty());
@@ -571,7 +575,9 @@ fn generational_worker_outer_stop_preserves_unprocessed_gray_and_owned_logs() {
     let key = symbol("u34-worker-outer-stop");
     heap.close_alloc_regions();
     let mut harness = WorkerHarness::new(&heap, true);
-    harness.job.gray.extend(std::iter::repeat_n(value, 2048));
+    for _ in 0..2048 {
+        harness.job.gray.push(value);
+    }
     // Both are visited before the quantum reaches the repeated float tail.
     harness.job.gray.push(key);
     let (result, deferred) = harness.run();

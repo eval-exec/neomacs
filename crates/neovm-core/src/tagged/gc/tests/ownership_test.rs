@@ -3222,7 +3222,7 @@ fn a_plain_variable_store_logs_its_pre_image_only_while_marking() {
         .lock()
         .unwrap()
         .iter()
-        .map(|v| v.bits())
+        .map(|word| word.value().bits())
         .collect();
     heap.set_concurrent_active_for_test(false);
 
@@ -3265,7 +3265,7 @@ fn a_specbind_swap_logs_its_pre_image_only_while_marking() {
         .lock()
         .unwrap()
         .iter()
-        .map(|v| v.bits())
+        .map(|word| word.value().bits())
         .collect();
     heap.set_concurrent_active_for_test(false);
 

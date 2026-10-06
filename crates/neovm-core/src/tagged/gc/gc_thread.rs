@@ -45,7 +45,7 @@ unsafe impl Send for HeapPtr {}
 /// It never reads a growable live registry or a mutable hash backing.
 pub(super) struct ConcurrentMarkJob {
     /// Root snapshot, moved out of the heap's gray queue at the start handshake.
-    pub(super) gray: Vec<TaggedValue>,
+    pub(super) gray: MarkStack,
     /// CONCURRENT CLAIM DISPATCHER state (the start handshake's page
     /// snapshot, cycle parity, dump span, claim counters) for
     /// `concurrent_try_mark_owned`. Grouped in a sub-struct so the scan
@@ -55,9 +55,9 @@ pub(super) struct ConcurrentMarkJob {
     /// block arithmetic; others (mapped/dump, or new blocks) are deferred.
     pub(super) claims: ConcurrentClaimJob,
     /// Overwritten children appended by the mutator's SATB barrier; drained here.
-    pub(super) satb: std::sync::Arc<std::sync::Mutex<Vec<TaggedValue>>>,
+    pub(super) satb: SharedMarkQueue,
     /// Non-cons / non-owned-cons values to trace at the STW termination.
-    pub(super) deferred: std::sync::Arc<std::sync::Mutex<Vec<TaggedValue>>>,
+    pub(super) deferred: SharedMarkQueue,
     /// Set when gray + SATB are drained (tentatively done); polled by the mutator.
     pub(super) done: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Set by the mutator to ask this loop to exit.
@@ -278,7 +278,7 @@ impl<S: WorkerSymbolMarks> WorkerMarkLogs<S> {
     fn queue_child<const SYMBOLS: bool>(
         &mut self,
         value: TaggedValue,
-        gray: &mut Vec<TaggedValue>,
+        gray: &mut MarkStack,
     ) {
         if S::ENABLED {
             if value.is_heap_object() {
@@ -298,7 +298,7 @@ impl<S: WorkerSymbolMarks> WorkerMarkLogs<S> {
     }
 
     #[inline]
-    fn queue_snapshot_child(&mut self, value: TaggedValue, gray: &mut Vec<TaggedValue>) {
+    fn queue_snapshot_child(&mut self, value: TaggedValue, gray: &mut MarkStack) {
         self.queue_child::<true>(value, gray);
     }
 }
@@ -309,7 +309,7 @@ trait ClaimExtension {
         &self,
         ptr: *const VecLikeHeader,
         job: &ConcurrentClaimJob,
-        gray: &mut Vec<TaggedValue>,
+        gray: &mut MarkStack,
         logs: &mut WorkerMarkLogs<Self::Symbols>,
     ) -> Option<bool>;
 }
@@ -323,7 +323,7 @@ impl ClaimExtension for LegacyClaims {
         &self,
         _ptr: *const VecLikeHeader,
         _job: &ConcurrentClaimJob,
-        _gray: &mut Vec<TaggedValue>,
+        _gray: &mut MarkStack,
         _logs: &mut WorkerMarkLogs<Self::Symbols>,
     ) -> Option<bool> {
         None
@@ -577,7 +577,15 @@ pub(super) fn concurrent_try_mark_owned(
     gray: &mut Vec<TaggedValue>,
 ) -> bool {
     debug_assert!(!job.major);
-    concurrent_try_mark_owned_logged::<false>(val, job, gray, &mut WorkerMarkLogs::default())
+    let mut stack = MarkStack::default();
+    let handled = concurrent_try_mark_owned_logged::<false>(
+        val,
+        job,
+        &mut stack,
+        &mut WorkerMarkLogs::default(),
+    );
+    gray.extend(stack.into_values());
+    handled
 }
 
 #[cfg(test)]
@@ -585,7 +593,7 @@ pub(super) fn concurrent_try_mark_owned(
 fn concurrent_try_mark_owned_logged<const MAJOR: bool>(
     val: TaggedValue,
     job: &ConcurrentClaimJob,
-    gray: &mut Vec<TaggedValue>,
+    gray: &mut MarkStack,
     logs: &mut WorkerMarkLogs,
 ) -> bool {
     concurrent_try_mark_owned_with_symbols::<MAJOR, MAJOR, LegacyClaims>(
@@ -606,9 +614,12 @@ fn concurrent_try_mark_owned_enabled<const MAJOR: bool>(
     gray: &mut Vec<TaggedValue>,
     logs: &mut EnabledWorkerMarkLogs,
 ) -> bool {
-    concurrent_try_mark_owned_with_symbols::<MAJOR, true, EnabledClaims>(
-        val, job, claims, gray, logs,
-    )
+    let mut stack = MarkStack::default();
+    let handled = concurrent_try_mark_owned_with_symbols::<MAJOR, true, EnabledClaims>(
+        val, job, claims, &mut stack, logs,
+    );
+    gray.extend(stack.into_values());
+    handled
 }
 
 #[inline]
@@ -620,7 +631,7 @@ fn concurrent_try_mark_owned_with_symbols<
     val: TaggedValue,
     job: &ConcurrentClaimJob,
     extension: &E,
-    gray: &mut Vec<TaggedValue>,
+    gray: &mut MarkStack,
     logs: &mut WorkerMarkLogs<E::Symbols>,
 ) -> bool {
     // FIRST PARTITION CYCLE: a child inside the dump span is fully handled
@@ -925,7 +936,7 @@ impl ClaimExtension for EnabledClaims {
         &self,
         ptr: *const VecLikeHeader,
         job: &ConcurrentClaimJob,
-        gray: &mut Vec<TaggedValue>,
+        gray: &mut MarkStack,
         logs: &mut EnabledWorkerMarkLogs,
     ) -> Option<bool> {
         let addr = ptr as usize;
@@ -1044,7 +1055,7 @@ fn concurrent_trace_mapped_veclike<const MAJOR: bool, const SYMBOLS: bool, E: Cl
             if SYMBOLS {
                 logs.note_symbol(child);
             } else if seen_symbols.insert(child.bits()) {
-                job.deferred.lock().unwrap().push(child);
+                job.deferred.lock().unwrap().push(MarkWord::of(child));
             }
         } else if child.is_heap_object()
             && !concurrent_try_mark_owned_with_symbols::<MAJOR, SYMBOLS, E>(
@@ -1055,7 +1066,7 @@ fn concurrent_trace_mapped_veclike<const MAJOR: bool, const SYMBOLS: bool, E: Cl
                 logs,
             )
         {
-            job.deferred.lock().unwrap().push(child);
+            job.deferred.lock().unwrap().push(MarkWord::of(child));
         }
     };
     match unsafe { (*ptr).type_tag } {
@@ -1108,7 +1119,7 @@ fn concurrent_trace_mapped_veclike<const MAJOR: bool, const SYMBOLS: bool, E: Cl
             job.deferred
                 .lock()
                 .unwrap()
-                .push(unsafe { TaggedValue::from_veclike_ptr(ptr) });
+                .push(MarkWord::of(unsafe { TaggedValue::from_veclike_ptr(ptr) }));
         }
     }
 }
@@ -1149,7 +1160,7 @@ fn route_snapshot_child<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExtensio
                 &mut job.gray,
                 logs,
             ) {
-                job.deferred.lock().unwrap().push(child);
+                job.deferred.lock().unwrap().push(MarkWord::of(child));
             }
         } else if SYMBOLS {
             logs.note_symbol(child);
@@ -1168,7 +1179,7 @@ fn route_snapshot_child<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExtensio
             &mut job.gray,
             logs,
         ) {
-            job.deferred.lock().unwrap().push(child);
+            job.deferred.lock().unwrap().push(MarkWord::of(child));
         }
     }
 }
@@ -1297,7 +1308,7 @@ fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExte
                         if SYMBOLS {
                             logs.note_symbol(child);
                         } else if seen_symbols.insert(child.bits()) {
-                            job.deferred.lock().unwrap().push(child);
+                            job.deferred.lock().unwrap().push(MarkWord::of(child));
                         }
                     } else if child.is_heap_object() {
                         // Same filter as `mark_or_push_child`: immediates
@@ -1311,7 +1322,7 @@ fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExte
                             &mut job.gray,
                             &mut logs,
                         ) {
-                            job.deferred.lock().unwrap().push(child);
+                            job.deferred.lock().unwrap().push(MarkWord::of(child));
                         }
                     }
                 }
@@ -1354,7 +1365,7 @@ fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExte
                 if !job.claims.pages.contains(ChunkClass::Cons, addr) {
                     // Mapped (non-dump) or new-block cons — let the mutator's
                     // termination mark it through the full `mark_value` path.
-                    job.deferred.lock().unwrap().push(val);
+                    job.deferred.lock().unwrap().push(MarkWord::of(val));
                     continue;
                 }
                 if unsafe { atomic_mark_owned_cons_ptr(ptr) } {
@@ -1383,7 +1394,7 @@ fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExte
                             break; // dump cons: permanent black
                         }
                         if !job.claims.pages.contains(ChunkClass::Cons, caddr) {
-                            job.deferred.lock().unwrap().push(cdr);
+                            job.deferred.lock().unwrap().push(MarkWord::of(cdr));
                             break;
                         }
                         if !unsafe { atomic_mark_owned_cons_ptr(cptr) } {
@@ -1410,7 +1421,7 @@ fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExte
                 ) {
                     continue;
                 }
-                job.deferred.lock().unwrap().push(val);
+                job.deferred.lock().unwrap().push(MarkWord::of(val));
             } else if <E::Symbols as WorkerSymbolMarks>::ENABLED && SYMBOLS {
                 logs.note_symbol(val);
             }
@@ -1440,14 +1451,14 @@ fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExte
             }
         } else {
             job.done.store(false, Ordering::Release);
-            job.gray.extend(batch);
+            job.gray.extend_words(batch);
         }
     }
     // Fix B: residual local gray (a mid-drain stop) joins the deferred
     // handoff; the termination fold routes both through the STW `mark_value`
     // drain. Empty on the normal (idle-stop) path.
     if !job.gray.is_empty() {
-        job.deferred.lock().unwrap().extend(job.gray.drain(..));
+        job.deferred.lock().unwrap().extend(job.gray.drain_words());
     }
     // Every exit, including either stop quantum, retains the owned logs.
     // No heap/snapshot access follows this handoff.
@@ -1906,7 +1917,7 @@ pub(crate) fn note_string_interval_preimage(
             if value.is_heap_object()
                 || (major && matches!(value.kind(), crate::tagged::value::ValueKind::Symbol(_)))
             {
-                shared.push(value);
+                shared.push(MarkWord::of(value));
             }
         });
     });

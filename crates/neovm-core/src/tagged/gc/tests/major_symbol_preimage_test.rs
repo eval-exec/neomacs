@@ -114,7 +114,12 @@ impl Drop for MarkPhase {
 }
 
 fn satb(heap: &TaggedHeap) -> Vec<TaggedValue> {
-    heap.satb_shared.lock().unwrap().clone()
+    heap.satb_shared
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|word| word.value())
+        .collect()
 }
 
 fn special_immediates() -> [TaggedValue; 4] {
@@ -339,7 +344,8 @@ fn major_symbol_raw_interval_choke_points_retain_plists_once_and_ignore_nil_gaps
         assert!(heap.current_mutator_gc().major_symbol_preimages.is_empty());
         phase.stop_synthetic(&mut heap);
         let retained = std::mem::take(&mut *heap.satb_shared.lock().unwrap());
-        heap.gray_queue.extend(retained);
+        heap.gray_queue
+            .extend(retained.into_iter().map(MarkWord::value));
         heap.incremental_drain_all();
         assert!(heap.marked_symbols.contains(id(key)));
         assert!(heap.current_mutator_gc().major_symbol_preimages.is_empty());

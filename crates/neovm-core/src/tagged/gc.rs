@@ -718,7 +718,7 @@ pub struct TaggedHeap {
     concurrent_mark_running: bool,
     /// Mutator->GC channel (Phase 5): the SATB barrier appends the overwritten
     /// children here (locked); the GC thread drains them into its gray worklist.
-    satb_shared: std::sync::Arc<std::sync::Mutex<Vec<TaggedValue>>>,
+    satb_shared: SharedMarkQueue,
     /// Per-cycle dedup for the COARSE (bulk) SATB barrier. A bulk mutator
     /// (`with_hash_table_mut`, `with_vector_data_mut`, char-table, …) hands a
     /// `&mut` to an arbitrary closure, so the barrier — which runs BEFORE the
@@ -748,7 +748,7 @@ pub struct TaggedHeap {
     /// can be reallocated by the mutator, so reading it concurrently would be a
     /// UAF). They are marked black and parked here, then traced at the
     /// termination handshake while the mutator is stopped.
-    deferred_veclikes: std::sync::Arc<std::sync::Mutex<Vec<TaggedValue>>>,
+    deferred_veclikes: SharedMarkQueue,
     /// GC thread sets this (Release) when gray + SATB are drained; the mutator
     /// polls it (Acquire) at safe points to decide when to terminate.
     gc_done: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -2655,6 +2655,8 @@ mod concurrent;
 pub use concurrent::MarkFinishError;
 mod heap_identity;
 pub use heap_identity::HeapIdentity;
+mod mark_word;
+use mark_word::{MarkStack, MarkWord, SharedMarkQueue};
 pub(crate) mod scan_contract;
 #[cfg(test)]
 #[path = "gc/tests/shutdown_tests.rs"]
