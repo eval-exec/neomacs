@@ -1510,7 +1510,6 @@ fn reserve_format_output(
 #[derive(Debug)]
 struct FormatOutput {
     bytes: Vec<u8>,
-    writable_extent: FormatStorageBytes,
     encoding: FormatStringEncoding,
 }
 
@@ -1521,14 +1520,10 @@ impl FormatOutput {
         capacity: usize,
         encoding: FormatStringEncoding,
     ) -> Result<Self, crate::emacs_core::alloc::AllocationFailure> {
-        let writable_extent = FormatStorageBytes::try_from(capacity)?;
+        let capacity = FormatStorageBytes::try_from(capacity)?;
         let mut bytes = Vec::new();
-        bytes.try_reserve_exact(writable_extent.get())?;
-        Ok(Self {
-            bytes,
-            writable_extent,
-            encoding,
-        })
+        bytes.try_reserve_exact(capacity.get())?;
+        Ok(Self { bytes, encoding })
     }
 
     #[inline]
@@ -1555,9 +1550,12 @@ impl FormatOutput {
 
     #[inline]
     fn append(&mut self, bytes: &[u8]) -> Result<(), crate::emacs_core::alloc::AllocationFailure> {
-        if bytes.len() > self.writable_extent.get() - self.bytes.len() {
-            self.grow(bytes)?;
-        } else if self.writable_extent.get() > Value::MOST_POSITIVE_FIXNUM as usize {
+        // Vec owns its actual storage extent: deriving spare capacity avoids a
+        // second, independently stored count that can disagree with the buffer.
+        if bytes.len() > self.bytes.capacity() - self.bytes.len() {
+            return self.grow_and_append(bytes);
+        }
+        if self.bytes.capacity() > Value::MOST_POSITIVE_FIXNUM as usize {
             // Spare canonical capacity above GNU's bound cannot prove that an
             // append stays in the actual output domain, even without growth.
             self.checked_append_extent(bytes)?;
@@ -1588,22 +1586,22 @@ impl FormatOutput {
 
     #[cold]
     #[inline(never)]
-    fn grow(
+    fn grow_and_append(
         &mut self,
         additional: &[u8],
     ) -> Result<(), crate::emacs_core::alloc::AllocationFailure> {
         let total = self.checked_append_extent(additional)?.get();
         // Geometric capacity is a storage unit, never an actual string length.
         let capacity = total.max(
-            self.writable_extent
-                .get()
+            self.bytes
+                .capacity()
                 .saturating_mul(2)
                 .min(isize::MAX as usize),
         );
         let extent = FormatStorageBytes::try_from(capacity)?;
         self.bytes
             .try_reserve_exact(extent.get() - self.bytes.len())?;
-        self.writable_extent = extent;
+        self.bytes.extend_from_slice(additional);
         Ok(())
     }
 
@@ -1887,6 +1885,7 @@ fn format_integer_digits(
 /// Render `n` as plain decimal digits appended to `out`, with no heap
 /// traffic: one backward stack-buffer pass, like GNU's sprintf into
 /// `sprintf_buf`.
+#[inline]
 fn push_i64_decimal(
     out: &mut FormatOutput,
     n: i64,
