@@ -669,6 +669,61 @@ impl LispSymbol {
     }
 }
 
+/// Compile-time contracts of the value cell: what code outside it cannot do.
+///
+/// The cell word is private, so nothing outside can store a payload without
+/// its tag:
+///
+/// ```compile_fail,E0616
+/// use neovm_core::emacs_core::intern::intern;
+/// use neovm_core::emacs_core::symbol::LispSymbol;
+///
+/// let symbol = LispSymbol::new(intern("p61-word"));
+/// let _word = &symbol.val;
+/// ```
+///
+/// nor set the tag apart from its payload:
+///
+/// ```compile_fail,E0624
+/// use neovm_core::emacs_core::intern::intern;
+/// use neovm_core::emacs_core::symbol::{LispSymbol, SymbolRedirect};
+///
+/// let symbol = LispSymbol::new(intern("p61-tag"));
+/// let mut flags = symbol.flags();
+/// flags.set_redirect(SymbolRedirect::Localized);
+/// ```
+///
+/// A forwarder descriptor cannot be fabricated, so a `Forwarded` cell always
+/// names one a `defvar_*` registered:
+///
+/// ```compile_fail,E0451
+/// use neovm_core::emacs_core::forward::{LispFwd, LispFwdType};
+///
+/// let _forged = LispFwd { ty: LispFwdType::Int };
+/// ```
+///
+/// nor copied out of the storage it describes:
+///
+/// ```compile_fail,E0507
+/// use neovm_core::emacs_core::forward::LispFwd;
+///
+/// fn copy(fwd: &'static LispFwd) -> LispFwd {
+///     *fwd
+/// }
+/// ```
+///
+/// and its slot is not lent out as a reference:
+///
+/// ```compile_fail,E0624
+/// use neovm_core::emacs_core::forward::LispFwd;
+///
+/// fn peek(fwd: &'static LispFwd) {
+///     let _ = fwd.load_ref();
+/// }
+/// ```
+#[cfg(doctest)]
+pub struct ValueCellCompileContract;
+
 // ===========================================================================
 // Writing a cell
 // ===========================================================================
