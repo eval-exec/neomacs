@@ -5246,6 +5246,7 @@ impl std::fmt::Debug for MatchScratchLease {
 }
 
 impl MatchScratchLease {
+    #[inline]
     fn take() -> Self {
         Self {
             scratch: std::mem::ManuallyDrop::new(MATCH_SCRATCH.with(|cell| {
@@ -5257,21 +5258,20 @@ impl MatchScratchLease {
             _thread: std::marker::PhantomData,
         }
     }
+    #[inline]
     fn get(&mut self) -> &mut MatchScratch {
         &mut self.scratch
     }
 }
 
 impl Drop for MatchScratchLease {
+    #[inline]
     fn drop(&mut self) {
         // SAFETY: this private field is initialized by `take`, remains owned
         // by the lease, and is extracted exactly once by its only destructor.
         // `ManuallyDrop` prevents a second destruction after returning the box.
         let scratch = unsafe { std::mem::ManuallyDrop::take(&mut self.scratch) };
-        drop(crate::tls_scope::TlsScope::restore(
-            &MATCH_SCRATCH,
-            Some(scratch),
-        ));
+        crate::tls_scope::TlsScope::restore_now(&MATCH_SCRATCH, Some(scratch));
     }
 }
 

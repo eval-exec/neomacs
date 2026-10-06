@@ -84,6 +84,13 @@ impl<T: 'static, Slot: TlsSlot<T> + 'static> TlsScope<T, Slot> {
         }
     }
 
+    /// Return an owned value without constructing a temporary scope.
+    /// An unavailable key or borrowed slot drops the returned value instead.
+    #[inline]
+    pub(crate) fn restore_now(key: &'static LocalKey<Slot>, previous: T) {
+        let _ = key.try_with(|slot| slot.try_replace(previous));
+    }
+
     /// Restore the enclosing value and return the temporary value once.
     pub(crate) fn finish(mut self) -> Option<T> {
         self.previous
@@ -96,7 +103,7 @@ impl<T: 'static, Slot: TlsSlot<T> + 'static> Drop for TlsScope<T, Slot> {
     #[inline]
     fn drop(&mut self) {
         if let Some(previous) = self.previous.take() {
-            let _ = self.key.try_with(|slot| slot.try_replace(previous));
+            Self::restore_now(self.key, previous);
         }
     }
 }
@@ -225,6 +232,38 @@ mod tests {
         VALUES.with(|values| values.borrow_mut().push(6));
         assert_eq!(scope.finish(), Some(vec![5, 6]));
         assert!(VALUES.with(|values| values.borrow().is_empty()));
+    }
+
+    #[test]
+    fn tls_scope_restore_now_drops_owned_values_once() {
+        #[derive(Debug)]
+        struct DropCount(Rc<Cell<usize>>);
+        impl Drop for DropCount {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
+        thread_local! {
+            static OWNED: RefCell<Option<DropCount>> = const { RefCell::new(None) };
+        }
+        let replaced = Rc::new(Cell::new(0));
+        let restored = Rc::new(Cell::new(0));
+        let rejected = Rc::new(Cell::new(0));
+        OWNED.with(|slot| *slot.borrow_mut() = Some(DropCount(Rc::clone(&replaced))));
+        TlsScope::restore_now(&OWNED, Some(DropCount(Rc::clone(&restored))));
+        assert_eq!(replaced.get(), 1);
+        assert_eq!(restored.get(), 0);
+        OWNED.with(|slot| {
+            let borrowed = slot.borrow();
+            TlsScope::restore_now(&OWNED, Some(DropCount(Rc::clone(&rejected))));
+            assert_eq!(rejected.get(), 1);
+            assert_eq!(restored.get(), 0);
+            assert!(borrowed.is_some());
+        });
+        TlsScope::restore_now(&OWNED, None);
+        assert_eq!(replaced.get(), 1);
+        assert_eq!(restored.get(), 1);
+        assert_eq!(rejected.get(), 1);
     }
 
     #[test]
