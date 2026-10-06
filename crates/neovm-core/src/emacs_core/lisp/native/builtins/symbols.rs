@@ -3822,83 +3822,107 @@ fn compare_lisp_strings(
     super::strings::string_ordering(lhs, rhs)
 }
 
-/// GNU fns.c:3089-3105 compares in the integer domain when conversion
-/// rounds a fixnum to the same double. A fixnum's extra signed range bit
-/// guarantees that this equal double fits in i64.
-#[inline]
-fn compare_fixnum_float_for_value_lt(integer: i64, float: f64) -> std::cmp::Ordering {
-    let rounded = integer as f64;
-    if rounded == float {
-        integer.cmp(&(float as i64))
-    } else {
-        rounded
-            .partial_cmp(&float)
-            .unwrap_or(std::cmp::Ordering::Equal)
+/// An integer decoded from a fixnum tag, hence strictly inside i64 range
+/// even after rounding to binary64. Only `ValueLtNumber::of` constructs it.
+/// This scalar has no Lisp state and can be shared between mutators.
+#[derive(Clone, Copy, Debug)]
+struct ValueLtFixnum(i64);
+
+static_assertions::assert_impl_all!(ValueLtFixnum: Send, Sync);
+
+/// Numeric operands decoded once for GNU's `value_cmp` (fns.c:3123-3132,
+/// 3263-3275). Borrowing ties bignums to their input values; comparing these
+/// operands never runs Lisp or reaches a GC safe point.
+/// Heap projections remain confined to the mutator owning the input values.
+#[derive(Clone, Copy, Debug)]
+enum ValueLtNumber<'value> {
+    Fixnum(ValueLtFixnum),
+    Float(f64),
+    Bignum(
+        &'value Integer,
+        std::marker::PhantomData<(&'value Value, *const ())>,
+    ),
+}
+
+// The borrowed limbs belong to the input Value's mutator. Integer's own
+// Send/Sync implementations do not make this heap projection transferable.
+static_assertions::assert_not_impl_any!(ValueLtNumber<'static>: Send, Sync);
+
+impl<'value> ValueLtNumber<'value> {
+    #[inline]
+    fn of(value: &'value Value) -> Option<Self> {
+        if let Some(integer) = value.as_fixnum() {
+            Some(Self::Fixnum(ValueLtFixnum(integer)))
+        } else if let Some(float) = value.as_float() {
+            Some(Self::Float(float))
+        } else {
+            value
+                .as_bignum()
+                .map(|integer| Self::Bignum(integer, std::marker::PhantomData))
+        }
+    }
+
+    #[inline]
+    fn compare(self, other: Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        match (self, other) {
+            (Self::Fixnum(left), Self::Fixnum(right)) => left.0.cmp(&right.0),
+            (Self::Fixnum(integer), Self::Float(float)) => {
+                compare_fixnum_float_for_value_lt(integer, float)
+            }
+            (Self::Float(float), Self::Fixnum(integer)) => {
+                compare_fixnum_float_for_value_lt(integer, float).reverse()
+            }
+            (Self::Float(left), Self::Float(right)) => compare_floats_for_value_lt(left, right),
+            (Self::Bignum(left, _), Self::Bignum(right, _)) => left.cmp(right),
+            // A fixnum fits in Integer's inline single-limb representation;
+            // these total comparisons allocate and clone no bignum limbs.
+            (Self::Bignum(left, _), Self::Fixnum(right)) => left.cmp(&Integer::from(right.0)),
+            (Self::Fixnum(left), Self::Bignum(right, _)) => {
+                right.cmp(&Integer::from(left.0)).reverse()
+            }
+            (Self::Bignum(integer, _), Self::Float(float)) => {
+                integer.partial_cmp(&float).unwrap_or(Ordering::Equal)
+            }
+            (Self::Float(float), Self::Bignum(integer, _)) => integer
+                .partial_cmp(&float)
+                .unwrap_or(Ordering::Equal)
+                .reverse(),
+        }
     }
 }
 
+/// GNU fns.c:3265-3267 makes NaN incomparable with every numeric operand.
+#[inline]
+fn compare_floats_for_value_lt(left: f64, right: f64) -> std::cmp::Ordering {
+    if left < right {
+        std::cmp::Ordering::Less
+    } else if left > right {
+        std::cmp::Ordering::Greater
+    } else {
+        std::cmp::Ordering::Equal
+    }
+}
+
+/// GNU fns.c:3089-3105 compares in the integer domain when conversion
+/// rounds a fixnum to the same double.
+#[inline]
+fn compare_fixnum_float_for_value_lt(integer: ValueLtFixnum, float: f64) -> std::cmp::Ordering {
+    let rounded = integer.0 as f64;
+    if rounded == float {
+        // Convert our own finite rounded fixnum, whose magnitude is at most
+        // 2^61 and therefore fits i64. Equality makes this the float's exact
+        // integral value, including either spelling of zero.
+        let exact = rounded as i64;
+        integer.0.cmp(&exact)
+    } else {
+        compare_floats_for_value_lt(rounded, float)
+    }
+}
+
+#[inline]
 fn compare_number_values_for_value_lt(lhs: &Value, rhs: &Value) -> Option<std::cmp::Ordering> {
-    use std::cmp::Ordering;
-
-    if !lhs.is_number() || !rhs.is_number() {
-        return None;
-    }
-
-    if lhs.is_float() || rhs.is_float() {
-        if let Some(big) = lhs.as_bignum() {
-            let right = match rhs.kind() {
-                ValueKind::Fixnum(n) => n as f64,
-                ValueKind::Float => rhs.xfloat(),
-                _ => return None,
-            };
-            return Some(big.partial_cmp(&right).unwrap_or(Ordering::Equal));
-        }
-        if let Some(big) = rhs.as_bignum() {
-            let left = match lhs.kind() {
-                ValueKind::Fixnum(n) => n as f64,
-                ValueKind::Float => lhs.xfloat(),
-                _ => return None,
-            };
-            return Some(
-                big.partial_cmp(&left)
-                    .map(|ordering| ordering.reverse())
-                    .unwrap_or(Ordering::Equal),
-            );
-        }
-        return match (lhs.kind(), rhs.kind()) {
-            (ValueKind::Fixnum(integer), ValueKind::Float) => {
-                Some(compare_fixnum_float_for_value_lt(integer, rhs.xfloat()))
-            }
-            (ValueKind::Float, ValueKind::Fixnum(integer)) => {
-                Some(compare_fixnum_float_for_value_lt(integer, lhs.xfloat()).reverse())
-            }
-            (ValueKind::Float, ValueKind::Float) => Some(
-                lhs.xfloat()
-                    .partial_cmp(&rhs.xfloat())
-                    .unwrap_or(Ordering::Equal),
-            ),
-            _other => None,
-        };
-    }
-
-    if !lhs.is_bignum() && !rhs.is_bignum() {
-        return match (lhs.kind(), rhs.kind()) {
-            (ValueKind::Fixnum(left), ValueKind::Fixnum(right)) => Some(left.cmp(&right)),
-            _ => None,
-        };
-    }
-
-    let left = match lhs.kind() {
-        ValueKind::Fixnum(n) => Integer::from(n),
-        ValueKind::Veclike(VecLikeType::Bignum) => lhs.as_bignum().expect("bignum").clone(),
-        _ => return None,
-    };
-    let right = match rhs.kind() {
-        ValueKind::Fixnum(n) => Integer::from(n),
-        ValueKind::Veclike(VecLikeType::Bignum) => rhs.as_bignum().expect("bignum").clone(),
-        _ => return None,
-    };
-    Some(left.cmp(&right))
+    Some(ValueLtNumber::of(lhs)?.compare(ValueLtNumber::of(rhs)?))
 }
 
 fn symbol_name_for_value_lt(
