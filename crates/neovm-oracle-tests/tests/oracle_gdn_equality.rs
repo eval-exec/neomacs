@@ -24,3 +24,20 @@ fn gdn_delete_string_representation() {
         expect_test::expect![[r#""OK (\"ab\" t \"ac\" t 4194282 t 2 t nil t t nil)""#]],
     );
 }
+
+#[test]
+fn gdn_reverse_string_representation() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"(list (multibyte-string-p (reverse (string-to-multibyte "ab")))
+                       (multibyte-string-p (nreverse (string-to-multibyte "ab")))
+                       (multibyte-string-p (reverse (string-to-multibyte "")))
+                       (multibyte-string-p (reverse (substring "éa" 1)))
+                       (multibyte-string-p (reverse "éa"))
+                       (string-to-list (reverse (concat "é" (string-to-multibyte "\352"))))
+                       (string-to-list (reverse (unibyte-string 97 234)))
+                       (text-properties-at 0 (reverse (propertize "ab" 'face 'bold))))"#;
+    common::assert_oracle_parity_expect(
+        form,
+        expect_test::expect![[r#""OK (nil nil nil nil t (4194282 233) (234 97) nil)""#]],
+    );
+}

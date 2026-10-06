@@ -18,3 +18,13 @@ fn gdn_delete_retains_input_string_encoding() {
         vec![0x3fffea]
     );
 }
+
+#[test]
+fn gdn_reverse_ascii_multibyte_becomes_unibyte() {
+    let source = Value::heap_string(crate::heap_types::LispString::from_emacs_bytes(
+        b"ab".to_vec(),
+    ));
+    let result = builtin_reverse(vec![source]).unwrap();
+    assert!(!result.as_lisp_string().unwrap().is_multibyte());
+    assert_eq!(result.as_lisp_string().unwrap().as_bytes(), b"ba");
+}

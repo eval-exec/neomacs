@@ -1124,7 +1124,9 @@ pub(crate) fn builtin_reverse(args: Vec<Value>) -> EvalResult {
             )
         })?;
 
-        if !string.is_multibyte() {
+        // GNU Freverse (fns.c:2354): equal character/byte lengths select
+        // unibyte output, including ASCII-only multibyte strings.
+        if string.schars() == string.sbytes() {
             let mut bytes = string.as_bytes().to_vec();
             bytes.reverse();
             return Ok(Value::heap_string(
