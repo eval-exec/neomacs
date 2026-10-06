@@ -3504,7 +3504,7 @@ pub(crate) fn builtin_transpose_regions(
     let leave_markers = args.get(4).is_some_and(|value| !value.is_nil());
     let _ = eval
         .buffers
-        .transpose_buffer_regions(current_id, transposition, leave_markers);
+        .transpose_buffer_regions(current_id, transposition, leave_markers.into());
     crate::emacs_core::editfns::signal_after_text_change(eval, change)?;
     Ok(Value::NIL)
 }

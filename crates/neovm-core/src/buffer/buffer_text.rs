@@ -1687,6 +1687,16 @@ impl BufferText {
         storage.text_props = Rc::new(text_props);
     }
 
+    /// Resolve a character position from storage alone while marker byte
+    /// coordinates are stale (GNU insdel.c:413-455, count_bytes).
+    pub(in crate::buffer) fn storage_anchor_for_char_pos(
+        &self,
+        pos: CharPos0,
+    ) -> TextPositionAnchor {
+        let storage = self.storage.borrow();
+        TextPositionAnchor::new(pos, storage.backend.char_pos_to_emacs_byte_pos(pos))
+    }
+
     /// Walk the intrusive marker chain and remap each marker's cached
     /// `(charpos, bytepos)` pair through the caller-supplied closure. GNU
     /// keeps those two coordinates together on `struct Lisp_Marker`; Neomacs

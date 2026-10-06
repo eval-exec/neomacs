@@ -23,6 +23,7 @@ pub use buffer::{
     LabeledRestrictionLabel, SavedRestrictionKind, SavedRestrictionState,
 };
 pub(crate) use buffer_text::BufferText;
+pub use edit_transaction::TranspositionAnchorPolicy;
 pub use overlay::{Overlay, OverlayList};
 pub use position::{
     AccessibleCharRange, AccessibleEmacsByteRange, CharLen, CharPos0, CharRange, DisplayColumn,

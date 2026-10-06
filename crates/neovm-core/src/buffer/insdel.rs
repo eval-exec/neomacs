@@ -9,7 +9,8 @@ use crate::buffer::edit_transaction::{
     DeletionString, InsertMarkerAdjustment, InsertMarkerPlacement, InsertTextPlan,
     MeasuredDeleteEdit, MeasuredInsertEdit, MeasuredReplaceEdit, MeasuredSameLenEdit,
     ReplaceTextPlan, SameLenModifiedStatePolicy, SameLenSubstitutionPlan, SharedTextEditMetadata,
-    SharedTextEditOutcome, TranspositionStoragePlan, convert_lisp_string_for_buffer_mode,
+    SharedTextEditOutcome, TranspositionAnchorPolicy, TranspositionStoragePlan,
+    convert_lisp_string_for_buffer_mode,
 };
 #[cfg(test)]
 use crate::buffer::position::EmacsByteLen;
@@ -273,7 +274,11 @@ impl Buffer {
     /// GNU `Ftranspose_regions` core: swap two non-overlapping current-buffer
     /// regions without changing buffer size.  Text movement is byte-based,
     /// while property and marker movement follows GNU's character positions.
-    pub fn transpose_regions(&mut self, transposition: TextTransposition, leave_markers: bool) {
+    pub fn transpose_regions(
+        &mut self,
+        transposition: TextTransposition,
+        anchor_policy: TranspositionAnchorPolicy,
+    ) {
         let first = transposition.first();
         let second = transposition.second();
         let mut region1 = Vec::with_capacity(first.byte_len().get());
@@ -287,7 +292,7 @@ impl Buffer {
             .copy_emacs_byte_range_to(second.byte_range(), &mut region2);
 
         let plan = TranspositionStoragePlan::new(transposition, &region1, &mid, &region2);
-        self.execute_transposition_storage_plan(plan, leave_markers);
+        self.execute_transposition_storage_plan(plan, anchor_policy);
     }
 }
 
@@ -603,16 +608,17 @@ impl BufferManager {
         &mut self,
         id: BufferId,
         transposition: TextTransposition,
-        leave_markers: bool,
+        anchor_policy: TranspositionAnchorPolicy,
     ) -> Option<()> {
         self.execute_shared_text_edit(id, |buffer| {
-            buffer.transpose_regions(transposition, leave_markers);
+            buffer.transpose_regions(transposition, anchor_policy);
             let edit = MeasuredSameLenEdit::covering(transposition.span_edit_range());
             Some(SharedTextEditOutcome::edited(
                 (),
                 SharedTextEditMetadata::Transposition {
                     edit,
                     transposition,
+                    anchor_policy,
                     modified_state: SameLenModifiedStatePolicy::RecordChange,
                 },
             ))

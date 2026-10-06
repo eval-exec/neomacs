@@ -6109,11 +6109,17 @@ impl BufferManager {
         buffer_id: BufferId,
     ) -> Option<()> {
         let markers = self.buffers.get(&buffer_id)?.state_markers?;
-        let pt = self.marker_emacs_byte_pos(buffer_id, markers.pt_marker)?;
-        let begv = self.marker_emacs_byte_pos(buffer_id, markers.begv_marker)?;
-        let zv = self.marker_emacs_byte_pos(buffer_id, markers.zv_marker)?;
+        let pt = self.marker_anchor_position(buffer_id, markers.pt_marker)?;
+        let begv = self.marker_anchor_position(buffer_id, markers.begv_marker)?;
+        let zv = self.marker_anchor_position(buffer_id, markers.zv_marker)?;
         let buffer = self.buffers.get_mut(&buffer_id)?;
-        buffer.set_accessible_region_and_point_from_emacs_bytes(EmacsByteRange::new(begv, zv), pt);
+        // GNU buffer.c:795-802 restores the three paired coordinates
+        // independently. Transposition moves the state markers along with
+        // the text (editfns.c:4500-4523), so saved point can lie outside the
+        // saved accessible region. This is full-text state restoration,
+        // not explicit narrowing or goto-char: neither anchor is clamped.
+        buffer.set_accessible_region_anchors_unchecked(begv, zv);
+        buffer.set_point_anchor_unchecked(pt);
         Some(())
     }
 

@@ -2069,7 +2069,10 @@ fn run_backend_transpose_script(kind: BufferTextBackendKind) -> BackendEditSnaps
         CharRange::from_usize(0, 2),
         CharRange::from_usize(4, 6),
     );
-    buf.transpose_regions(transposition, false);
+    buf.transpose_regions(
+        transposition,
+        crate::buffer::TranspositionAnchorPolicy::FollowText,
+    );
 
     let marker_position = marker_chain_anchor_for_test(&buf, 42);
 
@@ -3999,3 +4002,6 @@ fn buffer_property_overlay_and_symbol_roots_survive_collection_after_edits() {
         assert_eq!(eval.eval_str(r#"(let ((current (current-buffer))) (set-buffer "rooted-indirect") (prog1 (aref (get-text-property 2 'rooted-data) 0) (set-buffer current)))"#).unwrap(), Value::string("property"));
     }
 }
+
+#[cfg(test)]
+mod transpose_anchor_test;
