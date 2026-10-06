@@ -2173,6 +2173,257 @@ fn string_call_retaining_argument(callee: Value, string: Value, item: Value) -> 
     caller
 }
 
+struct VmAliasWritebackFixture {
+    original: Value,
+    replacement: Value,
+    table: Value,
+    vector: Value,
+    cell: Value,
+    binding: Value,
+    symbol: SymId,
+    stack_base: usize,
+}
+
+fn vm_alias_writeback_fixture(eval: &mut Context, test: HashTableTest) -> VmAliasWritebackFixture {
+    eval.setup_thread_locals();
+    let original = Value::string("abc");
+    let replacement = Value::string("xyz");
+    let table = Value::hash_table(test);
+    let cell = Value::cons(original, Value::NIL);
+    cell.set_cdr(cell);
+    let vector = Value::vector(vec![original, cell, table]);
+    table.with_hash_table_mut(|table| {
+        table.insert(original.to_hash_key(&table.test), original, original);
+        table.insert(
+            crate::emacs_core::value::HashKey::Int(2),
+            Value::fixnum(2),
+            vector,
+        );
+    });
+    let symbol = intern("vm-alias-writeback-root");
+    eval.obarray.set_symbol_value_id(symbol, original);
+    let binding = Value::cons(
+        Value::from_sym_id(intern("vm-alias-writeback-lexical")),
+        original,
+    );
+    eval.lexenv = Value::cons(binding, Value::NIL);
+    let stack_base = eval.bc_buf.len();
+    eval.bc_buf.extend([original, table, vector, cell]);
+    // Records are outside the replacement walk but remain ordinary GC roots.
+    // Keep both source strings live across the fixture's completing collection.
+    eval.bc_buf
+        .push(Value::make_record(vec![original, replacement]));
+    VmAliasWritebackFixture {
+        original,
+        replacement,
+        table,
+        vector,
+        cell,
+        binding,
+        symbol,
+        stack_base,
+    }
+}
+
+fn vm_alias_writeback_assert_graph(eval: &Context, fixture: &VmAliasWritebackFixture) {
+    let table = fixture.table.as_hash_table().unwrap();
+    let old_key = fixture.original.to_hash_key(&table.test);
+    let new_key = fixture.replacement.to_hash_key(&table.test);
+    if matches!(table.test, HashTableTest::Eq | HashTableTest::Eql) {
+        assert!(!table.data.contains_key(&old_key));
+        assert_eq!(table.data.get(&new_key), Some(&fixture.replacement));
+        assert_eq!(table.key_snapshot(&new_key), Some(&fixture.replacement));
+    } else {
+        assert_eq!(table.data.get(&old_key), Some(&fixture.replacement));
+        assert!(!table.data.contains_key(&new_key));
+        assert_eq!(table.key_snapshot(&old_key), Some(&fixture.original));
+    }
+    assert_eq!(
+        table.data.get(&crate::emacs_core::value::HashKey::Int(2)),
+        Some(&fixture.vector)
+    );
+    assert_eq!(
+        fixture.vector.as_vector_data().unwrap()[0],
+        fixture.replacement
+    );
+    assert_eq!(fixture.vector.as_vector_data().unwrap()[1], fixture.cell);
+    assert_eq!(fixture.vector.as_vector_data().unwrap()[2], fixture.table);
+    assert_eq!(fixture.cell.cons_car(), fixture.replacement);
+    assert_eq!(fixture.cell.cons_cdr(), fixture.cell);
+    assert_eq!(fixture.binding.cons_cdr(), fixture.replacement);
+    assert_eq!(
+        eval.obarray.symbol_value_id(fixture.symbol),
+        Some(&fixture.replacement)
+    );
+    assert_eq!(eval.bc_buf[fixture.stack_base], fixture.replacement);
+}
+
+#[test]
+fn vm_alias_writeback_inactive_replaces_keys_values_and_cyclic_roots() {
+    for test in [HashTableTest::Eq, HashTableTest::Eql, HashTableTest::Equal] {
+        let mut eval = Context::new_vm_runtime_harness();
+        let fixture = vm_alias_writeback_fixture(&mut eval, test);
+        assert!(!crate::tagged::gc::concurrent_hash_mutation_active());
+        let epoch = fixture.table.as_hash_table().unwrap().data.switch_epoch;
+        new_vm(&mut eval).maybe_writeback_mutating_first_arg(
+            "fillarray",
+            None,
+            &[fixture.original],
+            &fixture.replacement,
+        );
+        vm_alias_writeback_assert_graph(&eval, &fixture);
+        assert_eq!(
+            fixture.table.as_hash_table().unwrap().data.switch_epoch,
+            epoch.wrapping_add(1)
+        );
+        eval.gc_collect_exact();
+        vm_alias_writeback_assert_graph(&eval, &fixture);
+    }
+}
+
+#[test]
+fn vm_alias_writeback_early_rejections_preserve_roots_and_alias_target_still_replaces() {
+    let mut eval = Context::new_vm_runtime_harness();
+    let fixture = vm_alias_writeback_fixture(&mut eval, HashTableTest::Eq);
+    let equal_string = Value::string("abc");
+    let epoch = fixture.table.as_hash_table().unwrap().data.switch_epoch;
+    for (called_name, args, result) in [
+        ("concat", vec![fixture.original], fixture.replacement),
+        ("fillarray", vec![], fixture.replacement),
+        ("fillarray", vec![Value::fixnum(1)], fixture.replacement),
+        ("fillarray", vec![fixture.original], Value::fixnum(1)),
+        ("fillarray", vec![fixture.original], fixture.original),
+        ("fillarray", vec![fixture.original], equal_string),
+    ] {
+        new_vm(&mut eval).maybe_writeback_mutating_first_arg(called_name, None, &args, &result);
+        assert_eq!(eval.bc_buf[fixture.stack_base], fixture.original);
+        assert_eq!(
+            fixture.table.as_hash_table().unwrap().data.switch_epoch,
+            epoch
+        );
+        assert_eq!(fixture.cell.cons_car(), fixture.original);
+    }
+    new_vm(&mut eval).maybe_writeback_mutating_first_arg(
+        "vm-alias-writeback-callee",
+        Some("fillarray"),
+        &[fixture.original],
+        &fixture.replacement,
+    );
+    vm_alias_writeback_assert_graph(&eval, &fixture);
+}
+
+#[test]
+fn vm_alias_writeback_pending_structural_key_hydration_keeps_inactive_extent() {
+    let mut eval = Context::new_vm_runtime_harness();
+    eval.setup_thread_locals();
+    let original = Value::string("abc");
+    let replacement = Value::string("xyz");
+    let table = Value::hash_table(HashTableTest::Equal);
+    let parked_key = crate::emacs_core::value::HashKey::EqualVec(
+        vec![
+            crate::emacs_core::value::HashKey::EqualCons(
+                Box::new(crate::emacs_core::value::HashKey::Text("parked".into())),
+                Box::new(crate::emacs_core::value::HashKey::Nil),
+            ),
+            crate::emacs_core::value::HashKey::BoolVector(Box::new((1, vec![1].into()))),
+            crate::emacs_core::value::HashKey::Window(71),
+            crate::emacs_core::value::HashKey::Frame(72),
+        ]
+        .into(),
+    );
+    table.with_hash_table_mut(|table| {
+        table.set_pending_dump_entries(vec![(parked_key.clone(), original, None)]);
+    });
+    eval.bc_buf
+        .extend([table, Value::make_record(vec![original, replacement])]);
+    let collections = eval.tagged_heap.gc_collections();
+    new_vm(&mut eval).maybe_writeback_mutating_first_arg(
+        "fillarray",
+        None,
+        &[original],
+        &replacement,
+    );
+    assert!(!crate::tagged::gc::concurrent_hash_mutation_active());
+    assert_eq!(eval.tagged_heap.gc_collections(), collections);
+    let hydrated = table.as_hash_table().unwrap();
+    assert!(!hydrated.needs_hydration());
+    assert_eq!(
+        hydrated.data.values().copied().collect::<Vec<_>>(),
+        vec![replacement]
+    );
+    let snapshot = *hydrated.key_snapshots().next().unwrap();
+    let parts = snapshot.as_vector_data().unwrap();
+    assert_eq!(parts[0].cons_car().as_utf8_str(), Some("parked"));
+    assert!(parts[0].cons_cdr().is_nil());
+    assert_eq!(parts[1].as_bool_vector_obj().unwrap().nbits, 1);
+    assert_eq!(parts[2].as_window_id(), Some(71));
+    assert_eq!(parts[3].as_frame_id(), Some(72));
+    eval.gc_collect_exact();
+    let hydrated = table.as_hash_table().unwrap();
+    assert_eq!(
+        hydrated.data.values().copied().collect::<Vec<_>>(),
+        vec![replacement]
+    );
+    assert_eq!(*hydrated.key_snapshots().next().unwrap(), snapshot);
+}
+
+#[test]
+fn vm_alias_writeback_concurrent_context_cycle_keeps_guarded_graph_live() {
+    let mut eval = Context::new_vm_runtime_harness();
+    let fixture = vm_alias_writeback_fixture(&mut eval, HashTableTest::Eq);
+    // This fixture exercises the actual automatic concurrent handshake even
+    // when the surrounding suite requests synchronous GC stress elsewhere.
+    eval.gc_stress = false;
+    eval.gc_collect_exact();
+    eval.set_gc_threshold(usize::MAX);
+    // GEN1 can choose minors first. Let the real driver finish them until its
+    // normal major policy starts a concurrent cycle; never seed only the table.
+    for _ in 0..4096 {
+        eval.gc_pending = true;
+        eval.gc_safe_point_exact();
+        if eval.tagged_heap.concurrent_mark_running() {
+            break;
+        }
+    }
+    assert!(eval.tagged_heap.concurrent_mark_running());
+    let tier_h_active = crate::tagged::gc::concurrent_hash_mutation_active();
+    let expected_active = matches!(
+        std::env::var("NEOVM_GC_CONCURRENT_CLAIMS").ok().as_deref(),
+        Some("1" | "on" | "true" | "yes")
+    );
+    assert_eq!(tier_h_active, expected_active);
+    let snapshot = tier_h_active.then(|| {
+        crate::tagged::gc::concurrent_hash_snapshot(fixture.table)
+            .expect("the real enabled cycle captured this hydrated strong table")
+    });
+    let epoch = fixture.table.as_hash_table().unwrap().data.switch_epoch;
+    new_vm(&mut eval).maybe_writeback_mutating_first_arg(
+        "fillarray",
+        None,
+        &[fixture.original],
+        &fixture.replacement,
+    );
+    vm_alias_writeback_assert_graph(&eval, &fixture);
+    assert_eq!(
+        fixture.table.as_hash_table().unwrap().data.switch_epoch,
+        epoch.wrapping_add(1)
+    );
+    if let Some(snapshot) = snapshot {
+        let guard = snapshot
+            .lock_mutation(fixture.table.as_veclike_ptr().unwrap() as usize)
+            .unwrap();
+        assert!(
+            !guard.claim_dirty(),
+            "the active alias clone already admitted the current-child retrace"
+        );
+        drop(guard);
+        assert!(!snapshot.is_poisoned());
+    }
+    eval.gc_collect_exact();
+    assert!(!crate::tagged::gc::concurrent_hash_mutation_active());
+    vm_alias_writeback_assert_graph(&eval, &fixture);
+}
+
 #[test]
 fn vm_named_fillarray_keeps_existing_writeback_after_builtin_redefinition() {
     crate::test_utils::init_test_tracing();
