@@ -391,7 +391,12 @@ pub(crate) fn builtin_apply_slice(eval: &mut super::eval::Context, args: &[Value
     }
 
     let last = args[args.len() - 1];
-    let mut call_args = LispArgVec::new();
+    let spread_len = proper_list_length_or_signal(last)?;
+    // GNU Fapply knows this count before copying (eval.c:2818-2828).
+    // SmallVec keeps up to eight arguments inline and allocates once for
+    // longer spreads, using the validation pass instead of reallocating.
+    let call_len = spread_len.saturating_add(args.len()).saturating_sub(2);
+    let mut call_args = LispArgVec::with_capacity(call_len);
 
     if args.len() == 1 {
         let mut cursor = last;

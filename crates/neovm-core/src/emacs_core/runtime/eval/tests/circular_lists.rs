@@ -74,12 +74,34 @@ fn circular_lists_concat_matches_gnu() {
 }
 
 #[test]
+fn circular_lists_apply_matches_gnu() {
+    let form = include_str!("circular_lists_cases/apply.el");
+    let expected = gnu_fixture(
+        "apply",
+        form,
+        include_str!("circular_lists_cases/apply.expect"),
+    );
+    assert_eq!(runtime_startup_eval_one(form), expected);
+}
+
+#[test]
 fn circular_lists_cycle_tails_matches_gnu() {
     let form = include_str!("circular_lists_cases/cycle_tails.el");
     let expected = gnu_fixture(
         "cycle_tails",
         form,
         include_str!("circular_lists_cases/cycle_tails.expect"),
+    );
+    assert_eq!(runtime_startup_eval_one(form), expected);
+}
+
+#[test]
+fn circular_lists_compiled_matches_gnu() {
+    let form = include_str!("circular_lists_cases/compiled.el");
+    let expected = gnu_fixture(
+        "compiled",
+        form,
+        include_str!("circular_lists_cases/compiled.expect"),
     );
     assert_eq!(runtime_startup_eval_one(form), expected);
 }
