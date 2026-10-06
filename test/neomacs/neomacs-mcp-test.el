@@ -495,9 +495,9 @@ receive no response."
         (delete-process client)))))
 
 (ert-deftest neomacs-mcp-test-unsendable-response-is-error-reply ()
-  ;; Control characters are escaped twice: 30000 of them print to about
-  ;; 30 KB but encode to well over the 128 KiB response limit.  A raw
-  ;; byte, as in undecodable process output, cannot be encoded at all.
+  ;; ESC prints raw but JSON-escapes to 6 bytes: 30000 of them print to
+  ;; about 30 KB but encode to about 180 KB, over the response limit.  A
+  ;; raw byte, as in undecodable process output, cannot be encoded at all.
   (neomacs-mcp-test--with-root
     (let* ((socket (expand-file-name "mcp" root))
            (output (list ""))
@@ -535,6 +535,117 @@ receive no response."
                                                                  (gethash "result" (car next)))
                                                         0))))))
         (delete-process client)))))
+
+(defun neomacs-mcp-test--raw-replies (process output line barrier)
+  "Send LINE to PROCESS, then after its first reply a ping with ID BARRIER.
+Return every reply line in OUTPUT up to and including the ping's reply,
+without newlines, or nil if that reply does not arrive.  Requests run
+in order, so the lines before the last are the replies to LINE.  The
+ping is sent separately because LINE alone may fill the input limit.
+Clear OUTPUT afterwards."
+  (let ((ping (neomacs-mcp--object "jsonrpc" "2.0" "id" barrier "method" "ping"))
+        (done (concat "\"id\":" (json-serialize barrier)))
+        (deadline (+ (float-time) 10)))
+    (process-send-string process line)
+    (while (and (not (string-search "\n" (car output)))
+                (process-live-p process)
+                (< (float-time) deadline))
+      (accept-process-output nil 0.05))
+    (when (string-search "\n" (car output))
+      (process-send-string process (concat (json-serialize ping) "\n"))
+      (while (and (not (and (string-search done (car output))
+                            (string-suffix-p "\n" (car output))))
+                  (process-live-p process)
+                  (< (float-time) deadline))
+        (accept-process-output nil 0.05)))
+    (prog1 (and (string-search done (car output))
+                (string-suffix-p "\n" (car output))
+                (split-string (car output) "\n" t))
+      (setcar output ""))))
+
+(ert-deftest neomacs-mcp-test-near-limit-id-reply-stays-bounded ()
+  ;; A request just under the input limit whose ID alone is near that
+  ;; limit must not produce a reply over the output limit.  The ID is
+  ;; not echoed, and the connection stays usable.
+  (neomacs-mcp-test--with-root
+    (let* ((socket (expand-file-name "mcp" root))
+           (output (list ""))
+           client)
+      (neomacs-mcp-start socket)
+      (setq client (make-network-process
+                    :name "neomacs-mcp-test-client" :family 'local :service socket
+                    :coding 'utf-8 :noquery t
+                    :filter (lambda (_ chunk) (setcar output (concat (car output) chunk)))))
+      (unwind-protect
+          (progn
+            (neomacs-mcp-test--exchange
+             client output
+             (list (neomacs-mcp--object
+                    "jsonrpc" "2.0" "id" 1 "method" "initialize" "params"
+                    (neomacs-mcp--object "protocolVersion" "2025-06-18"
+                                         "capabilities" (neomacs-mcp--object)
+                                         "clientInfo" (neomacs-mcp--object
+                                                       "name" "test" "version" "1")))
+                   (neomacs-mcp--object "jsonrpc" "2.0"
+                                        "method" "notifications/initialized")))
+            (let ((barrier 0))
+              (dolist (id (list (make-string 131000 ?x)
+                                (json-parse-string (make-string 131000 ?9))))
+                ;; A valid request, and one rejected as invalid (no method).
+                (dolist (message (list (neomacs-mcp--object
+                                        "jsonrpc" "2.0" "id" id "method" "tools/list")
+                                       (neomacs-mcp--object "jsonrpc" "2.0" "id" id)))
+                  (let* ((line (concat (json-serialize message) "\n"))
+                         (lines (progn
+                                  (should (<= (string-bytes line) neomacs-mcp--frame-limit))
+                                  (neomacs-mcp-test--raw-replies
+                                   client output line
+                                   (format "barrier-%d" (cl-incf barrier)))))
+                         (raw (car lines))
+                         (reply (and raw (json-parse-string raw :null-object :null))))
+                    ;; Exactly one reply, then the barrier's.
+                    (should (= 2 (length lines)))
+                    (should (<= (1+ (string-bytes raw)) neomacs-mcp--output-limit))
+                    (should (eq :null (gethash "id" reply)))
+                    (should (= -32600 (gethash "code" (gethash "error" reply))))))))
+            (let ((next (neomacs-mcp-test--exchange
+                         client output
+                         (list (neomacs-mcp--object
+                                "jsonrpc" "2.0" "id" 2 "method" "tools/list")))))
+              (should (= 1 (length next)))
+              (should (equal 2 (gethash "id" (car next))))
+              (should (gethash "tools" (gethash "result" (car next))))))
+        (delete-process client)))))
+
+(ert-deftest neomacs-mcp-test-id-limit-boundary ()
+  ;; The quotes count: a 1022-character string ID encodes to 1024 bytes.
+  (should (neomacs-mcp--id-fits-p (make-string 1022 ?x)))
+  (should-not (neomacs-mcp--id-fits-p (make-string 1023 ?x)))
+  (should (neomacs-mcp--id-fits-p (json-parse-string (make-string 1024 ?9))))
+  (should-not (neomacs-mcp--id-fits-p (json-parse-string (make-string 1025 ?9)))))
+
+(ert-deftest neomacs-mcp-test-wire-never-exceeds-the-output-limit ()
+  ;; Admission bounds IDs, but the encoder must hold the limit on its
+  ;; own: an oversized or unencodable response with an oversized ID
+  ;; still yields one bounded error line.
+  (let ((id (make-string neomacs-mcp--output-limit ?x)))
+    (dolist (result (list (make-string neomacs-mcp--output-limit ?y)
+                          (string ?a (unibyte-char-to-multibyte 200))))
+      (let* ((wire (neomacs-mcp--wire
+                    (neomacs-mcp--object "jsonrpc" "2.0" "id" id "result" result)))
+             (reply (json-parse-string wire :null-object :null)))
+        (should (<= (string-bytes wire) neomacs-mcp--output-limit))
+        (should (string-suffix-p "\n" wire))
+        (should (eq :null (gethash "id" reply)))
+        (should (= -32603 (gethash "code" (gethash "error" reply))))))
+    ;; A short ID is still echoed in the replacement error.
+    (let ((reply (json-parse-string
+                  (neomacs-mcp--wire
+                   (neomacs-mcp--object
+                    "jsonrpc" "2.0" "id" 7
+                    "result" (make-string neomacs-mcp--output-limit ?y))))))
+      (should (equal 7 (gethash "id" reply)))
+      (should (= -32603 (gethash "code" (gethash "error" reply)))))))
 
 (ert-deftest neomacs-mcp-test-relay-round-trip ()
   (let ((relay (getenv "NEOMACS_MCP_RELAY")))

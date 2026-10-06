@@ -12,17 +12,18 @@ use std::time::{Duration, Instant};
 const TIMEOUT_MS: &str = "300";
 
 struct Fixture {
-    dir: PathBuf,
+    dir: tempfile::TempDir,
     socket: PathBuf,
     listener: UnixListener,
 }
 
 impl Fixture {
     fn new(name: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!("neomacs-mcp-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let socket = dir.join("mcp");
+        let dir = tempfile::Builder::new()
+            .prefix(&format!("mcp-{name}-"))
+            .tempdir()
+            .unwrap();
+        let socket = dir.path().join("mcp");
         let listener = UnixListener::bind(&socket).unwrap();
         Self {
             dir,
@@ -37,12 +38,6 @@ impl Fixture {
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
         stream
-    }
-}
-
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
 
@@ -198,7 +193,7 @@ fn unread_socket_write_is_bounded() {
 #[test]
 fn missing_socket_fails_without_fallback() {
     let fixture = Fixture::new("missing");
-    let mut child = relay(&fixture.dir.join("absent"));
+    let mut child = relay(&fixture.dir.path().join("absent"));
     let status = wait(&mut child, Duration::from_secs(5));
     assert_eq!(status.code(), Some(1));
     assert!(stderr(&mut child).contains("connect"));

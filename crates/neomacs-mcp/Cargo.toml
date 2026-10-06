@@ -11,5 +11,8 @@ description = "Stdio relay from MCP clients to the editor's local MCP socket"
 name = "neomacs-mcp"
 path = "src/main.rs"
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true

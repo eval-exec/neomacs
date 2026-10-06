@@ -68,8 +68,14 @@ metadata.  Tools registered by other libraries are not affected."
   :type 'number
   :group 'neomacs-mcp)
 
-(defconst neomacs-mcp--frame-limit 131072)
-(defconst neomacs-mcp--output-limit 131072)
+(defconst neomacs-mcp--frame-limit 131072
+  "Maximum bytes of buffered input per connection.
+This counts any incomplete message plus newly received data.")
+(defconst neomacs-mcp--output-limit 131072
+  "Maximum bytes of one response line, including its newline.")
+(defconst neomacs-mcp--id-limit 1024
+  "Maximum bytes of a JSON-encoded request ID.
+Replies echo the ID, so bounding it keeps every error reply bounded.")
 (defconst neomacs-mcp--queue-limit 64)
 (defconst neomacs-mcp--peer-queue-limit 16)
 (defconst neomacs-mcp--peer-limit 8)
@@ -492,23 +498,32 @@ refuse unless it equals the buffer's modification tick."
   "Close PEER once its connection is gone."
   (unless (process-live-p peer) (neomacs-mcp--close peer)))
 
+(defun neomacs-mcp--encode (response)
+  "Return RESPONSE encoded as JSON, or nil if it cannot be encoded."
+  (condition-case nil
+      (json-serialize response :false-object :false :null-object :null)
+    (error nil)))
+
 (defun neomacs-mcp--wire (response)
-  "Return RESPONSE as one line of JSON.
+  "Return RESPONSE as one line of JSON within `neomacs-mcp--output-limit'.
 If RESPONSE cannot be encoded, for example because it contains raw
-bytes, or exceeds the output limit, return an error for its ID instead."
-  (let* ((json (condition-case nil
-                   (json-serialize response :false-object :false :null-object :null)
-                 (error nil)))
+bytes, or exceeds the limit, return a fixed-size error for its ID
+instead, or for a null ID if even that error would not fit."
+  (let* ((json (neomacs-mcp--encode response))
          (message (cond ((null json) "Response cannot be encoded as JSON")
                         ((>= (string-bytes json) neomacs-mcp--output-limit)
                          "Response exceeds the output limit"))))
-    (concat (if message
-                (json-serialize
-                 (neomacs-mcp--object
-                  "jsonrpc" "2.0" "id" (gethash "id" response :null)
-                  "error" (neomacs-mcp--object "code" -32603 "message" message)))
-              json)
-            "\n")))
+    (when message
+      (setq json (neomacs-mcp--encode
+                  (neomacs-mcp--object
+                   "jsonrpc" "2.0" "id" (gethash "id" response :null)
+                   "error" (neomacs-mcp--object "code" -32603 "message" message))))
+      (unless (and json (< (string-bytes json) neomacs-mcp--output-limit))
+        (setq json (json-serialize
+                    (neomacs-mcp--object
+                     "jsonrpc" "2.0" "id" :null
+                     "error" (neomacs-mcp--object "code" -32603 "message" message))))))
+    (concat json "\n")))
 
 (defun neomacs-mcp--send (request response)
   "Send RESPONSE to the client of REQUEST unless it was abandoned.
@@ -606,6 +621,10 @@ Before that, drop at most `neomacs-mcp--scan-limit' abandoned requests."
                (equal id (gethash "id" (plist-get request :message) :absent)))
       (setf (plist-get request :cancelled) t))))
 
+(defun neomacs-mcp--id-fits-p (id)
+  "Return non-nil if request ID encodes within `neomacs-mcp--id-limit' bytes."
+  (<= (string-bytes (json-serialize id)) neomacs-mcp--id-limit))
+
 (defun neomacs-mcp--frame (peer line)
   "Parse LINE from PEER, then queue it or record a cancellation."
   (condition-case nil
@@ -624,8 +643,12 @@ Before that, drop at most `neomacs-mcp--scan-limit' abandoned requests."
                     (stringp method) (hash-table-p params)
                     (or (eq id :absent) (stringp id) (integerp id))))
           (neomacs-mcp--enqueue
-           peer (and (or (stringp id) (integerp id)) (neomacs-mcp--object "id" id))
+           peer (and (or (stringp id) (integerp id)) (neomacs-mcp--id-fits-p id)
+                     (neomacs-mcp--object "id" id))
            '(-32600 "Invalid request")))
+         ((and (not (eq id :absent)) (not (neomacs-mcp--id-fits-p id)))
+          ;; Over-long IDs are not echoed: reply once with a null ID.
+          (neomacs-mcp--enqueue peer nil '(-32600 "Request ID is too long")))
          ((and (eq id :absent) (equal method "notifications/cancelled"))
           (neomacs-mcp--cancel peer (gethash "requestId" params :absent)))
          ((and (eq id :absent) (not (equal method "notifications/initialized")))

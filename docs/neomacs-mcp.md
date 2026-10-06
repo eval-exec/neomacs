@@ -89,7 +89,8 @@ To turn it off:
 ```
 
 When `neomacs-mcp-full-access` is nil, `neomacs_eval` is neither listed nor
-callable; the remaining built-in tools only read buffers.  The option is
+callable: a call to it gets error `-32602` (Unknown tool).  The remaining
+built-in tools only read buffers.  The option is
 checked on every request, so changing it affects connected clients
 immediately.  Tools registered by other packages are not affected.
 
@@ -148,12 +149,16 @@ Continuous input can therefore delay requests indefinitely.  A tool runs
 synchronously in the editor's command loop: long-running Lisp blocks the
 editor just as it would from `M-:`.
 
-Limits: 8 connections, 64 queued requests (16 per connection), 128 KiB per
-incoming message and per response.  A response over the limit, or one that
-cannot be encoded as JSON (for example text containing raw bytes), is
-replaced by error `-32603`.  Exceeding any other limit, or reusing an
-outstanding request ID, closes that connection.  A response send that does
-not complete within `neomacs-mcp-send-timeout` seconds closes the connection.
+Limits: 8 connections, 64 queued requests (16 per connection), 128 KiB of
+buffered input per connection (any incomplete message plus newly received
+data) and 128 KiB per response line.  A request ID longer than 1024 bytes when
+encoded as JSON is not echoed: the request gets one `-32600` error with a null
+ID.  A response over the limit, or one that cannot be encoded as JSON (for
+example text containing raw bytes), is replaced by a fixed-size `-32603` error
+for the same request; the connection stays open.  Exceeding any other limit,
+or reusing an outstanding request ID, closes that connection.  A response send
+that does not complete within `neomacs-mcp-send-timeout` seconds closes the
+connection.
 
 ## Adding tools
 
