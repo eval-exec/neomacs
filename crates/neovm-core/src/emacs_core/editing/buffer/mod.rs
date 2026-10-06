@@ -1968,13 +1968,22 @@ pub(crate) fn builtin_replace_region_contents(
     if comparison_disabled || a_codes.is_empty() || b_codes.is_empty() {
         let replacement = buffer_insert_piece_from_string(source_value, target_multibyte)?
             .into_replacement_text();
-        let new_extent = super::editfns::lisp_string_text_extent(&replacement);
-        let change = TextChange::new(old_range, new_extent);
-        super::editfns::signal_before_text_change(eval, change)?;
-        eval.buffers
-            .replace_buffer_measured_region_lisp_string(current_id, old_range, &replacement)
-            .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?;
-        super::editfns::signal_after_text_change(eval, change)?;
+        // GNU `replace_range (min_a, min_a + size_a, source, true, ...)`
+        // (editfns.c:2044): the range is re-measured after the callbacks.
+        let pending = super::editfns::PendingTextEdit::new(
+            old_range,
+            super::editfns::RemeasureRule::ReplaceRange,
+        );
+        if let Some(prepared) = pending.prepare(eval)? {
+            let new_extent = prepared
+                .lease(&mut eval.buffers)
+                .and_then(|lease| lease.replace(&replacement))
+                .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?;
+            super::editfns::signal_after_text_change(
+                eval,
+                TextChange::new(prepared.range(), new_extent),
+            )?;
+        }
         eval.restore_specpdl_roots(source_root_scope);
         return Ok(Value::T);
     }
@@ -2014,13 +2023,34 @@ pub(crate) fn builtin_replace_region_contents(
     let change = TextChange::new(old_range, new_extent);
     super::editfns::signal_before_text_change(eval, change)?;
 
-    let region_start = byte_range.start().get();
-    // Apply the change runs back-to-front so that earlier byte positions stay
+    // GNU computes every run as `min_a + i` in characters before the
+    // callbacks ran, and `replace_range` clamps each one to BEGV..ZV of the
+    // live buffer (editfns.c:2165-2183, insdel.c:1509-1513). Measuring the
+    // runs in the live text keeps a callback's edit from leaving them past
+    // the text or inside a multibyte sequence.
+    let region_start = old_range.char_start();
+    // Apply the change runs back-to-front so that earlier positions stay
     // valid as we edit (mirrors GNU walking the change lists backwards).
     for run in runs.iter().rev() {
-        let del_start = EmacsBytePos::new(region_start + a_decoded[run.a_start].1);
-        let del_end = EmacsBytePos::new(region_start + a_decoded[run.a_end].1);
-        let del_range = EmacsByteRange::new(del_start, del_end);
+        let Some((target, del_range)) = eval.buffers.current_buffer().map(|buf| {
+            let begv = buf.point_min_char_pos();
+            let zv = buf.point_max_char_pos();
+            let total = buf.total_char_end_pos();
+            let from = region_start
+                .add_len(CharLen::new(run.a_start))
+                .max(begv)
+                .min(total);
+            let to = region_start
+                .add_len(CharLen::new(run.a_end))
+                .min(zv)
+                .clamp(from, total.max(from));
+            (
+                buf.id,
+                buf.edit_range_for_char_range(CharRange::new(from, to)),
+            )
+        }) else {
+            break;
+        };
 
         // Replacement text for this run: characters [b_start, b_end) of the
         // source, sliced from the original SOURCE value so text properties are
@@ -2037,11 +2067,17 @@ pub(crate) fn builtin_replace_region_contents(
         let replacement =
             buffer_insert_piece_from_string(replacement, target_multibyte)?.into_replacement_text();
         eval.buffers
-            .replace_buffer_emacs_byte_range_lisp_string(current_id, del_range, &replacement)
+            .replace_buffer_measured_region_lisp_string(target, del_range, &replacement)
             .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?;
     }
 
-    super::editfns::signal_after_text_change(eval, change)?;
+    // GNU `signal_after_change (min_a, size_a, size_b)` (editfns.c:2189).
+    super::editfns::signal_after_change_chars(
+        eval,
+        region_start,
+        old_range.char_len(),
+        new_extent.chars(),
+    )?;
 
     eval.restore_specpdl_roots(source_root_scope);
     Ok(Value::T)

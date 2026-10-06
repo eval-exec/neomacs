@@ -3520,11 +3520,42 @@ pub(crate) fn builtin_transpose_regions(
         current_id,
         changed_byte_span,
     )?;
+    let measured_at = crate::buffer::TextMeasurement::of(&eval.buffers, current_id);
     crate::emacs_core::editfns::signal_before_text_change(eval, change)?;
+    // GNU `Ftranspose_regions` runs `modify_text (start1, end2)` and then
+    // keeps using the positions it computed before (editfns.c), which reads
+    // stale bytes once a before-change function edited the buffer. Measure
+    // the same character positions in the live buffer instead, and reject
+    // them as `validate_region` would when they no longer fit.
+    let Some(target) = eval.buffers.current_buffer_id() else {
+        return Ok(Value::NIL);
+    };
+    let (transposition, change) =
+        if crate::buffer::TextMeasurement::of(&eval.buffers, target) == measured_at {
+            (transposition, change)
+        } else {
+            let Some(buf) = eval.buffers.get(target) else {
+                return Ok(Value::NIL);
+            };
+            if first.start() < buf.point_min_char_pos() || second.end() > buf.point_max_char_pos() {
+                return Err(signal(
+                    LispCondition::ArgsOutOfRange,
+                    vec![
+                        Value::fixnum(first.start().to_lisp().as_i64()),
+                        Value::fixnum(second.end().to_lisp().as_i64()),
+                    ],
+                ));
+            }
+            let transposition = buf.text_transposition_for_char_ranges(first, second);
+            let change = crate::buffer::TextChange::unchanged_extent(
+                buf.edit_range_for_char_range(transposition.char_span()),
+            );
+            (transposition, change)
+        };
     let leave_markers = args.get(4).is_some_and(|value| !value.is_nil());
     let _ = eval
         .buffers
-        .transpose_buffer_regions(current_id, transposition, leave_markers.into());
+        .transpose_buffer_regions(target, transposition, leave_markers.into());
     crate::emacs_core::editfns::signal_after_text_change(eval, change)?;
     Ok(Value::NIL)
 }

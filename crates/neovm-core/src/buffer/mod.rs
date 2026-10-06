@@ -25,6 +25,7 @@ pub use buffer::{
 };
 pub(crate) use buffer_text::BufferText;
 pub use edit_transaction::TranspositionAnchorPolicy;
+pub(crate) use edit_transaction::{PreparedBufferEdit, TextMeasurement};
 pub use overlay::{Overlay, OverlayList};
 pub(crate) use position::BufferLispPos;
 pub use position::{

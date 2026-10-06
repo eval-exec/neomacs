@@ -3404,6 +3404,70 @@ pub(crate) fn builtin_replace_match_with_state_and_flags(
     Ok(Value::NIL)
 }
 
+/// A register pair through GNU `update_search_regs` (search.c:3115-3145) for
+/// a replacement of `[old_start, old_end)` that now ends at `new_end`.
+/// Starts at or before the replaced start stay put, ends at or after the
+/// replaced end shift by the length change, and positions inside collapse
+/// to the replaced start.
+fn gnu_update_search_regs(
+    group: MatchGroup,
+    old_start: i64,
+    old_end: i64,
+    new_end: i64,
+) -> MatchGroup {
+    let change = new_end - old_end;
+    let start = group.start() as i64;
+    let start = if start <= old_start {
+        start
+    } else if start >= old_end {
+        start + change
+    } else {
+        old_start
+    };
+    let end = group.end() as i64;
+    let end = if end >= old_end {
+        end + change
+    } else if end > old_start {
+        old_start
+    } else {
+        end
+    };
+    MatchGroup::new(
+        usize::try_from(start).unwrap_or(0),
+        usize::try_from(end).unwrap_or(0),
+    )
+}
+
+/// Move the registers onto the range a buffer `replace-match` replaces once
+/// its before-change callbacks edited the buffer.
+///
+/// GNU keeps SUB_START in a marker across the callbacks and replaces from
+/// there (`replace_range`'s PRESERVE_PTR), so the registers follow the same
+/// shift; every register is also kept inside the live accessible region,
+/// where the stale numbers could otherwise point past the text.
+fn rebase_match_data_onto_prepared_range(
+    eval: &mut super::eval::Context,
+    measured: crate::buffer::TextEditRange,
+    prepared: crate::buffer::TextEditRange,
+) {
+    let Some((begv, zv)) = eval.buffers.current_buffer().map(|buf| {
+        (
+            buf.point_min_lisp_char_pos().to_one_based_usize(),
+            buf.point_max_lisp_char_pos().to_one_based_usize(),
+        )
+    }) else {
+        return;
+    };
+    let delta = prepared.char_start().get() as i64 - measured.char_start().get() as i64;
+    if let Some(md) = eval.match_data.as_mut() {
+        md.map_lisp_positions(|group| {
+            let group = group.translate_saturating(delta);
+            let start = group.start().clamp(begv, zv);
+            MatchGroup::new(start, group.end().clamp(start, zv))
+        });
+    }
+}
+
 pub(crate) fn builtin_replace_match(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
@@ -3496,7 +3560,34 @@ pub(crate) fn builtin_replace_match(
                     &replacement,
                 )?
             };
-            super::editfns::signal_before_text_change(eval, change)?;
+            // GNU `replace_range (sub_start, sub_end, ..., true, ...)`
+            // (search.c Freplace_match): the before-change callbacks run
+            // first and may edit the buffer; the replaced range is then
+            // re-measured from the preserved start (insdel.c:1502-1513).
+            let measured_at = eval
+                .buffers
+                .current_buffer_id()
+                .and_then(|id| crate::buffer::TextMeasurement::of(&eval.buffers, id));
+            let pending = super::editfns::PendingTextEdit::new(
+                change.old_range(),
+                super::editfns::RemeasureRule::ReplaceRange,
+            );
+            let Some(prepared) = pending.prepare(eval)? else {
+                return Ok(Value::NIL);
+            };
+            let live = eval
+                .buffers
+                .current_buffer_id()
+                .and_then(|id| crate::buffer::TextMeasurement::of(&eval.buffers, id));
+            let rebased = live != measured_at;
+            let measured = change.old_range();
+            let registers_before_rebase = rebased.then(|| eval.match_data.clone()).flatten();
+            let change = if rebased {
+                rebase_match_data_onto_prepared_range(eval, measured, prepared.range());
+                crate::buffer::TextChange::new(prepared.range(), change.new_extent())
+            } else {
+                change
+            };
             let result = builtin_replace_match_with_state_and_flags(
                 &eval.obarray,
                 &mut eval.buffers,
@@ -3504,6 +3595,30 @@ pub(crate) fn builtin_replace_match(
                 &args,
                 case_symbols_as_words,
             )?;
+            if let Some(mut registers) = registers_before_rebase {
+                // GNU never moves the registers for the callbacks' edits; it
+                // only runs `update_search_regs (from, to, from + SCHARS (new))`
+                // for the range it replaced (insdel.c replace_range).
+                let from = prepared.range().char_start().to_lisp().as_i64();
+                let to = prepared.range().char_end().to_lisp().as_i64();
+                let new_end = from + change.new_extent().chars().get() as i64;
+                registers
+                    .map_lisp_positions(|group| gnu_update_search_regs(group, from, to, new_end));
+                eval.match_data = Some(registers);
+            }
+            if rebased {
+                // GNU computes `newpoint = sub_start + SCHARS (newtext)` from
+                // the start it read BEFORE the callbacks and moves point there
+                // (search.c Freplace_match), however the callbacks moved the text.
+                let newpoint = measured.char_start().add_len(change.new_extent().chars());
+                if let Some((id, byte_pos)) = eval.buffers.current_buffer().map(|buf| {
+                    let accessible = buf.point_min_char_pos()..=buf.point_max_char_pos();
+                    let newpoint = newpoint.clamp(*accessible.start(), *accessible.end());
+                    (buf.id, buf.char_pos_to_emacs_byte_pos_clamped(newpoint))
+                }) {
+                    let _ = eval.buffers.goto_buffer_emacs_byte_pos(id, byte_pos);
+                }
+            }
             super::editfns::signal_after_text_change(eval, change)?;
             return Ok(result);
         }

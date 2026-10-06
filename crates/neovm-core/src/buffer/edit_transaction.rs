@@ -29,6 +29,31 @@ const _: () = assert!(
     std::mem::size_of::<Result<(), BufferEditError>>() == std::mem::size_of::<Option<()>>()
 );
 
+/// The text state a range was measured in: its buffer and that buffer's
+/// character-modification tick. A range measured at a tick stays coherent
+/// for as long as the tick is unchanged. Plain data; it grants nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TextMeasurement {
+    buffer: BufferId,
+    chars_tick: i64,
+}
+
+impl TextMeasurement {
+    /// The current text state of BUFFER, or None for a dead buffer.
+    #[inline]
+    pub(crate) fn of(buffers: &BufferManager, buffer: BufferId) -> Option<Self> {
+        buffers.get(buffer).map(|live| Self {
+            buffer,
+            chars_tick: live.chars_modified_tick(),
+        })
+    }
+
+    #[inline]
+    pub(crate) fn buffer(self) -> BufferId {
+        self.buffer
+    }
+}
+
 /// A measured physical buffer range leased to one mutator until mutation.
 ///
 /// Construction validates character bounds against the live buffer text and
@@ -82,6 +107,32 @@ impl<'a> PreparedBufferEdit<'a> {
         })
     }
 
+    /// Lease a range measured while the buffer's text had `measured_at`.
+    /// Unchanged text keeps a measured character/byte pair coherent, so it is
+    /// reused without a text walk; changed text is measured again from the
+    /// range's characters, with the same validation as [`Self::new`].
+    #[inline]
+    pub(in crate::buffer) fn measured(
+        buffers: &'a mut BufferManager,
+        buffer: BufferId,
+        range: TextEditRange,
+        measured_at: TextMeasurement,
+    ) -> Option<Self> {
+        let live = buffers.get(buffer)?;
+        if measured_at.buffer != buffer || measured_at.chars_tick != live.chars_modified_tick() {
+            return Self::new(buffers, buffer, range.char_range());
+        }
+        if range.char_end() > live.total_char_end_pos() {
+            return None;
+        }
+        Some(Self {
+            buffers,
+            buffer,
+            range,
+            _mutator: std::marker::PhantomData,
+        })
+    }
+
     /// Read-only measured geometry for notifications; this value alone
     /// cannot authorize mutation outside the buffer implementation.
     #[inline]
@@ -89,7 +140,7 @@ impl<'a> PreparedBufferEdit<'a> {
         self.range
     }
 
-    #[inline]
+    #[cfg(test)]
     pub(crate) fn buffer_id(&self) -> BufferId {
         self.buffer
     }

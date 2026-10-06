@@ -7,13 +7,10 @@
 use crate::emacs_core::error::LispCondition;
 use std::io::Read;
 
-use super::editfns::{
-    buffer_read_only_active_in_state, signal_after_text_change, signal_before_text_change,
-    text_change_for_lisp_string_replacement_in_manager,
-};
+use super::editfns::buffer_read_only_active_in_state;
 use super::error::{EvalResult, signal};
 use super::fns::{
-    read_buffer_region_bytes_in_manager, replace_buffer_region_lisp_string_in_manager,
+    read_buffer_region_bytes_in_manager, replace_buffer_emacs_byte_range_lisp_string,
 };
 use super::value::*;
 use crate::heap_types::LispString;
@@ -81,38 +78,16 @@ pub(crate) fn builtin_zlib_decompress_region(
     match decompressed {
         Some((data, 0)) => {
             let replacement = data.into_unibyte_string();
-            let change = text_change_for_lisp_string_replacement_in_manager(
-                &ctx.buffers,
-                buffer_id,
-                byte_range,
-                &replacement,
-            )?;
-            signal_before_text_change(ctx, change)?;
-            replace_buffer_region_lisp_string_in_manager(
-                &mut ctx.buffers,
-                buffer_id,
-                change.old_range(),
-                &replacement,
-            )?;
-            signal_after_text_change(ctx, change)?;
+            // The modification callbacks may edit the buffer; the helper
+            // replaces the range they leave, re-measured after them.
+            replace_buffer_emacs_byte_range_lisp_string(ctx, buffer_id, byte_range, &replacement)?;
             Ok(Value::T)
         }
         Some((data, remaining)) if allow_partial => {
             let replacement = data.into_unibyte_string();
-            let change = text_change_for_lisp_string_replacement_in_manager(
-                &ctx.buffers,
-                buffer_id,
-                byte_range,
-                &replacement,
-            )?;
-            signal_before_text_change(ctx, change)?;
-            replace_buffer_region_lisp_string_in_manager(
-                &mut ctx.buffers,
-                buffer_id,
-                change.old_range(),
-                &replacement,
-            )?;
-            signal_after_text_change(ctx, change)?;
+            // The modification callbacks may edit the buffer; the helper
+            // replaces the range they leave, re-measured after them.
+            replace_buffer_emacs_byte_range_lisp_string(ctx, buffer_id, byte_range, &replacement)?;
             Ok(Value::fixnum(remaining as i64))
         }
         Some(_) => unreachable!("non-partial successful decompression handled above"),

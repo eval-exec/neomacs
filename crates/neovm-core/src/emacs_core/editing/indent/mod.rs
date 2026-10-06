@@ -2696,6 +2696,42 @@ pub(crate) fn display_column_at_emacs_byte_pos(
     Ok(scan.column)
 }
 
+/// The character after point as a deletion range, clamped like
+/// `del_range_1` to the accessible region; None when point is at ZV.
+fn char_after_point_edit_range(
+    ctx: &crate::emacs_core::eval::Context,
+) -> Option<crate::buffer::TextEditRange> {
+    let buf = ctx.buffers.current_buffer()?;
+    let from = buf.point_char_pos();
+    let to = from
+        .add_len(crate::buffer::CharLen::new(1))
+        .min(buf.point_max_char_pos());
+    (from < to).then(|| buf.edit_range_for_char_range(crate::buffer::CharRange::new(from, to)))
+}
+
+fn current_point_char_pos(
+    ctx: &crate::emacs_core::eval::Context,
+) -> Option<crate::buffer::CharPos0> {
+    ctx.buffers.current_buffer().map(Buffer::point_char_pos)
+}
+
+/// Move point to a character position saved before Lisp ran (GNU
+/// `SET_PT_BOTH (goal_pt, goal_pt_byte)`), measured in the live text so a
+/// stale position can neither reach past it nor split a character.
+fn goto_current_buffer_char_pos(
+    ctx: &mut crate::emacs_core::eval::Context,
+    char_pos: crate::buffer::CharPos0,
+) {
+    let Some((buffer, byte_pos)) = ctx
+        .buffers
+        .current_buffer()
+        .map(|buf| (buf.id, buf.char_pos_to_emacs_byte_pos_clamped(char_pos)))
+    else {
+        return;
+    };
+    let _ = ctx.buffers.goto_buffer_emacs_byte_pos(buffer, byte_pos);
+}
+
 /// (move-to-column COLUMN &optional FORCE) -> COLUMN-REACHED
 ///
 /// Move point on the current line according to display columns.
@@ -2753,29 +2789,18 @@ pub(crate) fn move_to_column(
         }
         let _ = ctx.buffers.goto_buffer_emacs_byte_pos(current_id, tab_byte);
         let pad = spaces_to_column(col_before_tab, target);
-        let insert_pos = tab_byte;
-        let pad_len = pad.len();
         insert_inheriting_indentation(ctx, pad)?;
-        let tab_after_pad = insert_pos.add_len(EmacsByteLen::new(pad_len));
-        let delete_range = super::editfns::buffer_edit_range_for_byte_range_in_manager(
-            &ctx.buffers,
-            current_id,
-            EmacsByteRange::from_start_len(tab_after_pad, EmacsByteLen::new(1)),
-        )?;
-        let delete_change = crate::buffer::TextChange::deletion(delete_range);
-        super::editfns::signal_before_text_change(ctx, delete_change)?;
-        let _ = ctx
-            .buffers
-            .delete_buffer_measured_region(current_id, delete_range);
-        super::editfns::signal_after_text_change(ctx, delete_change)?;
-        let goal_point = tab_after_pad;
-        let _ = ctx
-            .buffers
-            .goto_buffer_emacs_byte_pos(current_id, goal_point);
+        // GNU Fmove_to_column (indent.c:1163-1168): `del_range (PT, PT + 1)`
+        // at the PT the insertion's callbacks left, then `goal_pt = PT`. Each
+        // step reads the live buffer: any callback may have edited it.
+        if let Some(tab) = char_after_point_edit_range(ctx) {
+            super::editfns::delete_text_range(ctx, tab, super::editfns::DeletedText::Discard)?;
+        }
+        let goal_point = current_point_char_pos(ctx);
         let _ = indent_to(ctx, vec![Value::fixnum(col_after_tab as i64), Value::NIL])?;
-        let _ = ctx
-            .buffers
-            .goto_buffer_emacs_byte_pos(current_id, goal_point);
+        if let Some(goal_point) = goal_point {
+            goto_current_buffer_char_pos(ctx, goal_point);
+        }
         return Ok(Value::fixnum(target as i64));
     }
 
