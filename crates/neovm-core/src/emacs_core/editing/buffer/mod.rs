@@ -12,6 +12,7 @@ use crate::buffer::{
     EmacsByteRange, LispBytePos1, LispCharPos1, TextChange, TextEditRange, TextExtent,
     TextPositionAnchor,
 };
+use crate::emacs_core::emacs_char::EmacsChar;
 use crate::emacs_core::filelock;
 use crate::emacs_core::misc;
 use crate::emacs_core::value::{
@@ -4093,6 +4094,39 @@ pub(crate) fn builtin_insert_byte(eval: &mut super::eval::Context, args: Vec<Val
     Ok(Value::NIL)
 }
 
+/// Validated substitution characters in the buffer's encoding domain.
+/// Values are immutable and local to the active mutator's edit call.
+#[derive(Clone, Copy, Debug)]
+enum SubstitutionCharacters {
+    Unibyte { from: u8, to: u8 },
+    Multibyte { from: EmacsChar, to: EmacsChar },
+}
+
+static_assertions::assert_impl_all!(SubstitutionCharacters: Send, Sync);
+
+impl SubstitutionCharacters {
+    fn for_buffer(buf: &Buffer, from: EmacsChar, to: EmacsChar) -> Self {
+        if buf.get_multibyte() {
+            Self::Multibyte { from, to }
+        } else {
+            Self::Unibyte {
+                from: from.code() as u8,
+                to: to.code() as u8,
+            }
+        }
+    }
+
+    fn codes(self) -> (EmacsChar, EmacsChar) {
+        match self {
+            Self::Unibyte { from, to } => (
+                EmacsChar::from_code_unchecked(u32::from(from)),
+                EmacsChar::from_code_unchecked(u32::from(to)),
+            ),
+            Self::Multibyte { from, to } => (from, to),
+        }
+    }
+}
+
 pub(crate) fn builtin_subst_char_in_region(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
@@ -4101,20 +4135,30 @@ pub(crate) fn builtin_subst_char_in_region(
 
     let start = expect_integer_or_marker_in_buffers(&eval.buffers, &args[0])?;
     let end = expect_integer_or_marker_in_buffers(&eval.buffers, &args[1])?;
-    let from_code = expect_character_code(&args[2])?;
-    let to_code = expect_character_code(&args[3])?;
+    // The Lisp boundary has checked both codes against EmacsChar::MAX.
+    let from_code = EmacsChar::from_code_unchecked(expect_character_code(&args[2])? as u32);
+    let to_code = EmacsChar::from_code_unchecked(expect_character_code(&args[3])? as u32);
     let noundo = args.get(4).is_some_and(|value| !value.is_nil());
 
-    let current_id = eval
-        .buffers
-        .current_buffer_id()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let target_multibyte = eval
-        .buffers
-        .get(current_id)
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
-        .get_multibyte();
-    let from_bytes = encode_char_code_for_buffer_bytes(from_code as u32, target_multibyte)
+    let current_id = eval.buffers.current_buffer_id().ok_or_else(|| {
+        signal(
+            LispCondition::Error,
+            vec![Value::string("No current buffer")],
+        )
+    })?;
+    let buffer = eval.buffers.get(current_id).ok_or_else(|| {
+        signal(
+            LispCondition::Error,
+            vec![Value::string("No current buffer")],
+        )
+    })?;
+    let target_multibyte = buffer.get_multibyte();
+    // GNU editfns.c:2340-2345 assigns both character codes to unsigned
+    // bytes in a unibyte buffer. Carry normalized codes through both scans
+    // and the storage edit; encoding only TOCHAR leaves FROMCHAR unmatched.
+    let (from_code, to_code) =
+        SubstitutionCharacters::for_buffer(buffer, from_code, to_code).codes();
+    let from_bytes = encode_char_code_for_buffer_bytes(from_code.code(), target_multibyte)
         .ok_or_else(|| {
             signal(
                 LispCondition::WrongTypeArgument,
@@ -4122,7 +4166,7 @@ pub(crate) fn builtin_subst_char_in_region(
             )
         })?;
     let to_bytes =
-        encode_char_code_for_buffer_bytes(to_code as u32, target_multibyte).ok_or_else(|| {
+        encode_char_code_for_buffer_bytes(to_code.code(), target_multibyte).ok_or_else(|| {
             signal(
                 LispCondition::WrongTypeArgument,
                 vec![Value::symbol("characterp"), args[3]],
@@ -4185,7 +4229,7 @@ pub(crate) fn builtin_subst_char_in_region(
         current_id,
         range,
         changed_range_through_end,
-        from_code as u32,
+        from_code.code(),
         &to_bytes,
         noundo,
     );
@@ -4201,15 +4245,17 @@ fn subst_char_in_region_scan(
     current_id: BufferId,
     start: i64,
     end: i64,
-    from_code: i64,
-    to_code: i64,
+    from_code: EmacsChar,
+    to_code: EmacsChar,
     to_bytes: &[u8],
     args: &[Value],
 ) -> Result<Option<(TextEditRange, TextEditRange)>, Flow> {
-    let buf = eval
-        .buffers
-        .get(current_id)
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let buf = eval.buffers.get(current_id).ok_or_else(|| {
+        signal(
+            LispCondition::Error,
+            vec![Value::string("No current buffer")],
+        )
+    })?;
     let point_min = buf.point_min_lisp_char_pos().as_i64();
     let point_max = buf.point_max_lisp_char_pos().as_i64();
     if start < point_min || start > point_max || end < point_min || end > point_max {
@@ -4226,7 +4272,7 @@ fn subst_char_in_region_scan(
         return Ok(None);
     }
     Ok(buf
-        .subst_char_changed_range(range, from_code as u32, to_bytes)
+        .subst_char_changed_range(range, from_code.code(), to_bytes)
         .map(|changed_range| (range, changed_range)))
 }
 

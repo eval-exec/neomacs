@@ -85,6 +85,17 @@ fn gdn_buf16() {
 }
 
 #[test]
+fn gdn_buf17() {
+    let form = include_str!("gdn_primitives_cases/buf17.el");
+    let expected = gnu_fixture(
+        "buf17",
+        form,
+        include_str!("gdn_primitives_cases/buf17.expect"),
+    );
+    assert_eq!(runtime_startup_eval_one(form), expected);
+}
+
+#[test]
 fn gdn_buf18() {
     let form = include_str!("gdn_primitives_cases/buf18.el");
     let expected = gnu_fixture(

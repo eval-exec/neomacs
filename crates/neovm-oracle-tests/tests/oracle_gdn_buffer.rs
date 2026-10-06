@@ -35,6 +35,14 @@ fn oracle_gdn_buf16() {
 }
 
 #[test]
+fn oracle_gdn_buf17() {
+    common::assert_oracle_parity_expect(
+        r#"(with-temp-buffer (set-buffer-multibyte nil) (insert "abc\351") (subst-char-in-region 1 5 #x3fffe9 ?z) (subst-char-in-region 1 5 #x161 ?Z) (buffer-string))"#,
+        expect_test::expect![[r#""OK \"Zbcz\"""#]],
+    );
+}
+
+#[test]
 fn oracle_gdn_buf18() {
     common::assert_oracle_parity_expect(
         r#"(with-temp-buffer (insert "abé") (subst-char-in-region 1 4 ?a ?é))"#,
@@ -203,5 +211,29 @@ fn oracle_gdn_transpose_indirect_points_and_markers() {
                 (marker-position m) (buffer-string)))
         (kill-buffer sibling))))) '(nil t))"#,
         expect_test::expect![[r#""OK ((6 2 2 \"efcdabgh\") (2 6 6 \"efcdabgh\"))""#]],
+    );
+}
+
+#[test]
+fn oracle_gdn_compiled_editing_primitives() {
+    common::assert_oracle_parity_expect(
+        r#"(progn
+      (require 'bytecomp)
+      (let ((byte-compile-warnings nil))
+        (mapcar (lambda (body)
+          (let ((fn (byte-compile body)) answer)
+            (dotimes (_ 20) (setq answer (funcall fn))) answer))
+          '((lambda () (with-temp-buffer (insert "abc") (setq buffer-read-only t)
+               (list (delete-char 0) (buffer-string))))
+            (lambda () (with-temp-buffer (insert "abc") (goto-char 2)
+               (condition-case e (delete-char nil) (error e))))
+            (lambda () (with-temp-buffer (set-buffer-multibyte nil)
+               (insert (unibyte-string 97 233)) (subst-char-in-region 1 3 #x161 ?Z)
+               (string-to-list (buffer-string))))
+            (lambda () (with-temp-buffer (insert "abcdefgh") (goto-char 2)
+               (transpose-regions 1 3 5 7 t) (point)))))))"#,
+        expect_test::expect![[
+            r#""OK ((nil \"abc\") (wrong-type-argument fixnump nil) (90 233) 2)""#
+        ]],
     );
 }
