@@ -28,3 +28,23 @@ fn gdn_reverse_ascii_multibyte_becomes_unibyte() {
     assert!(!result.as_lisp_string().unwrap().is_multibyte());
     assert_eq!(result.as_lisp_string().unwrap().as_bytes(), b"ba");
 }
+
+#[test]
+fn gdn_equal_car_cycle_terminates() {
+    let a = Value::list(vec![Value::fixnum(1)]);
+    let b = Value::list(vec![Value::fixnum(1)]);
+    a.set_car(a);
+    b.set_car(b);
+    assert_eq!(
+        crate::emacs_core::value::try_equal_value_swp(&a, &b, 0, false).unwrap(),
+        true
+    );
+    let c = Value::list(vec![Value::fixnum(1), Value::fixnum(2)]);
+    let d = Value::list(vec![Value::fixnum(1), Value::fixnum(3)]);
+    c.set_car(c);
+    d.set_car(d);
+    assert_eq!(
+        crate::emacs_core::value::try_equal_value_swp(&c, &d, 0, false).unwrap(),
+        false
+    );
+}

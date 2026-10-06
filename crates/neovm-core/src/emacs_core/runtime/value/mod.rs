@@ -23,7 +23,7 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use rustc_hash::{FxHashMap, FxHasher};
 use strum::{EnumString, IntoStaticStr};
 
-use super::error::{Flow, signal};
+use super::error::{Flow, LispCondition, signal};
 use super::intern::{SymId, intern};
 use crate::buffer::text_props::{PropertyInterval, TextPropertyPlistRun, TextPropertyTable};
 use crate::buffer::{CharPos0, CharRange, EmacsBytePos};
@@ -4741,7 +4741,7 @@ fn try_equal_value_inner(
 ) -> Result<bool, Flow> {
     if depth > 200 {
         return Err(signal(
-            "error",
+            LispCondition::Error,
             vec![Value::string("Stack overflow in equal")],
         ));
     }
@@ -4791,6 +4791,15 @@ fn try_equal_value_inner(
     if left.is_cons() {
         if !right.is_cons() {
             return Ok(false);
+        }
+        // GNU fns.c:2860-2885 remembers object pairs past depth ten.
+        // The tail guard covers cdr cycles; this shared pair table also covers
+        // cycles reached through cars or mixed cons/vector edges.
+        if depth > 10 {
+            let pair = EqualSeenPair::new(left, right);
+            if !seen.get_or_insert_with(HashSet::new).insert(pair) {
+                return Ok(true);
+            }
         }
         let mut left_tail = left;
         let mut right_tail = right;

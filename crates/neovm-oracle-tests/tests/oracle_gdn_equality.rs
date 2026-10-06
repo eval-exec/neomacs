@@ -41,3 +41,17 @@ fn gdn_reverse_string_representation() {
         expect_test::expect![[r#""OK (nil nil nil nil t (4194282 233) (234 97) nil)""#]],
     );
 }
+
+#[test]
+fn gdn_equal_car_cycles() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"(let ((a (list 1)) (b (list 1)) (c (list 1 2)) (d (list 1 3)))
+                    (setcar a a) (setcar b b) (setcar c c) (setcar d d)
+                    (list (equal a b) (equal c d) (equal-including-properties a b)
+                          (not (null (member a (list b))))
+                          (let ((x (vector nil)) (y (vector nil)))
+                            (aset x 0 (cons x a)) (aset y 0 (cons y b)) (equal x y))
+                          (let ((x (list 1)) (y (list 1 1)))
+                            (setcar x x) (setcar y y) (equal x y))))"#;
+    common::assert_oracle_parity_expect(form, expect_test::expect![[r#""OK (t nil t t t nil)""#]]);
+}
