@@ -1592,7 +1592,15 @@ impl FormatOutput {
             // append stays in the actual output domain, even without growth.
             self.checked_append_extent(bytes)?;
         }
-        self.bytes.extend_from_slice(bytes);
+        let old_length = self.bytes.len();
+        self.bytes.spare_capacity_mut()[..bytes.len()].write_copy_of_slice(bytes);
+        // SAFETY: the spare-capacity guard above proves that old_length plus
+        // bytes.len() is representable and does not exceed Vec's capacity.
+        // The existing prefix remains initialized, and the safe bulk copy
+        // initialized every byte in the new range before publishing its length.
+        unsafe {
+            self.bytes.set_len(old_length + bytes.len());
+        }
         Ok(())
     }
 

@@ -1,4 +1,4 @@
-use super::{FormatStorageBytes, allocate_format_bytes};
+use super::{FormatOutput, FormatStorageBytes, FormatStringEncoding, allocate_format_bytes};
 use crate::emacs_core::alloc::AllocationFailure;
 use crate::emacs_core::error::{FlowKind, SignalDelivery};
 use crate::emacs_core::eval::Context;
@@ -22,6 +22,20 @@ fn format_initial_storage_retains_vector_ownership_and_live_null_failure() {
     // Drop after ordinary Vec reallocation checks allocation-layout ownership.
     drop(bytes);
     assert!(FormatStorageBytes::try_from(isize::MAX as usize + 1).is_err());
+
+    for encoding in [
+        FormatStringEncoding::Unibyte,
+        FormatStringEncoding::Multibyte,
+    ] {
+        let mut output = FormatOutput::new(7, encoding).unwrap();
+        output.append(b"initial").unwrap();
+        output.append(b"").unwrap();
+        assert_eq!(output.bytes, b"initial");
+        output.append(b" storage").unwrap();
+        output.append(b"!").unwrap();
+        output.append(b" again").unwrap();
+        assert_eq!(output.bytes, b"initial storage! again");
+    }
 
     let mut context = Context::new();
     let original = context
