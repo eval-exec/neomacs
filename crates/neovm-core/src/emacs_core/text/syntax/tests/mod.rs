@@ -4486,3 +4486,6 @@ fn scanning_backward_steps_over_a_comment_start_like_gnu() {
         )
     );
 }
+
+#[cfg(test)]
+mod gdn_word_motion;

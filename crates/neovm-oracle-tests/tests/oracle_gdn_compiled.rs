@@ -4,6 +4,24 @@
 mod common;
 
 #[test]
+fn oracle_gdn_compiled_script_word_motion() {
+    // GNU bytecode.c:1492-1494 delegates Bforward_word to syntax.c:1477-1556.
+    common::assert_oracle_parity_expect(
+        r#"(progn (require 'bytecomp)
+  (let ((fn (byte-compile (lambda (n) (forward-word n) (point)))))
+    (mapcar (lambda (text)
+      (with-temp-buffer (insert text)
+        (let (forward backward)
+          (dotimes (_ 20)
+            (goto-char (point-min)) (setq forward (funcall fn 1))
+            (goto-char (point-max)) (setq backward (funcall fn -1)))
+          (list forward backward))))
+      '("中bc" "abαβ" "ひらカタ" "abc中" "éabc"))))"#,
+        expect_test::expect![[r#""OK ((2 2) (3 3) (3 3) (4 4) (5 1))""#]],
+    );
+}
+
+#[test]
 fn oracle_gdn_compiled_car_cycle_equal() {
     // GNU bytecode.c:1584-1589 delegates Bequal to fns.c:2860-2885.
     common::assert_oracle_parity_expect(

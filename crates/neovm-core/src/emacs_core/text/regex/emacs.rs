@@ -4047,6 +4047,98 @@ impl WordBoundaryLookup {
         }
         default_result
     }
+
+    fn script_at_emacs(&self, c: emacs_char::EmacsChar) -> Value {
+        self.char_script_table
+            .and_then(|table| {
+                crate::emacs_core::chartable::ct_lookup(&table, i64::from(c.code())).ok()
+            })
+            .unwrap_or(Value::NIL)
+    }
+
+    // GNU category.c:406-416, with membership resolved from full-code category sets.
+    #[inline]
+    fn category_pair_matches_emacs(
+        pair: Value,
+        first_member: impl Fn(u8) -> bool,
+        second_member: impl Fn(u8) -> bool,
+    ) -> bool {
+        if !pair.is_cons() {
+            return false;
+        }
+
+        let first = pair.cons_car();
+        let second = pair.cons_cdr();
+        let first_matches = first.is_nil()
+            || first.as_fixnum().is_some_and(|category| {
+                let Ok(category @ 0x20..=0x7e) = u8::try_from(category) else {
+                    return false;
+                };
+                first_member(category) && !second_member(category)
+            });
+        let second_matches = second.is_nil()
+            || second.as_fixnum().is_some_and(|category| {
+                let Ok(category @ 0x20..=0x7e) = u8::try_from(category) else {
+                    return false;
+                };
+                !first_member(category) && second_member(category)
+            });
+        first_matches && second_matches
+    }
+
+    /// GNU category.c:377-417 for word motion's full Emacs code domain.
+    /// This call-local snapshot performs no Lisp callbacks; its category and
+    /// script table reads retain byte8/non-Unicode keys instead of Rust char.
+    pub(crate) fn boundary_between_emacs_characters(
+        &self,
+        c1: emacs_char::EmacsChar,
+        c2: emacs_char::EmacsChar,
+        syntax: &BufferSyntaxLookup,
+    ) -> bool {
+        let same_script = crate::emacs_core::value::eq_value(
+            &self.script_at_emacs(c1),
+            &self.script_at_emacs(c2),
+        );
+        let mut categories = if same_script {
+            self.word_separating_categories
+        } else {
+            self.word_combining_categories
+        };
+        let default_result = !same_script;
+        if !categories.is_cons() {
+            return default_result;
+        }
+        let Some(table) = syntax.category_table else {
+            return default_result;
+        };
+        let set1 = crate::emacs_core::chartable::ct_lookup(&table, i64::from(c1.code()))
+            .unwrap_or(Value::NIL);
+        let set2 = crate::emacs_core::chartable::ct_lookup(&table, i64::from(c2.code()))
+            .unwrap_or(Value::NIL);
+        // GNU returns its script decision before examining category wildcards
+        // when either character's category set is nil (category.c:395-400).
+        let (Some(set1), Some(set2)) = (
+            crate::emacs_core::boolvec::BoolVectorView::of(&set1),
+            crate::emacs_core::boolvec::BoolVectorView::of(&set2),
+        ) else {
+            return default_result;
+        };
+        let member = |set: crate::emacs_core::boolvec::BoolVectorView<'_>, category: u8| {
+            let index = usize::from(category);
+            index < set.len() && set.get(index)
+        };
+        while categories.is_cons() {
+            if Self::category_pair_matches_emacs(
+                categories.cons_car(),
+                |category| member(set1, category),
+                |category| member(set2, category),
+            ) {
+                return !default_result;
+            }
+            categories = categories.cons_cdr();
+        }
+        default_result
+    }
 }
 
 pub(crate) trait SyntaxLookup {

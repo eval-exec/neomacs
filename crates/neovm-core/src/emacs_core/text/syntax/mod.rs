@@ -4,6 +4,7 @@
 //! motion functions (forward/backward word, sexp scanning), and the
 //! `string-to-syntax` descriptor parser.
 
+use crate::emacs_core::emacs_char::EmacsChar;
 use crate::emacs_core::error::LispCondition;
 use std::cell::{Cell, RefCell};
 use std::ops::Deref;
@@ -963,7 +964,14 @@ impl Default for SyntaxTable {
 /// A "word" is a maximal run of characters with syntax class `Word`.
 /// Between words, non-word characters are skipped.
 pub fn forward_word(buf: &Buffer, table: &SyntaxTable, count: i64) -> EmacsBytePos {
-    forward_word_with_options(buf, table, count, SyntaxProperties::Ignore).0
+    forward_word_with_options(
+        buf,
+        table,
+        count,
+        SyntaxProperties::Ignore,
+        Default::default(),
+    )
+    .0
 }
 
 fn syntax_char_from_code(code: u32) -> char {
@@ -1135,6 +1143,127 @@ impl<'a> BufferChars<'a> {
     }
 }
 
+/// Word-motion cursor that preserves all Emacs character codes.
+///
+/// Unlike the Rust-char view used by existing parsers, this represents byte8
+/// and non-Unicode characters without collapsing either domain. Its borrowed
+/// storage window belongs to one mutator and is valid only during a scan with
+/// no Lisp callbacks or text mutation (GNU syntax.c:1459-1561).
+struct WordChars<'a> {
+    storage: BufferChars<'a>,
+}
+
+static_assertions::assert_not_impl_any!(WordChars<'static>: Send, Sync);
+
+impl std::fmt::Debug for WordChars<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WordChars")
+            .field("base_char", &self.storage.base_char)
+            .field("multibyte", &self.storage.multibyte)
+            .field("cursor", &self.storage.cursor)
+            .finish()
+    }
+}
+
+impl<'a> WordChars<'a> {
+    fn new(buf: &'a Buffer, base_char: CharPos0) -> Self {
+        Self {
+            storage: BufferChars::new(buf, base_char),
+        }
+    }
+
+    #[inline(always)]
+    fn at(&mut self, idx: usize) -> EmacsChar {
+        if let Some((c_idx, c_byte, c_width)) = self.storage.cursor {
+            let byte_pos = if idx == c_idx {
+                c_byte
+            } else if idx == c_idx + 1 {
+                c_byte.add_len(c_width)
+            } else {
+                return self.at_outlined(idx);
+            };
+            if let Some((start, base, len)) = self.storage.window {
+                let pos = byte_pos.get();
+                if pos >= start && pos < start + len {
+                    // SAFETY: the borrowed BufferChars window contains pos;
+                    // this scan holds the buffer and runs no Lisp callbacks.
+                    let byte = unsafe { *base.add(pos - start) };
+                    if byte < 0x80 {
+                        self.storage.cursor = Some((idx, byte_pos, EmacsByteLen::new(1)));
+                        return EmacsChar::from_unibyte_byte(byte);
+                    }
+                }
+            }
+        }
+        self.at_outlined(idx)
+    }
+
+    #[inline(never)]
+    fn at_outlined(&mut self, idx: usize) -> EmacsChar {
+        let storage = &mut self.storage;
+        // For a forward step (or re-read of the same char) advance the byte
+        // cursor directly; otherwise pay for one (cached) char->byte
+        // conversion.  GNU's syntax scanners never convert per char -- they
+        // carry the byte position and bump it by the char width.
+        let byte_pos = match storage.cursor {
+            Some((c_idx, c_byte, _)) if idx == c_idx => c_byte,
+            Some((c_idx, c_byte, c_width)) if idx == c_idx + 1 => c_byte.add_len(c_width),
+            // Backward step (`char-before`-style peeks — the parser does
+            // these constantly): back over continuation bytes (at most 4 —
+            // the 5-byte internal encoding's worst case) instead of a full
+            // char->byte conversion per peek.
+            Some((c_idx, c_byte, _)) if idx + 1 == c_idx && c_byte.get() > 0 => {
+                let mut pos = c_byte.get() - 1;
+                if storage.multibyte {
+                    let mut steps = 0;
+                    while pos > 0
+                        && steps < 4
+                        && storage
+                            .buf
+                            .emacs_byte_at_pos(EmacsBytePos::new(pos))
+                            .is_some_and(|b| (b & 0xC0) == 0x80)
+                    {
+                        pos -= 1;
+                        steps += 1;
+                    }
+                }
+                EmacsBytePos::new(pos)
+            }
+            _ => buffer_char_to_emacs_byte_pos(
+                storage.buf,
+                storage.base_char.add_len(CharLen::new(idx)),
+            ),
+        };
+        let code = storage.code_at_byte(byte_pos);
+        // A unibyte buffer stores one byte per char; a multibyte buffer stores
+        // the char's internal multibyte length (raw bytes included -- see
+        // `emacs_char::char_bytes`).
+        //
+        // The `code < 0x80` arm is not redundant with `char_bytes`, which
+        // returns 1 for it anyway: the compiler lowers that function's
+        // comparison chain BRANCHLESSLY (cmov), so every character paid all of
+        // its bounds checks. Annotating this function showed the 5-byte-char
+        // bound alone at 9.31% of its samples and the raw-byte check at 4.52%,
+        // on a scan whose characters are overwhelmingly ASCII. Testing the
+        // dominant case first turns that into one predictable compare.
+        let width = if !storage.multibyte || code < 0x80 {
+            1
+        } else {
+            crate::emacs_core::emacs_char::char_bytes(code)
+        };
+        storage.cursor = Some((idx, byte_pos, EmacsByteLen::new(width)));
+        if storage.multibyte {
+            // Internal buffer bytes decode to the validated Emacs code domain.
+            EmacsChar::from_code_unchecked(code)
+        } else {
+            // GNU FETCH_CHAR_AS_MULTIBYTE (buffer.h:1391): high bytes are
+            // byte8 characters, not Unicode Latin-1 scalars.
+            EmacsChar::from_unibyte_byte(code as u8)
+        }
+    }
+}
+
 /// Forward-only character cursor for `parse-partial-sexp`.
 ///
 /// Unlike [`BufferChars`], this cursor does not preserve a logical index or a
@@ -1267,19 +1396,26 @@ fn forward_word_with_options(
     table: &SyntaxTable,
     count: i64,
     props: SyntaxProperties<'_>,
+    boundaries: super::regex_emacs::WordBoundaryLookup,
 ) -> (EmacsBytePos, bool) {
     // Per-scan syntax-table property cache (GNU gl_state); one
     // interval lookup per property RUN instead of per character.
     let prop_cache = SyntaxPropRange::new(props);
     let prop_cache = &prop_cache;
+    let category_table = super::category::active_category_table_for_buffer(Some(buf)).ok();
+    let boundary_syntax = super::regex_emacs::BufferSyntaxLookup {
+        syntax_table: *table,
+        category_table,
+        word_boundary: boundaries,
+    };
 
     if count < 0 {
-        return backward_word_with_options(buf, table, -count, props);
+        return backward_word_with_options(buf, table, -count, props, boundaries);
     }
 
     let accessible_bytes = buf.accessible_emacs_byte_region();
     let accessible_chars = buf.accessible_char_region();
-    let mut chars = BufferChars::new(buf, accessible_chars.start());
+    let mut chars = WordChars::new(buf, accessible_chars.start());
     let accessible_char_start = accessible_chars.start().get();
     let accessible_len = accessible_chars.len().get();
     let mut idx = buffer_byte_to_char_pos(buf, accessible_bytes.clamp(buf.point_emacs_byte_pos()))
@@ -1289,10 +1425,10 @@ fn forward_word_with_options(
         // Skip non-word characters
         while idx < accessible_len
             && !matches!(
-                effective_syntax_entry_for_abs_char(
+                word_syntax_entry_for_abs_char(
                     buf,
                     table,
-                    chars.char_at(idx),
+                    chars.at(idx),
                     accessible_char_start + idx,
                     prop_cache
                 )
@@ -1307,19 +1443,28 @@ fn forward_word_with_options(
             return (buffer_char_to_emacs_byte_pos(buf, abs_char), false);
         }
         // Skip word characters
-        while idx < accessible_len
-            && matches!(
-                effective_syntax_entry_for_abs_char(
+        let mut adjacent = None;
+        while idx < accessible_len {
+            let ch = chars.at(idx);
+            if !matches!(
+                word_syntax_entry_for_abs_char(
                     buf,
                     table,
-                    chars.char_at(idx),
+                    ch,
                     accessible_char_start + idx,
-                    prop_cache
+                    prop_cache,
                 )
                 .class,
                 SyntaxClass::Word
-            )
-        {
+            ) {
+                break;
+            }
+            if let Some(adjacent) = adjacent
+                && boundaries.boundary_between_emacs_characters(adjacent, ch, &boundary_syntax)
+            {
+                break;
+            }
+            adjacent = Some(ch);
             idx += 1;
         }
     }
@@ -1331,7 +1476,14 @@ fn forward_word_with_options(
 
 /// Move backward over `count` words.  Returns the resulting Emacs byte position.
 pub fn backward_word(buf: &Buffer, table: &SyntaxTable, count: i64) -> EmacsBytePos {
-    backward_word_with_options(buf, table, count, SyntaxProperties::Ignore).0
+    backward_word_with_options(
+        buf,
+        table,
+        count,
+        SyntaxProperties::Ignore,
+        Default::default(),
+    )
+    .0
 }
 
 /// Whether `find-word-boundary-function-table` has any binding (i.e. some mode
@@ -1391,15 +1543,15 @@ fn word_motion_with_table(
             let acc_chars = buf.accessible_char_region();
             let acc_start = acc_chars.start().get();
             let acc_len = acc_chars.len().get();
-            let mut chars = BufferChars::new(buf, acc_chars.start());
+            let mut chars = WordChars::new(buf, acc_chars.start());
             let point_char = buffer_byte_to_char_pos(buf, buf.point_emacs_byte_pos());
             let mut idx = point_char.saturating_sub(acc_start);
             let mut is_word = |i: usize| {
                 matches!(
-                    effective_syntax_entry_for_abs_char(
+                    word_syntax_entry_for_abs_char(
                         buf,
                         &table,
-                        chars.char_at(i),
+                        chars.at(i),
                         acc_start + i,
                         prop_cache
                     )
@@ -1415,7 +1567,7 @@ fn word_motion_with_table(
                     None
                 } else {
                     // ch0 begins a word; its 1-based char position.
-                    let ch0 = chars.char_at(idx);
+                    let ch0 = chars.at(idx);
                     let pos1 = (acc_start + idx + 1) as i64;
                     let limit1 = (acc_start + acc_len + 1) as i64; // ZV (1-based)
                     Some((ch0, pos1, limit1))
@@ -1428,7 +1580,7 @@ fn word_motion_with_table(
                     None
                 } else {
                     // ch1 ends a word; GNU passes its 1-based position.
-                    let ch1 = chars.char_at(idx - 1);
+                    let ch1 = chars.at(idx - 1);
                     let pos1 = (acc_start + idx) as i64;
                     let limit1 = (acc_start + 1) as i64; // BEGV (1-based)
                     Some((ch1, pos1, limit1))
@@ -1457,7 +1609,7 @@ fn word_motion_with_table(
         };
 
         // Look the character up in the boundary-function table.
-        let func = super::chartable::char_table_ref_and_range(&wbtable, i64::from(ch as u32))
+        let func = super::chartable::char_table_ref_and_range(&wbtable, i64::from(ch.code()))
             .map(|(v, _, _)| v)
             .unwrap_or(Value::NIL);
         let mut handled = false;
@@ -1492,7 +1644,13 @@ fn word_motion_with_table(
                 let props = SyntaxProperties::for_scan(honor, &eval.obarray, &eval.buffers);
                 let buf = eval.buffers.get(current_id).expect("buffer");
                 let table = SyntaxTable::for_buffer(buf);
-                forward_word_with_options(buf, &table, if forward { 1 } else { -1 }, props)
+                forward_word_with_options(
+                    buf,
+                    &table,
+                    if forward { 1 } else { -1 },
+                    props,
+                    super::builtins::search::current_word_boundary_lookup(eval),
+                )
             };
             let _ = eval.buffers.goto_buffer_emacs_byte_pos(current_id, byte);
             if !ok {
@@ -1536,7 +1694,14 @@ pub(crate) fn forward_word_destination(
         };
         let props = SyntaxProperties::for_scan(honor, &eval.obarray, &eval.buffers);
         let table = SyntaxTable::for_buffer(buf);
-        forward_word_with_options(buf, &table, count, props).0
+        forward_word_with_options(
+            buf,
+            &table,
+            count,
+            props,
+            super::builtins::search::current_word_boundary_lookup(eval),
+        )
+        .0
     }
 }
 
@@ -1545,19 +1710,26 @@ fn backward_word_with_options(
     table: &SyntaxTable,
     count: i64,
     props: SyntaxProperties<'_>,
+    boundaries: super::regex_emacs::WordBoundaryLookup,
 ) -> (EmacsBytePos, bool) {
     // Per-scan syntax-table property cache (GNU gl_state); one
     // interval lookup per property RUN instead of per character.
     let prop_cache = SyntaxPropRange::new(props);
     let prop_cache = &prop_cache;
+    let category_table = super::category::active_category_table_for_buffer(Some(buf)).ok();
+    let boundary_syntax = super::regex_emacs::BufferSyntaxLookup {
+        syntax_table: *table,
+        category_table,
+        word_boundary: boundaries,
+    };
 
     if count < 0 {
-        return forward_word_with_options(buf, table, -count, props);
+        return forward_word_with_options(buf, table, -count, props, boundaries);
     }
 
     let accessible_bytes = buf.accessible_emacs_byte_region();
     let accessible_chars = buf.accessible_char_region();
-    let mut chars = BufferChars::new(buf, accessible_chars.start());
+    let mut chars = WordChars::new(buf, accessible_chars.start());
     let accessible_char_start = accessible_chars.start().get();
     let mut idx = buffer_byte_to_char_pos(buf, accessible_bytes.clamp(buf.point_emacs_byte_pos()))
         .saturating_sub(accessible_char_start);
@@ -1566,10 +1738,10 @@ fn backward_word_with_options(
         // Skip non-word characters backward
         while idx > 0
             && !matches!(
-                effective_syntax_entry_for_abs_char(
+                word_syntax_entry_for_abs_char(
                     buf,
                     table,
-                    chars.char_at(idx - 1),
+                    chars.at(idx - 1),
                     accessible_char_start + idx - 1,
                     prop_cache
                 )
@@ -1584,19 +1756,28 @@ fn backward_word_with_options(
             return (buffer_char_to_emacs_byte_pos(buf, abs_char), false);
         }
         // Skip word characters backward
-        while idx > 0
-            && matches!(
-                effective_syntax_entry_for_abs_char(
+        let mut adjacent = None;
+        while idx > 0 {
+            let ch = chars.at(idx - 1);
+            if !matches!(
+                word_syntax_entry_for_abs_char(
                     buf,
                     table,
-                    chars.char_at(idx - 1),
+                    ch,
                     accessible_char_start + idx - 1,
-                    prop_cache
+                    prop_cache,
                 )
                 .class,
                 SyntaxClass::Word
-            )
-        {
+            ) {
+                break;
+            }
+            if let Some(adjacent) = adjacent
+                && boundaries.boundary_between_emacs_characters(ch, adjacent, &boundary_syntax)
+            {
+                break;
+            }
+            adjacent = Some(ch);
             idx -= 1;
         }
     }
@@ -3996,6 +4177,51 @@ pub(crate) fn regexp_syntax_class_at_emacs_byte(
     effective_syntax_entry_for_char_at_byte(buf, table, ch, byte_pos, prop_cache).class
 }
 
+/// Word-only syntax lookup, keeping byte8 and non-Unicode keys intact.
+/// Unicode keys retain the existing property/ASCII memo path; the outlined
+/// domain-specific arm reads the same property snapshot by full Emacs code.
+#[inline]
+fn word_syntax_entry_for_abs_char(
+    buf: &Buffer,
+    table: &SyntaxTable,
+    ch: EmacsChar,
+    abs_char: usize,
+    prop_cache: &SyntaxPropRange<'_>,
+) -> SyntaxEntry {
+    if let Some(unicode) = ch.as_rust_char() {
+        return effective_syntax_entry_for_abs_char(buf, table, unicode, abs_char, prop_cache);
+    }
+    word_syntax_entry_for_non_unicode_char(buf, table, ch, abs_char, prop_cache)
+}
+
+#[inline(never)]
+fn word_syntax_entry_for_non_unicode_char(
+    buf: &Buffer,
+    table: &SyntaxTable,
+    ch: EmacsChar,
+    abs_char: usize,
+    prop_cache: &SyntaxPropRange<'_>,
+) -> SyntaxEntry {
+    if let Some(prop) = prop_cache.syntax_table_prop_at_char(buf, abs_char) {
+        let entry = if builtin_syntax_table_p(vec![prop])
+            .ok()
+            .is_some_and(|v| v.is_truthy())
+        {
+            syntax_entry_at_char_code(&prop, ch.code())
+        } else {
+            syntax_entry_from_chartable_entry(&prop)
+        };
+        if let Some(entry) = entry {
+            return entry;
+        }
+    }
+    record_syntax_table_decode();
+    table.get_entry_code(ch.code()).unwrap_or_else(|| {
+        // GNU syntax.h:117: an absent descriptor has Swhitespace syntax.
+        SyntaxEntry::simple(SyntaxClass::Whitespace)
+    })
+}
+
 /// The syntax entry governing the character at `abs_char`.
 ///
 /// Reads the `syntax-table` property through a per-scan run cache (GNU
@@ -5894,10 +6120,12 @@ pub(crate) fn builtin_forward_word(
 
     let honor = parse_sexp_lookup_properties_enabled(eval);
     let orig_byte = {
-        let buf = eval
-            .buffers
-            .current_buffer()
-            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let buf = eval.buffers.current_buffer().ok_or_else(|| {
+            signal(
+                LispCondition::Error,
+                vec![Value::string("No current buffer")],
+            )
+        })?;
         buf.point_emacs_byte_pos()
     };
     // When `find-word-boundary-function-table` is active (subword/superword),
@@ -5908,18 +6136,28 @@ pub(crate) fn builtin_forward_word(
         word_motion_with_table(eval, count, honor, wbtable)
     } else {
         let props = SyntaxProperties::for_scan(honor, &eval.obarray, &eval.buffers);
-        let buf = eval
-            .buffers
-            .current_buffer()
-            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let buf = eval.buffers.current_buffer().ok_or_else(|| {
+            signal(
+                LispCondition::Error,
+                vec![Value::string("No current buffer")],
+            )
+        })?;
         let table = SyntaxTable::for_buffer(buf);
-        forward_word_with_options(buf, &table, count, props)
+        forward_word_with_options(
+            buf,
+            &table,
+            count,
+            props,
+            super::builtins::search::current_word_boundary_lookup(eval),
+        )
     };
     let (orig_char, raw_char) = {
-        let buf = eval
-            .buffers
-            .current_buffer()
-            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let buf = eval.buffers.current_buffer().ok_or_else(|| {
+            signal(
+                LispCondition::Error,
+                vec![Value::string("No current buffer")],
+            )
+        })?;
         (
             buffer_byte_to_lisp_pos(buf, orig_byte),
             buffer_byte_to_lisp_pos(buf, raw_byte),
@@ -5948,19 +6186,23 @@ pub(crate) fn builtin_forward_word(
     let final_byte = if constrained_char == raw_char {
         raw_byte
     } else {
-        let buf = eval
-            .buffers
-            .current_buffer()
-            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let buf = eval.buffers.current_buffer().ok_or_else(|| {
+            signal(
+                LispCondition::Error,
+                vec![Value::string("No current buffer")],
+            )
+        })?;
         // Convert constrained 1-based char position back to a byte offset.
         let zero_based = (constrained_char - 1).max(0) as usize;
         buffer_char_to_emacs_byte_pos(buf, CharPos0::new(zero_based))
     };
 
-    let current_id = eval
-        .buffers
-        .current_buffer_id()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let current_id = eval.buffers.current_buffer_id().ok_or_else(|| {
+        signal(
+            LispCondition::Error,
+            vec![Value::string("No current buffer")],
+        )
+    })?;
     let _ = eval
         .buffers
         .goto_buffer_emacs_byte_pos(current_id, final_byte);

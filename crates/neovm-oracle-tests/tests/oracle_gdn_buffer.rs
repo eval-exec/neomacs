@@ -3,6 +3,143 @@
 mod common;
 
 #[test]
+fn oracle_gdn_buf07() {
+    common::assert_oracle_parity_expect(
+        r#"(with-temp-buffer (insert "中bc") (goto-char 1) (forward-word) (point))"#,
+        expect_test::expect![[r#""OK 2""#]],
+    );
+}
+
+#[test]
+fn oracle_gdn_word_motion_scripts_categories_and_overrides() {
+    common::assert_oracle_parity_expect(
+        r#"(list
+      (mapcar (lambda (s) (with-temp-buffer (insert s) (goto-char 1)
+        (let ((f (progn (forward-word) (point))))
+          (goto-char (point-max)) (backward-word) (list f (point)))))
+        '("中bc" "abαβ" "ひらカタ" "abc中" "éabc"))
+      (let ((char-script-table (make-char-table 'char-script-table 'latin)))
+        (set-char-table-range char-script-table ?b 'greek)
+        (with-temp-buffer (insert "ab") (goto-char 1) (forward-word) (point)))
+      (let ((word-separating-categories nil))
+        (with-temp-buffer (insert "ひらカタ") (goto-char 1) (forward-word) (point))))"#,
+        expect_test::expect![[r#""OK (((2 2) (3 3) (3 3) (4 4) (5 1)) 2 5)""#]],
+    );
+}
+
+#[test]
+fn oracle_gdn_word_motion_nil_category_sets() {
+    common::assert_oracle_parity_expect(
+        r#"(mapcar (lambda (different-scripts)
+      (mapcar (lambda (present)
+        (with-temp-buffer
+          (insert "ab")
+          (let ((table (make-char-table 'category-table nil))
+                (char-script-table (make-char-table 'char-script-table 'latin))
+                (word-separating-categories '((nil . nil)))
+                (word-combining-categories '((nil . nil))))
+            (when different-scripts
+              (set-char-table-range char-script-table ?b 'greek))
+            (when (memq present '(first both))
+              (set-char-table-range table ?a (make-category-set "")))
+            (when (memq present '(second both))
+              (set-char-table-range table ?b (make-category-set "")))
+            (set-category-table table)
+            (goto-char 1)
+            (let ((forward (progn (forward-word) (point))))
+              (goto-char (point-max))
+              (backward-word)
+              (list forward (point))))))
+        '(none first second both))) '(nil t))"#,
+        expect_test::expect![[r#""OK (((3 1) (3 1) (3 1) (2 2)) ((2 2) (2 2) (2 2) (3 1)))""#]],
+    );
+}
+
+#[test]
+fn oracle_gdn_word_motion_script_entry_identity() {
+    common::assert_oracle_parity_expect(
+        r#"(mapcar (lambda (make-entry)
+      (mapcar (lambda (shared)
+        (let* ((left (funcall make-entry))
+               (right (if shared left (funcall make-entry)))
+               (char-script-table (make-char-table 'char-script-table nil)))
+          (set-char-table-range char-script-table ?a left)
+          (set-char-table-range char-script-table ?b right)
+          (with-temp-buffer
+            (insert "ab")
+            (set-category-table (make-char-table 'category-table nil))
+            (goto-char 1)
+            (let ((forward (progn (forward-word) (point))))
+              (goto-char (point-max))
+              (backward-word)
+              (list (equal left right) (eq left right) forward (point))))))
+        '(nil t)))
+      (list (lambda () (vector 1))
+            (lambda () (copy-sequence "script"))
+            (lambda () (make-symbol "script"))))"#,
+        expect_test::expect![[
+            r#""OK (((t nil 2 2) (t t 3 1)) ((t nil 2 2) (t t 3 1)) ((nil nil 2 2) (t t 3 1)))""#
+        ]],
+    );
+}
+
+#[test]
+fn oracle_gdn_word_motion_preserves_emacs_character_codes() {
+    common::assert_oracle_parity_expect(
+        r#"(mapcar (lambda (shape)
+      (mapcar (lambda (properties)
+        (mapcar (lambda (mode)
+          (let ((char-script-table (make-char-table 'char-script-table 'latin))
+                (word-combining-categories '((?r . nil)))
+                (word-separating-categories '((?r . nil)))
+                (code (nth 2 shape)))
+            (set-char-table-range char-script-table code
+              (if (eq mode 'separate) 'latin 'greek))
+            (set-char-table-range char-script-table #x80 'latin)
+            (set-char-table-range char-script-table #xfffd 'latin)
+            (with-temp-buffer
+              (set-buffer-multibyte (not (car shape)))
+              (insert (nth 1 shape))
+              (setq-local parse-sexp-lookup-properties t)
+              (let ((syntax (make-syntax-table))
+                    (categories (make-char-table 'category-table nil)))
+                (modify-syntax-entry code
+                  (if (memq properties '(cons table)) " " "w") syntax)
+                (modify-syntax-entry #x80 " " syntax)
+                (modify-syntax-entry #xfffd " " syntax)
+                (modify-syntax-entry ?a "w" syntax)
+                (set-syntax-table syntax)
+                (unless (eq mode 'script)
+                  (set-char-table-range categories code (make-category-set "r"))
+                  (set-char-table-range categories ?a (make-category-set "")))
+                (set-category-table categories))
+              (cond
+                ((eq properties 'face)
+                 (put-text-property 1 (point-max) 'face 'bold))
+                ((eq properties 'cons)
+                 (put-text-property 1 2 'syntax-table (string-to-syntax "w")))
+                ((eq properties 'table)
+                 (let ((override (make-syntax-table)))
+                   (modify-syntax-entry code "w" override)
+                   (modify-syntax-entry #x80 " " override)
+                   (modify-syntax-entry #xfffd " " override)
+                   (put-text-property 1 2 'syntax-table override))))
+              (goto-char 1)
+              (let ((forward (progn (forward-word) (point))))
+                (goto-char (point-max))
+                (backward-word)
+                (list forward (point))))))
+          '(script combine separate))) '(none face cons table)))
+      (list (list t (unibyte-string #x80 ?a) #x3fff80)
+            (list nil (string-to-multibyte (unibyte-string #x80 ?a)) #x3fff80)
+            (list nil (string #x110000 ?a) #x110000)))"#,
+        expect_test::expect![[
+            r#""OK ((((2 2) (3 1) (2 2)) ((2 2) (3 1) (2 2)) ((2 2) (3 1) (2 2)) ((2 2) (3 1) (2 2))) (((2 2) (3 1) (2 2)) ((2 2) (3 1) (2 2)) ((2 2) (3 1) (2 2)) ((2 2) (3 1) (2 2))) (((2 2) (3 1) (2 2)) ((2 2) (3 1) (2 2)) ((2 2) (3 1) (2 2)) ((2 2) (3 1) (2 2))))""#
+        ]],
+    );
+}
+
+#[test]
 fn oracle_gdn_transpose_indirect_points_and_markers() {
     common::assert_oracle_parity_expect(
         r#"(mapcar (lambda (leave)
