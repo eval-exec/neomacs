@@ -11,6 +11,14 @@ fn oracle_gdn_buf07() {
 }
 
 #[test]
+fn oracle_gdn_buf15() {
+    common::assert_oracle_parity_expect(
+        r#"(with-temp-buffer (insert "abc") (goto-char 2) (delete-char nil))"#,
+        expect_test::expect![[r#""ERR (wrong-type-argument fixnump nil)""#]],
+    );
+}
+
+#[test]
 fn oracle_gdn_buf18() {
     common::assert_oracle_parity_expect(
         r#"(with-temp-buffer (insert "abé") (subst-char-in-region 1 4 ?a ?é))"#,

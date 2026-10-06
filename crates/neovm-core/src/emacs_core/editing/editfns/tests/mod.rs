@@ -134,20 +134,6 @@ fn expect_max_args_above_max() {
     assert!(expect_max_args("test", &[Value::NIL, Value::NIL, Value::NIL], 2).is_err());
 }
 
-// -- expect_integer -------------------------------------------------------
-
-#[test]
-fn expect_integer_from_int() {
-    crate::test_utils::init_test_tracing();
-    assert_eq!(expect_integer("test", &Value::fixnum(42)).unwrap(), 42);
-}
-
-#[test]
-fn expect_integer_from_non_int() {
-    crate::test_utils::init_test_tracing();
-    assert!(expect_integer("test", &Value::NIL).is_err());
-}
-
 // -- collect_insert_text --------------------------------------------------
 
 #[test]

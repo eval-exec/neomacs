@@ -29,17 +29,6 @@ use strum::IntoStaticStr;
 // Argument helpers
 // ---------------------------------------------------------------------------
 
-/// Extract an integer (or char-as-integer) from a Value, signalling
-/// `wrong-type-argument` on type mismatch.
-fn expect_integer(_name: &str, val: &Value) -> Result<i64, Flow> {
-    val.as_int().ok_or_else(|| {
-        signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("integer-or-marker-p"), *val],
-        )
-    })
-}
-
 /// Convert a Lisp 1-based character position to a 0-based byte position,
 /// clamping to the accessible region `[begv, zv]`.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -1453,7 +1442,8 @@ pub(crate) fn builtin_delete_char(
 ) -> EvalResult {
     expect_min_args("delete-char", &args, 1)?;
     expect_max_args("delete-char", &args, 2)?;
-    let n = expect_integer("delete-char", &args[0])?;
+    // GNU cmds.c:233 uses CHECK_FIXNUM, including for bignums.
+    let n = crate::emacs_core::error::expect_fixnum(&args[0])?;
     let killflag = args.get(1).is_some_and(|v| v.is_truthy());
     ensure_current_buffer_writable_in_state(&ctx.obarray, &[], &ctx.buffers)?;
     if n.unsigned_abs() < 2 {
