@@ -4273,6 +4273,7 @@ dependencies = [
  "encoding_rs",
  "enumflags2",
  "errno",
+ "expect-test",
  "flate2",
  "fs4",
  "getrandom 0.4.3",

@@ -851,12 +851,17 @@ pub(crate) fn builtin_upcase_in_state_1(
 ) -> EvalResult {
     let args: [Value; 1] = [obj];
     let casetab = super::super::casetab::CaseTableOverride::for_current_buffer(eval)?;
-    upcase_with_override(&args, casetab)
+    upcase_with_override(
+        &args,
+        casetab,
+        super::super::casefiddle::upcase_word_predicate(eval, &casetab),
+    )
 }
 
 fn upcase_with_override(
     args: &[Value],
     casetab: super::super::casetab::CaseTableOverride,
+    is_word: impl Fn(u32) -> bool,
 ) -> EvalResult {
     expect_args("upcase", args, 1)?;
     match args[0].kind() {
@@ -866,8 +871,12 @@ fn upcase_with_override(
             let source_props = (!string.is_multibyte())
                 .then(|| get_string_text_properties_table_for_value(source))
                 .flatten();
-            let result =
-                Value::heap_string(transform_string_case(string, true, |_| false, &casetab));
+            let result = Value::heap_string(super::super::casefiddle::casify_lisp_string(
+                string,
+                super::super::casefiddle::CaseAction::Up,
+                is_word,
+                &casetab,
+            ));
             if let Some(table) = source_props {
                 set_string_text_properties_table_for_value(result, table);
             }
@@ -946,109 +955,6 @@ fn preserve_emacs_upcase_payload(code: i64) -> bool {
     )
 }
 
-/// Byte-faithful string case transform over Emacs char codes (issue #131):
-/// eight-bit / non-Unicode chars are caseless and pass through unchanged; in a
-/// unibyte string only ASCII is cased (raw high bytes pass through), matching the
-/// retired storage-String path. Mirrors `upcase`/`downcase_string_emacs_compat`
-/// (the `\u{0131}`/`\u{212A}` + payload-preserve specials, multi-char mapping).
-fn transform_string_case(
-    s: &crate::heap_types::LispString,
-    upcase: bool,
-    is_word: impl Fn(u32) -> bool,
-    casetab: &super::super::casetab::CaseTableOverride,
-) -> crate::heap_types::LispString {
-    use super::super::casetab::CaseMap;
-    // Greek capital sigma down-cases to the final form ς at the end of a word
-    // (GNU `casefiddle.c` `case_character`): when the preceding character is a
-    // word constituent and the following one is not.
-    const GREEK_CAPITAL_SIGMA: u32 = 0x03A3;
-    const GREEK_SMALL_SIGMA: u32 = 0x03C3;
-    const GREEK_SMALL_FINAL_SIGMA: u32 = 0x03C2;
-
-    let bytes = s.as_bytes();
-    let multibyte = s.is_multibyte();
-    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
-    let push = |out: &mut Vec<u8>, code: u32| {
-        if multibyte {
-            let mut buf = [0u8; crate::emacs_core::emacs_char::MAX_MULTIBYTE_LENGTH];
-            let n = crate::emacs_core::emacs_char::char_string(code, &mut buf);
-            out.extend_from_slice(&buf[..n]);
-        } else {
-            out.push(code as u8);
-        }
-    };
-    let mut pos = 0;
-    let mut prev_word = false;
-    while pos < bytes.len() {
-        let (code, len) = if multibyte {
-            crate::emacs_core::emacs_char::string_char(&bytes[pos..])
-        } else {
-            (bytes[pos] as u32, 1)
-        };
-        pos += len;
-        // GNU `case_character_impl` resolves each character through the
-        // per-buffer up/down case table (`buffer.h` `downcase`/`upcase`) before
-        // the Unicode special-casing. When a custom table is installed and has
-        // an explicit entry for this character, use it and skip the hardwired
-        // path; otherwise fall through unchanged (byte-identical default).
-        if casetab.is_custom() {
-            let which = if upcase { CaseMap::Up } else { CaseMap::Down };
-            if let Some(mapped) = casetab.map(which, code as i64) {
-                push(&mut out, mapped as u32);
-                prev_word = is_word(code);
-                continue;
-            }
-        }
-        match char::from_u32(code).filter(|_| multibyte || code < 0x80) {
-            Some(ch) if upcase => {
-                if ch == '\u{0131}' || preserve_emacs_upcase_string_payload(code as i64) {
-                    push(&mut out, code);
-                } else {
-                    for up in ch.to_uppercase() {
-                        push(&mut out, up as u32);
-                    }
-                }
-            }
-            Some(_) if code == GREEK_CAPITAL_SIGMA => {
-                let next_word = if pos < bytes.len() {
-                    let (next_code, _) = if multibyte {
-                        crate::emacs_core::emacs_char::string_char(&bytes[pos..])
-                    } else {
-                        (bytes[pos] as u32, 1)
-                    };
-                    is_word(next_code)
-                } else {
-                    false
-                };
-                push(
-                    &mut out,
-                    if prev_word && !next_word {
-                        GREEK_SMALL_FINAL_SIGMA
-                    } else {
-                        GREEK_SMALL_SIGMA
-                    },
-                );
-            }
-            Some(ch) => {
-                if ch == '\u{212A}' || preserve_emacs_downcase_string_payload(code as i64) {
-                    push(&mut out, code);
-                } else {
-                    for low in ch.to_lowercase() {
-                        push(&mut out, low as u32);
-                    }
-                }
-            }
-            None => push(&mut out, code),
-        }
-        prev_word = is_word(code);
-    }
-    if multibyte {
-        crate::heap_types::LispString::from_emacs_bytes(out)
-    } else {
-        crate::heap_types::LispString::from_unibyte(out)
-    }
-}
-
 pub(crate) fn upcase_char_code_emacs_compat(code: i64) -> i64 {
     if preserve_emacs_upcase_payload(code) {
         return code;
@@ -1065,22 +971,6 @@ pub(crate) fn upcase_char_code_emacs_compat(code: i64) -> i64 {
             }
         }
     }
-}
-
-fn preserve_emacs_upcase_string_payload(code: i64) -> bool {
-    matches!(
-        code,
-        411
-            | 612
-            | 7306
-            | 42957
-            | 42959
-            | 42963
-            | 42965
-            | 42971
-            | 68976..=68997
-            | 93883..=93907
-    )
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -1159,8 +1049,12 @@ fn downcase_with_word_pred(
             let source_props = (!string.is_multibyte())
                 .then(|| get_string_text_properties_table_for_value(source))
                 .flatten();
-            let result =
-                Value::heap_string(transform_string_case(string, false, is_word, &casetab));
+            let result = Value::heap_string(super::super::casefiddle::casify_lisp_string(
+                string,
+                super::super::casefiddle::CaseAction::Down,
+                is_word,
+                &casetab,
+            ));
             if let Some(table) = source_props {
                 set_string_text_properties_table_for_value(result, table);
             }
