@@ -82,22 +82,17 @@ fn start<W: Write + Send + 'static>(
         .name("neomacs-gui-log".into())
         .spawn(move || {
             let mut reported = 0;
-            let mut write_record = |record: &[u8]| -> io::Result<()> {
-                sink.write_all(record)?;
-                let rejected = worker_counters.rejected.load(Ordering::Relaxed);
-                if rejected != reported {
-                    writeln!(sink, "warning: GUI logging rejected {} records (queue full, oversized, or closed)", rejected)?;
-                    reported = rejected;
-                }
-                Ok(())
-            };
+            let mut failed = false;
             loop {
                 crossbeam_channel::select_biased! {
                     recv(stopped) -> _ => {
                         // Best-effort drain off-thread, bounded by queue capacity.
                         for record in receiver.try_iter() {
-                            if write_record(&record).is_err() {
+                            if write_record(&mut sink, &worker_counters, &mut reported, &record)
+                                .is_err()
+                            {
                                 increment(&worker_counters.write_failures);
+                                failed = true;
                                 break;
                             }
                         }
@@ -105,8 +100,11 @@ fn start<W: Write + Send + 'static>(
                     }
                     recv(receiver) -> record => match record {
                         Ok(record) => {
-                            if write_record(&record).is_err() {
+                            if write_record(&mut sink, &worker_counters, &mut reported, &record)
+                                .is_err()
+                            {
                                 increment(&worker_counters.write_failures);
+                                failed = true;
                                 break;
                             }
                         }
@@ -115,6 +113,11 @@ fn start<W: Write + Send + 'static>(
                 }
             }
             worker_counters.closed.store(true, Ordering::Release);
+            // Rejections after the last written record have no later record
+            // to carry their report; admission is closed, so report once more.
+            if !failed && report_rejections(&mut sink, &worker_counters, &mut reported).is_err() {
+                increment(&worker_counters.write_failures);
+            }
             if sink.flush().is_err() {
                 increment(&worker_counters.write_failures);
             }
@@ -130,6 +133,33 @@ fn start<W: Write + Send + 'static>(
             _worker: worker,
         },
     ))
+}
+
+fn write_record(
+    sink: &mut impl Write,
+    counters: &Counters,
+    reported: &mut usize,
+    record: &[u8],
+) -> io::Result<()> {
+    sink.write_all(record)?;
+    report_rejections(sink, counters, reported)
+}
+
+fn report_rejections(
+    sink: &mut impl Write,
+    counters: &Counters,
+    reported: &mut usize,
+) -> io::Result<()> {
+    let rejected = counters.rejected.load(Ordering::Relaxed);
+    if rejected != *reported {
+        writeln!(
+            sink,
+            "warning: GUI logging rejected {} records (queue full, oversized, or closed)",
+            rejected
+        )?;
+        *reported = rejected;
+    }
+    Ok(())
 }
 
 // One MakeWriter lifetime is one formatted tracing record. Reject oversized

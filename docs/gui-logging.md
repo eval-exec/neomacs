@@ -3,7 +3,8 @@
 The final GUI frontend routes tracing stdout through a lossy bounded queue:
 256 records, at most 64 KiB per record, plus one in-flight record. Oversized or
 full-queue records are rejected whole and counted; the worker reports the
-cumulative loss on a subsequent successful write. Guard drop requests a bounded
+cumulative loss on a subsequent successful write and once more when it stops,
+unless the sink has already failed. Guard drop requests a bounded
 best-effort drain without joining or writing to the blocked sink. Process exit
 may discard accepted diagnostics. This is not a durable delivery receipt.
 

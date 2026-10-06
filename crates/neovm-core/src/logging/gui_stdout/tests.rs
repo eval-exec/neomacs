@@ -110,6 +110,30 @@ fn size_limit_rejects_whole_records_without_truncation() {
 }
 
 #[test]
+fn rejection_after_last_record_is_reported_on_shutdown() {
+    let (_release, release_rx) = mpsc::channel();
+    let (flushed_tx, flushed) = mpsc::channel();
+    let (writer, guard) = start(
+        GatedSink {
+            entered: None,
+            release: release_rx,
+            flushed: flushed_tx,
+            bytes: Vec::new(),
+        },
+        2,
+    )
+    .unwrap();
+    emit(&writer, &vec![b'x'; RECORD_BYTES + 1]);
+    assert_eq!(guard.rejected_records(), 1);
+    drop(guard);
+    let output = String::from_utf8(flushed.recv_timeout(Duration::from_secs(2)).unwrap()).unwrap();
+    assert!(
+        output.contains("GUI logging rejected 1 records"),
+        "{output:?}"
+    );
+}
+
+#[test]
 fn sink_failure_closes_admission_and_is_counted() {
     struct BrokenSink(mpsc::Sender<()>);
     impl Write for BrokenSink {
