@@ -4005,3 +4005,6 @@ fn buffer_property_overlay_and_symbol_roots_survive_collection_after_edits() {
 
 #[cfg(test)]
 mod transpose_anchor_test;
+
+#[cfg(test)]
+mod foreign_marker_probe_test;

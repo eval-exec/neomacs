@@ -53,6 +53,14 @@ fn oracle_gdn_buf18() {
 }
 
 #[test]
+fn oracle_gdn_buf19() {
+    common::assert_oracle_parity_expect(
+        r#"(let ((b (generate-new-buffer " o"))) (with-current-buffer b (insert "é中😀abcd")) (with-temp-buffer (insert "abcdefghijklmnop") (let ((m (with-current-buffer b (copy-marker 4)))) (prog1 (list (char-after m) (char-before m)) (kill-buffer b)))))"#,
+        expect_test::expect![[r#""OK (106 105)""#]],
+    );
+}
+
+#[test]
 fn oracle_gdn_word_motion_scripts_categories_and_overrides() {
     common::assert_oracle_parity_expect(
         r#"(list
@@ -193,6 +201,27 @@ fn oracle_gdn_native_error_quoting_styles() {
       '(curve grave straight))"#,
         expect_test::expect![[
             r#""OK (((error \"Characters in ‘subst-char-in-region’ have different byte-lengths\") (error \"Cannot swap a dead buffer’s text\")) ((error \"Characters in `subst-char-in-region' have different byte-lengths\") (error \"Cannot swap a dead buffer's text\")) ((error \"Characters in 'subst-char-in-region' have different byte-lengths\") (error \"Cannot swap a dead buffer's text\")))""#
+        ]],
+    );
+}
+
+#[test]
+fn oracle_gdn_buffer_validation_and_encoding_shapes() {
+    common::assert_oracle_parity_expect(
+        r#"(list
+      (mapcar (lambda (arg) (condition-case e (delete-char arg)
+        (error (list (car e) (cadr e)
+          (if (markerp (caddr e)) 'marker (caddr e))))))
+        (list nil 1.0 'a (expt 2 70) (point-marker)))
+      (condition-case e (insert-buffer-substring-no-properties nil) (error e))
+      (condition-case e (char-after (make-marker)) (error e))
+      (condition-case e (char-before (make-marker)) (error e))
+      (with-temp-buffer (set-buffer-multibyte nil) (insert (unibyte-string 97 233))
+        (subst-char-in-region 1 3 #x161 #x1ff) (string-to-list (buffer-string)))
+      (with-temp-buffer (insert "aé") (subst-char-in-region 1 3 ?é ?ü)
+        (buffer-string)))"#,
+        expect_test::expect![[
+            r#""OK (((wrong-type-argument fixnump nil) (wrong-type-argument fixnump 1.0) (wrong-type-argument fixnump a) (wrong-type-argument fixnump 1180591620717411303424) (wrong-type-argument fixnump marker)) (wrong-type-argument stringp nil) (error \"Marker does not point anywhere\") (error \"Marker does not point anywhere\") (255 233) \"aü\")""#
         ]],
     );
 }

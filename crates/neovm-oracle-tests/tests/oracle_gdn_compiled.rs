@@ -4,6 +4,31 @@
 mod common;
 
 #[test]
+fn oracle_gdn_compiled_foreign_marker_reads() {
+    // GNU bytecode.c:1440-1442 delegates Bchar_after to editfns.c:1052-1057.
+    // bytecomp.el:5956-5958 rewrites char-before; runtime funcall also checks
+    // the primitive's distinct foreign-marker byte coordinates.
+    common::assert_oracle_parity_expect(
+        r#"(progn (require 'bytecomp)
+  (let ((fn (byte-compile (lambda (m before)
+      (list (char-after m) (char-before m) (funcall before m)))))
+        (donor (generate-new-buffer " gdn-compiled-marker")))
+    (unwind-protect
+      (progn
+        (with-current-buffer donor (insert "é中😀abcd"))
+        (mapcar (lambda (shape)
+          (with-temp-buffer
+            (when (eq shape 'unibyte) (set-buffer-multibyte nil))
+            (insert (if (eq shape 'mixed) "é中😀abcdefghijk" "abcdefghijklmnop"))
+            (let ((m (with-current-buffer donor (copy-marker 4))) answer)
+              (dotimes (_ 20) (setq answer (funcall fn m #'char-before))) answer)))
+          '(unibyte ascii-multibyte mixed)))
+      (kill-buffer donor))))"#,
+        expect_test::expect![[r#""OK ((106 99 105) (106 99 105) (97 128512 128512))""#]],
+    );
+}
+
+#[test]
 fn oracle_gdn_compiled_script_word_motion() {
     // GNU bytecode.c:1492-1494 delegates Bforward_word to syntax.c:1477-1556.
     common::assert_oracle_parity_expect(

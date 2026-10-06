@@ -3821,6 +3821,39 @@ impl Buffer {
         self.text.char_code_at_emacs_byte_pos(pos)
     }
 
+    /// Read at a marker byte coordinate originating in another buffer.
+    ///
+    /// GNU editfns.c:1052-1072 reuses that byte coordinate in the current
+    /// buffer. At a continuation byte it violates character.h:382's decoder
+    /// precondition, so GNU provides no stable result there. Keep the normal
+    /// character-boundary API strict and use bounded safe decoding for this
+    /// input. This pure read retains no borrowed storage across callbacks.
+    pub(crate) fn char_code_after_foreign_marker_byte_pos(&self, pos: EmacsBytePos) -> Option<u32> {
+        let end = self.total_emacs_byte_end_pos();
+        if pos >= end {
+            return None;
+        }
+        let lead = self.text.byte_at_emacs_byte_pos(pos);
+        if !self.get_multibyte() || (lead & 0xC0) != 0x80 {
+            return self.char_code_after_emacs_byte_pos(pos);
+        }
+        self.decode_foreign_marker_bytes(pos, end)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn decode_foreign_marker_bytes(&self, pos: EmacsBytePos, end: EmacsBytePos) -> Option<u32> {
+        let available = end.saturating_offset_from(pos).get();
+        let mut bytes = [0; crate::emacs_core::emacs_char::MAX_MULTIBYTE_LENGTH];
+        let length = available.min(bytes.len());
+        for (offset, byte) in bytes[..length].iter_mut().enumerate() {
+            *byte = self
+                .text
+                .byte_at_emacs_byte_pos(pos.add_len(EmacsByteLen::new(offset)));
+        }
+        Some(crate::emacs_core::emacs_char::string_char(&bytes[..length]).0)
+    }
+
     /// Character immediately before Emacs byte position `pos`, or `None`.
     pub fn char_before_emacs_byte_pos(&self, pos: EmacsBytePos) -> Option<char> {
         self.char_code_before_emacs_byte_pos(pos)

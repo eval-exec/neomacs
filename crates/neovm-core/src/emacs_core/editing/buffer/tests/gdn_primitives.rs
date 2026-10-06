@@ -105,3 +105,14 @@ fn gdn_buf18() {
     );
     assert_eq!(runtime_startup_eval_one(form), expected);
 }
+
+#[test]
+fn gdn_buf19() {
+    let form = include_str!("gdn_primitives_cases/buf19.el");
+    let expected = gnu_fixture(
+        "buf19",
+        form,
+        include_str!("gdn_primitives_cases/buf19.expect"),
+    );
+    assert_eq!(runtime_startup_eval_one(form), expected);
+}

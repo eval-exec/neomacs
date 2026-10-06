@@ -4875,14 +4875,30 @@ pub(crate) fn builtin_char_after(eval: &mut super::eval::Context, args: Vec<Valu
 pub(crate) fn builtin_char_after_1(eval: &mut super::eval::Context, pos: Value) -> EvalResult {
     let args: [Value; 1] = [pos];
     expect_max_args("char-after", &args, 1)?;
-    let buf = eval
-        .buffers
-        .current_buffer()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let buf = eval.buffers.current_buffer().ok_or_else(|| {
+        signal(
+            LispCondition::Error,
+            vec![Value::string("No current buffer")],
+        )
+    })?;
     let accessible = buf.accessible_emacs_byte_region();
     let byte_pos = if args.is_empty() || args[0].is_nil() {
         let point = buf.point_emacs_byte_pos();
         accessible.contains(point).then_some(point)
+    } else if pos.is_marker() {
+        // GNU editfns.c:1052-1057/1085-1090 uses the marker's own byte
+        // position even when its buffer differs from the current buffer.
+        let location = super::marker::marker_location_or_signal(&eval.buffers, pos)?;
+        let byte_pos = location.byte_pos();
+        if !accessible.contains(byte_pos) {
+            return Ok(Value::NIL);
+        }
+        let code = if location.buffer() == buf.id {
+            buf.char_code_after_emacs_byte_pos(byte_pos)
+        } else {
+            buf.char_code_after_foreign_marker_byte_pos(byte_pos)
+        };
+        return Ok(code.map_or(Value::NIL, |code| Value::fixnum(i64::from(code))));
     } else {
         let pos = expect_integer_or_marker_in_buffers(&eval.buffers, &args[0])?;
         if pos <= 0 {
@@ -4913,16 +4929,25 @@ pub(crate) fn builtin_char_before(eval: &mut super::eval::Context, args: Vec<Val
 pub(crate) fn builtin_char_before_1(eval: &mut super::eval::Context, pos: Value) -> EvalResult {
     let args: [Value; 1] = [pos];
     expect_max_args("char-before", &args, 1)?;
-    let buf = eval
-        .buffers
-        .current_buffer()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    let buf = eval.buffers.current_buffer().ok_or_else(|| {
+        signal(
+            LispCondition::Error,
+            vec![Value::string("No current buffer")],
+        )
+    })?;
     let accessible = buf.accessible_emacs_byte_region();
     let byte_pos = if args.is_empty() || args[0].is_nil() {
         let point = buf.point_emacs_byte_pos();
         accessible
             .contains_preceding_char_boundary(point)
             .then_some(point)
+    } else if pos.is_marker() {
+        // GNU editfns.c:1052-1057/1085-1090 uses the marker's own byte
+        // position even when its buffer differs from the current buffer.
+        let byte_pos = super::marker::marker_location_or_signal(&eval.buffers, pos)?.byte_pos();
+        accessible
+            .contains_preceding_char_boundary(byte_pos)
+            .then_some(byte_pos)
     } else {
         let pos = expect_integer_or_marker_in_buffers(&eval.buffers, &args[0])?;
         if pos <= 0 {
