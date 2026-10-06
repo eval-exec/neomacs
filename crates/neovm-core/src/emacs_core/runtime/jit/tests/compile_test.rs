@@ -4163,20 +4163,18 @@ fn cbsym_classifier_selects_shipset_by_name() {
 }
 
 #[test]
-fn cbsym_shipset_excludes_special_and_writeback_names() {
-    // The `dispatch_vm_builtin_unrooted` special names + the writeback /
-    // re-entrant names must NEVER classify: the fast shim funnels through
-    // `funcall_general`, a DIFFERENT dispatch than the special-name arm, and
-    // aset/fillarray carry a writeback protocol. Allowlist construction makes
+fn cbsym_shipset_excludes_special_and_reentrant_names() {
+    // The `dispatch_vm_builtin_unrooted` special names and reentrant names
+    // must NEVER classify: the fast shim funnels through `funcall_general`,
+    // a different dispatch than the special-name arm. Allowlist construction makes
     // this automatic; assert it functionally (a collision would classify one).
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::intern::intern;
     let _ev = Context::new();
-    for name in
-        CBSYM_SPECIAL_NAMES
-            .iter()
-            .copied()
-            .chain(["aset", "fillarray", "funcall", "apply", "eval"])
+    for name in CBSYM_SPECIAL_NAMES
+        .iter()
+        .copied()
+        .chain(["funcall", "apply", "eval"])
     {
         assert!(
             cbsym_spec_kind(intern(name), 0).is_none(),

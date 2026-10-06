@@ -1,6 +1,5 @@
 //! Bytecode virtual machine — stack-based interpreter.
 
-use std::collections::HashSet;
 use std::sync::OnceLock;
 
 use smallvec::SmallVec;
@@ -471,8 +470,6 @@ thread_local! {
     static ITERATIVE_CONTEXT_BC_FRAMES_MAX: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static GENERIC_BYTECODE_CLEANUP_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static OPCODE_DISPATCH_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static MUTATING_WRITEBACK_CLASSIFICATION_COUNT: std::cell::Cell<usize> =
-        const { std::cell::Cell::new(0) };
     static INLINE_BUILTIN_DIRECT_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static ARITH_INTEGER_FAST_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -550,16 +547,6 @@ fn reset_opcode_dispatch_count() {
 #[cfg(test)]
 fn opcode_dispatch_count() -> usize {
     OPCODE_DISPATCH_COUNT.with(std::cell::Cell::get)
-}
-
-#[cfg(test)]
-fn reset_mutating_writeback_classification_count() {
-    MUTATING_WRITEBACK_CLASSIFICATION_COUNT.with(|count| count.set(0));
-}
-
-#[cfg(test)]
-fn mutating_writeback_classification_count() -> usize {
-    MUTATING_WRITEBACK_CLASSIFICATION_COUNT.with(std::cell::Cell::get)
 }
 
 #[cfg(test)]
@@ -1874,12 +1861,6 @@ fn logior_sym_id() -> SymId {
 fn logxor_sym_id() -> SymId {
     static LOGXOR: OnceLock<SymId> = OnceLock::new();
     *LOGXOR.get_or_init(|| intern("logxor"))
-}
-
-#[inline(always)]
-fn fillarray_sym_id() -> SymId {
-    static FILLARRAY: OnceLock<SymId> = OnceLock::new();
-    *FILLARRAY.get_or_init(|| intern("fillarray"))
 }
 
 /// A tiny direct-mapped cache for symbol function cells proven to contain
@@ -5031,31 +5012,12 @@ impl<'a> Vm<'a> {
                             callers.enter_callee(callee_frame);
                             continue 'frame;
                         }
-                        let writeback_names = if matches!(
-                            target,
-                            ResolvedStackCallTarget::Interpreter { .. }
-                                | ResolvedStackCallTarget::ByteCode { .. }
-                        ) {
-                            // The closed target proof excludes GNU's native
-                            // aset/fillarray implementations.  Bytecode may
-                            // mutate a string through an explicit primitive,
-                            // but the ordinary call itself needs no host-side
-                            // replacement-object writeback.
-                            None
-                        } else if n > 0 && stk!()[args_start].is_string() {
-                            self.writeback_mutating_callable_names(&func_val)
-                        } else {
-                            None
-                        };
-                        let writeback_args = writeback_names
-                            .as_ref()
-                            .map(|_| stk!()[args_start..].iter().copied().collect::<LispArgVec>());
                         let result = if debug_armed {
                             let args: LispArgVec = stk!()[args_start..].iter().copied().collect();
                             vm_try!(self.with_bytecode_call_depth(|vm| {
                                 vm.call_function_debugged(func_val, args)
                             }))
-                        } else if writeback_names.is_none() {
+                        } else {
                             cursor.publish(self.ctx);
                             if let Err(flow) = self.enter_bytecode_call_depth() {
                                 resume_flow!(flow)
@@ -5107,28 +5069,7 @@ impl<'a> Vm<'a> {
                                     }
                                 }
                             }
-                        } else {
-                            let args: LispArgVec = stk!()[args_start..].iter().copied().collect();
-                            vm_try!(self.with_bytecode_call_depth(|vm| {
-                                vm.call_function(func_val, args)
-                            }))
                         };
-                        if let (Some((called_name, alias_target)), Some(writeback_args)) =
-                            (writeback_names.as_ref(), writeback_args.as_ref())
-                        {
-                            let root_scope = self.ctx.save_vm_roots();
-                            self.push_dynamic_vm_root(result);
-                            for value in writeback_args.iter().copied() {
-                                self.push_dynamic_vm_root(value);
-                            }
-                            self.maybe_writeback_mutating_first_arg(
-                                called_name,
-                                *alias_target,
-                                writeback_args,
-                                &result,
-                            );
-                            self.ctx.restore_vm_roots(root_scope);
-                        }
                         stk!().truncate(stack_after_call);
                         stk_push!(result);
                     }
@@ -5149,70 +5090,8 @@ impl<'a> Vm<'a> {
                             } else {
                                 Value::NIL
                             };
-                            // Spread the trailing list IN PLACE on the GC-traced
-                            // bc_buf: the explicit args a1..a(n-1) already sit
-                            // contiguously at [args_start, args_start + n - 1);
-                            // replace the list's slot with its elements (GNU
-                            // Fapply builds the same contiguous spread, then
-                            // funcall reads it — eval.c). list_to_vec keeps the
-                            // existing dotted/circular semantics (errors -> empty
-                            // spread) and its Floyd cycle detection. Checked Vec
-                            // ops only: the extension deliberately lives above
-                            // this frame's declared max-stack region, which
-                            // nothing inspects before the call returns (handler
-                            // watermarks below it truncate through it correctly
-                            // on a nonlocal exit).
-                            let last = stk!()[args_start + n - 1];
-                            let spread = list_to_vec(&last).unwrap_or_default();
-                            // The spread grows bc_buf (reserve can realloc), so it
-                            // runs published; reacquire picks up the new base.
-                            cursor.publish(self.ctx);
-                            self.ctx.bc_buf.truncate(args_start + n - 1);
-                            self.ctx.bc_buf.reserve(spread.len());
-                            self.ctx.bc_buf.extend_from_slice(&spread);
-                            cursor = StackCursor::acquire(self.ctx);
-                            let total = n - 1 + spread.len();
-                            // Writeback gate tests the first POST-spread argument
-                            // (for (apply f '("str" ...)) the string comes from
-                            // the spread).
-                            let writeback_names = if total > 0 && stk!()[args_start].is_string() {
-                                self.writeback_mutating_callable_names(&func_val)
-                            } else {
-                                None
-                            };
-                            let writeback_args: Option<LispArgVec> =
-                                writeback_names.as_ref().map(|_| {
-                                    stk!()[args_start..args_start + total]
-                                        .iter()
-                                        .copied()
-                                        .collect()
-                                });
-                            // Same call protocol as before (traced call_function:
-                            // backtrace push + generic dispatch, no depth guard,
-                            // no direct-builtin fast path), in its stack-args
-                            // flavor — the spread args stay rooted on bc_buf for
-                            // the whole call; func_val stays rooted in its own
-                            // caller slot below args_start.
                             let result =
-                                vm_try!(self.call_function_from_stack_args(
-                                    func_val, args_start, total, false,
-                                ));
-                            if let (Some((called_name, alias_target)), Some(writeback_args)) =
-                                (writeback_names.as_ref(), writeback_args.as_ref())
-                            {
-                                let root_scope = self.ctx.save_vm_roots();
-                                self.push_dynamic_vm_root(result);
-                                for value in writeback_args.iter().copied() {
-                                    self.push_dynamic_vm_root(value);
-                                }
-                                self.maybe_writeback_mutating_first_arg(
-                                    called_name,
-                                    *alias_target,
-                                    writeback_args,
-                                    &result,
-                                );
-                                self.ctx.restore_vm_roots(root_scope);
-                            }
+                                vm_try!(self.apply_arguments_from_stack(func_val, args_start, n,));
                             stk!().truncate(stack_after_call);
                             stk_push!(result);
                         }
@@ -6319,31 +6198,12 @@ impl<'a> Vm<'a> {
                         vm_profile::bump_entry(name_id, vm_profile::ENTRY_CALLBUILTIN);
                         let n = *n as usize;
                         let args_start = stk!().len().saturating_sub(n);
-                        let writeback_args = (stk!()
-                            .get(args_start)
-                            .is_some_and(|value| value.is_string())
-                            && Self::mutates_first_arg_sym(name_id))
-                        .then(|| stk!()[args_start..].iter().copied().collect::<LispArgVec>());
                         // This is the internal representation of a primitive
                         // opcode, never a Bcall specialization. GNU calls the
                         // primitive directly; genuine calls remain Op::Call.
                         let result = vm_try!(
                             self.dispatch_vm_builtin_by_id_from_stack(func, name_id, args_start, n)
                         );
-                        if let Some(writeback_args) = writeback_args.as_ref() {
-                            let root_scope = self.ctx.save_vm_roots();
-                            self.push_dynamic_vm_root(result);
-                            for value in writeback_args.iter().copied() {
-                                self.push_dynamic_vm_root(value);
-                            }
-                            self.maybe_writeback_mutating_first_arg(
-                                resolve_sym(name_id),
-                                None,
-                                writeback_args,
-                                &result,
-                            );
-                            self.ctx.restore_vm_roots(root_scope);
-                        }
                         stk!().truncate(args_start);
                         stk_push!(result);
                         poll_quit!();
@@ -6375,7 +6235,7 @@ impl<'a> Vm<'a> {
                                 args_start,
                                 n,
                             )),
-                            InlineSubrKind::Generic | InlineSubrKind::Writeback => {
+                            InlineSubrKind::Generic => {
                                 vm_try!(self.dispatch_call_builtin_sym(func, *sym, args_start, n))
                             }
                         };
@@ -6394,208 +6254,12 @@ impl<'a> Vm<'a> {
 
     // -- Helper methods --
 
-    /// Same predicate as [`Self::mutates_first_arg_name`] as one SymId
-    /// compare — the per-call classification below must not resolve and
-    /// string-compare symbol names on the hot path.
-    #[inline(always)]
-    fn mutates_first_arg_sym(id: SymId) -> bool {
-        // `aset` is NOT here: it mutates its array in place and returns the
-        // same object, so no reference to it can go stale. See
-        // `maybe_writeback_mutating_first_arg`.
-        id == fillarray_sym_id()
-    }
-
-    #[inline(never)]
-    fn writeback_mutating_callable_names(
-        &self,
-        func_val: &Value,
-    ) -> Option<(&'static str, Option<&'static str>)> {
-        #[cfg(test)]
-        MUTATING_WRITEBACK_CLASSIFICATION_COUNT.with(|count| count.set(count.get() + 1));
-        match func_val.kind() {
-            ValueKind::Subr(_) | ValueKind::Veclike(VecLikeType::Subr)
-                if func_val.as_subr_id().is_some() =>
-            {
-                let id = func_val.as_subr_id().unwrap();
-                Self::mutates_first_arg_sym(id).then(|| (resolve_sym(id), None))
-            }
-            ValueKind::Symbol(id) => {
-                if Self::mutates_first_arg_sym(id) {
-                    return Some((resolve_sym(id), None));
-                }
-                let alias_target =
-                    self.ctx
-                        .obarray
-                        .symbol_function_id(id)
-                        .and_then(|bound| match bound.kind() {
-                            ValueKind::Symbol(tid) => {
-                                Self::mutates_first_arg_sym(tid).then(|| resolve_sym(tid))
-                            }
-                            ValueKind::Subr(_) | ValueKind::Veclike(VecLikeType::Subr) => {
-                                let tid = bound.as_subr_id().unwrap();
-                                Self::mutates_first_arg_sym(tid).then(|| resolve_sym(tid))
-                            }
-                            _ => None,
-                        });
-                alias_target.map(|target| (resolve_sym(id), Some(target)))
-            }
-            _ => None,
-        }
-    }
-
     fn builtin_name_id(name: &str) -> SymId {
         lookup_interned(name).unwrap_or_else(|| intern(name))
     }
 
     pub(crate) fn apply_builtin_id() -> SymId {
         Self::cached_builtin_id("apply", &APPLY_ID)
-    }
-
-    /// Patch every reference to a string that a mutating builtin REPLACED
-    /// rather than mutated.
-    ///
-    /// `aset` used to be one of those: it rebuilt the whole string, so the
-    /// caller's variable still pointed at the old object and every reference
-    /// had to be found and rewritten. It stopped doing that — rebuilding made
-    /// byte-at-a-time transforms quadratic, so it mutates the bytes in place
-    /// and returns the SAME object (both of `aset_string_replacement`'s `Ok`
-    /// arms are `Ok(*array)`). The `aset` arm here outlived that change: it
-    /// re-ran `aset_string_replacement` — applying the byte write a second
-    /// time — only to compare the result against the original and always find
-    /// them identical. On `dhrystone` that was a redundant string mutation for
-    /// every one of ~60M `aset`s, and it could not have been otherwise: the
-    /// arm called OUR builtin directly, so no redefinition could make it
-    /// return a different object.
-    ///
-    /// Only `fillarray` remains, and only because it is reached through a
-    /// function CELL a user could have redefined; our own `fillarray` mutates
-    /// in place and returns its argument too.
-    #[inline(never)]
-    fn maybe_writeback_mutating_first_arg(
-        &mut self,
-        called_name: &str,
-        alias_target: Option<&str>,
-        call_args: &[Value],
-        result: &Value,
-    ) {
-        if called_name != "fillarray" && alias_target != Some("fillarray") {
-            return;
-        }
-
-        // Copy the argument out of the caller's buffer, as `replacement` is
-        // copied out of `result`. The walks below hand `from` to hash-table
-        // mutation closures, and the concurrent mutation path runs those out
-        // of line: a `from` pointing into `call_args` would make the
-        // interpreter's argument buffer escape at all six run_loop call sites
-        // of this function, which reloads it around each call and reshuffled
-        // the whole dispatch loop's register allocation (+2.5% VM tier).
-        let Some(&first_arg) = call_args.first() else {
-            return;
-        };
-        if !first_arg.is_string() {
-            return;
-        }
-
-        if !result.is_string() || eq_value(&first_arg, result) {
-            return;
-        }
-        let replacement = *result;
-
-        if crate::emacs_core::value::equal_value(&first_arg, &replacement, 0) {
-            return;
-        }
-        let first_arg = &first_arg;
-
-        let mut visited = HashSet::new();
-        for value in self.ctx.bc_buf.iter_mut() {
-            Self::replace_alias_refs_in_value(value, first_arg, &replacement, &mut visited);
-        }
-        // Walk the lexenv cons alist and replace alias refs in binding values
-        {
-            let mut lexenv_val = self.ctx.lexenv;
-            Self::replace_alias_refs_in_value(
-                &mut lexenv_val,
-                first_arg,
-                &replacement,
-                &mut visited,
-            );
-            self.ctx.lexenv = lexenv_val;
-        }
-        // dynamic stack removed — specbind writes directly to obarray
-        if let Some(current_id) = self.ctx.buffers.current_buffer_id()
-            && let Some(buf) = self.ctx.buffers.get_mut(current_id)
-        {
-            for value in buf.bound_buffer_local_values_mut() {
-                Self::replace_alias_refs_in_value(value, first_arg, &replacement, &mut visited);
-            }
-        }
-
-        self.ctx.obarray.for_each_value_cell_mut(|value| {
-            Self::replace_alias_refs_in_value(value, first_arg, &replacement, &mut visited);
-        });
-    }
-
-    fn replace_alias_refs_in_value(
-        value: &mut Value,
-        from: &Value,
-        to: &Value,
-        visited: &mut HashSet<usize>,
-    ) {
-        if eq_value(value, from) {
-            *value = *to;
-            return;
-        }
-
-        match value.kind() {
-            ValueKind::Cons => {
-                let key = value.bits() ^ 0x1;
-                if !visited.insert(key) {
-                    return;
-                }
-                let mut new_car = value.cons_car();
-                let mut new_cdr = value.cons_cdr();
-                Self::replace_alias_refs_in_value(&mut new_car, from, to, visited);
-                Self::replace_alias_refs_in_value(&mut new_cdr, from, to, visited);
-                value.set_car(new_car);
-                value.set_cdr(new_cdr);
-            }
-            ValueKind::Veclike(VecLikeType::Vector) => {
-                let key = value.bits() ^ 0x2;
-                if !visited.insert(key) {
-                    return;
-                }
-                let mut data = value.as_vector_data().unwrap().clone();
-                for item in data.iter_mut() {
-                    Self::replace_alias_refs_in_value(item, from, to, visited);
-                }
-                let _ = value.replace_vector_data(data);
-            }
-            ValueKind::Veclike(VecLikeType::HashTable) => {
-                let key = value.bits() ^ 0x4;
-                if !visited.insert(key) {
-                    return;
-                }
-                let old_ptr = match from.kind() {
-                    ValueKind::String => Some(from.bits()),
-                    _ => None,
-                };
-                let new_ptr = match to.kind() {
-                    ValueKind::String => Some(to.bits()),
-                    _ => None,
-                };
-                let _ = value.with_hash_table_mut(|ht| {
-                    if matches!(ht.test, HashTableTest::Eq | HashTableTest::Eql)
-                        && let (Some(old_ptr), Some(new_ptr)) = (old_ptr, new_ptr)
-                    {
-                        ht.replace_pointer_key(old_ptr, new_ptr, *to);
-                    }
-                    for item in ht.data.values_mut() {
-                        Self::replace_alias_refs_in_value(item, from, to, visited);
-                    }
-                });
-            }
-            _ => {}
-        }
     }
 
     /// GNU bytecode `Bvarref` by SymId.
@@ -7309,8 +6973,8 @@ impl<'a> Vm<'a> {
         self.assign_var_id(name_id, value)
     }
 
-    /// `Op::CallBuiltin` for JIT code: direct primitive dispatch, mutating
-    /// string writeback and a quit poll. Symbol calls use `call_for_jit` and
+    /// `Op::CallBuiltin` for JIT code: direct primitive dispatch and a quit
+    /// poll. Symbol calls use `call_for_jit` and
     /// retain function-cell/override resolution.
     pub(crate) fn callbuiltin_for_jit(&mut self, name_id: SymId, args: LispArgVec) -> EvalResult {
         self.callbuiltinsym_for_jit(name_id, args)
@@ -7318,35 +6982,42 @@ impl<'a> Vm<'a> {
 
     /// `Op::CallBuiltinSym` for JIT code — ALWAYS the direct named dispatch,
     /// never the function cell (GNU parity: bytecode-inlined primitives
-    /// bypass advice; see the interpreter arm's comment), plus writeback and
-    /// the trailing quit poll.
+    /// bypass advice; see the interpreter arm's comment), plus the trailing
+    /// quit poll.
     pub(crate) fn callbuiltinsym_for_jit(&mut self, sym: SymId, args: LispArgVec) -> EvalResult {
-        // See `callbuiltin_for_jit`: id-keyed, name resolved only for writeback.
-        let writeback_args = (args.first().is_some_and(|value| value.is_string())
-            && Self::mutates_first_arg_sym(sym))
-        .then(|| args.clone());
         let result = self.dispatch_vm_builtin_id(sym, args)?;
-        if let Some(writeback_args) = writeback_args.as_ref() {
-            let root_scope = self.ctx.save_vm_roots();
-            self.push_dynamic_vm_root(result);
-            for value in writeback_args.iter().copied() {
-                self.push_dynamic_vm_root(value);
-            }
-            self.maybe_writeback_mutating_first_arg(
-                resolve_sym(sym),
-                None,
-                writeback_args,
-                &result,
-            );
-            self.ctx.restore_vm_roots(root_scope);
-        }
         self.ctx.maybe_quit()?;
         Ok(result)
     }
 
+    /// Spread an `Op::Apply` suffix after its caller publishes the cursor.
+    /// Explicit arguments stay below the trailing list slot. The callee's
+    /// operand stays below `args_start`; the expanded arguments remain rooted
+    /// on `bc_buf` through the same generic stack-call protocol.
+    /// The synchronous call uses only this VM's owning mutator context.
+    #[inline(never)]
+    fn apply_arguments_from_stack(
+        &mut self,
+        func_val: Value,
+        args_start: usize,
+        nargs: usize,
+    ) -> EvalResult {
+        // The opcode calls this helper only for a positive operand count.
+        // Preserve list_to_vec's Floyd check and empty fallback for dotted or
+        // circular lists; this boundary does not change Lisp behavior.
+        let last = self.ctx.bc_buf[args_start + nargs - 1];
+        let spread = list_to_vec(&last).unwrap_or_default();
+        self.ctx.bc_buf.truncate(args_start + nargs - 1);
+        self.ctx.bc_buf.reserve(spread.len());
+        self.ctx.bc_buf.extend_from_slice(&spread);
+        let total = nargs - 1 + spread.len();
+        // No added bytecode-call depth guard or direct-builtin fast path.
+        self.call_function_from_stack_args(func_val, args_start, total, false)
+    }
+
     /// One bytecode-level `apply` with the interpreter's `Op::Apply` semantics:
-    /// spread the last argument as a list, writeback detection + after-call
-    /// writeback, and the plain traced `call_function` path (`Op::Apply` has no
+    /// spread the last argument as a list and use the plain traced
+    /// `call_function` path (`Op::Apply` has no
     /// nesting-depth guard — mirror that exactly). Used by the JIT apply shim;
     /// keep in sync with the `Op::Apply` arm of `run_loop`. The caller polls
     /// `maybe_quit` first and roots `func_val` + `raw_args` (the spread values
@@ -7364,40 +7035,15 @@ impl<'a> Vm<'a> {
             let spread = list_to_vec(&last).unwrap_or_default();
             raw_args.extend(spread);
         }
-        let args = raw_args;
-        let writeback_names = if args.first().is_some_and(|value| value.is_string()) {
-            self.writeback_mutating_callable_names(&func_val)
-        } else {
-            None
-        };
-        let writeback_args = writeback_names.as_ref().map(|_| args.clone());
-        let result = self.call_function(func_val, args)?;
-        if let (Some((called_name, alias_target)), Some(writeback_args)) =
-            (writeback_names.as_ref(), writeback_args.as_ref())
-        {
-            let root_scope = self.ctx.save_vm_roots();
-            self.push_dynamic_vm_root(result);
-            for value in writeback_args.iter().copied() {
-                self.push_dynamic_vm_root(value);
-            }
-            self.maybe_writeback_mutating_first_arg(
-                called_name,
-                *alias_target,
-                writeback_args,
-                &result,
-            );
-            self.ctx.restore_vm_roots(root_scope);
-        }
-        Ok(result)
+        self.call_function(func_val, raw_args)
     }
 
     /// One bytecode-level function call with the interpreter's `Op::Call`
-    /// semantics: mutating-string-arg writeback detection, the lisp-nesting
-    /// depth guard, the traced `call_function` path, and the after-call
-    /// writeback. Used by the JIT call shim (`jit::compile::neovm_jit_call`) so
+    /// semantics: the Lisp nesting-depth guard and traced `call_function`
+    /// path. Used by the JIT call shim (`jit::compile::neovm_jit_call`) so
     /// compiled code re-enters the runtime through exactly the interpreter's
-    /// call path — keep in sync with the `Op::Call` arm of `run_loop` (which
-    /// keeps an in-place stack-args fast path for the no-writeback case).
+    /// call path — keep in sync with the `Op::Call` arm of `run_loop`, which
+    /// keeps arguments rooted on the operand stack.
     ///
     /// The `nargs` arguments are ALREADY on `bc_buf` at `args_start` — the JIT
     /// shim pushed them straight from its native call-args slot, skipping a
@@ -7424,18 +7070,6 @@ impl<'a> Vm<'a> {
                 .collect();
             return self.with_bytecode_call_depth(|vm| vm.call_function_debugged(func_val, args));
         }
-        let first_is_string = nargs > 0 && self.ctx.bc_buf[args_start].is_string();
-        let writeback_names = if first_is_string {
-            self.writeback_mutating_callable_names(&func_val)
-        } else {
-            None
-        };
-        let writeback_args: Option<LispArgVec> = writeback_names.as_ref().map(|_| {
-            self.ctx.bc_buf[args_start..args_start + nargs]
-                .iter()
-                .copied()
-                .collect()
-        });
         // One resolution: the direct-builtin variant of the stack call covers
         // the builtin probe (same resolved callee, same dispatcher) and the
         // bytecode arm (backtrace span + one run_frame copy, as the
@@ -7445,22 +7079,6 @@ impl<'a> Vm<'a> {
         let result = self.with_bytecode_call_depth(|vm| {
             vm.call_function_from_stack_args(func_val, args_start, nargs, true)
         })?;
-        if let (Some((called_name, alias_target)), Some(writeback_args)) =
-            (writeback_names.as_ref(), writeback_args.as_ref())
-        {
-            let root_scope = self.ctx.save_vm_roots();
-            self.push_dynamic_vm_root(result);
-            for value in writeback_args.iter().copied() {
-                self.push_dynamic_vm_root(value);
-            }
-            self.maybe_writeback_mutating_first_arg(
-                called_name,
-                *alias_target,
-                writeback_args,
-                &result,
-            );
-            self.ctx.restore_vm_roots(root_scope);
-        }
         Ok(result)
     }
 
@@ -7494,9 +7112,7 @@ impl<'a> Vm<'a> {
     /// * the debugger dispatch (`dispatch_signal_result_if_needed`) + frame
     ///   pop with result.
     ///
-    /// NOT replicated, by static exclusion at the speculation site: the
-    /// aset/fillarray mutating-first-string-arg writeback (those names are
-    /// never speculated, site or resolved) and the `+`/`logand`/`logior`/
+    /// NOT replicated here: the `+`/`logand`/`logior`/
     /// `logxor` fixnum fast-value paths (all `Many`, never speculated — and
     /// they are pure result-equal shortcuts anyway).
     #[cfg(feature = "jit")]
@@ -8179,9 +7795,7 @@ impl<'a> Vm<'a> {
     /// so `callee` runs with no second resolution of the symbol, under a
     /// frame recording `called`, as GNU's `Bcall` records `call_fun`
     /// (src/bytecode.c:792-796). The rest is `call_for_jit_stack`'s
-    /// protocol: the entry debugger on `called`, one depth level. (Its
-    /// aset/fillarray first-argument writeback concerns subr callees; a
-    /// bytecode callee takes none, as before the frame named the symbol.)
+    /// protocol: the entry debugger on `called`, one depth level.
     #[cfg(feature = "jit")]
     pub(crate) fn call_resolved_bytecode_for_jit_stack(
         &mut self,
@@ -8353,9 +7967,8 @@ impl<'a> Vm<'a> {
     /// gained by them here) and no scratch roots (an interned symbol callee
     /// is obarray-rooted; the arguments are staged on the GC-traced bc_buf).
     /// Returns `None` for anything else — non-symbol callees, bytecode/
-    /// lambda/alias/advice cells, compiler overrides, and the
-    /// fillarray/aset writeback shapes (including alias-to-subr, read off
-    /// the resolved cell) — the caller then takes the full Vm path.
+    /// lambda/alias/advice cells and compiler overrides — the caller then
+    /// takes the full Vm path.
     /// Mirrors the spec shim's stage-2 ctx-level dispatch precedent.
     pub(crate) fn call_builtin_symbol_for_jit(
         ctx: &mut crate::emacs_core::eval::Context,
@@ -8380,12 +7993,6 @@ impl<'a> Vm<'a> {
             }
             None => ResolvedBuiltinCallee::from_static_symbol(sym_id)?,
         };
-        if nargs > 0 && ctx.bc_buf[args_start].is_string() {
-            let target_id = cell.and_then(|value| value.as_subr_id()).unwrap_or(sym_id);
-            if Self::mutates_first_arg_sym(sym_id) || Self::mutates_first_arg_sym(target_id) {
-                return None;
-            }
-        }
         // Inline ctx-level bytecode-call depth protocol (GNU's Bcall depth,
         // floor-raise included) — the spec shim's stage-2 shape.
         ctx.depth += 1;
@@ -9383,8 +8990,8 @@ impl<'a> Vm<'a> {
     /// `run_loop`'s body so the giant dispatch match stays small: a registered
     /// builtin takes GNU's inline-opcode path (direct primitive call, no
     /// backtrace frame, no arity check); everything else keeps the framed
-    /// [`Self::dispatch_vm_builtin_by_id_from_stack`] path with the
-    /// string-mutation writeback. Arguments live in `ctx.bc_buf[args_start..]`;
+    /// [`Self::dispatch_vm_builtin_by_id_from_stack`] path.
+    /// Arguments live in `ctx.bc_buf[args_start..]`;
     /// the caller truncates and pushes the result.
     #[inline(never)]
     fn dispatch_call_builtin_sym(
@@ -9403,36 +9010,7 @@ impl<'a> Vm<'a> {
         if let Some(function) = Self::inline_builtin_function(sym) {
             return self.call_inline_builtin(function, args_start, nargs);
         }
-        let writeback_args = (self
-            .ctx
-            .bc_buf
-            .get(args_start)
-            .is_some_and(|value| value.is_string())
-            && Self::mutates_first_arg_sym(sym))
-        .then(|| {
-            self.ctx.bc_buf[args_start..args_start + nargs]
-                .iter()
-                .copied()
-                .collect::<LispArgVec>()
-        });
-        let result = self.dispatch_vm_builtin_by_id_from_stack(func, sym, args_start, nargs);
-        if let Some(writeback_args) = writeback_args.as_ref() {
-            let result = result?;
-            let root_scope = self.ctx.save_vm_roots();
-            self.push_dynamic_vm_root(result);
-            for value in writeback_args.iter().copied() {
-                self.push_dynamic_vm_root(value);
-            }
-            self.maybe_writeback_mutating_first_arg(
-                crate::emacs_core::intern::resolve_sym(sym),
-                None,
-                writeback_args,
-                &result,
-            );
-            self.ctx.restore_vm_roots(root_scope);
-            return Ok(result);
-        }
-        result
+        self.dispatch_vm_builtin_by_id_from_stack(func, sym, args_start, nargs)
     }
 
     /// The Rust primitive a GNU inline opcode calls directly (bytecode.c

@@ -55,6 +55,7 @@ never	emacs_core/runtime/bytecode/vm.rs	Vm::call_fixed_builtin_direct	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::call_function	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::call_function_debugged	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::call_function_from_stack_args	run_loop
+never	emacs_core/runtime/bytecode/vm.rs	Vm::apply_arguments_from_stack	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::call_function_untraced_from_stack	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::call_resolved_builtin_from_stack_args	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::can_enter_interpreter_frame_iteratively	run_loop
@@ -62,7 +63,6 @@ never	emacs_core/runtime/bytecode/vm.rs	Vm::complete_interpreter_frame_chain	run
 never	emacs_core/runtime/bytecode/vm.rs	Vm::dispatch_call_builtin_sym	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::dispatch_vm_builtin_by_id_from_stack	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::fast_path_var_ref	run_loop
-never	emacs_core/runtime/bytecode/vm.rs	Vm::maybe_writeback_mutating_first_arg	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::op_current_buffer	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::op_point	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::op_point_max	run_loop
@@ -70,7 +70,6 @@ never	emacs_core/runtime/bytecode/vm.rs	Vm::op_point_min	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::osr_transfer	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::resolve_stack_call_target	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::resume_flow_out_of_line	run_loop
-never	emacs_core/runtime/bytecode/vm.rs	Vm::writeback_mutating_callable_names	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	invalid_bytecode_flow	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	resolve_switch_target	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	trace_invalid_bytecode_site	run_loop
@@ -147,13 +146,11 @@ always	emacs_core/runtime/bytecode/vm.rs	Vm::dispatch_interpreter_stack_call	run
 always	emacs_core/runtime/bytecode/vm.rs	Vm::enter_bytecode_call_depth	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	Vm::install_iterative_interpreter_frame	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	Vm::leave_bytecode_call_depth	run_loop,inline
-always	emacs_core/runtime/bytecode/vm.rs	Vm::mutates_first_arg_sym	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	Vm::push_dynamic_vm_root	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	Vm::resolve_interpreter_stack_call_target	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	Vm::run_interpreter_driver	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	Vm::uses_interpreter_only_tier	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	Vm::with_dynamic_vm_roots	run_loop,inline
-always	emacs_core/runtime/bytecode/vm.rs	fillarray_sym_id	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	fixnum_ge	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	fixnum_gt	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	fixnum_le	run_loop,inline

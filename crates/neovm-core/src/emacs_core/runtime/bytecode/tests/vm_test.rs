@@ -2046,7 +2046,7 @@ fn vm_stackref_return_fusion_preserves_frame_limit_validation() {
 }
 
 #[test]
-fn vm_bytecode_callee_skips_native_string_writeback_classification() {
+fn vm_bytecode_callee_preserves_string_argument_identity() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new_minimal_vm_harness();
     let callee_symbol = intern("vm-bytecode-string-identity");
@@ -2079,7 +2079,6 @@ fn vm_bytecode_callee_skips_native_string_writeback_classification() {
     ];
     caller.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(2);
 
-    reset_mutating_writeback_classification_count();
     let result = {
         let mut vm = new_vm(&mut eval);
         vm.execute(&caller, vec![])
@@ -2087,11 +2086,6 @@ fn vm_bytecode_callee_skips_native_string_writeback_classification() {
     };
 
     assert_eq!(result, argument);
-    assert_eq!(
-        mutating_writeback_classification_count(),
-        0,
-        "a resolved bytecode callee cannot be native aset/fillarray"
-    );
 }
 
 #[test]
@@ -2175,7 +2169,7 @@ fn string_call_retaining_argument(callee: Value, string: Value, item: Value) -> 
     caller
 }
 
-struct VmAliasWritebackFixture {
+struct VmStringAliasFixture {
     original: Value,
     replacement: Value,
     table: Value,
@@ -2186,7 +2180,7 @@ struct VmAliasWritebackFixture {
     stack_base: usize,
 }
 
-fn vm_alias_writeback_fixture(eval: &mut Context, test: HashTableTest) -> VmAliasWritebackFixture {
+fn vm_string_alias_fixture(eval: &mut Context, test: HashTableTest) -> VmStringAliasFixture {
     eval.setup_thread_locals();
     let original = Value::string("abc");
     let replacement = Value::string("xyz");
@@ -2202,20 +2196,20 @@ fn vm_alias_writeback_fixture(eval: &mut Context, test: HashTableTest) -> VmAlia
             vector,
         );
     });
-    let symbol = intern("vm-alias-writeback-root");
+    let symbol = intern("vm-string-alias-root");
     eval.obarray.set_symbol_value_id(symbol, original);
     let binding = Value::cons(
-        Value::from_sym_id(intern("vm-alias-writeback-lexical")),
+        Value::from_sym_id(intern("vm-string-alias-lexical")),
         original,
     );
     eval.lexenv = Value::cons(binding, Value::NIL);
     let stack_base = eval.bc_buf.len();
     eval.bc_buf.extend([original, table, vector, cell]);
-    // Records are outside the replacement walk but remain ordinary GC roots.
+    // Records retain both independent strings as ordinary GC roots.
     // Keep both source strings live across the fixture's completing collection.
     eval.bc_buf
         .push(Value::make_record(vec![original, replacement]));
-    VmAliasWritebackFixture {
+    VmStringAliasFixture {
         original,
         replacement,
         table,
@@ -2227,95 +2221,87 @@ fn vm_alias_writeback_fixture(eval: &mut Context, test: HashTableTest) -> VmAlia
     }
 }
 
-fn vm_alias_writeback_assert_graph(eval: &Context, fixture: &VmAliasWritebackFixture) {
+fn vm_string_alias_assert_graph(eval: &Context, fixture: &VmStringAliasFixture) {
     let table = fixture.table.as_hash_table().unwrap();
+    assert_eq!(table.data.len(), 2);
     let old_key = fixture.original.to_hash_key(&table.test);
-    let new_key = fixture.replacement.to_hash_key(&table.test);
-    if matches!(table.test, HashTableTest::Eq | HashTableTest::Eql) {
-        assert!(!table.data.contains_key(&old_key));
-        assert_eq!(table.data.get(&new_key), Some(&fixture.replacement));
-        assert_eq!(table.key_snapshot(&new_key), Some(&fixture.replacement));
-    } else {
-        assert_eq!(table.data.get(&old_key), Some(&fixture.replacement));
-        assert!(!table.data.contains_key(&new_key));
-        assert_eq!(table.key_snapshot(&old_key), Some(&fixture.original));
-    }
+    let suffix_key = fixture.replacement.to_hash_key(&table.test);
+    assert_eq!(table.data.get(&old_key), Some(&fixture.original));
+    assert!(!table.data.contains_key(&suffix_key));
+    assert_eq!(table.key_snapshot(&old_key), Some(&fixture.original));
     assert_eq!(
         table.data.get(&crate::emacs_core::value::HashKey::Int(2)),
         Some(&fixture.vector)
     );
     assert_eq!(
         fixture.vector.as_vector_data().unwrap()[0],
-        fixture.replacement
+        fixture.original
     );
     assert_eq!(fixture.vector.as_vector_data().unwrap()[1], fixture.cell);
     assert_eq!(fixture.vector.as_vector_data().unwrap()[2], fixture.table);
-    assert_eq!(fixture.cell.cons_car(), fixture.replacement);
+    assert_eq!(fixture.cell.cons_car(), fixture.original);
     assert_eq!(fixture.cell.cons_cdr(), fixture.cell);
-    assert_eq!(fixture.binding.cons_cdr(), fixture.replacement);
+    assert_eq!(fixture.binding.cons_cdr(), fixture.original);
     assert_eq!(
         eval.obarray.symbol_value_id_copied(fixture.symbol),
-        Some(fixture.replacement)
+        Some(fixture.original)
     );
-    assert_eq!(eval.bc_buf[fixture.stack_base], fixture.replacement);
+    assert_eq!(eval.bc_buf[fixture.stack_base], fixture.original);
+}
+
+fn vm_redefined_fillarray_call_preserving_argument(
+    eval: &mut Context,
+    fixture: &VmStringAliasFixture,
+    callee: SymId,
+) {
+    let concat = eval.eval_str("(symbol-function 'concat)").unwrap();
+    eval.obarray
+        .set_symbol_function_id(intern("fillarray"), concat);
+    let caller = string_call_retaining_argument(
+        Value::from_sym_id(callee),
+        fixture.original,
+        fixture.replacement,
+    );
+    let retained = new_vm(eval).execute(&caller, vec![]).unwrap();
+    assert_eq!(retained, fixture.original);
 }
 
 #[test]
-fn vm_alias_writeback_inactive_replaces_keys_values_and_cyclic_roots() {
+fn vm_redefined_fillarray_preserves_keys_values_and_cyclic_roots() {
     for test in [HashTableTest::Eq, HashTableTest::Eql, HashTableTest::Equal] {
         let mut eval = Context::new_vm_runtime_harness();
-        let fixture = vm_alias_writeback_fixture(&mut eval, test);
+        let fixture = vm_string_alias_fixture(&mut eval, test);
         assert!(!crate::tagged::gc::concurrent_hash_mutation_active());
         let epoch = fixture.table.as_hash_table().unwrap().data.switch_epoch;
-        new_vm(&mut eval).maybe_writeback_mutating_first_arg(
-            "fillarray",
-            None,
-            &[fixture.original],
-            &fixture.replacement,
-        );
-        vm_alias_writeback_assert_graph(&eval, &fixture);
-        assert_eq!(
-            fixture.table.as_hash_table().unwrap().data.switch_epoch,
-            epoch.wrapping_add(1)
-        );
-        eval.gc_collect_exact();
-        vm_alias_writeback_assert_graph(&eval, &fixture);
-    }
-}
-
-#[test]
-fn vm_alias_writeback_early_rejections_preserve_roots_and_alias_target_still_replaces() {
-    let mut eval = Context::new_vm_runtime_harness();
-    let fixture = vm_alias_writeback_fixture(&mut eval, HashTableTest::Eq);
-    let equal_string = Value::string("abc");
-    let epoch = fixture.table.as_hash_table().unwrap().data.switch_epoch;
-    for (called_name, args, result) in [
-        ("concat", vec![fixture.original], fixture.replacement),
-        ("fillarray", vec![], fixture.replacement),
-        ("fillarray", vec![Value::fixnum(1)], fixture.replacement),
-        ("fillarray", vec![fixture.original], Value::fixnum(1)),
-        ("fillarray", vec![fixture.original], fixture.original),
-        ("fillarray", vec![fixture.original], equal_string),
-    ] {
-        new_vm(&mut eval).maybe_writeback_mutating_first_arg(called_name, None, &args, &result);
-        assert_eq!(eval.bc_buf[fixture.stack_base], fixture.original);
+        vm_redefined_fillarray_call_preserving_argument(&mut eval, &fixture, intern("fillarray"));
+        vm_string_alias_assert_graph(&eval, &fixture);
         assert_eq!(
             fixture.table.as_hash_table().unwrap().data.switch_epoch,
             epoch
         );
-        assert_eq!(fixture.cell.cons_car(), fixture.original);
+        eval.gc_collect_exact();
+        vm_string_alias_assert_graph(&eval, &fixture);
     }
-    new_vm(&mut eval).maybe_writeback_mutating_first_arg(
-        "vm-alias-writeback-callee",
-        Some("fillarray"),
-        &[fixture.original],
-        &fixture.replacement,
-    );
-    vm_alias_writeback_assert_graph(&eval, &fixture);
 }
 
 #[test]
-fn vm_alias_writeback_pending_structural_key_hydration_keeps_inactive_extent() {
+fn vm_fillarray_alias_call_preserves_original_roots() {
+    let mut eval = Context::new_vm_runtime_harness();
+    let fixture = vm_string_alias_fixture(&mut eval, HashTableTest::Eq);
+    let alias = intern("vm-string-alias-callee");
+    eval.obarray
+        .set_symbol_function_id(alias, Value::from_sym_id(intern("fillarray")));
+    let epoch = fixture.table.as_hash_table().unwrap().data.switch_epoch;
+    vm_redefined_fillarray_call_preserving_argument(&mut eval, &fixture, alias);
+    vm_string_alias_assert_graph(&eval, &fixture);
+    assert_eq!(
+        fixture.table.as_hash_table().unwrap().data.switch_epoch,
+        epoch
+    );
+}
+
+#[test]
+fn vm_redefined_fillarray_preserves_pending_structural_key_table() {
     let mut eval = Context::new_vm_runtime_harness();
     eval.setup_thread_locals();
     let original = Value::string("abc");
@@ -2338,20 +2324,29 @@ fn vm_alias_writeback_pending_structural_key_hydration_keeps_inactive_extent() {
     });
     eval.bc_buf
         .extend([table, Value::make_record(vec![original, replacement])]);
-    let collections = eval.tagged_heap.gc_collections();
-    new_vm(&mut eval).maybe_writeback_mutating_first_arg(
-        "fillarray",
-        None,
-        &[original],
-        &replacement,
+    let concat = eval.eval_str("(symbol-function 'concat)").unwrap();
+    eval.obarray
+        .set_symbol_function_id(intern("fillarray"), concat);
+    let caller = string_call_retaining_argument(
+        Value::from_sym_id(intern("fillarray")),
+        original,
+        replacement,
     );
+    assert_eq!(
+        new_vm(&mut eval).execute(&caller, vec![]).unwrap(),
+        original
+    );
+    // The ordinary call preserves the parked value. Explicit table access
+    // performs the existing structural-key hydration under its own guard.
+
     assert!(!crate::tagged::gc::concurrent_hash_mutation_active());
-    assert_eq!(eval.tagged_heap.gc_collections(), collections);
+    let collections = eval.tagged_heap.gc_collections();
     let hydrated = table.as_hash_table().unwrap();
+    assert_eq!(eval.tagged_heap.gc_collections(), collections);
     assert!(!hydrated.needs_hydration());
     assert_eq!(
         hydrated.data.values().copied().collect::<Vec<_>>(),
-        vec![replacement]
+        vec![original]
     );
     let snapshot = *hydrated.key_snapshots().next().unwrap();
     let parts = snapshot.as_vector_data().unwrap();
@@ -2364,15 +2359,15 @@ fn vm_alias_writeback_pending_structural_key_hydration_keeps_inactive_extent() {
     let hydrated = table.as_hash_table().unwrap();
     assert_eq!(
         hydrated.data.values().copied().collect::<Vec<_>>(),
-        vec![replacement]
+        vec![original]
     );
     assert_eq!(*hydrated.key_snapshots().next().unwrap(), snapshot);
 }
 
 #[test]
-fn vm_alias_writeback_concurrent_context_cycle_keeps_guarded_graph_live() {
+fn vm_redefined_fillarray_concurrent_context_cycle_keeps_graph_live() {
     let mut eval = Context::new_vm_runtime_harness();
-    let fixture = vm_alias_writeback_fixture(&mut eval, HashTableTest::Eq);
+    let fixture = vm_string_alias_fixture(&mut eval, HashTableTest::Eq);
     // This fixture exercises the actual automatic concurrent handshake even
     // when the surrounding suite requests synchronous GC stress elsewhere.
     eval.gc_stress = false;
@@ -2399,35 +2394,22 @@ fn vm_alias_writeback_concurrent_context_cycle_keeps_guarded_graph_live() {
             .expect("the real enabled cycle captured this hydrated strong table")
     });
     let epoch = fixture.table.as_hash_table().unwrap().data.switch_epoch;
-    new_vm(&mut eval).maybe_writeback_mutating_first_arg(
-        "fillarray",
-        None,
-        &[fixture.original],
-        &fixture.replacement,
-    );
-    vm_alias_writeback_assert_graph(&eval, &fixture);
+    vm_redefined_fillarray_call_preserving_argument(&mut eval, &fixture, intern("fillarray"));
+    vm_string_alias_assert_graph(&eval, &fixture);
     assert_eq!(
         fixture.table.as_hash_table().unwrap().data.switch_epoch,
-        epoch.wrapping_add(1)
+        epoch
     );
     if let Some(snapshot) = snapshot {
-        let guard = snapshot
-            .lock_mutation(fixture.table.as_veclike_ptr().unwrap() as usize)
-            .unwrap();
-        assert!(
-            !guard.claim_dirty(),
-            "the active alias clone already admitted the current-child retrace"
-        );
-        drop(guard);
         assert!(!snapshot.is_poisoned());
     }
     eval.gc_collect_exact();
     assert!(!crate::tagged::gc::concurrent_hash_mutation_active());
-    vm_alias_writeback_assert_graph(&eval, &fixture);
+    vm_string_alias_assert_graph(&eval, &fixture);
 }
 
 #[test]
-fn vm_named_fillarray_keeps_existing_writeback_after_builtin_redefinition() {
+fn vm_named_fillarray_keeps_argument_after_builtin_redefinition() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new_vm_runtime_harness();
     let concat = eval.eval_str("(symbol-function 'concat)").unwrap();
@@ -2439,9 +2421,9 @@ fn vm_named_fillarray_keeps_existing_writeback_after_builtin_redefinition() {
         Value::string("!"),
     );
     let result = new_vm(&mut eval).execute(&caller, vec![]).unwrap();
-    // Preserve the VM's existing replacement-object behavior for the named
-    // fillarray call, even when its resolved builtin has a different identity.
-    assert_eq!(result.as_utf8_str(), Some("abc!"));
+    // A redefined function may return a new string without replacing aliases
+    // to its original argument. Only the actual native fillarray mutates it.
+    assert_eq!(result.as_utf8_str(), Some("abc"));
 }
 
 #[test]
@@ -2465,13 +2447,8 @@ fn vm_string_builtin_call_resolves_again_after_debugger_redefinition() {
         Value::fixnum('x' as i64),
     );
     eval.set_variable("debug-on-next-call", Value::T);
-    reset_mutating_writeback_classification_count();
     let result = new_vm(&mut eval).execute(&caller, vec![]).unwrap();
     assert_eq!(result.as_utf8_str(), Some("xxx"));
-    assert!(
-        mutating_writeback_classification_count() > 0,
-        "an armed debugger must retain the generic classification path"
-    );
 }
 
 #[test]
@@ -12569,6 +12546,10 @@ fn compiler_function_overrides_change_bumps_the_function_epoch() {
     );
     assert_eq!(run(&mut eval).as_utf8_str(), Some("neovm-epoch-probe"));
 }
+
+#[cfg(test)]
+#[path = "fillarray_identity.rs"]
+mod fillarray_identity;
 
 #[cfg(test)]
 #[path = "frame_bindings.rs"]

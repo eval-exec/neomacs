@@ -1692,12 +1692,6 @@ const SUBR_MANY_ALLOWLIST: &[&str] = &[
 ///   builtins; special forms / context-callables have different call
 ///   protocols. Checked again at run time (fresh entry read) since entries
 ///   are rewritten in place.
-/// * `aset`/`fillarray` excluded on BOTH the site name and the resolved subr
-///   name — their mutating-first-string-arg WRITEBACK protocol
-///   (`Vm::mutates_first_arg_name` / `maybe_writeback_mutating_first_arg`)
-///   wraps the generic call; the resolved-name check also covers
-///   `(fset 'alias (symbol-function 'aset))` aliases, which
-///   `writeback_mutating_callable_names` detects through the cell.
 /// * `funcall`/`apply`/`eval` excluded (both names) — re-entrant drivers;
 ///   depth/backtrace conservatism (`eval` IS a fixed-arity A2).
 ///
@@ -1732,7 +1726,7 @@ fn subr_spec_kind(binding: Value, site_sym: SymId, nargs: usize) -> Option<SpecC
     let resolved_name = resolve_sym(subr_sym);
     if [site_name, resolved_name]
         .iter()
-        .any(|name| matches!(*name, "aset" | "fillarray" | "funcall" | "apply" | "eval"))
+        .any(|name| matches!(*name, "funcall" | "apply" | "eval"))
     {
         return None;
     }
