@@ -58,6 +58,186 @@ impl Context {
         push_specpdl_entry_with(&mut self.specpdl, make);
     }
 
+    /// Abandon a scope without evaluating Lisp during Rust panic recovery.
+    ///
+    /// Normal and signaled Lisp exits must use `unbind_to_with_result`, which
+    /// executes watchers and cleanup forms and propagates their nonlocal exits.
+    /// This fallback restores storage and native saved state only. Abandoned
+    /// Lisp/native cleanup payloads are dropped without invoking callbacks.
+    /// A saved value rejected by a changed forwarding descriptor leaves that
+    /// descriptor's last valid value installed; recovery must not panic or
+    /// silently write an invalid value through a typed forwarding slot.
+    ///
+    /// This operation exclusively borrows one mutator's Context and specpdl;
+    /// independent mutators own separate restoration stacks and projections.
+    #[cold]
+    #[inline(never)]
+    #[deny(clippy::wildcard_enum_match_arm)]
+    pub(crate) fn discard_specpdl_to(&mut self, count: usize) {
+        while self.specpdl.len() > count {
+            let Some(binding) = self.specpdl.pop() else {
+                break;
+            };
+            match binding {
+                SpecBinding::Let { sym_id, old_value }
+                | SpecBinding::LetDefault {
+                    sym_id, old_value, ..
+                } => {
+                    self.discard_restore_default_binding(sym_id, old_value.get());
+                }
+                SpecBinding::LetLocal {
+                    sym_id,
+                    old_value,
+                    buffer_id,
+                } => {
+                    // A removed local binding stays removed, just as in GNU's
+                    // do_one_unbind. ThreadSwitch stores suppress watchers.
+                    if self
+                        .local_binding_value_for_thread_switch(sym_id, buffer_id)
+                        .is_some()
+                    {
+                        self.set_local_binding_for_thread_switch(sym_id, buffer_id, old_value);
+                        if self.runtime_binding_has_projection(sym_id) {
+                            // Restoring another buffer's local value must not
+                            // replace this mutator's current-buffer projections.
+                            let visible = self
+                                .visible_runtime_variable_value_by_id_resolved(sym_id)
+                                .unwrap_or(Value::NIL);
+                            self.publish_runtime_binding_write_by_resolved_id(sym_id, visible);
+                        }
+                    }
+                }
+                SpecBinding::LexicalEnv { old_lexenv } => {
+                    self.lexenv = old_lexenv;
+                }
+                SpecBinding::Backtrace { args, .. } => {
+                    if let Some(index) = args.owned_index() {
+                        // Unlike the normal LIFO pop this tolerates side-stack
+                        // residue already healed by a panic-containment boundary.
+                        self.backtrace_args_stack.truncate(index);
+                    }
+                }
+                SpecBinding::SaveExcursion { marker, .. } => {
+                    // Like the Lisp unwind: follow the saved marker's live
+                    // buffer, which buffer-swap-text may have changed.
+                    if let Some(location) =
+                        super::super::marker::marker_location(&self.buffers, marker)
+                    {
+                        self.restore_current_buffer_if_live(location.buffer());
+                        let _ = self
+                            .buffers
+                            .goto_buffer_emacs_byte_pos(location.buffer(), location.byte_pos());
+                    }
+                    super::super::marker::unchain_marker(&mut self.buffers, &marker);
+                }
+                SpecBinding::SaveCurrentBuffer { buffer_id } => {
+                    self.restore_current_buffer_if_live(buffer_id);
+                }
+                SpecBinding::SaveRestriction { state } => {
+                    self.buffers
+                        .restore_saved_restriction_state(state.into_state());
+                }
+                SpecBinding::LoadsInProgress { len } => self.loads_in_progress.truncate(len),
+                SpecBinding::RequireStack { len } => self.require_stack.truncate(len),
+                SpecBinding::GcRoot { .. }
+                | SpecBinding::Backtrace1 { .. }
+                | SpecBinding::Backtrace2 { .. }
+                | SpecBinding::BacktraceNative { .. }
+                | SpecBinding::UnwindProtect { .. }
+                | SpecBinding::NativeUnwind { .. }
+                | SpecBinding::Nop => {}
+            }
+        }
+        self.lexenv_assq_cache.clear();
+        self.lexenv_special_cache.clear();
+    }
+
+    /// Storage-only restoration below watcher and constant-check policy.
+    fn discard_restore_default_binding(&mut self, sym_id: SymId, saved: Option<Value>) {
+        use crate::emacs_core::forward::ForwardSlot;
+
+        // Follow the storage writer's bounded alias walk without constructing
+        // a Lisp error during Rust recovery. A watcher may have left an alias
+        // pointing at a built-in after this binding was recorded.
+        let mut resolved = sym_id;
+        for _ in 0..50 {
+            let Some(target) = self
+                .obarray
+                .get_by_id(resolved)
+                .and_then(|symbol| symbol.alias_target())
+            else {
+                break;
+            };
+            resolved = target;
+        }
+        let value = saved.unwrap_or(Value::UNBOUND);
+        let forwarder = self.obarray.forwarder(resolved);
+        // GNU set_internal refuses Qunbound for both built-in arms before
+        // storing (data.c:1725-1728,1805-1808). Descriptor type checking alone
+        // is insufficient: a Bool would accept UNBOUND as true, and an Obj
+        // would store the sentinel. Keep valid storage, then publish its value.
+        let builtin_unbind = value.is_unbound()
+            && (forwarder.is_some()
+                || self
+                    .obarray
+                    .blv(resolved)
+                    .is_some_and(|blv| blv.fwd.is_some()));
+        if !builtin_unbind {
+            if let Some(forwarder) = forwarder {
+                let Ok(store) = forwarder.store(value) else {
+                    // A Lisp set-default-toplevel-value can change the saved
+                    // value to one this descriptor cannot hold. Retain storage.
+                    return;
+                };
+                match forwarder.slot() {
+                    ForwardSlot::BufferObj(_) => {
+                        if let Some(info) =
+                            crate::buffer::buffer::lookup_buffer_slot_by_sym_id(resolved)
+                        {
+                            self.buffers
+                                .set_buffer_default_slot(info, store.canonical_value());
+                        }
+                    }
+                    ForwardSlot::Int(_)
+                    | ForwardSlot::Bool(_)
+                    | ForwardSlot::Obj(_)
+                    | ForwardSlot::KboardObj(_) => {
+                        forwarder.commit(store);
+                    }
+                }
+            } else {
+                // This preserves LOCALIZED defcell/valcell identity. These
+                // storage setters do not evaluate watchers or Lisp forms.
+                self.obarray.set_symbol_value_id(sym_id, value);
+            }
+        }
+        if self.runtime_binding_has_projection(resolved) {
+            // Host runtime fields mirror dynamic storage. A lexical binding
+            // left active during panic recovery cannot shadow a C global.
+            let visible = if let Some(blv) = self.obarray.blv(resolved) {
+                // The ordinary localized reader refreshes its cache through
+                // a buffer Value wrapper. Recovery reads the same canonical
+                // current binding without allocating in an ambient TLS heap
+                // or changing the retained BLV's defcell/valcell identity.
+                self.buffers
+                    .current_buffer()
+                    .and_then(|buffer| buffer.local_variable_binding_cell(resolved))
+                    .unwrap_or(blv.defcell)
+                    .cons_cdr()
+            } else {
+                self.visible_runtime_variable_value_by_id_resolved(resolved)
+                    .unwrap_or(Value::NIL)
+            };
+            let visible = if visible.is_unbound() {
+                Value::NIL
+            } else {
+                visible
+            };
+            self.publish_runtime_binding_write_by_resolved_id(resolved, visible);
+        }
+        self.sync_user_test_gc_binding_by_id(resolved);
+    }
+
     pub(super) fn run_specbind_watcher(
         &mut self,
         sym_id: SymId,
@@ -607,7 +787,7 @@ impl Context {
         buffer_id: crate::buffer::BufferId,
         value: Value,
     ) {
-        use crate::emacs_core::symbol::{SetInternalBind, SymbolRedirect};
+        use crate::emacs_core::symbol::SymbolRedirect;
 
         let is_localized = self
             .obarray
@@ -615,22 +795,18 @@ impl Context {
             .map(|s| s.redirect() == SymbolRedirect::Localized)
             .unwrap_or(false);
         if is_localized {
-            let buf_val = Value::make_buffer(buffer_id);
-            let alist = self
+            // GNU do_one_unbind restores only an existing local binding
+            // (eval.c:3871-3885), and set_internal writes that cell's cdr
+            // (data.c:1790-1791). The buffer owns the canonical cons; a
+            // valid BLV cache already points at it, and another buffer's
+            // loaded cache stays valid. Avoid constructing a Buffer wrapper
+            // through an ambient Context's TLS heap during panic recovery.
+            if let Some(cell) = self
                 .buffers
                 .get(buffer_id)
-                .map(|buf| buf.local_var_alist_value())
-                .unwrap_or(Value::NIL);
-            let new_alist = self.obarray.set_internal_localized(
-                sym_id,
-                value,
-                buf_val,
-                alist,
-                SetInternalBind::ThreadSwitch,
-                false,
-            );
-            if let Some(buf) = self.buffers.get_mut(buffer_id) {
-                buf.replace_local_var_alist(new_alist);
+                .and_then(|buffer| buffer.local_variable_binding_cell(sym_id))
+            {
+                cell.set_cdr(value);
             }
         } else if value.is_unbound() {
             let _ = self
@@ -1067,5 +1243,153 @@ impl Context {
             self.set_quit_flag_value(quitf);
         }
         result
+    }
+}
+
+/// A mutator-local specpdl scope with a non-Lisp panic fallback.
+///
+/// The exclusive borrow keeps the Context alive and prevents migration while
+/// saved state is active. Normal/signaled exits call `finish`; Drop abandons
+/// Lisp cleanup payloads and only restores native storage.
+#[must_use = "finish the scope to propagate Lisp cleanup signals"]
+struct SavedStateScope<'a> {
+    context: &'a mut Context,
+    count: Option<usize>,
+    thread_confined: std::marker::PhantomData<*const ()>,
+}
+
+static_assertions::assert_not_impl_any!(SavedStateScope<'static>: Send, Sync);
+
+impl std::fmt::Debug for SavedStateScope<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SavedStateScope")
+            .field("count", &self.count)
+            .finish_non_exhaustive()
+    }
+}
+
+impl SavedStateScope<'_> {
+    fn finish(mut self, result: EvalResult) -> EvalResult {
+        let result = match self.count {
+            Some(count) if self.context.specpdl.len() != count => {
+                self.context.unbind_to_with_result(count, result)
+            }
+            Some(_) | None => result,
+        };
+        self.count = None;
+        result
+    }
+}
+
+impl Drop for SavedStateScope<'_> {
+    fn drop(&mut self) {
+        if let Some(count) = self.count.take() {
+            self.context.discard_specpdl_to(count);
+        }
+    }
+}
+
+/// GNU `record_unwind_current_buffer`, owned by one mutator.
+///
+/// Holds an exclusive Context borrow and is deliberately neither Send nor
+/// Sync. Its specpdl entry roots the saved state across arbitrary Lisp and GC.
+#[derive(Debug)]
+#[must_use = "finish the current-buffer scope to propagate cleanup signals"]
+pub(crate) struct CurrentBufferScope<'a>(SavedStateScope<'a>);
+static_assertions::assert_not_impl_any!(CurrentBufferScope<'static>: Send, Sync);
+
+impl<'a> CurrentBufferScope<'a> {
+    pub(crate) fn enter(context: &'a mut Context) -> Self {
+        let count = Some(context.specpdl.len());
+        if let Some(buffer_id) = context.buffers.current_buffer_id() {
+            context.push_specpdl_with(|| SpecBinding::SaveCurrentBuffer { buffer_id });
+        }
+        Self(SavedStateScope {
+            context,
+            count,
+            thread_confined: std::marker::PhantomData,
+        })
+    }
+
+    /// Avoid a save entry when GNU would not switch buffers at all.
+    pub(crate) fn for_buffer(
+        context: &'a mut Context,
+        buffer: crate::buffer::BufferId,
+    ) -> Result<Self, Flow> {
+        if context.buffers.current_buffer_id() == Some(buffer) {
+            // GNU does not record a buffer restore for this case. Still own
+            // the child cleanup boundary if Rust unwinds unexpectedly.
+            let count = Some(context.specpdl.len());
+            return Ok(Self(SavedStateScope {
+                context,
+                count,
+                thread_confined: std::marker::PhantomData,
+            }));
+        }
+        let mut scope = Self::enter(context);
+        scope.context().set_current_buffer_unrecorded(buffer)?;
+        Ok(scope)
+    }
+
+    pub(crate) fn context(&mut self) -> &mut Context {
+        self.0.context
+    }
+    pub(crate) fn finish(self, result: EvalResult) -> EvalResult {
+        self.0.finish(result)
+    }
+}
+
+/// GNU save-excursion: current buffer and marker-backed point, for one mutator.
+/// No state is shared between independent Contexts, and the guard cannot migrate.
+#[derive(Debug)]
+#[must_use = "finish the excursion scope to propagate cleanup signals"]
+pub(crate) struct ExcursionScope<'a>(SavedStateScope<'a>);
+static_assertions::assert_not_impl_any!(ExcursionScope<'static>: Send, Sync);
+
+impl<'a> ExcursionScope<'a> {
+    pub(crate) fn enter(context: &'a mut Context) -> Self {
+        let count = context.record_save_excursion();
+        Self(SavedStateScope {
+            context,
+            count,
+            thread_confined: std::marker::PhantomData,
+        })
+    }
+    pub(crate) fn context(&mut self) -> &mut Context {
+        self.0.context
+    }
+    pub(crate) fn finish(self, result: EvalResult) -> EvalResult {
+        self.0.finish(result)
+    }
+}
+
+/// GNU save-restriction: marker-backed bounds without restoring current buffer.
+/// Exclusively borrows one mutator's Context; neither Send nor Sync.
+#[derive(Debug)]
+#[must_use = "finish the restriction scope to propagate cleanup signals"]
+pub(crate) struct RestrictionScope<'a>(SavedStateScope<'a>);
+static_assertions::assert_not_impl_any!(RestrictionScope<'static>: Send, Sync);
+
+impl<'a> RestrictionScope<'a> {
+    pub(crate) fn enter(context: &'a mut Context) -> Self {
+        let count = context
+            .buffers
+            .save_current_restriction_state()
+            .map(|state| {
+                let count = context.specpdl.len();
+                context.push_specpdl_with(|| SpecBinding::save_restriction(state));
+                count
+            });
+        Self(SavedStateScope {
+            context,
+            count,
+            thread_confined: std::marker::PhantomData,
+        })
+    }
+    pub(crate) fn context(&mut self) -> &mut Context {
+        self.0.context
+    }
+    pub(crate) fn finish(self, result: EvalResult) -> EvalResult {
+        self.0.finish(result)
     }
 }

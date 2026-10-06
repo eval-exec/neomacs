@@ -7397,6 +7397,7 @@ mod pdump_reconstruct;
 mod macroexpand;
 
 mod specpdl;
+pub(crate) use specpdl::{CurrentBufferScope, ExcursionScope, RestrictionScope};
 
 mod builtin_vars;
 pub(crate) use builtin_vars::builtin_frontend_on;

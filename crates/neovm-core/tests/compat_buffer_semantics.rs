@@ -288,3 +288,79 @@ fn compat_buffer_semantics_matches_gnu_emacs() {
         );
     }
 }
+
+fn tse_excursion_window_oracle_case(form: &str, expected_state: &str) {
+    if !oracle_enabled() {
+        return;
+    }
+    let expected = run_oracle_eval(form).expect("GNU saved excursion window oracle");
+    assert_eq!(
+        expected, expected_state,
+        "GNU must reach the full expected state: {form}"
+    );
+    let actual = run_neovm_eval(form).expect("Neo saved excursion window result");
+    assert_eq!(actual, expected, "{form}");
+}
+
+const TSE_EXCURSION_WINDOW_CASE: &str = r#"(defun tse-excursion-window-case (action)
+  (let ((caller (generate-new-buffer " *tse-excursion-caller*"))
+        (other (generate-new-buffer " *tse-excursion-other*"))
+        (victim (generate-new-buffer " *tse-excursion-victim*")))
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (switch-to-buffer caller)
+          (insert "abcdef") (goto-char 2)
+          (let ((original-window (selected-window))
+                (other-window (split-window)))
+            (with-current-buffer other (insert "uvwxyz"))
+            (set-window-buffer other-window other)
+            (with-current-buffer victim
+              (setq kill-buffer-query-functions
+                    (list (lambda ()
+                            (funcall action original-window other-window caller other)
+                            nil))))
+            (let ((result (kill-buffer victim)))
+              (list result
+                    (eq (current-buffer) caller) (point)
+                    (eq (selected-window) other-window)
+                    (window-live-p original-window)
+                    (and (window-live-p original-window) (window-point original-window))
+                    (buffer-live-p victim)))))
+      (with-current-buffer victim (setq kill-buffer-query-functions nil))
+      (mapc (lambda (buffer) (when (buffer-live-p buffer) (kill-buffer buffer)))
+            (list caller other victim)))))"#;
+
+#[test]
+fn saved_excursion_skips_deleted_original_window() {
+    let form = format!(
+        "(progn {} (tse-excursion-window-case {}))",
+        TSE_EXCURSION_WINDOW_CASE,
+        r#"(lambda (original alternative _caller _other)
+ (select-window original) (goto-char 4) (select-window alternative) (delete-window original))"#
+    );
+    tse_excursion_window_oracle_case(&form, "OK (nil t 2 t nil nil t)");
+}
+
+#[test]
+fn saved_excursion_skips_original_window_with_changed_buffer() {
+    let form = format!(
+        "(progn {} (tse-excursion-window-case {}))",
+        TSE_EXCURSION_WINDOW_CASE,
+        r#"(lambda (original alternative _caller other)
+ (select-window original) (goto-char 4) (select-window alternative) (set-window-buffer original other))"#
+    );
+    tse_excursion_window_oracle_case(&form, "OK (nil t 2 t t 7 t)");
+}
+
+#[test]
+fn saved_excursion_skips_killed_saved_buffer() {
+    let form = format!(
+        "(progn {} (tse-excursion-window-case {}))",
+        TSE_EXCURSION_WINDOW_CASE,
+        r#"(lambda (original alternative caller _other)
+ (select-window original) (goto-char 4) (select-window alternative)
+ (let ((kill-buffer-query-functions nil)) (kill-buffer caller)))"#
+    );
+    tse_excursion_window_oracle_case(&form, "OK (nil nil 7 t t 1 t)");
+}
