@@ -28060,5 +28060,8 @@ mod circular_lists;
 mod function_slots;
 
 #[cfg(test)]
+mod runtime_constants;
+
+#[cfg(test)]
 #[path = "marker_identity.rs"]
 mod marker_identity;

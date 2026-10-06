@@ -2,6 +2,7 @@
 //! Oracle fixtures are refreshed standalone with UPDATE_EXPECT=1 through the
 //! campaign sandbox, then read here without launching nested GNU scopes.
 use super::symbols::builtin_make_byte_code;
+use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::{
     push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
@@ -35,20 +36,19 @@ static_assertions::assert_not_impl_any!(TestRootScope: Send, Sync);
 use crate::emacs_core::value::{HashTableTest, Value};
 use crate::heap_types::LispString;
 
-fn converted_literal(size: Value, data: Value) -> Value {
-    let spec = Value::list(vec![
-        Value::symbol("hash-table"),
-        Value::symbol("size"),
-        size,
-        Value::symbol("test"),
-        Value::symbol("eq"),
-        Value::symbol("data"),
-        data,
-    ]);
-    let constant = Value::list(vec![
-        Value::symbol("make-hash-table-from-literal"),
-        Value::list(vec![Value::symbol("quote"), spec]),
-    ]);
+fn converted_literal(context: &mut Context, size: Value, data: Value) -> Value {
+    // GNU lread.c:3155–3200 constructs #s hash tables while reading. Ordinary
+    // list constants stay data in Fmake_byte_code (alloc.c:3557–3571).
+    let text = format!(
+        "#s(hash-table size {} test eq data {})",
+        crate::emacs_core::print::print_value(&size),
+        crate::emacs_core::print::print_value(&data),
+    );
+    let constant =
+        crate::emacs_core::reader::builtin_read_from_string(context, vec![Value::string(text)])
+            .expect("GNU hash-table reader literal")
+            .cons_car();
+    push_scratch_gc_root(constant);
     let function = builtin_make_byte_code(vec![
         Value::fixnum(0),
         Value::heap_string(LispString::from_unibyte(vec![0xc0, 0x87])),
@@ -57,7 +57,9 @@ fn converted_literal(size: Value, data: Value) -> Value {
     ])
     .expect("constant-return byte-code construction");
     push_scratch_gc_root(function);
-    function.get_bytecode_data().unwrap().constants[0]
+    let stored = function.get_bytecode_data().unwrap().constants[0];
+    assert_eq!(stored, constant, "constructor preserves the reader object");
+    stored
 }
 
 fn summary(value: Value) -> String {
@@ -93,6 +95,7 @@ fn two_pairs() -> Value {
 #[test]
 fn compiled_hash_literal_ignores_size_metadata_like_gnu() {
     let _roots = TestRootScope::new();
+    let mut context = Context::new();
     let expected = include_str!("tsb_literal_size/metadata.expect");
     let sizes = [
         Value::fixnum(3),
@@ -110,14 +113,22 @@ fn compiled_hash_literal_ignores_size_metadata_like_gnu() {
         "GNU fixture covers each SIZE shape"
     );
     for (size, expected) in sizes.into_iter().zip(expected) {
-        assert_eq!(summary(converted_literal(size, two_pairs())), expected);
+        assert_eq!(
+            summary(converted_literal(&mut context, size, two_pairs())),
+            expected
+        );
     }
 }
 
 #[test]
 fn compiled_hash_literal_huge_size_does_not_control_allocation() {
     let _roots = TestRootScope::new();
+    let mut context = Context::new();
     let expected = include_str!("tsb_literal_size/huge.expect").trim();
-    let table = converted_literal(Value::fixnum(Value::MOST_POSITIVE_FIXNUM), two_pairs());
+    let table = converted_literal(
+        &mut context,
+        Value::fixnum(Value::MOST_POSITIVE_FIXNUM),
+        two_pairs(),
+    );
     assert_eq!(summary(table), expected);
 }

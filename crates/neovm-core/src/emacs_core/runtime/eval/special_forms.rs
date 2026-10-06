@@ -1272,27 +1272,6 @@ impl Context {
         }
     }
 
-    /// Recursively walk a `Value`, treating everything as literal data
-    /// except `(byte-code-literal ...)` cons cells which are converted to
-    /// `Value::ByteCode` via `sf_byte_code_literal_value`.
-    pub(super) fn quote_value_with_bytecode(&mut self, value: Value) -> EvalResult {
-        if value.is_cons() && cons_head_symbol_id(&value) == Some(byte_code_literal_symbol()) {
-            return self.sf_byte_code_literal_value(value.cons_cdr());
-        }
-
-        match value.kind() {
-            ValueKind::Veclike(VecLikeType::Vector) => {
-                let items = value.as_vector_data().unwrap();
-                let mut values = Vec::with_capacity(items.len());
-                for item in items {
-                    values.push(self.quote_value_with_bytecode(*item)?);
-                }
-                Ok(Value::vector(values))
-            }
-            _ => Ok(value),
-        }
-    }
-
     pub(super) fn sf_byte_code_literal_value(&mut self, tail: Value) -> EvalResult {
         let vector = self.one_unevalled_arg(byte_code_literal_symbol(), tail)?;
         let Some(items) = vector.as_vector_data() else {
@@ -1306,23 +1285,17 @@ impl Context {
             return Ok(vector);
         }
 
-        let mut values = Vec::with_capacity(items.len());
-        for item in items {
-            values.push(self.quote_value_with_bytecode(*item)?);
-        }
-
-        crate::emacs_core::builtins::make_byte_code_from_slots(&values)
+        crate::emacs_core::builtins::make_byte_code_from_slots(items)
     }
 
     pub(super) fn sf_byte_code_value(&mut self, tail: Value) -> EvalResult {
-        let mut args = list_to_vec(&tail).ok_or_else(|| self.listp_error(tail))?;
+        let args = list_to_vec(&tail).ok_or_else(|| self.listp_error(tail))?;
         if args.len() != 3 {
             return Err(signal(
                 LispCondition::WrongNumberOfArguments,
                 vec![Value::symbol("byte-code"), Value::fixnum(args.len() as i64)],
             ));
         }
-        args[1] = self.quote_value_with_bytecode(args[1])?;
         crate::emacs_core::builtins::builtin_byte_code(self, args)
     }
 
