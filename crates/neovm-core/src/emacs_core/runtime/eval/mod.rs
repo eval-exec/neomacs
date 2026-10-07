@@ -2001,6 +2001,7 @@ cached_symbol_id!(closure_symbol, "closure");
 cached_symbol_id!(declare_symbol, "declare");
 cached_symbol_id!(macro_symbol, "macro");
 cached_symbol_id!(max_lisp_eval_depth_symbol, "max-lisp-eval-depth");
+cached_symbol_id!(frame_alpha_lower_limit_symbol, "frame-alpha-lower-limit");
 cached_symbol_id!(byte_code_literal_symbol, "byte-code-literal");
 cached_symbol_id!(byte_code_symbol, "byte-code");
 cached_symbol_id!(input_decode_map_symbol, "input-decode-map");
@@ -2094,7 +2095,7 @@ fn install_core_eval_symbols(obarray: &mut Obarray, reset_runtime_values: bool) 
         print_symbols_bare_symbol,
         max_lisp_eval_depth_symbol(),
         buffer_undo_list_symbol(),
-        intern("frame-alpha-lower-limit"),
+        frame_alpha_lower_limit_symbol(),
     ] {
         obarray.mark_runtime_projected_id(projected);
     }
@@ -4619,7 +4620,7 @@ impl Context {
             self.symbols_with_pos_enabled = value.is_truthy();
         } else if sym_id == self.print_symbols_bare_symbol {
             self.print_symbols_bare = value.is_truthy();
-        } else if sym_id == intern("frame-alpha-lower-limit") {
+        } else if sym_id == frame_alpha_lower_limit_symbol() {
             let limit = crate::window::frame_alpha::lower_limit(value);
             if let Some(host) = self.display_host.as_mut() {
                 host.set_gui_frame_alpha_lower_limit(limit);
