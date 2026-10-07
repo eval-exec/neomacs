@@ -9,6 +9,7 @@ struct DeferredHost {
     fail_frame: bool,
     fail_completion: bool,
     native_frames: Rc<RefCell<Vec<crate::window::FrameId>>>,
+    metrics: (f32, f32, f32, f64),
 }
 
 impl DisplayHost for DeferredHost {
@@ -16,7 +17,7 @@ impl DisplayHost for DeferredHost {
         Some((self.terminal, self.identity.clone()))
     }
     fn gui_frame_metrics(&self) -> Option<(f32, f32, f32, f64)> {
-        Some((8.0, 16.0, 14.0, 1.0))
+        Some(self.metrics)
     }
     fn realize_gui_frame(&mut self, request: GuiFrameHostRequest) -> Result<(), String> {
         // Native command admission can precede a later realization failure.
@@ -53,6 +54,7 @@ fn deferred_host(fail_frame: bool) -> DeferredHost {
         fail_frame,
         fail_completion: false,
         native_frames: Rc::new(RefCell::new(Vec::new())),
+        metrics: (8.0, 16.0, 14.0, 1.0),
     }
 }
 
@@ -329,4 +331,29 @@ fn deferred_gui_failed_native_frame_does_not_publish_a_lisp_frame() {
         "partial native admission must be rolled back"
     );
     assert!(eval.shutdown_request().is_none());
+}
+
+#[test]
+fn deferred_gui_later_frames_use_the_startup_frame_size() {
+    reset_terminal_thread_locals();
+    let mut eval = Context::new();
+    eval.eval_str("(selected-frame)").unwrap();
+    let mut host = deferred_host(false);
+    // A fractional cell width exposes truncation before multiplying.
+    host.metrics = (8.4, 17.0, 14.0, 1.0);
+    // The primary window is already adopted, so the host reports no window
+    // size and later frames fall back to the font metrics.
+    eval.set_display_host(Box::new(host));
+    // The first deferred frame is 80x35 text cells plus a scroll bar, two 8px
+    // fringes, a menu bar and a 34px tool bar:
+    // 80*8.4 + 8.4 + 16 = 696.4 and 35*17 + 17 + 34 = 646.
+    let expected = (696, 646);
+    for _ in 0..2 {
+        let frame = eval.eval_str("(x-create-frame nil)").unwrap();
+        let frame = eval
+            .frames
+            .get(crate::window::FrameId(frame.as_frame_id().unwrap()))
+            .unwrap();
+        assert_eq!((frame.width, frame.height), expected);
+    }
 }

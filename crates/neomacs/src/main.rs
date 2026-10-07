@@ -986,39 +986,11 @@ fn startup_dimensions(
     noninteractive: bool,
 ) -> (u32, u32) {
     match frontend {
-        FrontendKind::Gui => {
-            // GNU gui_figure_window_size (frame.c) seeds the first GUI frame from
-            // an 80x36 text grid, then adds the scroll bar, fringes, menu bar and
-            // tool bar *outside* that text area. The window we request here is later
-            // divided into chrome + text, so we must reserve BOTH the side and top
-            // chrome up front — otherwise the scroll bar/fringes eat into the columns
-            // (frame 78 wide) and the menu/tool bars eat into the lines (frame 33).
-            //
-            // Observed GNU `(frame-height)` is one LESS than its nominal geometry
-            // rows — deterministic, not a WM trim: `-g 80x35`->34, `-g 80x36`->35,
-            // `-g 80x40`->39, and the default (== -g 80x36) nets 35. GNU's default
-            // GUI frame is therefore 80x35 of *counted* text; match that observable.
-            let cols = 80u32;
-            let text_rows = 35u32;
-            // Side chrome the layout reserves outside the text columns: a default
-            // vertical scroll bar (one char wide) plus the two 8px fringes.
-            const DEFAULT_FRINGE_PX: f32 = 8.0;
-            let side_chrome = frame_metrics.char_width + 2.0 * DEFAULT_FRINGE_PX;
-            // Top chrome reserved above the text lines for a default GUI frame: a
-            // one-line menu bar (char_height) plus the icon-height tool bar. Both
-            // default on under -Q; if a user disables either this slightly
-            // over-reserves — the same default-configuration assumption the side
-            // chrome makes for the scroll bar. The tool-bar height mirrors GNU's
-            // image + margin + relief model (window::default_gui_tool_bar_line_height).
-            let menu_bar = frame_metrics.char_height;
-            let tool_bar =
-                neovm_core::window::default_gui_tool_bar_line_height(frame_metrics.font_pixel_size)
-                    as f32;
-            let top_chrome = menu_bar + tool_bar;
-            let width = (cols as f32 * frame_metrics.char_width + side_chrome).round() as u32;
-            let height = (text_rows as f32 * frame_metrics.char_height + top_chrome).round() as u32;
-            (width.max(200), height.max(100))
-        }
+        FrontendKind::Gui => neovm_core::window::default_gui_frame_pixel_size(
+            frame_metrics.char_width,
+            frame_metrics.char_height,
+            frame_metrics.font_pixel_size,
+        ),
         FrontendKind::Tty => {
             if noninteractive {
                 // GNU `make_frame` seeds the initial non-window frame with

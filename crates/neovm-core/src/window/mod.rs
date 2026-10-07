@@ -227,6 +227,43 @@ pub fn default_gui_tool_bar_line_height(font_pixel_size: f32) -> u32 {
         .max(1.0) as u32
 }
 
+/// Default pixel size of a top-level GUI frame for the given font metrics.
+///
+/// GNU gui_figure_window_size (frame.c) seeds a GUI frame from an 80x36 text
+/// grid, then adds the scroll bar, fringes, menu bar and tool bar *outside*
+/// that text area. The window requested here is later divided into chrome +
+/// text, so both the side and top chrome are reserved up front; otherwise the
+/// scroll bar/fringes eat into the columns (frame 78 wide) and the menu/tool
+/// bars eat into the lines (frame 33).
+///
+/// Observed GNU `(frame-height)` is one LESS than its nominal geometry rows,
+/// deterministically: `-g 80x35`->34, `-g 80x36`->35, `-g 80x40`->39, and the
+/// default (== -g 80x36) nets 35. GNU's default GUI frame is therefore 80x35
+/// of *counted* text; match that observable.
+pub fn default_gui_frame_pixel_size(
+    char_width: f32,
+    char_height: f32,
+    font_pixel_size: f32,
+) -> (u32, u32) {
+    let cols = 80u32;
+    let text_rows = 35u32;
+    // Side chrome the layout reserves outside the text columns: a default
+    // vertical scroll bar (one char wide) plus the two 8px fringes.
+    const DEFAULT_FRINGE_PX: f32 = 8.0;
+    let side_chrome = char_width + 2.0 * DEFAULT_FRINGE_PX;
+    // Top chrome reserved above the text lines: a one-line menu bar
+    // (char_height) plus the icon-height tool bar. Both default on under -Q;
+    // if a user disables either this slightly over-reserves, the same
+    // default-configuration assumption the side chrome makes for the scroll
+    // bar. The tool-bar height mirrors GNU's image + margin + relief model.
+    let menu_bar = char_height;
+    let tool_bar = default_gui_tool_bar_line_height(font_pixel_size) as f32;
+    let top_chrome = menu_bar + tool_bar;
+    let width = (cols as f32 * char_width + side_chrome).round() as u32;
+    let height = (text_rows as f32 * char_height + top_chrome).round() as u32;
+    (width.max(200), height.max(100))
+}
+
 // ---------------------------------------------------------------------------
 // Window geometry
 // ---------------------------------------------------------------------------

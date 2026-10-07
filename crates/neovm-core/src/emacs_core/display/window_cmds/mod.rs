@@ -7233,9 +7233,15 @@ pub(crate) fn x_create_frame_impl(
                 .and_then(|host| host.gui_frame_metrics())
                 .map(
                     |(char_width, char_height, font_pixel_size, device_scale_factor)| {
+                        // Size every deferred frame like the first one.
+                        let (width_px, height_px) = crate::window::default_gui_frame_pixel_size(
+                            char_width,
+                            char_height,
+                            font_pixel_size,
+                        );
                         GuiFrameMetrics {
-                            width_px: 80 * char_width as u32,
-                            height_px: 40 * char_height as u32,
+                            width_px,
+                            height_px,
                             char_width,
                             char_height,
                             font_pixel_size,
