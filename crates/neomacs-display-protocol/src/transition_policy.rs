@@ -439,4 +439,5 @@ impl From<&VisualConfig> for TransitionPolicy {
 }
 
 #[cfg(test)]
+#[path = "transition_policy/tests/transition_policy_test.rs"]
 mod tests;

@@ -814,5 +814,5 @@ impl ByteCodeFunction {
     }
 }
 #[cfg(test)]
-#[path = "tests/chunk.rs"]
+#[path = "tests/chunk_test.rs"]
 mod tests;

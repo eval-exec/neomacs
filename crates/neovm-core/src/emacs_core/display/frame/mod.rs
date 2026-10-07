@@ -9,7 +9,7 @@ pub(crate) mod position;
 mod selection;
 pub(crate) use selection::{builtin_handle_switch_frame, builtin_select_frame};
 #[cfg(test)]
-#[path = "tests/selection.rs"]
+#[path = "tests/selection_test.rs"]
 mod selection_test;
 use position::{FrameCoordinateOrigin, FramePositionSpec, apply_frame_position};
 

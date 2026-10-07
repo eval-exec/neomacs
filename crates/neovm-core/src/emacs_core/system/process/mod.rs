@@ -514,7 +514,7 @@ use crate::heap_types::LispString;
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/raw_bytes.rs"]
+#[path = "tests/raw_bytes_test.rs"]
 mod raw_bytes_tests;
 
 mod builtins;
@@ -529,5 +529,5 @@ pub(crate) use helpers::*;
 mod types;
 pub use types::*;
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/process_test.rs"]
 mod tests;

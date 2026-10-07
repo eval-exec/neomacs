@@ -3340,7 +3340,7 @@ pub(crate) fn builtin_treesit_linecol_cache(
 }
 
 #[cfg(test)]
-#[path = "tests/treesit_freshness.rs"]
+#[path = "tests/treesit_freshness_test.rs"]
 mod freshness_tests;
 
 #[cfg(test)]

@@ -922,5 +922,5 @@ pub(crate) fn builtin_bookmark_load(
 // Tests
 // ===========================================================================
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/bookmark_test.rs"]
 mod tests;

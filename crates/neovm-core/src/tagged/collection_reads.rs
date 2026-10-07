@@ -751,24 +751,25 @@ pub fn capture_normalized<S, T>(
 }
 
 #[cfg(test)]
+#[path = "collection_reads/tests/collection_reads_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/write_fusion.rs"]
+#[path = "tests/write_fusion_test.rs"]
 mod write_fusion_tests;
 
 #[cfg(all(test, feature = "jit"))]
-#[path = "collection_reads/tests/lazy_window.rs"]
+#[path = "collection_reads/tests/lazy_window_test.rs"]
 mod lazy_window_tests;
 
 #[cfg(all(test, feature = "jit"))]
-#[path = "collection_reads/tests/observed_epoch.rs"]
+#[path = "collection_reads/tests/observed_epoch_test.rs"]
 mod observed_epoch_tests;
 
 #[cfg(all(test, feature = "jit"))]
-#[path = "collection_reads/tests/observed_gap.rs"]
+#[path = "collection_reads/tests/observed_gap_test.rs"]
 mod observed_gap_tests;
 
 #[cfg(all(test, feature = "jit"))]
-#[path = "collection_reads/tests/observed_collisions.rs"]
+#[path = "collection_reads/tests/observed_collisions_test.rs"]
 mod observed_collisions_tests;

@@ -1133,5 +1133,5 @@ pub(crate) fn builtin_insert_abbrev_table_description(
 // Tests
 // ===========================================================================
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/abbrev_test.rs"]
 mod tests;

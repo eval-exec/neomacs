@@ -89,4 +89,5 @@ fn positive_f32(value: f32) -> Option<f32> {
 }
 
 #[cfg(test)]
+#[path = "display_face_layout/tests/display_face_layout_test.rs"]
 mod tests;

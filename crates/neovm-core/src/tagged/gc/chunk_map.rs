@@ -340,5 +340,5 @@ impl PageSnapshot {
 }
 
 #[cfg(test)]
-#[path = "tests/chunk_entry_decode_tests.rs"]
+#[path = "tests/chunk_entry_decode_test.rs"]
 mod decode_tests;

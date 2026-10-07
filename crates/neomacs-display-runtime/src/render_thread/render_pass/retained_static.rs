@@ -325,4 +325,5 @@ pub(super) fn ensure_retained_static_texture(
 }
 
 #[cfg(test)]
+#[path = "retained_static/tests/retained_static_test.rs"]
 mod tests;

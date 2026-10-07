@@ -2198,5 +2198,5 @@ impl ReplaceSideEffectPolicy {
 mod tests;
 
 #[cfg(test)]
-#[path = "edit_transaction/tests/transpose_gnu.rs"]
+#[path = "edit_transaction/tests/transpose_gnu_test.rs"]
 mod transpose_gnu;

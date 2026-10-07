@@ -7744,15 +7744,15 @@ thread_local! {
 }
 
 #[cfg(test)]
-#[path = "tests/back_comment_safe_positions.rs"]
+#[path = "tests/back_comment_safe_positions_test.rs"]
 mod back_comment_safe_positions_test;
 
 #[cfg(test)]
-#[path = "tests/syntax_prop_byte_run.rs"]
+#[path = "tests/syntax_prop_byte_run_test.rs"]
 mod syntax_prop_byte_run_test;
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/syntax_test.rs"]
 mod tests;
 
 #[cfg(test)]
@@ -7760,21 +7760,21 @@ mod tests;
 mod flat_ascii_syntax_entry_cache_tests;
 
 #[cfg(test)]
-#[path = "tests/scan_error_data_gnu.rs"]
+#[path = "tests/scan_error_data_gnu_test.rs"]
 mod scan_error_data_gnu_tests;
 
 #[cfg(test)]
-#[path = "tests/pps_propertize_gnu.rs"]
+#[path = "tests/pps_propertize_gnu_test.rs"]
 mod pps_propertize_gnu_tests;
 
 #[cfg(test)]
-#[path = "tests/parse_state_divergence_gnu.rs"]
+#[path = "tests/parse_state_divergence_gnu_test.rs"]
 mod parse_state_divergence_gnu_tests;
 
 #[cfg(test)]
-#[path = "tests/skip_syntax_classes.rs"]
+#[path = "tests/skip_syntax_classes_test.rs"]
 mod skip_syntax_classes_tests;
 
 #[cfg(test)]
-#[path = "tests/gc_tls_ownership.rs"]
+#[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;

@@ -2525,33 +2525,33 @@ pub(crate) fn builtin_isnan(args: Vec<Value>) -> EvalResult {
 }
 
 #[cfg(test)]
-#[path = "tests/arithmetic_minmax_compare.rs"]
+#[path = "tests/arithmetic_minmax_compare_test.rs"]
 mod arithmetic_minmax_compare_test;
 
 #[cfg(test)]
-#[path = "tests/arithmetic_rounding_nil_divisor.rs"]
+#[path = "tests/arithmetic_rounding_nil_divisor_test.rs"]
 mod arithmetic_rounding_nil_divisor_test;
 
 #[cfg(test)]
-#[path = "tests/arithmetic_ash_overflow.rs"]
+#[path = "tests/arithmetic_ash_overflow_test.rs"]
 mod arithmetic_ash_overflow_test;
 
 #[cfg(test)]
-#[path = "tests/arithmetic_bignum_borrowed.rs"]
+#[path = "tests/arithmetic_bignum_borrowed_test.rs"]
 mod arithmetic_bignum_borrowed_test;
 
 #[cfg(test)]
-#[path = "tests/arithmetic_rounding_float_exact.rs"]
+#[path = "tests/arithmetic_rounding_float_exact_test.rs"]
 mod arithmetic_rounding_float_exact_test;
 
 #[cfg(test)]
-#[path = "tests/arithmetic_limb_kernels.rs"]
+#[path = "tests/arithmetic_limb_kernels_test.rs"]
 mod arithmetic_limb_kernels_test;
 
 #[cfg(test)]
-#[path = "tests/arithmetic_integer_value.rs"]
+#[path = "tests/arithmetic_integer_value_test.rs"]
 mod arithmetic_integer_value_test;
 
 #[cfg(test)]
-#[path = "tests/arithmetic_rounding_capture.rs"]
+#[path = "tests/arithmetic_rounding_capture_test.rs"]
 mod arithmetic_rounding_capture_test;

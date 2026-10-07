@@ -286,4 +286,5 @@ impl PerfStatCapture {
 }
 
 #[cfg(test)]
+#[path = "counters/tests/counters_test.rs"]
 mod tests;

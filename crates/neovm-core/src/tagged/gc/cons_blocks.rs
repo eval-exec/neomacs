@@ -262,5 +262,5 @@ impl Drop for ConsBlock {
 }
 
 #[cfg(test)]
-#[path = "tests/cons_minor_tests.rs"]
+#[path = "tests/cons_minor_test.rs"]
 mod cons_minor_tests;

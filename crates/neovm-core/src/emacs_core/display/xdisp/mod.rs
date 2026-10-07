@@ -747,17 +747,8 @@ impl RowEdge {
 }
 
 #[cfg(test)]
-mod row_edge_tests {
-    use super::*;
-
-    #[test]
-    fn tty_row_edge_reserves_one_column_for_the_edge_glyph() {
-        assert_eq!(RowEdge::tty(80, 9.0, LineWrap::Truncate).x, 711.0);
-        assert_eq!(RowEdge::tty(80, 9.0, LineWrap::WindowWrap).x, 711.0);
-        // A one-column body cannot go below one usable column.
-        assert_eq!(RowEdge::tty(1, 9.0, LineWrap::Truncate).x, 9.0);
-    }
-}
+#[path = "tests/xdisp_row_edge_test.rs"]
+mod row_edge_tests;
 
 impl LineWrap {
     /// Whether a display line is a whole logical line.
@@ -9989,33 +9980,33 @@ pub(crate) fn builtin_buffer_text_pixel_size(
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/xdisp_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/mode_line_gc_roots.rs"]
+#[path = "tests/mode_line_gc_roots_test.rs"]
 mod mode_line_gc_roots;
 
 #[cfg(test)]
-#[path = "tests/mode_line_multibyte_identity.rs"]
+#[path = "tests/mode_line_multibyte_identity_test.rs"]
 mod mode_line_multibyte_identity;
 
 #[cfg(test)]
-#[path = "tests/mode_line_incremental_roots.rs"]
+#[path = "tests/mode_line_incremental_roots_test.rs"]
 mod mode_line_incremental_roots;
 
 #[cfg(test)]
-#[path = "tests/mode_line_live_spine.rs"]
+#[path = "tests/mode_line_live_spine_test.rs"]
 mod mode_line_live_spine;
 
 #[cfg(test)]
-#[path = "tests/mode_line_flow.rs"]
+#[path = "tests/mode_line_flow_test.rs"]
 mod mode_line_flow;
 
 #[cfg(test)]
-#[path = "tests/mode_line_outer_flow.rs"]
+#[path = "tests/mode_line_outer_flow_test.rs"]
 mod mode_line_outer_flow;
 
 #[cfg(test)]
-#[path = "tests/mode_line_outer_handlers.rs"]
+#[path = "tests/mode_line_outer_handlers_test.rs"]
 mod mode_line_outer_handlers;

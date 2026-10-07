@@ -459,5 +459,5 @@ pub(crate) fn install(eval: &mut Context) {
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/runtime_identity_test.rs"]
 mod tests;

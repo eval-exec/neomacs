@@ -1908,7 +1908,7 @@ fn copy_list_sequence_scan<const OBSERVED: bool>(arg: Value) -> EvalResult {
 }
 
 #[cfg(test)]
-#[path = "tests/copy_sequence_capture.rs"]
+#[path = "tests/copy_sequence_capture_test.rs"]
 mod copy_sequence_capture;
 
 // ===========================================================================
@@ -2248,9 +2248,9 @@ fn builtin_nconc_slice_values_scan<const OBSERVED: bool>(args: &[Value]) -> Eval
 // ===========================================================================
 
 #[cfg(test)]
-#[path = "tests/collection_scan_capture.rs"]
+#[path = "tests/collection_scan_capture_test.rs"]
 mod collection_scan_capture;
 
 #[cfg(test)]
-#[path = "tests/gdn_equality.rs"]
+#[path = "tests/gdn_equality_test.rs"]
 mod gdn_equality;

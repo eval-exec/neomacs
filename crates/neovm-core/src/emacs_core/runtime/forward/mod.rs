@@ -823,5 +823,5 @@ pub fn alloc_intfwd(initial: LispInteger) -> &'static LispIntFwd {
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/forward_module_test.rs"]
 mod gnu_parity_tests;

@@ -1315,6 +1315,7 @@ impl fmt::Debug for GapBuffer {
 // ===========================================================================
 
 #[cfg(test)]
+#[path = "gap_buffer/tests/gap_buffer_test.rs"]
 mod tests;
 
 /// Byte offset (from the START of `slice`) of the lead byte that begins the

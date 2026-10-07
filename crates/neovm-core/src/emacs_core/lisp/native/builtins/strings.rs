@@ -371,7 +371,7 @@ fn substring_impl(name: &str, args: &[Value], preserve_props: bool) -> EvalResul
 }
 
 #[cfg(test)]
-#[path = "tests/strings.rs"]
+#[path = "tests/strings_test.rs"]
 mod tests;
 
 pub(crate) fn builtin_substring(args: Vec<Value>) -> EvalResult {

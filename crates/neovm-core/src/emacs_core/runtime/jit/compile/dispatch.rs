@@ -353,7 +353,7 @@ fn aref_fast(array: Value, index: Value) -> Option<Value> {
 }
 
 #[cfg(test)]
-#[path = "tests/array_projection_capture.rs"]
+#[path = "tests/array_projection_capture_test.rs"]
 mod array_projection_capture;
 
 /// `Op::Aref` (GNU `Baref`) from compiled code: the element's bits, or

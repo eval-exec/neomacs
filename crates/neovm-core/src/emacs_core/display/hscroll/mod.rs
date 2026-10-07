@@ -604,5 +604,5 @@ fn window_point_lisp(window: &Window) -> crate::buffer::LispCharPos1 {
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/hscroll_test.rs"]
 mod tests;

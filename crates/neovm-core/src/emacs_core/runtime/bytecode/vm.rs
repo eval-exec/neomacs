@@ -9733,23 +9733,23 @@ pub(crate) mod resumed_chain_probe;
 pub(crate) use vm_leaf::render_vm_leaf_stats;
 
 #[cfg(test)]
-#[path = "tests/vm.rs"]
+#[path = "tests/vm_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/builtin_result_return.rs"]
+#[path = "tests/builtin_result_return_test.rs"]
 mod builtin_result_return_tests;
 
 #[cfg(test)]
-#[path = "tests/arith_integer_fast_path.rs"]
+#[path = "tests/arith_integer_fast_path_test.rs"]
 mod arith_integer_fast_path_tests;
 
 #[cfg(test)]
-#[path = "tests/collection_capture.rs"]
+#[path = "tests/collection_capture_test.rs"]
 mod collection_capture_tests;
 
 #[cfg(test)]
-#[path = "tests/stack_pool.rs"]
+#[path = "tests/stack_pool_test.rs"]
 mod stack_pool_tests;
 
 impl ArithGenericKind {

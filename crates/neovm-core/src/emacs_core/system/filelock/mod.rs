@@ -801,5 +801,5 @@ pub(crate) fn builtin_unlock_buffer(
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/filelock_test.rs"]
 mod tests;

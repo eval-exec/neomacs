@@ -103,4 +103,5 @@ pub fn page_curl_transform(t: f32, curl_progress: f32, bounds_h: f32) -> (f32, f
 }
 
 #[cfg(test)]
+#[path = "deform/tests/deform_test.rs"]
 mod tests;

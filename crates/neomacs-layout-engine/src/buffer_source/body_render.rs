@@ -567,5 +567,5 @@ impl BufferSourceWalkSetup {
 }
 
 #[cfg(test)]
-#[path = "body_render/tests/mini_row_storage.rs"]
+#[path = "body_render/tests/mini_row_storage_test.rs"]
 mod mini_row_storage_tests;

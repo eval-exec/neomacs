@@ -2733,5 +2733,5 @@ pub(crate) fn line_number_display_width(
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/indent_test.rs"]
 mod tests;

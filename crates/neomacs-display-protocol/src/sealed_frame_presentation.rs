@@ -107,4 +107,5 @@ impl Deref for SealedFramePresentation {
 }
 
 #[cfg(test)]
+#[path = "sealed_frame_presentation/tests/sealed_frame_presentation_test.rs"]
 mod tests;

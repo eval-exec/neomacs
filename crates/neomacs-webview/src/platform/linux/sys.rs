@@ -76,4 +76,5 @@ pub mod webkit {
 }
 
 #[cfg(test)]
+#[path = "sys/tests/sys_test.rs"]
 mod tests;

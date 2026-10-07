@@ -879,5 +879,5 @@ pub(crate) fn drain_pending_os_signals(
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/os_signal_test.rs"]
 mod os_signal_test;

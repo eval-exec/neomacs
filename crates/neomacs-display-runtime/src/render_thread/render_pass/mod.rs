@@ -529,5 +529,5 @@ fn render_frame_window_contents_reserved(
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/render_pass_test.rs"]
 mod tests;

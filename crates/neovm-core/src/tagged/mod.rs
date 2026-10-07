@@ -14,4 +14,5 @@ pub mod symbol_marks;
 pub mod value;
 
 #[cfg(test)]
+#[path = "tests/tagged_test.rs"]
 mod tests;

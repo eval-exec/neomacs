@@ -3903,5 +3903,5 @@ pub(crate) fn builtin_remove_overlays(
 // Tests
 // ===========================================================================
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/textprop_test.rs"]
 mod tests;

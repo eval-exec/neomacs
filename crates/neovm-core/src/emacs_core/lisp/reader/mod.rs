@@ -3396,14 +3396,14 @@ pub(crate) fn finish_read_key_sequence_vector_interactive_in_runtime(
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/minibuffer_teardown.rs"]
+#[path = "tests/minibuffer_teardown_test.rs"]
 mod minibuffer_teardown_tests;
 #[cfg(test)]
-#[path = "tests/minibuffer_unwind_order.rs"]
+#[path = "tests/minibuffer_unwind_order_test.rs"]
 mod minibuffer_unwind_order_tests;
 #[cfg(test)]
-#[path = "tests/raw_bytes.rs"]
+#[path = "tests/raw_bytes_test.rs"]
 mod raw_bytes_tests;
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/reader_test.rs"]
 mod tests;

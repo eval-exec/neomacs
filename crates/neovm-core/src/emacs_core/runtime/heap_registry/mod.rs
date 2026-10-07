@@ -172,5 +172,5 @@ impl<T> HeapRegistrySlot<T> {
 }
 
 #[cfg(test)]
-#[path = "tests/ownership.rs"]
+#[path = "tests/ownership_test.rs"]
 mod ownership_tests;

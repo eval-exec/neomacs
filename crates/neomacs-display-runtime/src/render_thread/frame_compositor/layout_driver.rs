@@ -319,4 +319,5 @@ impl LayoutDriver {
 }
 
 #[cfg(test)]
+#[path = "layout_driver/tests/layout_driver_test.rs"]
 mod tests;

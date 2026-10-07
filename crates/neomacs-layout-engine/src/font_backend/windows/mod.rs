@@ -542,4 +542,5 @@ impl TextAnalysisSourceMethods for SingleLocaleAnalysis {
 }
 
 #[cfg(test)]
+#[path = "tests/windows_test.rs"]
 mod tests;

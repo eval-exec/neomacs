@@ -3117,5 +3117,5 @@ pub(crate) fn builtin_flex_cost_gotoh(
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/minibuffer_test.rs"]
 mod tests;

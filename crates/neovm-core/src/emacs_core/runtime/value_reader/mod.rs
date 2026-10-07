@@ -3155,5 +3155,5 @@ fn maybe_recombine_latin1_emacs(data: Vec<u8>) -> crate::heap_types::LispString 
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/value_reader_test.rs"]
 mod tests;

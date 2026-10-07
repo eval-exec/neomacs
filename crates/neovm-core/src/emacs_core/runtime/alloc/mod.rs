@@ -38,5 +38,5 @@ pub fn register_bootstrap_vars(obarray: &mut Obarray) {
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/alloc_test.rs"]
 mod tests;

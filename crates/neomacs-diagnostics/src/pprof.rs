@@ -188,4 +188,5 @@ pub fn folded_to_pprof(folded: &str) -> Vec<u8> {
 }
 
 #[cfg(test)]
+#[path = "pprof/tests/pprof_test.rs"]
 mod tests;

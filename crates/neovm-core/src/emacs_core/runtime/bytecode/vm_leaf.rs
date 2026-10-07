@@ -232,5 +232,5 @@ impl Vm<'_> {
 }
 
 #[cfg(test)]
-#[path = "tests/vm_leaf.rs"]
+#[path = "tests/vm_leaf_test.rs"]
 mod vm_leaf_tests;

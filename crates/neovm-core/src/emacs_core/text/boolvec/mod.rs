@@ -524,5 +524,5 @@ pub(crate) fn builtin_bool_vector_count_consecutive(args: Vec<Value>) -> EvalRes
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/boolvec_test.rs"]
 mod tests;

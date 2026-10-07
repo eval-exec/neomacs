@@ -9912,29 +9912,29 @@ mod suffix_literal;
 mod short_literal;
 
 #[cfg(test)]
-#[path = "tests/short_literal.rs"]
+#[path = "tests/short_literal_test.rs"]
 mod short_literal_tests;
 
 #[cfg(test)]
-#[path = "tests/emacs.rs"]
+#[path = "tests/emacs_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/opcode_decode.rs"]
+#[path = "tests/opcode_decode_test.rs"]
 mod opcode_decode_tests;
 
 #[cfg(test)]
-#[path = "tests/casefold_scan.rs"]
+#[path = "tests/casefold_scan_test.rs"]
 mod casefold_scan_tests;
 
 #[cfg(test)]
-#[path = "tests/fail_stack_parity.rs"]
+#[path = "tests/fail_stack_parity_test.rs"]
 mod fail_stack_parity_tests;
 
 #[cfg(test)]
-#[path = "tests/start_anchor.rs"]
+#[path = "tests/start_anchor_test.rs"]
 mod start_anchor_tests;
 
 #[cfg(test)]
-#[path = "tests/suffix_literal.rs"]
+#[path = "tests/suffix_literal_test.rs"]
 mod suffix_literal_tests;

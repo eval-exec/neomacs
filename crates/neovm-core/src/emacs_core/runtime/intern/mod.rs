@@ -1882,13 +1882,13 @@ pub fn try_resolve_sym_lisp_string(id: SymId) -> Option<&'static LispString> {
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/intern_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/seed_prefix.rs"]
+#[path = "tests/seed_prefix_test.rs"]
 mod seed_prefix_tests;
 
 #[cfg(test)]
-#[path = "tests/gc_tls_ownership.rs"]
+#[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;

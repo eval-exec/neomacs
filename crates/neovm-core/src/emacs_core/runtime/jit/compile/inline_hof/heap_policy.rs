@@ -26,5 +26,5 @@ pub(crate) fn hoist_callback_heap_ptr() -> bool {
 }
 
 #[cfg(test)]
-#[path = "../../tests/inline_hof_heap_policy.rs"]
+#[path = "../../tests/inline_hof_heap_policy_test.rs"]
 mod tests;

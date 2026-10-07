@@ -30,4 +30,5 @@ fn empty_svg(title: &str) -> String {
 }
 
 #[cfg(test)]
+#[path = "flamegraph/tests/flamegraph_test.rs"]
 mod tests;

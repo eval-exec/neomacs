@@ -958,4 +958,5 @@ fn family_affinity_score(queried_family: Option<&str>, candidate_family: &str) -
 }
 
 #[cfg(test)]
+#[path = "resolver/tests/resolver_test.rs"]
 mod tests;

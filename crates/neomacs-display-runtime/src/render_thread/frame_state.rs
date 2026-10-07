@@ -642,4 +642,5 @@ impl RenderApp {
 }
 
 #[cfg(test)]
+#[path = "frame_state/tests/frame_state_test.rs"]
 mod tests;

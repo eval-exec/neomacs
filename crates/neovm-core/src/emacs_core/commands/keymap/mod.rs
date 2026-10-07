@@ -4304,5 +4304,5 @@ pub fn list_keymap_for_each_binding_recursive<F>(
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/keymap_test.rs"]
 mod tests;

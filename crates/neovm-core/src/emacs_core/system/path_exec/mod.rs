@@ -213,5 +213,5 @@ pub fn resolve() -> Option<PathExec> {
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/path_exec_test.rs"]
 mod tests;

@@ -310,9 +310,9 @@ pub(crate) fn resume_mapping(
 }
 
 #[cfg(test)]
-#[path = "../tests/inline_hof_runtime.rs"]
+#[path = "../tests/inline_hof_runtime_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "../tests/inline_hof_length.rs"]
+#[path = "../tests/inline_hof_length_test.rs"]
 mod hof_length_tests;

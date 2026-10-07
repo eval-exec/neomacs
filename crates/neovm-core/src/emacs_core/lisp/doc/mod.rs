@@ -954,5 +954,5 @@ pub(crate) fn builtin_snarf_documentation(
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/doc_test.rs"]
 mod tests;

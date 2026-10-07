@@ -338,5 +338,5 @@ impl Context {
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/debug_on_call_test.rs"]
 mod tests;

@@ -1685,9 +1685,9 @@ pub(crate) fn builtin_delete_terminal(
 }
 
 #[cfg(test)]
-#[path = "tests/gc_context_migration.rs"]
+#[path = "tests/gc_context_migration_test.rs"]
 mod gc_context_migration_tests;
 
 #[cfg(test)]
-#[path = "tests/registry_reinstall.rs"]
+#[path = "tests/registry_reinstall_test.rs"]
 mod registry_reinstall_tests;

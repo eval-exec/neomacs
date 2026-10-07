@@ -17,6 +17,7 @@
 
 mod subrs;
 #[cfg(test)]
+#[path = "modifiers/tests/modifiers_test.rs"]
 mod tests;
 #[cfg(test)]
 pub(crate) use subrs::SUBRS;

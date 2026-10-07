@@ -3518,15 +3518,15 @@ pub(crate) fn builtin_replace_match(
 }
 
 #[cfg(test)]
-#[path = "tests/search.rs"]
+#[path = "tests/search_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/search_frontend.rs"]
+#[path = "tests/search_frontend_test.rs"]
 mod search_frontend_tests;
 
 #[cfg(test)]
-#[path = "search/tests/gc_tls_ownership.rs"]
+#[path = "search/tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership;
 
 #[cfg(test)]

@@ -8132,8 +8132,9 @@ pub(crate) fn builtin_force_window_update(
 // Tests
 // ===========================================================================
 #[cfg(test)]
+#[path = "tests/window_cmds_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/selection_chrome.rs"]
+#[path = "tests/selection_chrome_test.rs"]
 mod selection_chrome_tests;

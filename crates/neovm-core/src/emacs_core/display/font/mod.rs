@@ -4153,5 +4153,5 @@ pub(crate) fn font_variation_glyphs(args: Vec<Value>) -> EvalResult {
 // Tests
 // ===========================================================================
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/font_test.rs"]
 mod tests;

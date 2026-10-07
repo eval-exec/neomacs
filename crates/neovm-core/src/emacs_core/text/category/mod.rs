@@ -760,9 +760,9 @@ pub(crate) fn builtin_set_category_table_in_buffers(
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/category_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/gc_tls_ownership.rs"]
+#[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;

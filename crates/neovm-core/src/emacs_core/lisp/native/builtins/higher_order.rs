@@ -21,7 +21,7 @@ fn sort_capture_enabled() -> bool {
 type MapResultVec = SmallVec<[Value; 8]>;
 
 #[cfg(test)]
-#[path = "tests/higher_order_capture.rs"]
+#[path = "tests/higher_order_capture_test.rs"]
 mod higher_order_capture;
 
 pub(crate) fn gnu_mapconcat_unfilled_slot_value() -> Value {
@@ -363,11 +363,11 @@ where
 }
 
 #[cfg(test)]
-#[path = "tests/map_resume.rs"]
+#[path = "tests/map_resume_test.rs"]
 mod map_resume;
 
 #[cfg(test)]
-#[path = "tests/map_resume_capture.rs"]
+#[path = "tests/map_resume_capture_test.rs"]
 mod map_resume_capture;
 
 #[inline]
@@ -1867,9 +1867,9 @@ fn merge_hi(
 
 #[cfg(test)]
 #[cfg(feature = "jit")]
-#[path = "tests/higher_order_callback_policy.rs"]
+#[path = "tests/higher_order_callback_policy_test.rs"]
 mod higher_order_callback_policy;
 
 #[cfg(all(test, feature = "jit"))]
-#[path = "tests/mapcar_activation.rs"]
+#[path = "tests/mapcar_activation_test.rs"]
 mod mapcar_activation;

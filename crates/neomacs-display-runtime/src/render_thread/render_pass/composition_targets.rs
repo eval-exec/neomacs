@@ -282,7 +282,7 @@ pub(super) fn mandatory_child_target(
 }
 
 #[cfg(test)]
-#[path = "composition_targets/tests/mod.rs"]
+#[path = "composition_targets/tests/composition_targets_test.rs"]
 mod tests;
 
 /// Preflight child composition before acquiring a surface or advancing any

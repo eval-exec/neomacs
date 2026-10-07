@@ -1675,4 +1675,5 @@ fn query_default_subpixel_order() -> FontconfigSubpixelOrder {
 }
 
 #[cfg(test)]
+#[path = "fontconfig/tests/fontconfig_test.rs"]
 mod tests;

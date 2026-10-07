@@ -5567,21 +5567,21 @@ use hash_index::{HashIndex, fx_hash_key, stored_hash};
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/value_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/bytecode_capture.rs"]
+#[path = "tests/bytecode_capture_test.rs"]
 mod bytecode_capture_tests;
 
 #[cfg(test)]
-#[path = "tests/metadata_capture.rs"]
+#[path = "tests/metadata_capture_test.rs"]
 mod metadata_capture_tests;
 
 #[cfg(test)]
-#[path = "tests/heap_mut_closure_guard.rs"]
+#[path = "tests/heap_mut_closure_guard_test.rs"]
 mod heap_mut_closure_guard;
 
 #[cfg(test)]
-#[path = "tests/gc_generational_hydration.rs"]
+#[path = "tests/gc_generational_hydration_test.rs"]
 mod gc_generational_hydration;

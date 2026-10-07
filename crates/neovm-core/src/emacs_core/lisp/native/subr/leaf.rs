@@ -585,5 +585,5 @@ pub(crate) fn call_checked(spec: &'static LeafSpec, ctx: &Context, args: &[Value
 }
 
 #[cfg(test)]
-#[path = "tests/leaf_contract.rs"]
+#[path = "tests/leaf_contract_test.rs"]
 mod leaf_contract_tests;

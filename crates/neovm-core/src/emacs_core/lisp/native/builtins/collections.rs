@@ -1639,9 +1639,9 @@ pub(crate) fn plist_member_eq_swp(args: Vec<Value>, symbols_with_pos_enabled: bo
 }
 
 #[cfg(test)]
-#[path = "tests/aset_string_in_place.rs"]
+#[path = "tests/aset_string_in_place_test.rs"]
 mod aset_string_in_place_test;
 
 #[cfg(test)]
-#[path = "tests/gc_tls_collections.rs"]
+#[path = "tests/gc_tls_collections_test.rs"]
 mod gc_tls_ownership_tests;

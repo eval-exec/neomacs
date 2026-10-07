@@ -322,5 +322,5 @@ mod native {
 pub(super) use native::W32NotifyBackend;
 
 #[cfg(test)]
-#[path = "tests/windows.rs"]
+#[path = "tests/windows_test.rs"]
 mod windows_test;

@@ -368,4 +368,5 @@ fn timestamp_delta_us(start: u64, end: u64, timestamp_period_ns: f32) -> Option<
 }
 
 #[cfg(test)]
+#[path = "gpu_frame_timing/tests/gpu_frame_timing_test.rs"]
 mod tests;

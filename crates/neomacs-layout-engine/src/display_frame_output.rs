@@ -1091,4 +1091,5 @@ impl WindowScrollBarMetrics {
 }
 
 #[cfg(test)]
+#[path = "display_frame_output/tests/display_frame_output_test.rs"]
 mod tests;

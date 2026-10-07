@@ -153,4 +153,5 @@ pub(crate) fn measurements(result: &FirstHotLoopResult, process_us: u128) -> Vec
 }
 
 #[cfg(test)]
+#[path = "first_entry/tests/first_entry_test.rs"]
 mod tests;

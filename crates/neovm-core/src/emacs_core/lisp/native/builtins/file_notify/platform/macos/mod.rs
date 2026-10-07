@@ -847,5 +847,5 @@ mod lisp;
 pub(crate) use lisp::{kqueue_add_watch, kqueue_rm_watch, kqueue_valid_p};
 
 #[cfg(test)]
-#[path = "tests/macos.rs"]
+#[path = "tests/macos_test.rs"]
 mod macos_test;

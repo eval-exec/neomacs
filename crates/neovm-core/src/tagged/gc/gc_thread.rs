@@ -1569,5 +1569,5 @@ pub(crate) fn note_string_interval_preimage(
 }
 
 #[cfg(test)]
-#[path = "tests/concurrent_major_worker_tests.rs"]
+#[path = "tests/concurrent_major_worker_test.rs"]
 mod concurrent_major_worker_tests;

@@ -545,4 +545,5 @@ pub struct FrameParams {
 }
 
 #[cfg(test)]
+#[path = "types/tests/types_test.rs"]
 mod tests;

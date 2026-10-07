@@ -89,7 +89,7 @@ use std::time::{Duration, Instant};
 mod platform_fonts;
 
 #[cfg(test)]
-#[path = "frame_snapshot_policy.rs"]
+#[path = "frame_snapshot_policy_test.rs"]
 mod frame_snapshot_policy;
 
 fn gui_display() -> BootstrapDisplayConfig {

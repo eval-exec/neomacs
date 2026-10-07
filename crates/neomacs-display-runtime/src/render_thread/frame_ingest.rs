@@ -1276,4 +1276,5 @@ fn dump_frame_glyphs_resolved(frame: &crate::core::frame_glyphs::FrameGlyphBuffe
 }
 
 #[cfg(all(test, feature = "webview"))]
+#[path = "frame_ingest/tests/frame_ingest_test.rs"]
 mod tests;

@@ -2420,5 +2420,5 @@ pub fn apply_module_function(ctx: &mut Context, func: Value, args: Vec<Value>) -
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/gc_tls_ownership.rs"]
+#[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;

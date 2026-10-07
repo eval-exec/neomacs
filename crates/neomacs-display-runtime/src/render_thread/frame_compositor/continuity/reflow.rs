@@ -289,4 +289,5 @@ pub(in crate::render_thread) fn imprints_by_window(
 }
 
 #[cfg(test)]
+#[path = "reflow/tests/reflow_test.rs"]
 mod tests;

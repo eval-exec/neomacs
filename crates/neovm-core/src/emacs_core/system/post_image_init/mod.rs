@@ -1216,5 +1216,5 @@ pub(crate) fn apply_post_image_init(eval: &mut Context) {
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/post_image_init_test.rs"]
 mod post_image_init_test;

@@ -57,11 +57,11 @@ pub(crate) use v2::{
 };
 
 #[cfg(test)]
-#[path = "tests/inline_named_front.rs"]
+#[path = "tests/inline_named_front_test.rs"]
 mod named_front_tests;
 
 #[cfg(test)]
-#[path = "tests/inline_named_runtime.rs"]
+#[path = "tests/inline_named_runtime_test.rs"]
 mod named_runtime_tests;
 
 /// Ops of a callee body, at most, for one splice.
@@ -726,21 +726,21 @@ pub(crate) fn force_inline_for_test(on: Option<bool>) {
 }
 
 #[cfg(test)]
-#[path = "tests/inline_v2.rs"]
+#[path = "tests/inline_v2_test.rs"]
 mod v2_tests;
 
 #[cfg(test)]
-#[path = "tests/inline_v2_closure.rs"]
+#[path = "tests/inline_v2_closure_test.rs"]
 mod v2_closure_tests;
 
 #[cfg(test)]
-#[path = "tests/inline_v2_hof.rs"]
+#[path = "tests/inline_v2_hof_test.rs"]
 mod v2_hof_tests;
 
 #[cfg(test)]
-#[path = "tests/inline_closure.rs"]
+#[path = "tests/inline_closure_test.rs"]
 mod closure_tests;
 
 #[cfg(test)]
-#[path = "tests/inline_entry_cache.rs"]
+#[path = "tests/inline_entry_cache_test.rs"]
 mod entry_cache_tests;

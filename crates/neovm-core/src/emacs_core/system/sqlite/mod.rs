@@ -1009,9 +1009,9 @@ use enabled::{SqliteBindSymbol, SqliteOperation, SqliteReturnType, value_is_fals
 use rusqlite::ffi;
 
 #[cfg(all(test, feature = "sqlite"))]
-#[path = "tests/enabled.rs"]
+#[path = "tests/enabled_test.rs"]
 mod tests;
 
 #[cfg(all(test, not(feature = "sqlite")))]
-#[path = "tests/disabled.rs"]
+#[path = "tests/disabled_test.rs"]
 mod tests;

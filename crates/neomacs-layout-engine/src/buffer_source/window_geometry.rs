@@ -477,4 +477,5 @@ impl BufferWindowLocalDisplayPolicy {
 }
 
 #[cfg(test)]
+#[path = "window_geometry/tests/window_geometry_test.rs"]
 mod tests;

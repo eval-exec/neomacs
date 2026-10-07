@@ -647,64 +647,65 @@ pub(crate) fn dispatch_builtin_without_eval_state(
 }
 
 #[cfg(test)]
+#[path = "tests/builtins_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/fixed_arity_hot_subrs.rs"]
+#[path = "tests/fixed_arity_hot_subrs_test.rs"]
 mod fixed_arity_hot_subrs;
 #[cfg(test)]
-#[path = "tests/replace_region_contents.rs"]
+#[path = "tests/replace_region_contents_test.rs"]
 mod replace_region_contents_test;
 
 #[cfg(test)]
-#[path = "tests/closure_slot_identity.rs"]
+#[path = "tests/closure_slot_identity_test.rs"]
 mod closure_slot_identity_test;
 #[cfg(test)]
-#[path = "tests/make_byte_code_literals.rs"]
+#[path = "tests/make_byte_code_literals_test.rs"]
 mod make_byte_code_literals_test;
 #[cfg(test)]
-#[path = "tests/make_closure_instance.rs"]
+#[path = "tests/make_closure_instance_test.rs"]
 mod make_closure_instance_test;
 
 #[cfg(test)]
-#[path = "tests/obarray_growth.rs"]
+#[path = "tests/obarray_growth_test.rs"]
 mod obarray_growth_test;
 #[cfg(test)]
-#[path = "tests/obarray_order.rs"]
+#[path = "tests/obarray_order_test.rs"]
 mod obarray_order_test;
 
 #[cfg(test)]
-#[path = "tests/assoc_callbacks.rs"]
+#[path = "tests/assoc_callbacks_test.rs"]
 mod assoc_callbacks_test;
 #[cfg(test)]
-#[path = "tests/predicate_walk_gc.rs"]
+#[path = "tests/predicate_walk_gc_test.rs"]
 mod predicate_walk_gc_test;
 #[cfg(test)]
-#[path = "tests/sort_capture.rs"]
+#[path = "tests/sort_capture_test.rs"]
 mod sort_capture_test;
 
 #[cfg(test)]
-#[path = "tests/lisp_only_predicates_and_aliases.rs"]
+#[path = "tests/lisp_only_predicates_and_aliases_test.rs"]
 mod lisp_only_predicates_and_aliases_test;
 
 #[cfg(test)]
-#[path = "tests/lisp_only_undo_commands.rs"]
+#[path = "tests/lisp_only_undo_commands_test.rs"]
 mod lisp_only_undo_commands_test;
 
 #[cfg(test)]
-#[path = "tests/process_launchers_are_lisp_only.rs"]
+#[path = "tests/process_launchers_are_lisp_only_test.rs"]
 mod process_launchers_are_lisp_only_test;
 
 #[cfg(test)]
-#[path = "tests/lisp_only_misc_names.rs"]
+#[path = "tests/lisp_only_misc_names_test.rs"]
 mod lisp_only_misc_names_test;
 
 #[cfg(test)]
-#[path = "tests/lisp_only_window_frame_names.rs"]
+#[path = "tests/lisp_only_window_frame_names_test.rs"]
 mod lisp_only_window_frame_names_test;
 
 #[cfg(test)]
-#[path = "tests/rust_subrs_shadowed_by_lisp.rs"]
+#[path = "tests/rust_subrs_shadowed_by_lisp_test.rs"]
 mod rust_subrs_shadowed_by_lisp_test;
 
 // -----------------------------------------------------------------------

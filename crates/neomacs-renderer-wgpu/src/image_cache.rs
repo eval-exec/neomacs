@@ -2529,4 +2529,5 @@ impl ImageCache {
 }
 
 #[cfg(test)]
+#[path = "image_cache/tests/image_cache_test.rs"]
 mod tests;

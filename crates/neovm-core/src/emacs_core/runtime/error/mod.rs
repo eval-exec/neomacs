@@ -2090,10 +2090,10 @@ pub fn format_eval_result_bytes_with_eval(
     out
 }
 #[cfg(test)]
-#[path = "tests/flow_kind.rs"]
+#[path = "tests/flow_kind_test.rs"]
 mod flow_kind_tests;
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/error_test.rs"]
 mod tests;
 
 /// Signal wrong-number-of-arguments unless `args` has exactly `n` items.
@@ -2288,13 +2288,13 @@ impl super::eval::Context {
 }
 
 #[cfg(test)]
-#[path = "tests/gc_tls_ownership.rs"]
+#[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;
 
 #[cfg(test)]
-#[path = "tests/flow_word.rs"]
+#[path = "tests/flow_word_test.rs"]
 mod flow_word_tests;
 
 #[cfg(test)]
-#[path = "tests/flow_word_gc.rs"]
+#[path = "tests/flow_word_gc_test.rs"]
 mod flow_word_gc_tests;

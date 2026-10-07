@@ -4683,5 +4683,5 @@ fn where_is_binding_prefix_keymap(obarray: &Obarray, binding: &Value) -> Option<
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/interactive_test.rs"]
 mod tests;

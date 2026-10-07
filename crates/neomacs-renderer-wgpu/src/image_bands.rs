@@ -591,7 +591,7 @@ impl BandPlan {
 }
 
 #[cfg(test)]
-#[path = "image_bands/tests.rs"]
+#[path = "image_bands/tests/image_bands_test.rs"]
 mod tests;
 
 /// A baseline JPEG's rows, as the decoder hands them over.

@@ -910,5 +910,5 @@ pub(crate) fn builtin_neomacs_heap_layout_stats(args: Vec<Value>) -> EvalResult 
 // Tests
 // ===========================================================================
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/builtins_extra_test.rs"]
 mod tests;

@@ -1487,5 +1487,5 @@ pub(crate) fn builtin_region_end(eval: &mut super::eval::Context, args: Vec<Valu
 // Tests
 // ===========================================================================
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/navigation_test.rs"]
 mod tests;

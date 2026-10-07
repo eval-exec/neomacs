@@ -741,5 +741,5 @@ impl GcTrace for AutoloadManager {
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/autoload_test.rs"]
 mod tests;

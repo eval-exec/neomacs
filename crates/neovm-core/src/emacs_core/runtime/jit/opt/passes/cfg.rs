@@ -693,5 +693,5 @@ fn mapped_term(
 }
 
 #[cfg(test)]
-#[path = "tests/cfg.rs"]
+#[path = "tests/cfg_test.rs"]
 mod tests;

@@ -54,4 +54,5 @@ pub(in crate::render_thread) fn theme_change(
 }
 
 #[cfg(test)]
+#[path = "theme/tests/theme_test.rs"]
 mod tests;

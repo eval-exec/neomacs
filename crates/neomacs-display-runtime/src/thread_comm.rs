@@ -1271,6 +1271,7 @@ impl RenderComms {
 }
 
 #[cfg(test)]
+#[path = "thread_comm/tests/thread_comm_test.rs"]
 mod tests;
 
 #[cfg(test)]

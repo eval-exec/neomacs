@@ -702,5 +702,5 @@ pub(crate) fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::O
     obarray.make_special("emulation-mode-map-alists");
 }
 #[cfg(test)]
-#[path = "tests/pure.rs"]
+#[path = "tests/pure_test.rs"]
 mod tests;
