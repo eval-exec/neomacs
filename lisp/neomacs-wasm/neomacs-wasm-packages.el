@@ -13,6 +13,7 @@
 
 (defvar which-key-idle-delay)
 (defvar which-key-idle-secondary-delay)
+(defvar warning-inhibit-types)
 
 (defvar neomacs-wasm-package-error nil
   "Reason optional landing packages are unavailable, or nil.")
@@ -81,7 +82,14 @@
   (tab-bar-mode 1)
   (global-tab-line-mode 1)
   (condition-case error-data
-      (neomacs-wasm-packages--activate)
+      ;; The curated bundle ships upstream sources verbatim, and hydra's
+      ;; lv.el predates lexical-binding cookies.  A packaging gap like that
+      ;; must not decide the first-run window layout, so load the bundle
+      ;; under the same inhibition startup.el applies to third-party
+      ;; subdirs.el files; personal init still sees its own warnings.
+      (let ((warning-inhibit-types
+             (cons '(files missing-lexbind-cookie) warning-inhibit-types)))
+        (neomacs-wasm-packages--activate))
     (error (setq neomacs-wasm-package-error (error-message-string error-data)))))
 
 (provide 'neomacs-wasm-packages)

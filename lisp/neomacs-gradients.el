@@ -1,4 +1,4 @@
-;;; neomacs-gradients.el --- Gradient background faces for Neomacs
+;;; neomacs-gradients.el --- Gradient background faces for Neomacs  -*- lexical-binding: t; -*-
 ;;;
 ;;; This module demonstrates how to use GPU-rendered gradient backgrounds
 ;;; on Neomacs faces while maintaining 100% compatibility with GNU Emacs.
