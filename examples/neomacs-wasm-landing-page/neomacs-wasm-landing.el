@@ -49,15 +49,22 @@
         ""
       (propertize " " 'display neomacs-wasm-landing--icon-image))))
 
+(defun neomacs-wasm-landing--tab-bar-icon-item ()
+  "Produce the window icon alone at the far left of the tab bar."
+  `((neomacs-wasm-icon
+     menu-item
+     ,(concat (neomacs-wasm-landing--tab-bar-icon) " ")
+     neomacs-wasm-landing-browse-repository
+     :help "Open https://github.com/eval-exec/neomacs in a browser tab")))
+
 (defun neomacs-wasm-landing--tab-bar-branding ()
-  "Produce the window icon and product name at the far left of the tab bar."
+  "Produce the product name at the left of the tab bar."
   `((neomacs-wasm-branding
      menu-item
-     ,(concat (neomacs-wasm-landing--tab-bar-icon)
-              (propertize " NEO Emacs (WebAssembly build) "
-                          'face '(:inherit (default neomacs-wasm-landing-body)
-                                           :weight bold))
-              (propertize "  │  " 'face 'shadow))
+     ,(concat
+       (propertize " NEO Emacs (WebAssembly build) "
+                   'face '(:inherit (bold neomacs-wasm-landing-body)))
+       (propertize "  │  " 'face 'shadow))
      neomacs-wasm-landing-browse-repository
      :help "Open https://github.com/eval-exec/neomacs in a browser tab")))
 
@@ -402,7 +409,8 @@ the landing window layout."
       ;; Far left: window icon and product name, then the conspicuous
       ;; work-in-progress warning linking to the repository.
       (add-to-list 'tab-bar-format 'neomacs-wasm-landing--tab-bar-warning)
-      (add-to-list 'tab-bar-format 'neomacs-wasm-landing--tab-bar-branding))
+      (add-to-list 'tab-bar-format 'neomacs-wasm-landing--tab-bar-branding)
+      (add-to-list 'tab-bar-format 'neomacs-wasm-landing--tab-bar-icon-item))
     ;; Select a non-side leaf before deleting the old window layout.
     (select-window
      (or (seq-find (lambda (window) (not (window-parameter window 'window-side)))
