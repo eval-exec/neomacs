@@ -21,6 +21,7 @@ neomacs-display-protocol.workspace = true
 neomacs-image.workspace = true
 neomacs-wasm-protocol.workspace = true
 neovm-core.workspace = true
+neovm-host-abi.workspace = true
 serde_json.workspace = true
 
 [lints]

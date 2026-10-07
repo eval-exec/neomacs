@@ -146,6 +146,14 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
         startup.scale_factor()
     ));
     let (metrics, font) = initial_frame_font(&startup)?;
+    // Seed the virtual monitor before any Lisp runs: startup Lisp
+    // (frame sizing, the landing layout) queries display geometry, and
+    // waiting for the first viewport event would make that a race.
+    sync_virtual_monitor(
+        startup.logical_extent().width(),
+        startup.logical_extent().height(),
+        startup.scale_factor(),
+    );
     let background = match startup.color_scheme() {
         BrowserColorScheme::Light => InitialBackgroundMode::Light,
         BrowserColorScheme::Dark => InitialBackgroundMode::Dark,
@@ -199,6 +207,33 @@ fn decode_startup(bytes: Vec<u8>) -> Result<BrowserEditorStartup, String> {
     Ok(startup)
 }
 
+/// Keep the single virtual browser monitor in sync with the live viewport.
+///
+/// The browser frontend reports its viewport, never host monitors, so
+/// display-geometry queries (x-display-pixel-*) would otherwise fail for
+/// the whole session.  Device pixels are what the monitor snapshot is
+/// expected to carry on this platform (logical extent times scale).  A
+/// host that does report monitors replaces this through MonitorsChanged.
+fn sync_virtual_monitor(logical_width: u32, logical_height: u32, scale_factor: f64) {
+    let scale = if scale_factor.is_finite() && scale_factor > 0.0 {
+        scale_factor
+    } else {
+        1.0
+    };
+    neovm_core::emacs_core::builtins::set_neomacs_monitor_info(
+        vec![neovm_core::emacs_core::builtins::NeomacsMonitorInfo {
+            x: 0,
+            y: 0,
+            width: (f64::from(logical_width) * scale).round() as i32,
+            height: (f64::from(logical_height) * scale).round() as i32,
+            scale,
+            width_mm: 0,
+            height_mm: 0,
+            name: Some("browser".to_owned()),
+        }],
+    );
+}
+
 struct BrowserWorkerTransport {
     input: FrontendInputPort,
     frames: FrontendFrameInbox,
@@ -250,9 +285,24 @@ impl BrowserWorkerTransport {
         let sequence = batch.sequence();
         for event in batch.into_events() {
             match event {
-                neomacs_wasm_protocol::ValidatedBrowserInputEvent::Host(event) => self.input.submit(&event),
-                neomacs_wasm_protocol::ValidatedBrowserInputEvent::Pointer(event) => self.input.submit_pointer(event),
-            }.map_err(|error| {
+                neomacs_wasm_protocol::ValidatedBrowserInputEvent::Host(event) => {
+                    if let neovm_host_abi::frontend_event::FrontendEvent::ViewportChanged(viewport) =
+                        &event
+                    {
+                        let extent = viewport.logical_extent();
+                        sync_virtual_monitor(
+                            extent.width(),
+                            extent.height(),
+                            viewport.scale().get(),
+                        );
+                    }
+                    self.input.submit(&event)
+                }
+                neomacs_wasm_protocol::ValidatedBrowserInputEvent::Pointer(event) => {
+                    self.input.submit_pointer(event)
+                }
+            }
+            .map_err(|error| {
                 HostInputWaitError::new(format!("failed to submit browser input: {error}"))
             })?;
         }

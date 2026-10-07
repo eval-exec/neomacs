@@ -4224,6 +4224,7 @@ dependencies = [
  "neomacs-layout-engine",
  "neomacs-wasm-protocol",
  "neovm-core",
+ "neovm-host-abi",
  "serde_json",
  "tracing",
 ]
