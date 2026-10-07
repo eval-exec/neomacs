@@ -43,8 +43,7 @@ canvas {
 #browser-startup {
   position: absolute;
   z-index: 1;
-  inset-block-start: 0;
-  inset-inline: 0;
+  inset: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
