@@ -24,6 +24,58 @@
 (defvar-local neomacs-wasm-landing--banner-overlay nil)
 (defvar-local neomacs-wasm-landing--playground-positioned nil)
 
+(defconst neomacs-wasm-landing--repo-url "https://github.com/eval-exec/neomacs"
+  "The repository this experimental preview is developed in.")
+
+(defvar neomacs-wasm-landing--icon-image nil
+  "Cached window-icon image for the tab bar, or nil when unavailable.")
+
+(defun neomacs-wasm-landing--tab-bar-icon ()
+  "Return a display-spec string with the window icon, or an empty string."
+  (if (not (display-images-p))
+      ""
+    (unless neomacs-wasm-landing--icon-image
+      (condition-case nil
+          (let ((image (create-image
+                        (expand-file-name "images/neomacs-window-icon.svg"
+                                          data-directory)
+                        'svg nil :height 20 :ascent 'center)))
+            ;; Decode outside redisplay so a failure is visible here, not
+            ;; as a silently blank spot in the tab bar.
+            (image-size image t)
+            (setq neomacs-wasm-landing--icon-image image))
+        (error (setq neomacs-wasm-landing--icon-image 'unavailable))))
+    (if (eq neomacs-wasm-landing--icon-image 'unavailable)
+        ""
+      (propertize " " 'display neomacs-wasm-landing--icon-image))))
+
+(defun neomacs-wasm-landing--tab-bar-branding ()
+  "Produce the window icon and product name at the far left of the tab bar."
+  `((neomacs-wasm-branding
+     menu-item
+     ,(concat (neomacs-wasm-landing--tab-bar-icon)
+              (propertize " NEO Emacs (WebAssembly build) "
+                          'face 'bold))
+     neomacs-wasm-landing-browse-repository
+     :help "Open https://github.com/eval-exec/neomacs in a browser tab")))
+
+(defun neomacs-wasm-landing--tab-bar-warning ()
+  "Produce the conspicuous work-in-progress warning in the tab bar."
+  `((neomacs-wasm-warning
+     menu-item
+     ,(propertize
+       (concat " EXPERIMENTAL INCOMPLETE WORK IN PROGRESS: "
+               neomacs-wasm-landing--repo-url " ")
+       'face '(:inherit font-lock-warning-face :weight bold)
+       'mouse-face 'highlight)
+     neomacs-wasm-landing-browse-repository
+     :help "Open https://github.com/eval-exec/neomacs in a browser tab")))
+
+(defun neomacs-wasm-landing-browse-repository ()
+  "Open the neomacs repository in a browser tab."
+  (interactive)
+  (neomacs-wasm-browse-url neomacs-wasm-landing--repo-url))
+
 (defcustom neomacs-wasm-landing-playground-file "~/playground.el"
   "Writable playground file.  Existing contents are never replaced."
   :type 'file
@@ -338,7 +390,11 @@ the landing window layout."
         (info (neomacs-wasm-landing--about)))
     (neomacs-wasm-landing--playground-buffer)
     (when (bound-and-true-p tab-bar-mode)
-      (tab-bar-rename-tab "NEO / Playground"))
+      (tab-bar-rename-tab "NEO / Playground")
+      ;; Far left: window icon and product name, then the conspicuous
+      ;; work-in-progress warning linking to the repository.
+      (add-to-list 'tab-bar-format 'neomacs-wasm-landing--tab-bar-warning)
+      (add-to-list 'tab-bar-format 'neomacs-wasm-landing--tab-bar-branding))
     ;; Select a non-side leaf before deleting the old window layout.
     (select-window
      (or (seq-find (lambda (window) (not (window-parameter window 'window-side)))

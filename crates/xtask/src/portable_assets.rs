@@ -134,6 +134,12 @@ fn write_runtime_archive(
     if banner.is_file() {
         entries.push((banner, PathBuf::from("etc/images/neomacs-banner.svg")));
     }
+    // The landing page's tab bar shows the same window icon the desktop
+    // app uses; keep one canonical asset in the display-runtime crate.
+    let window_icon = runtime_root.join("crates/neomacs-display-runtime/assets/window-icon.svg");
+    if window_icon.is_file() {
+        entries.push((window_icon, PathBuf::from("etc/images/neomacs-window-icon.svg")));
+    }
     entries.sort_by(|left, right| left.1.cmp(&right.1));
 
     let mut temporary = NamedTempFile::new_in(output_dir)?;
