@@ -55,7 +55,7 @@
      menu-item
      ,(concat (neomacs-wasm-landing--tab-bar-icon)
               (propertize " NEO Emacs (WebAssembly build) "
-                          'face '(:inherit neomacs-wasm-landing-body
+                          'face '(:inherit (default neomacs-wasm-landing-body)
                                            :weight bold))
               (propertize "  │  " 'face 'shadow))
      neomacs-wasm-landing-browse-repository
