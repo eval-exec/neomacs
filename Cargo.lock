@@ -3834,6 +3834,7 @@ dependencies = [
  "neomacs-video-model",
  "neomacs-webview",
  "neovm-core",
+ "num_enum",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
