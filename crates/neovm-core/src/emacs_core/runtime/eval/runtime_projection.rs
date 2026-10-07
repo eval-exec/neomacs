@@ -36,7 +36,7 @@ pub(super) fn runtime_projection_mask_for(core_mirrors: &[SymId]) -> Box<[u64]> 
     let mut ids: Vec<SymId> = core_mirrors.to_vec();
     ids.extend([
         max_lisp_eval_depth_symbol(),
-        intern("frame-alpha-lower-limit"),
+        frame_alpha_lower_limit_symbol(),
         input_decode_map_symbol(),
         local_function_key_map_symbol(),
     ]);
@@ -96,7 +96,7 @@ impl Context {
             || resolved == self.symbols_with_pos_enabled_symbol
             || resolved == self.print_symbols_bare_symbol
             || resolved == max_lisp_eval_depth_symbol()
-            || resolved == intern("frame-alpha-lower-limit")
+            || resolved == frame_alpha_lower_limit_symbol()
             || resolved == input_decode_map_symbol()
             || resolved == local_function_key_map_symbol()
             || self.is_gc_runtime_setting_symbol(resolved)
