@@ -135,7 +135,8 @@ macro_rules! demand_reasons {
         // Interface variants/fields defined by the scheduling plan; consumed as
         // later stages migrate effects onto the coordinator.
         #[allow(dead_code)]
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, enumset::EnumSetType)]
+        #[enumset(no_super_impls, no_ops)]
         pub(crate) enum DemandReason {
             $($(#[$variant_meta])* $variant,)+
         }
@@ -221,43 +222,8 @@ impl DemandReason {
 
 /// Set of [`DemandReason`]s, carried by value on a [`FramePlan`] so a frame can
 /// be attributed to what asked for it ("why did this present happen?").
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct DemandReasonSet(u32);
-
-impl DemandReasonSet {
-    pub(crate) const fn empty() -> Self {
-        DemandReasonSet(0)
-    }
-
-    fn insert(&mut self, reason: DemandReason) {
-        self.0 |= 1 << reason.index();
-    }
-
-    pub(crate) fn contains(self, reason: DemandReason) -> bool {
-        self.0 & (1 << reason.index()) != 0
-    }
-
-    pub(crate) fn is_empty(self) -> bool {
-        self.0 == 0
-    }
-
-    /// Reasons in [`DemandReason::ALL`] order.
-    pub(crate) fn iter(self) -> impl Iterator<Item = DemandReason> {
-        DemandReason::ALL
-            .into_iter()
-            .filter(move |r| self.contains(*r))
-    }
-}
-
-impl FromIterator<DemandReason> for DemandReasonSet {
-    fn from_iter<I: IntoIterator<Item = DemandReason>>(iter: I) -> Self {
-        let mut set = DemandReasonSet::empty();
-        for reason in iter {
-            set.insert(reason);
-        }
-        set
-    }
-}
+/// Iteration follows declaration order, matching [`DemandReason::ALL`].
+pub(crate) type DemandReasonSet = enumset::EnumSet<DemandReason>;
 
 /// A declaration that pixels need to change, with reason, scope, and cadence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

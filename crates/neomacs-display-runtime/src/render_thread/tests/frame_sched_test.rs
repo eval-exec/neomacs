@@ -1253,3 +1253,20 @@ fn servicing_twice_at_one_timestamp_is_idempotent() {
         "nothing ripe survives one service"
     );
 }
+
+#[test]
+fn demand_reason_sets_deduplicate_and_iterate_in_declaration_order() {
+    let reasons: DemandReasonSet = DemandReason::ALL
+        .into_iter()
+        .rev()
+        .chain(DemandReason::ALL)
+        .collect();
+    assert_eq!(reasons.iter().collect::<Vec<_>>(), DemandReason::ALL);
+    for reason in DemandReason::ALL {
+        assert!(reasons.contains(reason), "missing {reason:?}");
+    }
+    let empty = DemandReasonSet::default();
+    assert!(empty.is_empty());
+    assert!(empty.iter().next().is_none());
+    assert!(!empty.contains(DemandReason::EditorCommit));
+}
