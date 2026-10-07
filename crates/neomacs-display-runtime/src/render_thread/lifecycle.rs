@@ -102,7 +102,7 @@ impl RenderApp {
             }
         }
 
-        if emit_change_event && had_snapshot {
+        if !had_snapshot || emit_change_event {
             self.comms
                 .send_input(InputEvent::MonitorsChanged { monitors: snapshot });
         }
@@ -126,9 +126,7 @@ impl RenderApp {
                     .1,
                 self.frame_windows
                     .primary_window()
-                    .expect("primary window state")
-                    .chrome()
-                    .title
+                    .map(|primary| &primary.chrome().title)
             );
             self.lifecycle_flags.resumed_seen = true;
         }
@@ -158,7 +156,11 @@ impl RenderApp {
                 height,
                 title
             );
-            match event_loop.create_window(attrs) {
+            match self.comms.create_window(
+                event_loop,
+                attrs,
+                self.frame_windows.primary_event_frame_id(),
+            ) {
                 Ok(window) => {
                     let window: Arc<dyn winit::window::Window> = Arc::from(window);
                     NativeTextInputPolicy::for_gui_frame().apply_to_window(window.as_ref());
@@ -271,6 +273,13 @@ impl RenderApp {
             event_loop.exit();
             return;
         }
+        if self.gpu.is_none() && self.comms.keep_alive_without_frames {
+            if self.process_startup_commands() {
+                self.handle_exiting();
+                event_loop.exit();
+                return;
+            }
+        }
         if let Some(pending) = self.gpu_startup.take() {
             match pending.poll(&event_loop.create_proxy()) {
                 Ok(super::gpu_startup::GpuPoll::Pending(pending)) => {
@@ -279,33 +288,18 @@ impl RenderApp {
                 Ok(super::gpu_startup::GpuPoll::Ready(prepared)) => self.install_wgpu(prepared),
                 Err(error) => {
                     self.startup_error = Some(error);
-                    event_loop.exit();
+                    if !self.comms.keep_alive_without_frames {
+                        event_loop.exit();
+                    }
                     return;
                 }
             }
         }
-        if self.gpu.is_none()
-            && self
-                .frame_windows
-                .primary_window()
-                .is_some_and(|primary| !primary.lifecycle.is_active())
-        {
-            // Keep GPU-dependent commands in their original order. Shutdown
-            // must remain observable even for the legacy render-loop caller
-            // that has no evaluator preparation lifetime to monitor.
-            while let Ok(command) = self.comms.cmd_rx.try_recv() {
-                if matches!(
-                    command,
-                    crate::thread_comm::RenderCommand::Lifecycle(
-                        crate::thread_comm::LifecycleCommand::Shutdown
-                    )
-                ) {
-                    self.lifecycle_flags
-                        .request_shutdown(super::state::RenderShutdownReason::EvaluatorShutdown);
-                    event_loop.exit();
-                    return;
-                }
-                self.startup_commands.push_back(command);
+        if self.gpu.is_none() {
+            if self.process_startup_commands() {
+                self.handle_exiting();
+                event_loop.exit();
+                return;
             }
             event_loop.set_control_flow(ControlFlow::Wait);
             return;

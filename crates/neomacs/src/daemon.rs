@@ -211,12 +211,15 @@ pub(super) fn prepare(options: Option<&Options>) -> Result<Option<DaemonNotifier
 
 /// Re-exec a daemon in place, retaining its foreground/background identity.
 /// A background daemon is already detached: do not fork a second time.
-pub(super) fn restart(args: &[OsString]) -> ! {
+pub(super) fn restart(args: &[OsString], bypass_finalizers: bool) -> ! {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         let executable = std::env::current_exe().unwrap_or_else(|error| {
             eprintln!("neomacs: cannot restart: {error}");
+            if bypass_finalizers {
+                super::exit_cancelled_gui_startup(1);
+            }
             std::process::exit(1);
         });
         let mut command = std::process::Command::new(executable);
@@ -248,6 +251,9 @@ pub(super) fn restart(args: &[OsString]) -> ! {
         }
         let error = command.exec();
         eprintln!("neomacs: cannot restart: {error}");
+    }
+    if bypass_finalizers {
+        super::exit_cancelled_gui_startup(1);
     }
     std::process::exit(1);
 }

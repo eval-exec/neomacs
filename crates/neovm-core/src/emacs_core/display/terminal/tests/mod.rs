@@ -154,6 +154,58 @@ fn terminal_live_p_reports_frame_terminal_type_not_selected_global_type() {
 }
 
 #[test]
+fn terminal_live_p_uses_registered_type_without_frames_or_gui_globals() {
+    reset_terminal_thread_locals();
+    let mut eval = Context::new();
+    let initial = eval.eval_str("(selected-frame)").unwrap();
+    let initial_terminal = builtin_frame_terminal(&mut eval, vec![initial]).unwrap();
+    let gui_id = register_graphical_terminal(
+        neomacs_display_protocol::GraphicalDisplayIdentity::named(
+            neomacs_display_protocol::GraphicalBackend::Wayland,
+            "wayland-frame-free",
+        )
+        .unwrap(),
+    );
+    let gui_terminal = terminal_handle_value_for_id(gui_id).unwrap();
+    let tty = ensure_terminal_runtime_owner(
+        99,
+        "test-tty",
+        TerminalRuntimeConfig::interactive(
+            None,
+            neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities::full_with_color_cells(8),
+        ),
+    );
+    // Explicit owners keep their type whether GUI globals are absent or set.
+    for global in [Value::NIL, Value::symbol("neo")] {
+        eval.set_variable("window-system", global);
+        eval.set_variable("initial-window-system", global);
+        assert_eq!(
+            builtin_terminal_live_p(&mut eval, vec![gui_terminal]).unwrap(),
+            Value::symbol("neo")
+        );
+        assert_eq!(
+            builtin_terminal_live_p(&mut eval, vec![initial_terminal]).unwrap(),
+            Value::T
+        );
+        assert_eq!(
+            builtin_terminal_live_p(&mut eval, vec![tty]).unwrap(),
+            Value::T
+        );
+        assert!(
+            builtin_frame_initial_p(&mut eval, vec![initial_terminal])
+                .unwrap()
+                .is_truthy()
+        );
+        assert!(
+            builtin_frame_initial_p(&mut eval, vec![tty])
+                .unwrap()
+                .is_nil()
+        );
+    }
+    assert_eq!(eval.frames.frame_list().len(), 1);
+}
+
+#[test]
 fn terminal_live_p_int_is_not_live() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();

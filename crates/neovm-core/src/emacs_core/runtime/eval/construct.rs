@@ -2263,6 +2263,7 @@ impl Context {
             scroll_goal: None,
             display_host: None,
             tty_frame_host_factory: None,
+            gui_display_initializer: None,
             visual_config: neomacs_display_protocol::VisualConfig::default(),
             pending_menu_bar_popup_anchor: None,
             coding_systems: CodingSystemManager::new(),

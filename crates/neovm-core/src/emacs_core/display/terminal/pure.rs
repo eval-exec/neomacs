@@ -597,6 +597,20 @@ pub(crate) fn next_terminal_id() -> u64 {
     })
 }
 
+/// Register a native graphical connection without changing the daemon's
+/// initial terminal or any existing TTY frame.
+pub fn register_graphical_terminal(
+    identity: neomacs_display_protocol::GraphicalDisplayIdentity,
+) -> u64 {
+    let id = next_terminal_id();
+    ensure_terminal_runtime_owner(
+        id,
+        identity.terminal_name().to_owned(),
+        TerminalRuntimeConfig::window_system(identity),
+    );
+    id
+}
+
 /// GNU `get_named_terminal`: find an active termcap terminal already owning
 /// DEVICE so a second frame shares its renderer, input source, and kboard
 /// instead of opening the same tty twice.
@@ -1276,7 +1290,7 @@ pub(crate) fn builtin_frame_terminal(
     Ok(terminal_handle_value_for_id(terminal_id).unwrap_or_else(terminal_handle_value))
 }
 
-/// (terminal-live-p TERMINAL) -> t
+/// (terminal-live-p TERMINAL) -> output type or nil
 ///
 /// In GNU Emacs, terminal-live-p returns the terminal type symbol
 /// (e.g. 'x, 'w32) for GUI terminals, or t for TTY.  This is used
@@ -1289,6 +1303,14 @@ pub(crate) fn builtin_terminal_live_p(
     let Some(terminal_id) = decode_terminal_id_eval(eval, &args[0]) else {
         return Ok(Value::NIL);
     };
+    // GNU Fterminal_live_p classifies a window-system terminal by its output
+    // method, even when its last frame is gone or another terminal is
+    // selected.  A daemon's retained display connection relies on this.
+    if terminal_output_method_for_id(terminal_id) == Some(TerminalOutputMethod::WindowSystem) {
+        return Ok(Value::symbol(
+            crate::emacs_core::display::gui_window_system_symbol(),
+        ));
+    }
     let runtime = terminal_runtime_for_id(terminal_id);
     let mut terminal_has_frame = false;
     let window_system = eval
@@ -1597,6 +1619,23 @@ pub(crate) fn delete_terminal_owned(
             "error",
             vec![Value::string(
                 "Attempt to delete the sole active display terminal",
+            )],
+        ));
+    }
+    // The native display host retains this connection across frame deletion,
+    // but cannot retire/reconnect it independently. Reject public deletion
+    // before any Lisp hooks or ownership mutation; internal teardown is exempt.
+    if matches!(mode, DeleteTerminalMode::Public { .. })
+        && eval
+            .display_host
+            .as_ref()
+            .and_then(|host| host.gui_terminal())
+            .is_some_and(|(id, _)| id == terminal_id)
+    {
+        return Err(signal(
+            "error",
+            vec![Value::string(
+                "Deleting a retained graphical display terminal is not supported",
             )],
         ));
     }

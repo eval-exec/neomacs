@@ -458,8 +458,9 @@ strip = "none"
 # Never vendor dependencies into this repository. Always fork the crate on
 # GitHub and make changes on the fork's `patch` branch. Reference an exact Git
 # revision here and document the branch beside each dependency.
-# Fork branch: patch (includes Wayland/X11 fixes, continuous XI2 units, and Windows precision touchpad panning).
-winit = { git = "https://github.com/eval-exec/winit", rev = "2290f91c602f8efdf102972457a25e8b6e36f90c" }
+# Fork branch: patch (includes inherited fixes and explicit Wayland connections
+# with failed-construction retry; deferred daemon startup never mutates display env).
+winit = { git = "https://github.com/thanosapollo/winit", rev = "6884804b87b93c228b97ba683ddcc7d0acb4d023" }
 # Fork branch: neomacs-present-timing.
 # Native presentation IDs/timestamps; see the Vulkan timing seam in this fork.
 wgpu-hal = { git = "https://github.com/eval-exec/wgpu", rev = "9717f9fe277beec2c98df550662a626f8fc0248c" }

@@ -22,6 +22,34 @@ fn settled_point(
 use super::*;
 
 #[test]
+fn deferred_gui_daemon_close_and_stale_close_do_not_stop_root() {
+    let mut eval = crate::emacs_core::Context::new();
+    eval.configure_daemon(Some("close-test".into()), None);
+    eval.command_loop.running = true;
+    let initial = eval
+        .eval_str("(selected-frame)")
+        .unwrap()
+        .as_frame_id()
+        .unwrap();
+    let buffer = eval.buffer_manager_mut().create_buffer("owned-gui");
+    let gui = eval
+        .frame_manager_mut()
+        .create_frame("owned-gui", 320, 200, buffer);
+    eval.handle_window_close_input_event(gui.0).unwrap();
+    assert!(eval.frame_manager().get(gui).is_none());
+    assert!(
+        eval.frame_manager()
+            .get(crate::window::FrameId(initial))
+            .is_some()
+    );
+    assert!(eval.command_loop.running);
+    assert!(eval.shutdown_request().is_none());
+    eval.handle_window_close_input_event(gui.0).unwrap();
+    assert!(eval.command_loop.running);
+    assert!(eval.shutdown_request().is_none());
+}
+
+#[test]
 fn discrete_scroll_preserves_horizontal_direction_and_multiple_steps() {
     let mut eval = crate::emacs_core::Context::new();
     let buffer = eval.buffer_manager_mut().create_buffer("wheel-steps");

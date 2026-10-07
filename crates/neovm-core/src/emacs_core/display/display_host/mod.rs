@@ -299,6 +299,20 @@ impl GuiResourceQuery {
 }
 
 pub trait DisplayHost {
+    /// A deferred GUI connection owns a terminal independently of the initial
+    /// daemon terminal and any attached TTYs.
+    fn gui_terminal(&self) -> Option<(u64, neomacs_display_protocol::GraphicalDisplayIdentity)> {
+        None
+    }
+
+    /// Font-owned geometry for frames opened from a non-graphical selection.
+    fn gui_frame_metrics(&self) -> Option<(f32, f32, f32, f64)> {
+        None
+    }
+
+    fn default_gui_font(&self) -> Option<&str> {
+        None
+    }
     #[cfg(target_os = "macos")]
     fn ns_resource(&self, _name: &str) -> Option<String> {
         None
@@ -321,6 +335,14 @@ pub trait DisplayHost {
     }
 
     fn realize_gui_frame(&mut self, request: GuiFrameHostRequest) -> Result<(), String>;
+    /// Pending until the native window and render surface exist. Legacy hosts
+    /// realize synchronously; asynchronous native hosts must report completion.
+    fn poll_gui_frame_ready(
+        &mut self,
+        _frame: crate::window::FrameId,
+    ) -> Option<Result<(), String>> {
+        Some(Ok(()))
+    }
     fn resize_gui_frame(&mut self, request: GuiFrameHostRequest) -> Result<(), String>;
     /// Whether this concrete graphical backend can represent ATTRIBUTE.
     ///

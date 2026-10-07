@@ -3034,6 +3034,10 @@ pub(crate) struct DaemonState {
     pub(crate) notify: Option<DaemonNotifier>,
 }
 
+/// Display opener invoked only on the owning evaluator thread.
+pub type GuiDisplayInitializer =
+    Box<dyn FnMut(&mut Context, Option<&str>) -> Result<(), EvalError>>;
+
 pub struct Context {
     pub(crate) owned_roots: crate::emacs_core::owned_roots::OwnedRootRegistry,
     /// Tagged pointer heap — sole GC and allocator.
@@ -3404,6 +3408,9 @@ pub struct Context {
     /// `make-terminal-frame`. The VM owns identities; platform code owns the
     /// device, raw-mode, input, renderer, and lifecycle resources.
     pub(crate) tty_frame_host_factory: Option<Box<dyn TtyFrameHostFactory>>,
+    /// Installed by a display-free frontend. Invoked on this evaluator's
+    /// owning thread; neither the Context nor loaded modules migrate.
+    pub(crate) gui_display_initializer: Option<GuiDisplayInitializer>,
     /// Desired visual configuration.  Lisp updates this snapshot atomically;
     /// attaching or rebuilding a display replays it as authoritative state.
     pub(crate) visual_config: neomacs_display_protocol::VisualConfig,

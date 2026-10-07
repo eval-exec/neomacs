@@ -7954,7 +7954,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "x-display-list",
-        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::display::builtin_x_display_list(args)),
+        NativeFn::ContextVec(|ctx, args| {
+            crate::emacs_core::display::builtin_x_display_list(ctx, args)
+        }),
         SubrArity::new(0, Some(0)),
     ));
     ctx.register_subr(SubrSpec::new(

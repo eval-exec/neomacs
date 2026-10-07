@@ -1889,6 +1889,44 @@ fn daemon_graphical_request_fails_without_creating_a_phantom_frame() {
 }
 
 #[test]
+fn deferred_gui_failed_attach_preserves_daemon_state_and_shutdown() {
+    let mut fixture = Fixture::new();
+    fixture.foreground("deferred", &["-Q"]);
+    let pid = fixture.eval("deferred", "(emacs-pid)");
+    assert_eq!(fixture.eval("deferred", "(progn (setq gui-preserved (list 7 11)) (setq gui-preserved-alias gui-preserved) (get-buffer-create \"gui-preserved\") (with-current-buffer \"gui-preserved\" (insert \"before-attach\")) t)"), "t");
+    for expression in [
+        "(x-open-connection \"wayland-no-such-display\")",
+        "(make-frame '((window-system . neo) (display . \"wayland-no-such-display\")))",
+        "(x-open-connection 42)",
+    ] {
+        assert_eq!(
+            fixture.eval(
+                "deferred",
+                &format!("(condition-case nil (progn {expression} nil) (error t))")
+            ),
+            "t"
+        );
+        assert_eq!(fixture.eval("deferred", "(length (frame-list))"), "1");
+        assert_eq!(fixture.eval("deferred", "(emacs-pid)"), pid);
+        assert_eq!(fixture.eval("deferred", "(progn (garbage-collect) (list (eq gui-preserved gui-preserved-alias) gui-preserved (with-current-buffer \"gui-preserved\" (buffer-string)) (x-display-list)))"), "(t (7 11) \"before-attach\" nil)");
+    }
+    fixture.eval("deferred", "(kill-emacs)");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        if let Some(status) = fixture.daemon.as_mut().unwrap().try_wait().unwrap() {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "deferred display owner prevented root shutdown"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert!(status.success());
+    assert!(!fixture.socket("deferred").exists());
+}
+
+#[test]
 fn full_socket_backlog_has_a_bounded_client_wait_without_duplicate_startup() {
     let fixture = Fixture::new();
     fixture.write_init("");
