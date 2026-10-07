@@ -99,21 +99,20 @@ impl TextRead {
 
 /// The text MIME spellings, in smithay-clipboard's preference order.
 #[cfg(target_os = "linux")]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::IntoStaticStr)]
 pub(super) enum TextMime {
+    #[strum(serialize = "text/plain;charset=utf-8")]
     TextPlainUtf8,
+    #[strum(serialize = "UTF8_STRING")]
     Utf8String,
+    #[strum(serialize = "text/plain")]
     TextPlain,
 }
 
 #[cfg(target_os = "linux")]
 impl TextMime {
     pub(super) fn as_str(self) -> &'static str {
-        match self {
-            Self::TextPlainUtf8 => "text/plain;charset=utf-8",
-            Self::Utf8String => "UTF8_STRING",
-            Self::TextPlain => "text/plain",
-        }
+        self.into()
     }
 
     /// The first UTF-8 type offered, else plain text as a fallback; mirrors
@@ -122,11 +121,11 @@ impl TextMime {
     pub(super) fn choose(offered: &[String]) -> Option<Self> {
         let mut fallback = None;
         for mime in offered {
-            match mime.as_str() {
-                "text/plain;charset=utf-8" => return Some(Self::TextPlainUtf8),
-                "UTF8_STRING" => return Some(Self::Utf8String),
-                "text/plain" => fallback = Some(Self::TextPlain),
-                _ => {}
+            match mime.parse::<Self>() {
+                Ok(Self::TextPlainUtf8) => return Some(Self::TextPlainUtf8),
+                Ok(Self::Utf8String) => return Some(Self::Utf8String),
+                Ok(Self::TextPlain) => fallback = Some(Self::TextPlain),
+                Err(_) => {}
             }
         }
         fallback
