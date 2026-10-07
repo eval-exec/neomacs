@@ -1,11 +1,10 @@
+use super::super::tests::in_gpu_budget_child;
 use super::*;
 #[test]
 fn mandatory_child_target_refuses_before_present_and_recovers() {
-    if std::env::var("NEOMACS_GPU_BUDGET_MB").as_deref() != Ok("1") {
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "render_thread::render_pass::composition_targets::tests::mandatory_child_target_refuses_before_present_and_recovers", "--nocapture"])
-            .env("NEOMACS_GPU_BUDGET_MB", "1").status().unwrap();
-        assert!(status.success());
+    if !in_gpu_budget_child(
+        "render_thread::render_pass::composition_targets::tests::mandatory_child_target_refuses_before_present_and_recovers",
+    ) {
         return;
     }
     let mut renderer = WgpuRenderer::new(None, 96, 64).expect("real GPU required");
@@ -36,11 +35,9 @@ fn mandatory_child_target_refuses_before_present_and_recovers() {
 
 #[test]
 fn mandatory_resize_pair_releases_first_lease_when_second_is_refused() {
-    if std::env::var("NEOMACS_GPU_BUDGET_MB").as_deref() != Ok("1") {
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "render_thread::render_pass::composition_targets::tests::mandatory_resize_pair_releases_first_lease_when_second_is_refused", "--nocapture"])
-            .env("NEOMACS_GPU_BUDGET_MB", "1").status().unwrap();
-        assert!(status.success());
+    if !in_gpu_budget_child(
+        "render_thread::render_pass::composition_targets::tests::mandatory_resize_pair_releases_first_lease_when_second_is_refused",
+    ) {
         return;
     }
     let mut renderer = WgpuRenderer::new(None, 96, 64).expect("GPU required");
