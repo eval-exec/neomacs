@@ -667,5 +667,5 @@ pub(crate) fn builtin_kill_local_variable_impl(
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/custom_test.rs"]
 mod tests;

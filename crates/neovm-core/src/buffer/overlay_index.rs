@@ -1693,4 +1693,5 @@ fn ranges_overlap_region(
 }
 
 #[cfg(test)]
+#[path = "overlay_index/tests/overlay_index_test.rs"]
 mod tests;

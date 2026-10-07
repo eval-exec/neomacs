@@ -5390,6 +5390,7 @@ impl LayoutEngine {
 }
 
 #[cfg(test)]
+#[path = "engine/tests/engine_test.rs"]
 mod tests;
 
 #[cfg(test)]

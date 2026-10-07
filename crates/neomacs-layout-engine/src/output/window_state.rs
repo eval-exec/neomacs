@@ -736,8 +736,9 @@ impl OutputWindowGridEntry {
 }
 
 #[cfg(test)]
+#[path = "window_state/tests/window_state_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "window_state/tests/mini_preparation.rs"]
+#[path = "window_state/tests/mini_preparation_test.rs"]
 mod mini_preparation_tests;

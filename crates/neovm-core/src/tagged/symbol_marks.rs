@@ -54,4 +54,5 @@ impl SymbolMarkBits {
 }
 
 #[cfg(test)]
+#[path = "symbol_marks/tests/symbol_marks_test.rs"]
 mod tests;

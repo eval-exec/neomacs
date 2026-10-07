@@ -7263,9 +7263,9 @@ pub fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray)
 // Tests
 // ===========================================================================
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/fileio_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/fix8.rs"]
+#[path = "tests/fix8_test.rs"]
 mod fix8_tests;

@@ -494,4 +494,5 @@ macro_rules! define_subrs {
 pub(crate) use define_subrs;
 
 #[cfg(test)]
+#[path = "tests/subr_test.rs"]
 mod tests;

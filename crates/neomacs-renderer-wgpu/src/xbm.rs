@@ -140,4 +140,5 @@ fn constrain_and_return(width: u32, height: u32, rgba: Vec<u8>) -> Option<(u32, 
 }
 
 #[cfg(test)]
+#[path = "xbm/tests/xbm_test.rs"]
 mod tests;

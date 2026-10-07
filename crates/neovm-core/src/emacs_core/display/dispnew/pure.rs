@@ -319,5 +319,5 @@ pub(crate) fn builtin_frame_z_order_lessp(args: Vec<Value>) -> EvalResult {
 }
 
 #[cfg(test)]
-#[path = "tests/explicit_redraw.rs"]
+#[path = "tests/explicit_redraw_test.rs"]
 mod explicit_redraw_tests;

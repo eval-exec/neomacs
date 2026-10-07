@@ -1050,5 +1050,5 @@ pub(crate) fn builtin_recursion_depth(
 // Tests
 // ===========================================================================
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/misc_test.rs"]
 mod tests;

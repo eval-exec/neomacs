@@ -1352,7 +1352,7 @@ impl<'metrics> DisplayRowRenderer<'metrics> {
 }
 
 #[cfg(test)]
-#[path = "test.rs"]
+#[path = "tests/display_row_test.rs"]
 mod tests;
 
 // Submodules of the display_row family (moved from flat crate root).

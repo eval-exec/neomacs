@@ -1198,8 +1198,8 @@ pub(crate) fn builtin_unintern(eval: &mut super::eval::Context, args: Vec<Value>
     Ok(if removed { Value::T } else { Value::NIL })
 }
 #[cfg(test)]
-#[path = "tests/bignum_sxhash.rs"]
+#[path = "tests/bignum_sxhash_test.rs"]
 mod bignum_sxhash_tests;
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/hashtab_test.rs"]
 mod tests;

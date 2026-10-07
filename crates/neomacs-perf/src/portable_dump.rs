@@ -114,4 +114,5 @@ pub(crate) fn verify_run(provenance: &Path) -> Result<(), String> {
 }
 
 #[cfg(test)]
+#[path = "portable_dump/tests/portable_dump_test.rs"]
 mod tests;

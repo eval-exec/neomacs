@@ -16,7 +16,7 @@ mod keyboard_input;
 pub mod logging;
 pub mod tagged;
 #[cfg(test)]
-#[path = "tests/test_utils.rs"]
+#[path = "tests/test_utils_test.rs"]
 pub mod test_utils;
 pub mod window;
 

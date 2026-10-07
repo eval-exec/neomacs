@@ -5060,8 +5060,9 @@ fn box_style_to_u8(style: &NeoBoxStyle) -> u8 {
 }
 
 #[cfg(test)]
+#[path = "neovm_bridge/tests/neovm_bridge_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "neovm_bridge/line_count_test.rs"]
+#[path = "neovm_bridge/tests/line_count_test.rs"]
 mod line_count_test;

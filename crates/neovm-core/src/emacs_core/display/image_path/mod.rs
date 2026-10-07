@@ -132,5 +132,5 @@ impl ImageFileRequest {
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/image_path_test.rs"]
 mod tests;

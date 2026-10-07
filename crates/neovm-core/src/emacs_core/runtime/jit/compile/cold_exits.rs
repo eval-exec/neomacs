@@ -138,5 +138,5 @@ impl ColdSpan {
 }
 
 #[cfg(test)]
-#[path = "../tests/cold_exits.rs"]
+#[path = "../tests/cold_exits_test.rs"]
 mod tests;

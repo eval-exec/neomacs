@@ -45,4 +45,5 @@ pub const fn xterm_256_rgb(index: u8) -> (u8, u8, u8) {
 }
 
 #[cfg(test)]
+#[path = "xterm_palette/tests/xterm_palette_test.rs"]
 mod tests;

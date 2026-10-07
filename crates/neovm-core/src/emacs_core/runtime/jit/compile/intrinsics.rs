@@ -851,5 +851,5 @@ pub(crate) fn emit_symbol_cell_read(
 }
 
 #[cfg(test)]
-#[path = "../tests/intrinsics.rs"]
+#[path = "../tests/intrinsics_test.rs"]
 mod intrinsics_tests;

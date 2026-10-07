@@ -901,5 +901,5 @@ pub(crate) fn builtin_replace_regexp_in_string(
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/search_test.rs"]
 mod tests;

@@ -461,5 +461,5 @@ fn tagged_view(
 }
 
 #[cfg(test)]
-#[path = "tests/bools.rs"]
+#[path = "tests/bools_test.rs"]
 mod tests;

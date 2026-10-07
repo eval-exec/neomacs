@@ -5715,5 +5715,5 @@ pub fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray)
 // Tests
 // ===========================================================================
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/coding_test.rs"]
 mod tests;

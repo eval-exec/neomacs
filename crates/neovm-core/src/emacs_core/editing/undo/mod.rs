@@ -247,5 +247,5 @@ pub(crate) fn set_last_boundary_cause_explicit(ctx: &mut super::eval::Context) -
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/undo_test.rs"]
 mod tests;

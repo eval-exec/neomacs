@@ -878,5 +878,5 @@ pub(crate) fn decode_units_emacs(data: &[u8], is_multibyte: bool) -> Vec<(u32, u
     }
 }
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/string_escape_test.rs"]
 mod tests;

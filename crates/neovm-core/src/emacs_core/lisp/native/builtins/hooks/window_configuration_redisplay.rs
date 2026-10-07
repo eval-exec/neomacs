@@ -95,5 +95,5 @@ fn keep_live_source(saved: &mut crate::window::Window, live: &crate::window::Win
 }
 
 #[cfg(test)]
-#[path = "tests/window_configuration_redisplay.rs"]
+#[path = "tests/window_configuration_redisplay_test.rs"]
 mod tests;

@@ -837,4 +837,5 @@ impl Default for Transform {
 }
 
 #[cfg(test)]
+#[path = "types/tests/types_test.rs"]
 mod tests;

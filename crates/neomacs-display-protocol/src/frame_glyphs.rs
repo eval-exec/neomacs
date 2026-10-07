@@ -2551,4 +2551,5 @@ impl FrameGlyphBuffer {
 }
 
 #[cfg(test)]
+#[path = "frame_glyphs/tests/frame_glyphs_test.rs"]
 mod tests;

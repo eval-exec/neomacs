@@ -1369,5 +1369,5 @@ impl Default for ErrorRegistry {
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/errors_test.rs"]
 mod tests;

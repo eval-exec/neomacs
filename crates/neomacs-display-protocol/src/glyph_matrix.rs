@@ -3731,6 +3731,7 @@ pub trait RedisplayInterface {
 }
 
 #[cfg(test)]
+#[path = "glyph_matrix/tests/glyph_matrix_test.rs"]
 mod tests;
 
 #[cfg(test)]

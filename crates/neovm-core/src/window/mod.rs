@@ -8806,4 +8806,5 @@ impl GcTrace for WindowTree {
 // ===========================================================================
 
 #[cfg(test)]
+#[path = "tests/window_test.rs"]
 mod tests;

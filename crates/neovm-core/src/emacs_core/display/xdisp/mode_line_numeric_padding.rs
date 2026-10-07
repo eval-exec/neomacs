@@ -111,5 +111,5 @@ impl PaddingRanges {
 }
 
 #[cfg(test)]
-#[path = "tests/numeric_padding_default_policy.rs"]
+#[path = "tests/numeric_padding_default_policy_test.rs"]
 mod numeric_padding_default_policy_tests;

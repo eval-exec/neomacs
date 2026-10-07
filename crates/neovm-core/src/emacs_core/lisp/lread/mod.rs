@@ -1489,5 +1489,5 @@ fn integer_access_predicate_matches(candidate: &LispString, mask: i64) -> bool {
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/lread_test.rs"]
 mod tests;

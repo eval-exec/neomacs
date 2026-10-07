@@ -1021,11 +1021,11 @@ impl Drop for RedisplayTransaction<'_> {
 }
 
 #[cfg(test)]
-#[path = "tests/redisplay_hook_ownership.rs"]
+#[path = "tests/redisplay_hook_ownership_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "redisplay_hooks/tests/mode_line_flow.rs"]
+#[path = "redisplay_hooks/tests/mode_line_flow_test.rs"]
 mod mode_line_flow_tests;
 
 /// Temporary echo source, matching with_echo_area_buffer's owned unwind.
@@ -1247,17 +1247,17 @@ impl Drop for CommittedScrollGuard<'_> {
 }
 
 #[cfg(test)]
-#[path = "tests/redisplay_mini_only.rs"]
+#[path = "tests/redisplay_mini_only_test.rs"]
 mod mini_only_tests;
 
 #[cfg(test)]
-#[path = "tests/redisplay_mini_preparer_context.rs"]
+#[path = "tests/redisplay_mini_preparer_context_test.rs"]
 mod mini_preparer_context_tests;
 
 #[cfg(test)]
-#[path = "tests/redisplay_mini_source_eligibility.rs"]
+#[path = "tests/redisplay_mini_source_eligibility_test.rs"]
 mod mini_source_eligibility_tests;
 
 #[cfg(test)]
-#[path = "tests/redisplay_transaction_owner.rs"]
+#[path = "tests/redisplay_transaction_owner_test.rs"]
 mod transaction_owner_tests;

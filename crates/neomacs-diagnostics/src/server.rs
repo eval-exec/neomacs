@@ -470,4 +470,5 @@ pub fn spawn(
 }
 
 #[cfg(test)]
+#[path = "server/tests/server_test.rs"]
 mod tests;

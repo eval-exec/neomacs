@@ -313,5 +313,5 @@ const _: () = {
 };
 
 #[cfg(test)]
-#[path = "tests/cons_trailer_tests.rs"]
+#[path = "tests/cons_trailer_test.rs"]
 mod cons_trailer_tests;

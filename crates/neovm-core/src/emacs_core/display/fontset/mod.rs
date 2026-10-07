@@ -1368,5 +1368,5 @@ pub fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray)
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/fontset_test.rs"]
 mod tests;

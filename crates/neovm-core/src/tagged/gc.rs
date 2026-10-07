@@ -2553,19 +2553,19 @@ impl Drop for TaggedHeap {
 pub(crate) mod alloc_probe;
 
 #[cfg(test)]
-#[path = "gc/tests/layout_stats_tests.rs"]
+#[path = "gc/tests/layout_stats_test.rs"]
 mod layout_stats_tests;
 
 #[cfg(test)]
-#[path = "gc/tests/pacer_tests.rs"]
+#[path = "gc/tests/pacer_test.rs"]
 mod pacer_tests;
 
 #[cfg(test)]
-#[path = "gc/tests/ownership_tests.rs"]
+#[path = "gc/tests/ownership_test.rs"]
 mod ownership_tests;
 
 #[cfg(test)]
-#[path = "gc/tests/thread_local_ownership.rs"]
+#[path = "gc/tests/thread_local_ownership_test.rs"]
 mod thread_local_ownership_tests;
 
 /// FLOAT ARENA PAGES test suite. Every scenario runs twice: plain and with
@@ -2575,7 +2575,7 @@ mod thread_local_ownership_tests;
 /// relies on nextest's process-per-test model for the env var and the global
 /// `LIVE_FLOAT_PAGES` counter.
 #[cfg(test)]
-#[path = "gc/tests/float_arena_tests.rs"]
+#[path = "gc/tests/float_arena_test.rs"]
 mod float_arena_tests;
 
 /// ARENA PROMOTION + RETIREMENT test suite (stage 3, commit 4): the
@@ -2585,7 +2585,7 @@ mod float_arena_tests;
 /// remembered-set scan. Scenarios run plain and (where the partition
 /// verifiers add coverage) with `NEOVM_GC_VERIFY_PARTITION=1`.
 #[cfg(test)]
-#[path = "gc/tests/arena_promotion_tests.rs"]
+#[path = "gc/tests/arena_promotion_test.rs"]
 mod arena_promotion_tests;
 
 /// BYTECODE ARENA test suite (task 03/3a): page-span oracle exactness for the
@@ -2600,7 +2600,7 @@ mod arena_promotion_tests;
 /// teardown counters, and the test-only constants-mutation seam. Scenarios
 /// run plain and (where the partition matters) VERIFY_PARTITION-armed.
 #[cfg(test)]
-#[path = "gc/tests/bytecode_arena_tests.rs"]
+#[path = "gc/tests/bytecode_arena_test.rs"]
 mod bytecode_arena_tests;
 
 /// LAMBDA + MACRO ARENA test suite (task 03/3b): the 128B power-of-two class
@@ -2617,7 +2617,7 @@ mod bytecode_arena_tests;
 /// exactness/sweep/tenure/teardown battery proving its own arena. Scenarios
 /// run plain and (where the partition matters) VERIFY_PARTITION-armed.
 #[cfg(test)]
-#[path = "gc/tests/lambda_macro_arena_tests.rs"]
+#[path = "gc/tests/lambda_macro_arena_test.rs"]
 mod lambda_macro_arena_tests;
 
 /// RECORD ARENA test suite (task 03/3b): the 64B class (1024 slots/page,
@@ -2631,7 +2631,7 @@ mod lambda_macro_arena_tests;
 /// parity survival, and the WindowConfiguration dual-tag sharing the arena.
 /// Scenarios run plain and (where the partition matters) VERIFY_PARTITION.
 #[cfg(test)]
-#[path = "gc/tests/record_arena_tests.rs"]
+#[path = "gc/tests/record_arena_test.rs"]
 mod record_arena_tests;
 
 /// SYMBOL-WITH-POS ARENA test suite (task 03/3b): the 64B class (1024
@@ -2729,15 +2729,15 @@ pub(crate) use jit_state::{
 /// Allocation regions: sources, give-back, exact counters, black across
 /// the phase flags, and the close at every collector entry.
 #[cfg(test)]
-#[path = "gc/tests/alloc_region_tests.rs"]
+#[path = "gc/tests/alloc_region_test.rs"]
 mod alloc_region_tests;
 #[cfg(test)]
-#[path = "gc/tests/barrier_window_generational_tests.rs"]
+#[path = "gc/tests/barrier_window_generational_test.rs"]
 mod barrier_window_generational_tests;
 /// The write barrier's owner window against the gate it replaced, state by
 /// state and owner by owner, and its republication at every input writer.
 #[cfg(test)]
-#[path = "gc/tests/barrier_window_tests.rs"]
+#[path = "gc/tests/barrier_window_test.rs"]
 mod barrier_window_tests;
 /// BIGNUM ARENA test suite (lever P0.11): the 64B payload-bearing class
 /// (1024 slots/page, own arena). Covers the slot fit, page-span oracle
@@ -2748,22 +2748,22 @@ mod barrier_window_tests;
 /// counters and exact values after slot reuse. Scenarios run plain and
 /// (where the partition matters) VERIFY_PARTITION-armed.
 #[cfg(test)]
-#[path = "gc/tests/bignum_arena_tests.rs"]
+#[path = "gc/tests/bignum_arena_test.rs"]
 mod bignum_arena_tests;
 /// The generation census: survivor classes across cycles on both
 /// termination paths, the remembered-set probe, and that it measures without
 /// changing anything.
 #[cfg(test)]
-#[path = "gc/tests/census_tests.rs"]
+#[path = "gc/tests/census_test.rs"]
 mod census_tests;
 /// The chunk map: the radix, its entries through page and block creation,
 /// release and re-indexing, the oracles against the registries, the GC
 /// thread's snapshot semantics, and concurrent cycles classified through it.
 #[cfg(test)]
-#[path = "gc/tests/chunk_map_tests.rs"]
+#[path = "gc/tests/chunk_map_test.rs"]
 mod chunk_map_tests;
 #[cfg(test)]
-#[path = "gc/tests/cons_alloc_tests.rs"]
+#[path = "gc/tests/cons_alloc_test.rs"]
 mod cons_alloc_tests;
 /// A fake pdump image in one allocation (see the module doc for why one).
 #[cfg(test)]
@@ -2772,26 +2772,26 @@ pub(crate) mod fake_image;
 /// The header's generation byte, THE generation predicate per collection
 /// scope, the byte map, and the first cycle's promotion to permanent.
 #[cfg(test)]
-#[path = "gc/tests/generation_tests.rs"]
+#[path = "gc/tests/generation_test.rs"]
 mod generation_tests;
 #[cfg(test)]
-#[path = "gc/tests/generational_verifier_tests.rs"]
+#[path = "gc/tests/generational_verifier_test.rs"]
 mod generational_verifier_tests;
 #[cfg(test)]
-#[path = "gc/tests/marker_arena_tests.rs"]
+#[path = "gc/tests/marker_arena_test.rs"]
 mod marker_arena_tests;
 /// Record and closure slot stores are atomic: race-free against an atomic
 /// reader, same semantics, same barrier through a concurrent mark.
 #[cfg(test)]
-#[path = "gc/tests/slot_store_tests.rs"]
+#[path = "gc/tests/slot_store_test.rs"]
 mod slot_store_tests;
 #[cfg(test)]
-#[path = "gc/tests/symbol_with_pos_arena_tests.rs"]
+#[path = "gc/tests/symbol_with_pos_arena_test.rs"]
 mod symbol_with_pos_arena_tests;
 /// `NEOVM_GC_VEC_SCAN=defer` (F-G): no Tier-B snapshot, page vectors traced
 /// by reachability at the termination, with and without the chunk map.
 #[cfg(test)]
-#[path = "gc/tests/vec_scan_tests.rs"]
+#[path = "gc/tests/vec_scan_test.rs"]
 mod vec_scan_tests;
 
 /// Test-only growth helper mirroring the production insert resize policy closely
@@ -2806,24 +2806,24 @@ fn maybe_resize_for_test(ht: &mut crate::emacs_core::value::LispHashTable) {
 }
 
 #[cfg(test)]
-#[path = "gc/tests/generational_tests.rs"]
+#[path = "gc/tests/generational_test.rs"]
 mod generational_tests;
 
 #[cfg(test)]
-#[path = "gc/tests/birth_logs_tests.rs"]
+#[path = "gc/tests/birth_logs_test.rs"]
 mod birth_logs_tests;
 
 #[cfg(test)]
-#[path = "gc/tests/generational_major_tests.rs"]
+#[path = "gc/tests/generational_major_test.rs"]
 mod generational_major_tests;
 
 #[cfg(test)]
-#[path = "gc/tests/generational_pacing_tests.rs"]
+#[path = "gc/tests/generational_pacing_test.rs"]
 mod generational_pacing_tests;
 
 #[cfg(test)]
-#[path = "gc/tests/major_symbol_preimage_tests.rs"]
+#[path = "gc/tests/major_symbol_preimage_test.rs"]
 mod major_symbol_preimage_tests;
 #[cfg(test)]
-#[path = "gc/tests/symbol_barrier_tests.rs"]
+#[path = "gc/tests/symbol_barrier_test.rs"]
 mod symbol_barrier_tests;

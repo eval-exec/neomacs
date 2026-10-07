@@ -1950,4 +1950,5 @@ fn current_text_measure_state<'emit>(
 }
 
 #[cfg(test)]
+#[path = "source_render/tests/source_render_test.rs"]
 mod tests;

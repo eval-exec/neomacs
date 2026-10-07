@@ -487,4 +487,5 @@ pub(crate) fn wildcard_casefold_match(pattern: &str, text: &str) -> bool {
 }
 
 #[cfg(test)]
+#[path = "policy/tests/policy_test.rs"]
 mod tests;

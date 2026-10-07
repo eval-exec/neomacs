@@ -827,4 +827,5 @@ fn least_even_greater_than(level: u8) -> u8 {
 }
 
 #[cfg(test)]
+#[path = "resolver/tests/resolver_test.rs"]
 mod tests;

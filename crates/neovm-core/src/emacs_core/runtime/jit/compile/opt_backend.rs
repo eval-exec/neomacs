@@ -7,7 +7,7 @@ use super::*;
 use crate::emacs_core::jit::opt::{build, ir};
 
 #[cfg(test)]
-#[path = "tests/opt_opcode_transport_effects.rs"]
+#[path = "tests/opt_opcode_transport_effects_test.rs"]
 mod opcode_transport_effects_tests;
 
 /// Honor a Feedback request's explicit Full policy when the verified opt plan

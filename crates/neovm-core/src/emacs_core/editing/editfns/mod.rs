@@ -2377,5 +2377,5 @@ pub(crate) fn builtin_translate_region_internal(
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/editfns_test.rs"]
 mod tests;

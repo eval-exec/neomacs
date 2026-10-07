@@ -356,4 +356,5 @@ impl TransitionEasing {
 // ─── Tests ──────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[path = "scroll_animation/tests/scroll_animation_test.rs"]
 mod tests;

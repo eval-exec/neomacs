@@ -138,5 +138,5 @@ pub(crate) fn gc_threshold_integer_fallback(value: Value) -> Option<i64> {
 }
 
 #[cfg(test)]
-#[path = "tests/user_test_guard.rs"]
+#[path = "tests/user_test_guard_test.rs"]
 mod tests;

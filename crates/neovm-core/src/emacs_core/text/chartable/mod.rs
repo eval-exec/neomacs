@@ -2078,9 +2078,9 @@ pub(crate) use super::boolvec::{
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/chartable_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/collection_lookup_capture.rs"]
+#[path = "tests/collection_lookup_capture_test.rs"]
 mod collection_lookup_capture;

@@ -4808,11 +4808,11 @@ pub(crate) fn builtin_x_load_color_file(args: Vec<Value>) -> EvalResult {
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/xfaces_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/builtins.rs"]
+#[path = "tests/builtins_test.rs"]
 mod builtins_test;
 
 #[cfg(test)]
@@ -4824,5 +4824,5 @@ mod font_size_test;
 mod font_remapping_test;
 
 #[cfg(test)]
-#[path = "tests/gc_tls_ownership.rs"]
+#[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;

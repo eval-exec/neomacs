@@ -52,5 +52,5 @@ pub(super) fn condition_end_boundary(
 }
 
 #[cfg(test)]
-#[path = "tests/mini_source_stop.rs"]
+#[path = "tests/mini_source_stop_test.rs"]
 mod tests;

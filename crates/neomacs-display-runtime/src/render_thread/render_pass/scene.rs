@@ -20,7 +20,7 @@ use crate::render_thread::frame_stats;
 use crate::render_thread::frame_windows::GuiFrameRenderState;
 
 #[cfg(test)]
-#[path = "scene/tests.rs"]
+#[path = "scene/tests/scene_test.rs"]
 mod tests;
 use crate::render_thread::state::ChildFrameStyle;
 use neomacs_renderer_wgpu::{WgpuGlyphAtlas, WgpuRenderer};

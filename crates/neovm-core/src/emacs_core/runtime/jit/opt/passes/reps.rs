@@ -899,5 +899,5 @@ fn view_for(
 }
 
 #[cfg(test)]
-#[path = "tests/reps.rs"]
+#[path = "tests/reps_test.rs"]
 mod tests;

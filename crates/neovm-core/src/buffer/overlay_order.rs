@@ -601,4 +601,5 @@ where
 }
 
 #[cfg(test)]
+#[path = "overlay_order/tests/overlay_order_test.rs"]
 mod tests;

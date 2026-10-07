@@ -966,5 +966,5 @@ fn cut_chunks(
 }
 
 #[cfg(test)]
-#[path = "text_index/tests/mod.rs"]
+#[path = "text_index/tests/text_index_test.rs"]
 pub(crate) mod tests;

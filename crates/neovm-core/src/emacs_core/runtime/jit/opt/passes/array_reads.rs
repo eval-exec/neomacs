@@ -1024,5 +1024,5 @@ fn verify_reads_with_context(
 }
 
 #[cfg(test)]
-#[path = "tests/array_reads.rs"]
+#[path = "tests/array_reads_test.rs"]
 mod tests;

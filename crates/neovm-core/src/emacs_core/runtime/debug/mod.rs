@@ -637,5 +637,5 @@ fn format_param_list(params: &super::value::LambdaParams) -> String {
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/debug_test.rs"]
 mod tests;

@@ -527,5 +527,5 @@ impl DeoptChain {
 }
 
 #[cfg(test)]
-#[path = "tests/inline_chain_deopt.rs"]
+#[path = "tests/inline_chain_deopt_test.rs"]
 mod tests;

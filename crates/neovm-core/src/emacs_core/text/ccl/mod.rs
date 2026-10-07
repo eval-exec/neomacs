@@ -1512,9 +1512,9 @@ pub(crate) fn builtin_register_code_conversion_map_impl(args: Vec<Value>) -> Eva
     Ok(Value::fixnum(map_id))
 }
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/ccl_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/gc_tls_ownership.rs"]
+#[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;

@@ -447,9 +447,9 @@ pub(crate) fn line_numbers_require_mode_line(mode: crate::types::DisplayLineNumb
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/mode_line_gate_policy_aliases.rs"]
+#[path = "tests/mode_line_gate_policy_aliases_test.rs"]
 mod mode_line_gate_policy_aliases_tests;
 
 #[cfg(test)]
-#[path = "tests/mode_line_gate_default_policy.rs"]
+#[path = "tests/mode_line_gate_default_policy_test.rs"]
 mod mode_line_gate_default_policy_tests;

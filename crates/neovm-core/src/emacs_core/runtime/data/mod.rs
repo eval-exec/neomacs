@@ -316,4 +316,5 @@ pub(crate) fn default_value_in_state(
 }
 
 #[cfg(test)]
+#[path = "tests/data_test.rs"]
 mod tests;

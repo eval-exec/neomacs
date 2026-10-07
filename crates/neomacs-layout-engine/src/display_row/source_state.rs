@@ -124,5 +124,5 @@ impl DisplayRowSourceState {
 }
 
 #[cfg(test)]
-#[path = "source_state/tests/mod.rs"]
+#[path = "source_state/tests/source_state_test.rs"]
 mod tests;

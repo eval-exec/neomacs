@@ -1,4 +1,5 @@
 #[cfg(test)]
+#[path = "tests/conformance_test.rs"]
 mod conformance;
 mod contract;
 mod gap;

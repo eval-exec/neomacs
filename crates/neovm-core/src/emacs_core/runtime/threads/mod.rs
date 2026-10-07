@@ -1573,5 +1573,5 @@ pub(crate) fn sf_with_mutex(eval: &mut super::eval::Context, tail: &[Value]) -> 
 // Tests
 // ===========================================================================
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/threads_test.rs"]
 mod tests;

@@ -672,4 +672,5 @@ fn lisp_number(value: Value) -> Option<f32> {
 }
 
 #[cfg(test)]
+#[path = "display_property/tests/display_property_test.rs"]
 mod tests;

@@ -225,9 +225,9 @@ pub(crate) fn chain_framestate_at(
 }
 
 #[cfg(test)]
-#[path = "tests/chain_framestate.rs"]
+#[path = "tests/chain_framestate_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/chain_entry.rs"]
+#[path = "tests/chain_entry_test.rs"]
 mod entry_tests;

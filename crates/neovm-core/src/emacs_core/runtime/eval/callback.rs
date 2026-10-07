@@ -174,5 +174,5 @@ impl Context {
 }
 
 #[cfg(test)]
-#[path = "tests/native_callback_cache.rs"]
+#[path = "tests/native_callback_cache_test.rs"]
 mod native_callback_cache;

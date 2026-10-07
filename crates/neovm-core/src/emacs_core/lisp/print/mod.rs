@@ -2761,5 +2761,5 @@ fn threading_handle_print_name(kind: crate::tagged::header::VecLikeType) -> &'st
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/print_test.rs"]
 mod tests;

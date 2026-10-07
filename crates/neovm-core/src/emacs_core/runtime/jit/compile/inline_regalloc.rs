@@ -46,5 +46,5 @@ fn select_hof_allocator(
 }
 
 #[cfg(test)]
-#[path = "../tests/inline_regalloc.rs"]
+#[path = "../tests/inline_regalloc_test.rs"]
 mod tests;

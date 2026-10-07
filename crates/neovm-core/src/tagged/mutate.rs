@@ -555,5 +555,5 @@ pub fn with_xwidget_view_mut<R>(
 
 #[cfg(test)]
 #[cfg(debug_assertions)]
-#[path = "gc/tests/heap_mut_closure_tests.rs"]
+#[path = "gc/tests/heap_mut_closure_test.rs"]
 mod gc_heap_mut_closure_tests;

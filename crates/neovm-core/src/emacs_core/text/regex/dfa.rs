@@ -2840,5 +2840,5 @@ impl LiveDfa {
 }
 
 #[cfg(test)]
-#[path = "tests/dfa.rs"]
+#[path = "tests/dfa_test.rs"]
 mod tests;

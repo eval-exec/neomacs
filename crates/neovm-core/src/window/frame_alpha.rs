@@ -63,5 +63,5 @@ pub fn lower_limit(value: Value) -> f32 {
 }
 
 #[cfg(test)]
-#[path = "frame_alpha/tests/mod.rs"]
+#[path = "frame_alpha/tests/frame_alpha_test.rs"]
 mod tests;

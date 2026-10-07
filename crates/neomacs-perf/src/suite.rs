@@ -465,4 +465,5 @@ fn read_history(path: &Path) -> Result<(SuiteHistoryLink, Vec<u8>), PerfError> {
 }
 
 #[cfg(test)]
+#[path = "suite/tests/suite_test.rs"]
 mod tests;

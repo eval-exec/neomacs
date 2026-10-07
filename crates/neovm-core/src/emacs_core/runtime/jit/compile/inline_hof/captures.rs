@@ -127,5 +127,5 @@ impl Captures {
 }
 
 #[cfg(test)]
-#[path = "../../tests/inline_hof_captures.rs"]
+#[path = "../../tests/inline_hof_captures_test.rs"]
 mod tests;

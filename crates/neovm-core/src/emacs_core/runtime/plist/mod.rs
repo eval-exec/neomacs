@@ -421,5 +421,5 @@ pub fn plist_member(plist: Value, prop: &Value) -> Value {
 }
 
 #[cfg(test)]
-#[path = "tests/collection_capture.rs"]
+#[path = "tests/collection_capture_test.rs"]
 mod collection_capture;

@@ -350,4 +350,5 @@ impl MenuSession {
 }
 
 #[cfg(test)]
+#[path = "session/tests/session_test.rs"]
 mod tests;

@@ -2478,4 +2478,5 @@ pub(super) fn emit_window_switch_fade(
 // ===========================================================================
 
 #[cfg(test)]
+#[path = "window_effects/tests/window_effects_test.rs"]
 mod tests;

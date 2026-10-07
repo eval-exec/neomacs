@@ -132,4 +132,5 @@ pub(crate) fn window_pointer_source_map(
 }
 
 #[cfg(test)]
+#[path = "pointer/tests/pointer_test.rs"]
 mod tests;

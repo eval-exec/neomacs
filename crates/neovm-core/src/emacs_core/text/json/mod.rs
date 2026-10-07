@@ -1451,5 +1451,5 @@ pub(crate) fn builtin_json_insert(eval: &mut super::eval::Context, args: Vec<Val
 // Tests
 // ===========================================================================
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/json_test.rs"]
 mod tests;

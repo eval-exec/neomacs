@@ -6807,8 +6807,8 @@ pub(crate) fn expand_tilde(path: &str) -> String {
 }
 
 #[cfg(test)]
-#[path = "tests/eager_failure.rs"]
+#[path = "tests/eager_failure_test.rs"]
 mod eager_failure_tests;
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/load_test.rs"]
 mod tests;

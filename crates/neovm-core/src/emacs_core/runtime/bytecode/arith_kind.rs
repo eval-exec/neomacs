@@ -132,5 +132,5 @@ impl ArithGenericKind {
 }
 
 #[cfg(test)]
-#[path = "tests/arith_kind.rs"]
+#[path = "tests/arith_kind_test.rs"]
 mod tests;

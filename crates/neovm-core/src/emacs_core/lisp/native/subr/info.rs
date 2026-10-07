@@ -318,5 +318,5 @@ pub(crate) fn builtin_func_arity_ctx(
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/info.rs"]
+#[path = "tests/info_test.rs"]
 mod tests;

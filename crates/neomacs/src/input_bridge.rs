@@ -511,4 +511,5 @@ fn convert_single_display_event(event: &DisplayEvent) -> Option<KbInputEvent> {
 }
 
 #[cfg(test)]
+#[path = "input_bridge/tests/input_bridge_test.rs"]
 mod tests;

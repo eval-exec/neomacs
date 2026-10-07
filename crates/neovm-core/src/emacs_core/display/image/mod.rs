@@ -1841,7 +1841,7 @@ pub(crate) fn builtin_image_transforms_p(
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/image_test.rs"]
 mod tests;
 
 impl Context {

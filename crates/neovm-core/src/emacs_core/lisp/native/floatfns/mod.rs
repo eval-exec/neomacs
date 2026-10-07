@@ -206,5 +206,5 @@ pub(crate) fn builtin_ftruncate(args: Vec<Value>) -> EvalResult {
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/floatfns_test.rs"]
 mod tests;

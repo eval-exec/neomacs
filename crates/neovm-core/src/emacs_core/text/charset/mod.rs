@@ -2863,9 +2863,9 @@ fn classify_string_charsets(ls: &crate::heap_types::LispString) -> Vec<&'static 
 // Tests
 // ---------------------------------------------------------------------------
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/charset_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/gc_tls_ownership.rs"]
+#[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;

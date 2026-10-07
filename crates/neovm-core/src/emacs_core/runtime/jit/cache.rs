@@ -3347,13 +3347,13 @@ mod tests;
 mod tier2_off_test;
 
 #[cfg(test)]
-#[path = "cache/tests/gc_tls_ownership.rs"]
+#[path = "cache/tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;
 
 #[cfg(test)]
-#[path = "cache/tests/osr_inline.rs"]
+#[path = "cache/tests/osr_inline_test.rs"]
 mod osr_inline_tests;
 
 #[cfg(test)]
-#[path = "cache/tests/hof_regalloc.rs"]
+#[path = "cache/tests/hof_regalloc_test.rs"]
 mod hof_regalloc_tests;

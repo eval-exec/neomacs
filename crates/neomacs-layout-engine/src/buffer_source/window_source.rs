@@ -13,11 +13,11 @@ use crate::types::{PartialBodyWalkStart, WindowKind, WindowParams};
 use neovm_core::buffer::{CharPos0, EmacsBytePos, TextPositionAnchor};
 
 #[cfg(test)]
-#[path = "tests/window_source_tests.rs"]
+#[path = "tests/window_source_test.rs"]
 mod bounded_read_tests;
 
 #[cfg(test)]
-#[path = "tests/property_keys_budget_support.rs"]
+#[path = "tests/property_keys_budget_support_test.rs"]
 pub(crate) mod property_keys_budget_support;
 
 /// Numeric source-copy policy. This carries no Lisp state and is owned by
@@ -663,12 +663,13 @@ impl BufferWindowSourceRequest {
 }
 
 #[cfg(test)]
+#[path = "window_source/tests/window_source_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/source_budget_policy_aliases.rs"]
+#[path = "tests/source_budget_policy_aliases_test.rs"]
 mod source_budget_policy_aliases_tests;
 
 #[cfg(test)]
-#[path = "tests/source_budget_default_policy.rs"]
+#[path = "tests/source_budget_default_policy_test.rs"]
 mod source_budget_default_policy_tests;

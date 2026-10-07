@@ -840,9 +840,9 @@ fn probe_let_layout() -> Option<LetLayout> {
 }
 
 #[cfg(test)]
-#[path = "jit_layout/tests/golden.rs"]
+#[path = "jit_layout/tests/golden_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "jit_layout/tests/runtime_prefix.rs"]
+#[path = "jit_layout/tests/runtime_prefix_test.rs"]
 mod runtime_prefix_tests;

@@ -52,4 +52,5 @@ impl Context {
 }
 
 #[cfg(test)]
+#[path = "display_evaluation/tests/display_evaluation_test.rs"]
 mod tests;
