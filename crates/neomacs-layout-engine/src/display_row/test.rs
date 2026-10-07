@@ -15,7 +15,7 @@ use neomacs_display_protocol::frame_glyphs::GlyphRowRole;
 use neomacs_display_protocol::glyph_matrix::{Glyph, GlyphArea, GlyphRow, GlyphType};
 use neomacs_display_protocol::types::Color;
 use neomacs_display_protocol::types::FaceId;
-use neomacs_display_protocol::{Rect, VideoId};
+use neomacs_display_protocol::{ImageLayoutExtent, ImageReportedExtent, Rect, VideoId};
 use neovm_core::buffer::{CharPos0, EmacsBytePos, EmacsByteRange};
 use neovm_core::emacs_core::eval::{
     DisplayHost, GuiFrameHostRequest, ResolvedVideo, ResolvedWebKit, VideoResolveRequest,
@@ -1891,8 +1891,8 @@ fn chrome_image_request_carries_the_rows_fractional_frame_realization() {
 
     let requests = host.image_requests.lock().expect("image requests lock");
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].realization.layout_dimension(24), 18);
-    assert_eq!(requests[0].realization.raster_dimension(18), 32);
+    assert_eq!(requests[0].realization.layout_extent(ImageReportedExtent::new(24, 24)).width(), 18);
+    assert_eq!(requests[0].realization.raster_extent(ImageLayoutExtent::new(18, 18)).width(), 32);
 }
 
 #[test]

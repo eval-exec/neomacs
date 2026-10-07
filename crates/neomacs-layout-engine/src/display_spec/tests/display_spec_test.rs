@@ -1,4 +1,5 @@
 use super::*;
+use neomacs_display_protocol::{ImageLayoutExtent, ImageReportedExtent};
 use neovm_core::emacs_core::image_catalog::{ImageDataSource, ImageResolveSource};
 
 fn image_spec(ascent: Option<Value>) -> Value {
@@ -93,8 +94,20 @@ fn image_scale_default_survives_parsing_until_frame_realization() {
         ),
         DisplayImageDimensionEnvironment::new(14.0, 18.0, 7.2),
     );
-    assert_eq!(request.realization.layout_dimension(24), 18);
-    assert_eq!(request.realization.raster_dimension(18), 32);
+    assert_eq!(
+        request
+            .realization
+            .layout_extent(ImageReportedExtent::new(24, 24))
+            .width(),
+        18
+    );
+    assert_eq!(
+        request
+            .realization
+            .raster_extent(ImageLayoutExtent::new(18, 18))
+            .width(),
+        32
+    );
 }
 
 #[test]
