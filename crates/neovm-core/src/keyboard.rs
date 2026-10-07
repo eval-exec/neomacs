@@ -2578,6 +2578,10 @@ pub struct CommandLoop {
     /// should scale idle auto-save latency from the edited buffer, not from
     /// the tiny minibuffer (`src/keyboard.c:229,2939-2941`).
     last_non_minibuffer_size: usize,
+    /// Whether reporting a command error signaled and returned to top level.
+    /// A batch session ends with an error status once this is set, instead
+    /// of with the success status of a normal end of input.
+    pub error_report_failed: bool,
 }
 
 impl CommandLoop {
@@ -2595,6 +2599,7 @@ impl CommandLoop {
             last_idle_start_time: None,
             last_auto_save_input_events: 0,
             last_non_minibuffer_size: 0,
+            error_report_failed: false,
         }
     }
 

@@ -302,9 +302,19 @@ impl Context {
 
             match result {
                 Ok(value) if outermost_command_loop && self.command_loop_noninteractive() => {
-                    // GNU keyboard.c:1145 — end of file in batch run
+                    // GNU keyboard.c:1145 — end of file in batch run calls
+                    // (kill-emacs t).  After an error report that itself
+                    // signaled, exit like a plain batch error (cmd_error's
+                    // (kill-emacs -1), status 255) rather than with success;
+                    // GNU hangs in that case.  A deliberate (top-level) still
+                    // ends with success.
+                    let exit_arg = if self.command_loop.error_report_failed {
+                        Value::fixnum(-1)
+                    } else {
+                        Value::T
+                    };
                     tracing::info!("command_loop_inner: noninteractive EOF, calling kill-emacs");
-                    match super::super::builtins::symbols::builtin_kill_emacs(self, vec![Value::T])
+                    match super::super::builtins::symbols::builtin_kill_emacs(self, vec![exit_arg])
                         .kinded()
                     {
                         Err(FlowKind::Shutdown(_)) | Ok(_) => {}
@@ -553,6 +563,7 @@ impl Context {
             signal = %super::super::error::format_signal_data_with_eval(self, &sig),
             "Reporting a command error signaled; returning to top level"
         );
+        self.command_loop.error_report_failed = true;
         Flow::throw(Value::symbol("top-level"), Value::T)
     }
 

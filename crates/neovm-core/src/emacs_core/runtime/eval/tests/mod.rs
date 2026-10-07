@@ -23648,7 +23648,8 @@ fn command_error_report_failure_dispatches_an_undispatched_signal_once() {
 
 /// GNU `command_loop' runs its batch check after the catch around
 /// `command_loop_2' returns, including from a top-level throw: a batch
-/// session whose error report fails exits instead of reading on.
+/// session whose error report fails exits instead of reading on.  It exits
+/// with the status of a plain batch error (GNU hangs here instead).
 #[test]
 fn command_loop_batch_exits_after_failed_report() {
     crate::test_utils::init_test_tracing();
@@ -23682,10 +23683,52 @@ fn command_loop_batch_exits_after_failed_report() {
         Value::NIL,
         "a batch session must not read further commands after a failed report"
     );
-    assert!(
-        ev.shutdown_request.is_some(),
-        "the batch check must request kill-emacs"
+    assert_eq!(
+        ev.shutdown_request
+            .as_ref()
+            .map(|request| request.exit_code),
+        Some(-1),
+        "a batch session ended by a failed report must not exit with success"
     );
+}
+
+/// Run the batch top level FORM to its end and return the requested exit code.
+fn batch_top_level_exit_code(form: &str) -> Option<i32> {
+    let mut ev = Context::new();
+    ev.set_variable("noninteractive", Value::T);
+    let top_level = crate::emacs_core::value_reader::read_all(form, &test_ob())
+        .expect("parse top-level form")
+        .into_iter()
+        .next()
+        .expect("top-level form");
+    ev.set_variable("top-level", top_level);
+    let _ = ev.recursive_edit();
+    ev.shutdown_request().map(|request| request.exit_code)
+}
+
+/// `--batch --eval` whose error report signals: the startup report fails
+/// inside `top_level_1', input then ends, and the session must still exit
+/// with an error status.
+#[test]
+fn batch_startup_error_with_failed_report_exits_with_error_status() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        batch_top_level_exit_code(
+            r#"(progn
+                 (setq command-error-function
+                       (lambda (&rest _) (error "reporter boom")))
+                 (error "x"))"#,
+        ),
+        Some(-1)
+    );
+}
+
+/// A deliberate `(top-level)' in batch is not an error: the session still
+/// ends with success at end of input, as GNU's (kill-emacs t).
+#[test]
+fn batch_deliberate_top_level_exits_with_success() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(batch_top_level_exit_code("(top-level)"), Some(0));
 }
 
 /// GNU decides whether an error is ignored while dispatching the signal, before
