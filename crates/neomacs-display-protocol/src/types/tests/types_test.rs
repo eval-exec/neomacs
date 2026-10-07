@@ -451,23 +451,30 @@ fn test_transform_translate_zero() {
 
 #[test]
 fn test_cursor_anim_style_from_u8() {
-    assert_eq!(CursorAnimStyle::from_u8(0), CursorAnimStyle::Exponential);
-    assert_eq!(
-        CursorAnimStyle::from_u8(1),
-        CursorAnimStyle::CriticallyDampedSpring
-    );
-    assert_eq!(CursorAnimStyle::from_u8(2), CursorAnimStyle::EaseOutQuad);
-    assert_eq!(CursorAnimStyle::from_u8(3), CursorAnimStyle::EaseOutCubic);
-    assert_eq!(CursorAnimStyle::from_u8(4), CursorAnimStyle::EaseOutExpo);
-    assert_eq!(CursorAnimStyle::from_u8(5), CursorAnimStyle::EaseInOutCubic);
-    assert_eq!(CursorAnimStyle::from_u8(6), CursorAnimStyle::Linear);
-    assert_eq!(CursorAnimStyle::from_u8(7), CursorAnimStyle::Neovide);
+    let styles = [
+        (0, CursorAnimStyle::Exponential),
+        (1, CursorAnimStyle::CriticallyDampedSpring),
+        (2, CursorAnimStyle::EaseOutQuad),
+        (3, CursorAnimStyle::EaseOutCubic),
+        (4, CursorAnimStyle::EaseOutExpo),
+        (5, CursorAnimStyle::EaseInOutCubic),
+        (6, CursorAnimStyle::Linear),
+        (7, CursorAnimStyle::Neovide),
+    ];
+    for (raw, style) in styles {
+        assert_eq!(CursorAnimStyle::from_u8(raw), style);
+        assert_eq!(CursorAnimStyle::from(raw), style);
+        let encoded: u8 = style.into();
+        assert_eq!(encoded, raw);
+    }
 }
 
 #[test]
 fn test_cursor_anim_style_unknown_defaults_to_exponential() {
-    assert_eq!(CursorAnimStyle::from_u8(8), CursorAnimStyle::Exponential);
-    assert_eq!(CursorAnimStyle::from_u8(255), CursorAnimStyle::Exponential);
+    for raw in 8..=u8::MAX {
+        assert_eq!(CursorAnimStyle::from_u8(raw), CursorAnimStyle::Exponential);
+        assert_eq!(CursorAnimStyle::from(raw), CursorAnimStyle::Exponential);
+    }
 }
 
 // ---------------------------------------------------------------
