@@ -143,7 +143,7 @@
                       (regexp-quote "https://github.com/eval-exec/neomacs")
                       (buffer-string)))
              (should (file-readable-p
-                      (expand-file-name "author.jpg"
+                      (expand-file-name "assets/author.jpg"
                                         (neomacs-wasm-landing--root))))
              (should buffer-read-only)))
        (dolist (name '("*NEO Emacs*" "*Playgorund*" "*About*"))

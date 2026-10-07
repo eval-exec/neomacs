@@ -1,4 +1,4 @@
-[[file:../images/neomacs-banner.svg]]
+[[file:assets/neomacs-banner.svg]]
 
 * NEO Emacs
 /Not a screenshot. An editor you can change./

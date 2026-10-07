@@ -264,8 +264,8 @@ Only image geometry changes; never rearrange the user's windows."
       (find-file-noselect (expand-file-name "index.org" (neomacs-wasm-landing--root)))
     (rename-buffer "*NEO Emacs*" t)
     (unless neomacs-wasm-landing--banner-data
-      (let ((banner (expand-file-name "images/neomacs-banner.svg"
-                                      data-directory)))
+      (let ((banner (expand-file-name "assets/neomacs-banner.svg"
+                                      (neomacs-wasm-landing--root)))
         (when (and (display-images-p) (file-readable-p banner))
           (setq neomacs-wasm-landing--banner-data
                 (with-temp-buffer
@@ -285,7 +285,7 @@ Only image geometry changes; never rearrange the user's windows."
         (when (display-images-p)
           (condition-case error-data
               (let ((image (create-image
-                            (expand-file-name "author.jpg"
+                            (expand-file-name "assets/author.jpg"
                                               (neomacs-wasm-landing--root))
                             'jpeg nil :width 112 :scale 1 :ascent 'center)))
                 ;; Decode before redisplay, just as for the welcome banner.

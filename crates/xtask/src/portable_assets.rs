@@ -132,7 +132,10 @@ fn write_runtime_archive(
     }
     let banner = runtime_root.join("assets/banner.svg");
     if banner.is_file() {
-        entries.push((banner, PathBuf::from("etc/images/neomacs-banner.svg")));
+        entries.push((
+            banner,
+            PathBuf::from("examples/neomacs-wasm-landing-page/site/assets/neomacs-banner.svg"),
+        ));
     }
     // The landing page's tab bar shows the same window icon the desktop
     // app uses; keep one canonical asset in the display-runtime crate.
