@@ -171,17 +171,11 @@ impl<'a> EvaluatorInputBatch<'a> {
                 },
             },
             FrontendEvent::ViewportChanged(viewport) => {
-                // The frontend reports the viewport in logical units; the
-                // core's resize pipeline works in device pixels (it divides
-                // by the device-scaled character cell), so convert here or
-                // every scaled display computes a proportionally narrower
-                // frame.
                 let extent = viewport.logical_extent();
-                let scale = viewport.scale().get();
                 Self::single(InputEvent::Resize {
-                    width: (f64::from(extent.width()) * scale).round() as u32,
-                    height: (f64::from(extent.height()) * scale).round() as u32,
-                    scale_factor: scale,
+                    width: extent.width(),
+                    height: extent.height(),
+                    scale_factor: viewport.scale().get(),
                     emacs_frame_id: viewport.target().get(),
                 })
             }
