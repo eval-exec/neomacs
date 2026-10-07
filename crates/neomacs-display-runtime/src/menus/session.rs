@@ -77,6 +77,13 @@ impl MenuLifetime {
     }
 }
 
+/// Keyboard traversal through the selectable items in a menu panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum MenuDirection {
+    Next,
+    Previous,
+}
+
 pub struct MenuSession {
     menu: MeasuredMenu,
     /// The main (root) menu panel
@@ -178,7 +185,11 @@ impl MenuSession {
     }
 
     /// Move hover in the active panel. Returns true if changed.
-    pub fn move_hover(&mut self, direction: i32) -> bool {
+    pub(super) fn move_hover(&mut self, direction: MenuDirection) -> bool {
+        let step = match direction {
+            MenuDirection::Next => 1,
+            MenuDirection::Previous => -1,
+        };
         // Read panel state without mutable borrow
         let panel = self.active_panel();
         let len = panel.item_indices.len() as i32;
@@ -188,7 +199,7 @@ impl MenuSession {
         let current_hover = panel.hover_index;
         let indices: Vec<usize> = panel.item_indices.clone();
 
-        let mut idx = current_hover + direction;
+        let mut idx = current_hover + step;
         for _ in 0..len {
             if idx < 0 {
                 idx = len - 1;
@@ -205,7 +216,7 @@ impl MenuSession {
                 }
                 return false;
             }
-            idx += direction;
+            idx += step;
         }
         false
     }
