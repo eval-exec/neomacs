@@ -69,7 +69,7 @@ the full URL so the bar does not have to."
      menu-item
      ,(concat
        (propertize
-        " ⚠ EXPERIMENTAL · INCOMPLETE · WORK IN PROGRESS "
+        " ▲ EXPERIMENTAL · INCOMPLETE · WORK IN PROGRESS "
         'face '(:inherit (font-lock-warning-face
                           neomacs-wasm-landing-body)
                          :weight bold :background "yellow"
