@@ -4076,6 +4076,33 @@ impl Context {
             self.specpdl.push(SpecBinding::LexicalEnv { old_lexenv });
         }
 
+        // A lexical closure binds its formals onto the captured environment
+        // and installs that as the body's lexenv, exactly like the
+        // non-wasm `apply_lambda` arm (`bind_lexical_formals` +
+        // `run_lexical_closure_body`) and GNU `funcall_lambda`.  Falling
+        // through to `begin_lambda_call` would discard the closure's
+        // environment and bind the formals dynamically, so any closure
+        // called during load — before its file's bindings are global —
+        // would signal void-variable for its captured names.
+        if !raw_cons_lambda && let Some(env) = env {
+            return match bind_lexical_formals(env, func_value, arglist, args) {
+                Ok(new_env) => {
+                    let old_lexenv = std::mem::replace(&mut self.lexenv, new_env);
+                    self.specpdl.push(SpecBinding::LexicalEnv { old_lexenv });
+                    Ok(ActiveInterpretedLambdaCall {
+                        body,
+                        call_state: ActiveLambdaCallState {
+                            specpdl_count: self.specpdl.len(),
+                        },
+                        root_count,
+                    })
+                }
+                Err(err) => self
+                    .unbind_to_with_result(root_count, Err(err))
+                    .map(|_| unreachable!()),
+            };
+        }
+
         let call_state = match self.begin_lambda_call(func_value, arglist, env, args) {
             Ok(state) => state,
             Err(err) => {

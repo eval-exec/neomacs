@@ -15935,3 +15935,23 @@ fn test_bootstrap_cache_paths_are_keyed_by_the_lisp_source_fingerprint() {
         "distinct cached images must not collide on one path"
     );
 }
+
+
+/// A closure called inside a lexical `let` must see the `let`'s binding:
+/// the wasm `apply_lambda` arm used to drop the captured environment and
+/// bind formals dynamically, so any file whose load calls a closure over a
+/// let (treemacs-mode.el's eldoc obarray defconst) signaled void-variable.
+#[test]
+#[cfg(target_family = "wasm")]
+fn wasm_closure_call_installs_the_captured_lexical_environment() {
+    let mut eval = Context::new();
+    let result = eval
+        .eval_str(
+            r##"(let ((lexical-binding t))
+          (let ((ob (make-vector 59 0)))
+            (mapatoms (lambda (cmd) (set (intern (symbol-name cmd) ob) t)))
+            (length ob)))"##,
+        )
+        .expect("closure call must see the let binding");
+    assert_eq!(result, Value::fixnum(59));
+}
