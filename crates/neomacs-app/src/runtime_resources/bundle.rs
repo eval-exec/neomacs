@@ -11,7 +11,9 @@ use sha2::{Digest, Sha256};
 use crate::content_id::ContentId;
 
 pub(super) const REQUIRED_DIRECTORIES: [&str; 2] = ["lisp", "etc"];
-const OWNED_ARCHIVE_ROOTS: [&str; 4] = ["lisp", "etc", "leim", "info"];
+// `examples` carries optional example applications (like the browser landing
+// page) that mount into the runtime tree without being editor resources.
+const OWNED_ARCHIVE_ROOTS: [&str; 5] = ["lisp", "etc", "leim", "info", "examples"];
 
 pub(super) type RuntimeResourceBundleId = ContentId;
 

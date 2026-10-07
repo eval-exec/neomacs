@@ -59,7 +59,8 @@ not a promise of compatibility with every browser. Storage belongs to the
 
 ## Landing content
 
-The landing site consists of ordinary Org files in `etc/neomacs-landing/`,
+The landing site consists of ordinary Org files in
+`examples/neomacs-wasm-landing-page/site/`,
 included by the existing portable runtime packager. `index.org` is visited as
 a file; relative Org links and Treemacs open the other documents. The packaged
 site is read-only. Treemacs shows it as **NEO Emacs**, separately from **Your
@@ -70,7 +71,8 @@ an existing file. Its editable buffer shows line numbers; `C-x C-s` saves it.
 The `neo:copy` action copies a site document to a user-chosen destination and
 refuses to overwrite existing files. Named `neo:` actions are explicitly
 dispatched, not evaluated as arbitrary Lisp. Styling and layout remain in
-`lisp/neomacs-wasm/neomacs-wasm-landing.el`; content changes need no Rust edits.
+`examples/neomacs-wasm-landing-page/neomacs-wasm-landing.el`; content changes need
+no Rust edits.
 Fido vertical completion is enabled before personal init, which may override it.
 Org's in-memory parser cache remains enabled, but its persistent disk cache is
 disabled by default: Org's temporary-file rename crosses the browser's `/tmp`
@@ -103,7 +105,8 @@ sources and `Symbols Nerd Font Mono` font are downloaded as part of the package
 bundle, not vendored in this repository or installed on the user's system.
 The worker validates and registers the font before editor startup; glyphs use
 the same font selection, shaping, and shared replay transport as ordinary text.
-`lisp/neomacs-wasm/neomacs-wasm-icons.el` owns the Lisp integration, which runs
+`examples/neomacs-wasm-landing-page/neomacs-wasm-icons.el` owns the Lisp integration,
+which runs
 before personal init so users can override it.
 
 `C-x b` keeps `consult-buffer` and shows icons for its buffer candidates;
@@ -158,7 +161,9 @@ in persistent origin-private storage, not in the source repository. We never
 seed or overwrite it. GNU startup's ordinary init discovery also retains its
 `early-init.el`, legacy `~/.emacs`, and error-reporting behavior.
 
-The source-controlled defaults live separately in `lisp/neomacs-wasm/`:
+The source-controlled defaults live separately in
+`examples/neomacs-wasm-landing-page/` (the example is mounted into the runtime
+bundle at the same path):
 
 - `neomacs-wasm-startup.el`: browser policy and startup-profile selection.
 - `neomacs-wasm-packages.el`: Treemacs, doom-themes, and bundled which-key

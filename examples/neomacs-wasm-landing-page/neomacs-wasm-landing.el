@@ -114,9 +114,13 @@ Only image geometry changes; never rearrange the user's windows."
 (defun neomacs-wasm-landing--heading (text)
   (insert (propertize text 'face 'neomacs-wasm-landing-heading) "\n\n"))
 
+(defconst neomacs-wasm-landing--site-root
+  (expand-file-name "site/" (file-name-directory (or load-file-name buffer-file-name)))
+  "This example's read-only site documents.")
+
 (defun neomacs-wasm-landing--root ()
   "Return the packaged site's directory."
-  (expand-file-name "neomacs-landing/" data-directory))
+  neomacs-wasm-landing--site-root)
 
 (defun neomacs-wasm-landing-copy ()
   "Copy the current site document into browser home without overwriting files."
@@ -192,8 +196,8 @@ Only image geometry changes; never rearrange the user's windows."
       (find-file-noselect (expand-file-name "index.org" (neomacs-wasm-landing--root)))
     (rename-buffer "*NEO Emacs*" t)
     (unless neomacs-wasm-landing--banner-data
-      (let ((banner (expand-file-name "../images/neomacs-banner.svg"
-                                      (neomacs-wasm-landing--root))))
+      (let ((banner (expand-file-name "images/neomacs-banner.svg"
+                                      data-directory)))
         (when (and (display-images-p) (file-readable-p banner))
           (setq neomacs-wasm-landing--banner-data
                 (with-temp-buffer
@@ -213,7 +217,8 @@ Only image geometry changes; never rearrange the user's windows."
         (when (display-images-p)
           (condition-case error-data
               (let ((image (create-image
-                            (expand-file-name "neomacs-landing/author.jpg" data-directory)
+                            (expand-file-name "author.jpg"
+                                              (neomacs-wasm-landing--root))
                             'jpeg nil :width 112 :scale 1 :ascent 'center)))
                 ;; Decode before redisplay, just as for the welcome banner.
                 (image-size image t)

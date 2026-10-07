@@ -30,9 +30,13 @@ struct Package {
 }
 
 pub(super) fn package(repo: &Path, output: &Path) -> Result<()> {
-    let lock_bytes = fs::read(repo.join("crates/neomacs-wasm/packages.lock.toml"))?;
+    let lock_bytes =
+        fs::read(repo.join("examples/neomacs-wasm-landing-page/packages.lock.toml"))?;
     let lock: Lock = toml::from_str(std::str::from_utf8(&lock_bytes)?)?;
-    let mut files = BTreeMap::from([("etc/wasm-packages.lock.toml".to_owned(), lock_bytes)]);
+    let mut files = BTreeMap::from([(
+        "examples/neomacs-wasm-landing-page/packages.lock.toml".to_owned(),
+        lock_bytes,
+    )]);
     for package in lock.package {
         if package.name.is_empty()
             || !package
@@ -99,7 +103,7 @@ pub(super) fn package(repo: &Path, output: &Path) -> Result<()> {
                 continue;
             }
             let target = format!(
-                "lisp/neomacs-wasm-packages/{}/{}",
+                "examples/neomacs-wasm-landing-page/packages/{}/{}",
                 package.name,
                 path.to_string_lossy()
             );
@@ -167,10 +171,13 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let files = BTreeMap::from([
             (
-                "lisp/neomacs-wasm-packages/example/example.el".into(),
+                "examples/neomacs-wasm-landing-page/packages/example/example.el".into(),
                 b"(provide 'example)".to_vec(),
             ),
-            ("etc/wasm-packages.lock.toml".into(), b"locked".to_vec()),
+            (
+                "examples/neomacs-wasm-landing-page/packages.lock.toml".into(),
+                b"locked".to_vec(),
+            ),
         ]);
         let first = directory.path().join("first.bundle");
         let second = directory.path().join("second.bundle");

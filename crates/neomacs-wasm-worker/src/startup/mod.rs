@@ -9,7 +9,7 @@ pub(crate) fn configure_lisp(evaluator: &mut Context) -> Result<(), String> {
         .eval_str(
             r##"(progn
           (load (expand-file-name
-                 "../lisp/neomacs-wasm/neomacs-wasm-startup.el"
+                 "../examples/neomacs-wasm-landing-page/neomacs-wasm-startup.el"
                  invocation-directory) nil t t)
           (neomacs-wasm-startup-initialize))"##,
         )

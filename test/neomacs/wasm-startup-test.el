@@ -1,10 +1,15 @@
 ;;; wasm-startup-test.el --- Browser startup behavior -*- lexical-binding: t; -*-
 
 (require 'ert)
-(require 'neomacs-wasm-startup)
 
 (defconst neomacs-wasm-test--root
   (expand-file-name "../../" (file-name-directory (or load-file-name buffer-file-name))))
+
+;; The landing page is an example, outside the editor's own lisp tree.
+(add-to-list 'load-path
+             (expand-file-name "examples/neomacs-wasm-landing-page"
+                               neomacs-wasm-test--root))
+(require 'neomacs-wasm-startup)
 
 (defmacro neomacs-wasm-test--with-site (&rest body)
   "Exercise the shipped site with an isolated writable playground."
@@ -107,7 +112,8 @@
           (with-temp-buffer
             (emacs-lisp-mode)
             (insert-file-contents
-             (expand-file-name "etc/neomacs-landing/playground.el" neomacs-wasm-test--root))
+             (expand-file-name "examples/neomacs-wasm-landing-page/site/playground.el"
+                               neomacs-wasm-test--root))
             (should-not (string-match-p ";; 07 /" (buffer-string)))
             (goto-char (point-min))
             (let (form)
@@ -137,7 +143,8 @@
                       (regexp-quote "https://github.com/eval-exec/neomacs")
                       (buffer-string)))
              (should (file-readable-p
-                      (expand-file-name "neomacs-landing/author.jpg" data-directory)))
+                      (expand-file-name "author.jpg"
+                                        (neomacs-wasm-landing--root))))
              (should buffer-read-only)))
        (dolist (name '("*NEO Emacs*" "*Playgorund*" "*About*"))
          (when-let* ((buffer (get-buffer name)))

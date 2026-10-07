@@ -60,7 +60,10 @@ def main():
                                   excludes="Wrong type argument: commandp")
         editor.eval_expression('''(progn
           (unless (get-buffer-window
-                   (get-file-buffer (expand-file-name "neomacs-landing/features.org" data-directory)))
+                   (get-file-buffer
+                   (expand-file-name
+                    "../examples/neomacs-wasm-landing-page/site/features.org"
+                    data-directory)))
             (error (concat "Double click did not " "display the file")))
           (message (concat "TREE-DOUBLE-CLICK-" "PASSED")))''', "TREE-DOUBLE-CLICK-PASSED")
         driver.save_screenshot(str(artifacts / "treemacs-file.png"))

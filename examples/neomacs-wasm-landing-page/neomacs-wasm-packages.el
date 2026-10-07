@@ -19,7 +19,7 @@
   "Reason optional landing packages are unavailable, or nil.")
 
 (defconst neomacs-wasm-packages--root
-  (expand-file-name "../neomacs-wasm-packages/"
+  (expand-file-name "packages/"
                     (file-name-directory (or load-file-name buffer-file-name))))
 
 (defun neomacs-wasm-packages--activate ()

@@ -21,7 +21,7 @@ pub(super) const PORTABLE_RUNTIME_IMAGE_ID_ASSET: &str = "neomacs.portable.sha25
 pub(super) const RUNTIME_RESOURCE_ARCHIVE_ASSET: &str = "neomacs-runtime.bundle";
 pub(super) const RUNTIME_RESOURCE_ID_ASSET: &str = "neomacs-runtime.sha256";
 const REQUIRED_RESOURCE_ROOTS: [&str; 2] = ["lisp", "etc"];
-const OPTIONAL_RESOURCE_ROOTS: [&str; 2] = ["leim", "info"];
+const OPTIONAL_RESOURCE_ROOTS: [&str; 3] = ["leim", "info", "examples"];
 
 pub(super) fn run(repo_root: &Path, args: impl IntoIterator<Item = OsString>) -> Result<()> {
     let mut args = args.into_iter();

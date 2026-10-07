@@ -7,9 +7,9 @@ use neomacs_layout_engine::font_backend::install_packaged_fonts;
 use neovm_core::emacs_core::fileio::RuntimeResourceStore;
 
 pub(crate) fn initialize(resources: &dyn RuntimeResourceStore) -> Result<(), String> {
-    let path = resources
-        .mount_root()
-        .join("lisp/neomacs-wasm-packages/nerd-icons/fonts/NFM.ttf");
+    let path = resources.mount_root().join(
+        "examples/neomacs-wasm-landing-page/packages/nerd-icons/fonts/NFM.ttf",
+    );
     let mut assets = Vec::new();
     // Packages are optional: core startup must still work if their download failed.
     if let Some(bytes) = resources.file_contents(&path) {
