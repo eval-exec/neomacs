@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
     <title>NEO Emacs (WebAssembly build) — Experimental · Incomplete · Work in progress</title>
+    <!--CRITICAL_BOOT_STYLE-->
   </head>
   <body>
     <main id="browser-shell">
@@ -85,8 +86,22 @@
     <script type="module">
       const status = document.querySelector("#browser-status");
       const history = document.querySelector("#browser-startup-log");
+      const progressLabel = document.querySelector("#browser-progress-label");
       const started = performance.now();
       const phaseStarts = new Map();
+      let currentPhaseLabel = "Starting";
+      // One quiet line under the bar: the active phase and, while bytes
+      // flow, the measure from the (visually hidden) progress label.
+      function renderBootStatus() {
+        if (["ready", "failed", "stopped"].includes(status.dataset.state)) return;
+        const measure = progressLabel.textContent;
+        status.textContent = measure
+          ? `${currentPhaseLabel} — ${measure}`
+          : `${currentPhaseLabel}…`;
+      }
+      new MutationObserver(renderBootStatus).observe(progressLabel, {
+        childList: true, characterData: true, subtree: true,
+      });
       const phases = [
         ["page", "Load webpage"], ["release", "Resolve release"],
         ["frontend-modules", "Load styles and frontend modules"],
@@ -153,7 +168,8 @@
         if (state === "active") {
           phaseStarts.set(id, performance.now());
           phaseDetail(id, "Started");
-          status.textContent = row.querySelector(".phase-label").textContent + "…";
+          currentPhaseLabel = row.querySelector(".phase-label").textContent;
+          renderBootStatus();
           if (id === "frontend-download" || id === "worker-download" || id === "packages") {
             row.querySelector(".phase-heading").insertBefore(
               document.querySelector("#browser-progress"), row.querySelector("small"));

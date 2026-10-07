@@ -442,13 +442,20 @@ fn copy_web_bundle_sources(repo_root: &Path, output: &Path) -> Result<()> {
 }
 
 fn copy_browser_shell(repo_root: &Path, output: &Path) -> Result<()> {
-    copy_nonempty_file(
-        &repo_root
-            .join("crates/neomacs-wasm/web")
-            .join(WEB_SHELL_SOURCE),
-        &output.join(WEB_SHELL_SOURCE),
-        "browser release shell",
-    )
+    // Inline the stylesheet into the shell so the boot screen is styled at
+    // first paint: the release stylesheet arrives only after manifest.json
+    // resolves, and an unstyled splash flashes before then (FOUC).
+    let shell_source = repo_root.join("crates/neomacs-wasm/web").join(WEB_SHELL_SOURCE);
+    let stylesheet = fs::read_to_string(
+        repo_root.join("crates/neomacs-wasm/web").join("style.css"),
+    )?;
+    let shell = fs::read_to_string(&shell_source)?
+        .replace(
+            "<!--CRITICAL_BOOT_STYLE-->",
+            &format!("<style>\n{stylesheet}\n</style>"),
+        );
+    fs::write(output.join(WEB_SHELL_SOURCE), shell)?;
+    Ok(())
 }
 
 pub(super) fn publish_browser_bundle(

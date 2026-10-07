@@ -136,18 +136,16 @@ canvas {
   display: none;
 }
 
-/* Boot text is silent by default, like an OS splash: mark, bar, nothing
-   else.  The status line surfaces only when startup actually fails. */
+/* One quiet line under the bar carries the whole story: active phase and,
+   while bytes flow, the measure. */
 #browser-status {
-  display: none;
+  display: block;
   margin: 0;
-  color: #8b95a8;
-  font-size: 0.85rem;
+  color: #6f7a90;
+  font-size: 0.8rem;
   overflow-wrap: anywhere;
   text-align: center;
 }
-
-#browser-status[data-state="failed"] { display: block; }
 
 /* On the boot screen the checklist collapses to the active row, which
    carries the shared progress bar; the details toggle reveals everything. */
@@ -161,11 +159,18 @@ canvas {
   line-height: 1.5;
   overflow-wrap: anywhere;
   display: block;
+  /* The active row carries the bar; center it like the rest of the boot
+     screen instead of hugging the checklist's inline edge. */
+  align-self: center;
+  inline-size: fit-content;
+  max-inline-size: 100%;
 }
 
 #browser-startup-log > li { display: block; block-size: 0; margin: 0; overflow: hidden; }
 #browser-startup-log > li[data-state="active"],
 #browser-startup.browser-splash-diagnostic #browser-startup-log > li { block-size: auto; margin-block-end: 0.5rem; }
+#browser-startup-log > li[data-state="active"] { text-align: center; }
+#browser-startup.browser-splash-diagnostic #browser-startup-log { inline-size: min(100%, 46rem); }
 #browser-startup-log > li[data-state="active"] .phase-heading > :not(#browser-progress) { display: none; }
 #browser-startup-log > li[data-state="active"] .phase-details { display: none; }
 #browser-startup.browser-splash-diagnostic #browser-startup-log > li .phase-heading > * { display: revert; }
