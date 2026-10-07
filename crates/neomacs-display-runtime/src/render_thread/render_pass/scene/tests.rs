@@ -254,7 +254,8 @@ fn mixed_policy_child_admission_tracks_applied_highlight_under_held_pressure() {
             None,
             &style,
             false,
-        );
+        )
+        .unwrap();
         let data = pixels(&renderer, &target);
         assert_eq!(px(&data, 48, 40), [0, 255, 0, 255]);
         assert_eq!(
@@ -325,7 +326,8 @@ fn mixed_policy_child_admission_tracks_applied_highlight_under_held_pressure() {
         None,
         &style,
         false,
-    );
+    )
+    .unwrap();
     let data = pixels(&renderer, &target);
     assert!((127..=129).contains(&px(&data, 48, 40)[3]));
     assert_eq!(px(&data, 25, 25), [255; 4], "foreground remains opaque");
@@ -564,7 +566,8 @@ fn expired_child_resize_recovers_under_unchanged_budget_pressure() {
             None,
             &style,
             false,
-        );
+        )
+        .unwrap();
         let data = pixels(&renderer, &target);
         assert_eq!(px(&data, 48, 40), [0, 0, 255, 255]);
         assert_eq!(
@@ -610,7 +613,8 @@ fn expired_child_resize_recovers_under_unchanged_budget_pressure() {
         None,
         &style,
         false,
-    );
+    )
+    .unwrap();
     assert!((127..=129).contains(&px(&pixels(&renderer, &target), 48, 40)[3]));
 }
 
@@ -1054,7 +1058,8 @@ fn production_child_resize_applies_complete_picture_opacity_once() {
                         None,
                         &style,
                         false,
-                    );
+                    )
+                    .unwrap();
                     let data = pixels(&renderer, &target);
                     let bg = px(&data, 48, 40);
                     let fg = px(&data, 25, 25);
@@ -1105,4 +1110,78 @@ fn production_child_resize_applies_complete_picture_opacity_once() {
             }
         }
     }
+}
+
+#[test]
+fn missing_child_scratch_returns_retry_without_drawing_and_recovers() {
+    let mut renderer =
+        WgpuRenderer::new(None, W, H).expect("GPU required for preparation regression");
+    let origin = observe_platform_now();
+    let mut render = GuiFrameRenderState::new(42, renderer.device(), 1.0, false, origin);
+    let mut root = picture(42, 0, W as f32);
+    root.height = H as f32;
+    root.set_frame_identity(
+        DisplayFrameId::new(42),
+        DisplayFrameId::new(0),
+        0.0,
+        0.0,
+        0,
+        false,
+        0.0,
+        Color::BLACK,
+        false,
+        1.0,
+    );
+    root.background = Color::BLUE;
+    render.set_current_frame(
+        Some(root.clone()),
+        None,
+        Default::default(),
+        Default::default(),
+    );
+    let mut child = picture(43, 42, 40.0);
+    child.background_alpha = 0.5;
+    assert!(render.compositor.child_frames.update_frame(child));
+    let texture = target(&renderer);
+    let view = texture.create_view(&Default::default());
+    draw_root(&mut renderer, &mut render, &view, &root);
+    let before = pixels(&renderer, &texture);
+    let interaction = format!("{:?}", render.compositor.interaction);
+    let style = ChildFrameStyle::default();
+    assert!(matches!(
+        render_frame_content_overlays(
+            &mut renderer,
+            (W, H),
+            &mut render,
+            &view,
+            &root,
+            false,
+            None,
+            &style,
+            false
+        ),
+        Err(super::super::surface::FrameRenderFailure::WindowNotReady)
+    ));
+    assert_eq!(pixels(&renderer, &texture), before);
+    assert_eq!(format!("{:?}", render.compositor.interaction), interaction);
+    (render.child_opacity_src, render.child_resize_src) =
+        super::super::composition_targets::prepare_child_targets(
+            &mut renderer,
+            &mut render,
+            SnapshotSize::new(W, H).unwrap(),
+        )
+        .unwrap();
+    render_frame_content_overlays(
+        &mut renderer,
+        (W, H),
+        &mut render,
+        &view,
+        &root,
+        false,
+        None,
+        &style,
+        false,
+    )
+    .unwrap();
+    assert_ne!(pixels(&renderer, &texture), before);
 }

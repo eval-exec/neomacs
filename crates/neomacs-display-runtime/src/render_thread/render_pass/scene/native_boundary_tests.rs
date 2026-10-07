@@ -96,7 +96,8 @@ fn obsolete_native_owner_retires_before_required_child_under_same_pressure() {
         None,
         &style,
         false,
-    );
+    )
+    .unwrap();
     renderer.place_native_content_with_opacity(
         NativeContentPlacement::new(RenderTarget::new(&view, surface), &retained).unwrap(),
         root.background,
@@ -172,7 +173,8 @@ fn obsolete_native_owner_retires_before_required_child_under_same_pressure() {
             None,
             &style,
             false,
-        );
+        )
+        .unwrap();
         let data = pixels(&renderer, &out);
         assert_eq!(px(&data, 60, 40), [0, 0, 255, 255], "sibling order");
         assert!(

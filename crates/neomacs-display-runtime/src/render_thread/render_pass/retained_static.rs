@@ -85,13 +85,13 @@ pub(super) fn draw(
     inputs: &FrameDrawInputs<'_>,
     cursor_visible: bool,
     hovered_scroll_bar: Option<neomacs_display_protocol::ScrollBarIdentity>,
-) {
+) -> Result<(), super::surface::FrameRenderFailure> {
     let Some(native_size) = SnapshotSize::new(native.content_size().0, native.content_size().1)
     else {
         // wgpu rejects a zero extent, so there is no scene to retain and
         // nothing to composite from. Reaching this would mean the window was
         // asked to draw at a size `resize` already refuses to configure.
-        return;
+        return Ok(());
     };
     let generation = render.compositor.current_scene_generation;
     let retained_valid = is_valid(render, native_size);
@@ -116,7 +116,7 @@ pub(super) fn draw(
             inputs,
             false,
             true,
-        );
+        )?;
         let cells = build_filled_box_cursor_cells(
             frame,
             native.scale_factor as f32,
@@ -160,6 +160,7 @@ pub(super) fn draw(
         );
     }
     frame_stats::count(&frame_stats::COMPOSITE_ONLY_FRAMES);
+    Ok(())
 }
 
 /// Build a single-glyph mini-frame for each filled-box cursor in the frame

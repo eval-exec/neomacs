@@ -889,3 +889,75 @@ fn source_over_transitions_fill_uncovered_geometry_with_the_background() {
         }
     }
 }
+
+#[test]
+fn prepared_child_rejects_missing_wrong_size_and_aliased_resize_scratch() {
+    use neomacs_renderer_wgpu::renderer::{
+        ChildPreparationError, ChildResizePicture, PreparedChildFrame,
+    };
+    let mut h = try_harness().expect("GPU required for child preparation regression");
+    let child = FrameGlyphBuffer::with_size(W as f32, H as f32);
+    let size = SnapshotSize::new(W, H).unwrap();
+    let picture = h.renderer.acquire_snapshot(size).unwrap();
+    let old = h.renderer.acquire_snapshot(size).unwrap();
+    let mixed = h.renderer.acquire_snapshot(size).unwrap();
+    let small = h
+        .renderer
+        .acquire_snapshot(SnapshotSize::new(8, 8).unwrap())
+        .unwrap();
+    let resize = || ChildResizePicture {
+        old: &old,
+        old_width: W as f32,
+        old_height: H as f32,
+        mix: 0.5,
+    };
+    assert_eq!(
+        PreparedChildFrame::new(&child, 0.5, size, Some(&small), None, None).err(),
+        Some(ChildPreparationError::WrongSize)
+    );
+    assert_eq!(
+        PreparedChildFrame::new(&child, 1.0, size, Some(&picture), Some(resize()), None).err(),
+        Some(ChildPreparationError::MissingResizePicture)
+    );
+    assert_eq!(
+        PreparedChildFrame::new(
+            &child,
+            1.0,
+            size,
+            Some(&picture),
+            Some(resize()),
+            Some(&small)
+        )
+        .err(),
+        Some(ChildPreparationError::WrongSize)
+    );
+    for aliased in [&picture, &old] {
+        assert_eq!(
+            PreparedChildFrame::new(
+                &child,
+                1.0,
+                size,
+                Some(&picture),
+                Some(resize()),
+                Some(aliased)
+            )
+            .err(),
+            Some(ChildPreparationError::AliasedResizePicture)
+        );
+    }
+    assert_eq!(
+        PreparedChildFrame::new(&child, 1.0, size, Some(&old), Some(resize()), Some(&mixed)).err(),
+        Some(ChildPreparationError::AliasedResizePicture)
+    );
+    assert!(
+        PreparedChildFrame::new(
+            &child,
+            1.0,
+            size,
+            Some(&picture),
+            Some(resize()),
+            Some(&mixed)
+        )
+        .is_ok()
+    );
+}

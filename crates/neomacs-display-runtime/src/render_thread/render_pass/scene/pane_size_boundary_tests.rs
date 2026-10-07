@@ -356,7 +356,8 @@ fn pane_conversion_refuses_before_motion_and_recovers_under_held_pressure() {
             None,
             &style,
             false,
-        );
+        )
+        .unwrap();
         assert_eq!(
             px(&pixels(&renderer, &out), 48, 40)[3],
             255,
@@ -452,7 +453,8 @@ fn wrong_size_required_native_owner_retires_before_child_under_same_pressure() {
         None,
         &style,
         false,
-    );
+    )
+    .unwrap();
     let out = target(&renderer);
     let view = out.create_view(&Default::default());
     renderer.place_native_content_with_opacity(
