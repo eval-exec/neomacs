@@ -265,7 +265,7 @@ Only image geometry changes; never rearrange the user's windows."
     (rename-buffer "*NEO Emacs*" t)
     (unless neomacs-wasm-landing--banner-data
       (let ((banner (expand-file-name "assets/neomacs-banner.svg"
-                                      (neomacs-wasm-landing--root)))
+                                      (neomacs-wasm-landing--root))))
         (when (and (display-images-p) (file-readable-p banner))
           (setq neomacs-wasm-landing--banner-data
                 (with-temp-buffer
