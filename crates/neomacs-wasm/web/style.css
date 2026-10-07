@@ -68,11 +68,18 @@ canvas {
 }
 
 #browser-splash-logo {
-  inline-size: min(78vw, 42rem);
+  inline-size: 9.5rem;
   animation: browser-splash-breathe 4s ease-in-out infinite;
 }
 
 #browser-splash-logo svg { display: block; inline-size: 100%; }
+
+#browser-splash-word {
+  inline-size: min(70vw, 16rem);
+  margin-block-start: 0.6rem;
+}
+
+#browser-splash-word svg { display: block; inline-size: 100%; }
 
 @keyframes browser-splash-fade-in {
   from { opacity: 0; }
@@ -129,13 +136,18 @@ canvas {
   display: none;
 }
 
+/* Boot text is silent by default, like an OS splash: mark, bar, nothing
+   else.  The status line surfaces only when startup actually fails. */
 #browser-status {
+  display: none;
   margin: 0;
   color: #8b95a8;
   font-size: 0.85rem;
   overflow-wrap: anywhere;
   text-align: center;
 }
+
+#browser-status[data-state="failed"] { display: block; }
 
 /* On the boot screen the checklist collapses to the active row, which
    carries the shared progress bar; the details toggle reveals everything. */
@@ -242,6 +254,7 @@ canvas {
 }
 
 #browser-progress-label {
+  display: none;
   color: #6b7688;
   font-size: 0.8rem;
   font-variant-numeric: tabular-nums;
