@@ -58,6 +58,7 @@ impl MountedRuntimeResources {
         visit_authenticated_archive(
             Cursor::new(bundle.archive()),
             bundle.expected(),
+            bundle.requires_core_directories(),
             |entry, contents| {
                 let mounted_path = mount_root.join(entry.path());
                 if entry.kind() == ArchiveEntryKind::Directory {

@@ -110,7 +110,7 @@ fn extract_authenticated_archive(
     destination: &Path,
     expected: &RuntimeResourceBundleId,
 ) -> Result<(), RuntimeResourceError> {
-    visit_authenticated_archive(source, expected, |entry, contents| {
+    visit_authenticated_archive(source, expected, true, |entry, contents| {
         extract_entry(entry, contents, destination)
     })
 }

@@ -135,3 +135,32 @@ fn packaged_runtime_resources_reject_noncanonical_bundle_ids_before_extraction()
     assert!(error.to_string().contains("64 lowercase hexadecimal"));
     assert_eq!(opened.into_inner(), [RUNTIME_RESOURCE_ID_ASSET]);
 }
+
+#[test]
+fn optional_extension_archives_need_not_carry_core_directories() {
+    use neomacs_app::runtime_resources::{MountedRuntimeResources, RuntimeResourceBundle};
+
+    let core = runtime_archive(&[
+        ("lisp/loadup.el", b"(provide 'loadup)"),
+        ("etc/NEWS", b"news"),
+    ]);
+    let extension = runtime_archive(&[
+        ("examples/neomacs-wasm-landing-page/site/index.org", b"welcome"),
+    ]);
+    let mut mounted = MountedRuntimeResources::from_bundle(
+        std::path::Path::new("/runtime"),
+        RuntimeResourceBundle::from_assets(&core, bundle_id(&core).as_bytes()).unwrap(),
+    )
+    .unwrap();
+    let extension_bundle =
+        RuntimeResourceBundle::from_optional_assets(&extension, bundle_id(&extension).as_bytes())
+            .unwrap();
+    mounted.try_extend(
+        MountedRuntimeResources::from_bundle(
+            std::path::Path::new("/runtime"),
+            extension_bundle,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+}

@@ -33,10 +33,10 @@ pub(super) fn package(repo: &Path, output: &Path) -> Result<()> {
     let lock_bytes =
         fs::read(repo.join("examples/neomacs-wasm-landing-page/packages.lock.toml"))?;
     let lock: Lock = toml::from_str(std::str::from_utf8(&lock_bytes)?)?;
-    let mut files = BTreeMap::from([(
-        "examples/neomacs-wasm-landing-page/packages.lock.toml".to_owned(),
-        lock_bytes,
-    )]);
+    // The lock itself ships in the runtime bundle (the examples root), so the
+    // package archive carries only package files; a provenance copy here
+    // would collide with it when the two mounts merge.
+    let mut files = BTreeMap::new();
     for package in lock.package {
         if package.name.is_empty()
             || !package
@@ -173,10 +173,6 @@ mod tests {
             (
                 "examples/neomacs-wasm-landing-page/packages/example/example.el".into(),
                 b"(provide 'example)".to_vec(),
-            ),
-            (
-                "examples/neomacs-wasm-landing-page/packages.lock.toml".into(),
-                b"locked".to_vec(),
             ),
         ]);
         let first = directory.path().join("first.bundle");

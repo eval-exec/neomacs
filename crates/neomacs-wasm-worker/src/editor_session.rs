@@ -102,7 +102,9 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
     )
     .map_err(|error| format!("failed to mount browser runtime resources: {error}"))?;
     if let Some((archive, id)) = browser_host::package_assets()? {
-        let result = RuntimeResourceBundle::from_assets(&archive, &id)
+        // Optional extension archive: it carries only the landing example's
+        // package roots, not the lisp/ and etc/ a core runtime must have.
+        let result = RuntimeResourceBundle::from_optional_assets(&archive, &id)
             .and_then(|bundle| MountedRuntimeResources::from_bundle(Path::new(BrowserPaths::RUNTIME_ROOT), bundle))
             .and_then(|packages| runtime_resources.try_extend(packages));
         if let Err(error) = result {

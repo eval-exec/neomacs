@@ -66,6 +66,21 @@ export function observeAssetDownload(response, onProgress) {
 }
 
 /**
+ * Buffered assets paired with the sidecar file naming their SHA-256.
+ * A transfer that corrupts bytes in flight would otherwise surface much
+ * later as an unrelated-sounding mount failure inside the Worker.
+ */
+const digestPairs = [
+  ["runtimeImage", "runtimeImageId", "portable runtime image"],
+  ["runtimeResourceBundle", "runtimeResourceId", "runtime resource bundle"],
+];
+
+async function sha256Hex(bytes) {
+  return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
+    byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/**
  * Fetch the complete immutable input set for one editor Worker instance.
  *
  * `onProgress` is optional and receives `{received, total, complete}` as bytes arrive;
@@ -73,8 +88,25 @@ export function observeAssetDownload(response, onProgress) {
  * must render an indeterminate state rather than a false percentage. This is
  * the editor's longest startup phase on a real link — about 88 MB on a first
  * visit — and it used to report nothing at all, which reads as a hang.
+ *
+ * The buffered image and resource bundles are checked against their shipped
+ * SHA-256 sidecars before anything reaches the Worker, and one corrupted
+ * transfer is retried rather than reported as a startup failure.
  */
 export async function fetchEditorWorkerAssets(message, fetchAsset = globalThis.fetch, onProgress) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await fetchEditorWorkerAssetsOnce(message, fetchAsset, onProgress);
+    } catch (error) {
+      if (attempt >= 1 || !/(portable )?runtime (image|resource bundle) digest mismatch/.test(String(error?.message))) {
+        throw error;
+      }
+      reportProgress(onProgress, {received: 0, total: null, complete: false});
+    }
+  }
+}
+
+async function fetchEditorWorkerAssetsOnce(message, fetchAsset, onProgress) {
   const responses = await Promise.all(
     assetSpecs.map(([, urlField]) => fetchAsset(message[urlField])),
   );
@@ -114,5 +146,15 @@ export async function fetchEditorWorkerAssets(message, fetchAsset = globalThis.f
       assets[resultField] = new Uint8Array(buffer);
     }),
   );
+
+  for (const [dataField, idField, description] of digestPairs) {
+    const expected = new TextDecoder().decode(assets[idField]).trim();
+    // Skip verification when the sidecar is not a bare digest (for example
+    // the placeholder bodies used by unit-test response doubles).
+    if (!/^[0-9a-f]{64}$/.test(expected)) continue;
+    if (await sha256Hex(assets[dataField]) !== expected) {
+      throw new Error(`${description} digest mismatch; retrying download`);
+    }
+  }
   return assets;
 }

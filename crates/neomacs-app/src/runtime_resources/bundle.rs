@@ -26,6 +26,10 @@ pub(super) type RuntimeResourceBundleId = ContentId;
 pub struct RuntimeResourceBundle<'a> {
     archive: &'a [u8],
     expected: RuntimeResourceBundleId,
+    /// Core runtime archives must carry lisp/ and etc/.  Optional extension
+    /// archives (the landing example's package bundle) may hold only their
+    /// own roots, so they skip that requirement.
+    requires_core_directories: bool,
 }
 
 impl<'a> RuntimeResourceBundle<'a> {
@@ -34,6 +38,20 @@ impl<'a> RuntimeResourceBundle<'a> {
         Ok(Self {
             archive,
             expected: read_bundle_id(bundle_id)?,
+            requires_core_directories: true,
+        })
+    }
+
+    /// Like [`Self::from_assets`], for an optional extension archive that
+    /// carries only its own roots and need not include lisp/ or etc/.
+    pub fn from_optional_assets(
+        archive: &'a [u8],
+        bundle_id: &[u8],
+    ) -> Result<Self, RuntimeResourceError> {
+        Ok(Self {
+            archive,
+            expected: read_bundle_id(bundle_id)?,
+            requires_core_directories: false,
         })
     }
 
@@ -43,6 +61,10 @@ impl<'a> RuntimeResourceBundle<'a> {
 
     pub(super) fn expected(&self) -> &RuntimeResourceBundleId {
         &self.expected
+    }
+
+    pub(super) fn requires_core_directories(&self) -> bool {
+        self.requires_core_directories
     }
 }
 
@@ -203,6 +225,7 @@ pub(super) fn read_bundle_id(
 pub(super) fn visit_authenticated_archive(
     source: impl Read,
     expected: &RuntimeResourceBundleId,
+    requires_core_directories: bool,
     mut visit: impl FnMut(&ValidatedArchiveEntry, &mut dyn Read) -> Result<(), RuntimeResourceError>,
 ) -> Result<(), RuntimeResourceError> {
     let digesting = DigestingReader::new(source);
@@ -245,9 +268,11 @@ pub(super) fn visit_authenticated_archive(
         });
     }
 
-    for (index, directory) in REQUIRED_DIRECTORIES.iter().enumerate() {
-        if !seen_required_directories[index] {
-            return Err(RuntimeResourceError::MissingRequiredDirectory(directory));
+    if requires_core_directories {
+        for (index, directory) in REQUIRED_DIRECTORIES.iter().enumerate() {
+            if !seen_required_directories[index] {
+                return Err(RuntimeResourceError::MissingRequiredDirectory(directory));
+            }
         }
     }
     Ok(())

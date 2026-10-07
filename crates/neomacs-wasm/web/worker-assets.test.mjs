@@ -112,3 +112,38 @@ test("editor Worker names a failed portable runtime image ID fetch", async () =>
     /failed to fetch portable runtime image ID: 404/,
   );
 });
+
+const realDigest = Array.from(
+  new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("resources"))),
+  byte => byte.toString(16).padStart(2, "0")).join("");
+
+test("a corrupted runtime bundle transfer is detected and retried", async () => {
+  let bundleFetches = 0;
+  const responses = new Map([
+    ["worker.wasm", response("wasm")],
+    ["runtime.portable", response("image")],
+    ["runtime.portable.sha256", response("image digest")],
+    ["runtime.bundle", () => response((bundleFetches += 1) === 1 ? "corrupted!" : "resources")],
+    ["runtime.sha256", response(realDigest + "\n")],
+  ]);
+  const assets = await fetchEditorWorkerAssets(startMessage, async (url) => {
+    const found = responses.get(url);
+    return typeof found === "function" ? found() : found;
+  });
+  assert.equal(bundleFetches, 2);
+  assert.equal(new TextDecoder().decode(assets.runtimeResourceBundle), "resources");
+});
+
+test("a persistently corrupted runtime bundle fails after one retry", async () => {
+  const responses = new Map([
+    ["worker.wasm", response("wasm")],
+    ["runtime.portable", response("image")],
+    ["runtime.portable.sha256", response("image digest")],
+    ["runtime.bundle", response("corrupted!")],
+    ["runtime.sha256", response(realDigest)],
+  ]);
+  await assert.rejects(
+    fetchEditorWorkerAssets(startMessage, async (url) => responses.get(url)),
+    /runtime resource bundle digest mismatch/,
+  );
+});
