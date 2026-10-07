@@ -723,13 +723,14 @@ pub struct AnimatedCursor {
 #[serde(rename_all = "kebab-case")]
 #[repr(u8)]
 #[non_exhaustive]
-#[derive(strum::VariantNames)]
+#[derive(strum::VariantNames, num_enum::IntoPrimitive, num_enum::FromPrimitive)]
 // See `MotionKind`: strum's casing is a separate attribute from serde's, and
 // publishing `Exponential` where the registry accepts `exponential` puts a
 // value in a menu that is then refused.
 #[strum(serialize_all = "kebab-case")]
 pub enum CursorAnimStyle {
     /// Exponential decay. No fixed duration; `speed` controls rate.
+    #[num_enum(default)]
     Exponential = 0,
     /// Critically-damped spring. Physics-based, natural feel.
     CriticallyDampedSpring = 1,
@@ -748,17 +749,9 @@ pub enum CursorAnimStyle {
 }
 
 impl CursorAnimStyle {
+    /// Decode a numeric style, using exponential decay for unknown values.
     pub fn from_u8(v: u8) -> Self {
-        match v {
-            1 => Self::CriticallyDampedSpring,
-            2 => Self::EaseOutQuad,
-            3 => Self::EaseOutCubic,
-            4 => Self::EaseOutExpo,
-            5 => Self::EaseInOutCubic,
-            6 => Self::Linear,
-            7 => Self::Neovide,
-            _ => Self::Exponential,
-        }
+        Self::from(v)
     }
 }
 
