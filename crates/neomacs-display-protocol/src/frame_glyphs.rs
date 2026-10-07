@@ -941,8 +941,13 @@ pub struct PresentedWindowRegions {
 /// It is a width and not a rect because the origin is already published:
 /// the field starts at `PresentedWindowRegions::text_body.x`. A second copy of
 /// that origin could disagree with the first.
+/// Deserialization enforces the same finite, positive width as measurement.
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[nutype::nutype(
+    const_fn,
+    validate(finite, greater = 0.0),
+    derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)
+)]
 pub struct LineNumberFieldWidth(f32);
 
 impl LineNumberFieldWidth {
@@ -951,12 +956,12 @@ impl LineNumberFieldWidth {
     /// window.
     #[must_use]
     pub fn measured(px: f32) -> Option<Self> {
-        (px.is_finite() && px > 0.0).then_some(Self(px))
+        Self::try_new(px).ok()
     }
 
     #[must_use]
     pub const fn px(self) -> f32 {
-        self.0
+        self.into_inner()
     }
 }
 
