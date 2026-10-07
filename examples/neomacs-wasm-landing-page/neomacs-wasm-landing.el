@@ -63,16 +63,17 @@
 
 (defun neomacs-wasm-landing--tab-bar-warning ()
   "Produce the conspicuous work-in-progress warning in the tab bar.
-Underlined and clickable; the tooltip carries the full URL so the bar
-does not have to."
+A yellow badge with a warning sign; clickable, and the tooltip carries
+the full URL so the bar does not have to."
   `((neomacs-wasm-warning
      menu-item
      ,(concat
        (propertize
-        " EXPERIMENTAL · INCOMPLETE · WORK IN PROGRESS "
+        " ⚠ EXPERIMENTAL · INCOMPLETE · WORK IN PROGRESS "
         'face '(:inherit (font-lock-warning-face
                           neomacs-wasm-landing-body)
-                         :weight bold :underline t)
+                         :weight bold :background "yellow"
+                         :foreground "black")
         'mouse-face 'highlight)
        (propertize "  │  " 'face 'shadow))
      neomacs-wasm-landing-browse-repository
