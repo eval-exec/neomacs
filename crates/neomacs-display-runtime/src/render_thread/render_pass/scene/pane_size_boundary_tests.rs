@@ -215,9 +215,9 @@ fn fractional_outgoing_panes_use_final_native_conversion_and_settle_direct() {
 
 #[test]
 fn pane_conversion_refuses_before_motion_and_recovers_under_held_pressure() {
-    if std::env::var("NEOMACS_GPU_BUDGET_MB").as_deref() != Ok("1") {
-        let status=std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact","render_thread::render_pass::scene::tests::pane_size_boundary::pane_conversion_refuses_before_motion_and_recovers_under_held_pressure","--nocapture"]).env("NEOMACS_GPU_BUDGET_MB","1").status().unwrap();
-        assert!(status.success());
+    if !in_gpu_budget_child(
+        "render_thread::render_pass::scene::tests::pane_size_boundary::pane_conversion_refuses_before_motion_and_recovers_under_held_pressure",
+    ) {
         return;
     }
     for active in [false, true] {
@@ -369,9 +369,9 @@ fn pane_conversion_refuses_before_motion_and_recovers_under_held_pressure() {
 
 #[test]
 fn wrong_size_required_native_owner_retires_before_child_under_same_pressure() {
-    if std::env::var("NEOMACS_GPU_BUDGET_MB").as_deref() != Ok("1") {
-        let status=std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact","render_thread::render_pass::scene::tests::pane_size_boundary::wrong_size_required_native_owner_retires_before_child_under_same_pressure","--nocapture"]).env("NEOMACS_GPU_BUDGET_MB","1").status().unwrap();
-        assert!(status.success());
+    if !in_gpu_budget_child(
+        "render_thread::render_pass::scene::tests::pane_size_boundary::wrong_size_required_native_owner_retires_before_child_under_same_pressure",
+    ) {
         return;
     }
     let mut renderer = WgpuRenderer::new(None, W, H).expect("real GPU required");

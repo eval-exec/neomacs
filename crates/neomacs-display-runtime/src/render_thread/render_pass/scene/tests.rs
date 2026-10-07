@@ -113,11 +113,9 @@ fn seed_pending_layout(
 
 #[test]
 fn mixed_policy_child_admission_tracks_applied_highlight_under_held_pressure() {
-    if std::env::var("NEOMACS_GPU_BUDGET_MB").as_deref() != Ok("1") {
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "render_thread::render_pass::scene::tests::mixed_policy_child_admission_tracks_applied_highlight_under_held_pressure", "--nocapture"])
-            .env("NEOMACS_GPU_BUDGET_MB", "1").status().unwrap();
-        assert!(status.success());
+    if !in_gpu_budget_child(
+        "render_thread::render_pass::scene::tests::mixed_policy_child_admission_tracks_applied_highlight_under_held_pressure",
+    ) {
         return;
     }
     let mut renderer =
@@ -336,11 +334,9 @@ fn mixed_policy_child_admission_tracks_applied_highlight_under_held_pressure() {
 
 #[test]
 fn expired_child_resize_recovers_under_unchanged_budget_pressure() {
-    if std::env::var("NEOMACS_GPU_BUDGET_MB").as_deref() != Ok("1") {
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "render_thread::render_pass::scene::tests::expired_child_resize_recovers_under_unchanged_budget_pressure", "--nocapture"])
-            .env("NEOMACS_GPU_BUDGET_MB", "1").status().unwrap();
-        assert!(status.success());
+    if !in_gpu_budget_child(
+        "render_thread::render_pass::scene::tests::expired_child_resize_recovers_under_unchanged_budget_pressure",
+    ) {
         return;
     }
     let mut renderer = WgpuRenderer::new(None, W, H).expect("GPU required for expiry regression");
@@ -711,11 +707,9 @@ fn production_split_delete_placements_keep_background_opacity() {
 
 #[test]
 fn expired_child_lifecycle_needs_no_scratch_under_unchanged_pressure() {
-    if std::env::var("NEOMACS_GPU_BUDGET_MB").as_deref() != Ok("1") {
-        let status=std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact","render_thread::render_pass::scene::tests::expired_child_lifecycle_needs_no_scratch_under_unchanged_pressure","--nocapture"])
-            .env("NEOMACS_GPU_BUDGET_MB","1").status().unwrap();
-        assert!(status.success());
+    if !in_gpu_budget_child(
+        "render_thread::render_pass::scene::tests::expired_child_lifecycle_needs_no_scratch_under_unchanged_pressure",
+    ) {
         return;
     }
     for closing in [false, true] {
@@ -796,6 +790,7 @@ fn expired_child_lifecycle_needs_no_scratch_under_unchanged_pressure() {
     }
 }
 
+use super::super::tests::in_gpu_budget_child;
 use neomacs_display_protocol::TransitionEasing;
 use neomacs_display_protocol::frame_time::{FrameSample, observe_platform_now};
 use neomacs_display_protocol::motion_spec::{MotionDuration, MotionSpec, TweenSpec};

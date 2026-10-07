@@ -19,11 +19,9 @@ pub(super) fn full_plan() -> crate::render_thread::render_quality::RenderFeature
 
 #[test]
 fn obsolete_native_owner_retires_before_required_child_under_same_pressure() {
-    if std::env::var("NEOMACS_GPU_BUDGET_MB").as_deref() != Ok("1") {
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "render_thread::render_pass::scene::tests::native_boundary::obsolete_native_owner_retires_before_required_child_under_same_pressure", "--nocapture"])
-            .env("NEOMACS_GPU_BUDGET_MB", "1").status().unwrap();
-        assert!(status.success());
+    if !in_gpu_budget_child(
+        "render_thread::render_pass::scene::tests::native_boundary::obsolete_native_owner_retires_before_required_child_under_same_pressure",
+    ) {
         return;
     }
     let mut renderer = WgpuRenderer::new(None, W, H).expect("GPU required");

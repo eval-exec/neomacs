@@ -687,17 +687,49 @@ fn child_char_and_stretch_stipple_is_foreground_at_zero_background() {
     }
 }
 
+/// Run the test named `exact` in a child test process under a 1 MiB GPU
+/// budget. Returns true inside that child, where the caller runs its body.
+/// In the parent it requires the child to have run exactly one test and
+/// passed: libtest exits successfully when `--exact` matches nothing.
+fn in_gpu_budget_child(exact: &str) -> bool {
+    if std::env::var("NEOMACS_GPU_BUDGET_MB").as_deref() == Ok("1") {
+        return true;
+    }
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", exact, "--nocapture"])
+        .env("NEOMACS_GPU_BUDGET_MB", "1")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let mut results = stdout
+        .lines()
+        .filter_map(|line| line.strip_prefix("test result: ok. "));
+    let counts = match (results.next(), results.next()) {
+        (Some(counts), None) => counts,
+        _ => "",
+    };
+    let count = |label: &str| {
+        counts
+            .split("; ")
+            .find_map(|part| part.strip_suffix(label)?.parse::<u32>().ok())
+    };
+    assert!(
+        out.status.success() && count(" passed") == Some(1) && count(" failed") == Some(0),
+        "budget child for {exact} did not run exactly one passing test\n{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    false
+}
+
 /// Run in the bounded GPU lane with NEOMACS_GPU_BUDGET_MB=1. Real held
 /// leases deny the required picture; no opaque substitute is rendered.
 #[test]
 fn mandatory_child_picture_refusal_is_typed_and_recovers_after_lease_release() {
     // Isolate the budget knob in a child test process: never mutate the
     // environment of other concurrently running GPU tests.
-    if std::env::var("NEOMACS_GPU_BUDGET_MB").as_deref() != Ok("1") {
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "opacity_test::mandatory_child_picture_refusal_is_typed_and_recovers_after_lease_release", "--nocapture"])
-            .env("NEOMACS_GPU_BUDGET_MB", "1").status().unwrap();
-        assert!(status.success());
+    if !in_gpu_budget_child(
+        "opacity_test::mandatory_child_picture_refusal_is_typed_and_recovers_after_lease_release",
+    ) {
         return;
     }
     let mut h = try_harness().expect("real GPU adapter required");

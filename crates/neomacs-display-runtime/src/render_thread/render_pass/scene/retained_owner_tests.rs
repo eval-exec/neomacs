@@ -14,17 +14,9 @@ use neomacs_renderer_wgpu::SnapshotLease;
 use neomacs_renderer_wgpu::renderer::{NativeContentPlacement, RenderTarget};
 
 fn budget_one(name: &str) -> bool {
-    if std::env::var("NEOMACS_GPU_BUDGET_MB").as_deref() == Ok("1") {
-        return true;
-    }
-    let exact = format!("render_thread::render_pass::scene::tests::retained_owner::{name}");
-    let status = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", &exact, "--nocapture"])
-        .env("NEOMACS_GPU_BUDGET_MB", "1")
-        .status()
-        .unwrap();
-    assert!(status.success());
-    false
+    in_gpu_budget_child(&format!(
+        "render_thread::render_pass::scene::tests::retained_owner::{name}"
+    ))
 }
 
 fn setup() -> (WgpuRenderer, GuiFrameRenderState, FrameGlyphBuffer) {
