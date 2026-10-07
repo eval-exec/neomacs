@@ -303,7 +303,14 @@ impl ConsBlockTrailer {
 }
 
 const _: () = {
+    // The u64 trailer words ride usize-width atomics; only the native
+    // 64-bit heap is pinned. wasm32 builds the same offsets from size_of
+    // and never logs native worlds.
+    #[cfg(not(target_family = "wasm"))]
     assert!(usize::BITS == u64::BITS);
+    // 4001 cells is the native 64-bit cell size quotient; wasm32 packs more
+    // smaller cells into the same 64 KiB block.
+    #[cfg(not(target_family = "wasm"))]
     assert!(CONS_BLOCK_SIZE == 4001);
     assert!(CONS_CELLS_BYTES + size_of::<ConsBlockTrailer>() <= CONS_BLOCK_BYTES);
     assert!(CONS_OLD_OFFSET == CONS_CELLS_BYTES + std::mem::offset_of!(ConsBlockTrailer, old));

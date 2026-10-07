@@ -861,6 +861,10 @@ impl ObarrayRowHead {
 
 /// One fixed obarray symbol row (see `DumpObarray::plain_rows`).
 pub(crate) const OBARRAY_ROW_SIZE: usize = 32;
+// The row is an on-disk contract of the NATIVE mapped-heap image; the
+// browser host loads the portable image instead and never maps rows, so
+// the size pin applies only where that layout is produced and consumed.
+#[cfg(not(target_family = "wasm"))]
 const _: () = assert!(
     OBARRAY_ROW_SIZE
         == std::mem::size_of::<ObarrayRowHead>() + 3 * std::mem::size_of::<TaggedValue>()

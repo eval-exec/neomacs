@@ -24,7 +24,28 @@ pub fn apply_module_function(_ctx: &mut Context, func: Value, _args: Vec<Value>)
     ))
 }
 
-pub(crate) fn collect_dynamic_module_gc_roots(_roots: &mut Vec<Value>) {}
+pub(crate) fn collect_dynamic_module_gc_roots(_roots: &mut Vec<Value>, _heap_identity: usize) {}
+
+/// Registry handle for hosts without native modules. There is nothing to
+/// own: the handle is inert and every registry operation is a no-op.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct DynamicModuleRegistryHandle;
+
+pub(crate) fn current_dynamic_module_registry_handle() -> DynamicModuleRegistryHandle {
+    DynamicModuleRegistryHandle
+}
+
+pub(crate) fn install_dynamic_module_registry_handle(_handle: &DynamicModuleRegistryHandle) {}
+
+pub(crate) fn reset_dynamic_module_registry() {}
+
+pub(crate) fn retire_dynamic_module_registry(_registry: &DynamicModuleRegistryHandle) {}
+
+pub(crate) fn collect_dynamic_module_registry_gc_roots(
+    _registry: &DynamicModuleRegistryHandle,
+    _roots: &mut Vec<Value>,
+) {
+}
 
 pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     if let Some(message) = payload.downcast_ref::<&'static str>() {

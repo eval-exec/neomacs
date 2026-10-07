@@ -30,8 +30,13 @@ const CONS_OBSERVED_WORDS: usize = CONS_ADDRESSES_PER_GRANULE / u64::BITS as usi
 const OWNED_CELL_ADDRESS_STRIDE: usize = std::mem::size_of::<ConsCell>() / CONS_ADDRESS_ALIGN;
 
 const _: () = {
+    // Layout pins for the native 64-bit heap: wasm32 keeps the same computed
+    // relationships with 4-byte alignment and a 256-word granule.
+    #[cfg(not(target_family = "wasm"))]
     assert!(CONS_ADDRESS_ALIGN == 8);
+    #[cfg(not(target_family = "wasm"))]
     assert!(CONS_OBSERVED_WORDS == 128);
+    #[cfg(not(target_family = "wasm"))]
     assert!(OWNED_CELL_ADDRESS_STRIDE == 2);
 };
 

@@ -44,6 +44,16 @@ impl ProcessManager {
         Self
     }
 
+    /// A host without subprocesses owns none.
+    pub fn list_processes(&self) -> Vec<ProcessId> {
+        Vec::new()
+    }
+
+    /// Nothing to delete on a host without subprocesses.
+    pub fn delete_process(&mut self, _id: ProcessId) -> bool {
+        false
+    }
+
     /// No wake-up mechanism exists on this host: there is no process poller
     /// for a producer to interrupt. `None` is the documented contract for
     /// that, so an input bridge never believes it woke a sleeping evaluator.

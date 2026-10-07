@@ -215,7 +215,7 @@ impl TaggedHeap {
         self.close_alloc_regions();
         let bytes_before = self.live_bytes;
         self.incremental_drain_all();
-        self.incremental_finish(bytes_before, std::time::Instant::now());
+        self.incremental_finish(bytes_before, neomacs_host_runtime::time::Instant::now());
     }
 
     #[inline]

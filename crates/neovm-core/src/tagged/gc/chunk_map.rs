@@ -158,7 +158,7 @@ impl ChunkMap {
     /// The entry of the granule holding `addr`.
     #[inline(always)]
     pub(crate) fn get(&self, addr: usize) -> ChunkEntry {
-        let hi = addr >> L1_SHIFT;
+        let hi = ((addr as u64) >> L1_SHIFT) as usize;
         if hi >= L1_LEN {
             return ChunkEntry::NONE;
         }
@@ -181,7 +181,7 @@ impl ChunkMap {
     /// only: there is exactly one writer.
     pub(crate) fn set(&self, base: usize, entry: ChunkEntry) {
         debug_assert_eq!(base & ((1 << GRANULE_SHIFT) - 1), 0, "unaligned granule");
-        let hi = base >> L1_SHIFT;
+        let hi = ((base as u64) >> L1_SHIFT) as usize;
         assert!(
             hi < L1_LEN,
             "heap granule {base:#x} is above the chunk map's 47-bit range"
@@ -243,7 +243,7 @@ impl HeapChunkMap {
     /// [`ChunkMap::get`] without the `Arc` hop.
     #[inline(always)]
     pub(crate) fn get(&self, addr: usize) -> ChunkEntry {
-        let hi = addr >> L1_SHIFT;
+        let hi = ((addr as u64) >> L1_SHIFT) as usize;
         if hi >= L1_LEN {
             return ChunkEntry::NONE;
         }

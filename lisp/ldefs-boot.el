@@ -23085,6 +23085,26 @@ however many times `neomacs-video' is loaded.")
 (register-definition-prefixes "neomacs-video" '("neomacs-video-"))
 
 
+;;; Generated autoloads from neomacs-wasm/neomacs-wasm-icons.el
+
+(register-definition-prefixes "neomacs-wasm-icons" '("neomacs-wasm-icons-"))
+
+
+;;; Generated autoloads from neomacs-wasm/neomacs-wasm-landing.el
+
+(register-definition-prefixes "neomacs-wasm-landing" '("neomacs-wasm-"))
+
+
+;;; Generated autoloads from neomacs-wasm/neomacs-wasm-packages.el
+
+(register-definition-prefixes "neomacs-wasm-packages" '("neomacs-wasm-package"))
+
+
+;;; Generated autoloads from neomacs-wasm/neomacs-wasm-startup.el
+
+(register-definition-prefixes "neomacs-wasm-startup" '("neomacs-wasm-"))
+
+
 ;;; Generated autoloads from neomacs-webkit.el
 
 (autoload 'neomacs-webkit-open-url "neomacs-webkit"
