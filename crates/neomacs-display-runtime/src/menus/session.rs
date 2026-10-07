@@ -78,10 +78,11 @@ impl MenuLifetime {
 }
 
 /// Keyboard traversal through the selectable items in a menu panel.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, num_enum::IntoPrimitive)]
+#[repr(i32)]
 pub(super) enum MenuDirection {
-    Next,
-    Previous,
+    Next = 1,
+    Previous = -1,
 }
 
 pub struct MenuSession {
@@ -186,10 +187,7 @@ impl MenuSession {
 
     /// Move hover in the active panel. Returns true if changed.
     pub(super) fn move_hover(&mut self, direction: MenuDirection) -> bool {
-        let step = match direction {
-            MenuDirection::Next => 1,
-            MenuDirection::Previous => -1,
-        };
+        let step: i32 = direction.into();
         // Read panel state without mutable borrow
         let panel = self.active_panel();
         let len = panel.item_indices.len() as i32;
