@@ -68,7 +68,7 @@ canvas {
 }
 
 #browser-splash-logo {
-  inline-size: clamp(6rem, min(19vw, 21vh), 19rem);
+  inline-size: clamp(11rem, min(38vw, 40vh), 38rem);
   animation: browser-splash-breathe 4s ease-in-out infinite;
 }
 
@@ -109,16 +109,13 @@ canvas {
   background: #232936;
 }
 
+/* Frame-level easing in the shell script owns the width; no CSS
+   transition, so the two never fight. */
 #browser-lifecycle-bar {
   inline-size: 0;
   block-size: 100%;
   border-radius: inherit;
   background: #dfe6f3;
-  transition: inline-size 300ms ease-out;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  #browser-lifecycle-bar { transition: none; }
 }
 
 /* The per-phase progress element keeps its DOM contract (displayed inside
@@ -152,6 +149,7 @@ canvas {
 
 #browser-startup.browser-splash-diagnostic #browser-startup-log {
   display: block;
+  block-size: auto;
   max-block-size: min(60vh, 28rem);
 }
 
@@ -192,10 +190,15 @@ canvas {
   overflow-wrap: anywhere;
   display: block;
   /* The active row carries the bar; center it like the rest of the boot
-     screen instead of hugging the checklist's inline edge. */
+     screen instead of hugging the checklist's inline edge.  The checklist
+     itself contributes exactly zero height -- the contract bar's flex
+     min-content made the active row 8 or 16px depending on whether a
+     byte measure existed, which re-centered the splash and made the mark,
+     wordmark, and bar jump. */
   align-self: center;
   inline-size: fit-content;
   max-inline-size: 100%;
+  block-size: 0;
 }
 
 #browser-startup-log > li { display: block; block-size: 0; margin: 0; overflow: hidden; }
@@ -281,13 +284,14 @@ canvas {
 
 @media (prefers-reduced-motion: reduce) {
   #browser-progress-bar,
-  #browser-splash-logo,
   #browser-startup {
     transition: none;
     animation: none;
   }
 
-  #browser-splash-logo .taijitu-spin { animation: none; }
+  /* The boot mark keeps its slow spin even under reduced motion: it is
+     the identity of the splash, one rotation per nine seconds, gentler
+     than most "static" loading indicators. */
 }
 
 #browser-progress-label {
