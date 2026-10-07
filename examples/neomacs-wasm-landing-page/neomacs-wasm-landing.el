@@ -55,19 +55,26 @@
      menu-item
      ,(concat (neomacs-wasm-landing--tab-bar-icon)
               (propertize " NEO Emacs (WebAssembly build) "
-                          'face 'bold))
+                          'face '(:inherit neomacs-wasm-landing-body
+                                           :weight bold))
+              (propertize "  │  " 'face 'shadow))
      neomacs-wasm-landing-browse-repository
      :help "Open https://github.com/eval-exec/neomacs in a browser tab")))
 
 (defun neomacs-wasm-landing--tab-bar-warning ()
-  "Produce the conspicuous work-in-progress warning in the tab bar."
+  "Produce the conspicuous work-in-progress warning in the tab bar.
+Underlined and clickable; the tooltip carries the full URL so the bar
+does not have to."
   `((neomacs-wasm-warning
      menu-item
-     ,(propertize
-       (concat " EXPERIMENTAL INCOMPLETE WORK IN PROGRESS: "
-               neomacs-wasm-landing--repo-url " ")
-       'face '(:inherit font-lock-warning-face :weight bold)
-       'mouse-face 'highlight)
+     ,(concat
+       (propertize
+        " EXPERIMENTAL · INCOMPLETE · WORK IN PROGRESS "
+        'face '(:inherit (font-lock-warning-face
+                          neomacs-wasm-landing-body)
+                         :weight bold :underline t)
+        'mouse-face 'highlight)
+       (propertize "  │  " 'face 'shadow))
      neomacs-wasm-landing-browse-repository
      :help "Open https://github.com/eval-exec/neomacs in a browser tab")))
 
@@ -390,7 +397,7 @@ the landing window layout."
         (info (neomacs-wasm-landing--about)))
     (neomacs-wasm-landing--playground-buffer)
     (when (bound-and-true-p tab-bar-mode)
-      (tab-bar-rename-tab "NEO / Playground")
+      (tab-bar-rename-tab "Landing")
       ;; Far left: window icon and product name, then the conspicuous
       ;; work-in-progress warning linking to the repository.
       (add-to-list 'tab-bar-format 'neomacs-wasm-landing--tab-bar-warning)
