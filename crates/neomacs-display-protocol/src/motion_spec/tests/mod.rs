@@ -93,7 +93,7 @@ fn unit_interval_clamp_never_yields_a_value_outside_the_unit_range() {
 
 #[test]
 fn angular_frequency_and_damping_reject_non_positive_and_non_finite() {
-    for bad in [0.0f32, -1.0] {
+    for bad in [0.0f32, -0.0, -1.0] {
         assert_eq!(
             AngularFrequency::new(bad),
             Err(MotionSpecError::NotPositive)
@@ -203,7 +203,54 @@ fn newtypes_serialize_transparently_as_bare_numbers() {
         "12.5"
     );
     assert_eq!(
+        serde_json::to_string(&DampingRatio::new(0.75).expect("positive")).expect("serialize"),
+        "0.75"
+    );
+    assert_eq!(
         serde_json::to_string(&UnitInterval::clamp(0.5)).expect("serialize"),
         "0.5"
     );
+}
+
+#[test]
+fn spring_parameter_deserialization_preserves_validation_errors_and_positive_extremes() {
+    use serde::Deserialize;
+    use serde::de::value::{Error, F32Deserializer};
+
+    // JSON cannot encode nonfinite floats, but other Serde formats can.
+    for (value, expected) in [
+        (0.0, MotionSpecError::NotPositive),
+        (-0.0, MotionSpecError::NotPositive),
+        (-1.0, MotionSpecError::NotPositive),
+        (f32::NAN, MotionSpecError::NotFinite),
+        (f32::INFINITY, MotionSpecError::NotFinite),
+        (f32::NEG_INFINITY, MotionSpecError::NotFinite),
+    ] {
+        assert!(
+            AngularFrequency::deserialize(F32Deserializer::<Error>::new(value))
+                .unwrap_err()
+                .to_string()
+                .starts_with(&expected.to_string())
+        );
+        assert!(
+            DampingRatio::deserialize(F32Deserializer::<Error>::new(value))
+                .unwrap_err()
+                .to_string()
+                .starts_with(&expected.to_string())
+        );
+    }
+    for value in [f32::from_bits(1), 1.0, f32::MAX] {
+        assert_eq!(
+            AngularFrequency::deserialize(F32Deserializer::<Error>::new(value))
+                .unwrap()
+                .get(),
+            value
+        );
+        assert_eq!(
+            DampingRatio::deserialize(F32Deserializer::<Error>::new(value))
+                .unwrap()
+                .get(),
+            value
+        );
+    }
 }

@@ -145,7 +145,11 @@ impl UnitInterval {
 ///
 /// Strictly positive: a spring with zero frequency never converges.
 #[repr(transparent)]
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, serde::Serialize)]
+#[nutype::nutype(
+    const_fn,
+    validate(with = validate_positive_motion_parameter, error = MotionSpecError),
+    derive(Clone, Copy, Debug, PartialEq, PartialOrd, Serialize, Deserialize)
+)]
 #[serde(transparent)]
 pub struct AngularFrequency(f32);
 
@@ -154,7 +158,11 @@ pub struct AngularFrequency(f32);
 /// Strictly positive: a spring with zero damping oscillates forever, so no
 /// completion time can be computed for it.
 #[repr(transparent)]
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, serde::Serialize)]
+#[nutype::nutype(
+    const_fn,
+    validate(with = validate_positive_motion_parameter, error = MotionSpecError),
+    derive(Clone, Copy, Debug, PartialEq, PartialOrd, Serialize, Deserialize)
+)]
 #[serde(transparent)]
 pub struct DampingRatio(f32);
 
@@ -168,42 +176,43 @@ pub struct DampingRatio(f32);
 #[serde(transparent)]
 pub struct DevicePixels(f32);
 
-macro_rules! positive_f32_newtype {
-    ($name:ident) => {
-        impl $name {
-            /// # Errors
-            /// [`MotionSpecError::NotFinite`] if `value` is `NaN` or infinite,
-            /// [`MotionSpecError::NotPositive`] if it is zero or negative.
-            pub fn new(value: f32) -> Result<Self, MotionSpecError> {
-                if !value.is_finite() {
-                    Err(MotionSpecError::NotFinite)
-                } else if value <= 0.0 {
-                    Err(MotionSpecError::NotPositive)
-                } else {
-                    Ok(Self(value))
-                }
-            }
-
-            #[must_use]
-            pub const fn get(self) -> f32 {
-                self.0
-            }
-        }
-
-        impl<'de> serde::Deserialize<'de> for $name {
-            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                let value = <f32 as serde::Deserialize>::deserialize(deserializer)?;
-                Self::new(value).map_err(serde::de::Error::custom)
-            }
-        }
-    };
+const fn validate_positive_motion_parameter(value: &f32) -> Result<(), MotionSpecError> {
+    if !value.is_finite() {
+        Err(MotionSpecError::NotFinite)
+    } else if *value <= 0.0 {
+        Err(MotionSpecError::NotPositive)
+    } else {
+        Ok(())
+    }
 }
 
-positive_f32_newtype!(AngularFrequency);
-positive_f32_newtype!(DampingRatio);
+impl AngularFrequency {
+    /// # Errors
+    /// [`MotionSpecError::NotFinite`] if `value` is `NaN` or infinite,
+    /// [`MotionSpecError::NotPositive`] if it is zero or negative.
+    pub fn new(value: f32) -> Result<Self, MotionSpecError> {
+        Self::try_new(value)
+    }
+
+    #[must_use]
+    pub const fn get(self) -> f32 {
+        self.into_inner()
+    }
+}
+
+impl DampingRatio {
+    /// # Errors
+    /// [`MotionSpecError::NotFinite`] if `value` is `NaN` or infinite,
+    /// [`MotionSpecError::NotPositive`] if it is zero or negative.
+    pub fn new(value: f32) -> Result<Self, MotionSpecError> {
+        Self::try_new(value)
+    }
+
+    #[must_use]
+    pub const fn get(self) -> f32 {
+        self.into_inner()
+    }
+}
 
 impl DevicePixels {
     pub const ZERO: Self = Self(0.0);
