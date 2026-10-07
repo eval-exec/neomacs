@@ -179,7 +179,8 @@ fn present(
         None,
         &style,
         false,
-    );
+    )
+    .unwrap();
     if let Some(native) = &result.native {
         renderer.place_native_content_with_opacity(
             NativeContentPlacement::new(

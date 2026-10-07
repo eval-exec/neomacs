@@ -40,7 +40,7 @@ pub(super) fn through_composition_ring(
     cursor_visible: bool,
     accept_derived_effects: bool,
     pane_blits: &[PaneBlit],
-) {
+) -> Result<(), super::surface::FrameRenderFailure> {
     super::render_frame_window_contents(
         renderer,
         native,
@@ -50,7 +50,7 @@ pub(super) fn through_composition_ring(
         inputs,
         cursor_visible,
         false,
-    );
+    )?;
 
     detect_transitions(acquired, renderer, render, frame, accept_derived_effects);
     if render.compositor.renderer_effects.needs_redraw() {
@@ -106,7 +106,8 @@ pub(super) fn through_composition_ring(
         inputs.child_frame_style,
         inputs.scroll_indicators_enabled,
         inputs.toolbar,
-    );
+    )?;
+    Ok(())
 }
 
 /// Place and pin a pane picture using the content-local geometry supplied by
@@ -155,7 +156,7 @@ pub(super) fn onto_target(
     inputs: &FrameDrawInputs<'_>,
     cursor_visible: bool,
     accept_derived_effects: bool,
-) {
+) -> Result<(), super::surface::FrameRenderFailure> {
     super::render_frame_window_contents(
         renderer,
         native,
@@ -165,9 +166,10 @@ pub(super) fn onto_target(
         inputs,
         cursor_visible,
         true,
-    );
+    )?;
     detect_transitions(acquired, renderer, render, frame, accept_derived_effects);
     render.mark_active_visuals_dirty();
+    Ok(())
 }
 
 /// Measure this frame against the last presented one and start whatever motion

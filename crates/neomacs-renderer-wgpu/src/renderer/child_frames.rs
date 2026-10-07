@@ -7,13 +7,116 @@ use neomacs_display_protocol::frame_glyphs::FrameGlyphBuffer;
 use neomacs_display_protocol::types::{AnimatedCursor, Color};
 use neomacs_display_protocol::{PointerAppearanceSelection, RootSurfaceRect};
 
-/// Unscaled old picture and preflighted scratch for a child resize mix.
+/// Unscaled old picture and mix parameters for child resize preparation.
 pub struct ChildResizePicture<'a> {
     pub old: &'a super::SnapshotLease,
     pub old_width: f32,
     pub old_height: f32,
     pub mix: f32,
-    pub composition: &'a super::SnapshotLease,
+}
+
+/// A child picture whose opacity and required composition resources were checked.
+/// Consumed by rendering; the borrowed leases stay live until that draw finishes.
+///
+/// The prepared payload cannot acquire a new resource requirement after checking:
+/// ```compile_fail
+/// use neomacs_display_protocol::frame_glyphs::FrameGlyphBuffer;
+/// use neomacs_renderer_wgpu::{renderer::PreparedChildFrame, SnapshotSize};
+/// let mut child = FrameGlyphBuffer::with_size(96.0, 64.0);
+/// let prepared = PreparedChildFrame::new(
+///     &child, 1.0, SnapshotSize::new(96, 64).unwrap(), None, None, None,
+/// ).unwrap();
+/// child.background_alpha = 0.5;
+/// drop(prepared);
+/// ```
+/// A draw consumes its preparation:
+/// ```compile_fail
+/// use neomacs_renderer_wgpu::renderer::PreparedChildFrame;
+/// fn consume(prepared: PreparedChildFrame<'_>) {
+///     drop(prepared);
+///     drop(prepared);
+/// }
+/// ```
+pub struct PreparedChildFrame<'a> {
+    child: &'a FrameGlyphBuffer,
+    alpha: f32,
+    size: super::SnapshotSize,
+    composition: ChildComposition<'a>,
+}
+
+enum ChildComposition<'a> {
+    Direct,
+    Picture {
+        picture: &'a super::SnapshotLease,
+        resize: Option<(ChildResizePicture<'a>, &'a super::SnapshotLease)>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum ChildPreparationError {
+    #[error("child picture composition requires a scratch lease")]
+    MissingPicture,
+    #[error("child resize composition requires a second scratch lease")]
+    MissingResizePicture,
+    #[error("child scratch dimensions do not match the render target")]
+    WrongSize,
+    #[error("child resize composition cannot sample its render attachment")]
+    AliasedResizePicture,
+}
+
+fn child_alpha(alpha: f32) -> f32 {
+    if alpha.is_finite() {
+        alpha.clamp(0.0, 1.0)
+    } else {
+        1.0
+    }
+}
+
+impl<'a> PreparedChildFrame<'a> {
+    /// Validate pre-admitted resources without allocating or drawing anything.
+    /// Opacity and frame payload travel with the proof, so the draw cannot
+    /// independently replace them with inputs requiring unreserved resources.
+    pub fn new(
+        child: &'a FrameGlyphBuffer,
+        alpha: f32,
+        size: super::SnapshotSize,
+        picture: Option<&'a super::SnapshotLease>,
+        resize: Option<ChildResizePicture<'a>>,
+        resize_picture: Option<&'a super::SnapshotLease>,
+    ) -> Result<Self, ChildPreparationError> {
+        let alpha = child_alpha(alpha);
+        let composition = if child.background_alpha != 1.0 || alpha != 1.0 || resize.is_some() {
+            let picture = picture.ok_or(ChildPreparationError::MissingPicture)?;
+            if picture.size() != size {
+                return Err(ChildPreparationError::WrongSize);
+            }
+            let resize = resize
+                .map(|resize| {
+                    let mixed =
+                        resize_picture.ok_or(ChildPreparationError::MissingResizePicture)?;
+                    if mixed.size() != size {
+                        return Err(ChildPreparationError::WrongSize);
+                    }
+                    if mixed.id() == picture.id()
+                        || mixed.id() == resize.old.id()
+                        || picture.id() == resize.old.id()
+                    {
+                        return Err(ChildPreparationError::AliasedResizePicture);
+                    }
+                    Ok((resize, mixed))
+                })
+                .transpose()?;
+            ChildComposition::Picture { picture, resize }
+        } else {
+            ChildComposition::Direct
+        };
+        Ok(Self {
+            child,
+            alpha,
+            size,
+            composition,
+        })
+    }
 }
 
 impl WgpuRenderer {
@@ -210,6 +313,7 @@ impl WgpuRenderer {
     ) -> Result<(), super::BudgetExceeded> {
         let size = super::SnapshotSize::new(surface_width, surface_height)
             .expect("child target dimensions are nonzero");
+        let alpha = child_alpha(alpha);
         let picture = if child.background_alpha != 1.0 || alpha != 1.0 {
             Some(self.acquire_snapshot(size)?)
         } else {
@@ -217,13 +321,22 @@ impl WgpuRenderer {
         };
         self.render_child_frame_prepared(
             view,
-            child,
+            PreparedChildFrame {
+                child,
+                alpha,
+                size,
+                composition: match picture.as_ref() {
+                    Some(picture) => ChildComposition::Picture {
+                        picture,
+                        resize: None,
+                    },
+                    None => ChildComposition::Direct,
+                },
+            },
             offset_x,
             offset_y,
             clip_in_root,
             glyph_atlas,
-            surface_width,
-            surface_height,
             cursor_visible,
             animated_cursor,
             corner_radius,
@@ -232,11 +345,8 @@ impl WgpuRenderer {
             shadow_offset,
             shadow_opacity,
             pointer_selection,
-            alpha,
             scale,
             pivot,
-            picture.as_ref(),
-            None,
         );
         Ok(())
     }
@@ -247,13 +357,11 @@ impl WgpuRenderer {
     pub fn render_child_frame_prepared(
         &mut self,
         view: &wgpu::TextureView,
-        child: &FrameGlyphBuffer,
+        prepared: PreparedChildFrame<'_>,
         offset_x: f32,
         offset_y: f32,
         clip_in_root: RootSurfaceRect,
         glyph_atlas: &mut WgpuGlyphAtlas,
-        surface_width: u32,
-        surface_height: u32,
         cursor_visible: bool,
         animated_cursor: Option<AnimatedCursor>,
         corner_radius: f32,
@@ -262,19 +370,18 @@ impl WgpuRenderer {
         shadow_offset: f32,
         shadow_opacity: f32,
         pointer_selection: Option<PointerAppearanceSelection>,
-        alpha: f32,
         scale: f32,
         pivot: [f32; 2],
-        picture: Option<&super::SnapshotLease>,
-        resize: Option<ChildResizePicture<'_>>,
     ) {
-        let alpha = if alpha.is_finite() {
-            alpha.clamp(0.0, 1.0)
-        } else {
-            1.0
-        };
-        if child.background_alpha != 1.0 || alpha != 1.0 || resize.is_some() {
-            let picture = picture.expect("non-opaque child composition was preflighted");
+        let PreparedChildFrame {
+            child,
+            alpha,
+            size,
+            composition,
+        } = prepared;
+        let surface_width = size.width();
+        let surface_height = size.height();
+        if let ChildComposition::Picture { picture, resize } = composition {
             self.clear_child_picture(picture.view());
             // Backgrounds replace one another inside the child's own picture;
             // text is source-over coverage. Apply lifecycle opacity only once,
@@ -300,8 +407,7 @@ impl WgpuRenderer {
                 scale,
                 pivot,
             );
-            let composed = if let Some(resize) = resize {
-                let mixed = resize.composition;
+            let composed = if let Some((resize, mixed)) = resize {
                 self.clear_child_picture(mixed.view());
                 let scissor = self.child_frame_scissor(clip_in_root, surface_width, surface_height);
                 // Both pictures are already premultiplied. Sum their weighted
