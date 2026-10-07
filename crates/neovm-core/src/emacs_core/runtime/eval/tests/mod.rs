@@ -23620,12 +23620,21 @@ fn command_error_report_failure_dispatches_an_undispatched_signal_once() {
             vec![Value::string("Not enough arguments for format string")],
         )
     };
-    let is_top_level_throw =
-        |flow: &Flow| flow.as_throw().is_some_and(|thrown| thrown.tag.is_symbol_named("top-level"));
+    let is_top_level_throw = |flow: &Flow| {
+        flow.as_throw()
+            .is_some_and(|thrown| thrown.tag.is_symbol_named("top-level"))
+    };
 
     let rerouted = ev.command_error_report_failure(undispatched());
-    assert!(is_top_level_throw(&rerouted), "an unhandled signal throws to top-level");
-    assert_eq!(hook_calls(&mut ev), Value::fixnum(1), "dispatched exactly once");
+    assert!(
+        is_top_level_throw(&rerouted),
+        "an unhandled signal throws to top-level"
+    );
+    assert_eq!(
+        hook_calls(&mut ev),
+        Value::fixnum(1),
+        "dispatched exactly once"
+    );
 
     let FlowKind::Signal(sig) = undispatched().into_kind() else {
         panic!("signal flow");
