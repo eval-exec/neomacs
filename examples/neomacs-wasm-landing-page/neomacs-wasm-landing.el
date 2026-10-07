@@ -63,7 +63,8 @@
      menu-item
      ,(concat
        (propertize " NEO Emacs (WebAssembly build) "
-                   'face '(:inherit (bold neomacs-wasm-landing-body)))
+                   'face '(:inherit (bold neomacs-wasm-landing-body)
+                           :foreground "white"))
        (propertize "  │  " 'face 'shadow))
      neomacs-wasm-landing-browse-repository
      :help "Open https://github.com/eval-exec/neomacs in a browser tab")))
