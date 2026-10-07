@@ -1,6 +1,6 @@
 //! Translate desktop keys into menu navigation, never editor input.
 
-use super::session::MenuSession;
+use super::session::{MenuDirection, MenuSession};
 use winit::keyboard::{Key, NamedKey};
 
 pub(super) fn cancels(key: &Key, modifiers: winit::keyboard::ModifiersState) -> bool {
@@ -18,14 +18,14 @@ pub(super) fn key(
     }
     match key.as_ref() {
         Key::Named(NamedKey::ArrowDown) => {
-            session.move_hover(1);
+            session.move_hover(MenuDirection::Next);
         }
         Key::Named(NamedKey::ArrowUp) => {
-            session.move_hover(-1);
+            session.move_hover(MenuDirection::Previous);
         }
         Key::Named(NamedKey::ArrowRight) => {
             if session.open_submenu() {
-                session.move_hover(1);
+                session.move_hover(MenuDirection::Next);
             }
         }
         Key::Named(NamedKey::ArrowLeft) => {
@@ -33,11 +33,11 @@ pub(super) fn key(
         }
         Key::Named(NamedKey::Home) => {
             session.active_panel_mut().hover_index = -1;
-            session.move_hover(1);
+            session.move_hover(MenuDirection::Next);
         }
         Key::Named(NamedKey::End) => {
             session.active_panel_mut().hover_index = -1;
-            session.move_hover(-1);
+            session.move_hover(MenuDirection::Previous);
         }
         Key::Named(NamedKey::Enter) => {
             return session.activate_panel(session.submenu_panels.len());

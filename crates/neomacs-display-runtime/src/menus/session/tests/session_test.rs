@@ -521,7 +521,7 @@ fn move_hover_down_from_none() {
         item("C", true, 0),
     ]);
     // hover starts at -1, moving down (+1) should go to index 0
-    assert!(state.move_hover(1));
+    assert!(state.move_hover(MenuDirection::Next));
     assert_eq!(state.root_panel.hover_index, 0);
 }
 
@@ -532,10 +532,10 @@ fn move_hover_down_sequential() {
         item("B", true, 0),
         item("C", true, 0),
     ]);
-    state.move_hover(1); // -> 0
-    assert!(state.move_hover(1)); // -> 1
+    state.move_hover(MenuDirection::Next); // -> 0
+    assert!(state.move_hover(MenuDirection::Next)); // -> 1
     assert_eq!(state.root_panel.hover_index, 1);
-    assert!(state.move_hover(1)); // -> 2
+    assert!(state.move_hover(MenuDirection::Next)); // -> 2
     assert_eq!(state.root_panel.hover_index, 2);
 }
 
@@ -544,7 +544,7 @@ fn move_hover_wraps_around_bottom() {
     let mut state = simple_menu(vec![item("A", true, 0), item("B", true, 0)]);
     state.root_panel.hover_index = 1;
     // Moving down from last should wrap to 0.
-    assert!(state.move_hover(1));
+    assert!(state.move_hover(MenuDirection::Next));
     assert_eq!(state.root_panel.hover_index, 0);
 }
 
@@ -553,7 +553,7 @@ fn move_hover_wraps_around_top() {
     let mut state = simple_menu(vec![item("A", true, 0), item("B", true, 0)]);
     state.root_panel.hover_index = 0;
     // Moving up from first should wrap to last.
-    assert!(state.move_hover(-1));
+    assert!(state.move_hover(MenuDirection::Previous));
     assert_eq!(state.root_panel.hover_index, 1);
 }
 
@@ -561,7 +561,7 @@ fn move_hover_wraps_around_top() {
 fn move_hover_skips_separators() {
     let mut state = simple_menu(vec![item("A", true, 0), separator(0), item("B", true, 0)]);
     state.root_panel.hover_index = 0;
-    assert!(state.move_hover(1));
+    assert!(state.move_hover(MenuDirection::Next));
     // Should skip separator at index 1 and land on index 2.
     assert_eq!(state.root_panel.hover_index, 2);
 }
@@ -574,7 +574,7 @@ fn move_hover_skips_disabled_items() {
         item("C", true, 0),
     ]);
     state.root_panel.hover_index = 0;
-    assert!(state.move_hover(1));
+    assert!(state.move_hover(MenuDirection::Next));
     // Should skip disabled item at index 1.
     assert_eq!(state.root_panel.hover_index, 2);
 }
@@ -583,27 +583,27 @@ fn move_hover_skips_disabled_items() {
 fn move_hover_empty_panel() {
     // No depth-0 items means root panel is empty.
     let mut state = simple_menu(vec![item("Child", true, 1)]);
-    assert!(!state.move_hover(1));
-    assert!(!state.move_hover(-1));
+    assert!(!state.move_hover(MenuDirection::Next));
+    assert!(!state.move_hover(MenuDirection::Previous));
 }
 
 #[test]
 fn move_hover_all_disabled_returns_false() {
     let mut state = simple_menu(vec![item("A", false, 0), item("B", false, 0)]);
-    assert!(!state.move_hover(1));
+    assert!(!state.move_hover(MenuDirection::Next));
 }
 
 #[test]
 fn move_hover_all_separators_returns_false() {
     let mut state = simple_menu(vec![separator(0), separator(0)]);
-    assert!(!state.move_hover(1));
+    assert!(!state.move_hover(MenuDirection::Next));
 }
 
 #[test]
 fn move_hover_single_enabled_item_from_none() {
     let mut state = simple_menu(vec![item("Only", true, 0)]);
     // From -1 moving down lands on 0.
-    assert!(state.move_hover(1));
+    assert!(state.move_hover(MenuDirection::Next));
     assert_eq!(state.root_panel.hover_index, 0);
 }
 
@@ -612,7 +612,7 @@ fn move_hover_single_enabled_item_already_there() {
     let mut state = simple_menu(vec![item("Only", true, 0)]);
     state.root_panel.hover_index = 0;
     // Moving from the only item should not change (wraps back to same).
-    assert!(!state.move_hover(1));
+    assert!(!state.move_hover(MenuDirection::Next));
     assert_eq!(state.root_panel.hover_index, 0);
 }
 
@@ -623,8 +623,8 @@ fn move_hover_up_from_none() {
         item("B", true, 0),
         item("C", true, 0),
     ]);
-    // hover = -1, direction = -1 => idx = -2 => wraps to len-1 = 2
-    assert!(state.move_hover(-1));
+    // Moving backward from no hover selects the last item.
+    assert!(state.move_hover(MenuDirection::Previous));
     assert_eq!(state.root_panel.hover_index, 2);
 }
 
@@ -790,14 +790,14 @@ fn move_hover_in_submenu() {
     assert_eq!(state.active_panel().hover_index, -1);
 
     // Move down in submenu
-    assert!(state.move_hover(1));
+    assert!(state.move_hover(MenuDirection::Next));
     assert_eq!(state.active_panel().hover_index, 0); // "File1.txt"
-    assert!(state.move_hover(1));
+    assert!(state.move_hover(MenuDirection::Next));
     assert_eq!(state.active_panel().hover_index, 1); // "File2.txt"
-    assert!(state.move_hover(1));
+    assert!(state.move_hover(MenuDirection::Next));
     assert_eq!(state.active_panel().hover_index, 2); // "File3.txt"
     // Wraps back
-    assert!(state.move_hover(1));
+    assert!(state.move_hover(MenuDirection::Next));
     assert_eq!(state.active_panel().hover_index, 0);
 }
 
