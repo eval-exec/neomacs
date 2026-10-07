@@ -46,6 +46,17 @@ a buffer or window layout."
 (defun neomacs-wasm-startup-initialize ()
   "Install browser defaults before personal initialization.
 The worker calls this once per editor session, before `normal-top-level'."
+  ;; The portable image records the dump host's absolute `load-path',
+  ;; including the build user's package directory. No such filesystem
+  ;; exists here, and GNU startup would both warn about it and split the
+  ;; initial frame with a *Warnings* window -- which suppresses the
+  ;; landing layout, whose `one-window-p' gate then fails. Product
+  ;; mounts (the lisp tree, the verified package bundle) do exist, so
+  ;; dropping what does not keeps exactly the host leftovers out.
+  (dolist (dir (prog1 load-path (setq load-path nil)))
+    (when (file-directory-p dir)
+      (push dir load-path)))
+  (setq load-path (nreverse load-path))
   (setq ls-lisp-use-insert-directory-program nil)
   (require 'browse-url)
   (setq browse-url-browser-function #'neomacs-wasm-browse-url)
