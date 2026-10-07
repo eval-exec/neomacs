@@ -225,3 +225,34 @@ fn only_text_reaches_the_evaluator_facing_wire() {
     assert_eq!(TextRead::TargetUnavailable.into_option(), None);
     assert_eq!(TextRead::Indeterminate.into_option(), None);
 }
+
+#[test]
+fn text_mime_spellings_round_trip_exactly() {
+    for (mime, spelling) in [
+        (TextMime::TextPlainUtf8, "text/plain;charset=utf-8"),
+        (TextMime::Utf8String, "UTF8_STRING"),
+        (TextMime::TextPlain, "text/plain"),
+    ] {
+        assert_eq!(mime.as_str(), spelling);
+        assert_eq!(spelling.parse::<TextMime>(), Ok(mime));
+        assert_eq!(TextMime::choose(&offered(&[spelling])), Some(mime));
+    }
+}
+
+#[test]
+fn text_mime_recognition_does_not_accept_aliases_or_normalize_names() {
+    for spelling in [
+        "TextPlainUtf8",
+        "Utf8String",
+        "TextPlain",
+        "utf8_string",
+        "TEXT/PLAIN",
+        "text/plain;charset=UTF-8",
+        " text/plain",
+        "text/plain ",
+        "text/plain; charset=utf-8",
+    ] {
+        assert!(spelling.parse::<TextMime>().is_err(), "{spelling}");
+        assert_eq!(TextMime::choose(&offered(&[spelling])), None, "{spelling}");
+    }
+}
