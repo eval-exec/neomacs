@@ -886,7 +886,7 @@ pub fn compile_bytecode_function_requested(
         f.executable_ops().len(),
         jit_tier2().on && (has_back_edge(f.executable_ops()) || self_recursive),
     );
-    let started = std::time::Instant::now();
+    let started = neomacs_host_runtime::time::Instant::now();
     super::stats::verdict::begin();
     let named_t2 = inline_planning::named_tier_eligible(f, request, self_recursive);
     let opt_request = (jit_opt_mode() == OptMode::Opt).then_some(request);

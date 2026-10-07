@@ -137,7 +137,7 @@ impl RedisplayRuntime {
         let Ok(mut engine) = self.engine.try_borrow_mut() else {
             return (None, false);
         };
-        let started = std::time::Instant::now();
+        let started = neomacs_host_runtime::time::Instant::now();
         let (progress, publish) = maintenance::run_budgeted(
             || {
                 let progress = engine.maintain_scroll_coverage(evaluator);

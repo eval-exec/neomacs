@@ -384,7 +384,7 @@ impl TaggedHeap {
             }
             set
         }
-        let conssnap_t0 = std::time::Instant::now();
+        let conssnap_t0 = neomacs_host_runtime::time::Instant::now();
         let mut cons =
             FxHashSet::with_capacity_and_hasher(self.cons_blocks.len(), Default::default());
         for block in &self.cons_blocks {
@@ -393,16 +393,16 @@ impl TaggedHeap {
         let string = bases(&self.string_arena);
         self.handshake.last_start_conssnap_us = conssnap_t0.elapsed().as_micros() as u64;
         self.handshake.probe_cons_blocks = self.cons_blocks.len();
-        let floatsnap_t0 = std::time::Instant::now();
+        let floatsnap_t0 = neomacs_host_runtime::time::Instant::now();
         let float = bases(&self.float_arena);
         self.handshake.last_start_floatsnap_us = floatsnap_t0.elapsed().as_micros() as u64;
-        let vecbasesnap_t0 = std::time::Instant::now();
+        let vecbasesnap_t0 = neomacs_host_runtime::time::Instant::now();
         let vector = match self.vec_scan {
             knobs::VecScanMode::Snapshot => bases(&self.vector_arena),
             knobs::VecScanMode::Defer => FxHashSet::default(),
         };
         self.handshake.last_start_vecbasesnap_us = vecbasesnap_t0.elapsed().as_micros() as u64;
-        let bcsnap_t0 = std::time::Instant::now();
+        let bcsnap_t0 = neomacs_host_runtime::time::Instant::now();
         let bytecode = bases(&self.bytecode_arena);
         self.handshake.last_start_bcsnap_us = bcsnap_t0.elapsed().as_micros() as u64;
         PageSnapshot::BaseSets {

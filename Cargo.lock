@@ -3807,6 +3807,7 @@ dependencies = [
  "crossbeam-channel",
  "flate2",
  "neomacs-display-protocol",
+ "neomacs-host-runtime",
  "neomacs-layout-engine",
  "neovm-core",
  "neovm-host-abi",

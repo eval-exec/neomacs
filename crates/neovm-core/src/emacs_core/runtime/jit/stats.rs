@@ -847,7 +847,7 @@ pub fn mark_command_loop_entry() {
     let epoch = epoch::EpochCounters::snapshot();
     LOOP_MARK.with(|m| {
         *m.borrow_mut() = Some(LoopMark {
-            at: std::time::Instant::now(),
+            at: neomacs_host_runtime::time::Instant::now(),
             compile,
             epoch,
         })

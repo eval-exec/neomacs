@@ -4,7 +4,12 @@ std::cfg_select! {
     neomacs_have_dbus => {
         use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
 
+        // HAVE_DBUS is a configure result: the six primitives exist only on
+        // hosts that found dbus-1, so a portable image carries their cells
+        // but cannot require them from a browser consumer (GNU's
+        // --without-dbus answers there).
         crate::emacs_core::subr::define_subrs! {
+            native_host;
             SubrSpec::new(
                 "dbus--init-bus",
                 NativeFn::ContextVec(super::connection::init_bus),

@@ -114,7 +114,7 @@ impl TaggedHeap {
 
         // Unchain dead markers before the sweep frees them (mirrors GNU
         // sweep_buffer -> unchain_dead_markers). Reads marks, which are intact.
-        let unchain_t0 = std::time::Instant::now();
+        let unchain_t0 = neomacs_host_runtime::time::Instant::now();
         #[cfg(feature = "gc-memory-telemetry")]
         memory_telemetry::observe(self, memory_telemetry::Phase::FinalMark);
         self.promote_survivors_world_stopped();
