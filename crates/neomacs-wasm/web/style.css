@@ -37,21 +37,89 @@ canvas {
   :root { color: #252a33; background: #e5e7eb; }
 }
 
+/* The boot screen: like an operating system starting up, a centered logo,
+   one status line, and a slim progress bar. The full phase checklist stays
+   in the DOM for diagnostics; it is shown by the details toggle. */
 #browser-startup {
   position: absolute;
   z-index: 1;
   inset-block-start: 0;
   inset-inline: 0;
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) auto auto;
-  gap: 0.6rem;
-  padding: 0.65rem 0.8rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.9rem;
+  padding: 1.5rem 1rem 3rem;
   box-sizing: border-box;
   max-block-size: 100%;
   overflow: hidden;
-  background: Canvas;
-  color: CanvasText;
+  background: #0a080f;
+  color: #d8dee9;
   pointer-events: none;
+  animation: browser-splash-fade-in 600ms ease-out both;
+}
+
+#browser-splash {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.1rem;
+  margin-block-end: 1.2rem;
+}
+
+#browser-splash-logo {
+  inline-size: min(78vw, 42rem);
+  animation: browser-splash-breathe 4s ease-in-out infinite;
+}
+
+#browser-splash-logo svg { display: block; inline-size: 100%; }
+
+@keyframes browser-splash-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+#browser-splash-logo .taijitu-spin {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: browser-splash-spin 9s linear infinite;
+}
+
+@keyframes browser-splash-spin { to { transform: rotate(360deg); } }
+
+@keyframes browser-splash-breathe {
+  0%, 100% { filter: drop-shadow(0 0 1rem rgba(122, 162, 247, 0.25)); }
+  50% { filter: drop-shadow(0 0 2rem rgba(122, 162, 247, 0.5)); }
+}
+
+#browser-splash-details {
+  position: absolute;
+  inset-block-end: 0.9rem;
+  border: 0;
+  padding: 0.2rem 0.5rem;
+  background: transparent;
+  color: #57617a;
+  font: inherit;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+#browser-splash-details:hover { color: #9aa5b8; }
+
+#browser-startup.browser-splash-diagnostic {
+  justify-content: flex-end;
+  gap: 0.4rem;
+  overflow: auto;
+}
+
+#browser-startup.browser-splash-diagnostic #browser-splash { display: none; }
+
+#browser-startup.browser-splash-diagnostic #browser-startup-log {
+  display: block;
+  max-block-size: min(60vh, 28rem);
 }
 
 /* Author display rules override the browser's default [hidden] styling.
@@ -64,10 +132,14 @@ canvas {
 
 #browser-status {
   margin: 0;
-  color: #aeb7c6;
+  color: #8b95a8;
+  font-size: 0.85rem;
   overflow-wrap: anywhere;
+  text-align: center;
 }
 
+/* On the boot screen the checklist collapses to the active row, which
+   carries the shared progress bar; the details toggle reveals everything. */
 #browser-startup-log {
   margin: 0;
   padding: 0;
@@ -80,7 +152,14 @@ canvas {
   display: block;
 }
 
-#browser-startup-log > li { margin-block-end: 0.5rem; }
+#browser-startup-log > li { display: block; block-size: 0; margin: 0; overflow: hidden; }
+#browser-startup-log > li[data-state="active"],
+#browser-startup.browser-splash-diagnostic #browser-startup-log > li { block-size: auto; margin-block-end: 0.5rem; }
+#browser-startup-log > li[data-state="active"] .phase-heading > :not(#browser-progress) { display: none; }
+#browser-startup-log > li[data-state="active"] .phase-details { display: none; }
+#browser-startup.browser-splash-diagnostic #browser-startup-log > li .phase-heading > * { display: revert; }
+#browser-startup.browser-splash-diagnostic #browser-startup-log > li[data-state="active"] .phase-heading > :not(#browser-progress) { display: revert; }
+#browser-startup.browser-splash-diagnostic #browser-startup-log > li .phase-details { display: block; }
 .phase-heading {
   display: flex;
   flex-wrap: wrap;
@@ -107,29 +186,35 @@ canvas {
   color: #ff8080;
 }
 
+#browser-startup:has(#browser-status[data-state="failed"]) #browser-splash-logo {
+  animation: none;
+  filter: none;
+  opacity: 0.55;
+}
+
 /* Status and download progress share one flow layout and startup lifetime. */
 #browser-progress {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.45rem;
   pointer-events: none;
 }
 
 #browser-progress-track {
-  inline-size: 8rem;
-  max-inline-size: 60vw;
-  block-size: 0.35rem;
+  inline-size: 15rem;
+  max-inline-size: 70vw;
+  block-size: 0.3rem;
   overflow: hidden;
-  border-radius: 0.2rem;
-  background: #2a3140;
+  border-radius: 999px;
+  background: #232936;
 }
 
 #browser-progress-bar {
   inline-size: 0;
   block-size: 100%;
   border-radius: inherit;
-  background: #6ea8fe;
+  background: #dfe6f3;
   transition: inline-size 120ms linear;
 }
 
@@ -147,14 +232,18 @@ canvas {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  #browser-progress-bar {
+  #browser-progress-bar,
+  #browser-splash-logo,
+  #browser-startup {
     transition: none;
     animation: none;
   }
+
+  #browser-splash-logo .taijitu-spin { animation: none; }
 }
 
 #browser-progress-label {
-  color: #8892a4;
+  color: #6b7688;
   font-size: 0.8rem;
   font-variant-numeric: tabular-nums;
 }
