@@ -2074,6 +2074,8 @@ fn a_measured_line_number_field_survives_a_window_info_serde_round_trip() {
     info.line_number_field = LineNumberFieldWidth::measured(27.5);
 
     let json = serde_json::to_string(&info).expect("serialize window info");
+    let wire: serde_json::Value = serde_json::from_str(&json).expect("parse window info JSON");
+    assert_eq!(wire["line_number_field"], serde_json::json!(27.5));
     let decoded: WindowInfo = serde_json::from_str(&json).expect("deserialize window info");
 
     assert_eq!(decoded.line_number_field, info.line_number_field);
@@ -2096,4 +2098,65 @@ fn an_unmeasured_line_number_field_cannot_become_a_paintable_band() {
         LineNumberFieldWidth::measured(12.0).map(LineNumberFieldWidth::px),
         Some(12.0)
     );
+}
+
+#[test]
+fn line_number_field_deserialization_rejects_nonpositive_and_nonfinite_widths() {
+    use serde::Deserialize;
+    use serde::de::value::{Error, F32Deserializer};
+
+    // JSON cannot represent NaN or infinity; exercise Serde's f32 path too.
+    struct WidthDeserializer(f32);
+    impl<'de> serde::Deserializer<'de> for WidthDeserializer {
+        type Error = Error;
+
+        fn deserialize_any<V: serde::de::Visitor<'de>>(
+            self,
+            visitor: V,
+        ) -> Result<V::Value, Error> {
+            visitor.visit_f32(self.0)
+        }
+
+        fn deserialize_newtype_struct<V: serde::de::Visitor<'de>>(
+            self,
+            _name: &'static str,
+            visitor: V,
+        ) -> Result<V::Value, Error> {
+            visitor.visit_newtype_struct(F32Deserializer::<Error>::new(self.0))
+        }
+
+        serde::forward_to_deserialize_any! {
+            bool i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 char str string bytes
+            byte_buf option unit unit_struct seq tuple tuple_struct map struct enum
+            identifier ignored_any
+        }
+    }
+
+    for width in [f32::from_bits(1), 12.0, f32::MAX] {
+        assert_eq!(
+            LineNumberFieldWidth::deserialize(WidthDeserializer(width))
+                .unwrap()
+                .px(),
+            width
+        );
+    }
+
+    for width in [0.0, -0.0, -4.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        assert!(
+            LineNumberFieldWidth::deserialize(WidthDeserializer(width)).is_err(),
+            "accepted invalid width {width:?}"
+        );
+    }
+}
+
+#[test]
+fn window_info_deserialization_rejects_invalid_line_number_fields() {
+    let info = make_window_info(7, 3, 1, Rect::new(0.0, 0.0, 400.0, 200.0));
+    let mut json = serde_json::to_value(&info).expect("serialize window info");
+    for width in [0.0, -4.0] {
+        json["line_number_field"] = serde_json::json!(width);
+        assert!(serde_json::from_value::<WindowInfo>(json.clone()).is_err());
+    }
+    json["line_number_field"] = serde_json::Value::Null;
+    assert!(serde_json::from_value::<WindowInfo>(json).is_ok());
 }
