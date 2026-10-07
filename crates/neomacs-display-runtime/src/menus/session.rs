@@ -5,11 +5,20 @@ use neomacs_display_protocol::{
     menu::{MeasuredMenu, MenuPanel, MenuPanelRole},
 };
 
+/// The latest accepted snapshot and whether it can still produce a result.
+/// A closed snapshot is retained to reject stale show and hide requests.
+#[derive(Default, Clone, Copy)]
+enum MenuLifetimeState {
+    #[default]
+    Unseen,
+    Open(neomacs_display_protocol::menu::MenuToken),
+    Closed(neomacs_display_protocol::menu::MenuToken),
+}
+
 /// Revision ordering and immutable results, independent of native surfaces.
 #[derive(Default)]
 pub(super) struct MenuLifetime {
-    active: Option<neomacs_display_protocol::menu::MenuToken>,
-    latest: Option<neomacs_display_protocol::menu::MenuToken>,
+    state: MenuLifetimeState,
     results: std::collections::VecDeque<neomacs_display_protocol::menu::MenuResult>,
 }
 
@@ -21,37 +30,41 @@ impl MenuLifetime {
             ));
     }
     pub fn show(&mut self, token: neomacs_display_protocol::menu::MenuToken) -> bool {
-        if self.latest.is_some_and(|previous| {
-            (previous.session, previous.revision) >= (token.session, token.revision)
-        }) {
-            return false;
+        match self.state {
+            MenuLifetimeState::Unseen => {}
+            MenuLifetimeState::Open(previous) | MenuLifetimeState::Closed(previous) => {
+                if (previous.session, previous.revision) >= (token.session, token.revision) {
+                    return false;
+                }
+            }
         }
-        self.latest = Some(token);
-        self.active = Some(token);
+        self.state = MenuLifetimeState::Open(token);
         true
     }
 
     pub fn close(&mut self) {
-        self.active = None;
+        if let MenuLifetimeState::Open(token) = self.state {
+            self.state = MenuLifetimeState::Closed(token);
+        }
     }
 
     pub fn hide(&mut self, token: neomacs_display_protocol::menu::MenuToken) -> bool {
-        if self.latest.is_none()
-            || self.latest == Some(token)
-            || (self.active.is_none()
-                && self.latest.is_some_and(|previous| {
-                    (previous.session, previous.revision) < (token.session, token.revision)
-                }))
-        {
-            self.latest = Some(token);
-            self.close();
-            return true;
+        let accepted = match self.state {
+            MenuLifetimeState::Unseen => true,
+            MenuLifetimeState::Open(previous) => previous == token,
+            MenuLifetimeState::Closed(previous) => {
+                (previous.session, previous.revision) <= (token.session, token.revision)
+            }
+        };
+        if accepted {
+            self.state = MenuLifetimeState::Closed(token);
         }
-        false
+        accepted
     }
 
     pub fn finish(&mut self, index: i32) {
-        if let Some(token) = self.active.take() {
+        if let MenuLifetimeState::Open(token) = self.state {
+            self.state = MenuLifetimeState::Closed(token);
             self.results
                 .push_back(neomacs_display_protocol::menu::MenuResult::from_index(
                     token, index,

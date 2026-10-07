@@ -987,3 +987,71 @@ fn menu_columns_and_paint_positions_use_measured_cjk_advances() {
         168.0
     );
 }
+
+#[test]
+fn close_keeps_the_revision_without_delivering_a_result() {
+    let token = neomacs_display_protocol::menu::MenuToken {
+        session: 100,
+        revision: 1,
+    };
+    let mut lifetime = MenuLifetime::default();
+    lifetime.close();
+    assert!(lifetime.show(token));
+    lifetime.close();
+    lifetime.close();
+    lifetime.finish(2);
+    assert!(lifetime.take_result().is_none());
+    assert!(!lifetime.show(token));
+    assert!(lifetime.show(neomacs_display_protocol::menu::MenuToken {
+        revision: 2,
+        ..token
+    }));
+}
+
+#[test]
+fn newer_hide_only_advances_the_revision_after_the_menu_closes() {
+    let current = neomacs_display_protocol::menu::MenuToken {
+        session: 100,
+        revision: 1,
+    };
+    let newer = neomacs_display_protocol::menu::MenuToken {
+        revision: 2,
+        ..current
+    };
+    let mut lifetime = MenuLifetime::default();
+    assert!(lifetime.show(current));
+    assert!(!lifetime.hide(newer));
+    lifetime.finish(3);
+    let result = lifetime.take_result().unwrap();
+    assert_eq!(result.token, current);
+    assert_eq!(result.index(), 3);
+    assert!(lifetime.hide(newer));
+    assert!(!lifetime.hide(current));
+    assert!(!lifetime.show(newer));
+    lifetime.finish(4);
+    assert!(lifetime.take_result().is_none());
+}
+
+#[test]
+fn rejection_preserves_the_open_menu_and_finish_delivers_once() {
+    let current = neomacs_display_protocol::menu::MenuToken {
+        session: 100,
+        revision: 1,
+    };
+    let rejected = neomacs_display_protocol::menu::MenuToken {
+        session: 101,
+        revision: 1,
+    };
+    let mut lifetime = MenuLifetime::default();
+    assert!(lifetime.show(current));
+    lifetime.reject(rejected);
+    lifetime.finish(2);
+    lifetime.finish(3);
+    let rejection = lifetime.take_result().unwrap();
+    assert_eq!(rejection.token, rejected);
+    assert_eq!(rejection.index(), -1);
+    let selection = lifetime.take_result().unwrap();
+    assert_eq!(selection.token, current);
+    assert_eq!(selection.index(), 2);
+    assert!(lifetime.take_result().is_none());
+}
