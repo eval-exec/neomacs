@@ -68,15 +68,15 @@ canvas {
 }
 
 #browser-splash-logo {
-  inline-size: 9.5rem;
+  inline-size: clamp(6rem, min(19vw, 21vh), 19rem);
   animation: browser-splash-breathe 4s ease-in-out infinite;
 }
 
 #browser-splash-logo svg { display: block; inline-size: 100%; }
 
 #browser-splash-word {
-  inline-size: min(70vw, 16rem);
-  margin-block-start: 0.6rem;
+  inline-size: clamp(11rem, min(56vw, 64vh), 32rem);
+  margin-block-start: clamp(0.6rem, 2vh, 1.4rem);
 }
 
 #browser-splash-word svg { display: block; inline-size: 100%; }
@@ -98,6 +98,33 @@ canvas {
   0%, 100% { filter: drop-shadow(0 0 1rem rgba(122, 162, 247, 0.25)); }
   50% { filter: drop-shadow(0 0 2rem rgba(122, 162, 247, 0.5)); }
 }
+
+/* The one boot bar: whole-lifecycle, slim, never moving backwards. */
+#browser-lifecycle {
+  inline-size: 15rem;
+  max-inline-size: 70vw;
+  block-size: 0.3rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #232936;
+}
+
+#browser-lifecycle-bar {
+  inline-size: 0;
+  block-size: 100%;
+  border-radius: inherit;
+  background: #dfe6f3;
+  transition: inline-size 300ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #browser-lifecycle-bar { transition: none; }
+}
+
+/* The per-phase progress element keeps its DOM contract (displayed inside
+   the active download row) but yields the stage to the lifecycle bar. */
+#browser-progress { block-size: 0; opacity: 0; }
+#browser-progress:not([hidden]) { display: flex; }
 
 #browser-splash-details {
   position: absolute;
@@ -137,14 +164,19 @@ canvas {
 }
 
 /* One quiet line under the bar carries the whole story: active phase and,
-   while bytes flow, the measure. */
+   while bytes flow, the measure.  Pinned to a single ellipsized line so
+   the centered splash never jumps as the text changes length. */
 #browser-status {
   display: block;
   margin: 0;
   color: #6f7a90;
   font-size: 0.8rem;
-  overflow-wrap: anywhere;
   text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-inline-size: min(88vw, 44rem);
+  min-block-size: 1.2rem;
 }
 
 /* On the boot screen the checklist collapses to the active row, which
@@ -300,3 +332,9 @@ canvas {
 
 #browser-pending-link a { color: #9dc4ff; }
 #browser-pending-link button { float: right; }
+
+#browser-startup.browser-splash-diagnostic #browser-status {
+  white-space: normal;
+  max-inline-size: none;
+  min-block-size: 0;
+}

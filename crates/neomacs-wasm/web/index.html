@@ -60,6 +60,10 @@
         </div>
         </div>
         <p id="browser-status" role="status">Loading Neomacs…</p>
+        <div id="browser-lifecycle" role="progressbar" aria-label="Editor startup"
+             aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <div id="browser-lifecycle-bar"></div>
+        </div>
         <div
           id="browser-progress"
           role="progressbar"
@@ -144,6 +148,47 @@
         history.append(row);
         return [id, row];
       }));
+      // One bar for the whole boot.  Download phases carry the real time
+      // cost and interpolate by bytes; compute phases creep so the bar
+      // never stalls or moves backwards.
+      const lifecycleWeights = new Map([
+        ["page", 0.005], ["release", 0.01], ["frontend-modules", 0.01],
+        ["frontend-download", 0.12], ["frontend-init", 0.015],
+        ["worker-start", 0.01], ["worker-download", 0.58], ["storage", 0.005],
+        ["worker-compile", 0.02], ["worker-probe", 0.005], ["packages", 0.05],
+        ["verify-image", 0.02], ["verify-resources", 0.015], ["unpack", 0.03],
+        ["restore", 0.04], ["mounts", 0.005], ["configure", 0.01],
+        ["lisp", 0.02], ["first-frame", 0.01],
+      ]);
+      const lifecycleBar = document.querySelector("#browser-lifecycle-bar");
+      const lifecycleMeter = document.querySelector("#browser-lifecycle");
+      let lifecycleShown = 0;
+      function lifecycleProgress() {
+        let done = 0, activeWeight = 0, activeFraction = 0.35;
+        for (const [id, weight] of lifecycleWeights) {
+          const row = rows.get(id);
+          if (!row) continue;
+          if (row.dataset.state === "done") done += weight;
+          else if (row.dataset.state === "active") {
+            activeWeight = weight;
+            const measure = /([\d.]+)\s*\/\s*([\d.]+)\s*MiB/.exec(progressLabel.textContent);
+            if (measure) {
+              activeFraction = Math.min(1, Number(measure[1]) / Math.max(1e-6, Number(measure[2])));
+            } else {
+              const began = phaseStarts.get(id);
+              const elapsed = began === undefined ? 0 : (performance.now() - began) / 1000;
+              activeFraction = Math.min(0.9, 0.3 + elapsed / 8);
+            }
+          }
+        }
+        const target = done + activeWeight * activeFraction;
+        lifecycleShown = Math.max(lifecycleShown, Math.min(target, 0.995));
+        const percent = Math.round(lifecycleShown * 100);
+        lifecycleBar.style.inlineSize = `${percent}%`;
+        lifecycleMeter.setAttribute("aria-valuenow", String(percent));
+      }
+      setInterval(lifecycleProgress, 120);
+
       function phaseDetail(id, message) {
         if (["ready", "failed", "stopped"].includes(status.dataset.state)) return;
         const row = rows.get(id);
@@ -195,6 +240,18 @@
         toggle.setAttribute("aria-expanded", String(open));
       });
       updatePhase("page", "done");
+
+      function completeLifecycle() {
+        lifecycleShown = 1;
+        lifecycleBar.style.inlineSize = "100%";
+      }
+      const lifecycleFinisher = new MutationObserver(() => {
+        if (["ready", "failed", "stopped"].includes(status.dataset.state)) {
+          if (status.dataset.state === "ready") completeLifecycle();
+          lifecycleFinisher.disconnect();
+        }
+      });
+      lifecycleFinisher.observe(status, { attributes: true, attributeFilter: ["data-state"] });
 
       function installIcon(url) {
         const link = document.createElement("link");
