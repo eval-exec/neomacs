@@ -686,7 +686,7 @@ impl<'ctx> CharacterWidthPolicy<'ctx> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub(crate) fn character_width(&self, code: u32) -> usize {
         match code {
             0x20..=0x7e => 1,
@@ -732,7 +732,7 @@ impl<'ctx> CharacterWidthPolicy<'ctx> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub(crate) fn width(&self, code: u32) -> usize {
         if let Some(table) = self.display_table
             && let Ok(value) = crate::emacs_core::chartable::ct_lookup(&table, i64::from(code))
