@@ -4,6 +4,7 @@
 //! dump/load code share the same payload structs without reviving old heap
 //! module boundaries.
 
+use crate::buffer::text_props::{EmptyTextProperties, TextPropertiesRef};
 use crate::buffer::{BufferId, CharLen, CharPos0, CharRange, TextPropertyTable};
 use crate::emacs_core::emacs_char;
 use serde::ser::SerializeStruct;
@@ -141,23 +142,6 @@ fn lookup_static_rodata(key: u64, len: usize) -> Option<*const u8> {
     } else {
         None
     }
-}
-
-/// The table an interval-free string reports.
-///
-/// Interval tables hold Lisp values, which stay on their mutator thread, so
-/// each thread gets its own empty table rather than sharing a process-wide
-/// one. It is one small allocation per thread that reads an interval-free
-/// table, intentionally never freed: the reference outlives any borrow of a
-/// string. During thread teardown, after the slot is gone, a fresh one is
-/// leaked the same way.
-fn empty_text_property_table() -> &'static TextPropertyTable {
-    thread_local! {
-        static EMPTY: &'static TextPropertyTable = Box::leak(Box::new(TextPropertyTable::new()));
-    }
-    EMPTY
-        .try_with(|empty| *empty)
-        .unwrap_or_else(|_| Box::leak(Box::new(TextPropertyTable::new())))
 }
 
 struct OwnedStringDataGuard<'a> {
@@ -776,21 +760,24 @@ impl LispString {
 
     /// Text-property interval tree attached to this string, like GNU's
     /// `Lisp_String.u.s.intervals`.
+    /// An interval-free string returns a typed empty view without table
+    /// storage; an attached table stays borrowed from this string.
     ///
     /// MUTATOR-SIDE ONLY: dereferences the interval table, which the mutator
     /// can free at any time via `clear_intervals` — the concurrent GC thread
     /// must never call this (it reads only the pointer word via
     /// `intervals_ptr`; a dereference here on the GC thread is a
     /// use-after-free).
-    pub fn intervals(&self) -> &TextPropertyTable {
+    pub fn intervals(&self) -> TextPropertiesRef<'_> {
         let ptr = self.intervals.load(Ordering::Acquire);
         if ptr.is_null() {
-            empty_text_property_table()
+            EmptyTextProperties::new().view()
         } else {
-            // Safety: non-null means a live Box-allocated table; it is freed
+            // SAFETY: non-null means a live Box-allocated table; it is freed
             // only by `clear_intervals`/`Drop` (both `&mut self`), which the
-            // caller's `&self` excludes on the mutator thread.
-            unsafe { &*ptr }
+            // caller's `&self` excludes on the mutator thread. The view keeps
+            // that same borrow and cannot leave this thread.
+            TextPropertiesRef::from_table(unsafe { &*ptr })
         }
     }
 
@@ -1087,8 +1074,18 @@ impl LispString {
             Self::from_unibyte(data)
         };
 
-        let mut intervals = self.intervals().clone();
-        intervals.append_shifted_at_char_offset(other.intervals(), CharLen::new(self.schars()));
+        let mut intervals = self.intervals().to_owned_table();
+        let empty;
+        let other_intervals = match other.intervals().as_table() {
+            Some(table) => table,
+            None => {
+                // Appending an empty source still advances the destination's
+                // revision ticks. This local table has no heap allocation.
+                empty = TextPropertyTable::new();
+                &empty
+            }
+        };
+        intervals.append_shifted_at_char_offset(other_intervals, CharLen::new(self.schars()));
         if !intervals.is_empty() {
             *result.intervals_mut() = intervals;
         }
@@ -1141,7 +1138,7 @@ impl Clone for LispString {
     /// Mutator-side only (dereferences the interval table via `intervals`).
     fn clone(&self) -> Self {
         let intervals = if self.has_intervals() {
-            Box::into_raw(Box::new(self.intervals().clone()))
+            Box::into_raw(Box::new(self.intervals().to_owned_table()))
         } else {
             std::ptr::null_mut()
         };
@@ -1253,6 +1250,10 @@ mod tests;
 #[cfg(test)]
 #[path = "heap_types/tests/string_collection_capacity_test.rs"]
 mod string_collection_capacity_tests;
+
+#[cfg(test)]
+#[path = "heap_types/tests/text_property_view_test.rs"]
+mod text_property_view_tests;
 
 #[derive(Debug)]
 pub struct OverlayData {

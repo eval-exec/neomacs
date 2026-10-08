@@ -284,7 +284,7 @@ impl<'a> StringSyntaxLookup<'a> {
             property_lookup: crate::emacs_core::syntax::StringSyntaxPropByteRun::new(
                 syntax_properties,
                 string,
-                Some(intervals),
+                intervals.as_table(),
             ),
             base,
         })

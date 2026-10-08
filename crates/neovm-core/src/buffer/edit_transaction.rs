@@ -86,7 +86,7 @@ pub(in crate::buffer) fn convert_lisp_string_for_buffer_mode(
     }
     let mut converted = lisp_string_from_buffer_bytes(bytes, target_multibyte);
     if text.has_intervals() {
-        let intervals = text.intervals().clone();
+        let intervals = text.intervals().to_owned_table();
         if !intervals.is_empty() {
             *converted.intervals_mut() = intervals;
         }
@@ -1349,7 +1349,7 @@ impl InsertTextPlan {
         marker_adjustment: InsertMarkerAdjustment,
     ) -> Self {
         let text_properties = if text.has_intervals() {
-            text.intervals().clone()
+            text.intervals().to_owned_table()
         } else {
             TextPropertyTable::new()
         };
@@ -1425,7 +1425,7 @@ impl ReplaceTextPlan {
             .then(|| convert_lisp_string_for_buffer_mode(text, multibyte));
         let text = converted.as_ref().unwrap_or(text);
         let text_properties = if text.has_intervals() {
-            text.intervals().clone()
+            text.intervals().to_owned_table()
         } else {
             TextPropertyTable::new()
         };

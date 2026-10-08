@@ -342,7 +342,11 @@ fn reclaimed_string_borrowed(ptr: *const crate::tagged::header::StringObj) -> ! 
 
 fn string_text_props(value: Value) -> Option<&'static TextPropertyTable> {
     let ptr = value.as_string_ptr()?;
-    Some(unsafe { (*ptr).data.intervals() })
+    // SAFETY: callers keep their live string rooted on its mutator while the
+    // interval borrow is used, with no callback or collection that can free
+    // the table. The read view returns its actual table borrow, or None for
+    // an interval-free string; it never manufactures an empty table borrow.
+    unsafe { (*ptr).data.intervals().as_table() }
 }
 
 /// String text properties now live on the string object itself.

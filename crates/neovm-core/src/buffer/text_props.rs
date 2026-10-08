@@ -2578,6 +2578,137 @@ pub struct TextPropertyTable {
     syntax_prop_ranges: std::sync::Mutex<(u64, Vec<(CharPos0, CharPos0)>)>,
 }
 
+/// Absence of string text properties, with no Lisp values or table storage.
+///
+/// This state can be shared between threads. A real interval table remains
+/// borrowed from its string on the mutator that owns it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+pub struct EmptyTextProperties {
+    _private: (),
+}
+
+static_assertions::assert_impl_all!(EmptyTextProperties: Send, Sync, Clone, Copy, std::fmt::Debug, Default, Eq, PartialEq, std::hash::Hash);
+const _: () = {
+    assert!(std::mem::size_of::<EmptyTextProperties>() == 0);
+    assert!(std::mem::align_of::<EmptyTextProperties>() == 1);
+};
+
+impl EmptyTextProperties {
+    /// Construct the property-free state without allocating a table.
+    pub const fn new() -> Self {
+        Self { _private: () }
+    }
+
+    /// Read the empty state on the receiving thread.
+    pub const fn view(self) -> TextPropertiesRef<'static> {
+        TextPropertiesRef { table: None }
+    }
+}
+
+/// A read-only string interval view, including the absence of a table.
+///
+/// Copying this view copies its borrow; [`Self::to_owned_table`] explicitly
+/// copies table storage. An attached empty table stays distinguishable from
+/// absence through [`Self::as_table`], including its revision history.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct TextPropertiesRef<'a> {
+    table: Option<&'a TextPropertyTable>,
+}
+
+static_assertions::assert_impl_all!(TextPropertiesRef<'static>: Clone, Copy, std::fmt::Debug);
+static_assertions::assert_not_impl_any!(TextPropertiesRef<'static>: Send, Sync);
+const _: () = {
+    assert!(std::mem::size_of::<TextPropertiesRef<'static>>() == std::mem::size_of::<usize>());
+    assert!(std::mem::align_of::<TextPropertiesRef<'static>>() == std::mem::align_of::<usize>());
+    assert!(std::mem::offset_of!(TextPropertiesRef<'static>, table) == 0);
+};
+
+impl<'a> TextPropertiesRef<'a> {
+    pub(crate) const fn from_table(table: &'a TextPropertyTable) -> Self {
+        Self { table: Some(table) }
+    }
+
+    /// The actual borrowed table, if the string owns one.
+    #[inline]
+    pub const fn as_table(self) -> Option<&'a TextPropertyTable> {
+        self.table
+    }
+
+    #[inline]
+    pub fn is_empty(self) -> bool {
+        self.table.is_none_or(TextPropertyTable::is_empty)
+    }
+
+    #[inline]
+    pub fn mutation_tick(self) -> u64 {
+        self.table.map_or(0, TextPropertyTable::mutation_tick)
+    }
+
+    /// Copy a real table, or create an empty owned table for later mutation.
+    #[inline]
+    pub fn to_owned_table(self) -> TextPropertyTable {
+        self.table.map_or_else(TextPropertyTable::new, Clone::clone)
+    }
+
+    #[inline]
+    pub fn get_property_at_char_pos(self, pos: CharPos0, name: Value) -> Option<Value> {
+        self.table
+            .and_then(|table| table.get_property_at_char_pos(pos, name))
+    }
+
+    #[inline]
+    pub fn slice_char_range(self, range: CharRange) -> TextPropertyTable {
+        self.table.map_or_else(TextPropertyTable::new, |table| {
+            table.slice_char_range(range)
+        })
+    }
+
+    #[inline]
+    pub fn object_interval_runs_for_char_len(self, len: CharLen) -> Vec<ObjectIntervalRun> {
+        self.table.map_or_else(Vec::new, |table| {
+            table.object_interval_runs_for_char_len(len)
+        })
+    }
+
+    #[inline]
+    pub fn object_interval_plist_runs_for_char_len(
+        self,
+        len: CharLen,
+    ) -> Vec<ObjectIntervalPlistRun> {
+        self.table.map_or_else(Vec::new, |table| {
+            table.object_interval_plist_runs_for_char_len(len)
+        })
+    }
+
+    #[inline]
+    pub fn for_each_interval_from_char_pos(
+        self,
+        pos: CharPos0,
+        f: impl FnMut(CharPos0, CharPos0, Value) -> bool,
+    ) {
+        if let Some(table) = self.table {
+            table.for_each_interval_from_char_pos(pos, f);
+        }
+    }
+
+    #[inline]
+    pub(crate) fn for_each_root(self, f: impl FnMut(Value)) {
+        if let Some(table) = self.table {
+            table.for_each_root(f);
+        }
+    }
+
+    #[cfg(feature = "gc-memory-telemetry")]
+    #[inline]
+    pub(crate) fn memory_telemetry_storage(self) -> TextPropertyMemoryStorage {
+        self.table.map_or_else(
+            TextPropertyMemoryStorage::default,
+            TextPropertyTable::memory_telemetry_storage,
+        )
+    }
+}
+
 /// Clip a cached-range endpoint for a deletion of `range` (length
 /// `del_len`): positions past the deletion shift down, positions inside
 /// clamp to its start.

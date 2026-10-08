@@ -374,7 +374,7 @@ impl EchoAreaMessageText {
             )
         };
         if message.has_intervals() {
-            *converted.intervals_mut() = message.intervals().clone();
+            *converted.intervals_mut() = message.intervals().to_owned_table();
         }
         converted
     }

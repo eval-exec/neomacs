@@ -5906,7 +5906,7 @@ fn coding_result_for_buffer_multibyte(
     // `decode-coding-region`/`decode-coding-string` path; GNU keeps the charset
     // annotation across `code_convert_region`'s dst multibyteness adjustment.
     if text.has_intervals() {
-        let intervals = text.intervals().clone();
+        let intervals = text.intervals().to_owned_table();
         if !intervals.is_empty() {
             *converted.intervals_mut() = intervals;
         }

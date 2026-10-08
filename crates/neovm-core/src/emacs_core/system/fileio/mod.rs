@@ -6013,7 +6013,7 @@ impl DecodedFileContents {
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     fn text_properties(&self) -> Option<&TextPropertyTable> {
-        let table = self.text().intervals();
+        let table = self.text().intervals().as_table()?;
         if table.is_empty() { None } else { Some(table) }
     }
 
