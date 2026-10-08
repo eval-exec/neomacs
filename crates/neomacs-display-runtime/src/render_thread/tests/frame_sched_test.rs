@@ -1261,7 +1261,7 @@ fn demand_reason_sets_deduplicate_and_iterate_in_declaration_order() {
         .rev()
         .chain(DemandReason::ALL)
         .collect();
-    assert_eq!(reasons.iter().collect::<Vec<_>>(), DemandReason::ALL);
+    assert!(reasons.iter().eq(DemandReason::ALL));
     for reason in DemandReason::ALL {
         assert!(reasons.contains(reason), "missing {reason:?}");
     }
