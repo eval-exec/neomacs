@@ -5142,10 +5142,15 @@ fn builtin_coding_string_in_context(
         let latest = ctx
             .processes
             .get_any(process)
-            .ok_or_else(|| signal("error", vec![Value::string("Process not found")]))?
-            .coding_encode;
+            .and_then(|proc| proc.encoding_state.coding())
+            .ok_or_else(|| {
+                signal(
+                    "error",
+                    vec![Value::string("Process output coding is not initialized")],
+                )
+            })?;
         args[0] = transformed;
-        args[1] = latest;
+        args[1] = Value::symbol(latest.symbol());
         let roots = ctx.save_specpdl_roots();
         ctx.push_specpdl_root(transformed);
         let result = builtin_coding_string_in_context(
@@ -5265,17 +5270,14 @@ fn builtin_coding_string_in_context(
         return Ok(Value::fixnum(result_text.schars() as i64));
     }
     // The single EOL pass for the codec chain below, mirroring GNU
-    // GNU raw-text setup can omit the encoding engine altogether when
-    // inhibition was active. That eligibility remains cached until the
-    // descriptor changes coding; an eligible engine still reads inhibition
-    // dynamically on every conversion (coding.c:5681-5693, process.c:6772).
-    let encode_eol_conversion = if coding_system_base(&coding) == "raw-text"
-        && let EncodingBoundary::ProcessChunk { process } = encoding_boundary
+    // A bypass descriptor never enters GNU's encoding engine. Eligibility is
+    // captured at setup and includes hooks and codec requirements, not just EOL.
+    let encode_eol_conversion = if let EncodingBoundary::ProcessChunk { process } =
+        encoding_boundary
         && ctx
             .processes
             .get_any(process)
-            .and_then(|proc| proc.encoding_state.setup_eol_conversion())
-            == Some(crate::emacs_core::coding::EolConversion::Inhibited)
+            .is_some_and(|proc| !proc.encoding_state.requires_encoding())
     {
         crate::emacs_core::coding::EolConversion::Inhibited
     } else {
@@ -5611,6 +5613,36 @@ impl RuntimeCodingSystem {
     }
 }
 
+/// Runtime attributes of a coding, including an implicit EOL subsidiary.
+/// The registry stores some subsidiary names through their registered base.
+pub(crate) struct RuntimeCodingMetadata<'a> {
+    pub(crate) info: &'a crate::emacs_core::coding::CodingSystemInfo,
+    pub(crate) eol_type: crate::emacs_core::coding::EolType,
+}
+
+impl RuntimeCodingSystem {
+    pub(crate) fn metadata(
+        self,
+        systems: &crate::emacs_core::coding::CodingSystemManager,
+    ) -> Option<RuntimeCodingMetadata<'_>> {
+        let name = resolve_sym(self.symbol());
+        if let Some(info) = systems.get(name) {
+            return Some(RuntimeCodingMetadata {
+                info,
+                eol_type: info.eol_type,
+            });
+        }
+        let info = systems.get(coding_system_base(name))?;
+        let explicit = coding_name_eol(name);
+        let eol_type = if explicit == crate::emacs_core::coding::EolType::Undecided {
+            info.eol_type
+        } else {
+            explicit
+        };
+        Some(RuntimeCodingMetadata { info, eol_type })
+    }
+}
+
 #[derive(Clone, Copy)]
 enum ExternalEncodingBoundary {
     CompleteText,
@@ -5716,17 +5748,15 @@ fn process_encoder_state(
     ctx: &mut crate::emacs_core::eval::Context,
     process: crate::emacs_core::process::ProcessId,
 ) -> Result<&mut CodingEncoderState, crate::emacs_core::error::Flow> {
-    let eol_conversion = ctx.eol_conversion();
-    let proc = ctx
-        .processes
+    ctx.processes
         .get_any_mut(process)
-        .ok_or_else(|| signal("error", vec![Value::string("Process not found")]))?;
-    let coding = RuntimeCodingSystem::from_symbol(
-        proc.coding_encode
-            .as_symbol_id()
-            .unwrap_or_else(|| intern("utf-8-unix")),
-    );
-    Ok(proc.encoding_state.encoder_for(coding, eol_conversion))
+        .and_then(|proc| proc.encoding_state.encoder_mut())
+        .ok_or_else(|| {
+            signal(
+                "error",
+                vec![Value::string("Process output coding is not initialized")],
+            )
+        })
 }
 
 /// A file decode result whose coding-system selection remains an interned

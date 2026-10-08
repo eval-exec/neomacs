@@ -60,8 +60,13 @@ fn japanese_process_string_and_region_sends_match_gnu_bytes() {
         );
         assert_eq!(
             state["cases"].as_array().unwrap().len(),
-            23,
+            26,
             "{name}: {state}"
+        );
+        assert_eq!(
+            state["metadata"],
+            serde_json::json!(["binary", "binary"]),
+            "last coding must retain the installed binary descriptor: {state}"
         );
         for case in state["cases"].as_array().unwrap() {
             assert_eq!(case[2], case[3], "{name}: byte mismatch {case}");

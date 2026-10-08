@@ -2875,6 +2875,32 @@ pub(crate) fn builtin_make_network_process(
     Ok(Value::make_process(id))
 }
 
+/// Install the output descriptor before a newly created process is exposed.
+fn initialize_created_process_output(
+    eval: &mut super::super::eval::Context,
+    result: EvalResult,
+) -> EvalResult {
+    let value = result?;
+    if let Some(id) = value.as_process_id() {
+        eval.setup_process_output_descriptor(id)?;
+        // :stderr BUFFER constructs a separate pipe through the manager seam.
+        // An existing :stderr PROCESS already owns a descriptor and is reused.
+        let stderr = eval
+            .processes
+            .get_any(id)
+            .and_then(|proc| proc.stderrproc.as_process_id());
+        if let Some(stderr) = stderr
+            && eval
+                .processes
+                .get_any(stderr)
+                .is_some_and(|proc| proc.encoding_state.coding().is_none())
+        {
+            eval.setup_process_output_descriptor(stderr)?;
+        }
+    }
+    Ok(value)
+}
+
 /// (make-pipe-process &rest ARGS) -> process-or-nil
 pub(crate) fn builtin_make_pipe_process(
     eval: &mut super::super::eval::Context,
@@ -2882,14 +2908,15 @@ pub(crate) fn builtin_make_pipe_process(
 ) -> EvalResult {
     eval.sync_process_read_config_from_visible_variables();
     let coding_variables = read_connection_process_coding_variables(eval);
-    builtin_make_pipe_process_impl(
+    let result = builtin_make_pipe_process_impl(
         &mut eval.processes,
         &mut eval.buffers,
         &eval.threads,
         Some(&eval.coding_systems),
         coding_variables,
         args,
-    )
+    );
+    initialize_created_process_output(eval, result)
 }
 
 /// Capture the dynamic coding variables the way GNU reads them: at the moment
@@ -3043,14 +3070,15 @@ pub(crate) fn builtin_make_serial_process(
 ) -> EvalResult {
     eval.sync_process_read_config_from_visible_variables();
     let coding_variables = read_connection_process_coding_variables(eval);
-    builtin_make_serial_process_impl(
+    let result = builtin_make_serial_process_impl(
         &mut eval.processes,
         &mut eval.buffers,
         &eval.threads,
         Some(&eval.coding_systems),
         coding_variables,
         args,
-    )
+    );
+    initialize_created_process_output(eval, result)
 }
 
 pub(crate) fn builtin_make_serial_process_impl(
@@ -4054,7 +4082,7 @@ pub(crate) fn builtin_make_process(
         coding_environment,
     );
     eval.restore_specpdl_roots(roots);
-    process
+    initialize_created_process_output(eval, process)
 }
 
 /// Read the ambient half of GNU's `Fmake_process` coding chain, including the
@@ -4567,51 +4595,23 @@ fn encode_process_send_input_in_context(
         .as_symbol_id()
         .filter(|&symbol| symbol != super::super::intern::intern("nil"))
         .unwrap_or_else(|| super::super::intern::intern("utf-8-unix"));
-    // GNU send_process preserves unibyte character codes while retaining the
-    // configured EOL conversion (process.c:6760-6783). Runtime encoders must
-    // receive that raw-text policy rather than interpreting bytes as text.
-    let multibyte = input.is_multibyte();
-    let coding = if multibyte {
-        configured
-    } else {
-        use super::super::coding::EolType;
-        let name = super::super::intern::resolve_sym(configured);
-        let eol = eval
-            .coding_systems
-            .get(name)
-            .map(|info| info.eol_type)
-            .unwrap_or_else(|| crate::encoding::coding_name_eol(name));
-        let raw = match eol {
-            EolType::Dos => "raw-text-dos",
-            EolType::Mac => "raw-text-mac",
-            EolType::Unix | EolType::Undecided => "raw-text-unix",
-        };
-        super::super::intern::intern(raw)
-    };
-    let coding = crate::encoding::RuntimeCodingSystem::from_symbol(coding);
-    let reported = if multibyte {
-        configured
-    } else {
-        eval.processes
-            .get_any(id)
-            .and_then(|proc| proc.encoding_state.coding())
-            .map(|coding| coding.symbol())
-            .unwrap_or(configured)
-    };
-    eval.set_variable("last-coding-system-used", Value::symbol(reported));
-    // The descriptor changes coding before conversion hooks run. The codec
-    // acquires this state later, after any hook's reentrant sends have finished.
-    let setup_eol_conversion = eval.eol_conversion();
+    let configured = crate::encoding::RuntimeCodingSystem::from_symbol(configured);
+    let eol_conversion = eval.eol_conversion();
     let state = &mut eval
         .processes
         .get_any_mut(id)
         .expect("process was resolved above")
         .encoding_state;
-    if multibyte {
-        state.encoder_for(coding, setup_eol_conversion);
-    } else {
-        state.prepare_unibyte(coding, setup_eol_conversion);
-    }
+    let reported = state.select_input(
+        &eval.coding_systems,
+        configured,
+        input.is_multibyte(),
+        eol_conversion,
+    )?;
+    let coding = state
+        .coding()
+        .expect("input selection requires a descriptor");
+    eval.set_variable("last-coding-system-used", Value::symbol(reported.symbol()));
     let encoded = crate::encoding::encode_process_text_in_context(eval, input, coding, id)?;
     Ok(LispString::from_unibyte(encoded))
 }
@@ -4953,7 +4953,15 @@ pub(crate) fn builtin_set_process_coding_system(
     eval: &mut super::super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_set_process_coding_system_impl(&mut eval.processes, &eval.coding_systems, args)
+    let process = args.first().copied();
+    let result =
+        builtin_set_process_coding_system_impl(&mut eval.processes, &eval.coding_systems, args)?;
+    let id = resolve_process_object_or_wrong_type_any_in_manager(
+        &eval.processes,
+        &process.expect("validated arguments"),
+    )?;
+    eval.setup_process_output_descriptor(id)?;
+    Ok(result)
 }
 
 pub(crate) fn builtin_set_process_coding_system_impl(

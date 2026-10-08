@@ -171,3 +171,26 @@ fn process_send_legacy_pre_write_hooks_transform_and_reenter_processes() {
         expect,
     );
 }
+
+#[test]
+fn process_send_retains_live_nested_and_initial_raw_eol_coding() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect =
+        expect_test::expect![[r#""OK ((\"58e3818b58e38293\" t) (\"410a\" t) (\"410a\" t))""#]];
+    crate::common::assert_oracle_parity_expect(
+        &process_encoding_case_results("neomacs-process-encoding-descriptor-cases"),
+        expect,
+    );
+}
+
+#[test]
+fn process_send_repeated_binary_sends_retain_last_coding_identity() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[r#""OK (binary binary)""#]];
+    crate::common::assert_oracle_parity_expect(
+        &format!(
+            "(progn {PROCESS_SEND_ENCODING_CASES} (neomacs-process-encoding-binary-metadata))"
+        ),
+        expect,
+    );
+}
