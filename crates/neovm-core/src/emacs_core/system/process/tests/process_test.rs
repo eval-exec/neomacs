@@ -9475,6 +9475,20 @@ fn accepted_local_client_shallow_copies_server_plist_like_gnu() {
     assert_eq!(results[0], "OK (nil old new)");
 }
 
+#[test]
+fn accepted_tcp_clients_isolate_plist_spines_but_share_nested_values_like_gnu() {
+    let fixture = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../neomacs-gui-tests/fixtures/process-plist-isolation.el"
+    ));
+    let results = eval_all(&format!(
+        "(progn {fixture} (neomacs-process-plist-isolation-check))"
+    ));
+    // GNU's shallow copy isolates all plist cells, including later clients,
+    // while retaining the identity of mutable objects stored as values.
+    assert_eq!(results[0], "OK (t t t t t t t t t t 3)");
+}
+
 #[cfg(unix)]
 #[test]
 fn accepted_local_client_with_custom_filter_has_no_buffer_like_gnu() {

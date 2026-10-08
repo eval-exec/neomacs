@@ -9,6 +9,7 @@
 mod support;
 
 mod idle_timer_output;
+mod process_plist_isolation;
 mod process_send_encoding;
 
 #[cfg(test)]
