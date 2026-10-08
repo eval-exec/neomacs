@@ -1264,6 +1264,10 @@ pub(crate) enum NativeUnwindAction {
     MinibufferBuffer {
         state: Box<super::reader::MinibufferBufferUnwind>,
     },
+    /// GNU `record_unwind_protect_int (backtrace_eval_unrewind, -distance)`
+    /// (eval.c:4255): re-swap the specpdl suffix a `backtrace-eval` unbound,
+    /// restoring the frames' own bindings before their normal unwind.
+    BacktraceEvalRewind { distance: usize },
 }
 
 impl NativeUnwindAction {
@@ -1275,6 +1279,7 @@ impl NativeUnwindAction {
             }
             Self::MinibufferSession { state } => state.trace_roots(visit),
             Self::MinibufferBuffer { .. } => {}
+            Self::BacktraceEvalRewind { .. } => {}
         }
     }
 
@@ -1298,6 +1303,9 @@ impl NativeUnwindAction {
             Self::MinibufferBuffer { state } => {
                 super::reader::unwind_minibuffer_buffer(context, *state)
             }
+            Self::BacktraceEvalRewind { distance } => context
+                .specpdl_swap_suffix_for_backtrace_eval(distance, false)
+                .map(|()| Value::NIL),
         };
         context.restore_vm_roots(root_scope);
         result

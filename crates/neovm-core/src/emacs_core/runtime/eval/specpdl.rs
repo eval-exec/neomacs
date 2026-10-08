@@ -1191,6 +1191,143 @@ impl Context {
         Ok(())
     }
 
+    /// GNU `specpdl_unrewind` (eval.c:4134-4234): swap each entry's saved
+    /// state with the live state it protects, in place — the pointer-reversal
+    /// trick `backtrace-eval` uses to evaluate a form under an earlier frame's
+    /// bindings, and the same exchange thread switching performs on a whole
+    /// stack. UNWIND walks the suffix top-down, the rewind walks it bottom-up;
+    /// every arm is its own inverse, so the two passes restore exactly.
+    ///
+    /// Arms follow GNU: an excursion entry re-captures the current state into
+    /// itself and then restores the saved one (`save_excursion_save` +
+    /// `save_excursion_restore`, eval.c:4167-4175); save-current-buffer swaps
+    /// like the `set_buffer_if_live` special case (eval.c:4152-4159); let
+    /// entries use the thread-switch exchange. GNU's FIXME stands: Lisp
+    /// unwind-protect cleanups and restrictions have no rewind, so they stay
+    /// untouched in both directions.
+    pub(crate) fn specpdl_swap_suffix_for_backtrace_eval(
+        &mut self,
+        distance: usize,
+        unwind: bool,
+    ) -> Result<(), Flow> {
+        let top = self.specpdl.len();
+        let Some(base) = top.checked_sub(distance) else {
+            return Ok(());
+        };
+        let indices: Vec<usize> = (base..top).collect();
+        let indices = if unwind {
+            indices.into_iter().rev().collect::<Vec<_>>()
+        } else {
+            indices
+        };
+        let mut completed = Vec::new();
+        for index in indices {
+            if let Err(flow) = self.swap_backtrace_eval_entry(index) {
+                // Each completed swap is its own inverse; replaying them in
+                // reverse completion order restores both stacks, exactly as
+                // the thread-switch exchange does when a forwarded store
+                // rejects its saved value mid-exchange.
+                for swapped_index in completed.into_iter().rev() {
+                    let rollback = self.swap_backtrace_eval_entry(swapped_index);
+                    debug_assert!(
+                        rollback.is_ok(),
+                        "a completed backtrace-eval swap must be reversible"
+                    );
+                }
+                self.lexenv_assq_cache.clear();
+                self.lexenv_special_cache.clear();
+                return Err(flow);
+            }
+            completed.push(index);
+        }
+        self.lexenv_assq_cache.clear();
+        self.lexenv_special_cache.clear();
+        Ok(())
+    }
+
+    fn swap_backtrace_eval_entry(&mut self, index: usize) -> Result<(), Flow> {
+        // Copy the payload out first: the match's borrow of `specpdl` must end
+        // before the restore calls below take `&mut self`.
+        enum Swap {
+            Excursion(Value, ExcursionWindow),
+            CurrentBuffer(crate::buffer::BufferId),
+            LexicalEnv,
+            Let,
+            LetLocal,
+        }
+        let swap = match self.specpdl.get(index) {
+            Some(SpecBinding::SaveExcursion {
+                marker,
+                saved_window,
+                ..
+            }) => Swap::Excursion(*marker, *saved_window),
+            Some(SpecBinding::SaveCurrentBuffer { buffer_id }) => Swap::CurrentBuffer(*buffer_id),
+            Some(SpecBinding::LexicalEnv { .. }) => Swap::LexicalEnv,
+            Some(SpecBinding::Let { .. } | SpecBinding::LetDefault { .. }) => Swap::Let,
+            Some(SpecBinding::LetLocal { .. }) => Swap::LetLocal,
+            _ => return Ok(()),
+        };
+        match swap {
+            Swap::Excursion(old_marker, old_window) => {
+                // GNU re-captures into the entry first (`save_excursion_save`):
+                // a fresh marker at the current buffer's point, plus the
+                // selected window when it displays that buffer. The old
+                // marker stays traceable in its slot until the write lands.
+                let Some(buffer_id) = self.buffers.current_buffer_id() else {
+                    return Ok(());
+                };
+                let (new_marker, _) = super::super::marker::make_registered_point_marker(
+                    &mut self.buffers,
+                    buffer_id,
+                )
+                .expect("the current buffer is live, so its point marker registers");
+                let new_window = super::ExcursionWindow::capture(&self.frames, buffer_id);
+                if let Some(entry) = self.specpdl.get_mut(index) {
+                    *entry = SpecBinding::SaveExcursion {
+                        _saved_buffer_id: buffer_id,
+                        saved_window: new_window,
+                        marker: new_marker,
+                    };
+                }
+                // The popped pair is only on the stack now; root it across the
+                // restore, which may allocate window markers.
+                let root_scope = self.save_vm_roots();
+                self.push_vm_frame_root(old_marker);
+                self.restore_save_excursion(old_marker, old_window);
+                self.restore_vm_roots(root_scope);
+            }
+            Swap::CurrentBuffer(old_buffer_id) => {
+                // eval.c:4152-4159: record the current buffer into the entry
+                // and restore the saved one if it is still live.
+                let current = self.buffers.current_buffer_id();
+                if let (Some(entry), Some(current_buffer_id)) =
+                    (self.specpdl.get_mut(index), current)
+                {
+                    *entry = SpecBinding::SaveCurrentBuffer {
+                        buffer_id: current_buffer_id,
+                    };
+                }
+                self.restore_current_buffer_if_live(old_buffer_id);
+            }
+            Swap::LexicalEnv => {
+                // GNU binds internal-interpreter-environment with `specbind`,
+                // so its swap is the plain LET exchange; this port keeps a
+                // dedicated kind for the same live/saved exchange.
+                if let Some(SpecBinding::LexicalEnv { old_lexenv }) = self.specpdl.get_mut(index) {
+                    let saved = *old_lexenv;
+                    *old_lexenv = self.lexenv;
+                    self.lexenv = saved;
+                }
+            }
+            Swap::Let => self.swap_let_binding_for_thread_switch(index)?,
+            Swap::LetLocal => {
+                self.swap_let_binding_for_thread_switch(index)?;
+                self.swap_local_let_binding_for_thread_switch(index);
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn suspend_dynamic_bindings_for_thread_switch(
         &mut self,
     ) -> Result<ThreadDynamicBindingToken, Flow> {

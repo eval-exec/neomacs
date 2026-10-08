@@ -809,6 +809,13 @@ pub(crate) fn builtin_backtrace_debug(
 }
 
 /// `(backtrace-eval EXP NFRAMES &optional BASE)` -- batch-compatible helper.
+///
+/// GNU `Fbacktrace_eval` (eval.c:4241-4261): temporarily unwind the specpdl
+/// suffix above the target frame by swapping each entry's saved and live
+/// state in place (`backtrace_eval_unrewind`), evaluate EXP under the older
+/// bindings via `eval_sub`, and re-swap on the way out through a recorded
+/// native unwind. This is what lets the debugger read and set the lexical
+/// variables of the frame it inspects.
 pub(crate) fn builtin_backtrace_eval(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
@@ -824,7 +831,16 @@ pub(crate) fn builtin_backtrace_eval(
             vec![Value::string("Activation frame not found!")],
         ));
     }
-    eval.eval_value(&args[0])
+    // The target frame's own specpdl entry is the last one unbound, exactly
+    // as GNU's `distance = specpdl_ptr - pdl` counts it (eval.c:4249).
+    let count = eval.specpdl.len();
+    let distance = count - frame_indices[nframes];
+    eval.specpdl_swap_suffix_for_backtrace_eval(distance, true)?;
+    eval.push_specpdl_with(|| super::eval::SpecBinding::NativeUnwind {
+        action: super::eval::NativeUnwindAction::BacktraceEvalRewind { distance },
+    });
+    let result = eval.eval_value(&args[0]);
+    eval.unbind_to_with_result(count, result)
 }
 
 fn runtime_backtrace_indirect_function(
