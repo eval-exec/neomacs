@@ -825,9 +825,14 @@ fn captured_character_policy_selects_on_a_thread_without_evaluator_state() {
         weight: Some(FontWeight::from_css_weight(700)),
         slant: Some(FontSlant::Italic),
         width: Some(FontWidth::Normal),
-        repertory: Some(
-            neovm_core::emacs_core::fontset::FontRepertory::CharTableRanges(vec![(0x3040, 0x309f)]),
-        ),
+        definition: Some(neovm_core::emacs_core::fontset::FontDefinitionMetadata {
+            encoding: intern("unicode"),
+            repertory: Some(
+                neovm_core::emacs_core::fontset::FontRepertory::CharTableRanges(vec![(
+                    0x3040, 0x309f,
+                )]),
+            ),
+        }),
     };
     let policy = CapturedCharacterPolicy::capture(
         "Base Mono",
@@ -860,14 +865,17 @@ fn captured_character_policy_selects_on_a_thread_without_evaluator_state() {
     spec.family = Some(intern("Changed Family"));
     spec.weight = Some(FontWeight::from_css_weight(400));
     spec.lang = None;
-    spec.repertory = None;
+    spec.definition = None;
     drop(spec);
     drop(resolver);
 
     let selected = std::thread::spawn(move || {
         // No evaluator, obarray binding, or fontset read on this thread.
         assert_eq!(policy.languages, vec!["ja"]);
-        assert_eq!(policy.charset_ranges, vec![(0x3040, 0x309f)]);
+        assert!(
+            policy.charset_ranges.is_empty(),
+            "fontset repertory is not native glyph coverage"
+        );
         assert_eq!(
             policy.families.search_order(str::to_owned),
             vec![Some("Fixture Sans".into())]

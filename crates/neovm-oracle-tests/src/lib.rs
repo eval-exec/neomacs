@@ -140,6 +140,9 @@ mod float_nan_misc_edge_semantics;
 mod float_operations_comprehensive;
 mod following_char_operations;
 mod font_otf_availability_semantics;
+#[cfg(test)]
+#[path = "fontset_repertory_test.rs"]
+mod fontset_repertory;
 mod format;
 mod forward;
 mod frame;

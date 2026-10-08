@@ -234,7 +234,7 @@ impl FontResolver {
                 .map(neovm_core::face::FontWeight::from_css_weight),
             slant: query.slant,
             width: query.width,
-            repertory: None,
+            definition: None,
         };
         let constraints = GnuFontPolicy::constraints_for_entity(&spec);
         let representative = constraints.representative_char();
@@ -566,7 +566,7 @@ impl FontResolver {
                     weight: None,
                     slant: None,
                     width: None,
-                    repertory: None,
+                    definition: None,
                 },
             );
         }
