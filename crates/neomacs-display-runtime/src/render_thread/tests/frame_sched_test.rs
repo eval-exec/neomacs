@@ -948,7 +948,7 @@ fn plan_attributes_the_frame_to_its_driving_reasons() {
     let plan = c.begin_frame(win(1), tick_at(now.plus(ms(1))));
     assert!(plan.reasons.contains(DemandReason::CursorAnimation));
     assert!(plan.reasons.contains(DemandReason::EditorCommit));
-    assert!(!plan.reasons.contains(DemandReason::WebKit));
+    assert!(!plan.reasons.contains(DemandReason::Webkit));
     assert_eq!(
         plan.reasons.iter().collect::<Vec<_>>(),
         vec![DemandReason::EditorCommit, DemandReason::CursorAnimation]
