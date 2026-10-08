@@ -357,6 +357,8 @@ pub struct ShapedGlyph {
     pub glyph_id: u16,
     /// Pen x offset of the glyph within the run, in pixels from the origin.
     pub x: f32,
+    /// Unquantized pen and shaping offset, retained for advance normalization.
+    pub position: ShapedGlyphPosition,
     /// Pen y offset (baseline-relative), in pixels.
     pub y: f32,
     /// Horizontal advance of the glyph, in pixels.
@@ -365,6 +367,62 @@ pub struct ShapedGlyph {
     pub cluster_start: usize,
     /// End byte index (exclusive) of the source cluster in the shaped text.
     pub cluster_end: usize,
+}
+
+/// Logical horizontal placement before rasterization quantizes its origin.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ShapedGlyphPosition {
+    pub pen_x: f32,
+    pub offset_x: f32,
+}
+
+/// Apply the realized font's contract before either measurement or rendering
+/// consumes shaping output. Geometric pen order handles RTL without changing
+/// glyph order, and equal-pen groups keep zero-width marks with their bases.
+fn normalize_shaped_advances(
+    glyphs: &mut [ShapedGlyph],
+    policies: &HashMap<fontdb::ID, ResolvedFontAdvance>,
+) {
+    if !policies
+        .values()
+        .any(|policy| matches!(policy, ResolvedFontAdvance::MonospaceCells(_)))
+    {
+        return;
+    }
+    let mut visual_order: Vec<usize> = (0..glyphs.len()).collect();
+    visual_order.sort_by(|&a, &b| {
+        glyphs[a]
+            .position
+            .pen_x
+            .total_cmp(&glyphs[b].position.pen_x)
+    });
+    let mut advance_correction = 0.0;
+    let mut start = 0;
+    while start < visual_order.len() {
+        let pen_x = glyphs[visual_order[start]].position.pen_x;
+        let mut end = start + 1;
+        while end < visual_order.len() && glyphs[visual_order[end]].position.pen_x == pen_x {
+            end += 1;
+        }
+        let mut group_correction = 0.0;
+        for &index in &visual_order[start..end] {
+            let glyph = &mut glyphs[index];
+            let policy = policies.get(&glyph.font_id).copied().unwrap_or_default();
+            let advance = policy.resolve(glyph.x_advance);
+            group_correction += advance - glyph.x_advance;
+            glyph.x_advance = advance;
+            glyph.position.pen_x = pen_x + advance_correction;
+            let x = glyph.position.pen_x + glyph.position.offset_x;
+            glyph.x = match policy {
+                ResolvedFontAdvance::MonospaceCells(_) => x.round(),
+                ResolvedFontAdvance::PerGlyph | ResolvedFontAdvance::FixedCell(_) => {
+                    cosmic_text::SubpixelBin::new(x).0 as f32
+                }
+            };
+        }
+        advance_correction += group_correction;
+        start = end;
+    }
 }
 
 /// Cache key for font metrics lookups.
@@ -440,12 +498,20 @@ enum LayoutFontSource {
 fn resolved_font_advance(
     spacing: neomacs_display_protocol::font::FixedFontSpacing,
     metrics: Option<crate::font::probe::FontPxMetrics>,
+    replay: &FontReplay,
 ) -> ResolvedFontAdvance {
     match (spacing, metrics) {
         (
             neomacs_display_protocol::font::FixedFontSpacing::MonospaceOrCharacterCell,
             Some(metrics),
-        ) => ResolvedFontAdvance::fixed_cell(metrics.max_width as f32),
+        ) => match replay {
+            FontReplay::Swash { .. } => {
+                ResolvedFontAdvance::monospace_cells(metrics.max_width as f32)
+            }
+            FontReplay::FreeTypeBitmap { .. } => {
+                ResolvedFontAdvance::fixed_cell(metrics.max_width as f32)
+            }
+        },
         _ => ResolvedFontAdvance::PerGlyph,
     }
 }
@@ -1674,13 +1740,24 @@ impl FontMetricsService {
             return cached.clone();
         }
         self.n_shape_calls += 1;
-        let glyphs = self.shaper.shape_run(
+        let mut glyphs = self.shaper.shape_run(
             &mut self.font_system,
             text,
             &attrs.as_attrs(),
             font_size.max(1.0),
             font_size.max(1.0) * 1.3,
         );
+        let mut policies = HashMap::default();
+        for glyph in &glyphs {
+            if !policies.contains_key(&glyph.font_id) {
+                let policy = self
+                    .resolved_font_from_fontdb_id(glyph.font_id, font_size)
+                    .map(|font| font.glyph_advance)
+                    .unwrap_or_default();
+                policies.insert(glyph.font_id, policy);
+            }
+        }
+        normalize_shaped_advances(&mut glyphs, &policies);
         if self.shaped_run_cache.len() >= self.shaped_run_cache_cap {
             self.shaped_run_cache.clear();
         }
@@ -2067,10 +2144,10 @@ impl FontMetricsService {
                 line_height: metrics.height.max(1) as f32,
             })
             .or_else(|| self.font_metrics_from_selected_face(font_id, font_size));
-        let glyph_advance = resolved_font_advance(spacing, px_metrics);
         let device_ascii_advances =
             self.probe_resolved_font_device_ascii_advances(&identity, font_size);
         let replay = FontReplay::Swash { asset };
+        let glyph_advance = resolved_font_advance(spacing, px_metrics, &replay);
         let font = self.font_instances.intern(identity, replay, font_size, || {
             FontInstanceProperties {
                 family: resolved_family,
@@ -2130,11 +2207,14 @@ impl FontMetricsService {
             space_width: observed.space_advance_px.round().max(0.0) as i32,
             average_width: observed.average_advance_px.round().max(0.0) as i32,
         };
-        let glyph_advance =
-            resolved_font_advance(matched.metadata.fixed_spacing_policy(), Some(px_metrics));
         let identity = matched.identity.clone();
         let selector_slant = matched.slant();
         let replay = opened.replay();
+        let glyph_advance = resolved_font_advance(
+            matched.metadata.fixed_spacing_policy(),
+            Some(px_metrics),
+            &replay,
+        );
         let font = self
             .font_instances
             .intern(identity, replay, effective_size, || {
@@ -2391,8 +2471,8 @@ impl FontMetricsService {
                 line_height: metrics.height.max(1) as f32,
             })
             .or_else(|| self.font_metrics_from_selected_face(font_id, selection.font_size));
-        let glyph_advance = resolved_font_advance(spacing, px_metrics);
         let replay = FontReplay::Swash { asset };
+        let glyph_advance = resolved_font_advance(spacing, px_metrics, &replay);
         let font = self
             .font_instances
             .intern(identity, replay, selection.font_size, || {
@@ -2685,8 +2765,8 @@ impl FontMetricsService {
             .as_ref()
             .and_then(|matched| matched.weight())
             .unwrap_or(file_weight);
-        let glyph_advance = resolved_font_advance(spacing, px_metrics);
         let replay = swash_file_replay(&identity)?;
+        let glyph_advance = resolved_font_advance(spacing, px_metrics, &replay);
         Some(self.font_instances.intern(identity, replay, font_size, || {
             FontInstanceProperties {
                 family,
@@ -2912,11 +2992,7 @@ impl FontMetricsService {
         let materialized = self.materialized_font_for_realized_face_char(ch, selection);
         let direct_glyph = materialized.as_ref().filter(|materialized| {
             materialized.resolution == FontResolutionSource::FacePrimary
-                || materialized
-                    .font
-                    .glyph_advance
-                    .fixed_cell_advance_px()
-                    .is_some()
+                || materialized.font.glyph_advance.cell_advance_px().is_some()
         });
         let w = direct_glyph
             .and_then(|materialized| self.simple_copy_glyph_for_char(materialized, ch))

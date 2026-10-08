@@ -350,3 +350,27 @@ fn resolved_glyph_id_preserves_the_full_freetype_domain() {
     assert_eq!(decoded, glyph);
     assert_eq!(decoded.get(), 65_552);
 }
+
+#[test]
+fn monospace_glyphs_preserve_wide_ligature_and_zero_width_advances() {
+    let policy = ResolvedFontAdvance::monospace_cells(7.0);
+    for (measured, expected) in [
+        (7.392, 7.0),
+        (14.784, 14.0),
+        (22.176, 21.0),
+        (0.0, 0.0),
+        (17.0, 17.0),
+    ] {
+        assert_eq!(policy.resolve(measured), expected);
+    }
+    assert_eq!(
+        ResolvedFontAdvance::fixed_cell(7.0).resolve(14.784),
+        7.0,
+        "fixed-cell bitmap semantics remain distinct"
+    );
+    let encoded = serde_json::to_string(&policy).unwrap();
+    assert_eq!(
+        serde_json::from_str::<ResolvedFontAdvance>(&encoded).unwrap(),
+        policy
+    );
+}

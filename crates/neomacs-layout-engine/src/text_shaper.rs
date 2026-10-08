@@ -61,6 +61,10 @@ impl TextShaper for CosmicTextShaper {
                     font_id: phys.cache_key.font_id,
                     glyph_id: phys.cache_key.glyph_id,
                     x: phys.x as f32,
+                    position: crate::font::metrics::ShapedGlyphPosition {
+                        pen_x: glyph.x,
+                        offset_x: glyph.font_size * glyph.x_offset,
+                    },
                     y: phys.y as f32,
                     x_advance: glyph.w,
                     cluster_start: glyph.start,

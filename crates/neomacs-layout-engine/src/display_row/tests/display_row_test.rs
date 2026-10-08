@@ -2778,6 +2778,10 @@ fn display_text_run_measurement_plan_builds_from_shaped_glyphs() {
             font_id: fontdb::ID::dummy(),
             glyph_id: 1,
             x: 0.0,
+            position: crate::font::metrics::ShapedGlyphPosition {
+                pen_x: 0.0,
+                offset_x: 0.0,
+            },
             y: 0.0,
             x_advance,
             cluster_start,
@@ -4244,6 +4248,10 @@ fn shaped_complex_script_advances_are_not_cell_clamped() {
             font_id: fontdb::ID::dummy(),
             glyph_id: 1,
             x: 0.0,
+            position: crate::font::metrics::ShapedGlyphPosition {
+                pen_x: 0.0,
+                offset_x: 0.0,
+            },
             y: 0.0,
             x_advance,
             cluster_start,

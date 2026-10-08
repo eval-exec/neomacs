@@ -574,7 +574,6 @@ fn renderer_keeps_missing_ascii_on_primary_font() {
 #[test]
 fn renderer_uses_layouts_published_fixed_cell_advance() {
     use neomacs_display_protocol::face::Face;
-    use neomacs_display_protocol::font::ResolvedFontAdvance;
     use neomacs_layout_engine::font::metrics::FontMetricsService;
 
     let Some(resolved) =
@@ -582,7 +581,7 @@ fn renderer_uses_layouts_published_fixed_cell_advance() {
     else {
         return;
     };
-    let ResolvedFontAdvance::FixedCell(cell) = resolved.glyph_advance else {
+    let Some(cell) = resolved.glyph_advance.cell_advance_px() else {
         return;
     };
     let Some(mut atlas) = try_test_atlas() else {
@@ -603,7 +602,7 @@ fn renderer_uses_layouts_published_fixed_cell_advance() {
     else {
         panic!("the exact primary face must cover ASCII punctuation");
     };
-    assert_eq!(glyph.x_advance, cell.get());
+    assert_eq!(glyph.x_advance, cell);
 }
 
 #[cfg(unix)]
