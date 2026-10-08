@@ -87,6 +87,84 @@ static LXGW_NERD_REGULAR_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static MPLUS_1_CODE_THIN_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static NOTO_COLOR_EMOJI_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 
+/// The reported dual-width fixed-pitch font from issue #516, pinned to v3.1.0.
+#[must_use]
+pub fn plemol_jp_console_nf_regular() -> &'static Path {
+    static FIXTURE: OnceLock<PathBuf> = OnceLock::new();
+    FIXTURE
+        .get_or_init(|| {
+            prepare_plemol_jp().unwrap_or_else(|error| panic!("PlemolJP fixture: {error}"))
+        })
+        .as_path()
+}
+
+fn prepare_plemol_jp() -> Result<PathBuf, FixtureError> {
+    const FONT_SHA: &str = "0dadabb6766f13e31787d26d73467dd613a777e509a8214bc898333299dd4be4";
+    const ZIP_SHA: &str = "015142b7ce4fb497ea6eb14567c435b69450eb5028fb7d29c032d1ffb3854abb";
+    const ENTRY: &str = "PlemolJP_NF_v3.1.0/PlemolJPConsole_NF/PlemolJPConsoleNF-Regular.ttf";
+    let root = workspace_root().join("tmp/font-fixtures");
+    create_dir_all(&root)?;
+    let lock_path = root.join(".plemol-jp-v3.1.0.lock");
+    let lock = open_lock(&lock_path)?;
+    lock.lock().map_err(|source| FixtureError::Io {
+        path: lock_path.clone(),
+        source,
+    })?;
+    let result = (|| {
+        let destination = root.join("PlemolJPConsoleNF-Regular-v3.1.0.ttf");
+        if destination.exists() && verify_sha256(&destination, FONT_SHA).is_ok() {
+            return Ok(destination);
+        }
+        let archive = root.join("PlemolJP_NF_v3.1.0.zip");
+        ensure_download_with_limit(
+            &archive,
+            "https://github.com/yuru7/PlemolJP/releases/download/v3.1.0/PlemolJP_NF_v3.1.0.zip",
+            ZIP_SHA,
+            192 * 1024 * 1024,
+        )?;
+        let file = File::open(&archive).map_err(|source| FixtureError::Io {
+            path: archive.clone(),
+            source,
+        })?;
+        let mut zip = zip::ZipArchive::new(file).map_err(|source| FixtureError::Zip {
+            path: archive.clone(),
+            source,
+        })?;
+        let entry = zip.by_name(ENTRY).map_err(|source| FixtureError::Zip {
+            path: archive.clone(),
+            source,
+        })?;
+        let mut bytes = Vec::new();
+        entry
+            .take(MAX_PINNED_FIXTURE_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|source| FixtureError::Io {
+                path: archive.clone(),
+                source,
+            })?;
+        let actual = sha256_bytes(&bytes);
+        if actual != FONT_SHA {
+            return Err(FixtureError::Checksum {
+                path: destination,
+                expected: FONT_SHA,
+                actual,
+            });
+        }
+        let partial = destination.with_extension("partial");
+        write_all(&partial, &bytes)?;
+        fs::rename(&partial, &destination).map_err(|source| FixtureError::Io {
+            path: destination.clone(),
+            source,
+        })?;
+        Ok(destination)
+    })();
+    FileExt::unlock(&lock).map_err(|source| FixtureError::Io {
+        path: lock_path,
+        source,
+    })?;
+    result
+}
+
 /// Paths to the pinned Spleen faces used by the font boundary tests.
 #[derive(Clone, Debug)]
 pub struct SpleenFixtures {
@@ -291,6 +369,12 @@ fn prepare_lxgw_nerd_regular() -> Result<PathBuf, FixtureError> {
 
 #[derive(Debug, Error)]
 enum FixtureError {
+    #[error("ZIP failure at {path}: {source}")]
+    Zip {
+        path: PathBuf,
+        #[source]
+        source: zip::result::ZipError,
+    },
     #[error("I/O failure at {path}: {source}")]
     Io {
         path: PathBuf,

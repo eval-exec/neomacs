@@ -8,6 +8,7 @@
 
 mod support;
 
+mod dual_width_fixed_pitch;
 #[path = "fontset_family_only_test.rs"]
 mod fontset_family_only;
 mod frame_bar_parameters;

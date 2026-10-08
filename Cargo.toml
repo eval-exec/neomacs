@@ -86,6 +86,7 @@ unsafe_op_in_unsafe_fn = "warn"
 # at each site with a justification, rather than being escalated or muted here.
 
 [workspace.dependencies]
+zip = { version = "8.6", default-features = false, features = ["deflate"] }
 # Internal crates
 neomacs-terminfo = { path = "crates/neomacs-terminfo" }
 neomacs-allocator = { path = "crates/neomacs-allocator" }

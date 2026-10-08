@@ -1703,6 +1703,7 @@ fn shaping_first_realization_publishes_the_native_face_metrics() {
             resolved_font_advance(
                 neomacs_display_protocol::font::FixedFontSpacing::MonospaceOrCharacterCell,
                 Some(handle_metrics),
+                &via_face.font.replay,
             )
         );
     }
@@ -3790,4 +3791,238 @@ fn ascii_worker_policy_keeps_unicode_font_caches_warm() {
     );
     worker.install_worker_font_policy(&unicode);
     assert_eq!(worker.metrics_cache.len(), cached);
+}
+
+fn dual_width_fixed_pitch_service(
+    backend: FontBackendKind,
+    spacing: i32,
+) -> (FontMetricsService, String, fontdb::ID) {
+    let fixture = neomacs_test_fonts::plemol_jp_console_nf_regular()
+        .to_string_lossy()
+        .into_owned();
+    let mut svc = make_svc();
+    let ids = FontFileCache::open_file(svc.font_system.db_mut(), &fixture, 0).unwrap();
+    let face = svc.font_system.db().face(ids[0]).unwrap();
+    let family = face.families[0].0.clone();
+    let identity = ResolvedFontIdentity::from_platform_file_with_variations(
+        backend,
+        &fixture,
+        face.index,
+        Some(face.post_script_name.clone()),
+        Vec::new(),
+    );
+    svc.font_resolver
+        .replace_backend(Box::new(NativeMetricsPrimaryBackend {
+            candidates: vec![platform_file_candidate(
+                identity,
+                crate::font_backend::PlatformFontMetadata {
+                    foundry: None,
+                    family: family.clone(),
+                    weight: Some(400),
+                    slant: FontSlant::Normal,
+                    width: Some(FontWidth::Normal),
+                    spacing: Some(spacing),
+                    design_metrics: None,
+                    size: crate::font_backend::PlatformFontSize::Scalable,
+                },
+            )],
+            metrics: crate::font_backend::PlatformFontDesignMetrics {
+                units_per_em: 1000,
+                ascent: 1000,
+                descent: 300,
+                line_gap: 0,
+                max_advance: 528,
+                space_advance: 528,
+                average_advance: 528,
+            },
+        }));
+    (svc, family, ids[0])
+}
+
+#[test]
+fn fixed_pitch_outline_preserves_two_cell_cjk_advances() {
+    let (mut svc, family, _) = dual_width_fixed_pitch_service(FontBackendKind::CoreText, 100);
+    let primary = svc
+        .resolved_font_for_face(&family, 400, false, 14.0)
+        .unwrap();
+    let cjk = svc
+        .resolved_font_for_char('漢', &family, 400, false, 14.0)
+        .unwrap();
+    assert_eq!(
+        primary.id, cjk.id,
+        "CJK belongs to the primary face, not fallback"
+    );
+    assert_eq!(cjk.identity, primary.identity);
+    assert_eq!(
+        svc.char_width('漢', &family, 400, false, 14.0),
+        14.0,
+        "GNU macfont preserves two rounded 7px cells, despite fixed-pitch metadata"
+    );
+    let measured = svc.shape_run_for_realized_face(
+        "漢字",
+        RealizedFaceFontSelection::new(&family, 400, false, 14.0),
+    );
+    assert_eq!(
+        measured.iter().map(|glyph| glyph.x_advance).sum::<f32>(),
+        28.0,
+        "text-run measurement must use the same normalized advances as publication"
+    );
+    let (glyphs, _) = svc
+        .resolved_glyphs_for_cluster("漢字", &family, 400, false, 14.0)
+        .unwrap();
+    assert_eq!(
+        glyphs
+            .iter()
+            .map(|glyph| glyph.x_advance)
+            .collect::<Vec<_>>(),
+        vec![14.0, 14.0],
+        "shaped outlines must use the same multi-cell policy"
+    );
+    assert_eq!(
+        glyphs.iter().map(|glyph| glyph.x).collect::<Vec<_>>(),
+        vec![0.0, 14.0],
+        "advance correction must move subsequent glyphs, preserving shaping offsets"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn fixed_pitch_ascii_preserves_hinted_device_advances_at_fractional_scale() {
+    let (mut svc, family, _) = dual_width_fixed_pitch_service(FontBackendKind::Fontconfig, 100);
+    let scale = neomacs_display_protocol::geometry::DeviceScale::new(1.75).unwrap();
+    svc.set_device_scale(scale);
+    let widths = svc.fill_ascii_widths(&family, 400, false, 13.0);
+    // FreeType hints this font's ASCII cell to 12 device pixels at 23px.
+    // Preserve that physical width when converting to logical geometry.
+    assert!(
+        (widths['a' as usize] * scale.get() - 12.0).abs() < 0.001,
+        "round before scale conversion, not after: {} logical pixels",
+        widths['a' as usize]
+    );
+}
+
+struct PositionedClusterShaper(Vec<ShapedGlyph>);
+impl crate::text_shaper::TextShaper for PositionedClusterShaper {
+    fn shape_run(
+        &mut self,
+        _: &mut cosmic_text::FontSystem,
+        _: &str,
+        _: &cosmic_text::Attrs<'_>,
+        _: f32,
+        _: f32,
+    ) -> Vec<ShapedGlyph> {
+        self.0.clone()
+    }
+}
+
+#[test]
+fn monospace_cluster_preserves_rtl_pen_order() {
+    for reversed in [false, true] {
+        let (mut svc, family, font_id) =
+            dual_width_fixed_pitch_service(FontBackendKind::CoreText, 100);
+        let positions = if reversed {
+            [14.784, 7.392, 0.0]
+        } else {
+            [0.0, 7.392, 14.784]
+        };
+        svc.shaper = Box::new(PositionedClusterShaper(
+            positions
+                .into_iter()
+                .enumerate()
+                .map(|(index, pen_x)| ShapedGlyph {
+                    font_id,
+                    glyph_id: 1,
+                    x: cosmic_text::SubpixelBin::new(pen_x).0 as f32,
+                    position: ShapedGlyphPosition {
+                        pen_x,
+                        offset_x: 0.0,
+                    },
+                    y: 0.0,
+                    x_advance: 7.392,
+                    cluster_start: index,
+                    cluster_end: index + 1,
+                })
+                .collect(),
+        ));
+        let (glyphs, _) = svc
+            .resolved_glyphs_for_cluster("abc", &family, 400, false, 14.0)
+            .unwrap();
+        let expected = if reversed {
+            vec![14.0, 7.0, 0.0]
+        } else {
+            vec![0.0, 7.0, 14.0]
+        };
+        assert_eq!(
+            glyphs.iter().map(|glyph| glyph.x).collect::<Vec<_>>(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn proportional_cluster_preserves_fractional_and_negative_mark_offsets() {
+    let (mut svc, family, font_id) = dual_width_fixed_pitch_service(FontBackendKind::CoreText, 90);
+    let positions = [(0.0, 0.9), (7.0, -7.2), (14.0, 0.0)];
+    svc.shaper = Box::new(PositionedClusterShaper(
+        positions
+            .into_iter()
+            .enumerate()
+            .map(|(index, (pen_x, offset_x))| ShapedGlyph {
+                font_id,
+                glyph_id: 1,
+                x: cosmic_text::SubpixelBin::new(pen_x + offset_x).0 as f32,
+                position: ShapedGlyphPosition { pen_x, offset_x },
+                y: 0.0,
+                x_advance: 7.392,
+                cluster_start: index,
+                cluster_end: index + 1,
+            })
+            .collect(),
+    ));
+    let (glyphs, _) = svc
+        .resolved_glyphs_for_cluster("abc", &family, 400, false, 14.0)
+        .unwrap();
+    assert_eq!(
+        glyphs.iter().map(|glyph| glyph.x).collect::<Vec<_>>(),
+        vec![1.0, -1.0, 14.0]
+    );
+}
+
+#[test]
+fn monospace_cluster_keeps_zero_width_marks_on_their_shared_pen() {
+    for mark_first in [false, true] {
+        let (mut svc, family, font_id) =
+            dual_width_fixed_pitch_service(FontBackendKind::CoreText, 100);
+        let mut positions = vec![(0.0, 0.0, 7.392), (0.0, -0.2, 0.0), (7.392, 0.0, 7.392)];
+        if mark_first {
+            positions.swap(0, 1);
+        }
+        svc.shaper = Box::new(PositionedClusterShaper(
+            positions
+                .into_iter()
+                .enumerate()
+                .map(|(index, (pen_x, offset_x, x_advance))| ShapedGlyph {
+                    font_id,
+                    glyph_id: 1,
+                    x: cosmic_text::SubpixelBin::new(pen_x + offset_x).0 as f32,
+                    position: ShapedGlyphPosition { pen_x, offset_x },
+                    y: 0.0,
+                    x_advance,
+                    cluster_start: index,
+                    cluster_end: index + 1,
+                })
+                .collect(),
+        ));
+        let (glyphs, _) = svc
+            .resolved_glyphs_for_cluster("abc", &family, 400, false, 14.0)
+            .unwrap();
+        assert_eq!(
+            glyphs.iter().map(|glyph| glyph.x).collect::<Vec<_>>(),
+            vec![0.0, 0.0, 7.0]
+        );
+        assert_eq!(
+            glyphs.iter().filter(|glyph| glyph.x_advance == 0.0).count(),
+            1
+        );
+    }
 }
