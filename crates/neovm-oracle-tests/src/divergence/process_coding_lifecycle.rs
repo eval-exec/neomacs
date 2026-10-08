@@ -194,3 +194,14 @@ fn process_send_repeated_binary_sends_retain_last_coding_identity() {
         expect,
     );
 }
+
+#[test]
+fn accepted_tcp_clients_isolate_plist_spines_but_share_nested_values() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let fixture = include_str!("../../../neomacs-gui-tests/fixtures/process-plist-isolation.el");
+    let expect = expect_test::expect![[r#""OK (t t t t t t t t t t 3)""#]];
+    crate::common::assert_oracle_parity_expect(
+        &format!("(progn {fixture} (neomacs-process-plist-isolation-check))"),
+        expect,
+    );
+}
