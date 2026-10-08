@@ -650,7 +650,8 @@ fn vm_raw_parent_bridge_helper_is_gone() {
                 if !line.contains("with_extra_gc_roots_ptr(") {
                     continue;
                 }
-                if rel == Path::new("src/emacs_core/runtime/bytecode/tests/vm.rs") {
+                // The scanner's search literal is exempt; file! follows source renames.
+                if Path::new(file!()).ends_with(&rel) {
                     continue;
                 }
                 unexpected.push(format!("{}:{}", rel.display(), lineno + 1));
@@ -693,7 +694,8 @@ fn vm_parent_evaluator_bridge_is_limited_to_semantic_boundaries() {
                 if !line.contains("with_extra_gc_roots(") {
                     continue;
                 }
-                let allowed = rel == Path::new("src/emacs_core/runtime/bytecode/tests/vm.rs");
+                // Cargo may prefix file! with the workspace or an absolute path.
+                let allowed = Path::new(file!()).ends_with(&rel);
                 if !allowed {
                     unexpected.push(format!("{}:{}", rel.display(), lineno + 1));
                 }
