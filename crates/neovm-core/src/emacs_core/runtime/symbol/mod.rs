@@ -2168,13 +2168,13 @@ impl Obarray {
             return self.swap_plain_untrapped_value_id_while_marking(id, value, gate);
         }
         let mut write = self.symbols.cell_write(Self::slot_index(id), gate)?;
-        let sym = write.symbol();
-        if !sym.flags().is_plain_untrapped_unprojected() || !sym.interned_global {
+        if !write.symbol().interned_global {
             return None;
         }
+        let plain = write.plain_untrapped_unprojected()?;
         #[cfg(test)]
         note_plain_value_slot_visit();
-        write.plain().map(|plain| plain.store(value))
+        Some(plain.store(value))
     }
 
     /// [`Self::swap_plain_untrapped_value_id`] during a concurrent mark: the
@@ -2189,13 +2189,13 @@ impl Obarray {
         gate: MarkGate,
     ) -> Option<Value> {
         let mut write = self.symbols.cell_write(Self::slot_index(id), gate)?;
-        let sym = write.symbol();
-        if !sym.flags().is_plain_untrapped_unprojected() || !sym.interned_global {
+        if !write.symbol().interned_global {
             return None;
         }
+        let plain = write.plain_untrapped_unprojected()?;
         #[cfg(test)]
         note_plain_value_slot_visit();
-        write.plain().map(|plain| plain.store(value))
+        Some(plain.store(value))
     }
 
     /// [`Self::swap_plain_untrapped_value_id`] for a writer that does not
@@ -2214,13 +2214,16 @@ impl Obarray {
         let Some(mut write) = self.symbols.cell_write(Self::slot_index(id), gate) else {
             return false;
         };
-        let sym = write.symbol();
-        if !sym.flags().is_plain_untrapped_unprojected() || !sym.interned_global {
+        if !write.symbol().interned_global {
             return false;
         }
+        let Some(plain) = write.plain_untrapped_unprojected() else {
+            return false;
+        };
         #[cfg(test)]
         note_plain_value_slot_visit();
-        write.plain().map(|plain| plain.set(value)).is_some()
+        plain.set(value);
+        true
     }
 
     /// Whether a write to `id` could be a bare `SET_SYMBOL_VAL`: an interned,

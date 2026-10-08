@@ -281,25 +281,43 @@ impl CellWord {
         Self(std::ptr::from_ref(fwd) as usize)
     }
 
+    /// The word stored under `Plainval` by [`Self::plain`].
+    #[inline(always)]
+    fn read_plain(self) -> Value {
+        Value::from_bits(self.0)
+    }
+
+    /// The word stored under `Varalias` by [`Self::alias`], which
+    /// zero-extended it from a `u32`.
+    #[inline(always)]
+    fn read_alias(self) -> SymId {
+        SymId(self.0 as u32)
+    }
+
+    /// The word stored under `Localized` by [`Self::localized`].
+    #[inline(always)]
+    fn read_localized(self) -> BlvPtr {
+        // SAFETY: only `CellWord::localized` stores under this tag, from a
+        // `BlvPtr`, which is never null.
+        BlvPtr(unsafe { NonNull::new_unchecked(self.0 as *mut LispBufferLocalValue) })
+    }
+
+    /// The word stored under `Forwarded` by [`Self::forwarded`].
+    #[inline(always)]
+    fn read_forwarded(self) -> &'static LispFwd {
+        // SAFETY: only `CellWord::forwarded` stores under this tag, from a
+        // `&'static LispFwd`.
+        unsafe { &*(self.0 as *const LispFwd) }
+    }
+
     /// Decode under the tag the word was stored with.
     #[inline(always)]
     fn decode(self, redirect: SymbolRedirect) -> ValueCell {
         match redirect {
-            SymbolRedirect::Plainval => ValueCell::Plain(Value::from_bits(self.0)),
-            // The word was zero-extended from a `u32` by `alias`.
-            SymbolRedirect::Varalias => ValueCell::Alias(SymId(self.0 as u32)),
-            SymbolRedirect::Localized => {
-                // SAFETY: only `CellWord::localized` stores under this tag,
-                // from a `BlvPtr`, which is never null.
-                ValueCell::Localized(BlvPtr(unsafe {
-                    NonNull::new_unchecked(self.0 as *mut LispBufferLocalValue)
-                }))
-            }
-            // SAFETY: only `CellWord::forwarded` stores under this tag, from
-            // a `&'static LispFwd`.
-            SymbolRedirect::Forwarded => {
-                ValueCell::Forwarded(unsafe { &*(self.0 as *const LispFwd) })
-            }
+            SymbolRedirect::Plainval => ValueCell::Plain(self.read_plain()),
+            SymbolRedirect::Varalias => ValueCell::Alias(self.read_alias()),
+            SymbolRedirect::Localized => ValueCell::Localized(self.read_localized()),
+            SymbolRedirect::Forwarded => ValueCell::Forwarded(self.read_forwarded()),
         }
     }
 }
@@ -616,9 +634,11 @@ impl LispSymbol {
     /// `None` for every other redirect.
     #[inline(always)]
     pub(crate) fn plain_value(&self) -> Option<Value> {
-        match self.value_cell() {
-            ValueCell::Plain(value) => Some(value),
-            ValueCell::Alias(_) | ValueCell::Localized(_) | ValueCell::Forwarded(_) => None,
+        match self.flags.redirect() {
+            SymbolRedirect::Plainval => Some(self.val.read_plain()),
+            SymbolRedirect::Varalias | SymbolRedirect::Localized | SymbolRedirect::Forwarded => {
+                None
+            }
         }
     }
 
@@ -644,27 +664,29 @@ impl LispSymbol {
     /// The target of a `Varalias` cell; `None` for every other redirect.
     #[inline(always)]
     pub(crate) fn alias_target(&self) -> Option<SymId> {
-        match self.value_cell() {
-            ValueCell::Alias(target) => Some(target),
-            ValueCell::Plain(_) | ValueCell::Localized(_) | ValueCell::Forwarded(_) => None,
+        match self.flags.redirect() {
+            SymbolRedirect::Varalias => Some(self.val.read_alias()),
+            SymbolRedirect::Plainval | SymbolRedirect::Localized | SymbolRedirect::Forwarded => {
+                None
+            }
         }
     }
 
     /// The record of a `Localized` cell; `None` for every other redirect.
     #[inline(always)]
     pub(crate) fn localized_blv(&self) -> Option<BlvPtr> {
-        match self.value_cell() {
-            ValueCell::Localized(blv) => Some(blv),
-            ValueCell::Plain(_) | ValueCell::Alias(_) | ValueCell::Forwarded(_) => None,
+        match self.flags.redirect() {
+            SymbolRedirect::Localized => Some(self.val.read_localized()),
+            SymbolRedirect::Plainval | SymbolRedirect::Varalias | SymbolRedirect::Forwarded => None,
         }
     }
 
     /// The descriptor of a `Forwarded` cell; `None` for every other redirect.
     #[inline(always)]
     pub(crate) fn forwarded_descriptor(&self) -> Option<&'static LispFwd> {
-        match self.value_cell() {
-            ValueCell::Forwarded(fwd) => Some(fwd),
-            ValueCell::Plain(_) | ValueCell::Alias(_) | ValueCell::Localized(_) => None,
+        match self.flags.redirect() {
+            SymbolRedirect::Forwarded => Some(self.val.read_forwarded()),
+            SymbolRedirect::Plainval | SymbolRedirect::Varalias | SymbolRedirect::Localized => None,
         }
     }
 }
@@ -852,6 +874,18 @@ impl<'a> CellWrite<'a> {
         }
     }
 
+    /// [`Self::plain`] for the bind/unbind/`setq` fast paths: the cell as a
+    /// `Plainval` arm when its flags byte reads plain, untrapped and not
+    /// host-projected (one byte test, [`SymbolFlags::is_plain_untrapped_unprojected`],
+    /// which implies the `Plainval` tag), else `None`.
+    #[inline(always)]
+    pub(super) fn plain_untrapped_unprojected(&mut self) -> Option<PlainArm<'_, 'a>> {
+        self.sym
+            .flags
+            .is_plain_untrapped_unprojected()
+            .then_some(PlainArm { write: self })
+    }
+
     /// THE store seam of a value cell: every change of a tag or a word is
     /// this call.
     ///
@@ -913,7 +947,7 @@ impl PlainArm<'_, '_> {
     /// The value the cell holds ([`Value::UNBOUND`] when void).
     #[inline(always)]
     pub(super) fn value(&self) -> Value {
-        Value::from_bits(self.write.sym.val.0)
+        self.write.sym.val.read_plain()
     }
 
     /// GNU `SET_SYMBOL_VAL`: store VALUE ([`Value::UNBOUND`] voids the cell)
