@@ -588,6 +588,9 @@ impl Context {
             &self.dynamic_module_registry,
         );
         super::super::error::install_in_flight_registry_handle(&self.in_flight_registry);
+        super::super::builtins::install_integer_width_forwarder(
+            self.obarray.int_forwarder(intern("integer-width")),
+        );
         super::super::casetab::activate_casetab_thread_locals(self.cached_standard_case_table);
         let thread = std::thread::current().id();
         let thread_changed = self.last_activation_thread != Some(thread);
