@@ -1142,7 +1142,6 @@ fn concurrent_major_generic_cons_hook_keeps_existing_weak_heap_objects() {
 
 /// Remembered membership is owner identity, even when two live payloads
 /// compare structurally equal. A claim without its append must be rejected.
-#[cfg(debug_assertions)]
 #[test]
 fn major_remembered_membership_requires_owner_identity() {
     let mut heap = heap(true);
@@ -1160,13 +1159,13 @@ fn major_remembered_membership_requires_owner_identity() {
 
     heap.remember_owner(first);
     assert!(heap.is_remembered_for_test(first));
-    heap.debug_assert_remembered_membership(first);
+    heap.assert_remembered_membership_for_test(first);
     assert!(unsafe { (*header_ptr(second)).claim_remembered() });
     // Keep the probe result until after restoring the deliberately invalid
     // claim, so either reader's regression leaves a clean fixture on failure.
     let second_was_reported_remembered = heap.is_remembered_for_test(second);
     let invariant = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        heap.debug_assert_remembered_membership(second);
+        heap.assert_remembered_membership_for_test(second);
     }));
     unsafe {
         (*header_ptr(second))
@@ -1181,5 +1180,5 @@ fn major_remembered_membership_requires_owner_identity() {
         invariant.is_err(),
         "remembered claim without this owner's log must violate the invariant",
     );
-    heap.debug_assert_remembered_membership(second);
+    heap.assert_remembered_membership_for_test(second);
 }
