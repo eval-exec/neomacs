@@ -1282,10 +1282,16 @@ fn compare_buffer_substring_strings(
                 };
                 lp += a_len;
                 rp += b_len;
-                let a = fold(a_code);
-                let b = fold(b_code);
-                if a != b {
-                    return if a < b { -pos } else { pos };
+                // GNU editfns.c:1860-1867 applies the same current canonical
+                // table to both characters. Equal source codes therefore
+                // remain equal; this callback-free comparison need not look
+                // them up, even when an installed table changes their case.
+                if a_code != b_code {
+                    let a = fold(a_code);
+                    let b = fold(b_code);
+                    if a != b {
+                        return if a < b { -pos } else { pos };
+                    }
                 }
                 pos += 1;
             }
