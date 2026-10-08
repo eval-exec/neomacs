@@ -52,7 +52,7 @@ impl FrozenCharacterPolicies {
                 continue;
             }
             let (revision, entries) =
-                neovm_core::emacs_core::fontset::bounded_entries_for_char(ch, 32, 128)?;
+                neovm_core::emacs_core::fontset::bounded_entries_for_char(ch, 32)?;
             if revision != generation {
                 return None;
             }
@@ -85,7 +85,7 @@ impl FrozenCharacterPolicies {
                         weight: None,
                         slant: None,
                         width: None,
-                        repertory: None,
+                        definition: None,
                     },
                 )?);
             }

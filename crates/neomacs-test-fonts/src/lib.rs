@@ -42,6 +42,14 @@ const MPLUS_1_CODE_THIN_NAME: &str = "MPLUS1Code-Thin.ttf";
 const MPLUS_1_CODE_THIN_URL: &str = "https://raw.githubusercontent.com/coz-m/MPLUS_FONTS/9e2b62ba986047127eb0a73b3ca70d75a50114bd/fonts/MPLUS1Code/ttf/MPLUS1Code-Thin.ttf";
 const MPLUS_1_CODE_THIN_SHA256: &str =
     "730c24ad92d46ef913d92dd2ffcd41a535609604b8213d8326292d2664ffd107";
+const LXGW_NERD_RELEASE: &str = "lxgw-wenkai-nerd-1.522";
+const LXGW_NERD_ARCHIVE_URL: &str = "https://github.com/Yikai-Liao/LxgwWenKaiNerdFont/releases/download/v1.522/lxgw-wenkai-nerd-1.522.tar.gz";
+const LXGW_NERD_ARCHIVE_SHA256: &str =
+    "a09a5f9b31ba87f7da06fef1b8174934c9db57c3c50e0c830f0572f19ef9972f";
+const LXGW_NERD_REGULAR: &str = "LXGWWenKaiNerdFont-Regular.ttf";
+const LXGW_NERD_REGULAR_SHA256: &str =
+    "5d07bc2b306b8fb8da5eb47dc9394e93ab63cd945bba305b9605e3c442408b1a";
+const MAX_LXGW_ARCHIVE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_PINNED_FIXTURE_BYTES: u64 = 32 * 1024 * 1024;
 
 #[derive(Clone, Copy)]
@@ -75,6 +83,7 @@ const ARCHIVED_FONTS: [ArchivedFont; 5] = [
 
 static SPLEEN_FIXTURES: OnceLock<SpleenFixtures> = OnceLock::new();
 static WOFF2_COLLECTION_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
+static LXGW_NERD_REGULAR_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static MPLUS_1_CODE_THIN_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static NOTO_COLOR_EMOJI_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 
@@ -185,6 +194,101 @@ pub fn mplus_1_code_thin() -> &'static Path {
         .as_path()
 }
 
+/// Exact reporter family, published by the Nerd Font patch maintainer. The
+/// release archive and its extracted Regular face are independently verified.
+#[must_use]
+pub fn lxgw_wenkai_nerd_regular_1_522() -> &'static Path {
+    LXGW_NERD_REGULAR_FIXTURE
+        .get_or_init(|| {
+            prepare_lxgw_nerd_regular().unwrap_or_else(|error| {
+                panic!("failed to prepare pinned LXGW WenKai Nerd test font: {error}")
+            })
+        })
+        .as_path()
+}
+
+fn prepare_lxgw_nerd_regular() -> Result<PathBuf, FixtureError> {
+    let cache = workspace_root().join("tmp/font-fixtures");
+    create_dir_all(&cache)?;
+    let lock_path = cache.join(format!(".{LXGW_NERD_RELEASE}.lock"));
+    let lock = open_lock(&lock_path)?;
+    lock.lock().map_err(|source| FixtureError::Io {
+        path: lock_path.clone(),
+        source,
+    })?;
+    let result = (|| {
+        let archive_path = cache.join(format!("{LXGW_NERD_RELEASE}.tar.gz"));
+        ensure_download_with_limit(
+            &archive_path,
+            LXGW_NERD_ARCHIVE_URL,
+            LXGW_NERD_ARCHIVE_SHA256,
+            MAX_LXGW_ARCHIVE_BYTES,
+        )?;
+        let directory = cache.join(LXGW_NERD_RELEASE);
+        create_dir_all(&directory)?;
+        let destination = directory.join(LXGW_NERD_REGULAR);
+        if destination.is_file() && verify_sha256(&destination, LXGW_NERD_REGULAR_SHA256).is_ok() {
+            return Ok(destination);
+        }
+        let file = File::open(&archive_path).map_err(|source| FixtureError::Io {
+            path: archive_path.clone(),
+            source,
+        })?;
+        let mut archive = tar::Archive::new(GzDecoder::new(file));
+        let entries = archive.entries().map_err(|source| FixtureError::Io {
+            path: archive_path.clone(),
+            source,
+        })?;
+        let expected = Path::new(LXGW_NERD_RELEASE).join(LXGW_NERD_REGULAR);
+        for entry in entries {
+            let mut entry = entry.map_err(|source| FixtureError::Io {
+                path: archive_path.clone(),
+                source,
+            })?;
+            let path = entry.path().map_err(|source| FixtureError::Io {
+                path: archive_path.clone(),
+                source,
+            })?;
+            if path.as_ref() != expected {
+                continue;
+            }
+            if entry.size() > MAX_PINNED_FIXTURE_BYTES {
+                return Err(FixtureError::InvalidArchiveEntry(path.into_owned()));
+            }
+            let partial = directory.join(format!(".{LXGW_NERD_REGULAR}.partial"));
+            let mut output = File::create(&partial).map_err(|source| FixtureError::Io {
+                path: partial.clone(),
+                source,
+            })?;
+            io::copy(&mut entry, &mut output).map_err(|source| FixtureError::Io {
+                path: partial.clone(),
+                source,
+            })?;
+            verify_sha256(&partial, LXGW_NERD_REGULAR_SHA256)?;
+            if destination.exists() {
+                fs::remove_file(&destination).map_err(|source| FixtureError::Io {
+                    path: destination.clone(),
+                    source,
+                })?;
+            }
+            fs::rename(&partial, &destination).map_err(|source| FixtureError::Io {
+                path: destination.clone(),
+                source,
+            })?;
+            return Ok(destination);
+        }
+        Err(FixtureError::MissingArchiveEntry {
+            archive: archive_path,
+            entry: expected.display().to_string(),
+        })
+    })();
+    FileExt::unlock(&lock).map_err(|source| FixtureError::Io {
+        path: lock_path,
+        source,
+    })?;
+    result
+}
+
 #[derive(Debug, Error)]
 enum FixtureError {
     #[error("I/O failure at {path}: {source}")]
@@ -290,6 +394,15 @@ fn ensure_download(
     url: &'static str,
     expected_sha256: &'static str,
 ) -> Result<(), FixtureError> {
+    ensure_download_with_limit(path, url, expected_sha256, MAX_PINNED_FIXTURE_BYTES)
+}
+
+fn ensure_download_with_limit(
+    path: &Path,
+    url: &'static str,
+    expected_sha256: &'static str,
+    max_bytes: u64,
+) -> Result<(), FixtureError> {
     if path.exists() && verify_sha256(path, expected_sha256).is_ok() {
         return Ok(());
     }
@@ -310,7 +423,7 @@ fn ensure_download(
     let bytes = response
         .body_mut()
         .with_config()
-        .limit(MAX_PINNED_FIXTURE_BYTES)
+        .limit(max_bytes)
         .read_to_vec()
         .map_err(|error| FixtureError::Download {
             url,

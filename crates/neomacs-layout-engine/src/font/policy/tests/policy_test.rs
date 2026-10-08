@@ -11,7 +11,7 @@ fn registry_constraints_are_platform_neutral_and_typed() {
         weight: None,
         slant: None,
         width: None,
-        repertory: None,
+        definition: None,
     };
 
     let constraints = GnuFontPolicy::constraints_for_spec(&spec, '好');
@@ -33,7 +33,7 @@ fn generic_unicode_registry_does_not_invent_a_charset_filter() {
         weight: None,
         slant: None,
         width: None,
-        repertory: None,
+        definition: None,
     };
 
     let constraints = GnuFontPolicy::constraints_for_spec(&spec, 'λ');

@@ -79,7 +79,10 @@ fn query_charset_ranges_follow_gnu_registry_uniquifiers_when_registry_is_present
         weight: None,
         slant: None,
         width: None,
-        repertory: Some(FontRepertory::CharTableRanges(vec![(0x4E00, 0x9FFF)])),
+        definition: Some(neovm_core::emacs_core::fontset::FontDefinitionMetadata {
+            encoding: font_sym("unicode"),
+            repertory: Some(FontRepertory::CharTableRanges(vec![(0x4E00, 0x9FFF)])),
+        }),
     };
 
     assert_eq!(
@@ -89,7 +92,7 @@ fn query_charset_ranges_follow_gnu_registry_uniquifiers_when_registry_is_present
 }
 
 #[test]
-fn query_charset_ranges_use_repertory_when_registry_is_absent() {
+fn query_charset_ranges_do_not_treat_repertory_metadata_as_glyph_coverage() {
     let spec = StoredFontSpec {
         family: None,
         registry: None,
@@ -97,10 +100,13 @@ fn query_charset_ranges_use_repertory_when_registry_is_absent() {
         weight: None,
         slant: None,
         width: None,
-        repertory: Some(FontRepertory::CharTableRanges(vec![(0x4E00, 0x9FFF)])),
+        definition: Some(neovm_core::emacs_core::fontset::FontDefinitionMetadata {
+            encoding: font_sym("unicode"),
+            repertory: Some(FontRepertory::CharTableRanges(vec![(0x4E00, 0x9FFF)])),
+        }),
     };
 
-    assert_eq!(query_charset_ranges(&spec, '好'), vec![(0x4E00, 0x9FFF)]);
+    assert!(query_charset_ranges(&spec, '好').is_empty());
 }
 
 #[test]
@@ -113,7 +119,7 @@ fn query_charset_ranges_skip_generic_gnu_registries() {
             weight: None,
             slant: None,
             width: None,
-            repertory: None,
+            definition: None,
         };
         assert!(query_charset_ranges(&spec, '好').is_empty(), "{registry}");
     }
@@ -134,7 +140,7 @@ fn gb2312_registry_pattern() -> (
         weight: None,
         slant: None,
         width: None,
-        repertory: None,
+        definition: None,
     };
     let representative = representative_char_for_spec(&spec);
     let ranges = query_charset_ranges(&spec, representative);
@@ -285,7 +291,7 @@ fn registry_only_fontset_specs_try_requested_family_before_unspecified_fallback(
         weight: None,
         slant: None,
         width: None,
-        repertory: None,
+        definition: None,
     };
     let order = family_search_order("monospace", &spec);
     assert!(matches!(order.first(), Some(Some(_))));
@@ -301,7 +307,7 @@ fn constrained_fontset_specs_without_family_try_requested_family_first() {
         weight: Some(FontWeight::SEMI_BOLD),
         slant: None,
         width: None,
-        repertory: None,
+        definition: None,
     };
     let order = family_search_order("monospace", &spec);
     assert!(matches!(order.first(), Some(Some(_))));
@@ -527,7 +533,7 @@ fn find_font_candidate_prefers_the_requested_family_over_an_earlier_fallback() {
         weight: Some(FontWeight::Normal),
         slant: Some(FontSlant::Normal),
         width: None,
-        repertory: None,
+        definition: None,
     };
 
     let selected = select_find_font_candidate(
@@ -568,7 +574,7 @@ fn find_font_candidate_prefers_requested_width_over_candidate_order() {
         weight: Some(FontWeight::Bold),
         slant: Some(FontSlant::Normal),
         width: Some(FontWidth::Normal),
-        repertory: None,
+        definition: None,
     };
 
     let selected = select_find_font_candidate(

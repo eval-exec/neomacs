@@ -4,7 +4,7 @@
 //! Fontconfig behavior. This module translates a stored Lisp font spec into a
 //! typed native-catalog query without naming any operating-system backend.
 
-use neovm_core::emacs_core::fontset::{StoredFontSpec, repertory_target_ranges};
+use neovm_core::emacs_core::fontset::StoredFontSpec;
 use neovm_core::emacs_core::intern::resolve_sym;
 
 /// A fontset's explicit family constrains the search. Without one, GNU
@@ -383,15 +383,6 @@ pub(crate) fn query_charset_ranges(spec: &StoredFontSpec, ch: char) -> Vec<(u32,
         );
     }
 
-    if let Some(mut ranges) = spec
-        .repertory
-        .as_ref()
-        .and_then(repertory_target_ranges)
-        .filter(|ranges| !ranges.is_empty())
-    {
-        ranges.push((ch as u32, ch as u32));
-        return coalesce_ranges(ranges);
-    }
     Vec::new()
 }
 

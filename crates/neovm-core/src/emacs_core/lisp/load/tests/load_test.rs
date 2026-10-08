@@ -7128,20 +7128,32 @@ fn bootstrap_runtime_setup_default_fontset_preserves_gnu_han_order() {
             FontSpecEntry::ExplicitNone => None,
         })
         .collect();
-    // GNU Emacs 31.1 returns a shorter Han sequence here than older
-    // assumptions suggested. Normalize GNU's wildcard-heavy registry
-    // strings to Neomacs' stored registry form before comparing.
+    // Rendering candidates preserve every declared Han entry, even when
+    // its legacy encoding excludes 好. GNU fontset_find_font checks actual
+    // font glyph coverage instead of filtering these definitions. The first
+    // 19 entries follow GNU fontset.el's Han declaration (lines 706-724),
+    // then come the three prepended Unicode fallback fonts and the first
+    // original fallback. The adjacent fontset-font test separately pins
+    // GNU's encoding-filtered public pattern query.
     assert_eq!(
         registries,
         vec![
             Some("gb2312.1980-0".to_string()),
             Some("jisx0208*".to_string()),
+            Some("jisx0212*".to_string()),
             Some("big5*".to_string()),
             Some("ksc5601.1987*".to_string()),
             Some("cns11643.1992-1".to_string()),
+            Some("cns11643.1992-2".to_string()),
+            Some("cns11643.1992-3".to_string()),
+            Some("cns11643.1992-4".to_string()),
+            Some("cns11643.1992-5".to_string()),
+            Some("cns11643.1992-6".to_string()),
+            Some("cns11643.1992-7".to_string()),
             Some("gbk-0".to_string()),
             Some("gb18030".to_string()),
             Some("jisx0213.2000-1".to_string()),
+            Some("jisx0213.2000-2".to_string()),
             Some("jisx0213.2004-1".to_string()),
             Some("iso10646-1".to_string()),
             Some("iso10646-1".to_string()),
@@ -7149,14 +7161,6 @@ fn bootstrap_runtime_setup_default_fontset_preserves_gnu_han_order() {
             Some("iso10646-1".to_string()),
             Some("iso10646-1".to_string()),
             Some("gb2312.1980".to_string()),
-            Some("gbk-0".to_string()),
-            Some("gb18030".to_string()),
-            Some("jisx0208".to_string()),
-            Some("ksc5601.1987".to_string()),
-            Some("cns11643.1992-1".to_string()),
-            Some("big5".to_string()),
-            Some("jisx0213.2000-1".to_string()),
-            Some("jisx0213.2004-1".to_string()),
         ]
     );
 }

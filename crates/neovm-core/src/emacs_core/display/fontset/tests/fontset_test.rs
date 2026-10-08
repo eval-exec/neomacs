@@ -10,8 +10,54 @@ fn registry_spec(name: &str) -> FontSpecEntry {
         weight: None,
         slant: None,
         width: None,
-        repertory: None,
+        definition: None,
     })
+}
+
+#[test]
+fn family_only_cjk_rule_is_a_rendering_candidate_without_a_registry() {
+    crate::test_utils::init_test_tracing();
+    reset_fontset_registry();
+    reset_charset_registry();
+    set_fontset_font(
+        &Value::T,
+        &Value::cons(Value::fixnum(0x2E80), Value::fixnum(0x9FFF)),
+        &Value::string("LXGWWenKai Nerd Font"),
+        None,
+        None,
+        None,
+        Some(&Value::NIL),
+    )
+    .expect("install the family-only fontset rule");
+    let entries = matching_entries_for_fontset(DEFAULT_FONTSET_NAME, '中');
+    assert!(
+        entries
+            .iter()
+            .any(|entry| matches!(entry, FontSpecEntry::Font(spec)
+            if spec.family == Some(intern("LXGWWenKai Nerd Font")))),
+        "a missing registry must not discard the configured CJK rendering candidate"
+    );
+}
+
+#[test]
+fn detached_capture_keeps_family_only_cjk_rendering_candidates() {
+    crate::test_utils::init_test_tracing();
+    reset_fontset_registry();
+    reset_charset_registry();
+    set_fontset_font(
+        &Value::T,
+        &Value::fixnum('中' as i64),
+        &Value::string("LXGWWenKai Nerd Font"),
+        None,
+        None,
+        None,
+        Some(&Value::NIL),
+    )
+    .expect("install the family-only fontset rule");
+    let (_, entries) = bounded_entries_for_char('中', 1)
+        .expect("rendering capture does not need charset metadata expansion");
+    assert!(matches!(&entries[..], [FontSpecEntry::Font(spec)]
+        if spec.family == Some(intern("LXGWWenKai Nerd Font")) && spec.definition.is_none()));
 }
 
 #[test]
@@ -30,14 +76,17 @@ fn unmatched_family_font_spec_defaults_to_ascii_repertory_like_gnu() {
     };
 
     assert_eq!(
-        spec.repertory,
-        Some(FontRepertory::Charset(intern("ascii"))),
+        spec.definition,
+        Some(FontDefinitionMetadata {
+            encoding: intern("ascii"),
+            repertory: Some(FontRepertory::Charset(intern("ascii"))),
+        }),
         "GNU find_font_encoding falls back to Qascii when no alist pattern matches"
     );
     assert!(spec.matches_char('A' as u32));
     assert!(
         !spec.matches_char(0xE6AD),
-        "an unmatched family-only spec must not capture a private-use icon"
+        "ASCII query metadata does not describe private-use glyph coverage"
     );
 }
 
@@ -52,7 +101,7 @@ fn font_encoding_entry_distinguishes_nil_and_explicit_repertory() {
         weight: None,
         slant: None,
         width: None,
-        repertory: None,
+        definition: None,
     };
 
     let nil_repertory_entry = Value::list(vec![
@@ -61,8 +110,11 @@ fn font_encoding_entry_distinguishes_nil_and_explicit_repertory() {
     ]);
     let nil_repertory_alist = Value::list(vec![nil_repertory_entry]);
     assert_eq!(
-        resolve_font_repertory(&spec, Some(&nil_repertory_alist)),
-        FontRepertoryConstraint::Unrestricted,
+        resolve_font_definition(&spec, Some(&nil_repertory_alist)),
+        FontDefinitionMetadata {
+            encoding: intern("unicode-bmp"),
+            repertory: None,
+        },
         "(ENCODING) has GNU's explicit nil repertory"
     );
 
@@ -72,8 +124,11 @@ fn font_encoding_entry_distinguishes_nil_and_explicit_repertory() {
     );
     let explicit_repertory_alist = Value::list(vec![explicit_repertory_entry]);
     assert_eq!(
-        resolve_font_repertory(&spec, Some(&explicit_repertory_alist)),
-        FontRepertoryConstraint::Restricted(FontRepertory::Charset(intern("unicode-bmp")))
+        resolve_font_definition(&spec, Some(&explicit_repertory_alist)),
+        FontDefinitionMetadata {
+            encoding: intern("unicode"),
+            repertory: Some(FontRepertory::Charset(intern("unicode-bmp"))),
+        }
     );
 }
 
@@ -187,13 +242,13 @@ fn fallback_entries_append_after_specific_entries() {
     );
 
     assert_eq!(
-        data.matching_entries_for_char('好' as u32),
+        data.entries_for_char('好' as u32, FontsetLookupPurpose::Patterns),
         vec![registry_spec("gb2312.1980-0"), registry_spec("iso10646-1")]
     );
 }
 
 #[test]
-fn repertory_charset_filters_non_matching_entries() {
+fn encoding_charset_filters_informational_patterns() {
     crate::test_utils::init_test_tracing();
     let mut data = FontsetData::default();
     data.update_target(
@@ -205,7 +260,10 @@ fn repertory_charset_filters_non_matching_entries() {
             weight: None,
             slant: None,
             width: None,
-            repertory: Some(FontRepertory::Charset(intern("iso-8859-1"))),
+            definition: Some(FontDefinitionMetadata {
+                encoding: intern("iso-8859-1"),
+                repertory: Some(FontRepertory::Charset(intern("iso-8859-1"))),
+            }),
         }),
         FontsetAddMode::Append,
     );
@@ -218,13 +276,16 @@ fn repertory_charset_filters_non_matching_entries() {
             weight: None,
             slant: None,
             width: None,
-            repertory: Some(FontRepertory::Charset(intern("unicode-bmp"))),
+            definition: Some(FontDefinitionMetadata {
+                encoding: intern("unicode-bmp"),
+                repertory: Some(FontRepertory::Charset(intern("unicode-bmp"))),
+            }),
         }),
         FontsetAddMode::Append,
     );
 
     let registries: Vec<_> = data
-        .matching_entries_for_char('好' as u32)
+        .entries_for_char('好' as u32, FontsetLookupPurpose::Patterns)
         .into_iter()
         .filter_map(|entry| match entry {
             FontSpecEntry::Font(spec) => spec.registry.map(|sym| resolve_sym(sym).to_string()),
@@ -236,7 +297,7 @@ fn repertory_charset_filters_non_matching_entries() {
 }
 
 #[test]
-fn repertory_subset_charset_filters_non_matching_entries() {
+fn encoding_subset_charset_filters_informational_patterns() {
     crate::test_utils::init_test_tracing();
     reset_charset_registry();
 
@@ -270,7 +331,10 @@ fn repertory_subset_charset_filters_non_matching_entries() {
             weight: None,
             slant: None,
             width: None,
-            repertory: Some(FontRepertory::Charset(intern("iso-8859-2-test"))),
+            definition: Some(FontDefinitionMetadata {
+                encoding: intern("iso-8859-2-test"),
+                repertory: Some(FontRepertory::Charset(intern("iso-8859-2-test"))),
+            }),
         }),
         FontsetAddMode::Append,
     );
@@ -283,13 +347,16 @@ fn repertory_subset_charset_filters_non_matching_entries() {
             weight: None,
             slant: None,
             width: None,
-            repertory: Some(FontRepertory::Charset(intern("unicode-bmp"))),
+            definition: Some(FontDefinitionMetadata {
+                encoding: intern("unicode-bmp"),
+                repertory: Some(FontRepertory::Charset(intern("unicode-bmp"))),
+            }),
         }),
         FontsetAddMode::Append,
     );
 
     let registries: Vec<_> = data
-        .matching_entries_for_char('好' as u32)
+        .entries_for_char('好' as u32, FontsetLookupPurpose::Patterns)
         .into_iter()
         .filter_map(|entry| match entry {
             FontSpecEntry::Font(spec) => spec.registry.map(|sym| resolve_sym(sym).to_string()),
@@ -575,7 +642,10 @@ fn fontset_registry_pdump_uses_symbol_identity_for_charset_repertories() {
                         weight: None,
                         slant: None,
                         width: None,
-                        repertory: Some(FontRepertory::Charset(repertory_sym)),
+                        definition: Some(FontDefinitionMetadata {
+                            encoding: repertory_sym,
+                            repertory: Some(FontRepertory::Charset(repertory_sym)),
+                        }),
                     })],
                 }],
                 fallback: None,
@@ -598,7 +668,7 @@ fn fontset_registry_pdump_uses_symbol_identity_for_charset_repertories() {
         .expect("dumped font spec");
 
     assert!(matches!(
-        spec.repertory.as_ref().expect("dumped repertory"),
+        spec.definition.as_ref().expect("dumped definition").repertory.as_ref().expect("dumped repertory"),
         crate::emacs_core::pdump::types::DumpFontRepertory::CharsetSym(sym)
             if sym.0 == repertory_sym.0
     ));
@@ -656,26 +726,34 @@ fn bounded_fontset_capture_preserves_order_and_stops_at_explicit_none() {
         registry_spec("unreachable"),
     ]);
     assert_eq!(
-        data.bounded_entries_for_char('好' as u32, 2, 0),
+        data.bounded_entries_for_char('好' as u32, 2),
         Some(vec![registry_spec("first"), FontSpecEntry::ExplicitNone])
     );
-    assert_eq!(data.bounded_entries_for_char('好' as u32, 1, 0), None);
+    assert_eq!(data.bounded_entries_for_char('好' as u32, 1), None);
 }
 
 #[test]
-fn bounded_fontset_capture_rejects_large_and_charset_repertories_before_expansion() {
+fn bounded_fontset_capture_omits_repertory_metadata_without_expansion() {
     let mut data = FontsetData::default();
     let FontSpecEntry::Font(mut spec) = registry_spec("fixture") else {
         unreachable!()
     };
-    spec.repertory = Some(FontRepertory::CharTableRanges(vec![(0, 100); 128]));
+    spec.definition = Some(FontDefinitionMetadata {
+        encoding: intern("ascii"),
+        repertory: Some(FontRepertory::CharTableRanges(vec![(0, 100); 128])),
+    });
     data.fallback = Some(vec![FontSpecEntry::Font(spec.clone())]);
-    assert_eq!(data.bounded_entries_for_char('好' as u32, 2, 127), None);
     assert_eq!(
-        data.bounded_entries_for_char('好' as u32, 2, 128),
-        Some(Vec::new())
+        data.bounded_entries_for_char('好' as u32, 1),
+        Some(vec![registry_spec("fixture")])
     );
-    spec.repertory = Some(FontRepertory::Charset(intern("unicode")));
+    spec.definition = Some(FontDefinitionMetadata {
+        encoding: intern("ascii"),
+        repertory: Some(FontRepertory::Charset(intern("ascii"))),
+    });
     data.fallback = Some(vec![FontSpecEntry::Font(spec)]);
-    assert_eq!(data.bounded_entries_for_char('好' as u32, 2, 128), None);
+    assert_eq!(
+        data.bounded_entries_for_char('好' as u32, 1),
+        Some(vec![registry_spec("fixture")])
+    );
 }

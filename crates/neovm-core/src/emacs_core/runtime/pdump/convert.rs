@@ -36,8 +36,9 @@ use crate::emacs_core::coding::{CodingSystemInfo, CodingSystemManager, EolType};
 use crate::emacs_core::custom::CustomManager;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::fontset::{
-    FontRepertory, FontSpecEntry, FontsetDataSnapshot, FontsetRangeEntrySnapshot,
-    FontsetRegistrySnapshot, StoredFontSpec, restore_fontset_registry, snapshot_fontset_registry,
+    FontDefinitionMetadata, FontRepertory, FontSpecEntry, FontsetDataSnapshot,
+    FontsetRangeEntrySnapshot, FontsetRegistrySnapshot, StoredFontSpec, restore_fontset_registry,
+    snapshot_fontset_registry,
 };
 use crate::emacs_core::interactive::{InteractiveRegistry, InteractiveSpec};
 use crate::emacs_core::intern::{self, NameId, SymId};
@@ -4102,7 +4103,12 @@ fn dump_stored_font_spec(spec: StoredFontSpec) -> DumpStoredFontSpec {
         weight: spec.weight.map(FontWeight::dump_code),
         slant: spec.slant.map(|slant| dump_font_slant(&slant)),
         width: spec.width.map(|width| dump_font_width(&width)),
-        repertory: spec.repertory.map(dump_font_repertory),
+        definition: spec
+            .definition
+            .map(|definition| DumpFontDefinitionMetadata {
+                encoding: dump_sym_id(definition.encoding),
+                repertory: definition.repertory.map(dump_font_repertory),
+            }),
     }
 }
 
@@ -6482,7 +6488,13 @@ fn load_font_spec_entry(entry: &DumpFontSpecEntry) -> FontSpecEntry {
             weight: spec.weight.map(FontWeight::from_dump_code),
             slant: spec.slant.as_ref().map(load_font_slant),
             width: spec.width.as_ref().map(load_font_width),
-            repertory: spec.repertory.as_ref().map(load_font_repertory),
+            definition: spec
+                .definition
+                .as_ref()
+                .map(|definition| FontDefinitionMetadata {
+                    encoding: load_sym_id(&definition.encoding),
+                    repertory: definition.repertory.as_ref().map(load_font_repertory),
+                }),
         }),
         DumpFontSpecEntry::ExplicitNone => FontSpecEntry::ExplicitNone,
     }
