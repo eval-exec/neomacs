@@ -5,10 +5,17 @@
 fn thread_safety_compile_contracts() {
     let cases = trybuild::TestCases::new();
     cases.compile_fail("tests/thread_safety_ui/*.rs");
-    // Context's host closure diagnostics name the selected Flow representation.
-    // Keep the same transfer contracts with each feature's actual diagnostics.
-    #[cfg(feature = "flow-word")]
-    cases.compile_fail("tests/thread_safety_ui/flow_word/*.rs");
-    #[cfg(not(feature = "flow-word"))]
-    cases.compile_fail("tests/thread_safety_ui/plain_flow/*.rs");
+    // Context's host closure diagnostics name the selected Flow representation,
+    // and its platform fields change the reported bounds on arm64 macOS.
+    // Each target fixture keeps the identical transfer attempt and exact output.
+    let context_cases = match (
+        cfg!(feature = "flow-word"),
+        cfg!(all(target_arch = "aarch64", target_os = "macos")),
+    ) {
+        (true, true) => "tests/thread_safety_ui/arm64_macos/flow_word/*.rs",
+        (false, true) => "tests/thread_safety_ui/arm64_macos/plain_flow/*.rs",
+        (true, false) => "tests/thread_safety_ui/flow_word/*.rs",
+        (false, false) => "tests/thread_safety_ui/plain_flow/*.rs",
+    };
+    cases.compile_fail(context_cases);
 }
