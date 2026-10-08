@@ -1506,14 +1506,29 @@ impl Context {
         // more (a buffer-local or forwarded `let`, a watched symbol, an
         // `unwind-protect`, ...) hands the remaining suffix -- in the same
         // top-down order -- to the general unwinder.
-        let mut quit_scope = super::specpdl::UnwindQuitScope::enter(self);
-        let context = quit_scope.context();
-        context.pop_simple_specpdl_suffix(count);
-        let result = if context.specpdl.len() > count {
-            context.drain_unwind_to(count, result)
+        if !self.quit_flag_value().is_nil() {
+            return self.unbind_suffix_suspending_quit(count, result);
+        }
+        // No quit pending: GNU's bracket saves and puts back nil, so there is
+        // nothing to suspend, root or restore.
+        self.unbind_suffix_to(count, result)
+    }
+
+    #[inline]
+    fn unbind_suffix_to(&mut self, count: usize, result: EvalResult) -> EvalResult {
+        self.pop_simple_specpdl_suffix(count);
+        if self.specpdl.len() > count {
+            self.drain_unwind_to(count, result)
         } else {
             result
-        };
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn unbind_suffix_suspending_quit(&mut self, count: usize, result: EvalResult) -> EvalResult {
+        let mut quit_scope = super::specpdl::UnwindQuitScope::enter(self);
+        let result = quit_scope.context().unbind_suffix_to(count, result);
         quit_scope.finish(result)
     }
 

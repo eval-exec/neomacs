@@ -1241,25 +1241,40 @@ impl Context {
     }
 
     pub(crate) fn unbind_to_result(&mut self, count: usize) -> Result<(), Flow> {
+        // GNU `unbind_to` (eval.c:3907-3930) suspends a pending quit while
+        // cleanups run. With no quit pending its bracket saves and puts back
+        // nil, so there is nothing to suspend, root or restore.
+        if !self.quit_flag_value().is_nil() {
+            return self.unbind_entries_suspending_quit(count);
+        }
+        self.unbind_entries_to(count)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn unbind_entries_suspending_quit(&mut self, count: usize) -> Result<(), Flow> {
         let mut quit_scope = UnwindQuitScope::enter(self);
-        let context = quit_scope.context();
-        let result = (|| -> Result<(), Flow> {
-            while context.specpdl.len() > count {
-                match context.next_popped_binding_policy() {
-                    PoppedBindingPolicy::PureStorage => {
-                        let Some(binding) = context.specpdl.pop() else {
-                            break;
-                        };
-                        context.unbind_popped_binding(binding)?;
-                    }
-                    PoppedBindingPolicy::LispCleanup => context.unbind_popped_with_recovery()?,
-                }
-            }
-            Ok(())
-        })();
+        let result = quit_scope.context().unbind_entries_to(count);
         quit_scope.finish_unbind(result)
     }
 
+    #[inline]
+    fn unbind_entries_to(&mut self, count: usize) -> Result<(), Flow> {
+        while self.specpdl.len() > count {
+            match self.next_popped_binding_policy() {
+                PoppedBindingPolicy::PureStorage => {
+                    let Some(binding) = self.specpdl.pop() else {
+                        break;
+                    };
+                    self.unbind_popped_binding(binding)?;
+                }
+                PoppedBindingPolicy::LispCleanup => self.unbind_popped_with_recovery()?,
+            }
+        }
+        Ok(())
+    }
+
+    #[inline]
     #[deny(clippy::wildcard_enum_match_arm)]
     fn next_popped_binding_policy(&self) -> PoppedBindingPolicy {
         match self.specpdl.last() {
@@ -1316,6 +1331,10 @@ impl Context {
         result
     }
 
+    // Inlined into the unbind loop, which is where base `unbind_to_result`
+    // kept this match: an out-of-line call per popped entry cost about 0.4%
+    // of the org-editing board row.
+    #[inline]
     fn unbind_popped_binding(&mut self, binding: SpecBinding) -> Result<(), Flow> {
         match binding {
             SpecBinding::Let { sym_id, old_value } => {
