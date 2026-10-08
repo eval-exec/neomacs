@@ -137,11 +137,13 @@ fn claim(
         }
     } else {
         let mut legacy = WorkerMarkLogs::default();
+        let mut stack = MarkStack::default();
         let handled = if job.major {
-            concurrent_try_mark_owned_logged::<true>(value, &job.base, gray, &mut legacy)
+            concurrent_try_mark_owned_logged::<true>(value, &job.base, &mut stack, &mut legacy)
         } else {
-            concurrent_try_mark_owned_logged::<false>(value, &job.base, gray, &mut legacy)
+            concurrent_try_mark_owned_logged::<false>(value, &job.base, &mut stack, &mut legacy)
         };
+        gray.extend(stack.into_values());
         logs.result.promo.extend(legacy.result.promo);
         logs.result.symbols.extend(legacy.result.symbols);
         handled
@@ -435,6 +437,7 @@ fn concurrent_leaf_claims_do_not_read_marker_chain_payloads() {
 fn concurrent_leaf_claim_rmw_has_one_winner_across_threads() {
     let mut heap = heap(true, true, true);
     let value = Leaf::Marker.allocate(&mut heap);
+    let value_word = MarkWord::of(value);
     let job = job(&mut heap, true);
     let promotions = std::thread::scope(|scope| {
         let workers: Vec<_> = (0..8)
@@ -442,7 +445,10 @@ fn concurrent_leaf_claim_rmw_has_one_winner_across_threads() {
                 let job = &job;
                 scope.spawn(move || {
                     let mut logs = EnabledWorkerMarkLogs::default();
-                    assert!(claim(value, job, &mut Vec::new(), &mut logs));
+                    // SAFETY: this scoped collector fixture retains the heap
+                    // and admitted job through every worker, with no payload
+                    // mutation, collection or reclamation during the claims.
+                    assert!(claim(value_word.value(), job, &mut Vec::new(), &mut logs));
                     logs.result.promo.len()
                 })
             })

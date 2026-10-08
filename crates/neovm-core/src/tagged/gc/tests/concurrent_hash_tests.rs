@@ -245,11 +245,14 @@ fn tier_h_n_writers_retire_once_while_atomic_reader_keeps_original_words() {
     let (copied, copy_finished) = std::sync::mpsc::sync_channel(1);
     let logs = std::thread::scope(|scope| {
         let mut writers = Vec::new();
+        let mut reader_finished = Vec::new();
         for writer in 0..WRITERS {
             let snapshot = snapshot.clone();
             let table = table.clone();
             let start = start.clone();
             let copied = copied.clone();
+            let (finished, read_finished) = std::sync::mpsc::sync_channel(1);
+            reader_finished.push(finished);
             writers.push(scope.spawn(move || {
                 let mut mutator = ConcurrentHashMutatorState::new();
                 start.wait();
@@ -277,9 +280,19 @@ fn tier_h_n_writers_retire_once_while_atomic_reader_keeps_original_words() {
                         TaggedValue::fixnum(key + 5000),
                     );
                 }
-                // Each mutator keeps its own retire/dirty logs. Returning
-                // transfers them to its join result, preserving their lifetime.
-                (mutator.retired_hash_buffers, mutator.written_hash_owners)
+                // Keep each original slots allocation on its writer until the
+                // reader has completed. Only plain counts cross the join;
+                // neither local Values nor their retirement buffers move.
+                if let Err(error) = read_finished.recv_timeout(std::time::Duration::from_secs(10)) {
+                    // A failed completion wait cannot prove the reader ended.
+                    // Retain its possible backing before failing this fixture.
+                    std::mem::forget(mutator.retired_hash_buffers);
+                    panic!("reader did not finish before writer retirement: {error}");
+                }
+                (
+                    mutator.retired_hash_buffers.len(),
+                    mutator.written_hash_owners.len(),
+                )
             }));
         }
         let reader_snapshot = snapshot.clone();
@@ -298,6 +311,9 @@ fn tier_h_n_writers_retire_once_while_atomic_reader_keeps_original_words() {
                     .lock_reader(reader_snapshot.get(owner).unwrap())
                     .is_none()
             );
+            for finished in reader_finished {
+                finished.send(()).unwrap();
+            }
         });
         let logs: Vec<_> = writers
             .into_iter()
@@ -306,8 +322,8 @@ fn tier_h_n_writers_retire_once_while_atomic_reader_keeps_original_words() {
         reader.join().unwrap();
         logs
     });
-    assert_eq!(logs.iter().map(|log| log.0.len()).sum::<usize>(), 1);
-    assert_eq!(logs.iter().map(|log| log.1.len()).sum::<usize>(), 1);
+    assert_eq!(logs.iter().map(|log| log.0).sum::<usize>(), 1);
+    assert_eq!(logs.iter().map(|log| log.1).sum::<usize>(), 1);
     assert!(!snapshot.is_poisoned());
     drop(snapshot);
     drop(logs);
@@ -495,7 +511,12 @@ fn tier_h_n_deferred_writers_admit_one_dirty_owner_and_no_retirement() {
                         TaggedValue::fixnum(key + 5000),
                     );
                 }
-                (mutator.retired_hash_buffers, mutator.written_hash_owners)
+                // A deferred entry cannot admit a reader, so local retirement
+                // buffers may end here. Return only the exact count evidence.
+                (
+                    mutator.retired_hash_buffers.len(),
+                    mutator.written_hash_owners.len(),
+                )
             }));
         }
         writers
@@ -503,11 +524,8 @@ fn tier_h_n_deferred_writers_admit_one_dirty_owner_and_no_retirement() {
             .map(|writer| writer.join().unwrap())
             .collect::<Vec<_>>()
     });
-    assert_eq!(
-        logs.iter().map(|(retired, _)| retired.len()).sum::<usize>(),
-        0
-    );
-    assert_eq!(logs.iter().map(|(_, dirty)| dirty.len()).sum::<usize>(), 1);
+    assert_eq!(logs.iter().map(|(retired, _)| retired).sum::<usize>(), 0);
+    assert_eq!(logs.iter().map(|(_, dirty)| dirty).sum::<usize>(), 1);
     let entry = snapshot.get(owner).unwrap();
     assert!(entry.is_deferred());
     assert!(snapshot.lock_reader(entry).is_none());
@@ -579,7 +597,9 @@ fn tier_h_reader_lease_blocks_writers_until_every_word_and_callback_is_routed() 
                 object.table.data.reserve(2048);
                 object.table.data.clear();
                 object.table = table_with_entries(200);
-                mutator.retired_hash_buffers
+                // Reader completion precedes this writer's lock admission;
+                // local buffers can end here without any backing reader.
+                mutator.retired_hash_buffers.len()
             });
             write_attempted
                 .recv_timeout(std::time::Duration::from_secs(10))
@@ -593,7 +613,7 @@ fn tier_h_reader_lease_blocks_writers_until_every_word_and_callback_is_routed() 
             write_acquired
                 .recv_timeout(std::time::Duration::from_secs(10))
                 .unwrap();
-            assert!(writer.join().unwrap().is_empty());
+            assert_eq!(writer.join().unwrap(), 0);
         });
         assert!(snapshot.get(owner).unwrap().reader_done());
         assert!(!snapshot.is_poisoned());
