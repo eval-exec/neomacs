@@ -4673,6 +4673,49 @@ fn bootstrap_runtime_file_directories_are_unibyte_and_vc_mode_matches_gnu() {
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
 
+    // Source archives and remote correctness lanes omit checkout metadata.
+    // Give the real VC path a committed HELLO file in this test's own repo.
+    let fixture = tempdir().expect("HELLO Git fixture");
+    fs::copy(
+        crate::test_utils::workspace_root().join("etc/HELLO"),
+        fixture.path().join("HELLO"),
+    )
+    .expect("copy HELLO fixture");
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .current_dir(fixture.path())
+            .args([
+                "-c",
+                "core.hooksPath=.git/no-fixture-hooks",
+                "-c",
+                "commit.gpgSign=false",
+            ])
+            .args(args)
+            .output()
+            .expect("Git fixture command");
+        assert!(
+            output.status.success(),
+            "Git fixture {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    git(&["init", "--quiet"]);
+    git(&["add", "--", "HELLO"]);
+    git(&[
+        "-c",
+        "user.name=NeoVM fixture",
+        "-c",
+        "user.email=fixture@neomacs.invalid",
+        "commit",
+        "--quiet",
+        "-m",
+        "HELLO fixture",
+    ]);
+    eval.set_variable(
+        "data-directory",
+        Value::unibyte_string(format!("{}/", fixture.path().display())),
+    );
+
     let rendered = eval_rendered(
         &mut eval,
         r#"(progn

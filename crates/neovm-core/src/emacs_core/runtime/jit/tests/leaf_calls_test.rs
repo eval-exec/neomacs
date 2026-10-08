@@ -6,14 +6,13 @@
 //! when nothing was emitted.
 
 use super::leaf_abi::{
-    LEAF_STATS, bare_trampoline, declared_fast_half, leaf_trampoline_calls, opcode_leaf,
-    trampoline_bodies_for_test,
+    LEAF_STATS, bare_trampoline, leaf_trampoline_calls, opcode_leaf, trampoline_bodies_for_test,
 };
 use super::*;
 use crate::emacs_core::bytecode::Vm;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::print::print_value;
-use crate::emacs_core::subr::leaf::{LEAVES, LeafEntry, LeafId, LeafShape};
+use crate::emacs_core::subr::leaf::{Containment, LEAVES, LeafEntry, LeafExit, LeafId, LeafShape};
 use crate::emacs_core::value::LambdaParams;
 
 fn lexical_fn(nargs: u32, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
@@ -244,20 +243,21 @@ fn leaf_knob_parses() {
     );
 }
 
-/// A trampoline names its body as an item (so it inlines); that item must
-/// be the body its spec declares, with the declared containment. Every
-/// opcode leaf with a trampoline is reachable from its opcode.
+/// Every opcode trampoline has the declared containment and is reachable
+/// from exactly one opcode. `nth`'s declared fast half and contained body
+/// must give the exact value or signal its emitted trampoline produces.
+/// Inline functions can have several emitted copies, so their addresses
+/// cannot establish whether a trampoline implements its declaration.
 #[test]
 fn trampolines_call_their_spec_bodies() {
-    for (id, body, fast) in trampoline_bodies_for_test() {
+    for (id, _, fast) in trampoline_bodies_for_test() {
         let spec = id.spec();
-        let declared = match spec.entry {
-            LeafEntry::L1(f) => f as usize,
-            LeafEntry::L2(f) => f as usize,
-            LeafEntry::L3(f) => f as usize,
-        };
-        assert_eq!(body, declared, "{}: trampoline body", spec.name);
-        assert_eq!(fast, declared_fast_half(spec), "{}: containment", spec.name);
+        assert_eq!(
+            fast.is_some(),
+            matches!(spec.containment, Containment::FastOutside(_)),
+            "{}: containment",
+            spec.name
+        );
         assert!(bare_trampoline(id).is_some(), "{}", spec.name);
     }
     for spec in LEAVES {
@@ -270,6 +270,56 @@ fn trampolines_call_their_spec_bodies() {
             assert_eq!(ops, 1, "{}: exactly one opcode reaches it", spec.name);
         }
     }
+
+    let mut eval = Context::new();
+    let pool = eval
+        .eval_str("(list nil '(a b c) '(a b . c) 7 [a b c] (make-list 131 'a))")
+        .expect("nth list shapes");
+    crate::emacs_core::eval::push_scratch_gc_root(pool);
+    let lists = crate::emacs_core::value::list_to_vec(&pool).expect("proper pool");
+    let counts: Vec<_> = (-2..=130)
+        .map(Value::fixnum)
+        .chain([Value::NIL, Value::T])
+        .collect();
+    let spec = LeafId::Nth.spec();
+    let Containment::FastOutside(fast) = spec.containment else {
+        panic!("nth declares its audited fast half");
+    };
+    let LeafEntry::L2(body) = spec.entry else {
+        panic!("nth declares a two-argument body");
+    };
+    let leaf = compile_with_knob(&opcode_fn(Op::Nth, 2), LeafKnob::ALL);
+    let ctx_ptr = &mut eval as *mut Context as *mut u8;
+    let calls0 = leaf_trampoline_calls(LeafId::Nth);
+    let mut cases = 0;
+    for &list in &lists {
+        for &n in &counts {
+            let what = format!("(nth {} {})", print_value(&n), print_value(&list));
+            let declared = body(&eval, n, list);
+            if let Some(value) = fast(&eval, &[n, list, Value::NIL, Value::NIL]) {
+                assert!(
+                    matches!(&declared, Ok(expected) if expected.bits() == value.bits()),
+                    "{what}: the declared fast half agrees with its body"
+                );
+            }
+            let expected = match declared {
+                Ok(value) => print_value(&value),
+                Err(LeafExit::Signal(flow)) => flow_text(flow),
+                Err(LeafExit::Generic) => panic!("{what}: nth has no generic bounce"),
+            };
+            assert_eq!(
+                native(ctx_ptr, &leaf, &[n, list], &what),
+                expected,
+                "{what}"
+            );
+            cases += 1;
+        }
+    }
+    assert_eq!(
+        leaf_trampoline_calls(LeafId::Nth) - calls0,
+        cases,
+        "every case entered the emitted nth trampoline"
+    );
 }
 
 /// A leaf's signal reaches a handler in the same body, natively, with the

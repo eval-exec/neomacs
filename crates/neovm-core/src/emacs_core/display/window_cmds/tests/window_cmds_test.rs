@@ -7658,6 +7658,10 @@ fn x_create_frame_reserves_tab_bar_space_above_root_window() {
         Value::cons(Value::symbol("width"), Value::fixnum(80)),
         Value::cons(Value::symbol("height"), Value::fixnum(25)),
         Value::cons(Value::symbol("tab-bar-lines"), Value::fixnum(1)),
+        // Isolate the tab band from the mode-derived defaults installed at
+        // frame creation; menu/tool bars have their own geometry tests.
+        Value::cons(Value::symbol("menu-bar-lines"), Value::fixnum(0)),
+        Value::cons(Value::symbol("tool-bar-lines"), Value::fixnum(0)),
     ]);
     let created = super::builtin_x_create_frame(&mut ev, vec![params]).expect("x-create-frame");
 

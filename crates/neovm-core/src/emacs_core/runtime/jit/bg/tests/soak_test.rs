@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use super::*;
 use crate::emacs_core::intern::intern;
-use crate::emacs_core::jit::compile::force_deopt_for_test;
+use crate::emacs_core::jit::compile::{force_deopt_for_test, force_profit_gate_for_test};
 use crate::emacs_core::jit::force_osr_for_test;
 use crate::emacs_core::print::print_value;
 
@@ -111,6 +111,10 @@ fn jit_bg_stress_soak_matches_the_interpreter() {
         bc.jit_runtime()
             .set_heat_for_test(crate::emacs_core::jit::hot_threshold().saturating_sub(1));
     }
+    // The call-dominated driver must compile to exercise first-sight jobs.
+    // Production profitability deferral can correctly keep it interpreted
+    // for this whole run; this fixture tests pending/install correctness.
+    force_profit_gate_for_test(false);
     force_mode_for_test(Some(BgMode::Threaded));
     force_stress_for_test(Some(true));
     force_osr_for_test(true);
@@ -122,6 +126,7 @@ fn jit_bg_stress_soak_matches_the_interpreter() {
     force_osr_for_test(false);
     force_stress_for_test(None);
     force_mode_for_test(None);
+    force_profit_gate_for_test(true);
     assert_eq!(
         compiled, reference,
         "the same answers at the same iterations"

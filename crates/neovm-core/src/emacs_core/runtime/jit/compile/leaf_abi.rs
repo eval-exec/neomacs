@@ -691,13 +691,3 @@ pub(crate) fn trampoline_bodies_for_test() -> Vec<(LeafId, usize, Option<usize>)
         (LeafId::SymbolValue, one(leaves::symbol_value), None),
     ]
 }
-
-/// The containment a spec declares, as the trampoline tests compare it.
-#[cfg(test)]
-pub(crate) fn declared_fast_half(spec: &LeafSpec) -> Option<usize> {
-    use crate::emacs_core::subr::leaf::Containment;
-    match spec.containment {
-        Containment::Catch => None,
-        Containment::FastOutside(f) => Some(f as usize),
-    }
-}
