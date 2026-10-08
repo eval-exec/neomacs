@@ -22,7 +22,7 @@ include!("../neovm-core/src/emacs_core/runtime/jit/shim_names.rs");
 /// R2-B5: export the `neovm_jit_*` shims into the `neomacs` binary's dynamic
 /// symbol table (Linux + `jit` only) so the AOT preload `.so` resolves them at
 /// dlopen. Targets ONLY the `neomacs` bin (`rustc-link-arg-bin=neomacs=`), not
-/// `mock-display` or any test.
+/// any test or example.
 fn export_jit_shims_for_aot(target_os: &str) {
     if target_os != "linux" || env::var_os("CARGO_FEATURE_JIT").is_none() {
         return;

@@ -2625,8 +2625,9 @@ static SHIPPED_EDITOR_PROCESS: std::sync::atomic::AtomicBool =
 /// bytecode the way GNU does instead of refusing to start.
 ///
 /// There is exactly one caller and there must only ever be one: `neomacs`'s
-/// `main`, as its first statement.  `crates/neomacs/src/bin/mock-display.rs` and
-/// `neomacsclient.rs` do not call it because neither builds an image; the
+/// `main`, as its first statement.  `crates/neomacs/src/bin/neomacsclient.rs`
+/// and the `crates/neomacs/examples/mock-display.rs` example do not call it
+/// because neither builds an image; the
 /// `bootstrap-neomacs` and `neomacs-temacs` role images are byte copies of the
 /// `neomacs` binary (`xtask` `copy_executable_role_images`), so they run this
 /// same `main` and are covered -- which they must be, since `fresh-build`
