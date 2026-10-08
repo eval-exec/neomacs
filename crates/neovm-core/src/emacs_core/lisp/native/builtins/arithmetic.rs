@@ -1,6 +1,8 @@
 use super::*;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
 use crate::emacs_core::forward::LispIntFwd;
+use crate::emacs_core::intern::{SymId, intern};
+use crate::emacs_core::symbol::Obarray;
 use malachite::base::num::arithmetic::traits::{Abs, DivRound, Pow};
 use malachite::base::num::conversion::traits::RoundingFrom;
 use malachite::base::num::logic::traits::SignificantBits;
@@ -361,14 +363,40 @@ thread_local! {
     /// `make_bignum_bits` reads the C variable behind the `DEFVAR_INT`
     /// (`src/alloc.c:7542`); this is the same storage, so every `setq`,
     /// `let` and `set-default` of the global binding is seen as it happens.
-    /// `None` until a Context is active, read as GNU's initial value.
+    /// `None` while no Context is active, read as GNU's initial value.
+    ///
+    /// The descriptor is leaked, so it outlives its Context, but a bignum
+    /// stored in it lives in that Context's heap: see [`integer_width_below`].
     static INTEGER_WIDTH: Cell<Option<&'static LispIntFwd>> = const { Cell::new(None) };
 }
 
-/// Make `fwd` the `integer-width` the bignum constructors check: called by
-/// `Context::setup_thread_locals` with the active Context's forwarder.
-pub(crate) fn install_integer_width_forwarder(fwd: Option<&'static LispIntFwd>) {
+fn integer_width_symbol() -> SymId {
+    static SYMBOL: std::sync::OnceLock<SymId> = std::sync::OnceLock::new();
+    *SYMBOL.get_or_init(|| intern("integer-width"))
+}
+
+/// Make `obarray`'s `integer-width` the one the bignum constructors check:
+/// called by `Context::setup_thread_locals` for the Context it activates.
+pub(crate) fn install_integer_width_forwarder(obarray: &Obarray) {
+    let fwd = obarray.int_forwarder(integer_width_symbol());
     INTEGER_WIDTH.with(|slot| slot.set(fwd));
+}
+
+/// Forget `obarray`'s `integer-width` if it is the one installed on this
+/// thread: called when its Context is dropped, so later arithmetic on the
+/// thread reads GNU's initial value instead.
+pub(crate) fn retire_integer_width_forwarder(obarray: &Obarray) {
+    let Some(fwd) = obarray.int_forwarder(integer_width_symbol()) else {
+        return;
+    };
+    let _ = INTEGER_WIDTH.try_with(|slot| {
+        if slot
+            .get()
+            .is_some_and(|installed| std::ptr::eq(installed, fwd))
+        {
+            slot.set(None);
+        }
+    });
 }
 
 /// The bits a bignum may always have: GNU treats `integer-width` as at least
@@ -385,12 +413,20 @@ fn bignum_bits_overflow(bits: u64) -> bool {
 
 #[inline(never)]
 fn integer_width_below(bits: u64) -> bool {
-    let width = INTEGER_WIDTH
-        .with(Cell::get)
-        .map_or(1 << 16, LispIntFwd::get_i64);
-    // GNU compares the signed `integer_width` with the unsigned bit count, so
-    // a negative width converts to a huge one and limits nothing.
-    (width as u64) < bits
+    let Some(fwd) = INTEGER_WIDTH.with(Cell::get) else {
+        return (1u64 << 16) < bits;
+    };
+    // Only the slot's tag is read, never a bignum it holds: the slot can
+    // outlive the heap that bignum lives in, when its Context was dropped on
+    // another thread after moving there. A bignum width is outside the
+    // fixnum range, so a positive one exceeds every bit count a bignum can
+    // have (GMP's limb limit), and a negative one, like any negative width,
+    // is huge in GNU's comparison of the signed `integer_width` with the
+    // unsigned bit count: neither limits anything.
+    match fwd.get().as_fixnum() {
+        Some(width) => (width as u64) < bits,
+        None => false,
+    }
 }
 
 #[cold]
@@ -1036,6 +1072,17 @@ fn negate_value(eval: &super::super::eval::Context, value: &Value) -> EvalResult
 /// stack dispatcher has to materialize an owned vector for a `Many` subr. On
 /// `nbody` that was a malloc and a free for a million multiplications.
 pub(crate) fn builtin_mul(args: &[Value]) -> EvalResult {
+    // GNU returns a sole argument itself (data.c:3347-3348), as `+` does: no
+    // new number, so no `integer-width` check.
+    if let [arg] = args {
+        if arg.is_fixnum() || arg.is_float() || arg.is_bignum() {
+            return Ok(*arg);
+        }
+        if super::marker::is_marker(arg) {
+            return Ok(Value::make_int(super::marker::marker_position_as_int(arg)?));
+        }
+        return Err(wrong_number_or_marker(arg));
+    }
     // Two integers, not both fixnums (the loop below inlines those): the
     // result goes straight into its slot.
     if let [a, b] = args
@@ -1755,8 +1802,9 @@ pub(crate) fn builtin_ash_slice(args: &[Value]) -> EvalResult {
         }
     };
 
+    // GNU returns VALUE itself (data.c:3587-3588): no new number to check.
     if count_i64 == 0 {
-        return Ok(Value::make_integer(value_big));
+        return Ok(*value);
     }
     let result = if count_i64 > 0 {
         // Left shift. Mirror GNU `emacs_mpz_mul_2exp` (src/bignum.c:367):
@@ -2659,5 +2707,5 @@ mod arithmetic_integer_value_test;
 mod arithmetic_rounding_capture_test;
 
 #[cfg(test)]
-#[path = "tests/arithmetic_integer_width.rs"]
+#[path = "tests/arithmetic_integer_width_test.rs"]
 mod arithmetic_integer_width_test;

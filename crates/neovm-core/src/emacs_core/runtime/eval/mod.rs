@@ -4323,6 +4323,7 @@ fn lisp_frame_manager() -> FrameManager {
 impl Drop for Context {
     fn drop(&mut self) {
         super::dynamic_module::retire_dynamic_module_registry(&self.dynamic_module_registry);
+        super::builtins::retire_integer_width_forwarder(&self.obarray);
         crate::tagged::gc::clear_tagged_heap_if_installed(&self.tagged_heap);
     }
 }
