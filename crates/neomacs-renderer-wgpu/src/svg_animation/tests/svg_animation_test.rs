@@ -1,5 +1,6 @@
 //! Engine tests: compile → evaluate → patch → sample.
 
+#[path = "xml_test.rs"]
 mod xml;
 
 use super::eval;
@@ -384,5 +385,7 @@ fn next_event_never_precedes_begin() {
     );
 }
 
+#[path = "prefix_test.rs"]
 mod prefix;
+#[path = "timing_test.rs"]
 mod timing;
