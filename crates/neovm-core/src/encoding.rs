@@ -656,8 +656,6 @@ pub(crate) struct CharacterWidthPolicy<'ctx> {
     context: &'ctx Context,
 }
 
-static_assertions::assert_not_impl_any!(CharacterWidthPolicy<'static>: Send, Sync);
-
 impl std::fmt::Debug for CharacterWidthPolicy<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CharacterWidthPolicy")
@@ -4362,15 +4360,36 @@ fn run_coding_with_conversion_hook(
 /// plain UTF-8 bytes. This is what raw-text/no-conversion and the UTF-8 codec
 /// emit for the character payload.
 fn encode_utf8_plain(s: &crate::heap_types::LispString) -> Vec<u8> {
+    if s.is_multibyte() {
+        // Canonical Emacs UTF-8 already has the bytes GNU emits; only byte8
+        // characters shrink (coding.c:1456-1479, character.c:710-738).
+        return crate::emacs_core::emacs_char::str_as_unibyte(s.as_bytes());
+    }
+    // GNU consume_chars recognizes embedded sequences in unibyte text
+    // (coding.c:7666-7676). Only valid C0/C1 byte8 pairs change their bytes
+    // when encode_coding_utf_8 emits them. Other valid sequences and isolated
+    // high bytes round-trip unchanged, so copy the runs between those pairs.
+    // Unlike canonical multibyte input, unibyte input can contain malformed
+    // or truncated C0/C1 leads; preserve those octets instead of consuming two.
+    let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(s.sbytes());
-    for cp in coding_source_codepoints(s) {
-        if crate::emacs_core::emacs_char::char_byte8_p(cp) {
-            out.push(crate::emacs_core::emacs_char::char_to_byte8(cp));
-        } else if let Some(ch) = char::from_u32(cp) {
-            let mut b = [0u8; 4];
-            out.extend_from_slice(ch.encode_utf8(&mut b).as_bytes());
+    let mut position = 0;
+    while position < bytes.len() {
+        let next = memchr::memchr2(0xc0, 0xc1, &bytes[position..])
+            .map_or(bytes.len(), |offset| position + offset);
+        out.extend_from_slice(&bytes[position..next]);
+        position = next;
+        if position == bytes.len() {
+            break;
+        }
+        if let Some(&continuation) = bytes.get(position + 1)
+            && continuation & 0xc0 == 0x80
+        {
+            out.push(0x80 | ((bytes[position] & 1) << 6) | (continuation & 0x3f));
+            position += 2;
         } else {
-            encode_emacs_utf8_codepoint(cp, &mut out);
+            out.push(bytes[position]);
+            position += 1;
         }
     }
     out

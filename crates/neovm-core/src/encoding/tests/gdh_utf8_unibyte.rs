@@ -73,3 +73,59 @@ fn utf8_family_still_encodes_multibyte_eight_bit_as_one_byte() {
     let eacute = crate::heap_types::LispString::from_emacs_bytes(buf[..n].to_vec());
     assert_eq!(encode_lisp_string(&eacute, "utf-8"), vec![0xC3, 0xA9]);
 }
+
+#[test]
+fn utf8_bulk_encoding_matches_consumed_emacs_characters() {
+    crate::test_utils::init_test_tracing();
+    use super::super::{coding_source_codepoints, encode_emacs_utf8_codepoint, encode_utf8_plain};
+
+    // The decoder-based reference follows consume_chars + encode_coding_utf_8.
+    // It is independent of the optimized run-copy/pair-search algorithm.
+    let reference = |source: &crate::heap_types::LispString| {
+        let mut encoded = Vec::new();
+        for code in coding_source_codepoints(source) {
+            if crate::emacs_core::emacs_char::char_byte8_p(code) {
+                encoded.push(crate::emacs_core::emacs_char::char_to_byte8(code));
+            } else {
+                encode_emacs_utf8_codepoint(code, &mut encoded);
+            }
+        }
+        encoded
+    };
+    for first in 0..=u8::MAX {
+        let lone = unibyte(&[first]);
+        assert_eq!(encode_utf8_plain(&lone), reference(&lone));
+        for second in 0..=u8::MAX {
+            let source = unibyte(&[first, second]);
+            assert_eq!(
+                encode_utf8_plain(&source),
+                reference(&source),
+                "unibyte {first:02x} {second:02x}"
+            );
+        }
+    }
+    let mut canonical = Vec::new();
+    for code in [
+        0x41,
+        0xe9,
+        0xd800,
+        0x1f600,
+        0x110000,
+        crate::emacs_core::emacs_char::MAX_5_BYTE_CHAR,
+        crate::emacs_core::emacs_char::byte8_to_char(0x80),
+        crate::emacs_core::emacs_char::byte8_to_char(0xff),
+        0x42,
+    ] {
+        let mut bytes = [0u8; crate::emacs_core::emacs_char::MAX_MULTIBYTE_LENGTH];
+        let length = crate::emacs_core::emacs_char::char_string(code, &mut bytes);
+        canonical.extend_from_slice(&bytes[..length]);
+    }
+    // The same valid byte stream can be consumed from either source encoding.
+    let unibyte_source = unibyte(&canonical);
+    assert_eq!(
+        encode_utf8_plain(&unibyte_source),
+        reference(&unibyte_source)
+    );
+    let multibyte = crate::heap_types::LispString::from_emacs_bytes(canonical);
+    assert_eq!(encode_utf8_plain(&multibyte), reference(&multibyte));
+}

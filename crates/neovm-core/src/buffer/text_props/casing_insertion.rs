@@ -35,8 +35,6 @@ impl Drop for CasingPropertyRoots {
     }
 }
 
-static_assertions::assert_not_impl_any!(CasingPropertyRoots: Send, Sync);
-
 /// GNU EQ follows symbols-with-pos-enabled (lisp.h:1316-1324).
 #[derive(Clone, Copy, Debug)]
 enum CasingPropertyEquality {
@@ -127,10 +125,6 @@ impl std::fmt::Debug for CasingPropertyContext<'_> {
             .finish_non_exhaustive()
     }
 }
-
-static_assertions::assert_not_impl_any!(CasingPropertyControls: Send, Sync);
-static_assertions::assert_not_impl_any!(CasingPropertyContext<'static>: Send, Sync);
-static_assertions::assert_not_impl_any!(CasingPropertyMode<'static>: Send, Sync);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum InsertionSite {

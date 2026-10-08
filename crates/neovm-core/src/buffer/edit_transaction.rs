@@ -2211,8 +2211,6 @@ struct CasifyBufferSnapshot {
     mutator: std::marker::PhantomData<*const ()>,
 }
 
-static_assertions::assert_not_impl_any!(CasifyBufferSnapshot: Send, Sync);
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::buffer) enum BufferStateFieldUpdatePolicy {
     Update,

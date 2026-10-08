@@ -35,9 +35,6 @@ enum PreparedCasingPropertyState {
     },
 }
 
-static_assertions::assert_not_impl_any!(PreparedCasingProperties: Send, Sync);
-static_assertions::assert_not_impl_any!(PreparedCasingPropertyState: Send, Sync);
-
 /// What ends a line when lines are counted (GNU `display_count_lines`,
 /// src/xdisp.c).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

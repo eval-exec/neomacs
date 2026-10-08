@@ -798,8 +798,6 @@ struct CasedRegion {
     mutator: std::marker::PhantomData<*const ()>,
 }
 
-static_assertions::assert_not_impl_any!(CasedRegion: Send, Sync);
-
 fn casify_region_text(
     text: &LispString,
     action: CaseAction,

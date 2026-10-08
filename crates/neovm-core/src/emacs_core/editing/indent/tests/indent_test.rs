@@ -1234,4 +1234,3 @@ fn display_advance_interns_no_symbols_per_character() {
 }
 #[cfg(test)]
 mod gdm_columns;
-

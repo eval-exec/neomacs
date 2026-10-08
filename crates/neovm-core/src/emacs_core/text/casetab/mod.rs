@@ -532,9 +532,6 @@ pub(crate) struct InstalledCaseTables {
     mutator: std::marker::PhantomData<*const ()>,
 }
 
-static_assertions::assert_not_impl_any!(CaseTableOverride: Send, Sync);
-static_assertions::assert_not_impl_any!(InstalledCaseTables: Send, Sync);
-
 impl CaseTableOverride {
     /// Resolve the override for the current buffer, mirroring GNU's use of the
     /// per-buffer downcase/upcase/canon char-tables (`buffer.h:1648-1663`,

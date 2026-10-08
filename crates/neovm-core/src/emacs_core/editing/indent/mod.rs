@@ -1384,7 +1384,11 @@ fn tab_width_in_state(
     buf: Option<&Buffer>,
 ) -> TabWidth {
     // Resolve by identity while retaining GNU's validated tab-width fallback.
-    TabWidth::from(obarray.value_in_buffer_id(buf, tab_width_sym_id()).unwrap_or(Value::NIL))
+    TabWidth::from(
+        obarray
+            .value_in_buffer_id(buf, tab_width_sym_id())
+            .unwrap_or(Value::NIL),
+    )
 }
 
 /// GNU SANE_TAB_WIDTH, shared with char-width and string formatting.
