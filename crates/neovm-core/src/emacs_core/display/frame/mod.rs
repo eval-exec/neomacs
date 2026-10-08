@@ -1906,8 +1906,7 @@ pub(crate) fn builtin_modify_frame_parameters(
     }
     if let Some(frame) = eval.frames.get_mut(fid) {
         frame.sync_tab_bar_height_from_parameters();
-        frame.sync_menu_bar_height_from_parameters();
-        frame.sync_tool_bar_height_from_parameters();
+        frame.sync_bar_heights_from_parameters();
     }
 
     let requested_width = resolve_frame_size_parameter(&eval.frames, fid, requested_width, true);

@@ -5534,6 +5534,34 @@ fn gui_compact_bar_round_trip_preserves_frame_bar_requests() {
 }
 
 #[test]
+fn unselected_compact_frame_keeps_geometry_when_parameters_change() {
+    let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"]).unwrap();
+    let frame_id = bootstrap_runtime_gui_startup(&mut eval);
+    run_gnu_startup(&mut eval);
+    eval.eval_str("(setq compact-test-frame (selected-frame))")
+        .unwrap();
+    eval.set_variable("compact-bar-mode", Value::T);
+    sync_selected_gui_chrome_state(&mut eval);
+    let top = eval
+        .frame_manager()
+        .get(frame_id)
+        .unwrap()
+        .root_window()
+        .bounds()
+        .y;
+    assert!(top > 0.0);
+    eval.eval_str("(select-frame (make-frame '((name . \"other\"))))")
+        .unwrap();
+    eval.eval_str("(set-frame-parameter compact-test-frame 'name \"renamed\")")
+        .unwrap();
+    let frame = eval.frame_manager().get(frame_id).unwrap();
+    assert_eq!(frame.root_window().bounds().y, top);
+    assert_eq!(frame.menu_bar_height, 0);
+    assert_eq!(frame.tool_bar_height, 0);
+    assert_eq!(frame.compact_bar_height as f32, top);
+}
+
+#[test]
 fn bootstrap_gui_frame_seeds_live_menu_and_tool_bar_rows() {
     let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"])
         .expect("cached bootstrap evaluator");
