@@ -38,6 +38,7 @@ tracing-subscriber.workspace = true
 serde_json.workspace = true
 strum.workspace = true
 enumset.workspace = true
+enum-map.workspace = true
 num_enum.workspace = true
 thiserror.workspace = true
 bitflags.workspace = true

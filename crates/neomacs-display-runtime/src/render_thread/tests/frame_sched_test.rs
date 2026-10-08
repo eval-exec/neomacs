@@ -1270,3 +1270,42 @@ fn demand_reason_sets_deduplicate_and_iterate_in_declaration_order() {
     assert!(empty.iter().next().is_none());
     assert!(!empty.contains(DemandReason::EditorCommit));
 }
+
+#[test]
+fn per_window_counters_preserve_every_reason_in_diagnostic_order() {
+    use super::super::frame_stats;
+    let window = win(99);
+    let reasons: DemandReasonSet = DemandReason::ALL.into_iter().collect();
+    frame_stats::publish_window_demand(std::iter::once((window, reasons)));
+    let initial = frame_stats::window_snapshots();
+    assert_eq!(initial.len(), 1);
+    assert_eq!(initial[0].demand_reasons, [0; DemandReason::COUNT]);
+
+    for (index, reason) in DemandReason::ALL.into_iter().enumerate() {
+        let plan = FramePlan {
+            tick: tick_at(t0()),
+            work: RenderWork::CompositeOnly {
+                layers: LayerMask::CURSOR_EFFECTS,
+            },
+            should_present: true,
+            reasons: std::iter::once(reason).collect(),
+        };
+        for _ in 0..=index {
+            frame_stats::count_plan(window, &plan);
+        }
+    }
+    let expected = std::array::from_fn(|index| index as u64 + 1);
+    let snapshot = frame_stats::window_snapshots();
+    assert_eq!(snapshot[0].window, window.0);
+    assert_eq!(snapshot[0].active_reasons, frame_stats::DEMAND_REASON_NAMES);
+    assert_eq!(snapshot[0].demand_reasons, expected);
+
+    // Reconciliation changes active demand without discarding accumulated counts.
+    frame_stats::publish_window_demand(std::iter::once((window, DemandReasonSet::empty())));
+    let reconciled = frame_stats::window_snapshots();
+    assert!(reconciled[0].active_reasons.is_empty());
+    assert_eq!(reconciled[0].demand_reasons, expected);
+
+    frame_stats::publish_window_demand(std::iter::empty());
+    assert!(frame_stats::window_snapshots().is_empty());
+}
