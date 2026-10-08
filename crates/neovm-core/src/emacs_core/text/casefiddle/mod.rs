@@ -462,6 +462,65 @@ pub(crate) fn casify_lisp_string_with_extents(
     casify_text_with_extents(text, action, CaseTarget::String, is_word, casetab, extent)
 }
 
+/// GNU's unibyte loops case one byte at a time (casefiddle.c:330-345,451-460).
+/// Standard tables change only ASCII, so string and buffer targets agree and
+/// every source/output extent is one character and one byte. Raw bytes still
+/// enter the syntax predicate in their Emacs character domain for word casing.
+#[inline]
+fn casify_standard_unibyte_with_extents(
+    bytes: &[u8],
+    action: CaseAction,
+    is_word: impl Fn(u32) -> bool,
+    mut extent: impl FnMut(CaseExtent),
+) -> LispString {
+    let mut out = bytes.to_vec();
+    let one_byte = crate::buffer::TextExtent::new(
+        crate::buffer::CharLen::new(1),
+        crate::buffer::EmacsByteLen::new(1),
+    );
+    let mut report_extent = |source_index| {
+        extent(CaseExtent {
+            source_pos: crate::buffer::CharPos0::new(source_index),
+            source_extent: one_byte,
+            output_extent: one_byte,
+        });
+    };
+    match action {
+        CaseAction::Up => {
+            out.make_ascii_uppercase();
+            for source_index in 0..out.len() {
+                report_extent(source_index);
+            }
+        }
+        CaseAction::Down => {
+            out.make_ascii_lowercase();
+            for source_index in 0..out.len() {
+                report_extent(source_index);
+            }
+        }
+        CaseAction::Capitalize | CaseAction::Initials => {
+            let mut word_state = CasingWordState::Outside;
+            for (source_index, byte) in out.iter_mut().enumerate() {
+                let code = super::emacs_char::unibyte_to_char(*byte);
+                *byte = match action.character_action(word_state) {
+                    CharacterCaseAction::Up | CharacterCaseAction::Title => {
+                        byte.to_ascii_uppercase()
+                    }
+                    CharacterCaseAction::Down => byte.to_ascii_lowercase(),
+                    CharacterCaseAction::Unchanged => *byte,
+                };
+                report_extent(source_index);
+                word_state = if is_word(code) {
+                    CasingWordState::Inside
+                } else {
+                    CasingWordState::Outside
+                };
+            }
+        }
+    }
+    LispString::from_unibyte(out)
+}
+
 /// Casing with an optional monomorphized extent sink. The no-op sink used by
 /// string builtins compiles away; buffer edits retain both coordinate units.
 /// GNU casefiddle.c:137-151 resolves Unicode special casing before case tables;
@@ -477,6 +536,9 @@ pub(crate) fn casify_text_with_extents(
 ) -> LispString {
     let multibyte = text.is_multibyte();
     let bytes = text.as_bytes();
+    if !multibyte && !casetab.is_custom() {
+        return casify_standard_unibyte_with_extents(bytes, action, is_word, extent);
+    }
     let mut out = Vec::with_capacity(bytes.len());
     let mut pos = 0;
     let mut source_index = 0;
@@ -592,17 +654,7 @@ pub(crate) fn casify_text_with_extents(
             }
         }
         if !expanded {
-            let mapped = if !multibyte && !casetab.is_custom() {
-                match char_action {
-                    CharacterCaseAction::Up | CharacterCaseAction::Title => {
-                        (code as u8).to_ascii_uppercase() as u32
-                    }
-                    CharacterCaseAction::Down => (code as u8).to_ascii_lowercase() as u32,
-                    CharacterCaseAction::Unchanged => code,
-                }
-            } else {
-                simple_case_character(code as i64, char_action, casetab) as u32
-            };
+            let mapped = simple_case_character(code as i64, char_action, casetab) as u32;
             emit(
                 if multibyte && was_inword && code == 0x03a3 && mapped != code && !next_word {
                     0x03c2
