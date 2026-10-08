@@ -5585,48 +5585,64 @@ fn run_after_insert_file_pipeline(
         eval.push_specpdl_root(saved);
     }
 
-    let pipeline_result = (|| -> Result<i64, Flow> {
-        if replace_requested {
-            eval.buffers
-                .goto_buffer_emacs_byte_pos(current_id, accessible_start)
-                .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-        }
-
-        let format_result = eval.funcall_general(
-            Value::symbol("format-decode"),
-            vec![Value::NIL, Value::fixnum(inserted), visit_value],
-        )?;
-        if !format_result.is_nil() {
-            inserted = expect_inserted_char_count(&format_result)?;
-        }
-
-        let hook_sym = intern("after-insert-file-functions");
-        let hook_value = eval.visible_variable_value_or_nil("after-insert-file-functions");
-        let hook_functions = crate::emacs_core::hook_runtime::collect_hook_functions_in_state(
-            eval, hook_sym, hook_value, true,
-        );
-        if !hook_functions.is_empty() {
-            let gc_roots = eval.save_specpdl_roots();
-            for func in &hook_functions {
-                eval.push_specpdl_root(*func);
+    let pipeline_result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<i64, Flow> {
+            if replace_requested {
+                eval.buffers
+                    .goto_buffer_emacs_byte_pos(current_id, accessible_start)
+                    .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
             }
-            eval.push_specpdl_root(Value::fixnum(inserted));
-            let hook_result = (|| -> Result<i64, Flow> {
-                let mut inserted_now = inserted;
-                for function in &hook_functions {
-                    let result = eval.apply(*function, vec![Value::fixnum(inserted_now)])?;
-                    if !result.is_nil() {
-                        inserted_now = expect_inserted_char_count(&result)?;
-                    }
-                }
-                Ok(inserted_now)
-            })();
-            eval.restore_specpdl_roots(gc_roots);
-            inserted = hook_result?;
-        }
 
-        Ok(inserted)
-    })();
+            let format_result = eval.funcall_general(
+                Value::symbol("format-decode"),
+                vec![Value::NIL, Value::fixnum(inserted), visit_value],
+            )?;
+            if !format_result.is_nil() {
+                inserted = expect_inserted_char_count(&format_result)?;
+            }
+
+            let hook_sym = intern("after-insert-file-functions");
+            let hook_value = eval.visible_variable_value_or_nil("after-insert-file-functions");
+            let hook_functions = crate::emacs_core::hook_runtime::collect_hook_functions_in_state(
+                eval, hook_sym, hook_value, true,
+            );
+            if !hook_functions.is_empty() {
+                let gc_roots = eval.save_specpdl_roots();
+                for func in &hook_functions {
+                    eval.push_specpdl_root(*func);
+                }
+                eval.push_specpdl_root(Value::fixnum(inserted));
+                let hook_result = (|| -> Result<i64, Flow> {
+                    let mut inserted_now = inserted;
+                    for function in &hook_functions {
+                        let result = eval.apply(*function, vec![Value::fixnum(inserted_now)])?;
+                        if !result.is_nil() {
+                            inserted_now = expect_inserted_char_count(&result)?;
+                        }
+                    }
+                    Ok(inserted_now)
+                })();
+                eval.restore_specpdl_roots(gc_roots);
+                inserted = hook_result?;
+            }
+
+            Ok(inserted)
+        }));
+
+    // A Rust panic crossing the decode/hooks callbacks must not leave the
+    // dynamic suffix or the undo snapshot rooted (P4.11). GNU has no unwind
+    // here (fileio.c:5198-5199 saves undo and only the normal path restores
+    // it, :5288-5303), so the cleanup is storage-only and leaves exactly
+    // what GNU's signal path leaves: the callback's selected buffer and the
+    // disabled undo list.
+    let pipeline_result = match pipeline_result {
+        Ok(result) => result,
+        Err(panic) => {
+            eval.restore_specpdl_roots(undo_root);
+            eval.discard_specpdl_to(specpdl_count);
+            std::panic::resume_unwind(panic);
+        }
+    };
 
     eval.restore_specpdl_roots(undo_root);
     if pipeline_result.is_err() {
