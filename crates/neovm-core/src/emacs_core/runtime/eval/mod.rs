@@ -7758,7 +7758,7 @@ mod cconv_memo_tests;
 #[path = "tests/var_fast_test.rs"]
 mod var_fast_tests;
 #[cfg(test)]
-#[path = "tests/watcher_redispatch.rs"]
+#[path = "tests/watcher_redispatch_test.rs"]
 mod watcher_redispatch_tests;
 
 #[cfg(test)]

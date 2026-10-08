@@ -481,5 +481,5 @@ pub fn eval_source(input: &str) -> Result<Value, EvalError> {
 mod architecture_transmute_guard_test;
 
 #[cfg(test)]
-#[path = "tests/architecture/value_ref_guard.rs"]
+#[path = "tests/architecture/value_ref_guard_test.rs"]
 mod architecture_value_ref_guard_test;

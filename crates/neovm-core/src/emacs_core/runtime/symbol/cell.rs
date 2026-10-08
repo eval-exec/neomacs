@@ -1143,5 +1143,5 @@ pub(super) fn read_symbol_children<const MAJOR: bool>(
 }
 
 #[cfg(test)]
-#[path = "tests/cell.rs"]
+#[path = "tests/cell_test.rs"]
 mod tests;
