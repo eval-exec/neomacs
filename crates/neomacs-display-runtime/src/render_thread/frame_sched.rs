@@ -135,7 +135,10 @@ macro_rules! demand_reasons {
         // Interface variants/fields defined by the scheduling plan; consumed as
         // later stages migrate effects onto the coordinator.
         #[allow(dead_code)]
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, enumset::EnumSetType)]
+        #[derive(
+            Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord,
+            enumset::EnumSetType, enum_map::Enum,
+        )]
         #[enumset(no_super_impls, no_ops)]
         pub(crate) enum DemandReason {
             $($(#[$variant_meta])* $variant,)+

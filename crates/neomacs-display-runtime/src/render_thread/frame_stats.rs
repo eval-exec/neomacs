@@ -14,6 +14,7 @@
 //! All counters are relaxed atomics: every writer runs on the render thread,
 //! and readers only need eventually-consistent totals.
 
+use enum_map::EnumMap;
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -139,9 +140,8 @@ pub(super) fn count(counter: &AtomicU64) {
 struct WindowDemandStats {
     /// Demand reasons active as of the last reconciliation.
     active: DemandReasonSet,
-    /// Planned frames per demand reason for this window, indexed like
-    /// [`FrameSchedSnapshot::demand_reasons`].
-    plans: [u64; DemandReason::COUNT],
+    /// Planned frames for each demand reason, keyed by the reason itself.
+    plans: EnumMap<DemandReason, u64>,
 }
 
 static WINDOW_DEMAND: Mutex<BTreeMap<u64, WindowDemandStats>> = Mutex::new(BTreeMap::new());
@@ -166,7 +166,7 @@ pub(super) fn publish_window_demand(
         let plans = old
             .remove(&id.0)
             .map(|stats| stats.plans)
-            .unwrap_or([0; DemandReason::COUNT]);
+            .unwrap_or_default();
         map.insert(id.0, WindowDemandStats { active: set, plans });
     }
 }
@@ -190,10 +190,10 @@ pub(super) fn count_plan(window: NativeWindowId, plan: &FramePlan) {
     let mut map = WINDOW_DEMAND.lock().unwrap();
     let stats = map.entry(window.0).or_insert_with(|| WindowDemandStats {
         active: DemandReasonSet::empty(),
-        plans: [0; DemandReason::COUNT],
+        plans: EnumMap::default(),
     });
     for reason in plan.reasons.iter() {
-        stats.plans[reason.index()] += 1;
+        stats.plans[reason] += 1;
     }
 }
 
@@ -288,7 +288,7 @@ pub fn window_snapshots() -> Vec<WindowFrameSnapshot> {
         .map(|(id, stats)| WindowFrameSnapshot {
             window: *id,
             active_reasons: stats.active.iter().map(DemandReason::name).collect(),
-            demand_reasons: stats.plans,
+            demand_reasons: stats.plans.into_array(),
         })
         .collect()
 }
