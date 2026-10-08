@@ -800,6 +800,24 @@ impl Context {
         let _ = self.sync_current_buffer_runtime_state();
     }
 
+    /// Restore native buffer ownership while abandoning a Rust panic scope.
+    ///
+    /// GNU's `set_buffer_internal_1` (`buffer.c:2326-2395`) selects existing
+    /// storage; its table initialization belongs to buffer creation. Recovery
+    /// must likewise leave absent or invalid lazy tables untouched. This
+    /// exclusively borrowed Context owns the current mutator's buffer and
+    /// thread slots, so no ambient heap or TLS table cache is consulted.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn restore_current_buffer_storage_if_live(&mut self, id: crate::buffer::BufferId) {
+        if self.buffers.current_buffer_id() == Some(id) {
+            return;
+        }
+        if self.buffers.switch_current_unrecorded(id) {
+            self.sync_current_thread_buffer_state();
+        }
+    }
+
     /// Connect the input system for interactive mode.
     ///
     /// This mirrors GNU Emacs's `init_keyboard()` — it connects the evaluator

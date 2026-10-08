@@ -287,6 +287,14 @@ enum PoppedBindingPolicy {
     LispCleanup,
 }
 
+/// Normal Lisp unwind synchronizes runtime tables; Rust panic recovery only
+/// restores existing storage. One mutator owns either restoration policy.
+#[derive(Clone, Copy, Debug)]
+enum SavedBufferRestore {
+    Runtime,
+    StorageOnly,
+}
+
 impl Context {
     // Shared runtime write path for symbol-cell mutation. This mirrors GNU
     // `set_internal` after lexical handling has already been decided.
@@ -361,21 +369,17 @@ impl Context {
                         self.backtrace_args_stack.truncate(index);
                     }
                 }
-                SpecBinding::SaveExcursion { marker, .. } => {
-                    // Like the Lisp unwind: follow the saved marker's live
-                    // buffer, which buffer-swap-text may have changed.
-                    if let Some(location) =
-                        super::super::marker::marker_location(&self.buffers, marker)
-                    {
-                        self.restore_current_buffer_if_live(location.buffer());
-                        let _ = self
-                            .buffers
-                            .goto_buffer_emacs_byte_pos(location.buffer(), location.byte_pos());
-                    }
-                    super::super::marker::unchain_marker(&mut self.buffers, &marker);
-                }
+                SpecBinding::SaveExcursion {
+                    marker,
+                    saved_window,
+                    ..
+                } => self.restore_save_excursion_with_policy(
+                    marker,
+                    saved_window,
+                    SavedBufferRestore::StorageOnly,
+                ),
                 SpecBinding::SaveCurrentBuffer { buffer_id } => {
-                    self.restore_current_buffer_if_live(buffer_id);
+                    self.restore_current_buffer_storage_if_live(buffer_id);
                 }
                 SpecBinding::SaveRestriction { state } => {
                     self.buffers
@@ -1524,18 +1528,11 @@ impl Context {
                     cleanup_result?;
                 }
             },
-            SpecBinding::SaveExcursion { marker, .. } => {
-                // GNU editfns.c:792-803 follows the saved marker's
-                // current buffer, including after buffer-swap-text.
-                if let Some(location) = super::super::marker::marker_location(&self.buffers, marker)
-                {
-                    self.restore_current_buffer_if_live(location.buffer());
-                    let _ = self
-                        .buffers
-                        .goto_buffer_emacs_byte_pos(location.buffer(), location.byte_pos());
-                }
-                super::super::marker::unchain_marker(&mut self.buffers, &marker);
-            }
+            SpecBinding::SaveExcursion {
+                marker,
+                saved_window,
+                ..
+            } => self.restore_save_excursion(marker, saved_window),
             SpecBinding::SaveCurrentBuffer { buffer_id } => {
                 self.restore_current_buffer_if_live(buffer_id);
             }
@@ -1554,6 +1551,63 @@ impl Context {
             }
         }
         Ok(())
+    }
+
+    /// GNU `save_excursion_restore` (editfns.c:791-810): follow the saved
+    /// marker's live buffer — buffer-swap-text may have moved it — restore
+    /// that buffer and point, unchain the marker, and sync the capture-time
+    /// window's point when a different window is selected now and it still
+    /// displays the restored buffer. Panic recovery selects the storage-only
+    /// policy so switching buffers cannot seed lazy runtime tables.
+    fn restore_save_excursion(&mut self, marker: Value, saved_window: ExcursionWindow) {
+        self.restore_save_excursion_with_policy(marker, saved_window, SavedBufferRestore::Runtime);
+    }
+
+    fn restore_save_excursion_with_policy(
+        &mut self,
+        marker: Value,
+        saved_window: ExcursionWindow,
+        restore: SavedBufferRestore,
+    ) {
+        if let Some(location) = super::super::marker::marker_location(&self.buffers, marker) {
+            let restored_buffer = location.buffer();
+            match restore {
+                SavedBufferRestore::Runtime => {
+                    self.restore_current_buffer_if_live(restored_buffer);
+                }
+                SavedBufferRestore::StorageOnly => {
+                    self.restore_current_buffer_storage_if_live(restored_buffer);
+                }
+            }
+            let _ = self
+                .buffers
+                .goto_buffer_emacs_byte_pos(restored_buffer, location.byte_pos());
+            // GNU editfns.c:804-810: when the recorded window is not the
+            // selected window and still shows the restored buffer,
+            // `Fset_window_point (window, PT)` — the nonselected branch is
+            // one marker store plus the redisplay flag (window.c:1928-1933).
+            if let Some(window_id) = saved_window.window()
+                && Some(window_id)
+                    != self
+                        .frames
+                        .selected_frame()
+                        .map(|frame| frame.selected_window)
+                && let Some(point) = self
+                    .buffers
+                    .get(restored_buffer)
+                    .map(crate::buffer::Buffer::point_lisp_char_pos)
+                && let Some(window) = self.frames.lookup_window_mut(window_id)
+                && window.buffer_id() == Some(restored_buffer)
+            {
+                crate::window::window_markers::set_window_point_with_marker(
+                    &mut self.buffers,
+                    window,
+                    point,
+                );
+                self.gnu_mark_window_redisplay(window_id);
+            }
+        }
+        super::super::marker::unchain_marker(&mut self.buffers, &marker);
     }
 }
 

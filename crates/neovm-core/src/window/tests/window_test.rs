@@ -4248,3 +4248,50 @@ fn fontset_changes_invalidate_window_query_and_attempt_freshness() {
 #[cfg(test)]
 #[path = "split_hook_epoch_test.rs"]
 mod split_hook_epoch;
+
+#[test]
+fn selected_window_read_tracks_exact_ids_live_contents_and_sparse_tables() {
+    let mut frames = FrameManager::new();
+    assert!(frames.selected_window().is_none());
+    let first = frames.create_frame("first", 800, 600, BufferId(1));
+    let root = frames.selected_frame().unwrap().selected_window;
+    assert_eq!(frames.selected_window().unwrap().id(), root);
+    frames
+        .get_mut(first)
+        .unwrap()
+        .find_window_mut(root)
+        .unwrap()
+        .set_buffer(BufferId(3));
+    assert_eq!(
+        frames.selected_window().unwrap().buffer_id(),
+        Some(BufferId(3))
+    );
+    frames.selected = Some(FrameId(u64::MAX));
+    assert!(frames.selected_window().is_none());
+    frames.selected = Some(first);
+    let frame = frames.get_mut(first).unwrap();
+    frame.selected_window = WindowId(u64::MAX);
+    assert!(frames.selected_window().is_none());
+    let frame = frames.get_mut(first).unwrap();
+    frame.selected_window = root;
+    let minibuffer = frame.minibuffer_leaf.as_ref().unwrap().id();
+    frame.selected_window = minibuffer;
+    assert_eq!(frames.selected_window().unwrap().id(), minibuffer);
+    frames.get_mut(first).unwrap().selected_window = root;
+    frames.get_mut(first).unwrap().tree.nodes.reserve(64);
+    assert!(frames.get(first).unwrap().tree.nodes.capacity() > 7);
+    assert_eq!(frames.selected_window().unwrap().id(), root);
+    frames.frames.reserve(64);
+    assert!(frames.frames.capacity() > 7);
+    assert_eq!(frames.selected_window().unwrap().id(), root);
+    let second = frames.create_frame("second", 800, 600, BufferId(2));
+    frames.selected = Some(second);
+    let expected = frames.get(second).unwrap().selected_window;
+    assert_eq!(frames.selected_window().unwrap().id(), expected);
+    assert_eq!(
+        frames.selected_window().unwrap().buffer_id(),
+        Some(BufferId(2))
+    );
+    frames.selected = Some(first);
+    assert_eq!(frames.selected_window().unwrap().id(), root);
+}

@@ -1015,6 +1015,40 @@ impl SavedBufferId {
     }
 }
 
+/// GNU's `unwind_excursion.window` slot (editfns.c:783-786): the selected
+/// window at `save-excursion` capture time when it displayed the current
+/// buffer, `Qnil` otherwise. Window ids start at 1, so 0 is a sentinel that
+/// never names a window and the JIT-pinned `SpecBinding` payload width
+/// (`jit_layout.rs` `ENTRY_WORDS`) is unchanged.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ExcursionWindow(u64);
+
+impl ExcursionWindow {
+    /// GNU's `Qnil`: no window was recorded at capture time.
+    pub(crate) const NONE: Self = Self(0);
+
+    /// GNU `save_excursion_save` (editfns.c:783-786): record the selected
+    /// window when it displays BUFFER, `NONE` otherwise. Read-only: unlike
+    /// `ensure_selected_frame_id_in_state` this never synthesizes a frame,
+    /// so a frameless batch context records no window, like a GNU that never
+    /// ran `window-init`.
+    pub(crate) fn capture(frames: &FrameManager, buffer: BufferId) -> Self {
+        frames
+            .selected_window()
+            .filter(|window| window.buffer_id() == Some(buffer))
+            .map_or(Self::NONE, |window| Self(window.id().0))
+    }
+
+    /// The recorded window, or `None` for GNU's `Qnil`.
+    pub(crate) fn window(self) -> Option<WindowId> {
+        (self.0 != 0).then_some(WindowId(self.0))
+    }
+}
+
+static_assertions::assert_eq_size!(ExcursionWindow, u64);
+static_assertions::assert_eq_align!(ExcursionWindow, u64);
+
 mod specbinding_layout;
 
 specbinding_layout::define! {
@@ -1111,13 +1145,14 @@ pub(crate) enum SpecBinding {
     /// For VM: forms is a callable (bytecode fn), unbind_to calls apply.
     UnwindProtect { forms: Value, lexenv: Value },
     /// save-excursion state. Matches GNU SPECPDL_UNWIND_EXCURSION.
-    /// The owning evaluator's mutator records the original IDs for diagnostics
-    /// and retains their payload slots to preserve the specpdl layout. Restore
-    /// follows the traced marker's live location (GNU editfns.c:792-803), since
-    /// buffer-swap-text can move it away from these recording-time identities.
+    /// The owning evaluator's mutator records the original buffer id for
+    /// diagnostics and retains the payload slot GNU gives to
+    /// `unwind_excursion.window`. Restore follows the traced marker's live
+    /// location (GNU editfns.c:792-803), since buffer-swap-text can move it
+    /// away from the recording-time buffer identity.
     SaveExcursion {
         _saved_buffer_id: crate::buffer::BufferId,
-        _saved_marker_id: u64,
+        saved_window: ExcursionWindow,
         marker: Value,
     },
     /// save-current-buffer state. Matches GNU record_unwind_current_buffer.

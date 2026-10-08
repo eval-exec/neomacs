@@ -6814,6 +6814,45 @@ impl FrameManager {
         self.selected.and_then(|id| self.frames.get(&id))
     }
 
+    /// Borrow the selected window from the current frame/window storage.
+    ///
+    /// A fresh one-frame, one-window context needs no hashed ID probes. Only
+    /// small singleton tables use iteration: a table reduced after frame or
+    /// window churn can retain a large allocation and must use keyed lookup.
+    /// Exact keys are still checked, including the separate minibuffer leaf.
+    /// Nothing is cached across mutations; the owning mutator's borrow keeps
+    /// the selection and displayed buffer stable for this read.
+    #[inline(always)]
+    pub(crate) fn selected_window(&self) -> Option<&Window> {
+        let selected = self.selected?;
+        let frame = if self.frames.len() == 1 && self.frames.capacity() <= 7 {
+            self.frames
+                .iter()
+                .next()
+                .filter(|(id, _)| **id == selected)
+                .map(|(_, frame)| frame)?
+        } else {
+            self.frames.get(&selected)?
+        };
+        if frame.tree.nodes.len() == 1 && frame.tree.nodes.capacity() <= 7 {
+            frame
+                .tree
+                .nodes
+                .iter()
+                .next()
+                .filter(|(id, _)| **id == frame.selected_window)
+                .map(|(_, window)| window)
+                .or_else(|| {
+                    frame
+                        .minibuffer_leaf
+                        .as_ref()
+                        .filter(|window| window.id() == frame.selected_window)
+                })
+        } else {
+            frame.selected_window()
+        }
+    }
+
     /// Get a mutable reference to the selected frame.
     pub fn selected_frame_mut(&mut self) -> Option<&mut Frame> {
         self.selected.and_then(|id| self.frames.get_mut(&id))

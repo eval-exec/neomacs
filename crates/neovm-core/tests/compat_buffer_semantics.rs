@@ -1245,6 +1245,72 @@ fn saved_excursion_skips_killed_saved_buffer() {
     tse_excursion_window_oracle_case(&form, "OK (nil nil 7 t t 1 t)");
 }
 
+/// GNU `save_excursion_restore` (editfns.c:804-810): when the capture-time
+/// window no longer is the selected window but still displays the restored
+/// buffer, its point is synced to the restored point.
+#[test]
+fn saved_excursion_restores_original_window_point() {
+    let form = format!(
+        "(progn {} (tse-excursion-window-case {}))",
+        TSE_EXCURSION_WINDOW_CASE,
+        r#"(lambda (original alternative _caller _other)
+ (select-window original) (goto-char 4) (select-window alternative))"#
+    );
+    tse_excursion_window_oracle_case(&form, "OK (nil t 2 t t 2 t)");
+}
+
+/// The restored window point follows the saved marker's live position after
+/// cleanup forms moved it (GNU restores `PT` after `Fgoto_char (marker)`).
+#[test]
+fn saved_excursion_window_point_follows_marker_moved_in_cleanup() {
+    let form = format!(
+        "(progn {} (tse-excursion-window-case {}))",
+        TSE_EXCURSION_WINDOW_CASE,
+        r#"(lambda (original alternative caller _other)
+ (unwind-protect
+     (progn (select-window original) (goto-char 6) (select-window alternative))
+   (with-current-buffer caller (goto-char 1) (insert "XX"))))"#
+    );
+    tse_excursion_window_oracle_case(&form, "OK (nil t 4 t t 4 t)");
+}
+
+/// A `backtrace-eval` rewind pops the `save-excursion` entry itself, so the
+/// window-point exchange happens before the rewound form re-reads it.
+#[test]
+fn saved_excursion_frame_rewind_exchanges_original_window_point() {
+    tse_excursion_window_oracle_case(
+        r#"(progn
+(defvar tse-excursion-origin)
+(defvar tse-excursion-alternative)
+(defun tse-excursion-inner ()
+  (backtrace-eval
+   '(progn (goto-char 3) (list (point) (window-point tse-excursion-origin)))
+   2))
+(defun tse-excursion-outer ()
+  (save-excursion
+    (select-window tse-excursion-origin)
+    (goto-char 4)
+    (select-window tse-excursion-alternative)
+    (tse-excursion-inner)))
+(let ((caller (generate-new-buffer " *tse-rewind-caller*"))
+      (other (generate-new-buffer " *tse-rewind-other*")))
+  (unwind-protect
+      (save-window-excursion
+        (delete-other-windows)
+        (switch-to-buffer caller)
+        (insert "abcdef") (goto-char 2)
+        (let ((tse-excursion-origin (selected-window))
+              (tse-excursion-alternative (split-window)))
+          (with-current-buffer other (insert "uvwxyz"))
+          (set-window-buffer tse-excursion-alternative other)
+          (let ((result (tse-excursion-outer)))
+            (list result (point) (window-point tse-excursion-origin)
+                  (eq (selected-window) tse-excursion-alternative)))))
+    (mapc #'kill-buffer (list caller other)))))"#,
+        "OK ((3 2) 3 2 t)",
+    );
+}
+
 #[test]
 fn compat_casing_hook_mutations_keep_gnu_live_source_and_full_state() {
     if !oracle_enabled() {
