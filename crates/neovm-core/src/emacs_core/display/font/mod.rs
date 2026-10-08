@@ -771,11 +771,8 @@ fn sync_live_frame_font_state_in_state(
         frame.shrink_mini_window();
     }
     if geometry_changed {
-        frame.sync_menu_bar_height_from_parameters();
-        frame.sync_tool_bar_height_from_parameters();
         frame.sync_tab_bar_height_from_parameters();
-        frame.sync_compact_bar_height_from_parameters();
-        frame.sync_window_area_bounds();
+        frame.sync_bar_heights_from_parameters();
     }
 
     let mut geometry_hints = None;
