@@ -40,6 +40,8 @@ fn unselected_compact_frame_preserves_geometry_after_parameter_and_font_changes(
             GuiRunOptions::with_timeout(Duration::from_secs(25)),
         )
         .unwrap();
+    assert!(!result.timed_out, "scenario must finish: {result:#?}");
+    assert_eq!(result.exit_code, Some(0), "{result:#?}");
     assert_eq!(result.status, GuiRunStatus::Passed, "{result:#?}");
     let mut initial_height = None;
     for tag in ["before", "renamed", "font"] {
