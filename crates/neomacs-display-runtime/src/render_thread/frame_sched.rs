@@ -121,102 +121,123 @@ pub(crate) enum Cadence {
     At(EventTime),
 }
 
-/// Declares [`DemandReason`] and everything indexed by it from a single list.
-/// The variant set, `ALL`, `COUNT` and `name` all come from these lines, so a
-/// new reason is one line and cannot leave a hand-maintained table behind.
-macro_rules! demand_reasons {
-    ($(
-        $(#[$variant_meta:meta])*
-        $variant:ident => $name:literal,
-    )+) => {
-        /// Why a frame is wanted. Diagnostic identity, not policy encoded as
-        /// strings. Deadline demands are keyed by this, so each reason holds at
-        /// most one scheduled deadline per window.
-        // Interface variants/fields defined by the scheduling plan; consumed as
-        // later stages migrate effects onto the coordinator.
-        #[allow(dead_code)]
-        #[derive(
-            Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord,
-            enumset::EnumSetType, enum_map::Enum,
-        )]
-        #[enumset(no_super_impls, no_ops)]
-        pub(crate) enum DemandReason {
-            $($(#[$variant_meta])* $variant,)+
-        }
-
-        impl DemandReason {
-            /// Every reason, in declaration order. The order is the
-            /// counter/report order and matches the derived `Ord`.
-            pub(crate) const ALL: [DemandReason; Self::COUNT] =
-                [$(DemandReason::$variant,)+];
-
-            /// Number of reasons: the width of [`DemandReason::ALL`] and of
-            /// every per-reason counter array.
-            pub(crate) const COUNT: usize = [$(DemandReason::$variant,)+].len();
-
-            /// Stable snake_case name for diagnostics output.
-            pub(crate) const fn name(self) -> &'static str {
-                match self {
-                    $(DemandReason::$variant => $name,)+
-                }
-            }
-        }
-    };
-}
-
-demand_reasons! {
-    EditorCommit => "editor_commit",
-    CursorAnimation => "cursor_animation",
+/// Why a frame is wanted. Diagnostic identity, not policy encoded as
+/// strings. Deadline demands are keyed by this, so each reason holds at
+/// most one scheduled deadline per window.
+// Interface variants/fields defined by the scheduling plan; consumed as
+// later stages migrate effects onto the coordinator.
+#[allow(dead_code)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    enumset::EnumSetType,
+    enum_map::Enum,
+    strum::EnumCount,
+    strum::VariantArray,
+    strum::VariantNames,
+)]
+#[enumset(no_super_impls, no_ops)]
+pub(crate) enum DemandReason {
+    #[strum(serialize = "editor_commit")]
+    EditorCommit,
+    #[strum(serialize = "cursor_animation")]
+    CursorAnimation,
     /// Infinite ambient compositor-only demand: the cursor color cycle
     /// (Stage 3 tracer bullet). Distinct from CursorAnimation so its MaxRate
     /// phase anchor cannot collide with the blink deadline.
-    CursorColorCycle => "cursor_color_cycle",
-    FiniteEffect => "finite_effect",
-    Transition => "transition",
+    #[strum(serialize = "cursor_color_cycle")]
+    CursorColorCycle,
+    #[strum(serialize = "finite_effect")]
+    FiniteEffect,
+    #[strum(serialize = "transition")]
+    Transition,
     /// Panes travelling between two layouts. Distinct from `Transition`, which
     /// is a cross-presentation content effect: a morph changes where the panes
     /// are drawn, so it needs frames even when the content is unchanged and
     /// nothing else on screen is moving.
-    PaneMotion => "pane_motion",
+    #[strum(serialize = "pane_motion")]
+    PaneMotion,
     /// A child frame travelling through its lifecycle: a popup fading in or
     /// out, drifting to a new anchor. Distinct from `PaneMotion` (which is
     /// whole-layout tiling morphs) so diagnostics can answer why a popup is
     /// still being redrawn after its parent's layout has settled.
-    ChildFrameMotion => "child_frame_motion",
-    Video => "video",
-    WebKit => "webkit",
+    #[strum(serialize = "child_frame_motion")]
+    ChildFrameMotion,
+    #[strum(serialize = "video")]
+    Video,
+    #[strum(serialize = "webkit")]
+    WebKit,
     /// Animated shader surfaces visible in a composited frame
     /// (docs/display-engine/SHADER_SURFACES.md).
-    ShaderSurface => "shader_surface",
+    #[strum(serialize = "shader_surface")]
+    ShaderSurface,
     /// Installed full-frame post shader whose time uniforms require a fresh
     /// composite even when the editor scene is unchanged.
-    FrameShader => "frame_shader",
-    Terminal => "terminal",
-    Expose => "expose",
+    #[strum(serialize = "frame_shader")]
+    FrameShader,
+    #[strum(serialize = "terminal")]
+    Terminal,
+    #[strum(serialize = "expose")]
+    Expose,
     /// A tick the coordinator did not ask for: the platform invalidated the
     /// surface (expose, resize, first map) or a runtime recovery path called
     /// request_redraw on the window directly. Distinct from Expose, which
     /// attributes the coordinator's own re-queue of work a present failed to
     /// deliver.
-    PlatformRedraw => "platform_redraw",
-    DebugCapture => "debug_capture",
+    #[strum(serialize = "platform_redraw")]
+    PlatformRedraw,
+    #[strum(serialize = "debug_capture")]
+    DebugCapture,
     /// New editor content or blink toggle needing a repaint.
-    Redisplay => "redisplay",
+    #[strum(serialize = "redisplay")]
+    Redisplay,
     /// Render-effect families (Stage 6). Each names the group animating so
     /// diagnostics can answer "why is this window still rendering?" without
     /// per-effect logging.
-    CursorEffect => "cursor_effect",
-    WindowEffect => "window_effect",
-    TextEffect => "text_effect",
-    ScrollEffect => "scroll_effect",
-    DecorativeEffect => "decorative_effect",
-    TransientEffect => "transient_effect",
+    #[strum(serialize = "cursor_effect")]
+    CursorEffect,
+    #[strum(serialize = "window_effect")]
+    WindowEffect,
+    #[strum(serialize = "text_effect")]
+    TextEffect,
+    #[strum(serialize = "scroll_effect")]
+    ScrollEffect,
+    #[strum(serialize = "decorative_effect")]
+    DecorativeEffect,
+    #[strum(serialize = "transient_effect")]
+    TransientEffect,
 }
 
 impl DemandReason {
+    /// Number of reasons: the width of every per-reason counter array.
+    pub(crate) const COUNT: usize = <Self as strum::EnumCount>::COUNT;
+
+    /// Every reason, in declaration order. Preserve the fixed-size array API
+    /// while deriving the variant list from the enum.
+    pub(crate) const ALL: [Self; Self::COUNT] = {
+        let variants = <Self as strum::VariantArray>::VARIANTS;
+        let mut all = [variants[0]; Self::COUNT];
+        let mut i = 0;
+        while i < Self::COUNT {
+            all[i] = variants[i];
+            i += 1;
+        }
+        all
+    };
+
+    /// Stable diagnostic name, available in constant expressions.
+    pub(crate) const fn name(self) -> &'static str {
+        <Self as strum::VariantNames>::VARIANTS[self.index()]
+    }
+
     /// Index into [`DemandReason::ALL`] / the per-reason counter arrays. The
     /// enum is fieldless with default discriminants, so the cast is the
-    /// declaration position, which is `ALL`'s order by construction; density is
+    /// declaration position, matching the derived variant/name order; density is
     /// pinned by `demand_reason_indices_are_dense`.
     pub(crate) const fn index(self) -> usize {
         self as usize
