@@ -185,3 +185,7 @@ impl CoreTextBackend {
         selected
     }
 }
+
+#[cfg(test)]
+#[path = "tests/coretext_fixture_test.rs"]
+mod tests;

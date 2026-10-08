@@ -4812,17 +4812,6 @@ impl BootstrapFrameMetrics {
     };
 }
 
-fn font_weight_symbol(weight: FontWeight) -> &'static str {
-    weight.symbol_name()
-}
-
-fn startup_font_weight_symbol(weight: FontWeight) -> &'static str {
-    match weight {
-        FontWeight::Normal => "regular",
-        _ => font_weight_symbol(weight),
-    }
-}
-
 fn font_otf_capability_for_file(
     file: &str,
     face_index: u32,
@@ -5078,13 +5067,6 @@ fn bootstrap_buffers_with_font(
         startup_font::BootstrapFont::Tty => (Value::NIL, Value::string("fixed")),
         startup_font::BootstrapFont::Gui(font) => {
             let selected = (*font).into_selected();
-            let name = Value::string(format!(
-                "-*-{}-{}-{}-*-*-{}-*-*-*-*-*-*-*",
-                selected.resolved.family,
-                startup_font_weight_symbol(FontWeight::from_css_weight(selected.resolved.weight)),
-                selected.slant.symbol_name(),
-                selected.metrics.pixel_size,
-            ));
             let mut face = neovm_core::face::Face::new("default");
             face.height = Some(FaceHeight::Absolute(
                 display
@@ -5095,10 +5077,10 @@ fn bootstrap_buffers_with_font(
                 glyph_code: None,
                 font: core_opened_font_from_selection(selected, font_otf_capability_for_file),
             };
-            (
-                neovm_core::emacs_core::font::opened_font_from_resolved_match(&face, &matched),
-                name,
-            )
+            let opened =
+                neovm_core::emacs_core::font::opened_font_from_resolved_match(&face, &matched);
+            let name = neovm_core::emacs_core::font::public_frame_font_parameter_value(opened);
+            (opened, name)
         }
     };
     let bootstrap_font_snapshot = bootstrap_font

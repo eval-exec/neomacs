@@ -2437,6 +2437,9 @@ pub enum FontSpecSelection {
     #[default]
     Enumerate,
     DriverMatch,
+    /// Open a parsed specification: prefer listed entities first, then try
+    /// the driver matcher if the explicit specification has no candidates.
+    OpenBySpec,
 }
 
 /// One exact opened font shared by layout, frame geometry, and Lisp font

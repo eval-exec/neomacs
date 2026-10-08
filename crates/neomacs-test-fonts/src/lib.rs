@@ -38,6 +38,10 @@ const NOTO_COLOR_EMOJI_NAME: &str = "noto-color-emoji-2.051.ttf";
 const NOTO_COLOR_EMOJI_URL: &str = "https://raw.githubusercontent.com/googlefonts/noto-emoji/8998f5dd683424a73e2314a8c1f1e359c19e8742/fonts/NotoColorEmoji.ttf";
 const NOTO_COLOR_EMOJI_SHA256: &str =
     "72a635cb3d2f3524c51620cdde406b217204e8a6a06c6a096ff8ed4b5fd6e27b";
+const MPLUS_1_CODE_THIN_NAME: &str = "MPLUS1Code-Thin.ttf";
+const MPLUS_1_CODE_THIN_URL: &str = "https://raw.githubusercontent.com/coz-m/MPLUS_FONTS/9e2b62ba986047127eb0a73b3ca70d75a50114bd/fonts/MPLUS1Code/ttf/MPLUS1Code-Thin.ttf";
+const MPLUS_1_CODE_THIN_SHA256: &str =
+    "730c24ad92d46ef913d92dd2ffcd41a535609604b8213d8326292d2664ffd107";
 const MAX_PINNED_FIXTURE_BYTES: u64 = 32 * 1024 * 1024;
 
 #[derive(Clone, Copy)]
@@ -71,6 +75,7 @@ const ARCHIVED_FONTS: [ArchivedFont; 5] = [
 
 static SPLEEN_FIXTURES: OnceLock<SpleenFixtures> = OnceLock::new();
 static WOFF2_COLLECTION_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
+static MPLUS_1_CODE_THIN_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static NOTO_COLOR_EMOJI_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 
 /// Paths to the pinned Spleen faces used by the font boundary tests.
@@ -157,6 +162,24 @@ pub fn noto_color_emoji_2_051() -> &'static Path {
             )
             .unwrap_or_else(|error| {
                 panic!("failed to prepare pinned Noto Color Emoji test font: {error}")
+            })
+        })
+        .as_path()
+}
+
+/// The author's static Thin face. A process-local catalog containing only this
+/// file checks nearest-weight matching without any installed Regular sibling.
+#[must_use]
+pub fn mplus_1_code_thin() -> &'static Path {
+    MPLUS_1_CODE_THIN_FIXTURE
+        .get_or_init(|| {
+            prepare_pinned_file(
+                MPLUS_1_CODE_THIN_NAME,
+                MPLUS_1_CODE_THIN_URL,
+                MPLUS_1_CODE_THIN_SHA256,
+            )
+            .unwrap_or_else(|error| {
+                panic!("failed to prepare pinned M PLUS Thin test font: {error}")
             })
         })
         .as_path()

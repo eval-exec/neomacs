@@ -1369,12 +1369,7 @@ fn internal_set_lisp_face_attribute_eval_realizes_string_font_requests_for_live_
         .frame_manager()
         .get(frame_id)
         .expect("selected frame after font change");
-    assert_eq!(
-        frame
-            .parameter("font")
-            .and_then(|value| value.as_utf8_str()),
-        Some("Noto Sans Mono-16")
-    );
+    let public_font_name = frame.parameter("font").expect("public frame font name");
     let font_parameter = frame
         .parameter("font-parameter")
         .expect("font-parameter should be set");
@@ -1386,6 +1381,17 @@ fn internal_set_lisp_face_attribute_eval_realizes_string_font_requests_for_live_
     assert_eq!(frame.char_width, 13.0);
     assert_eq!(frame.char_height, 31.0);
     assert_eq!(frame.font_pixel_size, 22.0);
+
+    let face_font_name = builtin_face_font(
+        &mut eval,
+        vec![Value::symbol("default"), Value::make_frame(frame_id.0)],
+    )
+    .expect("default face font name");
+    assert_eq!(
+        public_font_name.as_utf8_str(),
+        face_font_name.as_utf8_str(),
+        "GNU commits the realized font name so default-font-height can use frame metrics"
+    );
 
     let default_font = builtin_internal_get_lisp_face_attribute(
         &mut eval,
