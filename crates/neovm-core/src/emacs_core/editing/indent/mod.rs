@@ -2071,6 +2071,19 @@ impl ControlRendering {
     }
 }
 
+/// Control rendering is read only if a scan encounters a control character.
+/// The answer lives in the scan's OnceCell, never in shared mutator state.
+#[cold]
+fn control_rendering_in_state(obarray: &Obarray, buf: &Buffer) -> ControlRendering {
+    if dynamic_buffer_or_global_symbol_value(obarray, &[], Some(buf), "ctl-arrow")
+        .is_none_or(|value| value.is_truthy())
+    {
+        ControlRendering::Caret
+    } else {
+        ControlRendering::Octal
+    }
+}
+
 /// A display-vector newline stops inside the vector without consuming its
 /// source character. Non-newline glyphs each occupy one column in indent.c.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2169,6 +2182,33 @@ fn simple_backward_column(
     }
 }
 
+/// Display-table vectors are uncommon in ordinary column scans. Keep their
+/// interpretation out of the character loop when no table is installed.
+/// The borrowed table belongs to this scan's mutator and is never retained.
+#[cold]
+#[inline(never)]
+fn display_table_column_advance(
+    table: &Value,
+    code: u32,
+    encoding: super::casefiddle::CaseEncoding,
+    column: DisplayColumn,
+    tab_width: TabWidth,
+    line_end: LineEndPolicy,
+) -> Option<ColumnAdvance> {
+    let entry = super::chartable::ct_ref(table, i64::from(code));
+    // GNU indent.c:283-295 counts a multibyte display vector by length;
+    // :760-788 interprets TAB/newline within single-byte glyph vectors.
+    if matches!(encoding, super::casefiddle::CaseEncoding::Multibyte) && code >= 0x80 {
+        entry.as_vector_data().map(|glyphs| {
+            ColumnAdvance::Continue(DisplayColumn::new(
+                column.get().saturating_add(glyphs.len().min(1000)),
+            ))
+        })
+    } else {
+        advance_column_glyphs(column, &entry, tab_width, line_end)
+    }
+}
+
 fn scan_for_column(
     ctx: &mut super::eval::Context,
     buffer_id: crate::buffer::BufferId,
@@ -2178,7 +2218,8 @@ fn scan_for_column(
         ColumnTarget::Position(pos) => (Some(pos), usize::MAX),
         ColumnTarget::Column(goal) => (None, goal.get()),
     };
-    let (mut scan, line_end, tab_width, line_end_policy, control_rendering) = {
+    let control_rendering = std::cell::OnceCell::new();
+    let (mut scan, line_end, tab_width, line_end_policy) = {
         let buf = ctx.buffers.get(buffer_id).ok_or_else(|| {
             signal(
                 LispCondition::Error,
@@ -2205,20 +2246,11 @@ fn scan_for_column(
         } else {
             LineEndPolicy::Newline
         };
-        let control_rendering =
-            if dynamic_buffer_or_global_symbol_value(&ctx.obarray, &[], Some(buf), "ctl-arrow")
-                .is_none_or(|value| value.is_truthy())
-            {
-                ControlRendering::Caret
-            } else {
-                ControlRendering::Octal
-            };
         (
             line.start().get(),
             line.end().get(),
             tab_width_in_state(&ctx.obarray, &[], Some(buf)),
             line_end_policy,
-            control_rendering,
         )
     };
     let end = end_byte
@@ -2261,7 +2293,7 @@ fn scan_for_column(
             display_table.as_ref(),
             tab_width,
             line_end_policy,
-            control_rendering,
+            *control_rendering.get_or_init(|| control_rendering_in_state(&ctx.obarray, buf)),
         );
         return Ok(ColumnScan {
             byte_pos: point,
@@ -2382,8 +2414,14 @@ fn scan_for_column(
                 .char_after_emacs_byte_len(scan_pos)
                 .map(|len| len.max(EmacsByteLen::new(1)))
                 .unwrap_or(EmacsByteLen::new(1));
-            let width = if code < 0x20 || code == 0x7f {
-                control_rendering.width()
+            // TAB/newline use their own column rules (GNU indent.c:810-821),
+            // so they do not require a ctl-arrow lookup.
+            let width = if matches!(code, 9 | 10) {
+                0
+            } else if code < 0x20 || code == 0x7f {
+                control_rendering
+                    .get_or_init(|| control_rendering_in_state(&ctx.obarray, buf))
+                    .width()
             } else {
                 buffer_char_display_width(buf, scan_pos, code)
             };
@@ -2393,26 +2431,19 @@ fn scan_for_column(
         previous_byte_pos = scan;
         previous_column = column;
         previous_code = Some(code);
-        let glyph_entry = display_table
-            .as_ref()
-            .map(|dt| super::chartable::ct_ref(dt, i64::from(code)));
-        // GNU indent.c:283-295 counts a multibyte display vector by length;
-        // :760-788 interprets TAB/newline within single-byte glyph vectors.
-        let glyph_advance = glyph_entry.as_ref().and_then(|entry| {
-            if multibyte && code >= 0x80 {
-                entry.as_vector_data().map(|glyphs| {
-                    ColumnAdvance::Continue(DisplayColumn::new(
-                        column.saturating_add(glyphs.len().min(1000)),
-                    ))
-                })
-            } else {
-                advance_column_glyphs(
-                    DisplayColumn::new(column),
-                    entry,
-                    tab_width,
-                    line_end_policy,
-                )
-            }
+        let glyph_advance = display_table.as_ref().and_then(|table| {
+            display_table_column_advance(
+                table,
+                code,
+                if multibyte {
+                    super::casefiddle::CaseEncoding::Multibyte
+                } else {
+                    super::casefiddle::CaseEncoding::Unibyte
+                },
+                DisplayColumn::new(column),
+                tab_width,
+                line_end_policy,
+            )
         });
         match glyph_advance {
             Some(ColumnAdvance::Continue(next)) => column = next.get(),
