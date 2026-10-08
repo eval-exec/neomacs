@@ -93,3 +93,42 @@ fn gc_tls_ownership_interned_name_atoms_do_not_carry_heap_properties() {
     first.gc_collect_exact();
     assert!(exact.as_lisp_string().unwrap().has_intervals());
 }
+
+#[test]
+fn name_atom_refs_strip_heap_properties_before_crossing_threads() {
+    use crate::buffer::{CharLen, CharPos0, CharRange};
+    use crate::tagged::gc::TaggedHeap;
+
+    let mut heap = TaggedHeap::new();
+    crate::tagged::gc::set_tagged_heap(&mut heap);
+    let payload = heap.alloc_string(LispString::from_utf8("name-atom-property-payload"));
+    let property = TaggedValue::from_sym_id(intern_uninterned("name-atom-property"));
+    let mut name = LispString::from_utf8("λ-name");
+    let len = CharLen::new(name.schars());
+    let range = CharRange::new(CharPos0::new(0), CharPos0::new(name.schars()));
+    assert!(
+        name.intervals_mut()
+            .put_property_for_object_char_len(range, len, property, payload,)
+    );
+    assert!(name.has_intervals());
+
+    let mut storage = NameAtomStorage::new();
+    let atom = storage.push(name);
+    let borrowed: &LispString = atom.borrow();
+    assert!(!borrowed.has_intervals());
+    let mut map = HashMap::with_hasher(FxBuildHasher);
+    map.insert(atom, NameId(0));
+    assert_eq!(map.get(&LispString::from_utf8("λ-name")), Some(&NameId(0)));
+
+    // The frozen atom kept only bytes, so its former property cannot keep the
+    // heap object alive. Reading the atom on a foreign thread needs no heap.
+    heap.collect_exact(std::iter::empty());
+    assert!(!heap.owns_heap_value_for_test(payload));
+    std::thread::spawn(move || {
+        let borrowed: &LispString = atom.borrow();
+        assert_eq!(borrowed.as_utf8_str(), Some("λ-name"));
+        assert!(!borrowed.has_intervals());
+    })
+    .join()
+    .expect("frozen atom reader exits");
+}
