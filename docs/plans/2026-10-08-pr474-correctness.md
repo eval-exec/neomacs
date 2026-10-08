@@ -115,3 +115,23 @@ legal default-delay marker.
 Test setup provisions existing malformed/truncated PNG fixtures under
 `tmp/imgmsg/fixtures`. Runtime integration uses generated bootstrap Lisp and a
 fresh fingerprint-matched development pdump so startup fits the suite timeouts.
+
+## Rebase follow-up
+
+Rebased the complete PR series onto `origin/main` at `f111bfda94` without
+textual conflicts. Migrated all seven PR-added unit-test files to the new
+`*_test.rs` layout with explicit paths, retaining module identities.
+
+Post-rebase checks:
+
+- `cargo check`: passed (`tmp/verification/rebase-cargo-check.log`).
+- Protocol and renderer nextest: **1,668 / 1,668 passed**
+  (`tmp/verification/rebase-renderer-protocol.log`).
+- Core nextest: **2 / 2 passed**, including all seven Lisp playback behaviors
+  (`tmp/verification/rebase-core.log`).
+- Live GNU oracle: **2 / 2 passed**
+  (`tmp/verification/rebase-oracle-run.log`).
+- GUI: **2 / 2 passed** against rebuilt binary `7BBC7FB3` and its matching
+  pdump (`tmp/svg-animation-gui-rebased.log`).
+- TUI: **1 / 1 passed** against the rebuilt runtime
+  (`tmp/verification/rebase-tui-run.log`).
