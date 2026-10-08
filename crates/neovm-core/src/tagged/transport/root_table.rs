@@ -16,6 +16,9 @@
 //! registry holds only weak references; leases own their table, so a table
 //! (and its chunks) is freed after its last root retires, and identities are
 //! never reused, so a table can outlive its heap without aliasing a later one.
+//! A counted registration lives with every table, including a table retained
+//! temporarily by a collector's Arc. When that count is zero, the root walk
+//! can skip both lazy registry initialization and its mutex.
 
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -28,6 +31,76 @@ use crate::tagged::value::TaggedValue;
 
 /// Cells per chunk. Chunks are boxed, so a cell never moves once handed out.
 const CHUNK_CELLS: usize = 64;
+
+/// Number of tables whose storage is still owned. Only registration tokens
+/// can change it, so a live table (and therefore every live root lease) keeps
+/// it nonzero. An empty count never requires consulting the registry.
+#[derive(Debug, Default)]
+#[repr(transparent)]
+struct LiveTableCount(AtomicUsize);
+
+static_assertions::assert_impl_all!(LiveTableCount: Send, Sync, std::fmt::Debug);
+static_assertions::assert_not_impl_any!(LiveTableCount: Clone, Copy);
+static_assertions::assert_eq_size!(LiveTableCount, AtomicUsize);
+const _: () = {
+    assert!(std::mem::align_of::<LiveTableCount>() == std::mem::align_of::<AtomicUsize>());
+    assert!(std::mem::offset_of!(LiveTableCount, 0) == 0);
+};
+
+impl LiveTableCount {
+    const fn new() -> Self {
+        Self(AtomicUsize::new(0))
+    }
+
+    fn register(&self) -> TableRegistration<'_> {
+        // Publish the count before a table can enter the registry or hand out
+        // a lease. The count cannot wrap: each registration owns a distinct
+        // allocated table, whose storage exhausts the address space first.
+        self.0.fetch_add(1, Ordering::Release);
+        TableRegistration(self)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.load(Ordering::Acquire) == 0
+    }
+
+    /// Keep registry initialization and locking behind the absence check.
+    /// The closure is monomorphized and inlined into the root walker.
+    #[inline(always)]
+    fn with_registered_tables(&self, scan: impl FnOnce()) {
+        if !self.is_empty() {
+            scan();
+        }
+    }
+}
+
+/// One counted table lifetime. Moving the token transfers that lifetime;
+/// cloning it would make retirement decrement twice and is forbidden.
+#[must_use = "dropping a table registration ends its counted lifetime"]
+#[derive(Debug)]
+#[repr(transparent)]
+struct TableRegistration<'a>(&'a LiveTableCount);
+
+static_assertions::assert_impl_all!(TableRegistration<'static>: Send, Sync, std::fmt::Debug);
+static_assertions::assert_not_impl_any!(TableRegistration<'static>: Clone, Copy);
+static_assertions::assert_eq_size!(TableRegistration<'static>, &LiveTableCount);
+const _: () = {
+    assert!(
+        std::mem::align_of::<TableRegistration<'static>>()
+            == std::mem::align_of::<&LiveTableCount>()
+    );
+    assert!(std::mem::offset_of!(TableRegistration<'static>, 0) == 0);
+};
+
+impl Drop for TableRegistration<'_> {
+    fn drop(&mut self) {
+        // Exactly one nonblocking atomic operation: no mutex, allocation,
+        // callback or panic. The table's last Arc owner ends this lifetime.
+        self.0.0.fetch_sub(1, Ordering::Release);
+    }
+}
+
+static LIVE_TABLES: LiveTableCount = LiveTableCount::new();
 
 /// The word of a value the collector traces from a root: a heap object, or a
 /// symbol other than `nil` and `t` (an uninterned symbol's cells survive only
@@ -173,14 +246,20 @@ pub(super) struct RootTable {
     /// Retirements since the last recycling pass: a hint that one may find
     /// cells, never a count of them.
     retired: AtomicUsize,
+    /// Count the table through its last Arc owner, including a collector
+    /// retaining it after the final root lease retires. Not JIT-visible.
+    _registration: TableRegistration<'static>,
 }
 
+static_assertions::assert_impl_all!(RootTable: Send, Sync, std::fmt::Debug);
+
 impl RootTable {
-    fn new(heap: HeapIdentity) -> Self {
+    fn new(heap: HeapIdentity, registration: TableRegistration<'static>) -> Self {
         Self {
             heap,
             cells: Mutex::new(CellAllocator::default()),
             retired: AtomicUsize::new(0),
+            _registration: registration,
         }
     }
 
@@ -275,7 +354,7 @@ fn table_for(heap: HeapIdentity) -> Arc<RootTable> {
         return table;
     }
     tables.retain(|_, table| table.strong_count() > 0);
-    let table = Arc::new(RootTable::new(heap));
+    let table = Arc::new(RootTable::new(heap, LIVE_TABLES.register()));
     tables.insert(heap, Arc::downgrade(&table));
     table
 }
@@ -287,14 +366,21 @@ fn existing_table(heap: HeapIdentity) -> Option<Arc<RootTable>> {
 /// Append every live shared root of `heap` to `out`, for the collector's root
 /// walk on that heap's mutator.
 pub(crate) fn collect_shared_root_gc_roots(heap: HeapIdentity, out: &mut Vec<TaggedValue>) {
-    let Some(table) = existing_table(heap) else {
-        return;
-    };
-    let cells = table.lock();
-    out.extend(cells.cells().filter_map(|cell| match cell.load() {
-        CellState::Live(word) => Some(word.value()),
-        CellState::Vacant | CellState::Retired => None,
-    }));
+    // Completed admission precedes this heap's world-stopped root capture;
+    // its table registration keeps the count nonzero. A concurrent admission
+    // after this observation is governed by the same start-root/SATB/birth
+    // and termination re-seed requirements as admission after the locked
+    // scan below. This is an absence check, not a new root snapshot protocol.
+    LIVE_TABLES.with_registered_tables(|| {
+        let Some(table) = existing_table(heap) else {
+            return;
+        };
+        let cells = table.lock();
+        out.extend(cells.cells().filter_map(|cell| match cell.load() {
+            CellState::Live(word) => Some(word.value()),
+            CellState::Vacant | CellState::Retired => None,
+        }));
+    });
 }
 
 /// Live and retired-but-unrecycled cells of `heap`'s table.
@@ -312,3 +398,7 @@ pub(super) fn cell_census(heap: HeapIdentity) -> (usize, usize) {
             CellState::Vacant => (live, retired),
         })
 }
+
+#[cfg(test)]
+#[path = "root_table_tests.rs"]
+mod tests;
