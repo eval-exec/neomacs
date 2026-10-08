@@ -1011,7 +1011,13 @@ impl PreparedGuiChromeSemantics {
         let needs_menu_items = evaluator
             .frame_manager()
             .get(frame_id)
-            .is_some_and(|frame| frame.compact_bar_height > 0 || frame.menu_bar_height > 0);
+            .is_some_and(|frame| {
+                frame.menu_bar_height > 0
+                    || (frame.compact_bar_height > 0
+                        && frame
+                            .known_frame_parameter_int(FrameParam::MenuBarLines)
+                            .is_some_and(|lines| lines > 0))
+            });
         let menu_items = if needs_menu_items {
             collect_gui_menu_bar_items_for_frame(evaluator, frame_id)
         } else {
@@ -1031,11 +1037,7 @@ impl PreparedGuiChromeSemantics {
             .frame_manager()
             .get(frame_id)
             .is_some_and(|frame| {
-                frame.compact_bar_height > 0
-                    || frame
-                        .frame_parameter_int("compact-bar-lines")
-                        .is_some_and(|lines| lines > 0)
-                    || frame.tool_bar_height > 0
+                frame.tool_bar_height > 0
                     || frame
                         .known_frame_parameter_int(FrameParam::ToolBarLines)
                         .is_some_and(|lines| lines > 0)

@@ -5418,6 +5418,122 @@ fn gnu_startup_keeps_single_row_minibuffer() {
 }
 
 #[test]
+fn gui_created_frame_seeds_bar_defaults_before_redisplay() {
+    let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"]).unwrap();
+    bootstrap_runtime_gui_startup(&mut eval);
+    run_gnu_startup(&mut eval);
+    for (modes, defaults, explicit, expected) in [
+        ("t", "nil", "nil", "(1 1)"),
+        ("nil", "nil", "nil", "(0 0)"),
+        (
+            "t",
+            "'((menu-bar-lines . 0) (tool-bar-lines . 2))",
+            "nil",
+            "(0 2)",
+        ),
+        (
+            "t",
+            "'((menu-bar-lines . 0) (tool-bar-lines . 2))",
+            "'((menu-bar-lines . 1) (tool-bar-lines . 0))",
+            "(1 0)",
+        ),
+    ] {
+        let result = eval
+            .eval_str(&format!(
+                "(let ((menu-bar-mode {modes}) (tool-bar-mode {modes})
+            (default-frame-alist {defaults}))
+            (let ((frame (x-create-frame {explicit})))
+              (list (frame-parameter frame 'menu-bar-lines)
+                    (frame-parameter frame 'tool-bar-lines))))"
+            ))
+            .unwrap();
+        assert_eq!(print_value_with_eval(&eval, &result), expected);
+    }
+}
+
+#[test]
+fn gui_redisplay_preserves_explicit_frame_bar_parameters() {
+    let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"])
+        .expect("cached bootstrap evaluator");
+    let frame_id = bootstrap_runtime_gui_startup(&mut eval);
+    run_gnu_startup(&mut eval);
+    eval.eval_str("(set-frame-parameter nil 'menu-bar-lines 0)")
+        .expect("hide this frame's menu without changing the global mode");
+    for _ in 0..3 {
+        sync_selected_gui_chrome_state(&mut eval);
+        let result = eval
+            .eval_str("(list (frame-parameter nil 'menu-bar-lines) menu-bar-mode)")
+            .unwrap();
+        assert_eq!(print_value_with_eval(&eval, &result), "(0 t)");
+        assert_eq!(
+            eval.frame_manager().get(frame_id).unwrap().menu_bar_height,
+            0
+        );
+    }
+}
+
+#[test]
+fn gui_redisplay_keeps_local_bar_requests_independent_of_global_modes() {
+    let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"]).unwrap();
+    let frame_id = bootstrap_runtime_gui_startup(&mut eval);
+    run_gnu_startup(&mut eval);
+    eval.eval_str(
+        "(progn (menu-bar-mode -1) (tool-bar-mode -1)
+                         (set-frame-parameter nil 'menu-bar-lines 1)
+                         (set-frame-parameter nil 'tool-bar-lines 2))",
+    )
+    .unwrap();
+    sync_selected_gui_chrome_state(&mut eval);
+    let result = eval
+        .eval_str(
+            "(list (frame-parameter nil 'menu-bar-lines)
+        (frame-parameter nil 'tool-bar-lines) menu-bar-mode tool-bar-mode)",
+        )
+        .unwrap();
+    assert_eq!(print_value_with_eval(&eval, &result), "(1 2 nil nil)");
+    let frame = eval.frame_manager().get(frame_id).unwrap();
+    assert_eq!(frame.menu_bar_height, frame.char_height.round() as u32);
+    assert_eq!(
+        frame.tool_bar_height,
+        2 * default_gui_tool_bar_line_height(frame.font_pixel_size)
+    );
+}
+
+#[test]
+fn gui_compact_bar_round_trip_preserves_frame_bar_requests() {
+    let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"]).unwrap();
+    let frame_id = bootstrap_runtime_gui_startup(&mut eval);
+    run_gnu_startup(&mut eval);
+    eval.eval_str("(modify-frame-parameters nil '((menu-bar-lines . 0) (tool-bar-lines . 2)))")
+        .unwrap();
+    for compact in [true, false, true, false] {
+        eval.set_variable(
+            "compact-bar-mode",
+            if compact { Value::T } else { Value::NIL },
+        );
+        sync_selected_gui_chrome_state(&mut eval);
+        let result = eval
+            .eval_str(
+                "(list (frame-parameter nil 'menu-bar-lines)
+            (frame-parameter nil 'tool-bar-lines))",
+            )
+            .unwrap();
+        assert_eq!(print_value_with_eval(&eval, &result), "(0 2)");
+        let frame = eval.frame_manager().get(frame_id).unwrap();
+        let line_height = default_gui_tool_bar_line_height(frame.font_pixel_size);
+        assert_eq!(frame.menu_bar_height, 0);
+        assert_eq!(
+            frame.tool_bar_height,
+            if compact { 0 } else { 2 * line_height }
+        );
+        assert_eq!(
+            frame.compact_bar_height,
+            if compact { line_height } else { 0 }
+        );
+    }
+}
+
+#[test]
 fn bootstrap_gui_frame_seeds_live_menu_and_tool_bar_rows() {
     let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"])
         .expect("cached bootstrap evaluator");
@@ -5520,8 +5636,8 @@ fn sync_selected_gui_chrome_state_uses_compact_bar_as_separate_gui_chrome() {
         .frame_manager()
         .selected_frame()
         .expect("selected frame after compact chrome sync");
-    assert_eq!(frame.frame_parameter_int("menu-bar-lines"), Some(0));
-    assert_eq!(frame.frame_parameter_int("tool-bar-lines"), Some(0));
+    assert_eq!(frame.frame_parameter_int("menu-bar-lines"), Some(1));
+    assert_eq!(frame.frame_parameter_int("tool-bar-lines"), Some(1));
     assert_eq!(frame.frame_parameter_int("compact-bar-lines"), Some(1));
     assert_eq!(frame.menu_bar_height, 0);
     assert_eq!(frame.tool_bar_height, 0);
