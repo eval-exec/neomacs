@@ -304,6 +304,13 @@ fn spec_layout() -> Option<SpecLayout> {
     })
 }
 
+/// Whether the host layouts admit inline buffer-local binds and restores.
+/// Tests derive work counts from admission capability, never emitted counters.
+#[cfg(test)]
+pub(crate) fn blv_bind_layout_available_for_test() -> bool {
+    spec_layout().is_some_and(|layout| layout.local_default_share)
+}
+
 /// The site a `varref` of SYM gets, if the knob inlines reads.
 pub(crate) fn read_site(sym: u32) -> Option<VarSite> {
     if !jit_inline_vars().read {

@@ -179,8 +179,7 @@ fn gen0_cons_shim_rejects_outside_mutator_observations_before_exact_query() {
     );
 }
 
-#[test]
-fn gen0_mapped_blv_keeps_remembered_proof_until_its_default_cell_is_observed() {
+fn check_mapped_blv_binding() {
     let _journal = JournalMode::observed();
     let mut source = blv_context(false);
     let source_owner = blv_cell(&source, false);
@@ -226,6 +225,8 @@ fn gen0_mapped_blv_keeps_remembered_proof_until_its_default_cell_is_observed() {
             .remember_mapped_cons_ahead_of_writes(owner)
     );
     assert!(!is_observed(owner.bits()));
+    let inline_bindings = super::super::inline_vars::blv_bind_layout_available_for_test();
+    super::super::inline_vars::reset_inline_var_sites();
     let leaf = compile_blv(
         &context,
         &[
@@ -238,6 +239,14 @@ fn gen0_mapped_blv_keeps_remembered_proof_until_its_default_cell_is_observed() {
         &[Value::symbol("u34-inline-blv")],
         1,
     );
+    assert_eq!(
+        super::super::inline_vars::inline_var_sites(super::super::inline_vars::InlineVarOp::Bind),
+        u32::from(inline_bindings)
+    );
+    assert_eq!(
+        super::super::inline_vars::inline_var_sites(super::super::inline_vars::InlineVarOp::Unbind),
+        u32::from(inline_bindings)
+    );
     for _ in 0..3 {
         assert_eq!(native(&mut context, &leaf, &[Value::T]), Value::T);
     }
@@ -246,12 +255,12 @@ fn gen0_mapped_blv_keeps_remembered_proof_until_its_default_cell_is_observed() {
     assert_eq!(native(&mut context, &leaf, &[Value::T]), Value::T);
     assert_eq!(
         super::super::shims::VARBIND_SHIM_CALLS.with(|count| count.get()) - binds,
-        0,
-        "an unobserved remembered dump cell keeps its inline binding proof",
+        usize::from(!inline_bindings),
+        "an admitted binding stays inline; a missing layout uses the compiled shim",
     );
     assert_eq!(
         super::super::shims::UNBIND_SHIM_CALLS.with(|count| count.get()) - unbinds,
-        0
+        usize::from(!inline_bindings)
     );
     assert!(
         !is_observed(owner.bits()),
@@ -269,6 +278,19 @@ fn gen0_mapped_blv_keeps_remembered_proof_until_its_default_cell_is_observed() {
         !reads.unchanged(),
         "bind and restore each journal their observed cell"
     );
+}
+
+#[test]
+fn gen0_mapped_blv_keeps_remembered_proof_until_its_default_cell_is_observed() {
+    check_mapped_blv_binding();
+}
+
+#[test]
+fn gen0_mapped_blv_keeps_remembered_proof_until_its_default_cell_is_observed_without_let_layout() {
+    super::super::jit_layout::with_unavailable_let_layout_for_test(|| {
+        assert!(!super::super::inline_vars::blv_bind_layout_available_for_test());
+        check_mapped_blv_binding();
+    });
 }
 
 fn blv_context(local: bool) -> Context {

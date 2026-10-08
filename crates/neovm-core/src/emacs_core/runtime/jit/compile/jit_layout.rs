@@ -755,6 +755,10 @@ pub(crate) struct LetLayout {
 
 /// [`LetLayout`], probed once; `None` turns inline binds off.
 pub(crate) fn let_layout() -> Option<LetLayout> {
+    #[cfg(test)]
+    if test_control::is_unavailable() {
+        return None;
+    }
     static LAYOUT: OnceLock<Option<LetLayout>> = OnceLock::new();
     *LAYOUT.get_or_init(|| {
         let layout = probe_let_layout();
@@ -846,3 +850,10 @@ mod tests;
 #[cfg(test)]
 #[path = "jit_layout/tests/runtime_prefix_test.rs"]
 mod runtime_prefix_tests;
+
+#[cfg(test)]
+#[path = "jit_layout/tests/test_control.rs"]
+mod test_control;
+
+#[cfg(test)]
+pub(crate) use test_control::with_unavailable_let_layout_for_test;
