@@ -57,8 +57,8 @@ use neovm_core::emacs_core::Context;
 use neovm_core::window::geometry::CellOrigin;
 use neovm_core::window::{
     DisplayPointSnapshot, DisplayRowSnapshot, MatrixRow0, PresentedWindowChromeArea,
-    PresentedWindowChromeString, PresentedWindowRegions, WindowCursorKind, WindowCursorPos,
-    WindowCursorSnapshot, WindowDisplaySnapshot,
+    PresentedWindowChromeString, PresentedWindowChromeStrings, PresentedWindowRegions,
+    WindowCursorKind, WindowCursorPos, WindowCursorSnapshot, WindowDisplaySnapshot,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -1247,6 +1247,61 @@ pub(crate) trait DisplayProgressSink {
     fn emit_chrome_progress(&mut self, evaluator: &mut Context, progress: ChromeRowProgress);
 }
 
+/// Only a changed area turns retained immutable sources back into a builder.
+/// Whole-window reuse preserves the existing collection and root admission.
+#[derive(Debug)]
+enum WindowChromeStringState {
+    Building(Vec<PresentedWindowChromeString>),
+    ReusedFrozen(PresentedWindowChromeStrings),
+}
+
+static_assertions::assert_impl_all!(WindowChromeStringState: Send, Sync, std::fmt::Debug);
+static_assertions::assert_not_impl_any!(WindowChromeStringState: Copy);
+
+impl WindowChromeStringState {
+    fn replace_area(
+        &mut self,
+        area: PresentedWindowChromeArea,
+        sources: Vec<PresentedWindowChromeString>,
+    ) {
+        match self {
+            Self::Building(current) => {
+                current.retain(|source| source.area() != area);
+                current.extend(sources);
+            }
+            Self::ReusedFrozen(previous) => {
+                let mut current: Vec<_> = previous
+                    .iter()
+                    .filter(|source| source.area() != area)
+                    .cloned()
+                    .collect();
+                current.extend(sources);
+                *self = Self::Building(current);
+            }
+        }
+    }
+
+    fn finish(self, evaluator: &Context) -> PresentedWindowChromeStrings {
+        match self {
+            Self::Building(mut sources) => {
+                // Original leases keep all children alive during validation
+                // and coalescing. Admission checks the evaluator's heap before
+                // any replacement root is installed.
+                if let Err(error) =
+                    PresentedWindowChromeString::coalesce_roots(&mut sources, evaluator)
+                {
+                    // Preserve rooted originals on a heap mismatch. Opaque
+                    // consumers remain safe; materialization still rejects
+                    // the foreign heap rather than exposing its values.
+                    tracing::error!(?error, "failed to coalesce window chrome roots");
+                }
+                sources.into()
+            }
+            Self::ReusedFrozen(sources) => sources,
+        }
+    }
+}
+
 pub(crate) struct WindowOutputEmitter {
     query_target: Option<LayoutCharPos0>,
     collect_query_restarts: bool,
@@ -1261,7 +1316,7 @@ pub(crate) struct WindowOutputEmitter {
     geometry: WindowRowGeometry,
     logical_cursor: Option<WindowCursorPos>,
     phys_cursor: Option<WindowCursorSnapshot>,
-    chrome_strings: Vec<PresentedWindowChromeString>,
+    chrome_strings: WindowChromeStringState,
 }
 
 impl DisplayProgressSink for WindowOutputEmitter {
@@ -1364,7 +1419,7 @@ impl WindowOutputEmitter {
             geometry: WindowRowGeometry::new(text_row_base, text_x, window_top),
             logical_cursor: None,
             phys_cursor: None,
-            chrome_strings: Vec::new(),
+            chrome_strings: WindowChromeStringState::Building(Vec::new()),
         }
     }
 
@@ -1795,12 +1850,11 @@ impl WindowOutputEmitter {
         sources: Vec<PresentedWindowChromeString>,
     ) {
         debug_assert!(sources.iter().all(|source| source.area() == area));
-        self.chrome_strings.retain(|current| current.area() != area);
-        self.chrome_strings.extend(sources);
+        self.chrome_strings.replace_area(area, sources);
     }
 
-    pub(crate) fn reuse_chrome_strings(&mut self, sources: Vec<PresentedWindowChromeString>) {
-        self.chrome_strings = sources;
+    pub(crate) fn reuse_chrome_strings(&mut self, sources: PresentedWindowChromeStrings) {
+        self.chrome_strings = WindowChromeStringState::ReusedFrozen(sources);
     }
 
     fn push_chrome_row_progress(&mut self, progress: DisplayRowOutputProgress) {
@@ -1853,17 +1907,9 @@ impl WindowOutputEmitter {
         let layout_freshness = buffer_id.and_then(|buffer_id| {
             evaluator.window_display_snapshot_freshness(frame_id, window_id, buffer_id)
         });
-        // Row batches keep earlier formatter results alive across later area
-        // callbacks and layout retries. Only the completed window coalesces
-        // all enabled areas into its one private vector lease.
-        if let Err(error) =
-            PresentedWindowChromeString::coalesce_roots(&mut self.chrome_strings, evaluator)
-        {
-            // Preserve the original rooted handles on an ownership mismatch;
-            // they remain safe for opaque consumers, and owner materialization
-            // still rejects the foreign heap instead of exposing its values.
-            tracing::error!(?error, "failed to coalesce window chrome roots");
-        }
+        // Changed areas validate/coalesce before freezing. Unchanged whole
+        // windows keep their already rooted immutable collection directly.
+        let chrome_strings = self.chrome_strings.finish(evaluator);
         let snapshot = WindowDisplaySnapshot {
             #[cfg(any(test, feature = "redisplay-test-policy"))]
             test_posn_object_extent_mode: Some(
@@ -1879,7 +1925,7 @@ impl WindowOutputEmitter {
             mode_line_height,
             header_line_height,
             tab_line_height,
-            chrome_strings: self.chrome_strings,
+            chrome_strings,
             logical_cursor,
             phys_cursor: phys_cursor.clone(),
             points: prepared_rows.points,
@@ -1903,3 +1949,7 @@ impl WindowOutputEmitter {
 #[cfg(test)]
 #[path = "window_output/tests/window_output_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "window_output/tests/chrome_strings_test.rs"]
+mod chrome_strings_tests;

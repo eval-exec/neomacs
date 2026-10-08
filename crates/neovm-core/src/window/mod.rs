@@ -2761,6 +2761,63 @@ impl PartialEq for PresentedWindowChromeString {
 
 impl Eq for PresentedWindowChromeString {}
 
+/// Immutable rooted chrome sources shared across redisplay snapshots.
+///
+/// Cloning shares one allocation and its existing heap-identified root leases.
+/// The empty collection has no allocation, and no mutable slice is exposed.
+/// Formatting builds an owned vector; publication freezes it after root
+/// coalescing, while unchanged windows retain this collection directly.
+#[repr(transparent)]
+#[derive(Clone, Debug, Default)]
+pub struct PresentedWindowChromeStrings(Option<Arc<[PresentedWindowChromeString]>>);
+
+static_assertions::assert_impl_all!(PresentedWindowChromeStrings: Send, Sync, Clone, std::fmt::Debug, Eq);
+static_assertions::assert_not_impl_any!(PresentedWindowChromeStrings: Copy);
+
+impl PresentedWindowChromeStrings {
+    /// Borrow the immutable sources without copying their rooted handles.
+    #[inline]
+    pub fn as_slice(&self) -> &[PresentedWindowChromeString] {
+        self.0.as_deref().unwrap_or(&[])
+    }
+}
+
+impl From<Vec<PresentedWindowChromeString>> for PresentedWindowChromeStrings {
+    fn from(sources: Vec<PresentedWindowChromeString>) -> Self {
+        if sources.is_empty() {
+            Self::default()
+        } else {
+            Self(Some(sources.into()))
+        }
+    }
+}
+
+impl AsRef<[PresentedWindowChromeString]> for PresentedWindowChromeStrings {
+    fn as_ref(&self) -> &[PresentedWindowChromeString] {
+        self.as_slice()
+    }
+}
+
+impl std::ops::Deref for PresentedWindowChromeStrings {
+    type Target = [PresentedWindowChromeString];
+
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
+
+impl PartialEq for PresentedWindowChromeStrings {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (None, None) => true,
+            (Some(left), Some(right)) => Arc::ptr_eq(left, right) || left == right,
+            (None, Some(_)) | (Some(_), None) => false,
+        }
+    }
+}
+
+impl Eq for PresentedWindowChromeStrings {}
+
 /// Last authoritative redisplay geometry for a live leaf window.
 #[derive(Clone, Debug)]
 pub struct WindowDisplaySnapshot {
@@ -2784,7 +2841,7 @@ pub struct WindowDisplaySnapshot {
     /// Last redisplay tab-line height in pixels.
     pub tab_line_height: i64,
     /// Rooted displayed string objects used by window-chrome glyph rows.
-    pub chrome_strings: Vec<PresentedWindowChromeString>,
+    pub chrome_strings: PresentedWindowChromeStrings,
     /// Intended cursor position in the redisplay result, even when no physical
     /// cursor was emitted.
     pub logical_cursor: Option<WindowCursorPos>,
@@ -2828,6 +2885,9 @@ pub struct WindowDisplaySnapshot {
     /// Exact end record produced by the same row walk as this snapshot.
     pub window_end_record: Option<WindowEndRecord>,
 }
+
+static_assertions::assert_impl_all!(WindowDisplaySnapshot: Send, Sync, Clone, std::fmt::Debug);
+static_assertions::assert_not_impl_any!(WindowDisplaySnapshot: Copy);
 
 /// Which window bodies an explicit `force-window-update` invalidated.
 ///
@@ -3566,7 +3626,7 @@ impl Default for WindowDisplaySnapshot {
             mode_line_height: 0,
             header_line_height: 0,
             tab_line_height: 0,
-            chrome_strings: Vec::new(),
+            chrome_strings: PresentedWindowChromeStrings::default(),
             logical_cursor: None,
             phys_cursor: None,
             points: Vec::new(),

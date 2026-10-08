@@ -316,7 +316,8 @@ fn presented_tab_line_hit_joins_renderer_string_index_with_rooted_lisp_value() {
                         PresentedWindowChromeArea::TabLine,
                         string_id,
                         shared_text.clone(),
-                    )],
+                    )]
+                    .into(),
                     ..Default::default()
                 }],
             )

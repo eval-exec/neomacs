@@ -154,7 +154,7 @@ impl PreparedViewports {
                 .collect();
             snapshot.logical_cursor = None;
             snapshot.phys_cursor = None;
-            snapshot.chrome_strings.clear();
+            snapshot.chrome_strings = Default::default();
             snapshot.regions_materialized = true;
             snapshot.layout_freshness = Some(current.clone());
             snapshot.window_end_record = None;
