@@ -196,6 +196,69 @@ fn integer_width_checks_every_new_bignum() {
     check(&cases);
 }
 
+/// GNU's `+`, `*`, `logand`, `logior` and `logxor` return a sole argument
+/// itself (`src/data.c:3307-3348`, `3494-3528`), `ash` returns VALUE for a
+/// zero COUNT, `max` one of its arguments and the rounding functions an
+/// integer given no divisor: no new bignum, so no width check, however wide
+/// the operand.  Every other spelling of the same value builds one and is
+/// checked.
+#[test]
+fn integer_width_spares_an_operand_returned_unchanged() {
+    let identities = [
+        "(eq x (* x))",
+        "(eq x (apply #'* (list x)))",
+        "(eq x (funcall #'* x))",
+        "(eq x (+ x))",
+        "(eq x (logand x))",
+        "(eq x (logior x))",
+        "(eq x (logxor x))",
+        "(eq x (ash x 0))",
+        "(eq x (max x))",
+        "(eq x (truncate x))",
+        "(eq x (floor x))",
+        "(eq x (ceiling x))",
+        "(eq x (round x))",
+    ];
+    let mut cases: Vec<(String, &str)> = Vec::new();
+    // Above the limit, negative, and below the limit.
+    for (x, width) in [
+        ("(expt 2 200)", 10),
+        ("(- (expt 2 200))", 10),
+        ("(expt 2 200)", 300),
+    ] {
+        for body in identities {
+            cases.push((
+                format!("(let ((x {x})) (let ((integer-width {width})) {body}))"),
+                "t",
+            ));
+        }
+    }
+    let x = |body: &str| format!("(let ((x (expt 2 200))) (let ((integer-width 10)) {body}))");
+    cases.extend([
+        (x("(* x 1)"), OVERFLOW),
+        (x("(* 1 x)"), OVERFLOW),
+        (x("(apply #'* (list x 1))"), OVERFLOW),
+        (x("(logand x -1)"), OVERFLOW),
+        (x("(expt x 1)"), OVERFLOW),
+        (x("(ash 0 x)"), "0"),
+        (
+            "(let ((x (expt 2 200))) (let ((integer-width 300)) (= (* x 1) x)))".to_owned(),
+            "t",
+        ),
+        ("(let ((x 1.5)) (eq x (* x)))".to_owned(), "t"),
+        (
+            "(* 'a)".to_owned(),
+            "(wrong-type-argument number-or-marker-p a)",
+        ),
+        (
+            "(progn (erase-buffer) (insert \"abc\") (* (point-marker)))".to_owned(),
+            "4",
+        ),
+    ]);
+    let cases: Vec<(&str, &str)> = cases.iter().map(|(f, w)| (f.as_str(), *w)).collect();
+    check(&cases);
+}
+
 /// The arithmetic opcodes answer two integers without calling the subr;
 /// that answer is bounded the same way.
 #[test]
@@ -232,4 +295,65 @@ fn integer_width_bounds_the_arithmetic_opcodes() {
     ];
     let cases: Vec<(&str, &str)> = cases.iter().map(|(f, w)| (f.as_str(), *w)).collect();
     check(&cases);
+}
+
+/// The width the bignum constructors read is the slot of the Context active
+/// on this thread, and it goes with that Context: once it is dropped, no
+/// later arithmetic on the thread reads it, and dropping one Context leaves
+/// the slot of the Context that is active alone.
+#[test]
+fn integer_width_slot_is_retired_with_its_context() {
+    crate::test_utils::init_test_tracing();
+    let mut a = Context::new();
+    a.eval_str("(setq integer-width 10)").unwrap();
+    assert!(super::integer_width_below(200));
+    drop(a);
+    // No Context is active: GNU's initial value, 65536.
+    assert!(!super::integer_width_below(65536));
+    assert!(super::integer_width_below(65537));
+
+    let mut b = Context::new();
+    b.eval_str("(setq integer-width (expt 2 62))").unwrap();
+    assert!(!super::integer_width_below(1 << 20));
+    let mut c = Context::new();
+    c.eval_str("(setq integer-width 300)").unwrap();
+    drop(b);
+    // `c' is the active Context: its slot is still the one read.
+    assert!(!super::integer_width_below(300));
+    assert!(super::integer_width_below(301));
+    assert_eq!(
+        format_eval_result(&c.eval_str(
+            "(list (condition-case e (expt 2 300) (error e)) (= (expt 2 299) (ash 1 299)))"
+        )),
+        "OK ((overflow-error) t)"
+    );
+    drop(c);
+    assert!(!super::integer_width_below(65536));
+    assert!(super::integer_width_below(65537));
+}
+
+/// A Context that moved to another thread and was dropped there leaves its
+/// slot installed on the thread it came from.  The slot outlives the
+/// Context, but a bignum stored in it lives in the Context's heap, which is
+/// gone: the width is read from the slot without that heap.  A bignum width
+/// is outside the fixnum range, so it limits nothing either way.
+#[test]
+fn integer_width_slot_of_a_context_dropped_elsewhere_is_read_without_its_heap() {
+    crate::test_utils::init_test_tracing();
+    let mut ctx = Context::new();
+    ctx.eval_str("(setq integer-width (expt 2 62))").unwrap();
+    assert!(!super::integer_width_below(1 << 20));
+    crate::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap);
+    std::thread::spawn(move || {
+        ctx.setup_thread_locals();
+        ctx.eval_str("(setq integer-width (- (expt 2 62)))")
+            .unwrap();
+        assert!(!super::integer_width_below(1 << 20));
+        drop(ctx);
+    })
+    .join()
+    .expect("drop the moved Context on its new thread");
+    // This thread still names the dropped Context's slot, whose bignum was
+    // freed with its heap.
+    assert!(!super::integer_width_below(1 << 20));
 }
