@@ -5,9 +5,7 @@
 //! counter moved), since a correctness assertion alone passes just as well
 //! when nothing was emitted.
 
-use super::leaf_abi::{
-    LEAF_STATS, bare_trampoline, leaf_trampoline_calls, opcode_leaf, trampoline_bodies_for_test,
-};
+use super::leaf_abi::{LEAF_STATS, bare_trampoline, leaf_trampoline_calls, opcode_leaf};
 use super::*;
 use crate::emacs_core::bytecode::Vm;
 use crate::emacs_core::eval::Context;
@@ -243,22 +241,92 @@ fn leaf_knob_parses() {
     );
 }
 
-/// Every opcode trampoline has the declared containment and is reachable
-/// from exactly one opcode. `nth`'s declared fast half and contained body
-/// must give the exact value or signal its emitted trampoline produces.
-/// Inline functions can have several emitted copies, so their addresses
-/// cannot establish whether a trampoline implements its declaration.
+/// A trampoline's values and signals must agree with its declared body,
+/// including arguments the fast half accepts and declines. Function
+/// addresses can be duplicated or merged by optimization, so they cannot
+/// establish this contract. Every opcode leaf with a trampoline is
+/// reachable from its opcode.
 #[test]
 fn trampolines_call_their_spec_bodies() {
-    for (id, _, fast) in trampoline_bodies_for_test() {
+    let mut eval = Context::new();
+    eval.eval_str("(put 'leaf-sym 'a 'prop-a)").expect("plist");
+    let ctx_ptr = &mut eval as *mut Context as *mut u8;
+    let list = eval
+        .eval_str(&format!("(list {})", OPERANDS.join(" ")))
+        .expect("operands");
+    crate::emacs_core::eval::push_scratch_gc_root(list);
+    let values = crate::emacs_core::value::list_to_vec(&list).expect("proper");
+    for (op, id, nargs) in OPCODE_LEAF_OPS {
         let spec = id.spec();
         assert_eq!(
-            fast.is_some(),
-            matches!(spec.containment, Containment::FastOutside(_)),
-            "{}: containment",
+            u32::from(spec.entry.slots()),
+            *nargs,
+            "{}: trampoline arity",
             spec.name
         );
-        assert!(bare_trampoline(id).is_some(), "{}", spec.name);
+        let fast = match spec.containment {
+            Containment::Catch => {
+                assert_ne!(*id, LeafId::Nth, "nth declares a fast half");
+                None
+            }
+            Containment::FastOutside(fast) => {
+                assert_eq!(*id, LeafId::Nth, "{}: audited fast half", spec.name);
+                Some(fast)
+            }
+        };
+        let leaf = compile_with_knob(&opcode_fn(op.clone(), *nargs), LeafKnob::ALL);
+        let calls0 = leaf_trampoline_calls(*id);
+        let (mut cases, mut fast_answers, mut fast_declines) = (0u64, 0u64, 0u64);
+        let mut check = |args: &[Value], what: &str| {
+            let want = match spec.entry.call(&eval, args) {
+                Ok(value) => print_value(&value),
+                Err(LeafExit::Signal(flow)) => flow_text(flow),
+                Err(LeafExit::Generic) => panic!("{what}: an opcode leaf must not decline"),
+            };
+            if let Some(fast) = fast {
+                let mut padded = [Value::NIL; 4];
+                padded[..args.len()].copy_from_slice(args);
+                match fast(&eval, &padded) {
+                    Some(value) => {
+                        assert_eq!(print_value(&value), want, "{what}: declared fast half");
+                        fast_answers += 1;
+                    }
+                    None => fast_declines += 1,
+                }
+            }
+            assert_eq!(
+                native(ctx_ptr, &leaf, args, what),
+                want,
+                "{what}: spec body"
+            );
+            cases += 1;
+        };
+        for (i, &a) in values.iter().enumerate() {
+            if *nargs == 1 {
+                check(&[a], &format!("({op:?} {})", OPERANDS[i]));
+            } else {
+                for (j, &b) in values.iter().enumerate() {
+                    check(
+                        &[a, b],
+                        &format!("({op:?} {} {})", OPERANDS[i], OPERANDS[j]),
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            leaf_trampoline_calls(*id) - calls0,
+            cases,
+            "{}: every case reached its trampoline",
+            spec.name
+        );
+        if fast.is_some() {
+            assert!(fast_answers > 0, "{}: fast answers exercised", spec.name);
+            assert!(
+                fast_declines > 0,
+                "{}: contained fallback exercised",
+                spec.name
+            );
+        }
     }
     for spec in LEAVES {
         if bare_trampoline(spec.id).is_some() {
@@ -271,7 +339,7 @@ fn trampolines_call_their_spec_bodies() {
         }
     }
 
-    let mut eval = Context::new();
+    // Exercise nth beyond its bounded fast walk as well as improper input.
     let pool = eval
         .eval_str("(list nil '(a b c) '(a b . c) 7 [a b c] (make-list 131 'a))")
         .expect("nth list shapes");
