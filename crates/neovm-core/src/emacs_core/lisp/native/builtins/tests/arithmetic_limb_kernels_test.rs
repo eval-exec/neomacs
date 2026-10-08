@@ -216,7 +216,8 @@ fn signed_add_limbs_value_matches_malachite() {
                         let ia = Integer::from_sign_and_abs(!a_neg, na.clone());
                         let ib = Integer::from_sign_and_abs(!b_neg, nb.clone());
                         let want = &ia + &ib;
-                        let got = signed_add_limbs_value(a_neg, &sa, b_neg, &sb);
+                        let got =
+                            signed_add_limbs_value(a_neg, &sa, b_neg, &sb).expect("within width");
                         let got_exact = match got.as_fixnum() {
                             Some(n) => Integer::from(n),
                             None => got.as_bignum().expect("integer").clone(),

@@ -231,15 +231,23 @@ fn int_add_and_mul_values_match_malachite() {
         for (y, yv) in pool.iter().zip(&values) {
             let (xo, yo) = (IntOperand::of(xv).unwrap(), IntOperand::of(yv).unwrap());
             assert_canonical(
-                int_add_value(xo, yo, false),
+                int_add_value(xo, yo, false).unwrap(),
                 &(x + y),
                 &format!("{x} + {y}"),
             );
-            assert_canonical(int_add_value(xo, yo, true), &(x - y), &format!("{x} - {y}"));
-            assert_canonical(int_mul_value(xo, yo), &(x * y), &format!("{x} * {y}"));
+            assert_canonical(
+                int_add_value(xo, yo, true).unwrap(),
+                &(x - y),
+                &format!("{x} - {y}"),
+            );
+            assert_canonical(
+                int_mul_value(xo, yo).unwrap(),
+                &(x * y),
+                &format!("{x} * {y}"),
+            );
         }
         if let Some(big) = xv.as_bignum() {
-            assert_canonical(bignum_negate_value(big), &-x, &format!("- {x}"));
+            assert_canonical(bignum_negate_value(big).unwrap(), &-x, &format!("- {x}"));
         }
     }
 }
