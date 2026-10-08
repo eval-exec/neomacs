@@ -18,6 +18,9 @@ use std::time::{Duration, Instant};
 use command_group::{CommandGroup, GroupChild};
 use wait_timeout::ChildExt;
 
+#[cfg(target_os = "linux")]
+pub mod clatter_notification;
+
 mod package_archive;
 mod prepared_package_set;
 mod source_lock;
@@ -27,9 +30,10 @@ pub use prepared_package_set::{
     LoadSuffixes, PackageActivation, PreparedPackageSet, package_activation_elisp,
 };
 pub use source_lock::{
-    LockedPackageSource, SHALLOW_GIT_FETCH_ARGS, SourceBuild, locked_melpa_install_plan,
-    locked_melpa_source, locked_melpa_sources, preflight_locked_melpa_packages,
-    prepare_cached_locked_melpa_package, prepare_cached_locked_package_plan,
+    CLATTER_PIN, LockedPackageSource, SHALLOW_GIT_FETCH_ARGS, SourceBuild,
+    locked_melpa_install_plan, locked_melpa_source, locked_melpa_sources,
+    preflight_locked_melpa_packages, prepare_cached_locked_melpa_package,
+    prepare_cached_locked_package_plan,
 };
 pub use tree_sitter_grammar::{
     prepare_cached_tree_sitter_grammar, prepare_cached_tree_sitter_grammar_from_subdirectory,

@@ -15,6 +15,9 @@ use crate::workspace_root;
 const LOCKED_PACKAGE_MANIFEST: &str = include_str!("melpa-package-lock.tsv");
 static LOCKED_PACKAGE_CATALOG: OnceLock<Result<LockedPackageCatalog, String>> = OnceLock::new();
 
+/// Exact MELPA transaction used by the account-free Clatter notification fixture.
+pub const CLATTER_PIN: (&str, &str) = ("clatter", "20261007.1819");
+
 /// The pinned Telega frontend the account-free GUI fixture mounts.  Tests and
 /// the fixture harness must use this pin instead of a literal so the lock row
 /// and its consumers cannot drift apart.
