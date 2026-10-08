@@ -662,7 +662,7 @@ fn concurrent_worker_channel_dispatch_preserves_legacy_and_enabled_symbol_polici
                 });
                 let mut harness = WorkerHarness::new(&heap, major);
                 harness.job.claims.pages = pages;
-                harness.job.gray = vec![root_cons, owner, position];
+                harness.job.gray = MarkStack::from_values(vec![root_cons, owner, position]);
                 let done = harness.job.done.clone();
                 let request = if let Some(claims) = extension {
                     GcRequest::ConcurrentMarkEnabled(Box::new(EnabledConcurrentMarkJob {
@@ -706,8 +706,8 @@ fn concurrent_worker_channel_dispatch_preserves_legacy_and_enabled_symbol_polici
                     assert_eq!(leaf.load(Ordering::Relaxed), 1);
                     assert_eq!(hash.load(Ordering::Relaxed), 1);
                 } else {
-                    assert!(deferred.contains(&owner));
-                    assert!(deferred.contains(&position));
+                    assert!(deferred.contains(&MarkWord::of(owner)));
+                    assert!(deferred.contains(&MarkWord::of(position)));
                     assert!(!unsafe { (*header(owner)).is_marked_at(parity) });
                     assert!(!unsafe { (*header(position)).is_marked_at(parity) });
                 }

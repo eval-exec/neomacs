@@ -38,6 +38,8 @@ pub(super) struct ConcurrentHashMutatorState {
     pub(super) written_hash_owners: Vec<TaggedValue>,
 }
 
+static_assertions::assert_not_impl_any!(ConcurrentHashMutatorState: Send, Sync);
+
 impl ConcurrentHashMutatorState {
     pub(super) fn new() -> Self {
         Self {
@@ -57,6 +59,8 @@ pub(super) struct ConcurrentClaimsState {
     // Never hold this map lock while locking an entry/table descriptor.
     mutators: Mutex<FxHashMap<NonZeroUsize, Arc<Mutex<ConcurrentHashMutatorState>>>>,
 }
+
+static_assertions::assert_not_impl_any!(ConcurrentClaimsState: Send, Sync);
 
 impl ConcurrentClaimsState {
     fn new() -> Self {
@@ -481,27 +485,38 @@ mod tests {
     }
 
     #[test]
-    fn u35_cold_registry_has_stable_distinct_mutators_and_retains_all_thread_exit_logs() {
-        let state = Arc::new(ConcurrentClaimsState::new());
+    fn u35_cold_registry_keeps_distinct_exited_thread_ids_and_owner_local_logs() {
+        // Thread IDs are plain registration data. Raw dirty-owner Values and
+        // retirement buffers remain on the heap owner's thread in this phase.
         let workers: Vec<_> = (0..3)
-            .map(|i| {
-                let state = state.clone();
-                std::thread::spawn(move || {
-                    let entry = state.current_mutator();
-                    assert!(Arc::ptr_eq(&entry, &state.current_mutator()));
-                    let mut log = entry.lock().unwrap();
-                    log.written_hash_owners.push(TaggedValue::fixnum(i as i64));
-                    log.retired_hash_buffers.push(vec![Some(
-                        crate::emacs_core::value::HashTableEntry {
-                            key: TaggedValue::fixnum(i as i64),
-                            value: TaggedValue::fixnum(99),
-                        },
-                    )]);
+            .map(|_| {
+                std::thread::spawn(|| {
+                    let id = current_mutator_id();
+                    assert_eq!(id, current_mutator_id());
+                    id
                 })
             })
             .collect();
-        for worker in workers {
-            worker.join().unwrap();
+        let ids: Vec<_> = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect();
+        assert_eq!(ids.iter().copied().collect::<FxHashSet<_>>().len(), 3);
+        let state = ConcurrentClaimsState::new();
+        for (i, id) in ids.into_iter().enumerate() {
+            // Admit an exited thread's ID to the registry while stopped on the
+            // owner. This exercises its actual lookup without moving local
+            // Value-bearing state to another thread.
+            let _id_scope = crate::tls_scope::TlsScope::new(&CONCURRENT_HASH_MUTATOR_ID, Some(id));
+            let entry = state.current_mutator();
+            assert!(Arc::ptr_eq(&entry, &state.current_mutator()));
+            let mut log = entry.lock().unwrap();
+            log.written_hash_owners.push(TaggedValue::fixnum(i as i64));
+            log.retired_hash_buffers
+                .push(vec![Some(crate::emacs_core::value::HashTableEntry {
+                    key: TaggedValue::fixnum(i as i64),
+                    value: TaggedValue::fixnum(99),
+                })]);
         }
         let entries = state.mutators_world_stopped();
         assert_eq!(entries.len(), 3);

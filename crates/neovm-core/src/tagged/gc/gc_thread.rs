@@ -1987,29 +1987,33 @@ mod worker_symbol_classification_tests {
         assert_eq!(logs.result.symbols, ids);
         assert_eq!(logs.seen_symbols.count(), ids.len());
 
-        let mut gray = Vec::new();
+        let mut gray = MarkStack::default();
         for value in ignored {
             logs.queue_child::<true>(value, &mut gray);
         }
-        assert_eq!(gray, heap_values, "only real heap objects join gray");
+        assert_eq!(
+            gray.into_values(),
+            heap_values,
+            "only real heap objects join gray"
+        );
         assert_eq!(logs.result.symbols, ids);
 
         let mut legacy: WorkerMarkLogs = WorkerMarkLogs::default();
-        let mut legacy_gray = Vec::new();
+        let mut legacy_gray = MarkStack::default();
         for value in ignored {
             legacy.queue_child::<false>(value, &mut legacy_gray);
         }
         for id in ids {
             legacy.queue_child::<false>(TaggedValue::from_sym_id(id), &mut legacy_gray);
         }
-        assert_eq!(legacy_gray, heap_values);
+        assert_eq!(legacy_gray.into_values(), heap_values);
         assert!(legacy.result.symbols.is_empty());
         assert_eq!(legacy.seen_symbols.len(), 0);
 
         // A fresh worker/cycle has its own bits. Snapshot routing preserves
         // first-encounter order and deduplication even after repeated symbols.
         let mut next_cycle = EnabledWorkerMarkLogs::default();
-        let mut snapshot_gray = Vec::new();
+        let mut snapshot_gray = MarkStack::default();
         for value in ignored {
             next_cycle.queue_snapshot_child(value, &mut snapshot_gray);
         }
@@ -2018,7 +2022,7 @@ mod worker_symbol_classification_tests {
                 next_cycle.queue_snapshot_child(TaggedValue::from_sym_id(id), &mut snapshot_gray);
             }
         }
-        assert_eq!(snapshot_gray, heap_values);
+        assert_eq!(snapshot_gray.into_values(), heap_values);
         assert_eq!(
             next_cycle.result.symbols,
             ids.into_iter().rev().collect::<Vec<_>>()

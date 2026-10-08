@@ -253,7 +253,7 @@ fn paused_worker_with_policy(
     let leaves = heap.leaf_page_snapshot_for_mark(&mut pages);
     let job = ConcurrentMarkJob {
         // Pop the owner first so its first fresh claim reaches the latch.
-        gray: other_roots.iter().copied().chain([owner]).collect(),
+        gray: MarkStack::from_values(other_roots.iter().copied().chain([owner]).collect()),
         claims: ConcurrentClaimJob {
             parity: heap.mark_parity,
             major: heap.generational.major_in_progress,
@@ -367,9 +367,9 @@ fn tier_h_actual_worker_stop_mid_scan_hands_off_every_child_before_termination()
             1,
         );
         let deferred = heap.deferred_veclikes.lock().unwrap();
-        let mut remaining: FxHashSet<_> = records.iter().map(|record| record.bits()).collect();
-        for value in deferred.iter() {
-            remaining.remove(&value.bits());
+        let mut remaining: FxHashSet<_> = records.iter().copied().map(MarkWord::of).collect();
+        for word in deferred.iter() {
+            remaining.remove(word);
         }
         assert!(
             remaining.is_empty(),
@@ -667,7 +667,12 @@ fn tier_h_actual_worker_deferred_first_write_keeps_header_white_and_both_child_s
                 .load(Ordering::Relaxed),
             0,
         );
-        assert!(heap.deferred_veclikes.lock().unwrap().contains(&owner));
+        assert!(
+            heap.deferred_veclikes
+                .lock()
+                .unwrap()
+                .contains(&MarkWord::of(owner))
+        );
 
         // No reader ever touches the changed backing. SATB retains removed
         // words, while the deferred owner/current-child retrace retains writes.
