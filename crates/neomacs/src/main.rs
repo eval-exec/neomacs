@@ -222,7 +222,8 @@ use neovm_core::emacs_core::{
 use neovm_core::face::{FaceHeight, FontWeight, LFaceAttr};
 use neovm_core::heap_types::LispString;
 use neovm_core::window::{
-    FrameDisplayIdentity, FrameFullscreen, FrameId, FrameParam, FrameVisibility, Window,
+    FrameDisplayIdentity, FrameFullscreen, FrameId, FrameParam, FrameVisibility,
+    GuiBarPresentation, Window,
 };
 
 use image_catalog::{AsyncImageCatalog, RedisplayWaker};
@@ -3078,6 +3079,13 @@ fn run_reused_gui_startup_frame_lisp(eval: &mut Context, frame_id: FrameId, body
 
 fn initialize_reused_gui_startup_frame(eval: &mut Context, frame_id: FrameId) {
     seed_gnu_default_gui_chrome_modes(eval);
+    // GNU gui_default_parameter seeds chrome at frame creation, before
+    // early-init/frame-initialize applies user settings. Redisplay must never
+    // replace those subsequent, authoritative frame-local requests.
+    if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id) {
+        frame.set_known_parameter(FrameParam::MenuBarLines, Value::fixnum(1));
+        frame.set_known_parameter(FrameParam::ToolBarLines, Value::fixnum(1));
+    }
 
     // GNU startup calls `window-system-initialization`, then
     // `frame-initialize`; the opening GUI frame is created through
@@ -3153,18 +3161,20 @@ fn sync_selected_gui_chrome_state(eval: &mut Context) {
         return;
     }
 
-    let menu_enabled = !eval
-        .obarray()
-        .symbol_value("menu-bar-mode")
-        .copied()
-        .unwrap_or(Value::NIL)
-        .is_nil();
-    let tool_enabled = !eval
-        .obarray()
-        .symbol_value("tool-bar-mode")
-        .copied()
-        .unwrap_or(Value::NIL)
-        .is_nil();
+    let selected_gui_frame = eval
+        .frame_manager()
+        .selected_frame()
+        .filter(|frame| frame.effective_window_system().is_some());
+    let menu_enabled = selected_gui_frame.is_some_and(|frame| {
+        frame
+            .known_frame_parameter_int(FrameParam::MenuBarLines)
+            .is_some_and(|lines| lines > 0)
+    });
+    let tool_enabled = selected_gui_frame.is_some_and(|frame| {
+        frame
+            .known_frame_parameter_int(FrameParam::ToolBarLines)
+            .is_some_and(|lines| lines > 0)
+    });
     if tool_enabled {
         ensure_gnu_tool_bar_setup(eval);
     }
@@ -3209,28 +3219,14 @@ fn sync_selected_gui_chrome_state(eval: &mut Context) {
         // `sync_window_area_bounds`, so the reflow reserves the chrome rows.
         frame.displays_chrome = true;
         frame.set_parameter(
-            FrameParam::MenuBarLines.symbol(),
-            Value::fixnum(if menu_items.is_empty() || compact_bar_enabled {
-                0
-            } else {
-                1
-            }),
-        );
-        frame.set_parameter(
-            FrameParam::ToolBarLines.symbol(),
-            Value::fixnum(if tool_items.is_empty() || compact_bar_enabled {
-                0
-            } else {
-                1
-            }),
-        );
-        frame.set_parameter(
             Value::symbol("compact-bar-lines"),
             Value::fixnum(if compact_bar_enabled { 1 } else { 0 }),
         );
-        frame.sync_menu_bar_height_from_parameters();
-        frame.sync_tool_bar_height_from_parameters();
-        frame.sync_compact_bar_height_from_parameters();
+        frame.sync_gui_bar_heights_from_parameters(if compact_bar_enabled {
+            GuiBarPresentation::Compact
+        } else {
+            GuiBarPresentation::Separate
+        });
         geometry_hints = Some((frame.id, frame.gui_geometry_hints()));
     }
 

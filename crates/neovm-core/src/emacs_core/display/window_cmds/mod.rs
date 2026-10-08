@@ -7062,6 +7062,28 @@ pub(crate) fn builtin_x_create_frame(
     let explicit = parse_gui_frame_params(args.first());
     let defaults = eval.eval_symbol_by_id(intern("default-frame-alist")).ok();
     let defaults = parse_gui_frame_params(defaults.as_ref());
+    // GNU xfns.c supplies mode-derived defaults through gui_default_parameter
+    // at creation, never through redisplay. Preserve explicit nil/zero and
+    // default-frame-alist overrides. Child/minibuffer-only frames have no bars.
+    for (parameter, mode) in [
+        (FrameParam::MenuBarLines, "menu-bar-mode"),
+        (FrameParam::ToolBarLines, "tool-bar-mode"),
+    ] {
+        let symbol = parameter.symbol();
+        let key = symbol.as_symbol_id().expect("known frame parameter symbol");
+        if !explicit.all.contains_key(&key) {
+            let value = defaults.all.get(&key).copied().unwrap_or_else(|| {
+                let enabled = explicit.parent_frame.is_none()
+                    && explicit.minibuffer != Some(Value::symbol("only"))
+                    && eval
+                        .obarray()
+                        .symbol_value(mode)
+                        .is_some_and(|value| value.is_truthy());
+                Value::fixnum(i64::from(enabled))
+            });
+            args[0] = Value::cons(Value::cons(symbol, value), args[0]);
+        }
+    }
     for name in ["alpha", "alpha-background"] {
         let key = intern(name);
         if !explicit.all.contains_key(&key)

@@ -30119,6 +30119,55 @@ fn layout_frame_rust_renders_tab_bar_text_from_lisp_tab_bar_keymap() {
 }
 
 #[test]
+fn compact_bar_only_publishes_content_requested_by_the_frame() {
+    let mut eval = create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"]).unwrap();
+    apply_runtime_startup_state(&mut eval).unwrap();
+    let buffer = eval.buffer_manager().current_buffer().unwrap().id();
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("compact-local-bars", 640, 480, buffer);
+    eval.set_variable("compact-test-frame", Value::make_frame(frame_id.0));
+    eval.eval_str(
+        "(progn (select-frame compact-test-frame)
+        (setq-default tool-bar-map '(keymap (probe menu-item \"Probe\" ignore))))",
+    )
+    .unwrap();
+    {
+        let frame = eval.frame_manager_mut().get_mut(frame_id).unwrap();
+        frame.set_window_system(Some(Value::symbol("neomacs")));
+        frame.displays_chrome = true;
+    }
+    let mut engine = LayoutEngine::new();
+    for (menu, tool) in [(0, 1), (1, 0)] {
+        eval.eval_str(&format!(
+            "(progn
+            (modify-frame-parameters nil '((menu-bar-lines . {menu})
+                                          (tool-bar-lines . {tool})
+                                          (compact-bar-lines . 1)))
+            (force-mode-line-update t))"
+        ))
+        .unwrap();
+        eval.frame_manager_mut()
+            .get_mut(frame_id)
+            .unwrap()
+            .sync_gui_bar_heights_from_parameters(neovm_core::window::GuiBarPresentation::Compact);
+        engine.layout_frame_rust(&mut eval, frame_id);
+        let state = engine.last_frame_display_state.as_ref().unwrap();
+        let band = state
+            .frame_chrome
+            .band(FrameChromeKind::CompactBar)
+            .unwrap();
+        let FrameChromeContent::CompactBar(content) = band.content() else {
+            panic!("compact presentation must publish compact content");
+        };
+        assert_eq!(!content.menu_items().is_empty(), menu > 0);
+        assert_eq!(!content.tool_items().is_empty(), tool > 0);
+        assert_eq!(state.frame_chrome.bands().len(), 1);
+        assert_eq!(state.window_infos[0].bounds.y, band.bounds().height());
+    }
+}
+
+#[test]
 fn layout_frame_rust_publishes_authoritative_frame_chrome() {
     let mut eval =
         create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"]).expect("bootstrap");
