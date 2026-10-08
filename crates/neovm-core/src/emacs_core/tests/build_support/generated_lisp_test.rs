@@ -76,6 +76,143 @@ fn roots() -> GeneratedLispRoots {
     GeneratedLispRoots::of_project(&project_root())
 }
 
+/// On Unix, isolate a child test process with only awk on PATH, reproducing
+/// native Windows where gunzip is a shell script rather than an executable.
+/// The parent never changes shared environment variables.
+#[test]
+fn gzipped_charset_generation_needs_only_the_awk_executable() {
+    #[cfg(unix)]
+    if std::env::var_os("NEOMACS_TEST_CHARSET_AWK_ONLY").is_none() {
+        let awk = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+            .map(|directory| directory.join(generated_lisp::AWK_PROGRAM))
+            .find(|path| path.is_file())
+            .and_then(|path| std::fs::canonicalize(path).ok())
+            .expect("an actual awk executable is required by GNU's generators");
+        let scratch = project_root().join("tmp");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let isolated = tempfile::tempdir_in(scratch).unwrap();
+        std::os::unix::fs::symlink(awk, isolated.path().join("awk")).unwrap();
+        let module = module_path!().split_once("::").unwrap().1;
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                &format!("{module}::gzipped_charset_generation_needs_only_the_awk_executable"),
+                "--nocapture",
+            ])
+            .env("NEOMACS_TEST_CHARSET_AWK_ONLY", "1")
+            .env("PATH", isolated.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "awk-only child failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("1 passed"),
+            "child must execute its test: {stdout}"
+        );
+        return;
+    }
+    let roots = roots();
+    let recipe = AWK_GENERATED_CHARSET_LISP
+        .iter()
+        .find(|recipe| {
+            matches!(
+                recipe.input,
+                generated_lisp::CharsetInput::GzippedGlibcCharmap { .. }
+            )
+        })
+        .expect("GNU has a compressed charset recipe");
+    let expected = std::fs::read(recipe.output_path(&roots))
+        .expect("GNU-generated charset Lisp is available for byte comparison");
+    assert!(
+        expected.len() > 1000,
+        "GNU output must contain the charset table"
+    );
+    let generated = recipe
+        .generate(&roots)
+        .expect("a compressed charset recipe requires awk, not an external gunzip executable");
+    assert_eq!(
+        generated, expected,
+        "gzip transport must preserve GNU awk's bytes"
+    );
+}
+
+/// Keep fixture files inside the checkout; never modify the shared GNU input.
+fn gzip_charset_fixture() -> (
+    tempfile::TempDir,
+    GeneratedLispRoots,
+    &'static CharsetTranslationLisp,
+) {
+    let original = roots();
+    let recipe = AWK_GENERATED_CHARSET_LISP
+        .iter()
+        .find(|recipe| {
+            matches!(
+                recipe.input,
+                generated_lisp::CharsetInput::GzippedGlibcCharmap { .. }
+            )
+        })
+        .expect("GNU has a compressed charset recipe");
+    let scratch = project_root().join("tmp");
+    std::fs::create_dir_all(&scratch).unwrap();
+    let fixture = tempfile::tempdir_in(scratch).unwrap();
+    let fixture_roots = GeneratedLispRoots {
+        charsets_dir: fixture.path().join("charsets"),
+        lisp_root: fixture.path().join("lisp"),
+        ..original.clone()
+    };
+    std::fs::create_dir_all(fixture_roots.charsets_dir.join("glibc")).unwrap();
+    std::fs::copy(
+        recipe.script_path(&original),
+        recipe.script_path(&fixture_roots),
+    )
+    .unwrap();
+    (fixture, fixture_roots, recipe)
+}
+
+#[test]
+fn concatenated_gzip_members_preserve_the_gnu_charset_output() {
+    use std::io::Write;
+    let (_fixture, fixture_roots, recipe) = gzip_charset_fixture();
+    // GNU awk ignores this comment, but the real charset is in the SECOND
+    // member. A decoder that reads only the first member loses the table.
+    let mut first = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    first.write_all(b"# first gzip member\n").unwrap();
+    let mut compressed = first.finish().unwrap();
+    compressed.extend(std::fs::read(recipe.input_path(&roots())).unwrap());
+    std::fs::write(recipe.input_path(&fixture_roots), compressed).unwrap();
+    assert_eq!(
+        recipe.generate(&fixture_roots).unwrap(),
+        std::fs::read(recipe.output_path(&roots())).unwrap(),
+        "gunzip processes every gzip member before GNU awk generates the table"
+    );
+}
+
+#[test]
+fn corrupt_gzip_does_not_replace_generated_charset_lisp() {
+    let (_fixture, fixture_roots, recipe) = gzip_charset_fixture();
+    let mut compressed = std::fs::read(recipe.input_path(&roots())).unwrap();
+    // Flip the trailer CRC while keeping the deflate payload valid.
+    let crc = compressed.len() - 8;
+    compressed[crc] ^= 1;
+    std::fs::write(recipe.input_path(&fixture_roots), compressed).unwrap();
+    let output = recipe.output_path(&fixture_roots);
+    std::fs::create_dir_all(output.parent().unwrap()).unwrap();
+    std::fs::write(&output, b"previous complete table\n").unwrap();
+    let error = recipe
+        .regenerate(&fixture_roots)
+        .expect_err("corrupt gzip must fail");
+    assert!(
+        error.contains("gzip"),
+        "error identifies compressed input: {error}"
+    );
+    assert_eq!(std::fs::read(output).unwrap(), b"previous complete table\n");
+}
+
 /// One generated file, whichever recipe table owns it.
 ///
 /// The checks below are scans, not lists: they ask "is the file on disk what
