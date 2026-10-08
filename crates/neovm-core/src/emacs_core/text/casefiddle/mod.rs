@@ -227,7 +227,12 @@ fn titlecase_word_initial(c: char) -> String {
     }
 }
 
+#[inline]
 fn push_multibyte_char_code(out: &mut Vec<u8>, code: u32) {
+    if code < 0x80 {
+        out.push(code as u8);
+        return;
+    }
     let mut buf = [0u8; crate::emacs_core::emacs_char::MAX_MULTIBYTE_LENGTH];
     let len = crate::emacs_core::emacs_char::char_string(code, &mut buf);
     out.extend_from_slice(&buf[..len]);
@@ -521,7 +526,20 @@ pub(crate) fn casify_text_with_extents(
             output_chars += 1;
         };
         let mut expanded = false;
-        if multibyte && let Some(ch) = char::from_u32(code) {
+        if multibyte && code < 0x80 && !casetab.is_custom() {
+            // GNU's standard Unicode tables map ASCII one-to-one. Keep the
+            // word-state decision and extent sink, but avoid Unicode iterator
+            // construction for each ASCII source character. Installed tables
+            // still take the full path, including string/buffer target policy.
+            emit(match char_action {
+                CharacterCaseAction::Up | CharacterCaseAction::Title => {
+                    (code as u8).to_ascii_uppercase() as u32
+                }
+                CharacterCaseAction::Down => (code as u8).to_ascii_lowercase() as u32,
+                CharacterCaseAction::Unchanged => code,
+            });
+            expanded = true;
+        } else if multibyte && let Some(ch) = char::from_u32(code) {
             match char_action {
                 CharacterCaseAction::Up => {
                     let upper = ch.to_uppercase();
