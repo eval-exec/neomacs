@@ -15,7 +15,7 @@ use position::{FrameCoordinateOrigin, FramePositionSpec, apply_frame_position};
 
 use super::error::Flow;
 use super::error::{EvalResult, LispCondition, signal};
-use super::intern::resolve_sym;
+use super::intern::{intern, resolve_sym};
 use super::value::{Value, ValueKind, VecLikeType};
 use super::window_cmds::{
     DeleteFrameMode, FRAME_TEXT_LINES_PARAM, FRAME_TOTAL_COLS_PARAM, FRAME_TOTAL_LINES_PARAM,
@@ -126,8 +126,7 @@ pub(crate) fn sync_gui_frame_alpha(eval: &mut super::eval::Context, frame: Frame
         .unwrap_or([-1.0; 2]);
     let limit = crate::window::frame_alpha::lower_limit(
         eval.obarray()
-            .symbol_value("frame-alpha-lower-limit")
-            .copied()
+            .symbol_value_id_copied(intern("frame-alpha-lower-limit"))
             .unwrap_or(Value::fixnum(20)),
     );
     if let Some(host) = eval.display_host.as_mut() {
