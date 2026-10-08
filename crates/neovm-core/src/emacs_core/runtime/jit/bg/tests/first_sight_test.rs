@@ -110,6 +110,28 @@ fn jit_bg_first_sight_strict_calls_keep_the_frames() {
     assert!(quiesce_for_test(Duration::from_secs(60)));
     cache::drain_ready_pending(Some(&ev));
     assert_eq!(kind_of(&ev, "neovm--bgf-outer"), "compiled");
+    {
+        let caller = ev
+            .obarray
+            .symbol_function_id(intern("neovm--bgf-outer"))
+            .expect("defined");
+        let bc = caller.get_bytecode_data().expect("byte-compiled");
+        // The idle drain installs without the caller's RuntimeState, so a
+        // completed job's backoff can still hold its dispatch interpreted.
+        // This fixture requires the installed caller to execute natively.
+        bc.jit_runtime().defer_tier_up(0);
+        assert_eq!(
+            bc.jit_runtime().dispatch_sized(bc.executable_ops().len()),
+            crate::emacs_core::jit::Plan::Compiled,
+            "the installed caller must dispatch to compiled code"
+        );
+    }
+    assert_eq!(
+        ev.eval_str("(neovm--bgf-outer 5 nil)")
+            .expect("caller preflight"),
+        Value::make_int(7)
+    );
+    assert_eq!(kind_of(&ev, "neovm--bgf-outer"), "compiled");
     assert_eq!(kind_of(&ev, "neovm--bgf-inner"), "none");
     let first_sight = stats_snapshot().enqueued[JobClass::FirstSight as usize];
     {
