@@ -698,7 +698,12 @@ impl WaitRequest {
         // Timer and process callbacks can replace the displayed buffer. Return
         // to read_char so its bounded display maintenance can discover that
         // change even when its previous coverage request had no more work.
+        // Only the command loop's UNBOUNDED read takes this exit: a bounded
+        // read (a Lisp `read-char` timeout, the retirement wait) has a
+        // deadline contract to honor, and GNU's loop keeps blocking until
+        // that deadline when nothing but timers ran.
         if matches!(self.keyboard, KeyboardWaitPolicy::ReadCommandInput)
+            && !self.deadline_is_finite()
             && (outcome.has_timer_activity() || outcome.ran_process_callbacks())
         {
             return Some(WaitCompletion::DisplayActivity);
@@ -1181,8 +1186,24 @@ impl super::eval::Context {
     fn complete_wait_after_required_minimum_drain(
         &mut self,
         request: &WaitRequest,
-        outcome: WaitServiceOutcome,
+        mut outcome: WaitServiceOutcome,
     ) -> Result<Option<WaitCompletion>, Flow> {
+        // The service pass checks for command input BEFORE its redisplay
+        // step, so input that arrives during that redisplay (a frontend
+        // completing its wake, a config whose echo traffic lands exactly
+        // then) has missed the outcome's recording.  A wait that completes
+        // on command input must not report a lesser completion while the
+        // input is already pending: GNU's loop would keep iterating and
+        // notice the input on the next pass, so the classification the
+        // caller sees ("input pending") holds either way.  Re-stage once
+        // here, after every callback of the pass has run.
+        if request.completes_on_command_input()
+            && !outcome.has_command_input_pending()
+            && let Some(query) = request.keyboard.input_query()
+            && self.stage_pending_command_input_for_wait_request(query)?
+        {
+            outcome.record_command_input_pending();
+        }
         let Some(completion) = request.completion_for(outcome) else {
             return Ok(None);
         };
