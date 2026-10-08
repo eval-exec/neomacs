@@ -367,9 +367,9 @@ fn tier_h_actual_worker_stop_mid_scan_hands_off_every_child_before_termination()
             1,
         );
         let deferred = heap.deferred_veclikes.lock().unwrap();
-        let mut remaining: FxHashSet<_> = records.iter().copied().map(MarkWord::of).collect();
+        let mut remaining: FxHashSet<_> = records.iter().map(|record| record.bits()).collect();
         for word in deferred.iter() {
-            remaining.remove(word);
+            remaining.remove(&word.value().bits());
         }
         assert!(
             remaining.is_empty(),
