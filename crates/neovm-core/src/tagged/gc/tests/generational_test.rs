@@ -83,7 +83,7 @@ fn generational_owned_owner_logging_and_immediate_filter() {
     assert_eq!(heap.current_mutator_gc().remset, [owner]);
     assert!(header(owner).is_remembered());
     assert!(!heap.mapped_remembered.contains(&owner.bits()));
-    heap.debug_assert_remembered_membership(owner);
+    heap.assert_remembered_membership_for_test(owner);
 }
 
 #[test]
