@@ -17,8 +17,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use super::overlay_bplus::{
-    OrderedFilterMask, OrderedRecordRelocation, OrderedShiftRecord, OrderedShiftTree,
-    OrderedTreeMatches, OrderedTreeQuery,
+    OrderedFilterMask, OrderedFilteredRecord, OrderedRecordRelocation, OrderedShiftRecord,
+    OrderedShiftTree, OrderedTreeMatches, OrderedTreeQuery,
 };
 use super::overlay_order::GnuOverlayOrder;
 use crate::emacs_core::plist;
@@ -262,6 +262,15 @@ impl OrderedShiftRecord for EndpointRecord {
     }
 }
 
+impl OrderedFilteredRecord for EndpointRecord {
+    fn with_filter_mask(self, property_mask: OrderedFilterMask) -> Self {
+        Self {
+            property_mask,
+            ..self
+        }
+    }
+}
+
 fn overlay_indexed_property_mask(overlay: Value) -> OrderedFilterMask {
     let Some(data) = overlay.as_overlay_data() else {
         return OrderedFilterMask::EMPTY;
@@ -426,28 +435,15 @@ impl EndpointBPlusTree {
     fn refresh_overlay_property_mask(&mut self, overlay: Value) {
         let property_mask = overlay_indexed_property_mask(overlay);
         for kind in [EndpointKind::Start, EndpointKind::End] {
-            let identity = EndpointIdentity::of(overlay, kind);
-            let Some(mut record) = self.records.record(identity) else {
-                continue;
-            };
-            // The mask says WHICH indexed properties the overlay carries, not
-            // their values, so almost every `overlay-put` leaves it alone:
-            // setting `face` on an overlay that already has one, or writing a
-            // property the index does not filter on, changes nothing here.
-            // Republishing regardless cost two ordered-tree rewrites per put --
-            // `replace_same_key` refreshes the leaf and every ancestor -- which
-            // is the dominant cost of diagnostic churn, where flymake puts four
-            // properties on each of hundreds of overlays. Comparing first turns
-            // the unchanged case into two lookups.
-            if record.property_mask == property_mask {
-                continue;
-            }
-            record.property_mask = property_mask;
-            let previous = self
+            // The signature conservatively tracks plist key classes,
+            // independent of their values. Changing a value or adding a
+            // colliding key leaves it unchanged: one lookup per endpoint.
+            // New diagnostic overlays gain classes as properties are added.
+            // Republish only the filter unions above those endpoints; their
+            // positions and pending lazy shifts need no summary rebuild.
+            let _previous = self
                 .records
-                .replace_same_key(record)
-                .expect("published overlay endpoint disappeared during property update");
-            debug_assert_eq!(previous.identity, identity);
+                .replace_filter_mask(EndpointIdentity::of(overlay, kind), property_mask);
         }
     }
 

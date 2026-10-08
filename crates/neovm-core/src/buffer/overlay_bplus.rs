@@ -69,6 +69,14 @@ impl OrderedFilterMask {
             .zip(other.0)
             .any(|(left, right)| left & right != 0)
     }
+
+    /// Whether every class in `other` is also in `self`.
+    pub(super) fn contains(self, other: Self) -> bool {
+        self.0
+            .iter()
+            .zip(other.0)
+            .all(|(outer, inner)| inner & !outer == 0)
+    }
 }
 
 impl BitOr for OrderedFilterMask {
@@ -94,6 +102,16 @@ pub(super) trait OrderedShiftRecord: Copy + Debug {
     }
     fn shifted(self, delta: EmacsByteDelta) -> Self;
     fn shifted_key(key: Self::Key, delta: EmacsByteDelta) -> Self::Key;
+}
+
+/// A record whose conservative filter class can change in place.
+///
+/// The class is independent of the record's key and positions, so changing
+/// it never moves the record, never needs pending lazy shifts resolved, and
+/// leaves every position summary valid.
+pub(super) trait OrderedFilteredRecord: OrderedShiftRecord {
+    /// This record with `mask` as its filter class; key and positions unchanged.
+    fn with_filter_mask(self, mask: OrderedFilterMask) -> Self;
 }
 
 /// Whether a changed record can retain its occupied position in key order.
@@ -217,6 +235,10 @@ pub(super) struct OrderedShiftTree<R: OrderedShiftRecord> {
     /// state or synchronization contract to the production tree.
     #[cfg(test)]
     membership_mutations: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Test-only count of complete node summary rebuilds. Clones share it,
+    /// like the counters above; relaxed increments publish no Lisp state.
+    #[cfg(test)]
+    summary_refreshes: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
@@ -240,6 +262,8 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
             ),
             #[cfg(test)]
             membership_mutations: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            #[cfg(test)]
+            summary_refreshes: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 
@@ -658,6 +682,18 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
     #[cfg(test)]
     pub(super) fn membership_mutation_count(&self) -> usize {
         self.membership_mutations
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    pub(super) fn reset_summary_refresh_count(&self) {
+        self.summary_refreshes
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    pub(super) fn summary_refresh_count(&self) -> usize {
+        self.summary_refreshes
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
@@ -1148,6 +1184,9 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
 
     fn refresh(&mut self, id: OrderedNodeId) {
         debug_assert!(self.node(id).pending_shift.is_zero());
+        #[cfg(test)]
+        self.summary_refreshes
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let (summary, prefix_max_end, branch_min_positions) = match &self.node(id).kind {
             OrderedNodeKind::Leaf(records) => {
                 let mut prefix = SmallVec::with_capacity(records.len());
@@ -1643,6 +1682,94 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
             "B+ branch separator positions drifted"
         );
         expected
+    }
+}
+
+impl<R: OrderedFilteredRecord> OrderedShiftTree<R> {
+    /// Give one record a new filter class and republish only the filter
+    /// summaries that change.
+    ///
+    /// A class change moves no record and no position, so pending lazy shifts
+    /// stay pending and the position summaries (`prefix_max_end`, separators,
+    /// key extremes) stay valid: a full `refresh` of the leaf and every
+    /// ancestor, as `replace_same_key` performs, would only recompute them.
+    /// Ancestor classes are unions of their children's, so the walk stops at
+    /// the first node whose union is unchanged. Returns the previous class,
+    /// or `None` when `identity` is not indexed. The caller holds the owning
+    /// buffer's exclusive mutation; nothing is shared with other mutators.
+    pub(super) fn replace_filter_mask(
+        &mut self,
+        identity: R::Identity,
+        mask: OrderedFilterMask,
+    ) -> Option<OrderedFilterMask> {
+        let leaf = *self.by_identity.get(&identity)?;
+        let records = self.leaf_records_mut(leaf);
+        let slot = records
+            .iter_mut()
+            .find(|record| record.identity() == identity)
+            .expect("overlay B+ identity map pointed to the wrong leaf");
+        let previous = slot.filter_mask();
+        if previous != mask {
+            *slot = slot.with_filter_mask(mask);
+            self.republish_filter_masks(leaf, FilterMaskChange::new(previous, mask));
+        }
+        Some(previous)
+    }
+
+    fn republish_filter_masks(&mut self, leaf: OrderedNodeId, change: FilterMaskChange) {
+        let mut current = Some(leaf);
+        while let Some(id) = current {
+            let published = self.summary(id).filter_mask;
+            let mask = match change {
+                // A union that only gains classes gains exactly these.
+                FilterMaskChange::Grown(added) => published | added,
+                FilterMaskChange::Shrunk => self.collect_filter_mask(id),
+            };
+            if mask == published {
+                return;
+            }
+            let node = self.node_mut(id);
+            node.summary
+                .as_mut()
+                .expect("nonempty overlay B+ node has a summary")
+                .filter_mask = mask;
+            current = node.parent;
+        }
+    }
+
+    fn collect_filter_mask(&self, id: OrderedNodeId) -> OrderedFilterMask {
+        match &self.node(id).kind {
+            OrderedNodeKind::Leaf(records) => records
+                .iter()
+                .fold(OrderedFilterMask::EMPTY, |mask, record| {
+                    mask | record.filter_mask()
+                }),
+            OrderedNodeKind::Branch(children) => children
+                .iter()
+                .fold(OrderedFilterMask::EMPTY, |mask, child| {
+                    mask | self.summary(*child).filter_mask
+                }),
+        }
+    }
+}
+
+/// How a record's filter class changed, which decides how its ancestors'
+/// union classes can be republished.
+#[derive(Clone, Copy, Debug)]
+enum FilterMaskChange {
+    /// Only gained classes: every union containing the record gains `added`.
+    Grown(OrderedFilterMask),
+    /// Lost at least one class: each union is recollected from its members.
+    Shrunk,
+}
+
+impl FilterMaskChange {
+    fn new(previous: OrderedFilterMask, mask: OrderedFilterMask) -> Self {
+        if mask.contains(previous) {
+            Self::Grown(mask)
+        } else {
+            Self::Shrunk
+        }
     }
 }
 

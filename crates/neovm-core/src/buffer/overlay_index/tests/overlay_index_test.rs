@@ -240,3 +240,6 @@ fn reverse_endpoint_stream_is_the_exact_inverse_across_tree_levels() {
 
 #[cfg(test)]
 mod deletion_single_restore;
+
+#[cfg(test)]
+mod property_mask_republish;
