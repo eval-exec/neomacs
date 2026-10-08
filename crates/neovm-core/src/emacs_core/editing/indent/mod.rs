@@ -2219,7 +2219,7 @@ fn scan_for_column(
         ColumnTarget::Column(goal) => (None, goal.get()),
     };
     let control_rendering = std::cell::OnceCell::new();
-    let (mut scan, line_end, tab_width, line_end_policy) = {
+    let (mut scan, line_end, tab_width, line_end_policy, encoding) = {
         let buf = ctx.buffers.get(buffer_id).ok_or_else(|| {
             signal(
                 LispCondition::Error,
@@ -2251,6 +2251,11 @@ fn scan_for_column(
             line.end().get(),
             tab_width_in_state(&ctx.obarray, &[], Some(buf)),
             line_end_policy,
+            if buf.get_multibyte() {
+                super::casefiddle::CaseEncoding::Multibyte
+            } else {
+                super::casefiddle::CaseEncoding::Unibyte
+            },
         )
     };
     let end = end_byte
@@ -2399,7 +2404,7 @@ fn scan_for_column(
                 next_char_property_boundary_byte(ctx, buffer_id, scan, composition_sym, end);
         }
 
-        let (code, char_len, width, multibyte) = {
+        let (code, char_len, width) = {
             let buf = ctx.buffers.get(buffer_id).ok_or_else(|| {
                 signal(
                     LispCondition::Error,
@@ -2416,7 +2421,11 @@ fn scan_for_column(
                 .unwrap_or(EmacsByteLen::new(1));
             // TAB/newline use their own column rules (GNU indent.c:810-821),
             // so they do not require a ctl-arrow lookup.
-            let width = if matches!(code, 9 | 10) {
+            // Printable ASCII has width one in both buffer encodings.
+            // Avoid decoding the same unibyte position again for its width.
+            let width = if (0o40..0o177).contains(&code) {
+                1
+            } else if matches!(code, 9 | 10) {
                 0
             } else if code < 0x20 || code == 0x7f {
                 control_rendering
@@ -2425,7 +2434,7 @@ fn scan_for_column(
             } else {
                 buffer_char_display_width(buf, scan_pos, code)
             };
-            (code, char_len, width, buf.get_multibyte())
+            (code, char_len, width)
         };
 
         previous_byte_pos = scan;
@@ -2435,11 +2444,7 @@ fn scan_for_column(
             display_table_column_advance(
                 table,
                 code,
-                if multibyte {
-                    super::casefiddle::CaseEncoding::Multibyte
-                } else {
-                    super::casefiddle::CaseEncoding::Unibyte
-                },
+                encoding,
                 DisplayColumn::new(column),
                 tab_width,
                 line_end_policy,
