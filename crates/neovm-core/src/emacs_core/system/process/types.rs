@@ -790,6 +790,8 @@ pub struct Process {
     pub coding_state: ProcessCodingState,
     /// Current encoding coding-system.
     pub coding_encode: Value,
+    /// The coding and encoder continuation currently installed on the output fd.
+    pub(crate) encoding_state: ProcessEncodingState,
     /// True once Lisp explicitly changes this process's coding system.
     pub coding_explicitly_set: bool,
     /// True after explicit process coding has deferred one terminal status
@@ -1479,6 +1481,7 @@ pub(super) fn process_coding_name_converts_nothing(name: &str) -> bool {
 /// (src/coding.c:7623-7625) resolves a VECTOR eol_type to `Qunix` before any
 /// encoder sees a character, so `raw-text`'s undecided end-of-line writes bare
 /// LF -- which is what "convert nothing" means on this side.
+#[cfg(test)]
 pub(super) fn process_encode_coding_converts_nothing(coding: Value) -> bool {
     coding.is_nil()
         || matches!(
@@ -2165,12 +2168,82 @@ impl ProcessCodingState {
     }
 }
 
+/// GNU's output descriptor retains both its selected coding and its encoder
+/// state. Selecting a different coding (including a unibyte raw-text downgrade)
+/// starts a fresh continuation without emitting bytes from the previous one.
+#[derive(Clone, Debug, Default)]
+pub(crate) enum ProcessEncodingState {
+    #[default]
+    Uninitialized,
+    Active {
+        coding: crate::encoding::RuntimeCodingSystem,
+        encoder: crate::encoding::CodingEncoderState,
+        setup_eol_conversion: crate::emacs_core::coding::EolConversion,
+    },
+}
+
+impl ProcessEncodingState {
+    pub(crate) fn coding(&self) -> Option<crate::encoding::RuntimeCodingSystem> {
+        match self {
+            Self::Uninitialized => None,
+            Self::Active { coding, .. } => Some(*coding),
+        }
+    }
+
+    pub(crate) fn setup_eol_conversion(&self) -> Option<crate::emacs_core::coding::EolConversion> {
+        match self {
+            Self::Uninitialized => None,
+            Self::Active {
+                setup_eol_conversion,
+                ..
+            } => Some(*setup_eol_conversion),
+        }
+    }
+
+    /// GNU reconfigures an eligible raw encoder for each unibyte send.
+    /// Once inhibition disables that engine, later raw sends bypass setup.
+    pub(crate) fn prepare_unibyte(
+        &mut self,
+        coding: crate::encoding::RuntimeCodingSystem,
+        eol_conversion: crate::emacs_core::coding::EolConversion,
+    ) {
+        self.encoder_for(coding, eol_conversion);
+        if let Self::Active {
+            setup_eol_conversion,
+            ..
+        } = self
+            && *setup_eol_conversion == crate::emacs_core::coding::EolConversion::Enabled
+        {
+            *setup_eol_conversion = eol_conversion;
+        }
+    }
+
+    pub(crate) fn encoder_for(
+        &mut self,
+        coding: crate::encoding::RuntimeCodingSystem,
+        setup_eol_conversion: crate::emacs_core::coding::EolConversion,
+    ) -> &mut crate::encoding::CodingEncoderState {
+        if !matches!(self, Self::Active { coding: current, .. } if *current == coding) {
+            *self = Self::Active {
+                coding,
+                encoder: crate::encoding::CodingEncoderState::default(),
+                setup_eol_conversion,
+            };
+        }
+        match self {
+            Self::Active { encoder, .. } => encoder,
+            Self::Uninitialized => unreachable!("output coding was installed above"),
+        }
+    }
+}
+
 /// Encode the data passed to `process-send-string`/`process-send-region`
 /// through a process's ENCODE coding system, mirroring GNU `send_process`
 /// (src/process.c).  A `binary`/`raw-text`/`no-conversion`/nil encode coding
 /// (or an unset one) leaves the bytes untouched; every other coding goes through
 /// the shared string encoder, which performs character-code conversion and the
 /// EOL conversion the coding's eol_type requests.
+#[cfg(test)]
 pub(super) fn encode_process_send_input(
     processes: &ProcessManager,
     id: ProcessId,
@@ -5620,6 +5693,7 @@ impl ProcessManager {
             coding_decode: coding.decode,
             coding_state: ProcessCodingState::default(),
             coding_encode: coding.encode,
+            encoding_state: ProcessEncodingState::default(),
             coding_explicitly_set: false,
             explicit_coding_status_deferred_once: false,
             inherit_coding_system_flag: false,

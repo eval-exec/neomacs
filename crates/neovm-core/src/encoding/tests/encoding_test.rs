@@ -1355,12 +1355,14 @@ fn iso2022_encoding_boundary_controls_final_ascii_reset() {
         &spec,
         &[intern("ascii"), jis],
         EncodingBoundary::CompleteText,
+        &mut CodingEncoderState::default(),
     );
     let file_region = encode_via_iso2022(
         &source,
         &spec,
         &[intern("ascii"), jis],
         EncodingBoundary::FileRegion,
+        &mut CodingEncoderState::default(),
     );
 
     assert_eq!(complete, b"\x1b$B!!\x1b(B");

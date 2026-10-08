@@ -1,0 +1,48 @@
+;;; process-send-encoding.el --- Present successful process byte checks -*- lexical-binding: t -*-
+
+(require 'json)
+(load (expand-file-name "process-send-encoding-cases.el"
+                        (file-name-directory load-file-name)) nil t)
+(setq inhibit-startup-screen t)
+(blink-cursor-mode -1)
+(when (display-graphic-p)
+  (menu-bar-mode -1)
+  (tool-bar-mode -1)
+  (set-frame-size nil 500 400 t)
+  (set-face-attribute 'default nil :foreground "#000000" :background "#ffffff"))
+
+(defvar neomacs-process-encoding-control (getenv "NEOMACS_PROCESS_ENCODING_CONTROL"))
+
+(defun neomacs-process-encoding-await-ack ()
+  (if (file-exists-p (expand-file-name "painted" neomacs-process-encoding-control))
+      (kill-emacs 0)
+    (run-at-time 0.05 nil #'neomacs-process-encoding-await-ack)))
+
+(defun neomacs-process-encoding-start ()
+  (switch-to-buffer (get-buffer-create "*process-send-encoding*"))
+  (erase-buffer)
+  (setq-local mode-line-format '(" Process encoding "))
+  (let* ((cases (append (neomacs-process-encoding-multibyte-cases)
+                        (neomacs-process-encoding-unibyte-cases)
+                        (neomacs-process-encoding-stateful-cases)
+                        (neomacs-process-encoding-hook-cases)))
+         (passed (catch 'failed
+                   (dolist (case cases)
+                     (unless (nth 4 case) (throw 'failed nil)))
+                   t)))
+    (insert (if passed "PROCESS-ENCODING-PASSED\n" "PROCESS-ENCODING-FAILED\n"))
+    (dolist (case cases)
+      (insert (format "%s %s: %s\n" (car case) (cadr case)
+                      (if (nth 4 case) "passed" "failed"))))
+    (goto-char (point-min))
+    (with-temp-file (expand-file-name "result.json" neomacs-process-encoding-control)
+      (insert (json-encode `((passed . ,(if passed t :json-false))
+                            (cases . ,(vconcat cases))))))
+    (when (display-graphic-p)
+      (set-face-attribute 'default nil :background (if passed "#00ff00" "#ff0000"))
+      (neomacs--write-frame-snapshot
+       (expand-file-name "final.json" neomacs-process-encoding-control) nil 'json)
+      (neomacs-process-encoding-await-ack))))
+
+(run-at-time 0.5 nil #'neomacs-process-encoding-start)
+(run-at-time 15 nil (lambda () (kill-emacs 2)))
