@@ -167,6 +167,7 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOVM_GC_CENSUS_FILE",
     // Collector controls and trace evidence for mutator/marker attribution.
     "NEOVM_GC_GENERATIONAL",
+    "NEOVM_GC_CONCURRENT_CLAIMS",
     "NEOVM_GC_STRESS",
     "NEOVM_GC_TRACE",
     // Callback and interpreter-pool experiments use the same editor binary.

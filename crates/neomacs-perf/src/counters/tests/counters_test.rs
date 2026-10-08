@@ -147,6 +147,7 @@ fn paired_runtime_and_collector_controls_reach_the_editor() {
     let names = [
         "NEOMACS_RUNTIME_ROOT",
         "NEOVM_GC_GENERATIONAL",
+        "NEOVM_GC_CONCURRENT_CLAIMS",
         "NEOVM_GC_STRESS",
         "NEOVM_GC_TRACE",
     ];
