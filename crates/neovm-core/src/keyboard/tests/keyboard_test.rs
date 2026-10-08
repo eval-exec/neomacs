@@ -2451,25 +2451,58 @@ fn timed_read_does_not_resume_previous_idle_epoch_for_ignored_mouse_motion() {
 
 #[test]
 fn timed_read_preserves_idle_epoch_while_servicing_async_special_input() {
+    let _policy = crate::emacs_core::eval::RedisplayHookPolicyGuard::legacy();
     let mut eval = crate::emacs_core::Context::new();
+    eval.eval_str(
+        r#"(setq vm-test-surface-error nil
+                neomacs-surface-error-functions
+                (list (lambda (id error)
+                        (setq vm-test-surface-error (list id error)))))"#,
+    )
+    .expect("install observable surface-error hook");
     let (sender, receiver) = crossbeam_channel::unbounded();
+    let _sender_keepalive = sender.clone();
     eval.input_rx = Some(receiver);
-    eval.timer_start_idle();
-    let epoch = eval.command_loop.idle_start_time;
+    let (release, released) = crossbeam_channel::bounded(0);
+    let (delivered, delivery) = crossbeam_channel::bounded(0);
     let worker = std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        released
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("first redisplay releases delivery after the initial input drain");
         sender
             .send(InputEvent::SurfaceCreateFailed {
-                id: 0,
-                error: "test failure".into(),
+                id: 7,
+                error: "async failure".into(),
             })
-            .unwrap();
-        // Keep the channel connected until the read's own deadline expires.
-        std::thread::sleep(std::time::Duration::from_millis(100));
+            .expect("deliver special input");
+        sender
+            .send(InputEvent::key_press(KeyEvent::char('x')))
+            .expect("deliver the key that completes the read");
+        delivered.send(()).expect("acknowledge queued delivery");
     });
-    let result = eval.read_char_with_timeout(Some(std::time::Duration::from_millis(50)));
-    worker.join().unwrap();
-    assert_eq!(result.unwrap(), None);
+    let mut release = Some(release);
+    eval.redisplay_fn = Some(Box::new(move |_| {
+        if let Some(release) = release.take() {
+            // Synchronize with actual delivery rather than racing a sleep
+            // against the read timeout. This guarantees delivery after the
+            // initial input drain, without claiming an OS blocking boundary.
+            release.send(()).expect("release async input worker");
+            delivery
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .expect("worker queued input before the read continues");
+        }
+    }));
+    eval.timer_start_idle();
+    let epoch = eval.command_loop.idle_start_time;
+    let result = eval.read_char_with_timeout(Some(std::time::Duration::from_secs(1)));
+    worker.join().expect("async input worker finishes");
+    assert_eq!(result.unwrap(), Some(Value::fixnum('x' as i64)));
+    assert_eq!(
+        eval.eval_str(r#"(equal vm-test-surface-error '(7 "async failure"))"#)
+            .expect("inspect the handler's recorded arguments"),
+        Value::T,
+        "the special event must invoke its Lisp handler with the delivered arguments",
+    );
     assert_eq!(eval.command_loop.idle_start_time, epoch);
 }
 
