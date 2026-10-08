@@ -3004,15 +3004,25 @@ fn process_send_string_test() {
 
 #[cfg(unix)]
 fn process_send_encoded_bytes(coding: &str, sends: &str) -> String {
+    process_send_encoded_bytes_with_creation_inhibition(coding, sends, "nil")
+}
+
+#[cfg(unix)]
+fn process_send_encoded_bytes_with_creation_inhibition(
+    coding: &str,
+    sends: &str,
+    creation_inhibit: &str,
+) -> String {
     let od = find_bin("od");
     let result = eval_one(&format!(
         r#"(let* ((output "")
-                  (p (make-process :name "issue510-encoding"
+                  (p (let ((inhibit-eol-conversion {creation_inhibit}))
+                       (make-process :name "issue510-encoding"
                                    :command '("{od}" "-An" "-tx1")
                                    :coding '(binary . {coding})
                                    :connection-type 'pipe
                                    :filter (lambda (_p text)
-                                             (setq output (concat output text)))))
+                                             (setq output (concat output text))))))
                   (deadline (+ (float-time) 5)))
              (unwind-protect
                  (progn
@@ -3026,6 +3036,75 @@ fn process_send_encoded_bytes(coding: &str, sends: &str) -> String {
                (delete-process p)))"#,
     ));
     result
+}
+
+#[cfg(unix)]
+#[test]
+fn process_send_string_nested_raw_hook_keeps_live_descriptor_coding() {
+    let result = process_send_encoded_bytes(
+        "iso-2022-jp",
+        r#"(defvar issue510-hook-process nil)
+           (defvar issue510-in-hook nil)
+           (setq issue510-hook-process p)
+           (defun issue510-raw-pre-write (_from _to)
+             (unless issue510-in-hook
+               (let ((issue510-in-hook t))
+                 (process-send-string issue510-hook-process (unibyte-string 88)))))
+           (define-coding-system 'issue510-raw-iso "Nested raw process encoding"
+             :coding-type 'iso-2022 :mnemonic ?J
+             :designation [(ascii japanese-jisx0208-1978 japanese-jisx0208 latin-jisx0201) nil nil nil]
+             :flags '(short ascii-at-eol ascii-at-cntl 7-bit designation)
+             :charset-list '(ascii japanese-jisx0208 japanese-jisx0208-1978 latin-jisx0201)
+             :pre-write-conversion 'issue510-raw-pre-write)
+           (set-process-coding-system p 'binary 'issue510-raw-iso)
+           (process-send-string p "か")
+           (process-send-string p "ん")"#,
+    );
+    assert_eq!(result, "OK (88 227 129 139 88 227 130 147)");
+}
+
+#[cfg(unix)]
+#[test]
+fn process_send_string_binary_keeps_installed_coding_between_raw_sends() {
+    let cat = find_bin("cat");
+    let result = eval_one(&format!(
+        r#"(let ((p (make-process :name "issue510-binary-coding" :command '("{cat}")
+                    :coding '(binary . binary) :connection-type 'pipe :filter #'ignore))
+                 (seen nil))
+             (unwind-protect
+                 (progn
+                   (dotimes (_ 2)
+                     (process-send-string p (unibyte-string 65))
+                     (push last-coding-system-used seen))
+                   (nreverse seen))
+               (delete-process p)))"#,
+    ));
+    assert_eq!(result, "OK (binary binary)");
+}
+
+#[cfg(unix)]
+#[test]
+fn process_send_string_raw_eol_inhibition_is_captured_at_creation() {
+    let result = process_send_encoded_bytes_with_creation_inhibition(
+        "raw-text-dos",
+        r#"(let ((inhibit-eol-conversion nil))
+             (process-send-string p (unibyte-string 65 10)))"#,
+        "t",
+    );
+    assert_eq!(result, "OK (65 10)");
+}
+
+#[cfg(unix)]
+#[test]
+fn process_send_string_raw_eol_inhibition_is_captured_at_reassignment() {
+    let result = process_send_encoded_bytes(
+        "raw-text-dos",
+        r#"(let ((inhibit-eol-conversion t))
+             (set-process-coding-system p 'binary 'raw-text-dos))
+           (let ((inhibit-eol-conversion nil))
+             (process-send-string p (unibyte-string 65 10)))"#,
+    );
+    assert_eq!(result, "OK (65 10)");
 }
 
 #[cfg(unix)]

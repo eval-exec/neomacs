@@ -3,28 +3,37 @@
 (defvar neomacs-process-encoding-hook-process nil)
 (defvar neomacs-process-encoding-in-hook nil)
 
-(defun neomacs-process-encoding-capture (coding text region inhibit &optional chunks)
-  "Capture exact bytes sent through CODING to a real pipe process."
+(defun neomacs-process-encoding-capture (coding text region inhibit &optional chunks options)
+  "Capture exact bytes sent through CODING to a real pipe process.
+OPTIONS can set :creation-inhibit, :setup, and :actions for stateful sends."
   (let* ((output "")
-         (process (make-process
+         (process (let ((inhibit-eol-conversion
+                         (plist-get options :creation-inhibit)))
+                    (make-process
                    :name "process-encoding-bytes" :command '("od" "-An" "-tx1")
                    :connection-type 'pipe :coding (cons 'binary coding)
                    :noquery t
                    :filter (lambda (_process bytes)
-                             (setq output (concat output bytes)))))
+                             (setq output (concat output bytes))))))
          (neomacs-process-encoding-hook-process process)
          (deadline (+ (float-time) 2)))
     (unwind-protect
         (progn
+          (when (plist-get options :setup)
+            (funcall (plist-get options :setup) process))
           (let ((inhibit-eol-conversion inhibit))
-            (if region
+            (cond
+             ((plist-get options :actions)
+              (funcall (plist-get options :actions) process))
+             (region
                 (with-temp-buffer
                   (set-buffer-multibyte (multibyte-string-p text))
                   (insert "prefix" text "suffix")
                   ;; Bounds are character positions, including for Japanese.
-                  (process-send-region process 7 (- (point-max) 6)))
+                  (process-send-region process 7 (- (point-max) 6))))
+             (t
               (dolist (part (or chunks (list text)))
-                (process-send-string process part))))
+                (process-send-string process part)))))
           (process-send-eof process)
           (while (and (process-live-p process) (< (float-time) deadline))
             (accept-process-output process 0.05))
@@ -126,3 +135,43 @@
       (push (list "hook-iso-2022" "nested-sends"
                   actual expected (equal actual expected)) results))
     (nreverse results)))
+
+(defun neomacs-process-encoding-nested-raw-send (_from _to)
+  (unless neomacs-process-encoding-in-hook
+    (let ((neomacs-process-encoding-in-hook t))
+      (process-send-string neomacs-process-encoding-hook-process (unibyte-string 88)))))
+
+(defun neomacs-process-encoding-descriptor-cases ()
+  "Keep the live descriptor coding selected by nested sends and EOL setup."
+  (define-coding-system 'neomacs-process-hook-raw-iso "ISO nested raw-send test"
+    :coding-type 'iso-2022 :mnemonic ?J
+    :designation [(ascii japanese-jisx0208-1978 japanese-jisx0208 latin-jisx0201) nil nil nil]
+    :flags '(short ascii-at-eol ascii-at-cntl 7-bit designation)
+    :charset-list '(ascii japanese-jisx0208 japanese-jisx0208-1978 latin-jisx0201)
+    :pre-write-conversion 'neomacs-process-encoding-nested-raw-send)
+  (let* ((nested (neomacs-process-encoding-capture
+                  'neomacs-process-hook-raw-iso "" nil nil '("か" "ん")))
+         (created (neomacs-process-encoding-capture
+                   'raw-text-dos (unibyte-string 65 10) nil nil nil
+                   '(:creation-inhibit t)))
+         (reassigned (neomacs-process-encoding-capture
+                      'raw-text-dos (unibyte-string 65 10) nil nil nil
+                      (list :setup (lambda (process)
+                                     (let ((inhibit-eol-conversion t))
+                                       (set-process-coding-system
+                                        process 'binary 'raw-text-dos)))))))
+    (list (list "hook-iso-2022" "nested-raw" nested "58e3818b58e38293"
+                (equal nested "58e3818b58e38293"))
+          (list "raw-text-dos" "creation-eol" created "410a" (equal created "410a"))
+          (list "raw-text-dos" "setter-eol" reassigned "410a" (equal reassigned "410a")))))
+
+(defun neomacs-process-encoding-binary-metadata ()
+  "Observe last-coding-system-used immediately after consecutive raw sends."
+  (let (seen)
+    (neomacs-process-encoding-capture
+     'binary "" nil nil nil
+     (list :actions (lambda (process)
+                      (dotimes (_ 2)
+                        (process-send-string process (unibyte-string 65))
+                        (push last-coding-system-used seen)))))
+    (nreverse seen)))

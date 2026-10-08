@@ -103,7 +103,12 @@ fn japanese_process_sends_preserve_bytes_and_paint_success() {
     let state: serde_json::Value =
         serde_json::from_slice(&fs::read(control.join("result.json")).unwrap()).unwrap();
     assert_eq!(state["passed"], true, "actual process bytes: {state}");
-    assert_eq!(state["cases"].as_array().unwrap().len(), 23, "{state}");
+    assert_eq!(state["cases"].as_array().unwrap().len(), 26, "{state}");
+    assert_eq!(
+        state["metadata"],
+        serde_json::json!(["binary", "binary"]),
+        "last coding must retain the installed binary descriptor: {state}"
+    );
     for case in state["cases"].as_array().unwrap() {
         assert_eq!(case[2], case[3], "byte mismatch {case}");
         assert_eq!(case[4], true, "byte mismatch {case}");
