@@ -30,6 +30,7 @@ core-foundation.workspace = true
 libc.workspace = true
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
+neomacs-melpa-test-support.workspace = true
 rustix.workspace = true
 wayland-client.workspace = true
 wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }

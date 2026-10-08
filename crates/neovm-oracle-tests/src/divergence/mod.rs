@@ -324,3 +324,6 @@ mod window_frame_display;
 mod window_frame_real;
 mod window_geometry;
 mod window_redisplay;
+
+#[cfg(target_os = "linux")]
+mod dbus_native_marshalling;

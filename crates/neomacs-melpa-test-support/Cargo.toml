@@ -14,6 +14,7 @@ fs4.workspace = true
 neomacs-infra.workspace = true
 neomacs-parity-reference.workspace = true
 sha2.workspace = true
+serde_json.workspace = true
 tempfile.workspace = true
 wait-timeout.workspace = true
 
