@@ -7361,6 +7361,9 @@ fn vm_process_control_and_send_builtins_use_shared_runtime_state() {
                      (p5 (get-process "vm-proc-5"))
                      (p6 (get-process "vm-proc-6"))
                      (p7 (get-process "vm-proc-7")))
+               ;; Synthetic records start before coding setup; the send target
+               ;; carries bytes, so initialize it through the public setter.
+               (set-process-coding-system p7 'binary 'binary)
                (list
                 (null (continue-process))
                 (eq (process-status p1) 'run)
@@ -7382,7 +7385,12 @@ fn vm_process_control_and_send_builtins_use_shared_runtime_state() {
                 (eq (process-send-eof p7) p7)
                 (null (process-running-child-p p7))))"#,
         )
-        .expect("process control/send builtins should execute");
+        .unwrap_or_else(|err| {
+            panic!(
+                "process control/send builtins should execute: {}",
+                crate::emacs_core::error::format_eval_result(&Err(err))
+            )
+        });
 
     assert_eq!(
         crate::emacs_core::error::format_eval_result(&Ok(result)),
