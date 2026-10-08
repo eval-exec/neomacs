@@ -9,6 +9,7 @@
 mod support;
 
 mod idle_timer_output;
+mod process_send_encoding;
 
 #[cfg(test)]
 #[path = "mode_line_min_width_boundary_oracle.rs"]

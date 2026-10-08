@@ -4552,6 +4552,70 @@ pub(super) fn accept_process_output_positive_timeout(args: &[Value]) -> Option<D
     (total_seconds > 0.0).then(|| Duration::from_secs_f64(total_seconds))
 }
 
+/// Encode a subprocess write with the current evaluator's coding definitions.
+fn encode_process_send_input_in_context(
+    eval: &mut super::super::eval::Context,
+    id: ProcessId,
+    input: LispString,
+) -> Result<LispString, Flow> {
+    let configured = eval
+        .processes
+        .get_any(id)
+        .ok_or_else(|| signal_process_not_running_in_manager(&eval.processes, id))?
+        .coding_encode;
+    let configured = configured
+        .as_symbol_id()
+        .filter(|&symbol| symbol != super::super::intern::intern("nil"))
+        .unwrap_or_else(|| super::super::intern::intern("utf-8-unix"));
+    // GNU send_process preserves unibyte character codes while retaining the
+    // configured EOL conversion (process.c:6760-6783). Runtime encoders must
+    // receive that raw-text policy rather than interpreting bytes as text.
+    let multibyte = input.is_multibyte();
+    let coding = if multibyte {
+        configured
+    } else {
+        use super::super::coding::EolType;
+        let name = super::super::intern::resolve_sym(configured);
+        let eol = eval
+            .coding_systems
+            .get(name)
+            .map(|info| info.eol_type)
+            .unwrap_or_else(|| crate::encoding::coding_name_eol(name));
+        let raw = match eol {
+            EolType::Dos => "raw-text-dos",
+            EolType::Mac => "raw-text-mac",
+            EolType::Unix | EolType::Undecided => "raw-text-unix",
+        };
+        super::super::intern::intern(raw)
+    };
+    let coding = crate::encoding::RuntimeCodingSystem::from_symbol(coding);
+    let reported = if multibyte {
+        configured
+    } else {
+        eval.processes
+            .get_any(id)
+            .and_then(|proc| proc.encoding_state.coding())
+            .map(|coding| coding.symbol())
+            .unwrap_or(configured)
+    };
+    eval.set_variable("last-coding-system-used", Value::symbol(reported));
+    // The descriptor changes coding before conversion hooks run. The codec
+    // acquires this state later, after any hook's reentrant sends have finished.
+    let setup_eol_conversion = eval.eol_conversion();
+    let state = &mut eval
+        .processes
+        .get_any_mut(id)
+        .expect("process was resolved above")
+        .encoding_state;
+    if multibyte {
+        state.encoder_for(coding, setup_eol_conversion);
+    } else {
+        state.prepare_unibyte(coding, setup_eol_conversion);
+    }
+    let encoded = crate::encoding::encode_process_text_in_context(eval, input, coding, id)?;
+    Ok(LispString::from_unibyte(encoded))
+}
+
 /// (process-send-string PROCESS STRING) -> nil
 pub(crate) fn builtin_process_send_string(
     eval: &mut super::super::eval::Context,
@@ -4579,7 +4643,7 @@ pub(crate) fn builtin_process_send_string(
     {
         return Err(signal_process_not_running_in_manager(&eval.processes, id));
     }
-    let encoded = encode_process_send_input(&eval.processes, id, &input, eval.eol_conversion());
+    let encoded = encode_process_send_input_in_context(eval, id, input)?;
     eval.send_process_input_reentrant(id, &encoded)?;
     Ok(Value::NIL)
 }
@@ -4931,6 +4995,7 @@ pub(crate) fn builtin_set_process_coding_system_impl(
     // zeroes both `coding->mode` (:5683, so the `CODING_MODE_LAST_BLOCK` latch
     // goes down) and `coding->carryover_bytes` (:5703).
     proc.coding_state.reset();
+    proc.encoding_state = ProcessEncodingState::default();
     proc.coding_encode = encoding;
     proc.coding_explicitly_set = true;
     Ok(Value::NIL)
@@ -5266,8 +5331,7 @@ pub(crate) fn builtin_process_send_region(
         buf.buffer_substring_lisp_string_range(region)
     };
 
-    let encoded =
-        encode_process_send_input(&eval.processes, id, &region_text, eval.eol_conversion());
+    let encoded = encode_process_send_input_in_context(eval, id, region_text)?;
     eval.send_process_input_reentrant(id, &encoded)?;
     Ok(Value::NIL)
 }
