@@ -142,74 +142,54 @@ pub(crate) enum Cadence {
     strum::VariantNames,
 )]
 #[enumset(no_super_impls, no_ops)]
+#[strum(serialize_all = "snake_case")]
 pub(crate) enum DemandReason {
-    #[strum(serialize = "editor_commit")]
     EditorCommit,
-    #[strum(serialize = "cursor_animation")]
     CursorAnimation,
     /// Infinite ambient compositor-only demand: the cursor color cycle
     /// (Stage 3 tracer bullet). Distinct from CursorAnimation so its MaxRate
     /// phase anchor cannot collide with the blink deadline.
-    #[strum(serialize = "cursor_color_cycle")]
     CursorColorCycle,
-    #[strum(serialize = "finite_effect")]
     FiniteEffect,
-    #[strum(serialize = "transition")]
     Transition,
     /// Panes travelling between two layouts. Distinct from `Transition`, which
     /// is a cross-presentation content effect: a morph changes where the panes
     /// are drawn, so it needs frames even when the content is unchanged and
     /// nothing else on screen is moving.
-    #[strum(serialize = "pane_motion")]
     PaneMotion,
     /// A child frame travelling through its lifecycle: a popup fading in or
     /// out, drifting to a new anchor. Distinct from `PaneMotion` (which is
     /// whole-layout tiling morphs) so diagnostics can answer why a popup is
     /// still being redrawn after its parent's layout has settled.
-    #[strum(serialize = "child_frame_motion")]
     ChildFrameMotion,
-    #[strum(serialize = "video")]
     Video,
     #[strum(serialize = "webkit")]
     WebKit,
     /// Animated shader surfaces visible in a composited frame
     /// (docs/display-engine/SHADER_SURFACES.md).
-    #[strum(serialize = "shader_surface")]
     ShaderSurface,
     /// Installed full-frame post shader whose time uniforms require a fresh
     /// composite even when the editor scene is unchanged.
-    #[strum(serialize = "frame_shader")]
     FrameShader,
-    #[strum(serialize = "terminal")]
     Terminal,
-    #[strum(serialize = "expose")]
     Expose,
     /// A tick the coordinator did not ask for: the platform invalidated the
     /// surface (expose, resize, first map) or a runtime recovery path called
     /// request_redraw on the window directly. Distinct from Expose, which
     /// attributes the coordinator's own re-queue of work a present failed to
     /// deliver.
-    #[strum(serialize = "platform_redraw")]
     PlatformRedraw,
-    #[strum(serialize = "debug_capture")]
     DebugCapture,
     /// New editor content or blink toggle needing a repaint.
-    #[strum(serialize = "redisplay")]
     Redisplay,
     /// Render-effect families (Stage 6). Each names the group animating so
     /// diagnostics can answer "why is this window still rendering?" without
     /// per-effect logging.
-    #[strum(serialize = "cursor_effect")]
     CursorEffect,
-    #[strum(serialize = "window_effect")]
     WindowEffect,
-    #[strum(serialize = "text_effect")]
     TextEffect,
-    #[strum(serialize = "scroll_effect")]
     ScrollEffect,
-    #[strum(serialize = "decorative_effect")]
     DecorativeEffect,
-    #[strum(serialize = "transient_effect")]
     TransientEffect,
 }
 
