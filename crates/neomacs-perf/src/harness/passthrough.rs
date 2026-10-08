@@ -3,6 +3,8 @@
 //! harness engine so new runtime knobs do not grow `harness.rs`.
 
 const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
+    // Paired binaries must be able to load the same frozen Lisp runtime.
+    "NEOMACS_RUNTIME_ROOT",
     // Independent redisplay controls; preserve upstream policy forwarding.
     "NEOMACS_PERF_SUSTAINED_VISIBLE",
     "NEOMACS_PERF_SUSTAINED_EDIT_CASE",
@@ -163,6 +165,10 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOVM_GC_CENSUS",
     "NEOVM_GC_CENSUS_REMSET",
     "NEOVM_GC_CENSUS_FILE",
+    // Collector controls and trace evidence for mutator/marker attribution.
+    "NEOVM_GC_GENERATIONAL",
+    "NEOVM_GC_STRESS",
+    "NEOVM_GC_TRACE",
     // Callback and interpreter-pool experiments use the same editor binary.
     "NEOVM_ASSOC_RESOLVED",
     "NEOVM_HASH_TEST_PARITY",

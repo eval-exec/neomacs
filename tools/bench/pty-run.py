@@ -21,6 +21,14 @@ Original docstring: run a TTY neomacs, wait for a sentinel FILE
 the same fixture completed on one run and timed out on the next -- so this
 removes `script` from the equation to see whether it was the cause."""
 import fcntl, os, pty, select, struct, sys, termios, time, signal
+from enum import Enum
+
+
+class CounterThreadScope(Enum):
+    PROCESS = "process"
+    MAIN_THREAD = "main-thread"
+
+
 argv = sys.argv[1:]
 cpu = os.environ.get("PTY_CPU", "")
 if cpu:
@@ -38,6 +46,9 @@ if perf_stat:
         "--output", perf_stat,
         "--event", os.environ.get("PTY_PERF_EVENTS", "cycles:u,instructions:u"),
     ]
+    thread_scope = CounterThreadScope(os.environ.get("PTY_PERF_THREAD_SCOPE", "process"))
+    if thread_scope is CounterThreadScope.MAIN_THREAD:
+        perf_argv.append("--no-inherit")
     perf_control = os.environ.get("PTY_PERF_CONTROL", "")
     if perf_control:
         perf_argv += ["--delay=-1", "--control=" + perf_control]
