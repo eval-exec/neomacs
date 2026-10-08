@@ -749,12 +749,25 @@ impl ImageFrameDelay {
 pub struct ImageEmbeddedMetadata {
     frame_count: Option<std::num::NonZeroU32>,
     frame_delay: Option<ImageFrameDelay>,
+    /// Neomacs computed sources can have a prefix played only once.
+    #[serde(default)]
+    introduction: Option<ImageSequenceIntroduction>,
+}
+
+/// A prefix and its repeating tail have independently quantized delays.
+/// Keeping these fields together prevents partial playback descriptions.
+#[derive(Clone, Debug, Eq, Hash, PartialEq, serde::Serialize, serde::Deserialize)]
+struct ImageSequenceIntroduction {
+    loop_start: std::num::NonZeroU32,
+    prefix_delay: ImageFrameDelay,
+    loop_delay: ImageFrameDelay,
 }
 
 impl ImageEmbeddedMetadata {
     pub const EMPTY: Self = Self {
         frame_count: None,
         frame_delay: None,
+        introduction: None,
     };
 
     #[must_use]
@@ -762,6 +775,52 @@ impl ImageEmbeddedMetadata {
         Self {
             frame_count: std::num::NonZeroU32::new(frame_count).filter(|count| count.get() > 1),
             frame_delay: Some(frame_delay),
+            introduction: None,
+        }
+    }
+
+    /// Set the first repeatable frame, validating it against this sequence.
+    #[must_use]
+    pub fn with_introduction(
+        mut self,
+        start: ImageFrameIndex,
+        prefix_delay: ImageFrameDelay,
+        loop_delay: ImageFrameDelay,
+    ) -> Option<Self> {
+        let start = u32::try_from(start.get()).ok()?;
+        if start >= self.frame_count()? {
+            return None;
+        }
+        self.introduction =
+            std::num::NonZeroU32::new(start).map(|loop_start| ImageSequenceIntroduction {
+                loop_start,
+                prefix_delay,
+                loop_delay,
+            });
+        Some(self)
+    }
+
+    #[must_use]
+    pub const fn loop_start(&self) -> Option<u32> {
+        match &self.introduction {
+            Some(intro) => Some(intro.loop_start.get()),
+            None => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn intro_delay(&self) -> Option<ImageFrameDelay> {
+        match &self.introduction {
+            Some(intro) => Some(intro.prefix_delay),
+            None => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn loop_delay(&self) -> Option<ImageFrameDelay> {
+        match &self.introduction {
+            Some(intro) => Some(intro.loop_delay),
+            None => None,
         }
     }
 

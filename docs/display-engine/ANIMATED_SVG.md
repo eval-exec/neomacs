@@ -74,16 +74,23 @@ load.
 
 ### Sharing rules
 
-Sequence identity follows the resolve source, and cache entries carry
-their producer kind (`AuthoredRaster` vs `ComputedSvg`), so a policy-off
-request can never be served frames a policy-on request materialized —
-cold or warm. Within the computed kind, the **first enabled request for
-a source fixes its grid**: a later enabled request for the same bytes
-with a different fps ceiling is served the already-materialized slots
-and delays (valid samples of the same timeline, at the first requester's
-cadence) until the sequence retires. Preferring a fresh grid per ceiling
-would thrash the cache under alternating requests; v1 treats the first
-requester as the owner.
+Sequence identity follows the resolve source. Cache entries carry a typed
+materialization: authored raster, or computed SVG with its sampling policy,
+face colors and resource context. A hit requires all materialization inputs
+to match. Policy-off requests never use computed frames, and enabled requests
+with different FPS ceilings get their own frame count and delay. One variant
+per source is resident at a time under the shared byte budget; alternating
+variants may recompute. Concurrent identical misses return the published
+winner, including its pixels and metadata. Decode leases release retirement
+accounting during success, failure and panic unwinding.
+
+Finite spans include an exact terminal sample (freeze or restore the base),
+with room reserved inside the 256-frame cap. Repeating spans preserve a
+one-time introductory prefix, followed by the checked least common multiple
+of indefinite durations after finite effects settle. The `loop-start`
+metadata tells the timer adapter where the repeating tail begins;
+`intro-delay` and `loop-delay` preserve both spans under the total frame cap.
+Unrepresentable spans fall back to static.
 
 ## Threading
 

@@ -74,12 +74,11 @@ pre-activation boundaries; neomacs-image-animate-svg mutates the
 displayed spec in place; the parity test pins the value, not just
 agreement.
 
-Still tracked for the render-paced increment (not v1 blockers, all in
-the enabled-policy path): zero-width keyTimes selection, discrete
-keyTimes last<1, fractional repeatCount, single-quote/entity-safe value
-serialization, SMIL sandwich ordering instead of last-wins, finite
-freeze/remove endpoint sampling, SVGZ/namespaced prefilter,
-concurrent-miss grid coherence, in_flight RAII on panic.
+Correctness follow-up: key-time selection, fractional repeats, XML serialization,
+SMIL contribution ordering, finite endpoints, SVGZ/namespaces, cache publication
+coherence, unwind cleanup and one-time introductions are now addressed in
+[the follow-up](2026-10-08-pr474-correctness.md). Native render-paced playback
+remains the architectural increment.
 
 Section 2 (design) to be weighed against this plan's deferred list —
 its MediaAsset/Playback/View/SampleKey identity split is the stronger

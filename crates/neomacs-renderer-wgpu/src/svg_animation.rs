@@ -28,19 +28,24 @@ mod sampler;
 
 pub(crate) use sampler::sample_shared as sample_svg_sequence;
 
-/// Cheap pre-filter for animation elements, operating on raw bytes.
+/// Cheap pre-filter for animation elements in normalized XML bytes.
 ///
-/// Layout measures every SVG it places, so the common static document must
-/// not pay for a second document parse just to learn it has nothing to
-/// animate. The scan is deliberately over-broad (`<set` also prefixes
-/// nothing in the SVG vocabulary that matters); the plan compile remains
-/// the authority on what animates.
+/// The common static document must not pay for another XML parse just to
+/// learn it has nothing to animate. Inspect the local element name so XML
+/// namespace prefixes cannot hide animation. This remains an over-broad
+/// optimization; plan compilation decides whether the document animates.
 pub(crate) fn may_contain_animation(data: &[u8]) -> bool {
-    // `animate`, `animateTransform`, `animateMotion`, `animateColor` all
-    // share the `<animate` byte prefix.
-    data.windows(b"<animate".len())
-        .any(|window| window == b"<animate")
-        || data.windows(b"<set".len()).any(|window| window == b"<set")
+    data.split(|byte| *byte == b'<').skip(1).any(|element| {
+        let qualified = element
+            .split(|byte| byte.is_ascii_whitespace() || matches!(*byte, b'/' | b'>'))
+            .next()
+            .unwrap_or_default();
+        let local = qualified
+            .rsplit(|byte| *byte == b':')
+            .next()
+            .unwrap_or_default();
+        local.starts_with(b"animate") || local.starts_with(b"set")
+    })
 }
 
 #[cfg(test)]

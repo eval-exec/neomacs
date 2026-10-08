@@ -47,6 +47,15 @@ fn nanos(duration: Duration) -> u128 {
     duration.as_nanos()
 }
 
+/// Grid positions never exceed their input Duration, so their seconds fit
+/// u64 even when the total nanosecond magnitude does not.
+fn grid_duration(nanos: u128) -> Duration {
+    Duration::new(
+        u64::try_from(nanos / 1_000_000_000).expect("position bounded by input Duration"),
+        (nanos % 1_000_000_000) as u32,
+    )
+}
+
 /// One sampling decision: the ceiling on distinct samples per loop.
 ///
 /// A grid is the memory bound for computed animation as much as a throttle:
@@ -94,6 +103,24 @@ impl SampleGrid {
         })
     }
 
+    /// Grid intervals for a finite span. The caller also samples the exact
+    /// endpoint, so reserve one of MAX_SLOTS for that terminal frame.
+    #[must_use]
+    pub fn for_finite_span(span: Duration, fps: u32) -> Option<Self> {
+        let mut grid = Self::new(span, fps)?;
+        grid.slot_count = grid.slot_count.min(Self::MAX_SLOTS - 1);
+        Some(grid)
+    }
+
+    /// Quantize a span within its share of a bounded multi-part sequence.
+    /// NonZeroU32 ensures every admitted part retains at least one sample.
+    #[must_use]
+    pub fn with_max_slots(span: Duration, fps: u32, limit: std::num::NonZeroU32) -> Option<Self> {
+        let mut grid = Self::new(span, fps)?;
+        grid.slot_count = grid.slot_count.min(limit.get());
+        Some(grid)
+    }
+
     /// The loop period the grid samples over.
     #[must_use]
     pub const fn period(&self) -> Duration {
@@ -112,7 +139,7 @@ impl SampleGrid {
     /// the grid so every consumer folds time the same way.
     #[must_use]
     pub fn wrap(&self, doc_time: Duration) -> Duration {
-        Duration::from_nanos(u64::try_from(nanos(doc_time) % nanos(self.period)).unwrap_or(0))
+        grid_duration(nanos(doc_time) % nanos(self.period))
     }
 
     /// The slot a wrapped document time falls in.
@@ -136,7 +163,7 @@ impl SampleGrid {
             return None;
         }
         let start = nanos(self.period) * u128::from(slot) / u128::from(self.slot_count);
-        Some(Duration::from_nanos(u64::try_from(start).unwrap_or(0)))
+        Some(grid_duration(start))
     }
 
     /// The exact rational delay each slot's sample is displayed for.
