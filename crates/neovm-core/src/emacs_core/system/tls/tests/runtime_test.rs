@@ -564,3 +564,174 @@ fn gnutls_error_helpers_match_gnu_type_and_known_code_rules() {
         other => panic!("expected error, got {other:?}"),
     }
 }
+
+#[path = "../../../../../../../test/support/tls_loopback.rs"]
+pub(super) mod loopback;
+
+#[test]
+fn tls_backend_verifies_the_peer_before_exposing_encrypted_output() {
+    use super::tls::{RustlsBackend, TlsClientBackend, TlsClientParameters, TlsHandshakeProgress};
+    let ca = loopback::resources().join("ca.pem");
+    for (hostname, trust_roots, accepted) in [
+        (
+            "localhost",
+            TlsTrustRoots::DefaultPlusFiles(vec![ca.clone()]),
+            true,
+        ),
+        (
+            "wrong.example",
+            TlsTrustRoots::DefaultPlusFiles(vec![ca]),
+            false,
+        ),
+        ("localhost", TlsTrustRoots::Default, false),
+    ] {
+        let peer = loopback::TlsPeer::spawn(1, std::time::Duration::ZERO, false);
+        let port = peer.port;
+        let socket = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let mut tls = RustlsBackend::start_client(
+            socket,
+            &TlsClientParameters {
+                hostname: hostname.to_owned(),
+                trust_roots,
+            },
+        )
+        .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let handshake = loop {
+            match tls.advance_handshake() {
+                Ok(TlsHandshakeProgress::Pending(_)) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                result => break result,
+            }
+        };
+        assert_eq!(
+            matches!(handshake, Ok(TlsHandshakeProgress::Ready)),
+            accepted,
+            "{hostname}: {handshake:?}"
+        );
+        if accepted {
+            let mut output = [0; 64];
+            let count = loop {
+                match tls.read_process_output(&mut output) {
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && std::time::Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                    result => break result.unwrap(),
+                }
+            };
+            assert_eq!(&output[..count], b"verified loopback\n");
+        } else {
+            assert!(
+                handshake.is_err(),
+                "verification must fail, rather than remain pending"
+            );
+        }
+        drop(tls);
+        drop(peer);
+    }
+}
+
+#[test]
+fn tls_backend_keeps_final_handshake_writes_pending_until_flushed() {
+    use super::tls::{TlsHandshakeInterest, TlsHandshakeProgress, advance_rustls_handshake};
+    use std::io::{ErrorKind, Read};
+    struct BackpressuredTransport {
+        input: Cursor<Vec<u8>>,
+        output: Vec<u8>,
+        write_budget: usize,
+    }
+    impl Read for BackpressuredTransport {
+        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+            match self.input.read(bytes)? {
+                0 => Err(ErrorKind::WouldBlock.into()),
+                count => Ok(count),
+            }
+        }
+    }
+    impl Write for BackpressuredTransport {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let count = bytes.len().min(self.write_budget);
+            if count == 0 {
+                return Err(ErrorKind::WouldBlock.into());
+            }
+            self.output.extend_from_slice(&bytes[..count]);
+            self.write_budget -= count;
+            Ok(count)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let resources = loopback::resources();
+    let mut roots = rustls::RootCertStore::empty();
+    roots
+        .add(CertificateDer::from_pem_file(resources.join("ca.pem")).unwrap())
+        .unwrap();
+    let mut client = ClientConnection::new(
+        Arc::new(
+            ClientConfig::builder()
+                .with_root_certificates(roots)
+                .with_no_client_auth(),
+        ),
+        ServerName::try_from("localhost").unwrap(),
+    )
+    .unwrap();
+    let mut server = ServerConnection::new(Arc::new(
+        ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![CertificateDer::from_pem_file(resources.join("server.pem")).unwrap()],
+                PrivateKeyDer::from_pem_file(resources.join("server-key.pem")).unwrap(),
+            )
+            .unwrap(),
+    ))
+    .unwrap();
+    let mut hello = Vec::new();
+    client.write_tls(&mut hello).unwrap();
+    server.read_tls(&mut Cursor::new(hello)).unwrap();
+    server.process_new_packets().unwrap();
+    let mut server_flight = Vec::new();
+    server.write_tls(&mut server_flight).unwrap();
+    let mut transport = BackpressuredTransport {
+        input: Cursor::new(server_flight),
+        output: Vec::new(),
+        write_budget: 0,
+    };
+    let progress = advance_rustls_handshake(&mut client, &mut transport).unwrap();
+    assert!(
+        !client.is_handshaking(),
+        "certificate verification has finished"
+    );
+    assert!(
+        matches!(
+            progress,
+            TlsHandshakeProgress::Pending(
+                TlsHandshakeInterest::Writable | TlsHandshakeInterest::ReadableAndWritable
+            )
+        ),
+        "the peer still needs ClientFinished: {progress:?}"
+    );
+    transport.write_budget = 5;
+    assert!(
+        matches!(
+            advance_rustls_handshake(&mut client, &mut transport).unwrap(),
+            TlsHandshakeProgress::Pending(_)
+        ),
+        "partial final writes must remain pending"
+    );
+    transport.write_budget = usize::MAX;
+    assert_eq!(
+        advance_rustls_handshake(&mut client, &mut transport).unwrap(),
+        TlsHandshakeProgress::Ready
+    );
+    server.read_tls(&mut Cursor::new(transport.output)).unwrap();
+    server.process_new_packets().unwrap();
+    assert!(
+        !server.is_handshaking(),
+        "Ready must permit the peer to finish too"
+    );
+}

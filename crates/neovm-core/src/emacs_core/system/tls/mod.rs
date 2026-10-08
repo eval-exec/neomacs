@@ -399,12 +399,54 @@ pub(crate) enum TlsStream {
     Rustls(RustlsTlsStream),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TlsHandshakeInterest {
+    Readable,
+    Writable,
+    ReadableAndWritable,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TlsHandshakeProgress {
+    Pending(TlsHandshakeInterest),
+    Ready,
+}
+
 impl TlsStream {
     fn rustls(inner: RustlsClientStream, peer_certificates_pem: Vec<String>) -> Self {
         Self::Rustls(RustlsTlsStream {
             inner,
             peer_certificates_pem,
         })
+    }
+
+    pub(crate) fn handshake_interest(&self) -> TlsHandshakeInterest {
+        match self {
+            Self::Rustls(stream) => rustls_handshake_interest(&stream.inner.conn),
+        }
+    }
+
+    /// A bounded nonblocking turn; process ownership persists across waits.
+    pub(crate) fn advance_handshake(&mut self) -> Result<TlsHandshakeProgress, TlsBackendError> {
+        match self {
+            Self::Rustls(stream) => {
+                let progress =
+                    advance_rustls_handshake(&mut stream.inner.conn, &mut stream.inner.sock)?;
+                if progress == TlsHandshakeProgress::Ready {
+                    stream.peer_certificates_pem = stream
+                        .inner
+                        .conn
+                        .peer_certificates()
+                        .map(|certs| {
+                            certs
+                                .iter()
+                                .map(|cert| der_certificate_to_pem(cert.as_ref()))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                }
+                Ok(progress)
+            }
+        }
     }
 
     pub(crate) fn set_nonblocking(&self, nonblocking: bool) -> std::io::Result<()> {
@@ -467,6 +509,54 @@ impl TlsStream {
                 rustls_complete_io_result(stream)
             }
         }
+    }
+}
+
+fn rustls_handshake_interest(connection: &rustls::ClientConnection) -> TlsHandshakeInterest {
+    match (connection.wants_read(), connection.wants_write()) {
+        (true, true) => TlsHandshakeInterest::ReadableAndWritable,
+        (false, true) => TlsHandshakeInterest::Writable,
+        _ => TlsHandshakeInterest::Readable,
+    }
+}
+
+/// Drive one bounded TLS turn over a nonblocking transport. Read and write
+/// remain independent so callers can retain the required readiness interest.
+pub(crate) fn advance_rustls_handshake(
+    connection: &mut rustls::ClientConnection,
+    transport: &mut (impl Read + Write),
+) -> Result<TlsHandshakeProgress, TlsBackendError> {
+    for read in [false, true, false] {
+        let result = if read && connection.wants_read() {
+            match connection.read_tls(transport) {
+                Ok(0) if connection.is_handshaking() => return Err(TlsBackendError::UnexpectedEof),
+                Ok(_) => connection
+                    .process_new_packets()
+                    .map(|_| ())
+                    .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error)),
+                Err(error) => Err(error),
+            }
+        } else if !read && connection.wants_write() {
+            connection.write_tls(transport).map(|_| ())
+        } else {
+            Ok(())
+        };
+        match result {
+            Ok(()) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                ) => {}
+            Err(error) => return Err(TlsBackendError::Io(error)),
+        }
+    }
+    if !connection.is_handshaking() && !connection.wants_write() {
+        Ok(TlsHandshakeProgress::Ready)
+    } else {
+        Ok(TlsHandshakeProgress::Pending(rustls_handshake_interest(
+            connection,
+        )))
     }
 }
 
@@ -683,9 +773,11 @@ impl std::fmt::Display for TlsBackendError {
 /// TLS transport backend boundary.
 ///
 /// The process layer owns backend-neutral `TlsStream` values, while each
-/// backend handles its own handshake, certificate roots, and error conversion.
+/// backend starts a verified client without waiting for any peer I/O.
+/// `TlsStream::advance_handshake` drives bounded turns; the evaluator owns
+/// readiness waits, callbacks, and cancellation between those turns.
 pub(crate) trait TlsClientBackend {
-    fn connect_client(
+    fn start_client(
         tcp_stream: TcpStream,
         parameters: &TlsClientParameters,
     ) -> Result<TlsStream, TlsBackendError>;
@@ -733,7 +825,7 @@ pub(crate) fn rustls_root_store(
 }
 
 impl TlsClientBackend for RustlsBackend {
-    fn connect_client(
+    fn start_client(
         tcp_stream: TcpStream,
         parameters: &TlsClientParameters,
     ) -> Result<TlsStream, TlsBackendError> {
@@ -748,50 +840,17 @@ impl TlsClientBackend for RustlsBackend {
             .try_into()
             .map_err(|_| TlsBackendError::InvalidHostname(parameters.hostname.clone()))?;
 
-        let mut tls_conn = rustls::ClientConnection::new(Arc::new(config), server_name)
+        let tls_conn = rustls::ClientConnection::new(Arc::new(config), server_name)
             .map_err(|err| TlsBackendError::Connect(err.to_string()))?;
 
         tcp_stream
-            .set_nonblocking(false)
+            .set_nonblocking(true)
             .map_err(TlsBackendError::Io)?;
-        let mut tcp_stream = tcp_stream;
-        rustls_complete_client_handshake(&mut tls_conn, &mut tcp_stream)?;
-        let tls_stream = rustls::StreamOwned::new(tls_conn, tcp_stream);
-
-        let peer_certificates_pem = tls_stream
-            .conn
-            .peer_certificates()
-            .map(|certs| {
-                certs
-                    .iter()
-                    .map(|cert| der_certificate_to_pem(cert.as_ref()))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let stream = TlsStream::rustls(tls_stream, peer_certificates_pem);
-        stream.set_nonblocking(true).ok();
-        Ok(stream)
+        Ok(TlsStream::rustls(
+            rustls::StreamOwned::new(tls_conn, tcp_stream),
+            Vec::new(),
+        ))
     }
-}
-
-fn rustls_complete_client_handshake(
-    tls_conn: &mut rustls::ClientConnection,
-    tcp_stream: &mut TcpStream,
-) -> Result<(), TlsBackendError> {
-    while tls_conn.is_handshaking() {
-        match tls_conn.complete_io(tcp_stream) {
-            Ok((0, 0)) if tls_conn.is_handshaking() => {
-                return Err(TlsBackendError::UnexpectedEof);
-            }
-            Ok(_) => {}
-            Err(ref err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(ref err) if err.kind() == std::io::ErrorKind::UnexpectedEof => {
-                return Err(TlsBackendError::UnexpectedEof);
-            }
-            Err(err) => return Err(TlsBackendError::Io(err)),
-        }
-    }
-    Ok(())
 }
 
 pub(crate) fn der_certificate_to_pem(der: &[u8]) -> String {

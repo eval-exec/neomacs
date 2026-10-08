@@ -547,6 +547,13 @@ pub(super) fn process_keyword_already_seen(
 /// native handles in one Rust owner gives Neomacs the same lifetime split:
 /// `Process` is durable Lisp-visible state, while replacing this bundle with
 /// `Default::default()` drops every live handle as one operation.
+#[derive(Default, PartialEq, Eq)]
+enum TlsPolling {
+    #[default]
+    Enabled,
+    Suspended,
+}
+
 #[derive(Default)]
 pub(super) struct LiveProcessIo {
     /// Pollable child-status wakeup source, where the platform exposes one.
@@ -585,6 +592,7 @@ pub(super) struct LiveProcessIo {
     pub(super) pending_network_connect: Option<PendingNetworkConnect>,
     /// TLS-wrapped stream for encrypted network connections.
     pub(super) tls_stream: Option<TlsStream>,
+    tls_polling: TlsPolling,
     /// The open device behind a serial process.  GNU keeps one descriptor for
     /// both directions (`p->infd = fd; p->outfd = fd`, src/process.c:3216-3217),
     /// so this single slot is the read source AND the write source.
@@ -737,6 +745,13 @@ impl Drop for LiveProcessIo {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum SentinelExecution {
+    #[default]
+    Idle,
+    Running,
+}
+
 /// A tracked process record.
 pub struct Process {
     pub id: ProcessId,
@@ -776,6 +791,7 @@ pub struct Process {
     pub filter: Value,
     /// Process sentinel callback (or default marker symbol).
     pub sentinel: Value,
+    sentinel_execution: SentinelExecution,
     /// Server process log callback.
     pub log: Value,
     /// Process plist state.
@@ -1154,12 +1170,14 @@ impl ProcessWaitBackend {
                                 };
                                 if event.readable
                                     && (process_has_readable_process_io(process)
+                                        || process_has_pending_tls_handshake_io(process)
                                         || process_has_observable_child_status(process))
                                 {
                                     ready_processes.push(id);
                                 }
                                 if event.writable
                                     && (process.live_io.pending_network_connect.is_some()
+                                        || process_has_pending_tls_handshake_io(process)
                                         || !process.write_queue.is_nil())
                                 {
                                     writable_processes.push(id);
@@ -4201,6 +4219,12 @@ impl ProcessFilterDispatch {
     }
 }
 
+fn process_has_pending_tls_handshake_io(process: &Process) -> bool {
+    process.gnutls_initstage == GnutlsInitStage::HandshakeTried
+        && process.live_io.tls_stream.is_some()
+        && process.live_io.tls_polling == TlsPolling::Enabled
+}
+
 pub(super) fn process_filter_accepts_output(proc: &Process) -> bool {
     ProcessFilterDispatch::from_lisp(proc.filter).accepts_output()
 }
@@ -4295,6 +4319,16 @@ impl super::super::eval::Context {
     ) -> Result<(), Flow> {
         if !self.processes.queue_input(id, input)? {
             return Err(signal("error", vec![Value::string("Process not found")]));
+        }
+
+        // A reentrant timer/filter cannot drive the suspended TLS handshake.
+        // Retain application data until verification succeeds, then flush it.
+        if self
+            .processes
+            .get(id)
+            .is_some_and(|process| process.gnutls_initstage == GnutlsInitStage::HandshakeTried)
+        {
+            return Ok(());
         }
 
         loop {
@@ -5330,6 +5364,10 @@ impl ProcessManager {
             return;
         };
 
+        if self.refresh_pending_tls_interest(id) {
+            return;
+        }
+
         if let Some(stdout) = proc.live_io.child_stdout.as_ref() {
             if enabled {
                 Self::register_child_stdout_with_poller(poller, stdout, id);
@@ -5749,6 +5787,7 @@ impl ProcessManager {
             exit_query_policy: ExitQueryPolicy::GNU_MAKE_PROCESS,
             filter: Value::symbol(DEFAULT_PROCESS_FILTER_SYMBOL),
             sentinel: Value::symbol(DEFAULT_PROCESS_SENTINEL_SYMBOL),
+            sentinel_execution: SentinelExecution::Idle,
             log: Value::NIL,
             plist: Value::NIL,
             stderrproc: Value::NIL,
@@ -6511,6 +6550,9 @@ impl ProcessManager {
             return ProcessBytesRead::NoSource;
         };
 
+        if proc.gnutls_initstage == GnutlsInitStage::HandshakeTried {
+            return ProcessBytesRead::WouldBlock;
+        }
         let read_len = process_read_buffer_len(proc);
         if let Some(ref mut tls) = proc.live_io.tls_stream {
             let mut buf = vec![0u8; read_len];
@@ -7119,6 +7161,12 @@ impl ProcessManager {
         &mut self,
         id: ProcessId,
     ) -> Result<ProcessWriteFlush, Flow> {
+        if self
+            .get(id)
+            .is_some_and(|proc| proc.gnutls_initstage == GnutlsInitStage::HandshakeTried)
+        {
+            return Ok(ProcessWriteFlush::Blocked);
+        }
         if self.write_queue_is_empty(id) {
             self.update_process_write_interest(id, ProcessWriteInterest::Readable);
             return Ok(ProcessWriteFlush::Drained);
@@ -7267,10 +7315,107 @@ impl ProcessManager {
         }
     }
 
+    pub(crate) fn has_pending_tls_handshake(&self, id: ProcessId) -> bool {
+        self.get(id).is_some_and(|process| {
+            process.gnutls_initstage == GnutlsInitStage::HandshakeTried
+                && process.live_io.tls_stream.is_some()
+        })
+    }
+
+    pub(crate) fn tls_handshake_process_ids(&self) -> Vec<ProcessId> {
+        self.processes
+            .iter()
+            .filter_map(|(&id, proc)| {
+                (proc.gnutls_initstage == GnutlsInitStage::HandshakeTried
+                    && proc.live_io.tls_stream.is_some())
+                .then_some(id)
+            })
+            .collect()
+    }
+    // Application filters and write queues cannot override a handshake's
+    // readiness requirements or a parent wait's suspension ownership.
+    fn refresh_pending_tls_interest(&self, id: ProcessId) -> bool {
+        let Some(process) = self.get(id) else {
+            return false;
+        };
+        if process.gnutls_initstage != GnutlsInitStage::HandshakeTried {
+            return false;
+        }
+        let Some(tls) = process.live_io.tls_stream.as_ref() else {
+            return false;
+        };
+        self.set_tls_handshake_interest(id, Some(tls.handshake_interest()));
+        true
+    }
+
+    pub(crate) fn suspend_tls_handshake_polling(&mut self, id: ProcessId) -> bool {
+        let Some(process) = self.get_mut(id) else {
+            return false;
+        };
+        if process.live_io.tls_polling == TlsPolling::Suspended {
+            return false;
+        }
+        process.live_io.tls_polling = TlsPolling::Suspended;
+        self.set_tls_handshake_interest(id, None);
+        true
+    }
+
+    pub(crate) fn resume_tls_handshake_polling(&mut self, id: ProcessId) {
+        let Some(process) = self.get_mut(id) else {
+            return;
+        };
+        process.live_io.tls_polling = TlsPolling::Enabled;
+        if process.gnutls_initstage == GnutlsInitStage::HandshakeTried
+            && let Some(tls) = process.live_io.tls_stream.as_ref()
+        {
+            let interest = tls.handshake_interest();
+            self.set_tls_handshake_interest(id, Some(interest));
+        }
+    }
+    pub(crate) fn set_tls_handshake_interest(
+        &self,
+        id: ProcessId,
+        interest: Option<TlsHandshakeInterest>,
+    ) {
+        let Some(poller) = self.wait_backend.poller() else {
+            return;
+        };
+        let Some(tls) = self
+            .get(id)
+            .and_then(|proc| proc.live_io.tls_stream.as_ref())
+        else {
+            return;
+        };
+        let Some(interest) = interest else {
+            let _ = poller.delete(tls.tcp_stream());
+            return;
+        };
+        if self
+            .get(id)
+            .is_some_and(|process| process.live_io.tls_polling == TlsPolling::Suspended)
+        {
+            return;
+        }
+        let (readable, writable) = match interest {
+            TlsHandshakeInterest::Readable => (true, false),
+            TlsHandshakeInterest::Writable => (false, true),
+            TlsHandshakeInterest::ReadableAndWritable => (true, true),
+        };
+        let event = polling::Event::new(id as usize, readable, writable);
+        if Self::modify_poll_source(poller, tls.tcp_stream(), event).is_err() {
+            let _ = Self::register_readable_source(poller, tls.tcp_stream(), id);
+            let _ = Self::modify_poll_source(poller, tls.tcp_stream(), event);
+        }
+    }
+
     /// Register a network socket with the I/O poller so that
     /// `wait_for_output` wakes up when data arrives.
     pub fn register_socket_fd(&self, id: ProcessId) -> Result<(), String> {
         let proc = self.processes.get(&id).ok_or("Process not found")?;
+        if self.refresh_pending_tls_interest(id) {
+            return Ok(());
+        }
+
         if !process_filter_accepts_output(proc) {
             return Ok(());
         }
@@ -7500,10 +7645,14 @@ impl ProcessManager {
             .map(|proc| proc.gnutls_boot_parameters)
             .filter(|parameters| !parameters.is_nil())
             .map(parse_make_network_tls_parameters)
-            .transpose()?
+            .transpose()
+            .map_err(|flow| {
+                self.delete_process(id);
+                flow
+            })?
             .flatten();
         if let Some(parameters) = tls_parameters {
-            upgrade_process_to_tls::<RustlsBackend>(
+            begin_process_tls::<RustlsBackend>(
                 self,
                 id,
                 &parameters.client,
@@ -8832,18 +8981,23 @@ impl super::super::eval::Context {
         if sentinel.is_nil() {
             return Ok(());
         }
-
-        let callback = if sentinel.is_symbol_named(DEFAULT_PROCESS_SENTINEL_SYMBOL) {
-            Value::symbol(DEFAULT_PROCESS_SENTINEL_SYMBOL)
-        } else {
-            sentinel
-        };
-
-        self.run_async_process_callback_preserving_state(
-            callback,
+        // A sentinel may enter a wait and delete its own process from a timer.
+        // Keep its recursion guard with the record, including after retirement.
+        if let Some(process) = self.processes.get_any_mut(pid) {
+            if process.sentinel_execution == SentinelExecution::Running {
+                return Ok(());
+            }
+            process.sentinel_execution = SentinelExecution::Running;
+        }
+        let result = self.run_async_process_callback_preserving_state(
+            sentinel,
             vec![Value::make_process(pid), Value::string(message)],
             AsyncCallbackKind::ProcessSentinel,
-        )
+        );
+        if let Some(process) = self.processes.get_any_mut(pid) {
+            process.sentinel_execution = SentinelExecution::Idle;
+        }
+        result
     }
 
     /// GNU `exec_sentinel` (src/process.c:7800), driven from a
@@ -9009,6 +9163,67 @@ impl super::super::eval::Context {
         self.poll_process_output_for_ids(visit, target_process, true)
     }
 
+    pub(super) fn finish_process_tls_handshake(
+        &mut self,
+        id: ProcessId,
+        map_error: fn(TlsBackendError) -> Flow,
+    ) -> Result<(), Flow> {
+        let result = (|| {
+            loop {
+                let proc = self.processes.get_mut(id).ok_or_else(|| {
+                    signal(
+                        "error",
+                        vec![Value::string("Process closed during TLS negotiation")],
+                    )
+                })?;
+                let stream = proc.live_io.tls_stream.as_mut().ok_or_else(|| {
+                    signal(
+                        "error",
+                        vec![Value::string("TLS connection closed during negotiation")],
+                    )
+                })?;
+                match stream.advance_handshake().map_err(map_error)? {
+                    TlsHandshakeProgress::Ready => {
+                        proc.gnutls_initstage = GnutlsInitStage::Ready;
+                        proc.gnutls_boot_parameters = Value::NIL;
+                        self.processes.register_socket_fd(id).ok();
+                        self.processes.flush_process_write_queue(id)?;
+                        return Ok(());
+                    }
+                    TlsHandshakeProgress::Pending(interest) => {
+                        self.processes
+                            .set_tls_handshake_interest(id, Some(interest));
+                        self.wait_for_tls_handshake(id)?;
+                    }
+                }
+            }
+        })();
+        if result.is_err() {
+            self.processes.delete_process(id);
+        }
+        result
+    }
+
+    fn finish_connected_tls_before_sentinel(
+        &mut self,
+        id: ProcessId,
+        sentinel: Value,
+    ) -> Result<(), Flow> {
+        let roots = self.save_specpdl_roots();
+        self.push_specpdl_root(sentinel);
+        let result = if self
+            .processes
+            .get(id)
+            .is_some_and(|proc| proc.gnutls_initstage == GnutlsInitStage::HandshakeTried)
+        {
+            self.finish_process_tls_handshake(id, signal_gnutls_boot_error)
+        } else {
+            Ok(())
+        };
+        self.restore_specpdl_roots(roots);
+        result
+    }
+
     pub(crate) fn poll_ready_process_output_for_service_request(
         &mut self,
         events: ProcessWaitEvents,
@@ -9025,6 +9240,7 @@ impl super::super::eval::Context {
                     outcome.record_serviced();
                 }
                 PendingNetworkConnectCompletion::Connected { sentinel } => {
+                    self.finish_connected_tls_before_sentinel(pid, sentinel)?;
                     self.setup_process_output_descriptor(pid)?;
                     // GNU services :nowait completion inside the wait and
                     // keeps waiting (only read bytes complete the wait).
@@ -9096,6 +9312,7 @@ impl super::super::eval::Context {
                         outcome.record_serviced();
                     }
                     PendingNetworkConnectCompletion::Connected { sentinel } => {
+                        self.finish_connected_tls_before_sentinel(pid, sentinel)?;
                         self.setup_process_output_descriptor(pid)?;
                         outcome.record_serviced();
                         self.run_process_sentinel_callback(pid, sentinel, "open\n")?;

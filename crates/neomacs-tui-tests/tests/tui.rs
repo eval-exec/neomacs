@@ -18,6 +18,7 @@ mod idle_timer_output;
 mod pixel_measurement;
 mod process_plist_isolation;
 mod process_send_encoding;
+mod stalled_tls;
 
 #[cfg(test)]
 #[path = "mode_line_min_width_boundary_oracle.rs"]

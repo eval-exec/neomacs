@@ -291,6 +291,7 @@ enum ProcessWaitPolicy {
     Any,
     Target(ProcessId),
     TargetOnly(ProcessId),
+    TlsHandshake(ProcessId),
 }
 
 impl ProcessWaitPolicy {
@@ -304,7 +305,7 @@ impl ProcessWaitPolicy {
 
     fn target_process(self) -> Option<ProcessId> {
         match self {
-            Self::Target(id) | Self::TargetOnly(id) => Some(id),
+            Self::Target(id) | Self::TargetOnly(id) | Self::TlsHandshake(id) => Some(id),
             Self::None | Self::ServiceAny | Self::Any => None,
         }
     }
@@ -322,6 +323,7 @@ impl ProcessWaitPolicy {
         match self {
             Self::Any => outcome.has_any_process_activity(),
             Self::Target(_) | Self::TargetOnly(_) => outcome.has_target_process_activity(),
+            Self::TlsHandshake(_) => outcome.handshake_ready,
             Self::None | Self::ServiceAny => false,
         }
     }
@@ -622,7 +624,9 @@ impl WaitRequest {
             ProcessWaitPolicy::ServiceAny | ProcessWaitPolicy::Any => {
                 ProcessOutputServiceRequest::any(None)
             }
-            ProcessWaitPolicy::Target(target) => ProcessOutputServiceRequest::any(Some(target)),
+            ProcessWaitPolicy::Target(target) | ProcessWaitPolicy::TlsHandshake(target) => {
+                ProcessOutputServiceRequest::any(Some(target))
+            }
             ProcessWaitPolicy::TargetOnly(target) => {
                 ProcessOutputServiceRequest::target_only(target)
             }
@@ -858,6 +862,7 @@ impl WaitSpecialInputActivity {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct WaitServiceOutcome {
+    handshake_ready: bool,
     process_activity: WaitProcessActivity,
     /// Non-output servicing ran during the wait: a connect completed, a
     /// sentinel/status-notify fired, or an EOF was handled. Kept SEPARATE from
@@ -1095,7 +1100,20 @@ impl super::eval::Context {
             // the generic notifier independent of its producers.
             let _ = self.stage_next_host_input_event_if_available()?;
         }
-        self.service_wait_request_processes(request, activity.into_process_service(), run_timers)
+        let handshake_ready = match (request.processes, &activity.process_service) {
+            (ProcessWaitPolicy::TlsHandshake(id), WaitProcessService::Ready(events)) => {
+                events.ready_processes_ref().contains(&id)
+                    || events.writable_processes_ref().contains(&id)
+            }
+            _ => false,
+        };
+        let mut outcome = self.service_wait_request_processes(
+            request,
+            activity.into_process_service(),
+            run_timers,
+        )?;
+        outcome.handshake_ready = handshake_ready;
+        Ok(outcome)
     }
 
     fn service_wait_request_processes(
@@ -1130,6 +1148,11 @@ impl super::eval::Context {
             // `jsonrpc-request` catch tag completed by a zero-delay timer.
             outcome.record_timer_activity(self.service_pending_timers_with_wait_policy(false)?);
         }
+
+        // A timer may request quit while inhibit-quit is temporarily bound.
+        // Honor it before invoking display hooks or more process callbacks;
+        // the caller's binding still determines whether quitting is allowed.
+        self.maybe_quit()?;
 
         // Drain ready process output (a non-blocking poll of already-readable
         // fds plus filter dispatch) BEFORE yielding to pending command input.
@@ -1175,6 +1198,13 @@ impl super::eval::Context {
     /// running/connecting (process.c drains remaining output, then breaks);
     /// output read during the final drain still wins via `completion_for`.
     fn wait_request_target_terminated(&self, request: &WaitRequest) -> bool {
+        if let ProcessWaitPolicy::TlsHandshake(pid) = request.processes {
+            // Deinitialization retires TLS ownership without changing the
+            // process status. Wake its owner so negotiation can fail cleanly.
+            if !self.processes.has_pending_tls_handshake(pid) {
+                return true;
+            }
+        }
         request.target_pid().is_some_and(|pid| {
             self.processes
                 .get(pid)
@@ -1281,7 +1311,39 @@ impl super::eval::Context {
         self.notify_processes_with_unnotified_status_change(target)
     }
 
+    pub(crate) fn wait_for_tls_handshake(&mut self, id: ProcessId) -> Result<(), Flow> {
+        let mut request = WaitRequest::accept_target_process_output_with_timers(
+            ProcessOutputWaitTiming::Forever,
+            id,
+            false,
+        );
+        request.processes = ProcessWaitPolicy::TlsHandshake(id);
+        request.redisplay = true;
+        self.wait_reading_process_output(request).map(|_| ())
+    }
+
     fn wait_reading_process_output(
+        &mut self,
+        request: WaitRequest,
+    ) -> Result<WaitCompletion, Flow> {
+        // A reentrant wait must not repeatedly wake on its suspended caller's
+        // TLS descriptor. Restore only still-live streams on every Flow exit.
+        let candidates = self.processes.tls_handshake_process_ids();
+        let suspended: Vec<_> = candidates
+            .into_iter()
+            .filter(|&id| {
+                request.processes != ProcessWaitPolicy::TlsHandshake(id)
+                    && self.processes.suspend_tls_handshake_polling(id)
+            })
+            .collect();
+        let result = self.wait_reading_process_output_inner(request);
+        for id in suspended {
+            self.processes.resume_tls_handshake_polling(id);
+        }
+        result
+    }
+
+    fn wait_reading_process_output_inner(
         &mut self,
         request: WaitRequest,
     ) -> Result<WaitCompletion, Flow> {
