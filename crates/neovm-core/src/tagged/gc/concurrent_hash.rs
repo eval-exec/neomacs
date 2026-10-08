@@ -7,6 +7,7 @@
 //! Writer policy either retires the original before reader admission, or defers
 //! a still-unclaimed table. A finished reader never accesses its backing again.
 
+use super::mark_word::MarkWord;
 use super::{CollectionScope, HashTableObj, TaggedValue, VecLikeType, load_value_atomic};
 use crate::emacs_core::value::{HashTableEntry, HashTableStorage};
 use rustc_hash::FxHashMap;
@@ -32,10 +33,18 @@ pub(crate) enum HashTableScanPolicy {
     DeferWrites,
 }
 
+/// Copied collector words are interpreted only while a cycle reader owns its
+/// lease. The snapshot never transports a mutator's local Value handles.
+type HashTableScanCallbacks = [Option<MarkWord>; 2];
+
+static_assertions::assert_impl_all!(HashTableScanCallbacks: Send, Sync, Copy);
+static_assertions::assert_eq_size!(Option<MarkWord>, Option<TaggedValue>);
+static_assertions::assert_eq_align!(Option<MarkWord>, Option<TaggedValue>);
+
 pub(crate) struct HashTableScanEntry {
     slots: *const Option<HashTableEntry>,
     slots_len: usize,
-    callbacks: [Option<TaggedValue>; 2],
+    callbacks: HashTableScanCallbacks,
     reader: AtomicU8,
     cow: AtomicU8,
     dirty: AtomicBool,
@@ -63,6 +72,8 @@ pub(crate) struct HashTableScanSnapshot {
 // Retired originals are freed only after an explicit finish proves reader exit;
 // abandonment retains them with the heap's other marker-readable storage. Bare
 // captured pointers are never dereferenced without the entry's read lease.
+// Copied callbacks carry collector words; only the admitted cycle reader
+// reconstructs local Values while routing their children into collector work.
 unsafe impl Send for HashTableScanSnapshot {}
 unsafe impl Sync for HashTableScanSnapshot {}
 static_assertions::assert_impl_all!(HashTableScanSnapshot: Send, Sync);
@@ -141,7 +152,8 @@ impl HashTableScanSnapshot {
             HashTableScanEntry {
                 slots,
                 slots_len,
-                callbacks: [table.user_cmp_function, table.user_hash_function],
+                callbacks: [table.user_cmp_function, table.user_hash_function]
+                    .map(|callback| callback.map(MarkWord::of)),
                 reader: AtomicU8::new(AVAILABLE),
                 cow: AtomicU8::new(UNTOUCHED),
                 dirty: AtomicBool::new(false),
@@ -324,7 +336,7 @@ impl HashTableReadGuard<'_> {
             push(load_value_atomic(&entry.value));
         }
         for callback in self.entry.callbacks.into_iter().flatten() {
-            push(callback);
+            push(callback.value());
         }
         self.scan_complete = true;
     }

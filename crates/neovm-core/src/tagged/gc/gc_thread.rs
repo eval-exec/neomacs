@@ -275,11 +275,7 @@ impl<S: WorkerSymbolMarks> WorkerMarkLogs<S> {
     }
 
     #[inline(always)]
-    fn queue_child<const SYMBOLS: bool>(
-        &mut self,
-        value: TaggedValue,
-        gray: &mut MarkStack,
-    ) {
+    fn queue_child<const SYMBOLS: bool>(&mut self, value: TaggedValue, gray: &mut MarkStack) {
         if S::ENABLED {
             if value.is_heap_object() {
                 gray.push(value);
