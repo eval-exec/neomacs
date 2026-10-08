@@ -1639,6 +1639,33 @@ impl Context {
                     // nothing (const-asserted beside `trivial_spec_binding_pop`).
                     unsafe { self.specpdl.set_len(top_idx) };
                 }
+                SpecBinding::SaveCurrentBuffer { buffer_id }
+                    if self.buffers.current_buffer_id() == Some(*buffer_id) =>
+                {
+                    // GNU set_buffer_internal_1 returns immediately when this
+                    // buffer is still current (buffer.c:2333-2334). There is
+                    // no callback, allocation or runtime synchronization to
+                    // protect, so retain RESULT without opening a root frame.
+                    // SAFETY: this variant owns only a BufferId, whose lack
+                    // of drop glue is const-asserted beside the trivial pops.
+                    unsafe { self.specpdl.set_len(self.specpdl.len() - 1) };
+                }
+                SpecBinding::SaveExcursion {
+                    marker,
+                    saved_window,
+                    ..
+                } => {
+                    let (marker, saved_window) = (*marker, *saved_window);
+                    match self.restore_excursion_in_current_buffer(marker, saved_window) {
+                        super::specpdl::ExcursionStorageRestore::Completed => {
+                            // SAFETY: restoration completed while the original
+                            // entry still rooted MARKER. All three payload
+                            // types are const-asserted to have no drop glue.
+                            unsafe { self.specpdl.set_len(self.specpdl.len() - 1) };
+                        }
+                        super::specpdl::ExcursionStorageRestore::NeedsRuntime => break,
+                    }
+                }
                 other => match trivial_spec_binding_pop(other) {
                     Some(TrivialSpecBindingPop::BacktraceArgs(args)) => {
                         self.release_backtrace_args(&args);

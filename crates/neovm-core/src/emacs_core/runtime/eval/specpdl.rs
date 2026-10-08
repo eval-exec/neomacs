@@ -247,15 +247,18 @@ impl<'a> PoppedBindingScope<'a> {
         }
         guard
     }
+    #[inline]
     fn context(&mut self) -> &mut Context {
         self.roots.context()
     }
+    #[inline]
     fn finish(mut self) {
         self.recovery = None;
         self.roots.restore();
     }
 }
 impl Drop for PoppedBindingScope<'_> {
+    #[inline]
     fn drop(&mut self) {
         if let Some(binding) = self.recovery.take() {
             let context = self.roots.context();
@@ -293,6 +296,14 @@ enum PoppedBindingPolicy {
 enum SavedBufferRestore {
     Runtime,
     StorageOnly,
+}
+
+/// Whether the current mutator completed an excursion without a buffer switch
+/// or window-point write. Only the completed case can retire its root entry.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum ExcursionStorageRestore {
+    Completed,
+    NeedsRuntime,
 }
 
 impl Context {
@@ -1407,7 +1418,7 @@ impl Context {
                     let Some(binding) = self.specpdl.pop() else {
                         break;
                     };
-                    self.unbind_popped_binding(binding)?;
+                    self.unbind_popped_binding(binding, PoppedBindingPolicy::PureStorage)?;
                 }
                 PoppedBindingPolicy::LispCleanup => self.unbind_popped_with_recovery()?,
             }
@@ -1465,7 +1476,9 @@ impl Context {
             in_flight.finish();
             return Ok(());
         };
-        let result = in_flight.context().unbind_popped_binding(binding);
+        let result = in_flight
+            .context()
+            .unbind_popped_binding(binding, PoppedBindingPolicy::LispCleanup);
         // Normal signals preserve GNU's popped-entry semantics. Only Rust
         // panic recovery replays native storage without evaluating Lisp.
         in_flight.finish();
@@ -1475,15 +1488,25 @@ impl Context {
     // Inlined into the unbind loop, which is where base `unbind_to_result`
     // kept this match: an out-of-line call per popped entry cost about 0.4%
     // of the org-editing board row.
-    #[inline]
-    fn unbind_popped_binding(&mut self, binding: SpecBinding) -> Result<(), Flow> {
+    // Classification precedes the pop, without a Lisp call or mutation in
+    // between. PureStorage therefore also proves this Context's watcher set
+    // is empty for a let entry; do not look it up a second time on that path.
+    #[inline(always)]
+    fn unbind_popped_binding(
+        &mut self,
+        binding: SpecBinding,
+        policy: PoppedBindingPolicy,
+    ) -> Result<(), Flow> {
         match binding {
             SpecBinding::Let { sym_id, old_value } => {
                 let old_value = old_value.get();
                 let still_plain = self.obarray.get_by_id(sym_id).is_none_or(|s| {
                     s.redirect() == crate::emacs_core::symbol::SymbolRedirect::Plainval
                 });
-                if still_plain && self.watchers.has_watchers(sym_id) {
+                if still_plain
+                    && policy == PoppedBindingPolicy::LispCleanup
+                    && self.watchers.has_watchers(sym_id)
+                {
                     let restore_val = old_value.unwrap_or(Value::NIL);
                     self.run_variable_watchers_by_id(sym_id, &restore_val, &Value::NIL, "unlet")?;
                     // A watcher can change the redirect arm. Restore through
@@ -1563,7 +1586,9 @@ impl Context {
                     }
                 };
                 if still_local {
-                    if self.watchers.has_watchers(sym_id) {
+                    if policy == PoppedBindingPolicy::LispCleanup
+                        && self.watchers.has_watchers(sym_id)
+                    {
                         self.run_variable_watchers_by_id_with_where(
                             sym_id,
                             &old_value,
@@ -1690,16 +1715,52 @@ impl Context {
         Ok(())
     }
 
+    /// GNU's common excursion restore: the marker's live buffer is still
+    /// current and the captured window needs no point update. The caller keeps
+    /// the original specpdl entry rooting MARKER until this returns Completed;
+    /// no Lisp object allocation, callback or GC point occurs during restore.
+    #[inline]
+    pub(super) fn restore_excursion_in_current_buffer(
+        &mut self,
+        marker: Value,
+        saved_window: ExcursionWindow,
+    ) -> ExcursionStorageRestore {
+        let Some(location) = super::super::marker::marker_location(&self.buffers, marker) else {
+            return ExcursionStorageRestore::NeedsRuntime;
+        };
+        if self.buffers.current_buffer_id() != Some(location.buffer()) {
+            return ExcursionStorageRestore::NeedsRuntime;
+        }
+        if let Some(window) = saved_window.window()
+            && Some(window)
+                != self
+                    .frames
+                    .selected_frame()
+                    .map(|frame| frame.selected_window)
+        {
+            return ExcursionStorageRestore::NeedsRuntime;
+        }
+        // Use the live marker and normal point setter: a changed narrowing
+        // still clamps point just as GNU Fgoto_char does (editfns.c:802).
+        let _ = self
+            .buffers
+            .goto_buffer_emacs_byte_pos(location.buffer(), location.byte_pos());
+        super::super::marker::unchain_marker(&mut self.buffers, &marker);
+        ExcursionStorageRestore::Completed
+    }
+
     /// GNU `save_excursion_restore` (editfns.c:791-810): follow the saved
     /// marker's live buffer — buffer-swap-text may have moved it — restore
     /// that buffer and point, unchain the marker, and sync the capture-time
     /// window's point when a different window is selected now and it still
     /// displays the restored buffer. Panic recovery selects the storage-only
     /// policy so switching buffers cannot seed lazy runtime tables.
+    #[inline]
     fn restore_save_excursion(&mut self, marker: Value, saved_window: ExcursionWindow) {
         self.restore_save_excursion_with_policy(marker, saved_window, SavedBufferRestore::Runtime);
     }
 
+    #[inline(always)]
     fn restore_save_excursion_with_policy(
         &mut self,
         marker: Value,
@@ -1771,6 +1832,7 @@ impl std::fmt::Debug for SavedStateScope<'_> {
 }
 
 impl SavedStateScope<'_> {
+    #[inline]
     fn finish(mut self, result: EvalResult) -> EvalResult {
         let result = match self.count {
             Some(count) if self.context.specpdl.len() != count => {
@@ -1784,6 +1846,7 @@ impl SavedStateScope<'_> {
 }
 
 impl Drop for SavedStateScope<'_> {
+    #[inline]
     fn drop(&mut self) {
         if let Some(count) = self.count.take() {
             self.context.discard_specpdl_to(count);
@@ -1801,6 +1864,7 @@ pub(crate) struct CurrentBufferScope<'a>(SavedStateScope<'a>);
 static_assertions::assert_not_impl_any!(CurrentBufferScope<'static>: Send, Sync);
 
 impl<'a> CurrentBufferScope<'a> {
+    #[inline]
     pub(crate) fn enter(context: &'a mut Context) -> Self {
         let count = Some(context.specpdl.len());
         if let Some(buffer_id) = context.buffers.current_buffer_id() {
@@ -1814,6 +1878,7 @@ impl<'a> CurrentBufferScope<'a> {
     }
 
     /// Avoid a save entry when GNU would not switch buffers at all.
+    #[inline]
     pub(crate) fn for_buffer(
         context: &'a mut Context,
         buffer: crate::buffer::BufferId,
@@ -1833,9 +1898,11 @@ impl<'a> CurrentBufferScope<'a> {
         Ok(scope)
     }
 
+    #[inline]
     pub(crate) fn context(&mut self) -> &mut Context {
         self.0.context
     }
+    #[inline]
     pub(crate) fn finish(self, result: EvalResult) -> EvalResult {
         self.0.finish(result)
     }
@@ -1849,6 +1916,7 @@ pub(crate) struct ExcursionScope<'a>(SavedStateScope<'a>);
 static_assertions::assert_not_impl_any!(ExcursionScope<'static>: Send, Sync);
 
 impl<'a> ExcursionScope<'a> {
+    #[inline]
     pub(crate) fn enter(context: &'a mut Context) -> Self {
         let count = Some(context.specpdl.len());
         let _ = context.record_save_excursion();
@@ -1858,9 +1926,11 @@ impl<'a> ExcursionScope<'a> {
             thread_confined: std::marker::PhantomData,
         })
     }
+    #[inline]
     pub(crate) fn context(&mut self) -> &mut Context {
         self.0.context
     }
+    #[inline]
     pub(crate) fn finish(self, result: EvalResult) -> EvalResult {
         self.0.finish(result)
     }
@@ -1874,6 +1944,7 @@ pub(crate) struct RestrictionScope<'a>(SavedStateScope<'a>);
 static_assertions::assert_not_impl_any!(RestrictionScope<'static>: Send, Sync);
 
 impl<'a> RestrictionScope<'a> {
+    #[inline]
     pub(crate) fn enter(context: &'a mut Context) -> Self {
         let count = Some(context.specpdl.len());
         if let Some(state) = context.buffers.save_current_restriction_state() {
@@ -1885,9 +1956,11 @@ impl<'a> RestrictionScope<'a> {
             thread_confined: std::marker::PhantomData,
         })
     }
+    #[inline]
     pub(crate) fn context(&mut self) -> &mut Context {
         self.0.context
     }
+    #[inline]
     pub(crate) fn finish(self, result: EvalResult) -> EvalResult {
         self.0.finish(result)
     }

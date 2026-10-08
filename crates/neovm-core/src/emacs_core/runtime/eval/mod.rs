@@ -1033,6 +1033,7 @@ impl ExcursionWindow {
     /// `ensure_selected_frame_id_in_state` this never synthesizes a frame,
     /// so a frameless batch context records no window, like a GNU that never
     /// ran `window-init`.
+    #[inline]
     pub(crate) fn capture(frames: &FrameManager, buffer: BufferId) -> Self {
         frames
             .selected_window()
@@ -1041,6 +1042,7 @@ impl ExcursionWindow {
     }
 
     /// The recorded window, or `None` for GNU's `Qnil`.
+    #[inline]
     pub(crate) fn window(self) -> Option<WindowId> {
         (self.0 != 0).then_some(WindowId(self.0))
     }
@@ -1651,7 +1653,8 @@ fn trivial_spec_binding_pop(binding: &SpecBinding) -> Option<TrivialSpecBindingP
 const _: () = assert!(!std::mem::needs_drop::<TrivialSpecBindingPop>());
 
 /// `pop_simple_specpdl_suffix` retires a `SpecBinding::Let`, `LetLocal`,
-/// `LetDefault` and `LexicalEnv` with `set_len` (GNU's `--specpdl_ptr`);
+/// `LetDefault`, `LexicalEnv`, `SaveCurrentBuffer` and a completed
+/// `SaveExcursion` with `set_len` (GNU's `--specpdl_ptr`);
 /// that is only sound while those variants' payloads own nothing.
 const _: () = assert!(
     !std::mem::needs_drop::<SymId>()
@@ -1659,6 +1662,7 @@ const _: () = assert!(
         && !std::mem::needs_drop::<Value>()
         && !std::mem::needs_drop::<crate::buffer::BufferId>()
         && !std::mem::needs_drop::<SavedBufferId>()
+        && !std::mem::needs_drop::<ExcursionWindow>()
 );
 
 #[derive(Clone, Debug, Default)]
@@ -7511,6 +7515,10 @@ use form_head_cache::{FormHead, HeadClass};
 #[cfg(test)]
 #[path = "tests/eval_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/saved_state_scope_test.rs"]
+mod saved_state_scope_test;
 
 #[cfg(test)]
 #[path = "tests/gc_context_shutdown.rs"]

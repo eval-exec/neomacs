@@ -131,6 +131,7 @@ pub(crate) fn make_registered_buffer_marker(
 /// [`make_registered_buffer_marker`] would turn point into a Lisp position,
 /// that back into a byte, and the byte back into a char. `None` when
 /// `buffer_id` names no live buffer.
+#[inline(always)]
 pub(crate) fn make_registered_point_marker(
     buffers: &mut BufferManager,
     buffer_id: BufferId,
