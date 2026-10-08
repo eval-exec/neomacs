@@ -120,9 +120,11 @@ fn jit_bg_first_sight_strict_calls_keep_the_frames() {
         // completed job's backoff can still hold its dispatch interpreted.
         // This fixture requires the installed caller to execute natively.
         bc.jit_runtime().defer_tier_up(0);
-        assert_eq!(
-            bc.jit_runtime().dispatch_sized(bc.executable_ops().len()),
-            crate::emacs_core::jit::Plan::Compiled,
+        assert!(
+            matches!(
+                bc.jit_runtime().dispatch_sized(bc.executable_ops().len()),
+                crate::emacs_core::jit::Plan::Compiled
+            ),
             "the installed caller must dispatch to compiled code"
         );
     }
