@@ -363,6 +363,7 @@ struct WaitRequest {
     timers: TimerWaitPolicy,
     redisplay: bool,
     special_input: SpecialInputWaitPolicy,
+    idle_policy: crate::keyboard::IdleTransitionPolicy,
 }
 
 impl WaitRequest {
@@ -412,6 +413,7 @@ impl WaitRequest {
             timers,
             redisplay: false,
             special_input: SpecialInputWaitPolicy::ServiceOnly,
+            idle_policy: crate::keyboard::IdleTransitionPolicy::Manage,
         }
     }
 
@@ -473,6 +475,7 @@ impl WaitRequest {
             timers: TimerWaitPolicy::Run,
             redisplay: true,
             special_input: SpecialInputWaitPolicy::ServiceOnly,
+            idle_policy: crate::keyboard::IdleTransitionPolicy::Manage,
         }
     }
 
@@ -492,6 +495,7 @@ impl WaitRequest {
             timers: TimerWaitPolicy::Run,
             redisplay,
             special_input: SpecialInputWaitPolicy::ServiceOnly,
+            idle_policy: crate::keyboard::IdleTransitionPolicy::Manage,
         }
     }
 
@@ -503,6 +507,7 @@ impl WaitRequest {
             timers,
             redisplay: false,
             special_input: SpecialInputWaitPolicy::ServiceOnly,
+            idle_policy: crate::keyboard::IdleTransitionPolicy::Manage,
         }
     }
 
@@ -523,6 +528,7 @@ impl WaitRequest {
             timers: TimerWaitPolicy::Run,
             redisplay,
             special_input: SpecialInputWaitPolicy::Suppress,
+            idle_policy: crate::keyboard::IdleTransitionPolicy::Manage,
         }
     }
 
@@ -535,6 +541,7 @@ impl WaitRequest {
             timers: TimerWaitPolicy::Run,
             redisplay: false,
             special_input: SpecialInputWaitPolicy::ServiceOnly,
+            idle_policy: crate::keyboard::IdleTransitionPolicy::Manage,
         }
     }
 
@@ -549,6 +556,7 @@ impl WaitRequest {
             timers: TimerWaitPolicy::Run,
             redisplay: false,
             special_input: SpecialInputWaitPolicy::ServiceOnly,
+            idle_policy: crate::keyboard::IdleTransitionPolicy::Manage,
         }
     }
 
@@ -560,6 +568,7 @@ impl WaitRequest {
             timers: TimerWaitPolicy::Suppress,
             redisplay: false,
             special_input: SpecialInputWaitPolicy::CompleteOnResize,
+            idle_policy: crate::keyboard::IdleTransitionPolicy::Manage,
         }
     }
 
@@ -702,9 +711,10 @@ impl WaitRequest {
         // read (a Lisp `read-char` timeout, the retirement wait) has a
         // deadline contract to honor, and GNU's loop keeps blocking until
         // that deadline when nothing but timers ran.
-        if matches!(self.keyboard, KeyboardWaitPolicy::ReadCommandInput)
-            && !self.deadline_is_finite()
-            && (outcome.has_timer_activity() || outcome.ran_process_callbacks())
+        if matches!(
+            (self.keyboard, self.deadline),
+            (KeyboardWaitPolicy::ReadCommandInput, WaitDeadline::Forever)
+        ) && (outcome.has_timer_activity() || outcome.ran_process_callbacks())
         {
             return Some(WaitCompletion::DisplayActivity);
         }
@@ -1035,8 +1045,13 @@ impl super::eval::Context {
         self.service_wait_request_once(&WaitRequest::input_pending_with_timers())
     }
 
-    pub(crate) fn service_input_wait_with_redisplay(&mut self) -> Result<(), Flow> {
-        self.service_wait_request_once(&WaitRequest::service_once(true))
+    pub(crate) fn service_input_wait_with_redisplay(
+        &mut self,
+        idle_policy: crate::keyboard::IdleTransitionPolicy,
+    ) -> Result<(), Flow> {
+        let mut request = WaitRequest::service_once(true);
+        request.idle_policy = idle_policy;
+        self.service_wait_request_once(&request)
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -1091,7 +1106,7 @@ impl super::eval::Context {
     ) -> Result<WaitServiceOutcome, Flow> {
         let mut outcome = WaitServiceOutcome::default();
         let special_input = if request.services_special_input() {
-            self.service_wait_request_special_input_events()?
+            self.service_wait_request_special_input_events_with_idle_policy(request.idle_policy)?
         } else {
             SpecialInputServiceOutcome::default()
         };
@@ -1381,11 +1396,23 @@ impl super::eval::Context {
         Ok(completion == WaitCompletion::SpecialInputActivity)
     }
 
+    #[cfg(test)]
     pub(crate) fn wait_for_command_input(
         &mut self,
         deadline: Option<Instant>,
     ) -> Result<CommandInputWaitOutcome, Flow> {
-        let request = if let Some(deadline) = deadline {
+        self.wait_for_command_input_with_idle_policy(
+            deadline,
+            crate::keyboard::IdleTransitionPolicy::Manage,
+        )
+    }
+
+    pub(crate) fn wait_for_command_input_with_idle_policy(
+        &mut self,
+        deadline: Option<Instant>,
+        idle_policy: crate::keyboard::IdleTransitionPolicy,
+    ) -> Result<CommandInputWaitOutcome, Flow> {
+        let mut request = if let Some(deadline) = deadline {
             if deadline <= Instant::now() {
                 return Ok(CommandInputWaitOutcome::DeadlineElapsed);
             }
@@ -1393,6 +1420,7 @@ impl super::eval::Context {
         } else {
             WaitRequest::read_command_input_forever()
         };
+        request.idle_policy = idle_policy;
         self.wait_reading_process_output(request)
             .map(CommandInputWaitOutcome::from_completion)
     }

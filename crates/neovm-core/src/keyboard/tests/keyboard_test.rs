@@ -2352,3 +2352,153 @@ fn character_and_keysym_transport_keep_colliding_values_distinct() {
             if key == KeyEvent::char_with_mods(character, Modifiers::meta())));
     }
 }
+
+// GNU keyboard.c starts/stops idle only for an unbounded read (no end_time).
+#[test]
+fn timed_read_preserves_existing_idle_epoch_at_immediate_timeout() {
+    let mut eval = crate::emacs_core::Context::new();
+    eval.timer_start_idle();
+    let epoch = eval.command_loop.idle_start_time;
+    assert!(epoch.is_some());
+    assert_eq!(
+        eval.read_char_with_timeout(Some(std::time::Duration::ZERO))
+            .unwrap(),
+        None
+    );
+    assert_eq!(eval.command_loop.idle_start_time, epoch);
+}
+
+#[test]
+fn timed_read_preserves_existing_idle_epoch_after_wait_timeout() {
+    let mut eval = crate::emacs_core::Context::new();
+    let (_sender, receiver) = crossbeam_channel::unbounded();
+    eval.input_rx = Some(receiver);
+    eval.timer_start_idle();
+    let epoch = eval.command_loop.idle_start_time;
+    assert_eq!(
+        eval.read_char_with_timeout(Some(std::time::Duration::from_millis(5)))
+            .unwrap(),
+        None
+    );
+    assert_eq!(eval.command_loop.idle_start_time, epoch);
+}
+
+#[test]
+fn timed_read_preserves_existing_idle_epoch_when_input_arrives() {
+    let mut eval = crate::emacs_core::Context::new();
+    eval.timer_start_idle();
+    let epoch = eval.command_loop.idle_start_time;
+    eval.command_loop
+        .keyboard
+        .pending_input_events
+        .push_back(InputEvent::key_press(KeyEvent::char('x')));
+    assert_eq!(
+        eval.read_char_with_timeout(Some(std::time::Duration::ZERO))
+            .unwrap(),
+        Some(Value::fixnum('x' as i64))
+    );
+    assert_eq!(eval.command_loop.idle_start_time, epoch);
+}
+
+#[test]
+fn timed_read_does_not_start_idle_epoch() {
+    let mut eval = crate::emacs_core::Context::new();
+    assert_eq!(
+        eval.read_char_with_timeout(Some(std::time::Duration::ZERO))
+            .unwrap(),
+        None
+    );
+    assert!(eval.command_loop.idle_start_time.is_none());
+}
+
+#[test]
+fn unbounded_read_stops_idle_epoch_when_input_arrives() {
+    let mut eval = crate::emacs_core::Context::new();
+    eval.timer_start_idle();
+    eval.command_loop
+        .keyboard
+        .pending_input_events
+        .push_back(InputEvent::key_press(KeyEvent::char('x')));
+    assert_eq!(
+        eval.read_char_with_timeout(None).unwrap(),
+        Some(Value::fixnum('x' as i64))
+    );
+    assert!(eval.command_loop.idle_start_time.is_none());
+}
+
+#[test]
+fn timed_read_does_not_resume_previous_idle_epoch_for_ignored_mouse_motion() {
+    let mut eval = crate::emacs_core::Context::new();
+    eval.timer_start_idle();
+    eval.timer_stop_idle();
+    assert!(eval.command_loop.last_idle_start_time.is_some());
+    eval.command_loop
+        .keyboard
+        .pending_input_events
+        .push_back(InputEvent::MouseMove {
+            x: 0.0,
+            y: 0.0,
+            modifiers: Modifiers::default(),
+            target_frame_id: 0,
+        });
+    assert_eq!(
+        eval.read_char_with_timeout(Some(std::time::Duration::ZERO))
+            .unwrap(),
+        None
+    );
+    assert!(eval.command_loop.idle_start_time.is_none());
+}
+
+#[test]
+fn timed_read_preserves_idle_epoch_while_servicing_async_special_input() {
+    let mut eval = crate::emacs_core::Context::new();
+    let (sender, receiver) = crossbeam_channel::unbounded();
+    eval.input_rx = Some(receiver);
+    eval.timer_start_idle();
+    let epoch = eval.command_loop.idle_start_time;
+    let worker = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        sender
+            .send(InputEvent::SurfaceCreateFailed {
+                id: 0,
+                error: "test failure".into(),
+            })
+            .unwrap();
+        // Keep the channel connected until the read's own deadline expires.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    });
+    let result = eval.read_char_with_timeout(Some(std::time::Duration::from_millis(50)));
+    worker.join().unwrap();
+    assert_eq!(result.unwrap(), None);
+    assert_eq!(eval.command_loop.idle_start_time, epoch);
+}
+
+#[test]
+fn timed_read_preserves_idle_epoch_during_preliminary_redisplay_service() {
+    let _policy = crate::emacs_core::eval::RedisplayHookPolicyGuard::legacy();
+    let mut eval = crate::emacs_core::Context::new();
+    let queued = std::rc::Rc::new(std::cell::Cell::new(false));
+    let observed = std::rc::Rc::clone(&queued);
+    eval.redisplay_fn = Some(Box::new(move |eval| {
+        if !observed.replace(true) {
+            eval.command_loop.keyboard.pending_input_events.push_back(
+                InputEvent::SurfaceCreateFailed {
+                    id: 0,
+                    error: "redisplay test failure".into(),
+                },
+            );
+        }
+    }));
+    eval.timer_start_idle();
+    let epoch = eval.command_loop.idle_start_time;
+    assert_eq!(
+        eval.read_char_with_timeout(Some(std::time::Duration::from_millis(5)))
+            .unwrap(),
+        None
+    );
+    assert!(
+        queued.get(),
+        "redisplay must enqueue the special event after the initial input drain"
+    );
+    assert_eq!(eval.command_loop.idle_start_time, epoch);
+}
