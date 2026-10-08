@@ -15,7 +15,7 @@ struct PrivateBus {
 
 impl PrivateBus {
     fn start() -> Self {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tmp");
+        let root = neomacs_infra::workspace_root().join("tmp");
         std::fs::create_dir_all(&root).unwrap();
         let scratch = tempfile::Builder::new()
             .prefix("dbus-oracle-")
@@ -57,13 +57,14 @@ impl PrivateBus {
         }
     }
 
-    fn parity(&self, form: &str) {
-        crate::common::assert_oracle_parity_with_env(
+    fn parity(&self, form: &str, expected: expect_test::Expect) {
+        crate::common::assert_oracle_parity_with_env_expect(
             form,
             &[
                 ("DBUS_SESSION_BUS_ADDRESS", &self.address),
                 ("DBUS_FATAL_WARNINGS", "0"),
             ],
+            expected,
         );
     }
 }
@@ -73,6 +74,10 @@ impl Drop for PrivateBus {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+fn valid_compounds_expect() -> expect_test::Expect {
+    expect_test::expect![[r#""OK (sent sent sent sent sent)""#]]
 }
 
 #[test]
@@ -89,6 +94,7 @@ fn dbus_native_marshalling_valid_compounds() {
          (:array :signature "{sv}")
          (:variant (:struct :string "value" :uint32 2))
          (:array))))"#,
+        valid_compounds_expect(),
     );
 }
 
@@ -107,7 +113,7 @@ fn dbus_native_marshalling_rejects_malformed_containers() {
          (:variant :string "one" :string "two")
          (:struct)
          (:array :string "one" :uint32 2)
-         (:array (:struct "one") (:struct "two" 3)))))"#);
+         (:array (:struct "one") (:struct "two" 3)))))"#, expect_test::expect![[r#""OK (wrong-type-argument wrong-type-argument wrong-type-argument wrong-type-argument wrong-type-argument wrong-type-argument wrong-type-argument)""#]]);
 }
 
 #[test]
@@ -119,5 +125,73 @@ fn dbus_native_marshalling_rejects_invalid_path_and_signature() {
         (condition-case data
           (progn (apply #'dbus-send-signal :session nil "/org/neomacs/Oracle" "org.neomacs.Oracle" "Payload" arguments) 'unexpected-success)
           (t (car data))))
-       '((:object-path "invalid") (:signature "INVALID"))))"#);
+       '((:object-path "invalid") (:signature "INVALID"))))"#, expect_test::expect![[r#""OK (dbus-error dbus-error)""#]]);
+}
+
+/// Exercise the public evaluator in a child so snapshot selection stays local.
+#[test]
+fn dbus_native_marshalling_snapshot_rejects_wrong_outcome() {
+    const CHILD: &str = "NEOMACS_DBUS_ORACLE_SNAPSHOT_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        PrivateBus::start().parity("'wrong-outcome", valid_compounds_expect());
+        return;
+    }
+    let selector = format!(
+        "{}::dbus_native_marshalling_snapshot_rejects_wrong_outcome",
+        module_path!().split_once("::").unwrap().1
+    );
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", &selector, "--nocapture"])
+        .env(CHILD, "1")
+        .env("NEOVM_ORACLE_MODE", "snapshot")
+        .env_remove("UPDATE_EXPECT")
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "snapshot accepted an intentionally incorrect evaluator outcome: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("expect test failed"),
+        "child failed without a snapshot mismatch: {}{}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn dbus_native_marshalling_private_bus_uses_relocated_workspace() {
+    const CHILD: &str = "NEOMACS_DBUS_ORACLE_RELOCATED_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        let bus = PrivateBus::start();
+        let expected =
+            std::path::PathBuf::from(std::env::var_os("NEXTEST_WORKSPACE_ROOT").unwrap())
+                .join("tmp");
+        assert_eq!(bus._scratch.path().parent().unwrap(), expected);
+        return;
+    }
+    let scratch_root = neomacs_infra::workspace_root().join("tmp");
+    std::fs::create_dir_all(&scratch_root).unwrap();
+    let relocated = tempfile::Builder::new()
+        .prefix("relocated-dbus-oracle-")
+        .tempdir_in(scratch_root)
+        .unwrap();
+    let selector = format!(
+        "{}::dbus_native_marshalling_private_bus_uses_relocated_workspace",
+        module_path!().split_once("::").unwrap().1
+    );
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", &selector, "--nocapture"])
+        .env(CHILD, "1")
+        .env("NEXTEST_WORKSPACE_ROOT", relocated.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "relocated private bus failed: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
