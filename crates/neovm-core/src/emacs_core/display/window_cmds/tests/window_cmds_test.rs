@@ -12398,4 +12398,5 @@ fn window_lines_pixel_dimensions_returns_nil_without_a_current_matrix() {
 }
 
 #[cfg(test)]
+#[path = "tsb_boundary_numbers.rs"]
 mod tsb_boundary_numbers;

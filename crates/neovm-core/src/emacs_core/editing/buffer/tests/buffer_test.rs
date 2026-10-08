@@ -439,4 +439,5 @@ mod overlay_deletion_bulk_order;
 mod conversion_byte_boundary;
 
 #[cfg(test)]
+#[path = "tsb_boundary_numbers.rs"]
 mod tsb_boundary_numbers;

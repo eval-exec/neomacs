@@ -3,6 +3,7 @@ use crate::emacs_core::eval::Context;
 use crate::emacs_core::value::list_to_vec;
 
 #[cfg(test)]
+#[path = "boundary_numbers.rs"]
 mod boundary_numbers;
 
 #[test]

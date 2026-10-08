@@ -6535,4 +6535,5 @@ fn insert_file_contents_auto_coding_probe_size_is_the_probe_length() {
 }
 
 #[cfg(test)]
+#[path = "time_boundary.rs"]
 mod time_boundary;

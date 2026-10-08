@@ -1163,4 +1163,5 @@ mod line_index;
 mod selective_display_gnu;
 
 #[cfg(test)]
+#[path = "tsb_boundary_numbers.rs"]
 mod tsb_boundary_numbers;

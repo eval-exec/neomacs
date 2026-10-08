@@ -11,6 +11,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(test)]
+#[path = "numeric_boundaries.rs"]
 mod numeric_boundaries;
 
 fn eval_first_form_after_marker(eval: &mut Context, source: &str, marker: &str) {

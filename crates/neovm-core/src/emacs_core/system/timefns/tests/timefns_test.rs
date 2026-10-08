@@ -1857,18 +1857,24 @@ fn current_cpu_time_is_cpu_not_wall_time() {
 }
 
 #[cfg(test)]
+#[path = "boundary.rs"]
 mod boundary;
 
 #[cfg(test)]
+#[path = "calendar.rs"]
 mod calendar;
 #[cfg(test)]
+#[path = "time_zone_spec.rs"]
 mod time_zone_spec;
 #[cfg(test)]
+#[path = "unix_timestamp.rs"]
 mod unix_timestamp;
 
 #[cfg(unix)]
+#[path = "cpu_soft_limit.rs"]
 mod cpu_soft_limit;
 
 #[cfg(test)]
 #[cfg(target_os = "linux")]
+#[path = "local_reader_concurrency.rs"]
 mod local_reader_concurrency;

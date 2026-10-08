@@ -1370,4 +1370,5 @@ fn threads_mutexes_and_condition_variables_are_opaque_objects_not_conses() {
 }
 
 #[cfg(test)]
+#[path = "numeric_boundaries.rs"]
 mod numeric_boundaries;
