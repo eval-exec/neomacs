@@ -329,7 +329,7 @@ pub(crate) fn builtin_gnutls_boot(
     let id = resolve_process_object_or_wrong_type_any_in_manager(&eval.processes, &args[0])?;
     let parameters = parse_gnutls_boot_parameters(args[1], args[2])?;
     upgrade_process_to_tls::<RustlsBackend>(
-        &mut eval.processes,
+        eval,
         id,
         &parameters.client,
         "gnutls-boot",
@@ -453,7 +453,7 @@ pub(crate) fn builtin_neomacs_open_tls_stream(
     let id = resolve_process_or_wrong_type_any_in_manager(&eval.processes, &process)?;
     let parameters = TlsClientParameters::default_roots(host);
     upgrade_process_to_tls::<RustlsBackend>(
-        &mut eval.processes,
+        eval,
         id,
         &parameters,
         "neomacs-open-tls-stream",
@@ -463,6 +463,17 @@ pub(crate) fn builtin_neomacs_open_tls_stream(
 }
 
 pub(super) fn upgrade_process_to_tls<B: TlsClientBackend>(
+    eval: &mut super::super::eval::Context,
+    id: ProcessId,
+    parameters: &TlsClientParameters,
+    operation: &str,
+    map_error: fn(TlsBackendError) -> Flow,
+) -> Result<(), Flow> {
+    begin_process_tls::<B>(&mut eval.processes, id, parameters, operation, map_error)?;
+    eval.finish_process_tls_handshake(id, map_error)
+}
+
+pub(super) fn begin_process_tls<B: TlsClientBackend>(
     processes: &mut ProcessManager,
     id: ProcessId,
     parameters: &TlsClientParameters,
@@ -503,14 +514,19 @@ pub(super) fn upgrade_process_to_tls<B: TlsClientBackend>(
     };
 
     proc.gnutls_initstage = GnutlsInitStage::HandshakeTried;
-    let tls_stream = B::connect_client(tcp_stream, parameters).map_err(map_error)?;
+    let tls_stream = match B::start_client(tcp_stream, parameters) {
+        Ok(stream) => stream,
+        Err(error) => {
+            // TCP ownership has transferred; a failed configuration cannot
+            // leave an apparently live process without any transport.
+            processes.delete_process(id);
+            return Err(map_error(error));
+        }
+    };
 
     // Store the TLS stream. The poller still watches the underlying fd
     // (which is the same fd that was registered for the plain socket).
     proc.live_io.tls_stream = Some(tls_stream);
-    proc.gnutls_initstage = GnutlsInitStage::Ready;
-    proc.gnutls_boot_parameters = Value::NIL;
-
     Ok(())
 }
 
@@ -1362,7 +1378,7 @@ pub(super) fn connect_network_process_at_explicit_address(
             }
             if let Some(parameters) = tls_parameters.clone() {
                 upgrade_process_to_tls::<RustlsBackend>(
-                    &mut eval.processes,
+                    eval,
                     id,
                     &parameters.client,
                     "make-network-process",
@@ -2354,7 +2370,7 @@ pub(super) fn connect_local_socket_process(
             }
             if let Some(parameters) = tls_parameters.clone() {
                 upgrade_process_to_tls::<RustlsBackend>(
-                    &mut eval.processes,
+                    eval,
                     id,
                     &parameters.client,
                     "make-network-process",
@@ -2860,7 +2876,7 @@ pub(crate) fn builtin_make_network_process(
 
     if let Some(parameters) = tls_parameters {
         upgrade_process_to_tls::<RustlsBackend>(
-            &mut eval.processes,
+            eval,
             id,
             &parameters.client,
             "make-network-process",

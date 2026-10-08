@@ -43,8 +43,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use strum::{EnumString, IntoStaticStr};
 
 use super::tls::{
-    RustlsBackend, TlsBackendError, TlsClientBackend, TlsClientParameters, TlsStream,
-    gnutls_close_notify_result_value, gnutls_peer_status_to_value, parse_gnutls_boot_parameters,
+    RustlsBackend, TlsBackendError, TlsClientBackend, TlsClientParameters, TlsHandshakeInterest,
+    TlsHandshakeProgress, TlsStream, gnutls_close_notify_result_value, gnutls_peer_status_to_value,
+    parse_gnutls_boot_parameters,
 };
 use super::wait::ProcessOutputWaitOutcome;
 

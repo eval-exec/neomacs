@@ -4347,6 +4347,8 @@ dependencies = [
  "neomacs-parity-reference",
  "neomacs-test-oracle",
  "proptest",
+ "rustls",
+ "rustls-pki-types",
  "tempfile",
  "tracing",
 ]

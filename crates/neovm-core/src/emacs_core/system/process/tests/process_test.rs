@@ -15973,3 +15973,290 @@ fn subprocess_output_during_idle_does_not_reset_the_idle_epoch() {
         "chatty process should have delivered output during the wait",
     );
 }
+
+#[test]
+fn stalled_tls_handshake_services_lisp_timers_and_timeout() {
+    let peer = crate::emacs_core::tls_test::loopback::StalledPeer::spawn();
+    let port = peer.port;
+    let result = eval_one(&format!(
+        r#"
+(require 'timer)
+(let* ((client (make-network-process :name "stalled-tls" :host "127.0.0.1" :service {port} :noquery t))
+       (timer-fired nil)
+       (timer (run-with-timer 0.025 nil (lambda () (setq timer-fired t)))))
+  (unwind-protect
+      (let ((outcome
+             (condition-case nil
+                 (catch 'tls-done
+                   (with-timeout (0.15 (throw 'tls-done 'timeout))
+                     (gnutls-boot client 'gnutls-x509pki '(:hostname "localhost" :complete-negotiation t)))
+                   'returned)
+               (error 'failed))))
+        (list timer-fired outcome (process-live-p client)))
+    (cancel-timer timer)
+    (delete-process client)))
+"#
+    ));
+    drop(peer);
+    assert_eq!(
+        result, "OK (t timeout nil)",
+        "the Lisp timeout must unwind negotiation and close the process"
+    );
+}
+
+#[test]
+fn deleting_tls_during_an_open_sentinel_does_not_reenter_the_sentinel() {
+    let peer = crate::emacs_core::tls_test::loopback::StalledPeer::spawn();
+    let port = peer.port;
+    let result = eval_one(&format!(
+        r#"
+(require 'timer)
+(let ((outcome nil) (calls 0) (timer-fired nil) client)
+  (setq client
+        (make-network-process :name "sentinel-tls-delete" :host "127.0.0.1" :service {port} :nowait t :noquery t
+          :sentinel (lambda (process message)
+                      (setq calls (1+ calls))
+                      (when (string-prefix-p "open" message)
+                        (run-with-timer 0.025 nil (lambda () (setq timer-fired t) (delete-process process)))
+                        (setq outcome (condition-case nil
+                                          (progn (gnutls-boot process 'gnutls-x509pki '(:hostname "localhost" :complete-negotiation t)) 'ready)
+                                        (error 'closed)))))))
+  (unwind-protect
+      (progn
+        (with-timeout (0.5 (error "sentinel watchdog"))
+          (while (not outcome) (accept-process-output nil 0.05)))
+        (list timer-fired outcome calls (process-live-p client)))
+    (delete-process client)))
+"#
+    ));
+    drop(peer);
+    assert_eq!(result, "OK (t closed 1 nil)");
+}
+
+#[test]
+fn deferred_tls_configuration_failure_closes_the_process() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let result = eval_one(&format!(
+        r#"
+(let ((client (make-network-process
+                :name "invalid-tls-config" :host "127.0.0.1" :service {port} :nowait t :noquery t
+                :tls-parameters '(gnutls-x509pki :hostname "localhost" :trustfiles ("/no/such/neomacs-test-ca.pem")))))
+  (unwind-protect
+      (list (condition-case nil (progn (accept-process-output client 0.2) 'returned) (error 'failed))
+            (not (process-live-p client)))
+    (delete-process client)))
+"#
+    ));
+    assert_eq!(result, "OK (failed t)");
+}
+
+#[test]
+fn application_send_from_a_handshake_timer_returns_without_waiting_for_tls() {
+    let peer = crate::emacs_core::tls_test::loopback::StalledPeer::spawn();
+    let port = peer.port;
+    let result = eval_one(&format!(
+        r#"
+(require 'timer)
+(let* ((client (make-network-process :name "stalled-tls" :host "127.0.0.1" :service {port} :noquery t))
+       (timer-fired nil)
+       (timer (run-with-timer 0.025 nil (lambda () (process-send-string client "queued application data") (setq timer-fired t)))))
+  (unwind-protect
+      (let ((outcome
+             (condition-case nil
+                 (catch 'tls-done
+                   (with-timeout (0.15 (throw 'tls-done 'timeout))
+                     (gnutls-boot client 'gnutls-x509pki '(:hostname "localhost" :complete-negotiation t)))
+                   'returned)
+               (error 'failed))))
+        (list timer-fired outcome (process-live-p client)))
+    (cancel-timer timer)
+    (delete-process client)))
+"#
+    ));
+    drop(peer);
+    assert_eq!(
+        result, "OK (t timeout nil)",
+        "the Lisp timeout must unwind negotiation and close the process"
+    );
+}
+
+#[test]
+fn nested_tls_waits_preserve_suspension_and_deliver_queued_data() {
+    use crate::emacs_core::tls_test::loopback;
+    let peer = loopback::TlsPeer::spawn(1, Duration::from_millis(100), true);
+    let ca = loopback::resources().join("ca.pem");
+    let result = eval_one(&format!(
+        r#"
+(require 'timer)
+(eval
+ '(let ((client nil) (outcome nil) (nested nil) (slept-efficiently nil))
+    (setq client
+          (make-network-process :name "nested-tls" :host "127.0.0.1" :service {} :nowait t
+            :buffer (generate-new-buffer " *nested tls*") :noquery t
+            :tls-parameters '(gnutls-x509pki :hostname "localhost" :trustfiles ("{}") :verify-error t :complete-negotiation t)
+            :sentinel (let ((captured (copy-sequence "rooted sentinel")))
+                        (lambda (_process message)
+                          (when (string-prefix-p "open" message) (setq outcome captured))))))
+    (run-with-timer
+     0.025 nil
+     (lambda ()
+       ;; Only the callback captured by deferred-connect completion now owns
+       ;; its lexical string. GC must not lose it while TLS is waiting.
+       (set-process-sentinel client nil)
+       (garbage-collect)
+       (process-send-string client "queued encrypted data\n")
+       (let* ((before (current-cpu-time))
+              (ticks (car before)) (hz (cdr before)))
+         (run-with-timer 0.005 nil (lambda () (set-process-filter client t) (set-process-filter client nil) (sleep-for 0.005) (setq nested t)))
+         (sleep-for 0.4)
+         (setq slept-efficiently (< (- (car (current-cpu-time)) ticks) (* hz 0.2))))))
+    (unwind-protect
+        (progn
+          (with-timeout (2 (error "TLS completion watchdog"))
+            (while (not outcome) (accept-process-output nil 0.05)))
+          (accept-process-output client 0.5)
+          (list outcome nested slept-efficiently
+                (with-current-buffer (process-buffer client) (string-prefix-p "queued encrypted data\n" (buffer-string)))))
+      (delete-process client)
+      (kill-buffer (process-buffer client)))) t)
+"#,
+        peer.port,
+        ca.display()
+    ));
+    assert_eq!(result, "OK (\"rooted sentinel\" t t t)");
+}
+
+#[test]
+fn tls_negotiation_obeys_quit_and_closes_the_connection() {
+    let peer = crate::emacs_core::tls_test::loopback::StalledPeer::spawn();
+    let result = eval_one(&format!(
+        r#"
+(require 'timer)
+(let* ((inhibit-quit nil)
+       (client (make-network-process :name "quit-tls" :host "127.0.0.1" :service {} :noquery t))
+       (timer (run-with-timer 0.025 nil (lambda () (setq quit-flag t)))))
+  (unwind-protect
+      (list (condition-case nil
+                (progn (gnutls-boot client 'gnutls-x509pki '(:hostname "localhost" :complete-negotiation t)) 'returned)
+              (quit 'quit) (error 'failed))
+            (not (process-live-p client)))
+    (setq quit-flag nil)
+    (cancel-timer timer)
+    (delete-process client)))
+"#,
+        peer.port
+    ));
+    assert_eq!(result, "OK (quit t)");
+}
+
+#[test]
+fn recursive_tls_upgrade_does_not_retire_the_outer_handshake() {
+    let peer = crate::emacs_core::tls_test::loopback::StalledPeer::spawn();
+    let result = eval_one(&format!(
+        r#"
+(require 'timer)
+(let* ((client (make-network-process :name "recursive-tls" :host "127.0.0.1" :service {} :noquery t))
+       (still-live nil)
+       (timer (run-with-timer 0.025 nil
+                (lambda ()
+                  (condition-case nil (gnutls-boot client 'gnutls-x509pki '(:hostname "localhost")) (error nil))
+                  (setq still-live (not (not (process-live-p client))))))))
+  (unwind-protect
+      (list (catch 'done (with-timeout (0.15 (throw 'done 'timeout))
+                          (gnutls-boot client 'gnutls-x509pki '(:hostname "localhost" :complete-negotiation t))) 'returned)
+            still-live (not (process-live-p client)))
+    (cancel-timer timer) (delete-process client)))
+"#,
+        peer.port
+    ));
+    assert_eq!(result, "OK (timeout t t)");
+}
+
+#[test]
+fn deferred_tls_parameter_parse_failure_closes_the_process() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let result = eval_one(&format!(
+        r#"
+(let ((client (make-network-process :name "invalid-deferred-tls" :host "127.0.0.1" :service {} :nowait t :noquery t)))
+  (gnutls-asynchronous-parameters client '(gnutls-x509pki :hostname 42))
+  (unwind-protect
+      (list (condition-case nil (progn (accept-process-output client 0.2) 'returned) (error 'failed))
+            (not (process-live-p client)))
+    (delete-process client)))
+"#,
+        listener.local_addr().unwrap().port()
+    ));
+    assert_eq!(result, "OK (failed t)");
+}
+
+#[test]
+fn application_filter_suspension_does_not_suspend_tls_verification() {
+    use crate::emacs_core::tls_test::loopback;
+    let peer = loopback::TlsPeer::spawn(1, Duration::from_millis(100), false);
+    let result = eval_one(&format!(
+        r#"
+(require 'timer)
+(let* ((client (make-network-process :name "filtered-tls" :host "127.0.0.1" :service {} :noquery t))
+       (timer (run-with-timer 0.025 nil (lambda () (set-process-filter client t)))))
+  (unwind-protect
+      (list (catch 'done
+              (with-timeout (0.5 (throw 'done 'timeout))
+                (gnutls-boot client 'gnutls-x509pki '(:hostname "localhost" :trustfiles ("{}") :complete-negotiation t)))
+              'ready)
+            (not (null (plist-get (gnutls-peer-status client) :certificates))))
+    (cancel-timer timer) (delete-process client)))
+"#,
+        peer.port,
+        loopback::resources().join("ca.pem").display()
+    ));
+    assert_eq!(result, "OK (ready t)");
+}
+
+#[test]
+fn nowait_tls_queues_early_application_data_until_verification() {
+    use crate::emacs_core::tls_test::loopback;
+    let peer = loopback::TlsPeer::spawn(1, Duration::ZERO, true);
+    let result = eval_one(&format!(
+        r#"
+(require 'timer)
+(let ((client (make-network-process :name "early-tls-send" :host "127.0.0.1" :service {} :nowait t :noquery t
+                :buffer (generate-new-buffer " *early TLS*")
+                :tls-parameters '(gnutls-x509pki :hostname "localhost" :trustfiles ("{}") :complete-negotiation t))))
+  (unwind-protect
+      (progn
+        (process-send-string client "encrypted from the start\n")
+        (with-timeout (2 (error "encrypted echo watchdog"))
+          (while (with-current-buffer (process-buffer client)
+                   (not (string-prefix-p "encrypted from the start\n" (buffer-string))))
+            (accept-process-output nil 0.05)))
+        t)
+    (delete-process client) (kill-buffer (process-buffer client))))
+"#,
+        peer.port,
+        loopback::resources().join("ca.pem").display()
+    ));
+    assert_eq!(result, "OK t");
+}
+
+#[test]
+fn deinitializing_pending_tls_wakes_the_negotiation_owner() {
+    let peer = crate::emacs_core::tls_test::loopback::StalledPeer::spawn();
+    let result = eval_one(&format!(
+        r#"
+(require 'timer)
+(let* ((client (make-network-process :name "deinit-tls" :host "127.0.0.1" :service {} :noquery t))
+       (timer (run-with-timer 0.025 nil (lambda () (gnutls-deinit client)))))
+  (unwind-protect
+      (list (catch 'done
+              (with-timeout (0.3 (throw 'done 'watchdog))
+                (condition-case nil
+                    (progn (gnutls-boot client 'gnutls-x509pki '(:hostname "localhost" :complete-negotiation t)) 'returned)
+                  (error 'closed))))
+            (not (process-live-p client)))
+    (cancel-timer timer) (delete-process client)))
+"#,
+        peer.port
+    ));
+    assert_eq!(result, "OK (closed t)");
+}
