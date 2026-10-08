@@ -41,13 +41,64 @@ use crate::emacs_core::SymId;
 use crate::face::{
     Face as RuntimeFace, FaceHeight, FaceRemapping, FontSlant, FontWeight, FontWidth, LFaceAttr,
 };
-use crate::heap_types::LispString;
+use crate::heap_types::{LispString, LispStringStorageKind};
 use crate::tagged::header::{FontObjectData, FontObjectMetrics};
 use crate::window::{FRAME_ID_BASE, FrameId, FrameManager, FrameParam, WindowId};
 use neomacs_display_protocol::font::ResolvedFontIdentity;
 
 type AlternativeFontFamilyAlist = Vec<(SymId, Vec<SymId>)>;
-type AlternativeFontRegistryAlist = Vec<(LispString, Vec<LispString>)>;
+type AlternativeFontRegistryAlist = Vec<(FontNameSpelling, Vec<FontNameSpelling>)>;
+
+/// A font name's spelling, independent of Lisp text properties and heap roots.
+/// Private fields keep cached names from acquiring GC-managed payloads.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FontNameSpelling {
+    bytes: Vec<u8>,
+    storage_kind: LispStringStorageKind,
+}
+
+static_assertions::assert_impl_all!(FontNameSpelling: Send, Sync, Clone, std::fmt::Debug);
+static_assertions::assert_impl_all!(AlternativeFontRegistryAlist: Send, Sync);
+
+impl FontNameSpelling {
+    pub(super) fn from_utf8(name: &str) -> Self {
+        Self {
+            bytes: name.as_bytes().to_vec(),
+            storage_kind: LispStringStorageKind::Multibyte,
+        }
+    }
+
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Reconstruct a property-free string on the requesting mutator.
+    pub(crate) fn to_lisp_string(&self) -> LispString {
+        match self.storage_kind {
+            LispStringStorageKind::Multibyte => LispString::from_emacs_bytes(self.bytes.clone()),
+            LispStringStorageKind::Unibyte => LispString::from_unibyte(self.bytes.clone()),
+        }
+    }
+}
+
+impl From<&LispString> for FontNameSpelling {
+    fn from(name: &LispString) -> Self {
+        Self {
+            bytes: name.as_bytes().to_vec(),
+            storage_kind: name.storage_kind(),
+        }
+    }
+}
+
+impl std::hash::Hash for FontNameSpelling {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::hash::Hash::hash(&self.bytes, state);
+        state.write_u8(match self.storage_kind {
+            LispStringStorageKind::Unibyte => 0,
+            LispStringStorageKind::Multibyte => 1,
+        });
+    }
+}
 
 const FONT_WEIGHT_STYLE_TABLE: &[(i64, &[&str])] = &[
     (0, &["thin"]),
@@ -154,6 +205,21 @@ pub(crate) fn alternative_font_family_alist() -> &'static RwLock<AlternativeFont
 
 pub(crate) fn alternative_font_registry_alist() -> &'static RwLock<AlternativeFontRegistryAlist> {
     ALTERNATIVE_FONT_REGISTRY_ALIST.get_or_init(|| RwLock::new(Vec::new()))
+}
+
+pub(crate) fn replace_alternative_font_registry_alist(names: Vec<(LispString, Vec<LispString>)>) {
+    let spellings = names
+        .into_iter()
+        .map(|(name, aliases)| {
+            (
+                FontNameSpelling::from(&name),
+                aliases.iter().map(FontNameSpelling::from).collect(),
+            )
+        })
+        .collect();
+    if let Ok(mut state) = alternative_font_registry_alist().write() {
+        *state = spellings;
+    }
 }
 
 fn font_style_table(entries: &[(i64, &[&str])]) -> Value {

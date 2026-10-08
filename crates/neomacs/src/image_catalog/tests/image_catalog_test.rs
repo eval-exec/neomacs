@@ -33,7 +33,7 @@ fn file_request(path: &str) -> ImageResolveRequest {
     ImageResolveRequest {
         spec: ImageSpecIdentity::from_lisp_spec(&spec).expect("test image spec"),
         identity: image_load_identity(&spec, &items),
-        source: ImageResolveSource::File(LispString::from_utf8(path)),
+        source: ImageResolveSource::File(ImageFileName::from_utf8(path)),
         size: ImageSizeSpec::new(AxisSize::AtMost(24), AxisSize::AtMost(24)),
         rotation: Default::default(),
         colors: ImageColorContext::default(),

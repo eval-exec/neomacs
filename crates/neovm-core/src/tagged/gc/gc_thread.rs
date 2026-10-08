@@ -1116,6 +1116,9 @@ fn concurrent_trace_mapped_veclike<const MAJOR: bool, const SYMBOLS: bool, E: Cl
             // publication — the mutator materializes a stub with a plain
             // whole-data write, safe today only because this arm defers all
             // mapped bytecode to the mutator side.
+            // SAFETY: the start-handshake mapped-veclike registry supplies a
+            // live, aligned header retained through this cycle. This only tags
+            // its address; payload tracing remains on the termination mutator.
             job.deferred
                 .lock()
                 .unwrap()

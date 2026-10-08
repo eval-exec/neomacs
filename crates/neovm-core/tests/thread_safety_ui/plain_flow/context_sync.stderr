@@ -20,11 +20,6 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
    |   pub struct Context {
    |   ------------------ doesn't satisfy `neovm_core::Context: Sync`
    |
-  ::: $RUST/core/src/ptr/non_null.rs
-   |
-   |   pub struct NonNull<T: PointeeSized> {
-   |   ----------------------------------- doesn't satisfy `NonNull<ByteCodeFunction>: Sync` or `NonNull<[Op]>: Sync`
-   |
   ::: $RUST/core/src/cell.rs
    |
    |   pub struct Cell<T: ?Sized> {
@@ -32,6 +27,11 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
 ...
    |   pub struct RefCell<T: ?Sized> {
    |   ----------------------------- doesn't satisfy 7 bounds
+   |
+  ::: $RUST/core/src/ptr/non_null.rs
+   |
+   |   pub struct NonNull<T: PointeeSized> {
+   |   ----------------------------------- doesn't satisfy `NonNull<ByteCodeFunction>: Sync` or `NonNull<[Op]>: Sync`
    |
   ::: src/emacs_core/display/display_host/mod.rs
    |
@@ -89,6 +89,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `*const (): Sync`
            which is required by `neovm_core::Context: Sync`
            `Rc<Cell<Option<shared::PointBeforeCommand>>>: Sync`
+           which is required by `neovm_core::Context: Sync`
+           `*const u8: Sync`
            which is required by `neovm_core::Context: Sync`
            `*mut builtins::collections::HashTestGcInhibitAccounting: Sync`
            which is required by `neovm_core::Context: Sync`

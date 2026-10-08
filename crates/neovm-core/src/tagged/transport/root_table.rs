@@ -214,6 +214,8 @@ unsafe impl Send for RootLease {}
 // SAFETY: see `Send`; `&RootLease` exposes only atomic loads of the cell.
 unsafe impl Sync for RootLease {}
 
+static_assertions::assert_impl_all!(RootLease: Send, Sync);
+
 impl RootLease {
     /// Root `word` in `heap`'s table.
     pub(super) fn register(heap: HeapIdentity, word: TracedWord) -> Self {

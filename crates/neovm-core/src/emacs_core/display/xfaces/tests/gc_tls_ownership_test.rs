@@ -68,8 +68,12 @@ fn gc_tls_ownership_font_registry_names_do_not_retain_unrooted_properties() {
     );
     let state = alternative_font_registry_alist().read().unwrap();
     assert!(
-        state.iter().all(|(name, aliases)| !name.has_intervals()
-            && aliases.iter().all(|alias| !alias.has_intervals())),
+        state
+            .iter()
+            .all(|(name, aliases)| !name.to_lisp_string().has_intervals()
+                && aliases
+                    .iter()
+                    .all(|alias| !alias.to_lisp_string().has_intervals())),
         "the static font name registry copied heap Values in string text properties"
     );
     drop(state);

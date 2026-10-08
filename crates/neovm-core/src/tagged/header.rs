@@ -65,6 +65,8 @@ impl ConsCell {
     #[inline]
     pub unsafe fn load_car(&self) -> TaggedValue {
         let p = &self.car as *const TaggedValue as *const AtomicUsize;
+        // SAFETY: the caller keeps this cons live and uses atomic slot access.
+        // TaggedValue's pinned word size/alignment admits the AtomicUsize view.
         TaggedValue::from_bits(unsafe { (*p).load(Ordering::Acquire) })
     }
 
@@ -77,6 +79,8 @@ impl ConsCell {
     #[inline]
     pub unsafe fn load_cdr(&self) -> TaggedValue {
         let p = &self.cdr_or_next as *const ConsCdrOrNext as *const AtomicUsize;
+        // SAFETY: the caller proves this live union contains `cdr` and all
+        // concurrent writes are atomic. Its word has AtomicUsize alignment.
         TaggedValue::from_bits(unsafe { (*p).load(Ordering::Acquire) })
     }
 
@@ -1121,6 +1125,8 @@ impl LispValueVec {
     #[inline]
     pub fn load_atomic(&self, i: usize) -> TaggedValue {
         let p = &self.as_slice()[i] as *const TaggedValue as *const AtomicUsize;
+        // SAFETY: indexing proves a live, aligned slot in the borrowed backing.
+        // TaggedValue is one aligned word; concurrent slot writes use Release.
         TaggedValue::from_bits(unsafe { (*p).load(Ordering::Acquire) })
     }
 
@@ -1141,6 +1147,8 @@ impl LispValueVec {
     pub fn iter_atomic(&self) -> impl Iterator<Item = TaggedValue> + '_ {
         self.as_slice().iter().map(|slot| {
             let p = slot as *const TaggedValue as *const AtomicUsize;
+            // SAFETY: the backing borrow retains this aligned word slot, and
+            // its concurrent accesses follow the atomic publication contract.
             TaggedValue::from_bits(unsafe { (*p).load(Ordering::Acquire) })
         })
     }
@@ -1361,6 +1369,8 @@ impl VectorScanSnapshot {
 #[inline]
 pub fn load_value_atomic(slot: &TaggedValue) -> TaggedValue {
     let p = slot as *const TaggedValue as *const AtomicUsize;
+    // SAFETY: the borrow identifies a live slot with pinned word alignment.
+    // Concurrent access uses the atomic publication contract documented above.
     TaggedValue::from_bits(unsafe { (*p).load(Ordering::Acquire) })
 }
 

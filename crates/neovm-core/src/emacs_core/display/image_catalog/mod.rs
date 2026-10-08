@@ -6,7 +6,7 @@
 
 use crate::emacs_core::Value;
 use crate::emacs_core::symbol::Obarray;
-use crate::heap_types::LispString;
+use crate::heap_types::{LispString, LispStringStorageKind};
 use crate::window::Frame;
 pub use neomacs_display_protocol::ImageAnimationPolicy;
 pub use neomacs_display_protocol::ImageRealization as ResolvedImageRealization;
@@ -263,6 +263,99 @@ pub fn numeric_image_scale(value: Value) -> Option<ImageScaleFactor> {
         .flatten()
 }
 
+/// Property-free image source text, preserving the Lisp cache-key spelling.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ImageSourceSpelling {
+    bytes: Vec<u8>,
+    storage_kind: LispStringStorageKind,
+}
+
+static_assertions::assert_impl_all!(ImageSourceSpelling: Send, Sync, Clone, std::fmt::Debug, Eq, std::hash::Hash);
+
+impl From<&LispString> for ImageSourceSpelling {
+    fn from(text: &LispString) -> Self {
+        Self {
+            bytes: text.as_bytes().to_vec(),
+            storage_kind: text.storage_kind(),
+        }
+    }
+}
+
+impl std::hash::Hash for ImageSourceSpelling {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::hash::Hash::hash(&self.bytes, state);
+        std::hash::Hash::hash(
+            &match self.storage_kind {
+                LispStringStorageKind::Unibyte => false,
+                LispStringStorageKind::Multibyte => true,
+            },
+            state,
+        );
+    }
+}
+
+/// A GNU image `:base-uri` spelling without Lisp properties or heap pointers.
+///
+/// Retain its original bytes and string mode for request identity. Decoders
+/// interpret those bytes as UTF-8 exactly as they did at the Lisp-string edge.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ImageBaseUri(ImageSourceSpelling);
+
+static_assertions::assert_impl_all!(ImageBaseUri: Send, Sync, Clone, std::fmt::Debug, Eq, std::hash::Hash);
+
+impl ImageBaseUri {
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0.bytes
+    }
+
+    #[must_use]
+    pub fn as_utf8_str(&self) -> Option<&str> {
+        std::str::from_utf8(self.as_bytes()).ok()
+    }
+}
+
+impl From<&LispString> for ImageBaseUri {
+    fn from(uri: &LispString) -> Self {
+        Self(ImageSourceSpelling::from(uri))
+    }
+}
+
+/// A Lisp image `:file` spelling, before GNU image-path resolution.
+///
+/// It may contain non-UTF-8 Emacs bytes; filename classification retains its
+/// existing UTF-8 admission rule rather than normalizing the spelling here.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ImageFileName(ImageSourceSpelling);
+
+static_assertions::assert_impl_all!(ImageFileName: Send, Sync, Clone, std::fmt::Debug, Eq, std::hash::Hash);
+
+impl ImageFileName {
+    #[must_use]
+    pub fn from_utf8(path: &str) -> Self {
+        Self(ImageSourceSpelling {
+            bytes: path.as_bytes().to_vec(),
+            storage_kind: LispStringStorageKind::Multibyte,
+        })
+    }
+
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0.bytes
+    }
+
+    #[must_use]
+    pub fn as_utf8_str(&self) -> Option<&str> {
+        std::str::from_utf8(self.as_bytes()).ok()
+    }
+}
+
+impl From<&LispString> for ImageFileName {
+    fn from(path: &LispString) -> Self {
+        Self(ImageSourceSpelling::from(path))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ImageDataSource {
     /// Encoded bytes with no authority to resolve external resources.
@@ -271,9 +364,11 @@ pub enum ImageDataSource {
     /// explicitly supplied GNU image `:base-uri`.
     WithBaseUri {
         data: EncodedBytes,
-        base_uri: LispString,
+        base_uri: ImageBaseUri,
     },
 }
+
+static_assertions::assert_impl_all!(ImageDataSource: Send, Sync, Clone, std::fmt::Debug, Eq, std::hash::Hash);
 
 impl ImageDataSource {
     /// The encoded bytes, whichever authority they carry.
@@ -288,9 +383,11 @@ impl ImageDataSource {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ImageResolveSource {
-    File(LispString),
+    File(ImageFileName),
     Data(ImageDataSource),
 }
+
+static_assertions::assert_impl_all!(ImageResolveSource: Send, Sync, Clone, std::fmt::Debug, Eq, std::hash::Hash);
 
 pub use crate::image_identity::ImageSpecIdentity;
 
@@ -325,6 +422,8 @@ pub struct ImageResolveRequest {
     /// specification the way GNU does.
     pub identity: ImageLoadIdentity,
 }
+
+static_assertions::assert_impl_all!(ImageResolveRequest: Send, Sync, Clone, std::fmt::Debug, Eq, std::hash::Hash);
 
 /// Cache operation requested by the Lisp image compatibility layer.
 ///

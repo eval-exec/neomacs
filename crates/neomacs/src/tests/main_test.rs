@@ -59,7 +59,7 @@ use neovm_core::emacs_core::eval::{
 use neovm_core::emacs_core::image_catalog::{AxisSize, ImageRotation, ImageSizeSpec};
 use neovm_core::emacs_core::image_catalog::{
     EncodedBytes, ImageAnimationInvalidation, ImageAnimationPolicy, ImageCatalog,
-    ImageColorContext, ImageDataSource, ImageFrameIndex, ImageId, ImageLoadAttempt,
+    ImageColorContext, ImageDataSource, ImageFileName, ImageFrameIndex, ImageId, ImageLoadAttempt,
     ImageLoadIdentity, ImageLoadToken, ImageLookup, ImageResolveRequest, ImageResolveSource,
     ImageSizeLimit, ImageSpecIdentity, ResolvedImageMetadata,
 };
@@ -2620,7 +2620,7 @@ fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_threa
     let image_path = repo_root.join("test/data/image/blank-100x200.png");
     let request = ImageResolveRequest {
         spec: test_image_spec_identity(image_path.to_str().expect("utf8 path")),
-        source: ImageResolveSource::File(LispString::from_utf8(
+        source: ImageResolveSource::File(ImageFileName::from_utf8(
             image_path.to_str().expect("utf8 path"),
         )),
         identity: test_file_image_identity(image_path.to_str().expect("utf8 path")),
@@ -2921,7 +2921,7 @@ fn primary_display_host_expands_tilde_in_image_file_before_render_command() {
     };
     let request = ImageResolveRequest {
         spec: test_image_spec_identity("~/Pictures/Pik.png"),
-        source: ImageResolveSource::File(LispString::from_utf8("~/Pictures/Pik.png")),
+        source: ImageResolveSource::File(ImageFileName::from_utf8("~/Pictures/Pik.png")),
         identity: test_file_image_identity("~/Pictures/Pik.png"),
         size: ImageSizeSpec::new(AxisSize::AtMost(0), AxisSize::AtMost(24)),
         rotation: ImageRotation::None,

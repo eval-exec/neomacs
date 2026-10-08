@@ -78,11 +78,11 @@ pub(crate) enum LispStringStorageKind {
     Multibyte,
 }
 
-// `data` always points into owned Vec storage or an immutable mapped/static
-// region. Moving the Rust owner does not move Vec allocations, and mutation
-// requires `&mut self`.
-unsafe impl Send for LispString {}
-unsafe impl Sync for LispString {}
+// The byte pointer alone does not justify sharing this owner: its interval
+// table can hold mutator-local Values. Collector access to the atomic interval
+// pointer word is admitted separately; it never dereferences that table.
+static_assertions::assert_not_impl_any!(LispString: Send, Sync);
+static_assertions::assert_not_impl_any!(TextPropertyTable: Send, Sync);
 
 #[derive(Clone, Copy)]
 struct StaticRoDataEntry {
@@ -225,12 +225,17 @@ impl LispString {
     #[cold]
     #[inline(never)]
     pub(crate) fn mark_owned_storage_collection_observed(&self) {
-        let _ =
-            self.storage_capacity
-                .fetch_update(Ordering::Release, Ordering::Relaxed, |encoded| {
-                    (encoded != 0 && encoded & Self::OWNED_STORAGE_COLLECTION_OBSERVED_MASK == 0)
-                        .then_some(encoded | Self::OWNED_STORAGE_COLLECTION_OBSERVED_MASK)
-                });
+        Self::mark_capacity_collection_observed(&self.storage_capacity);
+    }
+
+    // Share only the atomic metadata word with an observer, never the string's
+    // bytes or its mutator-local interval table.
+    #[inline(always)]
+    fn mark_capacity_collection_observed(capacity: &AtomicUsize) {
+        let _ = capacity.fetch_update(Ordering::Release, Ordering::Relaxed, |encoded| {
+            (encoded != 0 && encoded & Self::OWNED_STORAGE_COLLECTION_OBSERVED_MASK == 0)
+                .then_some(encoded | Self::OWNED_STORAGE_COLLECTION_OBSERVED_MASK)
+        });
     }
 
     /// Reset transferred payload metadata before publishing a new owner.

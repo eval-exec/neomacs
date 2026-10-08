@@ -69,6 +69,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `Rc<Cell<Option<shared::PointBeforeCommand>>>: Send`
            which is required by `neovm_core::Context: Send`
+           `*const u8: Send`
+           which is required by `neovm_core::Context: Send`
            `*mut builtins::collections::HashTestGcInhibitAccounting: Send`
            which is required by `neovm_core::Context: Send`
            `RefCell<ccl::CclRegistry>: Sync`

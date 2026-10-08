@@ -751,7 +751,7 @@ impl TaggedHeap {
         if cfg!(test) || std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1") {
             let mut kinds = DrainKinds::default();
             for &word in &deferred {
-                // Safety: parked entries are live heap values; nothing has been
+                // SAFETY: parked entries are live heap values; nothing has been
                 // swept since they were parked (see `DrainKinds::note`).
                 unsafe { kinds.note(word.value()) };
             }

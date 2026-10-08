@@ -18,11 +18,11 @@ use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_max_args, expect_min_args};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::image_catalog::{
-    AxisSize, EncodedBytes, ImageAnimationInvalidation, ImageAnimationPolicy, ImageColorContext,
-    ImageDataSource, ImageFrameIndex, ImageHeuristicMask, ImageInvalidation, ImageLoadIdentity,
-    ImageMaskKind, ImageMaskPolicy, ImageResolveRequest, ImageResolveSource, ImageRotation,
-    ImageScaleEnvironment, ImageScalePolicy, ImageSizeSpec, ImageSpecIdentity,
-    image_scale_environment, numeric_image_scale,
+    AxisSize, EncodedBytes, ImageAnimationInvalidation, ImageAnimationPolicy, ImageBaseUri,
+    ImageColorContext, ImageDataSource, ImageFileName, ImageFrameIndex, ImageHeuristicMask,
+    ImageInvalidation, ImageLoadIdentity, ImageMaskKind, ImageMaskPolicy, ImageResolveRequest,
+    ImageResolveSource, ImageRotation, ImageScaleEnvironment, ImageScalePolicy, ImageSizeSpec,
+    ImageSpecIdentity, image_scale_environment, numeric_image_scale,
 };
 use crate::window::FRAME_ID_BASE;
 use neomacs_display_protocol::image_diagnostic::{ImageDiagnosticSubject, ImageFormatName};
@@ -285,7 +285,9 @@ pub fn image_resolve_source_from_items(items: &[Value]) -> Option<ImageResolveSo
     while index + 1 < items.len() {
         let value = items[index + 1];
         match ImageSpecKey::from_lisp_value(items[index]) {
-            Some(ImageSpecKey::File) => file_source = value.as_lisp_string().cloned(),
+            Some(ImageSpecKey::File) => {
+                file_source = value.as_lisp_string().map(ImageFileName::from);
+            }
             Some(ImageSpecKey::Data) => {
                 // The Lisp string's bytes are materialized once, here, and every
                 // consumer of this request — the catalog's key, the load command,
@@ -295,7 +297,9 @@ pub fn image_resolve_source_from_items(items: &[Value]) -> Option<ImageResolveSo
                     .as_lisp_string()
                     .map(|data| EncodedBytes::new(data.as_bytes().to_vec()));
             }
-            Some(ImageSpecKey::BaseUri) => base_uri = value.as_lisp_string().cloned(),
+            Some(ImageSpecKey::BaseUri) => {
+                base_uri = value.as_lisp_string().map(ImageBaseUri::from);
+            }
             _ => {}
         }
         index += 2;
@@ -1482,7 +1486,7 @@ pub(crate) fn builtin_clear_image_cache_in_context(
                 .is_some_and(|catalog| {
                     catalog
                         .invalidate(ImageInvalidation::Dependency(ImageResolveSource::File(
-                            crate::heap_types::LispString::from_utf8(path),
+                            ImageFileName::from_utf8(path),
                         )))
                         .changed()
                 });

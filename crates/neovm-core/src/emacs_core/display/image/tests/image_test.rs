@@ -42,6 +42,87 @@ fn svg_animation_lisp_playback_behavior() {
     );
 }
 
+#[test]
+fn image_source_spellings_preserve_bytes_mode_and_decoder_input() {
+    use crate::heap_types::LispString;
+    use std::hash::{DefaultHasher, Hash, Hasher};
+
+    fn hash(value: &impl Hash) -> u64 {
+        let mut state = DefaultHasher::new();
+        value.hash(&mut state);
+        state.finish()
+    }
+
+    for mut uri in [
+        LispString::from_utf8("/images/字-é/"),
+        LispString::from_unibyte(vec![0xff, b'/']),
+        LispString::from_emacs_bytes(vec![0xc0, 0xbf, b'/']),
+        LispString::from_utf8("/images/"),
+        LispString::from_unibyte(b"/images/".to_vec()),
+    ] {
+        let _ = uri.intervals_mut();
+        assert!(uri.has_intervals());
+        let snapshot = ImageBaseUri::from(&uri);
+        assert_eq!(snapshot.as_bytes(), uri.as_bytes());
+        assert_eq!(snapshot.as_utf8_str(), uri.as_utf8_str());
+        assert_eq!(hash(&snapshot), hash(&uri));
+        let filename = ImageFileName::from(&uri);
+        assert_eq!(filename.as_bytes(), uri.as_bytes());
+        assert_eq!(filename.as_utf8_str(), uri.as_utf8_str());
+        assert_eq!(hash(&filename), hash(&uri));
+    }
+
+    assert_ne!(
+        ImageBaseUri::from(&LispString::from_utf8("/images/")),
+        ImageBaseUri::from(&LispString::from_unibyte(b"/images/".to_vec())),
+    );
+    assert_ne!(
+        ImageFileName::from(&LispString::from_utf8("/images/")),
+        ImageFileName::from(&LispString::from_unibyte(b"/images/".to_vec())),
+    );
+    assert_eq!(
+        ImageFileName::from_utf8("/images/字-é/"),
+        ImageFileName::from(&LispString::from_utf8("/images/字-é/")),
+    );
+}
+
+#[test]
+fn image_source_materializes_base_uri_without_lisp_properties() {
+    use crate::heap_types::LispString;
+
+    let mut eval = Context::new();
+    eval.setup_thread_locals();
+    let mut uri = LispString::from_utf8("/images/字/");
+    let _ = uri.intervals_mut();
+    let items = [
+        Value::symbol("image"),
+        Value::keyword("data"),
+        Value::heap_string(LispString::from_unibyte(vec![0xff, 0x00, 0x80])),
+        Value::keyword("base-uri"),
+        Value::heap_string(uri),
+    ];
+    let Some(ImageResolveSource::Data(ImageDataSource::WithBaseUri { data, base_uri })) =
+        image_resolve_source_from_items(&items)
+    else {
+        panic!("data and base URI must retain resource-resolution authority");
+    };
+    assert_eq!(&*data, &[0xff, 0x00, 0x80]);
+    assert_eq!(base_uri.as_utf8_str(), Some("/images/字/"));
+    assert!(items[4].as_lisp_string().unwrap().has_intervals());
+
+    let mut filename = LispString::from_unibyte(vec![0xff, b'.', b'p', b'n', b'g']);
+    let _ = filename.intervals_mut();
+    let mut file_items = items.to_vec();
+    file_items.extend([Value::keyword("file"), Value::heap_string(filename)]);
+    let Some(ImageResolveSource::File(filename)) = image_resolve_source_from_items(&file_items)
+    else {
+        panic!("an explicit file must retain precedence over data and base URI");
+    };
+    assert_eq!(filename.as_bytes(), &[0xff, b'.', b'p', b'n', b'g']);
+    assert_eq!(filename.as_utf8_str(), None);
+    assert!(file_items[6].as_lisp_string().unwrap().has_intervals());
+}
+
 #[derive(Default)]
 struct RecordingImageDisplayHost {
     requests: Arc<Mutex<Vec<ImageResolveRequest>>>,

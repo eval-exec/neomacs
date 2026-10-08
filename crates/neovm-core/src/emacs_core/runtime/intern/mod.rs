@@ -13,7 +13,7 @@
 use hashbrown::HashMap;
 use parking_lot::RwLock;
 use rustc_hash::{FxBuildHasher, FxHashMap};
-use std::borrow::Cow;
+use std::borrow::{Borrow, Cow};
 use std::cell::{Cell, RefCell};
 use std::fmt::Write as _;
 use std::hash::{BuildHasher, Hash, Hasher};
@@ -228,6 +228,34 @@ pub const UNBOUND_SYM_ID: SymId = SymId(2);
 /// Number of symbol-name atoms stored in each non-moving allocation.
 const NAME_ATOM_CHUNK: usize = 4096;
 
+/// One frozen, property-free name atom in process-lifetime storage.
+///
+/// Only `NameAtomStorage::push` constructs this reference, after stripping
+/// heap-backed text properties and moving the string into a leaked slot.
+/// Hash and equality inspect only its immutable bytes and representation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+struct NameAtomRef(&'static LispString);
+
+// SAFETY: construction is confined to `NameAtomStorage::push`. Its referenced
+// string has no interval table, never moves or drops, and is never mutated after
+// publication. Its bytes are owned by that leaked string or are immutable
+// process-lifetime mapped/static storage, so they contain no heap-local Values.
+unsafe impl Send for NameAtomRef {}
+// SAFETY: the same frozen, property-free invariant permits concurrent reads;
+// neither this wrapper nor any published name API exposes mutable access.
+unsafe impl Sync for NameAtomRef {}
+
+static_assertions::assert_impl_all!(NameAtomRef: Send, Sync, Copy, std::fmt::Debug);
+static_assertions::assert_eq_size!(NameAtomRef, &'static LispString);
+static_assertions::assert_eq_align!(NameAtomRef, &'static LispString);
+
+impl Borrow<LispString> for NameAtomRef {
+    fn borrow(&self) -> &LispString {
+        self.0
+    }
+}
+
 /// Append-only, process-lifetime storage for interned symbol names.
 ///
 /// The symbol registry exposes name atoms as `&'static LispString`, so the
@@ -239,11 +267,17 @@ struct NameAtomStorage {
     len: usize,
 }
 
-// SAFETY: chunks are appended and initialized only through `&mut self` while
-// the enclosing `StringInterner` is write-locked. Published `LispString`s are
-// immutable and their leaked backing allocations never move or disappear.
+// SAFETY: chunks are appended and initialized only through `&mut self`.
+// `push` clears interval tables before publication, so no published atom owns
+// heap-local Values. Atoms and their bytes are frozen; the leaked chunks never
+// move or disappear. The enclosing global interner additionally uses its lock
+// when accessing or extending this storage.
 unsafe impl Send for NameAtomStorage {}
+// SAFETY: shared access reads only initialized, frozen, property-free slots.
+// New slots require `&mut self`; no published slot is ever changed or freed.
 unsafe impl Sync for NameAtomStorage {}
+
+static_assertions::assert_impl_all!(NameAtomStorage: Send, Sync);
 
 impl NameAtomStorage {
     fn new() -> Self {
@@ -267,7 +301,7 @@ impl NameAtomStorage {
             .reserve(required_chunks.saturating_sub(self.chunks.len()));
     }
 
-    fn push(&mut self, mut value: LispString) -> &'static LispString {
+    fn push(&mut self, mut value: LispString) -> NameAtomRef {
         // Name atoms outlive every tagged heap. Exact Lisp name objects keep
         // their rooted text properties separately; the atom stores spelling
         // only, so it must never retain property Values from that heap.
@@ -291,9 +325,14 @@ impl NameAtomStorage {
         // initialized value is never mutated, so the returned reference stays
         // valid for the remainder of the process.
         let slot = unsafe { self.chunks[chunk_index].as_ptr().add(slot_index) };
+        // SAFETY: this is the next uninitialized slot in the leaked allocation;
+        // its owner has exclusive access and the incoming string has no table.
         unsafe { slot.write(value) };
         self.len += 1;
-        unsafe { &*slot }
+        // SAFETY: the write initialized the slot. No mutable reference is ever
+        // published, and the string, its property-free state and bytes live for
+        // the process lifetime, establishing `NameAtomRef`'s invariant.
+        NameAtomRef(unsafe { &*slot })
     }
 
     #[inline]
@@ -312,11 +351,53 @@ impl NameAtomStorage {
     }
 }
 
+#[cfg(test)]
+#[test]
+fn name_atom_refs_strip_heap_properties_before_crossing_threads() {
+    use crate::buffer::{CharLen, CharPos0, CharRange};
+    use crate::tagged::gc::TaggedHeap;
+
+    let mut heap = TaggedHeap::new();
+    crate::tagged::gc::set_tagged_heap(&mut heap);
+    let payload = heap.alloc_string(LispString::from_utf8("name-atom-property-payload"));
+    let property = TaggedValue::from_sym_id(intern_uninterned("name-atom-property"));
+    let mut name = LispString::from_utf8("λ-name");
+    let len = CharLen::new(name.schars());
+    let range = CharRange::new(CharPos0::new(0), CharPos0::new(name.schars()));
+    assert!(
+        name.intervals_mut()
+            .put_property_for_object_char_len(range, len, property, payload,)
+    );
+    assert!(name.has_intervals());
+
+    let mut storage = NameAtomStorage::new();
+    let atom = storage.push(name);
+    let borrowed: &LispString = atom.borrow();
+    assert!(!borrowed.has_intervals());
+    let mut map = HashMap::with_hasher(FxBuildHasher);
+    map.insert(atom, NameId(0));
+    assert_eq!(map.get(&LispString::from_utf8("λ-name")), Some(&NameId(0)));
+
+    // The frozen atom kept only bytes, so its former property cannot keep the
+    // heap object alive. Reading the atom on a foreign thread needs no heap.
+    heap.collect_exact(std::iter::empty());
+    assert!(!heap.owns_heap_value_for_test(payload));
+    std::thread::spawn(move || {
+        let borrowed: &LispString = atom.borrow();
+        assert_eq!(borrowed.as_utf8_str(), Some("λ-name"));
+        assert!(!borrowed.has_intervals());
+    })
+    .join()
+    .expect("frozen atom reader exits");
+}
+
 /// Append-only string interner used only for symbol names.
 pub struct StringInterner {
     strings: NameAtomStorage,
-    map: HashMap<&'static LispString, NameId, FxBuildHasher>,
+    map: HashMap<NameAtomRef, NameId, FxBuildHasher>,
 }
+
+static_assertions::assert_impl_all!(StringInterner: Send, Sync);
 
 impl Default for StringInterner {
     fn default() -> Self {
@@ -375,7 +456,7 @@ impl StringInterner {
         self.map
             .raw_entry()
             .from_hash(hash, |candidate| {
-                candidate.is_multibyte() == multibyte && candidate.as_bytes() == bytes
+                candidate.0.is_multibyte() == multibyte && candidate.0.as_bytes() == bytes
             })
             .map(|(_, id)| *id)
     }
@@ -446,7 +527,7 @@ impl StringInterner {
         // names per load.
         let hash = self.hash_name_parts(bytes, multibyte);
         match self.map.raw_entry_mut().from_hash(hash, |candidate| {
-            candidate.is_multibyte() == multibyte && candidate.as_bytes() == bytes
+            candidate.0.is_multibyte() == multibyte && candidate.0.as_bytes() == bytes
         }) {
             hashbrown::hash_map::RawEntryMut::Occupied(entry) => *entry.get(),
             hashbrown::hash_map::RawEntryMut::Vacant(entry) => {

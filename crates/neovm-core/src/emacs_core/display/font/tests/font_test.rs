@@ -19,6 +19,30 @@ use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+#[test]
+fn cached_font_name_spelling_preserves_bytes_and_drops_intervals() {
+    let cases = [
+        LispString::from_utf8("font-字-é"),
+        LispString::from_unibyte(vec![0xff, b'A']),
+        LispString::from_utf8("font-ascii"),
+        LispString::from_unibyte(b"font-ascii".to_vec()),
+    ];
+    for mut original in cases {
+        let _ = original.intervals_mut();
+        assert!(original.has_intervals());
+        let spelling = FontNameSpelling::from(&original);
+        let reconstructed = spelling.to_lisp_string();
+        assert_eq!(reconstructed.as_bytes(), original.as_bytes());
+        assert_eq!(reconstructed.is_multibyte(), original.is_multibyte());
+        assert!(!reconstructed.has_intervals());
+    }
+
+    assert_ne!(
+        FontNameSpelling::from(&LispString::from_utf8("same")),
+        FontNameSpelling::from(&LispString::from_unibyte(b"same".to_vec()))
+    );
+}
+
 fn call_face_font(args: impl FnOnce() -> Vec<Value>) -> EvalResult {
     let mut eval = Context::new();
     let args = args();

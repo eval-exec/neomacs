@@ -16,7 +16,7 @@ use crate::tagged::value::TaggedValue;
 #[repr(transparent)]
 pub(super) struct MarkWord(usize);
 
-static_assertions::assert_impl_all!(MarkWord: Send, Sync, Copy);
+static_assertions::assert_impl_all!(MarkWord: Send, Sync, Copy, std::fmt::Debug);
 static_assertions::assert_eq_size!(MarkWord, TaggedValue);
 
 impl MarkWord {
@@ -47,7 +47,7 @@ pub(super) type SharedMarkQueue = Arc<Mutex<Vec<MarkWord>>>;
 #[derive(Default)]
 pub(super) struct MarkStack(Vec<MarkWord>);
 
-static_assertions::assert_impl_all!(MarkStack: Send);
+static_assertions::assert_impl_all!(MarkStack: Send, std::fmt::Debug);
 
 impl MarkStack {
     /// Take over a world-stopped gray queue at the start handshake.

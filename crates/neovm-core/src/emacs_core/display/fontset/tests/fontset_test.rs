@@ -439,11 +439,11 @@ fn parse_font_spec_entry_preserves_raw_unibyte_string_names() {
 }
 
 #[test]
-fn registry_storage_uses_lisp_strings_for_names_and_aliases() {
+fn registry_storage_uses_property_free_spellings_for_names_and_aliases() {
     crate::test_utils::init_test_tracing();
     let mut registry = FontsetRegistry::with_defaults();
-    let name = fontset_name_lisp_string("-*-fixed-medium-r-normal-*-16-*-*-*-*-*-fontset-unit");
-    let alias = fontset_name_lisp_string("fontset-unit");
+    let name = fontset_name_spelling("-*-fixed-medium-r-normal-*-16-*-*-*-*-*-fontset-unit");
+    let alias = fontset_name_spelling("fontset-unit");
     let registered = registry.register_fontset(name.clone(), Some(alias.clone()));
 
     assert!(registry.fontsets.contains_key(&name));
@@ -457,13 +457,52 @@ fn registry_storage_uses_lisp_strings_for_names_and_aliases() {
     assert_eq!(registered, name);
 
     let listed = list_to_vec(&registry.list_value());
-    assert!(listed.contains(&Value::heap_string(name.clone())));
+    assert!(listed.contains(&Value::heap_string(name.to_lisp_string())));
 
     let alias_alist = list_to_vec(&registry.alias_alist_value());
     assert!(alias_alist.contains(&Value::cons(
-        Value::heap_string(name),
-        Value::heap_string(alias)
+        Value::heap_string(name.to_lisp_string()),
+        Value::heap_string(alias.to_lisp_string())
     )));
+}
+
+#[test]
+fn registry_spellings_preserve_non_ascii_and_string_byte_modes() {
+    crate::test_utils::init_test_tracing();
+    let mut registry = FontsetRegistry::with_defaults();
+    let unicode = fontset_name_spelling("fontset-字-é");
+    let raw = FontNameSpelling::from(&LispString::from_unibyte(vec![0xff, b'A']));
+    let multibyte_ascii = fontset_name_spelling("fontset-ascii");
+    let unibyte_ascii =
+        FontNameSpelling::from(&LispString::from_unibyte(b"fontset-ascii".to_vec()));
+
+    registry.register_fontset(unicode.clone(), Some(raw.clone()));
+    registry.register_fontset(multibyte_ascii.clone(), None);
+    registry.register_fontset(unibyte_ascii.clone(), None);
+    assert_eq!(registry.alias_to_name.get(&raw), Some(&unicode));
+    assert_ne!(multibyte_ascii, unibyte_ascii);
+    assert!(registry.fontsets.contains_key(&multibyte_ascii));
+    assert!(registry.fontsets.contains_key(&unibyte_ascii));
+
+    let names = list_to_vec(&registry.list_value());
+    for spelling in [&unicode, &multibyte_ascii, &unibyte_ascii] {
+        let expected = spelling.to_lisp_string();
+        assert!(
+            names
+                .iter()
+                .any(|name| name.as_lisp_string() == Some(&expected))
+        );
+    }
+    let aliases = list_to_vec(&registry.alias_alist_value());
+    let alias = aliases
+        .iter()
+        .find(|pair| pair.cons_car().as_lisp_string() == Some(&unicode.to_lisp_string()))
+        .unwrap()
+        .cons_cdr();
+    let alias = alias.as_lisp_string().unwrap();
+    assert_eq!(alias.as_bytes(), &[0xff, b'A']);
+    assert!(!alias.is_multibyte());
+    assert!(!alias.has_intervals());
 }
 
 #[test]
