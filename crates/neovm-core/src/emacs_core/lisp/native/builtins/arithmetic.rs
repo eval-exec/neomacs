@@ -9,9 +9,9 @@ use malachite::base::num::logic::traits::SignificantBits;
 use malachite::base::rounding_modes::RoundingMode;
 use malachite::integer::Integer;
 use malachite::natural::Natural;
-use std::cell::Cell;
+use std::cell::RefCell;
 use std::mem::MaybeUninit;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, Weak};
 
 // ===========================================================================
 // Arithmetic
@@ -358,45 +358,78 @@ fn integer_is_negative(x: &Integer) -> bool {
     x.sign() == std::cmp::Ordering::Less
 }
 
+/// Owns the lifetime of a Context's arithmetic policy. Only the Context owns
+/// the strong token; thread-local activations cannot keep a retired policy
+/// alive, even when the Context moves to and is dropped on another thread.
+#[derive(Default)]
+pub(crate) struct IntegerWidthContext {
+    lifetime: Arc<()>,
+}
+
+struct IntegerWidthBinding {
+    forwarder: &'static LispIntFwd,
+    owner: Weak<()>,
+}
+
 thread_local! {
-    /// The `integer-width` slot of the Context active on this thread. GNU's
-    /// `make_bignum_bits` reads the C variable behind the `DEFVAR_INT`
-    /// (`src/alloc.c:7542`); this is the same storage, so every `setq`,
-    /// `let` and `set-default` of the global binding is seen as it happens.
-    /// `None` while no Context is active, read as GNU's initial value.
-    ///
-    /// The descriptor is leaked, so it outlives its Context, but a bignum
-    /// stored in it lives in that Context's heap: see [`integer_width_below`].
-    static INTEGER_WIDTH: Cell<Option<&'static LispIntFwd>> = const { Cell::new(None) };
+    /// The slot remains live through `setq`, `let`, and `set-default`. Its
+    /// descriptor is static, but its policy belongs to a particular Context.
+    static INTEGER_WIDTH: RefCell<Option<IntegerWidthBinding>> = const { RefCell::new(None) };
 }
 
-fn integer_width_symbol() -> SymId {
-    static SYMBOL: std::sync::OnceLock<SymId> = std::sync::OnceLock::new();
-    *SYMBOL.get_or_init(|| intern("integer-width"))
+impl IntegerWidthContext {
+    pub(crate) fn activate(&self, obarray: &Obarray) {
+        static SYMBOL: std::sync::OnceLock<SymId> = std::sync::OnceLock::new();
+        let symbol = *SYMBOL.get_or_init(|| intern("integer-width"));
+        let binding = obarray
+            .int_forwarder(symbol)
+            .map(|forwarder| IntegerWidthBinding {
+                forwarder,
+                owner: Arc::downgrade(&self.lifetime),
+            });
+        INTEGER_WIDTH.with(|slot| *slot.borrow_mut() = binding);
+    }
+
+    /// Clear this thread's activation without clearing a newer Context's.
+    /// Other threads observe retirement through their weak ownership token.
+    pub(crate) fn retire(&self) {
+        let _ = INTEGER_WIDTH.try_with(|slot| {
+            let mut binding = slot.borrow_mut();
+            if binding
+                .as_ref()
+                .is_some_and(|installed| installed.owner.ptr_eq(&Arc::downgrade(&self.lifetime)))
+            {
+                *binding = None;
+            }
+        });
+    }
 }
 
-/// Make `obarray`'s `integer-width` the one the bignum constructors check:
-/// called by `Context::setup_thread_locals` for the Context it activates.
-pub(crate) fn install_integer_width_forwarder(obarray: &Obarray) {
-    let fwd = obarray.int_forwarder(integer_width_symbol());
-    INTEGER_WIDTH.with(|slot| slot.set(fwd));
+/// Separate a finite result limit from GNU's effectively unlimited widths.
+/// Negative intmax_t values compare as huge unsigned widths; bignum widths
+/// exceed every bit count permitted by the limb capacity guard. Neither
+/// requires dereferencing a Lisp bignum, even during cross-thread teardown.
+enum IntegerWidthLimit {
+    Bounded(u64),
+    Unlimited,
 }
 
-/// Forget `obarray`'s `integer-width` if it is the one installed on this
-/// thread: called when its Context is dropped, so later arithmetic on the
-/// thread reads GNU's initial value instead.
-pub(crate) fn retire_integer_width_forwarder(obarray: &Obarray) {
-    let Some(fwd) = obarray.int_forwarder(integer_width_symbol()) else {
-        return;
-    };
-    let _ = INTEGER_WIDTH.try_with(|slot| {
-        if slot
-            .get()
-            .is_some_and(|installed| std::ptr::eq(installed, fwd))
-        {
-            slot.set(None);
+impl IntegerWidthLimit {
+    const DEFAULT: Self = Self::Bounded(1 << 16);
+
+    fn from_forwarder(forwarder: &LispIntFwd) -> Self {
+        match forwarder.get().as_fixnum() {
+            Some(width) if width >= 0 => Self::Bounded(width as u64),
+            Some(_) | None => Self::Unlimited,
         }
-    });
+    }
+
+    fn below(self, bits: u64) -> bool {
+        match self {
+            Self::Bounded(width) => width < bits,
+            Self::Unlimited => false,
+        }
+    }
 }
 
 /// The bits a bignum may always have: GNU treats `integer-width` as at least
@@ -413,20 +446,17 @@ fn bignum_bits_overflow(bits: u64) -> bool {
 
 #[inline(never)]
 fn integer_width_below(bits: u64) -> bool {
-    let Some(fwd) = INTEGER_WIDTH.with(Cell::get) else {
-        return (1u64 << 16) < bits;
-    };
-    // Only the slot's tag is read, never a bignum it holds: the slot can
-    // outlive the heap that bignum lives in, when its Context was dropped on
-    // another thread after moving there. A bignum width is outside the
-    // fixnum range, so a positive one exceeds every bit count a bignum can
-    // have (GMP's limb limit), and a negative one, like any negative width,
-    // is huge in GNU's comparison of the signed `integer_width` with the
-    // unsigned bit count: neither limits anything.
-    match fwd.get().as_fixnum() {
-        Some(width) => (width as u64) < bits,
-        None => false,
-    }
+    INTEGER_WIDTH.with(|slot| {
+        let binding = slot.borrow();
+        let limit = match binding.as_ref() {
+            Some(installed) if installed.owner.upgrade().is_some() => {
+                IntegerWidthLimit::from_forwarder(installed.forwarder)
+            }
+            // No active Context, or its owner was dropped on another thread.
+            _ => IntegerWidthLimit::DEFAULT,
+        };
+        limit.below(bits)
+    })
 }
 
 #[cold]

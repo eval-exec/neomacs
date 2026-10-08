@@ -60,6 +60,7 @@ impl Context {
             obarray.symbol_value_id_or_nil(core_eval_symbols.throw_on_input_symbol);
 
         let mut ev = Self {
+            integer_width_context: Default::default(),
             owned_roots: Default::default(),
             tagged_heap,
             pdump_image: None,

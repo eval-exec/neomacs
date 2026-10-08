@@ -333,10 +333,9 @@ fn integer_width_slot_is_retired_with_its_context() {
 }
 
 /// A Context that moved to another thread and was dropped there leaves its
-/// slot installed on the thread it came from.  The slot outlives the
-/// Context, but a bignum stored in it lives in the Context's heap, which is
-/// gone: the width is read from the slot without that heap.  A bignum width
-/// is outside the fixnum range, so it limits nothing either way.
+/// descriptor installed on the thread it came from. The descriptor outlives
+/// the Context, but its arithmetic policy and heap do not. After retirement
+/// the original thread uses the default without dereferencing the old bignum.
 #[test]
 fn integer_width_slot_of_a_context_dropped_elsewhere_is_read_without_its_heap() {
     crate::test_utils::init_test_tracing();
@@ -353,7 +352,33 @@ fn integer_width_slot_of_a_context_dropped_elsewhere_is_read_without_its_heap() 
     })
     .join()
     .expect("drop the moved Context on its new thread");
-    // This thread still names the dropped Context's slot, whose bignum was
-    // freed with its heap.
-    assert!(!super::integer_width_below(1 << 20));
+    // Its policy is retired on this thread too, without reading the freed heap.
+    assert!(super::integer_width_below(1 << 20));
+}
+
+/// Dropping the owner on another thread must restore the default policy on
+/// its former thread, including when the old width allowed larger results.
+#[test]
+fn integer_width_cross_thread_drop_restores_default_arithmetic_policy() {
+    use crate::emacs_core::value::Value;
+
+    for width in ["1000000", "-1", "(expt 2 62)"] {
+        let mut ctx = Context::new();
+        ctx.eval_str(&format!("(setq integer-width {width})"))
+            .unwrap();
+        crate::tagged::gc::clear_tagged_heap_if_installed(&ctx.tagged_heap);
+        std::thread::spawn(move || {
+            ctx.setup_thread_locals();
+            drop(ctx);
+        })
+        .join()
+        .unwrap();
+        // The actual expt subr must reject this with the no-Context default,
+        // before allocating its result. A stale permissive policy accepts it.
+        let result = super::builtin_expt(vec![Value::fixnum(2), Value::fixnum(65536)]);
+        assert!(
+            result.is_err(),
+            "retired width {width} still permits a 65537-bit result"
+        );
+    }
 }
