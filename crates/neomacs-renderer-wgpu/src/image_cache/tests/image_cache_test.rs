@@ -2655,6 +2655,7 @@ fn a_jpeg_below_the_threshold_publishes_no_bands() {
 
 #[path = "decode_diagnostic_test.rs"]
 mod decode_diagnostic;
+#[path = "svg_forms_test.rs"]
 mod svg_forms;
 
 /// A diagnostic for tests that only exercise scheduling, not wording.

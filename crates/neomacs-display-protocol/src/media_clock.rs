@@ -98,5 +98,5 @@ impl Default for MediaClock {
 }
 
 #[cfg(test)]
-#[path = "media_clock/tests/mod.rs"]
+#[path = "media_clock/tests/media_clock_test.rs"]
 mod tests;

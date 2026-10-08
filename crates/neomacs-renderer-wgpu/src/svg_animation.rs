@@ -49,4 +49,5 @@ pub(crate) fn may_contain_animation(data: &[u8]) -> bool {
 }
 
 #[cfg(test)]
+#[path = "svg_animation/tests/svg_animation_test.rs"]
 mod tests;

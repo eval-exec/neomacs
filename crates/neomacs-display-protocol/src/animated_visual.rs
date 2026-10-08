@@ -208,5 +208,5 @@ fn gcd(mut a: u128, mut b: u128) -> u128 {
 }
 
 #[cfg(test)]
-#[path = "animated_visual/tests/mod.rs"]
+#[path = "animated_visual/tests/animated_visual_test.rs"]
 mod tests;
