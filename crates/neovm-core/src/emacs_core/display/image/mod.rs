@@ -1619,6 +1619,24 @@ fn image_embedded_metadata_to_lisp(
             }
         });
     }
+    if let Some(start) = metadata.loop_start() {
+        plist.push(Value::symbol("loop-start"));
+        plist.push(Value::fixnum(i64::from(start)));
+    }
+    for (name, delay) in [
+        ("intro-delay", metadata.intro_delay()),
+        ("loop-delay", metadata.loop_delay()),
+    ] {
+        if let Some(delay) = delay {
+            plist.push(Value::symbol(name));
+            plist.push(match delay {
+                crate::emacs_core::image_catalog::ImageFrameDelay::UseDefault => Value::T,
+                crate::emacs_core::image_catalog::ImageFrameDelay::Milliseconds { .. } => {
+                    Value::make_float(delay.seconds().expect("numeric delay has seconds"))
+                }
+            });
+        }
+    }
     Value::list(plist)
 }
 

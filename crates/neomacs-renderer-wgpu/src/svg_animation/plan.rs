@@ -58,7 +58,8 @@ pub(crate) struct Timeline {
     /// Parsed keyframe values, in cycle order.
     pub(crate) values: Vec<AnimatedValue>,
     /// Author-stated key times as cycle fractions in `[0, 1]`, first 0 and
-    /// last 1; `None` means uniform segments.
+    /// last 1 for linear mode; discrete mode may end earlier.
+    /// `None` means uniform segments.
     pub(crate) key_times: Option<Vec<f64>>,
     /// How values move between keyframes.
     pub(crate) calc: CalcMode,
@@ -74,8 +75,8 @@ pub(crate) struct Timeline {
 pub(crate) enum Repeat {
     /// `repeatCount="indefinite"`.
     Indefinite,
-    /// `repeatCount` as a count (default 1).
-    Count(u32),
+    /// Validated active span, including fractional repeats (default one cycle).
+    Finite(Duration),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -136,7 +137,7 @@ impl AnimationPlan {
     fn rule_active_duration(rule: &AnimationRule) -> Option<Duration> {
         match rule.timeline.repeat {
             Repeat::Indefinite => None,
-            Repeat::Count(count) => rule.timeline.dur.checked_mul(count),
+            Repeat::Finite(active) => Some(active),
         }
     }
 
@@ -147,7 +148,7 @@ impl AnimationPlan {
             .any(|rule| rule.timeline.repeat == Repeat::Indefinite)
     }
 
-    /// Document time the last rule activates at.
+    /// Document time after all starts and finite endings.
     ///
     /// The sampler starts a looping plan's grid here: everything before is
     /// introductory state, and a loop restarting the introduction every
@@ -155,32 +156,36 @@ impl AnimationPlan {
     pub(crate) fn intro_end(&self) -> Duration {
         self.rules
             .iter()
-            .map(|rule| rule.timeline.begin)
+            .filter_map(|rule| match rule.timeline.repeat {
+                Repeat::Indefinite => Some(rule.timeline.begin),
+                Repeat::Finite(active) => rule.timeline.begin.checked_add(active),
+            })
             .max()
             .unwrap_or_default()
     }
 
-    /// The document's loop period.
-    ///
-    /// A looping (indefinite) plan's period is its steady-state cycle: the
-    /// longest `dur` among indefinite rules, measured from
-    /// [`Self::intro_end`]. A plan of only finite rules has a finite span
-    /// and replays from zero; its period includes each rule's `begin`
-    /// (`begin + active`), so a delayed rule's animation is inside the
-    /// loop instead of never sampled. (Rules with different `dur`s would
-    /// strictly need an LCM; the sampler quantizes on one grid, so the
-    /// maximum keeps every rule's keyframes expressible while staying
-    /// honest that the composite loop is no shorter than its slowest
-    /// rule.)
+    /// Exact common period of indefinite rules, or the finite document span.
+    /// Checked nanosecond LCM preserves every rule's phase on wrap. Finite
+    /// rules do not contribute to an indefinite period: they have finished
+    /// by `intro_end`, and their frozen or removed effects remain stable.
     pub(crate) fn loop_period(&self) -> Option<Duration> {
+        if self.has_indefinite() {
+            let mut common = 1_u128;
+            for rule in &self.rules {
+                if rule.timeline.repeat != Repeat::Indefinite {
+                    continue;
+                }
+                let duration = rule.timeline.dur.as_nanos();
+                common = (common / gcd(common, duration)).checked_mul(duration)?;
+            }
+            return duration_from_nanos(common);
+        }
         let mut period = Duration::ZERO;
         for rule in &self.rules {
             let timeline = &rule.timeline;
             let duration = match timeline.repeat {
                 Repeat::Indefinite => timeline.dur,
-                Repeat::Count(count) => timeline
-                    .begin
-                    .checked_add(timeline.dur.checked_mul(count)?)?,
+                Repeat::Finite(active) => timeline.begin.checked_add(active)?,
             };
             period = period.max(duration);
         }
@@ -203,10 +208,18 @@ impl AnimatedVisual for AnimationPlan {
                 Some(active) => begin + active.as_secs_f64(),
                 None => f64::INFINITY,
             };
+            if end > now && end.is_finite() {
+                next = Some(next.map_or(end, |current| current.min(end)));
+            }
             let fractions = timeline
                 .key_times
                 .clone()
-                .unwrap_or_else(|| uniform_fractions(timeline.values.len()));
+                .unwrap_or_else(|| match timeline.calc {
+                    CalcMode::Linear => uniform_fractions(timeline.values.len()),
+                    CalcMode::Discrete => (0..timeline.values.len())
+                        .map(|index| index as f64 / timeline.values.len() as f64)
+                        .collect(),
+                });
             // The cycle holding the next boundary, measured in the
             // rule's own cycles: clamped at zero so a query far before
             // activation still reaches the `begin` boundary instead of
@@ -260,13 +273,13 @@ pub(crate) fn compile(data: &[u8]) -> Option<AnimationPlan> {
     let text = std::str::from_utf8(data).ok()?;
     let document = usvg::roxmltree::Document::parse(text).ok()?;
     let root = document.root_element();
-    if root.tag_name().name() != "svg" {
+    if root.tag_name().name() != "svg" || !is_svg_element(root) {
         return None;
     }
 
     let mut plan = AnimationPlan::default();
     for node in root.descendants() {
-        if !node.is_element() {
+        if !node.is_element() || !is_svg_element(node) {
             continue;
         }
         if !matches!(
@@ -276,17 +289,18 @@ pub(crate) fn compile(data: &[u8]) -> Option<AnimationPlan> {
             continue;
         }
         if let Some(rule) = compile_rule(data, node) {
-            // Two rules on one element attribute cannot both splice it;
-            // document order decides, last wins, matching the SMIL
-            // sandwich's later-document priority for the common
-            // non-additive case. The whole site is the key — the
-            // insertion position identifies the target element, so two
-            // absent attributes on different elements never collide.
-            plan.rules.retain(|existing| existing.site != rule.site);
+            // Preserve all contributions. Evaluation selects one per site
+            // using activation priority, with document order breaking ties.
             plan.rules.push(rule);
         }
     }
     Some(plan)
+}
+
+fn is_svg_element(node: usvg::roxmltree::Node<'_, '_>) -> bool {
+    node.tag_name()
+        .namespace()
+        .is_none_or(|namespace| namespace == "http://www.w3.org/2000/svg")
 }
 
 fn compile_rule(data: &[u8], node: usvg::roxmltree::Node<'_, '_>) -> Option<AnimationRule> {
@@ -338,15 +352,18 @@ fn compile_rule(data: &[u8], node: usvg::roxmltree::Node<'_, '_>) -> Option<Anim
     }
     let repeat = match node.attribute("repeatCount") {
         Some("indefinite") => Repeat::Indefinite,
-        Some(count) => Repeat::Count(
-            count
-                .parse::<f64>()
-                .ok()
-                .filter(|count| count.is_finite() && *count >= 0.0)
-                .and_then(|count| u32::try_from(count as u64).ok())
-                .unwrap_or(1),
-        ),
-        None => Repeat::Count(1),
+        Some(count) => {
+            let count = count.parse::<f64>().ok()?;
+            if !count.is_finite() || count <= 0.0 {
+                return None;
+            }
+            let active = Duration::try_from_secs_f64(dur.as_secs_f64() * count).ok()?;
+            if active.is_zero() || begin.checked_add(active).is_none() {
+                return None;
+            }
+            Repeat::Finite(active)
+        }
+        None => Repeat::Finite(dur),
     };
     let freeze = node.attribute("fill") == Some("freeze");
 
@@ -377,7 +394,10 @@ fn compile_rule(data: &[u8], node: usvg::roxmltree::Node<'_, '_>) -> Option<Anim
         }
     }
 
-    let key_times = match node.attribute("keyTimes").and_then(parse_key_times) {
+    let key_times = match node
+        .attribute("keyTimes")
+        .and_then(|raw| parse_key_times(raw, calc))
+    {
         Some(times) if times.len() == values.len() => Some(times),
         // A malformed count is ignored rather than dropping the rule: the
         // uniform fallback keeps the animation expressible.
@@ -500,16 +520,54 @@ fn clock_value(raw: &str) -> Option<Duration> {
     Duration::try_from_secs_f64(seconds).ok()
 }
 
-fn parse_key_times(raw: &str) -> Option<Vec<f64>> {
+fn parse_key_times(raw: &str, calc: CalcMode) -> Option<Vec<f64>> {
     let times: Vec<f64> = raw
         .split(';')
         .map(str::trim)
         .map(str::parse::<f64>)
         .collect::<Result<Vec<_>, _>>()
         .ok()?;
-    match times.as_slice() {
-        [first, .., last] if first == &0.0 && last == &1.0 => Some(times),
-        _ => None,
+    (times.first() == Some(&0.0)
+        && (calc == CalcMode::Discrete || times.last() == Some(&1.0))
+        && times
+            .iter()
+            .all(|time| time.is_finite() && (0.0..=1.0).contains(time))
+        && times.windows(2).all(|pair| pair[0] <= pair[1]))
+    .then_some(times)
+}
+
+fn gcd(mut a: u128, mut b: u128) -> u128 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
+}
+
+fn duration_from_nanos(nanos: u128) -> Option<Duration> {
+    Some(Duration::new(
+        u64::try_from(nanos / 1_000_000_000).ok()?,
+        (nanos % 1_000_000_000) as u32,
+    ))
+}
+
+/// Finite spans have a terminal state; only proven periodic spans wrap.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum SampleTimeline {
+    Finite { end: Duration },
+    Repeating { origin: Duration, period: Duration },
+}
+
+impl AnimationPlan {
+    pub(crate) fn sample_timeline(&self) -> Option<SampleTimeline> {
+        let span = self.loop_period()?;
+        Some(if self.has_indefinite() {
+            SampleTimeline::Repeating {
+                origin: self.intro_end(),
+                period: span,
+            }
+        } else {
+            SampleTimeline::Finite { end: span }
+        })
     }
 }
 

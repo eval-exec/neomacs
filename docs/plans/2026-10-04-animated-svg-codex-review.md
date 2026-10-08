@@ -1,3 +1,6 @@
+> Historical review of fc11c3db88. The correctness follow-up and current
+> validation are recorded in [2026-10-08-pr474-correctness.md](2026-10-08-pr474-correctness.md).
+
 ## SECTION 1 — CODE REVIEW
 
 **Request changes.** The policy gate is substantially improved, but enabled animation has several correctness failures and an allocation path capable of exhausting process memory.

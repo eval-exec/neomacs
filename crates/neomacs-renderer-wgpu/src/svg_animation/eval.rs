@@ -29,10 +29,20 @@ pub(crate) struct AttributeOverride {
 /// source text is what shows, exactly as a renderer that ignores animations
 /// would draw it.
 pub(crate) fn evaluate(plan: &AnimationPlan, doc_time: Duration) -> Vec<AttributeOverride> {
-    let mut overrides = Vec::new();
+    let mut overrides: Vec<AttributeOverride> = Vec::new();
     for (index, rule) in plan.rules.iter().enumerate() {
         if let Some(value) = evaluate_rule(rule, doc_time) {
-            overrides.push(AttributeOverride { rule: index, value });
+            if let Some(existing) = overrides
+                .iter_mut()
+                .find(|existing| plan.rules[existing.rule].site == rule.site)
+            {
+                // Later activation takes priority; document order breaks ties.
+                if rule.timeline.begin >= plan.rules[existing.rule].timeline.begin {
+                    *existing = AttributeOverride { rule: index, value };
+                }
+            } else {
+                overrides.push(AttributeOverride { rule: index, value });
+            }
         }
     }
     overrides
@@ -46,28 +56,41 @@ fn evaluate_rule(rule: &AnimationRule, doc_time: Duration) -> Option<String> {
     let local = doc_time - timeline.begin;
     let active = match timeline.repeat {
         Repeat::Indefinite => None,
-        Repeat::Count(count) => timeline.dur.checked_mul(count),
+        Repeat::Finite(active) => Some(active),
     };
     if let Some(active) = active
         && local >= active
     {
         // Past the end: frozen at the last value, or back to the base.
-        return if timeline.freeze {
-            Some(serialize(timeline.values.last()?, rule))
-        } else {
-            None
-        };
+        if !timeline.freeze {
+            return None;
+        }
     }
     if timeline.values.is_empty() {
         return None;
     }
 
     let dur = timeline.dur.as_secs_f64();
-    let cycle = if dur > 0.0 {
+    let cycle = if let Some(active) = active.filter(|active| local >= *active) {
+        let remainder = active.as_nanos() % timeline.dur.as_nanos();
+        if remainder == 0 {
+            1.0
+        } else {
+            remainder as f64 / timeline.dur.as_nanos() as f64
+        }
+    } else if dur > 0.0 {
         (local.as_secs_f64() % dur) / dur
     } else {
         0.0
     };
+    // Discrete freeze holds the value just before the active endpoint;
+    // a keyframe placed exactly at that endpoint never became active.
+    let cycle =
+        if timeline.calc == CalcMode::Discrete && active.is_some_and(|active| local >= active) {
+            cycle.next_down()
+        } else {
+            cycle
+        };
     let value = match timeline.calc {
         CalcMode::Discrete => discrete_value(timeline, cycle),
         CalcMode::Linear => interpolate_value(timeline, cycle)?,
@@ -99,14 +122,18 @@ fn interpolate_value(timeline: &super::plan::Timeline, cycle: f64) -> Option<Ani
     if values.len() < 2 {
         return values.first().cloned();
     }
+    if cycle >= 1.0 {
+        return values.last().cloned();
+    }
     let (start_fraction, end_fraction, index) = match &timeline.key_times {
         Some(times) => {
             // The first window whose far edge is strictly past `cycle`; a
             // cycle fraction that reached 1.0 through rounding falls to the
             // last window rather than past every segment.
-            let mut segment = times.windows(2).enumerate().find(|(_, window)| {
-                cycle < window[1] || (window[1] - window[0]).abs() < f64::EPSILON
-            });
+            let mut segment = times
+                .windows(2)
+                .enumerate()
+                .find(|(_, window)| cycle < window[1]);
             if segment.is_none() {
                 segment = Some((times.len() - 2, &times[times.len() - 2..]));
             }
@@ -161,10 +188,8 @@ fn interpolate_value(timeline: &super::plan::Timeline, cycle: f64) -> Option<Ani
 
 /// Render one value as source text for its attribute.
 ///
-/// A value carrying a double quote would break out of the attribute the
-/// patch writes it into. Supported value types cannot produce one; an
-/// author-supplied opaque value can, so quotes are stripped rather than
-/// trusted.
+/// Values remain decoded semantic text here; the patch boundary performs
+/// XML encoding according to the destination's attribute syntax.
 fn serialize(value: &AnimatedValue, rule: &AnimationRule) -> String {
     let rendered = match (&rule.timeline.transform, value) {
         (Some(kind), AnimatedValue::Numbers(numbers)) => {
@@ -188,7 +213,7 @@ fn serialize(value: &AnimatedValue, rule: &AnimationRule) -> String {
         ),
         (_, AnimatedValue::Opaque(text)) => text.clone(),
     };
-    rendered.replace('"', "")
+    rendered
 }
 
 fn round_channel(channel: f64) -> u8 {

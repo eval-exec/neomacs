@@ -84,3 +84,17 @@ fn slot_delay_stays_rational_when_it_does_not() {
     };
     assert_eq!((numerator, denominator.get()), (100, 3));
 }
+
+#[test]
+fn grid_positions_preserve_durations_larger_than_u64_nanoseconds() {
+    let grid = SampleGrid::new(seconds(1 << 63), 30).unwrap();
+    assert_eq!(grid.slot_start(128), Some(seconds(1 << 62)));
+    assert_eq!(grid.wrap(seconds(u64::MAX)), seconds((1 << 63) - 1));
+}
+
+#[test]
+fn finite_span_reserves_an_endpoint_inside_the_frame_cap() {
+    let grid = SampleGrid::for_finite_span(seconds(20), 30).unwrap();
+    assert_eq!(grid.slot_count() + 1, SampleGrid::MAX_SLOTS);
+    assert!((grid.slot_delay().unwrap().seconds().unwrap() - 20.0 / 255.0).abs() < 1e-9);
+}

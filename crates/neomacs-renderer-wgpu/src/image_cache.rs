@@ -301,6 +301,14 @@ struct DecodedPixels {
     embedded: ImageEmbeddedMetadata,
 }
 
+/// Whether an opt-in computed sequence owns frame selection for this load.
+enum ComputedSequenceDecode {
+    NotAnimated,
+    Frame(DecodedPixels),
+    /// The sequence exists, but its requested frame cannot be realized.
+    Unavailable,
+}
+
 impl NativePixels {
     fn raster(width: u32, height: u32, rgba: Vec<u8>) -> Self {
         Self {
@@ -1083,8 +1091,8 @@ impl ImageCache {
         // so relative references resolve as the static path does.
         if animation.is_enabled()
             && let Some(data) = encoded.as_ref()
-            && crate::svg_animation::may_contain_animation(data)
-            && let Some(pixels) = Self::decode_computed_sequence_data(
+        {
+            match Self::decode_computed_sequence_data(
                 data.clone(),
                 frame,
                 sequence_cache,
@@ -1096,12 +1104,24 @@ impl ImageCache {
                 mask,
                 &crate::svg::SvgResourceContext::BaseUri(path.to_owned()),
                 animation,
-            )
-        {
-            return Some(pixels);
+            ) {
+                ComputedSequenceDecode::Frame(pixels) => return Some(pixels),
+                ComputedSequenceDecode::Unavailable => return None,
+                ComputedSequenceDecode::NotAnimated => {}
+            }
         }
         if !frame.is_first() {
-            return None;
+            // GNU's static SVG loader ignores :index. Other still formats keep
+            // their existing index validation; only a valid SVG may fall back.
+            return Self::decode_svg_data(
+                encoded.as_ref()?,
+                size,
+                rotation,
+                realization,
+                colors,
+                mask,
+                crate::svg::SvgResourceContext::BaseUri(path.to_owned()),
+            );
         }
         // Fallback: try XPM
         if let Some(result) = crate::xpm::decode_xpm_file(Path::new(path)) {
@@ -1175,9 +1195,8 @@ impl ImageCache {
         // cache hit. A disabled request must take the static path below
         // unconditionally — cold or warm — or the GNU-compatible default
         // would depend on load order.
-        if animation.is_enabled()
-            && crate::svg_animation::may_contain_animation(&data)
-            && let Some(pixels) = Self::decode_computed_sequence_data(
+        if animation.is_enabled() {
+            match Self::decode_computed_sequence_data(
                 data.clone(),
                 frame,
                 sequence_cache,
@@ -1189,12 +1208,22 @@ impl ImageCache {
                 mask,
                 &resources,
                 animation,
-            )
-        {
-            return Some(pixels);
+            ) {
+                ComputedSequenceDecode::Frame(pixels) => return Some(pixels),
+                ComputedSequenceDecode::Unavailable => return None,
+                ComputedSequenceDecode::NotAnimated => {}
+            }
         }
         if !frame.is_first() {
-            return None;
+            return Self::decode_svg_data(
+                &data,
+                size,
+                rotation,
+                realization,
+                colors,
+                mask,
+                resources,
+            );
         }
         // Fallback: try XPM
         if let Some(result) = crate::xpm::decode_xpm_data(&data) {
@@ -1273,7 +1302,7 @@ impl ImageCache {
         mask: ImageMaskPolicy,
         resources: &crate::svg::SvgResourceContext,
         policy: ImageAnimationPolicy,
-    ) -> Option<DecodedPixels> {
+    ) -> ComputedSequenceDecode {
         match sequence_cache.resolve_svg(sequence, &data, frame, colors, resources, policy) {
             ImageSequenceResolution::Frame(frame) => {
                 let (width, height) = frame.dimensions();
@@ -1284,8 +1313,11 @@ impl ImageCache {
                     embedded,
                 }
                 .realize_bitmap(size, rotation, realization, mask)
+                .map(ComputedSequenceDecode::Frame)
+                .unwrap_or(ComputedSequenceDecode::Unavailable)
             }
-            ImageSequenceResolution::MissingFrame | ImageSequenceResolution::NotAnimated => None,
+            ImageSequenceResolution::MissingFrame => ComputedSequenceDecode::Unavailable,
+            ImageSequenceResolution::NotAnimated => ComputedSequenceDecode::NotAnimated,
         }
     }
 

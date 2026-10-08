@@ -9,12 +9,38 @@
 
 use super::eval::AttributeOverride;
 
+/// XML syntax produced from a decoded attribute value. Keeping this type
+/// separate from evaluation's strings makes every splice pass through the
+/// escaping boundary exactly once, regardless of the source's quote style.
+struct XmlAttributeValue(String);
+
+impl XmlAttributeValue {
+    fn from_decoded(value: &str) -> Self {
+        let mut escaped = String::with_capacity(value.len());
+        for character in value.chars() {
+            match character {
+                '&' => escaped.push_str("&amp;"),
+                '<' => escaped.push_str("&lt;"),
+                '>' => escaped.push_str("&gt;"),
+                '"' => escaped.push_str("&quot;"),
+                '\'' => escaped.push_str("&apos;"),
+                // Literal XML attribute whitespace normalizes to spaces;
+                // character references preserve the evaluated value.
+                '\t' => escaped.push_str("&#x9;"),
+                '\n' => escaped.push_str("&#xA;"),
+                '\r' => escaped.push_str("&#xD;"),
+                other => escaped.push(other),
+            }
+        }
+        Self(escaped)
+    }
+}
+
 /// Apply `overrides` (rule indices into `plan`) to `data`, highest offset
 /// first so splices never invalidate a later site's range.
 ///
-/// Overrides are deduplicated by site before splicing: evaluation produces
-/// one override per rule, and two rules resolved to the same attribute site
-/// (already collapsed at compile time) cannot both write it.
+/// Evaluation resolves competing animations before splicing and produces
+/// at most one override for each attribute site.
 pub(crate) fn apply(
     plan: &super::plan::AnimationPlan,
     data: &[u8],
@@ -27,12 +53,12 @@ pub(crate) fn apply(
     enum Edit {
         Replace {
             range: std::ops::Range<usize>,
-            value: String,
+            value: XmlAttributeValue,
         },
         Insert {
             position: usize,
             attribute: String,
-            value: String,
+            value: XmlAttributeValue,
         },
     }
     impl Edit {
@@ -51,27 +77,27 @@ pub(crate) fn apply(
             match &site.value_range {
                 Some(range) => Edit::Replace {
                     range: range.clone(),
-                    value: override_value.value.clone(),
+                    value: XmlAttributeValue::from_decoded(&override_value.value),
                 },
                 None => Edit::Insert {
                     position: site.insert_pos,
                     attribute: site.attribute.clone(),
-                    value: override_value.value.clone(),
+                    value: XmlAttributeValue::from_decoded(&override_value.value),
                 },
             }
         })
         .collect();
     // Highest offset first: an insertion and a replacement at the same
-    // element must not see each other's shifted positions. Sites are
-    // distinct by construction (compile deduplicates a shared range), so
-    // ordering by position alone is stable for the splice loop.
+    // element must not see each other's shifted positions. Evaluation
+    // selects distinct sites, so ordering by position alone is stable
+    // for the splice loop.
     edits.sort_by_key(|edit| std::cmp::Reverse(edit.position()));
 
     let mut patched = data.to_vec();
     for edit in edits {
         match edit {
             Edit::Replace { range, value } => {
-                patched.splice(range, value.bytes());
+                patched.splice(range, value.0.bytes());
             }
             Edit::Insert {
                 position,
@@ -80,7 +106,7 @@ pub(crate) fn apply(
             } => {
                 patched.splice(
                     position..position,
-                    format!(" {attribute}=\"{value}\"").bytes(),
+                    format!(" {attribute}=\"{}\"", value.0).bytes(),
                 );
             }
         }

@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use neomacs_display_protocol::animated_visual::SampleGrid;
 use neomacs_display_protocol::{
-    ImageAnimationPolicy, ImageColorContext, ImageFrameDelay, ImageRealization, ImageRotation,
-    ImageSizeSpec,
+    ImageAnimationPolicy, ImageColorContext, ImageFrameDelay, ImageFrameIndex, ImageRealization,
+    ImageRotation, ImageSizeSpec,
 };
 
 use super::eval;
@@ -25,13 +25,14 @@ use super::plan;
 /// One sampled animation, in the shape the sequence cache publishes.
 pub(crate) struct SampledAnimation {
     pub(crate) frames: Vec<SampledFrame>,
-    pub(crate) delay: ImageFrameDelay,
+    pub(crate) loop_start: Option<ImageFrameIndex>,
 }
 
 pub(crate) struct SampledFrame {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) rgba: Vec<u8>,
+    pub(crate) delay: ImageFrameDelay,
 }
 
 /// Sample `data`'s animation on a grid under `policy`.
@@ -54,31 +55,26 @@ pub(crate) fn sample(
     resources: &crate::svg::SvgResourceContext,
     policy: ImageAnimationPolicy,
 ) -> Option<SampledAnimation> {
-    if !policy.is_enabled() || !super::may_contain_animation(data) {
+    if !policy.is_enabled() {
         return None;
     }
     let bounded = crate::svg::bounded_svg_data(data)?;
+    if !super::may_contain_animation(bounded.as_ref()) {
+        return None;
+    }
     let animation = plan::compile(bounded.as_ref())?;
     if animation.is_empty() {
         return None;
     }
-    let period = animation.loop_period()?;
-    let grid = SampleGrid::new(period, policy.fps().unwrap_or(SampleGrid::DEFAULT_FPS))?;
-    let delay = grid.slot_delay()?;
-    // A looping plan samples its steady state: the introduction before the
-    // last `begin` happens once and must not replay every cycle (a
-    // staggered spinner would reset to base values on every wrap). A
-    // finite plan replays from zero, introduction included.
-    let origin = if animation.has_indefinite() {
-        animation.intro_end()
-    } else {
-        std::time::Duration::ZERO
-    };
-
-    let mut frames: Vec<SampledFrame> = Vec::with_capacity(grid.slot_count() as usize);
+    let schedule = SampleSchedule::new(
+        animation.sample_timeline()?,
+        policy.fps().unwrap_or(SampleGrid::DEFAULT_FPS),
+    )?;
+    let frame_count = schedule.samples.len();
+    let mut frames: Vec<SampledFrame> = Vec::with_capacity(frame_count);
     let mut total_bytes = 0_usize;
-    for slot in 0..grid.slot_count() {
-        let doc_time = origin.checked_add(grid.slot_start(slot)?)?;
+    for sample in schedule.samples {
+        let doc_time = sample.document_time;
         // Slot zero samples document time zero — the SMIL start state, not
         // the static base state. GNU renders the base; the difference is
         // the documented divergence the policy opts into.
@@ -109,7 +105,7 @@ pub(crate) fn sample(
             decoded
                 .rgba
                 .len()
-                .checked_mul((grid.slot_count() as usize).checked_sub(frames.len() + 1)?)?,
+                .checked_mul(frame_count.checked_sub(frames.len() + 1)?)?,
         )?;
         if projected > MAX_COMPUTED_SEQUENCE_BYTES {
             return None;
@@ -118,9 +114,95 @@ pub(crate) fn sample(
             width,
             height,
             rgba: decoded.rgba,
+            delay: sample.delay,
         });
     }
-    (frames.len() > 1).then_some(SampledAnimation { frames, delay })
+    (frames.len() > 1).then_some(SampledAnimation {
+        frames,
+        loop_start: schedule.loop_start,
+    })
+}
+
+/// Sample times remain separate from pixels, so a bounded prefix and repeating
+/// tail can retain their own exact delays without coupling decoder geometry.
+struct TimedSample {
+    document_time: std::time::Duration,
+    delay: ImageFrameDelay,
+}
+
+struct SampleSchedule {
+    samples: Vec<TimedSample>,
+    loop_start: Option<ImageFrameIndex>,
+}
+
+impl SampleSchedule {
+    fn new(timeline: plan::SampleTimeline, fps: u32) -> Option<Self> {
+        use std::num::NonZeroU32;
+        use std::time::Duration;
+        let mut schedule = Self {
+            samples: Vec::new(),
+            loop_start: None,
+        };
+        match timeline {
+            plan::SampleTimeline::Finite { end } => {
+                u64::try_from(end.as_nanos()).ok()?;
+                let grid = SampleGrid::for_finite_span(end, fps)?;
+                schedule.append_grid(grid, Duration::ZERO)?;
+                schedule.samples.push(TimedSample {
+                    document_time: end,
+                    delay: grid.slot_delay()?,
+                });
+            }
+            plan::SampleTimeline::Repeating { origin, period } => {
+                u64::try_from(origin.as_nanos()).ok()?;
+                u64::try_from(period.as_nanos()).ok()?;
+                let loop_grid = SampleGrid::new(period, fps)?;
+                if origin.is_zero() {
+                    schedule.append_grid(loop_grid, origin)?;
+                } else {
+                    let prefix_grid = SampleGrid::new(origin, fps)?;
+                    let combined = prefix_grid.slot_count() + loop_grid.slot_count();
+                    let (prefix_grid, loop_grid) = if combined > SampleGrid::MAX_SLOTS {
+                        // Every segment receives at least one sample. Allocate
+                        // the cap proportionally, preserving each span's exact
+                        // duration rather than replaying the introduction.
+                        let prefix_slots = (SampleGrid::MAX_SLOTS * prefix_grid.slot_count()
+                            / combined)
+                            .clamp(1, SampleGrid::MAX_SLOTS - 1);
+                        (
+                            SampleGrid::with_max_slots(
+                                origin,
+                                fps,
+                                NonZeroU32::new(prefix_slots)?,
+                            )?,
+                            SampleGrid::with_max_slots(
+                                period,
+                                fps,
+                                NonZeroU32::new(SampleGrid::MAX_SLOTS - prefix_slots)?,
+                            )?,
+                        )
+                    } else {
+                        (prefix_grid, loop_grid)
+                    };
+                    schedule.append_grid(prefix_grid, Duration::ZERO)?;
+                    schedule.loop_start = Some(ImageFrameIndex::new(schedule.samples.len() as u64));
+                    schedule.append_grid(loop_grid, origin)?;
+                }
+            }
+        }
+        Some(schedule)
+    }
+
+    fn append_grid(&mut self, grid: SampleGrid, origin: std::time::Duration) -> Option<()> {
+        let delay = grid.slot_delay()?;
+        for slot in 0..grid.slot_count() {
+            self.samples.push(TimedSample {
+                document_time: origin.checked_add(grid.slot_start(slot)?)?,
+                delay,
+            });
+        }
+        Some(())
+    }
 }
 
 /// Aggregate ceiling for one computed sequence, matching the sequence
@@ -141,10 +223,7 @@ pub(crate) fn sample_shared(
     let frames = animation
         .frames
         .into_iter()
-        .map(|frame| (frame.width, frame.height, frame.rgba))
+        .map(|frame| (frame.width, frame.height, frame.rgba, frame.delay))
         .collect();
-    Some(crate::image_sequence::DecodedImageSequence::from_frames(
-        frames,
-        animation.delay,
-    ))
+    crate::image_sequence::DecodedImageSequence::from_timed_frames(frames, animation.loop_start)
 }

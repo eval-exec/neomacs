@@ -53,6 +53,8 @@ mod frame_visibility;
 mod help_describe;
 #[path = "ibuffer.rs"]
 mod ibuffer;
+#[path = "image_svg_animation.rs"]
+mod image_svg_animation;
 #[path = "input_methods.rs"]
 mod input_methods;
 #[path = "issue_140_hscroll.rs"]

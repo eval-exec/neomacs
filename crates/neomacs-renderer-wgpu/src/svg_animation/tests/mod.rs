@@ -1,5 +1,7 @@
 //! Engine tests: compile → evaluate → patch → sample.
 
+mod xml;
+
 use super::eval;
 use super::patch;
 use super::plan;
@@ -302,7 +304,7 @@ fn sampling_quantizes_a_loop_into_distinct_frames() {
     )
     .expect("sampled animation");
     assert_eq!(animation.frames.len(), 8);
-    assert_eq!(animation.delay.seconds(), Some(0.25));
+    assert_eq!(animation.frames[0].delay.seconds(), Some(0.25));
     for frame in &animation.frames {
         assert_eq!((frame.width, frame.height), (100, 100));
         assert_eq!(frame.rgba.len(), 100 * 100 * 4);
@@ -381,3 +383,6 @@ fn next_event_never_precedes_begin() {
         Some(Duration::from_secs(10))
     );
 }
+
+mod prefix;
+mod timing;

@@ -1,8 +1,7 @@
 use image::AnimationDecoder;
 use neomacs_display_protocol::{
     ImageAnimationPolicy, ImageColorContext, ImageEmbeddedMetadata, ImageFrameDelay,
-    ImageFrameIndex, ImageRealization, ImageRotation, ImageSequenceId, ImageSequenceRetirement,
-    ImageSizeSpec,
+    ImageFrameIndex, ImageSequenceId, ImageSequenceRetirement,
 };
 use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
@@ -14,6 +13,7 @@ const DEFAULT_SEQUENCE_CACHE_BYTES: usize = 64 * 1024 * 1024;
 pub(crate) struct DecodedImageSequence {
     frames: Vec<DecodedSequenceFrame>,
     memory_size: usize,
+    loop_start: Option<ImageFrameIndex>,
 }
 
 #[derive(Clone)]
@@ -27,9 +27,8 @@ struct DecodedSequenceFrame {
 impl DecodedImageSequence {
     /// Assemble a sequence from already-decoded frames.
     ///
-    /// Computed animation (the SVG sampler) produces frames the same shape
-    /// the raster decoders do; this is the one door those producers use
-    /// into the cache, so budget accounting stays centralized.
+    /// Uniform-delay sequences have no introductory interval. Producers that
+    /// carry a timed introduction use `from_timed_frames` instead.
     pub(crate) fn from_frames(
         frames: Vec<(u32, u32, Vec<u8>)>,
         delay: ImageFrameDelay,
@@ -51,17 +50,68 @@ impl DecodedImageSequence {
         Arc::new(Self {
             frames,
             memory_size,
+            loop_start: None,
         })
+    }
+
+    /// Preserve individual delays and a validated repeatable tail.
+    pub(crate) fn from_timed_frames(
+        frames: Vec<(u32, u32, Vec<u8>, ImageFrameDelay)>,
+        loop_start: Option<ImageFrameIndex>,
+    ) -> Option<Arc<Self>> {
+        let count = u32::try_from(frames.len()).ok()?;
+        if count == 0 || loop_start.is_some_and(|start| start.get() >= u64::from(count)) {
+            return None;
+        }
+        let loop_start = loop_start.filter(|start| !start.is_first());
+        if let Some(start) = loop_start {
+            let start = usize::try_from(start.get()).ok()?;
+            let prefix_delay = frames.first()?.3;
+            let loop_delay = frames.get(start)?.3;
+            // The compatibility metadata describes one delay per segment.
+            // Refuse a sequence that cannot be represented by that table.
+            if frames[..start].iter().any(|frame| frame.3 != prefix_delay)
+                || frames[start..].iter().any(|frame| frame.3 != loop_delay)
+            {
+                return None;
+            }
+        }
+        let mut memory_size = 0_usize;
+        let frames = frames
+            .into_iter()
+            .map(|(width, height, rgba, delay)| {
+                memory_size = memory_size.checked_add(rgba.len())?;
+                Some(DecodedSequenceFrame {
+                    width,
+                    height,
+                    rgba: rgba.into(),
+                    delay,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(Arc::new(Self {
+            frames,
+            memory_size,
+            loop_start,
+        }))
     }
 
     fn frame(&self, index: ImageFrameIndex) -> Option<ImageSequenceFrame> {
         let index = usize::try_from(index.get()).ok()?;
         let frame = self.frames.get(index)?;
-        let embedded = if self.frames.len() > 1 {
+        let mut embedded = if self.frames.len() > 1 {
             ImageEmbeddedMetadata::animation(u32::try_from(self.frames.len()).ok()?, frame.delay)
         } else {
             ImageEmbeddedMetadata::EMPTY
         };
+        if let Some(loop_start) = self.loop_start {
+            let start = usize::try_from(loop_start.get()).ok()?;
+            embedded = embedded.with_introduction(
+                loop_start,
+                self.frames.first()?.delay,
+                self.frames.get(start)?.delay,
+            )?;
+        }
         Some(ImageSequenceFrame {
             width: frame.width,
             height: frame.height,
@@ -109,30 +159,25 @@ impl ImageSequenceResolution {
     }
 }
 
-/// Which decode path produced an entry.
+/// Inputs that determine a sequence's decoded frames.
 ///
-/// Sequence identity follows the resolve source, but the two producers
-/// answer to different gates: an authored raster sequence (GIF, WebP,
-/// APNG) is always live, while a computed SVG sequence exists only under
-/// an enabled `:animation` policy. One id can therefore name either kind
-/// across the lifetime of a source, and a hit is only a hit for the path
-/// asking for its own kind — the raster resolve must never serve frames
-/// a policy-off request never asked to materialize.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SequenceKind {
+/// Authored raster sequences have no computed rendering context. Computed SVG
+/// sequences require every sampling input to match before a resident entry can
+/// be reused; the enum prevents publishing one without its policy or resources.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum SequenceMaterialization {
     AuthoredRaster,
-    ComputedSvg,
+    ComputedSvg {
+        colors: ImageColorContext,
+        resources: crate::svg::SvgResourceContext,
+        policy: ImageAnimationPolicy,
+    },
 }
 
 enum SequenceCacheEntry {
     Animated {
         sequence: Arc<DecodedImageSequence>,
-        kind: SequenceKind,
-        /// The face colors computed frames were baked with
-        /// (`currentColor`, the background rect). Authored raster frames
-        /// ignore it; for computed frames a different color context is a
-        /// different materialization and must not be served.
-        colors: ImageColorContext,
+        materialization: SequenceMaterialization,
         last_access: u64,
     },
 }
@@ -150,22 +195,18 @@ impl SequenceCacheEntry {
         }
     }
 
-    fn kind(&self) -> SequenceKind {
+    fn matches(&self, materialization: &SequenceMaterialization) -> bool {
         match self {
-            Self::Animated { kind, .. } => *kind,
+            Self::Animated {
+                materialization: resident,
+                ..
+            } => resident == materialization,
         }
     }
 
-    fn matches(&self, kind: SequenceKind, colors: ImageColorContext) -> bool {
+    fn sequence(&self) -> Arc<DecodedImageSequence> {
         match self {
-            Self::Animated {
-                kind: entry_kind,
-                colors: entry_colors,
-                ..
-            } => {
-                *entry_kind == kind
-                    && (kind == SequenceKind::AuthoredRaster || *entry_colors == colors)
-            }
+            Self::Animated { sequence, .. } => Arc::clone(sequence),
         }
     }
 
@@ -211,22 +252,17 @@ impl ImageSequenceCacheState {
             || self.individually_retired.contains(&sequence)
     }
 
-    /// The resident entry for `sequence` when it was produced by `kind`.
-    ///
-    /// An entry of the other kind is not a hit: the caller proceeds down
-    /// its own miss path, and publication below replaces the mismatched
-    /// entry rather than being fenced out by first-wins.
-    fn entry_of_kind(
+    /// A resident entry with exactly the inputs requested by this worker.
+    fn entry_for(
         &mut self,
         sequence: ImageSequenceId,
-        kind: SequenceKind,
-        colors: ImageColorContext,
+        materialization: &SequenceMaterialization,
     ) -> Option<&mut SequenceCacheEntry> {
         let stamp = self.next_access();
         let hit = self
             .entries
             .get_mut(&sequence)
-            .filter(|entry| entry.matches(kind, colors));
+            .filter(|entry| entry.matches(materialization));
         match hit {
             Some(entry) => {
                 self.hits = self.hits.saturating_add(1);
@@ -293,37 +329,12 @@ impl ImageSequenceCache {
         data: &[u8],
         frame: ImageFrameIndex,
     ) -> ImageSequenceResolution {
-        {
-            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-            if let Some(entry) = state.entry_of_kind(
-                sequence,
-                SequenceKind::AuthoredRaster,
-                ImageColorContext::default(),
-            ) {
-                return entry.resolve(frame);
-            }
-            state.begin_decode(sequence);
-        }
-
-        let Some(decoded) = decode_sequence(data) else {
-            self.finish_decode(sequence);
-            return if frame.is_first() {
-                ImageSequenceResolution::NotAnimated
-            } else {
-                ImageSequenceResolution::MissingFrame
-            };
-        };
-        let result = decoded
-            .frame(frame)
-            .map(ImageSequenceResolution::Frame)
-            .unwrap_or(ImageSequenceResolution::MissingFrame);
-        self.publish_decoded(
+        self.resolve_with(
             sequence,
-            decoded,
-            SequenceKind::AuthoredRaster,
-            ImageColorContext::default(),
-        );
-        result
+            frame,
+            SequenceMaterialization::AuthoredRaster,
+            || decode_sequence(data),
+        )
     }
 
     /// Resolve one frame of a computed animation (an SVG document sampled
@@ -343,67 +354,79 @@ impl ImageSequenceCache {
         resources: &crate::svg::SvgResourceContext,
         policy: ImageAnimationPolicy,
     ) -> ImageSequenceResolution {
-        {
+        self.resolve_with(
+            sequence,
+            frame,
+            SequenceMaterialization::ComputedSvg {
+                colors,
+                resources: resources.clone(),
+                policy,
+            },
+            || crate::svg_animation::sample_svg_sequence(data, colors, resources, policy),
+        )
+    }
+
+    fn resolve_with(
+        &self,
+        sequence: ImageSequenceId,
+        frame: ImageFrameIndex,
+        materialization: SequenceMaterialization,
+        decode: impl FnOnce() -> Option<Arc<DecodedImageSequence>>,
+    ) -> ImageSequenceResolution {
+        let decode_lease = {
             let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-            if let Some(entry) = state.entry_of_kind(sequence, SequenceKind::ComputedSvg, colors) {
+            if let Some(entry) = state.entry_for(sequence, &materialization) {
                 return entry.resolve(frame);
             }
             state.begin_decode(sequence);
-        }
+            DecodeLease {
+                cache: self,
+                sequence,
+            }
+        };
 
-        let Some(decoded) =
-            crate::svg_animation::sample_svg_sequence(data, colors, resources, policy)
-        else {
-            self.finish_decode(sequence);
-            return if frame.is_first() {
-                ImageSequenceResolution::NotAnimated
-            } else {
-                ImageSequenceResolution::MissingFrame
+        let Some(decoded) = decode() else {
+            return match materialization {
+                // A computed plan that cannot be materialized has no indexed
+                // sequence. Its SVG fallback follows GNU's static semantics.
+                SequenceMaterialization::ComputedSvg { .. } => ImageSequenceResolution::NotAnimated,
+                SequenceMaterialization::AuthoredRaster if !frame.is_first() => {
+                    ImageSequenceResolution::MissingFrame
+                }
+                SequenceMaterialization::AuthoredRaster => ImageSequenceResolution::NotAnimated,
             };
         };
-        let result = decoded
+        let published = decode_lease.publish(decoded, materialization);
+        published
             .frame(frame)
             .map(ImageSequenceResolution::Frame)
-            .unwrap_or(ImageSequenceResolution::MissingFrame);
-        self.publish_decoded(sequence, decoded, SequenceKind::ComputedSvg, colors);
-        result
-    }
-
-    fn finish_decode(&self, sequence: ImageSequenceId) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        state.finish_decode(sequence);
+            .unwrap_or(ImageSequenceResolution::MissingFrame)
     }
 
     fn publish_decoded(
         &self,
         sequence: ImageSequenceId,
         decoded: Arc<DecodedImageSequence>,
-        kind: SequenceKind,
-        colors: ImageColorContext,
-    ) {
+        materialization: SequenceMaterialization,
+    ) -> Arc<DecodedImageSequence> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if state.is_retired(sequence) {
-            state.finish_decode(sequence);
-            return;
+            return decoded;
         }
-        if state
+        if let Some(entry) = state
             .entries
             .get(&sequence)
-            .is_some_and(|entry| entry.matches(kind, colors))
+            .filter(|entry| entry.matches(&materialization))
         {
-            // First publication of a kind wins: a concurrent duplicate
-            // decode of the same source coalesces into the resident entry.
-            state.finish_decode(sequence);
-            return;
+            // A duplicate decode must return the same sequence every subsequent
+            // hit will serve, including its frame count and delay metadata.
+            return entry.sequence();
         }
-        // An entry the asking path would not serve (other kind, or computed
-        // frames baked for other colors) is stale for it — the source
-        // changed which materialization owns it — so it is replaced.
+        // A different materialization cannot satisfy this request.
         state.remove(sequence);
         let memory_size = decoded.memory_size;
         if memory_size > self.max_bytes {
-            state.finish_decode(sequence);
-            return;
+            return decoded;
         }
         while state.total_bytes.saturating_add(memory_size) > self.max_bytes {
             let Some(victim) = state
@@ -422,13 +445,12 @@ impl ImageSequenceCache {
         state.entries.insert(
             sequence,
             SequenceCacheEntry::Animated {
-                sequence: decoded,
-                kind,
-                colors,
+                sequence: Arc::clone(&decoded),
+                materialization,
                 last_access: stamp,
             },
         );
-        state.finish_decode(sequence);
+        decoded
     }
 
     pub(crate) fn retire(&self, retirement: ImageSequenceRetirement) {
@@ -471,14 +493,6 @@ impl ImageSequenceCache {
     }
 
     #[cfg(test)]
-    fn mark_in_flight(&self, sequence: ImageSequenceId) {
-        self.state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .begin_decode(sequence);
-    }
-
-    #[cfg(test)]
     fn stats(&self) -> ImageSequenceCacheStats {
         let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         ImageSequenceCacheStats {
@@ -492,6 +506,34 @@ impl ImageSequenceCache {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .total_bytes
+    }
+}
+
+/// Balances a cache miss independently of decoder success or panic unwinding.
+struct DecodeLease<'a> {
+    cache: &'a ImageSequenceCache,
+    sequence: ImageSequenceId,
+}
+
+impl DecodeLease<'_> {
+    fn publish(
+        self,
+        decoded: Arc<DecodedImageSequence>,
+        materialization: SequenceMaterialization,
+    ) -> Arc<DecodedImageSequence> {
+        self.cache
+            .publish_decoded(self.sequence, decoded, materialization)
+    }
+}
+
+impl Drop for DecodeLease<'_> {
+    fn drop(&mut self) {
+        let mut state = self
+            .cache
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.finish_decode(self.sequence);
     }
 }
 
@@ -545,6 +587,7 @@ pub(crate) fn decode_sequence(data: &[u8]) -> Option<Arc<DecodedImageSequence>> 
         Arc::new(DecodedImageSequence {
             frames: decoded,
             memory_size,
+            loop_start: None,
         })
     })
 }

@@ -185,7 +185,7 @@ follows the user's defcustom instead of hard-coding either behavior."
 
 (defun neomacs-image-animate-svg (image &optional limit)
   "Animate the SVG image IMAGE, in place, if it carries SMIL animation.
-IMAGE is an image spec as displayed in a buffer (`image-at-point' gives
+IMAGE is an image spec as displayed in a buffer (`image--get-image' gives
 you one).  `image-animate' advances frames by mutating the very list it
 is handed — its timer `plist-put's `:index' on IMAGE — so IMAGE is
 modified in place rather than copied: the frames walked are the frames
