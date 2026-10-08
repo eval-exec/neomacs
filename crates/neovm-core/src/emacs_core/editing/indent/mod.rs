@@ -2074,10 +2074,8 @@ impl ControlRendering {
 /// Control rendering is read only if a scan encounters a control character.
 /// The answer lives in the scan's OnceCell, never in shared mutator state.
 #[cold]
-fn control_rendering_in_state(obarray: &Obarray, buf: &Buffer) -> ControlRendering {
-    if dynamic_buffer_or_global_symbol_value(obarray, &[], Some(buf), "ctl-arrow")
-        .is_none_or(|value| value.is_truthy())
-    {
+fn control_rendering_in_state(buf: &Buffer) -> ControlRendering {
+    if buf.slots[crate::buffer::buffer::BUFFER_SLOT_CTL_ARROW.index()].is_truthy() {
         ControlRendering::Caret
     } else {
         ControlRendering::Octal
@@ -2235,12 +2233,11 @@ fn scan_for_column(
         // non-selected window's `pointm`.
         let anchor = end_byte.unwrap_or_else(|| buf.point_emacs_byte_pos());
         let line = line_bounds(buf, anchor);
-        let line_end_policy = if dynamic_buffer_or_global_symbol_value(
-            &ctx.obarray,
-            &[],
-            Some(buf),
-            "selective-display",
-        ) == Some(Value::T)
+        // These BUFFER_OBJFWD slots already contain live local/default
+        // values. GNU reads BVAR directly; avoid resolving fixed slot names.
+        let line_end_policy = if buf.slots
+            [crate::buffer::buffer::BUFFER_SLOT_SELECTIVE_DISPLAY.index()]
+            == Value::T
         {
             LineEndPolicy::NewlineOrCarriageReturn
         } else {
@@ -2249,7 +2246,7 @@ fn scan_for_column(
         (
             line.start().get(),
             line.end().get(),
-            tab_width_in_state(&ctx.obarray, &[], Some(buf)),
+            TabWidth::from(buf.slots[crate::buffer::buffer::BUFFER_SLOT_TAB_WIDTH.index()]),
             line_end_policy,
             if buf.get_multibyte() {
                 super::casefiddle::CaseEncoding::Multibyte
@@ -2298,7 +2295,7 @@ fn scan_for_column(
             display_table.as_ref(),
             tab_width,
             line_end_policy,
-            *control_rendering.get_or_init(|| control_rendering_in_state(&ctx.obarray, buf)),
+            *control_rendering.get_or_init(|| control_rendering_in_state(buf)),
         );
         return Ok(ColumnScan {
             byte_pos: point,
@@ -2429,7 +2426,7 @@ fn scan_for_column(
                 0
             } else if code < 0x20 || code == 0x7f {
                 control_rendering
-                    .get_or_init(|| control_rendering_in_state(&ctx.obarray, buf))
+                    .get_or_init(|| control_rendering_in_state(buf))
                     .width()
             } else {
                 buffer_char_display_width(buf, scan_pos, code)
