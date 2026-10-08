@@ -75,7 +75,7 @@ const FUNCTIONS: [&str; 15] = [
     "bgs-drive",
 ];
 
-/// Started one call short of their tier-up.
+/// Functions whose first call reaches the native dispatch threshold.
 const PRIMED: [&str; 4] = ["bgs-drive", "bgs-step", "bgs-floats", "bgs-caller"];
 
 const ITERATIONS: u32 = 450;
@@ -93,9 +93,9 @@ fn jit_bg_stress_soak_matches_the_interpreter() {
     let drive = format!("(bgs-drive {ITERATIONS})");
     let reference = print_value(&ev.eval_str(&drive).expect("interpreted run"));
     // Byte-compile everything and restore the callee the run redefines.
-    // The driver, the step, one loop and one caller start a call short of
-    // their tier-up; the rest stay cold, so the native step reaches them
-    // first through its speculated sites (first-sight compiles).
+    // Prime the driver, step and floating-point loop for background entry
+    // tier-ups, and the caller for native dispatch on its first call. The
+    // remaining bytecode functions start cold for first-sight compiles.
     ev.eval_str(DEFINITIONS).expect("redefined");
     for name in FUNCTIONS {
         ev.eval_str(&format!("(byte-compile '{name})"))
@@ -115,10 +115,27 @@ fn jit_bg_stress_soak_matches_the_interpreter() {
     // Production profitability deferral can correctly keep it interpreted
     // for this whole run; this fixture tests pending/install correctness.
     force_profit_gate_for_test(false);
+    // A native caller must reach a cold callee before the soak warms it.
+    // Depending on worker scheduling to install the caller first made the
+    // FirstSight coverage assertion fail in optimized test builds. Compile
+    // only this caller synchronously, without running it or inlining its
+    // callee; the driver, step and loops still tier up during the soak.
+    force_mode_for_test(Some(BgMode::Sync));
+    force_deopt_for_test(false);
+    crate::emacs_core::jit::inline::force_inline_for_test(Some(false));
+    let caller = ev
+        .obarray
+        .symbol_function_id(intern("bgs-caller"))
+        .expect("caller defined");
+    let caller_bc = caller.get_bytecode_data().expect("caller byte-compiled");
+    assert!(
+        crate::emacs_core::jit::cache::resolve_compiled_leaf_ptr(&mut ev, caller_bc).is_some(),
+        "caller installed without executing its callee"
+    );
+    crate::emacs_core::jit::inline::force_inline_for_test(None);
     force_mode_for_test(Some(BgMode::Threaded));
     force_stress_for_test(Some(true));
     force_osr_for_test(true);
-    force_deopt_for_test(false);
     let before = stats_snapshot();
     let compiled = print_value(&ev.eval_str(&drive).expect("compiled run"));
     assert!(quiesce_for_test(Duration::from_secs(60)));
