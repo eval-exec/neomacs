@@ -3037,6 +3037,8 @@ pub(crate) struct DaemonState {
 }
 
 pub struct Context {
+    /// Arithmetic policy ownership, reconstructed rather than dumped.
+    pub(crate) integer_width_context: super::builtins::IntegerWidthContext,
     pub(crate) owned_roots: crate::emacs_core::owned_roots::OwnedRootRegistry,
     /// Tagged pointer heap — sole GC and allocator.
     pub(crate) tagged_heap: Box<crate::tagged::gc::TaggedHeap>,
@@ -4323,7 +4325,7 @@ fn lisp_frame_manager() -> FrameManager {
 impl Drop for Context {
     fn drop(&mut self) {
         super::dynamic_module::retire_dynamic_module_registry(&self.dynamic_module_registry);
-        super::builtins::retire_integer_width_forwarder(&self.obarray);
+        self.integer_width_context.retire();
         crate::tagged::gc::clear_tagged_heap_if_installed(&self.tagged_heap);
     }
 }
