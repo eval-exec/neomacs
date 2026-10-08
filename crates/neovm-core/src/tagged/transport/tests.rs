@@ -7,7 +7,9 @@ use super::root_table::cell_census;
 use super::{
     ImmediateValue, NotImmediate, SharedRoot, SharedRootError, collect_shared_root_gc_roots,
 };
-use crate::emacs_core::intern::{intern, intern_uninterned};
+use crate::emacs_core::intern::{
+    intern, intern_uninterned, is_canonical_id, unintern_canonical_id,
+};
 use crate::heap_types::LispString;
 use crate::tagged::gc::TaggedHeap;
 use crate::tagged::value::TaggedValue;
@@ -34,7 +36,7 @@ fn alloc_named_cons(heap: &mut TaggedHeap, name: &str) -> (TaggedValue, TaggedVa
 }
 
 #[test]
-fn immediate_values_are_fixnums_and_interned_symbols() {
+fn immediate_values_are_fixnums_nil_and_t() {
     assert_eq!(ImmediateValue::NIL.value().bits(), TaggedValue::NIL.bits());
     assert_eq!(ImmediateValue::T.value().bits(), TaggedValue::T.bits());
     let fixnum = ImmediateValue::fixnum(-42).expect("in range");
@@ -51,14 +53,13 @@ fn immediate_values_are_fixnums_and_interned_symbols() {
         ImmediateValue::fixnum(TaggedValue::MOST_NEGATIVE_FIXNUM - 1),
         None
     );
-    let symbol = ImmediateValue::interned("p73-immediate-symbol");
     assert_eq!(
-        symbol.value().as_symbol_id(),
-        Some(intern("p73-immediate-symbol"))
+        ImmediateValue::try_from(TaggedValue::NIL),
+        Ok(ImmediateValue::NIL)
     );
     assert_eq!(
-        ImmediateValue::try_from(TaggedValue::from_sym_id(intern("p73-immediate-symbol"))),
-        Ok(symbol)
+        ImmediateValue::try_from(TaggedValue::T),
+        Ok(ImmediateValue::T)
     );
     assert_eq!(TaggedValue::from(fixnum).bits(), fixnum.value().bits());
 }
@@ -78,7 +79,25 @@ fn immediate_values_reject_heap_objects_and_uninterned_symbols() {
     let uninterned = TaggedValue::from_sym_id(intern_uninterned("p73-uninterned"));
     assert_eq!(
         ImmediateValue::try_from(uninterned),
-        Err(NotImmediate::UninternedSymbol)
+        Err(NotImmediate::SymbolNeedsRoot)
+    );
+}
+
+#[test]
+fn immediate_values_reject_a_canonical_symbol_before_and_after_unintern() {
+    let id = intern("p73-immediate-canonical-rejection");
+    let symbol = TaggedValue::from_sym_id(id);
+    assert!(is_canonical_id(id));
+    assert_eq!(
+        ImmediateValue::try_from(symbol),
+        Err(NotImmediate::SymbolNeedsRoot)
+    );
+
+    assert!(unintern_canonical_id(id));
+    assert!(!is_canonical_id(id));
+    assert_eq!(
+        ImmediateValue::try_from(symbol),
+        Err(NotImmediate::SymbolNeedsRoot)
     );
 }
 

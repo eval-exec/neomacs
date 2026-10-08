@@ -170,6 +170,7 @@ type ThreadConfined = PhantomData<*const ()>;
 static_assertions::assert_not_impl_any!(TaggedValue: Send, Sync);
 static_assertions::assert_eq_size!(TaggedValue, usize);
 static_assertions::assert_eq_align!(TaggedValue, usize);
+static_assertions::const_assert_eq!(std::mem::offset_of!(TaggedValue, 0), 0);
 static_assertions::assert_eq_size!(Option<TaggedValue>, [usize; 2]);
 
 /// Raw word order (no Lisp meaning), for ordered containers keyed by values.

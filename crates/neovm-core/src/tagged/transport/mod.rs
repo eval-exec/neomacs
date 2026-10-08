@@ -2,7 +2,7 @@
 //!
 //! A raw `TaggedValue` is valid only on the mutator that keeps it reachable.
 //! Values leave a mutator in one of two validated forms:
-//! - [`ImmediateValue`]: fixnums and interned symbols, which need no root and
+//! - [`ImmediateValue`]: fixnums, `nil` and `t`, which need no root and
 //!   mean the same thing in every heap;
 //! - [`SharedRoot`]: any value, rooted in its heap's root table until the last
 //!   clone drops, and materialized back only on a mutator of that heap.

@@ -2,16 +2,14 @@
 
 use std::fmt;
 
-use crate::emacs_core::intern::{intern, is_canonical_id};
 use crate::tagged::value::{TaggedValue, ValueKind};
 
-/// A fixnum or an interned (canonical) symbol, `nil` and `t` included.
+/// A fixnum, `nil` or `t`.
 ///
-/// These words name no heap object: a fixnum is its own payload, and a
-/// canonical symbol's id is process-global and kept alive by the obarray. So
-/// unlike a raw [`TaggedValue`], this type may live in statics and cross
-/// threads. Heap objects (and uninterned symbols, whose cells belong to one
-/// heap) travel in a [`SharedRoot`](super::SharedRoot) instead.
+/// These words always need no GC root, so unlike a raw [`TaggedValue`], this
+/// type may live in statics and cross threads. Every other symbol travels in a
+/// [`SharedRoot`](super::SharedRoot): even a canonical symbol may later be
+/// uninterned and lose the obarray's reachability guarantee.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct ImmediateValue(usize);
@@ -26,21 +24,18 @@ pub enum NotImmediate {
     /// The value is a heap object; share it through a `SharedRoot`.
     #[error("a heap object needs a rooted transport")]
     HeapObject,
-    /// The symbol is not interned, so its cells are heap-local.
-    #[error("an uninterned symbol needs a rooted transport")]
-    UninternedSymbol,
+    /// Symbols other than `nil` and `t` need a durable GC root.
+    #[error("a symbol other than nil or t needs a rooted transport")]
+    SymbolNeedsRoot,
 }
+
+static_assertions::assert_impl_all!(NotImmediate: Send, Sync, Copy, fmt::Debug, std::error::Error);
 
 impl ImmediateValue {
     /// The symbol `nil`.
     pub const NIL: Self = Self(TaggedValue::NIL.0);
     /// The symbol `t`.
     pub const T: Self = Self(TaggedValue::T.0);
-
-    /// The canonical symbol named `name`, interning it if needed.
-    pub fn interned(name: &str) -> Self {
-        Self(TaggedValue::from_sym_id(intern(name)).bits())
-    }
 
     /// The fixnum `n`, or `None` outside the fixnum range.
     pub fn fixnum(n: i64) -> Option<Self> {
@@ -71,8 +66,7 @@ impl TryFrom<TaggedValue> for ImmediateValue {
             return Ok(immediate);
         }
         match value.as_symbol_id() {
-            Some(id) if is_canonical_id(id) => Ok(Self(value.bits())),
-            Some(_) => Err(NotImmediate::UninternedSymbol),
+            Some(_) => Err(NotImmediate::SymbolNeedsRoot),
             None => Err(NotImmediate::HeapObject),
         }
     }
@@ -91,9 +85,9 @@ impl fmt::Debug for ImmediateValue {
             ValueKind::Nil => f.write_str("ImmediateValue(nil)"),
             ValueKind::T => f.write_str("ImmediateValue(t)"),
             ValueKind::Fixnum(n) => write!(f, "ImmediateValue({n})"),
-            ValueKind::Symbol(id) => write!(f, "ImmediateValue(Symbol({id:?}))"),
             // Unreachable through the validating constructors.
-            ValueKind::Cons
+            ValueKind::Symbol(_)
+            | ValueKind::Cons
             | ValueKind::String
             | ValueKind::Float
             | ValueKind::Subr(_)

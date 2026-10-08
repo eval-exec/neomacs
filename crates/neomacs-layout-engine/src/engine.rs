@@ -154,23 +154,59 @@ enum EditReplayStructureProperty {
     WrapPrefix,
 }
 
+/// A preencoded symbol identity used only for text-property comparisons.
+///
+/// Symbol IDs are append-only and never reused. This stores their bits without
+/// owning a Lisp object or relying on canonicality to keep a symbol rooted.
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+struct SymbolComparisonKey(usize);
+
+static_assertions::assert_impl_all!(SymbolComparisonKey: Send, Sync, Copy, std::fmt::Debug);
+static_assertions::assert_eq_size!(SymbolComparisonKey, usize);
+static_assertions::assert_eq_align!(SymbolComparisonKey, usize);
+static_assertions::assert_eq_size!(Value, usize);
+static_assertions::assert_eq_align!(Value, usize);
+
+impl SymbolComparisonKey {
+    fn new(id: neovm_core::emacs_core::intern::SymId) -> Self {
+        Self(Value::from_sym_id(id).bits())
+    }
+
+    fn local_comparison_key(self) -> Value {
+        // SAFETY: `new` stores only bits of a valid symbol ID, whose append-only
+        // process identity is never reused. Value is transparently one usize
+        // (pinned in neovm-core). This local copy is used by the two callers
+        // below only for identity comparison, never for symbol-cell access or
+        // as a GC root; no unrooted Lisp object crosses threads.
+        unsafe { std::mem::transmute::<usize, Value>(self.0) }
+    }
+}
+
 impl EditReplayStructureProperty {
-    /// The property symbols. The process-wide cache holds immediates, which
-    /// may be shared across threads; each call builds the local values.
+    /// The property identities, converted to local comparison keys.
+    ///
+    /// The cache holds preencoded append-only SymId identity bits, even after
+    /// uninterning. Both callers use these keys only for the bounded
+    /// text-property scan: its presence index and plist lookup compare identity
+    /// bits without reading a symbol cell. The cache owns no Lisp object or GC
+    /// root; values in live interval plists supply their own roots.
     fn symbols() -> [Value; <Self as strum::EnumCount>::COUNT] {
-        use neovm_core::tagged::transport::ImmediateValue;
+        use neovm_core::emacs_core::intern::intern;
         use std::sync::OnceLock;
         use strum::VariantArray;
 
         const N: usize = <EditReplayStructureProperty as strum::EnumCount>::COUNT;
-        static SYMBOLS: OnceLock<[ImmediateValue; N]> = OnceLock::new();
+        static SYMBOLS: OnceLock<[SymbolComparisonKey; N]> = OnceLock::new();
         SYMBOLS
             .get_or_init(|| {
                 std::array::from_fn(|index| {
-                    ImmediateValue::interned(EditReplayStructureProperty::VARIANTS[index].into())
+                    SymbolComparisonKey::new(intern(
+                        EditReplayStructureProperty::VARIANTS[index].into(),
+                    ))
                 })
             })
-            .map(ImmediateValue::value)
+            .map(SymbolComparisonKey::local_comparison_key)
     }
 }
 
