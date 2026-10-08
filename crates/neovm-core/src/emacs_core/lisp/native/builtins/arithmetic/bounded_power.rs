@@ -19,6 +19,7 @@ pub(super) enum PowerError {
 impl TryFrom<(Integer, u64)> for BoundedPower {
     type Error = PowerError;
 
+    #[inline]
     fn try_from((base, exponent): (Integer, u64)) -> Result<Self, Self::Error> {
         // GNU bignum.c:emacs_mpz_pow_ui checks nbase*exp against
         // min(NLIMBS_LIMIT, GMP_NLIMBS_MAX - 5) before entering GMP.
@@ -35,6 +36,7 @@ impl TryFrom<(Integer, u64)> for BoundedPower {
 }
 
 impl From<BoundedPower> for Integer {
+    #[inline]
     fn from(power: BoundedPower) -> Self {
         power.base.pow(power.exponent)
     }
