@@ -406,11 +406,7 @@ fn build_frame_font_object_from_resolution(
     let canonical = &opened.resolved;
     let mut selected = requested_face.clone();
     selected.family = Some(Value::string(canonical.family.clone()));
-    selected.foundry = opened
-        .foundry
-        .clone()
-        .map(Value::heap_string)
-        .or(requested_face.foundry);
+    selected.foundry = opened.foundry.clone().map(Value::heap_string);
     selected.weight = Some(FontWeight::from_css_weight(canonical.weight));
     selected.slant = Some(opened.slant);
     selected.width = Some(opened.width());
@@ -578,7 +574,6 @@ fn frame_minimum_inner_pixels(
 pub(crate) fn sync_live_frame_font_state(
     eval: &mut super::eval::Context,
     frame_id: FrameId,
-    requested: &Value,
     resolution: &LiveFrameFontResolution,
 ) -> Result<(), Flow> {
     let Some(frame) = eval.frames.get(frame_id) else {
@@ -621,7 +616,6 @@ pub(crate) fn sync_live_frame_font_state(
         &mut eval.frames,
         &mut eval.display_host,
         frame_id,
-        requested,
         resolution,
         vertical,
     );
@@ -700,7 +694,6 @@ fn sync_live_frame_font_state_in_state(
     frames: &mut FrameManager,
     display_host: &mut Option<Box<dyn super::eval::DisplayHost>>,
     frame_id: FrameId,
-    requested: &Value,
     resolution: &LiveFrameFontResolution,
     geometry_policy: FontChangeGeometryPolicy,
 ) {
@@ -721,11 +714,10 @@ fn sync_live_frame_font_state_in_state(
         return;
     };
 
-    let public_font_name = if requested.is_string() {
-        *requested
-    } else {
-        font_name_value(&resolution.font_value).unwrap_or(*requested)
-    };
+    // GNU gui_set_font publishes FONT_NAME_INDEX after opening succeeds.
+    // Face and frame APIs must describe the same realized font; retaining a
+    // selector here also forces default-font-height through font-info.
+    let public_font_name = public_frame_font_parameter_value(resolution.font_value);
 
     let font_changed = frame.parameter("font-parameter") != Some(resolution.font_value);
     let new_font_pixel_size = metrics.pixel_size.max(1) as f32;
@@ -822,7 +814,6 @@ pub(crate) fn sync_live_frame_font_parameter_in_state(
         frames,
         display_host,
         frame_id,
-        &requested,
         &resolution,
         FontChangeGeometryPolicy::PreserveCharacterGrid,
     );
@@ -878,7 +869,7 @@ pub(crate) fn sync_live_default_face_font_state(
     let font_value = build_frame_font_object_from_resolution(&requested_face, &realized);
     let resolution = LiveFrameFontResolution { font_value };
 
-    sync_live_frame_font_state(eval, frame_id, &font_value, &resolution)
+    sync_live_frame_font_state(eval, frame_id, &resolution)
 }
 
 fn expect_optional_frame_designator_in_state(
@@ -3019,8 +3010,7 @@ pub fn opened_font_from_resolved_match(
     selected.foundry = opened
         .foundry
         .as_ref()
-        .map(|foundry| Value::from_sym_id(intern(foundry.as_utf8_str().unwrap_or_default())))
-        .or(face.foundry);
+        .map(|foundry| Value::from_sym_id(intern(foundry.as_utf8_str().unwrap_or_default())));
     selected.weight = Some(FontWeight::from_css_weight(canonical.weight));
     selected.slant = Some(opened.slant);
     selected.width = Some(opened.width());
@@ -3074,7 +3064,9 @@ pub(crate) fn font_name_value(font_like: &Value) -> Option<Value> {
     }
 }
 
-pub(crate) fn public_frame_font_parameter_value(font_like: Value) -> Value {
+/// Project a font object to GNU's public frame parameter, its canonical
+/// opened name. Startup and subsequent frame changes share this projection.
+pub fn public_frame_font_parameter_value(font_like: Value) -> Value {
     if is_font(&font_like) {
         font_name_value(&font_like).unwrap_or(font_like)
     } else {
@@ -3150,8 +3142,8 @@ pub(crate) fn live_frame_font_attribute_fallback(
         // selected it.  GNU's `internal-get-lisp-face-attribute` consequently
         // exposes a font object here; callers such as `startup.el` rely on
         // that type when passing the result to `font-xlfd-name`/`font-match-p`.
-        // Keep the requested designator separately in the frame's typed
-        // `FrameParam::Font` slot.
+        // The frame's typed `FrameParam::Font` slot exposes this opened
+        // object's canonical name separately.
         return Some(font_value);
     }
 
@@ -3795,13 +3787,12 @@ pub(crate) fn font_info(eval: &mut super::eval::Context, args: Vec<Value>) -> Ev
                 .ok_or_else(|| signal("error", vec![Value::string("Invalid font name"), name]))?;
             let size =
                 named_font_opening_size(spec, eval.frames.get(frame_id).expect("validated frame"));
-            // GNU font_open_by_spec prefers normal styles, independent of
-            // the frame face, but preserves the name's explicit styles.
+            // GNU font_open_by_spec keeps explicit styles as constraints,
+            // ranks listed entities using normal-style preferences, and
+            // falls back to driver matching only when listing finds none.
             let mut request =
                 font_spec_resolve_request(eval, &spec, Some(&Value::make_frame(frame_id.0)))?;
-            request.weight.get_or_insert(FontWeight::NORMAL);
-            request.slant.get_or_insert(FontSlant::Normal);
-            request.width.get_or_insert(FontWidth::Normal);
+            request.selection = super::eval::FontSpecSelection::OpenBySpec;
             let entity = match_font_spec_request(eval, request)?;
             (entity, size)
         }

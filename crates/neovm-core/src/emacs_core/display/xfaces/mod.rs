@@ -3341,7 +3341,7 @@ pub(crate) fn builtin_internal_set_lisp_face_attribute(
                     if face_name == "default"
                         && let FontFaceRealizationTarget::LiveFrame(frame_id) = target
                     {
-                        sync_live_frame_font_state(eval, frame_id, &value, &resolution)?;
+                        sync_live_frame_font_state(eval, frame_id, &resolution)?;
                     }
                 }
             } else if face_name == "default"

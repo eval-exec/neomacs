@@ -11,7 +11,9 @@ mod worker_policy;
 pub(crate) use worker_policy::FrozenCharacterPolicies;
 
 use crate::font::policy::{CapturedFontFamilyPolicy, FontFamilySource, GnuFontPolicy};
-use crate::font::selection::{CandidateSelectionScore, candidate_selection_score};
+use crate::font::selection::{
+    CandidateSelectionScore, candidate_selection_score, candidate_style_selection_score,
+};
 use crate::font_backend::{
     FontBackend, FontCandidate, FontCandidateQuery, FontCandidateScope, FontFamilyName,
     FontSelectionSize, PlatformFontCandidate, PlatformFontMatch, PlatformFontSize,
@@ -127,7 +129,11 @@ impl FontEntityMatchPolicy {
         let Some(candidate) = candidate else {
             return false;
         };
-        if candidate == requested {
+        // GNU compares FONT_WEIGHT_INDEX >> 8, the table's category,
+        // not the platform's raw CSS coordinate (e.g. Thin 100 and 150).
+        if FontWeight::from_css_weight(candidate).gnu_numeric()
+            == FontWeight::from_css_weight(requested).gnu_numeric()
+        {
             return true;
         }
         match self {
@@ -253,41 +259,96 @@ impl FontResolver {
             requested_width: query.width.unwrap_or(FontWidth::Normal),
             direction: TextDirection::for_char(representative),
         };
-        let candidates = match query.selection {
-            FontSpecSelection::Enumerate => self.backend.list_candidates(&candidate_query),
-            FontSpecSelection::DriverMatch => {
-                match self.backend.match_font_spec(&candidate_query) {
-                    crate::font_backend::FontDriverMatch::Native(candidate) => {
-                        return Some(ResolvedFontEntity {
-                            matched: self.backend.finalize_match(candidate?.matched)?,
-                            registry: Some("iso10646-1".to_owned()),
-                        });
-                    }
-                    crate::font_backend::FontDriverMatch::Enumerated(candidates) => candidates,
-                }
-            }
-        };
-        let selected = candidates
-            .into_iter()
-            .enumerate()
-            .filter(|(_, candidate)| {
-                entity_matches_query(
-                    candidate,
+        let selected = match query.selection {
+            FontSpecSelection::Enumerate => self.select_entity_candidates(
+                self.backend.list_candidates(&candidate_query),
+                query,
+                &candidate_query,
+                FontSpecSelection::Enumerate,
+            ),
+            FontSpecSelection::DriverMatch => self.match_entity_driver(&candidate_query, query),
+            FontSpecSelection::OpenBySpec => self
+                .select_entity_candidates(
+                    self.backend.list_candidates(&candidate_query),
                     query,
-                    FontEntityMatchPolicy::for_backend(self.backend.kind()),
+                    &candidate_query,
+                    FontSpecSelection::OpenBySpec,
                 )
-            })
-            .min_by_key(|(ordinal, candidate)| {
-                (
-                    requested_width_distance(query.width, candidate.matched.metadata.width),
-                    *ordinal,
-                )
-            })
-            .and_then(|(_, candidate)| self.backend.finalize_match(candidate.matched))?;
+                .or_else(|| {
+                    // GNU font_load_for_lface first honors explicit listing
+                    // constraints; on a miss, font_matching_entity replaces
+                    // the style slots with font_open_by_spec's normal attrs.
+                    let mut preferences = candidate_query.clone();
+                    preferences.requested_weight = 400;
+                    preferences.requested_slant = FontSlant::Normal;
+                    preferences.requested_width = FontWidth::Normal;
+                    self.match_entity_driver(&preferences, query)
+                }),
+        }?;
         Some(ResolvedFontEntity {
             matched: selected,
             registry: Some("iso10646-1".to_owned()),
         })
+    }
+
+    fn match_entity_driver(
+        &self,
+        preferences: &FontCandidateQuery,
+        query: &FontEntityQuery,
+    ) -> Option<PlatformFontMatch> {
+        match self.backend.match_font_spec(preferences) {
+            crate::font_backend::FontDriverMatch::Native(candidate) => {
+                self.backend.finalize_match(candidate?.matched)
+            }
+            crate::font_backend::FontDriverMatch::Enumerated(candidates) => self
+                .select_entity_candidates(
+                    candidates,
+                    query,
+                    preferences,
+                    FontSpecSelection::DriverMatch,
+                ),
+        }
+    }
+
+    fn select_entity_candidates(
+        &self,
+        candidates: Vec<FontCandidate>,
+        query: &FontEntityQuery,
+        preferences: &FontCandidateQuery,
+        selection: FontSpecSelection,
+    ) -> Option<PlatformFontMatch> {
+        candidates
+            .into_iter()
+            .enumerate()
+            .filter(|(_, candidate)| match selection {
+                FontSpecSelection::Enumerate | FontSpecSelection::OpenBySpec => {
+                    entity_matches_query(
+                        candidate,
+                        query,
+                        FontEntityMatchPolicy::for_backend(self.backend.kind()),
+                    )
+                }
+                FontSpecSelection::DriverMatch => entity_matches_identity(candidate, query),
+            })
+            .min_by_key(|(ordinal, candidate)| {
+                let score = match selection {
+                    FontSpecSelection::Enumerate => EntityCandidateScore::Enumeration(
+                        requested_width_distance(query.width, candidate.matched.metadata.width),
+                    ),
+                    FontSpecSelection::OpenBySpec | FontSpecSelection::DriverMatch => {
+                        EntityCandidateScore::Preferred(candidate_style_selection_score(
+                            FontWeight::from_css_weight(preferences.requested_weight),
+                            preferences.requested_slant,
+                            Some(preferences.requested_width),
+                            FontWeight::from_css_weight(candidate.matched.weight().unwrap_or(400)),
+                            candidate.matched.slant(),
+                            candidate.matched.metadata.width,
+                        ))
+                    }
+                };
+                (score, *ordinal)
+            })
+            .and_then(|(_, candidate)| self.backend.finalize_match(candidate.matched))
     }
 
     /// Open one selected entity through its owning backend for `font-info`.
@@ -795,11 +856,13 @@ struct SelectionRequest<'a> {
     size: FontSelectionSize,
 }
 
-fn entity_matches_query(
-    candidate: &FontCandidate,
-    query: &FontEntityQuery,
-    policy: FontEntityMatchPolicy,
-) -> bool {
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum EntityCandidateScore {
+    Enumeration(u16),
+    Preferred(CandidateSelectionScore),
+}
+
+fn entity_matches_identity(candidate: &FontCandidate, query: &FontEntityQuery) -> bool {
     query.postscript_name.as_ref().is_none_or(|requested| {
         candidate
             .matched
@@ -807,9 +870,18 @@ fn entity_matches_query(
             .postscript_name
             .as_ref()
             .is_some_and(|actual| actual.eq_ignore_ascii_case(requested))
-    }) && query
-        .weight
-        .is_none_or(|weight| policy.weight_matches(weight, candidate.matched.weight()))
+    })
+}
+
+fn entity_matches_query(
+    candidate: &FontCandidate,
+    query: &FontEntityQuery,
+    policy: FontEntityMatchPolicy,
+) -> bool {
+    entity_matches_identity(candidate, query)
+        && query
+            .weight
+            .is_none_or(|weight| policy.weight_matches(weight, candidate.matched.weight()))
         && query
             .slant
             .is_none_or(|slant| candidate.matched.slant() == slant)

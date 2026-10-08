@@ -995,3 +995,118 @@ fn frozen_explicit_none_does_not_enable_native_fallback() {
     );
     assert!(!resolver.worker_policy_missing());
 }
+
+#[test]
+fn coretext_driver_match_opens_thin_only_family_with_noncanonical_weight() {
+    // GNU macfont_match uses CoreText's descriptor matcher, separately from
+    // font_delete_unmatched's strict list-fonts style filtering. A sole Thin
+    // face may report CT weight -0.6 as CSS 150 rather than named Thin's 100.
+    let probes = Arc::new(AtomicUsize::new(0));
+    let mut thin = candidate("Thin Only Fixture", 150, FontSlant::Normal, 0);
+    thin.matched.metadata.design_metrics = None;
+    let expected_identity = thin.matched.identity.clone();
+    let resolver = FontResolver::new(Box::new(MetricBackend {
+        candidates: vec![thin],
+        probes: Arc::clone(&probes),
+    }));
+
+    for requested_weight in [100, 400] {
+        let enumeration = FontEntityQuery::new(FontFamilyName::new("Thin Only Fixture"))
+            .with_weight(requested_weight)
+            .with_slant(FontSlant::Normal)
+            .with_width(FontWidth::Normal);
+        if requested_weight == 400 {
+            assert!(
+                resolver.resolve_entity(&enumeration).is_none(),
+                "enumeration rejects a different GNU weight category"
+            );
+        }
+
+        let opened = resolver
+            .open_entity(
+                &enumeration.with_selection(FontSpecSelection::DriverMatch),
+                20,
+            )
+            .expect("driver matching opens the family's available Thin face");
+        assert_eq!(opened.entity.matched.identity, expected_identity);
+        assert_eq!(opened.entity.matched.weight(), Some(150));
+        assert_eq!(opened.metrics.ascent, 16);
+    }
+    assert_eq!(probes.load(Ordering::Relaxed), 2);
+}
+
+#[test]
+fn entity_enumeration_matches_gnu_weight_category_for_noncanonical_css_weight() {
+    let resolver = FontResolver::new(Box::new(MetricBackend {
+        candidates: vec![candidate("Thin Only Fixture", 150, FontSlant::Normal, 0)],
+        probes: Arc::new(AtomicUsize::new(0)),
+    }));
+    let query = FontEntityQuery::new(FontFamilyName::new("Thin Only Fixture"))
+        .with_weight(100)
+        .with_slant(FontSlant::Normal)
+        .with_width(FontWidth::Normal);
+    let entity = resolver
+        .resolve_entity(&query)
+        .expect("GNU exact style filtering compares weight-table categories");
+    assert_eq!(entity.matched.weight(), Some(150));
+    assert_eq!(entity.matched.family(), "Thin Only Fixture");
+    assert!(
+        resolver.resolve_entity(&query.with_weight(400)).is_none(),
+        "Thin remains distinct from Normal during enumeration"
+    );
+}
+
+#[test]
+fn opening_by_spec_keeps_explicit_bold_before_native_regular_fallback() {
+    let resolver = FontResolver::new(Box::new(CandidateBackend {
+        candidates: vec![
+            candidate("Fixture Sans", 400, FontSlant::Normal, 0),
+            candidate("Fixture Sans", 700, FontSlant::Normal, 0),
+        ],
+    }));
+    let query = FontEntityQuery::new(FontFamilyName::new("Fixture Sans"))
+        .with_weight(700)
+        .with_selection(FontSpecSelection::OpenBySpec);
+    let opened = resolver.resolve_entity(&query).expect("listed Bold face");
+    assert_eq!(opened.matched.weight(), Some(700));
+    assert_eq!(
+        opened.matched.file_path(),
+        Some("/fixture/Fixture Sans-700.ttf")
+    );
+}
+
+#[test]
+fn opening_by_spec_uses_normal_as_preference_without_requiring_normal_face() {
+    for weights in [vec![150, 400], vec![150]] {
+        let resolver = FontResolver::new(Box::new(MetricBackend {
+            candidates: weights
+                .iter()
+                .map(|weight| candidate("Fixture Sans", *weight, FontSlant::Normal, 0))
+                .collect(),
+            probes: Arc::new(AtomicUsize::new(0)),
+        }));
+        let query = FontEntityQuery::new(FontFamilyName::new("Fixture Sans"))
+            .with_selection(FontSpecSelection::OpenBySpec);
+        let opened = resolver.resolve_entity(&query).expect("available face");
+        assert_eq!(
+            opened.matched.weight(),
+            Some(if weights.contains(&400) { 400 } else { 150 })
+        );
+    }
+}
+
+#[test]
+fn opening_by_spec_driver_fallback_replaces_unavailable_explicit_style_with_normal_preference() {
+    let resolver = FontResolver::new(Box::new(MetricBackend {
+        candidates: vec![
+            candidate("Fixture Sans", 700, FontSlant::Normal, 0),
+            candidate("Fixture Sans", 400, FontSlant::Normal, 0),
+        ],
+        probes: Arc::new(AtomicUsize::new(0)),
+    }));
+    let query = FontEntityQuery::new(FontFamilyName::new("Fixture Sans"))
+        .with_weight(900)
+        .with_selection(FontSpecSelection::OpenBySpec);
+    let opened = resolver.resolve_entity(&query).expect("fallback face");
+    assert_eq!(opened.matched.weight(), Some(400));
+}

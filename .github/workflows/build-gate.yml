@@ -57,7 +57,7 @@ jobs:
           cache-key: ci-check-${{ matrix.label }}
           cache-shared-key: ${{ matrix.label }}-dev
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
-          install-nextest: ${{ matrix.label == 'linux-x86_64' || matrix.label == 'windows-msvc-x86_64' }}
+          install-nextest: ${{ matrix.label == 'linux-x86_64' || matrix.label == 'windows-msvc-x86_64' || runner.os == 'macOS' }}
 
       - name: Check native dependency type coherence
         if: matrix.label == 'linux-x86_64'
@@ -79,6 +79,13 @@ jobs:
         run: >-
           cargo nextest run -p neomacs-layout-engine
           font_backend::windows::tests
+
+      - name: Test CoreText Thin-only font matching
+        if: runner.os == 'macOS'
+        run: >-
+          cargo nextest run --locked -p neomacs-layout-engine --lib
+          -E 'test(registered_coretext_thin_fixture_enumerates_and_opens_with_normal_preference)'
+          --no-tests=fail
 
       - name: cargo check minimal capability build
         if: matrix.label == 'linux-x86_64'

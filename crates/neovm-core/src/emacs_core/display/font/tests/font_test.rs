@@ -408,6 +408,76 @@ struct CapturingFindFontDisplayHost {
     matched: Option<ResolvedFontSpecMatch>,
 }
 
+/// A Thin-only catalog: listing respects styles, opening may substitute.
+struct ThinOnlyDisplayHost(CapturingFindFontDisplayHost);
+
+impl DisplayHost for ThinOnlyDisplayHost {
+    fn realize_gui_frame(&mut self, request: GuiFrameHostRequest) -> Result<(), String> {
+        self.0.realize_gui_frame(request)
+    }
+
+    fn resize_gui_frame(&mut self, request: GuiFrameHostRequest) -> Result<(), String> {
+        self.0.resize_gui_frame(request)
+    }
+
+    fn resolve_font_for_spec(
+        &mut self,
+        request: FontSpecResolveRequest,
+    ) -> Result<Option<ResolvedFontSpecMatch>, String> {
+        if request.selection == crate::emacs_core::eval::FontSpecSelection::Enumerate
+            && request
+                .weight
+                .is_some_and(|weight| weight != FontWeight::THIN)
+        {
+            return Ok(None);
+        }
+        self.0.resolve_font_for_spec(request)
+    }
+
+    fn probe_font_entity_metrics(
+        &mut self,
+        request: FontEntityMetricsRequest,
+    ) -> Result<Option<ResolvedFontEntityMetrics>, String> {
+        self.0.probe_font_entity_metrics(request)
+    }
+}
+
+#[test]
+fn named_font_info_opens_thin_only_family_without_weakening_find_font() {
+    let mut eval = Context::new();
+    ensure_selected_gui_frame(&mut eval);
+    eval.set_display_host(Box::new(ThinOnlyDisplayHost(
+        CapturingFindFontDisplayHost {
+            last_request: Rc::new(RefCell::new(None)),
+            matched: Some(ResolvedFontSpecMatch {
+                foundry: None,
+                family: LispString::from_utf8("Thin Only Mono"),
+                registry: Some(LispString::from_utf8("iso10646-1")),
+                file: None,
+                weight: Some(FontWeight::THIN),
+                slant: Some(FontSlant::Normal),
+                width: Some(crate::face::FontWidth::Normal),
+                spacing: Some(100),
+                postscript_name: Some(LispString::from_utf8("ThinOnlyMono-Thin")),
+            }),
+        },
+    )));
+    let spec = font_spec(vec![
+        Value::keyword("family"),
+        Value::string("Thin Only Mono"),
+        Value::keyword("weight"),
+        Value::symbol("normal"),
+    ])
+    .unwrap();
+    assert!(find_font(&mut eval, vec![spec]).unwrap().is_nil());
+    let info = font_info(&mut eval, vec![Value::string("Thin Only Mono-14")]).unwrap();
+    let fields = info
+        .as_vector_data()
+        .expect("named opening must substitute the available Thin face");
+    assert_eq!(fields.len(), 14);
+    assert!(fields[3].as_int().is_some_and(|height| height > 0));
+}
+
 struct NativeFontEntityDisplayHost {
     request: Rc<RefCell<Option<FontEntityMetricsRequest>>>,
     result: ResolvedFontEntityMetrics,

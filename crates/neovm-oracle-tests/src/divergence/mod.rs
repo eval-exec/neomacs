@@ -129,6 +129,7 @@ mod file_variables_deep;
 mod fileio_deep;
 mod fill_abbrev_comment;
 mod float_format_runtime;
+mod font_matching_semantics;
 mod fontlock_jitlock_highlight;
 mod format_char_pua;
 mod format_char_pua_matrix;
