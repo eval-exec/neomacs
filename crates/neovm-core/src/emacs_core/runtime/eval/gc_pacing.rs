@@ -383,11 +383,51 @@ impl Context {
         }
     }
 
-    /// Get the current GC threshold.
     /// Share `value` with other threads, rooted in this evaluator's heap until
     /// the last clone of the returned root drops.
-    pub fn share_value(&self, value: Value) -> crate::tagged::transport::SharedRoot {
-        crate::tagged::transport::SharedRoot::new(&self.tagged_heap, value)
+    ///
+    /// # Safety
+    /// `value` must be live and belong to this evaluator's heap. The caller
+    /// must satisfy [`SharedRoot::new`]'s admission and lifetime requirements;
+    /// a raw `Value` carries no heap brand, so this evaluator cannot prove its
+    /// origin merely by accepting it as an argument.
+    ///
+    /// [`SharedRoot::new`]: crate::tagged::transport::SharedRoot::new
+    pub unsafe fn share_value(&self, value: Value) -> crate::tagged::transport::SharedRoot {
+        // SAFETY: the caller supplies the live same-heap value and lifetime
+        // proof required by this method; this Context supplies its heap.
+        unsafe { crate::tagged::transport::SharedRoot::new(&self.tagged_heap, value) }
+    }
+
+    /// Share several live values through one private vector lease.
+    ///
+    /// # Safety
+    /// Every value must satisfy [`Self::share_value`]'s admission and lifetime
+    /// requirements. This evaluator must be the installed active mutator;
+    /// raw values stay reachable until the batch has been admitted.
+    ///
+    /// # Errors
+    /// A missing installed heap or an installed heap from another evaluator.
+    pub unsafe fn share_values(
+        &self,
+        values: &[Value],
+    ) -> Result<Vec<crate::tagged::transport::SharedRoot>, crate::tagged::transport::SharedRootError>
+    {
+        use crate::tagged::gc::{HeapIdentity, current_tagged_heap_identity};
+        use crate::tagged::transport::SharedRootError;
+        let installed = current_tagged_heap_identity()
+            .and_then(HeapIdentity::from_legacy_word)
+            .ok_or(SharedRootError::NoInstalledHeap)?;
+        let owner = self.tagged_heap.heap_identity();
+        if installed != owner {
+            return Err(SharedRootError::ForeignHeap {
+                owner,
+                mutator: installed,
+            });
+        }
+        // SAFETY: this method's caller establishes live same-evaluator input
+        // provenance, and the identity check establishes its installed heap.
+        unsafe { crate::tagged::transport::SharedRoot::batch_from_current_heap(values) }
     }
 
     /// The local value of `root` on this evaluator's thread.

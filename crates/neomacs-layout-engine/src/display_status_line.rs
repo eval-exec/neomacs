@@ -1000,14 +1000,11 @@ impl WindowChromeStringSources {
         area: PresentedWindowChromeArea,
         formatted: &ModeLineDisplayOutput,
         evaluator: &Context,
-    ) -> Self {
+    ) -> Result<Self, neovm_core::tagged::transport::SharedRootError> {
         let root_id = crate::display_row::root_lisp_string_id();
         let root_value = formatted.value();
-        let mut presented = vec![PresentedWindowChromeString::new(
-            area,
-            root_id,
-            evaluator.share_value(root_value),
-        )];
+        let mut values = vec![root_value];
+        let mut string_ids = vec![root_id];
         let mut source_ids: Vec<(Value, GlyphStringId)> = Vec::new();
         let mut spans = Vec::with_capacity(formatted.source_spans().len());
 
@@ -1020,21 +1017,29 @@ impl WindowChromeStringSources {
             } else {
                 let id = GlyphStringId::new(source_ids.len().saturating_add(2) as u64);
                 source_ids.push((source, id));
-                presented.push(PresentedWindowChromeString::new(
-                    area,
-                    id,
-                    evaluator.share_value(source),
-                ));
+                values.push(source);
+                string_ids.push(id);
                 id
             };
             spans.push(WindowChromeSourceSpan::from_mode_line_span(span, string_id));
         }
 
-        Self {
+        // SAFETY: these formatter objects belong to `evaluator`'s installed
+        // mutator. The row-render entry scratch-roots the flattened string
+        // and source sidecar across Lisp callbacks. Vector allocation invokes
+        // no Lisp or collection; its private lease is installed before those
+        // scratch roots are restored. Context collections trace shared roots.
+        let roots = unsafe { evaluator.share_values(&values) }?;
+        let presented = string_ids
+            .into_iter()
+            .zip(roots)
+            .map(|(id, root)| PresentedWindowChromeString::new(area, id, root))
+            .collect();
+        Ok(Self {
             area,
             presented,
             spans,
-        }
+        })
     }
 
     fn source_position(&self, output_position: usize) -> Option<(GlyphStringId, usize)> {
@@ -1159,12 +1164,15 @@ impl<'face> WindowChromeDisplayRowRequest<'face> {
         self,
         face_ids: &mut FrameFaceAttempt,
         evaluator: &Context,
-    ) -> WindowChromeDisplayRowRenderRequest<'face> {
+    ) -> Result<
+        WindowChromeDisplayRowRenderRequest<'face>,
+        neovm_core::tagged::transport::SharedRootError,
+    > {
         let chrome_strings = WindowChromeStringSources::new(
             presented_window_chrome_area(self.kind),
             &self.formatted,
             evaluator,
-        );
+        )?;
         let composition_regions = self
             .formatted
             .source_spans()
@@ -1204,11 +1212,11 @@ impl<'face> WindowChromeDisplayRowRequest<'face> {
             bounds: self.bounds,
             render_request,
         };
-        WindowChromeDisplayRowRenderRequest {
+        Ok(WindowChromeDisplayRowRenderRequest {
             output: self.output,
             row,
             chrome_strings,
-        }
+        })
     }
 }
 
@@ -1288,11 +1296,22 @@ impl<'state, 'services, 'face> WindowChromeRowsRenderState<'state, 'services, 'f
         {
             let height = self.install_memo_row(&request, index, row, snapshot);
             neovm_core::emacs_core::eval::restore_scratch_gc_roots(saved_roots);
-            return Some(height);
+            return match height {
+                Ok(height) => Some(height),
+                Err(error) => {
+                    tracing::error!(?error, "failed to root chrome memo sources");
+                    None
+                }
+            };
         }
-        let rendered = request
-            .into_render_request(self.render_services.face_ids(), self.evaluator)
-            .render_and_apply(self, anchor, rules);
+        let rendered =
+            match request.into_render_request(self.render_services.face_ids(), self.evaluator) {
+                Ok(request) => request.render_and_apply(self, anchor, rules),
+                Err(error) => {
+                    tracing::error!(?error, "failed to root chrome row sources");
+                    None
+                }
+            };
         if let Some((index, row, _)) = memo_hit {
             self.verify_memo_row(index, &row);
         }
@@ -1380,12 +1399,12 @@ impl<'state, 'services, 'face> WindowChromeRowsRenderState<'state, 'services, 'f
         index: usize,
         row: MatrixRow,
         snapshot: DisplayRowSnapshot,
-    ) -> f32 {
+    ) -> Result<f32, neovm_core::tagged::transport::SharedRootError> {
         let chrome_strings = WindowChromeStringSources::new(
             presented_window_chrome_area(request.kind),
             &request.formatted,
             self.evaluator,
-        );
+        )?;
         self.output_emitter
             .replace_chrome_area_strings(chrome_strings.area, chrome_strings.presented);
         let height = row.height_px;
@@ -1394,7 +1413,7 @@ impl<'state, 'services, 'face> WindowChromeRowsRenderState<'state, 'services, 'f
             .install_finalized_output_row(index, row);
         self.output_emitter.push_reused_chrome(vec![snapshot]);
         CHROME_MEMO_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        height
+        Ok(height)
     }
 
     /// `NEOMACS_CHROME_MEMO=verify`: the row just rendered must equal the

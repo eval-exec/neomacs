@@ -262,7 +262,10 @@ fn presented_tab_line_hit_joins_renderer_string_index_with_rooted_lisp_value() {
     let protocol_presentation = PresentationId::new(7);
     let string_id = GlyphStringId::new(1);
     let text = Value::string("first second");
-    let shared_text = eval.share_value(text);
+    // SAFETY: `text` was just allocated through this evaluator's installed
+    // heap, with no intervening collection. The evaluator stays alive while
+    // the snapshot is used and its collector traces shared roots.
+    let shared_text = unsafe { eval.share_value(text) };
     let tab_bounds = FrameRect::new(0.0, 0.0, 200.0, 16.0).unwrap();
     let char_bounds = FrameRect::new(40.0, 0.0, 8.0, 16.0).unwrap();
     let hit_index = PresentedHitIndex::from_parts_with_strings(

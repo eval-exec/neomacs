@@ -2688,6 +2688,8 @@ pub struct PresentedWindowChromeString {
     object: crate::tagged::transport::SharedRoot,
 }
 
+static_assertions::assert_impl_all!(PresentedWindowChromeString: Send, Sync, Clone, std::fmt::Debug);
+
 impl PresentedWindowChromeString {
     pub fn new(
         area: PresentedWindowChromeArea,
@@ -2712,6 +2714,31 @@ impl PresentedWindowChromeString {
     /// The rooted string object; the evaluator materializes it.
     pub fn object(&self) -> &crate::tagged::transport::SharedRoot {
         &self.object
+    }
+
+    /// Share one private vector lease across all areas of a window snapshot.
+    /// Existing handles keep every child alive during allocation, and are
+    /// replaced only after successful admission. An already shared lease is
+    /// reused, including whole-window chrome reused from a previous frame.
+    ///
+    /// # Errors
+    /// A missing installed heap, or a source belonging to another evaluator.
+    pub fn coalesce_roots(
+        sources: &mut [Self],
+        evaluator: &crate::emacs_core::Context,
+    ) -> Result<(), crate::tagged::transport::SharedRootError> {
+        for source in sources.iter() {
+            let _local = evaluator.materialize(&source.object)?;
+        }
+        let roots: Vec<_> = sources.iter().map(|source| &source.object).collect();
+        let replacement =
+            crate::tagged::transport::SharedRoot::coalesce_on_current_mutator(&roots)?;
+        if let Some(replacement) = replacement {
+            for (source, root) in sources.iter_mut().zip(replacement) {
+                source.object = root;
+            }
+        }
+        Ok(())
     }
 }
 

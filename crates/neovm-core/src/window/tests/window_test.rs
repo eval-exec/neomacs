@@ -1784,6 +1784,10 @@ fn prepared_and_active_chrome_strings_are_rooted_by_their_shared_roots() {
         crate::tagged::transport::collect_shared_root_gc_roots(heap.heap_identity(), &mut roots);
         heap.collect_exact(roots.into_iter());
     };
+    // SAFETY: `displayed` was just allocated by this heap. All collections
+    // below seed the shared-root table, and the heap outlives materialization
+    // and use of its prepared and active snapshots.
+    let displayed_root = unsafe { crate::tagged::transport::SharedRoot::new(&heap, displayed) };
     let mut mgr = FrameManager::new();
     let frame_id = mgr.create_frame("chrome-roots", 800, 600, BufferId(1));
     let window_id = mgr.get(frame_id).unwrap().selected_window;
@@ -1797,7 +1801,7 @@ fn prepared_and_active_chrome_strings_are_rooted_by_their_shared_roots() {
                 chrome_strings: vec![PresentedWindowChromeString::new(
                     PresentedWindowChromeArea::TabLine,
                     neomacs_display_protocol::GlyphStringId::new(1),
-                    crate::tagged::transport::SharedRoot::new(&heap, displayed),
+                    displayed_root,
                 )],
                 ..Default::default()
             }],

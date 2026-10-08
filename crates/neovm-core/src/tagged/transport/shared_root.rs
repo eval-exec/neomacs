@@ -18,8 +18,8 @@ use crate::tagged::value::TaggedValue;
 /// turns it back into a local value, through [`SharedRoot::materialize`].
 ///
 /// Clones share one root. It retires when the last clone drops, on any thread,
-/// without locking or blocking. Fixnums, `nil` and `t` need no root and take
-/// no table cell.
+/// without locking or blocking. Individually admitted fixnums, `nil` and `t`
+/// need no table cell; batch admission roots its private vector once.
 #[derive(Clone)]
 pub struct SharedRoot {
     heap: HeapIdentity,
@@ -32,7 +32,28 @@ enum Transport {
     Untraced(usize),
     /// A heap object or a symbol, kept alive by its lease.
     Rooted(Arc<RootLease>),
+    /// A child of one private, immutable vector protected by the lease.
+    /// The cached word preserves child identity without handing out the
+    /// backing vector or dereferencing its payload on a receiving thread.
+    BatchElement {
+        lease: Arc<RootLease>,
+        child: ChildIdentity,
+    },
 }
+
+/// Identity of a child of an unexposed immutable vector. Constructed only
+/// during audited batch admission; its accompanying lease protects the child.
+/// The word is compared opaquely off-mutator and materialized only on its heap.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+struct ChildIdentity(usize);
+
+static_assertions::assert_impl_all!(ChildIdentity: Send, Sync, Copy, fmt::Debug);
+static_assertions::assert_eq_size!(ChildIdentity, usize);
+const _: () = {
+    assert!(std::mem::align_of::<ChildIdentity>() == std::mem::align_of::<usize>());
+    assert!(std::mem::offset_of!(ChildIdentity, 0) == 0);
+};
 
 /// A value materialized from a [`SharedRoot`] on its heap's mutator.
 ///
@@ -60,22 +81,137 @@ pub enum SharedRootError {
 }
 
 static_assertions::assert_impl_all!(SharedRoot: Send, Sync, Clone, fmt::Debug);
+static_assertions::assert_impl_all!(Transport: Send, Sync, Clone);
 static_assertions::assert_impl_all!(SharedRootError: Send, Sync, Copy, std::error::Error);
 static_assertions::assert_not_impl_any!(LocalRoot<'static>: Send, Sync);
 
 impl SharedRoot {
     /// Share `value`, a value held by `heap`'s mutator.
-    pub fn new(heap: &TaggedHeap, value: TaggedValue) -> Self {
+    ///
+    /// # Safety
+    /// The caller must be a mutator of `heap`. `value` must be live, and any
+    /// traced object it names must belong to this heap's allocation domain.
+    /// Keep `value` reachable until registration completes. Every subsequent
+    /// collection of that heap must trace its shared-root table while this
+    /// root can be materialized. The root does not own the heap: its backing
+    /// storage must remain alive for every materialization.
+    ///
+    /// During an active mark, reachability means coverage by the collector's
+    /// start roots, a SATB-protected source home, or allocate-black births.
+    /// Merely retaining an unregistered Rust copy of a value is insufficient.
+    ///
+    /// Raw values carry no heap brand, so `&TaggedHeap` cannot prove these
+    /// admission requirements on its own.
+    pub unsafe fn new(heap: &TaggedHeap, value: TaggedValue) -> Self {
         Self::in_heap(heap.heap_identity(), value)
     }
 
     /// Share `value` from the heap installed on this thread, for callers
     /// that reach their heap only through the thread's installed view.
-    pub fn from_current_heap(value: TaggedValue) -> Result<Self, SharedRootError> {
-        let heap = current_tagged_heap_identity()
-            .and_then(HeapIdentity::from_legacy_word)
-            .ok_or(SharedRootError::NoInstalledHeap)?;
+    ///
+    /// # Safety
+    /// The caller must satisfy [`SharedRoot::new`]'s admission and lifetime
+    /// requirements for the installed heap. Installed TLS identifies the
+    /// mutator's heap; it does not prove that an unbranded `value` came from
+    /// that heap or is still live.
+    pub unsafe fn from_current_heap(value: TaggedValue) -> Result<Self, SharedRootError> {
+        let heap = Self::current_heap()?;
         Ok(Self::in_heap(heap, value))
+    }
+
+    /// Admit several values through one private, immutable Lisp vector root.
+    /// Each returned handle materializes its original child, never the vector.
+    ///
+    /// # Safety
+    /// The caller must satisfy [`SharedRoot::new`]'s live same-heap admission
+    /// and lifetime requirements for every value and the installed mutator.
+    /// Keep every input reachable until this method returns. The installed
+    /// heap's collector must trace the shared-root table. This method keeps
+    /// the freshly allocated backing vector private and never mutates it.
+    pub unsafe fn batch_from_current_heap(
+        values: &[TaggedValue],
+    ) -> Result<Vec<Self>, SharedRootError> {
+        let heap = Self::current_heap()?;
+        if values.is_empty() {
+            return Ok(Vec::new());
+        }
+        // This allocator invokes neither Lisp callbacks nor a collection.
+        // The caller keeps inputs reachable until the vector's lease is live.
+        let vector = TaggedValue::vector(values.to_vec());
+        let word = TracedWord::of(vector).expect("a freshly allocated vector is traced");
+        let lease = Arc::new(RootLease::register(heap, word));
+        Ok(values
+            .iter()
+            .map(|value| Self {
+                heap,
+                transport: Transport::BatchElement {
+                    lease: Arc::clone(&lease),
+                    child: ChildIdentity(value.bits()),
+                },
+            })
+            .collect())
+    }
+
+    /// Whether two handles share a collector lease, possibly selecting
+    /// different children of the same private vector.
+    pub fn shares_backing_root(&self, other: &Self) -> bool {
+        self.heap == other.heap
+            && self
+                .lease()
+                .zip(other.lease())
+                .is_some_and(|(left, right)| Arc::ptr_eq(left, right))
+    }
+
+    /// Coalesce rooted children into one lease on their installed mutator.
+    ///
+    /// Returns `None` if no coalescing is needed. All input handles remain
+    /// live throughout allocation, and are unchanged on failure.
+    ///
+    /// # Errors
+    /// [`SharedRootError::NoInstalledHeap`] on a non-mutator, or
+    /// [`SharedRootError::ForeignHeap`] for an input from another heap.
+    pub fn coalesce_on_current_mutator(
+        roots: &[&Self],
+    ) -> Result<Option<Vec<Self>>, SharedRootError> {
+        let Some(first) = roots.first() else {
+            return Ok(None);
+        };
+        let heap = Self::current_heap()?;
+        for root in roots {
+            if root.heap != heap {
+                return Err(SharedRootError::ForeignHeap {
+                    owner: root.heap,
+                    mutator: heap,
+                });
+            }
+        }
+        if roots.len() == 1
+            || roots.iter().all(|root| root.shares_backing_root(first))
+            || roots.iter().all(|root| root.lease().is_none())
+        {
+            return Ok(None);
+        }
+        let values: Vec<_> = roots
+            .iter()
+            .map(|root| TaggedValue::from_bits(root.word()))
+            .collect();
+        // SAFETY: each checked input belongs to the installed heap, and its
+        // borrowed lease keeps its child alive across allocation. Only this
+        // method's private vector constructor sees the aggregate value.
+        unsafe { Self::batch_from_current_heap(&values) }.map(Some)
+    }
+
+    fn current_heap() -> Result<HeapIdentity, SharedRootError> {
+        current_tagged_heap_identity()
+            .and_then(HeapIdentity::from_legacy_word)
+            .ok_or(SharedRootError::NoInstalledHeap)
+    }
+
+    fn lease(&self) -> Option<&Arc<RootLease>> {
+        match &self.transport {
+            Transport::Untraced(_) => None,
+            Transport::Rooted(lease) | Transport::BatchElement { lease, .. } => Some(lease),
+        }
     }
 
     fn in_heap(heap: HeapIdentity, value: TaggedValue) -> Self {
@@ -131,13 +267,14 @@ impl SharedRoot {
         match &self.transport {
             Transport::Untraced(word) => *word,
             Transport::Rooted(lease) => lease.word().value().bits(),
+            Transport::BatchElement { child, .. } => child.0,
         }
     }
 }
 
 impl fmt::Debug for SharedRoot {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let rooted = matches!(self.transport, Transport::Rooted(_));
+        let rooted = !matches!(self.transport, Transport::Untraced(_));
         f.debug_struct("SharedRoot")
             .field("heap", &self.heap)
             .field("word", &format_args!("{:#x}", self.word()))

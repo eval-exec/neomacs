@@ -1853,6 +1853,17 @@ impl WindowOutputEmitter {
         let layout_freshness = buffer_id.and_then(|buffer_id| {
             evaluator.window_display_snapshot_freshness(frame_id, window_id, buffer_id)
         });
+        // Row batches keep earlier formatter results alive across later area
+        // callbacks and layout retries. Only the completed window coalesces
+        // all enabled areas into its one private vector lease.
+        if let Err(error) =
+            PresentedWindowChromeString::coalesce_roots(&mut self.chrome_strings, evaluator)
+        {
+            // Preserve the original rooted handles on an ownership mismatch;
+            // they remain safe for opaque consumers, and owner materialization
+            // still rejects the foreign heap instead of exposing its values.
+            tracing::error!(?error, "failed to coalesce window chrome roots");
+        }
         let snapshot = WindowDisplaySnapshot {
             #[cfg(any(test, feature = "redisplay-test-policy"))]
             test_posn_object_extent_mode: Some(
