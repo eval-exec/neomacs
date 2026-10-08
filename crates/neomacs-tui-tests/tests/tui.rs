@@ -8,6 +8,8 @@
 
 mod support;
 
+mod idle_timer_output;
+
 #[cfg(test)]
 #[path = "mode_line_min_width_boundary_oracle.rs"]
 mod mode_line_min_width_boundary_oracle;

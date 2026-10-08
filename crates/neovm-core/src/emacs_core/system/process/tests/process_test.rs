@@ -15549,6 +15549,8 @@ fn epipe_on_send_leaves_the_real_child_status_for_the_next_wait_to_reap() {
 /// process activity interrupts the wait, services its output, and the
 /// epoch keeps its original start.  Issue #476 reported idle timers that
 /// never fired under such a config; this pins the invariant they depend on.
+/// The callback must fire before the terminating keypress; this test does
+/// not assert an exact wall-clock firing time.
 #[test]
 fn subprocess_output_during_idle_does_not_reset_the_idle_epoch() {
     crate::test_utils::init_test_tracing();
@@ -15560,7 +15562,7 @@ fn subprocess_output_during_idle_does_not_reset_the_idle_epoch() {
              (lambda () (setq vm-chatter-idle-fired 'done)))
            (start-process "chatter" "*vm-chatter*"
                           "sh" "-c"
-                          "while true; do echo tick; sleep 0.01; done"))"#,
+                          "i=0; while [ $i -lt 100 ]; do echo tick; sleep 0.01; i=$((i + 1)); done"))"#,
     )
     .expect("schedule idle timer and chatty subprocess");
 
@@ -15568,7 +15570,7 @@ fn subprocess_output_during_idle_does_not_reset_the_idle_epoch() {
     ev.input_rx = Some(rx);
     let _tx_keepalive = tx.clone();
     let notifier = ev.wait_notifier();
-    std::thread::spawn(move || {
+    let sender = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(400));
         tx.send(crate::keyboard::InputEvent::key_press(
             crate::keyboard::KeyEvent::char('a'),
@@ -15579,20 +15581,23 @@ fn subprocess_output_during_idle_does_not_reset_the_idle_epoch() {
         }
     });
 
-    let event = ev.read_char().expect("read_char returns the queued keypress");
+    let event = ev.read_char();
+    let idle_fired = ev.eval_symbol("vm-chatter-idle-fired");
+    let ticks = ev.eval_str(
+        r#"(with-current-buffer "*vm-chatter*"
+            (count-matches "^tick" (point-min) (point-max)))"#,
+    );
+    sender.join().expect("input sender should finish");
+    ev.eval_str(r#"(delete-process "chatter")"#)
+        .expect("stop and reap the bounded chatter subprocess");
+    let event = event.expect("read_char returns the queued keypress");
     assert_eq!(event, Value::fixnum('a' as i64));
     assert_eq!(
-        ev.eval_symbol("vm-chatter-idle-fired")
-            .expect("idle timer flag should be bound"),
+        idle_fired.expect("idle timer flag should be bound"),
         Value::symbol("done"),
         "subprocess output must not reset the idle epoch (Elisp manual, Idle Timers)",
     );
-    let ticks = ev
-        .eval_str(
-            r#"(with-current-buffer "*vm-chatter*"
-                (count-matches "^tick" (point-min) (point-max)))"#,
-        )
-        .expect("count delivered process output");
+    let ticks = ticks.expect("count delivered process output");
     assert!(
         ticks.as_fixnum().unwrap_or(0) > 0,
         "chatty process should have delivered output during the wait",
