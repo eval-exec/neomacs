@@ -8,6 +8,7 @@
 
 mod support;
 
+mod coding_detection;
 mod coding_save;
 mod dual_width_fixed_pitch;
 #[path = "fontset_family_only_test.rs"]
