@@ -19,7 +19,8 @@ impl crate::emacs_core::Context {
             || self.input_rx.as_ref().is_some_and(|rx| !rx.is_empty());
         // A keyboard macro's commands are not input arriving faster than
         // display: GNU's `read_char' returns the next macro event before it
-        // reaches redisplay, so it never paints in the middle of a macro.
+        // reaches redisplay, so nothing repaints automatically between the
+        // commands of a macro (explicit `redisplay' calls still paint).
         if self.display_idle_maintenance_fn.is_none()
             || !pending
             || self.command_loop.is_executing_kbd_macro()
