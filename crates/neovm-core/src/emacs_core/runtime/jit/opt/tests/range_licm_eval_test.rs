@@ -193,8 +193,7 @@ fn reset_side(ctx: &mut Context) {
 fn side(ctx: &Context) -> String {
     text(
         ctx.obarray
-            .symbol_value("t34-o335-side")
-            .copied()
+            .symbol_value_copied("t34-o335-side")
             .unwrap_or(LispValue::NIL),
     )
 }

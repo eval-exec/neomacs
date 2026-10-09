@@ -6571,7 +6571,7 @@ fn fuzz_varset_bodies_match_interpreter_state() {
     }
     fn snap(ev: &Context, ids: &[SymId]) -> Vec<Option<usize>> {
         ids.iter()
-            .map(|id| ev.obarray.symbol_value_id(*id).copied().map(|v| v.bits()))
+            .map(|id| ev.obarray.symbol_value_id_copied(*id).map(|v| v.bits()))
             .collect()
     }
 
@@ -7774,8 +7774,7 @@ fn parked_panic_survives_leaf_exit_cleanup_running_compiled_code() {
     // The inner handler saw ITS signal.
     let witness = ev
         .obarray
-        .symbol_value("jit-fx-witness")
-        .cloned()
+        .symbol_value_copied("jit-fx-witness")
         .unwrap_or(Value::NIL);
     assert_eq!(
         witness.cons_car().as_symbol_name(),
@@ -7951,8 +7950,7 @@ fn contained_panic_in_load_unwinds_load_bookkeeping() {
         );
         assert_eq!(
             ev.obarray
-                .symbol_value("load-in-progress")
-                .cloned()
+                .symbol_value_copied("load-in-progress")
                 .unwrap_or(Value::NIL),
             Value::NIL,
             "round {round}: load-in-progress wedged"

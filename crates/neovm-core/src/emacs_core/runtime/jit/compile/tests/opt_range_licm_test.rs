@@ -483,11 +483,7 @@ fn opt_range_native_cold_overflow_after_store_and_gc_keeps_full_frame() {
                 .set_symbol_value("t34-o33-effects", Value::fixnum(0));
             let expected = tier0(&mut ctx, &source, &args).unwrap();
             let _expected = Roots::new(&[expected]);
-            let expected_effect = ctx
-                .obarray
-                .symbol_value("t34-o33-effects")
-                .copied()
-                .unwrap();
+            let expected_effect = ctx.obarray.symbol_value_copied("t34-o33-effects").unwrap();
             ctx.obarray
                 .set_symbol_value("t34-o33-effects", Value::fixnum(0));
             let NativeRun::DeoptAt(base_exit) =
@@ -529,7 +525,7 @@ fn opt_range_native_cold_overflow_after_store_and_gc_keeps_full_frame() {
                 snapshot.stack
             );
             assert_eq!(
-                ctx.obarray.symbol_value("t34-o33-effects").copied(),
+                ctx.obarray.symbol_value_copied("t34-o33-effects"),
                 Some(expected_effect)
             );
             assert_eq!(
@@ -537,7 +533,7 @@ fn opt_range_native_cold_overflow_after_store_and_gc_keeps_full_frame() {
                 print_value(&expected)
             );
             assert_eq!(
-                ctx.obarray.symbol_value("t34-o33-effects").copied(),
+                ctx.obarray.symbol_value_copied("t34-o33-effects"),
                 Some(expected_effect),
                 "cold replay does not repeat the store"
             );
@@ -737,7 +733,7 @@ fn opt_licm_native_body_guards_preserve_zero_trip_and_late_effect() {
     ctx.obarray.set_symbol_value("t34-o335-side", Value::NIL);
     let expected = tier0(&mut ctx, &source, &args).unwrap_err();
     let expected_signal = signal_summary(&expected);
-    let expected_side = ctx.obarray.symbol_value("t34-o335-side").copied().unwrap();
+    let expected_side = ctx.obarray.symbol_value_copied("t34-o335-side").unwrap();
     let _side = Roots::new(&[expected_side]);
     ctx.obarray.set_symbol_value("t34-o335-side", Value::NIL);
     let NativeRun::DeoptAt(base_exit) = baseline.call(&mut ctx as *mut Context as *mut u8, &args)
@@ -765,7 +761,7 @@ fn opt_licm_native_body_guards_preserve_zero_trip_and_late_effect() {
     ctx.obarray.set_symbol_value("t34-o335-side", Value::NIL);
     draft_o35_check_ok(&mut ctx, &source, &after, &candidate, &zero);
     assert_eq!(
-        ctx.obarray.symbol_value("t34-o335-side").copied(),
+        ctx.obarray.symbol_value_copied("t34-o335-side"),
         Some(Value::NIL),
         "zero trip never executes body guard/store"
     );
@@ -789,7 +785,7 @@ fn opt_licm_native_body_guards_preserve_zero_trip_and_late_effect() {
         snapshot.stack
     );
     assert_eq!(
-        print_value(&ctx.obarray.symbol_value("t34-o335-side").copied().unwrap()),
+        print_value(&ctx.obarray.symbol_value_copied("t34-o335-side").unwrap()),
         print_value(&expected_side)
     );
     assert_eq!(

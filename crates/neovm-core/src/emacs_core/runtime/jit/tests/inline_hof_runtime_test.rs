@@ -148,8 +148,7 @@ fn frame(callback: Value, pc: usize, stack: Vec<Value>) -> InlinedFrameResume {
 fn abort_signal_observer(ctx: &mut Context, symbol: Value, _data: Value) -> Result<Value, Flow> {
     let count = ctx
         .obarray
-        .symbol_value("hof-abort-hook-count")
-        .copied()
+        .symbol_value_copied("hof-abort-hook-count")
         .unwrap()
         .as_fixnum()
         .unwrap();
@@ -239,7 +238,11 @@ fn inline_hof_runtime_abort_dispatches_signal_with_live_map_depth_and_frame() {
             ("hof-abort-hook-callback", callback),
             ("hof-abort-hook-sequence", sequence),
         ] {
-            assert_eq!(ctx.obarray.symbol_value(name), Some(&expected), "{name}");
+            assert_eq!(
+                ctx.obarray.symbol_value_copied(name),
+                Some(expected),
+                "{name}"
+            );
         }
         assert_eq!(ctx.depth, 0);
         assert!(ctx.specpdl.is_empty());

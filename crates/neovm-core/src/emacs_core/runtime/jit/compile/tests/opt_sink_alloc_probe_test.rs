@@ -132,9 +132,9 @@ fn load_fixture(ctx: &mut Context, roots: &Roots) -> Fixture {
         LoadOptions::implicit_dependency(MissingFilePolicy::Signal),
     )
     .expect("frozen primitive graph loader must succeed in bare Context");
-    let graph = *ctx
+    let graph = ctx
         .obarray
-        .symbol_value("t34-o36-fixture-objects")
+        .symbol_value_copied("t34-o36-fixture-objects")
         .expect("loader's graph binding");
     roots.add(&[graph]);
     let objects = graph.as_vector_data().expect("42-node graph");
@@ -167,7 +167,7 @@ fn load_fixture(ctx: &mut Context, roots: &Roots) -> Fixture {
     }
     for &(name, spec) in &oracle::GLOBALS {
         assert_eq!(
-            ctx.obarray.symbol_value(name).unwrap().bits(),
+            ctx.obarray.symbol_value_copied(name).unwrap().bits(),
             constant_value(spec, objects).bits(),
             "global {name}"
         );

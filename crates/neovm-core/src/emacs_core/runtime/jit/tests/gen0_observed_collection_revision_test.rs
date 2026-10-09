@@ -197,9 +197,9 @@ fn gen0_mapped_blv_keeps_remembered_proof_until_its_default_cell_is_observed() {
     set_tagged_heap(&mut context.tagged_heap);
     context.specpdl.reserve(16);
     context.jit_bind_stack.reserve(16);
-    let owner = *context
+    let owner = context
         .obarray()
-        .symbol_value("fx1-mapped-default-owner")
+        .symbol_value_copied("fx1-mapped-default-owner")
         .expect("mapped owner root");
     let symbol = context
         .obarray()

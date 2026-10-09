@@ -330,7 +330,7 @@ fn mir_call_observability_matches_the_interpreter() {
             };
             let debug_calls = ev
                 .obarray
-                .symbol_value("mir-call-debug-count")
+                .symbol_value_copied("mir-call-debug-count")
                 .unwrap()
                 .as_fixnum()
                 .unwrap();

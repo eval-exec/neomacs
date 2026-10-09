@@ -382,8 +382,7 @@ fn inline_named_runtime_assigned_argument_is_resumed_without_losing_original_cal
     );
     let observed = ctx
         .obarray
-        .symbol_value("named-runtime-observed-call")
-        .copied()
+        .symbol_value_copied("named-runtime-observed-call")
         .unwrap();
     assert_eq!(
         observed.cons_car(),

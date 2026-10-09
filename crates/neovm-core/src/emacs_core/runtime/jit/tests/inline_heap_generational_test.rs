@@ -45,7 +45,7 @@ fn context(generational: bool) -> Context {
 }
 
 fn global(context: &Context, name: &str) -> Value {
-    context.obarray().symbol_value(name).copied().expect(name)
+    context.obarray().symbol_value_copied(name).expect(name)
 }
 
 fn minor(context: &mut Context) {

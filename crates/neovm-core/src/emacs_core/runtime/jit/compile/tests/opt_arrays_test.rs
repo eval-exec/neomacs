@@ -351,7 +351,7 @@ fn opt_range_native_actual_vector_record_arefs_elide_current_bounds_and_keep_err
         let args = [array, index, payload];
         ctx.obarray.set_symbol_value("t34-o335-side", Value::NIL);
         let expected = tier0(&mut ctx, &f, &args);
-        let expected_side = ctx.obarray.symbol_value("t34-o335-side").copied().unwrap();
+        let expected_side = ctx.obarray.symbol_value_copied("t34-o335-side").unwrap();
         ctx.obarray.set_symbol_value("t34-o335-side", Value::NIL);
         // Original native errors are checked independently, including existing
         // baseline signal protocol; frame omissions are kept in frozen67 report.
@@ -377,7 +377,7 @@ fn opt_range_native_actual_vector_record_arefs_elide_current_bounds_and_keep_err
         assert_eq!(exit.pc, 4);
         assert_eq!(exit.stack, vec![array, index, payload, array, index]);
         assert_eq!(
-            ctx.obarray.symbol_value("t34-o335-side").copied(),
+            ctx.obarray.symbol_value_copied("t34-o335-side"),
             Some(expected_side)
         );
         let actual = resumed(&mut ctx, &f, &exit);

@@ -876,7 +876,7 @@ fn assert_frame(stack: &[Value], args: &[Value]) {
     assert_eq!(stack[9], Value::make_int(1));
 }
 fn side(ctx: &Context, payload: Value) {
-    let value = *ctx.obarray.symbol_value("t34-o36-side").unwrap();
+    let value = ctx.obarray.symbol_value_copied("t34-o36-side").unwrap();
     let items = list_to_vec(&value).unwrap();
     assert_eq!(items, vec![Value::symbol("stored"), payload]);
 }
@@ -995,15 +995,19 @@ fn opt_sink_native_virtual_full_frame_after_visible_store() {
     assert_frame(&resume.stack, &args);
     side(&ctx, payload);
     assert_eq!(
-        ctx.obarray.symbol_value("t34-o36-watch-count").unwrap(),
-        &Value::make_int(1)
+        ctx.obarray
+            .symbol_value_copied("t34-o36-watch-count")
+            .unwrap(),
+        Value::make_int(1)
     );
     let replayed = resumed(&mut ctx, function, &resume).unwrap();
     roots.add(&[replayed]);
     assert_eq!(print_value(&replayed), expected_print);
     assert_eq!(
-        ctx.obarray.symbol_value("t34-o36-watch-count").unwrap(),
-        &Value::make_int(1),
+        ctx.obarray
+            .symbol_value_copied("t34-o36-watch-count")
+            .unwrap(),
+        Value::make_int(1),
         "cold replay must not repeat visible pre-guard store"
     );
     // Actual frozen GNU wrong-type input still reports the original signal,
