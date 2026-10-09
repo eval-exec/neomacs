@@ -3792,9 +3792,31 @@ fn input_pending_p_reloads_event_filter_after_timer_callbacks() {
 fn input_pending_p_returns_t_when_quit_flag_is_set() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
+    // GNU get_input_pending counts a deferred quit as pending input
+    // (keyboard.c:8052-8059). Inhibit quitting so evaluation/service safe
+    // points can reach that query instead of signaling first.
+    ev.set_variable("inhibit-quit", Value::T);
     ev.set_quit_flag_value(Value::T);
     let result = builtin_input_pending_p(&mut ev, vec![]).unwrap();
     assert_eq!(result, Value::T);
+    assert_eq!(ev.quit_flag_value(), Value::T);
+}
+
+#[test]
+fn input_pending_p_signals_uninhibited_quit_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+    // GNU eval_sub checks quit before evaluating a call (eval.c:2601),
+    // and probably_quit honors inhibit-quit (eval.c:1891-1894). The exact
+    // batch form below signals quit, rather than returning pending input.
+    let error = ev
+        .eval_str("(let ((quit-flag t)) (input-pending-p))")
+        .expect_err("GNU signals an uninhibited pending quit");
+    assert!(matches!(
+        error,
+        crate::emacs_core::error::EvalError::Signal { symbol, .. }
+            if symbol == intern("quit")
+    ));
 }
 
 #[test]
