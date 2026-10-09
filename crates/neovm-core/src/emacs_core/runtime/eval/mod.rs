@@ -2614,6 +2614,8 @@ impl ResolvedFrameFont {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedFontSpecMatch {
+    /// Exact host selection, retained independently of public font properties.
+    pub coverage_handle: Option<crate::emacs_core::display_host::FontEntityHandle>,
     pub family: crate::heap_types::LispString,
     pub foundry: Option<crate::heap_types::LispString>,
     pub registry: Option<crate::heap_types::LispString>,

@@ -164,3 +164,5 @@ mod gnu_redisplay_mutation_oracle;
 #[cfg(test)]
 #[path = "redisplay_mini_source_start_oracle.rs"]
 mod redisplay_mini_source_start_oracle;
+
+mod font_coverage;

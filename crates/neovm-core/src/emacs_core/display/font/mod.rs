@@ -3003,6 +3003,12 @@ fn build_font_entity_for_spec_match(matched: &super::eval::ResolvedFontSpecMatch
         elems.push(value);
     };
 
+    if let Some(handle) = matched.coverage_handle {
+        push_field(
+            "neomacs-entity-handle",
+            Value::fixnum(i64::from(handle.get())),
+        );
+    }
     // GNU orders entity fields foundry-first (XLFD order); the foundry is
     // a symbol (e.g. GOOG) read from fontconfig FC_FOUNDRY.
     if let Some(foundry) = &matched.foundry {
@@ -3912,7 +3918,12 @@ pub(crate) fn font_get_glyphs(args: Vec<Value>) -> EvalResult {
     Ok(Value::NIL)
 }
 
-pub(crate) fn font_has_char_p(args: Vec<Value>) -> EvalResult {
+pub(crate) fn font_has_char_p(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    use super::display_host::{
+        FontCoverage, FontCoverageRequest, FontCoverageTarget, FontEntityHandle,
+    };
+    use crate::emacs_core::emacs_char::EmacsChar;
+
     expect_args_range("font-has-char-p", &args, 2, 3)?;
     if !is_font(&args[0]) {
         return Err(signal(
@@ -3920,8 +3931,54 @@ pub(crate) fn font_has_char_p(args: Vec<Value>) -> EvalResult {
             vec![Value::symbol("font"), args[0]],
         ));
     }
-    let _ = expect_font_character(args[1])?;
-    Ok(Value::NIL)
+    let character = args[1]
+        .as_int()
+        .and_then(|code| u32::try_from(code).ok())
+        .and_then(EmacsChar::from_code)
+        .ok_or_else(|| {
+            signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("characterp"), args[1]],
+            )
+        })?;
+    // GNU CHECK_FRAME accepts a frame object, without requiring it to be live.
+    let frame_id = match args.get(2) {
+        None => super::window_cmds::ensure_selected_frame_id(eval),
+        Some(frame) if frame.is_nil() => super::window_cmds::ensure_selected_frame_id(eval),
+        Some(frame) => frame_id_from_designator(frame).ok_or_else(|| {
+            signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("framep"), *frame],
+            )
+        })?,
+    };
+    let target = if let Some(opened) = args[0].as_font_data() {
+        FontCoverageTarget::Opened(opened.identity.clone())
+    } else {
+        let handle = font_value_fields(&args[0])
+            .and_then(|fields| font_vector_get_flexible(fields, "neomacs-entity-handle"))
+            .and_then(|value| value.as_int())
+            .and_then(|value| u32::try_from(value).ok())
+            .and_then(FontEntityHandle::new);
+        let Some(handle) = handle else {
+            return Ok(Value::NIL);
+        };
+        FontCoverageTarget::Entity(handle)
+    };
+    let Some(host) = eval.display_host.as_mut() else {
+        return Ok(Value::NIL);
+    };
+    match host
+        .font_character_coverage(FontCoverageRequest {
+            frame_id,
+            target,
+            character,
+        })
+        .map_err(|error| signal("error", vec![Value::string(error)]))?
+    {
+        FontCoverage::Present => Ok(Value::t()),
+        FontCoverage::Absent | FontCoverage::NeedsOpening => Ok(Value::NIL),
+    }
 }
 
 pub(crate) fn font_match_p(args: Vec<Value>) -> EvalResult {
