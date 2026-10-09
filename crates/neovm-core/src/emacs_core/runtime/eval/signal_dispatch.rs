@@ -577,11 +577,12 @@ impl Context {
     }
 
     pub(super) fn call_debugger_for_signal(&mut self, sig: &SignalData) -> Result<(), Flow> {
-        let rendered = super::super::error::format_signal_data_with_eval(self, sig);
+        // Render only when this diagnostic is enabled. GNU's debugger entry
+        // does not print the signal before invoking the callback (eval.c:2229).
         tracing::error!(
             "entering Lisp debugger for signal: symbol={} data={}",
             format_symbol_name_for_diagnostic(sig.symbol),
-            rendered
+            super::super::error::format_signal_data_with_eval(self, sig)
         );
         // GNU `call_debugger (list2 (Qdebug, ...))` from `maybe_call_debugger`:
         // one shared entry point with the `debug-on-next-call` and
