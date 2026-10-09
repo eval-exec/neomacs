@@ -380,6 +380,10 @@ mod tests;
 #[path = "tests/width_policy.rs"]
 mod width_policy_tests;
 
+#[cfg(test)]
+#[path = "tests/gdh_format_width_scan_test.rs"]
+mod gdh_format_width_scan_tests;
+
 pub(crate) fn builtin_substring(args: Vec<Value>) -> EvalResult {
     builtin_substring_slice(&args)
 }
@@ -1741,7 +1745,19 @@ fn format_string_spec_tracked(
         let policy = crate::encoding::CharacterWidthPolicy::from_context(ctx);
         truncated_end = 0;
         let mut pos = 0usize;
+        let width_only_limit = if spec.precision.is_none() {
+            spec.width
+        } else {
+            None
+        };
         while pos < data.len() {
+            if width_only_limit.is_some_and(|minimum| content_width >= minimum) {
+                // Without precision GNU copies all source bytes; width only
+                // decides padding (editfns.c:3751-3752,3764-3765). Nonnegative
+                // widths cannot require padding after the minimum is reached.
+                truncated_end = data.len();
+                break;
+            }
             let (code, len) = next_format_unit(data, pos, is_multibyte);
             let display_width = policy.width(code);
             if let Some(prec) = spec.precision
