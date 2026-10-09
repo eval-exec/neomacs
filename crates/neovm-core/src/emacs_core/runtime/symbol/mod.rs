@@ -1871,17 +1871,14 @@ impl Obarray {
         self.slot_mut(id)
     }
 
-    /// Get the value cell of a symbol.
+    /// Copy the global value of a symbol.
     ///
     /// **This is not GNU's `Vfoo`.** For a symbol some buffer has localised it
     /// answers the BLV *defcell*, and for a `DEFVAR_PER_BUFFER` name it
     /// answers `None`; see [`BufferlessValue`] for why, and
     /// [`Self::value_in_buffer`] for the reader that does mirror GNU's C.
-    pub fn symbol_value(&self, name: &str) -> Option<&Value> {
-        self.symbol_value_id(intern(name))
-    }
-
-    /// Copy a symbol's global value without borrowing its mutable value cell.
+    ///
+    /// The returned word does not borrow the mutable symbol or descriptor slot.
     #[inline]
     pub fn symbol_value_copied(&self, name: &str) -> Option<Value> {
         self.symbol_value_id_copied(intern(name))
@@ -2057,62 +2054,14 @@ impl Obarray {
 
     /// Get a symbol's value by identity, returning nil when unbound.
     ///
-    /// This is the copied-value equivalent of the common
-    /// `symbol_value_id(...).copied().unwrap_or(Value::NIL)` pattern.
     /// GNU's `find_symbol_value` returns a `Lisp_Object` directly; keeping
-    /// hot evaluator reads in this shape avoids an extra borrowed Option path.
+    /// hot evaluator reads in this shape avoids an extra Option path.
     #[inline(always)]
     pub fn symbol_value_id_or_nil(&self, id: SymId) -> Value {
         match self.symbol_value_id_copied(id) {
             Some(value) => value,
             None => Value::NIL,
         }
-    }
-
-    pub fn symbol_value_id(&self, id: SymId) -> Option<&Value> {
-        let mut current = id;
-        for _ in 0..50 {
-            let sym = match self.symbols.get(Self::slot_index(current)) {
-                Some(sym) => sym,
-                _ => return None,
-            };
-            match sym.value_cell() {
-                ValueCell::Plain(_) => {
-                    // UNBOUND sentinel = unbound.
-                    return sym.plain_value_ref().filter(|v| !v.is_unbound());
-                }
-                ValueCell::Alias(target) => {
-                    current = target;
-                }
-                ValueCell::Localized(_) => {
-                    // Return the BLV defcell default (global) value.
-                    // The defcell is a heap-allocated cons (sym . default);
-                    // its cdr field lives in the GC heap, which is owned
-                    // by `self` for the lifetime of `&self`.
-                    // UNBOUND cdr means the symbol has no global default.
-                    return self.blv(current).and_then(|blv| {
-                        // Safety: defcell is a valid heap cons (allocated
-                        // by Value::cons in make_symbol_localized and kept
-                        // alive by the GC root in blv.defcell). The cdr
-                        // field lives in the ConsCell in the GC heap and
-                        // is valid for the lifetime of `&self`.
-                        let cdr_ref = unsafe {
-                            let cons_ptr = blv.defcell.xcons_ptr();
-                            &(*cons_ptr).cdr_or_next.cdr
-                        };
-                        if cdr_ref.is_unbound() {
-                            None
-                        } else {
-                            Some(cdr_ref)
-                        }
-                    });
-                }
-                ValueCell::Forwarded(fwd) => {
-                    return fwd.load_ref();
-                }
-            }
-        }
-        None // alias cycle
     }
 
     /// Set the value cell of a symbol. Interns if needed.
@@ -4201,52 +4150,6 @@ impl Obarray {
             }
         }
         Ok(())
-    }
-
-    /// Get the default value of a symbol, following aliases.
-    /// For `Plainval` this is the direct value; for `Localized` it's the
-    /// BLV defcell default; for `Varalias` it follows the chain; for
-    /// `Forwarded` BUFFER_OBJFWD it returns the forwarder's static default.
-    ///
-    /// Phase F: reads from the redirect union (`val`) rather than the
-    /// legacy `value` enum field.
-    pub fn default_value_id(&self, id: SymId) -> Option<&Value> {
-        let mut current = id;
-        for _ in 0..50 {
-            let sym = self.slot(current)?;
-            match sym.value_cell() {
-                ValueCell::Plain(_) => {
-                    return sym.plain_value_ref().filter(|v| !v.is_unbound());
-                }
-                ValueCell::Alias(target) => {
-                    current = target;
-                }
-                ValueCell::Localized(_) => {
-                    // Return a reference to the BLV defcell cdr (the default).
-                    return self.blv(current).and_then(|blv| {
-                        // Safety: same as symbol_value_id's Localized arm.
-                        let cdr_ref = unsafe {
-                            let cons_ptr = blv.defcell.xcons_ptr();
-                            &(*cons_ptr).cdr_or_next.cdr
-                        };
-                        if cdr_ref.is_unbound() {
-                            None
-                        } else {
-                            Some(cdr_ref)
-                        }
-                    });
-                }
-                ValueCell::Forwarded(fwd) => {
-                    if let Some(value) = fwd.load_ref() {
-                        return Some(value);
-                    }
-                    // `load_ref` answers for every family but the per-buffer
-                    // slot, whose registration default is immutable.
-                    return fwd.as_buffer_obj_fwd().map(|buf_fwd| &buf_fwd.default);
-                }
-            }
-        }
-        None
     }
 
     /// Copy the global default, including a per-buffer forwarder's default.
