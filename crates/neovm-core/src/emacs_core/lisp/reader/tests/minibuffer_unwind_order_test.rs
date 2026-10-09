@@ -147,8 +147,7 @@ fn exercise_reader(restore_windows: bool, throw_inactive: bool, record_active: b
     eval.input_rx = Some(rx);
     let map = eval
         .obarray
-        .symbol_value("d5-mini-map")
-        .copied()
+        .symbol_value_copied("d5-mini-map")
         .expect("map");
     let mut expired = None;
     let handlers = eval.condition_stack.len();
@@ -242,8 +241,7 @@ fn exercise_reader(restore_windows: bool, throw_inactive: bool, record_active: b
         .expect("first post-reader hook pass");
     let calls = eval
         .obarray
-        .symbol_value("d5-mini-buffer-calls")
-        .copied()
+        .symbol_value_copied("d5-mini-buffer-calls")
         .expect("calls");
     let calls = list_to_vec(&calls).expect("call list");
     assert_eq!(
@@ -258,8 +256,7 @@ fn exercise_reader(restore_windows: bool, throw_inactive: bool, record_active: b
         .expect("idle post-reader pass");
     let idle = eval
         .obarray
-        .symbol_value("d5-mini-buffer-calls")
-        .copied()
+        .symbol_value_copied("d5-mini-buffer-calls")
         .expect("idle calls");
     assert_eq!(
         list_to_vec(&idle).expect("idle list"),
