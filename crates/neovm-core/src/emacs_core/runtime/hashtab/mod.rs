@@ -112,8 +112,8 @@ fn is_global_obarray_proxy_in_state(
     value: &Value,
 ) -> bool {
     obarray
-        .symbol_value("obarray")
-        .is_some_and(|proxy| *proxy == *value)
+        .symbol_value_copied("obarray")
+        .is_some_and(|proxy| proxy == *value)
 }
 
 /// Convert a `HashKey` back into a `Value`.
@@ -1033,12 +1033,10 @@ pub(crate) fn maphash_entry_at_slot(table: Value, slot: usize) -> Option<(Value,
 
 fn current_lisp_obarray_value(eval: &super::eval::Context) -> Value {
     eval.obarray()
-        .symbol_value("obarray")
-        .copied()
+        .symbol_value_copied("obarray")
         .unwrap_or_else(|| {
             eval.obarray()
-                .symbol_value("neovm--obarray-object")
-                .copied()
+                .symbol_value_copied("neovm--obarray-object")
                 .unwrap_or(Value::NIL)
         })
 }
