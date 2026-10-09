@@ -14341,9 +14341,9 @@ fn an_exited_child_is_a_zombie_here_and_reaped_in_gnu() {
 /// as a function this port can call.  It is not wired to any Lisp entry
 /// point (see `UpdateStatusSite::recording` and the pin above), so this test
 /// is what keeps it honest: it drives a `ProcessManager` with no wait loop
-/// at all, waits until `/proc` says the child is a ZOMBIE -- exited and not
-/// reaped -- and asserts that the sweep, and only the sweep, turns `run`
-/// into `(exit . 7)`.
+/// at all, waits until the kernel reports the child exited without reaping
+/// it, and asserts that the sweep, and only the sweep, turns `run` into
+/// `(exit . 7)`. Linux uses `/proc`; Darwin uses `waitid` with `WNOWAIT`.
 ///
 /// The second half is ledger 165's inversion as a compile-time fact rather
 /// than a comment: `handle_child_signal` passes `p->pid` to
@@ -14385,6 +14385,7 @@ fn gnus_sigchld_sweep_records_an_exited_child_and_cannot_reach_a_pidless_process
     // Wait for the kernel, not for the clock: a zombie is exited-and-unreaped,
     // which is the exact state GNU's handler would have found.
     let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    #[cfg(not(target_os = "macos"))]
     let is_zombie = |pid: u32| {
         std::fs::read_to_string(format!("/proc/{pid}/stat"))
             .ok()
@@ -14398,6 +14399,32 @@ fn gnus_sigchld_sweep_records_an_exited_child_and_cannot_reach_a_pidless_process
                     .map(str::to_string)
             })
             .is_some_and(|state| state == "Z")
+    };
+    #[cfg(target_os = "macos")]
+    let is_zombie = |pid: u32| {
+        // Darwin has no /proc. GNU's handler consumes the owned child's
+        // wait status (process.c:7741-7748; sysdep.c:471,515-517), so this
+        // fixture must leave it available for the sweep's first reap.
+        let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        // SAFETY: pid is this test's unreaped child; info points to writable
+        // storage. WNOWAIT reports its exit without consuming the status.
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                info.as_mut_ptr(),
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if result != 0 {
+            let error = std::io::Error::last_os_error();
+            assert_eq!(error.raw_os_error(), Some(libc::EINTR), "waitid: {error}");
+            return false;
+        }
+        // SAFETY: siginfo_t's integer and pointer fields admit zero values;
+        // the successful waitid writes its report into the zeroed storage.
+        let info = unsafe { info.assume_init() };
+        info.si_pid == pid as libc::pid_t && info.si_code == libc::CLD_EXITED && info.si_status == 7
     };
     while std::time::Instant::now() < deadline && !is_zombie(os_pid) {
         std::thread::sleep(Duration::from_millis(1));
