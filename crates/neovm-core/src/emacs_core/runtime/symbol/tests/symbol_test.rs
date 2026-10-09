@@ -49,7 +49,7 @@ fn define_lisp_variable_encodes_specialness_and_locality_together() {
         LispVariableLocality::Global,
     );
     assert_eq!(
-        ob.symbol_value("defvar-global").copied(),
+        ob.symbol_value_copied("defvar-global"),
         Some(Value::fixnum(41))
     );
     assert!(ob.is_special("defvar-global"));
@@ -62,7 +62,7 @@ fn define_lisp_variable_encodes_specialness_and_locality_together() {
     );
     let local_id = intern("defvar-local-if-set");
     assert_eq!(
-        ob.symbol_value("defvar-local-if-set").copied(),
+        ob.symbol_value_copied("defvar-local-if-set"),
         Some(Value::fixnum(42))
     );
     assert!(ob.is_special("defvar-local-if-set"));
@@ -161,7 +161,7 @@ fn symbol_value_cell() {
     assert!(!ob.boundp("x"));
     ob.set_symbol_value("x", Value::fixnum(42));
     assert!(ob.boundp("x"));
-    assert_eq!(ob.symbol_value("x").unwrap().as_int(), Some(42));
+    assert_eq!(ob.symbol_value_copied("x").unwrap().as_int(), Some(42));
 }
 
 #[test]
@@ -267,8 +267,8 @@ fn interning_keyword_materializes_gnu_self_evaluating_symbol_state() {
     assert!(ob.is_constant(":vm-keyword"));
     assert!(ob.is_special(":vm-keyword"));
     assert_eq!(
-        ob.symbol_value(":vm-keyword"),
-        Some(&Value::keyword(":vm-keyword"))
+        ob.symbol_value_copied(":vm-keyword"),
+        Some(Value::keyword(":vm-keyword"))
     );
 }
 
@@ -336,8 +336,11 @@ fn for_each_value_cell_mut_updates_plain_and_buffer_local_values() {
         }
     });
 
-    assert_eq!(ob.symbol_value("plain"), Some(&Value::fixnum(11)));
-    assert_eq!(ob.symbol_value("buffer-local"), Some(&Value::fixnum(12)));
+    assert_eq!(ob.symbol_value_copied("plain"), Some(Value::fixnum(11)));
+    assert_eq!(
+        ob.symbol_value_copied("buffer-local"),
+        Some(Value::fixnum(12))
+    );
     assert_eq!(ob.symbol_function("callable"), Some(Value::fixnum(99)));
     assert_eq!(
         ob.get_property("plist-holder", "meta"),
@@ -442,7 +445,7 @@ fn swap_plain_untrapped_value_refuses_every_slow_shape() {
         "a plain cell swaps and reports the old value"
     );
     assert_eq!(
-        ob.symbol_value_id(plain).map(|v| v.bits()),
+        ob.symbol_value_id_copied(plain).map(|v| v.bits()),
         Some(Value::fixnum(2).bits())
     );
 
@@ -455,7 +458,7 @@ fn swap_plain_untrapped_value_refuses_every_slow_shape() {
         .expect("plain cell");
     assert!(old.is_unbound());
     assert_eq!(
-        ob.symbol_value_id(unbound).map(|v| v.bits()),
+        ob.symbol_value_id_copied(unbound).map(|v| v.bits()),
         Some(Value::fixnum(9).bits())
     );
 
@@ -470,7 +473,7 @@ fn swap_plain_untrapped_value_refuses_every_slow_shape() {
             .is_none()
     );
     assert_eq!(
-        ob.symbol_value_id(watched).map(|v| v.bits()),
+        ob.symbol_value_id_copied(watched).map(|v| v.bits()),
         Some(Value::fixnum(3).bits())
     );
 
@@ -483,7 +486,7 @@ fn swap_plain_untrapped_value_refuses_every_slow_shape() {
             .is_none()
     );
     assert_eq!(
-        ob.symbol_value_id(projected).map(|v| v.bits()),
+        ob.symbol_value_id_copied(projected).map(|v| v.bits()),
         Some(Value::fixnum(5).bits())
     );
 
