@@ -756,6 +756,10 @@ pub struct FontMetricsService {
     /// Owns lifetime-stable IDs and catalog-local canonical records together.
     /// Ordinary request/cache invalidation leaves these instances untouched.
     font_instances: FontInstanceInterner,
+    /// Exact bitmap faces opened for coverage scans such as emoji filtering.
+    /// Cache failures too; invalidation follows the native font catalog.
+    coverage_bitmap_fonts:
+        HashMap<ResolvedFontIdentity, Option<neomacs_font_materializer::OpenedFont>>,
     /// Cache: (realized face/fontset selection, char) → the exact selected
     /// font. Same generation contract as the other caches: cleared by
     /// `clear_caches`.
@@ -910,6 +914,7 @@ impl FontMetricsService {
             shaper: crate::text_shaper::default_text_shaper(),
             resolved_face_font_cache: HashMap::default(),
             font_instances: FontInstanceInterner::default(),
+            coverage_bitmap_fonts: HashMap::default(),
             resolved_char_font_cache: HashMap::default(),
             resolved_cluster_cache: HashMap::default(),
             primary_pin_cache: HashMap::default(),
@@ -1070,6 +1075,53 @@ impl FontMetricsService {
         query: &crate::font::resolver::FontEntityQuery,
     ) -> Option<crate::font::resolver::ResolvedFontEntity> {
         self.font_resolver.resolve_entity(query)
+    }
+
+    /// Inspect the exact selected face without fontset or family fallback.
+    /// A failed materialization is unknown coverage, not a missing glyph.
+    pub fn font_has_char_in_match(
+        &mut self,
+        matched: &crate::font_backend::PlatformFontMatch,
+        ch: char,
+    ) -> Option<bool> {
+        if matched.metadata.size.is_fixed() {
+            if !self.coverage_bitmap_fonts.contains_key(&matched.identity) {
+                let opened = self.open_bitmap_font(matched, 16.0).ok();
+                self.coverage_bitmap_fonts
+                    .insert(matched.identity.clone(), opened);
+            }
+            return self
+                .coverage_bitmap_fonts
+                .get(&matched.identity)?
+                .as_ref()
+                .map(|font| font.glyph_for_char(ch).is_some());
+        }
+        self.font_has_char_in_asset(&matched.asset, ch)
+    }
+
+    fn font_has_char_in_asset(&mut self, asset: &FontOutlineAsset, ch: char) -> Option<bool> {
+        let pinned = self
+            .font_file_cache
+            .pin_exact_asset(&mut self.font_system, asset)
+            .ok()?;
+        let font = self
+            .font_system
+            .get_font(pinned.fontdb_id(), cosmic_text::fontdb::Weight::NORMAL)?;
+        Some(font.as_swash().charmap().map(ch) != 0)
+    }
+
+    /// Opened objects carry their complete identity, including collection
+    /// selectors and native memory assets discovered through exact observation.
+    pub fn font_has_char_in_identity(
+        &mut self,
+        identity: &ResolvedFontIdentity,
+        ch: char,
+    ) -> Option<bool> {
+        if let Some(matched) = self.font_resolver.observe_exact_font(identity, "") {
+            return self.font_has_char_in_match(&matched, ch);
+        }
+        let asset = FontOutlineAsset::File(FontFileAsset::from_identity(identity)?);
+        self.font_has_char_in_asset(&asset, ch)
     }
 
     pub fn open_font_entity(
@@ -3356,6 +3408,7 @@ impl FontMetricsService {
     /// Canonical font instances intentionally survive: IDs are durable and
     /// records are dropped only by a catalog advance, not request changes.
     pub fn clear_caches(&mut self) {
+        self.coverage_bitmap_fonts.clear();
         self.otf_capability_cache.clear();
         self.ascii_cache.clear();
         self.char_cache.clear();

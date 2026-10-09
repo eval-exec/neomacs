@@ -250,3 +250,7 @@ path = "tests/coding_safety.rs"
 [[test]]
 name = "coding_detection"
 path = "tests/coding_detection.rs"
+
+[[test]]
+name = "font_coverage"
+path = "tests/font_coverage.rs"

@@ -343,7 +343,11 @@ fn font_c_pure_primitives_validate_and_project_font_values() {
         Value::NIL
     );
     assert_eq!(
-        font_has_char_p(vec![font_spec, Value::fixnum('a' as i64)]).expect("font-has-char-p"),
+        font_has_char_p(
+            &mut Context::new(),
+            vec![font_spec, Value::fixnum('a' as i64)]
+        )
+        .expect("font-has-char-p"),
         Value::NIL
     );
 
@@ -474,6 +478,7 @@ fn named_font_info_opens_thin_only_family_without_weakening_find_font() {
         CapturingFindFontDisplayHost {
             last_request: Rc::new(RefCell::new(None)),
             matched: Some(ResolvedFontSpecMatch {
+                coverage_handle: None,
                 foundry: None,
                 family: LispString::from_utf8("Thin Only Mono"),
                 registry: Some(LispString::from_utf8("iso10646-1")),
@@ -639,6 +644,7 @@ fn font_info_opens_a_native_entity_without_a_file() {
         },
     }));
     let entity = build_font_entity_for_spec_match(&ResolvedFontSpecMatch {
+        coverage_handle: None,
         foundry: None,
         family: LispString::from_utf8("Menlo"),
         registry: Some(LispString::from_utf8("iso10646-1")),
@@ -682,6 +688,7 @@ fn find_font_eval_requests_exact_registry_match_from_display_host() {
     eval.set_display_host(Box::new(CapturingFindFontDisplayHost {
         last_request: Rc::clone(&last_request),
         matched: Some(ResolvedFontSpecMatch {
+            coverage_handle: None,
             foundry: None,
             family: LispString::from_utf8("Noto Sans Mono CJK SC"),
             registry: Some(LispString::from_utf8("iso10646-1")),
@@ -759,6 +766,7 @@ fn find_font_eval_returns_gnu_canonical_ultra_light_weight_symbol() {
     eval.set_display_host(Box::new(CapturingFindFontDisplayHost {
         last_request: Rc::clone(&last_request),
         matched: Some(ResolvedFontSpecMatch {
+            coverage_handle: None,
             foundry: None,
             family: LispString::from_utf8("JetBrains Mono"),
             registry: Some(LispString::from_utf8("iso10646-1")),

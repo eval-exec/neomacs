@@ -185,7 +185,8 @@ use neovm_core::emacs_core::Value;
 use neovm_core::emacs_core::builtins::set_neomacs_monitor_info;
 use neovm_core::emacs_core::display::gui_window_system_symbol;
 use neovm_core::emacs_core::display_host::{
-    AvailableFontFamilyName, FontResolveRequest, FrameFontRequest, XwidgetScriptRequestId,
+    AvailableFontFamilyName, FontCoverage, FontCoverageRequest, FontCoverageTarget,
+    FontEntityHandle, FontResolveRequest, FrameFontRequest, XwidgetScriptRequestId,
 };
 #[cfg(feature = "neo-term")]
 use neovm_core::emacs_core::display_host::{
@@ -1169,6 +1170,38 @@ impl ResolvedSurfaceMemo {
     }
 }
 
+/// Entity selections survive ordinary cache invalidation. Repeated selections
+/// share a handle; retained assets keep native-memory faces alive. Indices are
+/// never reused, so an old Lisp entity cannot silently become a different face.
+#[derive(Default)]
+struct FontEntityCatalog {
+    handles: HashMap<neomacs_display_protocol::font::ResolvedFontIdentity, FontEntityHandle>,
+    entries: Vec<neomacs_layout_engine::font_backend::PlatformFontMatch>,
+}
+
+impl FontEntityCatalog {
+    fn intern(
+        &mut self,
+        font: neomacs_layout_engine::font_backend::PlatformFontMatch,
+    ) -> Option<FontEntityHandle> {
+        if let Some(handle) = self.handles.get(&font.identity) {
+            return Some(*handle);
+        }
+        let handle =
+            FontEntityHandle::new(u32::try_from(self.entries.len()).ok()?.checked_add(1)?)?;
+        self.handles.insert(font.identity.clone(), handle);
+        self.entries.push(font);
+        Some(handle)
+    }
+
+    fn get(
+        &self,
+        handle: FontEntityHandle,
+    ) -> Option<&neomacs_layout_engine::font_backend::PlatformFontMatch> {
+        self.entries.get((handle.get() - 1) as usize)
+    }
+}
+
 struct PrimaryWindowDisplayHost {
     resources: neomacs_display_runtime::gui_resources::GuiResources,
     system_fonts: neovm_core::emacs_core::display_host::SystemFonts,
@@ -1180,6 +1213,7 @@ struct PrimaryWindowDisplayHost {
     primary_frame_id: Option<neovm_core::window::FrameId>,
     last_window_titles: Mutex<HashMap<neovm_core::window::FrameId, LispString>>,
     font_metrics: Option<FontMetricsService>,
+    font_entities: FontEntityCatalog,
     primary_window_size: SharedPrimaryWindowSize,
     image_catalog: Rc<AsyncImageCatalog>,
     #[cfg(feature = "video")]
@@ -2132,6 +2166,7 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         }
         let entity = self.synchronized_font_metrics().resolve_font_entity(&query);
         Ok(entity.map(|entity| ResolvedFontSpecMatch {
+            coverage_handle: self.font_entities.intern(entity.matched.clone()),
             family: LispString::from_utf8(entity.matched.family()),
             foundry: entity
                 .matched
@@ -2160,6 +2195,32 @@ impl DisplayHost for PrimaryWindowDisplayHost {
                 .as_ref()
                 .map(|name| LispString::from_utf8(name)),
         }))
+    }
+
+    fn font_character_coverage(
+        &mut self,
+        request: FontCoverageRequest,
+    ) -> Result<FontCoverage, String> {
+        let Some(ch) = request.character.as_rust_char() else {
+            return Ok(FontCoverage::Absent);
+        };
+        let coverage = match request.target {
+            FontCoverageTarget::Entity(handle) => {
+                let Some(font) = self.font_entities.get(handle).cloned() else {
+                    return Ok(FontCoverage::NeedsOpening);
+                };
+                self.synchronized_font_metrics()
+                    .font_has_char_in_match(&font, ch)
+            }
+            FontCoverageTarget::Opened(identity) => self
+                .synchronized_font_metrics()
+                .font_has_char_in_identity(&identity, ch),
+        };
+        Ok(match coverage {
+            Some(true) => FontCoverage::Present,
+            Some(false) => FontCoverage::Absent,
+            None => FontCoverage::NeedsOpening,
+        })
     }
 
     fn probe_font_px_metrics(
@@ -3812,6 +3873,7 @@ fn run_gui_evaluator_worker(
         primary_frame_id: None,
         last_window_titles: Mutex::new(HashMap::new()),
         font_metrics: None,
+        font_entities: FontEntityCatalog::default(),
         primary_window_size: Arc::clone(&primary_window_size),
         image_catalog: Rc::new(AsyncImageCatalog::new(
             emacs_comms.cmd_tx.clone(),
