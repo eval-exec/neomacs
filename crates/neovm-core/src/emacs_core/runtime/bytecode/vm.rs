@@ -678,6 +678,8 @@ pub(crate) struct StackCursor {
     len: usize,
 }
 
+static_assertions::assert_not_impl_any!(StackCursor: Send, Sync);
+
 #[cfg(debug_assertions)]
 thread_local! {
     static STACK_CURSOR_LIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -2399,25 +2401,43 @@ impl<'a> Vm<'a> {
         &mut self,
         f: impl FnOnce(&mut Self) -> Result<T, Flow>,
     ) -> Result<T, Flow> {
-        if let Err(flow) = self.enter_bytecode_call_depth() {
-            return Err(self.ctx.finish_lisp_depth_overflow(flow));
-        }
+        self.enter_published_bytecode_call_depth()?;
         let result = f(self);
         self.leave_bytecode_call_depth();
         result
     }
 
+    /// Check already-counted depth with the caller's operands published.
+    /// Keep rejected-call dispatch and depth retirement inside this cold
+    /// boundary; floor-raised success remains counted for the normal exit.
+    #[cold]
+    #[inline(never)]
+    fn bytecode_depth_exceeded_published(&mut self) -> Result<(), Flow> {
+        match self.bytecode_depth_exceeded() {
+            Ok(()) => Ok(()),
+            Err(flow) => Err(self.ctx.finish_lisp_depth_overflow(flow)),
+        }
+    }
+
+    /// Finish a cached driver's confirmed depth rejection with its cursor live.
+    /// Consume publication before callback Lisp, dispatch at counted depth,
+    /// and retire the rejected call exactly once. Accepted floor raises keep
+    /// the original cursor in the driver and never cross this boundary.
+    #[cold]
+    #[inline(never)]
+    fn finish_live_bytecode_depth_overflow(&mut self, cursor: StackCursor, flow: Flow) -> Flow {
+        cursor.publish(self.ctx);
+        self.ctx.finish_lisp_depth_overflow(flow)
+    }
+
+    /// Enter a bytecode call whose caller has already published its operands.
     #[inline(always)]
-    fn enter_bytecode_call_depth(&mut self) -> Result<(), Flow> {
+    fn enter_published_bytecode_call_depth(&mut self) -> Result<(), Flow> {
         self.ctx.depth += 1;
         if self.ctx.depth > self.ctx.max_depth {
-            // Cold: the floor-raise + error construction stay out of the hot
-            // prologue's codegen; the common shallow call pays one compare.
-            if let Err(flow) = self.bytecode_depth_exceeded() {
-                // The caller publishes its operand roots before dispatching
-                // this signal and retiring the rejected call's depth.
-                return Err(flow);
-            }
+            // Cold: floor raising, error construction, dispatch and rejected
+            // depth retirement stay outside the shallow call's live ranges.
+            self.bytecode_depth_exceeded_published()?;
         }
         Ok(())
     }
@@ -4965,10 +4985,13 @@ impl<'a> Vm<'a> {
                             // reacquire, nothing here reaches a GC safe
                             // point. The classify gate already proved the
                             // callee sealed and stack-verified.
-                            if let Err(flow) = self.enter_bytecode_call_depth() {
-                                cursor.publish(self.ctx);
-                                let flow = self.ctx.finish_lisp_depth_overflow(flow);
-                                resume_flow!(flow)
+                            self.ctx.depth += 1;
+                            if self.ctx.depth > self.ctx.max_depth {
+                                if let Err(flow) = self.bytecode_depth_exceeded() {
+                                    let flow =
+                                        self.finish_live_bytecode_depth_overflow(cursor, flow);
+                                    resume_flow!(flow);
+                                }
                             }
                             let prepared = call.callee();
                             let callee_code = prepared.code();
@@ -5023,8 +5046,7 @@ impl<'a> Vm<'a> {
                             }))
                         } else {
                             cursor.publish(self.ctx);
-                            if let Err(flow) = self.enter_bytecode_call_depth() {
-                                let flow = self.ctx.finish_lisp_depth_overflow(flow);
+                            if let Err(flow) = self.enter_published_bytecode_call_depth() {
                                 resume_flow!(flow)
                             }
                             match self

@@ -143,7 +143,7 @@ always	emacs_core/runtime/bytecode/vm.rs	StackCursor::truncate	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	Vm::complete_interpreter_frame_value	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	Vm::dispatch_bytecode_tier	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	Vm::dispatch_interpreter_stack_call	run_loop,inline
-always	emacs_core/runtime/bytecode/vm.rs	Vm::enter_bytecode_call_depth	run_loop,inline
+exempt	emacs_core/runtime/bytecode/vm.rs	Vm::enter_published_bytecode_call_depth	run_loop,inline	# GNU published-depth entry replaces the old helper; retain its hint pending a new protected census
 always	emacs_core/runtime/bytecode/vm.rs	Vm::install_iterative_interpreter_frame	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	Vm::leave_bytecode_call_depth	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	Vm::push_dynamic_vm_root	run_loop,inline
@@ -441,3 +441,6 @@ exempt	emacs_core/runtime/bytecode/vm.rs	Vm::cons_car_observed	run_loop	# intent
 exempt	emacs_core/runtime/bytecode/vm.rs	Vm::cons_cdr_observed	run_loop	# intentional collection-capture slow path; retain #[cold] and #[inline(never)]; the new boundary awaits the lead's protected fat-build comparison
 exempt	tagged/value.rs	TaggedValue::from_fixnum	run_loop,inline	# validated-domain constructor introduced after the reference census; retain #[inline]; extending the pinned subset requires protected pre-LTO comparisons
 exempt	emacs_core/runtime/bytecode/vm.rs	Vm::unbind_frame_target	run_loop,inline	# new frame-owned unbind helper outside the reference protected census; retain existing #[inline(always)]; pinning awaits the lead's protected fat-build comparison
+
+exempt	emacs_core/runtime/bytecode/vm.rs	Vm::finish_live_bytecode_depth_overflow	run_loop	# GNU rejected-depth dispatch publishes live operands; cold boundary pending a new protected census
+exempt	emacs_core/runtime/bytecode/vm.rs	Vm::bytecode_depth_exceeded_published	run_loop	# GNU depth dispatch with already-published operands; cold boundary pending a new protected census
