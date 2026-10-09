@@ -27,8 +27,10 @@ fn oracle_sort_published_native_frames_for_lists_and_keyed_vectors() {
                       (if (eq container 'list)
                           (setcar (nthcdr 47 seq) '(bad))
                         (aset seq 47 '(bad))))
-                    (let* ((run (lambda () (sort seq :lessp pred :key key :in-place t)))
-                           (function (if compiled (byte-compile run) run))
+                    (let* ((sorter (lambda (sequence predicate key)
+                                     (sort sequence :lessp predicate :key key :in-place t)))
+                           (function (if compiled (byte-compile sorter) sorter))
+                           (run (lambda () (funcall function seq pred key)))
                            (signal-hook-function
                             (lambda (condition data)
                               (when (eq condition 'wrong-type-argument)
@@ -41,7 +43,7 @@ fn oracle_sort_published_native_frames_for_lists_and_keyed_vectors() {
                                   (aset seq 0 (if (eq pred '<) 777 "zzzz")))
                                 (garbage-collect)))))
                       (let ((result (condition-case err
-                                      (neovm--gde-published-nest levels function)
+                                      (neovm--gde-published-nest levels run)
                                     (error (car err)))))
                         (push (list levels pred container compiled failed
                                     (if failed result (eq result seq)) calls
