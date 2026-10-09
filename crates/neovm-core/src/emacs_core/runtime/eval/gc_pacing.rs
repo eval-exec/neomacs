@@ -212,6 +212,22 @@ impl Context {
         }
         group("profiler");
         self.trace_profiler_roots(visit);
+        // These Rust-owned payloads clone interval tables but share their Lisp
+        // plists. The echo buffer's copied plists do not retain the message's
+        // own copies. GNU roots echo buffers and Vloads_in_progress instead.
+        group("string_payloads");
+        for text in self
+            .current_message
+            .iter()
+            .chain(self.loads_in_progress.iter())
+            .chain(
+                self.last_redisplay_signature
+                    .iter()
+                    .flat_map(|signature| signature.current_message.iter()),
+            )
+        {
+            text.trace_roots_with(visit);
+        }
         group("misc");
         visit(self.lexenv);
         visit(self.quit_flag);
