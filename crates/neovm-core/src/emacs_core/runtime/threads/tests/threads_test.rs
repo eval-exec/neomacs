@@ -364,7 +364,7 @@ fn test_main_thread_variable_matches_current_thread() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
     let current = builtin_current_thread(&mut eval, vec![]).unwrap();
-    let main_thread = eval.obarray.symbol_value("main-thread").copied().unwrap();
+    let main_thread = eval.obarray.symbol_value_copied("main-thread").unwrap();
     assert!(eq_value(&current, &main_thread));
 }
 
