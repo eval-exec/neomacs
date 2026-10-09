@@ -270,8 +270,7 @@ impl Context {
             .set_symbol_value_id(when_entered_debugger_symbol(), Value::fixnum(events));
         let debugger = self
             .obarray
-            .symbol_value_id(debugger_symbol())
-            .copied()
+            .symbol_value_id_copied(debugger_symbol())
             .unwrap_or(Value::NIL);
         let count = self.specpdl.len();
         // GNU's four `specbind`s, in GNU's order (`src/eval.c:306-314`).
