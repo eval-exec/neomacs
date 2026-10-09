@@ -2399,10 +2399,22 @@ impl<'a> Vm<'a> {
         &mut self,
         f: impl FnOnce(&mut Self) -> Result<T, Flow>,
     ) -> Result<T, Flow> {
-        self.enter_published_bytecode_call_depth()?;
+        if let Err(flow) = self.enter_published_bytecode_call_depth() {
+            return Err(Self::reject_bytecode_call(f, flow));
+        }
         let result = f(self);
         self.leave_bytecode_call_depth();
         result
+    }
+
+    /// Drop the uncalled closure after rejected-depth callbacks have finished.
+    /// Keep its owned argument cleanup out of the interpreter's normal paths;
+    /// successful calls retain the original closure and depth-check code.
+    #[cold]
+    #[inline(never)]
+    fn reject_bytecode_call<T>(f: impl FnOnce(&mut Self) -> Result<T, Flow>, flow: Flow) -> Flow {
+        drop(f);
+        flow
     }
 
     /// Check already-counted depth with the caller's operands published.
