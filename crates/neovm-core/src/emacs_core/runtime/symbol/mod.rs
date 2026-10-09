@@ -684,9 +684,9 @@ pub struct Obarray {
     members_epoch: u64,
     /// Memoized GNU-bucket-order symbol list for completion over the
     /// global obarray: try-completion/all-completions re-derive the same
-    /// ~30k-symbol hash+sort per call (a bootstrap hotspot). Mutex, not
-    /// RefCell — `&Obarray` is shared with the concurrent GC scan thread
-    /// (uncontended in practice: completion runs on the Lisp thread).
+    /// ~30k-symbol hash+sort per call (a bootstrap hotspot). Completion owns
+    /// this cache on the mutator. The concurrent marker receives a leased
+    /// symbol snapshot and never accesses the cache or `&Obarray`.
     completion_order_cache: std::sync::Mutex<Option<CompletionOrderCache>>,
     /// Heap-allocated BLVs for `SYMBOL_LOCALIZED` symbols. Each entry
     /// is a `Box::into_raw` pointer; freed in [`Obarray::drop`]. The
@@ -735,6 +735,12 @@ pub struct Obarray {
     /// walk (`jit::cache::sync_cache_to_obarray`).
     generation: u64,
 }
+
+// The owner contains thread-local Values and mutable BLV records. Atomic
+// symbol words do not admit sharing their containing owner; the marker moves
+// only an admitted ObarrayScanSnapshot with retained chunk storage.
+static_assertions::assert_impl_all!(Obarray: Clone, std::fmt::Debug);
+static_assertions::assert_not_impl_any!(Obarray: Send, Sync);
 
 /// The next [`Obarray::generation`]: one process-global counter, so no two
 /// obarrays alive at once (or ever) share a generation.
@@ -816,8 +822,8 @@ struct SymbolChunks {
     /// — kept equal to `chunks.as_ptr()` by every operation that can move it
     /// (construction, clone, growth). Compiled code reads it at a fixed offset
     /// to reach a symbol's cell without a call (see
-    /// [`OBARRAY_JIT_SPINE_OFFSET`]). A plain integer, not a raw pointer, so
-    /// the store stays `Send`/`Sync`.
+    /// [`OBARRAY_JIT_SPINE_OFFSET`]). This integer preserves the JIT layout;
+    /// it does not make the containing thread-local symbol store Send/Sync.
     spine_addr: usize,
 }
 
@@ -1160,10 +1166,12 @@ static_assertions::const_assert_eq!(
 // SAFETY: construction requires the heap-identified serialized-writer admission.
 // Every raw chunk/side pointer has a storage lease: owner destruction retains
 // the allocations until the marker has finished reading. The one owning marker
-// uses atomic presence/slot loads and the admitted writer's seqlock protocol.
+// uses the Acquire presence gate and the admitted writer's seqlock protocol
+// for the redirect/payload pair. Function and plist are independent atomic
+// words. It never accesses BLVs, descriptor interiors or the completion cache.
 unsafe impl Send for ObarrayScanSnapshot {}
 static_assertions::assert_impl_all!(ObarrayScanSnapshot: Send, std::fmt::Debug);
-static_assertions::assert_not_impl_any!(ObarrayScanSnapshot: Sync);
+static_assertions::assert_not_impl_any!(ObarrayScanSnapshot: Sync, Copy, Clone);
 
 impl std::fmt::Debug for ObarrayScanSnapshot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1364,13 +1372,6 @@ impl Clone for Obarray {
         }
     }
 }
-
-// Safety: Obarray contains raw pointers to its own heap allocations.
-// They're owned by the obarray, so sending the obarray across threads
-// (via Send) or sharing it via &Obarray (via Sync) is safe — the
-// pointers don't escape and don't carry interior mutability.
-unsafe impl Send for Obarray {}
-unsafe impl Sync for Obarray {}
 
 impl Default for Obarray {
     fn default() -> Self {

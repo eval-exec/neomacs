@@ -7,6 +7,47 @@ use crate::emacs_core::intern::{SymId, intern};
 use crate::emacs_core::symbol::{FunctionEpochBump, Obarray, force_fn_stamps_for_test};
 use crate::emacs_core::value::Value;
 
+/// Only the atomic publication fields enter reader threads. The owner borrow
+/// retains the side allocation and prevents chunk growth until the scope ends.
+struct FunctionStampReader<'a> {
+    side: &'a super::fn_stamps::ChunkSide,
+    clock: &'a std::sync::atomic::AtomicU64,
+    slot: usize,
+}
+
+static_assertions::assert_impl_all!(FunctionStampReader<'static>: Send, Sync, std::fmt::Debug);
+static_assertions::assert_not_impl_any!(FunctionStampReader<'static>: Copy, Clone);
+
+impl<'a> FunctionStampReader<'a> {
+    fn capture(owner: &'a Obarray, symbol: SymId) -> Self {
+        let index = Obarray::slot_index(symbol);
+        Self {
+            side: &owner.symbols.sides[index >> 12],
+            clock: &owner.function_epoch,
+            slot: index & (super::OBARRAY_CHUNK - 1),
+        }
+    }
+
+    fn published_epoch(&self) -> u64 {
+        self.clock.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    // This protocol assertion uses only the actual atomic side fields; the
+    // Obarray predicate's resolution and knob behavior have separate tests.
+    fn changed_after(&self, since: u64) -> bool {
+        self.side.floor() > since || self.side.stamp(self.slot) > since
+    }
+}
+
+impl std::fmt::Debug for FunctionStampReader<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FunctionStampReader")
+            .field("slot", &self.slot)
+            .field("published_epoch", &self.published_epoch())
+            .finish_non_exhaustive()
+    }
+}
+
 /// Turns `NEOVM_FN_STAMPS` on for the test's thread, and back to the
 /// environment when dropped.
 struct StampsOn;
@@ -334,27 +375,37 @@ fn exclusive_clock_reads_preserve_publication_and_owned_clone_independence() {
     assert_eq!(published, ob.function_epoch());
     assert!(!ob.fn_unchanged_since(sym, before_floor));
     assert!(ob.fn_unchanged_since(sym, published));
-    let mut copy = ob.clone();
     let start = std::sync::Barrier::new(2);
-    std::thread::scope(|scope| {
-        let original = scope.spawn(|| {
-            start.wait();
-            ob.set_symbol_function_id(sym, Value::fixnum(2));
-            ob.set_symbol_function_id(sym, Value::fixnum(3));
-            assert_eq!(ob.function_epoch_exclusive(), ob.function_epoch());
-        });
+    let (copy_epoch, copy_value) = std::thread::scope(|scope| {
         let cloned = scope.spawn(|| {
+            let _on = StampsOn::new();
+            // Construct and clone on the worker itself. Only the symbol ID,
+            // expected epoch and final immediate data cross this boundary.
+            let mut source = Obarray::new();
+            source.set_symbol_function_id(sym, Value::fixnum(1));
+            source.invalidate_all_function_bindings(FunctionEpochBump::SubrRewrite);
+            assert_eq!(source.function_epoch(), published);
+            let mut copy = source.clone();
             start.wait();
             copy.set_symbol_function_id(sym, Value::fixnum(4));
             assert_eq!(copy.function_epoch_exclusive(), copy.function_epoch());
+            assert_eq!(source.function_epoch(), published);
+            assert_eq!(source.symbol_function_id(sym), Some(Value::fixnum(1)));
+            (
+                copy.function_epoch_exclusive(),
+                copy.symbol_function_id(sym).and_then(Value::as_fixnum),
+            )
         });
-        original.join().expect("original mutator");
-        cloned.join().expect("clone mutator");
+        start.wait();
+        ob.set_symbol_function_id(sym, Value::fixnum(2));
+        ob.set_symbol_function_id(sym, Value::fixnum(3));
+        assert_eq!(ob.function_epoch_exclusive(), ob.function_epoch());
+        cloned.join().expect("clone mutator")
     });
     assert_eq!(ob.function_epoch_exclusive(), published + 2);
-    assert_eq!(copy.function_epoch_exclusive(), published + 1);
+    assert_eq!(copy_epoch, published + 1);
     assert_eq!(ob.symbol_function_id(sym), Some(Value::fixnum(3)));
-    assert_eq!(copy.symbol_function_id(sym), Some(Value::fixnum(4)));
+    assert_eq!(copy_value, Some(4));
 }
 
 /// A restored image's cells were written without stamps: nothing validated
@@ -398,9 +449,9 @@ fn concurrent_readers_observe_stamps_and_floor_before_the_published_clock() {
     let mut ob = Obarray::new();
     let sym = intern("neovm--fs-publication");
     ob.ensure_symbol_id(sym);
-    let ob = &ob;
-    let side = &ob.symbols.sides[Obarray::slot_index(sym) >> 12];
-    let clock = &ob.function_epoch;
+    let reader = FunctionStampReader::capture(&ob, sym);
+    let side = reader.side;
+    let clock = reader.clock;
     let start = Barrier::new(4);
     let done = AtomicBool::new(false);
     const LAST_EPOCH: u64 = 20_000;
@@ -425,18 +476,18 @@ fn concurrent_readers_observe_stamps_and_floor_before_the_published_clock() {
                     start.wait();
                     let mut samples = 0;
                     while samples < 128 || !done.load(Ordering::Acquire) {
-                        let now = ob.function_epoch();
+                        let now = reader.published_epoch();
                         if now != 0 {
                             assert!(
-                                !ob.fn_unchanged_since(sym, now - 1),
+                                reader.changed_after(now - 1),
                                 "clock {now} must publish its stamp or floor first"
                             );
                         }
                         samples += 1;
                         std::hint::spin_loop();
                     }
-                    assert_eq!(ob.function_epoch(), LAST_EPOCH);
-                    assert!(!ob.fn_unchanged_since(sym, LAST_EPOCH - 1));
+                    assert_eq!(reader.published_epoch(), LAST_EPOCH);
+                    assert!(reader.changed_after(LAST_EPOCH - 1));
                 })
             })
             .collect();
@@ -463,8 +514,9 @@ fn a_resync_snapshot_stays_stale_when_a_redefinition_follows_its_proof() {
     ob.set_symbol_function_id(sym, Value::fixnum(1));
     let armed = ob.function_epoch();
     ob.set_symbol_function_id(intern("neovm--fs-resync-unrelated"), Value::fixnum(1));
-    let ob = &ob;
-    let side = &ob.symbols.sides[Obarray::slot_index(sym) >> 12];
+    let reader = FunctionStampReader::capture(&ob, sym);
+    let side = reader.side;
+    let clock = reader.clock;
     let proof_done = Barrier::new(2);
     let change_published = Barrier::new(2);
 
@@ -477,7 +529,7 @@ fn a_resync_snapshot_stays_stale_when_a_redefinition_follows_its_proof() {
                 Obarray::slot_index(sym) & (super::OBARRAY_CHUNK - 1),
                 armed + 2,
             );
-            ob.function_epoch.store(armed + 2, Ordering::Release);
+            clock.store(armed + 2, Ordering::Release);
             change_published.wait();
         });
         let snapshot = ob.function_epoch();
