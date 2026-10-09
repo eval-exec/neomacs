@@ -252,6 +252,49 @@ fn raw_tty_bytes_cross_the_bridge_without_interpretation() {
 }
 
 #[test]
+fn tracked_key_transport_preserves_immediate_quit_without_reading() {
+    use neomacs_display_protocol::input_progress::InputDelivery;
+    for (key, modifiers, expected) in [
+        (
+            keyboard::FrontendKey::Character('g'),
+            keyboard::RENDER_CTRL_MASK,
+            true,
+        ),
+        (keyboard::FrontendKey::Character('g'), 0, false),
+        (
+            keyboard::FrontendKey::Character('p'),
+            keyboard::RENDER_CTRL_MASK,
+            false,
+        ),
+    ] {
+        let delivery = InputDelivery::for_read();
+        let receipt = delivery.receipt();
+        let display_event = DisplayEvent::Tracked {
+            receipt: delivery,
+            event: Box::new(DisplayEvent::Key {
+                key,
+                modifiers,
+                pressed: true,
+                emacs_frame_id: 42,
+            }),
+        };
+        let event = convert_display_event(&display_event).expect("tracked key event");
+        assert_eq!(event.requests_default_quit(), expected);
+        assert!(!receipt.consumed_or_cancelled());
+        let KbInputEvent::Tracked { event, .. } = &event else {
+            panic!("bridge discarded tracking");
+        };
+        assert!(matches!(
+            event.as_ref(),
+            KbInputEvent::KeyPress {
+                emacs_frame_id: 42,
+                ..
+            }
+        ));
+    }
+}
+
+#[test]
 fn key_transport_preserves_source_frame_identity() {
     let display_event = DisplayEvent::Key {
         key: keyboard::FrontendKey::Character('a'),

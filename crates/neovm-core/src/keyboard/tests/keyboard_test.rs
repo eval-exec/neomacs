@@ -20,6 +20,8 @@ fn settled_point(
 }
 
 use super::*;
+#[path = "repeat_backpressure.rs"]
+mod repeat_backpressure;
 
 #[test]
 fn discrete_scroll_preserves_horizontal_direction_and_multiple_steps() {

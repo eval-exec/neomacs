@@ -1543,6 +1543,9 @@ impl InputEvent {
     /// `C-g`, and should wake an evaluator that is busy outside `read_char`.
     pub fn requests_default_quit(&self) -> bool {
         match self {
+            Self::Tracked { event, .. } | Self::Observed { event, .. } => {
+                event.requests_default_quit()
+            }
             Self::RawTtyBytes { bytes, .. } => bytes.contains(&0x07),
             Self::TtyByte { byte, .. } => *byte == 0x07,
             Self::TtyCharacter { character, .. } => character.code() == 0x07,
