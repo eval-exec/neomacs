@@ -77,7 +77,7 @@ fn load_hist_file_name(
     let found_effective = load_found_effective(found);
     if !eval
         .obarray()
-        .symbol_value("purify-flag")
+        .symbol_value_copied("purify-flag")
         .is_some_and(|value| value.is_truthy())
     {
         return found_effective;
@@ -113,7 +113,7 @@ fn load_hist_file_name(
 fn record_preloaded_file(eval: &mut super::eval::Context, requested: &LispString) {
     if !eval
         .obarray()
-        .symbol_value("purify-flag")
+        .symbol_value_copied("purify-flag")
         .is_some_and(|value| value.is_truthy())
     {
         return;
@@ -127,8 +127,7 @@ fn record_preloaded_file(eval: &mut super::eval::Context, requested: &LispString
     // just above.
     let list = eval
         .obarray()
-        .symbol_value("preloaded-file-list")
-        .cloned()
+        .symbol_value_copied("preloaded-file-list")
         .unwrap_or(Value::NIL);
     eval.push_specpdl_root(list);
     let updated = Value::cons(entry, list);
@@ -660,12 +659,14 @@ pub(crate) struct LoadSuffixPlan {
 impl LoadSuffixPlan {
     pub(crate) fn from_obarray(obarray: &super::symbol::Obarray) -> Result<Self, Flow> {
         let suffixes = strict_load_suffix_list(
-            obarray.symbol_value("load-suffixes"),
+            obarray.symbol_value_copied("load-suffixes").as_ref(),
             "load-suffixes",
             Some(default_load_suffixes()),
         )?;
         let representations = strict_load_suffix_list(
-            obarray.symbol_value("load-file-rep-suffixes"),
+            obarray
+                .symbol_value_copied("load-file-rep-suffixes")
+                .as_ref(),
             "load-file-rep-suffixes",
             Some(vec![Vec::new()]),
         )?;
@@ -674,8 +675,7 @@ impl LoadSuffixPlan {
         // value so irrelevant members (and even an otherwise-invalid value)
         // do not affect ordinary Elisp suffixes.
         let compressed_representations = obarray
-            .symbol_value("jka-compr-load-suffixes")
-            .copied()
+            .symbol_value_copied("jka-compr-load-suffixes")
             .unwrap_or(Value::NIL);
 
         let mut required = Vec::with_capacity(suffixes.len() * representations.len());
@@ -984,7 +984,7 @@ pub(crate) fn resolve_load_path_file_in_state(
         LoadCandidates::AppendSuffixes(suffixes) => (false, suffixes),
     };
     let prefer_newer = obarray
-        .symbol_value("load-prefer-newer")
+        .symbol_value_copied("load-prefer-newer")
         .is_some_and(|value| value.is_truthy());
     let load_path = get_load_path(obarray, buf);
 
@@ -1064,8 +1064,7 @@ pub fn get_load_path(
         .unwrap_or_else(|| LispString::from_unibyte(b".".to_vec()));
 
     let val = obarray
-        .symbol_value("load-path")
-        .cloned()
+        .symbol_value_copied("load-path")
         .unwrap_or(Value::NIL);
     super::value::list_to_vec(&val)
         .unwrap_or_default()
@@ -1589,7 +1588,9 @@ pub(crate) fn get_eager_macroexpand_fn(eval: &super::eval::Context) -> Option<Va
     // Respect the Elisp `macroexp--pending-eager-loads` variable.
     // When it starts with `skip`, eager expansion is suppressed (mirrors
     // the check in `internal-macroexpand-for-load` in macroexp.el).
-    if let Some(val) = eval.obarray().symbol_value("macroexp--pending-eager-loads")
+    if let Some(val) = eval
+        .obarray()
+        .symbol_value_copied("macroexp--pending-eager-loads")
         && val.is_cons()
         && val.cons_car().is_symbol_named("skip")
     {
@@ -2047,8 +2048,7 @@ fn streaming_readevalloop_lisp_source(
             // path off the Lisp call route.
             let read_hook = eval
                 .obarray
-                .symbol_value("load-read-function")
-                .copied()
+                .symbol_value_copied("load-read-function")
                 .filter(|hook| !hook.is_nil() && !hook.is_symbol_named("read"));
             let (form, next_pos) = match read_hook {
                 Some(hook) => {
@@ -2988,8 +2988,7 @@ fn build_load_history(eval: &mut super::eval::Context, filename: &LispString, en
     eval.push_specpdl_root(current_load_list);
     let history = eval
         .obarray()
-        .symbol_value("load-history")
-        .cloned()
+        .symbol_value_copied("load-history")
         .unwrap_or(Value::NIL);
     eval.push_specpdl_root(history);
     let filtered_history = if entire {
@@ -4032,7 +4031,7 @@ fn ensure_startup_compat_variables(eval: &mut super::eval::Context, project_root
         ),
     ];
     for (name, value) in defaults {
-        if eval.obarray().symbol_value(name).is_none() {
+        if eval.obarray().symbol_value_copied(name).is_none() {
             eval.set_variable(name, value);
         }
     }
@@ -4584,8 +4583,7 @@ fn loaded_source_paths(eval: &mut super::eval::Context) -> Vec<PathBuf> {
     {
         let history = eval
             .obarray()
-            .symbol_value("load-history")
-            .cloned()
+            .symbol_value_copied("load-history")
             .unwrap_or(Value::NIL);
         let mut paths = std::collections::BTreeSet::new();
 
@@ -4687,7 +4685,7 @@ fn collect_runtime_referenced_symbol_names(
     let mut seen = std::collections::BTreeSet::new();
 
     for id in eval.obarray().global_member_ids().collect::<Vec<_>>() {
-        if let Some(value) = eval.obarray().symbol_value_id(id).copied() {
+        if let Some(value) = eval.obarray().symbol_value_id_copied(id) {
             collect_value_symbol_names(value, &mut symbol_names, &mut seen);
         }
         if let Some(function) = eval.obarray().symbol_function_id(id) {
@@ -5212,10 +5210,10 @@ fn normalize_bootstrap_runtime_surface(
                 .iter()
                 .chain(runtime_loaddefs_state.keymap_forms.iter())
             {
-                let Some(value) = eval.obarray().symbol_value(&replay.target) else {
+                let Some(value) = eval.obarray().symbol_value_copied(&replay.target) else {
                     continue;
                 };
-                if !is_list_keymap(value) {
+                if !is_list_keymap(&value) {
                     continue;
                 }
                 eval_runtime_form(eval, replay.form)?;
@@ -5827,7 +5825,7 @@ fn restore_final_image_interpreted_closure_filter(eval: &mut super::eval::Contex
     let cconv_sym = super::intern::intern("cconv-make-interpreted-closure");
     let filter_is_nil = eval
         .obarray()
-        .symbol_value_id(filter_sym)
+        .symbol_value_id_copied(filter_sym)
         .is_none_or(|value| value.is_nil());
     let cconv_bound = eval
         .obarray()
@@ -5846,8 +5844,7 @@ fn sync_runtime_interpreted_closure_filter(eval: &mut super::eval::Context) {
     let cconv_sym = super::intern::intern("cconv-make-interpreted-closure");
     let filter_fn = eval
         .obarray()
-        .symbol_value_id(closure_filter_sym)
-        .cloned()
+        .symbol_value_id_copied(closure_filter_sym)
         .and_then(|value| {
             if value.as_symbol_id() == Some(cconv_sym) {
                 eval.obarray().symbol_function_id(cconv_sym)
@@ -6010,7 +6007,7 @@ fn maybe_trace_bootstrap_macro_perf(eval: &super::eval::Context) {
     if let Some(summary) = eval.macro_perf_summary() {
         let gc_elapsed = eval
             .obarray()
-            .symbol_value("gc-elapsed")
+            .symbol_value_copied("gc-elapsed")
             .and_then(|value| value.as_number_f64())
             .unwrap_or(0.0);
         eprintln!(
@@ -6113,8 +6110,7 @@ pub(crate) fn seed_loadup_dump_branch_state(eval: &mut super::eval::Context) {
     // loadup.el:115 saves the pre-dump value before :116 overwrites it.
     let previous = eval
         .obarray()
-        .symbol_value("load-prefer-newer")
-        .copied()
+        .symbol_value_copied("load-prefer-newer")
         .unwrap_or(Value::NIL);
     eval.set_variable("load--prefer-newer", previous);
     for name in LOADUP_DUMP_BRANCH_SEEDED_VARIABLES {

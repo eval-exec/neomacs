@@ -266,8 +266,8 @@ fn the_image_build_seeds_every_statement_of_loadups_dump_branch() {
 
     for name in LOADUP_DUMP_BRANCH_SEEDED_VARIABLES {
         assert_eq!(
-            eval.obarray().symbol_value(name),
-            Some(&Value::T),
+            eval.obarray().symbol_value_copied(name),
+            Some(Value::T),
             "loadup.el:110-116 sets {name} while building the image, and the \
              dump-mode branch that would do it is dead in this port"
         );
@@ -283,8 +283,8 @@ fn the_image_build_seeds_every_statement_of_loadups_dump_branch() {
     // seeding the temporary is what lets GNU's own Lisp do the restore rather
     // than a Rust copy of it.
     assert_eq!(
-        eval.obarray().symbol_value("load--prefer-newer"),
-        Some(&Value::NIL),
+        eval.obarray().symbol_value_copied("load--prefer-newer"),
+        Some(Value::NIL),
         "loadup.el:115 saves the pre-dump value so :493 can put it back"
     );
 }
